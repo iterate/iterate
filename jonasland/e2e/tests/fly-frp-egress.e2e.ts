@@ -26,62 +26,6 @@ const OTEL_SERVICE_ENV = {
   OTEL_PROPAGATORS: "tracecontext,baggage",
 };
 
-function errorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") return undefined;
-
-  const direct =
-    "code" in error && typeof (error as { code?: unknown }).code === "string"
-      ? ((error as { code: string }).code ?? undefined)
-      : undefined;
-  if (direct) return direct;
-
-  const cause =
-    "cause" in error && (error as { cause?: unknown }).cause
-      ? (error as { cause: unknown }).cause
-      : undefined;
-  if (!cause || cause === error) return undefined;
-  return errorCode(cause);
-}
-
-function isRetriableSocketError(error: unknown): boolean {
-  const code = errorCode(error);
-  if (!code) return false;
-  return (
-    code === "ECONNRESET" ||
-    code === "ECONNREFUSED" ||
-    code === "ETIMEDOUT" ||
-    code === "EPIPE" ||
-    code === "ENOTFOUND" ||
-    code === "EAI_AGAIN" ||
-    code === "UND_ERR_SOCKET" ||
-    code === "UND_ERR_CONNECT_TIMEOUT" ||
-    code === "UND_ERR_HEADERS_TIMEOUT" ||
-    code === "UND_ERR_BODY_TIMEOUT"
-  );
-}
-
-function shellSingleQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\"'\"'")}'`;
-}
-
-async function withRetriableSocketErrors<T>(task: () => Promise<T>): Promise<T> {
-  const maxAttempts = 8;
-  let attempt = 1;
-
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    try {
-      return await task();
-    } catch (error) {
-      if (attempt >= maxAttempts || !isRetriableSocketError(error)) {
-        throw error;
-      }
-      await new Promise((resolve) => setTimeout(resolve, Math.min(250 * attempt, 1_500)));
-      attempt += 1;
-    }
-  }
-}
-
 async function waitForDirectHttp(
   deployment: ProjectDeployment,
   params: { url: string; timeoutMs?: number },
@@ -98,35 +42,39 @@ async function waitForDirectHttp(
   throw new Error(`timed out waiting for direct http ${params.url}`);
 }
 
-async function startEgressProxyProcess(
+async function startEgressProxyWithExternalProxy(
   deployment: ProjectDeployment,
-  params: { externalProxyUrl: string },
+  externalProxyUrl: string,
 ): Promise<void> {
-  await withRetriableSocketErrors(async () => {
-    const definition = JSON.stringify({
+  const updated = await deployment.pidnap.processes.updateConfig({
+    processSlug: "egress-proxy",
+    definition: {
       command: "/opt/pidnap/node_modules/.bin/tsx",
       args: ["/opt/services/egress-service/src/server.ts"],
       env: {
         ...OTEL_SERVICE_ENV,
-        ITERATE_EXTERNAL_EGRESS_PROXY: params.externalProxyUrl,
+        ITERATE_EXTERNAL_EGRESS_PROXY: externalProxyUrl,
       },
-    });
-    const reloaded = await deployment.exec([
-      "bash",
-      "-lc",
-      `/opt/pidnap/node_modules/.bin/tsx /opt/pidnap/src/cli.ts process reload egress-proxy -d ${shellSingleQuote(definition)} -r true`,
-    ]);
-    if (reloaded.exitCode !== 0) {
-      throw new Error(`failed to reload egress-proxy:\n${reloaded.output}`);
-    }
-    await waitForDirectHttp(deployment, {
-      url: "http://127.0.0.1:19000/healthz",
-    });
+    },
+    options: { restartPolicy: "always" },
+    envOptions: { reloadDelay: false },
+  });
+
+  if (updated.state !== "running") {
+    await deployment.pidnap.processes.start({ target: "egress-proxy" });
+  }
+
+  await deployment.waitForPidnapProcessRunning({
+    target: "egress-proxy",
+    timeoutMs: 45_000,
+  });
+  await waitForDirectHttp(deployment, {
+    url: "http://127.0.0.1:19000/healthz",
   });
 }
 
 describe.runIf(RUN_FLY_FRP_E2E)("jonasland fly frp egress", () => {
-  test("fly machine reaches host-local mock egress over direct frp tunnel", async () => {
+  test("fly machine POSTs https://example.com via egress+frp and body arrives at local mock", async () => {
     if (image.trim().length === 0) {
       throw new Error("Set JONASLAND_E2E_FLY_IMAGE or FLY_DEFAULT_IMAGE for Fly e2e");
     }
@@ -155,9 +103,16 @@ describe.runIf(RUN_FLY_FRP_E2E)("jonasland fly frp egress", () => {
         localTargetPort: proxy.port,
         frpcBin: process.env.JONASLAND_E2E_FRPC_BIN,
       });
+      await startEgressProxyWithExternalProxy(deployment, frpBridge.dataProxyUrl);
 
       step = "wait-for-delivery";
-      const delivery = proxy.waitFor((request) => request.url.includes("/v1/models"), {
+      const requestPath = "/vitest-frp-post";
+      const payload = JSON.stringify({
+        message: "hello-from-fly",
+        run: "frp-post-proof",
+      });
+      const payloadShellQuoted = `'${payload.replaceAll("'", "'\"'\"'")}'`;
+      const delivery = proxy.waitFor((request) => request.url.includes(requestPath), {
         timeout: 120_000,
       });
 
@@ -165,7 +120,12 @@ describe.runIf(RUN_FLY_FRP_E2E)("jonasland fly frp egress", () => {
       const curl = await deployment.exec([
         "sh",
         "-ec",
-        `curl -i -sS -H 'Host: api.openai.com' ${frpBridge.dataProxyUrl}/v1/models`,
+        [
+          "curl -4 -i -sS -k",
+          "-H 'content-type: application/json'",
+          `--data ${payloadShellQuoted}`,
+          `https://example.com${requestPath}`,
+        ].join(" "),
       ]);
       curlOutput = curl.output;
 
@@ -179,6 +139,8 @@ describe.runIf(RUN_FLY_FRP_E2E)("jonasland fly frp egress", () => {
           `egress curl did not return mock payload:\n${curl.output}\nfrpc logs:\n${frpBridge.clientLogs()}\nfrps logs:\n${frpsLogs.output}`,
         );
       }
+      expect(curl.output.toLowerCase()).toContain("x-iterate-egress-mode: external-proxy");
+      expect(curl.output.toLowerCase()).toContain("x-iterate-egress-proxy-seen: 1");
 
       step = "assert-proxy-delivery";
       const record = await delivery.catch((error) => {
@@ -191,7 +153,11 @@ describe.runIf(RUN_FLY_FRP_E2E)("jonasland fly frp egress", () => {
           { cause: error },
         );
       });
-      expect(new URL(record.request.url).pathname).toBe("/v1/models");
+      expect(new URL(record.request.url).pathname).toBe(requestPath);
+      expect(record.request.method).toBe("POST");
+      expect(record.request.headers.get("host")).toContain("127.0.0.1:27180");
+      expect(record.request.headers.get("x-iterate-egress-mode")).toBe("external-proxy");
+      expect(await record.request.text()).toBe(payload);
       expect(record.response.status).toBe(200);
     } catch (error) {
       throw new Error(`fly frp e2e failed during: ${step}`, {

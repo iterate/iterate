@@ -90,16 +90,6 @@ http://clickstack.iterate.localhost {
     @health path /healthz
     respond @health "ok" 200
 
-    @frp_control host frp-control.iterate.localhost
-    handle @frp_control {
-        reverse_proxy 127.0.0.1:27000
-    }
-
-    @frp_data host *.frp-egress.iterate.localhost
-    handle @frp_data {
-        reverse_proxy 127.0.0.1:27080
-    }
-
     @frp_control_ws {
         header Connection *Upgrade*
         header Upgrade websocket
@@ -166,18 +156,6 @@ http://clickstack.iterate.localhost {
     @caddymanager host caddymanager.iterate.localhost
     handle @caddymanager {
         reverse_proxy 127.0.0.1:8501
-    }
-
-    @frp_control host frp-control.iterate.localhost
-    handle @frp_control {
-        reverse_proxy 127.0.0.1:27000 {
-            stream_close_delay 5m
-        }
-    }
-
-    @frp_data host *.frp-egress.iterate.localhost
-    handle @frp_data {
-        reverse_proxy 127.0.0.1:27080
     }
 
     @frp_control_ws {

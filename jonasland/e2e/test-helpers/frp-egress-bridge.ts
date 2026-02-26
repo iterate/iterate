@@ -40,8 +40,6 @@ async function configureFlyFrps(params: {
   const config = [
     `bindAddr = ${tomlString("0.0.0.0")}`,
     `bindPort = ${String(FRP_CONTROL_BIND_PORT)}`,
-    `vhostHTTPPort = ${String(27080)}`,
-    "",
     `auth.token = ${tomlString(params.token)}`,
     "",
   ].join("\n");
@@ -111,47 +109,10 @@ async function readFlyFrpsLogsBestEffort(params: {
   return result.output.trim();
 }
 
-async function probeControlRouteBestEffort(controlRouteHost: string): Promise<string> {
-  const args = [
-    "-i",
-    "-sS",
-    "--max-time",
-    "8",
-    "-H",
-    "Connection: Upgrade",
-    "-H",
-    "Upgrade: websocket",
-    "-H",
-    "Sec-WebSocket-Version: 13",
-    "-H",
-    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-    `https://${controlRouteHost}/`,
-  ];
-
-  return await new Promise<string>((resolve) => {
-    const child = spawn("curl", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    const output: string[] = [];
-    child.stdout.on("data", (chunk) => {
-      output.push(String(chunk));
-    });
-    child.stderr.on("data", (chunk) => {
-      output.push(String(chunk));
-    });
-
-    child.on("error", (error) => {
-      resolve(`curl spawn error: ${error.message}`);
-    });
-    child.on("close", (code) => {
-      resolve(`curl exit=${String(code)}\n${output.join("")}`);
-    });
-  });
-}
-
 async function startFrpc(params: {
   controlServerHost: string;
+  controlServerPort: number;
+  controlTransportProtocol: "websocket" | "wss";
   token: string;
   localTargetPort: number;
   frpcBin?: string;
@@ -166,8 +127,8 @@ async function startFrpc(params: {
 
   const config = [
     `serverAddr = ${tomlString(params.controlServerHost)}`,
-    `serverPort = ${String(443)}`,
-    `transport.protocol = ${tomlString("wss")}`,
+    `serverPort = ${String(params.controlServerPort)}`,
+    `transport.protocol = ${tomlString(params.controlTransportProtocol)}`,
     `auth.token = ${tomlString(params.token)}`,
     "",
     "[[proxies]]",
@@ -274,6 +235,8 @@ export async function startFlyFrpEgressBridge(params: {
   let runId = "";
   let processSlug = "";
   let controlServerHost = "";
+  let controlServerPort = 443;
+  let controlTransportProtocol: "websocket" | "wss" = "wss";
   let dataProxyUrl = "";
 
   try {
@@ -281,7 +244,15 @@ export async function startFlyFrpEgressBridge(params: {
     runId = sanitizeRunId(params.runId);
     processSlug = `frps-${runId}`;
     const token = randomUUID();
-    controlServerHost = new URL(await params.deployment.ingressUrl()).hostname;
+    const ingressUrl = new URL(await params.deployment.ingressUrl());
+    controlServerHost = ingressUrl.hostname;
+    controlServerPort =
+      ingressUrl.port.length > 0
+        ? Number.parseInt(ingressUrl.port, 10)
+        : ingressUrl.protocol === "https:"
+          ? 443
+          : 80;
+    controlTransportProtocol = ingressUrl.protocol === "https:" ? "wss" : "websocket";
     dataProxyUrl = `http://127.0.0.1:${String(FRP_DATA_REMOTE_PORT)}`;
 
     step = "configure-fly-frps";
@@ -294,6 +265,8 @@ export async function startFlyFrpEgressBridge(params: {
     step = "start-frpc";
     const frpc = await startFrpc({
       controlServerHost,
+      controlServerPort,
+      controlTransportProtocol,
       token,
       localTargetPort: params.localTargetPort,
       frpcBin: params.frpcBin,
@@ -303,7 +276,6 @@ export async function startFlyFrpEgressBridge(params: {
       step = "wait-frpc-connected";
       await frpc.waitUntilConnected();
     } catch (error) {
-      const controlRouteProbe = await probeControlRouteBestEffort(controlServerHost);
       const frpsLogs = await readFlyFrpsLogsBestEffort({
         deployment: params.deployment,
         processSlug,
@@ -314,7 +286,7 @@ export async function startFlyFrpEgressBridge(params: {
         processSlug,
       });
       throw new Error(
-        `frpc failed to connect (controlServerHost=${controlServerHost}, dataProxyUrl=${dataProxyUrl})\ncontrol route probe:\n${controlRouteProbe}\nfrps logs:\n${frpsLogs || "(empty)"}`,
+        `frpc failed to connect (controlServerHost=${controlServerHost}, dataProxyUrl=${dataProxyUrl})\nfrps logs:\n${frpsLogs || "(empty)"}`,
         { cause: error },
       );
     }
