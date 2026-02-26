@@ -79,8 +79,10 @@ sudo mkdir -p "$STAGING"
 
   sudo chown iterate:iterate "$STAGING"
 
-  # First boot: if the disk has no .bashrc, it's a fresh/empty disk.
-  if [[ ! -f "${STAGING}/.bashrc" ]]; then
+  # First boot: check for the repo as the signal that setup completed successfully.
+  # (Using .bashrc was unreliable — shared R2 buckets can have stale dotfiles.)
+  REPO_DIR="${STAGING}/src/github.com/iterate/iterate"
+  if [[ ! -f "${REPO_DIR}/package.json" ]]; then
     echo "[archil] First boot — setting up persistent home directory"
 
     # 1. Seed dotfiles/configs from image snapshot
@@ -90,7 +92,6 @@ sudo mkdir -p "$STAGING"
     fi
 
     # 2. Clone iterate repo and install deps
-    REPO_DIR="${STAGING}/src/github.com/iterate/iterate"
     mkdir -p "$(dirname "$REPO_DIR")"
 
     REPO_URL="${ITERATE_REPO_URL:-https://github.com/nichochar/iterate.git}"
@@ -135,7 +136,11 @@ sudo mkdir -p "$STAGING"
 
     echo "[archil] First boot setup complete"
   else
-    echo "[archil] Existing home directory found, skipping setup"
+    echo "[archil] Existing home directory found, updating dotfiles"
+    # Always re-seed dotfiles from image (picks up config updates from new images)
+    if [[ -d /tmp/home-seed ]]; then
+      cp -a /tmp/home-seed/. "${STAGING}/"
+    fi
   fi
 
   # Bind-mount the staging dir over ~ so all processes see the persistent disk at ~
