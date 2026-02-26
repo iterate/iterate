@@ -182,10 +182,9 @@ app.get("/api/observability", (c) => {
 });
 
 app.post("/api/debug/trigger-error", (c) => {
-  const debugTokenRaw = (c.env as Record<string, unknown>)["DEBUG_TRIGGER_ERROR_TOKEN"];
-  const debugToken = typeof debugTokenRaw === "string" ? debugTokenRaw.trim() : undefined;
+  const serviceAuthToken = c.env.SERVICE_AUTH_TOKEN?.trim();
 
-  if (!debugToken) {
+  if (!serviceAuthToken) {
     return c.json({ error: "Not found" }, 404);
   }
 
@@ -195,7 +194,7 @@ app.post("/api/debug/trigger-error", (c) => {
     : undefined;
   const providedToken = bearerToken ?? c.req.header("x-iterate-debug-token")?.trim();
 
-  if (!providedToken || providedToken !== debugToken) {
+  if (!providedToken || providedToken !== serviceAuthToken) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
