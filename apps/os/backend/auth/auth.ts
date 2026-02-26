@@ -91,6 +91,22 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
     baseURL: envParam.VITE_PUBLIC_URL,
     telemetry: { enabled: false },
     secret: envParam.BETTER_AUTH_SECRET,
+    logger: {
+      level: "error",
+      // Route better-auth's internal logging through our logger so the
+      // real underlying errors (e.g. DB connection failures) surface in
+      // our error tracking instead of being swallowed into generic
+      // APIError("Failed to get session").
+      log: (level, message, ...args) => {
+        if (level === "error") {
+          logger.error(`[better-auth] ${message}`, ...args);
+        } else if (level === "warn") {
+          logger.warn(`[better-auth] ${message}`);
+        } else {
+          logger.info(`[better-auth] ${message}`);
+        }
+      },
+    },
     trustedOrigins: (request) => {
       // In non-prod, allow any localhost/127.0.0.1 origin (any port)
       if (isNonProd) {

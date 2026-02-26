@@ -224,10 +224,10 @@ app.use("*", async (c, next) => {
   let session: Awaited<ReturnType<typeof auth.api.getSession>> = null;
   try {
     session = await auth.api.getSession({ headers: c.req.raw.headers });
-  } catch (error) {
-    // better-auth wraps DB errors as generic "Failed to get session" —
-    // log the real cause so it surfaces in error tracking
-    logger.error("getSession failed", error);
+  } catch {
+    // Don't 500 the entire request when session lookup fails (e.g. DB
+    // blip). The real error is already logged by better-auth's logger
+    // config in auth.ts — this catch just prevents it from bubbling up.
   }
   c.set("db", db);
   c.set("auth", auth);
