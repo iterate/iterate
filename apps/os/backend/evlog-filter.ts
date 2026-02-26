@@ -33,7 +33,7 @@ function getFilter(): jsonata.Expression | undefined {
     try {
       compiledFilter = jsonata(expr);
     } catch (err) {
-      // eslint-disable-next-line no-console
+      // eslint-disable-next-line no-console -- startup error, no logger available yet
       console.error(`[evlog-filter] Invalid EVLOG_KEEP expression: ${expr}`, err);
       compiledFilter = undefined; // no filtering on bad expression — keep everything
     }
