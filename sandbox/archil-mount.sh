@@ -51,9 +51,9 @@ echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${MOUNT_POINT} (region: ${AR
 
   # First boot: if the disk has no .bashrc, it's empty — extract image snapshot.
   # The tarball contains the full ~ from build time: repo, dotfiles, node_modules, etc.
-  if [[ ! -f "${MOUNT_POINT}/.bashrc" ]] && [[ -f /opt/home.tar ]]; then
+  if [[ ! -f "${MOUNT_POINT}/.bashrc" ]] && [[ -f /opt/home.tar.gz ]]; then
     echo "[archil] First boot — extracting home tarball into persistent disk"
-    tar xf /opt/home.tar -C "${MOUNT_POINT}"
+    tar xzf /opt/home.tar.gz -C "${MOUNT_POINT}"
     sudo chown -R iterate:iterate "${MOUNT_POINT}"
     echo "[archil] Extraction complete ($(du -sh "${MOUNT_POINT}" | cut -f1))"
   fi

@@ -45,9 +45,9 @@ fi
 #   Pidnap starts from /opt/sandbox (copied at build time) before archil is ready.
 # - Non-archil Fly: extract here so the repo is available immediately.
 if [[ -z "${DOCKER_HOST_SYNC_ENABLED:-}" ]] && [[ -z "${ARCHIL_DISK_NAME:-}" ]]; then
-  if [[ ! -d "${ITERATE_REPO}/sandbox" ]] && [[ -f /opt/home.tar ]]; then
+  if [[ ! -d "${ITERATE_REPO}/sandbox" ]] && [[ -f /opt/home.tar.gz ]]; then
     echo "[entry] Extracting home tarball (non-archil mode)"
-    tar xf /opt/home.tar -C /home/iterate
+    tar xzf /opt/home.tar.gz -C /home/iterate
   fi
 fi
 
@@ -66,9 +66,9 @@ tee -a "$CONSOLE_LOG" < "$CONSOLE_FIFO" &
 # Pidnap CLI: use the repo copy if available, otherwise extract just pidnap from tarball.
 PIDNAP_CONFIG="/opt/sandbox/pidnap.config.ts"
 PIDNAP_CLI="${ITERATE_REPO}/packages/pidnap/src/cli.ts"
-if [[ ! -f "$PIDNAP_CLI" ]] && [[ -f /opt/home.tar ]]; then
+if [[ ! -f "$PIDNAP_CLI" ]] && [[ -f /opt/home.tar.gz ]]; then
   echo "[entry] Extracting pidnap from tarball"
-  tar xf /opt/home.tar -C /home/iterate \
+  tar xzf /opt/home.tar.gz -C /home/iterate \
     --include='./src/github.com/iterate/iterate/packages/pidnap/*' \
     --include='./src/github.com/iterate/iterate/node_modules/pidnap' \
     --include='./src/github.com/iterate/iterate/node_modules/.pnpm/pidnap*' \

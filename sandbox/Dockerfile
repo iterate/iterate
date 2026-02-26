@@ -227,17 +227,13 @@ RUN git init && \
     git commit -m "snapshot ${GIT_SHA}" && \
     git branch -M main
 
-# Archil persistence: package the entire home dir (repo + dotfiles + tools) into a
-# tarball at /opt/home.tar. When archil mounts at ~, the first-boot script extracts
-# this tarball to populate the persistent disk. This is a single file in the image
-# layer — no overlayfs copy-up penalty at runtime.
-# Then remove the repo from ~ so archil can mount over a lightweight home dir.
-# Entry.sh and sandbox scripts are copied to /opt/sandbox/ so they're accessible
-# before archil extracts the tarball.
-RUN sudo tar cf /opt/home.tar -C /home/iterate . && \
-    sudo cp -a "$ITERATE_REPO/sandbox" /opt/sandbox && \
-    sudo rm -rf /home/iterate/src && \
-    sudo mkdir -p /home/iterate/.iterate
+# Archil persistence: package the entire home dir into a compressed tarball.
+# When archil mounts at ~, the first-boot script extracts this to populate the disk.
+# Using gzip to keep image size reasonable (~500MB vs ~2GB uncompressed).
+# Also copy sandbox scripts to /opt/sandbox/ so entry.sh + archil-mount.sh are
+# accessible before the tarball is extracted.
+RUN sudo tar czf /opt/home.tar.gz -C /home/iterate . && \
+    sudo cp -a "$ITERATE_REPO/sandbox" /opt/sandbox
 
 ENV GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA
