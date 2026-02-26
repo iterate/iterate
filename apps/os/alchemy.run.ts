@@ -730,6 +730,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     name: `iterate-archil-${app.stage}`,
     locationHint: "enam", // US East — colocate with worker + PlanetScale
     adopt: true,
+    dev: { remote: true }, // always create real bucket, even in dev (Archil needs actual R2)
   });
 
   const worker = await TanStackStart("os", {
