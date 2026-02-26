@@ -165,6 +165,17 @@ function buildPrompt(params: {
       "- If Cursor Bugbot marked this low risk and independent verification shows merge is safe, you may auto-merge.",
     );
   }
+  lines.push(
+    "",
+    "PR routing marker:",
+    "- When creating or updating a PR body, always include this hidden block at the very end so webhook events route back to this agent session:",
+    "```",
+    `<!-- iterate-agent-context`,
+    `agent_path: ${agentPath}`,
+    `-->`,
+    `<!-- iterate:agent-pr -->`,
+    "```",
+  );
   return lines.join("\n");
 }
 
@@ -229,7 +240,9 @@ async function forwardPromptToMachine(params: {
   const response = await fetcher(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "iterate:agent:prompt-added", message: params.prompt }),
+    body: JSON.stringify({
+      events: [{ type: "iterate:agent:prompt-added", message: params.prompt }],
+    }),
     signal: AbortSignal.timeout(15_000),
   });
 
