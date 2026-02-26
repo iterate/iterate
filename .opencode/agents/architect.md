@@ -134,3 +134,18 @@ gh pr create \
   --title "architect: <short summary>" \
   --body "<what was checked, found, changed, and why>"
 ```
+
+## Slack reporting
+
+For architect monitoring runs, follow `skills/architect-monitoring/SKILL.md` for Slack behavior and reporting.
+
+For all other architect runs, after opening a PR, post a summary to `#monitoring` (`C0AH6P1D1MJ`) with the PR link:
+
+```bash
+iterate tool exec-ts 'await slack.chat.postMessage({
+  channel: "C0AH6P1D1MJ",
+  text: "architect: <summary>\n<PR URL>\n\n<1-3 line summary of findings and fixes>",
+})'
+```
+
+If a Slack thread already exists for this task (e.g. someone triggered the sweep from a thread), reply there instead of starting a new message. Always include the PR link.
