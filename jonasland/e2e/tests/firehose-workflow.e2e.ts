@@ -5,6 +5,8 @@ import { projectDeployment, type ProjectDeployment } from "../test-helpers/index
 
 const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
 const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
+const ITERATE_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
+const PIDNAP_TSX_PATH = `${ITERATE_REPO}/packages/pidnap/node_modules/.bin/tsx`;
 
 const ORDER_WORKFLOW_STARTED_EVENT_TYPE = "https://events.iterate.com/orders/workflow-started";
 const ORDER_WORKFLOW_COMPLETED_EVENT_TYPE = "https://events.iterate.com/orders/workflow-completed";
@@ -41,8 +43,8 @@ async function startOrdersProcess(deployment: ProjectDeployment): Promise<void> 
   const updated = await deployment.pidnap.processes.updateConfig({
     processSlug: "orders",
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/orders-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/orders-service/src/server.ts`],
       env: {
         ...OTEL_SERVICE_ENV,
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
