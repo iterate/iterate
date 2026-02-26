@@ -94,6 +94,8 @@ export async function sendPostHogEvent(
 }
 
 function parseStackTrace(stack: string | undefined): Array<{
+  platform: string;
+  lang: string;
   filename: string;
   function: string;
   lineno: number | undefined;
@@ -110,6 +112,8 @@ function parseStackTrace(stack: string | undefined): Array<{
 
       const [, fn, filename, lineno, colno] = match;
       return {
+        platform: "custom",
+        lang: "javascript",
         filename: filename || "<unknown>",
         function: fn || "<anonymous>",
         lineno: lineno ? parseInt(lineno, 10) : undefined,
@@ -131,23 +135,38 @@ export async function sendPostHogException(
 ): Promise<void> {
   if (params.errors.length === 0) return;
 
+  const fallbackFrames = [
+    {
+      platform: "custom",
+      lang: "javascript",
+      filename: "<unknown>",
+      function: "<unknown>",
+      lineno: undefined,
+      colno: undefined,
+      in_app: true,
+    },
+  ];
+
   await posthogCapture({
     api_key: params.apiKey,
     event: "$exception",
     distinct_id: params.distinctId,
     properties: {
-      $exception_list: params.errors.map((error) => ({
-        type: error.name,
-        value: error.message,
-        mechanism: {
-          handled: true,
-          synthetic: false,
-        },
-        stacktrace: {
-          type: "raw",
-          frames: parseStackTrace(error.stack),
-        },
-      })),
+      $exception_list: params.errors.map((error) => {
+        const frames = parseStackTrace(error.stack);
+        return {
+          type: error.name,
+          value: error.message,
+          mechanism: {
+            handled: true,
+            synthetic: false,
+          },
+          stacktrace: {
+            type: "raw",
+            frames: frames.length > 0 ? frames : fallbackFrames,
+          },
+        };
+      }),
       $environment: params.environment,
       $lib: params.lib ?? "posthog-fetch",
       request: params.request,
