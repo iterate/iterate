@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type FormEvent } from "react";
 import { createFileRoute, Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import {
@@ -137,6 +137,7 @@ const markdownOptions = {
       props: { className: "border-l-2 border-current/20 pl-3 italic opacity-80 mb-2" },
     },
     pre: {
+      component: CodeBlock,
       props: {
         className: "rounded-md bg-black/10 dark:bg-white/10 p-3 overflow-x-auto mb-2 text-xs",
       },
@@ -149,9 +150,23 @@ const markdownOptions = {
   },
 };
 
+const InsidePreContext = createContext(false);
+
+function CodeBlock({ children, className, ...props }: React.ComponentProps<"pre">) {
+  return (
+    <InsidePreContext.Provider value={true}>
+      <pre className={className} {...props}>
+        {children}
+      </pre>
+    </InsidePreContext.Provider>
+  );
+}
+
 function InlineCode({ children, className, ...props }: React.ComponentProps<"code">) {
-  // If wrapped in <pre>, it's a code block — render plain
-  if (className?.includes("lang-") || (typeof children === "string" && children.includes("\n"))) {
+  const insidePre = useContext(InsidePreContext);
+
+  // If inside <pre>, it's a fenced code block — render plain
+  if (insidePre) {
     return (
       <code className={className} {...props}>
         {children}
@@ -187,6 +202,14 @@ function ProjectHomePage() {
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
   const [mobileShowMessages, setMobileShowMessages] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync mobile view state with URL — when browser back removes the thread param,
+  // hide the messages panel on mobile
+  useEffect(() => {
+    if (!search.thread) {
+      setMobileShowMessages(false);
+    }
+  }, [search.thread]);
 
   const { data: projectData } = useSuspenseQuery(
     orpc.project.bySlug.queryOptions({ input: { projectSlug: params.projectSlug } }),
@@ -437,7 +460,7 @@ function ProjectHomePage() {
           )}
         >
           {/* Thread header with mobile back button */}
-          {selectedThreadId && messages.length > 0 ? (
+          {selectedThreadId ? (
             <div className="flex shrink-0 items-center gap-2 rounded-lg border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
               <button
                 type="button"
