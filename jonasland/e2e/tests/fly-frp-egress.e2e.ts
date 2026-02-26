@@ -149,7 +149,7 @@ describe.runIf(RUN_FLY_FRP_E2E)("jonasland fly frp egress", () => {
           .map((entry) => `${entry.request.method} ${entry.request.url}`)
           .join("\n");
         throw new Error(
-          `mock egress did not observe /v1/models (records=${String(proxy.records.length)})\ncurl output:\n${curlOutput}\nobserved:\n${observed}`,
+          `mock egress did not observe ${requestPath} (records=${String(proxy.records.length)})\ncurl output:\n${curlOutput}\nobserved:\n${observed}`,
           { cause: error },
         );
       });
