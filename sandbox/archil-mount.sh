@@ -42,8 +42,16 @@ mkdir -p "${MOUNT_POINT}"
 
 echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${MOUNT_POINT} (region: ${ARCHIL_CLI_REGION})"
 
-# --no-fork: keep archil in foreground so pidnap can manage the process lifecycle.
+# Fix ownership after mount: archil mounts as root, but the iterate user needs write access.
+# Run in background since --no-fork blocks the main thread.
+(
+  while ! grep -q "archil" /proc/mounts 2>/dev/null; do sleep 1; done
+  sudo chown iterate:iterate "${MOUNT_POINT}"
+  echo "[archil] Mount ready — ownership set to iterate:iterate"
+) &
+
 # --force: claim ownership even if stale delegation exists from a previous machine.
+# --no-fork: keep archil in foreground so pidnap can manage the process lifecycle.
 # --log-dir: log to file for debugging.
 sudo --preserve-env=ARCHIL_MOUNT_TOKEN archil mount "${ARCHIL_DISK_NAME}" "${MOUNT_POINT}" \
   --region "${ARCHIL_CLI_REGION}" \

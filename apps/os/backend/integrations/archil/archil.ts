@@ -84,7 +84,8 @@ export async function ensureProjectArchilDisk(
 
 /**
  * Create an Archil disk backed by R2.
- * Each project gets its own prefix in a shared R2 bucket.
+ * Currently uses a shared R2 bucket without prefix isolation.
+ * TODO: use per-project bucketPrefix once Archil supports it in the mount path.
  */
 async function createArchilDisk(
   env: CloudflareEnv,
@@ -117,7 +118,9 @@ async function createArchilDisk(
           bucketEndpoint: env.ARCHIL_R2_ENDPOINT,
           accessKeyId: env.ARCHIL_R2_ACCESS_KEY_ID,
           secretAccessKey: env.ARCHIL_R2_SECRET_ACCESS_KEY,
-          bucketPrefix: `projects/${params.projectId}/`,
+          // Note: bucketPrefix is not yet supported by Archil's mount path.
+          // For now, each project gets its own disk with a dedicated R2 bucket.
+          // TODO: re-add bucketPrefix once Archil ships the fix (per Hunter, Feb 2026).
         },
       ],
       authMethods: [
