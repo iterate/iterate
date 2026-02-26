@@ -218,8 +218,6 @@ RUN pnpm install --frozen-lockfile --offline
 # Run post-repo-sync steps (cacheable - only reruns when source changes)
 RUN bash "$ITERATE_REPO/sandbox/after-repo-sync-steps.sh"
 
-
-
 ARG GIT_SHA=unknown
 # Keep a functional git repo inside the image for tools/tests that call git.
 RUN git init && \
@@ -229,7 +227,19 @@ RUN git init && \
     git commit -m "snapshot ${GIT_SHA}" && \
     git branch -M main
 
+# Archil persistence: package the entire home dir (repo + dotfiles + tools) into a
+# tarball at /opt/home.tar. When archil mounts at ~, the first-boot script extracts
+# this tarball to populate the persistent disk. This is a single file in the image
+# layer — no overlayfs copy-up penalty at runtime.
+# Then remove the repo from ~ so archil can mount over a lightweight home dir.
+# Entry.sh and sandbox scripts are copied to /opt/sandbox/ so they're accessible
+# before archil extracts the tarball.
+RUN sudo tar cf /opt/home.tar -C /home/iterate . && \
+    sudo cp -a "$ITERATE_REPO/sandbox" /opt/sandbox && \
+    sudo rm -rf /home/iterate/src && \
+    sudo mkdir -p /home/iterate/.iterate
+
 ENV GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA
 
-ENTRYPOINT ["/home/iterate/src/github.com/iterate/iterate/sandbox/entry.sh"]
+ENTRYPOINT ["/opt/sandbox/entry.sh"]
