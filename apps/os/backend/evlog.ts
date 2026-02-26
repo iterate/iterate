@@ -154,9 +154,11 @@ export function flushRequestEvlog(): RequestEvlogFlushPayload | undefined {
   store.flushed = true;
 
   // Evaluate the log filter synchronously.
+  // Errors always bypass the filter so PostHog reporting is never suppressed.
   const context = log.getContext();
-  const level = store.errors.length > 0 || Boolean(context.error) ? "error" : store.level;
-  if (!shouldKeepEvent({ ...context, level })) return undefined;
+  const hasErrors = store.errors.length > 0 || Boolean(context.error);
+  const level = hasErrors ? "error" : store.level;
+  if (!hasErrors && !shouldKeepEvent({ ...context, level })) return undefined;
 
   const event = log.emit();
   if (!event) return undefined;

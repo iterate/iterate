@@ -10,7 +10,10 @@ import jsonata from "@mmkal/jsonata/sync";
  * Default expression (when unset):
  *   `level != 'info' or request.status >= 400 or request.duration >= 500`
  *
- * i.e. keep errors/warnings unconditionally, keep info only if status >= 400 or slow.
+ * i.e. keep info only if status >= 400 or slow.
+ *
+ * Note: error-level events (requests with recorded errors) always bypass
+ * this filter entirely — see `flushRequestEvlog()` in evlog.ts.
  *
  * Examples:
  *   - Keep everything:              `true`
