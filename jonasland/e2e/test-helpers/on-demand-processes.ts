@@ -4,6 +4,12 @@ const OTEL_SERVICE_ENV = {
   OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
   OTEL_PROPAGATORS: "tracecontext,baggage",
 };
+const ITERATE_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
+const PIDNAP_TSX_PATH = `${ITERATE_REPO}/packages/pidnap/node_modules/.bin/tsx`;
+const CADDYMANAGER_PATH = `${ITERATE_REPO}/jonasland/sandbox/caddymanager/server.mjs`;
+function serviceServerPath(serviceName: string): string {
+  return `${ITERATE_REPO}/services/${serviceName}/src/server.ts`;
+}
 
 export type OnDemandProcessConfig = {
   definition: {
@@ -27,8 +33,8 @@ export type OnDemandProcessConfig = {
 const sharedOnDemandProcesses = {
   orders: {
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/orders-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [serviceServerPath("orders-service")],
       env: {
         ...OTEL_SERVICE_ENV,
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
@@ -38,16 +44,16 @@ const sharedOnDemandProcesses = {
   },
   outerbase: {
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/outerbase-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [serviceServerPath("outerbase-service")],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "outerbase.iterate.localhost", path: "/healthz" },
   },
   docs: {
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/docs-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [serviceServerPath("docs-service")],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "docs.iterate.localhost", path: "/healthz" },
@@ -58,16 +64,16 @@ export const onDemandProcesses = {
   ...sharedOnDemandProcesses,
   home: {
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/home-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [serviceServerPath("home-service")],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "home.iterate.localhost", path: "/" },
   },
   "egress-proxy": {
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/egress-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [serviceServerPath("egress-service")],
       env: OTEL_SERVICE_ENV,
     },
     directHttpCheck: { url: "http://127.0.0.1:19000/healthz" },
@@ -94,7 +100,7 @@ export const onDemandProcesses = {
   caddymanager: {
     definition: {
       command: "node",
-      args: ["/opt/jonasland-sandbox/caddymanager/server.mjs"],
+      args: [CADDYMANAGER_PATH],
       env: {},
     },
     routeCheck: { host: "caddymanager.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
