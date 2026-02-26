@@ -96,9 +96,20 @@ sudo mkdir -p "$STAGING"
     REPO_URL="${ITERATE_REPO_URL:-https://github.com/nichochar/iterate.git}"
     REPO_REF="${GIT_SHA:-main}"
 
+    # Wait for egress proxy (port 8888) — .gitconfig routes through it
+    echo "[archil] Waiting for egress proxy on port 8888..."
+    for i in $(seq 1 60); do
+      if nc -z 127.0.0.1 8888 2>/dev/null; then
+        echo "[archil] Egress proxy ready"
+        break
+      fi
+      sleep 1
+    done
+
     echo "[archil] Cloning ${REPO_URL} @ ${REPO_REF}"
     git clone --depth 1 --branch main "$REPO_URL" "$REPO_DIR" 2>&1 || {
       # If branch clone fails, try cloning then checking out the sha
+      rm -rf "$REPO_DIR"
       git clone "$REPO_URL" "$REPO_DIR" 2>&1
     }
 
