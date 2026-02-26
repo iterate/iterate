@@ -9,6 +9,11 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@iterate-com/ui": ["../../packages/ui/src/index.ts"],
+      "@iterate-com/ui/*": ["../../packages/ui/src/*"]
+    },
     "allowImportingTsExtensions": true,
     "moduleResolution": "bundler",
     "skipLibCheck": true

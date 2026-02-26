@@ -1053,6 +1053,9 @@ importers:
 
   jonasland/demo:
     dependencies:
+      '@iterate-com/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       react:
         specifier: ^19.2.0
         version: 19.2.3
@@ -1443,13 +1446,25 @@ importers:
       '@iterate-com/agents-contract':
         specifier: workspace:*
         version: link:../agents-contract
+      better-sqlite3:
+        specifier: ^12.4.1
+        version: 12.6.0
+      drizzle-orm:
+        specifier: ^0.45.1
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(pg@8.17.1)(postgres@3.4.7)
       hono:
         specifier: ^4.11.10
         version: 4.12.2
     devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
       '@types/node':
         specifier: ^25.0.10
         version: 25.0.10
+      drizzle-kit:
+        specifier: ^0.31.7
+        version: 0.31.8
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -19812,7 +19827,7 @@ snapshots:
 
   '@types/better-sqlite3@7.6.13':
     dependencies:
-      '@types/node': 24.10.1
+      '@types/node': 25.0.10
 
   '@types/chai@5.2.2':
     dependencies:

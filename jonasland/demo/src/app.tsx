@@ -1,4 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Badge } from "@iterate-com/ui/components/badge";
+import { Button } from "@iterate-com/ui/components/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@iterate-com/ui/components/card";
+import { Input } from "@iterate-com/ui/components/input";
+import { Label } from "@iterate-com/ui/components/label";
+import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+import { Separator } from "@iterate-com/ui/components/separator";
+import { Switch } from "@iterate-com/ui/components/switch";
+import { Textarea } from "@iterate-com/ui/components/textarea";
 import type {
   JonaslandDemoProvider,
   JonaslandDemoState,
@@ -51,6 +66,15 @@ function prettyBody(body: string): string {
   } catch {
     return body;
   }
+}
+
+function phaseBadgeVariant(
+  phase: JonaslandDemoState["phase"],
+): "default" | "secondary" | "destructive" | "outline" {
+  if (phase === "running") return "default";
+  if (phase === "error") return "destructive";
+  if (phase === "idle") return "secondary";
+  return "outline";
 }
 
 function phaseLabel(phase: JonaslandDemoState["phase"]): string {
@@ -272,324 +296,402 @@ export function App() {
   const isRunning = state?.phase === "running";
   const canStop = state !== null && state.phase !== "idle";
 
-  const phaseTone = useMemo(() => {
-    if (state?.phase === "running") return "is-running";
-    if (state?.phase === "starting" || state?.phase === "stopping") return "is-pending";
-    if (state?.phase === "error") return "is-error";
-    return "is-idle";
-  }, [state?.phase]);
+  const records = state?.records ?? [];
+  const events = state?.events ?? [];
+
+  const phase = useMemo(() => state?.phase ?? "idle", [state?.phase]);
 
   return (
-    <div className="page-shell">
-      <header className="hero-panel">
-        <p className="kicker">Jonas Land Demo Control</p>
-        <h1>State-Driven Sandbox + Egress Lab</h1>
-        <p className="lede">
-          One in-memory JonaslandDemoState drives sandbox lifecycle, mock egress behavior, and the
-          request/response firehose.
-        </p>
-        <div className={`phase-pill ${phaseTone}`}>
-          {state ? phaseLabel(state.phase) : "Loading"}
+    <div className="min-h-screen bg-muted/40">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 p-4 md:p-6">
+        <Card>
+          <CardHeader className="gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <CardTitle>Mock Demo OS</CardTitle>
+                <CardDescription>
+                  Create a deployment, poke it from outside, and use this server as its external
+                  egress proxy with controllable scenarios.
+                </CardDescription>
+              </div>
+              <Badge variant={phaseBadgeVariant(phase)}>{phaseLabel(phase)}</Badge>
+            </div>
+            {errorText ? (
+              <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {errorText}
+              </p>
+            ) : null}
+          </CardHeader>
+        </Card>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>Deployment Controls</CardTitle>
+              <CardDescription>Provider, sandbox lifecycle, and entry links.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="provider">Provider</Label>
+                <NativeSelect
+                  id="provider"
+                  disabled={disableActions || (state !== null && state.phase !== "idle")}
+                  onChange={(event) =>
+                    onSetProvider(event.currentTarget.value as JonaslandDemoProvider)
+                  }
+                  value={providerDraft}
+                >
+                  <NativeSelectOption value="docker">docker</NativeSelectOption>
+                  <NativeSelectOption value="fly">fly (not implemented)</NativeSelectOption>
+                </NativeSelect>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button disabled={disableActions || isRunning} onClick={onStart} type="button">
+                  Start Sandbox
+                </Button>
+                <Button
+                  disabled={disableActions || !canStop}
+                  onClick={onStop}
+                  type="button"
+                  variant="destructive"
+                >
+                  Stop Sandbox
+                </Button>
+                <Button
+                  disabled={disableActions}
+                  onClick={() => void refresh({ syncDrafts: true })}
+                  type="button"
+                  variant="outline"
+                >
+                  Refresh
+                </Button>
+              </div>
+
+              <Separator />
+
+              <dl className="grid grid-cols-[120px_1fr] gap-2 text-sm">
+                <dt className="text-muted-foreground">Container</dt>
+                <dd className="font-mono text-xs break-all">
+                  {state?.sandbox.containerName ?? "-"}
+                </dd>
+                <dt className="text-muted-foreground">Ingress</dt>
+                <dd className="font-mono text-xs break-all">{state?.sandbox.ingressUrl ?? "-"}</dd>
+                <dt className="text-muted-foreground">Home</dt>
+                <dd className="font-mono text-xs break-all">
+                  {state?.links.home ? (
+                    <a
+                      className="underline"
+                      href={state.links.home}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      {state.links.home}
+                    </a>
+                  ) : (
+                    "-"
+                  )}
+                </dd>
+                <dt className="text-muted-foreground">Egress Proxy</dt>
+                <dd className="font-mono text-xs break-all">
+                  {state?.sandbox.externalEgressProxy ?? "-"}
+                </dd>
+              </dl>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Egress Scenario</CardTitle>
+              <CardDescription>Default behavior when no mock rule matches.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="fallback">Fallback mode</Label>
+                <NativeSelect
+                  id="fallback"
+                  disabled={disableActions}
+                  onChange={(event) =>
+                    setFallbackModeDraft(event.currentTarget.value as JonaslandEgressFallbackMode)
+                  }
+                  value={fallbackModeDraft}
+                >
+                  <NativeSelectOption value="deny-all">deny-all</NativeSelectOption>
+                  <NativeSelectOption value="proxy-internet">proxy-internet</NativeSelectOption>
+                </NativeSelect>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="default-prompt">Default Slack prompt</Label>
+                <Textarea
+                  id="default-prompt"
+                  onChange={(event) => setPromptDraft(event.currentTarget.value)}
+                  rows={3}
+                  value={promptDraft}
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button disabled={disableActions} onClick={onSaveConfig} type="button">
+                  Save Config
+                </Button>
+                <Button
+                  disabled={disableActions || !isRunning}
+                  onClick={onSimulateSlack}
+                  type="button"
+                  variant="secondary"
+                >
+                  Simulate Slack Webhook
+                </Button>
+                <Button
+                  disabled={disableActions}
+                  onClick={onClearRecords}
+                  type="button"
+                  variant="outline"
+                >
+                  Clear Captures
+                </Button>
+              </div>
+
+              {lastSlackResult ? <pre>{JSON.stringify(lastSlackResult, null, 2)}</pre> : null}
+            </CardContent>
+          </Card>
         </div>
-      </header>
 
-      <main className="grid-layout">
-        <section className="panel">
-          <h2>Provider + Sandbox</h2>
-          <label>
-            Provider
-            <select
-              disabled={disableActions || (state !== null && state.phase !== "idle")}
-              onChange={(event) => onSetProvider(event.target.value as JonaslandDemoProvider)}
-              value={providerDraft}
-            >
-              <option value="docker">docker</option>
-              <option value="fly">fly (not implemented)</option>
-            </select>
-          </label>
+        <Card>
+          <CardHeader>
+            <CardTitle>Mock Rules</CardTitle>
+            <CardDescription>
+              Rules match outbound method/host/path (`*` wildcard) before fallback mode is applied.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="rule-name">Name</Label>
+                <Input
+                  id="rule-name"
+                  onChange={(event) =>
+                    setRuleDraft((prev) => ({ ...prev, name: event.target.value }))
+                  }
+                  value={ruleDraft.name}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rule-method">Method</Label>
+                <Input
+                  id="rule-method"
+                  onChange={(event) =>
+                    setRuleDraft((prev) => ({ ...prev, method: event.target.value.toUpperCase() }))
+                  }
+                  value={ruleDraft.method}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rule-host">Host pattern</Label>
+                <Input
+                  id="rule-host"
+                  onChange={(event) =>
+                    setRuleDraft((prev) => ({ ...prev, hostPattern: event.target.value }))
+                  }
+                  value={ruleDraft.hostPattern}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rule-path">Path pattern</Label>
+                <Input
+                  id="rule-path"
+                  onChange={(event) =>
+                    setRuleDraft((prev) => ({ ...prev, pathPattern: event.target.value }))
+                  }
+                  value={ruleDraft.pathPattern}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rule-status">Response status</Label>
+                <Input
+                  id="rule-status"
+                  onChange={(event) =>
+                    setRuleDraft((prev) => ({ ...prev, responseStatus: event.target.value }))
+                  }
+                  value={ruleDraft.responseStatus}
+                />
+              </div>
+              <div className="flex items-end gap-2 rounded-md border p-3">
+                <Switch
+                  checked={ruleDraft.enabled}
+                  id="rule-enabled"
+                  onCheckedChange={(checked) =>
+                    setRuleDraft((prev) => ({ ...prev, enabled: Boolean(checked) }))
+                  }
+                />
+                <Label htmlFor="rule-enabled">Rule enabled</Label>
+              </div>
+            </div>
 
-          <div className="row-actions">
-            <button disabled={disableActions || isRunning} onClick={onStart}>
-              Start Sandbox
-            </button>
-            <button className="danger" disabled={disableActions || !canStop} onClick={onStop}>
-              Stop Sandbox
-            </button>
-            <button
-              className="ghost"
-              disabled={disableActions}
-              onClick={() => void refresh({ syncDrafts: true })}
-            >
-              Refresh
-            </button>
-          </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="rule-headers">Response headers (JSON)</Label>
+                <Textarea
+                  id="rule-headers"
+                  onChange={(event) =>
+                    setRuleDraft((prev) => ({ ...prev, responseHeadersJson: event.target.value }))
+                  }
+                  rows={7}
+                  value={ruleDraft.responseHeadersJson}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rule-body">Response body</Label>
+                <Textarea
+                  id="rule-body"
+                  onChange={(event) =>
+                    setRuleDraft((prev) => ({ ...prev, responseBody: event.target.value }))
+                  }
+                  rows={7}
+                  value={ruleDraft.responseBody}
+                />
+              </div>
+            </div>
 
-          <dl className="meta-grid">
-            <dt>Container</dt>
-            <dd>{state?.sandbox.containerName ?? "-"}</dd>
-            <dt>Ingress URL</dt>
-            <dd>{state?.sandbox.ingressUrl ?? "-"}</dd>
-            <dt>Home URL</dt>
-            <dd>
-              {state?.links.home ? (
-                <a href={state.links.home} rel="noreferrer" target="_blank">
-                  {state.links.home}
-                </a>
+            <div className="flex flex-wrap gap-2">
+              <Button disabled={disableActions} onClick={onSaveRule} type="button">
+                {ruleDraft.id ? "Update Rule" : "Add Rule"}
+              </Button>
+              <Button
+                disabled={disableActions}
+                onClick={onResetRuleDraft}
+                type="button"
+                variant="outline"
+              >
+                New Rule
+              </Button>
+            </div>
+
+            <Separator />
+
+            {state?.config.mockRules.length ? (
+              <div className="grid gap-2">
+                {state.config.mockRules.map((rule) => (
+                  <div
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3"
+                    key={rule.id}
+                  >
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">{rule.name}</p>
+                      <p className="font-mono text-xs text-muted-foreground">
+                        {rule.method} {rule.hostPattern}
+                        {rule.pathPattern}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={rule.enabled ? "default" : "secondary"}>
+                        {rule.enabled ? "enabled" : "disabled"}
+                      </Badge>
+                      <Badge variant="outline">{rule.responseStatus}</Badge>
+                      <Button
+                        onClick={() => onLoadRule(rule)}
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        onClick={() => onDeleteRule(rule.id)}
+                        size="sm"
+                        type="button"
+                        variant="destructive"
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No mock rules configured.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader className="flex-row items-center justify-between">
+              <div>
+                <CardTitle>Egress Firehose</CardTitle>
+                <CardDescription>
+                  All outbound requests and responses captured by this host.
+                </CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={autoRefresh}
+                  id="auto-refresh"
+                  onCheckedChange={(checked) => setAutoRefresh(Boolean(checked))}
+                />
+                <Label htmlFor="auto-refresh">Auto refresh</Label>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {records.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No requests captured yet.</p>
               ) : (
-                "-"
+                records
+                  .slice()
+                  .reverse()
+                  .map((record) => (
+                    <div className="space-y-2 rounded-md border p-3" key={record.id}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-mono text-xs">
+                          {record.method} {record.path}
+                        </p>
+                        <Badge variant="outline">{record.responseStatus}</Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground">host={record.host}</p>
+                      <div className="grid gap-2 md:grid-cols-2">
+                        <div className="space-y-1">
+                          <Label>Request</Label>
+                          <pre>{prettyBody(record.requestBody)}</pre>
+                        </div>
+                        <div className="space-y-1">
+                          <Label>Response</Label>
+                          <pre>{prettyBody(record.responseBody)}</pre>
+                        </div>
+                      </div>
+                    </div>
+                  ))
               )}
-            </dd>
-            <dt>Egress target</dt>
-            <dd>{state?.sandbox.externalEgressProxy ?? "-"}</dd>
-          </dl>
-        </section>
+            </CardContent>
+          </Card>
 
-        <section className="panel">
-          <h2>Egress Policy</h2>
-          <label>
-            Fallback mode
-            <select
-              disabled={disableActions}
-              onChange={(event) =>
-                setFallbackModeDraft(event.target.value as JonaslandEgressFallbackMode)
-              }
-              value={fallbackModeDraft}
-            >
-              <option value="deny-all">deny-all</option>
-              <option value="proxy-internet">proxy-internet</option>
-            </select>
-          </label>
-
-          <label>
-            Default Slack prompt
-            <textarea
-              onChange={(event) => setPromptDraft(event.target.value)}
-              rows={3}
-              value={promptDraft}
-            />
-          </label>
-
-          <div className="row-actions">
-            <button disabled={disableActions} onClick={onSaveConfig}>
-              Save Config
-            </button>
-            <button disabled={disableActions || !isRunning} onClick={onSimulateSlack}>
-              Simulate Slack Webhook
-            </button>
-            <button className="ghost" disabled={disableActions} onClick={onClearRecords}>
-              Clear Captures
-            </button>
-          </div>
-
-          {lastSlackResult ? (
-            <pre className="result-block">{JSON.stringify(lastSlackResult, null, 2)}</pre>
-          ) : null}
-        </section>
-
-        <section className="panel panel-full">
-          <h2>Mock Rules</h2>
-
-          <div className="row-split">
-            <label>
-              Name
-              <input
-                onChange={(event) =>
-                  setRuleDraft((prev) => ({ ...prev, name: event.target.value }))
-                }
-                value={ruleDraft.name}
-              />
-            </label>
-            <label>
-              Method
-              <input
-                onChange={(event) =>
-                  setRuleDraft((prev) => ({ ...prev, method: event.target.value.toUpperCase() }))
-                }
-                value={ruleDraft.method}
-              />
-            </label>
-          </div>
-
-          <div className="row-split">
-            <label>
-              Host pattern (`*` supported)
-              <input
-                onChange={(event) =>
-                  setRuleDraft((prev) => ({ ...prev, hostPattern: event.target.value }))
-                }
-                value={ruleDraft.hostPattern}
-              />
-            </label>
-            <label>
-              Path pattern (`*` supported)
-              <input
-                onChange={(event) =>
-                  setRuleDraft((prev) => ({ ...prev, pathPattern: event.target.value }))
-                }
-                value={ruleDraft.pathPattern}
-              />
-            </label>
-          </div>
-
-          <div className="row-split">
-            <label>
-              Response status
-              <input
-                onChange={(event) =>
-                  setRuleDraft((prev) => ({ ...prev, responseStatus: event.target.value }))
-                }
-                value={ruleDraft.responseStatus}
-              />
-            </label>
-            <label className="checkbox-row">
-              <input
-                checked={ruleDraft.enabled}
-                onChange={(event) =>
-                  setRuleDraft((prev) => ({ ...prev, enabled: event.target.checked }))
-                }
-                type="checkbox"
-              />
-              Rule enabled
-            </label>
-          </div>
-
-          <label>
-            Response headers (JSON object)
-            <textarea
-              onChange={(event) =>
-                setRuleDraft((prev) => ({ ...prev, responseHeadersJson: event.target.value }))
-              }
-              rows={5}
-              value={ruleDraft.responseHeadersJson}
-            />
-          </label>
-
-          <label>
-            Response body
-            <textarea
-              onChange={(event) =>
-                setRuleDraft((prev) => ({ ...prev, responseBody: event.target.value }))
-              }
-              rows={8}
-              value={ruleDraft.responseBody}
-            />
-          </label>
-
-          <div className="row-actions">
-            <button disabled={disableActions} onClick={onSaveRule}>
-              {ruleDraft.id ? "Update Rule" : "Add Rule"}
-            </button>
-            <button className="ghost" disabled={disableActions} onClick={onResetRuleDraft}>
-              New Rule
-            </button>
-          </div>
-
-          {state?.config.mockRules.length ? (
-            <div className="record-list">
-              {state.config.mockRules.map((rule) => (
-                <article className="record-card" key={rule.id}>
-                  <div className="record-head">
-                    <strong>
-                      {rule.method} {rule.hostPattern}
-                      {rule.pathPattern}
-                    </strong>
-                    <span>{rule.enabled ? "enabled" : "disabled"}</span>
-                  </div>
-                  <p className="record-host">
-                    {rule.name} | {rule.responseStatus}
-                  </p>
-                  <div className="row-actions">
-                    <button
-                      className="ghost"
-                      disabled={disableActions}
-                      onClick={() => onLoadRule(rule)}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      className="danger"
-                      disabled={disableActions}
-                      onClick={() => onDeleteRule(rule.id)}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <p className="empty">No mock rules configured.</p>
-          )}
-        </section>
-
-        <section className="panel panel-full">
-          <div className="panel-head">
-            <h2>Captured Third-Party Traffic</h2>
-            <label className="checkbox-row compact">
-              <input
-                checked={autoRefresh}
-                onChange={(event) => setAutoRefresh(event.target.checked)}
-                type="checkbox"
-              />
-              Auto refresh
-            </label>
-          </div>
-
-          {state?.records.length ? (
-            <div className="record-list">
-              {state.records
-                .slice()
-                .reverse()
-                .map((record) => (
-                  <article className="record-card" key={record.id}>
-                    <div className="record-head">
-                      <strong>
-                        {record.method} {record.path}
-                      </strong>
-                      <span>
-                        {record.responseStatus} in {record.durationMs}ms
-                      </span>
-                    </div>
-                    <p className="record-host">host={record.host}</p>
-                    <div className="record-grid">
-                      <div>
-                        <h3>Request</h3>
-                        <pre>{prettyBody(record.requestBody)}</pre>
-                      </div>
-                      <div>
-                        <h3>Response</h3>
-                        <pre>{prettyBody(record.responseBody)}</pre>
-                      </div>
-                    </div>
-                  </article>
-                ))}
-            </div>
-          ) : (
-            <p className="empty">No requests captured yet.</p>
-          )}
-        </section>
-
-        <section className="panel panel-full">
-          <h2>Runtime Events</h2>
-          {state?.events.length ? (
-            <ul className="event-list">
-              {state.events
-                .slice()
-                .reverse()
-                .map((event) => (
-                  <li key={event.id}>
-                    <time>{event.createdAt}</time>
-                    <span>{event.message}</span>
-                  </li>
-                ))}
-            </ul>
-          ) : (
-            <p className="empty">No events yet.</p>
-          )}
-        </section>
-      </main>
-
-      {errorText ? <aside className="error-banner">{errorText}</aside> : null}
+          <Card>
+            <CardHeader>
+              <CardTitle>Runtime Events</CardTitle>
+              <CardDescription>Server-side operation log from the mock demo OS.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {events.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No events yet.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {events
+                    .slice()
+                    .reverse()
+                    .map((event) => (
+                      <li className="rounded-md border p-2" key={event.id}>
+                        <p className="font-mono text-[11px] text-muted-foreground">
+                          {event.createdAt}
+                        </p>
+                        <p className="text-sm">{event.message}</p>
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }

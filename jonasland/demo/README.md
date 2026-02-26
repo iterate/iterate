@@ -1,23 +1,21 @@
-# Jonas Land Demo
+# Mock Demo OS
 
-Host-side control plane + external egress proxy for Jonas Land sandbox work.
+Host-side controller + external egress proxy for a Jonas Land deployment.
 
 ## What it does
 
-- Uses one in-memory `JonaslandDemoState` as the source of truth.
-- Exposes oRPC-style procedures at `/orpc/demo.*` (UI reads/writes only through procedures).
-- Starts/stops a sandbox (`docker` now, `fly` placeholder).
-- Starts baseline services + Jonasland services and the `home` app.
-- Acts as the sandbox's external egress proxy:
+- Uses one in-memory `JonaslandDemoState` as source of truth.
+- Exposes procedures at `/orpc/demo.*` (UI reads/writes only through these).
+- Starts/stops a deployment (`docker` now, `fly` placeholder).
+- Starts baseline services + Jonasland services + `home`.
+- Acts as that deployment's external egress proxy:
   - matcher-based mock rules
   - fallback policy: `deny-all` or `proxy-internet`
 - Captures full outbound request/response pairs for inspection.
 
 ## Run
 
-```bash
-pnpm jonasland demo
-```
+`pnpm jonasland`
 
 Then open `http://127.0.0.1:5173`.
 
