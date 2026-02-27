@@ -776,12 +776,13 @@ function findMatchingMockRule(params: {
   host: string;
   path: string;
 }): JonaslandMockRule | undefined {
+  const pathOnly = params.path.split("?")[0];
   return state.config.mockRules.find((rule) => {
     if (!rule.enabled) return false;
 
     const methodMatch = wildcardMatch(params.method, rule.method);
     const hostMatch = wildcardMatch(params.host, rule.hostPattern);
-    const pathMatch = wildcardMatch(params.path, rule.pathPattern);
+    const pathMatch = wildcardMatch(pathOnly, rule.pathPattern);
 
     return methodMatch && hostMatch && pathMatch;
   });

@@ -67,10 +67,10 @@ const onDemandProcesses: ProcessConfig[] = ON_DEMAND_PROCESSES.map((processConfi
   slug: processConfig.slug,
   definition: processConfig.definition,
   ...(processConfig.routeCheck
-    ? { routeCheck: { ...processConfig.routeCheck, timeoutMs: 60_000 } }
+    ? { routeCheck: { ...processConfig.routeCheck, timeoutMs: processConfig.routeCheck.timeoutMs ?? 60_000 } }
     : {}),
   ...(processConfig.directHttpCheck
-    ? { directHttpCheck: { ...processConfig.directHttpCheck, timeoutMs: 60_000 } }
+    ? { directHttpCheck: { ...processConfig.directHttpCheck, timeoutMs: processConfig.directHttpCheck.timeoutMs ?? 60_000 } }
     : {}),
 }));
 
