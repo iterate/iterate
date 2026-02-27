@@ -23,18 +23,12 @@ A service's external representation is exactly two things:
 The canonical type. A service definition is a **TS package** that exports this shape:
 
 ```typescript
-interface ServiceDefinition<
-  TContract extends AnyContractRouter = AnyContractRouter,
-  TConfig extends z.ZodType = z.ZodType,
-> {
+interface ServiceDefinition<TConfig extends z.ZodType = z.ZodType> {
   /** Unique identifier. Used in hostnames, file paths, registry keys. kebab-case. */
   slug: string;
 
   /** Semver */
   version: string;
-
-  /** The oRPC contract this service implements (for TS/oRPC services) */
-  contract?: TContract;
 
   /**
    * Typed config schema — what this service needs to run.
@@ -52,9 +46,6 @@ interface ServiceDefinition<
    *
    * The service listens on an OS-assigned ephemeral port (port 0),
    * then reports that port as part of the target.
-   *
-   * For TS/oRPC services: sets up Hono, mounts handlers, registers with registry, listens.
-   * For wrapped non-TS services: spawns the inner process, starts a TS proxy in front of it.
    *
    * Graceful shutdown is handled via POSIX signals (SIGTERM), not a stop() function.
    */
@@ -283,17 +274,25 @@ From the registry + Caddy perspective, a service is always: **one slug, one host
 
 This keeps the registry dead simple and pushes routing complexity to where it belongs — inside the service.
 
-## Contract vs ServiceDefinition
+## oRPC services (TS-specific layer)
 
-A **contract** is a pure API shape — it carries no identity. A **ServiceDefinition** binds a contract to an identity (slug, config, start logic).
+The base `ServiceDefinition` is protocol-agnostic — it knows nothing about oRPC, HTTP, or any specific RPC framework. Not all services are oRPC services (e.g. wrapped third-party software, TCP services, static file servers).
 
-- Two services CAN implement the same contract with different slugs
-- A caller depends on the **contract** (for types) and the **slug** (for addressing)
-- The contract is "what can I do?", the definition is "who am I, what do I need, and how do I start?"
+For our own TS services that use oRPC, we layer on a **contract** — a pure API shape that carries no identity:
 
-### ServiceRef (for callers)
+```typescript
+interface OrpcServiceDefinition<
+  TContract extends AnyContractRouter,
+  TConfig extends z.ZodType = z.ZodType,
+> extends ServiceDefinition<TConfig> {
+  /** The oRPC contract this service implements */
+  contract: TContract;
+}
+```
 
-What a caller needs to create a client:
+### ServiceRef (for callers of oRPC services)
+
+What a caller needs to create a typed client:
 
 ```typescript
 interface ServiceRef<TContract extends AnyContractRouter> {
@@ -302,23 +301,25 @@ interface ServiceRef<TContract extends AnyContractRouter> {
 }
 ```
 
-A ServiceDefinition naturally satisfies ServiceRef.
+An `OrpcServiceDefinition` naturally satisfies `ServiceRef`.
 
 ### Same contract, different services
+
+Two services CAN implement the same contract with different slugs. A caller depends on the **contract** (for types) and the **slug** (for addressing):
 
 ```typescript
 // widget-contract package exports the contract shape
 export const widgetContract = oc.router({ ... });
 
 // service-a definition
-export const serviceA = defineService({
+export const serviceA = defineOrpcService({
   slug: "service-a",
   contract: widgetContract,
   // ...
 });
 
 // service-b definition — same shape, different identity
-export const serviceB = defineService({
+export const serviceB = defineOrpcService({
   slug: "service-b",
   contract: widgetContract,
   // ...
@@ -393,9 +394,9 @@ Utility function that handles boilerplate. A service author writes the minimum; 
 - OpenAPI spec serving
 
 ```typescript
-export function defineService<TContract, TConfig extends z.ZodType>(
-  def: ServiceDefinitionInput<TContract, TConfig>,
-): ServiceDefinition<TContract, TConfig> {
+export function defineService<TConfig extends z.ZodType>(
+  def: ServiceDefinitionInput<TConfig>,
+): ServiceDefinition<TConfig> {
   return {
     ...def,
     async start(config) {
