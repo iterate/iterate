@@ -4,7 +4,6 @@ import type { Logger } from "../src/logger.ts";
 import { createMockLogger, longRunningProcess } from "./test-utils.ts";
 
 type PostedEvent = {
-  path: string;
   event: {
     type: string;
     payload: Record<string, unknown>;
@@ -18,18 +17,15 @@ function extractPostedEvents(fetchMock: ReturnType<typeof vi.fn>): PostedEvent[]
     const body = call[1]?.body;
     if (typeof body !== "string") continue;
     const parsed = JSON.parse(body) as {
-      json?: {
-        path: string;
-        events?: Array<{
-          type: string;
-          payload: Record<string, unknown>;
-          version?: string | number;
-        }>;
-      };
+      events?: Array<{
+        type: string;
+        payload: Record<string, unknown>;
+        version?: string | number;
+      }>;
     };
-    const event = parsed.json?.events?.[0];
+    const event = parsed.events?.[0];
     if (!event) continue;
-    results.push({ path: parsed.json?.path ?? "", event });
+    results.push({ event });
   }
   return results;
 }
@@ -49,10 +45,10 @@ describe("Manager event publishing", () => {
     vi.restoreAllMocks();
   });
 
-  it("publishes process state changes in append oRPC shape", async () => {
+  it("publishes process state changes in stream append shape", async () => {
     const config: ManagerConfig = {
       events: {
-        callbackURL: "http://127.0.0.1:19010/orpc/append",
+        callbackURL: "http://127.0.0.1:19010/api/streams/pidnap",
       },
       processes: [
         {
@@ -84,7 +80,6 @@ describe("Manager event publishing", () => {
         (entry) => entry.event.type === "https://events.iterate.com/pidnap/process/state-changed",
       );
 
-      expect(stateChanged?.path).toBe("/pidnap");
       expect(stateChanged?.event.version).toBe("1");
       expect(stateChanged?.event.payload.name).toBe("worker");
       expect(stateChanged?.event.payload.previousState).toBe("idle");

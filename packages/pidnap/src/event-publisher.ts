@@ -4,7 +4,6 @@ import type { Logger } from "./logger.ts";
 
 export const EventDeliveryConfig = v.object({
   callbackURL: v.string(),
-  path: v.optional(v.string()),
   headers: v.optional(v.record(v.string(), v.string())),
   timeoutMs: v.optional(v.number()),
   retryBaseDelayMs: v.optional(v.number()),
@@ -15,7 +14,6 @@ export type EventDeliveryConfig = v.InferOutput<typeof EventDeliveryConfig>;
 
 const ITERATE_EVENT_TYPE_PREFIX = "https://events.iterate.com/" as const;
 const PIDNAP_EVENT_SCHEMA_VERSION = "1";
-const DEFAULT_STREAM_PATH = "/pidnap";
 const DEFAULT_TIMEOUT_MS = 2_000;
 const DEFAULT_RETRY_BASE_DELAY_MS = 200;
 const DEFAULT_RETRY_MAX_DELAY_MS = 5_000;
@@ -35,18 +33,8 @@ type PublishEvent = {
   payload: Record<string, unknown>;
 };
 
-function normalizeStreamPath(path: string | undefined): string {
-  const trimmed = path?.trim();
-  if (!trimmed) return DEFAULT_STREAM_PATH;
-
-  const segments = trimmed.split("/").filter(Boolean);
-  if (segments.length === 0) return "/";
-  return `/${segments.join("/")}`;
-}
-
 export class EventPublisher {
   private callbackURL: string | null;
-  private path: string;
   private headers: Record<string, string>;
   private timeoutMs: number;
   private retryBaseDelayMs: number;
@@ -60,7 +48,6 @@ export class EventPublisher {
 
   constructor(config: EventDeliveryConfig | undefined, logger: Logger) {
     this.callbackURL = config?.callbackURL?.trim() ?? null;
-    this.path = normalizeStreamPath(config?.path);
     this.headers = config?.headers ?? {};
     this.timeoutMs = Math.max(100, config?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     this.retryBaseDelayMs = Math.max(10, config?.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
@@ -189,16 +176,13 @@ export class EventPublisher {
           ...this.headers,
         },
         body: JSON.stringify({
-          json: {
-            path: this.path,
-            events: [
-              {
-                type: event.type,
-                payload: event.payload,
-                version: PIDNAP_EVENT_SCHEMA_VERSION,
-              },
-            ],
-          },
+          events: [
+            {
+              type: event.type,
+              payload: event.payload,
+              version: PIDNAP_EVENT_SCHEMA_VERSION,
+            },
+          ],
         }),
         signal: controller.signal,
       });
