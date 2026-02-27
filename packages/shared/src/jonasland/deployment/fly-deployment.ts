@@ -709,10 +709,10 @@ export async function flyDeploymentRuntime(
       await sandbox.restart();
       machineId = undefined;
       await refreshClients();
+      await waitReady();
       deployment.pidnap = pidnap;
       deployment.caddy = caddy;
       deployment.registry = registry;
-      await waitReady();
     },
     async [Symbol.asyncDispose]() {
       if (deleted) return;
