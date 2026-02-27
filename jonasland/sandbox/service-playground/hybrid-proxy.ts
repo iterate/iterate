@@ -12,7 +12,7 @@ import { createServer as createNetServer, connect, type Server } from "node:net"
 import { createServer as createHttpServer } from "node:http";
 import type { Hono } from "hono";
 
-const MANAGED_PATH_PREFIXES = ["/service/", "/openapi.json", "/orpc"];
+const MANAGED_PATH_PREFIXES = ["/service/", "/openapi.json", "/orpc/"];
 
 function isHttpAndManaged(chunk: Buffer): boolean {
   const head = chunk.toString("ascii", 0, Math.min(chunk.length, 512));
