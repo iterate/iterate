@@ -6,7 +6,7 @@ We built this for [Iterate](https://iterate.com) deployments, but the pattern is
 
 ## The problem
 
-You have a single server (e.g. a Fly.io machine) running multiple apps behind Caddy. You need many publicly routable hostnames to reach it — one per app, per test run, per environment. Normally this means:
+You have a single server (e.g. a Fly.io machine) running multiple apps behind Caddy. You need many publicly routable hostnames to reach it — one per app, per port, per test run. Normally this means:
 
 1. Create a DNS record per hostname
 2. Wait for propagation
@@ -15,7 +15,9 @@ You have a single server (e.g. a Fly.io machine) running multiple apps behind Ca
 
 This takes minutes to hours and doesn't scale for ephemeral environments like E2E test runs.
 
-An alternative is to use tunnel services like ngrok or Cloudflare Tunnel, where each service gets a random public hostname. This works for one-off use, but doesn't scale when you need dozens of concurrent hostnames for parallel E2E test runs — tunnel services have connection limits, rate limits, and per-tunnel overhead.
+An alternative is tunnel services (ngrok, Cloudflare Tunnel, localtunnel) where each service gets a random public hostname. This works for one-off use, but breaks down at scale — you can't spin up dozens of concurrent tunnels for parallel E2E test runs without hitting connection limits, rate limits, and per-tunnel overhead.
+
+In production, we provision proper wildcard certificates and CNAME records per project. But in testing, we need hostnames that spin up and tear down in milliseconds. That's what this worker does.
 
 ## The solution
 
@@ -30,14 +32,14 @@ Now any `<anything>.proxy.iterate.com` hostname hits this worker. The worker loo
 ```
                           Client
                             │
-                            │  https://myapp.proxy.iterate.com/api/health
+                            │  https://webapp__my-project.proxy.iterate.com/api/health
                             ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │                       Cloudflare Edge                                │
 │                                                                      │
 │  *.proxy.iterate.com  ─►  cf-ingress-proxy-worker                    │
 │                                                                      │
-│     1. Extract Host header (myapp.proxy.iterate.com)                 │
+│     1. Extract Host header                                           │
 │     2. Look up route (in-memory cache → D1 fallback)                 │
 │     3. Forward request transparently (HTTP + WebSocket)              │
 │                                                                      │
@@ -55,7 +57,7 @@ Now any `<anything>.proxy.iterate.com` hostname hits this worker. The worker loo
                   │   └──┬─────┬─────┬───┘   │
                   │      │     │     │        │
                   │      ▼     ▼     ▼        │
-                  │    app1  app2  app3        │
+                  │    :3000 :4096 :8080       │
                   └─────────────────────────┘
 ```
 
@@ -63,29 +65,40 @@ The proxy is fully transparent — it forwards HTTP requests, WebSocket connecti
 
 ## How routes work
 
+### Hostname conventions
+
+In Iterate deployments, hostnames follow the pattern `<app-or-port>__<project-slug>.proxy.iterate.com`:
+
+- `webapp__my-project.proxy.iterate.com` — route to the webapp service
+- `3000__my-project.proxy.iterate.com` — route to port 3000
+- `4096__my-project.proxy.iterate.com` — route to the OpenCode API on port 4096
+
+Caddy inside the Fly machine reads the `Host` header and routes to the right process/port.
+
 ### Exact routes
 
 ```ts
 await client.setRoute({
-  route: "myapp.proxy.iterate.com",
-  target: "https://my-fly-app.fly.dev",
-  headers: { host: "myapp.proxy.iterate.com" },
+  route: "webapp__my-project.proxy.iterate.com",
+  target: "https://prd-my-project.fly.dev",
+  headers: { host: "webapp__my-project.proxy.iterate.com" },
   ttlSeconds: 3600,
 });
 ```
 
-Requests to `myapp.proxy.iterate.com` are forwarded to `my-fly-app.fly.dev` with the `Host` header overridden. The route auto-expires after 1 hour.
-
 ### Wildcard routes
 
 ```ts
+// Route all subdomains for a project to its Fly machine
 await client.setRoute({
-  route: "*.proxy.iterate.com",
-  target: "https://my-fly-app.fly.dev",
+  route: "*.my-project.proxy.iterate.com",
+  target: "https://prd-my-project.fly.dev",
 });
 ```
 
-Now `anything.proxy.iterate.com` routes to your Fly app. Exact matches always take priority over wildcards, and longer wildcard suffixes take priority over shorter ones.
+Now `webapp__my-project.proxy.iterate.com`, `3000__my-project.proxy.iterate.com`, etc. all route to the same Fly machine. Caddy inside differentiates by Host header.
+
+Exact matches always take priority over wildcards. Longer wildcard suffixes take priority over shorter ones.
 
 ### Route lifecycle
 
@@ -97,11 +110,11 @@ Now `anything.proxy.iterate.com` routes to your Fly app. Exact matches always ta
 
 All endpoints require `Authorization: Bearer <CF_PROXY_WORKER_API_TOKEN>`.
 
-| Endpoint      | Description                       |
-| ------------- | --------------------------------- |
-| `setRoute`    | Create or update a route (upsert) |
-| `deleteRoute` | Remove a route                    |
-| `listRoutes`  | List all routes                   |
+| Endpoint | Description |
+|---|---|
+| `setRoute` | Create or update a route (upsert) |
+| `deleteRoute` | Remove a route |
+| `listRoutes` | List all routes |
 
 ### Client setup
 
@@ -124,46 +137,55 @@ const client = createORPCClient(
 );
 ```
 
-### Concrete example: E2E test with two apps
+### Concrete example: E2E test with multiple services
 
 ```ts
-// One Fly machine, two logical apps
+const projectSlug = "my-project";
+const flyTarget = "https://prd-my-project.fly.dev";
+
+// Route different apps/ports to the same Fly machine
 await client.setRoute({
-  route: "app1__run123.proxy.iterate.com",
-  target: "https://someapp.fly.dev",
-  headers: { host: "app1__run123.proxy.iterate.com" },
-  metadata: { testRun: "run123", app: "app1" },
+  route: `webapp__${projectSlug}.proxy.iterate.com`,
+  target: flyTarget,
+  headers: { host: `webapp__${projectSlug}.proxy.iterate.com` },
+  metadata: { project: projectSlug, service: "webapp" },
   ttlSeconds: 3600,
 });
 
 await client.setRoute({
-  route: "app2__run123.proxy.iterate.com",
-  target: "https://someapp.fly.dev",
-  headers: { host: "app2__run123.proxy.iterate.com" },
-  metadata: { testRun: "run123", app: "app2" },
+  route: `4096__${projectSlug}.proxy.iterate.com`,
+  target: flyTarget,
+  headers: { host: `4096__${projectSlug}.proxy.iterate.com` },
+  metadata: { project: projectSlug, service: "opencode" },
   ttlSeconds: 3600,
 });
 
 // Both hostnames hit the same Fly machine.
-// Caddy inside reads the Host header and routes to the right app.
+// Caddy inside reads the Host header and routes to the right port.
 ```
 
 ## Schema
 
 `routes` table (D1/SQLite):
 
-| Column        | Type        | Description                                                         |
-| ------------- | ----------- | ------------------------------------------------------------------- |
-| `route`       | TEXT PK     | Hostname pattern (`app.proxy.iterate.com` or `*.proxy.iterate.com`) |
-| `target`      | TEXT        | Upstream URL                                                        |
-| `headers`     | TEXT (JSON) | Header overrides for upstream request                               |
-| `metadata`    | TEXT (JSON) | Arbitrary metadata (test run ID, app name, etc.)                    |
-| `status`      | TEXT        | `active` / `expired` / `disabled`                                   |
-| `ttl_seconds` | INTEGER     | Optional TTL in seconds                                             |
-| `expires_at`  | TEXT        | Computed expiration timestamp                                       |
-| `expired_at`  | TEXT        | When the route was marked expired                                   |
-| `created_at`  | TEXT        | Creation timestamp                                                  |
-| `updated_at`  | TEXT        | Last update timestamp                                               |
+| Column | Type | Description |
+|---|---|---|
+| `route` | TEXT PK | Hostname pattern (e.g. `webapp__proj.proxy.iterate.com` or `*.proj.proxy.iterate.com`) |
+| `target` | TEXT | Upstream URL |
+| `headers` | TEXT (JSON) | Header overrides for upstream request |
+| `metadata` | TEXT (JSON) | Arbitrary metadata (project slug, service name, etc.) |
+| `status` | TEXT | `active` / `expired` / `disabled` |
+| `ttl_seconds` | INTEGER | Optional TTL in seconds |
+| `expires_at` | TEXT | Computed expiration timestamp |
+| `expired_at` | TEXT | When the route was marked expired |
+| `created_at` | TEXT | Creation timestamp |
+| `updated_at` | TEXT | Last update timestamp |
+
+## Caveats
+
+- **No route conflict detection.** Callers are trusted to not create overlapping or conflicting routes. This is fine for now because the only callers are our own control plane and test infrastructure.
+- **No multi-tenancy / auth scoping.** A single API token controls all routes. There's no per-project or per-user access control.
+- **Lazy TTL expiration only.** Expired routes are marked on next lookup, not proactively cleaned up. Stale rows accumulate until manually deleted.
 
 ## Run / deploy
 
