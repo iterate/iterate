@@ -1,5 +1,7 @@
 Sacrifice grammar for concision. Don't waste tokens. Skip obvious context.
 
+<!-- This file was reviewed on 2026-02-27 -->
+
 ## TOC
 
 - Quick reference
