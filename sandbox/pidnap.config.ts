@@ -179,6 +179,21 @@ export default defineConfig({
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
     },
+    {
+      name: "trigger-monitor-agent",
+      definition: {
+        command: "bash",
+        args: [`${iterateRepo}/repo-templates/default/scripts/trigger-monitor-agent.sh`],
+        cwd: `${iterateRepo}/repo-templates/default`,
+      },
+      options: {
+        restartPolicy: "on-failure",
+      },
+      schedule: {
+        cron: "0 */3 * * *",
+        runOnStart: false,
+      },
+    },
     ...(cloudflareTunnelHostname
       ? [
           {
