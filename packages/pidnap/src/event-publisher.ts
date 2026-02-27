@@ -189,14 +189,16 @@ export class EventPublisher {
           ...this.headers,
         },
         body: JSON.stringify({
-          path: this.path,
-          events: [
-            {
-              type: event.type,
-              payload: event.payload,
-              version: PIDNAP_EVENT_SCHEMA_VERSION,
-            },
-          ],
+          json: {
+            path: this.path,
+            events: [
+              {
+                type: event.type,
+                payload: event.payload,
+                version: PIDNAP_EVENT_SCHEMA_VERSION,
+              },
+            ],
+          },
         }),
         signal: controller.signal,
       });

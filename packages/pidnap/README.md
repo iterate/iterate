@@ -56,14 +56,14 @@ const client = createClient("http://localhost:9876/rpc");
 
 ## Event publishing (optional)
 
-Pidnap can publish process state change events in the events-service `appendStreamEvents` shape:
+Pidnap can publish process state change events to the events-service `append` oRPC endpoint:
 
 ```ts
 const callbackURL = process.env.PIDNAP_EVENTS_CALLBACK_URL?.trim();
 
 export default defineConfig({
   events: {
-    callbackURL: callbackURL ?? "http://127.0.0.1:19010/orpc/appendStreamEvents",
+    callbackURL: callbackURL ?? "http://127.0.0.1:19010/orpc/append",
     path: "/pidnap",
     timeoutMs: 2000,
   },
@@ -73,25 +73,27 @@ export default defineConfig({
 Run with a callback target:
 
 ```bash
-PIDNAP_EVENTS_CALLBACK_URL=http://127.0.0.1:19010/orpc/appendStreamEvents pidnap init
+PIDNAP_EVENTS_CALLBACK_URL=http://127.0.0.1:19010/orpc/append pidnap init
 ```
 
 Posted body:
 
 ```json
 {
-  "path": "/pidnap",
-  "events": [
-    {
-      "type": "https://events.iterate.com/pidnap/process/state-changed",
-      "payload": {
-        "name": "worker",
-        "previousState": "idle",
-        "state": "running"
-      },
-      "version": "1"
-    }
-  ]
+  "json": {
+    "path": "/pidnap",
+    "events": [
+      {
+        "type": "https://events.iterate.com/pidnap/process/state-changed",
+        "payload": {
+          "name": "worker",
+          "previousState": "idle",
+          "state": "running"
+        },
+        "version": "1"
+      }
+    ]
+  }
 }
 ```
 

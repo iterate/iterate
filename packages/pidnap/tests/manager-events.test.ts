@@ -18,16 +18,18 @@ function extractPostedEvents(fetchMock: ReturnType<typeof vi.fn>): PostedEvent[]
     const body = call[1]?.body;
     if (typeof body !== "string") continue;
     const parsed = JSON.parse(body) as {
-      path: string;
-      events?: Array<{
-        type: string;
-        payload: Record<string, unknown>;
-        version?: string | number;
-      }>;
+      json?: {
+        path: string;
+        events?: Array<{
+          type: string;
+          payload: Record<string, unknown>;
+          version?: string | number;
+        }>;
+      };
     };
-    const event = parsed.events?.[0];
+    const event = parsed.json?.events?.[0];
     if (!event) continue;
-    results.push({ path: parsed.path, event });
+    results.push({ path: parsed.json?.path ?? "", event });
   }
   return results;
 }
@@ -47,10 +49,10 @@ describe("Manager event publishing", () => {
     vi.restoreAllMocks();
   });
 
-  it("publishes process state changes in appendStreamEvents shape", async () => {
+  it("publishes process state changes in append oRPC shape", async () => {
     const config: ManagerConfig = {
       events: {
-        callbackURL: "http://127.0.0.1:19010/orpc/appendStreamEvents",
+        callbackURL: "http://127.0.0.1:19010/orpc/append",
       },
       processes: [
         {

@@ -13,13 +13,13 @@ describe("EventPublisher", () => {
     vi.restoreAllMocks();
   });
 
-  it("publishes event in appendStreamEvents shape", async () => {
+  it("publishes event in append oRPC shape", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(undefined, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const publisher = new EventPublisher(
       {
-        callbackURL: "http://example.com/orpc/appendStreamEvents",
+        callbackURL: "http://example.com/orpc/append",
       },
       createMockLogger(),
     );
@@ -33,25 +33,29 @@ describe("EventPublisher", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("http://example.com/orpc/appendStreamEvents");
+    expect(url).toBe("http://example.com/orpc/append");
     expect(init.method).toBe("POST");
 
     const body = JSON.parse(String(init.body)) as {
-      path: string;
-      events: Array<{
-        type: string;
-        version?: string | number;
-        payload: Record<string, unknown>;
-      }>;
+      json: {
+        path: string;
+        events: Array<{
+          type: string;
+          version?: string | number;
+          payload: Record<string, unknown>;
+        }>;
+      };
     };
 
-    expect(body.path).toBe("/pidnap");
-    expect(body.events[0]?.type).toBe("https://events.iterate.com/pidnap/process/state-changed");
-    expect(body.events[0]?.version).toBe("1");
-    expect(body.events[0]?.payload.name).toBe("worker");
-    expect(body.events[0]?.payload.eventId).toEqual(expect.any(String));
-    expect(body.events[0]?.payload.emittedAt).toEqual(expect.any(String));
-    expect(body.events[0]?.payload.sequence).toBe(1);
+    expect(body.json.path).toBe("/pidnap");
+    expect(body.json.events[0]?.type).toBe(
+      "https://events.iterate.com/pidnap/process/state-changed",
+    );
+    expect(body.json.events[0]?.version).toBe("1");
+    expect(body.json.events[0]?.payload.name).toBe("worker");
+    expect(body.json.events[0]?.payload.eventId).toEqual(expect.any(String));
+    expect(body.json.events[0]?.payload.emittedAt).toEqual(expect.any(String));
+    expect(body.json.events[0]?.payload.sequence).toBe(1);
   });
 
   it("normalizes stream path", async () => {
@@ -60,7 +64,7 @@ describe("EventPublisher", () => {
 
     const publisher = new EventPublisher(
       {
-        callbackURL: "http://example.com/orpc/appendStreamEvents",
+        callbackURL: "http://example.com/orpc/append",
         path: "//pidnap//events//",
       },
       createMockLogger(),
@@ -74,8 +78,8 @@ describe("EventPublisher", () => {
     await publisher.close(2000);
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(String(init.body)) as { path: string };
-    expect(body.path).toBe("/pidnap/events");
+    const body = JSON.parse(String(init.body)) as { json: { path: string } };
+    expect(body.json.path).toBe("/pidnap/events");
   });
 
   it("logs warning when callback returns non-2xx", async () => {
@@ -85,7 +89,7 @@ describe("EventPublisher", () => {
     const logger = createMockLogger();
     const publisher = new EventPublisher(
       {
-        callbackURL: "http://example.com/orpc/appendStreamEvents",
+        callbackURL: "http://example.com/orpc/append",
         retryMaxAttempts: 1,
       },
       logger,
@@ -112,7 +116,7 @@ describe("EventPublisher", () => {
 
     const publisher = new EventPublisher(
       {
-        callbackURL: "http://example.com/orpc/appendStreamEvents",
+        callbackURL: "http://example.com/orpc/append",
         retryBaseDelayMs: 5,
         retryMaxDelayMs: 5,
         retryMaxAttempts: 5,
@@ -135,7 +139,7 @@ describe("EventPublisher", () => {
 
     const publisher = new EventPublisher(
       {
-        callbackURL: "http://example.com/orpc/appendStreamEvents",
+        callbackURL: "http://example.com/orpc/append",
         retryBaseDelayMs: 5,
         retryMaxDelayMs: 5,
       },
@@ -179,7 +183,7 @@ describe("EventPublisher", () => {
 
     const publisher = new EventPublisher(
       {
-        callbackURL: "http://example.com/orpc/appendStreamEvents",
+        callbackURL: "http://example.com/orpc/append",
       },
       createMockLogger(),
     );
