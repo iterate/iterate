@@ -1,7 +1,6 @@
 ---
 name: architect-diagnose-performance
 description: Diagnose latency, saturation, and throughput regressions.
-publish: false
 ---
 
 # Diagnose Performance
