@@ -105,23 +105,22 @@ export default defineConfig({
       dependsOn: ["egress-proxy"],
     },
     {
-      // Polls for /tmp/archil-repo-ready (written by archil-mount.sh after clone + install,
-      // or immediately when archil is not configured since the repo is baked into the image).
-      // Exits 0 when ready. Processes that need the repo depend on this with condition "completed".
-      name: "archil-repo-ready",
+      name: "archil-git-sync",
       definition: {
         command: "bash",
-        args: [
-          "-c",
-          'while [ ! -f /tmp/archil-repo-ready ]; do sleep 2; done; echo "[archil-repo-ready] Repo is available"',
-        ],
+        args: [`${sandboxDir}/archil-git-sync.sh`],
       },
       envOptions: {
         inheritGlobalEnv: false,
         reloadDelay: false,
       },
       options: {
-        restartPolicy: "never",
+        restartPolicy: "always",
+        backoff: {
+          type: "exponential",
+          initialDelayMs: 5000,
+          maxDelayMs: 60000,
+        },
       },
       dependsOn: ["archil-mount"],
     },
@@ -142,9 +141,6 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
-      // In archil mode, repo isn't available until archil-mount clones + installs it.
-      // Wait for archil-repo-ready (exits 0 when repo is on disk).
-      dependsOn: [{ process: "archil-repo-ready", condition: "completed" }],
     },
     {
       name: "daemon-backend",
@@ -167,7 +163,6 @@ export default defineConfig({
         // Safe now that daemon no longer writes to .env (PR #1030 moved to push-based setup).
         reloadDelay: 500,
       },
-      dependsOn: [{ process: "archil-repo-ready", condition: "completed" }],
     },
     {
       name: "daemon-frontend",
@@ -210,9 +205,7 @@ export default defineConfig({
           "DEBUG",
           "--print-logs",
         ],
-        // cwd must be a path that exists even during archil mount.
-        // The default cwd (ITERATE_REPO under ~) gets hidden by the bind-mount.
-        cwd: "/tmp",
+        cwd: iterateRepo,
       },
       envOptions: {
         // TODO: confirm why opencode needs a lower env reload delay than default.
@@ -221,7 +214,6 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
-      dependsOn: [{ process: "archil-repo-ready", condition: "completed" }],
     },
     {
       name: "trace-viewer",
