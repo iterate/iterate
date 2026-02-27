@@ -19,7 +19,8 @@ function isHttpAndManaged(chunk: Buffer): boolean {
   if (!/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) /.test(head)) {
     return false;
   }
-  const firstLine = head.slice(0, head.indexOf("\r\n"));
+  const crlfIdx = head.indexOf("\r\n");
+  const firstLine = crlfIdx === -1 ? head : head.slice(0, crlfIdx);
   const path = firstLine.split(" ")[1] || "";
   return MANAGED_PATH_PREFIXES.some((p) => path.startsWith(p));
 }
@@ -82,12 +83,15 @@ export function createHybridProxy(opts: HybridProxyOptions): Promise<HybridProxy
       // The outer TCP server — entrypoint for all connections
       const tcpServer: Server = createNetServer((socket) => {
         socket.once("data", (firstChunk: Buffer) => {
+          // Pause immediately to prevent data loss between once("data") and pipe()
+          socket.pause();
+
           // Decide where to route based on first bytes
           const targetPort = isHttpAndManaged(firstChunk) ? httpPort : innerPort;
 
           const proxy = connect(targetPort, "127.0.0.1", () => {
             proxy.write(firstChunk);
-            socket.pipe(proxy);
+            socket.pipe(proxy); // pipe() calls resume() internally
             proxy.pipe(socket);
           });
           proxy.on("error", () => socket.destroy());
