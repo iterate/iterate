@@ -93,11 +93,11 @@ Now `anything.proxy.iterate.com` routes to your Fly app. Exact matches always ta
 
 All endpoints require `Authorization: Bearer <CF_PROXY_WORKER_API_TOKEN>`.
 
-| Endpoint | Description |
-|---|---|
-| `setRoute` | Create or update a route (upsert) |
-| `deleteRoute` | Remove a route |
-| `listRoutes` | List all routes |
+| Endpoint      | Description                       |
+| ------------- | --------------------------------- |
+| `setRoute`    | Create or update a route (upsert) |
+| `deleteRoute` | Remove a route                    |
+| `listRoutes`  | List all routes                   |
 
 ### Client setup
 
@@ -148,18 +148,18 @@ await client.setRoute({
 
 `routes` table (D1/SQLite):
 
-| Column | Type | Description |
-|---|---|---|
-| `route` | TEXT PK | Hostname pattern (`app.proxy.iterate.com` or `*.proxy.iterate.com`) |
-| `target` | TEXT | Upstream URL |
-| `headers` | TEXT (JSON) | Header overrides for upstream request |
-| `metadata` | TEXT (JSON) | Arbitrary metadata (test run ID, app name, etc.) |
-| `status` | TEXT | `active` / `expired` / `disabled` |
-| `ttl_seconds` | INTEGER | Optional TTL in seconds |
-| `expires_at` | TEXT | Computed expiration timestamp |
-| `expired_at` | TEXT | When the route was marked expired |
-| `created_at` | TEXT | Creation timestamp |
-| `updated_at` | TEXT | Last update timestamp |
+| Column        | Type        | Description                                                         |
+| ------------- | ----------- | ------------------------------------------------------------------- |
+| `route`       | TEXT PK     | Hostname pattern (`app.proxy.iterate.com` or `*.proxy.iterate.com`) |
+| `target`      | TEXT        | Upstream URL                                                        |
+| `headers`     | TEXT (JSON) | Header overrides for upstream request                               |
+| `metadata`    | TEXT (JSON) | Arbitrary metadata (test run ID, app name, etc.)                    |
+| `status`      | TEXT        | `active` / `expired` / `disabled`                                   |
+| `ttl_seconds` | INTEGER     | Optional TTL in seconds                                             |
+| `expires_at`  | TEXT        | Computed expiration timestamp                                       |
+| `expired_at`  | TEXT        | When the route was marked expired                                   |
+| `created_at`  | TEXT        | Creation timestamp                                                  |
+| `updated_at`  | TEXT        | Last update timestamp                                               |
 
 ## Run / deploy
 

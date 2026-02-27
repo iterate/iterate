@@ -17,6 +17,7 @@ Goal: Kent C. Dodds / Barda-quality code. Minimal, transparent, zero unnecessary
 ## Phase 1: Transparent proxy + in-memory caching (request path performance)
 
 The hot path (every proxied request) currently does:
+
 1. `ensureSchema()` — runs CREATE TABLE + 4x ALTER TABLE + 3x CREATE INDEX on **every request**
 2. D1 query for exact match
 3. D1 query for ALL wildcard rows, then filter in JS
@@ -26,10 +27,12 @@ The hot path (every proxied request) currently does:
 **Changes:**
 
 ### 1a. Remove `ensureSchema()` from the request path
+
 - Run schema migration once at deploy time or via admin API endpoint
 - The proxy path should never touch DDL
 
 ### 1b. In-memory route cache
+
 - Global `Map<string, ResolvedRoute>` at module scope (persists within isolate)
 - On proxy request: check in-memory cache first → on miss, query D1 → populate cache
 - Cache invalidation: admin API mutations (`setRoute`/`deleteRoute`) clear the in-memory cache
@@ -37,24 +40,33 @@ The hot path (every proxied request) currently does:
 - This is isolate-local, not global — acceptable for this use case since routes change rarely
 
 ### 1c. Wildcard resolution optimization
+
 - Instead of fetching ALL wildcard rows, maintain an in-memory sorted list of wildcard suffixes
 - Match against the list without hitting D1 on every request
 
 ### 1d. Transparent WebSocket support
+
 CF Workers `fetch()` natively supports WebSocket upgrades when you pass the original request through. The current code does:
+
 ```ts
 const body = method === "GET" || method === "HEAD" ? undefined : request.body;
-const upstreamResponse = await fetch(new Request(upstreamUrl, { method, headers, body, redirect: "manual" }));
+const upstreamResponse = await fetch(
+  new Request(upstreamUrl, { method, headers, body, redirect: "manual" }),
+);
 ```
+
 This strips the original request's WebSocket upgrade context. Instead:
+
 ```ts
 return fetch(new Request(upstreamUrl, request));
 ```
+
 This passes the entire request (including upgrade headers, body stream, etc.) transparently. The runtime handles WebSocket lifecycle with zero per-message overhead.
 
 **Key insight:** `return fetch(new Request(newUrl, request))` handles both HTTP and WebSocket transparently. No `WebSocketPair` needed for a pass-through proxy.
 
 **Caveats:**
+
 - Must use `https://` not `wss://` in the fetch URL
 - WebSocket idle timeout: 100s via CF CDN — may need heartbeat awareness
 - Max message size: 32 MiB
@@ -62,6 +74,7 @@ This passes the entire request (including upgrade headers, body stream, etc.) tr
 ## Phase 2: Code cleanup & structure
 
 ### 2a. Separate concerns
+
 - `routes.ts` — route CRUD (D1 operations)
 - `cache.ts` — in-memory route cache
 - `proxy.ts` — transparent proxy logic (tiny)
@@ -69,23 +82,27 @@ This passes the entire request (including upgrade headers, body stream, etc.) tr
 - `server.ts` — Hono app wiring (just the glue)
 
 ### 2b. Remove unnecessary abstractions
+
 - `InputError` class → just use `ORPCError` directly
 - `parseJsonObject` → D1 already stores/returns JSON text, simplify
 - `rowToRouteRecord` → consider whether the camelCase transform is worth the complexity
 
 ### 2c. Clean up schema management
+
 - Single migration function, called from admin API or deploy script
 - Not called on every request
 
 ## Phase 3: README + documentation
 
 ### 3a. Rewrite README
+
 - Clear explanation of the architecture and why it exists
 - ASCII/mermaid diagram showing: Client → CF Worker (proxy) → Fly.io → Caddy → App
 - Document the wildcard pattern: `*.proxy.iterate.com` CNAME → worker, then routes like `anything.proxy.iterate.com` → target
 - Concrete examples
 
 ### 3b. Inline code comments
+
 - Keep minimal but explain non-obvious choices (e.g. why global var cache is fine)
 
 ## Phase 4: E2E tests
@@ -93,6 +110,7 @@ This passes the entire request (including upgrade headers, body stream, etc.) tr
 Model after the JonasLand E2E test suite. Tests should be in `apps/cf-proxy-worker/e2e/` or similar.
 
 ### 4a. Test infrastructure
+
 - Vitest test runner
 - The test takes as input:
   - `CF_PROXY_WORKER_URL` — publicly routable hostname for the proxy
@@ -101,6 +119,7 @@ Model after the JonasLand E2E test suite. Tests should be in `apps/cf-proxy-work
 - Tests register routes via admin API, then make requests through the proxy
 
 ### 4b. Test cases
+
 - **HTTP proxy:** Register route → request through proxy → verify response
 - **Header rewriting:** Verify Host header and custom headers reach upstream
 - **Wildcard routing:** Register `*.pattern` → verify subdomain requests route correctly
@@ -114,7 +133,9 @@ Model after the JonasLand E2E test suite. Tests should be in `apps/cf-proxy-work
 - **Concurrent connections:** Multiple simultaneous requests/WS connections
 
 ### 4c. Stats output
+
 At test end, print:
+
 - HTTP proxy latency (p50, p95, p99)
 - WebSocket round-trip latency (p50, p95, p99)
 - Number of routes tested
