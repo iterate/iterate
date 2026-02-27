@@ -9,7 +9,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { Hono } from "hono";
 import { z } from "zod/v4";
 import { defineService } from "./define-service.ts";
-import { createHybridProxy, type HybridProxyHandle } from "./hybrid-proxy.ts";
+import { createHybridProxy } from "./hybrid-proxy.ts";
 
 export const echoService = defineService({
   slug: "echo",

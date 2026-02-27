@@ -11,7 +11,6 @@ const GO_BINARY = path.join(PLAYGROUND_DIR, "echo-tcp-server");
 describe("echo service (hybrid TCP/HTTP proxy)", () => {
   let target: string;
   let port: number;
-  let proxyCleanup: (() => void) | undefined;
 
   beforeAll(async () => {
     // Compile the Go binary
