@@ -1080,13 +1080,11 @@ importers:
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
 
   jonasland/e2e:
+    dependencies:
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
     devDependencies:
-      '@accelerated-software-development/caddy-api-client':
-        specifier: ^0.4.3
-        version: 0.4.3(zod@4.3.6)
-      '@docker/node-sdk':
-        specifier: ^0.0.17
-        version: 0.0.17
       '@types/node':
         specifier: ^25.0.10
         version: 25.0.10
@@ -1219,6 +1217,18 @@ importers:
 
   packages/shared:
     dependencies:
+      '@accelerated-software-development/caddy-api-client':
+        specifier: ^0.4.3
+        version: 0.4.3(zod@4.3.6)
+      '@docker/node-sdk':
+        specifier: ^0.0.17
+        version: 0.0.17
+      '@iterate-com/registry-service':
+        specifier: workspace:*
+        version: link:../../services/registry-service
+      '@iterate-com/sandbox':
+        specifier: workspace:*
+        version: link:../../sandbox
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -1261,6 +1271,9 @@ importers:
       evlog:
         specifier: ^1.8.0
         version: 1.11.0(react@19.2.3)
+      pidnap:
+        specifier: workspace:*
+        version: link:../pidnap
       ws:
         specifier: ^8.18.3
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)

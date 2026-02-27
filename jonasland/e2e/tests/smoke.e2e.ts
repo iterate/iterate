@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import {
-  mockEgressProxy,
-  createDeployment,
-  type DeploymentRuntime,
-} from "../test-helpers/index.ts";
+import { DockerDeployment, type DeploymentRuntime } from "@iterate-com/shared/jonasland/deployment";
+import { mockEgressProxy } from "../test-helpers/index.ts";
 
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const RUN_DOCKER_E2E = E2E_PROVIDER === "docker";
@@ -169,10 +166,10 @@ async function waitForDocsSources(
 
 describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   test("caddy admin is API-only and typed caddy client works", async () => {
-    await using deployment = await createDeployment({
+    await using deployment = await DockerDeployment.withConfig({
       image,
       name: `jonasland-e2e-${randomUUID()}`,
-    });
+    }).create();
 
     await deployment.waitForHealthyWithLogs({ url: `${await deployment.ingressUrl()}/` });
 
@@ -188,10 +185,10 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("home and outerbase host routes are reachable", async () => {
-    await using deployment = await createDeployment({
+    await using deployment = await DockerDeployment.withConfig({
       image,
       name: `jonasland-e2e-home-outerbase-${randomUUID()}`,
-    });
+    }).create();
     await startOnDemandProcess(deployment, "home");
     await startOnDemandProcess(deployment, "outerbase");
 
@@ -210,10 +207,10 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("fixture returns typed pidnap/caddy/registry client", async () => {
-    await using deployment = await createDeployment({
+    await using deployment = await DockerDeployment.withConfig({
       image,
       name: `jonasland-e2e-${randomUUID()}`,
-    });
+    }).create();
 
     await deployment.waitForPidnapHostRoute({});
     await deployment.assertIptablesRedirect();
@@ -243,10 +240,10 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("events service is reachable through caddy and supports stream append/list", async () => {
-    await using deployment = await createDeployment({
+    await using deployment = await DockerDeployment.withConfig({
       image,
       name: `jonasland-e2e-events-${randomUUID()}`,
-    });
+    }).create();
 
     const health = await deployment.exec([
       "curl",
@@ -307,10 +304,10 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("orders service is reachable and emits order-placed stream events", async () => {
-    await using deployment = await createDeployment({
+    await using deployment = await DockerDeployment.withConfig({
       image,
       name: `jonasland-e2e-orders-${randomUUID()}`,
-    });
+    }).create();
     await startOnDemandProcess(deployment, "orders");
 
     const health = await deployment.exec(
@@ -354,10 +351,10 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("docs service consolidates OpenAPI specs from tagged services", async () => {
-    await using deployment = await createDeployment({
+    await using deployment = await DockerDeployment.withConfig({
       image,
       name: `jonasland-e2e-docs-${randomUUID()}`,
-    });
+    }).create();
     await startOnDemandProcess(deployment, "orders");
     await startOnDemandProcess(deployment, "docs");
 
@@ -396,10 +393,10 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("services sqlite WAL mode and state persist across container restart", async () => {
-    await using deployment = await createDeployment({
+    await using deployment = await DockerDeployment.withConfig({
       image,
       name: `jonasland-e2e-persist-${randomUUID()}`,
-    });
+    }).create();
 
     const readJournalMode = async () => {
       const result = await deployment.registry.service.sql({
@@ -451,10 +448,10 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("pidnap can imperatively add and control a process", async () => {
-    await using deployment = await createDeployment({
+    await using deployment = await DockerDeployment.withConfig({
       image,
       name: `jonasland-e2e-${randomUUID()}`,
-    });
+    }).create();
 
     await deployment.waitForPidnapProcessRunning({
       target: "caddy",
@@ -509,13 +506,13 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
 
     const matched = proxy.waitFor((request) => new URL(request.url).pathname === "/v1/models");
 
-    await using deployment = await createDeployment({
+    await using deployment = await DockerDeployment.withConfig({
       image,
       name: `jonasland-e2e-egress-${randomUUID()}`,
       env: {
         ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
       },
-    });
+    }).create();
     await startOnDemandProcess(deployment, "egress-proxy");
 
     const curl = await deployment.exec(
@@ -552,10 +549,10 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
 
     const matched = proxy.waitFor((request) => new URL(request.url).pathname === "/direct-target");
 
-    await using deployment = await createDeployment({
+    await using deployment = await DockerDeployment.withConfig({
       image,
       name: `jonasland-e2e-egress-direct-${randomUUID()}`,
-    });
+    }).create();
     await startOnDemandProcess(deployment, "egress-proxy");
 
     const directTarget = `${proxy.proxyUrl}/direct-target`;

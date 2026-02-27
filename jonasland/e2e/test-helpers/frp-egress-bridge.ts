@@ -4,7 +4,7 @@ import { arch, platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
-import type { DeploymentRuntime } from "./docker-deployment.ts";
+import type { DeploymentRuntime } from "@iterate-com/shared/jonasland/deployment";
 
 const FRP_CONTROL_BIND_PORT = 27000;
 const FRP_DATA_REMOTE_PORT = 27180;

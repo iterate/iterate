@@ -13,6 +13,7 @@ FROM node:24-trixie-slim
 ARG GIT_SHA=unknown
 ARG CADDY_VERSION=2.11.1
 ARG FRP_VERSION=0.65.0
+ARG PI_CODING_AGENT_VERSION=0.52.8
 ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -42,6 +43,8 @@ RUN case "${TARGETARCH}" in \
     rm -rf /tmp/frp.tar.gz "/tmp/frp_${FRP_VERSION}_linux_${FRP_ARCH}"
 
 RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
+
+RUN npm install -g @mariozechner/pi-coding-agent@${PI_CODING_AGENT_VERSION} && npm cache clean --force
 
 COPY --from=openobserve /openobserve /usr/local/bin/openobserve
 COPY --from=otelcol /otelcol-contrib /usr/local/bin/otelcol-contrib

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import { createDeployment } from "../test-helpers/index.ts";
+import { FlyDeployment } from "@iterate-com/shared/jonasland/deployment";
 
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const RUN_FLY_E2E = E2E_PROVIDER === "fly";
@@ -34,10 +34,10 @@ describe.runIf(RUN_FLY_E2E)("jonasland fly e2e", () => {
 
     let step = "create deployment";
     try {
-      await using deployment = await createDeployment({
+      await using deployment = await FlyDeployment.withConfig({
         image,
         name: `jonasland-e2e-fly-${randomUUID().slice(0, 8)}`,
-      });
+      }).create();
 
       step = "resolve ingress";
       const ingress = await deployment.ingressUrl();

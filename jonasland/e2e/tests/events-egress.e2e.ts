@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import {
-  mockEgressProxy,
-  createDeployment,
-  type DeploymentRuntime,
-} from "../test-helpers/index.ts";
+import { DockerDeployment, type DeploymentRuntime } from "@iterate-com/shared/jonasland/deployment";
+import { mockEgressProxy } from "../test-helpers/index.ts";
 
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const RUN_DOCKER_E2E = E2E_PROVIDER === "docker";
@@ -79,10 +76,10 @@ async function postEventsOrpc(
 
 describe.runIf(RUN_DOCKER_E2E)("jonasland events egress", () => {
   test("events service health + append/listStreams work inside the container", async () => {
-    await using deployment = await createDeployment({
+    await using deployment = await DockerDeployment.withConfig({
       image,
       name: `jonasland-e2e-events-contract-${randomUUID()}`,
-    });
+    }).create();
 
     const health = await deployment.exec([
       "curl",
@@ -135,13 +132,13 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland events egress", () => {
       },
     });
 
-    await using deployment = await createDeployment({
+    await using deployment = await DockerDeployment.withConfig({
       image,
       name: `jonasland-e2e-events-egress-${randomUUID()}`,
       env: {
         ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
       },
-    });
+    }).create();
     await startEgressProxyProcess(deployment);
 
     const streamPath = `e2e/events/${randomUUID().slice(0, 8)}`;
