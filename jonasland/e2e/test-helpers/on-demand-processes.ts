@@ -5,6 +5,32 @@ const OTEL_SERVICE_ENV = {
   OTEL_PROPAGATORS: "tracecontext,baggage",
 };
 
+const TSX_BIN_CANDIDATES = [
+  "/opt/pidnap/node_modules/.bin/tsx",
+  "/home/iterate/src/github.com/iterate/iterate/packages/pidnap/node_modules/.bin/tsx",
+] as const;
+
+const TSX_LAUNCH_SCRIPT = [
+  "for tsx in /opt/pidnap/node_modules/.bin/tsx /home/iterate/src/github.com/iterate/iterate/packages/pidnap/node_modules/.bin/tsx; do",
+  '  if [ -x "$tsx" ]; then',
+  '    exec "$tsx" "$1"',
+  "  fi",
+  "done",
+  `echo "tsx binary not found in expected paths: ${TSX_BIN_CANDIDATES.join(" ")}" >&2`,
+  "exit 127",
+].join("; ");
+
+function createTsxDefinition(params: {
+  scriptPath: string;
+  env: Record<string, string>;
+}): OnDemandProcessConfig["definition"] {
+  return {
+    command: "sh",
+    args: ["-lc", TSX_LAUNCH_SCRIPT, "tsx-launcher", params.scriptPath],
+    env: params.env,
+  };
+}
+
 export type OnDemandProcessConfig = {
   definition: {
     command: string;
@@ -26,30 +52,27 @@ export type OnDemandProcessConfig = {
 
 const sharedOnDemandProcesses = {
   orders: {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/orders-service/src/server.ts"],
+    definition: createTsxDefinition({
+      scriptPath: "/opt/services/orders-service/src/server.ts",
       env: {
         ...OTEL_SERVICE_ENV,
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
       },
-    },
+    }),
     routeCheck: { host: "orders.iterate.localhost", path: "/healthz" },
   },
   outerbase: {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/outerbase-service/src/server.ts"],
+    definition: createTsxDefinition({
+      scriptPath: "/opt/services/outerbase-service/src/server.ts",
       env: OTEL_SERVICE_ENV,
-    },
+    }),
     routeCheck: { host: "outerbase.iterate.localhost", path: "/healthz" },
   },
   docs: {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/docs-service/src/server.ts"],
+    definition: createTsxDefinition({
+      scriptPath: "/opt/services/docs-service/src/server.ts",
       env: OTEL_SERVICE_ENV,
-    },
+    }),
     routeCheck: { host: "docs.iterate.localhost", path: "/healthz" },
   },
 } satisfies Record<string, OnDemandProcessConfig>;
@@ -57,19 +80,17 @@ const sharedOnDemandProcesses = {
 export const onDemandProcesses = {
   ...sharedOnDemandProcesses,
   home: {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/home-service/src/server.ts"],
+    definition: createTsxDefinition({
+      scriptPath: "/opt/services/home-service/src/server.ts",
       env: OTEL_SERVICE_ENV,
-    },
+    }),
     routeCheck: { host: "home.iterate.localhost", path: "/" },
   },
   "egress-proxy": {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/egress-service/src/server.ts"],
+    definition: createTsxDefinition({
+      scriptPath: "/opt/services/egress-service/src/server.ts",
       env: OTEL_SERVICE_ENV,
-    },
+    }),
     directHttpCheck: { url: "http://127.0.0.1:19000/healthz" },
   },
   openobserve: {

@@ -129,6 +129,30 @@ describe("EventPublisher", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("stops retrying old inflight events after close timeout", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(undefined, { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const publisher = new EventPublisher(
+      {
+        callbackURL: "http://example.com/orpc/appendStreamEvents",
+        retryBaseDelayMs: 5,
+        retryMaxDelayMs: 5,
+      },
+      createMockLogger(),
+    );
+
+    publisher.publish({
+      type: "pidnap/process/state-changed",
+      payload: { name: "worker", previousState: "idle", state: "running" },
+    });
+
+    await publisher.close(20);
+    const attemptsWhenClosed = fetchMock.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fetchMock).toHaveBeenCalledTimes(attemptsWhenClosed);
+  });
+
   it("does nothing when callback URL is blank", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

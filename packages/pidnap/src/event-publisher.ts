@@ -56,6 +56,7 @@ export class EventPublisher {
   private inflight = new Set<Promise<void>>();
   private sequence = 0;
   private closeDeadlineMs: number | null = null;
+  private retryEpoch = 0;
 
   constructor(config: EventDeliveryConfig | undefined, logger: Logger) {
     this.callbackURL = config?.callbackURL?.trim() ?? null;
@@ -101,6 +102,7 @@ export class EventPublisher {
     const deadline = Date.now() + boundedTimeoutMs;
     this.closeDeadlineMs =
       this.closeDeadlineMs === null ? deadline : Math.min(this.closeDeadlineMs, deadline);
+    let timedOut = false;
 
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
@@ -112,24 +114,28 @@ export class EventPublisher {
     try {
       await Promise.race([Promise.allSettled(Array.from(this.inflight)), timeoutPromise]);
     } catch (error) {
+      timedOut = true;
       this.logger.warn("Event publisher close timeout/error:", error);
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle);
       this.closeDeadlineMs = null;
+      if (timedOut) this.retryEpoch += 1;
     }
   }
 
   private send(event: PublishEvent): void {
     if (!this.callbackURL) return;
 
-    const request = this.deliverWithRetry(event).finally(() => {
+    const requestEpoch = this.retryEpoch;
+    const request = this.deliverWithRetry(event, requestEpoch).finally(() => {
       this.inflight.delete(request);
     });
     this.inflight.add(request);
   }
 
-  private async deliverWithRetry(event: PublishEvent): Promise<void> {
+  private async deliverWithRetry(event: PublishEvent, requestEpoch: number): Promise<void> {
     for (let attempt = 1; ; attempt += 1) {
+      if (requestEpoch !== this.retryEpoch) return;
       if (this.isPastCloseDeadline()) return;
 
       const delivered = await this.deliverOnce(event);
