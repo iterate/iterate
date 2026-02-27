@@ -161,11 +161,16 @@ abstract class DeploymentBase implements AsyncDisposable, DeploymentRuntime {
 
     if (params?.waitForReady ?? true) {
       const readyTimeoutMs = params?.readyTimeoutMs ?? 120_000;
-      await this.waitForPidnapHostRoute({ timeoutMs: readyTimeoutMs });
-      await this.waitForDirectHttp({
-        url: "http://127.0.0.1/",
-        timeoutMs: readyTimeoutMs,
-      });
+      try {
+        await this.waitForPidnapHostRoute({ timeoutMs: readyTimeoutMs });
+        await this.waitForDirectHttp({
+          url: "http://127.0.0.1/",
+          timeoutMs: readyTimeoutMs,
+        });
+      } catch (error) {
+        await this.destroy().catch(() => {});
+        throw error;
+      }
     }
 
     return this;
