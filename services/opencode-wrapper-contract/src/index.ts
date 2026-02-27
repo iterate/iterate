@@ -53,6 +53,8 @@ export const OpencodeWrapperServiceEnv = z.object({
   OPENAI_BASE_URL: z.string().default("https://api.openai.com"),
   SLACK_API_BASE_URL: z.string().default("https://slack.com"),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
+  OPENCODE_PROVIDER_ID: z.string().default("openai"),
+  OPENCODE_MODEL_ID: z.string().default("gpt-4o-mini"),
   AGENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19061"),
   DAEMON_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19060"),
   EVENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19010"),

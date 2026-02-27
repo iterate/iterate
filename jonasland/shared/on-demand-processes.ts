@@ -45,11 +45,21 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
   },
   opencode: {
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/jonasland-sandbox/scripts/opencode-mock.ts"],
+      command: "opencode",
+      args: [
+        "serve",
+        "--port",
+        "4096",
+        "--hostname",
+        "0.0.0.0",
+        "--log-level",
+        "DEBUG",
+        "--print-logs",
+      ],
       env: {
         ...ON_DEMAND_OTEL_SERVICE_ENV,
-        OPENCODE_PORT: "4096",
+        OPENAI_API_KEY: "test-key",
+        ANTHROPIC_API_KEY: "test-key",
       },
     },
     directHttpCheck: { url: "http://127.0.0.1:4096/healthz" },
@@ -79,6 +89,8 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
         OPENAI_BASE_URL: "http://api.openai.com",
         SLACK_API_BASE_URL: "http://slack.com",
         OPENAI_MODEL: "gpt-4o-mini",
+        OPENCODE_PROVIDER_ID: "openai",
+        OPENCODE_MODEL_ID: "gpt-4o-mini",
         AGENTS_SERVICE_BASE_URL: "http://127.0.0.1:19061",
         DAEMON_SERVICE_BASE_URL: "http://127.0.0.1:19060",
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010",

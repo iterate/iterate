@@ -12,6 +12,7 @@ FROM node:24-trixie-slim
 
 ARG GIT_SHA=unknown
 ARG CADDY_VERSION=2.11.1
+ARG SANDBOX_OPENCODE_VERSION=1.2.4
 ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,6 +30,8 @@ RUN curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_
     chmod +x /usr/local/bin/caddy
 
 RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
+ENV PATH="/root/.opencode/bin:${PATH}"
 
 COPY --from=openobserve /openobserve /usr/local/bin/openobserve
 COPY --from=otelcol /otelcol-contrib /usr/local/bin/otelcol-contrib

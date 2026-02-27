@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { createAdaptorServer } from "@hono/node-server";
+import { createOpencodeClient, type Event as OpencodeEvent } from "@opencode-ai/sdk/v2";
 import { opencodeWrapperServiceManifest } from "@iterate-com/opencode-wrapper-contract";
 import { createRegistryClient } from "@iterate-com/registry-service/client";
 import { Hono } from "hono";
@@ -14,21 +14,36 @@ import {
   AGENTS_RESPONSE_ADDED_TYPE,
   AGENTS_STATUS_UPDATED_TYPE,
   AgentPromptAddedPayload,
+  type SlackReplyTarget,
 } from "../../../packages/shared/src/jonasland/agents-events.ts";
 import { mountServiceSubRouterHttpRoutes } from "../../../packages/shared/src/jonasland/index.ts";
+
+interface PromptExecutionState {
+  keyBase: string;
+  replyTarget: SlackReplyTarget;
+  prompt: string;
+  latestText: string;
+  emittedResponse: boolean;
+}
 
 interface SessionRecord {
   id: string;
   agentPath: string;
   streamPath: string;
   createdAt: string;
+  pendingPrompt?: PromptExecutionState;
 }
 
 const env = opencodeWrapperServiceManifest.envVars.parse(process.env);
-const sessions = new Map<string, SessionRecord>();
+const opencodeClient = createOpencodeClient({ baseUrl: env.OPENCODE_BASE_URL });
+const sessionsById = new Map<string, SessionRecord>();
+const sessionIdByStreamPath = new Map<string, string>();
 const app = new Hono();
 const serviceRegistryHost = "opencode-wrapper.iterate.localhost";
 const serviceRegistryOpenApiPath = "/api/openapi.json";
+
+let stopLifecycleSubscription = false;
+
 const docsOs = implement(opencodeWrapperServiceManifest.orpcContract);
 const docsRouter = docsOs.router({
   service: {
@@ -50,9 +65,9 @@ const docsRouter = docsOs.router({
   },
   wrapper: {
     createSession: docsOs.wrapper.createSession.handler(async ({ input }) => ({
-      route: `/sessions/stub-${input.agentPath.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
-      sessionId: `stub-${input.agentPath.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
-      streamPath: `/agents/opencode/stub-${input.agentPath.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+      route: `/sessions/${input.agentPath}`,
+      sessionId: input.agentPath,
+      streamPath: `/agents/opencode/${input.agentPath.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
     })),
     forwardSessionEvents: docsOs.wrapper.forwardSessionEvents.handler(async () => ({
       ok: true,
@@ -63,6 +78,7 @@ const docsRouter = docsOs.router({
     })),
   },
 });
+
 const openAPIHandler = new OpenAPIHandler(docsRouter, {
   plugins: [
     new OpenAPIReferencePlugin({
@@ -81,6 +97,10 @@ const openAPIHandler = new OpenAPIHandler(docsRouter, {
   ],
 });
 
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
 function encodeStreamPathForUrl(path: string): string {
   return path
     .replace(/^\/+/, "")
@@ -94,38 +114,70 @@ function toEventsApiUrl(pathname: string): string {
   return new URL(pathname, env.EVENTS_SERVICE_BASE_URL).toString();
 }
 
-async function callModel(prompt: string): Promise<string> {
-  const response = await fetch(`${env.OPENAI_BASE_URL}/v1/responses`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${process.env.OPENAI_API_KEY ?? "test-key"}`,
-    },
-    body: JSON.stringify({
-      model: env.OPENAI_MODEL,
-      input: prompt,
-    }),
-  });
+function normalizeStreamPath(path: string): string {
+  const normalized = `/${path.replace(/^\/+/, "")}`;
+  if (normalized === "/") {
+    throw new Error("missing stream path");
+  }
+  return normalized;
+}
 
-  if (!response.ok) {
-    throw new Error(`openai failed: ${response.status} ${await response.text()}`);
+function normalizeText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function toModelRef(): string {
+  return `${env.OPENCODE_PROVIDER_ID}/${env.OPENCODE_MODEL_ID}`;
+}
+
+function extractSessionId(event: OpencodeEvent): string | null {
+  switch (event.type) {
+    case "session.status":
+    case "session.idle":
+      return event.properties.sessionID;
+    case "session.error":
+      return event.properties.sessionID ?? null;
+    case "message.updated":
+      return event.properties.info.sessionID;
+    case "message.part.updated":
+      return event.properties.part.sessionID;
+    default:
+      return null;
+  }
+}
+
+function toolStatusText(
+  event: Extract<OpencodeEvent, { type: "message.part.updated" }>,
+): string | null {
+  const part = event.properties.part;
+  if (part.type !== "tool") return null;
+
+  const state = part.state;
+  if (state.status !== "running" && state.status !== "completed") {
+    return null;
   }
 
-  const payload = (await response.json()) as {
-    output_text?: string;
-    output?: Array<{ content?: Array<{ text?: string }> }>;
-  };
+  const title = "title" in state && typeof state.title === "string" ? state.title.trim() : "";
+  const description =
+    state.input && typeof state.input.description === "string"
+      ? state.input.description.trim()
+      : "";
+  const fallback = part.tool?.trim() || "Working";
+  const text = title || description || fallback;
+  return text.length > 0 ? text : null;
+}
 
-  if (typeof payload.output_text === "string" && payload.output_text.length > 0) {
-    return payload.output_text;
-  }
-
-  const textFromOutput = payload.output
-    ?.flatMap((item) => item.content ?? [])
-    .map((item) => item.text)
-    .find((value): value is string => typeof value === "string" && value.length > 0);
-
-  return textFromOutput ?? "No response text returned.";
+function sessionErrorMessage(event: Extract<OpencodeEvent, { type: "session.error" }>): string {
+  const maybeMessage =
+    "error" in event.properties && typeof event.properties.error === "string"
+      ? event.properties.error
+      : "message" in event.properties && typeof event.properties.message === "string"
+        ? event.properties.message
+        : "OpenCode session failed";
+  const trimmed = maybeMessage.trim();
+  return trimmed.length > 0 ? trimmed : "OpenCode session failed";
 }
 
 async function appendEventToStream(params: {
@@ -154,8 +206,175 @@ async function appendEventToStream(params: {
   }
 }
 
-async function delay(ms: number): Promise<void> {
+async function emitPromptError(session: SessionRecord, message: string): Promise<void> {
+  const pending = session.pendingPrompt;
+  if (!pending) return;
+
+  await appendEventToStream({
+    streamPath: session.streamPath,
+    type: AGENTS_ERROR_TYPE,
+    payload: {
+      message,
+      retryable: false,
+      replyTarget: pending.replyTarget,
+    },
+    idempotencyKey: `${pending.keyBase}:error`,
+  }).catch(() => {});
+
+  session.pendingPrompt = undefined;
+}
+
+async function flushPromptResponseIfNeeded(session: SessionRecord): Promise<void> {
+  const pending = session.pendingPrompt;
+  if (!pending || pending.emittedResponse) return;
+
+  const text = pending.latestText.trim();
+  if (!text) return;
+
+  await appendEventToStream({
+    streamPath: session.streamPath,
+    type: AGENTS_RESPONSE_ADDED_TYPE,
+    payload: {
+      text,
+      replyTarget: pending.replyTarget,
+      model: toModelRef(),
+    },
+    idempotencyKey: `${pending.keyBase}:response`,
+  });
+  pending.emittedResponse = true;
+}
+
+async function handleSessionIdle(session: SessionRecord): Promise<void> {
+  const pending = session.pendingPrompt;
+  if (!pending) return;
+
+  await flushPromptResponseIfNeeded(session);
+
+  await appendEventToStream({
+    streamPath: session.streamPath,
+    type: AGENTS_STATUS_UPDATED_TYPE,
+    payload: {
+      phase: "idle",
+      text: "",
+      replyTarget: pending.replyTarget,
+    },
+    idempotencyKey: `${pending.keyBase}:status:idle`,
+  });
+
+  session.pendingPrompt = undefined;
+}
+
+async function handleOpencodeEvent(event: OpencodeEvent): Promise<void> {
+  const sessionId = extractSessionId(event);
+  if (!sessionId) return;
+
+  const session = sessionsById.get(sessionId);
+  if (!session) return;
+
+  const pending = session.pendingPrompt;
+  if (!pending) return;
+
+  if (event.type === "session.status") {
+    if (event.properties.status.type === "busy") {
+      await appendEventToStream({
+        streamPath: session.streamPath,
+        type: AGENTS_STATUS_UPDATED_TYPE,
+        payload: {
+          phase: "thinking",
+          text: ":thinking_face: Thinking...",
+          emoji: ":thinking_face:",
+          replyTarget: pending.replyTarget,
+        },
+        idempotencyKey: `${pending.keyBase}:status:thinking`,
+      });
+      return;
+    }
+
+    if (event.properties.status.type === "idle") {
+      await handleSessionIdle(session);
+      return;
+    }
+  }
+
+  if (event.type === "message.part.updated") {
+    const toolText = toolStatusText(event);
+    if (toolText) {
+      const toolPart = event.properties.part;
+      const toolState = toolPart.type === "tool" ? toolPart.state : undefined;
+      const toolStatus =
+        toolState && (toolState.status === "running" || toolState.status === "completed")
+          ? toolState.status
+          : "unknown";
+
+      await appendEventToStream({
+        streamPath: session.streamPath,
+        type: AGENTS_STATUS_UPDATED_TYPE,
+        payload: {
+          phase: "tool-running",
+          text: `:hammer_and_wrench: ${toolText}`,
+          emoji: ":hammer_and_wrench:",
+          replyTarget: pending.replyTarget,
+        },
+        idempotencyKey: `${pending.keyBase}:tool:${toolPart.id}:${toolStatus}`,
+      });
+      return;
+    }
+
+    const part = event.properties.part;
+    if (part.type === "text") {
+      const text = normalizeText(part.text);
+      if (text) {
+        pending.latestText = text;
+      }
+
+      await appendEventToStream({
+        streamPath: session.streamPath,
+        type: AGENTS_STATUS_UPDATED_TYPE,
+        payload: {
+          phase: "responding",
+          text: ":speech_balloon: Responding...",
+          emoji: ":speech_balloon:",
+          replyTarget: pending.replyTarget,
+        },
+        idempotencyKey: `${pending.keyBase}:status:responding`,
+      });
+      return;
+    }
+  }
+
+  if (event.type === "session.idle") {
+    await handleSessionIdle(session);
+    return;
+  }
+
+  if (event.type === "session.error") {
+    await emitPromptError(session, sessionErrorMessage(event));
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runLifecycleSubscriptionLoop(): Promise<void> {
+  while (!stopLifecycleSubscription) {
+    try {
+      const result = await opencodeClient.global.event();
+      for await (const globalEvent of result.stream) {
+        if (stopLifecycleSubscription) {
+          return;
+        }
+
+        await handleOpencodeEvent(globalEvent.payload).catch(() => {});
+      }
+    } catch {
+      // Keep retrying while service is alive.
+    }
+
+    if (!stopLifecycleSubscription) {
+      await sleep(1_000);
+    }
+  }
 }
 
 async function registerOpenApiRoute(): Promise<void> {
@@ -175,7 +394,7 @@ async function registerOpenApiRoute(): Promise<void> {
       });
       return;
     } catch {
-      await delay(1_000);
+      await sleep(1_000);
     }
   }
 }
@@ -195,21 +414,33 @@ for (const path of ["/api/openapi.json", "/api/docs", "/api/docs/*"]) {
 
 app.post("/new", async (c) => {
   const body = (await c.req.json()) as { agentPath?: string };
-  const agentPath = body.agentPath?.trim();
+  const agentPath = normalizeText(body.agentPath);
   if (!agentPath) return c.json({ error: "agentPath is required" }, 400);
 
-  await fetch(`${env.OPENCODE_BASE_URL}/healthz`).catch(() => {
-    // opencode process is best-effort in this minimal wrapper
+  const health = await opencodeClient.global.health().catch(() => null);
+  if (!health?.data?.healthy) {
+    return c.json({ error: "opencode is not healthy" }, 503);
+  }
+
+  const created = await opencodeClient.session.create({
+    title: `Agent: ${agentPath}`,
   });
 
-  const sessionId = randomUUID();
+  const sessionId = normalizeText(created.data?.id);
+  if (!sessionId) {
+    return c.json({ error: "failed to create opencode session" }, 502);
+  }
+
   const streamPath = `/agents/opencode/${sessionId}`;
-  sessions.set(sessionId, {
+  const record: SessionRecord = {
     id: sessionId,
     agentPath,
     streamPath,
-    createdAt: new Date().toISOString(),
-  });
+    createdAt: nowIso(),
+  };
+
+  sessionsById.set(sessionId, record);
+  sessionIdByStreamPath.set(streamPath, sessionId);
 
   return c.json({
     route: `/sessions/${sessionId}`,
@@ -220,12 +451,12 @@ app.post("/new", async (c) => {
 
 app.post("/sessions/:sessionId", async (c) => {
   const sessionId = c.req.param("sessionId");
-  const session = sessions.get(sessionId);
+  const session = sessionsById.get(sessionId);
   if (!session) return c.json({ error: "session not found" }, 404);
 
   await c.req.json().catch(() => null);
 
-  return c.json({ ok: true as const });
+  return c.json({ ok: true as const, sessionId: session.id });
 });
 
 app.post("/internal/events/provider", async (c) => {
@@ -245,60 +476,46 @@ app.post("/internal/events/provider", async (c) => {
     return c.json({ error: "invalid provider payload" }, 400);
   }
 
-  const streamPath = `/${(body.path ?? "").replace(/^\/+/, "")}`;
-  if (streamPath === "/") {
+  let streamPath: string;
+  try {
+    streamPath = normalizeStreamPath(body.path ?? "");
+  } catch {
     return c.json({ error: "missing stream path" }, 400);
   }
 
+  const sessionId = sessionIdByStreamPath.get(streamPath);
+  if (!sessionId) {
+    return c.json({ error: "unknown stream path" }, 404);
+  }
+
+  const session = sessionsById.get(sessionId);
+  if (!session) {
+    return c.json({ error: "session not found" }, 404);
+  }
+
   const keyBase = `${streamPath}:${body.offset ?? "unknown"}`;
+  session.pendingPrompt = {
+    keyBase,
+    prompt: payload.data.prompt,
+    replyTarget: payload.data.replyTarget,
+    latestText: "",
+    emittedResponse: false,
+  };
 
   try {
-    await appendEventToStream({
-      streamPath,
-      type: AGENTS_STATUS_UPDATED_TYPE,
-      payload: {
-        phase: "thinking",
-        text: ":thinking_face: Thinking...",
-        emoji: ":thinking_face:",
-        replyTarget: payload.data.replyTarget,
+    await opencodeClient.session.promptAsync({
+      sessionID: session.id,
+      parts: [{ type: "text", text: payload.data.prompt }],
+      model: {
+        providerID: env.OPENCODE_PROVIDER_ID,
+        modelID: env.OPENCODE_MODEL_ID,
       },
-      idempotencyKey: `${keyBase}:status:thinking`,
-    });
-
-    const modelResponse = await callModel(payload.data.prompt);
-
-    await appendEventToStream({
-      streamPath,
-      type: AGENTS_RESPONSE_ADDED_TYPE,
-      payload: {
-        text: modelResponse,
-        replyTarget: payload.data.replyTarget,
-        model: env.OPENAI_MODEL,
-      },
-      idempotencyKey: `${keyBase}:response`,
-    });
-
-    await appendEventToStream({
-      streamPath,
-      type: AGENTS_STATUS_UPDATED_TYPE,
-      payload: {
-        phase: "idle",
-        text: "",
-        replyTarget: payload.data.replyTarget,
-      },
-      idempotencyKey: `${keyBase}:status:idle`,
     });
   } catch (error) {
-    await appendEventToStream({
-      streamPath,
-      type: AGENTS_ERROR_TYPE,
-      payload: {
-        message: error instanceof Error ? error.message : String(error),
-        retryable: false,
-        replyTarget: payload.data.replyTarget,
-      },
-      idempotencyKey: `${keyBase}:error`,
-    }).catch(() => {});
+    await emitPromptError(
+      session,
+      error instanceof Error ? error.message : "failed to start opencode prompt",
+    );
   }
 
   return c.json({ ok: true as const, handled: true });
@@ -311,9 +528,12 @@ export const startOpencodeWrapperService = async () => {
   });
 
   void registerOpenApiRoute();
+  void runLifecycleSubscriptionLoop();
 
   return {
     close: async () => {
+      stopLifecycleSubscription = true;
+
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) {
