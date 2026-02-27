@@ -20,18 +20,15 @@ A service's external representation is exactly two things:
 
 ## ServiceDefinition
 
-The canonical type describing what a service *is*:
+The canonical type. A service definition is a **TS package** that exports this shape:
 
 ```typescript
 interface ServiceDefinition<
   TContract extends AnyContractRouter = AnyContractRouter,
-  TConfigSchema extends z.ZodType = z.ZodType,
+  TConfig extends z.ZodType = z.ZodType,
 > {
-  /** Unique identifier. Used in hostnames, file paths, registry keys. kebab-case. */
+  /** Unique identifier. Used in hostnames, file paths, registry keys. kebab-case. Also the human-readable name. */
   slug: string;
-
-  /** Human-readable name */
-  name: string;
 
   /** Semver */
   version: string;
@@ -47,27 +44,75 @@ interface ServiceDefinition<
    * NOT env vars. The registry provides values for this schema.
    * Think of it as the service's "constructor parameters".
    */
-  configSchema: TConfigSchema;
+  configSchema: TConfig;
 
-  /** Capabilities / metadata */
-  capabilities: {
-    /** Should Caddy route public internet traffic to this service? */
-    publicTraffic?: boolean;
+  /** Path to a SQLite DB that should appear in the viewer, if any */
+  sqliteDbPath?: string;
 
-    /** Does this service have a SQLite DB that should appear in the viewer? */
-    sqliteDb?: {
-      path: string;
-    };
+  /** Path where openapi.json is served at runtime (for docs aggregation) */
+  openapiPath?: string;
 
-    /** Path where openapi.json is served at runtime (for docs aggregation) */
-    openapiPath?: string;
-  };
+  /**
+   * Start the service. Receives parsed, validated config.
+   * Returns a handle with a stop() function for graceful shutdown.
+   *
+   * For TS/oRPC services: sets up Hono, mounts handlers, registers with registry, listens.
+   * For non-TS services: converts config to env vars, spawns subprocess.
+   */
+  start(config: z.infer<TConfig>): Promise<ServiceHandle>;
 }
+
+interface ServiceHandle {
+  /** Graceful shutdown */
+  stop(): Promise<void>;
+}
+```
+
+### Why a package with start()?
+
+Every service — even non-TS ones — gets a thin TS definition package. This gives us:
+
+- **Uniform entrypoint.** Pidnap, registry, test harnesses all call `start()`. No separate "how to run this" config.
+- **Typed config pipeline.** Config schema is Zod (TS anyway). `start()` receives parsed, validated config. No more raw env var parsing in each service.
+- **Adapter layer for non-TS services.** The `start()` function can convert typed config to env vars and spawn a child process. The wrapper is tiny.
+
+```typescript
+// Example: wrapping a non-TS service
+export default defineService({
+  slug: "outerbase",
+  port: 19040,
+  configSchema: z.object({ dbUrl: z.string() }),
+  async start(config) {
+    const proc = spawn("outerbase-server", {
+      env: { DATABASE_URL: config.dbUrl, PORT: String(this.port) },
+    });
+    return { stop: () => proc.kill() };
+  },
+});
+
+// Example: TS/oRPC service
+export default defineService({
+  slug: "orders",
+  port: 19020,
+  contract: ordersContract,
+  configSchema: z.object({
+    dbPath: z.string(),
+    eventsServiceUrl: z.string(),
+  }),
+  async start(config) {
+    const db = createDb(config.dbPath);
+    const app = new Hono();
+    // mount handlers...
+    const server = serve({ fetch: app.fetch, port: this.port });
+    await registerWithRegistry(this);
+    return { stop: () => server.close() };
+  },
+});
 ```
 
 ### Key design decisions
 
-**Contract vs ServiceDefinition:** A contract is a pure API shape — it carries no identity. A ServiceDefinition *binds* a contract to an identity (slug, port, config). Two services CAN implement the same contract with different slugs. The contract is "what can I do?", the definition is "who am I and what do I need?".
+**Contract vs ServiceDefinition:** A contract is a pure API shape — it carries no identity. A ServiceDefinition *binds* a contract to an identity (slug, port, config, start logic). Two services CAN implement the same contract with different slugs. The contract is "what can I do?", the definition is "who am I, what do I need, and how do I start?".
 
 **When a caller depends on a service**, it depends on:
 - The **contract** (for type safety)
@@ -75,11 +120,52 @@ interface ServiceDefinition<
 
 This means clients are constructed from `(contract, slug)` — not from the full ServiceDefinition. The ServiceDefinition is used by the *service itself* and by the *registry*.
 
-**Config schema replaces env vars.** Today, services declare `envVars: z.object({...})` in their manifest and parse `process.env` at startup. Instead, the service should declare a config schema, and the registry provides the values. The service still *receives* them as env vars (or a config object), but the source of truth is the registry, not `.env` files.
+**Config schema replaces env vars.** Today, services declare `envVars: z.object({...})` in their manifest and parse `process.env` at startup. Instead, the service declares a config schema, and the registry provides the values. The `start()` function receives parsed config — no more `process.env` parsing scattered across services.
+
+## ServiceRef (for callers)
+
+What a caller needs to create a client — the minimum projection of a ServiceDefinition:
+
+```typescript
+interface ServiceRef<TContract extends AnyContractRouter> {
+  slug: string;
+  port: number;
+  contract: TContract;
+}
+```
+
+A ServiceDefinition naturally satisfies ServiceRef. The definition package exports both the full definition and the ref.
+
+### Same contract, different services
+
+If `service-a` and `service-b` both implement `widgetContract`:
+
+```typescript
+// widget-contract package exports the contract
+export const widgetContract = oc.router({ ... });
+
+// service-a definition package
+export const serviceA = defineService({
+  slug: "service-a",
+  port: 19100,
+  contract: widgetContract,
+  // ...
+});
+
+// service-b definition package
+export const serviceB = defineService({
+  slug: "service-b",
+  port: 19101,
+  contract: widgetContract,
+  // ...
+});
+```
+
+Callers import the definition they want and use it as a ServiceRef for client construction.
 
 ## Registration protocol
 
-On startup, a service:
+On startup, `start()` calls the registry:
 
 1. Knows exactly one thing: the registry base URL (env var: `REGISTRY_URL`)
 2. Sends a `register` request with:
@@ -89,8 +175,8 @@ On startup, a service:
      version: string;
      host: string;          // where Caddy can reach me (e.g. "127.0.0.1:19020")
      configSchema: object;  // JSON Schema of what I need
-     capabilities: { ... }; // from ServiceDefinition
      openapiSpec?: object;  // the full openapi.json (or URL to fetch it)
+     sqliteDbPath?: string;
    }
    ```
 3. Registry responds with:
@@ -107,72 +193,25 @@ On shutdown (or crash detection), the service deregisters.
 ## Lifecycle
 
 ```
-[start] → know REGISTRY_URL
-       → POST /register { slug, version, host, configSchema, capabilities, openapiSpec }
-       ← { config, caddy }
-       → apply config
-       → signal ready (start accepting traffic)
-       ...
-       → POST /deregister { slug }
-       ← ack
-[stop]
+[start()] → know REGISTRY_URL
+          → POST /register { slug, version, host, configSchema, ... }
+          ← { config, caddy }
+          → apply config, set up server, mount handlers
+          → start accepting traffic
+          ...
+          → stop() called
+          → POST /deregister { slug }
+          ← ack
+[stopped]
 ```
-
-## Client construction
-
-Today:
-```typescript
-const client = createOrpcRpcServiceClient({
-  env: { ITERATE_PROJECT_BASE_URL: "..." },
-  manifest: ordersServiceManifest,  // { slug, port, orpcContract }
-});
-```
-
-This is roughly right. The manifest is the ServiceDefinition minus config. We should formalize this:
-
-```typescript
-// What a caller needs to create a client
-interface ServiceRef<TContract extends AnyContractRouter> {
-  slug: string;
-  port: number;
-  contract: TContract;
-}
-```
-
-A ServiceDefinition produces a ServiceRef by dropping config/capabilities. The contract package exports both.
-
-### Same contract, different services
-
-If `service-a` and `service-b` both implement `widgetContract`:
-
-```typescript
-// widget-contract package exports the contract
-export const widgetContract = oc.router({ ... });
-
-// service-a-contract package
-export const serviceARef: ServiceRef<typeof widgetContract> = {
-  slug: "service-a",
-  port: 19100,
-  contract: widgetContract,
-};
-
-// service-b-contract package
-export const serviceBRef: ServiceRef<typeof widgetContract> = {
-  slug: "service-b",
-  port: 19101,
-  contract: widgetContract,
-};
-```
-
-Callers choose which to talk to by importing the right ServiceRef.
 
 ## Committed openapi.json
 
 Design goal: `openapi.json` files are committed in the repo, not just generated at runtime.
 
 Approach:
-- Each service contract package has a script: `pnpm generate:openapi`
-- This script imports the contract, uses `@orpc/openapi` to generate the spec, writes to `services/{slug}-contract/openapi.json`
+- Each service definition package has a script: `pnpm generate:openapi`
+- This script imports the contract, uses `@orpc/openapi` to generate the spec, writes to `services/{slug}/openapi.json`
 - CI verifies specs are up-to-date (generate + diff)
 - Other services/tools can import the committed spec for codegen, docs, etc.
 
@@ -183,5 +222,6 @@ Approach:
 - [ ] **Service discovery beyond Caddy.** Currently Caddy is the only router. What if a service needs to discover another service without going through Caddy? (Answer for now: use the port-based URL resolution, which already works.)
 - [ ] **OpenAPI client generation.** We want typed oRPC-wrapped clients auto-generated from committed specs. What's the toolchain? `@orpc/openapi` can generate specs; can it also consume them to produce clients? Or do we use a separate codegen tool?
 - [ ] **Third-party / non-oRPC services.** The abstraction should work for any HTTP service with an OpenAPI spec, not just our TS/oRPC ones. The registration protocol is HTTP-based and contract-agnostic — the oRPC contract is a TS-specific nicety on top.
-- [ ] **Same-contract-different-service naming.** How do we name the packages? `widget-contract` for the shared contract, `service-a-definition` for the identity binding? Or just `service-a` exports both its definition and re-exports the contract?
-- [ ] **Migration path from current manifests.** The existing `ordersServiceManifest` etc. need to evolve into `ServiceDefinition`. Should be incremental — rename fields, add configSchema, deprecate envVars.
+- [ ] **Package naming convention.** When a contract is shared between services, how do we name things? Options: `widget-contract` for the shape + each service's definition package re-exports it. Or: contracts always live in the definition package (1:1 today).
+- [ ] **Migration path from current manifests.** The existing `ordersServiceManifest` etc. evolve into ServiceDefinitions. Incremental: add `start()`, rename `orpcContract` → `contract`, replace `envVars` with `configSchema`.
+- [ ] **`defineService()` helper.** Utility function that validates the definition shape and returns a typed object. Handles boilerplate like OTEL init, registry registration, graceful shutdown signal handling.
