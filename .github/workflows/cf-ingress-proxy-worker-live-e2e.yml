@@ -16,6 +16,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      ALCHEMY_CI_STATE_STORE_CHECK: "false"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

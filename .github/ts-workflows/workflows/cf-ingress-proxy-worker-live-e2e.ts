@@ -22,6 +22,9 @@ export default workflow({
       if: "github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.fork == false",
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       "timeout-minutes": 20,
+      env: {
+        ALCHEMY_CI_STATE_STORE_CHECK: "false",
+      },
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "stg" }),
