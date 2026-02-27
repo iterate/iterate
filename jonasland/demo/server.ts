@@ -861,6 +861,8 @@ async function proxyToInternet(params: {
       const responseBody = await response.text();
       const responseHeaders: Record<string, string> = {};
       for (const [key, value] of response.headers.entries()) {
+        const lower = key.toLowerCase();
+        if (lower === "content-length" || lower === "content-encoding" || lower === "transfer-encoding") continue;
         responseHeaders[key] = value;
       }
 
