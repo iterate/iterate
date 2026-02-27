@@ -1,7 +1,6 @@
 ---
 name: architect-diagnose-test-flakes
 description: Diagnose flaky tests and unstable CI behavior.
-publish: false
 ---
 
 # Diagnose Test Flakes
