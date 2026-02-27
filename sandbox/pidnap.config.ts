@@ -71,7 +71,7 @@ export default defineConfig({
           "--set",
           `confdir=${mitmproxyDir}`,
           "-s",
-          `${sandboxDir}/egress-proxy-addon.py`,
+          `/opt/mitmproxy/egress-proxy-addon.py`,
           "--ssl-insecure",
         ],
       },

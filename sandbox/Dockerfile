@@ -129,7 +129,8 @@ RUN mkdir -p /opt/mitmproxy/certs && \
       sleep 0.5; \
     done && \
     kill $PID 2>/dev/null || true && \
-    test -f /opt/mitmproxy/certs/mitmproxy-ca-cert.pem
+    test -f /opt/mitmproxy/certs/mitmproxy-ca-cert.pem && \
+    chmod -R a+rX /opt/mitmproxy/certs
 
 # Install mitmproxy CA certificate system-wide
 RUN mkdir -p /usr/local/share/ca-certificates/iterate && \
@@ -221,6 +222,10 @@ RUN if [ -f .git ]; then rm .git && mkdir .git; fi
 
 # Ensure shell scripts are executable (git may not preserve permissions on all platforms)
 RUN chmod +x sandbox/*.sh sandbox/providers/docker/*.sh
+
+# Copy egress proxy addon to a system path so it's available before archil-mount
+# clones the repo (the archil bind-mount hides ~/src/... during first boot).
+RUN sudo cp sandbox/egress-proxy-addon.py /opt/mitmproxy/egress-proxy-addon.py
 
 # Install dependencies then clean the pnpm content-addressable store.
 # The store is only needed during install — node_modules/.pnpm has hardlinks
