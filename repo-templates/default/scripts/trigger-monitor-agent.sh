@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Only run for the iterate/iterate repo — skip silently for customer machines.
-repo_path="${ITERATE_CUSTOMER_REPO_PATH:-${ITERATE_REPO:-}}"
-if [[ "$repo_path" != */iterate/iterate ]]; then
-  exit 0
-fi
-
 daemon_base_url="${ITERATE_DAEMON_BASE_URL:-http://127.0.0.1:${PORT:-3001}}"
 agent_path="${ITERATE_MONITOR_AGENT_PATH:-/cron/monitor-fly-io-usage}"
 
