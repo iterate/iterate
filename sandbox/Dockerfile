@@ -223,20 +223,18 @@ RUN git init && \
     git commit -m "snapshot ${GIT_SHA}" && \
     git branch -M main
 
-# Snapshot tool directories from ~ so archil-mount.sh can seed them onto
-# the archil disk after mount (the bind-mount over ~ hides everything).
+# Snapshot tool directories from ~ as a compressed tarball so archil-mount.sh
+# can seed them onto the archil disk after mount (the bind-mount over ~ hides
+# everything). Using a tarball avoids doubling the image layer size.
 # Only tool/binary dirs — NOT the repo (it's cloned separately on first boot).
-RUN sudo mkdir -p /opt/home-snapshot && sudo chown iterate:iterate /opt/home-snapshot && \
-    for d in .local .npm-global .bun .fly .opencode .claude .cache/node .mitmproxy .iterate .config go; do \
-      if [ -d "/home/iterate/$d" ]; then \
-        mkdir -p "/opt/home-snapshot/$d" && \
-        cp -a "/home/iterate/$d/." "/opt/home-snapshot/$d/"; \
-      fi; \
-    done && \
-    for f in .bashrc .bash_logout .profile .gitconfig .npmrc .claude.json; do \
-      [ -f "/home/iterate/$f" ] && cp "/home/iterate/$f" /opt/home-snapshot/ || true; \
-    done && \
-    echo "Home snapshot created at /opt/home-snapshot"
+RUN cd /home/iterate && \
+    tar czf /tmp/home-snapshot.tar.gz \
+      --ignore-failed-read \
+      .local .npm-global .bun .fly .opencode .claude .cache/node .mitmproxy .iterate .config go \
+      .bashrc .bash_logout .profile .gitconfig .npmrc .claude.json \
+      2>/dev/null && \
+    sudo mv /tmp/home-snapshot.tar.gz /opt/home-snapshot.tar.gz && \
+    echo "Home snapshot tarball: $(du -sh /opt/home-snapshot.tar.gz | cut -f1)"
 
 ENV GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA

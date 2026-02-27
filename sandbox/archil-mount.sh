@@ -51,10 +51,10 @@ export ARCHIL_MOUNT_TOKEN="${ARCHIL_MOUNT_TOKEN:-}"
 echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${STAGING} -> ${MOUNT_POINT} (region: ${ARCHIL_CLI_REGION})"
 
 # The Dockerfile snapshots all tool directories (bins, configs, dotfiles)
-# to /opt/home-snapshot/ so they survive the archil bind-mount over ~.
-HOME_SNAPSHOT="/opt/home-snapshot"
-if [[ ! -d "$HOME_SNAPSHOT" ]]; then
-  echo "[archil] WARNING: /opt/home-snapshot not found — tools will be missing"
+# to /opt/home-snapshot.tar.gz so they survive the archil bind-mount over ~.
+HOME_SNAPSHOT="/opt/home-snapshot.tar.gz"
+if [[ ! -f "$HOME_SNAPSHOT" ]]; then
+  echo "[archil] WARNING: /opt/home-snapshot.tar.gz not found — tools will be missing"
 fi
 
 # Archil FUSE (libfuse2) refuses to mount on a non-empty directory.
@@ -75,15 +75,15 @@ sudo mkdir -p "$STAGING"
   # Recursive chown over FUSE is extremely slow (minutes for large dirs).
   sudo chown iterate:iterate "$STAGING"
 
-  # Seed tool directories and configs from image snapshot.
+  # Seed tool directories and configs from image snapshot tarball.
   # This restores all binaries (pnpm, tsx, mitmdump, bun, fly, etc.) that the bind-mount hides.
-  # On subsequent boots, skip the heavy copy if tools are already present (from a previous seed).
-  if [[ -d "$HOME_SNAPSHOT" ]]; then
+  # On subsequent boots, skip the heavy extract if tools are already present.
+  if [[ -f "$HOME_SNAPSHOT" ]]; then
     if [[ -x "${STAGING}/.local/bin/mitmdump" ]] && [[ -x "${STAGING}/.npm-global/bin/tsx" ]]; then
       echo "[archil] Tools already present on disk, skipping seed"
     else
-      echo "[archil] Seeding tool directories from image snapshot..."
-      cp -a "$HOME_SNAPSHOT"/. "${STAGING}/" 2>&1 || echo "[archil] Warning: some files failed to copy (expected for setxattr)"
+      echo "[archil] Extracting tool directories from image snapshot..."
+      tar xzf "$HOME_SNAPSHOT" -C "${STAGING}/" 2>&1 || echo "[archil] Warning: some files failed to extract"
       echo "[archil] Tool directories seeded"
     fi
   fi
