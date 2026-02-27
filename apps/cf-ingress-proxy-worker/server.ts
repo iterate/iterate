@@ -109,18 +109,22 @@ function parseJsonObject(value: string, field: "headers" | "metadata"): Record<s
 
 function normalizeInboundHost(rawHost: string | null): string | null {
   if (!rawHost) return null;
-  const first = rawHost.split(",")[0]?.trim().toLowerCase().replace(/\.$/, "") ?? "";
+  const first = rawHost.split(",")[0]?.trim().toLowerCase() ?? "";
   if (!first) return null;
+  let host: string;
   if (first.startsWith("[")) {
     const endBracket = first.indexOf("]");
     if (endBracket === -1) return null;
-    return first.slice(1, endBracket);
+    host = first.slice(1, endBracket);
+  } else {
+    const lastColon = first.lastIndexOf(":");
+    if (lastColon !== -1 && first.indexOf(":") === lastColon) {
+      host = first.slice(0, lastColon);
+    } else {
+      host = first;
+    }
   }
-  const lastColon = first.lastIndexOf(":");
-  if (lastColon !== -1 && first.indexOf(":") === lastColon) {
-    return first.slice(0, lastColon);
-  }
-  return first;
+  return host.replace(/\.$/, "") || null;
 }
 
 function parseTargetUrl(target: string): URL {
