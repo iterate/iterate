@@ -24,20 +24,20 @@ In production, we provision proper wildcard certificates and CNAME records per p
 One wildcard DNS record + one wildcard TLS certificate + this proxy worker.
 
 ```
-*.proxy.iterate.com  CNAME → cf-ingress-proxy-worker (Cloudflare Worker)
+*.ingress.iterate.com  CNAME → cf-ingress-proxy-worker (Cloudflare Worker)
 ```
 
-Now any `<anything>.proxy.iterate.com` hostname hits this worker. The worker looks up a route table to decide where to forward the request. Routes are managed via an authenticated API.
+Now any `<anything>.ingress.iterate.com` hostname hits this worker. The worker looks up a route table to decide where to forward the request. Routes are managed via an authenticated API.
 
 ```
                           Client
                             │
-                            │  https://webapp__my-project.proxy.iterate.com/api/health
+                            │  https://webapp__my-project.ingress.iterate.com/api/health
                             ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │                       Cloudflare Edge                                │
 │                                                                      │
-│  *.proxy.iterate.com  ─►  cf-ingress-proxy-worker                    │
+│  *.ingress.iterate.com  ─►  cf-ingress-proxy-worker                    │
 │                                                                      │
 │     1. Extract Host header                                           │
 │     2. Look up route (in-memory cache → D1 fallback)                 │
@@ -67,11 +67,11 @@ The proxy is fully transparent — it forwards HTTP requests, WebSocket connecti
 
 ### Hostname conventions
 
-In Iterate deployments, hostnames follow the pattern `<app-or-port>__<project-slug>.proxy.iterate.com`:
+In Iterate deployments, hostnames follow the pattern `<app-or-port>__<project-slug>.ingress.iterate.com`:
 
-- `webapp__my-project.proxy.iterate.com` — route to the webapp service
-- `3000__my-project.proxy.iterate.com` — route to port 3000
-- `4096__my-project.proxy.iterate.com` — route to the OpenCode API on port 4096
+- `webapp__my-project.ingress.iterate.com` — route to the webapp service
+- `3000__my-project.ingress.iterate.com` — route to port 3000
+- `4096__my-project.ingress.iterate.com` — route to the OpenCode API on port 4096
 
 Caddy inside the Fly machine reads the `Host` header and routes to the right process/port.
 
@@ -79,9 +79,9 @@ Caddy inside the Fly machine reads the `Host` header and routes to the right pro
 
 ```ts
 await client.setRoute({
-  route: "webapp__my-project.proxy.iterate.com",
+  route: "webapp__my-project.ingress.iterate.com",
   target: "https://prd-my-project.fly.dev",
-  headers: { host: "webapp__my-project.proxy.iterate.com" },
+  headers: { host: "webapp__my-project.ingress.iterate.com" },
   ttlSeconds: 3600,
 });
 ```
@@ -91,12 +91,12 @@ await client.setRoute({
 ```ts
 // Route all subdomains for a project to its Fly machine
 await client.setRoute({
-  route: "*.my-project.proxy.iterate.com",
+  route: "*.my-project.ingress.iterate.com",
   target: "https://prd-my-project.fly.dev",
 });
 ```
 
-Now `webapp__my-project.proxy.iterate.com`, `3000__my-project.proxy.iterate.com`, etc. all route to the same Fly machine. Caddy inside differentiates by Host header.
+Now `webapp__my-project.ingress.iterate.com`, `3000__my-project.ingress.iterate.com`, etc. all route to the same Fly machine. Caddy inside differentiates by Host header.
 
 Exact matches always take priority over wildcards. Longer wildcard suffixes take priority over shorter ones.
 
@@ -145,17 +145,17 @@ const flyTarget = "https://prd-my-project.fly.dev";
 
 // Route different apps/ports to the same Fly machine
 await client.setRoute({
-  route: `webapp__${projectSlug}.proxy.iterate.com`,
+  route: `webapp__${projectSlug}.ingress.iterate.com`,
   target: flyTarget,
-  headers: { host: `webapp__${projectSlug}.proxy.iterate.com` },
+  headers: { host: `webapp__${projectSlug}.ingress.iterate.com` },
   metadata: { project: projectSlug, service: "webapp" },
   ttlSeconds: 3600,
 });
 
 await client.setRoute({
-  route: `4096__${projectSlug}.proxy.iterate.com`,
+  route: `4096__${projectSlug}.ingress.iterate.com`,
   target: flyTarget,
-  headers: { host: `4096__${projectSlug}.proxy.iterate.com` },
+  headers: { host: `4096__${projectSlug}.ingress.iterate.com` },
   metadata: { project: projectSlug, service: "opencode" },
   ttlSeconds: 3600,
 });
@@ -170,7 +170,7 @@ await client.setRoute({
 
 | Column        | Type        | Description                                                                            |
 | ------------- | ----------- | -------------------------------------------------------------------------------------- |
-| `route`       | TEXT PK     | Hostname pattern (e.g. `webapp__proj.proxy.iterate.com` or `*.proj.proxy.iterate.com`) |
+| `route`       | TEXT PK     | Hostname pattern (e.g. `webapp__proj.ingress.iterate.com` or `*.proj.ingress.iterate.com`) |
 | `target`      | TEXT        | Upstream URL                                                                           |
 | `headers`     | TEXT (JSON) | Header overrides for upstream request                                                  |
 | `metadata`    | TEXT (JSON) | Arbitrary metadata (project slug, service name, etc.)                                  |
