@@ -1,6 +1,8 @@
-# cf-proxy-worker
+# cf-ingress-proxy-worker
 
 Transparent ingress proxy on Cloudflare Workers. Gives any backend instant public hostnames — no DNS propagation, no certificate provisioning, no waiting.
+
+We built this for [Iterate](https://iterate.com) deployments, but the pattern is useful for any system that needs on-demand public URLs — coding agents, AI agent sandboxes, ephemeral preview environments, etc.
 
 ## The problem
 
@@ -13,12 +15,14 @@ You have a single server (e.g. a Fly.io machine) running multiple apps behind Ca
 
 This takes minutes to hours and doesn't scale for ephemeral environments like E2E test runs.
 
+An alternative is to use tunnel services like ngrok or Cloudflare Tunnel, where each service gets a random public hostname. This works for one-off use, but doesn't scale when you need dozens of concurrent hostnames for parallel E2E test runs — tunnel services have connection limits, rate limits, and per-tunnel overhead.
+
 ## The solution
 
 One wildcard DNS record + one wildcard TLS certificate + this proxy worker.
 
 ```
-*.proxy.iterate.com  CNAME → cf-proxy-worker (Cloudflare Worker)
+*.proxy.iterate.com  CNAME → cf-ingress-proxy-worker (Cloudflare Worker)
 ```
 
 Now any `<anything>.proxy.iterate.com` hostname hits this worker. The worker looks up a route table to decide where to forward the request. Routes are managed via an authenticated API.
@@ -31,7 +35,7 @@ Now any `<anything>.proxy.iterate.com` hostname hits this worker. The worker loo
 ┌──────────────────────────────────────────────────────────────────────┐
 │                       Cloudflare Edge                                │
 │                                                                      │
-│  *.proxy.iterate.com  ─►  cf-proxy-worker                            │
+│  *.proxy.iterate.com  ─►  cf-ingress-proxy-worker                    │
 │                                                                      │
 │     1. Extract Host header (myapp.proxy.iterate.com)                 │
 │     2. Look up route (in-memory cache → D1 fallback)                 │
@@ -165,11 +169,11 @@ await client.setRoute({
 
 ```bash
 # Local dev
-pnpm --filter @iterate-com/cf-proxy-worker dev
+pnpm --filter @iterate-com/cf-ingress-proxy-worker dev
 
 # Deploy to production
-pnpm --filter @iterate-com/cf-proxy-worker deploy:prd
+pnpm --filter @iterate-com/cf-ingress-proxy-worker deploy:prd
 
 # Unit tests
-pnpm --filter @iterate-com/cf-proxy-worker test
+pnpm --filter @iterate-com/cf-ingress-proxy-worker test
 ```
