@@ -132,6 +132,14 @@ function toModelRef(): string {
   return `${env.OPENCODE_PROVIDER_ID}/${env.OPENCODE_MODEL_ID}`;
 }
 
+function providerSubscriptionSlug(sessionId: string): string {
+  return `provider-opencode-${sessionId}`;
+}
+
+function providerCallbackUrl(): string {
+  return `http://127.0.0.1:${String(env.OPENCODE_WRAPPER_SERVICE_PORT)}/internal/events/provider`;
+}
+
 function extractSessionId(event: OpencodeEvent): string | null {
   switch (event.type) {
     case "session.status":
@@ -203,6 +211,30 @@ async function appendEventToStream(params: {
 
   if (!response.ok) {
     throw new Error(`events append failed: ${response.status} ${await response.text()}`);
+  }
+}
+
+async function registerProviderSubscription(params: { streamPath: string; sessionId: string }) {
+  const response = await fetch(toEventsApiUrl("/orpc/registerSubscription"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      json: {
+        path: params.streamPath.replace(/^\/+/, ""),
+        subscription: {
+          type: "webhook",
+          URL: providerCallbackUrl(),
+          subscriptionSlug: providerSubscriptionSlug(params.sessionId),
+        },
+        idempotencyKey: `subscription:provider:opencode:${params.streamPath}`,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `events registerSubscription failed: ${response.status} ${await response.text()}`,
+    );
   }
 }
 
@@ -441,6 +473,19 @@ app.post("/new", async (c) => {
 
   sessionsById.set(sessionId, record);
   sessionIdByStreamPath.set(streamPath, sessionId);
+
+  try {
+    await registerProviderSubscription({ streamPath, sessionId });
+  } catch (error) {
+    sessionsById.delete(sessionId);
+    sessionIdByStreamPath.delete(streamPath);
+    return c.json(
+      {
+        error: error instanceof Error ? error.message : "failed to register provider subscription",
+      },
+      502,
+    );
+  }
 
   return c.json({
     route: `/sessions/${sessionId}`,

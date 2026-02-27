@@ -1,0 +1,28 @@
+{
+  "name": "@iterate-com/pi-wrapper-service",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/server.ts",
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.9",
+    "@iterate-com/pi-wrapper-contract": "workspace:*",
+    "@iterate-com/registry-service": "workspace:*",
+    "@mariozechner/pi-ai": "^0.55.1",
+    "@mariozechner/pi-coding-agent": "^0.42.0",
+    "@orpc/openapi": "^1.13.5",
+    "@orpc/server": "^1.13.5",
+    "@orpc/zod": "^1.13.5",
+    "hono": "^4.11.10"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "typescript": "^5.9.3"
+  }
+}

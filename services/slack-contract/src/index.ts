@@ -3,6 +3,9 @@ import { createServiceSubRouterContract } from "@iterate-com/shared/jonasland";
 import { z } from "zod/v4";
 import packageJson from "../package.json" with { type: "json" };
 
+export const AgentProvider = z.enum(["opencode", "pi"]);
+export type AgentProvider = z.infer<typeof AgentProvider>;
+
 const serviceSubRouter = createServiceSubRouterContract({
   healthSummary: "Slack service health metadata",
   sqlSummary: "No-op SQL endpoint for slack service",
@@ -35,7 +38,12 @@ export type SlackRouteRecord = z.infer<typeof SlackRouteRecord>;
 export const SlackWebhookDecisionOutput = z.object({
   shouldCreateAgent: z.boolean(),
   shouldAppendPrompt: z.boolean(),
-  getOrCreateInput: z.object({ agentPath: z.string().min(1) }).optional(),
+  getOrCreateInput: z
+    .object({
+      agentPath: z.string().min(1),
+      provider: AgentProvider,
+    })
+    .optional(),
   reasonCodes: z.array(z.string().min(1)),
   debug: z.record(z.string(), z.unknown()),
 });
@@ -85,6 +93,7 @@ export const slackContract = oc.router({
         z.object({
           webhook: SlackWebhookInput,
           existingRoutes: z.array(SlackRouteRecord).optional(),
+          provider: AgentProvider.optional(),
         }),
       )
       .output(SlackWebhookDecisionOutput),
@@ -105,6 +114,7 @@ export const SlackServiceEnv = z.object({
   AGENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19061"),
   EVENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19010"),
   SLACK_API_BASE_URL: z.string().default("https://slack.com"),
+  SLACK_AGENT_PROVIDER: AgentProvider.default("opencode"),
   SERVICES_ORPC_URL: z.string().default("http://127.0.0.1:8777/orpc"),
 });
 

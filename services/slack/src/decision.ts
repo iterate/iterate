@@ -11,15 +11,18 @@ interface SlackRouteRecord {
   agentStreamPath: string;
 }
 
+type AgentProvider = "opencode" | "pi";
+
 export interface SlackWebhookDecisionInput {
   webhook: SlackWebhookReceivedPayload;
   existingRoutes: Array<SlackRouteRecord>;
+  provider: AgentProvider;
 }
 
 export interface SlackWebhookDecision {
   shouldCreateAgent: boolean;
   shouldAppendPrompt: boolean;
-  getOrCreateInput?: { agentPath: string };
+  getOrCreateInput?: { agentPath: string; provider: AgentProvider };
   reasonCodes: string[];
   debug: Record<string, unknown>;
 }
@@ -91,11 +94,13 @@ export function decideSlackWebhook(input: SlackWebhookDecisionInput): SlackWebho
     shouldAppendPrompt: true,
     getOrCreateInput: {
       agentPath: proposedAgentPath,
+      provider: input.provider,
     },
     reasonCodes: ["route.missing-create-agent"],
     debug: {
       existingRouteCount,
       proposedAgentPath,
+      provider: input.provider,
       channel: input.webhook.channel,
       threadTs: input.webhook.threadTs,
     },

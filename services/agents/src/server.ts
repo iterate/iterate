@@ -16,12 +16,14 @@ import { mountServiceSubRouterHttpRoutes } from "../../../packages/shared/src/jo
 
 interface AgentProvisioningRecord {
   agentPath: string;
-  provider: "opencode";
+  provider: AgentProvider;
   sessionId: string;
   streamPath: string;
   createdAt: string;
   updatedAt: string;
 }
+
+type AgentProvider = "opencode" | "pi";
 
 const inFlightGetOrCreate = new Map<string, Promise<AgentProvisioningRecord>>();
 
@@ -70,9 +72,9 @@ const docsRouter = docsOs.router({
     getOrCreate: docsOs.agents.getOrCreate.handler(async ({ input }) => ({
       agent: {
         agentPath: input.agentPath,
-        provider: "opencode",
+        provider: input.provider,
         sessionId: "stub-session",
-        streamPath: "/agents/opencode/stub-session",
+        streamPath: `/agents/${input.provider}/stub-session`,
         createdAt: new Date(0).toISOString(),
         updatedAt: new Date(0).toISOString(),
       },
@@ -160,6 +162,10 @@ function normalizeAgentPath(agentPath: string): string {
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
+function normalizeProvider(provider: unknown): AgentProvider {
+  return provider === "pi" ? "pi" : "opencode";
+}
+
 function normalizeStreamPath(streamPath: string): string {
   const trimmed = streamPath.trim();
   if (trimmed.length === 0) {
@@ -190,12 +196,12 @@ function toEventsApiUrl(pathname: string): string {
   return new URL(pathname, env.EVENTS_SERVICE_BASE_URL).toString();
 }
 
-function toCanonicalProviderStreamPath(sessionId: string): string {
-  return `/agents/opencode/${sessionId}`;
+function toCanonicalProviderStreamPath(provider: AgentProvider, sessionId: string): string {
+  return `/agents/${provider}/${sessionId}`;
 }
 
-function providerSubscriptionSlug(sessionId: string): string {
-  return `provider-opencode-${sessionId}`;
+function providerWrapperBaseUrl(provider: AgentProvider): string {
+  return provider === "pi" ? env.PI_WRAPPER_BASE_URL : env.OPENCODE_WRAPPER_BASE_URL;
 }
 
 function readProvisionByAgentPath(agentPath: string): AgentProvisioningRecord | null {
@@ -220,7 +226,7 @@ function readProvisionByAgentPath(agentPath: string): AgentProvisioningRecord | 
   if (!row) return null;
   return {
     agentPath: row.agent_path,
-    provider: "opencode",
+    provider: normalizeProvider(row.provider),
     sessionId: row.session_id,
     streamPath: row.stream_path,
     createdAt: row.created_at,
@@ -230,7 +236,7 @@ function readProvisionByAgentPath(agentPath: string): AgentProvisioningRecord | 
 
 function insertProvisioning(params: {
   agentPath: string;
-  provider: "opencode";
+  provider: AgentProvider;
   sessionId: string;
   streamPath: string;
 }): AgentProvisioningRecord {
@@ -238,7 +244,13 @@ function insertProvisioning(params: {
   agentsDb
     .prepare(
       `INSERT INTO agent_provisioning (agent_path, provider, session_id, stream_path, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(agent_path)
+       DO UPDATE SET
+         provider = excluded.provider,
+         session_id = excluded.session_id,
+         stream_path = excluded.stream_path,
+         updated_at = excluded.updated_at`,
     )
     .run(params.agentPath, params.provider, params.sessionId, params.streamPath, now, now);
 
@@ -253,16 +265,19 @@ function insertProvisioning(params: {
 }
 
 async function createProviderSession(
+  provider: AgentProvider,
   agentPath: string,
 ): Promise<{ sessionId: string; streamPath: string }> {
-  const response = await fetch(`${env.OPENCODE_WRAPPER_BASE_URL}/new`, {
+  const response = await fetch(`${providerWrapperBaseUrl(provider)}/new`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ agentPath }),
   });
 
   if (!response.ok) {
-    throw new Error(`opencode-wrapper create failed: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `${provider}-wrapper create failed: ${response.status} ${await response.text()}`,
+    );
   }
 
   const payload = (await response.json()) as {
@@ -273,82 +288,47 @@ async function createProviderSession(
 
   const sessionId = payload.sessionId?.trim();
   if (!sessionId) {
-    throw new Error("opencode-wrapper session response missing sessionId");
+    throw new Error(`${provider}-wrapper session response missing sessionId`);
   }
 
   const streamPath = payload.streamPath?.trim();
   return {
     sessionId,
-    streamPath: normalizeStreamPath(streamPath ?? toCanonicalProviderStreamPath(sessionId)),
+    streamPath: normalizeStreamPath(
+      streamPath ?? toCanonicalProviderStreamPath(provider, sessionId),
+    ),
   };
 }
 
-async function registerProviderSubscription(params: {
-  streamPath: string;
-  sessionId: string;
-}): Promise<void> {
-  const response = await fetch(toEventsApiUrl("/orpc/registerSubscription"), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      json: {
-        path: params.streamPath.replace(/^\/+/, ""),
-        subscription: {
-          type: "webhook-with-ack",
-          URL: `${env.OPENCODE_WRAPPER_BASE_URL}/internal/events/provider`,
-          subscriptionSlug: providerSubscriptionSlug(params.sessionId),
-        },
-        idempotencyKey: `subscription:provider:${params.streamPath}`,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `events registerSubscription failed: ${response.status} ${await response.text()}`,
-    );
-  }
-}
-
-async function getOrCreateAgentProvisioning(
-  inputAgentPath: string,
-): Promise<{ agent: AgentProvisioningRecord; wasNewlyCreated: boolean }> {
-  const agentPath = normalizeAgentPath(inputAgentPath);
+async function getOrCreateAgentProvisioning(input: {
+  agentPath: string;
+  provider: AgentProvider;
+}): Promise<{ agent: AgentProvisioningRecord; wasNewlyCreated: boolean }> {
+  const agentPath = normalizeAgentPath(input.agentPath);
+  const provider = input.provider;
+  const inFlightKey = `${provider}:${agentPath}`;
   const existing = readProvisionByAgentPath(agentPath);
-  if (existing) {
-    await registerProviderSubscription({
-      streamPath: existing.streamPath,
-      sessionId: existing.sessionId,
-    });
+  if (existing && existing.provider === provider) {
     return { agent: existing, wasNewlyCreated: false };
   }
 
-  let pending = inFlightGetOrCreate.get(agentPath);
+  let pending = inFlightGetOrCreate.get(inFlightKey);
   if (!pending) {
     pending = (async () => {
-      const createdSession = await createProviderSession(agentPath);
-      await registerProviderSubscription(createdSession);
-      try {
-        return insertProvisioning({
-          agentPath,
-          provider: "opencode",
-          sessionId: createdSession.sessionId,
-          streamPath: createdSession.streamPath,
-        });
-      } catch {
-        const raced = readProvisionByAgentPath(agentPath);
-        if (!raced) {
-          throw new Error("failed to persist agent provisioning");
-        }
-        return raced;
-      }
+      const createdSession = await createProviderSession(provider, agentPath);
+      return insertProvisioning({
+        agentPath,
+        provider,
+        sessionId: createdSession.sessionId,
+        streamPath: createdSession.streamPath,
+      });
     })();
 
-    inFlightGetOrCreate.set(agentPath, pending);
+    inFlightGetOrCreate.set(inFlightKey, pending);
     void pending
       .finally(() => {
-        if (inFlightGetOrCreate.get(agentPath) === pending) {
-          inFlightGetOrCreate.delete(agentPath);
+        if (inFlightGetOrCreate.get(inFlightKey) === pending) {
+          inFlightGetOrCreate.delete(inFlightKey);
         }
       })
       .catch(() => {});
@@ -364,7 +344,10 @@ async function getOrCreateAgentProvisioning(
 async function resolveTargetStreamPath(proxyPath: string): Promise<string> {
   const canonicalProxyPath = normalizeAgentPath(proxyPath);
 
-  if (canonicalProxyPath.startsWith("/agents/opencode/")) {
+  if (
+    canonicalProxyPath.startsWith("/agents/opencode/") ||
+    canonicalProxyPath.startsWith("/agents/pi/")
+  ) {
     return canonicalProxyPath;
   }
 
@@ -454,14 +437,17 @@ async function proxyReadStream(streamPath: string, search: string): Promise<Resp
 }
 
 app.post("/api/agents/get-or-create", async (c) => {
-  const body = (await c.req.json()) as { agentPath?: string };
+  const body = (await c.req.json()) as { agentPath?: string; provider?: AgentProvider };
   const agentPath = body.agentPath?.trim();
   if (!agentPath) {
     return c.json({ error: "agentPath is required" }, 400);
   }
 
   try {
-    const { agent, wasNewlyCreated } = await getOrCreateAgentProvisioning(agentPath);
+    const { agent, wasNewlyCreated } = await getOrCreateAgentProvisioning({
+      agentPath,
+      provider: normalizeProvider(body.provider),
+    });
     return c.json({ agent, wasNewlyCreated });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

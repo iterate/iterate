@@ -11,7 +11,7 @@ import packageJson from "../package.json" with { type: "json" };
 
 export const Agent = z.object({
   agentPath: z.string().min(1),
-  provider: z.literal("opencode"),
+  provider: z.enum(["opencode", "pi"]),
   sessionId: z.string().min(1),
   streamPath: z.string().min(1),
   createdAt: z.string(),
@@ -20,6 +20,7 @@ export const Agent = z.object({
 
 export const GetOrCreateAgentInput = z.object({
   agentPath: z.string().min(1),
+  provider: z.enum(["opencode", "pi"]).default("opencode"),
 });
 
 const EventInputPayload = z.object({
@@ -107,6 +108,7 @@ export const agentsContract = oc.router({
 export const AgentsServiceEnv = z.object({
   AGENTS_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(19061),
   OPENCODE_WRAPPER_BASE_URL: z.string().default("http://127.0.0.1:19062"),
+  PI_WRAPPER_BASE_URL: z.string().default("http://127.0.0.1:19064"),
   EVENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19010"),
   AGENTS_SERVICE_DB_PATH: z.string().default("agents-service.sqlite"),
   SERVICES_ORPC_URL: z.string().default("http://127.0.0.1:8777/orpc"),

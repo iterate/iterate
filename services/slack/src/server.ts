@@ -41,6 +41,8 @@ interface SlackThreadAgentRoute {
   updatedAt: string;
 }
 
+type AgentProvider = "opencode" | "pi";
+
 const env = slackServiceManifest.envVars.parse(process.env);
 const app = new Hono();
 const INTEGRATIONS_STREAM_PATH = "/integrations/slack/webhooks";
@@ -80,7 +82,7 @@ const docsRouter = docsOs.router({
     decideWebhook: docsOs.slack.decideWebhook.handler(async () => ({
       shouldCreateAgent: true,
       shouldAppendPrompt: true,
-      getOrCreateInput: { agentPath: "/agents/slack/demo/demo" },
+      getOrCreateInput: { agentPath: "/agents/slack/demo/demo", provider: "opencode" },
       reasonCodes: ["stub"],
       debug: {},
     })),
@@ -543,10 +545,13 @@ async function postSlackMessage(payload: {
   }
 }
 
-async function callAgentsGetOrCreate(agentPath: string): Promise<{
+async function callAgentsGetOrCreate(params: {
+  agentPath: string;
+  provider: AgentProvider;
+}): Promise<{
   agent: {
     agentPath: string;
-    provider: "opencode";
+    provider: AgentProvider;
     sessionId: string;
     streamPath: string;
   };
@@ -555,7 +560,7 @@ async function callAgentsGetOrCreate(agentPath: string): Promise<{
   const response = await fetch(`${env.AGENTS_SERVICE_BASE_URL}/api/agents/get-or-create`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ agentPath }),
+    body: JSON.stringify(params),
   });
 
   if (!response.ok) {
@@ -565,7 +570,7 @@ async function callAgentsGetOrCreate(agentPath: string): Promise<{
   return (await response.json()) as {
     agent: {
       agentPath: string;
-      provider: "opencode";
+      provider: AgentProvider;
       sessionId: string;
       streamPath: string;
     };
@@ -587,10 +592,11 @@ async function processIntegrationWebhookEvent(input: {
   const decision = decideSlackWebhook({
     webhook: input.webhook,
     existingRoutes: routes.map(toSlackContractRoute),
+    provider: env.SLACK_AGENT_PROVIDER,
   });
 
   if (decision.shouldCreateAgent && decision.getOrCreateInput) {
-    const created = await callAgentsGetOrCreate(decision.getOrCreateInput.agentPath);
+    const created = await callAgentsGetOrCreate(decision.getOrCreateInput);
     upsertRoute({
       workspaceId: defaultWorkspaceId,
       channel: input.webhook.channel,
@@ -783,6 +789,7 @@ app.post("/api/slack/debug/decide-webhook", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as {
     webhook?: unknown;
     existingRoutes?: Array<SlackRouteRecord>;
+    provider?: AgentProvider;
   };
 
   const normalized = normalizeSlackWebhookInput(body.webhook ?? {});
@@ -798,6 +805,7 @@ app.post("/api/slack/debug/decide-webhook", async (c) => {
   const decision = decideSlackWebhook({
     webhook: normalized.event,
     existingRoutes: Array.isArray(body.existingRoutes) ? body.existingRoutes : [],
+    provider: body.provider === "pi" ? "pi" : env.SLACK_AGENT_PROVIDER,
   });
   return c.json(decision);
 });

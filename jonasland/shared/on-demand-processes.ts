@@ -3,6 +3,7 @@ export type OnDemandProcessName =
   | "opencode"
   | "agents"
   | "opencode-wrapper"
+  | "pi-wrapper"
   | "slack"
   | "outerbase"
   | "clickstack";
@@ -45,7 +46,7 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
   },
   opencode: {
     definition: {
-      command: "opencode",
+      command: "/root/.opencode/bin/opencode",
       args: [
         "serve",
         "--port",
@@ -72,6 +73,7 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
         ...ON_DEMAND_OTEL_SERVICE_ENV,
         AGENTS_SERVICE_PORT: "19061",
         OPENCODE_WRAPPER_BASE_URL: "http://127.0.0.1:19062",
+        PI_WRAPPER_BASE_URL: "http://127.0.0.1:19064",
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010",
         AGENTS_SERVICE_DB_PATH: "/var/lib/jonasland/agents-service.sqlite",
       },
@@ -98,6 +100,25 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
     },
     routeCheck: { host: "opencode-wrapper.iterate.localhost", path: "/healthz" },
   },
+  "pi-wrapper": {
+    definition: {
+      command: "/opt/pidnap/node_modules/.bin/tsx",
+      args: ["/opt/services/pi-wrapper/src/server.ts"],
+      env: {
+        ...ON_DEMAND_OTEL_SERVICE_ENV,
+        PI_WRAPPER_SERVICE_PORT: "19064",
+        PI_MODEL_PROVIDER: "openai",
+        PI_MODEL_ID: "gpt-4o-mini",
+        PI_AGENT_DIR: "/var/lib/jonasland/pi-agent",
+        PI_WORKING_DIRECTORY: "/tmp",
+        OPENAI_API_KEY: "test-key",
+        ANTHROPIC_API_KEY: "test-key",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
+        EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010",
+      },
+    },
+    routeCheck: { host: "pi-wrapper.iterate.localhost", path: "/healthz" },
+  },
   slack: {
     definition: {
       command: "/opt/pidnap/node_modules/.bin/tsx",
@@ -109,6 +130,7 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
         AGENTS_SERVICE_BASE_URL: "http://127.0.0.1:19061",
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010",
         SLACK_API_BASE_URL: "http://slack.com",
+        SLACK_AGENT_PROVIDER: "opencode",
       },
     },
     routeCheck: { host: "slack.iterate.localhost", path: "/healthz" },
