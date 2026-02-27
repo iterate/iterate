@@ -133,7 +133,6 @@ describe("live ingress-proxy E2E", () => {
   ])(
     "$scenario returns CONFLICT",
     async ({ action }) => {
-      const requestHost = new URL(baseUrl!).hostname;
       // Ensure we have a route to conflict with
       let targetRoute: { routeId: string };
       try {
