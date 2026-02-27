@@ -59,6 +59,7 @@ export class EventInput extends Schema.Class<EventInput>("EventInput")({
   type: EventType,
   payload: Payload,
   version: Schema.optionalWith(Version, { default: () => Version.make("1") }),
+  idempotencyKey: Schema.optional(Schema.String),
 }) {}
 
 /** Full event with path, offset and createdAt assigned by storage */

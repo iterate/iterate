@@ -14,6 +14,8 @@ import { ON_DEMAND_OTEL_SERVICE_ENV, ON_DEMAND_PROCESSES } from "../shared/on-de
 import type {
   DemoEvent,
   EgressRecord,
+  JonaslandDemoMutation,
+  JonaslandDemoMutationResult,
   JonaslandDemoProvider,
   JonaslandDemoState,
   JonaslandMockRule,
@@ -83,10 +85,20 @@ const onDemandProcesses: ProcessConfig[] = ON_DEMAND_PROCESSES.map((processConfi
   slug: processConfig.slug,
   definition: processConfig.definition,
   ...(processConfig.routeCheck
-    ? { routeCheck: { ...processConfig.routeCheck, timeoutMs: 60_000 } }
+    ? {
+        routeCheck: {
+          ...processConfig.routeCheck,
+          timeoutMs: processConfig.routeCheck.timeoutMs ?? 60_000,
+        },
+      }
     : {}),
   ...(processConfig.directHttpCheck
-    ? { directHttpCheck: { ...processConfig.directHttpCheck, timeoutMs: 60_000 } }
+    ? {
+        directHttpCheck: {
+          ...processConfig.directHttpCheck,
+          timeoutMs: processConfig.directHttpCheck.timeoutMs ?? 60_000,
+        },
+      }
     : {}),
 }));
 
@@ -123,7 +135,7 @@ const state: JonaslandDemoState = {
         name: "OpenAI responses",
         enabled: true,
         method: "POST",
-        hostPattern: "api.openai.com",
+        hostPattern: "*",
         pathPattern: "/v1/responses",
         responseStatus: 200,
         responseHeaders: {
@@ -152,7 +164,7 @@ const state: JonaslandDemoState = {
         name: "Slack chat.postMessage",
         enabled: true,
         method: "POST",
-        hostPattern: "slack.com",
+        hostPattern: "*",
         pathPattern: "/api/chat.postMessage",
         responseStatus: 200,
         responseHeaders: {
@@ -175,6 +187,13 @@ const state: JonaslandDemoState = {
 
 let deployment: ProjectDeployment | null = null;
 let activeOperation: Promise<unknown> | null = null;
+const stateSubscribers = new Map<
+  string,
+  {
+    res: ServerResponse;
+    heartbeat: NodeJS.Timeout;
+  }
+>();
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -201,6 +220,60 @@ function snapshotState(): JonaslandDemoState {
   };
 }
 
+function emitStateSnapshotToSubscriber(res: ServerResponse, snapshot: JonaslandDemoState): void {
+  const payload = JSON.stringify({ json: snapshot });
+  res.write(`event: message\ndata: ${payload}\n\n`);
+}
+
+function publishStateUpdate(): void {
+  if (stateSubscribers.size === 0) return;
+
+  const snapshot = snapshotState();
+  for (const [subscriberId, subscriber] of stateSubscribers) {
+    if (subscriber.res.writableEnded || subscriber.res.destroyed) {
+      clearInterval(subscriber.heartbeat);
+      stateSubscribers.delete(subscriberId);
+      continue;
+    }
+
+    try {
+      emitStateSnapshotToSubscriber(subscriber.res, snapshot);
+    } catch {
+      clearInterval(subscriber.heartbeat);
+      stateSubscribers.delete(subscriberId);
+      subscriber.res.destroy();
+    }
+  }
+}
+
+function attachStateUpdatesStream(req: IncomingMessage, res: ServerResponse): void {
+  setCors(res);
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+    "x-accel-buffering": "no",
+  });
+  res.write(": connected\n\n");
+
+  const subscriberId = randomUUID();
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded || res.destroyed) return;
+    res.write(": ping\n\n");
+  }, 15_000);
+
+  stateSubscribers.set(subscriberId, { res, heartbeat });
+  emitStateSnapshotToSubscriber(res, snapshotState());
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    stateSubscribers.delete(subscriberId);
+    if (!res.writableEnded) {
+      res.end();
+    }
+  });
+}
+
 function appendEvent(message: string): void {
   const event: DemoEvent = {
     id: randomUUID(),
@@ -212,6 +285,7 @@ function appendEvent(message: string): void {
     state.events.splice(0, state.events.length - MAX_EVENTS);
   }
   process.stdout.write(`[jonasland-demo] ${event.createdAt} ${message}\n`);
+  publishStateUpdate();
 }
 
 function syncLinksFromIngress(): void {
@@ -282,6 +356,7 @@ function recordEgress(entry: EgressRecord): void {
   if (state.records.length > MAX_RECORDS) {
     state.records.splice(0, state.records.length - MAX_RECORDS);
   }
+  publishStateUpdate();
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -453,6 +528,7 @@ async function withOperationLock<Result>(task: () => Promise<Result>): Promise<R
   }
 
   state.busy = true;
+  publishStateUpdate();
   const operation = task();
   activeOperation = operation;
 
@@ -462,6 +538,7 @@ async function withOperationLock<Result>(task: () => Promise<Result>): Promise<R
     if (activeOperation === operation) {
       activeOperation = null;
       state.busy = false;
+      publishStateUpdate();
     }
   }
 }
@@ -610,6 +687,79 @@ async function simulateSlackWebhook(payload: SimulateSlackInput): Promise<Simula
     channel,
     text,
   };
+}
+
+async function streamDaemonCommandToClient(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  command: string;
+  cwd?: string;
+}): Promise<void> {
+  const ingressUrl = state.sandbox.ingressUrl;
+  if (ingressUrl === null) {
+    sendJson(params.res, 400, { error: "sandbox is not running" });
+    return;
+  }
+
+  const target = new URL("/orpc/tools/streamShell", ingressUrl);
+  const body = JSON.stringify({
+    json: {
+      command: params.command,
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+    },
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    const upstream = httpRequest(
+      {
+        protocol: target.protocol,
+        hostname: target.hostname,
+        port: target.port,
+        method: "POST",
+        path: target.pathname,
+        headers: {
+          host: "daemon.iterate.localhost",
+          accept: "text/event-stream",
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body, "utf8").toString(),
+        },
+      },
+      (upstreamResponse) => {
+        setCors(params.res);
+        params.res.writeHead(upstreamResponse.statusCode ?? 200, {
+          "content-type": String(
+            upstreamResponse.headers["content-type"] ?? "text/plain; charset=utf-8",
+          ),
+          "cache-control": "no-cache",
+          "x-accel-buffering": "no",
+        });
+
+        upstreamResponse.on("data", (chunk) => {
+          params.res.write(chunk);
+        });
+
+        upstreamResponse.on("end", () => {
+          params.res.end();
+          resolve();
+        });
+
+        upstreamResponse.on("error", (error) => {
+          reject(error);
+        });
+      },
+    );
+
+    upstream.on("error", reject);
+    params.req.on("close", () => {
+      upstream.destroy();
+      if (!params.res.writableEnded) {
+        params.res.end();
+      }
+      resolve();
+    });
+    upstream.write(body);
+    upstream.end();
+  });
 }
 
 function wildcardMatch(value: string, pattern: string): boolean {
@@ -888,71 +1038,58 @@ function sanitizeMockRuleInput(input: unknown): UpsertMockRuleInput {
   };
 }
 
-async function dispatchOrpcProcedure(procedure: string, input: unknown): Promise<unknown> {
-  if (procedure === "demo.getState") {
-    return snapshotState();
-  }
-
-  if (procedure === "demo.setProvider") {
-    const payload = isRecord(input) ? input : {};
+async function applyStateMutation(
+  input: JonaslandDemoMutation,
+): Promise<JonaslandDemoMutationResult> {
+  if (input.type === "set-provider") {
     if (state.phase !== "idle") {
       throw new Error("provider can only be changed while sandbox is idle");
     }
 
-    state.provider = asProvider(payload.provider);
+    state.provider = input.provider;
     appendEvent(`provider set to ${state.provider}`);
-    return snapshotState();
+    return { state: snapshotState() };
   }
 
-  if (procedure === "demo.startSandbox") {
+  if (input.type === "start-sandbox") {
     await withOperationLock(async () => await startSandbox());
-    return snapshotState();
+    publishStateUpdate();
+    return { state: snapshotState() };
   }
 
-  if (procedure === "demo.stopSandbox") {
+  if (input.type === "stop-sandbox") {
     await withOperationLock(async () => await stopSandbox());
-    return snapshotState();
+    publishStateUpdate();
+    return { state: snapshotState() };
   }
 
-  if (procedure === "demo.simulateSlackWebhook") {
-    const payload = isRecord(input) ? input : {};
-    const result = await withOperationLock(
-      async () =>
-        await simulateSlackWebhook({
-          text: readString(payload, "text"),
-          channel: readString(payload, "channel"),
-          threadTs: readString(payload, "threadTs"),
-        }),
-    );
-
-    return {
-      state: snapshotState(),
-      result,
-    };
+  if (input.type === "simulate-slack-webhook") {
+    const result = await withOperationLock(async () => await simulateSlackWebhook(input.input));
+    publishStateUpdate();
+    return { state: snapshotState(), result };
   }
 
-  if (procedure === "demo.patchConfig") {
-    const payload = isRecord(input) ? input : {};
-
-    const maybePrompt = readString(payload, "defaultSlackPrompt");
-    if (maybePrompt !== undefined) {
-      state.config.defaultSlackPrompt = maybePrompt;
+  if (input.type === "patch-config") {
+    if (input.patch.defaultSlackPrompt !== undefined) {
+      state.config.defaultSlackPrompt = input.patch.defaultSlackPrompt;
     }
 
-    const maybeFallback = readString(payload, "fallbackMode");
-    if (maybeFallback !== undefined) {
-      if (maybeFallback !== "deny-all" && maybeFallback !== "proxy-internet") {
+    if (input.patch.fallbackMode !== undefined) {
+      if (
+        input.patch.fallbackMode !== "deny-all" &&
+        input.patch.fallbackMode !== "proxy-internet"
+      ) {
         throw new Error("fallbackMode must be 'deny-all' or 'proxy-internet'");
       }
-      state.config.fallbackMode = maybeFallback;
+      state.config.fallbackMode = input.patch.fallbackMode;
     }
 
     appendEvent("updated demo config");
-    return snapshotState();
+    return { state: snapshotState() };
   }
 
-  if (procedure === "demo.upsertMockRule") {
-    const next = sanitizeMockRuleInput(input);
+  if (input.type === "upsert-mock-rule") {
+    const next = sanitizeMockRuleInput(input.rule);
     const ruleId = next.id && next.id.length > 0 ? next.id : `rule-${randomUUID()}`;
 
     const rule: JonaslandMockRule = {
@@ -976,12 +1113,11 @@ async function dispatchOrpcProcedure(procedure: string, input: unknown): Promise
       appendEvent(`added mock rule: ${rule.name}`);
     }
 
-    return snapshotState();
+    return { state: snapshotState() };
   }
 
-  if (procedure === "demo.deleteMockRule") {
-    const payload = isRecord(input) ? input : {};
-    const id = readString(payload, "id")?.trim();
+  if (input.type === "delete-mock-rule") {
+    const id = input.id.trim();
     if (!id) throw new Error("id is required");
 
     const prevLength = state.config.mockRules.length;
@@ -990,13 +1126,151 @@ async function dispatchOrpcProcedure(procedure: string, input: unknown): Promise
       appendEvent(`deleted mock rule: ${id}`);
     }
 
+    return { state: snapshotState() };
+  }
+
+  if (input.type === "clear-records") {
+    state.records = [];
+    appendEvent("cleared egress records");
+    return { state: snapshotState() };
+  }
+
+  const exhaustiveCheck: never = input;
+  throw new Error(`unsupported mutation: ${JSON.stringify(exhaustiveCheck)}`);
+}
+
+function parseStateMutation(input: unknown): JonaslandDemoMutation {
+  if (!isRecord(input)) throw new Error("mutation payload must be an object");
+
+  const mutationType = readString(input, "type");
+  if (!mutationType) throw new Error("mutation type is required");
+
+  if (mutationType === "set-provider") {
+    return { type: mutationType, provider: asProvider(input.provider) };
+  }
+
+  if (mutationType === "start-sandbox" || mutationType === "stop-sandbox") {
+    return { type: mutationType };
+  }
+
+  if (mutationType === "simulate-slack-webhook") {
+    const rawInput = isRecord(input.input) ? input.input : {};
+    return {
+      type: mutationType,
+      input: {
+        text: readString(rawInput, "text"),
+        channel: readString(rawInput, "channel"),
+        threadTs: readString(rawInput, "threadTs"),
+      },
+    };
+  }
+
+  if (mutationType === "patch-config") {
+    const rawPatch = isRecord(input.patch) ? input.patch : {};
+    return {
+      type: mutationType,
+      patch: {
+        defaultSlackPrompt: readString(rawPatch, "defaultSlackPrompt"),
+        fallbackMode: readString(rawPatch, "fallbackMode") as
+          | "deny-all"
+          | "proxy-internet"
+          | undefined,
+      },
+    };
+  }
+
+  if (mutationType === "upsert-mock-rule") {
+    const rawRule = isRecord(input.rule) ? input.rule : input;
+    return {
+      type: mutationType,
+      rule: sanitizeMockRuleInput(rawRule),
+    };
+  }
+
+  if (mutationType === "delete-mock-rule") {
+    const id = readString(input, "id")?.trim();
+    if (!id) throw new Error("id is required");
+    return { type: mutationType, id };
+  }
+
+  if (mutationType === "clear-records") {
+    return { type: mutationType };
+  }
+
+  throw new Error(`unknown mutation type: ${mutationType}`);
+}
+
+async function dispatchOrpcProcedure(procedure: string, input: unknown): Promise<unknown> {
+  const normalizedProcedure = procedure.replaceAll("/", ".");
+
+  if (normalizedProcedure === "demo.getState") {
     return snapshotState();
   }
 
-  if (procedure === "demo.clearRecords") {
-    state.records = [];
-    appendEvent("cleared egress records");
-    return snapshotState();
+  if (normalizedProcedure === "demo.mutateState") {
+    const mutation = parseStateMutation(input);
+    return await applyStateMutation(mutation);
+  }
+
+  // Compatibility aliases while frontend/backends move to demo.mutateState.
+  if (normalizedProcedure === "demo.setProvider") {
+    const payload = isRecord(input) ? input : {};
+    return await applyStateMutation({
+      type: "set-provider",
+      provider: asProvider(payload.provider),
+    });
+  }
+
+  if (normalizedProcedure === "demo.startSandbox") {
+    return await applyStateMutation({ type: "start-sandbox" });
+  }
+
+  if (normalizedProcedure === "demo.stopSandbox") {
+    return await applyStateMutation({ type: "stop-sandbox" });
+  }
+
+  if (normalizedProcedure === "demo.simulateSlackWebhook") {
+    const payload = isRecord(input) ? input : {};
+    return await applyStateMutation({
+      type: "simulate-slack-webhook",
+      input: {
+        text: readString(payload, "text"),
+        channel: readString(payload, "channel"),
+        threadTs: readString(payload, "threadTs"),
+      },
+    });
+  }
+
+  if (normalizedProcedure === "demo.patchConfig") {
+    const payload = isRecord(input) ? input : {};
+    return await applyStateMutation({
+      type: "patch-config",
+      patch: {
+        defaultSlackPrompt: readString(payload, "defaultSlackPrompt"),
+        fallbackMode: readString(payload, "fallbackMode") as
+          | "deny-all"
+          | "proxy-internet"
+          | undefined,
+      },
+    });
+  }
+
+  if (normalizedProcedure === "demo.upsertMockRule") {
+    return await applyStateMutation({
+      type: "upsert-mock-rule",
+      rule: sanitizeMockRuleInput(input),
+    });
+  }
+
+  if (normalizedProcedure === "demo.deleteMockRule") {
+    const payload = isRecord(input) ? input : {};
+    const id = readString(payload, "id")?.trim();
+    if (!id) throw new Error("id is required");
+    return await applyStateMutation({ type: "delete-mock-rule", id });
+  }
+
+  if (normalizedProcedure === "demo.clearRecords") {
+    return await applyStateMutation({ type: "clear-records" });
   }
 
   throw new Error(`unknown procedure: ${procedure}`);
@@ -1027,6 +1301,14 @@ const server = createServer(async (req, res) => {
   try {
     if (method === "GET" && url.pathname === "/healthz") {
       sendJson(res, 200, { ok: true, phase: state.phase });
+      return;
+    }
+
+    if (
+      (method === "GET" || method === "POST") &&
+      (url.pathname === "/orpc/demo.stateUpdates" || url.pathname === "/orpc/demo/stateUpdates")
+    ) {
+      attachStateUpdatesStream(req, res);
       return;
     }
 
@@ -1070,7 +1352,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (method === "POST" && url.pathname === "/records/clear") {
-      await dispatchOrpcProcedure("demo.clearRecords", {});
+      await dispatchOrpcProcedure("demo.mutateState", { type: "clear-records" });
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -1087,27 +1369,51 @@ const server = createServer(async (req, res) => {
 
     if (method === "POST" && url.pathname === "/__demo/config") {
       const input = await readJson<unknown>(req);
-      await dispatchOrpcProcedure("demo.patchConfig", input);
+      await dispatchOrpcProcedure("demo.mutateState", {
+        type: "patch-config",
+        patch: input,
+      });
       sendJson(res, 200, { ok: true, state: snapshotState() });
       return;
     }
 
     if (method === "POST" && url.pathname === "/__demo/actions/start") {
-      await dispatchOrpcProcedure("demo.startSandbox", {});
+      await dispatchOrpcProcedure("demo.mutateState", { type: "start-sandbox" });
       sendJson(res, 200, { ok: true, state: snapshotState() });
       return;
     }
 
     if (method === "POST" && url.pathname === "/__demo/actions/stop") {
-      await dispatchOrpcProcedure("demo.stopSandbox", {});
+      await dispatchOrpcProcedure("demo.mutateState", { type: "stop-sandbox" });
       sendJson(res, 200, { ok: true, state: snapshotState() });
       return;
     }
 
     if (method === "POST" && url.pathname === "/__demo/actions/simulate-slack") {
       const payload = await readJson<unknown>(req);
-      const result = await dispatchOrpcProcedure("demo.simulateSlackWebhook", payload);
+      const result = await dispatchOrpcProcedure("demo.mutateState", {
+        type: "simulate-slack-webhook",
+        input: payload,
+      });
       sendJson(res, 200, { ok: true, ...(isRecord(result) ? result : { result }) });
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/__demo/streams/daemon-logs") {
+      const command = url.searchParams.get("command")?.trim();
+      const cwd = url.searchParams.get("cwd")?.trim();
+      if (!command) {
+        sendJson(res, 400, { error: "command query param is required" });
+        return;
+      }
+
+      appendEvent(`stream daemon logs: ${command}`);
+      await streamDaemonCommandToClient({
+        req,
+        res,
+        command,
+        ...(cwd ? { cwd } : {}),
+      });
       return;
     }
 

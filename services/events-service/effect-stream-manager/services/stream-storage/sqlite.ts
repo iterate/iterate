@@ -43,6 +43,7 @@ export interface EventRow {
   type: string;
   payload: string;
   version: string;
+  idempotency_key: string | null;
   created_at: string;
   trace_id: string;
   span_id: string;
@@ -55,6 +56,7 @@ const eventToRow = (event: Event): EventRow => ({
   type: event.type,
   payload: JSON.stringify(event.payload),
   version: event.version,
+  idempotency_key: event.idempotencyKey ?? null,
   created_at: DateTime.formatIso(event.createdAt),
   trace_id: event.trace.traceId,
   span_id: event.trace.spanId,
@@ -68,6 +70,7 @@ const rowToEvent = (row: EventRow): Event =>
     type: EventType.make(row.type),
     payload: parsePayloadJson(row.payload),
     version: Version.make(row.version),
+    ...(row.idempotency_key !== null ? { idempotencyKey: row.idempotency_key } : {}),
     createdAt: DateTime.unsafeFromDate(new Date(row.created_at)),
     trace: TraceContext.make({
       traceId: TraceId.make(row.trace_id),
@@ -176,7 +179,37 @@ export const sqliteLayer = (
                 ? JSON.stringify(metadataPayload.metadata)
                 : JSON.stringify({});
 
-            db.transaction((tx) => {
+            return db.transaction((tx) => {
+              if (row.idempotency_key !== null) {
+                const existing = tx
+                  .select()
+                  .from(schema.eventsTable)
+                  .where(
+                    and(
+                      eq(schema.eventsTable.path, row.path),
+                      eq(schema.eventsTable.idempotencyKey, row.idempotency_key),
+                    ),
+                  )
+                  .limit(1)
+                  .all()[0];
+
+                if (existing !== undefined) {
+                  const existingEvent = rowToEvent({
+                    path: existing.path,
+                    offset: existing.offset,
+                    type: existing.type,
+                    payload: existing.payload,
+                    version: existing.version,
+                    idempotency_key: existing.idempotencyKey,
+                    created_at: existing.createdAt,
+                    trace_id: existing.traceId,
+                    span_id: existing.spanId,
+                    parent_span_id: existing.parentSpanId,
+                  });
+                  return { event: existingEvent, inserted: false as const };
+                }
+              }
+
               tx.insert(schema.eventsTable)
                 .values({
                   path: row.path,
@@ -184,6 +217,7 @@ export const sqliteLayer = (
                   type: row.type,
                   payload: row.payload,
                   version: row.version,
+                  idempotencyKey: row.idempotency_key,
                   createdAt: row.created_at,
                   traceId: row.trace_id,
                   spanId: row.span_id,
@@ -213,7 +247,9 @@ export const sqliteLayer = (
                 String(event.type) === PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE
                   ? parsePushSubscriptionPayload(event.payload)
                   : undefined;
-              if (subscriptionPayload === undefined) return;
+              if (subscriptionPayload === undefined) {
+                return { event, inserted: true as const };
+              }
 
               tx.insert(schema.eventStreamSubscriptionsTable)
                 .values({
@@ -237,9 +273,9 @@ export const sqliteLayer = (
                   },
                 })
                 .run();
-            });
 
-            return event;
+              return { event, inserted: true as const };
+            });
           }).pipe(
             Effect.mapError((cause) => StreamStorageError.make({ cause, context: { event } })),
           );
@@ -326,6 +362,7 @@ export const sqliteLayer = (
                     type: row.type,
                     payload: row.payload,
                     version: row.version,
+                    idempotency_key: row.idempotencyKey,
                     created_at: row.createdAt,
                     trace_id: row.traceId,
                     span_id: row.spanId,

@@ -1,0 +1,197 @@
+@import "@xterm/xterm/css/xterm.css";
+
+:root {
+  --background: oklch(0.97 0.01 247.86);
+  --foreground: oklch(0.2 0.02 255.5);
+  --card: oklch(1 0 0 / 95%);
+  --card-foreground: oklch(0.17 0.02 255.5);
+  --border: oklch(0.9 0.01 255.5);
+  --muted-foreground: oklch(0.47 0.02 255.5);
+  --primary: oklch(0.58 0.14 240.2);
+  --primary-foreground: oklch(0.99 0.01 250.1);
+  --secondary: oklch(0.94 0.01 245.9);
+  --ring: oklch(0.64 0.12 237.1);
+  --radius: 12px;
+  color-scheme: light;
+  font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  color: var(--foreground);
+  background:
+    radial-gradient(circle at 12% 14%, oklch(0.92 0.05 232.01), transparent 42%),
+    radial-gradient(circle at 90% 0%, oklch(0.87 0.04 200.91), transparent 34%),
+    linear-gradient(180deg, oklch(0.96 0.01 250), oklch(0.94 0.01 250));
+}
+
+.app-shell {
+  min-height: 100%;
+  height: 100dvh;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--card-foreground);
+  box-shadow:
+    0 10px 24px oklch(0.26 0.03 248.2 / 10%),
+    0 2px 6px oklch(0.18 0.03 248.1 / 6%);
+}
+
+.controls-card {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 9999px;
+}
+
+.status-dot[data-state="connected"] {
+  background: oklch(0.76 0.18 149.15);
+}
+
+.status-dot[data-state="connecting"],
+.status-dot[data-state="reconnecting"] {
+  background: oklch(0.79 0.15 93.91);
+}
+
+.status-dot[data-state="disconnected"] {
+  background: oklch(0.63 0.21 28.1);
+}
+
+.status-text {
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+
+.session-pill {
+  margin-left: auto;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  font-size: 11px;
+  color: oklch(0.38 0.03 247.8);
+  background: var(--secondary);
+  font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.input {
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+  padding: 8px 12px;
+  color: var(--foreground);
+  background: oklch(1 0 0 / 78%);
+  outline: none;
+}
+
+.input:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px oklch(0.64 0.12 237.1 / 22%);
+}
+
+.btn {
+  min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--primary-foreground);
+  background: var(--primary);
+  transition: filter 120ms ease;
+}
+
+.btn:hover {
+  filter: brightness(0.95);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.btn-secondary {
+  color: var(--foreground);
+  background: var(--secondary);
+  border-color: var(--border);
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.terminal-card {
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+  background: oklch(0.18 0.01 255.1 / 96%);
+  border-color: oklch(0.24 0.02 251.6);
+}
+
+.terminal-container {
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.terminal-container .xterm {
+  width: 100% !important;
+  height: 100% !important;
+  padding: 6px;
+}
+
+.terminal-container .xterm-viewport {
+  overflow-y: auto !important;
+}
+
+@media (min-width: 740px) {
+  .app-shell {
+    padding: 16px;
+  }
+
+  .controls-grid {
+    grid-template-columns: 1fr auto auto auto;
+  }
+}

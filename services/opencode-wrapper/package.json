@@ -13,6 +13,10 @@
   "dependencies": {
     "@hono/node-server": "^1.19.9",
     "@iterate-com/opencode-wrapper-contract": "workspace:*",
+    "@iterate-com/registry-service": "workspace:*",
+    "@orpc/openapi": "^1.13.5",
+    "@orpc/server": "^1.13.5",
+    "@orpc/zod": "^1.13.5",
     "hono": "^4.11.10"
   },
   "devDependencies": {

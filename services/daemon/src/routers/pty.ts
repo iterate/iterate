@@ -69,6 +69,10 @@ function spawnPtyProcess(): pty.IPty {
     COLORTERM: "truecolor",
   } as Record<string, string>;
 
+  if (env.FORCE_COLOR && env.NO_COLOR) {
+    delete env.NO_COLOR;
+  }
+
   return pty.spawn(shell, [], {
     name: "xterm-256color",
     cwd: homedir(),
@@ -115,7 +119,7 @@ function createSession(ptyProcess: pty.IPty, ws: WSContext<WebSocket>): PtySessi
     }
   });
 
-  ptyProcess.onExit(() => {
+  ptyProcess.onExit(({ exitCode }) => {
     if (!ptySessions.has(session.id)) {
       return;
     }
@@ -126,7 +130,12 @@ function createSession(ptyProcess: pty.IPty, ws: WSContext<WebSocket>): PtySessi
 
     if (session.ws) {
       wsToSessionId.delete(session.ws);
-      session.ws.close(1000, "Process exited");
+      const message =
+        exitCode === 0
+          ? "\r\n\x1b[33mShell exited\x1b[0m\r\n"
+          : `\r\n\x1b[31mShell exited (code: ${String(exitCode)})\x1b[0m\r\n`;
+      session.ws.send(message);
+      session.ws.close(exitCode === 0 ? 1000 : 4000, "Process exited");
     }
   });
 
@@ -136,14 +145,17 @@ function createSession(ptyProcess: pty.IPty, ws: WSContext<WebSocket>): PtySessi
 function attachToSession(session: PtySession, ws: WSContext<WebSocket>): void {
   cancelCleanup(session);
   const previousWs = session.ws;
-  if (previousWs && previousWs !== ws) {
+  if (previousWs) {
     wsToSessionId.delete(previousWs);
-    try {
-      previousWs.close(1000, "Reattached from another client");
-    } catch {
-      // ignore close errors from stale sockets
+    if (previousWs !== ws) {
+      try {
+        previousWs.close(1000, "Reattached from another client");
+      } catch {
+        // ignore close errors from stale sockets
+      }
     }
   }
+
   session.ws = ws;
   wsToSessionId.set(ws, session.id);
 
@@ -184,7 +196,16 @@ ptyRouter.get(
           }
         }
 
-        const ptyProcess = spawnPtyProcess();
+        let ptyProcess: pty.IPty;
+        try {
+          ptyProcess = spawnPtyProcess();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          ws.send(`\r\n\x1b[31mError: Failed to spawn process: ${message}\x1b[0m\r\n`);
+          ws.close(1011, "Failed to spawn process");
+          return;
+        }
+
         session = createSession(ptyProcess, ws);
         if (initialCommand) {
           session.pendingCommand = { command: initialCommand, autorun: initialAutorun };
@@ -212,9 +233,12 @@ ptyRouter.get(
                 session.ptyProcess.write(command);
                 if (autorun) session.ptyProcess.write("\r\n");
               })
+              .case(z.object({ type: z.literal("exec") }), () => {
+                ws.send("\r\n\x1b[31mError: exec command requires 'command' field\x1b[0m\r\n");
+              })
               .default(() => {});
-          } catch {
-            // ignore malformed command messages
+          } catch (error) {
+            ws.send(`\r\n\x1b[31mError: Failed to parse command: ${String(error)}\x1b[0m\r\n`);
           }
           return;
         }

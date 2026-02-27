@@ -8,6 +8,13 @@
       "when": 1771491200000,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1772063405180,
+      "tag": "0001_add_idempotency_key",
+      "breakpoints": true
     }
   ]
 }

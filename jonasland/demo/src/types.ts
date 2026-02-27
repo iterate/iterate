@@ -77,3 +77,37 @@ export type SimulateSlackResult = {
   channel: string;
   text: string;
 };
+
+export type JonaslandDemoMutation =
+  | { type: "set-provider"; provider: JonaslandDemoProvider }
+  | { type: "start-sandbox" }
+  | { type: "stop-sandbox" }
+  | { type: "simulate-slack-webhook"; input: SimulateSlackInput }
+  | {
+      type: "patch-config";
+      patch: {
+        defaultSlackPrompt?: string;
+        fallbackMode?: JonaslandEgressFallbackMode;
+      };
+    }
+  | {
+      type: "upsert-mock-rule";
+      rule: {
+        id?: string;
+        name: string;
+        enabled?: boolean;
+        method: string;
+        hostPattern: string;
+        pathPattern: string;
+        responseStatus: number;
+        responseHeaders?: Record<string, string>;
+        responseBody: string;
+      };
+    }
+  | { type: "delete-mock-rule"; id: string }
+  | { type: "clear-records" };
+
+export type JonaslandDemoMutationResult = {
+  state: JonaslandDemoState;
+  result?: SimulateSlackResult;
+};

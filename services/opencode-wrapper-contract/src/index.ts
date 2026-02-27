@@ -35,6 +35,14 @@ export const opencodeWrapperContract = oc.router({
         }),
       )
       .output(z.object({ ok: z.literal(true) })),
+    providerCallback: oc
+      .route({
+        method: "POST",
+        path: "/internal/events/provider",
+        summary: "Consume agent stream push events for provider execution",
+      })
+      .input(z.object({}).passthrough())
+      .output(z.object({ ok: z.literal(true), handled: z.boolean() })),
   },
 });
 
@@ -46,6 +54,8 @@ export const OpencodeWrapperServiceEnv = z.object({
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   AGENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19061"),
   DAEMON_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19060"),
+  EVENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19010"),
+  SERVICES_ORPC_URL: z.string().default("http://127.0.0.1:8777/orpc"),
 });
 
 export const opencodeWrapperServiceManifest = {

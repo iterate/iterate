@@ -3,7 +3,9 @@ export type OnDemandProcessName =
   | "opencode"
   | "agents"
   | "opencode-wrapper"
-  | "slack";
+  | "slack"
+  | "outerbase"
+  | "clickstack";
 
 export type OnDemandProcessConfig = {
   slug: OnDemandProcessName;
@@ -15,9 +17,11 @@ export type OnDemandProcessConfig = {
   routeCheck?: {
     host: string;
     path: string;
+    timeoutMs?: number;
   };
   directHttpCheck?: {
     url: string;
+    timeoutMs?: number;
   };
 };
 
@@ -58,6 +62,8 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
         ...ON_DEMAND_OTEL_SERVICE_ENV,
         AGENTS_SERVICE_PORT: "19061",
         OPENCODE_WRAPPER_BASE_URL: "http://127.0.0.1:19062",
+        EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010",
+        AGENTS_SERVICE_DB_PATH: "/var/lib/jonasland/agents-service.sqlite",
       },
     },
     routeCheck: { host: "agents.iterate.localhost", path: "/healthz" },
@@ -75,6 +81,7 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
         OPENAI_MODEL: "gpt-4o-mini",
         AGENTS_SERVICE_BASE_URL: "http://127.0.0.1:19061",
         DAEMON_SERVICE_BASE_URL: "http://127.0.0.1:19060",
+        EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010",
       },
     },
     routeCheck: { host: "opencode-wrapper.iterate.localhost", path: "/healthz" },
@@ -87,9 +94,35 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
         ...ON_DEMAND_OTEL_SERVICE_ENV,
         SLACK_SERVICE_PORT: "19063",
         AGENTS_SERVICE_BASE_URL: "http://127.0.0.1:19061",
+        EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010",
+        SLACK_API_BASE_URL: "http://slack.com",
       },
     },
     routeCheck: { host: "slack.iterate.localhost", path: "/healthz" },
+  },
+  outerbase: {
+    definition: {
+      command: "/opt/pidnap/node_modules/.bin/tsx",
+      args: ["/opt/services/outerbase-service/src/server.ts"],
+      env: ON_DEMAND_OTEL_SERVICE_ENV,
+    },
+    routeCheck: {
+      host: "outerbase.iterate.localhost",
+      path: "/healthz",
+      timeoutMs: 60_000,
+    },
+  },
+  clickstack: {
+    definition: {
+      command: "/opt/jonasland-sandbox/clickstack-launcher.sh",
+      args: [],
+      env: {},
+    },
+    routeCheck: {
+      host: "clickstack.iterate.localhost",
+      path: "/",
+      timeoutMs: 120_000,
+    },
   },
 };
 

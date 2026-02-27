@@ -5,7 +5,7 @@
  * EventStream owns offset management, storage is dumb (just persists Events)
  */
 import jsonata from "jsonata";
-import { Data, DateTime, Effect, PubSub, Runtime, Schema, Stream } from "effect";
+import { Data, DateTime, Effect, Option, PubSub, Runtime, Schema, Stream } from "effect";
 import {
   PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE,
   type PushSubscriptionCallbackAddedPayload,
@@ -131,8 +131,8 @@ export interface EventStream {
   /** Read historical events on this path, optionally within a range */
   readonly read: (options?: { from?: Offset; to?: Offset }) => Stream.Stream<Event>;
 
-  /** Append an event to this path, returns the stored event with assigned offset */
-  readonly append: (event: EventInput) => Effect.Effect<Event>;
+  /** Append an event to this path, returns insert status and stored event */
+  readonly append: (event: EventInput) => Effect.Effect<{ event: Event; inserted: boolean }>;
 
   /** Persist/advance acked delivery offset for one push subscription */
   readonly ackOffset: (input: { subscriptionSlug: string; offset: Offset }) => Effect.Effect<void>;
@@ -577,12 +577,29 @@ export const make = (
     const append = (eventInput: EventInput) =>
       appendSemaphore.withPermits(1)(
         Effect.gen(function* () {
+          if (eventInput.idempotencyKey !== undefined) {
+            const existingEvent = yield* storage.read().pipe(
+              Stream.filter(
+                (streamEvent) => streamEvent.idempotencyKey === eventInput.idempotencyKey,
+              ),
+              Stream.runHead,
+            );
+
+            if (Option.isSome(existingEvent)) {
+              return { event: existingEvent.value, inserted: false as const };
+            }
+          }
+
           const nextOffset = formatOffset(offsetToNumber(state.lastOffset) + 1);
           const createdAt = yield* DateTime.now;
           const trace = yield* fromCurrentSpan;
           const event = Event.make({ ...eventInput, path, offset: nextOffset, createdAt, trace });
 
-          yield* storage.append(event);
+          const stored = yield* storage.append(event);
+          if (!stored.inserted) {
+            return stored;
+          }
+
           state = reduce(state, event);
 
           yield* Effect.all([
@@ -591,7 +608,7 @@ export const make = (
           ]).pipe(Effect.forkDaemon, Effect.asVoid);
 
           yield* PubSub.publish(pubsub, event);
-          return event;
+          return { event, inserted: true as const };
         }),
       );
 

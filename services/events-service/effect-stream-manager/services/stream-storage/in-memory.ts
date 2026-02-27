@@ -47,6 +47,14 @@ export const inMemoryLayer: Layer.Layer<StreamStorageManager> = Layer.sync(
     const append = (event: Event) =>
       Effect.sync(() => {
         const stream = getOrCreateStream(event.path);
+        if (event.idempotencyKey !== undefined) {
+          const existing = stream.events.find(
+            (candidate) => candidate.idempotencyKey === event.idempotencyKey,
+          );
+          if (existing) {
+            return { event: existing, inserted: false as const };
+          }
+        }
         stream.events.push(event);
 
         const metadataPayload = parseStreamMetadataUpdatedPayload(event.payload);
@@ -69,7 +77,7 @@ export const inMemoryLayer: Layer.Layer<StreamStorageManager> = Layer.sync(
           });
         }
 
-        return event;
+        return { event, inserted: true as const };
       });
 
     const read = ({ path, from, to }: { path: StreamPath; from?: Offset; to?: Offset }) =>

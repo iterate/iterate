@@ -50,7 +50,7 @@ export interface StreamStorage {
   readonly read: (options?: { from?: Offset; to?: Offset }) => Stream.Stream<Event>;
 
   /** Append an event to this stream (already has offset/createdAt assigned) */
-  readonly append: (event: Event) => Effect.Effect<Event>;
+  readonly append: (event: Event) => Effect.Effect<{ event: Event; inserted: boolean }>;
 
   /** Read current push subscription metadata for this stream */
   readonly listPushSubscriptions: () => Effect.Effect<ReadonlyArray<PushSubscriptionState>>;
@@ -96,7 +96,9 @@ export interface StreamStorageManager {
   }) => Stream.Stream<Event, StreamStorageError>;
 
   /** Append event to stream (path is taken from event.path) */
-  readonly append: (event: Event) => Effect.Effect<Event, StreamStorageError>;
+  readonly append: (
+    event: Event,
+  ) => Effect.Effect<{ event: Event; inserted: boolean }, StreamStorageError>;
 
   /** Read current push subscription metadata for a stream */
   readonly listPushSubscriptions: (input: {

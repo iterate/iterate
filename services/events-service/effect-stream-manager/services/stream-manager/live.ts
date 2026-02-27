@@ -78,13 +78,15 @@ export const liveLayerWithOptions = (
             }
 
             const metaStream = yield* getOrInitializeStream(EVENTS_META_STREAM_PATH);
-            const metaEvent = yield* metaStream.append(
+            const metaEventResult = yield* metaStream.append(
               EventInput.make({
                 type: EventType.make(STREAM_CREATED_TYPE),
                 payload: { path: pathKey },
               }),
             );
-            yield* PubSub.publish(globalPubSub, metaEvent);
+            if (metaEventResult.inserted) {
+              yield* PubSub.publish(globalPubSub, metaEventResult.event);
+            }
           }
 
           return stream;
@@ -102,12 +104,14 @@ export const liveLayerWithOptions = (
         event: EventInput;
       }) {
         const stream = yield* getOrCreateStream(path);
-        const storedEvent = yield* stream.append(event);
+        const stored = yield* stream.append(event);
 
         // Also publish to global PubSub for "all paths" subscribers
-        yield* PubSub.publish(globalPubSub, storedEvent);
+        if (stored.inserted) {
+          yield* PubSub.publish(globalPubSub, stored.event);
+        }
 
-        return storedEvent;
+        return stored.event;
       });
 
       const ackOffset = Effect.fn("StreamManager.ackOffset")(function* ({

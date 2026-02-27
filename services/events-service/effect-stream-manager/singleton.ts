@@ -36,6 +36,7 @@ const toContractEvent = (event: Event): EventStreamEvent => {
     type: IterateEventType.parse(String(encoded.type)),
     payload: encoded.payload,
     version: encoded.version,
+    ...(encoded.idempotencyKey !== undefined ? { idempotencyKey: encoded.idempotencyKey } : {}),
     createdAt: encoded.createdAt,
     trace: {
       traceId: encoded.trace.traceId,
@@ -67,6 +68,7 @@ type ContractEventInput = {
   readonly type: string;
   readonly payload: Readonly<Record<string, unknown>>;
   readonly version?: string | number | undefined;
+  readonly idempotencyKey?: string | undefined;
 };
 
 export interface EventOperations {
@@ -78,6 +80,7 @@ export interface EventOperations {
   readonly appendSubscriptionRegistration: (input: {
     readonly path: string;
     readonly subscription: PushSubscriptionCallbackAddedPayload;
+    readonly idempotencyKey?: string | undefined;
   }) => Promise<void>;
 
   readonly acknowledgeOffset: (input: {
@@ -109,6 +112,9 @@ const createOperations = (manager: StreamManager): EventOperations => ({
         ...(eventInput.version !== undefined
           ? { version: Version.make(String(eventInput.version)) }
           : {}),
+        ...(eventInput.idempotencyKey !== undefined
+          ? { idempotencyKey: eventInput.idempotencyKey }
+          : {}),
       });
 
       await Effect.runPromise(manager.append({ path: toDomainPath(input.path), event }));
@@ -119,6 +125,7 @@ const createOperations = (manager: StreamManager): EventOperations => ({
     const event = EventInput.make({
       type: EventType.make(PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE),
       payload: input.subscription,
+      ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}),
     });
 
     await Effect.runPromise(manager.append({ path: toDomainPath(input.path), event }));

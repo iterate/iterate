@@ -112,6 +112,7 @@ const EventStreamEventInput = z.object({
   type: IterateEventType,
   payload: PlainUnknownRecord,
   version: Version.optional(),
+  idempotencyKey: z.string().min(1).optional(),
 });
 
 export const EventStreamEvent = EventStreamEventInput.extend({
@@ -260,6 +261,7 @@ export const eventBusContract = oc.router({
       z.object({
         path: StreamPath,
         subscription: PushSubscriptionCallbackAddedPayload,
+        idempotencyKey: z.string().min(1).optional(),
       }),
     )
     .output(z.void()),

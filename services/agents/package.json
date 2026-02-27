@@ -8,15 +8,26 @@
     "./server": "./src/server.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:check": "drizzle-kit check",
+    "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.9",
     "@iterate-com/agents-contract": "workspace:*",
+    "@iterate-com/registry-service": "workspace:*",
+    "@orpc/openapi": "^1.13.5",
+    "@orpc/server": "^1.13.5",
+    "@orpc/zod": "^1.13.5",
+    "better-sqlite3": "^12.4.1",
+    "drizzle-orm": "^0.45.1",
     "hono": "^4.11.10"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.0.10",
+    "drizzle-kit": "^0.31.7",
     "typescript": "^5.9.3"
   }
 }

@@ -33,16 +33,34 @@ export const slackContract = oc.router({
         z.object({
           ok: z.literal(true),
           queued: z.boolean(),
-          agentPath: z.string(),
-          threadTs: z.string(),
+          streamPath: z.string(),
         }),
       ),
+    integrationCallback: oc
+      .route({
+        method: "POST",
+        path: "/internal/events/integrations",
+        summary: "Receive integration stream push events",
+      })
+      .input(z.object({}).passthrough())
+      .output(z.object({ ok: z.literal(true), handled: z.boolean() })),
+    agentUpdatesCallback: oc
+      .route({
+        method: "POST",
+        path: "/internal/events/agent-updates",
+        summary: "Receive agent stream push events",
+      })
+      .input(z.object({}).passthrough())
+      .output(z.object({ ok: z.literal(true), handled: z.boolean() })),
   },
 });
 
 export const SlackServiceEnv = z.object({
   SLACK_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(19063),
   AGENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19061"),
+  EVENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19010"),
+  SLACK_API_BASE_URL: z.string().default("https://slack.com"),
+  SERVICES_ORPC_URL: z.string().default("http://127.0.0.1:8777/orpc"),
 });
 
 export const slackServiceManifest = {

@@ -2,7 +2,19 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { createAdaptorServer } from "@hono/node-server";
 import { opencodeWrapperServiceManifest } from "@iterate-com/opencode-wrapper-contract";
+import { createRegistryClient } from "@iterate-com/registry-service/client";
 import { Hono } from "hono";
+import { OpenAPIHandler } from "@orpc/openapi/fetch";
+import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
+import { implement } from "@orpc/server";
+import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
+import {
+  AGENTS_ERROR_TYPE,
+  AGENTS_PROMPT_ADDED_TYPE,
+  AGENTS_RESPONSE_ADDED_TYPE,
+  AGENTS_STATUS_UPDATED_TYPE,
+  AgentPromptAddedPayload,
+} from "../../../packages/shared/src/jonasland/agents-events.ts";
 import { mountServiceSubRouterHttpRoutes } from "../../../packages/shared/src/jonasland/index.ts";
 
 interface SessionRecord {
@@ -14,14 +26,70 @@ interface SessionRecord {
 const env = opencodeWrapperServiceManifest.envVars.parse(process.env);
 const sessions = new Map<string, SessionRecord>();
 const app = new Hono();
+const serviceRegistryHost = "opencode-wrapper.iterate.localhost";
+const serviceRegistryOpenApiPath = "/api/openapi.json";
+const docsOs = implement(opencodeWrapperServiceManifest.orpcContract);
+const docsRouter = docsOs.router({
+  service: {
+    health: docsOs.service.health.handler(async () => ({
+      ok: true,
+      service: opencodeWrapperServiceManifest.name,
+      version: opencodeWrapperServiceManifest.version,
+    })),
+    sql: docsOs.service.sql.handler(async () => ({
+      rows: [],
+      headers: [],
+      stat: {
+        rowsAffected: 0,
+        rowsRead: null,
+        rowsWritten: null,
+        queryDurationMs: 0,
+      },
+    })),
+  },
+  wrapper: {
+    createSession: docsOs.wrapper.createSession.handler(async ({ input }) => ({
+      route: `/sessions/stub-${input.agentPath.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+      sessionId: `stub-${input.agentPath.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+    })),
+    forwardSessionEvents: docsOs.wrapper.forwardSessionEvents.handler(async () => ({
+      ok: true,
+    })),
+    providerCallback: docsOs.wrapper.providerCallback.handler(async () => ({
+      ok: true,
+      handled: true,
+    })),
+  },
+});
+const openAPIHandler = new OpenAPIHandler(docsRouter, {
+  plugins: [
+    new OpenAPIReferencePlugin({
+      docsProvider: "scalar",
+      docsPath: "/docs",
+      specPath: "/openapi.json",
+      schemaConverters: [new ZodToJsonSchemaConverter()],
+      specGenerateOptions: {
+        info: {
+          title: "jonasland opencode-wrapper-service API",
+          version: opencodeWrapperServiceManifest.version,
+        },
+        servers: [{ url: "/api" }],
+      },
+    }),
+  ],
+});
 
-function extractPrompt(events: Array<{ type?: string; message?: string }> | undefined): string {
-  if (!events || events.length === 0) return "";
-  const prompts = events
-    .filter((event) => event.type === "iterate:agent:prompt-added")
-    .map((event) => event.message ?? "")
-    .filter((value) => value.trim().length > 0);
-  return prompts.join("\n\n");
+function encodeStreamPathForUrl(path: string): string {
+  return path
+    .replace(/^\/+/, "")
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+function toEventsApiUrl(pathname: string): string {
+  return new URL(pathname, env.EVENTS_SERVICE_BASE_URL).toString();
 }
 
 async function callModel(prompt: string): Promise<string> {
@@ -58,35 +126,70 @@ async function callModel(prompt: string): Promise<string> {
   return textFromOutput ?? "No response text returned.";
 }
 
-async function postSlackMessage(payload: {
-  channel: string;
-  thread_ts: string;
-  text: string;
-}): Promise<void> {
-  const response = await fetch(`${env.SLACK_API_BASE_URL}/api/chat.postMessage`, {
+async function appendEventToStream(params: {
+  streamPath: string;
+  type: string;
+  payload: Record<string, unknown>;
+  idempotencyKey: string;
+}) {
+  const encodedPath = encodeStreamPathForUrl(params.streamPath);
+  const response = await fetch(toEventsApiUrl(`/api/streams/${encodedPath}`), {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${process.env.SLACK_BOT_TOKEN ?? "xoxb-test"}`,
-    },
-    body: JSON.stringify(payload),
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      events: [
+        {
+          type: params.type,
+          payload: params.payload,
+          idempotencyKey: params.idempotencyKey,
+        },
+      ],
+    }),
   });
 
   if (!response.ok) {
-    throw new Error(`slack failed: ${response.status} ${await response.text()}`);
+    throw new Error(`events append failed: ${response.status} ${await response.text()}`);
   }
+}
 
-  const payloadJson = (await response.json().catch(() => null)) as {
-    ok?: boolean;
-    error?: string;
-  } | null;
-  if (payloadJson?.ok === false) {
-    throw new Error(`slack failed: ${payloadJson.error ?? "unknown error"}`);
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function registerOpenApiRoute(): Promise<void> {
+  const servicesClient = createRegistryClient({ url: env.SERVICES_ORPC_URL });
+  const routeTarget = `127.0.0.1:${String(env.OPENCODE_WRAPPER_SERVICE_PORT)}`;
+
+  for (let attempt = 1; attempt <= 90; attempt += 1) {
+    try {
+      await servicesClient.routes.upsert({
+        host: serviceRegistryHost,
+        target: routeTarget,
+        metadata: {
+          openapiPath: serviceRegistryOpenApiPath,
+          title: "OpenCode Wrapper Service",
+        },
+        tags: ["openapi", "opencode-wrapper"],
+      });
+      return;
+    } catch {
+      await delay(1_000);
+    }
   }
 }
 
 app.get("/healthz", (c) => c.text("ok"));
 mountServiceSubRouterHttpRoutes({ app, manifest: opencodeWrapperServiceManifest });
+
+for (const path of ["/api/openapi.json", "/api/docs", "/api/docs/*"]) {
+  app.all(path, async (c) => {
+    const { matched, response } = await openAPIHandler.handle(c.req.raw, {
+      prefix: "/api",
+    });
+    if (matched) return c.newResponse(response.body, response);
+    return c.json({ error: "not_found" }, 404);
+  });
+}
 
 app.post("/new", async (c) => {
   const body = (await c.req.json()) as { agentPath?: string };
@@ -115,40 +218,85 @@ app.post("/sessions/:sessionId", async (c) => {
   const session = sessions.get(sessionId);
   if (!session) return c.json({ error: "session not found" }, 404);
 
+  await c.req.json().catch(() => null);
+
+  return c.json({ ok: true as const });
+});
+
+app.post("/internal/events/provider", async (c) => {
   const body = (await c.req.json()) as {
-    events?: Array<{ type?: string; message?: string }>;
-    slack?: { channel?: string; threadTs?: string };
+    type?: string;
+    payload?: unknown;
+    path?: string;
+    offset?: string;
   };
 
-  const prompt = extractPrompt(body.events);
-  if (!prompt) return c.json({ error: "missing prompt-added event" }, 400);
+  if (body.type !== AGENTS_PROMPT_ADDED_TYPE) {
+    return c.json({ ok: true as const, handled: false });
+  }
 
-  await fetch(`${env.AGENTS_SERVICE_BASE_URL}/api/agents/update`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ path: session.agentPath, isWorking: true, shortStatus: "Thinking" }),
-  }).catch(() => {});
+  const payload = AgentPromptAddedPayload.safeParse(body.payload);
+  if (!payload.success) {
+    return c.json({ error: "invalid provider payload" }, 400);
+  }
+
+  const streamPath = `/${(body.path ?? "").replace(/^\/+/, "")}`;
+  if (streamPath === "/") {
+    return c.json({ error: "missing stream path" }, 400);
+  }
+
+  const keyBase = `${streamPath}:${body.offset ?? "unknown"}`;
 
   try {
-    const modelResponse = await callModel(prompt);
+    await appendEventToStream({
+      streamPath,
+      type: AGENTS_STATUS_UPDATED_TYPE,
+      payload: {
+        phase: "thinking",
+        text: ":thinking_face: Thinking...",
+        emoji: ":thinking_face:",
+        replyTarget: payload.data.replyTarget,
+      },
+      idempotencyKey: `${keyBase}:status:thinking`,
+    });
 
-    if (body.slack?.channel && body.slack?.threadTs) {
-      const slackPayload = {
-        channel: body.slack.channel,
-        thread_ts: body.slack.threadTs,
+    const modelResponse = await callModel(payload.data.prompt);
+
+    await appendEventToStream({
+      streamPath,
+      type: AGENTS_RESPONSE_ADDED_TYPE,
+      payload: {
         text: modelResponse,
-      };
-      await postSlackMessage(slackPayload);
-    }
-  } finally {
-    await fetch(`${env.AGENTS_SERVICE_BASE_URL}/api/agents/update`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: session.agentPath, isWorking: false, shortStatus: "" }),
+        replyTarget: payload.data.replyTarget,
+        model: env.OPENAI_MODEL,
+      },
+      idempotencyKey: `${keyBase}:response`,
+    });
+
+    await appendEventToStream({
+      streamPath,
+      type: AGENTS_STATUS_UPDATED_TYPE,
+      payload: {
+        phase: "idle",
+        text: "",
+        replyTarget: payload.data.replyTarget,
+      },
+      idempotencyKey: `${keyBase}:status:idle`,
+    });
+  } catch (error) {
+    await appendEventToStream({
+      streamPath,
+      type: AGENTS_ERROR_TYPE,
+      payload: {
+        message: error instanceof Error ? error.message : String(error),
+        retryable: false,
+        replyTarget: payload.data.replyTarget,
+      },
+      idempotencyKey: `${keyBase}:error`,
     }).catch(() => {});
   }
 
-  return c.json({ ok: true as const });
+  return c.json({ ok: true as const, handled: true });
 });
 
 export const startOpencodeWrapperService = async () => {
@@ -156,6 +304,8 @@ export const startOpencodeWrapperService = async () => {
   await new Promise<void>((resolve) => {
     server.listen(env.OPENCODE_WRAPPER_SERVICE_PORT, "0.0.0.0", () => resolve());
   });
+
+  void registerOpenApiRoute();
 
   return {
     close: async () => {

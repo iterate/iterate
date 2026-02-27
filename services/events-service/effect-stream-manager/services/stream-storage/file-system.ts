@@ -62,6 +62,16 @@ export const fileSystemLayer = (
           yield* ensurePath({ path: event.path });
 
           const filePath = getFilePath(event.path);
+          if (event.idempotencyKey !== undefined) {
+            const content = yield* fs.readFileString(filePath);
+            const existing = (yield* parseEventsFromFile(content)).find(
+              (candidate) => candidate.idempotencyKey === event.idempotencyKey,
+            );
+            if (existing) {
+              return { event: existing, inserted: false as const };
+            }
+          }
+
           const encoded = yield* Schema.encode(Event)(event);
           const yaml = YAML.stringify(encoded);
           const doc = "---\n" + yaml;
@@ -81,7 +91,7 @@ export const fileSystemLayer = (
             });
           }
 
-          return event;
+          return { event, inserted: true as const };
         }).pipe(Effect.mapError((cause) => StreamStorageError.make({ cause, context: { event } })));
 
       const read = ({

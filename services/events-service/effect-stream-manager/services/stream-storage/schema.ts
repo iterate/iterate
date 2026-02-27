@@ -1,4 +1,11 @@
-import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 export const eventsTable = sqliteTable(
   "events",
@@ -8,6 +15,7 @@ export const eventsTable = sqliteTable(
     type: text("type").notNull(),
     payload: text("payload").notNull(),
     version: text("version").notNull().default("1"),
+    idempotencyKey: text("idempotency_key"),
     createdAt: text("created_at").notNull(),
     traceId: text("trace_id").notNull(),
     spanId: text("span_id").notNull(),
@@ -19,6 +27,7 @@ export const eventsTable = sqliteTable(
       columns: [table.path, table.offset],
     }),
     index("idx_events_path_offset").on(table.path, table.offset),
+    uniqueIndex("idx_events_path_idempotency_unique").on(table.path, table.idempotencyKey),
   ],
 );
 

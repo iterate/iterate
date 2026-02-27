@@ -31,6 +31,7 @@ import {
 import { createOTLPDrain } from "evlog/otlp";
 import { type Plugin } from "vite";
 import { z } from "zod/v4";
+export * from "./agents-events.ts";
 
 type RuntimeGlobal = typeof globalThis & {
   __jonaslandOtelInitialized?: boolean;

@@ -14,6 +14,7 @@ const serviceName = "jonasland-home-service";
 const platformLinks = [
   { label: "Home", host: "home.iterate.localhost", path: "/" },
   { label: "Docs", host: "docs.iterate.localhost", path: "/" },
+  { label: "OpenCode", host: "opencode.iterate.localhost", path: "/" },
   {
     label: "OpenObserve",
     host: "openobserve.iterate.localhost",
@@ -56,6 +57,41 @@ const platformServices = [
 ] as const;
 
 const services = [
+  {
+    label: "Daemon Service",
+    host: "daemon.iterate.localhost",
+    apiPath: "/healthz",
+    frontendHint: "has no frontend",
+    docsPath: "/api/docs",
+  },
+  {
+    label: "OpenCode Wrapper Service",
+    host: "opencode-wrapper.iterate.localhost",
+    apiPath: "/healthz",
+    frontendHint: "has no frontend",
+    docsPath: "/api/docs",
+  },
+  {
+    label: "OpenCode Service",
+    host: "opencode.iterate.localhost",
+    frontendPath: "/",
+    apiPath: "/healthz",
+    docsHint: "docs not exposed",
+  },
+  {
+    label: "Agents Service",
+    host: "agents.iterate.localhost",
+    apiPath: "/healthz",
+    frontendHint: "has no frontend",
+    docsPath: "/api/docs",
+  },
+  {
+    label: "Slack Service",
+    host: "slack.iterate.localhost",
+    apiPath: "/healthz",
+    frontendHint: "has no frontend",
+    docsPath: "/api/docs",
+  },
   {
     label: "Orders Service",
     host: "orders.iterate.localhost",
