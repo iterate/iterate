@@ -46,7 +46,7 @@ export default {
         command: tsxPath,
         args: [`${iterateRepo}/services/registry-service/src/server.ts`],
         env: {
-          PORT: "19010",
+          PORT: "8777",
           OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
           OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
