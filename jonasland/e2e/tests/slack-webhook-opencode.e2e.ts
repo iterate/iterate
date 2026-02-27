@@ -107,6 +107,42 @@ async function postEventsOrpc(
   ]);
 }
 
+function encodeStreamPathForUrl(path: string): string {
+  return path
+    .replace(/^\/+/, "")
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+async function readStreamEvents(
+  deployment: ProjectDeployment,
+  streamPath: string,
+): Promise<Array<Record<string, unknown>>> {
+  const encoded = encodeStreamPathForUrl(streamPath);
+  const result = await deployment.exec([
+    "curl",
+    "-fsS",
+    "-H",
+    EVENTS_HOST_HEADER,
+    `http://127.0.0.1/api/streams/${encoded}`,
+  ]);
+
+  if (result.exitCode !== 0) {
+    throw new Error(`failed to read stream ${streamPath}: ${result.output}`);
+  }
+
+  const events: Array<Record<string, unknown>> = [];
+  for (const line of result.output.split("\n")) {
+    if (!line.startsWith("data: ")) continue;
+    const raw = line.slice("data: ".length).trim();
+    if (raw.length === 0) continue;
+    events.push(JSON.parse(raw) as Record<string, unknown>);
+  }
+  return events;
+}
+
 describe.runIf(RUN_E2E)("jonasland slack webhook flow", () => {
   test("slack webhook goes through events mediation, triggers llm call, and posts slack updates", async () => {
     await using proxy = await mockEgressProxy();
@@ -237,7 +273,59 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow", () => {
     };
     const streams = streamsPayload.json;
     expect(streams.some((stream) => stream.path === "/integrations/slack/webhooks")).toBe(true);
-    expect(streams.some((stream) => stream.path.startsWith("/agents/opencode/"))).toBe(true);
+    const agentStream = streams.find((stream) => stream.path.startsWith("/agents/opencode/"));
+    expect(agentStream).toBeDefined();
+
+    const integrationEvents = await readStreamEvents(deployment, "/integrations/slack/webhooks");
+    expect(
+      integrationEvents.some(
+        (event) =>
+          event["type"] === "https://events.iterate.com/integrations/slack/webhook-received",
+      ),
+    ).toBe(true);
+    const webhookEvent = integrationEvents.find(
+      (event) => event["type"] === "https://events.iterate.com/integrations/slack/webhook-received",
+    );
+    expect(webhookEvent).toBeDefined();
+    expect(webhookEvent?.["payload"]).toEqual(
+      expect.objectContaining({
+        channel: "C123",
+        threadTs: "1730000000.000100",
+        text: "<@BOT> what is 50 minus 8",
+      }),
+    );
+
+    const agentEvents = await readStreamEvents(deployment, agentStream!.path);
+    expect(
+      agentEvents.some(
+        (event) => event["type"] === "https://events.iterate.com/agents/prompt-added",
+      ),
+    ).toBe(true);
+    expect(
+      agentEvents.some(
+        (event) => event["type"] === "https://events.iterate.com/agents/status-updated",
+      ),
+    ).toBe(true);
+    expect(
+      agentEvents.some(
+        (event) => event["type"] === "https://events.iterate.com/agents/response-added",
+      ),
+    ).toBe(true);
+
+    const promptEvent = agentEvents.find(
+      (event) => event["type"] === "https://events.iterate.com/agents/prompt-added",
+    );
+    expect(promptEvent).toBeDefined();
+    expect(promptEvent?.["payload"]).toEqual(
+      expect.objectContaining({
+        source: "slack",
+        prompt: "<@BOT> what is 50 minus 8",
+        replyTarget: expect.objectContaining({
+          channel: "C123",
+          threadTs: "1730000000.000100",
+        }),
+      }),
+    );
 
     const unmatchedCount = proxy.records.filter((record) => record.response.status === 599).length;
     expect(unmatchedCount).toBe(0);
