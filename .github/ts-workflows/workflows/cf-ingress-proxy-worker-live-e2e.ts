@@ -42,7 +42,7 @@ export default workflow({
           run: [
             "set -euo pipefail",
             'deploy_log="$(mktemp)"',
-            `doppler run --config stg -- sh -c 'APP_STAGE="$APP_STAGE" tsx ./alchemy.run.ts cli deploy --stage "$APP_STAGE"' | tee "$deploy_log"`,
+            `doppler run --config stg -- sh -c 'APP_STAGE="$APP_STAGE" pnpm exec tsx ./alchemy.run.ts cli deploy --stage "$APP_STAGE"' | tee "$deploy_log"`,
             'base_url="$(grep -Eo \'https://[^[:space:]]+\' "$deploy_log" | tail -n 1)"',
             'base_url="${base_url%/}"',
             'if [ -z "$base_url" ]; then',
@@ -78,7 +78,7 @@ export default workflow({
             '  echo "APP_STAGE not set; skipping teardown"',
             "  exit 0",
             "fi",
-            `doppler run --config stg -- sh -c 'tsx ./alchemy.run.ts cli --destroy --stage "$APP_STAGE"' || echo "Teardown command failed; check Alchemy state manually for $APP_STAGE"`,
+            `doppler run --config stg -- sh -c 'pnpm exec tsx ./alchemy.run.ts cli --destroy --stage "$APP_STAGE"' || echo "Teardown command failed; check Alchemy state manually for $APP_STAGE"`,
           ].join("\n"),
         },
       ],
