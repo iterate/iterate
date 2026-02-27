@@ -223,14 +223,26 @@ RUN git init && \
     git commit -m "snapshot ${GIT_SHA}" && \
     git branch -M main
 
-# Snapshot tool directories from ~ as a compressed tarball so archil-mount.sh
-# can seed them onto the archil disk after mount (the bind-mount over ~ hides
-# everything). Using a tarball avoids doubling the image layer size.
-# Only tool/binary dirs — NOT the repo (it's cloned separately on first boot).
+# Snapshot boot-critical tool directories from ~ as a compressed tarball.
+# archil-mount.sh extracts this onto the archil disk so tools survive the
+# bind-mount over ~. Only include what's needed for pidnap processes to start:
+#   - .local/bin/ (mitmdump, uv, gog, claude) — NOT .local/share (pnpm store, uv envs)
+#   - .mitmproxy/ (egress proxy CA certs)
+#   - .iterate/ (bin wrappers, configs)
+#   - .opencode/bin/ (opencode binary)
+#   - .config/ (opencode, claude settings)
+#   - dotfiles (.bashrc, .profile, .gitconfig, .npmrc, .claude.json)
+# Heavy tools (agent-browser, codex, pi, bun, fly, go, .claude/bin) are NOT
+# included — they get installed on first boot or are at system paths.
 RUN cd /home/iterate && \
     tar czf /tmp/home-snapshot.tar.gz \
       --ignore-failed-read \
-      .local .npm-global .bun .fly .opencode .claude .cache/node .mitmproxy .iterate .config go \
+      .local/bin \
+      .local/share/uv \
+      .mitmproxy \
+      .iterate \
+      .opencode/bin \
+      .config \
       .bashrc .bash_logout .profile .gitconfig .npmrc .claude.json \
       2>/dev/null && \
     sudo mv /tmp/home-snapshot.tar.gz /opt/home-snapshot.tar.gz && \

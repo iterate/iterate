@@ -79,7 +79,7 @@ sudo mkdir -p "$STAGING"
   # This restores all binaries (pnpm, tsx, mitmdump, bun, fly, etc.) that the bind-mount hides.
   # On subsequent boots, skip the heavy extract if tools are already present.
   if [[ -f "$HOME_SNAPSHOT" ]]; then
-    if [[ -x "${STAGING}/.local/bin/mitmdump" ]] && [[ -x "${STAGING}/.npm-global/bin/tsx" ]]; then
+    if [[ -x "${STAGING}/.local/bin/mitmdump" ]] && [[ -x "${STAGING}/.opencode/bin/opencode" ]]; then
       echo "[archil] Tools already present on disk, skipping seed"
     else
       echo "[archil] Extracting tool directories from image snapshot..."
