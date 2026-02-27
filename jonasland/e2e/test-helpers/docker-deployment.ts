@@ -11,8 +11,8 @@ import {
   type Client as PidnapClient,
 } from "../../../packages/pidnap/src/api/client.ts";
 export {
+  MockEgressProxy,
   mockEgressProxy,
-  type MockEgressProxy,
   type MockEgressRecord,
   type MockEgressWaitForHandle,
 } from "./mock-egress-proxy.ts";
@@ -45,6 +45,11 @@ function toEnvRecord(env?: Record<string, string> | string[]): Record<string, st
     })
     .filter((entry): entry is readonly [string, string] => entry !== undefined);
   return Object.fromEntries(entries);
+}
+
+function withDefaultExtraHosts(extraHosts?: string[]): string[] {
+  const merged = ["host.docker.internal:host-gateway", ...(extraHosts ?? [])];
+  return [...new Set(merged)];
 }
 
 function exposedPortsMap(exposedPorts?: string[]): Record<string, {}> | undefined {
@@ -423,7 +428,7 @@ async function waitForHostRouteViaContainer(params: {
   throw new Error(`timed out waiting for host route ${params.host}${params.path}`);
 }
 
-export interface ProjectDeployment {
+export interface DeploymentRuntime {
   ports: {
     ingress: number;
   };
@@ -445,11 +450,11 @@ export interface ProjectDeployment {
   [Symbol.asyncDispose](): Promise<void>;
 }
 
-export type SandboxFixture = ProjectDeployment;
+export type SandboxFixture = DeploymentRuntime;
 
 export async function waitForHealthyWithLogs(params: {
   url: string;
-  deployment: Pick<ProjectDeployment, "logs">;
+  deployment: Pick<DeploymentRuntime, "logs">;
 }): Promise<void> {
   try {
     await waitForHttpOk({
@@ -465,7 +470,7 @@ export async function waitForHealthyWithLogs(params: {
 }
 
 export async function waitForPidnapHostRoute(params: {
-  deployment: Pick<ProjectDeployment, "exec">;
+  deployment: Pick<DeploymentRuntime, "exec">;
   timeoutMs?: number;
 }): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 45_000;
@@ -487,7 +492,7 @@ export async function waitForPidnapHostRoute(params: {
 }
 
 export async function assertIptablesRedirect(params: {
-  deployment: Pick<ProjectDeployment, "exec">;
+  deployment: Pick<DeploymentRuntime, "exec">;
 }): Promise<void> {
   const natRules = await params.deployment.exec("iptables -t nat -S OUTPUT");
   if (natRules.exitCode !== 0) {
@@ -501,13 +506,13 @@ export async function assertIptablesRedirect(params: {
   }
 }
 
-export async function projectDeployment(params: {
+export async function createDeployment(params: {
   image: string;
   name?: string;
   extraHosts?: string[];
   capAdd?: string[];
   env?: Record<string, string> | string[];
-}): Promise<ProjectDeployment> {
+}): Promise<DeploymentRuntime> {
   const requestedEnv = toEnvRecord(params.env);
   const exposedPorts = ["80/tcp"];
   const capAdd = params.capAdd ?? ["NET_ADMIN"];
@@ -516,7 +521,7 @@ export async function projectDeployment(params: {
     name: params.name,
     env: params.env,
     exposedPorts,
-    extraHosts: params.extraHosts,
+    extraHosts: withDefaultExtraHosts(params.extraHosts),
     capAdd,
   });
 
@@ -638,7 +643,7 @@ export async function projectDeployment(params: {
     throw error;
   }
 
-  const deployment: ProjectDeployment = {
+  const deployment: DeploymentRuntime = {
     ports,
     pidnap,
     caddy,
@@ -708,5 +713,5 @@ export async function projectDeployment(params: {
   return deployment;
 }
 
-export const dockerProjectDeployment = projectDeployment;
-export const sandboxFixture = projectDeployment;
+export const dockerDeploymentRuntime = createDeployment;
+export const sandboxFixture = createDeployment;

@@ -7,7 +7,7 @@ export type SerializableValue =
   | { [key: string]: SerializableValue };
 export type SerializableObject = { [key: string]: SerializableValue };
 
-export interface ProjectDeploymentSharedConfig {
+export interface DeploymentSharedConfig {
   provider: string;
   name?: string;
   image?: string;
@@ -21,15 +21,15 @@ export interface ProjectDeploymentSharedConfig {
  * - provider discriminator (`provider`)
  * - provider-specific top-level fields (joined, not nested)
  */
-export type ProjectDeploymentConfigVariant<
+export type DeploymentConfigVariant<
   TProvider extends string,
   TProviderSpecific extends SerializableObject = SerializableObject,
   TShared extends SerializableObject = SerializableObject,
-> = ProjectDeploymentSharedConfig & TShared & TProviderSpecific & { provider: TProvider };
+> = DeploymentSharedConfig & TShared & TProviderSpecific & { provider: TProvider };
 
-export type ProjectDeploymentConfig = ProjectDeploymentConfigVariant<string>;
+export type DeploymentConfig = DeploymentConfigVariant<string>;
 
-export function defineProjectDeploymentConfigs<const T extends readonly ProjectDeploymentConfig[]>(
+export function defineDeploymentConfigs<const T extends readonly DeploymentConfig[]>(
   configs: T,
 ): T {
   return configs;
@@ -37,28 +37,28 @@ export function defineProjectDeploymentConfigs<const T extends readonly ProjectD
 
 export type ProviderConfigMap = Record<string, SerializableObject>;
 
-export type ProjectDeploymentConfigFromMap<
+export type DeploymentConfigFromMap<
   TProviderMap extends ProviderConfigMap,
   TShared extends SerializableObject = SerializableObject,
 > = {
-  [TProvider in keyof TProviderMap & string]: ProjectDeploymentConfigVariant<
+  [TProvider in keyof TProviderMap & string]: DeploymentConfigVariant<
     TProvider,
     TProviderMap[TProvider],
     TShared
   >;
 }[keyof TProviderMap & string];
 
-export type ProjectDeploymentProviderFactoryMap<
+export type DeploymentProviderFactoryMap<
   TProviderMap extends ProviderConfigMap,
   TProviderInstance,
   TShared extends SerializableObject = SerializableObject,
 > = {
   [TProvider in keyof TProviderMap & string]: (
-    config: ProjectDeploymentConfigVariant<TProvider, TProviderMap[TProvider], TShared>,
+    config: DeploymentConfigVariant<TProvider, TProviderMap[TProvider], TShared>,
   ) => TProviderInstance;
 };
 
-export interface ProjectDeploymentRuntime {
+export interface DeploymentRuntime {
   fetcher: DeploymentFetcher;
   restart(): Promise<void>;
   destroy(): Promise<void>;
@@ -85,12 +85,12 @@ export interface BootstrapClients {
   pidnap: PidnapBootstrapClient;
 }
 
-export interface BootstrapContext<TInput, TRuntime extends ProjectDeploymentRuntime> {
+export interface BootstrapContext<TInput, TRuntime extends DeploymentRuntime> {
   input: TInput;
   runtime: TRuntime;
 }
 
-export interface ProjectDeploymentProviderOptions {
+export interface DeploymentProviderOptions {
   caddyHealthTimeoutMs?: number;
   pidnapHealthTimeoutMs?: number;
   serviceReadyTimeoutMs?: number;
@@ -98,7 +98,7 @@ export interface ProjectDeploymentProviderOptions {
   bootstrapServices?: string[];
 }
 
-const DEFAULT_OPTIONS: Required<ProjectDeploymentProviderOptions> = {
+const DEFAULT_OPTIONS: Required<DeploymentProviderOptions> = {
   caddyHealthTimeoutMs: 180_000,
   pidnapHealthTimeoutMs: 120_000,
   serviceReadyTimeoutMs: 120_000,
@@ -106,16 +106,16 @@ const DEFAULT_OPTIONS: Required<ProjectDeploymentProviderOptions> = {
   bootstrapServices: ["registry", "events"],
 };
 
-export abstract class ProjectDeploymentProvider<
+export abstract class DeploymentProvider<
   TOpts extends object,
   TInput,
-  TRuntime extends ProjectDeploymentRuntime,
+  TRuntime extends DeploymentRuntime,
 > {
-  protected readonly bootstrapOpts: Required<ProjectDeploymentProviderOptions>;
+  protected readonly bootstrapOpts: Required<DeploymentProviderOptions>;
 
   protected constructor(
     protected readonly opts: TOpts,
-    bootstrapOpts?: ProjectDeploymentProviderOptions,
+    bootstrapOpts?: DeploymentProviderOptions,
   ) {
     this.bootstrapOpts = {
       ...DEFAULT_OPTIONS,

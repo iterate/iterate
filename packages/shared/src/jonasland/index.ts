@@ -729,4 +729,4 @@ export function createOrpcRpcWebSocketServiceClient<TContract extends AnyContrac
   return createORPCClient(link);
 }
 
-export * from "./project-deployment-provider.ts";
+export * from "./deployment/index.ts";

@@ -1,13 +1,13 @@
 import {
   DockerDeployment,
   FlyDeployment,
-  type ProjectDeployment,
+  type Deployment,
   type SandboxFixture,
 } from "./deployment.ts";
 
-export type { ProjectDeployment, SandboxFixture };
+export type { Deployment, SandboxFixture };
 
-export interface CreateProjectDeploymentParams {
+export interface CreateDeploymentParams {
   image: string;
   name?: string;
   extraHosts?: string[];
@@ -23,16 +23,14 @@ function resolveProvider(): "docker" | "fly" {
   throw new Error(`Unsupported JONASLAND_E2E_PROVIDER: ${provider}`);
 }
 
-function resolveFlyImage(params: CreateProjectDeploymentParams): string {
+function resolveFlyImage(params: CreateDeploymentParams): string {
   if (params.image.trim().length > 0) return params.image;
   const fallback = process.env.JONASLAND_E2E_FLY_IMAGE ?? process.env.FLY_DEFAULT_IMAGE;
   if (fallback && fallback.trim().length > 0) return fallback;
   throw new Error("Fly deployment requires image or JONASLAND_E2E_FLY_IMAGE/FLY_DEFAULT_IMAGE");
 }
 
-export async function projectDeployment(
-  params: CreateProjectDeploymentParams,
-): Promise<ProjectDeployment> {
+export async function createDeployment(params: CreateDeploymentParams): Promise<Deployment> {
   const provider = resolveProvider();
   if (provider === "fly") {
     const deployment = new FlyDeployment({
@@ -49,4 +47,4 @@ export async function projectDeployment(
   return deployment;
 }
 
-export const sandboxFixture = projectDeployment;
+export const sandboxFixture = createDeployment;

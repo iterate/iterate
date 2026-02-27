@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import {
   DockerDeployment,
   FlyDeployment,
-  mockEgressProxy,
+  MockEgressProxy,
   startFlyFrpEgressBridge,
   type Deployment,
 } from "../test-helpers/index.ts";
@@ -35,7 +35,7 @@ const providerCases: ProviderCase[] = [
       await DockerDeployment.withConfig({
         image: DOCKER_IMAGE,
       }).create({
-        name: `jonasland-e2e-frp-egress-docker-${randomUUID().slice(0, 8)}`,
+        name: deploymentNameForCurrentTest("docker"),
       }),
   },
   {
@@ -45,10 +45,25 @@ const providerCases: ProviderCase[] = [
       await FlyDeployment.withConfig({
         image: FLY_IMAGE,
       }).create({
-        name: `jonasland-e2e-frp-egress-fly-${randomUUID().slice(0, 8)}`,
+        name: deploymentNameForCurrentTest("fly"),
       }),
   },
 ];
+
+function slugifyForName(value: string): string {
+  return value
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, "-")
+    .replaceAll(/^-+|-+$/g, "")
+    .slice(0, 32);
+}
+
+function deploymentNameForCurrentTest(provider: ProviderName): string {
+  const currentTestName = expect.getState().currentTestName ?? "unnamed-test";
+  const workerId = process.env.VITEST_WORKER_ID ?? "0";
+  const slug = slugifyForName(currentTestName);
+  return `jonasland-vtest-${provider}-${workerId}-${slug}`;
+}
 
 async function postEventsOrpc(
   deployment: Deployment,
@@ -153,18 +168,12 @@ async function waitForFirehoseEvent(params: {
 }
 
 for (const provider of providerCases) {
+  // Tip: run a single provider with `pnpm jonasland e2e -t docker` or `-t fly`.
   describe.runIf(provider.enabled)(`frp egress milestone (${provider.name})`, () => {
     test("routes external-proxy egress via frp to local mock", async () => {
-      await using proxy = await mockEgressProxy();
-      proxy.fetch = async (request) =>
-        Response.json({
-          ok: true,
-          path: new URL(request.url).pathname,
-          mode: "external-proxy",
-        });
+      await using proxy = await MockEgressProxy.create();
 
       await using deployment = await provider.create();
-      await deployment.waitForPidnapHostRoute({ timeoutMs: 120_000 });
 
       await using frpBridge = await startFlyFrpEgressBridge({
         deployment,
@@ -172,40 +181,68 @@ for (const provider of providerCases) {
         frpcBin: process.env.JONASLAND_E2E_FRPC_BIN,
       });
 
-      await deployment.setEnvVars({
-        ITERATE_EXTERNAL_EGRESS_PROXY: frpBridge.dataProxyUrl,
+      const egressProcess = await deployment.pidnap.processes.get({
+        target: "egress-proxy",
+        includeEffectiveEnv: false,
       });
-      await deployment.ensureEgressProxyProcess();
+      await deployment.pidnap.processes.updateConfig({
+        processSlug: "egress-proxy",
+        definition: {
+          ...egressProcess.definition,
+          env: {
+            ...(egressProcess.definition.env ?? {}),
+            ITERATE_EXTERNAL_EGRESS_PROXY: frpBridge.dataProxyUrl,
+          },
+        },
+        options: {
+          restartPolicy: "always",
+        },
+        restartImmediately: true,
+      });
+      await deployment.pidnap.processes.start({ target: "egress-proxy" }).catch(() => {});
+      await deployment.waitForPidnapProcessRunning({ target: "egress-proxy" });
 
-      const requestPath = `/vitest-frp-milestone-${randomUUID().slice(0, 8)}`;
+      const requestPath = "/vitest-frp-milestone";
       const payload = JSON.stringify({
         source: `${provider.name}-frp-milestone`,
-        run: randomUUID().slice(0, 8),
       });
-      const observed = proxy.waitFor((request) => new URL(request.url).pathname === requestPath, {
-        timeout: 180_000,
-      });
+      const observed = proxy.waitFor((request) => new URL(request.url).pathname === requestPath);
+      proxy.fetch = async (request) =>
+        Response.json({
+          ok: true,
+          path: new URL(request.url).pathname,
+          mode: "external-proxy",
+        });
 
-      const curl = await deployment.runEgressRequestViaCurl({
-        requestPath,
-        payloadJson: payload,
-      });
+      const curl = await deployment.exec([
+        "curl",
+        "-4",
+        "-k",
+        "-sS",
+        "-i",
+        "-H",
+        "content-type: application/json",
+        "--data",
+        payload,
+        `https://api.openai.com${requestPath}`,
+      ]);
 
       expect(curl.exitCode).toBe(0);
       expect(curl.output).toContain('"ok":true');
       expect(curl.output.toLowerCase()).toContain("x-iterate-egress-mode: external-proxy");
       expect(curl.output.toLowerCase()).toContain("x-iterate-egress-proxy-seen: 1");
 
-      const delivered = await observed;
-      expect(new URL(delivered.request.url).pathname).toBe(requestPath);
-      expect(await delivered.request.text()).toBe(payload);
-      expect(delivered.request.headers.get("host")).toContain("127.0.0.1:27180");
-      expect(delivered.response.status).toBe(200);
+      // Slightly clunky for now: register mock observation before the request
+      // to avoid even theoretical race windows.
+      const { request, response } = await observed;
+      expect(new URL(request.url).pathname).toBe(requestPath);
+      expect(await request.text()).toBe(payload);
+      expect(request.headers.get("host")).toContain("127.0.0.1:27180");
+      expect(response.status).toBe(200);
     }, 900_000);
 
     test("events firehose SSE emits appended event", async () => {
       await using deployment = await provider.create();
-      await deployment.waitForPidnapHostRoute({ timeoutMs: 120_000 });
 
       const streamPath = `frp-milestone/events/${randomUUID().slice(0, 8)}`;
       const expectedType = "https://events.iterate.com/events/test/frp-milestone-sse";

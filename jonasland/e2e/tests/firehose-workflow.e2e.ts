@@ -1,7 +1,7 @@
 import { request as httpRequest } from "node:http";
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import { projectDeployment, type ProjectDeployment } from "../test-helpers/index.ts";
+import { createDeployment, type DeploymentRuntime } from "../test-helpers/index.ts";
 
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const RUN_DOCKER_E2E = E2E_PROVIDER === "docker";
@@ -23,7 +23,7 @@ const sleep = (ms: number): Promise<void> =>
   });
 
 async function waitForHostRoute(
-  deployment: ProjectDeployment,
+  deployment: DeploymentRuntime,
   params: { host: string; path: string; timeoutMs?: number },
 ): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 45_000;
@@ -38,7 +38,7 @@ async function waitForHostRoute(
   throw new Error(`timed out waiting for host route ${params.host}${params.path}`);
 }
 
-async function startOrdersProcess(deployment: ProjectDeployment): Promise<void> {
+async function startOrdersProcess(deployment: DeploymentRuntime): Promise<void> {
   const updated = await deployment.pidnap.processes.updateConfig({
     processSlug: "orders",
     definition: {
@@ -162,7 +162,7 @@ async function collectMatchingSseEvents(params: {
 
 describe.runIf(RUN_DOCKER_E2E)("jonasland firehose workflow", () => {
   test("firehose SSE captures delayed workflow events emitted by orders service", async () => {
-    await using deployment = await projectDeployment({
+    await using deployment = await createDeployment({
       image,
       name: `jonasland-e2e-firehose-${randomUUID()}`,
     });

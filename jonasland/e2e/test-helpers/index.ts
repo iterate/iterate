@@ -1,29 +1,21 @@
 export {
-  mockEgressProxy,
+  dockerDeploymentRuntime,
   mockttpFixture,
+  MockEgressProxy,
   waitForHttpOk,
-  waitForHealthyWithLogs,
-  waitForPidnapHostRoute,
-  waitForPidnapProcessRunning,
-  assertIptablesRedirect,
-  dockerContainerFixture,
-  execInContainer,
-  dockerProjectDeployment,
-  type MockEgressProxy,
+  mockEgressProxy,
+  type DeploymentRuntime,
   type MockEgressRecord,
   type MockEgressWaitForHandle,
-} from "./docker-project-deployment.ts";
+} from "./docker-deployment.ts";
+export { flyDeploymentRuntime } from "./fly-deployment.ts";
 
-export { flyProjectDeployment } from "./fly-project-deployment.ts";
 export { startFlyFrpEgressBridge, type FlyFrpEgressBridge } from "./frp-egress-bridge.ts";
-
 export {
-  projectDeployment,
+  createDeployment,
   sandboxFixture,
-  type ProjectDeployment,
-  type SandboxFixture,
-  type CreateProjectDeploymentParams,
-} from "./project-deployment.ts";
+  type CreateDeploymentParams,
+} from "./create-deployment.ts";
 export {
   Deployment,
   DockerDeployment,

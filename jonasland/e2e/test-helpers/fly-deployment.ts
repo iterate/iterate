@@ -22,8 +22,8 @@ import {
   waitForHttpOk,
   waitForPidnapHostRoute,
   waitForPidnapProcessRunning,
-  type ProjectDeployment,
-} from "./docker-project-deployment.ts";
+  type DeploymentRuntime,
+} from "./docker-deployment.ts";
 
 type FlyExecResponse = {
   exit_code?: number;
@@ -473,15 +473,15 @@ async function waitForRuntimeReady(params: {
   );
 }
 
-export interface FlyProjectDeploymentParams {
+export interface FlyDeploymentRuntimeParams {
   image: string;
   name?: string;
   env?: Record<string, string> | string[];
 }
 
-export async function flyProjectDeployment(
-  params: FlyProjectDeploymentParams,
-): Promise<ProjectDeployment> {
+export async function flyDeploymentRuntime(
+  params: FlyDeploymentRuntimeParams,
+): Promise<DeploymentRuntime> {
   const rawEnv = process.env as Record<string, string | undefined>;
   const flyApiToken = rawEnv.FLY_API_TOKEN;
   if (!flyApiToken) {
@@ -667,7 +667,7 @@ export async function flyProjectDeployment(
     );
   }
 
-  const deployment: ProjectDeployment = {
+  const deployment: DeploymentRuntime = {
     ports: {
       ingress: 443,
     },

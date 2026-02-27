@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./jonasland": "./src/jonasland/index.ts",
+    "./jonasland/deployment": "./src/jonasland/deployment/index.ts",
     "./force-public-url-vite-plugin": "./src/dev/force-public-url-vite-plugin.ts",
     "./project-ingress": "./src/project-ingress.ts"
   },

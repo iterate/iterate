@@ -3,13 +3,13 @@ import { mockEgressProxy } from "../test-helpers/index.ts";
 
 describe("mock egress proxy", () => {
   test.concurrent("records requests and supports waitFor", async () => {
-    await using proxy = await mockEgressProxy();
-    proxy.fetch = async (request) =>
-      Response.json({
-        path: new URL(request.url).pathname,
-        method: request.method,
-      });
-
+    await using proxy = await mockEgressProxy({
+      fetch: async (request) =>
+        Response.json({
+          path: new URL(request.url).pathname,
+          method: request.method,
+        }),
+    });
     const handle = proxy.waitFor((request) => new URL(request.url).pathname === "/charges");
     const response = await fetch(proxy.urlFor("/charges"), {
       method: "POST",
@@ -28,8 +28,9 @@ describe("mock egress proxy", () => {
   });
 
   test.concurrent("respondWith intercepts before fetch handler", async () => {
-    await using proxy = await mockEgressProxy();
-    proxy.fetch = async () => Response.json({ from: "handler" });
+    await using proxy = await mockEgressProxy({
+      fetch: async () => Response.json({ from: "handler" }),
+    });
 
     const handle = proxy.waitFor((request) => new URL(request.url).pathname === "/inventory");
     handle.respondWith(Response.json({ error: "unavailable" }, { status: 503 }));
@@ -43,8 +44,9 @@ describe("mock egress proxy", () => {
   });
 
   test.concurrent("iterator yields only records after iterator creation", async () => {
-    await using proxy = await mockEgressProxy();
-    proxy.fetch = async () => new Response("ok");
+    await using proxy = await mockEgressProxy({
+      fetch: async () => new Response("ok"),
+    });
 
     await fetch(proxy.urlFor("/before"));
 

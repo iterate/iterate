@@ -23,7 +23,6 @@
     "prepare": "is-ci || husky",
     "vitest": "pnpm os test",
     "test": "pnpm -r --parallel --filter '!@iterate-com/jonasland-e2e' test",
-    "test:jonasland-e2e": "pnpm --filter @iterate-com/jonasland-e2e test",
     "test:onboarding": "pnpm -r --parallel test:onboarding",
     "test:onboarding:production": "pnpm -r --parallel test:onboarding:production",
     "docker:up": "tsx ./scripts/docker-compose.ts up -d",

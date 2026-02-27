@@ -24,21 +24,19 @@ export interface MockEgressWaitForHandle extends Promise<MockEgressRecord> {
 
 export interface MockEgressProxyOptions {
   port?: number;
-}
-
-export interface MockEgressProxy extends AsyncIterable<MockEgressRecord>, AsyncDisposable {
-  fetch: MockEgressFetch;
-  readonly port: number;
-  readonly url: string;
-  readonly proxyUrl: string;
-  readonly hostProxyUrl: string;
-  urlFor(path: string): string;
-  readonly records: ReadonlyArray<MockEgressRecord>;
-  waitFor(
-    matcher: (request: Request) => boolean,
-    options?: { timeout?: number },
-  ): MockEgressWaitForHandle;
-  close(): Promise<void>;
+  /**
+   * Optional request handler provided at construction time.
+   * This keeps call sites concise for small tests.
+   *
+   * Design note:
+   * We intentionally keep this primitive and low-level for now:
+   * - request -> fetch handler
+   * - (future) request upgrade hook
+   *
+   * Higher-level mocking/recording/blocking APIs can be layered on top
+   * without changing the core transport surface.
+   */
+  fetch?: MockEgressFetch;
 }
 
 type PendingWaiter = {
@@ -150,18 +148,6 @@ async function writeResponse(res: ServerResponse, webResponse: Response): Promis
   res.end(body);
 }
 
-function settleWaiter(waiters: PendingWaiter[], waiter: PendingWaiter): void {
-  waiter.settled = true;
-  if (waiter.timeoutHandle) {
-    clearTimeout(waiter.timeoutHandle);
-    waiter.timeoutHandle = undefined;
-  }
-  const index = waiters.indexOf(waiter);
-  if (index >= 0) {
-    waiters.splice(index, 1);
-  }
-}
-
 function safeMatch(matcher: (request: Request) => boolean, request: Request): boolean {
   try {
     return matcher(request);
@@ -170,109 +156,146 @@ function safeMatch(matcher: (request: Request) => boolean, request: Request): bo
   }
 }
 
-export async function mockEgressProxy(options?: MockEgressProxyOptions): Promise<MockEgressProxy> {
-  const records: MockEgressRecord[] = [];
-  const waiters: PendingWaiter[] = [];
-  const broadcaster = new RecordBroadcaster();
-  let offset = 0;
-  let closed = false;
-  let closePromise: Promise<void> | undefined;
-  let port = 0;
-  let url = "";
-  let proxyUrl = "";
-  let hostProxyUrl = "";
+export class MockEgressProxy implements AsyncIterable<MockEgressRecord>, AsyncDisposable {
+  fetch: MockEgressFetch;
 
-  const proxy: MockEgressProxy = {
-    fetch: async () => new Response("mock-egress-proxy: handler not configured", { status: 501 }),
-    get port() {
-      return port;
-    },
-    get url() {
-      return url;
-    },
-    get proxyUrl() {
-      return proxyUrl;
-    },
-    get hostProxyUrl() {
-      return hostProxyUrl;
-    },
-    urlFor(path: string): string {
-      const normalized = path.startsWith("/") ? path : `/${path}`;
-      return `${url}${normalized}`;
-    },
-    get records() {
-      return records;
-    },
-    waitFor(
-      matcher: (request: Request) => boolean,
-      waitOptions?: { timeout?: number },
-    ): MockEgressWaitForHandle {
-      let waiterRef: PendingWaiter | undefined;
-      const promise = new Promise<MockEgressRecord>((resolve, reject) => {
-        const waiter: PendingWaiter = {
-          matcher,
-          resolve,
-          reject,
-          settled: false,
-        };
-        waiterRef = waiter;
+  private readonly recordsInternal: MockEgressRecord[] = [];
+  private readonly waiters: PendingWaiter[] = [];
+  private readonly broadcaster = new RecordBroadcaster();
+  private readonly server = createServer(async (incoming, res) => {
+    await this.handleRequest(incoming, res);
+  });
 
-        if (waitOptions?.timeout !== undefined) {
-          waiter.timeoutHandle = setTimeout(() => {
-            if (waiter.settled) return;
-            settleWaiter(waiters, waiter);
-            waiter.reject(
-              new Error(
-                `mock-egress-proxy waitFor timed out after ${String(waitOptions.timeout)}ms`,
-              ),
-            );
-          }, waitOptions.timeout);
-        }
+  private offset = 0;
+  private closed = false;
+  private closePromise: Promise<void> | undefined;
+  private _port = 0;
+  private _url = "";
+  private _proxyUrl = "";
+  private _hostProxyUrl = "";
 
-        waiters.push(waiter);
-      });
+  private constructor(options?: MockEgressProxyOptions) {
+    this.fetch =
+      options?.fetch ??
+      (async () => new Response("mock-egress-proxy: handler not configured", { status: 501 }));
+  }
 
-      const handle = promise as MockEgressWaitForHandle;
-      handle.respondWith = (response: Response) => {
-        if (!waiterRef || waiterRef.settled) {
-          throw new Error("cannot respondWith on a settled waitFor handle");
-        }
-        waiterRef.interceptResponse = response.clone();
+  static async create(options?: MockEgressProxyOptions): Promise<MockEgressProxy> {
+    const proxy = new MockEgressProxy(options);
+    await proxy.listen(options?.port);
+    return proxy;
+  }
+
+  get port() {
+    return this._port;
+  }
+
+  get url() {
+    return this._url;
+  }
+
+  get proxyUrl() {
+    return this._proxyUrl;
+  }
+
+  get hostProxyUrl() {
+    return this._hostProxyUrl;
+  }
+
+  urlFor(path: string): string {
+    const normalized = path.startsWith("/") ? path : `/${path}`;
+    return `${this.url}${normalized}`;
+  }
+
+  get records() {
+    return this.recordsInternal;
+  }
+
+  waitFor(
+    matcher: (request: Request) => boolean,
+    waitOptions?: { timeout?: number },
+  ): MockEgressWaitForHandle {
+    let waiterRef: PendingWaiter | undefined;
+    const promise = new Promise<MockEgressRecord>((resolve, reject) => {
+      const waiter: PendingWaiter = {
+        matcher,
+        resolve,
+        reject,
+        settled: false,
       };
-      return handle;
-    },
-    async close(): Promise<void> {
-      if (closePromise) return await closePromise;
-      closePromise = new Promise<void>((resolve) => {
-        if (closed) {
-          resolve();
-          return;
-        }
-        closed = true;
-        broadcaster.close();
-        for (const waiter of [...waiters]) {
-          if (waiter.settled) continue;
-          settleWaiter(waiters, waiter);
-          waiter.reject(new Error("mock-egress-proxy closed before waitFor matched"));
-        }
-        server.close(() => resolve());
-      });
-      return await closePromise;
-    },
-    async [Symbol.asyncDispose](): Promise<void> {
-      await proxy.close();
-    },
-    [Symbol.asyncIterator](): AsyncIterator<MockEgressRecord> {
-      return broadcaster.subscribe();
-    },
-  };
+      waiterRef = waiter;
 
-  const server = createServer(async (incoming, res) => {
-    const request = await toRequest(incoming, port);
+      if (waitOptions?.timeout !== undefined) {
+        waiter.timeoutHandle = setTimeout(() => {
+          if (waiter.settled) return;
+          this.settleWaiter(waiter);
+          waiter.reject(
+            new Error(`mock-egress-proxy waitFor timed out after ${String(waitOptions.timeout)}ms`),
+          );
+        }, waitOptions.timeout);
+      }
+
+      this.waiters.push(waiter);
+    });
+
+    const handle = promise as MockEgressWaitForHandle;
+    handle.respondWith = (response: Response) => {
+      if (!waiterRef || waiterRef.settled) {
+        throw new Error("cannot respondWith on a settled waitFor handle");
+      }
+      waiterRef.interceptResponse = response.clone();
+    };
+    return handle;
+  }
+
+  async close(): Promise<void> {
+    if (this.closePromise) return await this.closePromise;
+
+    this.closePromise = new Promise<void>((resolve) => {
+      if (this.closed) {
+        resolve();
+        return;
+      }
+
+      this.closed = true;
+      this.broadcaster.close();
+      for (const waiter of [...this.waiters]) {
+        if (waiter.settled) continue;
+        this.settleWaiter(waiter);
+        waiter.reject(new Error("mock-egress-proxy closed before waitFor matched"));
+      }
+      this.server.close(() => resolve());
+    });
+
+    return await this.closePromise;
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<MockEgressRecord> {
+    return this.broadcaster.subscribe();
+  }
+
+  private settleWaiter(waiter: PendingWaiter): void {
+    waiter.settled = true;
+    if (waiter.timeoutHandle) {
+      clearTimeout(waiter.timeoutHandle);
+      waiter.timeoutHandle = undefined;
+    }
+    const index = this.waiters.indexOf(waiter);
+    if (index >= 0) {
+      this.waiters.splice(index, 1);
+    }
+  }
+
+  private async handleRequest(incoming: IncomingMessage, res: ServerResponse): Promise<void> {
+    const request = await toRequest(incoming, this.port);
     const requestForRecord = request.clone();
     const createdAt = Date.now();
 
-    const matchedWaiters = waiters.filter(
+    const matchedWaiters = this.waiters.filter(
       (waiter) => !waiter.settled && safeMatch(waiter.matcher, requestForRecord.clone()),
     );
     const interceptingWaiter = matchedWaiters.find(
@@ -285,7 +308,7 @@ export async function mockEgressProxy(options?: MockEgressProxyOptions): Promise
       interceptingWaiter.interceptResponse = undefined;
     } else {
       try {
-        response = await proxy.fetch(request);
+        response = await this.fetch(request);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         response = new Response(`mock-egress-proxy handler error: ${message}`, { status: 500 });
@@ -295,38 +318,42 @@ export async function mockEgressProxy(options?: MockEgressProxyOptions): Promise
     await writeResponse(res, response.clone());
 
     const record: MockEgressRecord = {
-      offset,
+      offset: this.offset,
       request: requestForRecord,
       response: response.clone(),
       createdAt,
       duration: Date.now() - createdAt,
     };
-    offset += 1;
-    records.push(record);
-    broadcaster.publish(record);
+    this.offset += 1;
+    this.recordsInternal.push(record);
+    this.broadcaster.publish(record);
 
     for (const waiter of matchedWaiters) {
       if (waiter.settled) continue;
-      settleWaiter(waiters, waiter);
+      this.settleWaiter(waiter);
       waiter.resolve(record);
     }
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options?.port ?? 0, "127.0.0.1", () => resolve());
-  });
-
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    await proxy.close();
-    throw new Error("mock-egress-proxy failed to determine listening port");
   }
 
-  port = address.port;
-  url = `http://localhost:${String(port)}`;
-  proxyUrl = `http://host.docker.internal:${String(port)}`;
-  hostProxyUrl = `http://127.0.0.1:${String(port)}`;
+  private async listen(port?: number): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      this.server.once("error", reject);
+      this.server.listen(port ?? 0, "127.0.0.1", () => resolve());
+    });
 
-  return proxy;
+    const address = this.server.address();
+    if (address === null || typeof address === "string") {
+      await this.close();
+      throw new Error("mock-egress-proxy failed to determine listening port");
+    }
+
+    this._port = address.port;
+    this._url = `http://localhost:${String(this.port)}`;
+    this._proxyUrl = `http://host.docker.internal:${String(this.port)}`;
+    this._hostProxyUrl = `http://127.0.0.1:${String(this.port)}`;
+  }
+}
+
+export async function mockEgressProxy(options?: MockEgressProxyOptions): Promise<MockEgressProxy> {
+  return await MockEgressProxy.create(options);
 }

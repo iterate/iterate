@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import {
   mockEgressProxy,
-  projectDeployment,
-  type ProjectDeployment,
+  createDeployment,
+  type DeploymentRuntime,
 } from "../test-helpers/index.ts";
 
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
@@ -21,7 +21,7 @@ const EVENTS_HOST_HEADER = "Host: events.iterate.localhost";
 const EVENTS_JSON_HEADER = "content-type: application/json";
 
 async function waitForDirectHttp(
-  deployment: ProjectDeployment,
+  deployment: DeploymentRuntime,
   params: { url: string; timeoutMs?: number },
 ): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 45_000;
@@ -36,7 +36,7 @@ async function waitForDirectHttp(
   throw new Error(`timed out waiting for direct http ${params.url}`);
 }
 
-async function startEgressProxyProcess(deployment: ProjectDeployment): Promise<void> {
+async function startEgressProxyProcess(deployment: DeploymentRuntime): Promise<void> {
   const updated = await deployment.pidnap.processes.updateConfig({
     processSlug: "egress-proxy",
     definition: {
@@ -60,7 +60,7 @@ async function startEgressProxyProcess(deployment: ProjectDeployment): Promise<v
 }
 
 async function postEventsOrpc(
-  deployment: ProjectDeployment,
+  deployment: DeploymentRuntime,
   procedure: string,
   body: unknown,
 ): Promise<{ exitCode: number; output: string }> {
@@ -79,7 +79,7 @@ async function postEventsOrpc(
 
 describe.runIf(RUN_DOCKER_E2E)("jonasland events egress", () => {
   test("events service health + append/listStreams work inside the container", async () => {
-    await using deployment = await projectDeployment({
+    await using deployment = await createDeployment({
       image,
       name: `jonasland-e2e-events-contract-${randomUUID()}`,
     });
@@ -126,18 +126,18 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland events egress", () => {
   });
 
   test("events push subscription emits registration and appended events through external egress proxy", async () => {
-    await using proxy = await mockEgressProxy();
-    proxy.fetch = async (request) => {
-      if (new URL(request.url).pathname !== "/events-callback") {
-        return new Response("unmatched", { status: 599 });
-      }
-      return Response.json({ ok: true });
-    };
+    await using proxy = await mockEgressProxy({
+      fetch: async (request) => {
+        if (new URL(request.url).pathname !== "/events-callback") {
+          return new Response("unmatched", { status: 599 });
+        }
+        return Response.json({ ok: true });
+      },
+    });
 
-    await using deployment = await projectDeployment({
+    await using deployment = await createDeployment({
       image,
       name: `jonasland-e2e-events-egress-${randomUUID()}`,
-      extraHosts: ["host.docker.internal:host-gateway"],
       env: {
         ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
       },

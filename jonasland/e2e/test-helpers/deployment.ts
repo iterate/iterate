@@ -1,6 +1,6 @@
-import { dockerProjectDeployment, type ProjectDeployment } from "./docker-project-deployment.ts";
-import { flyProjectDeployment } from "./fly-project-deployment.ts";
-export type { ProjectDeployment, SandboxFixture } from "./docker-project-deployment.ts";
+import { dockerDeploymentRuntime, type DeploymentRuntime } from "./docker-deployment.ts";
+import { flyDeploymentRuntime } from "./fly-deployment.ts";
+export type { DeploymentRuntime, SandboxFixture } from "./docker-deployment.ts";
 
 export type ProviderName = "docker" | "fly";
 
@@ -17,7 +17,10 @@ export interface DeploymentConfig {
   env?: Record<string, string> | string[];
 }
 
-export type DeploymentStartParams = Partial<DeploymentConfig>;
+export interface DeploymentStartParams extends Partial<DeploymentConfig> {
+  waitForReady?: boolean;
+  readyTimeoutMs?: number;
+}
 
 export type DeploymentFactory<TDeployment extends Deployment = Deployment> = {
   create(params?: DeploymentStartParams): Promise<TDeployment>;
@@ -33,8 +36,8 @@ const EGRESS_PROCESS_ENV = {
 function mergeConfig(base: DeploymentConfig, override?: DeploymentStartParams): DeploymentConfig {
   if (!override) return { ...base };
   return {
-    ...base,
-    ...override,
+    image: override.image ?? base.image,
+    name: override.name ?? base.name,
     extraHosts: override.extraHosts ?? base.extraHosts,
     capAdd: override.capAdd ?? base.capAdd,
     env: override.env ?? base.env,
@@ -91,10 +94,10 @@ async function retry<T>(task: () => Promise<T>, attempts: number): Promise<T> {
   throw lastError;
 }
 
-abstract class DeploymentBase implements AsyncDisposable, ProjectDeployment {
+abstract class DeploymentBase implements AsyncDisposable, DeploymentRuntime {
   static implemented: boolean = false;
 
-  protected runtime: ProjectDeployment | null = null;
+  protected runtime: DeploymentRuntime | null = null;
   protected state: "new" | "running" | "stopped" | "destroyed" = "new";
   private homeEnvFilePath: string | null = null;
 
@@ -102,9 +105,9 @@ abstract class DeploymentBase implements AsyncDisposable, ProjectDeployment {
 
   abstract readonly providerName: ProviderName;
 
-  protected abstract createRuntime(config: DeploymentConfig): Promise<ProjectDeployment>;
+  protected abstract createRuntime(config: DeploymentConfig): Promise<DeploymentRuntime>;
 
-  protected requireRuntime(): ProjectDeployment {
+  protected requireRuntime(): DeploymentRuntime {
     if (!this.runtime) {
       throw new Error(`${this.constructor.name} is not started`);
     }
@@ -115,7 +118,7 @@ abstract class DeploymentBase implements AsyncDisposable, ProjectDeployment {
     return this.requireRuntime().ports;
   }
 
-  set ports(value: ProjectDeployment["ports"]) {
+  set ports(value: DeploymentRuntime["ports"]) {
     this.requireRuntime().ports = value;
   }
 
@@ -123,7 +126,7 @@ abstract class DeploymentBase implements AsyncDisposable, ProjectDeployment {
     return this.requireRuntime().pidnap;
   }
 
-  set pidnap(value: ProjectDeployment["pidnap"]) {
+  set pidnap(value: DeploymentRuntime["pidnap"]) {
     this.requireRuntime().pidnap = value;
   }
 
@@ -131,7 +134,7 @@ abstract class DeploymentBase implements AsyncDisposable, ProjectDeployment {
     return this.requireRuntime().caddy;
   }
 
-  set caddy(value: ProjectDeployment["caddy"]) {
+  set caddy(value: DeploymentRuntime["caddy"]) {
     this.requireRuntime().caddy = value;
   }
 
@@ -139,7 +142,7 @@ abstract class DeploymentBase implements AsyncDisposable, ProjectDeployment {
     return this.requireRuntime().registry;
   }
 
-  set registry(value: ProjectDeployment["registry"]) {
+  set registry(value: DeploymentRuntime["registry"]) {
     this.requireRuntime().registry = value;
   }
 
@@ -155,6 +158,16 @@ abstract class DeploymentBase implements AsyncDisposable, ProjectDeployment {
     const config = mergeConfig(this.config, params);
     this.runtime = await this.createRuntime(config);
     this.state = "running";
+
+    if (params?.waitForReady ?? true) {
+      const readyTimeoutMs = params?.readyTimeoutMs ?? 120_000;
+      await this.waitForPidnapHostRoute({ timeoutMs: readyTimeoutMs });
+      await this.waitForDirectHttp({
+        url: "http://127.0.0.1/",
+        timeoutMs: readyTimeoutMs,
+      });
+    }
+
     return this;
   }
 
@@ -441,8 +454,8 @@ export class DockerDeployment extends Deployment {
 
   readonly providerName = "docker";
 
-  protected override async createRuntime(config: DeploymentConfig): Promise<ProjectDeployment> {
-    return await dockerProjectDeployment(config);
+  protected override async createRuntime(config: DeploymentConfig): Promise<DeploymentRuntime> {
+    return await dockerDeploymentRuntime(config);
   }
 
   static withConfig(config: DeploymentConfig): DeploymentFactory<DockerDeployment> {
@@ -461,8 +474,8 @@ export class FlyDeployment extends Deployment {
 
   readonly providerName = "fly";
 
-  protected override async createRuntime(config: DeploymentConfig): Promise<ProjectDeployment> {
-    return await flyProjectDeployment({
+  protected override async createRuntime(config: DeploymentConfig): Promise<DeploymentRuntime> {
+    return await flyDeploymentRuntime({
       image: config.image,
       name: config.name,
       env: config.env,

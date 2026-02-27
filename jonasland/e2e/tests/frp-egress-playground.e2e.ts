@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import {
-  dockerProjectDeployment,
-  flyProjectDeployment,
-  mockEgressProxy,
+  DockerDeployment,
+  FlyDeployment,
+  MockEgressProxy,
   startFlyFrpEgressBridge,
-  type ProjectDeployment,
+  type Deployment,
 } from "../test-helpers/index.ts";
 
 type ProviderName = "docker" | "fly";
@@ -13,25 +13,56 @@ type ProviderName = "docker" | "fly";
 type ProviderCase = {
   name: ProviderName;
   enabled: boolean;
-  image: string;
+  create: () => Promise<Deployment>;
 };
 
 const providerEnv = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const runAllProviders = providerEnv === "all";
 
-const DOCKER_IMAGE = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
+const DOCKER_IMAGE = "jonasland-sandbox:local";
 const FLY_IMAGE =
   process.env.JONASLAND_E2E_FLY_IMAGE ??
   process.env.FLY_DEFAULT_IMAGE ??
   process.env.JONASLAND_SANDBOX_IMAGE ??
   "";
 
-const EGRESS_PROCESS_ENV = {
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
-  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
-  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
-  OTEL_PROPAGATORS: "tracecontext,baggage",
-};
+function slugifyForName(value: string): string {
+  return value
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, "-")
+    .replaceAll(/^-+|-+$/g, "")
+    .slice(0, 32);
+}
+
+function deploymentNameForCurrentTest(provider: ProviderName): string {
+  const currentTestName = expect.getState().currentTestName ?? "unnamed-test";
+  const workerId = process.env.VITEST_WORKER_ID ?? "0";
+  const slug = slugifyForName(currentTestName);
+  return `jonasland-vtest-${provider}-${workerId}-${slug}`;
+}
+
+const providerCases: ProviderCase[] = [
+  {
+    name: "docker",
+    enabled: runAllProviders || providerEnv === "docker",
+    create: async () =>
+      await DockerDeployment.withConfig({
+        image: DOCKER_IMAGE,
+      }).create({
+        name: deploymentNameForCurrentTest("docker"),
+      }),
+  },
+  {
+    name: "fly",
+    enabled: (runAllProviders || providerEnv === "fly") && FLY_IMAGE.trim().length > 0,
+    create: async () =>
+      await FlyDeployment.withConfig({
+        image: FLY_IMAGE,
+      }).create({
+        name: deploymentNameForCurrentTest("fly"),
+      }),
+  },
+];
 
 function isTransientError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -49,6 +80,7 @@ function isTransientError(error: unknown): boolean {
 
 async function retry<T>(task: () => Promise<T>, attempts: number): Promise<T> {
   let lastError: unknown;
+
   for (let i = 0; i < attempts; i += 1) {
     try {
       return await task();
@@ -58,31 +90,12 @@ async function retry<T>(task: () => Promise<T>, attempts: number): Promise<T> {
       await new Promise((resolve) => setTimeout(resolve, 300 * (i + 1)));
     }
   }
+
   throw lastError;
 }
 
-function shQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\"'\"'")}'`;
-}
-
-async function waitForDirectHttp(
-  deployment: ProjectDeployment,
-  params: { url: string; timeoutMs?: number },
-): Promise<void> {
-  const timeoutMs = params.timeoutMs ?? 90_000;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const result = await deployment
-      .exec(["curl", "-fsS", params.url])
-      .catch(() => ({ exitCode: 1, output: "" }));
-    if (result.exitCode === 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`timed out waiting for direct http ${params.url}`);
-}
-
 async function postEventsOrpc(
-  deployment: ProjectDeployment,
+  deployment: Deployment,
   procedure: string,
   body: unknown,
 ): Promise<{ exitCode: number; output: string }> {
@@ -99,200 +112,11 @@ async function postEventsOrpc(
   ]);
 }
 
-abstract class DeploymentFixtureBase implements AsyncDisposable {
-  protected deployment: ProjectDeployment | null = null;
-
-  constructor(
-    protected readonly providerName: ProviderName,
-    protected readonly image: string,
-  ) {}
-
-  protected abstract createDeployment(opts: {
-    image: string;
-    name: string;
-  }): Promise<ProjectDeployment>;
-
-  protected requireDeployment(): ProjectDeployment {
-    if (!this.deployment) throw new Error("deployment not started");
-    return this.deployment;
-  }
-
-  async start(): Promise<ProjectDeployment> {
-    const deployment = await this.createDeployment({
-      image: this.image,
-      name: `jonasland-e2e-${this.providerName}-frp-${randomUUID().slice(0, 8)}`,
-    });
-    this.deployment = deployment;
-    await deployment.waitForPidnapHostRoute({ timeoutMs: 120_000 });
-    await waitForDirectHttp(deployment, {
-      url: "http://127.0.0.1/",
-      timeoutMs: 120_000,
-    });
-    return deployment;
-  }
-
-  async execWithRetry(
-    cmd: string | string[],
-    attempts = 8,
-  ): Promise<{ exitCode: number; output: string }> {
-    const deployment = this.requireDeployment();
-    return await retry(async () => await deployment.exec(cmd), attempts);
-  }
-
-  async pidnapRpc(path: string, input: unknown): Promise<unknown> {
-    const payload = JSON.stringify({ json: input });
-    const result = await this.execWithRetry(
-      [
-        "curl",
-        "-fsS",
-        "-X",
-        "POST",
-        "-H",
-        "Host: pidnap.iterate.localhost",
-        "-H",
-        "content-type: application/json",
-        "--data",
-        payload,
-        `http://127.0.0.1/rpc/${path}`,
-      ],
-      8,
-    );
-    return JSON.parse(result.output) as unknown;
-  }
-
-  async configureEgressProxy(externalProxyUrl: string): Promise<void> {
-    const deployment = this.requireDeployment();
-    await retry(async () => {
-      const env = {
-        ...EGRESS_PROCESS_ENV,
-        ITERATE_EXTERNAL_EGRESS_PROXY: externalProxyUrl,
-      };
-
-      await this.pidnapRpc("processes/updateConfig", {
-        processSlug: "egress-proxy",
-        definition: {
-          command: "/opt/pidnap/node_modules/.bin/tsx",
-          args: ["/opt/services/egress-service/src/server.ts"],
-          env,
-        },
-        options: { restartPolicy: "always" },
-        envOptions: { reloadDelay: false },
-        restartImmediately: true,
-      });
-
-      await this.execWithRetry(
-        [
-          "sh",
-          "-ec",
-          [
-            "curl -sS -X POST",
-            "-H 'Host: pidnap.iterate.localhost'",
-            "-H 'content-type: application/json'",
-            '--data \'{"json":{"target":"egress-proxy"}}\'',
-            "http://127.0.0.1/rpc/processes/start",
-            "|| true",
-          ].join(" "),
-        ],
-        4,
-      );
-
-      await this.pidnapRpc("processes/waitForRunning", {
-        target: "egress-proxy",
-        timeoutMs: 120_000,
-        pollIntervalMs: 300,
-        includeLogs: true,
-        logTailLines: 120,
-      });
-    }, 8);
-
-    await waitForDirectHttp(deployment, {
-      url: "http://127.0.0.1:19000/healthz",
-      timeoutMs: 120_000,
-    });
-  }
-
-  async exec(cmd: string | string[]) {
-    return await this.execWithRetry(cmd, 8);
-  }
-
-  async runEgressRequestViaCurl(params: {
-    requestPath: string;
-    payloadJson: string;
-  }): Promise<{ exitCode: number; output: string }> {
-    return await this.exec([
-      "sh",
-      "-ec",
-      [
-        "curl -4 -k -sS -i",
-        "-H 'content-type: application/json'",
-        `--data ${shQuote(params.payloadJson)}`,
-        `https://api.openai.com${params.requestPath}`,
-      ]
-        .filter((part) => part.length > 0)
-        .join(" "),
-    ]);
-  }
-
-  async [Symbol.asyncDispose](): Promise<void> {
-    if (!this.deployment) return;
-    await this.deployment[Symbol.asyncDispose]();
-    this.deployment = null;
-  }
-}
-
-class DockerFixture extends DeploymentFixtureBase {
-  constructor(image: string) {
-    super("docker", image);
-  }
-
-  protected override async createDeployment(opts: {
-    image: string;
-    name: string;
-  }): Promise<ProjectDeployment> {
-    return await dockerProjectDeployment(opts);
-  }
-}
-
-class FlyFixture extends DeploymentFixtureBase {
-  constructor(image: string) {
-    super("fly", image);
-  }
-
-  protected override async createDeployment(opts: {
-    image: string;
-    name: string;
-  }): Promise<ProjectDeployment> {
-    return await flyProjectDeployment(opts);
-  }
-}
-
-const providerCases: ProviderCase[] = [
-  {
-    name: "docker",
-    enabled: runAllProviders || providerEnv === "docker",
-    image: DOCKER_IMAGE,
-  },
-  {
-    name: "fly",
-    enabled: (runAllProviders || providerEnv === "fly") && FLY_IMAGE.trim().length > 0,
-    image: FLY_IMAGE,
-  },
-];
-
-function makeFixture(params: { providerName: ProviderName; image: string }): DeploymentFixtureBase {
-  return params.providerName === "fly"
-    ? new FlyFixture(params.image)
-    : new DockerFixture(params.image);
-}
-
 for (const provider of providerCases) {
+  // Tip: run a single provider with `pnpm jonasland e2e -t docker` or `-t fly`.
   describe.runIf(provider.enabled)(`deployment abstraction parity (${provider.name})`, () => {
     test("core control plane + events orpc append/list works", async () => {
-      await using fixture = makeFixture({
-        providerName: provider.name,
-        image: provider.image,
-      });
-      const deployment = await fixture.start();
+      await using deployment = await provider.create();
 
       const streamPath = `frp-parity/events/${randomUUID().slice(0, 8)}`;
       const appendResult = await retry(
@@ -326,19 +150,9 @@ for (const provider of providerCases) {
     }, 900_000);
 
     test("frp + egress external-proxy mode delivers payload to local vitest mock", async () => {
-      await using proxy = await mockEgressProxy();
-      proxy.fetch = async (request) =>
-        Response.json({
-          ok: true,
-          path: new URL(request.url).pathname,
-          mode: "external-proxy",
-        });
+      await using proxy = await MockEgressProxy.create();
 
-      await using fixture = makeFixture({
-        providerName: provider.name,
-        image: provider.image,
-      });
-      const deployment = await fixture.start();
+      await using deployment = await provider.create();
 
       await using frpBridge = await startFlyFrpEgressBridge({
         deployment,
@@ -346,32 +160,64 @@ for (const provider of providerCases) {
         frpcBin: process.env.JONASLAND_E2E_FRPC_BIN,
       });
 
-      await fixture.configureEgressProxy(frpBridge.dataProxyUrl);
+      const egressProcess = await deployment.pidnap.processes.get({
+        target: "egress-proxy",
+        includeEffectiveEnv: false,
+      });
+      await deployment.pidnap.processes.updateConfig({
+        processSlug: "egress-proxy",
+        definition: {
+          ...egressProcess.definition,
+          env: {
+            ...(egressProcess.definition.env ?? {}),
+            ITERATE_EXTERNAL_EGRESS_PROXY: frpBridge.dataProxyUrl,
+          },
+        },
+        options: {
+          restartPolicy: "always",
+        },
+        restartImmediately: true,
+      });
+      await deployment.pidnap.processes.start({ target: "egress-proxy" }).catch(() => {});
+      await deployment.waitForPidnapProcessRunning({ target: "egress-proxy" });
 
       const requestPath = "/vitest-frp-external";
       const payload = JSON.stringify({
         source: `${provider.name}-frp-external`,
-        run: randomUUID().slice(0, 8),
       });
-      const observed = proxy.waitFor((request) => new URL(request.url).pathname === requestPath, {
-        timeout: 180_000,
-      });
+      const observed = proxy.waitFor((request) => new URL(request.url).pathname === requestPath);
+      proxy.fetch = async (request) =>
+        Response.json({
+          ok: true,
+          path: new URL(request.url).pathname,
+          mode: "external-proxy",
+        });
 
-      const curl = await fixture.runEgressRequestViaCurl({
-        requestPath,
-        payloadJson: payload,
-      });
+      const curl = await deployment.exec([
+        "curl",
+        "-4",
+        "-k",
+        "-sS",
+        "-i",
+        "-H",
+        "content-type: application/json",
+        "--data",
+        payload,
+        `https://api.openai.com${requestPath}`,
+      ]);
 
       expect(curl.exitCode).toBe(0);
       expect(curl.output).toContain('"ok":true');
       expect(curl.output.toLowerCase()).toContain("x-iterate-egress-mode: external-proxy");
       expect(curl.output.toLowerCase()).toContain("x-iterate-egress-proxy-seen: 1");
 
-      const delivered = await observed;
-      expect(new URL(delivered.request.url).pathname).toBe(requestPath);
-      expect(await delivered.request.text()).toBe(payload);
-      expect(delivered.request.headers.get("host")).toContain("127.0.0.1:27180");
-      expect(delivered.response.status).toBe(200);
+      // Slightly clunky for now: register mock observation before the request
+      // to avoid even theoretical race windows.
+      const { request, response } = await observed;
+      expect(new URL(request.url).pathname).toBe(requestPath);
+      expect(await request.text()).toBe(payload);
+      expect(request.headers.get("host")).toContain("127.0.0.1:27180");
+      expect(response.status).toBe(200);
     }, 900_000);
   });
 }

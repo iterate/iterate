@@ -2,7 +2,12 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
-import { projectDeployment, type ProjectDeployment } from "./e2e/test-helpers/index.ts";
+import {
+  DockerDeployment,
+  FlyDeployment,
+  type Deployment,
+  type ProviderName,
+} from "./e2e/test-helpers/index.ts";
 
 type RouteCheck = {
   host: string;
@@ -149,7 +154,7 @@ function errorMessage(error: unknown): string {
 }
 
 async function waitForHostRoute(
-  deployment: ProjectDeployment,
+  deployment: Deployment,
   params: { host: string; path: string; timeoutMs?: number },
 ): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 45_000;
@@ -170,7 +175,7 @@ async function waitForHostRoute(
 }
 
 async function waitForDirectHttp(
-  deployment: ProjectDeployment,
+  deployment: Deployment,
   params: { url: string; timeoutMs?: number },
 ): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 45_000;
@@ -188,7 +193,7 @@ async function waitForDirectHttp(
   throw new Error(`timed out waiting for direct http ${params.url}`);
 }
 
-async function startProcess(deployment: ProjectDeployment, config: ProcessConfig): Promise<void> {
+async function startProcess(deployment: Deployment, config: ProcessConfig): Promise<void> {
   logLine(`starting process: ${config.slug}`);
 
   const updated = await deployment.pidnap.processes.updateConfig({
@@ -317,8 +322,22 @@ async function hostJson<T>(
   return JSON.parse(text) as T;
 }
 
+function resolveProvider(): ProviderName {
+  const provider = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
+  if (provider === "docker" || provider === "fly") return provider;
+  throw new Error(`Unsupported JONASLAND_E2E_PROVIDER: ${provider}`);
+}
+
 async function main(): Promise<void> {
   const subcommand = process.argv[2];
+  if (subcommand === "e2e") {
+    const forwardedArgs = process.argv[3] === "--" ? process.argv.slice(4) : process.argv.slice(3);
+    execFileSync("pnpm", ["--filter", "@iterate-com/jonasland-e2e", "e2e", ...forwardedArgs], {
+      stdio: "inherit",
+    });
+    return;
+  }
+
   if (subcommand !== undefined && subcommand !== "demo") {
     throw new Error(`unknown jonasland command: ${subcommand}`);
   }
@@ -329,13 +348,20 @@ async function main(): Promise<void> {
   logLine(`building image: ${image}`);
   execFileSync("pnpm", ["--filter", "./jonasland/sandbox", "build"], { stdio: "inherit" });
 
-  logLine(`starting container: ${containerName}`);
-  const deployment = await projectDeployment({
-    image,
-    name: containerName,
-    capAdd: ["NET_ADMIN", "SYS_ADMIN"],
-    extraHosts: ["host.docker.internal:host-gateway"],
-  });
+  const provider = resolveProvider();
+  logLine(`starting deployment: ${containerName} (provider=${provider})`);
+  const deployment =
+    provider === "fly"
+      ? await FlyDeployment.withConfig({
+          image,
+          name: containerName,
+        }).create()
+      : await DockerDeployment.withConfig({
+          image,
+          name: containerName,
+          capAdd: ["NET_ADMIN", "SYS_ADMIN"],
+          extraHosts: ["host.docker.internal:host-gateway"],
+        }).create();
 
   logLine("ensuring baseline processes");
   for (const processSlug of ["caddy", "registry", "events"] as const) {

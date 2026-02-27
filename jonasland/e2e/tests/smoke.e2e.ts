@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import {
   mockEgressProxy,
-  projectDeployment,
-  type ProjectDeployment,
+  createDeployment,
+  type DeploymentRuntime,
 } from "../test-helpers/index.ts";
 
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
@@ -78,7 +78,7 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
 };
 
 async function waitForHostRoute(
-  deployment: ProjectDeployment,
+  deployment: DeploymentRuntime,
   params: { host: string; path: string; timeoutMs?: number },
 ): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 45_000;
@@ -94,7 +94,7 @@ async function waitForHostRoute(
 }
 
 async function waitForDirectHttp(
-  deployment: ProjectDeployment,
+  deployment: DeploymentRuntime,
   params: { url: string; timeoutMs?: number },
 ): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 45_000;
@@ -110,7 +110,7 @@ async function waitForDirectHttp(
 }
 
 async function startOnDemandProcess(
-  deployment: ProjectDeployment,
+  deployment: DeploymentRuntime,
   processName: OnDemandProcessName,
 ): Promise<void> {
   const processConfig = ON_DEMAND_PROCESSES[processName];
@@ -136,7 +136,7 @@ async function startOnDemandProcess(
 }
 
 async function waitForDocsSources(
-  deployment: ProjectDeployment,
+  deployment: DeploymentRuntime,
   expectedHosts: string[],
 ): Promise<{ sources: Array<{ id: string; title: string; specUrl: string }>; total: number }> {
   const deadline = Date.now() + 45_000;
@@ -169,7 +169,7 @@ async function waitForDocsSources(
 
 describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   test("caddy admin is API-only and typed caddy client works", async () => {
-    await using deployment = await projectDeployment({
+    await using deployment = await createDeployment({
       image,
       name: `jonasland-e2e-${randomUUID()}`,
     });
@@ -188,7 +188,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("home and outerbase host routes are reachable", async () => {
-    await using deployment = await projectDeployment({
+    await using deployment = await createDeployment({
       image,
       name: `jonasland-e2e-home-outerbase-${randomUUID()}`,
     });
@@ -210,7 +210,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("fixture returns typed pidnap/caddy/registry client", async () => {
-    await using deployment = await projectDeployment({
+    await using deployment = await createDeployment({
       image,
       name: `jonasland-e2e-${randomUUID()}`,
     });
@@ -243,7 +243,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("events service is reachable through caddy and supports stream append/list", async () => {
-    await using deployment = await projectDeployment({
+    await using deployment = await createDeployment({
       image,
       name: `jonasland-e2e-events-${randomUUID()}`,
     });
@@ -307,7 +307,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("orders service is reachable and emits order-placed stream events", async () => {
-    await using deployment = await projectDeployment({
+    await using deployment = await createDeployment({
       image,
       name: `jonasland-e2e-orders-${randomUUID()}`,
     });
@@ -354,7 +354,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("docs service consolidates OpenAPI specs from tagged services", async () => {
-    await using deployment = await projectDeployment({
+    await using deployment = await createDeployment({
       image,
       name: `jonasland-e2e-docs-${randomUUID()}`,
     });
@@ -396,7 +396,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("services sqlite WAL mode and state persist across container restart", async () => {
-    await using deployment = await projectDeployment({
+    await using deployment = await createDeployment({
       image,
       name: `jonasland-e2e-persist-${randomUUID()}`,
     });
@@ -451,7 +451,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("pidnap can imperatively add and control a process", async () => {
-    await using deployment = await projectDeployment({
+    await using deployment = await createDeployment({
       image,
       name: `jonasland-e2e-${randomUUID()}`,
     });
@@ -495,23 +495,23 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("tls mitm to real upstream host via caddy -> egress-proxy chain", async () => {
-    await using proxy = await mockEgressProxy();
-    proxy.fetch = async (request) => {
-      if (new URL(request.url).pathname === "/v1/models") {
-        return Response.json({
-          ok: true,
-          path: new URL(request.url).pathname,
-        });
-      }
-      return new Response("unmatched", { status: 599 });
-    };
+    await using proxy = await mockEgressProxy({
+      fetch: async (request) => {
+        if (new URL(request.url).pathname === "/v1/models") {
+          return Response.json({
+            ok: true,
+            path: new URL(request.url).pathname,
+          });
+        }
+        return new Response("unmatched", { status: 599 });
+      },
+    });
 
     const matched = proxy.waitFor((request) => new URL(request.url).pathname === "/v1/models");
 
-    await using deployment = await projectDeployment({
+    await using deployment = await createDeployment({
       image,
       name: `jonasland-e2e-egress-${randomUUID()}`,
-      extraHosts: ["host.docker.internal:host-gateway"],
       env: {
         ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
       },
@@ -537,24 +537,24 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   });
 
   test("egress supports x-iterate-target-url direct mode", async () => {
-    await using proxy = await mockEgressProxy();
-    proxy.fetch = async (request) => {
-      if (new URL(request.url).pathname === "/direct-target") {
-        return Response.json({
-          ok: true,
-          path: new URL(request.url).pathname,
-          mode: "direct-target",
-        });
-      }
-      return new Response("unmatched", { status: 599 });
-    };
+    await using proxy = await mockEgressProxy({
+      fetch: async (request) => {
+        if (new URL(request.url).pathname === "/direct-target") {
+          return Response.json({
+            ok: true,
+            path: new URL(request.url).pathname,
+            mode: "direct-target",
+          });
+        }
+        return new Response("unmatched", { status: 599 });
+      },
+    });
 
     const matched = proxy.waitFor((request) => new URL(request.url).pathname === "/direct-target");
 
-    await using deployment = await projectDeployment({
+    await using deployment = await createDeployment({
       image,
       name: `jonasland-e2e-egress-direct-${randomUUID()}`,
-      extraHosts: ["host.docker.internal:host-gateway"],
     });
     await startOnDemandProcess(deployment, "egress-proxy");
 

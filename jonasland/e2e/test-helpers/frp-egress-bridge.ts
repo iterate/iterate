@@ -4,7 +4,7 @@ import { arch, platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
-import type { ProjectDeployment } from "./project-deployment.ts";
+import type { DeploymentRuntime } from "./docker-deployment.ts";
 
 const FRP_CONTROL_BIND_PORT = 27000;
 const FRP_DATA_REMOTE_PORT = 27180;
@@ -110,7 +110,7 @@ async function resolveFrpcBinary(explicit?: string): Promise<string> {
 }
 
 async function configureFlyFrps(params: {
-  deployment: ProjectDeployment;
+  deployment: DeploymentRuntime;
   processSlug: string;
   token: string;
 }): Promise<void> {
@@ -163,7 +163,7 @@ async function configureFlyFrps(params: {
 }
 
 async function stopFlyFrpsBestEffort(params: {
-  deployment: ProjectDeployment;
+  deployment: DeploymentRuntime;
   processSlug: string;
 }): Promise<void> {
   const pidFile = `/tmp/${params.processSlug}.frps.pid`;
@@ -177,7 +177,7 @@ async function stopFlyFrpsBestEffort(params: {
 }
 
 async function readFlyFrpsLogsBestEffort(params: {
-  deployment: ProjectDeployment;
+  deployment: DeploymentRuntime;
   processSlug: string;
 }): Promise<string> {
   const logFile = `/tmp/${params.processSlug}.frps.log`;
@@ -304,7 +304,7 @@ export interface FlyFrpEgressBridge extends AsyncDisposable {
 }
 
 export async function startFlyFrpEgressBridge(params: {
-  deployment: ProjectDeployment;
+  deployment: DeploymentRuntime;
   localTargetPort: number;
   frpcBin?: string;
   runId?: string;

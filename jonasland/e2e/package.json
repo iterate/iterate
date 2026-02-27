@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "e2e": "doppler run -- vitest run",
     "test": "doppler run -- vitest run",
     "test:e2e": "doppler run -- vitest run",
     "test:frp": "doppler run -- vitest run -t frp",
