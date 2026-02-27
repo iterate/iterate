@@ -107,7 +107,9 @@ Equivalent local Docker pattern is `*.iterate.localhost` with host-header routin
 ## Minimal parity test example
 
 Canonical test file:
-`jonasland/e2e/tests/example.end2end.e2e.ts`
+`jonasland/e2e/tests/clean/example.e2e.ts`
+
+Clean example tests live under `jonasland/e2e/tests/clean/`.
 
 ```ts
 import { describe, expect, test } from "vitest";

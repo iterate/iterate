@@ -5,7 +5,7 @@ import {
   MockEgressProxy,
   startFlyFrpEgressBridge,
   type Deployment,
-} from "../test-helpers/index.ts";
+} from "../../test-helpers/index.ts";
 
 type ProviderName = "docker" | "fly";
 
