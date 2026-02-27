@@ -1,11 +1,11 @@
 import { z } from "zod/v4";
 
-const d1BindingSchema = z.custom<D1Database>(
+const D1Binding = z.custom<D1Database>(
   (value) => typeof value === "object" && value !== null && "prepare" in value,
   { message: "DB binding is required" },
 );
 
-const typeIdPrefixSchema = z
+const TypeIdPrefix = z
   .string()
   .trim()
   .default("ipr")
@@ -14,15 +14,15 @@ const typeIdPrefixSchema = z
     message: "TYPEID_PREFIX must contain lowercase letters only",
   });
 
-export const workerEnvSchema = z.object({
-  DB: d1BindingSchema,
+export const WorkerEnv = z.object({
+  DB: D1Binding,
   INGRESS_PROXY_API_TOKEN: z.string().trim().min(1, "INGRESS_PROXY_API_TOKEN is required"),
-  TYPEID_PREFIX: typeIdPrefixSchema,
+  TYPEID_PREFIX: TypeIdPrefix,
 });
 
-export type RawProxyWorkerEnv = z.input<typeof workerEnvSchema>;
-export type ProxyWorkerEnv = z.output<typeof workerEnvSchema>;
+export type RawProxyWorkerEnv = z.input<typeof WorkerEnv>;
+export type ProxyWorkerEnv = z.output<typeof WorkerEnv>;
 
 export function parseWorkerEnv(env: RawProxyWorkerEnv): ProxyWorkerEnv {
-  return workerEnvSchema.parse(env);
+  return WorkerEnv.parse(env);
 }

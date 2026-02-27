@@ -1,7 +1,7 @@
-import { workerEnvSchema } from "./env.ts";
+import { WorkerEnv } from "./env.ts";
 
 // This manifest is a first step toward sharing a common deployment manifest shape.
 export const manifest = {
   name: "ingress-proxy",
-  requiredEnvSchema: workerEnvSchema,
+  requiredEnvSchema: WorkerEnv,
 } as const;
