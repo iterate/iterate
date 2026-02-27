@@ -136,9 +136,14 @@ sudo mkdir -p "$STAGING"
     echo "[archil] Cloning ${REPO_URL} @ ${REPO_REF}"
     CLONE_OK=false
     for attempt in $(seq 1 3); do
-      # First try: anonymous clone (works for public repos, avoids credential helper
-      # which injects a not-yet-provisioned token that causes 401)
-      if GIT_TERMINAL_PROMPT=0 git -c credential.helper= clone --depth 1 --branch main "$REPO_URL" "$REPO_DIR" 2>&1; then
+      # Anonymous clone: bypass credential helper AND egress proxy.
+      # On first boot, GitHub creds aren't provisioned yet (daemon must report ready first).
+      # Public repos like iterate/iterate can be cloned without auth.
+      # The egress proxy's magic token swap causes 401 when creds aren't ready,
+      # so we bypass both the proxy and the credential helper.
+      if GIT_TERMINAL_PROMPT=0 HTTPS_PROXY="" HTTP_PROXY="" https_proxy="" http_proxy="" \
+         GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+         git clone --depth 1 --branch main "$REPO_URL" "$REPO_DIR" 2>&1; then
         CLONE_OK=true
         break
       fi
