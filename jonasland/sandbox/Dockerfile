@@ -29,6 +29,34 @@ RUN curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_
     | tar -xz -C /usr/local/bin caddy && \
     chmod +x /usr/local/bin/caddy
 
+# Pre-generate Caddy's internal CA at build time so the root cert/key are baked
+# into an early cacheable image layer.
+RUN set -eux; \
+    printf '%s\n' \
+      '{' \
+      '    admin off' \
+      '    local_certs' \
+      '    auto_https off' \
+      '}' \
+      '' \
+      'https://api.openai.com {' \
+      '    tls internal' \
+      '    respond "ok" 200' \
+      '}' > /tmp/caddy-bootstrap.Caddyfile; \
+    caddy run --config /tmp/caddy-bootstrap.Caddyfile --adapter caddyfile >/tmp/caddy-bootstrap.log 2>&1 & \
+    caddy_pid="$!"; \
+    for _ in $(seq 1 40); do \
+      if curl -kfsS --resolve api.openai.com:443:127.0.0.1 https://api.openai.com/ >/dev/null; then \
+        break; \
+      fi; \
+      sleep 0.25; \
+    done; \
+    kill "$caddy_pid"; \
+    wait "$caddy_pid" || true; \
+    test -f /root/.local/share/caddy/pki/authorities/local/root.crt; \
+    test -f /root/.local/share/caddy/pki/authorities/local/root.key; \
+    rm -f /tmp/caddy-bootstrap.Caddyfile /tmp/caddy-bootstrap.log
+
 RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
 ENV PATH="/root/.opencode/bin:${PATH}"

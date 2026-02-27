@@ -113,7 +113,6 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
         PI_WORKING_DIRECTORY: "/tmp",
         OPENAI_API_KEY: "test-key",
         ANTHROPIC_API_KEY: "test-key",
-        NODE_TLS_REJECT_UNAUTHORIZED: "0",
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010",
       },
     },

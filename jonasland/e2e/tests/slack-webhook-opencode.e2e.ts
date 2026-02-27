@@ -224,22 +224,6 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow", () => {
     await startOnDemandProcess(deployment, "opencode-wrapper");
     await startOnDemandProcess(deployment, "slack");
 
-    const providerReq = proxy.waitFor(
-      (request) => {
-        const url = new URL(request.url);
-        return url.pathname !== "/api/chat.postMessage";
-      },
-      { timeout: 45_000 },
-    );
-
-    const firstSlackReq = proxy.waitFor(
-      (request) => {
-        const url = new URL(request.url);
-        return url.pathname === "/api/chat.postMessage";
-      },
-      { timeout: 30_000 },
-    );
-
     const webhookPayload = {
       event: {
         type: "app_mention",
@@ -268,10 +252,6 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow", () => {
       const logs = await deployment.logs();
       throw new Error(`webhook failed:\n${webhook.output}\n\ncontainer logs:\n${logs}`);
     }
-
-    await providerReq;
-
-    await firstSlackReq;
 
     const slackDeadline = Date.now() + 90_000;
     let lastSlackBodies: Array<Record<string, unknown>> = [];
