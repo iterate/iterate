@@ -359,6 +359,18 @@ function baseUrlFromPublicServiceUrl(publicServiceUrl: string): string | null {
   }
 }
 
+function toFlyClientBaseUrl(ingressBaseUrl: string): string {
+  try {
+    const url = new URL(ingressBaseUrl);
+    if (url.hostname.endsWith(".fly.dev")) {
+      url.protocol = "http:";
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return ingressBaseUrl;
+  }
+}
+
 async function resolveIngressBaseUrl(params: {
   fallbackIngressBaseUrl: string;
   registry: RegistryClient;
@@ -485,7 +497,7 @@ export async function flyDeploymentRuntime(
   const flyBaseDomain = rawEnv.FLY_BASE_DOMAIN ?? "fly.dev";
   const externalId = normalizeFlyExternalId(params.name);
   const fallbackIngressBaseUrl = `https://${externalId}.${flyBaseDomain}`;
-  const fallbackClientBaseUrl = `http://${externalId}.${flyBaseDomain}`;
+  const fallbackClientBaseUrl = toFlyClientBaseUrl(fallbackIngressBaseUrl);
 
   const provider = new FlyProvider(rawEnv);
   const envRecord = toEnvRecord(params.env);
@@ -576,7 +588,7 @@ export async function flyDeploymentRuntime(
       fallbackIngressBaseUrl,
       registry,
     });
-    clientBaseUrl = ingressBaseUrl.replace(/^https:/, "http:");
+    clientBaseUrl = toFlyClientBaseUrl(ingressBaseUrl);
 
     pidnap = createPidnapClient({
       url: `${clientBaseUrl}/rpc`,

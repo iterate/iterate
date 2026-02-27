@@ -335,54 +335,136 @@ abstract class DeploymentBase implements AsyncDisposable, DeploymentRuntime {
   }
 
   async ensureEgressProxyProcess(params?: { externalProxyUrl?: string }): Promise<void> {
-    const envFilePath = await this.resolveHomeEnvFilePath();
-    if (params?.externalProxyUrl) {
-      await this.setEnvVars({ ITERATE_EXTERNAL_EGRESS_PROXY: params.externalProxyUrl });
-    }
+    try {
+      await retry(async () => {
+        const envFilePath = await this.resolveHomeEnvFilePath();
+        if (params?.externalProxyUrl) {
+          await this.setEnvVars({ ITERATE_EXTERNAL_EGRESS_PROXY: params.externalProxyUrl });
+        }
 
-    await retry(async () => {
-      const existing = await this.pidnap.processes
-        .get({
+        const existing = await this.pidnap.processes
+          .get({
+            target: "egress-proxy",
+            includeEffectiveEnv: false,
+          })
+          .catch(() => null);
+
+        const definition = {
+          command: existing?.definition.command ?? "/opt/pidnap/node_modules/.bin/tsx",
+          args: existing?.definition.args ?? ["/opt/services/egress-service/src/server.ts"],
+          env: {
+            ...(existing?.definition.env ?? {}),
+            ...EGRESS_PROCESS_ENV,
+          },
+        };
+
+        const updated = await this.pidnap.processes.updateConfig({
+          processSlug: "egress-proxy",
+          definition,
+          options: {
+            restartPolicy: "always",
+          },
+          envOptions: {
+            envFile: envFilePath,
+            reloadDelay: true,
+          },
+          restartImmediately: true,
+        });
+
+        if (updated.state !== "running") {
+          await this.pidnap.processes.start({ target: "egress-proxy" });
+        }
+
+        await this.waitForPidnapProcessRunning({
           target: "egress-proxy",
-          includeEffectiveEnv: false,
-        })
-        .catch(() => null);
+          timeoutMs: 120_000,
+        });
+        await this.waitForDirectHttp({
+          url: "http://127.0.0.1:19000/healthz",
+          timeoutMs: 120_000,
+        });
+      }, 8);
+    } catch (error) {
+      if (this.providerName !== "fly") {
+        throw error;
+      }
+      await this.ensureEgressProxyProcessViaExec(params, error);
+    }
+  }
 
-      const definition = {
-        command: existing?.definition.command ?? "/opt/pidnap/node_modules/.bin/tsx",
-        args: existing?.definition.args ?? ["/opt/services/egress-service/src/server.ts"],
-        env: {
-          ...(existing?.definition.env ?? {}),
-          ...EGRESS_PROCESS_ENV,
-        },
-      };
-
-      const updated = await this.pidnap.processes.updateConfig({
-        processSlug: "egress-proxy",
-        definition,
-        options: {
-          restartPolicy: "always",
-        },
-        envOptions: {
-          envFile: envFilePath,
-          reloadDelay: true,
-        },
-        restartImmediately: true,
-      });
-
-      if (updated.state !== "running") {
-        await this.pidnap.processes.start({ target: "egress-proxy" });
+  private async ensureEgressProxyProcessViaExec(
+    params: { externalProxyUrl?: string } | undefined,
+    originalError: unknown,
+  ): Promise<void> {
+    await retry(async () => {
+      const envFilePath = await this.resolveHomeEnvFilePath();
+      if (params?.externalProxyUrl) {
+        await this.setEnvVars({ ITERATE_EXTERNAL_EGRESS_PROXY: params.externalProxyUrl });
       }
 
-      await this.waitForPidnapProcessRunning({
-        target: "egress-proxy",
+      const updatePayload = JSON.stringify({
+        json: {
+          processSlug: "egress-proxy",
+          definition: {
+            command: "/opt/pidnap/node_modules/.bin/tsx",
+            args: ["/opt/services/egress-service/src/server.ts"],
+            env: EGRESS_PROCESS_ENV,
+          },
+          options: {
+            restartPolicy: "always",
+          },
+          envOptions: {
+            envFile: envFilePath,
+            reloadDelay: true,
+          },
+          restartImmediately: true,
+        },
+      });
+
+      const updateResult = await this.exec([
+        "sh",
+        "-ec",
+        [
+          "curl -fsS -X POST",
+          "-H 'Host: pidnap.iterate.localhost'",
+          "-H 'content-type: application/json'",
+          `--data ${shQuote(updatePayload)}`,
+          "http://127.0.0.1/rpc/processes/updateConfig",
+        ].join(" "),
+      ]);
+
+      if (updateResult.exitCode !== 0) {
+        throw new Error(
+          `pidnap local updateConfig failed while configuring egress-proxy:\n${updateResult.output}`,
+        );
+      }
+
+      const startPayload = JSON.stringify({
+        json: {
+          target: "egress-proxy",
+        },
+      });
+      await this.exec([
+        "sh",
+        "-ec",
+        [
+          "curl -fsS -X POST",
+          "-H 'Host: pidnap.iterate.localhost'",
+          "-H 'content-type: application/json'",
+          `--data ${shQuote(startPayload)}`,
+          "http://127.0.0.1/rpc/processes/start >/dev/null 2>&1 || true",
+        ].join(" "),
+      ]).catch(() => {});
+
+      await this.waitForDirectHttp({
+        url: "http://127.0.0.1:19000/healthz",
         timeoutMs: 120_000,
       });
-    }, 8);
-
-    await this.waitForDirectHttp({
-      url: "http://127.0.0.1:19000/healthz",
-      timeoutMs: 120_000,
+    }, 6).catch((fallbackError) => {
+      throw new Error(
+        `egress-proxy configuration failed via pidnap client and fallback exec path (${this.providerName})`,
+        { cause: fallbackError ?? originalError },
+      );
     });
   }
 
