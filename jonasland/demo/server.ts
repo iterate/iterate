@@ -881,67 +881,6 @@ function jsonString(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
-async function handleEgressRequest(
-  req: IncomingMessage,
-  pathnameWithQuery: string,
-): Promise<ProxyResult> {
-  const method = (req.method ?? "GET").toUpperCase();
-  const host = req.headers.host?.trim() ?? "";
-  const requestPath = pathnameWithQuery;
-  const requestBody = await readBody(req);
-
-  const matchedRule = findMatchingMockRule({
-    method,
-    host,
-    path: requestPath,
-  });
-
-  if (matchedRule) {
-    return {
-      status: matchedRule.responseStatus,
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        ...matchedRule.responseHeaders,
-      },
-      body: matchedRule.responseBody,
-    };
-  }
-
-  if (state.config.fallbackMode === "deny-all") {
-    return {
-      status: 502,
-      headers: { "content-type": "application/json; charset=utf-8" },
-      body: jsonString({
-        error: "egress_denied",
-        message: "No mock rule matched and fallback mode is deny-all",
-        request: {
-          method,
-          host,
-          path: requestPath,
-        },
-      }),
-    };
-  }
-
-  if (!host) {
-    return {
-      status: 400,
-      headers: { "content-type": "application/json; charset=utf-8" },
-      body: jsonString({
-        error: "missing_host",
-        message: "Cannot proxy request without Host header",
-      }),
-    };
-  }
-
-  return await proxyToInternet({
-    request: req,
-    requestBody,
-    host,
-    pathnameWithQuery,
-  });
-}
-
 function parseSafeJson(text: string): unknown {
   try {
     return JSON.parse(text);
