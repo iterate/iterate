@@ -728,5 +728,3 @@ export function createOrpcRpcWebSocketServiceClient<TContract extends AnyContrac
   const link = new WebSocketRPCLink({ websocket: options.websocket });
   return createORPCClient(link);
 }
-
-export * from "./deployment/index.ts";

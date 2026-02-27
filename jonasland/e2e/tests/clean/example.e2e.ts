@@ -3,19 +3,23 @@ import { DockerDeployment, FlyDeployment } from "@iterate-com/shared/jonasland/d
 import { MockEgressProxy } from "../../test-helpers/mock-egress-proxy.ts";
 
 const DOCKER_IMAGE = "jonasland-sandbox:local";
-const FLY_IMAGE =
-  process.env.JONASLAND_E2E_FLY_IMAGE ??
-  process.env.FLY_DEFAULT_IMAGE ??
-  process.env.JONASLAND_SANDBOX_IMAGE ??
-  "";
+const FLY_IMAGE = process.env.JONASLAND_E2E_FLY_IMAGE ?? process.env.JONASLAND_SANDBOX_IMAGE ?? "";
 
 const providerEnv = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const runAllProviders = providerEnv === "all";
 
 // Run a single provider with `pnpm jonasland e2e -t docker` or `-t fly`.
 const providers = [
-  { label: "docker", enabled: runAllProviders || providerEnv === "docker", factory: DockerDeployment.withConfig({ image: DOCKER_IMAGE }) },
-  { label: "fly", enabled: (runAllProviders || providerEnv === "fly") && FLY_IMAGE.trim().length > 0, factory: FlyDeployment.withConfig({ image: FLY_IMAGE }) },
+  {
+    label: "docker",
+    enabled: runAllProviders || providerEnv === "docker",
+    factory: DockerDeployment.withConfig({ image: DOCKER_IMAGE }),
+  },
+  {
+    label: "fly",
+    enabled: (runAllProviders || providerEnv === "fly") && FLY_IMAGE.trim().length > 0,
+    factory: FlyDeployment.withConfig({ image: FLY_IMAGE }),
+  },
 ];
 
 for (const { label, enabled, factory } of providers) {

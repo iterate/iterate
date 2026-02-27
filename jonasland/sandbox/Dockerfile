@@ -60,6 +60,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml /opt/
 COPY services /opt/services
 COPY packages /opt/packages
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
+    --filter pidnap \
     --filter @iterate-com/registry-service \
     --filter @iterate-com/events-service \
     --filter @iterate-com/orders-service \

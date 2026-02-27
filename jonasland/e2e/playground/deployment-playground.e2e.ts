@@ -25,8 +25,7 @@ async function createDeployment<TDeployment extends Deployment>(
 
 const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
 const DEFAULT_IMAGE = process.env.JONASLAND_SANDBOX_IMAGE ?? "jonasland-sandbox:local";
-const FLY_IMAGE =
-  process.env.JONASLAND_E2E_FLY_IMAGE ?? process.env.FLY_DEFAULT_IMAGE ?? DEFAULT_IMAGE;
+const FLY_IMAGE = process.env.JONASLAND_E2E_FLY_IMAGE ?? DEFAULT_IMAGE;
 
 const providerCases: Array<{
   Provider: DeploymentProvider;

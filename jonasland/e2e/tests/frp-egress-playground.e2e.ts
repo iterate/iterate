@@ -20,11 +20,7 @@ const providerEnv = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLo
 const runAllProviders = providerEnv === "all";
 
 const DOCKER_IMAGE = "jonasland-sandbox:local";
-const FLY_IMAGE =
-  process.env.JONASLAND_E2E_FLY_IMAGE ??
-  process.env.FLY_DEFAULT_IMAGE ??
-  process.env.JONASLAND_SANDBOX_IMAGE ??
-  "";
+const FLY_IMAGE = process.env.JONASLAND_E2E_FLY_IMAGE ?? process.env.JONASLAND_SANDBOX_IMAGE ?? "";
 
 function slugifyForName(value: string): string {
   return value
