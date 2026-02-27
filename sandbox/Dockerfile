@@ -184,9 +184,17 @@ RUN agent-browser install
 ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
 # Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session.
-# Use a free model — no API keys are available at build time.
-# First verify opencode installed correctly, then allow warm-up to fail (network issues are OK).
-RUN opencode --version && (opencode run --model opencode/kimi-k2.5-free "Hello" || true)
+# No API keys exist at build time, so the LLM call itself will fail — that's expected.
+# We only care that opencode boots far enough to download its npm deps.
+# Errors we accept: model not found, auth failures, network issues.
+# Errors we do NOT accept: opencode binary missing or broken (checked by --version).
+RUN set -e && \
+    opencode --version && \
+    set +e && \
+    echo "--- opencode warm-up (errors below are expected) ---" && \
+    opencode run "Hello" 2>&1; \
+    warmup_exit=$?; \
+    echo "--- opencode warm-up finished (exit=$warmup_exit) ---"
 
 # Repo path and working dir (used by COPY steps below).
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
