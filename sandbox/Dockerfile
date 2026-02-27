@@ -223,6 +223,21 @@ RUN git init && \
     git commit -m "snapshot ${GIT_SHA}" && \
     git branch -M main
 
+# Snapshot tool directories from ~ so archil-mount.sh can seed them onto
+# the archil disk after mount (the bind-mount over ~ hides everything).
+# Only tool/binary dirs — NOT the repo (it's cloned separately on first boot).
+RUN mkdir -p /opt/home-snapshot && \
+    for d in .local .npm-global .bun .fly .opencode .claude .cache/node .mitmproxy .iterate .config go; do \
+      if [ -d "/home/iterate/$d" ]; then \
+        mkdir -p "/opt/home-snapshot/$d" && \
+        cp -a "/home/iterate/$d/." "/opt/home-snapshot/$d/"; \
+      fi; \
+    done && \
+    for f in .bashrc .bash_logout .profile .gitconfig .npmrc .claude.json; do \
+      [ -f "/home/iterate/$f" ] && cp "/home/iterate/$f" /opt/home-snapshot/; \
+    done && \
+    echo "Home snapshot created at /opt/home-snapshot"
+
 ENV GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA
 
