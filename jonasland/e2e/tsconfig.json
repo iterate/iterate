@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "lib": ["esnext"],
+    "types": ["node", "@playwright/test"],
+    "strict": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "moduleResolution": "bundler",
+    "skipLibCheck": true
+  },
+  "include": [
+    "test-helpers/**/*.ts",
+    "tests/**/*.ts",
+    "spec/**/*.ts",
+    "vitest.config.ts",
+    "playwright.config.ts"
+  ]
+}

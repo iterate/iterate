@@ -1,0 +1,18 @@
+---
+state: pending
+due: 2026-01-29T09:00:00Z
+schedule: "0 9 * * *"
+priority: normal
+---
+
+# Daily US Box Office Report
+
+Send a summary of yesterday's US box office numbers to #movie-club on Slack.
+
+Include:
+- Top 5 films by gross
+- Notable changes from previous week
+- Any new releases
+
+After completing, this task will auto-recreate for tomorrow at 9am.
+If this report is no longer needed, update the schedule to null before completing.

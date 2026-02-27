@@ -1,0 +1,60 @@
+{
+  "files.associations": {
+    "wrangler.json": "jsonc"
+  },
+  "terminal.integrated.scrollback": 100000,
+  "[jsonc]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode"
+  },
+  "[javascriptreact]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode"
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode"
+  },
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.oxc": "explicit"
+  },
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.preferences.importModuleSpecifierEnding": "js",
+  "typescript.preferences.preferTypeOnlyAutoImports": true,
+  "typescript.experimental.useTsgo": true,
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/.alchemy": true,
+    "**/.git": true,
+    "**/.repomix-*": true,
+    "**/.next": true,
+    "**/.wrangler": true,
+    "**/routeTree.gen.ts": true,
+    "**/worker-configuration.d.ts": true
+  },
+  "files.readonlyInclude": {
+    "**/routeTree.gen.ts": true
+  },
+  "files.watcherExclude": {
+    "**/routeTree.gen.ts": true,
+    "**/worker-configuration.d.ts": true,
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/.wrangler": true,
+    "**/.alchemy": true
+  },
+  "git.autorefresh": true,
+  "git.autoRepositoryDetection": true,
+  "vitest.disableWorkspaceWarning": true
+}

@@ -1,0 +1,61 @@
+# Exclude .git from build context.
+.git
+
+.DS_Store
+node_modules
+**/node_modules
+.pnpm-store
+**/.pnpm-store
+*.tsbuildinfo
+
+# React Router
+.react-router
+
+# TanStack
+.tanstack
+build
+dist
+
+# Cloudflare
+.mf
+.wrangler
+.dev.vars*
+.alchemy
+
+!.dev.vars.example
+.env*
+!.env.example
+
+.cursor/rules
+.rules
+.clinerules/
+
+.cache
+__pycache__/
+
+# ad-hoc ignored files/paths
+*ignoreme*
+evalite-export
+
+# Playwright test artifacts
+test-results/
+playwright-report/
+.last-run.json
+
+*.db
+*.sqlite
+.output
+
+# opensrc - source code for packages
+opensrc/
+
+# opencode sessions
+session-ses*.md
+
+# local lint-staged config
+lint-staged.local.cjs
+
+playwriter-screenshot-*
+
+# PR video recordings
+pr-videos/
