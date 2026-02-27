@@ -146,6 +146,6 @@ At test end, print:
 
 3. ~~**Test environment:**~~ **Resolved:** Test against production by default. No local miniflare path needed.
 
-4. **Should the proxy strip/add any security headers?** Currently passes everything through transparently. May want to set `X-Forwarded-For`, `X-Forwarded-Proto`, etc.
+4. ~~**Should the proxy strip/add any security headers?**~~ **Resolved:** Fully transparent — the proxy passes the original `Host` header through as-is. Caddy uses it for routing. No header rewriting in the default path. The route `headers` field is unnecessary for the default case and can be dropped to simplify.
 
 5. **How should we handle the case where upstream is down?** Currently returns 502 with `proxy_error`. Should we add retry logic or keep it simple?
