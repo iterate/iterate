@@ -64,7 +64,7 @@ export default defineConfig({
     {
       name: "egress-proxy",
       definition: {
-        command: "mitmdump",
+        command: "/opt/mitmproxy/bin/mitmdump",
         args: [
           "-p",
           "8888",
@@ -178,7 +178,7 @@ export default defineConfig({
     {
       name: "opencode",
       definition: {
-        command: "opencode",
+        command: "/opt/opencode/.opencode/bin/opencode",
         args: [
           "serve",
           "--port",
