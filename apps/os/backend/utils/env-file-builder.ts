@@ -108,9 +108,8 @@ OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="http://127.0.0.1:4318/v1/traces"
 `;
   }
 
-  // Hardcoded to sandbox home dir since this runs on the OS (Cloudflare Worker), not in the sandbox
-  const home = "/home/iterate";
-  const mitmDir = `${home}/.mitmproxy`;
+  // Mitmproxy certs are at a system path so they survive archil bind-mount over ~
+  const mitmDir = "/opt/mitmproxy/certs";
   const ca = `${mitmDir}/mitmproxy-ca-cert.pem`;
   const proxy = "http://127.0.0.1:8888";
   const magicToken = encodeURIComponent("getIterateSecret({secretKey: 'github.access_token'})");

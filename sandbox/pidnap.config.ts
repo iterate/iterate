@@ -7,7 +7,7 @@ const iterateRepo =
   process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
 const sandboxDir = join(iterateRepo, "sandbox");
 const envFile = join(home, ".iterate/.env");
-const mitmproxyDir = join(home, ".mitmproxy");
+const mitmproxyDir = "/opt/mitmproxy/certs";
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
 const githubMagicToken = encodeURIComponent(

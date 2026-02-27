@@ -7,7 +7,7 @@ fi
 
 # PATH setup for non-bash login shells.
 if [ -z "$BASH_VERSION" ]; then
-    export PATH="$HOME/.iterate/bin:$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.bun/bin:$HOME/.npm-global/bin:/usr/local/go/bin:$HOME/go/bin:$PATH"
+    export PATH="$HOME/.iterate/bin:/opt/claude/.local/bin:/opt/opencode/.opencode/bin:/opt/mitmproxy/bin:/opt/uv/bin:/opt/npm-global/bin:/opt/bun/bin:/opt/fly/bin:/usr/local/go/bin:/opt/go/bin:$PATH"
 fi
 
 # Source iterate environment variables (for sh)

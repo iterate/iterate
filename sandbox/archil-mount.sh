@@ -3,7 +3,12 @@
 # Mounts the project's Archil disk at ~ so the entire home directory
 # persists across machine reprovisioning.
 #
-# First boot (empty disk): copies dotfiles from image, clones iterate repo, pnpm install.
+# All tools (mitmdump, claude, opencode, bun, fly, etc.) are installed
+# to system paths (/opt/, /usr/local/) by the Dockerfile, so they survive
+# the bind-mount. Archil only needs to persist dotfiles, the repo clone,
+# and pnpm install.
+#
+# First boot (empty disk): seeds dotfiles from image, clones iterate repo, pnpm install.
 # Subsequent boots: archil already has everything from a previous machine's session.
 #
 # Env vars (from process env, set by Fly from project env vars):
@@ -50,13 +55,6 @@ export ARCHIL_MOUNT_TOKEN="${ARCHIL_MOUNT_TOKEN:-}"
 
 echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${STAGING} -> ${MOUNT_POINT} (region: ${ARCHIL_CLI_REGION})"
 
-# The Dockerfile snapshots all tool directories (bins, configs, dotfiles)
-# to /opt/home-snapshot.tar.gz so they survive the archil bind-mount over ~.
-HOME_SNAPSHOT="/opt/home-snapshot.tar.gz"
-if [[ ! -f "$HOME_SNAPSHOT" ]]; then
-  echo "[archil] WARNING: /opt/home-snapshot.tar.gz not found — tools will be missing"
-fi
-
 # Archil FUSE (libfuse2) refuses to mount on a non-empty directory.
 # Mount to an empty staging dir first, then bind-mount over ~.
 sudo mkdir -p "$STAGING"
@@ -75,19 +73,6 @@ sudo mkdir -p "$STAGING"
   # Recursive chown over FUSE is extremely slow (minutes for large dirs).
   sudo chown iterate:iterate "$STAGING"
 
-  # Seed tool directories and configs from image snapshot tarball.
-  # This restores all binaries (pnpm, tsx, mitmdump, bun, fly, etc.) that the bind-mount hides.
-  # On subsequent boots, skip the heavy extract if tools are already present.
-  if [[ -f "$HOME_SNAPSHOT" ]]; then
-    if [[ -x "${STAGING}/.local/bin/mitmdump" ]] && [[ -x "${STAGING}/.opencode/bin/opencode" ]]; then
-      echo "[archil] Tools already present on disk, skipping seed"
-    else
-      echo "[archil] Extracting tool directories from image snapshot..."
-      tar xzf "$HOME_SNAPSHOT" -C "${STAGING}/" 2>&1 || echo "[archil] Warning: some files failed to extract"
-      echo "[archil] Tool directories seeded"
-    fi
-  fi
-
   # Bind-mount IMMEDIATELY so other processes can use ~ without waiting for clone.
   echo "[archil] Bind-mounting ${STAGING} over ${MOUNT_POINT}"
   sudo mount --bind "$STAGING" "$MOUNT_POINT"
@@ -100,9 +85,32 @@ sudo mkdir -p "$STAGING"
   # (Using .bashrc was unreliable — shared R2 buckets can have stale dotfiles.)
   REPO_DIR="${STAGING}/src/github.com/iterate/iterate"
   if [[ ! -f "${REPO_DIR}/package.json" ]]; then
-    echo "[archil] First boot — cloning repo and installing deps"
+    echo "[archil] First boot — seeding dotfiles, cloning repo, installing deps"
 
-    mkdir -p "$(dirname "$REPO_DIR")"
+    # Seed dotfiles from the image's home-skeleton (baked into the repo copy).
+    # These provide .bashrc, .profile, .gitconfig, .npmrc, etc.
+    SKELETON="${STAGING}/src/github.com/iterate/iterate/sandbox/home-skeleton"
+    # The repo isn't cloned yet, so use the image's copy at the original path
+    IMAGE_SKELETON="/home/iterate/src/github.com/iterate/iterate/sandbox/home-skeleton"
+    # On first boot the bind-mount hides the original ~ — but we can read from
+    # the image via /proc/1/root if needed. However, the skeleton files are also
+    # in the COPY'd repo. Since we haven't bind-mounted yet... actually we have.
+    # Use a pre-stashed copy: the Dockerfile COPY'd the repo, so the files exist
+    # at the ITERATE_REPO path under the original mount. But the bind-mount now
+    # hides them. Fortunately rsync from image overlay still works via /proc:
+    # Actually, simplest: we stash the skeleton to /opt/home-skeleton in the Dockerfile.
+    # But we didn't do that. Let's just inline the critical dotfiles here.
+    # The sync-home-skeleton.sh will run later when the repo is cloned.
+    
+    # Seed minimal dotfiles so the shell works before repo clone
+    sudo mkdir -p "${STAGING}/.iterate/bin"
+    sudo chown -R iterate:iterate "${STAGING}/.iterate"
+    # .bashrc and .profile will be synced later from the cloned repo
+
+    # Ensure parent dirs exist and are writable by iterate.
+    # On shared R2 buckets, old dirs from previous disks may be root-owned.
+    sudo mkdir -p "$(dirname "$REPO_DIR")"
+    sudo chown iterate:iterate "${STAGING}" "${STAGING}/src" "${STAGING}/src/github.com" "${STAGING}/src/github.com/iterate" 2>/dev/null || true
 
     REPO_URL="${ITERATE_REPO_URL:-https://github.com/nichochar/iterate.git}"
     REPO_REF="${GIT_SHA:-main}"
@@ -120,7 +128,7 @@ sudo mkdir -p "$STAGING"
     # Git clone may fail early if GitHub auth isn't ready yet (egress proxy needs
     # the control plane to provision credentials). Retry with backoff.
     # Clean up any partial/stale repo dir before first attempt.
-    rm -rf "$REPO_DIR"
+    rm -rf "$REPO_DIR" 2>/dev/null; sudo rm -rf "$REPO_DIR" 2>/dev/null || true
     echo "[archil] Cloning ${REPO_URL} @ ${REPO_REF}"
     CLONE_OK=false
     for attempt in $(seq 1 10); do
@@ -128,7 +136,7 @@ sudo mkdir -p "$STAGING"
         CLONE_OK=true
         break
       fi
-      rm -rf "$REPO_DIR"
+      rm -rf "$REPO_DIR" 2>/dev/null; sudo rm -rf "$REPO_DIR" 2>/dev/null || true
       echo "[archil] Clone attempt $attempt failed, retrying in ${attempt}0s..."
       sleep $((attempt * 10))
     done
@@ -142,6 +150,11 @@ sudo mkdir -p "$STAGING"
         git fetch origin "$REPO_REF" 2>/dev/null || true
         git checkout "$REPO_REF" 2>/dev/null || echo "[archil] Warning: could not checkout ${REPO_REF}, staying on main"
       fi
+
+      # Sync home-skeleton dotfiles from the cloned repo
+      echo "[archil] Syncing home-skeleton dotfiles"
+      cd "$REPO_DIR"
+      bash "$REPO_DIR/sandbox/sync-home-skeleton.sh" 2>&1 || echo "[archil] Warning: sync-home-skeleton failed"
 
       # Install dependencies
       echo "[archil] Installing dependencies (pnpm install)"

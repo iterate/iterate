@@ -84,9 +84,9 @@ log "mitmproxy running (PID: $PROXY_PID)"
 sleep 2
 
 # Install CA cert to system
-if [ -f ~/.mitmproxy/mitmproxy-ca-cert.pem ]; then
+if [ -f /opt/mitmproxy/certs/mitmproxy-ca-cert.pem ]; then
     log "Installing CA cert to system..."
-    cp ~/.mitmproxy/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/mitmproxy-ca.crt
+    cp /opt/mitmproxy/certs/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/mitmproxy-ca.crt
     update-ca-certificates 2>/dev/null || true
 fi
 

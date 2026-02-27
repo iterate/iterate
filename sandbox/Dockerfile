@@ -94,13 +94,108 @@ RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
+# === Install tools to system paths (survive archil bind-mount over ~) ===
+# All tools below install to /opt/ or /usr/local/ so they're available even
+# after archil mounts a persistent disk over /home/iterate.
+
+# Install uv to /opt/uv (as root)
+RUN curl -fsSL https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/opt/uv/bin sh
+ENV PATH="/opt/uv/bin:$PATH"
+
+# Install mitmproxy via uv to /opt/mitmproxy.
+# UV_PYTHON_INSTALL_DIR puts the managed Python in a system path (not /root/.local/share/uv/python)
+# so the iterate user can execute mitmproxy scripts via their shebang lines.
+RUN UV_TOOL_DIR=/opt/mitmproxy/tools UV_TOOL_BIN_DIR=/opt/mitmproxy/bin \
+    UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    /opt/uv/bin/uv tool install mitmproxy==${SANDBOX_MITMPROXY_VERSION} && \
+    chmod -R a+rX /opt/uv /opt/mitmproxy
+ENV PATH="/opt/mitmproxy/bin:$PATH"
+
+# Generate mitmproxy CA certificate at build time to /opt/mitmproxy/certs.
+# This certificate is baked into the image and shared across all sandbox instances.
+# This is safe because:
+# 1. Each sandbox is network-isolated - they cannot communicate with each other
+# 2. The cert is only used for the local egress proxy within each sandbox
+# 3. No sandbox can intercept another sandbox's traffic
+# Note: The CA keypair is regenerated when SANDBOX_MITMPROXY_VERSION changes (layer invalidation).
+RUN mkdir -p /opt/mitmproxy/certs && \
+    /opt/mitmproxy/bin/mitmdump -p 0 --set confdir=/opt/mitmproxy/certs &>/dev/null & \
+    PID=$! && \
+    # TODO: replace this polling hack with a direct cert-generation command.
+    # Track in tasks/mitmproxy-direct-cert-command.md.
+    # Cert generation is not immediate; poll for CA file before continuing.
+    for i in $(seq 1 30); do \
+      [ -f /opt/mitmproxy/certs/mitmproxy-ca-cert.pem ] && break; \
+      sleep 0.5; \
+    done && \
+    kill $PID 2>/dev/null || true && \
+    test -f /opt/mitmproxy/certs/mitmproxy-ca-cert.pem
+
+# Install mitmproxy CA certificate system-wide
+RUN mkdir -p /usr/local/share/ca-certificates/iterate && \
+    cp /opt/mitmproxy/certs/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt && \
+    update-ca-certificates
+
+# Install npm global packages (agent-browser, codex, pi) to /opt/npm-global
+RUN mkdir -p /opt/npm-global && \
+    npm config set prefix /opt/npm-global && \
+    npm install -g \
+    agent-browser@${SANDBOX_AGENT_BROWSER_VERSION} \
+    @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION} \
+    @openai/codex@${SANDBOX_CODEX_VERSION} \
+    && npm cache clean --force
+ENV PATH="/opt/npm-global/bin:$PATH"
+
+# Install bun to /opt/bun
+RUN BUN_INSTALL=/opt/bun curl -fsSL https://bun.sh/install | bash -s "bun-v${SANDBOX_BUN_VERSION}"
+ENV PATH="/opt/bun/bin:$PATH"
+
+# Install Go (detect architecture at build time) — already goes to /usr/local/go
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then GO_ARCH="arm64"; else GO_ARCH="amd64"; fi && \
+    curl -fsSL "https://go.dev/dl/go${SANDBOX_GO_VERSION}.linux-${GO_ARCH}.tar.gz" | tar -C /usr/local -xzf -
+ENV PATH="/usr/local/go/bin:/opt/go/bin:$PATH"
+ENV GOPATH="/opt/go"
+
+# Install flyctl to /opt/fly
+RUN FLYCTL_INSTALL=/opt/fly curl -fsSL https://fly.io/install.sh | sh
+ENV PATH="/opt/fly/bin:$PATH"
+
+# Install gogcli (Google Suite CLI: Gmail, GCal, GDrive, etc.)
+# Uses mmkal's fork with --access-token support for headless/proxy environments
+RUN git clone https://github.com/mmkal/gogcli.git /tmp/gogcli && \
+    cd /tmp/gogcli && \
+    git checkout ${SANDBOX_GOGCLI_REF} && \
+    GOPATH=/opt/go go build -o /usr/local/bin/gog ./cmd/gog && \
+    rm -rf /tmp/gogcli
+
+# Install Archil client (persistent POSIX volumes backed by S3/R2)
+# Installs to /usr/bin/archil by default (system path, survives bind-mount)
+RUN curl -s https://s3.amazonaws.com/archil-client/install | sh || true
+
+# Install Claude Code to /opt/claude.
+# The installer runs `claude install` which places the launcher at ~/.local/bin/claude.
+# Set HOME=/opt/claude so it installs there instead of the real home dir.
+RUN mkdir -p /opt/claude && HOME=/opt/claude bash -c "curl -fsSL https://claude.ai/install.sh | bash -s -- ${SANDBOX_CLAUDE_CODE_VERSION}"
+ENV PATH="/opt/claude/.local/bin:$PATH"
+
+# Install OpenCode to /opt/opencode.
+# The installer places the binary at ~/.opencode/bin/opencode.
+# Set HOME=/opt/opencode so it installs there.
+RUN mkdir -p /opt/opencode && HOME=/opt/opencode bash -c "curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}"
+ENV PATH="/opt/opencode/.opencode/bin:$PATH"
+
+# agent-browser chromium is installed on first boot via archil-mount.sh (persists on archil disk).
+# This saves ~700MB from the Docker image.
+
 # Create non-root user with passwordless sudo
 RUN useradd -m -s /bin/bash iterate && \
     echo 'iterate ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/iterate && \
     chmod 0440 /etc/sudoers.d/iterate && \
     mkdir -p /home/iterate/src/github.com/iterate \
     /var/log/pidnap && \
-    chown -R iterate:iterate /home/iterate /var/log/pidnap
+    chown -R iterate:iterate /home/iterate /var/log/pidnap && \
+    chown -R iterate:iterate /opt/npm-global /opt/go /opt/opencode /opt/claude
 
 USER iterate
 
@@ -108,84 +203,7 @@ USER iterate
 # (e.g. `docker exec container opencode`). Login shells reset PATH via /etc/profile,
 # so home-skeleton/.profile must ALSO set up these paths for `bash -l` and SSH to work.
 # Keep both in sync! The .iterate/bin paths must be prepended last so wrappers win.
-ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
-
-# Install Archil client (persistent POSIX volumes backed by S3/R2)
-RUN curl -s https://s3.amazonaws.com/archil-client/install | sh || true
-
-# Install uv and use that to install mitmproxy
-RUN curl -fsSL https://astral.sh/uv/install.sh | sh
-RUN uv tool install mitmproxy==${SANDBOX_MITMPROXY_VERSION}
-
-# Generate mitmproxy CA certificate at build time.
-# This certificate is baked into the image and shared across all sandbox instances.
-# This is safe because:
-# 1. Each sandbox is network-isolated - they cannot communicate with each other
-# 2. The cert is only used for the local egress proxy within each sandbox
-# 3. No sandbox can intercept another sandbox's traffic
-# Note: The CA keypair is regenerated when SANDBOX_MITMPROXY_VERSION changes (layer invalidation).
-RUN mkdir -p /home/iterate/.mitmproxy && \
-    /home/iterate/.local/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
-    PID=$! && \
-    # TODO: replace this polling hack with a direct cert-generation command.
-    # Track in tasks/mitmproxy-direct-cert-command.md.
-    # Cert generation is not immediate; poll for CA file before continuing.
-    for i in $(seq 1 30); do \
-      [ -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem ] && break; \
-      sleep 0.5; \
-    done && \
-    kill $PID 2>/dev/null || true && \
-    test -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem
-
-# Install mitmproxy CA certificate system-wide
-RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
-    sudo cp /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt && \
-    sudo update-ca-certificates
-
-# Configure npm for userspace global installs
-RUN mkdir -p ~/.npm-global && \
-    npm config set prefix ~/.npm-global
-ENV PATH="/home/iterate/.npm-global/bin:$PATH"
-
-# Install bun (installs to ~/.bun)
-RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${SANDBOX_BUN_VERSION}"
-ENV PATH="/home/iterate/.bun/bin:$PATH"
-
-# Install Go (detect architecture at build time)
-RUN ARCH=$(dpkg --print-architecture) && \
-    if [ "$ARCH" = "arm64" ]; then GO_ARCH="arm64"; else GO_ARCH="amd64"; fi && \
-    curl -fsSL "https://go.dev/dl/go${SANDBOX_GO_VERSION}.linux-${GO_ARCH}.tar.gz" | sudo tar -C /usr/local -xzf -
-ENV PATH="/usr/local/go/bin:/home/iterate/go/bin:$PATH"
-ENV GOPATH="/home/iterate/go"
-
-# Install flyctl (Fly.io CLI)
-RUN curl -fsSL https://fly.io/install.sh | sh
-ENV PATH="/home/iterate/.fly/bin:$PATH"
-
-# Install gogcli (Google Suite CLI: Gmail, GCal, GDrive, etc.)
-# Uses mmkal's fork with --access-token support for headless/proxy environments
-RUN mkdir -p /home/iterate/.local/bin && \
-    git clone https://github.com/mmkal/gogcli.git /tmp/gogcli && \
-    cd /tmp/gogcli && \
-    git checkout ${SANDBOX_GOGCLI_REF} && \
-    go build -o /home/iterate/.local/bin/gog ./cmd/gog && \
-    rm -rf /tmp/gogcli
-
-# === Agent packages (npm, userspace) ===
-RUN npm install -g \
-    agent-browser@${SANDBOX_AGENT_BROWSER_VERSION} \
-    @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION} \
-    @openai/codex@${SANDBOX_CODEX_VERSION} \
-    && npm cache clean --force
-RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${SANDBOX_CLAUDE_CODE_VERSION}
-RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
-ENV PATH="/home/iterate/.opencode/bin:$PATH"
-
-# agent-browser chromium is installed on first boot via archil-mount.sh (persists on archil disk).
-# This saves ~700MB from the Docker image.
-
-# Ensure wrapper scripts win after all PATH modifications.
-ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
+ENV PATH="/home/iterate/.iterate/bin:/opt/claude/.local/bin:/opt/opencode/.opencode/bin:/opt/mitmproxy/bin:/opt/uv/bin:/opt/npm-global/bin:/opt/bun/bin:/opt/fly/bin:/usr/local/go/bin:/opt/go/bin:$PATH"
 
 # Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session.
 # Use a free model — no API keys are available at build time.
@@ -222,31 +240,6 @@ RUN git init && \
     git add . && \
     git commit -m "snapshot ${GIT_SHA}" && \
     git branch -M main
-
-# Snapshot boot-critical tool directories from ~ as a compressed tarball.
-# archil-mount.sh extracts this onto the archil disk so tools survive the
-# bind-mount over ~. Only include what's needed for pidnap processes to start:
-#   - .local/bin/ (mitmdump, uv, gog, claude) — NOT .local/share (pnpm store, uv envs)
-#   - .mitmproxy/ (egress proxy CA certs)
-#   - .iterate/ (bin wrappers, configs)
-#   - .opencode/bin/ (opencode binary)
-#   - .config/ (opencode, claude settings)
-#   - dotfiles (.bashrc, .profile, .gitconfig, .npmrc, .claude.json)
-# Heavy tools (agent-browser, codex, pi, bun, fly, go, .claude/bin) are NOT
-# included — they get installed on first boot or are at system paths.
-RUN cd /home/iterate && \
-    tar czf /tmp/home-snapshot.tar.gz \
-      --ignore-failed-read \
-      .local/bin \
-      .local/share/uv \
-      .mitmproxy \
-      .iterate \
-      .opencode/bin \
-      .config \
-      .bashrc .bash_logout .profile .gitconfig .npmrc .claude.json \
-      2>/dev/null && \
-    sudo mv /tmp/home-snapshot.tar.gz /opt/home-snapshot.tar.gz && \
-    echo "Home snapshot tarball: $(du -sh /opt/home-snapshot.tar.gz | cut -f1)"
 
 ENV GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA
