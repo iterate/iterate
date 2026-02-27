@@ -130,7 +130,7 @@ export default defineService({
   async start(config) {
     // 1. Start the inner process
     const proc = spawn("outerbase-server", {
-      env: { DATABASE_URL: config.dbUrl, PORT: "0" },
+      env: { ...process.env, DATABASE_URL: config.dbUrl, PORT: "0" },
     });
     const innerPort = await waitForPort(proc);
 
@@ -247,10 +247,11 @@ function attachWsProxy(server: import("node:http").Server, innerPort: number) {
     const proxySocket = connect(innerPort, "127.0.0.1", () => {
       const path = req.url || "/";
       const headerLines = Object.entries(req.headers)
+        .filter(([k]) => k.toLowerCase() !== "host")
         .map(([k, v]) => `${k}: ${v}`)
         .join("\r\n");
       proxySocket.write(
-        `GET ${path} HTTP/1.1\r\n${headerLines}\r\nHost: 127.0.0.1:${innerPort}\r\n\r\n`,
+        `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1:${innerPort}\r\n${headerLines}\r\n\r\n`,
       );
       proxySocket.write(head);
       proxySocket.pipe(socket);
