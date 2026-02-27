@@ -37,7 +37,7 @@ function deploymentNameForCurrentTest(provider: ProviderName): string {
   const currentTestName = expect.getState().currentTestName ?? "unnamed-test";
   const workerId = process.env.VITEST_WORKER_ID ?? "0";
   const slug = slugifyForName(currentTestName);
-  return `jonasland-vtest-${provider}-${workerId}-${slug}`;
+  return `jonasland-vitest-${provider}-${workerId}-${slug}`;
 }
 
 const providerCases: ProviderCase[] = [

@@ -12,7 +12,7 @@ Fly is the first concrete provider because it is the current production path.
 
 # What this PR changes
 
-- Introduces a shared deployment abstraction in `packages/shared/src/jonasland/deployment/` used by both OS worker and VTest-style runners.
+- Introduces a shared deployment abstraction in `packages/shared/src/jonasland/deployment/` used by both OS worker and Vitest-style runners.
 - Adds Docker and Fly implementations behind the same deployment contract.
 - Makes Fly internet-path behavior end-to-end testable from a Vitest runner machine.
 - Adds explicit ingress + egress internet plumbing for tests:
@@ -95,7 +95,7 @@ const providers: Array<{
     enabled: true,
     create: () =>
       DockerDeployment.withConfig({ image: "jonasland-sandbox:local" }).create({
-        name: "jonasland-vtest-docker-mini",
+        name: "jonasland-vitest-docker-mini",
       }),
   },
   {
@@ -103,7 +103,7 @@ const providers: Array<{
     enabled: Boolean(process.env.JONASLAND_E2E_FLY_IMAGE),
     create: () =>
       FlyDeployment.withConfig({ image: process.env.JONASLAND_E2E_FLY_IMAGE! }).create({
-        name: "jonasland-vtest-fly-mini",
+        name: "jonasland-vitest-fly-mini",
       }),
   },
 ];

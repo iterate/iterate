@@ -131,7 +131,7 @@ const providers: Array<{
     enabled: true,
     create: () =>
       DockerDeployment.withConfig({ image: "jonasland-sandbox:local" }).create({
-        name: "jonasland-vtest-docker-my-test",
+        name: "jonasland-vitest-docker-my-test",
       }),
   },
   {
@@ -139,7 +139,7 @@ const providers: Array<{
     enabled: Boolean(process.env.JONASLAND_E2E_FLY_IMAGE),
     create: () =>
       FlyDeployment.withConfig({ image: process.env.JONASLAND_E2E_FLY_IMAGE! }).create({
-        name: "jonasland-vtest-fly-my-test",
+        name: "jonasland-vitest-fly-my-test",
       }),
   },
 ];
