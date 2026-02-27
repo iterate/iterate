@@ -31,20 +31,7 @@ The hot path (every proxied request) currently does:
 - Run schema migration once at deploy time or via admin API endpoint
 - The proxy path should never touch DDL
 
-### 1b. In-memory route cache
-
-- Global `Map<string, ResolvedRoute>` at module scope (persists within isolate)
-- On proxy request: check in-memory cache first → on miss, query D1 → populate cache
-- Cache invalidation: admin API mutations (`setRoute`/`deleteRoute`) clear the in-memory cache
-- TTL on cache entries (e.g. 30s) so stale routes eventually refresh
-- This is isolate-local, not global — acceptable for this use case since routes change rarely
-
-### 1c. Wildcard resolution optimization
-
-- Instead of fetching ALL wildcard rows, maintain an in-memory sorted list of wildcard suffixes
-- Match against the list without hitting D1 on every request
-
-### 1d. `setRoute` conflict detection (`onConflict` parameter)
+### 1b. `setRoute` conflict detection (`onConflict` parameter)
 
 Currently `setRoute` silently upserts — if a route already exists, it overwrites. Add an `onConflict` parameter:
 
@@ -53,7 +40,7 @@ Currently `setRoute` silently upserts — if a route already exists, it overwrit
 
 This prevents accidental route collisions. Since callers are trusted (only our control plane + tests), this is a safety net, not a security boundary.
 
-### 1e. Transparent WebSocket support
+### 1c. Transparent WebSocket support
 
 CF Workers `fetch()` natively supports WebSocket upgrades when you pass the original request through. The current code does:
 
@@ -80,23 +67,17 @@ This passes the entire request (including upgrade headers, body stream, etc.) tr
 - WebSocket idle timeout: 100s via CF CDN — may need heartbeat awareness
 - Max message size: 32 MiB
 
-## Phase 2: Code cleanup & structure
+## Phase 2: Code cleanup — single file, < 500 lines
 
-### 2a. Separate concerns
+**Constraint:** Everything stays in one file (`server.ts`). Target < 500 lines total. If it's more, we failed.
 
-- `routes.ts` — route CRUD (D1 operations)
-- `cache.ts` — in-memory route cache
-- `proxy.ts` — transparent proxy logic (tiny)
-- `admin.ts` — oRPC admin API handlers
-- `server.ts` — Hono app wiring (just the glue)
-
-### 2b. Remove unnecessary abstractions
+### 2a. Remove unnecessary abstractions
 
 - `InputError` class → just use `ORPCError` directly
 - `parseJsonObject` → D1 already stores/returns JSON text, simplify
 - `rowToRouteRecord` → consider whether the camelCase transform is worth the complexity
 
-### 2c. Clean up schema management
+### 2b. Clean up schema management
 
 - Single migration function, called from admin API or deploy script
 - Not called on every request
@@ -114,11 +95,20 @@ This passes the entire request (including upgrade headers, body stream, etc.) tr
 
 - Keep minimal but explain non-obvious choices (e.g. why global var cache is fine)
 
-## Phase 4: E2E tests
+## Phase 4: Tests
 
-Model after the JonasLand E2E test suite. Tests should be in `apps/cf-ingress-proxy-worker/e2e/` or similar.
+**Strategy:** All tests are E2E tests against the live worker, except unit tests for route matching logic (exact vs wildcard priority, suffix sorting, etc.).
 
-### 4a. Test infrastructure
+Model after the JonasLand E2E test suite.
+
+### 4a. Unit tests (route matching only)
+
+- Exact match wins over wildcard
+- Longer wildcard suffix wins over shorter
+- Expired routes don't match
+- `onConflict: "fail"` rejects duplicate routes
+
+### 4b. E2E test infrastructure
 
 - Vitest test runner
 - The test takes as input:
@@ -127,7 +117,7 @@ Model after the JonasLand E2E test suite. Tests should be in `apps/cf-ingress-pr
 - For WebSocket testing: spin up a local server, expose via `cloudflared tunnel --protocol http2`
 - Tests register routes via admin API, then make requests through the proxy
 
-### 4b. Test cases
+### 4c. E2E test cases
 
 - **HTTP proxy:** Register route → request through proxy → verify response
 - **Header rewriting:** Verify Host header and custom headers reach upstream
@@ -152,16 +142,12 @@ At test end, print:
 
 ## Open questions
 
-1. **Cache invalidation across isolates:** When admin API updates a route, only the local isolate's cache is cleared. Other isolates will serve stale data until their cache TTL expires. Is 30s acceptable? Could use Cache API (data-center-local) as L2 but that adds complexity.
+1. **Schema migration strategy:** Should we have an explicit `/admin/migrate` endpoint? Or rely on Wrangler migrations? D1 supports migrations via `wrangler d1 migrations`.
 
-2. **Schema migration strategy:** Should we have an explicit `/admin/migrate` endpoint? Or rely on Wrangler migrations? D1 supports migrations via `wrangler d1 migrations`.
+2. **Wildcard matching complexity:** Currently supports `*.suffix` only. Do we need more complex patterns (e.g. regex, path-based routing)? Probably not — keep it simple.
 
-3. **Wildcard matching complexity:** Currently supports `*.suffix` only. Do we need more complex patterns (e.g. regex, path-based routing)? Probably not — keep it simple.
+3. **Test environment:** Do we run E2E tests against the production proxy worker, or deploy a staging instance? Need a `*.ingress.iterate.com` wildcard cert + CNAME in place for tests to work.
 
-4. **Test environment:** Do we run E2E tests against the production proxy worker, or deploy a staging instance? Need a `*.ingress.iterate.com` wildcard cert + CNAME in place for tests to work.
+4. **Should the proxy strip/add any security headers?** Currently passes everything through transparently. May want to set `X-Forwarded-For`, `X-Forwarded-Proto`, etc.
 
-5. **Should the proxy strip/add any security headers?** Currently passes everything through transparently. May want to set `X-Forwarded-For`, `X-Forwarded-Proto`, etc.
-
-6. **Rate limiting on admin API?** Not critical now but good to consider.
-
-7. **How should we handle the case where upstream is down?** Currently returns 502 with `proxy_error`. Should we add retry logic or keep it simple?
+5. **How should we handle the case where upstream is down?** Currently returns 502 with `proxy_error`. Should we add retry logic or keep it simple?
