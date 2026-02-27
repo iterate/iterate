@@ -3,7 +3,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "pnpm -r --parallel --filter '!./apps/daemon' --filter '!./apps/cf-proxy-worker' dev",
+    "dev": "pnpm -r --parallel --filter '!./apps/daemon' --filter '!./apps/cf-ingress-proxy-worker' dev",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "oxfmt",
