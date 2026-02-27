@@ -8,11 +8,7 @@
  *   - Everything else (HTTP to the inner service, raw TCP, WebSocket upgrades)
  *     gets piped straight through as an L4 proxy. Zero inspection.
  */
-import {
-  createServer as createNetServer,
-  connect,
-  type Server,
-} from "node:net";
+import { createServer as createNetServer, connect, type Server } from "node:net";
 import { createServer as createHttpServer } from "node:http";
 import type { Hono } from "hono";
 
@@ -38,9 +34,7 @@ export interface HybridProxyHandle {
   close(): void;
 }
 
-export function createHybridProxy(
-  opts: HybridProxyOptions,
-): Promise<HybridProxyHandle> {
+export function createHybridProxy(opts: HybridProxyOptions): Promise<HybridProxyHandle> {
   const { innerPort, app } = opts;
 
   // Internal HTTP server for managed routes — Hono handles the requests
@@ -49,8 +43,7 @@ export function createHybridProxy(
       const url = `http://127.0.0.1${req.url || "/"}`;
       const headers = new Headers();
       for (const [key, value] of Object.entries(req.headers)) {
-        if (value)
-          headers.set(key, Array.isArray(value) ? value.join(", ") : value);
+        if (value) headers.set(key, Array.isArray(value) ? value.join(", ") : value);
       }
       const body =
         req.method !== "GET" && req.method !== "HEAD"
@@ -61,14 +54,9 @@ export function createHybridProxy(
             })
           : undefined;
 
-      const response = await app.fetch(
-        new Request(url, { method: req.method, headers, body }),
-      );
+      const response = await app.fetch(new Request(url, { method: req.method, headers, body }));
 
-      res.writeHead(
-        response.status,
-        Object.fromEntries(response.headers.entries()),
-      );
+      res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
       if (response.body) {
         const reader = response.body.getReader();
         while (true) {
@@ -88,17 +76,14 @@ export function createHybridProxy(
     // Listen on an internal port for managed HTTP
     httpServer.listen(0, "127.0.0.1", () => {
       const httpAddr = httpServer.address();
-      if (!httpAddr || typeof httpAddr === "string")
-        throw new Error("httpServer bind failed");
+      if (!httpAddr || typeof httpAddr === "string") throw new Error("httpServer bind failed");
       const httpPort = httpAddr.port;
 
       // The outer TCP server — entrypoint for all connections
       const tcpServer: Server = createNetServer((socket) => {
         socket.once("data", (firstChunk: Buffer) => {
           // Decide where to route based on first bytes
-          const targetPort = isHttpAndManaged(firstChunk)
-            ? httpPort
-            : innerPort;
+          const targetPort = isHttpAndManaged(firstChunk) ? httpPort : innerPort;
 
           const proxy = connect(targetPort, "127.0.0.1", () => {
             proxy.write(firstChunk);
@@ -114,8 +99,7 @@ export function createHybridProxy(
 
       tcpServer.listen(0, "127.0.0.1", () => {
         const addr = tcpServer.address();
-        if (!addr || typeof addr === "string")
-          throw new Error("tcpServer bind failed");
+        if (!addr || typeof addr === "string") throw new Error("tcpServer bind failed");
         resolve({
           port: addr.port,
           close() {

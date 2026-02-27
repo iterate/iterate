@@ -1,7 +1,7 @@
-import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { execSync } from "node:child_process";
 import { connect } from "node:net";
 import path from "node:path";
+import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { echoService } from "./echo-service.ts";
 
 const PLAYGROUND_DIR = path.dirname(new URL(import.meta.url).pathname);
