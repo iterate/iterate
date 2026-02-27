@@ -111,10 +111,8 @@ Model after the JonasLand E2E test suite.
 ### 4b. E2E test infrastructure
 
 - Vitest test runner
-- The test takes as input:
-  - `CF_PROXY_WORKER_URL` — publicly routable hostname for the proxy
-  - `CF_PROXY_WORKER_API_TOKEN` — access token for admin API
-- For WebSocket testing: spin up a local server, expose via `cloudflared tunnel --protocol http2`
+- Tests run against production by default (URL + token passed as args/env)
+- For WebSocket testing: spin up a local server, expose via `cloudflared tunnel --protocol http2`, proxy requests through the live worker back to self
 - Tests register routes via admin API, then make requests through the proxy
 
 ### 4c. E2E test cases
@@ -146,7 +144,7 @@ At test end, print:
 
 2. **Wildcard matching complexity:** Currently supports `*.suffix` only. Do we need more complex patterns (e.g. regex, path-based routing)? Probably not — keep it simple.
 
-3. **Test environment:** Do we run E2E tests against the production proxy worker, or deploy a staging instance? Need a `*.ingress.iterate.com` wildcard cert + CNAME in place for tests to work.
+3. ~~**Test environment:**~~ **Resolved:** Test against production by default. No local miniflare path needed.
 
 4. **Should the proxy strip/add any security headers?** Currently passes everything through transparently. May want to set `X-Forwarded-For`, `X-Forwarded-Proto`, etc.
 
