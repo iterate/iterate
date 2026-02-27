@@ -8,6 +8,13 @@
       "when": 1772063909698,
       "tag": "0000_init_agents_routes",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1772194206026,
+      "tag": "0001_add_agent_provisioning",
+      "breakpoints": true
     }
   ]
 }

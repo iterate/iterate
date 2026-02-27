@@ -23,6 +23,37 @@ export const SlackWebhookInput = z
   })
   .passthrough();
 
+export const SlackRouteRecord = z.object({
+  channel: z.string().min(1),
+  threadTs: z.string().min(1),
+  agentPath: z.string().min(1),
+  providerSessionId: z.string().min(1),
+  agentStreamPath: z.string().min(1),
+});
+export type SlackRouteRecord = z.infer<typeof SlackRouteRecord>;
+
+export const SlackWebhookDecisionOutput = z.object({
+  shouldCreateAgent: z.boolean(),
+  shouldAppendPrompt: z.boolean(),
+  getOrCreateInput: z.object({ agentPath: z.string().min(1) }).optional(),
+  reasonCodes: z.array(z.string().min(1)),
+  debug: z.record(z.string(), z.unknown()),
+});
+export type SlackWebhookDecisionOutput = z.infer<typeof SlackWebhookDecisionOutput>;
+
+export const SlackCodemodeInput = z.object({
+  agentPath: z.string().min(1),
+  code: z.string().min(1),
+});
+export type SlackCodemodeInput = z.infer<typeof SlackCodemodeInput>;
+
+export const SlackCodemodeOutput = z.object({
+  success: z.boolean(),
+  result: z.unknown().optional(),
+  error: z.string().optional(),
+});
+export type SlackCodemodeOutput = z.infer<typeof SlackCodemodeOutput>;
+
 export const slackContract = oc.router({
   ...serviceSubRouter,
   slack: {
@@ -44,19 +75,33 @@ export const slackContract = oc.router({
       })
       .input(z.object({}).passthrough())
       .output(z.object({ ok: z.literal(true), handled: z.boolean() })),
-    agentUpdatesCallback: oc
+    decideWebhook: oc
       .route({
         method: "POST",
-        path: "/internal/events/agent-updates",
-        summary: "Receive agent stream push events",
+        path: "/api/slack/debug/decide-webhook",
+        summary: "Dry-run Slack webhook routing and agent-create decision",
       })
-      .input(z.object({}).passthrough())
-      .output(z.object({ ok: z.literal(true), handled: z.boolean() })),
+      .input(
+        z.object({
+          webhook: SlackWebhookInput,
+          existingRoutes: z.array(SlackRouteRecord).optional(),
+        }),
+      )
+      .output(SlackWebhookDecisionOutput),
+    codemode: oc
+      .route({
+        method: "POST",
+        path: "/codemode",
+        summary: "Execute Slack codemode script against agent thread context",
+      })
+      .input(SlackCodemodeInput)
+      .output(SlackCodemodeOutput),
   },
 });
 
 export const SlackServiceEnv = z.object({
   SLACK_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(19063),
+  SLACK_SERVICE_DB_PATH: z.string().default("slack-service.sqlite"),
   AGENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19061"),
   EVENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19010"),
   SLACK_API_BASE_URL: z.string().default("https://slack.com"),

@@ -18,6 +18,7 @@ export const opencodeWrapperContract = oc.router({
         z.object({
           route: z.string(),
           sessionId: z.string(),
+          streamPath: z.string(),
         }),
       ),
     forwardSessionEvents: oc

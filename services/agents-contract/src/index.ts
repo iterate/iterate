@@ -1,13 +1,19 @@
-import { oc } from "@orpc/contract";
+import { eventIterator, oc } from "@orpc/contract";
+import {
+  EventStreamEvent,
+  Offset,
+  PushSubscriptionCallbackAddedPayload,
+  StreamPath,
+} from "@iterate-com/events-contract";
 import { createServiceSubRouterContract } from "@iterate-com/shared/jonasland";
 import { z } from "zod/v4";
 import packageJson from "../package.json" with { type: "json" };
 
 export const Agent = z.object({
-  path: z.string(),
-  destination: z.string().nullable(),
-  isWorking: z.boolean(),
-  shortStatus: z.string(),
+  agentPath: z.string().min(1),
+  provider: z.literal("opencode"),
+  sessionId: z.string().min(1),
+  streamPath: z.string().min(1),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -16,23 +22,10 @@ export const GetOrCreateAgentInput = z.object({
   agentPath: z.string().min(1),
 });
 
-export const UpdateAgentInput = z.object({
-  path: z.string().min(1),
-  destination: z.string().nullable().optional(),
-  isWorking: z.boolean().optional(),
-  shortStatus: z.string().optional(),
-});
-
-export const SlackAgentProxyInput = z.object({
-  prompt: z.string().min(1),
-  slack: z.object({
-    channel: z.string().min(1),
-    threadTs: z.string().min(1),
-    ts: z.string().min(1),
-    user: z.string().optional(),
-    subtype: z.string().optional(),
-  }),
-  callbackUrl: z.string().url(),
+const EventInputPayload = z.object({
+  type: z.string().min(1),
+  payload: z.record(z.string(), z.unknown()),
+  version: z.string().min(1).optional(),
   idempotencyKey: z.string().min(1).optional(),
 });
 
@@ -53,37 +46,61 @@ export const agentsContract = oc.router({
           wasNewlyCreated: z.boolean(),
         }),
       ),
-    update: oc
-      .route({ method: "POST", path: "/api/agents/update", summary: "Update agent state" })
-      .input(UpdateAgentInput)
-      .output(z.object({ ok: z.literal(true), agent: Agent })),
-    subscribe: oc
+    appendToStream: oc
       .route({
         method: "POST",
-        path: "/api/agents/subscribe",
-        summary: "Subscribe to agent changes",
-      })
-      .input(z.object({ agentPath: z.string(), callbackUrl: z.string().url() }))
-      .output(z.object({ ok: z.literal(true) })),
-    slackProxy: oc
-      .route({
-        method: "POST",
-        path: "/api/agents/slack/{threadTs}/proxy",
-        summary: "Resolve virtual slack agent path and append prompt event",
+        path: "/api/agents/streams/{+path}",
+        summary: "Append events to an agent stream target",
       })
       .input(
-        SlackAgentProxyInput.extend({
-          threadTs: z.string().min(1),
+        z.object({
+          path: StreamPath,
+          events: z.array(EventInputPayload).min(1),
         }),
       )
-      .output(
+      .output(z.void()),
+    registerStreamSubscription: oc
+      .route({
+        method: "POST",
+        path: "/api/agents/streams/{+path}/subscriptions",
+        summary: "Register a push subscription for an agent stream target",
+      })
+      .input(
         z.object({
-          ok: z.literal(true),
-          created: z.boolean(),
-          sessionId: z.string(),
-          streamPath: z.string(),
+          path: StreamPath,
+          subscription: PushSubscriptionCallbackAddedPayload,
+          idempotencyKey: z.string().min(1).optional(),
         }),
-      ),
+      )
+      .output(z.void()),
+    ackStreamSubscriptionOffset: oc
+      .route({
+        method: "POST",
+        path: "/api/agents/streams/{+path}/subscriptions/{subscriptionSlug}/ack",
+        summary: "Acknowledge offset for a push subscription on an agent stream target",
+      })
+      .input(
+        z.object({
+          path: StreamPath,
+          subscriptionSlug: z.string().min(1),
+          offset: Offset,
+        }),
+      )
+      .output(z.void()),
+    stream: oc
+      .route({
+        method: "GET",
+        path: "/api/agents/streams/{+path}",
+        summary: "Read an agent stream target and optionally keep stream live",
+      })
+      .input(
+        z.object({
+          path: StreamPath,
+          offset: Offset.optional(),
+          live: z.boolean().optional(),
+        }),
+      )
+      .output(eventIterator(EventStreamEvent)),
   },
 });
 

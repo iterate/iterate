@@ -20,6 +20,7 @@ import { mountServiceSubRouterHttpRoutes } from "../../../packages/shared/src/jo
 interface SessionRecord {
   id: string;
   agentPath: string;
+  streamPath: string;
   createdAt: string;
 }
 
@@ -51,6 +52,7 @@ const docsRouter = docsOs.router({
     createSession: docsOs.wrapper.createSession.handler(async ({ input }) => ({
       route: `/sessions/stub-${input.agentPath.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
       sessionId: `stub-${input.agentPath.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+      streamPath: `/agents/opencode/stub-${input.agentPath.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
     })),
     forwardSessionEvents: docsOs.wrapper.forwardSessionEvents.handler(async () => ({
       ok: true,
@@ -201,15 +203,18 @@ app.post("/new", async (c) => {
   });
 
   const sessionId = randomUUID();
+  const streamPath = `/agents/opencode/${sessionId}`;
   sessions.set(sessionId, {
     id: sessionId,
     agentPath,
+    streamPath,
     createdAt: new Date().toISOString(),
   });
 
   return c.json({
     route: `/sessions/${sessionId}`,
     sessionId,
+    streamPath,
   });
 });
 

@@ -1483,6 +1483,9 @@ importers:
 
   services/agents-contract:
     dependencies:
+      '@iterate-com/events-contract':
+        specifier: workspace:*
+        version: link:../events-contract
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -2035,6 +2038,12 @@ importers:
       '@hono/node-server':
         specifier: ^1.19.9
         version: 1.19.9(hono@4.12.2)
+      '@iterate-com/agents-contract':
+        specifier: workspace:*
+        version: link:../agents-contract
+      '@iterate-com/events-contract':
+        specifier: workspace:*
+        version: link:../events-contract
       '@iterate-com/registry-service':
         specifier: workspace:*
         version: link:../registry-service
@@ -2050,16 +2059,31 @@ importers:
       '@orpc/zod':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.5(@opentelemetry/api@1.9.0))(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
+      better-sqlite3:
+        specifier: ^12.4.1
+        version: 12.6.0
       hono:
         specifier: ^4.11.10
         version: 4.12.2
+      ws:
+        specifier: ^8.18.3
+        version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
     devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
       '@types/node':
         specifier: ^25.0.10
         version: 25.0.10
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@25.0.10)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
   services/slack-contract:
     dependencies:

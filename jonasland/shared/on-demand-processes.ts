@@ -93,6 +93,7 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
       env: {
         ...ON_DEMAND_OTEL_SERVICE_ENV,
         SLACK_SERVICE_PORT: "19063",
+        SLACK_SERVICE_DB_PATH: "/var/lib/jonasland/slack-service.sqlite",
         AGENTS_SERVICE_BASE_URL: "http://127.0.0.1:19061",
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010",
         SLACK_API_BASE_URL: "http://slack.com",

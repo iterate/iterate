@@ -18,3 +18,12 @@ export const agentRoutesTable = sqliteTable(
     }),
   ],
 );
+
+export const agentProvisioningTable = sqliteTable("agent_provisioning", {
+  agentPath: text("agent_path").primaryKey().notNull(),
+  provider: text("provider").notNull(),
+  sessionId: text("session_id").notNull(),
+  streamPath: text("stream_path").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});

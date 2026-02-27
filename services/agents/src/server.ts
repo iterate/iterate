@@ -1,7 +1,6 @@
 import { mkdirSync } from "node:fs";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createAdaptorServer } from "@hono/node-server";
 import { agentsServiceManifest } from "@iterate-com/agents-contract";
 import { createRegistryClient } from "@iterate-com/registry-service/client";
@@ -13,24 +12,18 @@ import BetterSqlite3 from "better-sqlite3";
 import { drizzle as drizzleBetterSqlite } from "drizzle-orm/better-sqlite3";
 import { migrate as migrateBetterSqlite } from "drizzle-orm/better-sqlite3/migrator";
 import { Hono } from "hono";
-import {
-  AGENTS_PROMPT_ADDED_TYPE,
-  type SlackReplyTarget,
-} from "../../../packages/shared/src/jonasland/agents-events.ts";
 import { mountServiceSubRouterHttpRoutes } from "../../../packages/shared/src/jonasland/index.ts";
 
-interface AgentRecord {
-  path: string;
-  destination: string | null;
-  isWorking: boolean;
-  shortStatus: string;
+interface AgentProvisioningRecord {
+  agentPath: string;
+  provider: "opencode";
+  sessionId: string;
+  streamPath: string;
   createdAt: string;
   updatedAt: string;
 }
 
-const agents = new Map<string, AgentRecord>();
-const subscriptions = new Map<string, Set<string>>();
-const inFlightAgentCreations = new Map<string, Promise<AgentRecord>>();
+const inFlightGetOrCreate = new Map<string, Promise<AgentProvisioningRecord>>();
 
 const env = agentsServiceManifest.envVars.parse(process.env);
 const port = env.AGENTS_SERVICE_PORT;
@@ -76,37 +69,28 @@ const docsRouter = docsOs.router({
   agents: {
     getOrCreate: docsOs.agents.getOrCreate.handler(async ({ input }) => ({
       agent: {
-        path: input.agentPath,
-        destination: null,
-        isWorking: false,
-        shortStatus: "",
+        agentPath: input.agentPath,
+        provider: "opencode",
+        sessionId: "stub-session",
+        streamPath: "/agents/opencode/stub-session",
         createdAt: new Date(0).toISOString(),
         updatedAt: new Date(0).toISOString(),
       },
       wasNewlyCreated: false,
     })),
-    update: docsOs.agents.update.handler(async ({ input }) => ({
-      ok: true,
-      agent: {
-        path: input.path,
-        destination: input.destination ?? null,
-        isWorking: input.isWorking ?? false,
-        shortStatus: input.shortStatus ?? "",
-        createdAt: new Date(0).toISOString(),
-        updatedAt: new Date(0).toISOString(),
-      },
-    })),
-    subscribe: docsOs.agents.subscribe.handler(async () => ({
-      ok: true,
-    })),
-    slackProxy: docsOs.agents.slackProxy.handler(async ({ input }) => ({
-      ok: true,
-      created: false,
-      sessionId: `stub-${input.threadTs}`,
-      streamPath: `/agents/opencode/stub-${input.threadTs}`,
-    })),
+    appendToStream: docsOs.agents.appendToStream.handler(async () => undefined),
+    registerStreamSubscription: docsOs.agents.registerStreamSubscription.handler(
+      async () => undefined,
+    ),
+    ackStreamSubscriptionOffset: docsOs.agents.ackStreamSubscriptionOffset.handler(
+      async () => undefined,
+    ),
+    stream: docsOs.agents.stream.handler(async function* () {
+      return;
+    }),
   },
 });
+
 const openAPIHandler = new OpenAPIHandler(docsRouter, {
   plugins: [
     new OpenAPIReferencePlugin({
@@ -128,8 +112,8 @@ const openAPIHandler = new OpenAPIHandler(docsRouter, {
 app.get("/healthz", (c) => c.text("ok"));
 mountServiceSubRouterHttpRoutes({ app, manifest: agentsServiceManifest });
 
-for (const path of ["/api/openapi.json", "/api/docs", "/api/docs/*"]) {
-  app.all(path, async (c) => {
+for (const docPath of ["/api/openapi.json", "/api/docs", "/api/docs/*"]) {
+  app.all(docPath, async (c) => {
     const { matched, response } = await openAPIHandler.handle(c.req.raw, {
       prefix: "/api",
     });
@@ -168,79 +152,63 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-interface AgentRouteRecord {
-  sourceKind: "slack_thread";
-  sourceId: string;
-  provider: "opencode";
-  sessionId: string;
-  streamPath: string;
-  createdAt: string;
-  updatedAt: string;
+function normalizeAgentPath(agentPath: string): string {
+  const trimmed = agentPath.trim();
+  if (trimmed.length === 0) {
+    throw new Error("agentPath is required");
+  }
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
-function normalizeStreamPath(path: string): string {
-  return path.replace(/^\/+/, "");
+function normalizeStreamPath(streamPath: string): string {
+  const trimmed = streamPath.trim();
+  if (trimmed.length === 0) {
+    throw new Error("streamPath is required");
+  }
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
-function toCanonicalAgentStreamPath(sessionId: string): string {
-  return `/agents/opencode/${sessionId}`;
-}
-
-function encodeStreamPathForUrl(path: string): string {
-  const normalized = normalizeStreamPath(path);
-  return normalized
+function encodeStreamPathForUrl(streamPath: string): string {
+  return streamPath
+    .replace(/^\/+/, "")
     .split("/")
     .filter((segment) => segment.length > 0)
     .map((segment) => encodeURIComponent(segment))
     .join("/");
 }
 
+function decodeWildcardPath(pathname: string): string {
+  const decoded = pathname
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map((segment) => decodeURIComponent(segment))
+    .join("/");
+  return `/${decoded}`;
+}
+
 function toEventsApiUrl(pathname: string): string {
   return new URL(pathname, env.EVENTS_SERVICE_BASE_URL).toString();
 }
 
-function buildSubscriptionSlug(threadTs: string): string {
-  return `slack-thread-${threadTs.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+function toCanonicalProviderStreamPath(sessionId: string): string {
+  return `/agents/opencode/${sessionId}`;
 }
 
 function providerSubscriptionSlug(sessionId: string): string {
   return `provider-opencode-${sessionId}`;
 }
 
-function virtualSlackAgentPath(threadTs: string): string {
-  return `/agents/slack/${threadTs.replace(/\./g, "-")}`;
-}
-
-function parseSessionId(payload: { route?: string; sessionId?: string }): string {
-  if (payload.sessionId && payload.sessionId.trim().length > 0) {
-    return payload.sessionId.trim();
-  }
-
-  const route = payload.route?.trim();
-  if (!route) {
-    throw new Error("opencode-wrapper session response missing sessionId");
-  }
-
-  const last = route
-    .split("/")
-    .filter((segment) => segment.length > 0)
-    .at(-1);
-  if (!last) throw new Error("opencode-wrapper session route missing id");
-  return last;
-}
-
-function readRouteBySlackThread(threadTs: string): AgentRouteRecord | null {
+function readProvisionByAgentPath(agentPath: string): AgentProvisioningRecord | null {
   const row = agentsDb
     .prepare(
-      `SELECT source_kind, source_id, provider, session_id, stream_path, created_at, updated_at
-       FROM agent_routes
-       WHERE source_kind = ? AND source_id = ?
+      `SELECT agent_path, provider, session_id, stream_path, created_at, updated_at
+       FROM agent_provisioning
+       WHERE agent_path = ?
        LIMIT 1`,
     )
-    .get("slack_thread", threadTs) as
+    .get(agentPath) as
     | {
-        source_kind: string;
-        source_id: string;
+        agent_path: string;
         provider: string;
         session_id: string;
         stream_path: string;
@@ -251,8 +219,7 @@ function readRouteBySlackThread(threadTs: string): AgentRouteRecord | null {
 
   if (!row) return null;
   return {
-    sourceKind: "slack_thread",
-    sourceId: row.source_id,
+    agentPath: row.agent_path,
     provider: "opencode",
     sessionId: row.session_id,
     streamPath: row.stream_path,
@@ -261,31 +228,23 @@ function readRouteBySlackThread(threadTs: string): AgentRouteRecord | null {
   };
 }
 
-function insertRoute(params: {
-  threadTs: string;
+function insertProvisioning(params: {
+  agentPath: string;
+  provider: "opencode";
   sessionId: string;
   streamPath: string;
-}): AgentRouteRecord {
+}): AgentProvisioningRecord {
   const now = nowIso();
   agentsDb
     .prepare(
-      `INSERT INTO agent_routes (source_kind, source_id, provider, session_id, stream_path, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO agent_provisioning (agent_path, provider, session_id, stream_path, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     )
-    .run(
-      "slack_thread",
-      params.threadTs,
-      "opencode",
-      params.sessionId,
-      params.streamPath,
-      now,
-      now,
-    );
+    .run(params.agentPath, params.provider, params.sessionId, params.streamPath, now, now);
 
   return {
-    sourceKind: "slack_thread",
-    sourceId: params.threadTs,
-    provider: "opencode",
+    agentPath: params.agentPath,
+    provider: params.provider,
     sessionId: params.sessionId,
     streamPath: params.streamPath,
     createdAt: now,
@@ -293,49 +252,53 @@ function insertRoute(params: {
   };
 }
 
-async function appendEventToStream(params: {
-  streamPath: string;
-  type: string;
-  payload: Record<string, unknown>;
-  idempotencyKey?: string;
-}) {
-  const encodedPath = encodeStreamPathForUrl(params.streamPath);
-  const response = await fetch(toEventsApiUrl(`/api/streams/${encodedPath}`), {
+async function createProviderSession(
+  agentPath: string,
+): Promise<{ sessionId: string; streamPath: string }> {
+  const response = await fetch(`${env.OPENCODE_WRAPPER_BASE_URL}/new`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      events: [
-        {
-          type: params.type,
-          payload: params.payload,
-          ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-        },
-      ],
-    }),
+    body: JSON.stringify({ agentPath }),
   });
 
   if (!response.ok) {
-    throw new Error(`events append failed: ${response.status} ${await response.text()}`);
+    throw new Error(`opencode-wrapper create failed: ${response.status} ${await response.text()}`);
   }
+
+  const payload = (await response.json()) as {
+    route?: string;
+    sessionId?: string;
+    streamPath?: string;
+  };
+
+  const sessionId = payload.sessionId?.trim();
+  if (!sessionId) {
+    throw new Error("opencode-wrapper session response missing sessionId");
+  }
+
+  const streamPath = payload.streamPath?.trim();
+  return {
+    sessionId,
+    streamPath: normalizeStreamPath(streamPath ?? toCanonicalProviderStreamPath(sessionId)),
+  };
 }
 
-async function registerPushSubscription(params: {
+async function registerProviderSubscription(params: {
   streamPath: string;
-  subscription: {
-    type: "webhook" | "webhook-with-ack";
-    URL: string;
-    subscriptionSlug: string;
-  };
-  idempotencyKey?: string;
-}) {
+  sessionId: string;
+}): Promise<void> {
   const response = await fetch(toEventsApiUrl("/orpc/registerSubscription"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       json: {
-        path: normalizeStreamPath(params.streamPath),
-        subscription: params.subscription,
-        ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+        path: params.streamPath.replace(/^\/+/, ""),
+        subscription: {
+          type: "webhook-with-ack",
+          URL: `${env.OPENCODE_WRAPPER_BASE_URL}/internal/events/provider`,
+          subscriptionSlug: providerSubscriptionSlug(params.sessionId),
+        },
+        idempotencyKey: `subscription:provider:${params.streamPath}`,
       },
     }),
   });
@@ -347,99 +310,45 @@ async function registerPushSubscription(params: {
   }
 }
 
-function routeToAbsolute(baseUrl: string, destination: string): string {
-  if (destination.startsWith("http://") || destination.startsWith("https://")) return destination;
-  return `${baseUrl}${destination.startsWith("/") ? destination : `/${destination}`}`;
-}
-
-function pruneSubscription(agentPath: string, callbackUrl: string): void {
-  const urls = subscriptions.get(agentPath);
-  if (!urls) return;
-  urls.delete(callbackUrl);
-  if (urls.size === 0) {
-    subscriptions.delete(agentPath);
-  }
-}
-
-async function createDestination(agentPath: string): Promise<string> {
-  const response = await fetch(`${env.OPENCODE_WRAPPER_BASE_URL}/new`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ agentPath }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`opencode-wrapper create failed: ${response.status} ${await response.text()}`);
-  }
-
-  const payload = (await response.json()) as { route: string };
-  return routeToAbsolute(env.OPENCODE_WRAPPER_BASE_URL, payload.route);
-}
-
-async function getOrCreateSlackThreadRoute(threadTs: string): Promise<{
-  route: AgentRouteRecord;
-  created: boolean;
-}> {
-  const existing = readRouteBySlackThread(threadTs);
-  if (existing) return { route: existing, created: false };
-
-  const response = await fetch(`${env.OPENCODE_WRAPPER_BASE_URL}/new`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ agentPath: virtualSlackAgentPath(threadTs) }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`opencode-wrapper create failed: ${response.status} ${await response.text()}`);
-  }
-
-  const payload = (await response.json()) as { route?: string; sessionId?: string };
-  const sessionId = parseSessionId(payload);
-  const streamPath = toCanonicalAgentStreamPath(sessionId);
-
-  try {
-    const inserted = insertRoute({ threadTs, sessionId, streamPath });
-    return { route: inserted, created: true };
-  } catch {
-    const raced = readRouteBySlackThread(threadTs);
-    if (!raced) throw new Error("failed to resolve slack thread route");
-    return { route: raced, created: false };
-  }
-}
-
-function createAgentRecord(agentPath: string, destination: string): AgentRecord {
-  const createdAt = nowIso();
-  return {
-    path: agentPath,
-    destination,
-    isWorking: false,
-    shortStatus: "",
-    createdAt,
-    updatedAt: createdAt,
-  };
-}
-
-async function getOrCreateAgentRecord(
-  agentPath: string,
-): Promise<{ agent: AgentRecord; wasNewlyCreated: boolean }> {
-  const existing = agents.get(agentPath);
+async function getOrCreateAgentProvisioning(
+  inputAgentPath: string,
+): Promise<{ agent: AgentProvisioningRecord; wasNewlyCreated: boolean }> {
+  const agentPath = normalizeAgentPath(inputAgentPath);
+  const existing = readProvisionByAgentPath(agentPath);
   if (existing) {
+    await registerProviderSubscription({
+      streamPath: existing.streamPath,
+      sessionId: existing.sessionId,
+    });
     return { agent: existing, wasNewlyCreated: false };
   }
 
-  let pending = inFlightAgentCreations.get(agentPath);
+  let pending = inFlightGetOrCreate.get(agentPath);
   if (!pending) {
     pending = (async () => {
-      const destination = await createDestination(agentPath);
-      const created = createAgentRecord(agentPath, destination);
-      agents.set(agentPath, created);
-      return created;
+      const createdSession = await createProviderSession(agentPath);
+      await registerProviderSubscription(createdSession);
+      try {
+        return insertProvisioning({
+          agentPath,
+          provider: "opencode",
+          sessionId: createdSession.sessionId,
+          streamPath: createdSession.streamPath,
+        });
+      } catch {
+        const raced = readProvisionByAgentPath(agentPath);
+        if (!raced) {
+          throw new Error("failed to persist agent provisioning");
+        }
+        return raced;
+      }
     })();
-    inFlightAgentCreations.set(agentPath, pending);
+
+    inFlightGetOrCreate.set(agentPath, pending);
     void pending
       .finally(() => {
-        if (inFlightAgentCreations.get(agentPath) === pending) {
-          inFlightAgentCreations.delete(agentPath);
+        if (inFlightGetOrCreate.get(agentPath) === pending) {
+          inFlightGetOrCreate.delete(agentPath);
         }
       })
       .catch(() => {});
@@ -452,195 +361,183 @@ async function getOrCreateAgentRecord(
   return { agent: resolved, wasNewlyCreated: false };
 }
 
-app.post("/api/agents/get-or-create", async (c) => {
-  const body = (await c.req.json()) as { agentPath?: string };
-  const agentPath = body.agentPath?.trim();
-  if (!agentPath) return c.json({ error: "agentPath is required" }, 400);
+async function resolveTargetStreamPath(proxyPath: string): Promise<string> {
+  const canonicalProxyPath = normalizeAgentPath(proxyPath);
 
-  const { agent, wasNewlyCreated } = await getOrCreateAgentRecord(agentPath);
-  return c.json({ agent, wasNewlyCreated });
-});
+  if (canonicalProxyPath.startsWith("/agents/opencode/")) {
+    return canonicalProxyPath;
+  }
 
-app.post("/api/agents/update", async (c) => {
-  const body = (await c.req.json()) as {
-    path?: string;
-    destination?: string | null;
-    isWorking?: boolean;
-    shortStatus?: string;
+  const record = readProvisionByAgentPath(canonicalProxyPath);
+  if (!record) {
+    throw new Error(`agent stream target not found: ${canonicalProxyPath}`);
+  }
+
+  return record.streamPath;
+}
+
+async function proxyAppend(streamPath: string, body: unknown): Promise<Response> {
+  const payload = body as {
+    events?: Array<{
+      type?: string;
+      payload?: unknown;
+      version?: string;
+      idempotencyKey?: string;
+    }>;
   };
 
-  const path = body.path?.trim();
-  if (!path) return c.json({ error: "path is required" }, 400);
-
-  const existing = agents.get(path);
-  if (!existing) return c.json({ error: "agent not found" }, 404);
-
-  const updated: AgentRecord = {
-    ...existing,
-    ...(body.destination !== undefined ? { destination: body.destination } : {}),
-    ...(body.isWorking !== undefined ? { isWorking: body.isWorking } : {}),
-    ...(body.shortStatus !== undefined ? { shortStatus: body.shortStatus } : {}),
-    updatedAt: nowIso(),
-  };
-
-  agents.set(path, updated);
-
-  const callbackUrls = subscriptions.get(path) ?? new Set<string>();
-  const callbackBody = JSON.stringify({
-    type: "iterate:agent-updated",
-    payload: updated,
-  });
-  for (const callbackUrl of callbackUrls) {
-    void fetch(callbackUrl, {
-      method: "POST",
+  if (!Array.isArray(payload.events) || payload.events.length === 0) {
+    return new Response(JSON.stringify({ error: "events array is required" }), {
+      status: 400,
       headers: { "content-type": "application/json" },
-      body: callbackBody,
-    })
-      .then((response) => {
-        if (!response.ok) {
-          pruneSubscription(path, callbackUrl);
-        }
-      })
-      .catch(() => {
-        pruneSubscription(path, callbackUrl);
-      });
+    });
   }
 
-  return c.json({ ok: true as const, agent: updated });
-});
-
-app.post("/api/agents/subscribe", async (c) => {
-  const body = (await c.req.json()) as { agentPath?: string; callbackUrl?: string };
-  const agentPath = body.agentPath?.trim();
-  const callbackUrl = body.callbackUrl?.trim();
-  if (!agentPath || !callbackUrl) {
-    return c.json({ error: "agentPath and callbackUrl are required" }, 400);
-  }
-
-  let urls = subscriptions.get(agentPath);
-  if (!urls) {
-    urls = new Set<string>();
-    subscriptions.set(agentPath, urls);
-  }
-  urls.add(callbackUrl);
-
-  return c.json({ ok: true as const });
-});
-
-app.post("/api/agents/unsubscribe", async (c) => {
-  const body = (await c.req.json()) as { agentPath?: string; callbackUrl?: string };
-  const agentPath = body.agentPath?.trim();
-  const callbackUrl = body.callbackUrl?.trim();
-  if (!agentPath || !callbackUrl) {
-    return c.json({ error: "agentPath and callbackUrl are required" }, 400);
-  }
-
-  pruneSubscription(agentPath, callbackUrl);
-  return c.json({ ok: true as const });
-});
-
-async function handleSlackProxy(c: {
-  req: { param: (name: string) => string; json: () => Promise<unknown> };
-  json: (body: unknown, status?: number) => Response;
-}) {
-  const threadTs = c.req.param("threadTs")?.trim();
-  if (!threadTs) return c.json({ error: "threadTs is required" }, 400);
-
-  const body = (await c.req.json()) as {
-    prompt?: string;
-    slack?: {
-      channel?: string;
-      threadTs?: string;
-      ts?: string;
-      user?: string;
-      subtype?: string;
-    };
-    callbackUrl?: string;
-    idempotencyKey?: string;
-  };
-
-  const prompt = body.prompt?.trim();
-  const channel = body.slack?.channel?.trim();
-  const callbackUrl = body.callbackUrl?.trim();
-  if (!prompt || !channel || !callbackUrl) {
-    return c.json({ error: "prompt, slack.channel, and callbackUrl are required" }, 400);
-  }
-
-  const slackReplyTarget: SlackReplyTarget = {
-    channel,
-    threadTs,
-  };
-
-  const { route, created } = await getOrCreateSlackThreadRoute(threadTs);
-
-  await registerPushSubscription({
-    streamPath: route.streamPath,
-    subscription: {
-      type: "webhook-with-ack",
-      URL: `${env.OPENCODE_WRAPPER_BASE_URL}/internal/events/provider`,
-      subscriptionSlug: providerSubscriptionSlug(route.sessionId),
-    },
-    idempotencyKey: `subscription:provider:${route.streamPath}`,
-  });
-
-  await registerPushSubscription({
-    streamPath: route.streamPath,
-    subscription: {
-      type: "webhook",
-      URL: callbackUrl,
-      subscriptionSlug: buildSubscriptionSlug(threadTs),
-    },
-    idempotencyKey: `subscription:slack:${route.streamPath}:${threadTs}`,
-  });
-
-  await appendEventToStream({
-    streamPath: route.streamPath,
-    type: AGENTS_PROMPT_ADDED_TYPE,
-    payload: {
-      prompt,
-      source: "slack",
-      virtualAgentPath: virtualSlackAgentPath(threadTs),
-      replyTarget: slackReplyTarget,
-    },
-    idempotencyKey: body.idempotencyKey ?? `prompt:${threadTs}:${body.slack?.ts ?? prompt}`,
-  });
-
-  return c.json({
-    ok: true as const,
-    created,
-    sessionId: route.sessionId,
-    streamPath: route.streamPath,
+  const encodedPath = encodeStreamPathForUrl(streamPath);
+  return fetch(toEventsApiUrl(`/api/streams/${encodedPath}`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ events: payload.events }),
   });
 }
 
-app.post("/api/agents/slack/:threadTs/proxy", handleSlackProxy);
-app.post("/agents/slack/:threadTs/proxy", handleSlackProxy);
+async function proxyRegisterSubscription(streamPath: string, body: unknown): Promise<Response> {
+  const payload = body as {
+    subscription?: unknown;
+    idempotencyKey?: string;
+  };
 
-app.post("/api/agents/forward/*", async (c) => {
-  const suffix = c.req.path.slice("/api/agents/forward".length);
-  const agentPath = suffix.startsWith("/") ? suffix : `/${suffix}`;
-  if (agentPath === "/") return c.json({ error: "agent path missing" }, 400);
+  return fetch(toEventsApiUrl("/orpc/registerSubscription"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      json: {
+        path: streamPath.replace(/^\/+/, ""),
+        subscription: payload.subscription,
+        ...(payload.idempotencyKey ? { idempotencyKey: payload.idempotencyKey } : {}),
+      },
+    }),
+  });
+}
 
-  const { agent } = await getOrCreateAgentRecord(agentPath);
-
-  if (!agent.destination) {
-    return c.json({ error: "agent destination unavailable" }, 503);
+async function proxyAckOffset(
+  streamPath: string,
+  subscriptionSlug: string,
+  body: unknown,
+): Promise<Response> {
+  const payload = body as { offset?: string };
+  if (!payload.offset || payload.offset.trim().length === 0) {
+    return new Response(JSON.stringify({ error: "offset is required" }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
   }
 
-  const body = await c.req.json();
-  const upstream = await fetch(agent.destination, {
+  return fetch(toEventsApiUrl("/orpc/ackOffset"), {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-iterate-agent-path": agentPath,
-    },
-    body: JSON.stringify(body),
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      json: {
+        path: streamPath.replace(/^\/+/, ""),
+        subscriptionSlug,
+        offset: payload.offset,
+      },
+    }),
   });
+}
 
-  const text = await upstream.text();
-  c.header("content-type", upstream.headers.get("content-type") ?? "application/json");
-  c.status(upstream.status as never);
-  return c.body(text);
+async function proxyReadStream(streamPath: string, search: string): Promise<Response> {
+  const encodedPath = encodeStreamPathForUrl(streamPath);
+  return fetch(toEventsApiUrl(`/api/streams/${encodedPath}${search}`), {
+    method: "GET",
+  });
+}
+
+app.post("/api/agents/get-or-create", async (c) => {
+  const body = (await c.req.json()) as { agentPath?: string };
+  const agentPath = body.agentPath?.trim();
+  if (!agentPath) {
+    return c.json({ error: "agentPath is required" }, 400);
+  }
+
+  try {
+    const { agent, wasNewlyCreated } = await getOrCreateAgentProvisioning(agentPath);
+    return c.json({ agent, wasNewlyCreated });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return c.json({ error: message }, 502);
+  }
+});
+
+app.all("/api/agents/streams/*", async (c) => {
+  const prefix = "/api/agents/streams/";
+  const fullPath = c.req.path;
+  const suffix = fullPath.slice(prefix.length);
+
+  if (!suffix || suffix.trim().length === 0) {
+    return c.json({ error: "path is required" }, 400);
+  }
+
+  try {
+    if (c.req.method === "POST" && suffix.endsWith("/subscriptions")) {
+      const proxyPath = decodeWildcardPath(suffix.slice(0, -"/subscriptions".length));
+      const streamPath = await resolveTargetStreamPath(proxyPath);
+      const upstream = await proxyRegisterSubscription(
+        streamPath,
+        await c.req.json().catch(() => ({})),
+      );
+      const responseBody = await upstream.text();
+      c.status(upstream.status as never);
+      c.header("content-type", upstream.headers.get("content-type") ?? "application/json");
+      return c.body(responseBody);
+    }
+
+    const ackMatch = suffix.match(/^(.*)\/subscriptions\/([^/]+)\/ack$/);
+    if (c.req.method === "POST" && ackMatch) {
+      const proxyPath = decodeWildcardPath(ackMatch[1] ?? "");
+      const subscriptionSlug = decodeURIComponent(ackMatch[2] ?? "").trim();
+      if (!subscriptionSlug) {
+        return c.json({ error: "subscriptionSlug is required" }, 400);
+      }
+
+      const streamPath = await resolveTargetStreamPath(proxyPath);
+      const upstream = await proxyAckOffset(
+        streamPath,
+        subscriptionSlug,
+        await c.req.json().catch(() => ({})),
+      );
+      const responseBody = await upstream.text();
+      c.status(upstream.status as never);
+      c.header("content-type", upstream.headers.get("content-type") ?? "application/json");
+      return c.body(responseBody);
+    }
+
+    const proxyPath = decodeWildcardPath(suffix);
+    const streamPath = await resolveTargetStreamPath(proxyPath);
+
+    if (c.req.method === "POST") {
+      const upstream = await proxyAppend(streamPath, await c.req.json().catch(() => ({})));
+      const responseBody = await upstream.text();
+      c.status(upstream.status as never);
+      c.header("content-type", upstream.headers.get("content-type") ?? "application/json");
+      return c.body(responseBody);
+    }
+
+    if (c.req.method === "GET") {
+      const search = new URL(c.req.url).search;
+      const upstream = await proxyReadStream(streamPath, search);
+      const headers = new Headers(upstream.headers);
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers,
+      });
+    }
+
+    return c.json({ error: "method not allowed" }, 405);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return c.json({ error: message }, 404);
+  }
 });
 
 export const startAgentsService = async () => {

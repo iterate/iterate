@@ -8,19 +8,27 @@
     "./server": "./src/server.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.9",
+    "@iterate-com/agents-contract": "workspace:*",
+    "@iterate-com/events-contract": "workspace:*",
     "@iterate-com/registry-service": "workspace:*",
     "@orpc/openapi": "^1.13.5",
     "@orpc/server": "^1.13.5",
     "@orpc/zod": "^1.13.5",
     "@iterate-com/slack-contract": "workspace:*",
-    "hono": "^4.11.10"
+    "better-sqlite3": "^12.4.1",
+    "hono": "^4.11.10",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.0.10",
-    "typescript": "^5.9.3"
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   }
 }
