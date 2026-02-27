@@ -7,6 +7,7 @@
     "deploy:prd": "doppler run --config prd -- sh -c 'APP_STAGE=prd tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
     "deploy": "pnpm run deploy:prd",
     "test": "vitest run",
+    "test:e2e-live": "vitest run --config ./vitest.live.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
