@@ -3,6 +3,7 @@ Sacrifice grammar for concision. Don't waste tokens. Skip obvious context.
 ## TOC
 
 - Quick reference
+- Working with GitHub
 - Environment variables (Doppler)
 - Critical rules
 - Trace debugging (Jaeger)
