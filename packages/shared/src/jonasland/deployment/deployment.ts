@@ -303,7 +303,7 @@ abstract class DeploymentBase implements AsyncDisposable, DeploymentRuntime {
       [
         "set -euo pipefail",
         `mkdir -p \"$(dirname ${shQuote(envFilePath)})\"`,
-        `TMP_FILE=\"$(mktemp \"${envFilePath}.tmp.XXXXXX\")\"`,
+        `TMP_FILE="$(mktemp ${shQuote(envFilePath + ".tmp.XXXXXX")})"`,
         `printf '%s' ${shQuote(encoded)} | base64 -d > \"$TMP_FILE\"`,
         `mv \"$TMP_FILE\" ${shQuote(envFilePath)}`,
       ].join("\n"),
