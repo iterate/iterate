@@ -44,7 +44,16 @@ The hot path (every proxied request) currently does:
 - Instead of fetching ALL wildcard rows, maintain an in-memory sorted list of wildcard suffixes
 - Match against the list without hitting D1 on every request
 
-### 1d. Transparent WebSocket support
+### 1d. `setRoute` conflict detection (`onConflict` parameter)
+
+Currently `setRoute` silently upserts — if a route already exists, it overwrites. Add an `onConflict` parameter:
+
+- `"fail"` (default) — reject with error if route already exists with a different target/config
+- `"overwrite"` — current upsert behavior
+
+This prevents accidental route collisions. Since callers are trusted (only our control plane + tests), this is a safety net, not a security boundary.
+
+### 1e. Transparent WebSocket support
 
 CF Workers `fetch()` natively supports WebSocket upgrades when you pass the original request through. The current code does:
 
@@ -98,7 +107,7 @@ This passes the entire request (including upgrade headers, body stream, etc.) tr
 
 - Clear explanation of the architecture and why it exists
 - ASCII/mermaid diagram showing: Client → CF Worker (proxy) → Fly.io → Caddy → App
-- Document the wildcard pattern: `*.proxy.iterate.com` CNAME → worker, then routes like `anything.proxy.iterate.com` → target
+- Document the wildcard pattern: `*.ingress.iterate.com` CNAME → worker, then routes like `anything.ingress.iterate.com` → target
 - Concrete examples
 
 ### 3b. Inline code comments
@@ -149,7 +158,7 @@ At test end, print:
 
 3. **Wildcard matching complexity:** Currently supports `*.suffix` only. Do we need more complex patterns (e.g. regex, path-based routing)? Probably not — keep it simple.
 
-4. **Test environment:** Do we run E2E tests against the production proxy worker, or deploy a staging instance? Need a `*.proxy.iterate.com` wildcard cert + CNAME in place for tests to work.
+4. **Test environment:** Do we run E2E tests against the production proxy worker, or deploy a staging instance? Need a `*.ingress.iterate.com` wildcard cert + CNAME in place for tests to work.
 
 5. **Should the proxy strip/add any security headers?** Currently passes everything through transparently. May want to set `X-Forwarded-For`, `X-Forwarded-Proto`, etc.
 
