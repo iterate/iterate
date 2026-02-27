@@ -25,7 +25,9 @@ function dedupeTags(tags: string[]): string[] {
   return [...new Set(tags)];
 }
 
-function buildDesiredProcesses(config: { pidnap?: { processes?: RestartingProcessEntry[] } }): DesiredProcess[] {
+function buildDesiredProcesses(config: {
+  pidnap?: { processes?: RestartingProcessEntry[] };
+}): DesiredProcess[] {
   const seen = new Set<string>();
   const desired: DesiredProcess[] = [];
 
