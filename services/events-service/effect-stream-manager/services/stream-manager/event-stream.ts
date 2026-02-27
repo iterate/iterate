@@ -5,7 +5,7 @@
  * EventStream owns offset management, storage is dumb (just persists Events)
  */
 import jsonata from "jsonata";
-import { Data, DateTime, Effect, Option, PubSub, Runtime, Schema, Stream } from "effect";
+import { Data, DateTime, Effect, PubSub, Runtime, Schema, Stream } from "effect";
 import {
   PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE,
   type PushSubscriptionCallbackAddedPayload,
@@ -577,19 +577,6 @@ export const make = (
     const append = (eventInput: EventInput) =>
       appendSemaphore.withPermits(1)(
         Effect.gen(function* () {
-          if (eventInput.idempotencyKey !== undefined) {
-            const existingEvent = yield* storage.read().pipe(
-              Stream.filter(
-                (streamEvent) => streamEvent.idempotencyKey === eventInput.idempotencyKey,
-              ),
-              Stream.runHead,
-            );
-
-            if (Option.isSome(existingEvent)) {
-              return { event: existingEvent.value, inserted: false as const };
-            }
-          }
-
           const nextOffset = formatOffset(offsetToNumber(state.lastOffset) + 1);
           const createdAt = yield* DateTime.now;
           const trace = yield* fromCurrentSpan;
