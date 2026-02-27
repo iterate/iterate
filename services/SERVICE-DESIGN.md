@@ -149,7 +149,7 @@ export default defineService({
     app.all("/*", proxyTo(innerPort));
 
     const server = createServer(nodeHandler(app));
-    attachWsProxy(server, innerPort);  // WebSocket passthrough
+    attachWsProxy(server, innerPort); // WebSocket passthrough
     const port = await listen(server, 0);
 
     // 3. Signal handling
@@ -181,8 +181,14 @@ export default defineService({
     const server = createServer(nodeHandler(app));
     const port = await listen(server, 0);
 
-    process.on("SIGTERM", () => { server.close(); process.exit(0); });
-    process.on("SIGINT", () => { server.close(); process.exit(0); });
+    process.on("SIGTERM", () => {
+      server.close();
+      process.exit(0);
+    });
+    process.on("SIGINT", () => {
+      server.close();
+      process.exit(0);
+    });
 
     await registerWithRegistry({ slug: "orders", target: `127.0.0.1:${port}` });
     return { target: `127.0.0.1:${port}` };
@@ -338,8 +344,10 @@ On startup, `start()` calls the registry:
 3. Registry responds with:
    ```typescript
    {
-     config: Record<string, unknown>;  // values matching configSchema
-     caddy: { configured: boolean };   // confirmation that routing is set up
+     config: Record<string, unknown>; // values matching configSchema
+     caddy: {
+       configured: boolean;
+     } // confirmation that routing is set up
    }
    ```
 4. Service applies config and starts accepting traffic
