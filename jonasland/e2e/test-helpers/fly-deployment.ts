@@ -359,7 +359,7 @@ function baseUrlFromPublicServiceUrl(publicServiceUrl: string): string | null {
     if (separator <= 0) return null;
     const suffixHost = parsed.hostname.slice(separator + 2);
     if (!suffixHost) return null;
-    return `${parsed.protocol}//${suffixHost}`;
+    return `${parsed.protocol}//${suffixHost}${parsed.port ? `:${parsed.port}` : ""}`;
   } catch {
     return null;
   }
