@@ -188,12 +188,13 @@ ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 # We only care that opencode boots far enough to download its npm deps.
 # Errors we accept: model not found, auth failures, network issues.
 # Errors we do NOT accept: opencode binary missing or broken (checked by --version).
-RUN opencode --version && \
+RUN set -e && \
+    opencode --version && \
+    set +e && \
     echo "--- opencode warm-up (errors below are expected) ---" && \
     opencode run "Hello" 2>&1; \
     warmup_exit=$?; \
-    echo "--- opencode warm-up finished (exit=$warmup_exit) ---" && \
-    true
+    echo "--- opencode warm-up finished (exit=$warmup_exit) ---"
 
 # Repo path and working dir (used by COPY steps below).
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
