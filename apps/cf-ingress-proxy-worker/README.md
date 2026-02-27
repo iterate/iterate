@@ -73,10 +73,9 @@ Alchemy manages worker + D1 resources.
 
 - SQLite-backed unit tests for conflict/matching internals.
 - E2E-style worker tests for API and proxy behavior.
-- Real deployment E2E script:
-  - `INGRESS_PROXY_E2E_BASE_URL=<worker-url> INGRESS_PROXY_E2E_API_TOKEN=<token> pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live`
-  - Defaults `INGRESS_PROXY_E2E_BASE_URL` to `https://ingress-proxy.iterate.workers.dev`.
 
 ## TODO (explicitly deferred)
 
 Pattern lookup optimization is intentionally deferred. Current matching prioritizes correctness and simplicity; optimize query narrowing later if route cardinality warrants it.
+
+- Add route TTL/expiry support (schema + API + resolver semantics + dedicated E2E coverage).
