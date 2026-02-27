@@ -118,7 +118,7 @@ sudo mkdir -p "$STAGING"
     REPO_URL="${ITERATE_REPO_URL:-https://github.com/nichochar/iterate.git}"
     REPO_REF="${GIT_SHA:-main}"
 
-    # Wait for egress proxy (port 8888) — .gitconfig routes through it
+    # Wait for egress proxy (port 8888) — needed for HTTPS traffic
     echo "[archil] Waiting for egress proxy on port 8888..."
     for i in $(seq 1 60); do
       if bash -c 'echo > /dev/tcp/127.0.0.1/8888' 2>/dev/null; then
@@ -128,14 +128,17 @@ sudo mkdir -p "$STAGING"
       sleep 1
     done
 
-    # Git clone may fail early if GitHub auth isn't ready yet (egress proxy needs
-    # the control plane to provision credentials). Retry with backoff.
-    # Clean up any partial/stale repo dir before first attempt.
+    # Clone the repo. On first boot, GitHub credentials aren't available yet
+    # (daemon must report ready before the OS pushes creds). For public repos
+    # like iterate/iterate, bypass the credential helper and clone anonymously.
+    # For private repos, retry with backoff until creds arrive.
     rm -rf "$REPO_DIR" 2>/dev/null; sudo rm -rf "$REPO_DIR" 2>/dev/null || true
     echo "[archil] Cloning ${REPO_URL} @ ${REPO_REF}"
     CLONE_OK=false
-    for attempt in $(seq 1 10); do
-      if git clone --depth 1 --branch main "$REPO_URL" "$REPO_DIR" 2>&1; then
+    for attempt in $(seq 1 3); do
+      # First try: anonymous clone (works for public repos, avoids credential helper
+      # which injects a not-yet-provisioned token that causes 401)
+      if GIT_TERMINAL_PROMPT=0 git -c credential.helper= clone --depth 1 --branch main "$REPO_URL" "$REPO_DIR" 2>&1; then
         CLONE_OK=true
         break
       fi
