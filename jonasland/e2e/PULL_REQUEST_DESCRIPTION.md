@@ -70,6 +70,9 @@ flowchart LR
 
 # Mini test example
 
+Canonical test file:
+`jonasland/e2e/tests/example.end2end.e2e.ts`
+
 ```ts
 import { describe, expect, test } from "vitest";
 import {
@@ -152,7 +155,19 @@ for (const provider of providers) {
       ]);
 
       expect(curl.exitCode).toBe(0);
-      expect(curl.output).toContain('"ok":true');
+      expect(curl.output).toMatch(/HTTP\/\d(?:\.\d)? 200/);
+
+      const curlBody =
+        curl.output
+          .split(/\r?\n\r?\n/)
+          .at(-1)
+          ?.trim() ?? "";
+      const curlJson = JSON.parse(curlBody) as {
+        ok: boolean;
+        path: string;
+      };
+      expect(curlJson.ok).toBe(true);
+      expect(curlJson.path).toBe("/mini");
 
       // Slightly clunky for now: register waitFor first to avoid races.
       const { request, response } = await seen;

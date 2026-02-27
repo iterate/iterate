@@ -106,6 +106,9 @@ Equivalent local Docker pattern is `*.iterate.localhost` with host-header routin
 
 ## Minimal parity test example
 
+Canonical test file:
+`jonasland/e2e/tests/example.end2end.e2e.ts`
+
 ```ts
 import { describe, expect, test } from "vitest";
 import {
@@ -187,14 +190,26 @@ for (const provider of providers) {
         "https://api.openai.com/mini",
       ]);
 
+      expect(curl.exitCode).toBe(0);
+      expect(curl.output).toMatch(/HTTP\/\d(?:\.\d)? 200/);
+
+      const curlBody =
+        curl.output
+          .split(/\r?\n\r?\n/)
+          .at(-1)
+          ?.trim() ?? "";
+      const curlJson = JSON.parse(curlBody) as {
+        ok: boolean;
+        path: string;
+      };
+      expect(curlJson.ok).toBe(true);
+      expect(curlJson.path).toBe("/mini");
+
       // Slightly clunky for now: register waitFor before sending the request
       // to avoid race conditions.
       const { request, response } = await observed;
       expect(new URL(request.url).pathname).toBe("/mini");
       expect(response.status).toBe(200);
-
-      expect(curl.exitCode).toBe(0);
-      expect(curl.output).toContain('"ok":true');
     });
   });
 }
