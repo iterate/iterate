@@ -2,7 +2,7 @@ import { workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 export default workflow({
-  name: "Deploy CF Proxy Worker",
+  name: "Deploy CF Ingress Proxy Worker",
   permissions: {
     contents: "read",
     deployments: "write",
@@ -11,9 +11,9 @@ export default workflow({
     push: {
       branches: ["main"],
       paths: [
-        "apps/cf-proxy-worker/**",
-        ".github/ts-workflows/workflows/deploy-cf-proxy-worker.ts",
-        ".github/workflows/deploy-cf-proxy-worker.yml",
+        "apps/cf-ingress-proxy-worker/**",
+        ".github/ts-workflows/workflows/deploy-cf-ingress-proxy-worker.ts",
+        ".github/workflows/deploy-cf-ingress-proxy-worker.yml",
       ],
     },
     workflow_dispatch: {},
@@ -25,8 +25,8 @@ export default workflow({
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "prd" }),
         {
-          name: "Deploy apps/cf-proxy-worker",
-          "working-directory": "apps/cf-proxy-worker",
+          name: "Deploy apps/cf-ingress-proxy-worker",
+          "working-directory": "apps/cf-ingress-proxy-worker",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             APP_STAGE: "prd",

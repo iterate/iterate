@@ -103,7 +103,9 @@ async function authenticateApiKey(
   db.update(schema.projectAccessToken)
     .set({ lastUsedAt: new Date() })
     .where(eq(schema.projectAccessToken.id, tokenId))
-    .catch(() => {});
+    .catch((err) => {
+      logger.error("Failed to update access token lastUsedAt", err);
+    });
 
   return { machine, tokenId };
 }

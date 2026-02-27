@@ -47,6 +47,7 @@ export type EvlogExceptionPayload = {
   event: WideEvent;
   errors?: Error[];
   env?: EvlogPostHogEnv;
+  executionCtx?: { waitUntil: (promise: Promise<unknown>) => void };
 };
 
 function getTimestamp(timestamp?: string): string {
@@ -63,7 +64,10 @@ async function posthogCapture(body: Record<string, unknown>): Promise<void> {
   });
 
   if (!response.ok) {
-    throw new Error(`PostHog capture failed: ${response.status} ${response.statusText}`);
+    const details = await response.text().catch(() => "<no body>");
+    throw new Error(
+      `PostHog capture failed: ${response.status} ${response.statusText} ${details.slice(0, 500)}`,
+    );
   }
 }
 
@@ -90,6 +94,8 @@ export async function sendPostHogEvent(
 }
 
 function parseStackTrace(stack: string | undefined): Array<{
+  platform: string;
+  lang: string;
   filename: string;
   function: string;
   lineno: number | undefined;
@@ -106,6 +112,8 @@ function parseStackTrace(stack: string | undefined): Array<{
 
       const [, fn, filename, lineno, colno] = match;
       return {
+        platform: "custom",
+        lang: "javascript",
         filename: filename || "<unknown>",
         function: fn || "<anonymous>",
         lineno: lineno ? parseInt(lineno, 10) : undefined,
@@ -127,23 +135,38 @@ export async function sendPostHogException(
 ): Promise<void> {
   if (params.errors.length === 0) return;
 
+  const fallbackFrames = [
+    {
+      platform: "custom",
+      lang: "javascript",
+      filename: "<unknown>",
+      function: "<unknown>",
+      lineno: undefined,
+      colno: undefined,
+      in_app: true,
+    },
+  ];
+
   await posthogCapture({
     api_key: params.apiKey,
     event: "$exception",
     distinct_id: params.distinctId,
     properties: {
-      $exception_list: params.errors.map((error) => ({
-        type: error.name,
-        value: error.message,
-        mechanism: {
-          handled: true,
-          synthetic: false,
-        },
-        stacktrace: {
-          type: "raw",
-          frames: parseStackTrace(error.stack),
-        },
-      })),
+      $exception_list: params.errors.map((error) => {
+        const frames = parseStackTrace(error.stack);
+        return {
+          type: error.name,
+          value: error.message,
+          mechanism: {
+            handled: true,
+            synthetic: false,
+          },
+          stacktrace: {
+            type: "raw",
+            frames: frames.length > 0 ? frames : fallbackFrames,
+          },
+        };
+      }),
       $environment: params.environment,
       $lib: params.lib ?? "posthog-fetch",
       request: params.request,
@@ -181,21 +204,38 @@ export async function sendEvlogExceptionToPostHog(payload: EvlogExceptionPayload
   if (!payload.errors || payload.errors.length === 0) return;
 
   const apiKey = payload.env?.POSTHOG_PUBLIC_KEY;
-  if (!apiKey) return;
+  if (!apiKey) {
+    logger.warn("POSTHOG_PUBLIC_KEY missing for evlog exception flush");
+    return;
+  }
 
   const event = payload.event as unknown as EvlogExceptionEvent;
   const request = toPostHogRequestContext(event);
   const user = toPostHogUserContext(event);
 
-  await sendPostHogException({
-    apiKey,
-    distinctId: user.id,
-    errors: payload.errors,
-    request,
-    user,
-    environment: payload.env?.VITE_APP_STAGE ?? evlogAppStage,
-    lib: "evlog-worker",
-  });
+  logger.info(
+    `PostHog evlog exception dispatch requestId=${request.id} path=${request.path} errorCount=${payload.errors.length} waitUntil=${Boolean(payload.executionCtx)}`,
+  );
+
+  try {
+    await sendPostHogException({
+      apiKey,
+      distinctId: user.id,
+      errors: payload.errors,
+      request,
+      user,
+      environment: payload.env?.VITE_APP_STAGE ?? evlogAppStage,
+      lib: "evlog-worker",
+    });
+    logger.info(`PostHog evlog exception sent requestId=${request.id}`);
+  } catch (error) {
+    logger.error("PostHog evlog exception failed", {
+      requestId: request.id,
+      path: request.path,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
 /**

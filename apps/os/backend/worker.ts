@@ -9,6 +9,7 @@ import { RPCHandler } from "@orpc/server/fetch";
 import { onError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { createRouterClient } from "@orpc/server";
+import { initLogger } from "evlog";
 import { createWorkersLogger, initWorkersLogger } from "evlog/workers";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import {
@@ -87,12 +88,26 @@ const appStage =
 
 setRequestEvlogFlushHandler(sendEvlogExceptionToPostHog);
 
-initWorkersLogger({
-  env: {
-    service: "os",
-    environment: appStage,
-  },
-});
+if (import.meta.env.DEV) {
+  // Use initLogger directly in dev to enable pretty tree-format output.
+  // initWorkersLogger hardcodes pretty: false, which is correct for production
+  // (CF Workers dashboard needs raw objects) but noisy locally.
+  initLogger({
+    env: {
+      service: "os",
+      environment: appStage,
+    },
+    pretty: true,
+    stringify: false,
+  });
+} else {
+  initWorkersLogger({
+    env: {
+      service: "os",
+      environment: appStage,
+    },
+  });
+}
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
@@ -181,6 +196,28 @@ app.get("/api/observability", (c) => {
   });
 });
 
+app.post("/api/debug/trigger-error", (c) => {
+  const serviceAuthToken = c.env.SERVICE_AUTH_TOKEN?.trim();
+
+  if (!serviceAuthToken) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const authorization = c.req.header("authorization");
+  const bearerToken = authorization?.startsWith("Bearer ")
+    ? authorization.slice(7).trim()
+    : undefined;
+  const providedToken = bearerToken ?? c.req.header("x-iterate-debug-token")?.trim();
+
+  if (!providedToken || providedToken !== serviceAuthToken) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const rawReason = c.req.query("reason") ?? "manual-test";
+  const reason = rawReason.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "manual-test";
+  throw new Error(`Intentional debug error for telemetry testing (${reason})`);
+});
+
 app.use(
   cors({
     origin: (origin, c: Context<{ Bindings: CloudflareEnv }>) => {
@@ -203,7 +240,9 @@ app.use("*", async (c, next) => {
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
-  const orpcCaller = createRouterClient(appRouter, { context: createContext(c) });
+  const orpcCaller = createRouterClient(appRouter, {
+    context: createContext(c),
+  });
   c.set("orpcCaller", orpcCaller);
   return next();
 });
@@ -371,7 +410,11 @@ const appOrpcHandler = new RPCHandler(appRouter, {
           : undefined;
       const errorDetails =
         error instanceof Error
-          ? { name: error.name, message: error.message, stack: error.stack ?? "stack unavailable" }
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack ?? "stack unavailable",
+            }
           : {
               name: "NonErrorThrowable",
               message: String(error),
@@ -435,7 +478,11 @@ const daemonOrpcHandler = new RPCHandler(workerRouter, {
           : undefined;
       const errorDetails =
         error instanceof Error
-          ? { name: error.name, message: error.message, stack: error.stack ?? "stack unavailable" }
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack ?? "stack unavailable",
+            }
           : {
               name: "NonErrorThrowable",
               message: String(error),
