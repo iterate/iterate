@@ -17,6 +17,8 @@ const serviceName = "jonasland-outerbase-service";
 const DEFAULT_SQLITE_PATHS = [
   "/var/lib/jonasland/events-service.sqlite",
   "/var/lib/jonasland/orders-service.sqlite",
+  "/var/lib/jonasland/registry.sqlite",
+  "/var/lib/jonasland/agents-service.sqlite",
 ].join(",");
 
 let studioOrigin = "";
