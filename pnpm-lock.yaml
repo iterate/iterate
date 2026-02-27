@@ -129,14 +129,14 @@ importers:
         specifier: ^4.1.13
         version: 4.1.13
 
-  apps/cf-proxy-worker:
+  apps/cf-ingress-proxy-worker:
     dependencies:
       '@orpc/server':
         specifier: ^1.13.4
         version: 1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
       alchemy:
         specifier: ^0.83.0
-        version: 0.83.3(@aws-sdk/client-s3@3.962.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(bufferutil@4.0.9)(kysely@0.28.8)(pg@8.17.1)(postgres@3.4.7)(utf-8-validate@5.0.10)(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260205.0)(wrangler@4.64.0(@cloudflare/workers-types@4.20260207.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+        version: 0.83.3(@aws-sdk/client-s3@3.962.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(bufferutil@4.0.9)(kysely@0.28.8)(pg@8.17.1)(postgres@3.4.7)(utf-8-validate@5.0.10)(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260205.0)(wrangler@4.68.1(@cloudflare/workers-types@4.20260207.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))
       hono:
         specifier: ^4.11.3
         version: 4.12.2
@@ -164,7 +164,7 @@ importers:
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.1)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
       wrangler:
         specifier: ^4.64.0
-        version: 4.64.0(@cloudflare/workers-types@4.20260207.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+        version: 4.68.1(@cloudflare/workers-types@4.20260207.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
 
   apps/daemon:
     dependencies:
@@ -20719,7 +20719,7 @@ snapshots:
       - utf-8-validate
       - workerd
 
-  alchemy@0.83.3(@aws-sdk/client-s3@3.962.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(bufferutil@4.0.9)(kysely@0.28.8)(pg@8.17.1)(postgres@3.4.7)(utf-8-validate@5.0.10)(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260205.0)(wrangler@4.64.0(@cloudflare/workers-types@4.20260207.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)):
+  alchemy@0.83.3(@aws-sdk/client-s3@3.962.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(bufferutil@4.0.9)(kysely@0.28.8)(pg@8.17.1)(postgres@3.4.7)(utf-8-validate@5.0.10)(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260205.0)(wrangler@4.68.1(@cloudflare/workers-types@4.20260207.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)):
     dependencies:
       '@aws-sdk/credential-providers': 3.936.0
       '@cloudflare/unenv-preset': 2.7.7(unenv@2.0.0-rc.21)(workerd@1.20260205.0)
@@ -20748,7 +20748,7 @@ snapshots:
       proper-lockfile: 4.1.2
       signal-exit: 4.1.0
       unenv: 2.0.0-rc.21
-      wrangler: 4.64.0(@cloudflare/workers-types@4.20260207.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      wrangler: 4.68.1(@cloudflare/workers-types@4.20260207.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       yaml: 2.8.2
     optionalDependencies:
@@ -27213,23 +27213,6 @@ snapshots:
       workerd: 1.20260205.0
     optionalDependencies:
       '@cloudflare/workers-types': 4.20251128.0
-      fsevents: 2.3.3
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
-
-  wrangler@4.64.0(@cloudflare/workers-types@4.20260207.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10):
-    dependencies:
-      '@cloudflare/kv-asset-handler': 0.4.2
-      '@cloudflare/unenv-preset': 2.12.1(unenv@2.0.0-rc.24)(workerd@1.20260205.0)
-      blake3-wasm: 2.1.5
-      esbuild: 0.27.3
-      miniflare: 4.20260205.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
-      path-to-regexp: 6.3.0
-      unenv: 2.0.0-rc.24
-      workerd: 1.20260205.0
-    optionalDependencies:
-      '@cloudflare/workers-types': 4.20260207.0
       fsevents: 2.3.3
     transitivePeerDependencies:
       - bufferutil
