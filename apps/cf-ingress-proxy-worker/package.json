@@ -1,5 +1,5 @@
 {
-  "name": "@iterate-com/cf-proxy-worker",
+  "name": "@iterate-com/cf-ingress-proxy-worker",
   "private": true,
   "type": "module",
   "scripts": {
