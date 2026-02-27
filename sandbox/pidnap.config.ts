@@ -105,6 +105,27 @@ export default defineConfig({
       dependsOn: ["egress-proxy"],
     },
     {
+      // Polls for /tmp/archil-repo-ready (written by archil-mount.sh after clone + install,
+      // or immediately when archil is not configured since the repo is baked into the image).
+      // Exits 0 when ready. Processes that need the repo depend on this with condition "completed".
+      name: "archil-repo-ready",
+      definition: {
+        command: "bash",
+        args: [
+          "-c",
+          'while [ ! -f /tmp/archil-repo-ready ]; do sleep 2; done; echo "[archil-repo-ready] Repo is available"',
+        ],
+      },
+      envOptions: {
+        inheritGlobalEnv: false,
+        reloadDelay: false,
+      },
+      options: {
+        restartPolicy: "never",
+      },
+      dependsOn: ["archil-mount"],
+    },
+    {
       name: "project-ingress-proxy",
       definition: {
         command: "tsx",
@@ -122,8 +143,8 @@ export default defineConfig({
         restartPolicy: "always",
       },
       // In archil mode, repo isn't available until archil-mount clones + installs it.
-      // Depend on archil-mount so we wait for the mount, then retry until repo exists.
-      dependsOn: ["archil-mount"],
+      // Wait for archil-repo-ready (exits 0 when repo is on disk).
+      dependsOn: [{ process: "archil-repo-ready", condition: "completed" }],
     },
     {
       name: "daemon-backend",
@@ -146,7 +167,7 @@ export default defineConfig({
         // Safe now that daemon no longer writes to .env (PR #1030 moved to push-based setup).
         reloadDelay: 500,
       },
-      dependsOn: ["archil-mount"],
+      dependsOn: [{ process: "archil-repo-ready", condition: "completed" }],
     },
     {
       name: "daemon-frontend",

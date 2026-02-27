@@ -209,7 +209,8 @@ ENV PATH="/home/iterate/.iterate/bin:/opt/claude/.local/bin:/opt/opencode/.openc
 # Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session.
 # Use a free model — no API keys are available at build time.
 # First verify opencode installed correctly, then allow warm-up to fail (network issues are OK).
-RUN opencode --version && (opencode run --model opencode/kimi-k2.5-free "Hello" || true)
+RUN opencode --version && (opencode run --model opencode/kimi-k2.5-free "Hello" || true) && \
+    rm -rf /home/iterate/.cache
 
 # Repo path and working dir (used by COPY steps below).
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate

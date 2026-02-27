@@ -29,6 +29,8 @@ fi
 
 if [[ -z "${ARCHIL_DISK_NAME:-}" ]]; then
   echo "[archil] No ARCHIL_DISK_NAME set, skipping mount"
+  # Signal that the repo is ready (it's baked into the image)
+  touch /tmp/archil-repo-ready
   exec sleep infinity
 fi
 
@@ -41,6 +43,7 @@ if grep -q "archil" /proc/mounts 2>/dev/null; then
     sudo mount --bind "$STAGING" "$MOUNT_POINT"
     touch /tmp/archil-home-ready
   fi
+  touch /tmp/archil-repo-ready
   exec sleep infinity
 fi
 
@@ -178,6 +181,10 @@ sudo mkdir -p "$STAGING"
   else
     echo "[archil] Existing home directory found"
   fi
+
+  # Signal that the repo is available (either from clone or previous boot)
+  touch /tmp/archil-repo-ready
+  echo "[archil] Repo ready signal written"
 ) &
 
 # --force: claim ownership even if stale delegation exists from a previous machine.
