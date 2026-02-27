@@ -105,13 +105,23 @@ sudo mkdir -p "$PERSIST"
       fi
     done
 
-    # Ensure iterate owns everything on persist
-    sudo chown -R iterate:iterate "$PERSIST"
-
     echo "[archil] First boot seeding complete"
   else
     echo "[archil] Existing persistent state found"
   fi
+
+  # Always fix ownership on persist dirs — archil FUSE creates files as root,
+  # and shared R2 buckets can leave root-owned dirs from previous boots.
+  # Only chown the specific dirs we need (not the whole volume, which could
+  # be slow if there's a lot of stale data from shared buckets).
+  echo "[archil] Fixing ownership on persist dirs"
+  sudo chown iterate:iterate "$PERSIST"
+  for f in "${PERSIST_FILES[@]}"; do
+    [[ -f "${PERSIST}/${f}" ]] && sudo chown iterate:iterate "${PERSIST}/${f}"
+  done
+  for d in "${PERSIST_DIRS[@]}"; do
+    [[ -d "${PERSIST}/${d}" ]] && sudo chown -R iterate:iterate "${PERSIST}/${d}"
+  done
 
   # Create symlinks from ~ to persist volume for files
   for f in "${PERSIST_FILES[@]}"; do
