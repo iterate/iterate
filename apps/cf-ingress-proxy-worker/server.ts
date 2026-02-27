@@ -540,6 +540,10 @@ const RouteIdInput = z.object({
   routeId: z.string().min(1),
 });
 
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Error && /UNIQUE constraint failed/i.test(error.message);
+}
+
 function mapRouteError(error: unknown): never {
   if (error instanceof RouteInputError) {
     throw new ORPCError("BAD_REQUEST", { message: error.message });
@@ -552,6 +556,13 @@ function mapRouteError(error: unknown): never {
       data: {
         conflicts: error.conflicts,
       },
+    });
+  }
+
+  if (isUniqueConstraintError(error)) {
+    throw new ORPCError("CONFLICT", {
+      message:
+        "Pattern conflicts with existing route patterns. A concurrent request may have claimed the pattern.",
     });
   }
 
