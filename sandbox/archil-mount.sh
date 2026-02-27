@@ -115,7 +115,7 @@ sudo mkdir -p "$STAGING"
     sudo mkdir -p "$(dirname "$REPO_DIR")"
     sudo chown iterate:iterate "${STAGING}" "${STAGING}/src" "${STAGING}/src/github.com" "${STAGING}/src/github.com/iterate" 2>/dev/null || true
 
-    REPO_URL="${ITERATE_REPO_URL:-https://github.com/nichochar/iterate.git}"
+    REPO_URL="${ITERATE_REPO_URL:-https://github.com/iterate/iterate.git}"
     REPO_REF="${GIT_SHA:-main}"
 
     # Wait for egress proxy (port 8888) — needed for HTTPS traffic

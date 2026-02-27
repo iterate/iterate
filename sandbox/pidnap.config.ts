@@ -210,6 +210,9 @@ export default defineConfig({
           "DEBUG",
           "--print-logs",
         ],
+        // cwd must be a path that exists even during archil mount.
+        // The default cwd (ITERATE_REPO under ~) gets hidden by the bind-mount.
+        cwd: "/tmp",
       },
       envOptions: {
         // TODO: confirm why opencode needs a lower env reload delay than default.
@@ -218,6 +221,7 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
+      dependsOn: [{ process: "archil-repo-ready", condition: "completed" }],
     },
     {
       name: "trace-viewer",
