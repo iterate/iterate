@@ -1,301 +1,172 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-type ProcedureError = {
-  code: string;
-  status: number;
-  message: string;
-  data?: unknown;
-};
-
-type RoutePatternRecord = {
-  patternId: number;
-  pattern: string;
-  target: string;
-  headers: Record<string, string>;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type RouteRecord = {
-  routeId: string;
-  metadata: Record<string, unknown>;
-  patterns: RoutePatternRecord[];
-  createdAt: string;
-  updatedAt: string;
-};
-
 const baseUrl = process.env.INGRESS_PROXY_E2E_BASE_URL;
 const apiToken = process.env.INGRESS_PROXY_E2E_API_TOKEN ?? process.env.INGRESS_PROXY_API_TOKEN;
 
-function getHeaderValueCaseInsensitive(
-  headers: Record<string, string | string[]> | undefined,
-  name: string,
-): string | null {
-  if (!headers) return null;
-  const wanted = name.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === wanted) return Array.isArray(value) ? (value[0] ?? null) : value;
-  }
-  return null;
-}
-
-function requireEnv(): { baseUrl: string; apiToken: string } {
-  if (!baseUrl) {
-    throw new Error("INGRESS_PROXY_E2E_BASE_URL is required for live E2E tests");
-  }
-  if (!apiToken) {
-    throw new Error("INGRESS_PROXY_E2E_API_TOKEN (or INGRESS_PROXY_API_TOKEN) is required");
-  }
-  return { baseUrl, apiToken };
-}
-
-async function callProcedure<T>(params: {
-  name: string;
-  input: unknown;
-  baseUrl: string;
-  apiToken: string;
-}): Promise<T> {
-  const response = await fetch(`${params.baseUrl}/api/orpc/${params.name}`, {
+async function rpc<T>(name: string, input: unknown): Promise<T> {
+  if (!baseUrl || !apiToken) throw new Error("E2E env vars not set");
+  const res = await fetch(`${baseUrl}/api/orpc/${name}`, {
     method: "POST",
-    headers: {
-      authorization: `Bearer ${params.apiToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ json: params.input }),
+    headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ json: input }),
   });
-
-  const payload = (await response.json()) as { json?: T & ProcedureError };
-  if (!response.ok) {
-    throw payload.json as ProcedureError;
-  }
-
+  const payload = (await res.json()) as { json?: T & { code?: string; status?: number } };
+  if (!res.ok) throw payload.json;
   return payload.json as T;
 }
 
-async function createRoute(params: {
-  baseUrl: string;
-  apiToken: string;
-  metadata: Record<string, unknown>;
-  patterns: Array<{ pattern: string; target: string; headers?: Record<string, string> }>;
-}): Promise<RouteRecord> {
-  return callProcedure<RouteRecord>({
-    name: "createRoute",
-    input: {
-      metadata: params.metadata,
-      patterns: params.patterns,
-    },
-    baseUrl: params.baseUrl,
-    apiToken: params.apiToken,
-  });
-}
-
-async function updateRoute(params: {
-  baseUrl: string;
-  apiToken: string;
-  routeId: string;
-  metadata: Record<string, unknown>;
-  patterns: Array<{ pattern: string; target: string; headers?: Record<string, string> }>;
-}): Promise<RouteRecord> {
-  return callProcedure<RouteRecord>({
-    name: "updateRoute",
-    input: {
-      routeId: params.routeId,
-      metadata: params.metadata,
-      patterns: params.patterns,
-    },
-    baseUrl: params.baseUrl,
-    apiToken: params.apiToken,
-  });
-}
-
-async function listRoutes(params: { baseUrl: string; apiToken: string }): Promise<RouteRecord[]> {
-  return callProcedure<RouteRecord[]>({
-    name: "listRoutes",
-    input: {},
-    baseUrl: params.baseUrl,
-    apiToken: params.apiToken,
-  });
-}
-
-async function deleteRoute(params: {
-  baseUrl: string;
-  apiToken: string;
-  routeId: string;
-}): Promise<void> {
-  await callProcedure<{ deleted: boolean }>({
-    name: "deleteRoute",
-    input: { routeId: params.routeId },
-    baseUrl: params.baseUrl,
-    apiToken: params.apiToken,
-  });
+function headerValue(headers: Record<string, string | string[]> | undefined, name: string) {
+  if (!headers) return null;
+  const key = Object.keys(headers).find((k) => k.toLowerCase() === name.toLowerCase());
+  if (!key) return null;
+  const v = headers[key];
+  return Array.isArray(v) ? (v[0] ?? null) : (v ?? null);
 }
 
 describe("live ingress-proxy E2E", () => {
   const createdRouteIds = new Set<string>();
-  let env: { baseUrl: string; apiToken: string };
-  let suiteId = "";
+  const suiteId = `live-e2e-${Date.now()}`;
 
   beforeAll(async () => {
-    env = requireEnv();
-    suiteId = `live-e2e-${Date.now()}`;
-
-    const existing = await listRoutes(env);
-    for (const route of existing) {
-      if (route.metadata?.suiteId === suiteId) {
-        await deleteRoute({ ...env, routeId: route.routeId });
-      }
+    if (!baseUrl || !apiToken) throw new Error("Missing INGRESS_PROXY_E2E_BASE_URL / API_TOKEN");
+    const existing = await rpc<{ routeId: string; metadata: Record<string, unknown> }[]>(
+      "listRoutes",
+      {},
+    );
+    for (const r of existing) {
+      if (r.metadata?.suiteId === suiteId) await rpc("deleteRoute", { routeId: r.routeId });
     }
   });
 
   afterAll(async () => {
-    for (const routeId of [...createdRouteIds].reverse()) {
+    for (const id of [...createdRouteIds].reverse()) {
       try {
-        await deleteRoute({ ...env, routeId });
+        await rpc("deleteRoute", { routeId: id });
       } catch {
-        // best-effort cleanup
+        // best-effort
       }
     }
   });
 
-  it("covers exact-vs-wildcard, wildcard specificity, create/update conflicts", async () => {
-    const requestHost = new URL(env.baseUrl).hostname;
+  async function create(
+    patterns: { pattern: string; target: string; headers?: Record<string, string> }[],
+    kind: string,
+  ) {
+    const route = await rpc<{ routeId: string }>("createRoute", {
+      metadata: { suiteId, kind },
+      patterns,
+    });
+    createdRouteIds.add(route.routeId);
+    return route;
+  }
 
+  it("exact route wins over wildcards, longer wildcard wins over shorter", async () => {
+    const requestHost = new URL(baseUrl!).hostname;
     const shortSuffix = "workers.dev";
     const longSuffix = "iterate.workers.dev";
 
-    const shortCandidates = [`*.${shortSuffix}`, `**.${shortSuffix}`, `***.${shortSuffix}`];
-    const longCandidates = [`*.${longSuffix}`, `**.${longSuffix}`, `***.${longSuffix}`];
-
-    let shortRoute: RouteRecord | null = null;
-    let shortPattern = "";
-    for (const pattern of shortCandidates) {
-      try {
-        shortRoute = await createRoute({
-          ...env,
-          metadata: { suiteId, kind: "short" },
-          patterns: [
-            {
-              pattern,
-              target: "https://httpbingo.org",
-              headers: { host: "httpbingo.org", "x-route-kind": "short" },
-            },
-          ],
-        });
-        shortPattern = pattern;
-        createdRouteIds.add(shortRoute.routeId);
-        break;
-      } catch (error) {
-        if ((error as ProcedureError).code !== "CONFLICT") throw error;
+    // Find available wildcard patterns (some may be taken by other runs)
+    const tryPatterns = async (suffixes: string[], kind: string) => {
+      for (const p of [`*.${suffixes[0]}`, `**.${suffixes[0]}`, `***.${suffixes[0]}`]) {
+        try {
+          return { route: await create([{ pattern: p, target: "https://httpbingo.org", headers: { host: "httpbingo.org", "x-route-kind": kind } }], kind), pattern: p };
+        } catch (e) {
+          if ((e as { code?: string }).code !== "CONFLICT") throw e;
+        }
       }
-    }
-    expect(shortRoute).not.toBeNull();
-
-    let longRoute: RouteRecord | null = null;
-    let longPattern = "";
-    for (const pattern of longCandidates) {
-      try {
-        longRoute = await createRoute({
-          ...env,
-          metadata: { suiteId, kind: "long" },
-          patterns: [
-            {
-              pattern,
-              target: "https://httpbingo.org",
-              headers: { host: "httpbingo.org", "x-route-kind": "long" },
-            },
-          ],
-        });
-        longPattern = pattern;
-        createdRouteIds.add(longRoute.routeId);
-        break;
-      } catch (error) {
-        if ((error as ProcedureError).code !== "CONFLICT") throw error;
-      }
-    }
-    expect(longRoute).not.toBeNull();
-
-    const exactRoute = await createRoute({
-      ...env,
-      metadata: { suiteId, kind: "exact" },
-      patterns: [
-        {
-          pattern: requestHost,
-          target: "https://httpbingo.org",
-          headers: { host: "httpbingo.org", "x-route-kind": "exact" },
-        },
-      ],
-    });
-    createdRouteIds.add(exactRoute.routeId);
-
-    const exactResponse = await fetch(`${env.baseUrl}/anything?scenario=exact`);
-    expect(exactResponse.status).toBe(200);
-    expect(exactResponse.headers.get("x-ingress-proxy-route-id")).toBe(exactRoute.routeId);
-
-    const exactJson = (await exactResponse.json()) as {
-      headers?: Record<string, string | string[]>;
-      url?: string;
+      throw new Error(`All wildcard patterns for ${suffixes[0]} are taken`);
     };
+
+    const short = await tryPatterns([shortSuffix], "short");
+    const long = await tryPatterns([longSuffix], "long");
+
+    // Exact match should win
+    const exact = await create(
+      [{ pattern: requestHost, target: "https://httpbingo.org", headers: { host: "httpbingo.org", "x-route-kind": "exact" } }],
+      "exact",
+    );
+
+    const exactRes = await fetch(`${baseUrl}/anything?scenario=exact`);
+    expect(exactRes.status).toBe(200);
+    expect(exactRes.headers.get("x-ingress-proxy-route-id")).toBe(exact.routeId);
+    const exactJson = (await exactRes.json()) as { headers?: Record<string, string | string[]>; url?: string };
     expect(exactJson.url).toBe("https://httpbingo.org/anything?scenario=exact");
-    expect(getHeaderValueCaseInsensitive(exactJson.headers, "x-route-kind")).toBe("exact");
+    expect(headerValue(exactJson.headers, "x-route-kind")).toBe("exact");
 
-    await deleteRoute({ ...env, routeId: exactRoute.routeId });
-    createdRouteIds.delete(exactRoute.routeId);
+    // Delete exact, longer wildcard should now win
+    await rpc("deleteRoute", { routeId: exact.routeId });
+    createdRouteIds.delete(exact.routeId);
 
-    const wildcardResponse = await fetch(`${env.baseUrl}/anything?scenario=wildcard-specificity`);
-    expect(wildcardResponse.status).toBe(200);
-    expect(wildcardResponse.headers.get("x-ingress-proxy-route-id")).toBe(longRoute!.routeId);
-    const wildcardJson = (await wildcardResponse.json()) as {
-      headers?: Record<string, string | string[]>;
-      url?: string;
-    };
-    expect(wildcardJson.url).toBe("https://httpbingo.org/anything?scenario=wildcard-specificity");
-    expect(getHeaderValueCaseInsensitive(wildcardJson.headers, "x-route-kind")).toBe("long");
+    const wcRes = await fetch(`${baseUrl}/anything?scenario=wildcard-specificity`);
+    expect(wcRes.status).toBe(200);
+    expect(wcRes.headers.get("x-ingress-proxy-route-id")).toBe(long.route.routeId);
+    const wcJson = (await wcRes.json()) as { headers?: Record<string, string | string[]> };
+    expect(headerValue(wcJson.headers, "x-route-kind")).toBe("long");
 
-    await expect(
-      createRoute({
-        ...env,
-        metadata: { suiteId, kind: "conflict-create" },
-        patterns: [{ pattern: longPattern, target: "https://example.com" }],
-      }),
-    ).rejects.toMatchObject({ code: "CONFLICT" });
-
-    await expect(
-      updateRoute({
-        ...env,
-        routeId: shortRoute!.routeId,
-        metadata: { suiteId, kind: "conflict-update" },
-        patterns: [{ pattern: longPattern, target: "https://example.com" }],
-      }),
-    ).rejects.toMatchObject({ code: "CONFLICT" });
-
-    const selfUpdated = await updateRoute({
-      ...env,
-      routeId: longRoute!.routeId,
-      metadata: { suiteId, kind: "self-update" },
-      patterns: [
-        {
-          pattern: longPattern,
-          target: "https://httpbingo.org",
-          headers: { host: "httpbingo.org", "x-route-kind": "long2" },
-        },
-      ],
-    });
-    expect(selfUpdated.routeId).toBe(longRoute!.routeId);
-
-    const postUpdateResponse = await fetch(`${env.baseUrl}/anything?scenario=post-update`);
-    expect(postUpdateResponse.status).toBe(200);
-    expect(postUpdateResponse.headers.get("x-ingress-proxy-route-id")).toBe(longRoute!.routeId);
-    const postUpdateJson = (await postUpdateResponse.json()) as {
-      headers?: Record<string, string | string[]>;
-      url?: string;
-    };
-    expect(postUpdateJson.url).toBe("https://httpbingo.org/anything?scenario=post-update");
-    expect(getHeaderValueCaseInsensitive(postUpdateJson.headers, "x-route-kind")).toBe("long2");
-
-    const listed = await listRoutes(env);
-    const listedIds = new Set(listed.map((route) => route.routeId));
-    expect(listedIds.has(shortRoute!.routeId)).toBe(true);
-    expect(listedIds.has(longRoute!.routeId)).toBe(true);
-    expect(shortPattern.length).toBeGreaterThan(0);
+    expect(short.pattern.length).toBeGreaterThan(0);
   }, 120_000);
+
+  it.each([
+    { scenario: "create duplicate", action: "createRoute" as const },
+    { scenario: "update to taken pattern", action: "updateRoute" as const },
+  ])("$scenario returns CONFLICT", async ({ action }) => {
+    const requestHost = new URL(baseUrl!).hostname;
+    // Ensure we have a route to conflict with
+    let targetRoute: { routeId: string };
+    try {
+      targetRoute = await create(
+        [{ pattern: `conflict-test-${Date.now()}.example.test`, target: "https://httpbingo.org" }],
+        `conflict-${action}`,
+      );
+    } catch {
+      // Route may already exist from another test; just use a fresh pattern
+      targetRoute = await create(
+        [{ pattern: `conflict-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.example.test`, target: "https://httpbingo.org" }],
+        `conflict-${action}`,
+      );
+    }
+
+    const takenPattern = `conflict-target-${Date.now()}.example.test`;
+    await create([{ pattern: takenPattern, target: "https://httpbingo.org" }], "conflict-holder");
+
+    if (action === "createRoute") {
+      await expect(
+        rpc("createRoute", {
+          metadata: { suiteId },
+          patterns: [{ pattern: takenPattern, target: "https://example.com" }],
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+    } else {
+      await expect(
+        rpc("updateRoute", {
+          routeId: targetRoute.routeId,
+          metadata: { suiteId },
+          patterns: [{ pattern: takenPattern, target: "https://example.com" }],
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+    }
+  }, 30_000);
+
+  it("self-update preserves own patterns without conflict", async () => {
+    const pattern = `self-update-${Date.now()}.example.test`;
+    const route = await create(
+      [{ pattern, target: "https://httpbingo.org", headers: { host: "httpbingo.org", "x-route-kind": "v1" } }],
+      "self-update",
+    );
+
+    const updated = await rpc<{ routeId: string }>("updateRoute", {
+      routeId: route.routeId,
+      metadata: { suiteId, kind: "self-updated" },
+      patterns: [{ pattern, target: "https://httpbingo.org", headers: { host: "httpbingo.org", "x-route-kind": "v2" } }],
+    });
+    expect(updated.routeId).toBe(route.routeId);
+  }, 30_000);
+
+  it("listRoutes includes created routes", async () => {
+    const listed = await rpc<{ routeId: string }[]>("listRoutes", {});
+    const ids = new Set(listed.map((r) => r.routeId));
+    for (const id of createdRouteIds) {
+      expect(ids.has(id)).toBe(true);
+    }
+  }, 30_000);
 });

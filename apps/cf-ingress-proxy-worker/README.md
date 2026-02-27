@@ -56,17 +56,11 @@ All endpoints require `Authorization: Bearer <INGRESS_PROXY_API_TOKEN>`.
 - required: `DB`, `INGRESS_PROXY_API_TOKEN`
 - defaulted (non-secret): `TYPEID_PREFIX` (default `ipr`)
 
-`manifest.ts` exports:
-
-- `name: "ingress-proxy"`
-- required env schema
-
 ## Deploy
 
-Alchemy manages worker + D1 resources.
+Alchemy manages worker + D1 resources. `WORKER_NAME` env var controls both the Worker and D1 database name.
 
-- worker name: `ingress-proxy`
-- D1 name: `ingress-proxy-routes` (prod)
+- production: `WORKER_NAME=ingress-proxy`
 - D1 schema applied via `migrations/`
 
 ## Tests

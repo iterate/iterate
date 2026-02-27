@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "doppler run --config dev -- sh -c 'APP_STAGE=dev tsx ./alchemy.run.ts cli --dev --stage \"$APP_STAGE\"'",
-    "deploy:prd": "doppler run --config prd -- sh -c 'APP_STAGE=prd tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
+    "dev": "doppler run --config dev -- sh -c 'WORKER_NAME=ingress-proxy-dev APP_STAGE=dev tsx ./alchemy.run.ts cli --dev'",
+    "deploy:prd": "doppler run --config prd -- sh -c 'WORKER_NAME=ingress-proxy APP_STAGE=prd tsx ./alchemy.run.ts cli deploy'",
     "deploy": "pnpm run deploy:prd",
     "test": "vitest run",
     "test:e2e-live": "vitest run --config ./vitest.live.config.ts",

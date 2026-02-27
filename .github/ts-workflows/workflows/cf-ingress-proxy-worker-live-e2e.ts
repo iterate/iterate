@@ -24,15 +24,20 @@ export default workflow({
       "timeout-minutes": 20,
       env: {
         ALCHEMY_CI_STATE_STORE_CHECK: "false",
+        WORKER_NAME:
+          "ipr-e2e-pr${{ github.event.pull_request.number || github.run_id }}-${{ github.run_id }}-${{ github.run_attempt }}",
       },
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "stg" }),
         {
-          name: "Set ephemeral stage name",
+          id: "secrets",
+          name: "Generate ephemeral API token",
           run: [
             "set -euo pipefail",
-            'echo "APP_STAGE=pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_ENV"',
+            'token="$(openssl rand -base64 32)"',
+            'echo "::add-mask::$token"',
+            'echo "api_token=$token" >> "$GITHUB_OUTPUT"',
           ].join("\n"),
         },
         {
@@ -41,11 +46,12 @@ export default workflow({
           "working-directory": "apps/cf-ingress-proxy-worker",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+            INGRESS_PROXY_API_TOKEN: "${{ steps.secrets.outputs.api_token }}",
           },
           run: [
             "set -euo pipefail",
             'deploy_log="$(mktemp)"',
-            `doppler run --config stg -- sh -c 'APP_STAGE="$APP_STAGE" pnpm exec tsx ./alchemy.run.ts cli deploy --stage "$APP_STAGE"' | tee "$deploy_log"`,
+            `doppler run --config stg -- sh -c 'WORKER_NAME="$WORKER_NAME" INGRESS_PROXY_API_TOKEN="$INGRESS_PROXY_API_TOKEN" pnpm exec tsx ./alchemy.run.ts cli deploy' | tee "$deploy_log"`,
             'base_url="$(grep -Eo \'https://[^[:space:]]+\' "$deploy_log" | tail -n 1)"',
             'base_url="${base_url%/}"',
             'if [ -z "$base_url" ]; then',
@@ -60,12 +66,12 @@ export default workflow({
           name: "Run live Vitest E2E against ephemeral deployment",
           "working-directory": "apps/cf-ingress-proxy-worker",
           env: {
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             INGRESS_PROXY_E2E_BASE_URL: "${{ steps.deploy.outputs.base_url }}",
+            INGRESS_PROXY_E2E_API_TOKEN: "${{ steps.secrets.outputs.api_token }}",
           },
           run: [
             "set -euo pipefail",
-            `doppler run --config stg -- sh -c 'export INGRESS_PROXY_E2E_BASE_URL="$INGRESS_PROXY_E2E_BASE_URL"; export INGRESS_PROXY_E2E_API_TOKEN="\${INGRESS_PROXY_E2E_API_TOKEN:-\${INGRESS_PROXY_API_TOKEN:-$CF_PROXY_WORKER_API_TOKEN}}"; pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live'`,
+            "pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live",
           ].join("\n"),
         },
         {
@@ -74,14 +80,15 @@ export default workflow({
           "working-directory": "apps/cf-ingress-proxy-worker",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+            INGRESS_PROXY_API_TOKEN: "${{ steps.secrets.outputs.api_token }}",
           },
           run: [
             "set -euo pipefail",
-            'if [ -z "${APP_STAGE:-}" ]; then',
-            '  echo "APP_STAGE not set; skipping teardown"',
+            'if [ -z "${WORKER_NAME:-}" ]; then',
+            '  echo "WORKER_NAME not set; skipping teardown"',
             "  exit 0",
             "fi",
-            `doppler run --config stg -- sh -c 'pnpm exec tsx ./alchemy.run.ts cli --destroy --stage "$APP_STAGE"' || echo "Teardown command failed; check Alchemy state manually for $APP_STAGE"`,
+            `doppler run --config stg -- sh -c 'WORKER_NAME="$WORKER_NAME" INGRESS_PROXY_API_TOKEN="$INGRESS_PROXY_API_TOKEN" pnpm exec tsx ./alchemy.run.ts cli --destroy' || echo "Teardown failed; check Alchemy state for $WORKER_NAME"`,
           ].join("\n"),
         },
       ],

@@ -1,10 +1,5 @@
 import { z } from "zod/v4";
 
-const D1Binding = z.custom<D1Database>(
-  (value) => typeof value === "object" && value !== null && "prepare" in value,
-  { message: "DB binding is required" },
-);
-
 const TypeIdPrefix = z
   .string()
   .trim()
@@ -15,7 +10,7 @@ const TypeIdPrefix = z
   });
 
 export const WorkerEnv = z.object({
-  DB: D1Binding,
+  DB: z.custom<D1Database>((v) => typeof v === "object" && v !== null && "prepare" in v),
   INGRESS_PROXY_API_TOKEN: z.string().trim().min(1, "INGRESS_PROXY_API_TOKEN is required"),
   TYPEID_PREFIX: TypeIdPrefix,
 });
