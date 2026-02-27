@@ -52,3 +52,4 @@ DEV_TUNNEL=0 pnpm dev        # disabled (also: false, or unset)
 
 See `sandbox/README.md` for provider strategy, image tagging, and CI flow.
 Fly is the primary deployment provider; Daytona is supported for one-off manual testing only.
+
