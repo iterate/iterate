@@ -181,8 +181,8 @@ RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${SANDBOX_CLAUDE_CODE_V
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
 ENV PATH="/home/iterate/.opencode/bin:$PATH"
 
-# Pre-download Chromium for agent-browser (pinned to version bundled with agent-browser@0.13.0)
-RUN agent-browser install
+# agent-browser chromium is installed on first boot via archil-mount.sh (persists on archil disk).
+# This saves ~700MB from the Docker image.
 
 # Ensure wrapper scripts win after all PATH modifications.
 ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
@@ -196,15 +196,7 @@ RUN opencode --version && (opencode run --model opencode/kimi-k2.5-free "Hello" 
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 WORKDIR /home/iterate/src/github.com/iterate/iterate
 
-# Copy lockfile first (dependency layer)
-# This way, unless the dependencies change, we don't have to download from pnpm
-# TODO: consider BuildKit cache mount for pnpm store to speed CI builds.
-COPY --chown=iterate:iterate package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN ARCH=$(dpkg --print-architecture) && \
-    if [ "$ARCH" = "amd64" ]; then PNPM_ARCH="x64"; else PNPM_ARCH="arm64"; fi && \
-    pnpm fetch --config.platform=linux --config.arch="$PNPM_ARCH" --config.libc=glibc
-
-# Copy repo, exclude git metadata from context.
+# Copy repo (exclude git metadata and node_modules from context).
 # If .git is a worktree file, replace with dir
 COPY --chown=iterate:iterate --exclude=.git --exclude=.git/ --exclude=node_modules . .
 RUN if [ -f .git ]; then rm .git && mkdir .git; fi
@@ -212,8 +204,12 @@ RUN if [ -f .git ]; then rm .git && mkdir .git; fi
 # Ensure shell scripts are executable (git may not preserve permissions on all platforms)
 RUN chmod +x sandbox/*.sh sandbox/providers/docker/*.sh
 
-# Install dependencies (cacheable - only reruns when lockfile changes)
-RUN pnpm install --frozen-lockfile --offline
+# Install dependencies then clean the pnpm content-addressable store.
+# The store is only needed during install — node_modules/.pnpm has hardlinks
+# that survive store deletion. This saves ~1.7GB from the image.
+# On machines with archil, deps are cached on the persistent disk across boots.
+RUN pnpm install --frozen-lockfile && \
+    rm -rf /home/iterate/.local/share/pnpm/store
 
 # Run post-repo-sync steps (cacheable - only reruns when source changes)
 RUN bash "$ITERATE_REPO/sandbox/after-repo-sync-steps.sh"

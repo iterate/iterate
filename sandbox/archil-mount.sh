@@ -80,7 +80,10 @@ sudo mkdir -p "$STAGING"
   while ! grep -q "$STAGING" /proc/mounts 2>/dev/null; do sleep 1; done
   echo "[archil] Archil mounted at ${STAGING}"
 
-  sudo chown -R iterate:iterate "$STAGING"
+  # Only chown the mount point itself (not -R). Files inside are already owned
+  # by iterate from previous boots or will be created by iterate.
+  # Recursive chown over FUSE is extremely slow (minutes for large dirs).
+  sudo chown iterate:iterate "$STAGING"
 
   # Seed dotfiles/configs from image snapshot (always, to pick up config updates)
   if [[ -d /tmp/home-seed ]]; then
@@ -151,6 +154,10 @@ sudo mkdir -p "$STAGING"
       # Run post-sync steps (builds daemon frontend, runs migrations, etc.)
       echo "[archil] Running post-sync steps"
       bash "$REPO_DIR/sandbox/after-repo-sync-steps.sh" 2>&1
+
+      # Install Chromium for agent-browser (persists on archil disk across machines)
+      echo "[archil] Installing agent-browser chromium"
+      agent-browser install 2>&1 || echo "[archil] Warning: agent-browser install failed"
 
       # Init git repo for tools that need it
       git add . 2>/dev/null || true
