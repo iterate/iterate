@@ -164,6 +164,21 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow", () => {
       return new Response("unmatched", { status: 599 });
     };
 
+    await using deployment = await projectDeployment({
+      image,
+      name: `jonasland-e2e-slack-${randomUUID()}`,
+      extraHosts: ["host.docker.internal:host-gateway"],
+      runtimeProcessTargets: ["caddy", "registry", "events"],
+      env: {
+        ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
+      },
+    });
+
+    await startOnDemandProcess(deployment, "egress-proxy");
+    await startOnDemandProcess(deployment, "agents");
+    await startOnDemandProcess(deployment, "opencode-wrapper");
+    await startOnDemandProcess(deployment, "slack");
+
     const llmReq = proxy.waitFor(
       (request) => {
         const url = new URL(request.url);
@@ -179,21 +194,6 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow", () => {
       },
       { timeout: 30_000 },
     );
-
-    await using deployment = await projectDeployment({
-      image,
-      name: `jonasland-e2e-slack-${randomUUID()}`,
-      extraHosts: ["host.docker.internal:host-gateway"],
-      env: {
-        ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
-      },
-    });
-
-    await startOnDemandProcess(deployment, "egress-proxy");
-    await startOnDemandProcess(deployment, "opencode");
-    await startOnDemandProcess(deployment, "agents");
-    await startOnDemandProcess(deployment, "opencode-wrapper");
-    await startOnDemandProcess(deployment, "slack");
 
     const webhookPayload = {
       event: {

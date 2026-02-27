@@ -467,6 +467,7 @@ export async function projectDeployment(params: {
   extraHosts?: string[];
   capAdd?: string[];
   env?: Record<string, string> | string[];
+  runtimeProcessTargets?: Array<"caddy" | "registry" | "events" | "daemon">;
 }): Promise<ProjectDeployment> {
   const exposedPorts = ["80/tcp"];
   const capAdd = params.capAdd ?? ["NET_ADMIN"];
@@ -502,12 +503,19 @@ export async function projectDeployment(params: {
     }),
   });
 
+  const runtimeProcessTargets = params.runtimeProcessTargets ?? [
+    "caddy",
+    "registry",
+    "events",
+    "daemon",
+  ];
+
   const waitForRuntimeReady = async () => {
     await waitForHttpOk({
       url: `${ingressBaseUrl}/`,
       timeoutMs: 45_000,
     });
-    for (const processName of ["caddy", "registry", "events", "daemon"] as const) {
+    for (const processName of runtimeProcessTargets) {
       await waitForPidnapProcessRunning({
         client: pidnap,
         target: processName,
