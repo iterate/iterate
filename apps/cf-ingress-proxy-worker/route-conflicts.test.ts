@@ -28,10 +28,14 @@ async function resetDb() {
 }
 
 async function seed(routeId: string, pattern: string) {
-  await env.DB.prepare(`INSERT OR IGNORE INTO routes (id, metadata) VALUES (?1, '{}')`).bind(routeId).run();
+  await env.DB.prepare(`INSERT OR IGNORE INTO routes (id, metadata) VALUES (?1, '{}')`)
+    .bind(routeId)
+    .run();
   await env.DB.prepare(
     `INSERT INTO route_patterns (route_id, pattern, target, headers) VALUES (?1, ?2, 'https://t.dev', '{}')`,
-  ).bind(routeId, pattern).run();
+  )
+    .bind(routeId, pattern)
+    .run();
 }
 
 beforeEach(resetDb);

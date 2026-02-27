@@ -69,7 +69,19 @@ describe("live ingress-proxy E2E", () => {
     const tryPatterns = async (suffixes: string[], kind: string) => {
       for (const p of [`*.${suffixes[0]}`, `**.${suffixes[0]}`, `***.${suffixes[0]}`]) {
         try {
-          return { route: await create([{ pattern: p, target: "https://httpbingo.org", headers: { host: "httpbingo.org", "x-route-kind": kind } }], kind), pattern: p };
+          return {
+            route: await create(
+              [
+                {
+                  pattern: p,
+                  target: "https://httpbingo.org",
+                  headers: { host: "httpbingo.org", "x-route-kind": kind },
+                },
+              ],
+              kind,
+            ),
+            pattern: p,
+          };
         } catch (e) {
           if ((e as { code?: string }).code !== "CONFLICT") throw e;
         }
@@ -82,14 +94,23 @@ describe("live ingress-proxy E2E", () => {
 
     // Exact match should win
     const exact = await create(
-      [{ pattern: requestHost, target: "https://httpbingo.org", headers: { host: "httpbingo.org", "x-route-kind": "exact" } }],
+      [
+        {
+          pattern: requestHost,
+          target: "https://httpbingo.org",
+          headers: { host: "httpbingo.org", "x-route-kind": "exact" },
+        },
+      ],
       "exact",
     );
 
     const exactRes = await fetch(`${baseUrl}/anything?scenario=exact`);
     expect(exactRes.status).toBe(200);
     expect(exactRes.headers.get("x-ingress-proxy-route-id")).toBe(exact.routeId);
-    const exactJson = (await exactRes.json()) as { headers?: Record<string, string | string[]>; url?: string };
+    const exactJson = (await exactRes.json()) as {
+      headers?: Record<string, string | string[]>;
+      url?: string;
+    };
     expect(exactJson.url).toBe("https://httpbingo.org/anything?scenario=exact");
     expect(headerValue(exactJson.headers, "x-route-kind")).toBe("exact");
 
@@ -109,55 +130,81 @@ describe("live ingress-proxy E2E", () => {
   it.each([
     { scenario: "create duplicate", action: "createRoute" as const },
     { scenario: "update to taken pattern", action: "updateRoute" as const },
-  ])("$scenario returns CONFLICT", async ({ action }) => {
-    const requestHost = new URL(baseUrl!).hostname;
-    // Ensure we have a route to conflict with
-    let targetRoute: { routeId: string };
-    try {
-      targetRoute = await create(
-        [{ pattern: `conflict-test-${Date.now()}.example.test`, target: "https://httpbingo.org" }],
-        `conflict-${action}`,
-      );
-    } catch {
-      // Route may already exist from another test; just use a fresh pattern
-      targetRoute = await create(
-        [{ pattern: `conflict-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.example.test`, target: "https://httpbingo.org" }],
-        `conflict-${action}`,
-      );
-    }
+  ])(
+    "$scenario returns CONFLICT",
+    async ({ action }) => {
+      const requestHost = new URL(baseUrl!).hostname;
+      // Ensure we have a route to conflict with
+      let targetRoute: { routeId: string };
+      try {
+        targetRoute = await create(
+          [
+            {
+              pattern: `conflict-test-${Date.now()}.example.test`,
+              target: "https://httpbingo.org",
+            },
+          ],
+          `conflict-${action}`,
+        );
+      } catch {
+        // Route may already exist from another test; just use a fresh pattern
+        targetRoute = await create(
+          [
+            {
+              pattern: `conflict-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.example.test`,
+              target: "https://httpbingo.org",
+            },
+          ],
+          `conflict-${action}`,
+        );
+      }
 
-    const takenPattern = `conflict-target-${Date.now()}.example.test`;
-    await create([{ pattern: takenPattern, target: "https://httpbingo.org" }], "conflict-holder");
+      const takenPattern = `conflict-target-${Date.now()}.example.test`;
+      await create([{ pattern: takenPattern, target: "https://httpbingo.org" }], "conflict-holder");
 
-    if (action === "createRoute") {
-      await expect(
-        rpc("createRoute", {
-          metadata: { suiteId },
-          patterns: [{ pattern: takenPattern, target: "https://example.com" }],
-        }),
-      ).rejects.toMatchObject({ code: "CONFLICT" });
-    } else {
-      await expect(
-        rpc("updateRoute", {
-          routeId: targetRoute.routeId,
-          metadata: { suiteId },
-          patterns: [{ pattern: takenPattern, target: "https://example.com" }],
-        }),
-      ).rejects.toMatchObject({ code: "CONFLICT" });
-    }
-  }, 30_000);
+      if (action === "createRoute") {
+        await expect(
+          rpc("createRoute", {
+            metadata: { suiteId },
+            patterns: [{ pattern: takenPattern, target: "https://example.com" }],
+          }),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+      } else {
+        await expect(
+          rpc("updateRoute", {
+            routeId: targetRoute.routeId,
+            metadata: { suiteId },
+            patterns: [{ pattern: takenPattern, target: "https://example.com" }],
+          }),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+      }
+    },
+    30_000,
+  );
 
   it("self-update preserves own patterns without conflict", async () => {
     const pattern = `self-update-${Date.now()}.example.test`;
     const route = await create(
-      [{ pattern, target: "https://httpbingo.org", headers: { host: "httpbingo.org", "x-route-kind": "v1" } }],
+      [
+        {
+          pattern,
+          target: "https://httpbingo.org",
+          headers: { host: "httpbingo.org", "x-route-kind": "v1" },
+        },
+      ],
       "self-update",
     );
 
     const updated = await rpc<{ routeId: string }>("updateRoute", {
       routeId: route.routeId,
       metadata: { suiteId, kind: "self-updated" },
-      patterns: [{ pattern, target: "https://httpbingo.org", headers: { host: "httpbingo.org", "x-route-kind": "v2" } }],
+      patterns: [
+        {
+          pattern,
+          target: "https://httpbingo.org",
+          headers: { host: "httpbingo.org", "x-route-kind": "v2" },
+        },
+      ],
     });
     expect(updated.routeId).toBe(route.routeId);
   }, 30_000);
