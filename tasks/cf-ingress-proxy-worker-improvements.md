@@ -142,7 +142,7 @@ At test end, print:
 
 ## Open questions
 
-1. **Schema migration strategy:** Should we have an explicit `/admin/migrate` endpoint? Or rely on Wrangler migrations? D1 supports migrations via `wrangler d1 migrations`.
+1. ~~**Schema migration strategy:**~~ **Resolved:** Use `alchemy.run.ts` D1 migrations (lightweight, already in the project).
 
 2. **Wildcard matching complexity:** Currently supports `*.suffix` only. Do we need more complex patterns (e.g. regex, path-based routing)? Probably not — keep it simple.
 
