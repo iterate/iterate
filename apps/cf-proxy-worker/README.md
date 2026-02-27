@@ -1,71 +1,105 @@
 # cf-proxy-worker
 
-Programmable ingress proxy for host-based routing on Cloudflare Workers.
+Transparent ingress proxy on Cloudflare Workers. Gives any backend instant public hostnames — no DNS propagation, no certificate provisioning, no waiting.
 
-## Why this exists
+## The problem
 
-In end-to-end and Playwright tests we need to hit one Fly machine with many different hostnames.
+You have a single server (e.g. a Fly.io machine) running multiple apps behind Caddy. You need many publicly routable hostnames to reach it — one per app, per test run, per environment. Normally this means:
 
-Example test need:
+1. Create a DNS record per hostname
+2. Wait for propagation
+3. Provision TLS certificates
+4. Wait for certificate issuance
 
-1. Start one Fly machine (single external address), running Caddy + multiple apps behind it.
-2. Create several public test hostnames.
-3. Route all those hostnames to the same Fly target, but preserve/override `Host` per route.
-4. Run tests against those hostnames to validate real host-based app behavior.
+This takes minutes to hours and doesn't scale for ephemeral environments like E2E test runs.
 
-This worker is the routing control plane for that.
+## The solution
 
-## What it does
+One wildcard DNS record + one wildcard TLS certificate + this proxy worker.
 
-- Stores routes in D1.
-- Resolves inbound hostname with exact match first, wildcard fallback.
-- Proxies request to `target` URL.
-- Rewrites `Host` to target by default, then applies route header overrides.
-- Exposes authenticated oRPC admin API:
-  - `listRoutes`
-  - `setRoute`
-  - `deleteRoute`
-- Supports route lifecycle fields:
-  - `status`
-  - `ttl_seconds`
-  - `expires_at`
-  - `expired_at`
-- TTL behavior:
-  - if a matching row is expired, resolver marks it `status=expired`, sets `expired_at`, and ignores it.
+```
+*.proxy.iterate.com  CNAME → cf-proxy-worker (Cloudflare Worker)
+```
 
-## Schema
+Now any `<anything>.proxy.iterate.com` hostname hits this worker. The worker looks up a route table to decide where to forward the request. Routes are managed via an authenticated API.
 
-`routes` table columns:
+```
+                          Client
+                            │
+                            │  https://myapp.proxy.iterate.com/api/health
+                            ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                       Cloudflare Edge                                │
+│                                                                      │
+│  *.proxy.iterate.com  ─►  cf-proxy-worker                            │
+│                                                                      │
+│     1. Extract Host header (myapp.proxy.iterate.com)                 │
+│     2. Look up route (in-memory cache → D1 fallback)                 │
+│     3. Forward request transparently (HTTP + WebSocket)              │
+│                                                                      │
+│  Admin API: /api/orpc/{listRoutes, setRoute, deleteRoute}            │
+│                                                                      │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               │
+                               ▼
+                  ┌─────────────────────────┐
+                  │      Fly.io machine      │
+                  │                          │
+                  │   ┌──────────────────┐   │
+                  │   │      Caddy       │   │
+                  │   │  routes by Host  │   │
+                  │   └──┬─────┬─────┬───┘   │
+                  │      │     │     │        │
+                  │      ▼     ▼     ▼        │
+                  │    app1  app2  app3        │
+                  └─────────────────────────┘
+```
 
-- `route` (PK)
-- `target`
-- `headers` (json text)
-- `metadata` (json text)
-- `status` (`active | expired | disabled`)
-- `ttl_seconds` (nullable)
-- `expires_at` (nullable)
-- `expired_at` (nullable)
-- `created_at`
-- `updated_at`
+The proxy is fully transparent — it forwards HTTP requests, WebSocket connections, and streaming bodies without inspecting or modifying payloads. CF Workers `fetch()` handles WebSocket upgrades natively with zero per-message overhead.
 
-Indexes:
+## How routes work
 
-- `idx_routes_status_expires_at (status, expires_at)`
-- `idx_routes_expires_at (expires_at)`
-- `idx_routes_status (status)`
+### Exact routes
 
-## Concrete Fly E2E example
+```ts
+await client.setRoute({
+  route: "myapp.proxy.iterate.com",
+  target: "https://my-fly-app.fly.dev",
+  headers: { host: "myapp.proxy.iterate.com" },
+  ttlSeconds: 3600,
+});
+```
 
-Assume one Fly app target:
+Requests to `myapp.proxy.iterate.com` are forwarded to `my-fly-app.fly.dev` with the `Host` header overridden. The route auto-expires after 1 hour.
 
-- `https://someapp.fly.dev`
+### Wildcard routes
 
-You want two hostnames for the same machine:
+```ts
+await client.setRoute({
+  route: "*.proxy.iterate.com",
+  target: "https://my-fly-app.fly.dev",
+});
+```
 
-- `app1__run123.cf-ingress-worker.com`
-- `app2__run123.cf-ingress-worker.com`
+Now `anything.proxy.iterate.com` routes to your Fly app. Exact matches always take priority over wildcards, and longer wildcard suffixes take priority over shorter ones.
 
-Configure routes:
+### Route lifecycle
+
+- `ttlSeconds` — optional auto-expiration
+- `status` — `active` | `expired` | `disabled`
+- Expired routes are lazily marked on next lookup attempt
+
+## Admin API
+
+All endpoints require `Authorization: Bearer <CF_PROXY_WORKER_API_TOKEN>`.
+
+| Endpoint | Description |
+|---|---|
+| `setRoute` | Create or update a route (upsert) |
+| `deleteRoute` | Remove a route |
+| `listRoutes` | List all routes |
+
+### Client setup
 
 ```ts
 import { createORPCClient } from "@orpc/client";
@@ -84,52 +118,58 @@ const client = createORPCClient(
       }),
   }),
 );
+```
 
+### Concrete example: E2E test with two apps
+
+```ts
+// One Fly machine, two logical apps
 await client.setRoute({
-  route: "app1__run123.cf-ingress-worker.com",
+  route: "app1__run123.proxy.iterate.com",
   target: "https://someapp.fly.dev",
-  headers: { host: "app1__run123.cf-ingress-worker.com" },
+  headers: { host: "app1__run123.proxy.iterate.com" },
   metadata: { testRun: "run123", app: "app1" },
   ttlSeconds: 3600,
 });
 
 await client.setRoute({
-  route: "app2__run123.cf-ingress-worker.com",
+  route: "app2__run123.proxy.iterate.com",
   target: "https://someapp.fly.dev",
-  headers: { host: "app2__run123.cf-ingress-worker.com" },
+  headers: { host: "app2__run123.proxy.iterate.com" },
   metadata: { testRun: "run123", app: "app2" },
   ttlSeconds: 3600,
 });
+
+// Both hostnames hit the same Fly machine.
+// Caddy inside reads the Host header and routes to the right app.
 ```
 
-Now both test hostnames hit the same Fly machine target, but each request can carry its own host identity for Caddy/internal app routing.
+## Schema
 
-## Auth
+`routes` table (D1/SQLite):
 
-Admin API requires:
-
-- `Authorization: Bearer <CF_PROXY_WORKER_API_TOKEN>`
+| Column | Type | Description |
+|---|---|---|
+| `route` | TEXT PK | Hostname pattern (`app.proxy.iterate.com` or `*.proxy.iterate.com`) |
+| `target` | TEXT | Upstream URL |
+| `headers` | TEXT (JSON) | Header overrides for upstream request |
+| `metadata` | TEXT (JSON) | Arbitrary metadata (test run ID, app name, etc.) |
+| `status` | TEXT | `active` / `expired` / `disabled` |
+| `ttl_seconds` | INTEGER | Optional TTL in seconds |
+| `expires_at` | TEXT | Computed expiration timestamp |
+| `expired_at` | TEXT | When the route was marked expired |
+| `created_at` | TEXT | Creation timestamp |
+| `updated_at` | TEXT | Last update timestamp |
 
 ## Run / deploy
 
-Deploy prod:
-
 ```bash
-pnpm --filter @iterate-com/cf-proxy-worker deploy:prd
-```
-
-Local dev:
-
-```bash
+# Local dev
 pnpm --filter @iterate-com/cf-proxy-worker dev
-```
 
-Tests:
+# Deploy to production
+pnpm --filter @iterate-com/cf-proxy-worker deploy:prd
 
-```bash
+# Unit tests
 pnpm --filter @iterate-com/cf-proxy-worker test
 ```
-
-## Future direction
-
-This same ingress pattern can also become a low-cost hosted feature: provide users a public routable URL layer for home-lab/self-hosted services, with lightweight account onboarding (for example email-based signup).
