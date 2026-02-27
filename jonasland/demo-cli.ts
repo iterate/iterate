@@ -192,7 +192,7 @@ function nsToSecondsString(value: bigint): string {
   const whole = value / 1_000_000_000n;
   const fraction = value % 1_000_000_000n;
   const fractionPart = fraction.toString().padStart(9, "0");
-  return `${whole.toString()}.${fractionPart}`.replace(/\.?0+$/, "");
+  return `${whole.toString()}.${fractionPart}`.replace(/\.?0+$/, "") || "0";
 }
 
 function toRowWhere(row: ClickstackTraceRow): string {
