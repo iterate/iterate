@@ -274,43 +274,43 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow", () => {
     await firstSlackReq;
 
     const slackDeadline = Date.now() + 90_000;
-    let observedTwoSlackMessages = false;
+    let lastSlackBodies: Array<Record<string, unknown>> = [];
+    let statusMessageExists = false;
+    let finalAnswerExists = false;
     while (Date.now() < slackDeadline) {
       const slackRecords = proxy.records.filter(
         (record) => new URL(record.request.url).pathname === "/api/chat.postMessage",
       );
       if (slackRecords.length >= 2) {
-        const slackBodies = await Promise.all(
+        lastSlackBodies = await Promise.all(
           slackRecords.map(
             async (record) => (await record.request.json()) as Record<string, unknown>,
           ),
         );
 
-        expect(
-          slackBodies.every(
-            (body) => body.channel === "C123" && body.thread_ts === "1730000000.000100",
-          ),
-        ).toBe(true);
-
-        const statusMessageExists = slackBodies.some((body) => {
+        statusMessageExists = lastSlackBodies.some((body) => {
           const text = typeof body.text === "string" ? body.text : "";
           return /thinking|responding|tool|working/i.test(text);
         });
 
-        const finalAnswerExists = slackBodies.some((body) => {
+        finalAnswerExists = lastSlackBodies.some((body) => {
           const text = typeof body.text === "string" ? body.text : "";
           if (/^:warning:/i.test(text)) return false;
           return text.length > 0 && !/thinking|responding|tool|working/i.test(text);
         });
 
-        expect(statusMessageExists).toBe(true);
-        expect(finalAnswerExists).toBe(true);
-        observedTwoSlackMessages = true;
-        break;
+        if (statusMessageExists && finalAnswerExists) break;
       }
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
-    expect(observedTwoSlackMessages).toBe(true);
+    expect(lastSlackBodies.length).toBeGreaterThanOrEqual(2);
+    expect(
+      lastSlackBodies.every(
+        (body) => body.channel === "C123" && body.thread_ts === "1730000000.000100",
+      ),
+    ).toBe(true);
+    expect(statusMessageExists).toBe(true);
+    expect(finalAnswerExists).toBe(true);
 
     const listResult = await postEventsOrpc(deployment, "listStreams", {});
     expect(listResult.exitCode).toBe(0);
