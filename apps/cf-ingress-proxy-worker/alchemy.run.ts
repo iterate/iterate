@@ -7,7 +7,10 @@ const Config = z.object({
   INGRESS_PROXY_API_TOKEN: z
     .string()
     .min(1, "INGRESS_PROXY_API_TOKEN or CF_PROXY_WORKER_API_TOKEN is required"),
-  TYPEID_PREFIX: z.string().default("ipr"),
+  TYPEID_PREFIX: z
+    .string()
+    .regex(/^[a-z]+$/, "TYPEID_PREFIX must contain lowercase letters only")
+    .default("ipr"),
   INGRESS_PROXY_ROUTE_PATTERN: z.string().optional(),
   INGRESS_PROXY_ROUTE_ZONE_ID: z.string().optional(),
 });
