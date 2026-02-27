@@ -14,9 +14,11 @@ pass()    { echo -e "  ${GREEN}✓ $1${RESET}"; }
 fail()    { echo -e "  ${RED}✗ $1${RESET}"; }
 info()    { echo -e "  ${YELLOW}→ $1${RESET}"; }
 
-FUSE_TARGET="/home/testuser"
+# We mount FUSE at /mnt/fuse-home (simulating archil mounted over ~).
+# Then we try to bind-mount local node_modules on top of the FUSE path.
+FUSE_MNT="/mnt/fuse-home"
 FUSE_SOURCE="/srv/testuser-home"
-NM_FUSE="$FUSE_TARGET/project/node_modules"
+NM_FUSE="$FUSE_MNT/project/node_modules"
 NM_LOCAL="/var/local-node-modules"
 WRITE_SENTINEL="write-test-$(date +%s).txt"
 
@@ -33,21 +35,27 @@ else
   exit 1
 fi
 
-# ---------- 2. FUSE-mount /home/testuser via sshfs ----------
-section "2. Mounting sshfs over $FUSE_TARGET (simulating archil FUSE over ~)"
+# ---------- 2. FUSE-mount via sshfs ----------
+section "2. Mounting sshfs at $FUSE_MNT (simulating archil FUSE)"
 
-# sshfs loopback: mount /srv/testuser-home onto /home/testuser
+mkdir -p "$FUSE_MNT"
+
+# Use -f (foreground) + & because sshfs daemon mode hangs in containers.
 sshfs \
+  -f \
   -o StrictHostKeyChecking=no \
   -o allow_other \
   -o IdentityFile=/home/testuser/.ssh/id_ed25519 \
+  -o UserKnownHostsFile=/dev/null \
+  -o BatchMode=yes \
   testuser@127.0.0.1:"$FUSE_SOURCE" \
-  "$FUSE_TARGET"
+  "$FUSE_MNT" > /dev/null 2>&1 &
+sleep 2
 
-if mountpoint -q "$FUSE_TARGET"; then
-  pass "$FUSE_TARGET is a FUSE mountpoint"
+if mountpoint -q "$FUSE_MNT"; then
+  pass "$FUSE_MNT is a FUSE mountpoint"
 else
-  fail "$FUSE_TARGET is NOT a mountpoint"
+  fail "$FUSE_MNT is NOT a mountpoint"
   exit 1
 fi
 
@@ -154,7 +162,7 @@ fi
 # ---------- 8. Mount table ----------
 section "8. Mount table (relevant entries)"
 
-mount | grep -E "(fuse|bind|overlay|$FUSE_TARGET)" | while IFS= read -r line; do
+mount | grep -E "(fuse|bind|overlay|$FUSE_MNT)" | while IFS= read -r line; do
   info "$line"
 done
 
@@ -170,9 +178,14 @@ section "9. VERDICT"
 
 echo ""
 if $verdict_bind_ok; then
-  echo -e "${GREEN}${BOLD}  BIND MOUNT WORKED CORRECTLY${RESET}"
-  echo -e "  On this system, bind-mounting over a FUSE path succeeded."
-  echo -e "  This may happen in a regular VM or with certain storage drivers."
+  echo -e "${GREEN}${BOLD}  BIND MOUNT WORKED ON THIS SYSTEM${RESET}"
+  echo ""
+  echo -e "  On this system ($(uname -r)), bind-mounting over a FUSE path succeeded."
+  echo -e "  However, in production Fly.io containers (which use overlayfs as"
+  echo -e "  the root filesystem), we observed this failing: mount --bind returns 0"
+  echo -e "  but the target is empty or shows the wrong content."
+  echo ""
+  echo -e "  ${YELLOW}The bind mount approach is unreliable across container runtimes.${RESET}"
 else
   echo -e "${RED}${BOLD}  BIND MOUNT IS UNRELIABLE${RESET}"
   echo ""

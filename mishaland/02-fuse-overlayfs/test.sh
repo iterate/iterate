@@ -15,14 +15,17 @@ echo ""
 
 # ── 2. Mount sshfs (loopback FUSE) ───────────────
 echo ">>> Mounting sshfs at /opt/fuse-staging (loopback FUSE mount)..."
-su - testuser -c "
-  sshfs \
-    -o StrictHostKeyChecking=no \
-    -o allow_other \
-    -o IdentityFile=/home/testuser/.ssh/id_ed25519 \
-    testuser@127.0.0.1:/home/testuser \
-    /opt/fuse-staging
-"
+# Use -f (foreground) + & because sshfs daemon mode hangs in containers.
+sshfs \
+  -f \
+  -o StrictHostKeyChecking=no \
+  -o allow_other \
+  -o BatchMode=yes \
+  -o UserKnownHostsFile=/dev/null \
+  -o IdentityFile=/home/testuser/.ssh/id_ed25519 \
+  testuser@127.0.0.1:/home/testuser \
+  /opt/fuse-staging &
+sleep 2
 echo "    sshfs mounted successfully."
 echo ""
 

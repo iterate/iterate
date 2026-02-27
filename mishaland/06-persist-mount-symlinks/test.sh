@@ -69,15 +69,19 @@ mkdir -p "$PERSIST_MNT"
 
 # Loopback sshfs: mount /srv/persist-data (local backing dir) at /mnt/persist
 # This simulates an external FUSE filesystem with realistic latency characteristics
+# Use -f (foreground) + & because sshfs daemon mode hangs in containers.
 sshfs \
+  -f \
   -o StrictHostKeyChecking=no \
   -o UserKnownHostsFile=/dev/null \
   -o IdentityFile="$HOME_DIR/.ssh/id_ed25519" \
+  -o BatchMode=yes \
   -o allow_other \
   -o reconnect \
   -o ServerAliveInterval=15 \
   testuser@127.0.0.1:/srv/persist-data \
-  "$PERSIST_MNT" 2>/dev/null
+  "$PERSIST_MNT" 2>/dev/null &
+sleep 2
 
 if mountpoint -q "$PERSIST_MNT"; then
   pass "FUSE mounted at $PERSIST_MNT"

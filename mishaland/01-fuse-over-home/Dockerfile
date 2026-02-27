@@ -2,23 +2,30 @@ FROM node:20-bookworm
 
 # Install sshfs (FUSE filesystem), openssh for the loopback trick
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    sshfs openssh-server fuse3 git time procps \
+    sshfs openssh-server fuse3 git time procps rsync \
     && rm -rf /var/lib/apt/lists/*
 
 # Allow non-root FUSE mounts with allow_other
 RUN echo 'user_allow_other' >> /etc/fuse.conf
 
 # Setup SSH for loopback sshfs
+# We create two users:
+#   - testuser: simulates the app user, home at /home/testuser (will be FUSE-mounted)
+#   - fuseuser: used only for SSH/SFTP, home at /home/fuseuser (never mounted over)
+# This avoids a circular dependency where sshd tries to cd to /home/testuser
+# which is the FUSE mount backed by the same sshd.
 RUN mkdir -p /run/sshd && \
     ssh-keygen -A && \
     useradd -m -s /bin/bash testuser && \
-    echo 'testuser:testpass' | chpasswd && \
-    mkdir -p /home/testuser/.ssh && \
-    ssh-keygen -t ed25519 -f /home/testuser/.ssh/id_ed25519 -N '' && \
-    cp /home/testuser/.ssh/id_ed25519.pub /home/testuser/.ssh/authorized_keys && \
-    chown -R testuser:testuser /home/testuser/.ssh && \
-    chmod 700 /home/testuser/.ssh && \
-    chmod 600 /home/testuser/.ssh/authorized_keys
+    useradd -m -s /bin/bash fuseuser && \
+    echo 'fuseuser:fusepass' | chpasswd && \
+    mkdir -p /root/.ssh && \
+    ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N '' && \
+    mkdir -p /home/fuseuser/.ssh && \
+    cp /root/.ssh/id_ed25519.pub /home/fuseuser/.ssh/authorized_keys && \
+    chown -R fuseuser:fuseuser /home/fuseuser/.ssh && \
+    chmod 700 /home/fuseuser/.ssh && \
+    chmod 600 /home/fuseuser/.ssh/authorized_keys
 
 # Enable pnpm
 RUN corepack enable && corepack prepare pnpm@9 --activate

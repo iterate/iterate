@@ -18,6 +18,7 @@ RUN mkdir -p /run/sshd && \
 
 # Prepare directories
 RUN mkdir -p /opt/lower-dir /opt/fuse-staging /opt/merged /opt/work && \
+    chown testuser:testuser /opt/fuse-staging && \
     echo "I am a file from the lower layer" > /opt/lower-dir/existing-file.txt
 
 RUN echo 'user_allow_other' >> /etc/fuse.conf

@@ -1,7 +1,7 @@
 FROM node:20-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    sshfs openssh-server fuse3 git time \
+    sshfs openssh-server fuse3 git time bc \
     && rm -rf /var/lib/apt/lists/*
 
 # Setup SSH for loopback sshfs

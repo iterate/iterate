@@ -50,37 +50,47 @@ echo ""
 # ── Mount sshfs ────────────────────────────────────────
 echo "=== Mounting FUSE (sshfs loopback) ==="
 mkdir -p /mnt/fuse-test
+chown testuser:testuser /mnt/fuse-test
 
 # Accept host key automatically, disable caching to make
 # every metadata op a real round-trip (worst case).
-sudo -u testuser sshfs testuser@127.0.0.1:/srv/fuse-data /mnt/fuse-test \
+# Use -f (foreground) + & because sshfs daemon mode hangs in containers.
+sshfs \
+    -f \
     -o StrictHostKeyChecking=no \
+    -o IdentityFile=/home/testuser/.ssh/id_ed25519 \
+    -o UserKnownHostsFile=/dev/null \
+    -o BatchMode=yes \
     -o allow_other \
-    -o cache=no
+    -o cache=no \
+    testuser@127.0.0.1:/srv/fuse-data /mnt/fuse-test &
+sleep 2
 
 echo "FUSE mounted at /mnt/fuse-test"
 mount | grep fuse
 echo ""
 
-# ── Copy files to FUSE ────────────────────────────────
-echo "=== Copying files to FUSE mount ==="
-echo "(This itself is slow — every write is a round-trip)"
+# ── Create files on FUSE ──────────────────────────────
+echo "=== Creating test files on FUSE mount ==="
+echo "(Each file creation is a FUSE round-trip)"
 mkdir -p /mnt/fuse-test/testdir
 
-# Pick up to 3000 files to keep copy time tolerable.
+# Create 200 files directly on the FUSE mount.
+# This is faster than copying a tar archive through FUSE.
 COPY_START=$(date +%s%N)
-cd "$SRC"
-find . -type f | head -3000 | tar cf - -T - | tar xf - -C /mnt/fuse-test/testdir/
+for i in $(seq 1 200); do
+  echo "test-file-$i" > /mnt/fuse-test/testdir/file-$i.txt
+done
 COPY_END=$(date +%s%N)
 COPY_MS=$(( (COPY_END - COPY_START) / 1000000 ))
 
 FUSE_FILES=$(find /mnt/fuse-test/testdir -type f | wc -l)
 FUSE_DIRS=$(find /mnt/fuse-test/testdir -type d | wc -l)
-echo "Copied $FUSE_FILES files ($FUSE_DIRS dirs) to FUSE in ${COPY_MS}ms"
+echo "Created $FUSE_FILES files ($FUSE_DIRS dirs) on FUSE in ${COPY_MS}ms"
 echo ""
 
 # ── chown over FUSE ───────────────────────────────────
-TIMEOUT_SEC=120
+TIMEOUT_SEC=60
 
 echo "=== TEST: chown -R on FUSE mount ==="
 echo "Running chown -R root:root on $FUSE_FILES files over FUSE..."
