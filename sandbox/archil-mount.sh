@@ -117,11 +117,11 @@ sudo mkdir -p "$STAGING"
 
     # Fix ownership of dirs that may be root-owned from shared R2 bucket stale data.
     # These are needed by pnpm, npm, opencode, etc. during first-boot install.
-    for dir in .cache .config .local .npm-global; do
-      if [[ -d "${STAGING}/${dir}" ]]; then
-        sudo chown -R iterate:iterate "${STAGING}/${dir}" 2>/dev/null || true
-      fi
+    # Create them if missing, then chown so iterate user can write.
+    for dir in .cache .config .local .local/share .local/share/pnpm .npm-global; do
+      sudo mkdir -p "${STAGING}/${dir}"
     done
+    sudo chown -R iterate:iterate "${STAGING}/.cache" "${STAGING}/.config" "${STAGING}/.local" "${STAGING}/.npm-global" 2>/dev/null || true
 
     REPO_URL="${ITERATE_REPO_URL:-https://github.com/iterate/iterate.git}"
     REPO_REF="${GIT_SHA:-main}"
