@@ -81,9 +81,6 @@ describe("GitHub Webhook Handler", () => {
         },
         project: {
           findMany: vi.fn().mockResolvedValue([]),
-        },
-        projectRepo: {
-          findMany: vi.fn().mockResolvedValue([]),
           findFirst: vi.fn().mockResolvedValue(null),
         },
         projectConnection: {
@@ -106,7 +103,10 @@ describe("GitHub Webhook Handler", () => {
     const app = new Hono();
     app.use("*", async (c, next) => {
       c.set("db" as never, mockDb as never);
-      c.env = { GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET, APP_STAGE: appStage } as never;
+      c.env = {
+        GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET,
+        APP_STAGE: appStage,
+      } as never;
       await next();
     });
     app.route("/", githubApp);
@@ -208,7 +208,10 @@ describe("GitHub Webhook Handler", () => {
         event: "workflow_run",
         payload: {
           ...validWorkflowRunPayload,
-          workflow_run: { ...validWorkflowRunPayload.workflow_run, conclusion: "failure" },
+          workflow_run: {
+            ...validWorkflowRunPayload.workflow_run,
+            conclusion: "failure",
+          },
         },
         expected: { received: true },
       },
@@ -218,7 +221,10 @@ describe("GitHub Webhook Handler", () => {
         event: "workflow_run",
         payload: {
           ...validWorkflowRunPayload,
-          workflow_run: { ...validWorkflowRunPayload.workflow_run, head_branch: "feature-branch" },
+          workflow_run: {
+            ...validWorkflowRunPayload.workflow_run,
+            head_branch: "feature-branch",
+          },
         },
         expected: { received: true },
       },
@@ -323,7 +329,9 @@ describe("GitHub Webhook Handler", () => {
             body: "PR body",
             html_url: "https://github.com/iterate/iterate/pull/34",
             user: { login: "bob" },
-            pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/34" },
+            pull_request: {
+              url: "https://api.github.com/repos/iterate/iterate/pulls/34",
+            },
           },
           comment: {
             id: 456,
@@ -337,7 +345,11 @@ describe("GitHub Webhook Handler", () => {
 
     it.each(issueCommentCases)("$name", async ({ payload, expected }) => {
       const { app } = createTestApp();
-      const res = await makeWebhookRequest({ app, payload, event: "issue_comment" });
+      const res = await makeWebhookRequest({
+        app,
+        payload,
+        event: "issue_comment",
+      });
       await expectWebhookMatch(res, expected);
     });
   });
@@ -382,7 +394,11 @@ describe("GitHub Webhook Handler", () => {
 
     it.each(pullRequestCases)("$name", async ({ payload, expected }) => {
       const { app } = createTestApp();
-      const res = await makeWebhookRequest({ app, payload, event: "pull_request" });
+      const res = await makeWebhookRequest({
+        app,
+        payload,
+        event: "pull_request",
+      });
       await expectWebhookMatch(res, expected);
     });
   });
@@ -409,7 +425,10 @@ describe("GitHub Webhook Handler", () => {
         name: "acknowledges commit_comment without APP_STAGE tag",
         payload: {
           ...validCommitCommentPayload,
-          comment: { ...validCommitCommentPayload.comment, body: "Testing [refresh]" },
+          comment: {
+            ...validCommitCommentPayload.comment,
+            body: "Testing [refresh]",
+          },
         },
         expected: { received: true },
       },
@@ -428,7 +447,11 @@ describe("GitHub Webhook Handler", () => {
 
     it.each(commitCommentCases)("$name", async ({ payload, expected }) => {
       const { app } = createTestApp("dev");
-      const res = await makeWebhookRequest({ app, payload, event: "commit_comment" });
+      const res = await makeWebhookRequest({
+        app,
+        payload,
+        event: "commit_comment",
+      });
       await expectWebhookMatch(res, expected);
     });
   });

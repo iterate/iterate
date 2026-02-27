@@ -23,6 +23,30 @@ export const workerContract = oc.router({
         }),
       )
       .output(z.object({ success: z.boolean() })),
+
+    /**
+     * Get config-repo details for the machine's project.
+     * Returns null when no config repo is configured.
+     */
+    getConfigRepo: oc
+      .input(
+        z.object({
+          machineId: z.string(),
+        }),
+      )
+      .output(
+        z.object({
+          configRepo: z
+            .object({
+              repoId: z.string(),
+              owner: z.string(),
+              name: z.string(),
+              branch: z.string(),
+              cloneUrl: z.string(),
+            })
+            .nullable(),
+        }),
+      ),
   }),
 });
 

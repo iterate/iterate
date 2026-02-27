@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { agentOrpcRouter } from "../routers/agents.ts";
+import { configRepoOrpcRouter } from "../routers/config-repo.ts";
 import type { SerializedAgent, SerializedAgentRoute } from "../routers/agents.ts";
 import { publicProcedure } from "./init.ts";
 import { getCustomerRepoPath } from "./platform.ts";
@@ -31,6 +32,10 @@ const baseProcedures = {
   }),
 };
 
-export const daemonRouter = { ...baseProcedures, ...agentOrpcRouter };
+export const daemonRouter = {
+  ...baseProcedures,
+  ...agentOrpcRouter,
+  configRepo: configRepoOrpcRouter,
+};
 
 export type { SerializedAgent, SerializedAgentRoute };

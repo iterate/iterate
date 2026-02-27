@@ -16,10 +16,6 @@ import { logger } from "../tag-logger.ts";
 import type { CloudflareEnv } from "../../env.ts";
 import { getUnifiedEnvVars } from "../utils/env-vars.ts";
 import { buildEnvFileContent } from "../utils/env-file-builder.ts";
-import {
-  getGitHubInstallationTokenWithDiagnostics,
-  getRepositoryById,
-} from "../integrations/github/github.ts";
 
 type RepoInfo = {
   url: string;
@@ -66,7 +62,7 @@ export async function resolveMachineSetupData(
   db: DB,
   env: CloudflareEnv,
   projectId: string,
-  machineId: string,
+  _machineId: string,
 ): Promise<{ envFileContent: string; repos: RepoInfo[] }> {
   const dangerousRawSecrets = env.DANGEROUS_RAW_SECRETS_ENABLED === "true";
 
@@ -76,57 +72,29 @@ export async function resolveMachineSetupData(
     encryptionSecret: dangerousRawSecrets ? env.ENCRYPTION_SECRET : undefined,
   });
 
-  // Fetch project connections and repos
+  // Fetch project config repo
   const projectData = await db.query.project.findFirst({
     where: eq(schema.project.id, projectId),
-    with: {
-      connections: {
-        where: (connection, { eq: whereEq }) => whereEq(connection.provider, "github-app"),
-      },
-      projectRepos: true,
+    columns: {
+      configRepoOwner: true,
+      configRepoName: true,
+      configRepoDefaultBranch: true,
     },
   });
-  const githubConnection = projectData?.connections[0] ?? null;
-  const projectRepos = projectData?.projectRepos ?? [];
-
-  // Get GitHub installation token for repo access
-  let installationToken: string | null = null;
-  if (githubConnection) {
-    const providerData = githubConnection.providerData as { installationId?: number };
-    const installationId = providerData.installationId;
-    if (installationId) {
-      const tokenResult = await getGitHubInstallationTokenWithDiagnostics(env, installationId);
-      installationToken = tokenResult.token;
-      if (!tokenResult.token) {
-        logger.set({ machine: { id: machineId }, project: { id: projectId } });
-        logger.warn(
-          `[machine-setup] Failed to get GitHub installation token installationId=${installationId}`,
-        );
-      }
-    }
-  }
-
-  // Resolve repo info
-  const repoResults =
-    installationToken && projectRepos.length > 0
-      ? await Promise.all(
-          projectRepos.map(async (repo): Promise<RepoInfo | null> => {
-            const repoInfo = await getRepositoryById(installationToken!, repo.externalId);
-            if (!repoInfo) {
-              logger.warn(`[machine-setup] Could not fetch repo info repoId=${repo.externalId}`);
-              return null;
-            }
-            return {
-              url: `https://github.com/${repoInfo.owner}/${repoInfo.name}.git`,
-              branch: repoInfo.defaultBranch,
-              path: `/home/iterate/src/github.com/${repoInfo.owner}/${repoInfo.name}`,
-              owner: repoInfo.owner,
-              name: repoInfo.name,
-            };
-          }),
-        )
+  const repos: RepoInfo[] =
+    projectData?.configRepoOwner &&
+    projectData?.configRepoName &&
+    projectData?.configRepoDefaultBranch
+      ? [
+          {
+            url: `https://github.com/${projectData.configRepoOwner}/${projectData.configRepoName}.git`,
+            branch: projectData.configRepoDefaultBranch,
+            path: `/home/iterate/src/github.com/${projectData.configRepoOwner}/${projectData.configRepoName}`,
+            owner: projectData.configRepoOwner,
+            name: projectData.configRepoName,
+          },
+        ]
       : [];
-  const repos = repoResults.filter((r): r is RepoInfo => r !== null);
 
   // Add daemon-specific env vars
   const daemonEnvVars = [
@@ -137,7 +105,10 @@ export async function resolveMachineSetupData(
       secret: null,
       description: null,
       egressProxyRule: null,
-      source: { type: "global" as const, description: "Iterate-provided Resend from address" },
+      source: {
+        type: "global" as const,
+        description: "Iterate-provided Resend from address",
+      },
       createdAt: null,
     },
     {
@@ -151,7 +122,9 @@ export async function resolveMachineSetupData(
     },
   ];
 
-  const envFileContent = buildEnvFileContent(daemonEnvVars, { skipProxy: dangerousRawSecrets });
+  const envFileContent = buildEnvFileContent(daemonEnvVars, {
+    skipProxy: dangerousRawSecrets,
+  });
 
   return { envFileContent, repos };
 }
@@ -257,7 +230,11 @@ export async function pushSetupToMachine(
   // Let the caller write sentinel file last — marks the full setup as complete.
   // If we crashed before here, the next retry re-writes .env and re-clones (skipping existing).
   return () =>
-    client.tool.writeFile({ path: sentinelPath, content: setupFingerprint, mode: 0o600 });
+    client.tool.writeFile({
+      path: sentinelPath,
+      content: setupFingerprint,
+      mode: 0o600,
+    });
 }
 
 /**
@@ -294,7 +271,9 @@ export async function pushEnvToRunningMachines(
         const transport = await buildDaemonTransport(machine, env);
         const client = createDaemonClient(transport);
         // Read first to skip no-op writes (avoids unnecessary pidnap restarts)
-        const existing = await client.tool.readFile({ path: "~/.iterate/.env" });
+        const existing = await client.tool.readFile({
+          path: "~/.iterate/.env",
+        });
         if (existing.exists && existing.content === envFileContent) {
           logger.set({ machine: { id: machine.id } });
           logger.info("[machine-setup] .env already up to date, skipping");

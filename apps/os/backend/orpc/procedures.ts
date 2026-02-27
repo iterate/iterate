@@ -18,7 +18,9 @@ import type { Context } from "./context.ts";
 const base = os.$context<Context>();
 
 /** Outbox plugin - injects `ctx.sendEvent(tx, output)` into every procedure */
-const outboxMiddleware = createPostProcedureConsumerPlugin(queuer, { waitUntil });
+const outboxMiddleware = createPostProcedureConsumerPlugin(queuer, {
+  waitUntil,
+});
 export const publicProcedure = base.use(outboxMiddleware);
 
 /** Protected procedure that requires authentication */
@@ -124,7 +126,6 @@ export const projectProtectedProcedure = protectedProcedure.use(
       where: eq(projectTable.slug, slug),
       with: {
         organization: true,
-        projectRepos: true,
         envVars: true,
         accessTokens: true,
         connections: true,

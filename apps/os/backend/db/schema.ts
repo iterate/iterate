@@ -1,4 +1,5 @@
 import {
+  type AnyPgColumn,
   pgTable,
   timestamp,
   text,
@@ -260,6 +261,11 @@ export const project = pgTable(
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
     sandboxProvider: t.text({ enum: [...PROJECT_SANDBOX_PROVIDER] }).notNull(),
+    configRepoId: t.text(),
+    configRepoProvider: t.text(),
+    configRepoOwner: t.text(),
+    configRepoName: t.text(),
+    configRepoDefaultBranch: t.text(),
     customDomain: t.text().unique(),
     defaultPort: t.integer(),
     ...withTimestamps,
@@ -274,7 +280,6 @@ export const projectRelations = relations(project, ({ one, many }) => ({
   }),
   events: many(event),
   machines: many(machine),
-  projectRepos: many(projectRepo),
   envVars: many(projectEnvVar),
   accessTokens: many(projectAccessToken),
   connections: many(projectConnection),
@@ -288,7 +293,7 @@ export const projectEnvVar = pgTable(
     projectId: t
       .text()
       .notNull()
-      .references(() => project.id, { onDelete: "cascade" }),
+      .references((): AnyPgColumn => project.id, { onDelete: "cascade" }),
     machineId: t.text().references(() => machine.id, { onDelete: "cascade" }),
     key: t.text().notNull(),
     value: t.text().notNull(), // Plain text - secrets go in the secret table
@@ -570,33 +575,6 @@ export const eventRelations = relations(event, ({ one }) => ({
   }),
 }));
 // #endregion ========== Events ==========
-
-// #region ========== Project Repo (simplified iterateConfigSource) ==========
-export const projectRepo = pgTable(
-  "project_repo",
-  (t) => ({
-    id: iterateId("repo"),
-    projectId: t
-      .text()
-      .notNull()
-      .references(() => project.id, { onDelete: "cascade" }),
-    provider: t.text().notNull(),
-    externalId: t.text().notNull(),
-    owner: t.text().notNull(),
-    name: t.text().notNull(),
-    defaultBranch: t.text().notNull().default("main"),
-    ...withTimestamps,
-  }),
-  (t) => [uniqueIndex("project_repo_project_owner_name_idx").on(t.projectId, t.owner, t.name)],
-);
-
-export const projectRepoRelations = relations(projectRepo, ({ one }) => ({
-  project: one(project, {
-    fields: [projectRepo.projectId],
-    references: [project.id],
-  }),
-}));
-// #endregion ========== Project Repo ==========
 
 // #region ========== Billing ==========
 export const SubscriptionStatus = [

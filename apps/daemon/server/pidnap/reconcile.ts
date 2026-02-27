@@ -46,8 +46,8 @@ function buildDesiredProcesses(config: IterateConfig): DesiredProcess[] {
   return desired;
 }
 
-export async function reconcilePidnapProcesses(): Promise<void> {
-  const cwd = getAgentWorkingDirectory();
+export async function reconcilePidnapProcesses(options?: { configCwd?: string }): Promise<void> {
+  const cwd = options?.configCwd ?? getAgentWorkingDirectory();
   const config = await loadConfig(cwd, { forceReload: true });
   const desired = buildDesiredProcesses(config);
 

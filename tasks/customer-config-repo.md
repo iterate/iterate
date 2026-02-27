@@ -52,6 +52,7 @@ This is a single-phase boot — no setup push or 2-phase restart needed. The dae
 ## Implementation as oRPC procedures
 
 Per architectural preference: any logic running in the sandbox should be an oRPC procedure. This means:
+
 - Config repo clone/pull = oRPC procedure on daemon, callable via `iterate exec-ts daemon.cloneConfigRepo()` or similar
 - OS endpoint to get config repo info + fresh token = oRPC procedure on OS worker
 

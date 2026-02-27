@@ -68,7 +68,10 @@ export function createGitHubClient(env: CloudflareEnv) {
   return new arctic.GitHub(env.GITHUB_APP_CLIENT_ID, env.GITHUB_APP_CLIENT_SECRET, redirectURI);
 }
 
-export const githubApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
+export const githubApp = new Hono<{
+  Bindings: CloudflareEnv;
+  Variables: Variables;
+}>();
 
 githubApp.get(
   "/callback",
@@ -142,7 +145,10 @@ githubApp.get(
       return c.json({ error: "Failed to get user info" }, 400);
     }
 
-    const userInfo = (await userResponse.json()) as { id: number; login: string };
+    const userInfo = (await userResponse.json()) as {
+      id: number;
+      login: string;
+    };
 
     const installationReposResponse = await fetch(
       `https://api.github.com/user/installations/${installation_id}/repositories`,
@@ -213,31 +219,16 @@ githubApp.get(
 
       if (installationRepos.repositories.length === 1) {
         const repo = installationRepos.repositories[0];
-        const existingRepo = await tx.query.projectRepo.findFirst({
-          where: eq(schema.projectRepo.projectId, projectId),
-        });
-
-        if (existingRepo) {
-          await tx
-            .update(schema.projectRepo)
-            .set({
-              provider: "github",
-              externalId: repo.id.toString(),
-              owner: repo.owner.login,
-              name: repo.name,
-              defaultBranch: repo.default_branch,
-            })
-            .where(eq(schema.projectRepo.id, existingRepo.id));
-        } else {
-          await tx.insert(schema.projectRepo).values({
-            projectId,
-            provider: "github",
-            externalId: repo.id.toString(),
-            owner: repo.owner.login,
-            name: repo.name,
-            defaultBranch: repo.default_branch,
-          });
-        }
+        await tx
+          .update(schema.project)
+          .set({
+            configRepoId: repo.id.toString(),
+            configRepoProvider: "github",
+            configRepoOwner: repo.owner.login,
+            configRepoName: repo.name,
+            configRepoDefaultBranch: repo.default_branch,
+          })
+          .where(eq(schema.project.id, projectId));
       }
 
       // Upsert secret for egress proxy to use (project-scoped for sandbox git operations)
@@ -472,7 +463,10 @@ export async function getGitHubInstallationTokenWithDiagnostics(
     }
 
     const parseStartedAt = Date.now();
-    const data = (await response.json()) as { token: string; expires_at: string };
+    const data = (await response.json()) as {
+      token: string;
+      expires_at: string;
+    };
     diagnostics.parseMs = Math.round(Date.now() - parseStartedAt);
     diagnostics.totalMs = Math.round(Date.now() - startedAt);
 
@@ -590,7 +584,11 @@ export async function listInstallationRepositories(
 
 // ── Webhook Types ──────────────────────────────────────────────────
 
-type WebhookEventParams<T = unknown> = { payload: T; db: DB; env: CloudflareEnv };
+type WebhookEventParams<T = unknown> = {
+  payload: T;
+  db: DB;
+  env: CloudflareEnv;
+};
 
 // ── Webhook Schemas ────────────────────────────────────────────────
 
@@ -681,14 +679,15 @@ githubApp.post("/webhook", async (c) => {
 
       // Look up project repo to get group association
       if (repoOwner && repoName) {
-        const projectRepoRecord = await db.query.projectRepo.findFirst({
-          where: (pr, { eq, and }) => and(eq(pr.owner, repoOwner), eq(pr.name, repoName)),
-          with: { project: true },
+        const projectRecord = await db.query.project.findFirst({
+          where: (project, { eq, and }) =>
+            and(eq(project.configRepoOwner, repoOwner), eq(project.configRepoName, repoName)),
+          columns: { id: true, organizationId: true },
         });
-        if (projectRepoRecord?.project) {
+        if (projectRecord) {
           groups = {
-            organization: projectRepoRecord.project.organizationId,
-            project: projectRepoRecord.projectId,
+            organization: projectRecord.organizationId,
+            project: projectRecord.id,
           };
         }
       }
@@ -724,12 +723,16 @@ githubApp.post("/webhook", async (c) => {
       payload: { ...payload, _delivery_id: deliveryId },
       externalId,
     })
-    .onConflictDoNothing({ target: [schema.event.type, schema.event.externalId] })
+    .onConflictDoNothing({
+      target: [schema.event.type, schema.event.externalId],
+    })
     .returning({ id: schema.event.id });
 
   if (!inserted) {
     // Duplicate delivery - already processed
-    logger.debug("[GitHub Webhook] Duplicate delivery, skipping", { deliveryId });
+    logger.debug("[GitHub Webhook] Duplicate delivery, skipping", {
+      deliveryId,
+    });
     return c.json({ received: true, duplicate: true });
   }
 
@@ -879,7 +882,13 @@ async function handleWorkflowRun({ payload, db, env }: WebhookEventParams<Workfl
   logger.set({ workflowRunId: workflow_run.id, headSha, shortSha });
   logger.info("[GitHub Webhook] Processing CI completion");
 
-  await recreateMachinesForAllProjects({ db, env, shortSha, namePrefix: "ci", logContext: "" });
+  await recreateMachinesForAllProjects({
+    db,
+    env,
+    shortSha,
+    namePrefix: "ci",
+    logContext: "",
+  });
 }
 
 async function processGitHubWebhookEvent(params: {
@@ -950,7 +959,12 @@ async function handleCommitComment({ payload, db, env }: WebhookEventParams<Comm
   const commitSha = comment.commit_id;
   const shortSha = commitSha.slice(0, 7);
 
-  logger.set({ commentId: comment.id, user: comment.user.login, commitSha, shortSha });
+  logger.set({
+    commentId: comment.id,
+    user: comment.user.login,
+    commitSha,
+    shortSha,
+  });
   logger.info("[GitHub Webhook] Processing [refresh] comment");
 
   await recreateMachinesForAllProjects({

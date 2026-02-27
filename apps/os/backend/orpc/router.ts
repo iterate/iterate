@@ -25,7 +25,9 @@ const os = implement(workerContract).$context<ORPCContext>();
 const withApiKey = os.middleware(async ({ context, next }) => {
   const authHeader = context.reqHeaders?.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) {
-    throw new ORPCError("UNAUTHORIZED", { message: "Missing or invalid Authorization header" });
+    throw new ORPCError("UNAUTHORIZED", {
+      message: "Missing or invalid Authorization header",
+    });
   }
 
   const apiKey = authHeader.slice(7); // Remove "Bearer " prefix
@@ -96,7 +98,9 @@ async function authenticateApiKey(
     logger.warn(
       `Machine does not belong to token's project machineProjectId=${machine.project.id} tokenProjectId=${accessToken.projectId}`,
     );
-    throw new ORPCError("FORBIDDEN", { message: "Machine doesn't belong to this project" });
+    throw new ORPCError("FORBIDDEN", {
+      message: "Machine doesn't belong to this project",
+    });
   }
 
   // Touch last-used timestamp in background
@@ -153,8 +157,58 @@ export const reportStatus = os.machines.reportStatus
     return { success: true };
   });
 
+export const getConfigRepo = os.machines.getConfigRepo
+  .use(withApiKey)
+  .handler(async ({ input, context }) => {
+    const { db } = context;
+    const { machine } = await authenticateApiKey(db, context.apiKey, input.machineId);
+
+    const machineWithProject = await db.query.machine.findFirst({
+      where: eq(schema.machine.id, machine.id),
+      with: {
+        project: {
+          with: {
+            connections: {
+              where: (connection, { eq: whereEq }) => whereEq(connection.provider, "github-app"),
+            },
+          },
+        },
+      },
+    });
+
+    if (!machineWithProject) {
+      throw new ORPCError("NOT_FOUND", { message: "Machine not found" });
+    }
+
+    const configRepoId = machineWithProject.project.configRepoId;
+    const configRepoOwner = machineWithProject.project.configRepoOwner;
+    const configRepoName = machineWithProject.project.configRepoName;
+    const configRepoBranch = machineWithProject.project.configRepoDefaultBranch;
+    if (!configRepoId || !configRepoOwner || !configRepoName || !configRepoBranch) {
+      return { configRepo: null };
+    }
+
+    const githubConnection = machineWithProject.project.connections[0];
+    if (!githubConnection) {
+      throw new ORPCError("PRECONDITION_FAILED", {
+        message: "GitHub connection not found for project",
+      });
+    }
+
+    return {
+      configRepo: {
+        repoId: configRepoId,
+        owner: configRepoOwner,
+        name: configRepoName,
+        branch: configRepoBranch,
+        cloneUrl: `https://github.com/${configRepoOwner}/${configRepoName}.git`,
+      },
+    };
+  });
+
 export const workerRouter = os.router({
   machines: {
     reportStatus,
+    getConfigRepo,
   },
 });
