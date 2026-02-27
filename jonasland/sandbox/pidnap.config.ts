@@ -1,5 +1,8 @@
 const iterateRepo = process.env.ITERATE_REPO ?? "/home/iterate/src/github.com/iterate/iterate";
 const tsxPath = `${iterateRepo}/packages/pidnap/node_modules/.bin/tsx`;
+const pidnapEventsCallbackURL =
+  process.env.PIDNAP_EVENTS_CALLBACK_URL?.trim() ||
+  "http://127.0.0.1:19010/orpc/appendStreamEvents";
 
 export default {
   http: {
@@ -8,6 +11,11 @@ export default {
   },
   state: {
     autosaveFile: "/var/log/pidnap/state/autosave.json",
+  },
+  events: {
+    callbackURL: pidnapEventsCallbackURL,
+    path: "/pidnap",
+    timeoutMs: 2000,
   },
   logDir: "/var/log/pidnap",
   processes: [

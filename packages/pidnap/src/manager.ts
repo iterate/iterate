@@ -19,6 +19,7 @@ import type { Logger } from "./logger.ts";
 import { RestartingProcess, RestartingProcessOptions } from "./restarting-process.ts";
 import { EnvManager, type EnvChangeEvent } from "./env-manager.ts";
 import { DependencyResolver } from "./dependency-resolver.ts";
+import { EventDeliveryConfig, EventPublisher } from "./event-publisher.ts";
 
 export const HttpServerConfig = v.object({
   host: v.optional(v.string()),
@@ -105,6 +106,7 @@ export const ManagerConfig = v.object({
   logDir: v.optional(v.string()),
   env: v.optional(v.record(v.string(), v.string())),
   envFile: v.optional(v.string()),
+  events: v.optional(EventDeliveryConfig),
   processes: v.optional(v.array(RestartingProcessEntry)),
   state: v.optional(ManagerStateStorageConfig),
 });
@@ -145,6 +147,7 @@ export class Manager {
   private config: ManagerConfig;
   private logger: Logger;
   private envManager: EnvManager;
+  private eventPublisher: EventPublisher;
   private autosavePath: string;
   private autosaveEnabled: boolean;
   private autosaveRevision = 0;
@@ -156,6 +159,7 @@ export class Manager {
   // Dependency resolution
   private dependencyResolver = new DependencyResolver();
   private stateChangeUnsubscribes: Map<string, () => void> = new Map();
+  private lastKnownProcessStates: Map<string, string> = new Map();
 
   // Env reload tracking
   private envReloadConfig: Map<string, EnvReloadDelay> = new Map();
@@ -178,6 +182,7 @@ export class Manager {
     this.autosaveEnabled = config.state !== undefined;
     this.autosavePath = this.resolveAutosavePath(cwd, config.state?.autosaveFile);
     this.ensureLogDirs();
+    this.eventPublisher = new EventPublisher(config.events, this.logger.child("events"));
 
     this.validateConfigNames(config.processes ?? []);
 
@@ -725,6 +730,7 @@ export class Manager {
     const timer = this.envReloadTimers.get(name);
     if (timer) clearTimeout(timer);
     this.envReloadTimers.delete(name);
+    this.lastKnownProcessStates.delete(name);
   }
 
   listManagedProcessEntries(): ReadonlyArray<
@@ -795,6 +801,7 @@ export class Manager {
           nextEntry.tags,
         );
         this.restartingProcesses.set(processSlug, restartingProcess);
+        this.lastKnownProcessStates.set(processSlug, restartingProcess.state);
         const unsubscribe = restartingProcess.onStateChange((newState) => {
           this.onProcessStateChange(processSlug, newState);
         });
@@ -882,6 +889,7 @@ export class Manager {
         entry.tags,
       );
       this.restartingProcesses.set(entry.name, restartingProcess);
+      this.lastKnownProcessStates.set(entry.name, restartingProcess.state);
       const defaultDelay = entry.envOptions?.inheritGlobalEnv === false ? false : 5000;
       this.envReloadConfig.set(entry.name, entry.envOptions?.reloadDelay ?? defaultDelay);
     }
@@ -984,6 +992,25 @@ export class Manager {
    * Handle process state changes to start dependents
    */
   private onProcessStateChange(name: string, newState: string): void {
+    const previousState = this.lastKnownProcessStates.get(name) ?? "idle";
+    this.lastKnownProcessStates.set(name, newState);
+
+    if (previousState !== newState) {
+      this.eventPublisher.publish({
+        type: "pidnap/process/state-changed",
+        payload: {
+          managerState: this._state,
+          name,
+          previousState,
+          state: newState,
+          restarts: this.restartingProcesses.get(name)?.restarts ?? 0,
+          tags: this.restartingProcesses.get(name)?.tags ?? [],
+          desiredState: this.getProcessEntryByName(name)?.desiredState ?? "running",
+          persistence: this.getProcessEntryByName(name)?.persistence ?? "durable",
+        },
+      });
+    }
+
     if (this._state !== "running") return;
 
     // Check if any pending processes can now start
@@ -1008,6 +1035,7 @@ export class Manager {
   async stop(timeout?: number): Promise<void> {
     if (this._state === "idle" || this._state === "stopped") {
       this._state = "stopped";
+      await this.eventPublisher.close();
       return;
     }
 
@@ -1026,12 +1054,6 @@ export class Manager {
     }
     this.schedulers.clear();
 
-    // Unsubscribe from state changes
-    for (const unsubscribe of this.stateChangeUnsubscribes.values()) {
-      unsubscribe();
-    }
-    this.stateChangeUnsubscribes.clear();
-
     // Unsubscribe from env changes
     if (this.envChangeUnsubscribe) {
       this.envChangeUnsubscribe();
@@ -1049,6 +1071,13 @@ export class Manager {
     const stopPromises = Array.from(this.restartingProcesses.values()).map((p) => p.stop(timeout));
     await Promise.all(stopPromises);
 
+    // Unsubscribe from state changes after processes fully stop so
+    // stop-time transitions can still emit lifecycle events.
+    for (const unsubscribe of this.stateChangeUnsubscribes.values()) {
+      unsubscribe();
+    }
+    this.stateChangeUnsubscribes.clear();
+
     try {
       this.writeAutosaveState();
     } catch (error) {
@@ -1057,6 +1086,7 @@ export class Manager {
 
     this._state = "stopped";
     this.logger.info(`Manager stopped`);
+    await this.eventPublisher.close();
   }
 
   /**
