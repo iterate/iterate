@@ -13,7 +13,9 @@ async function rpc<T>(name: string, input: unknown): Promise<T> {
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("json")) {
     const text = await res.text();
-    throw new Error(`rpc ${name}: expected JSON but got ${res.status} ${contentType}: ${text.slice(0, 200)}`);
+    throw new Error(
+      `rpc ${name}: expected JSON but got ${res.status} ${contentType}: ${text.slice(0, 200)}`,
+    );
   }
   const payload = (await res.json()) as { json?: T & { code?: string; status?: number } };
   if (!res.ok) throw payload.json;
