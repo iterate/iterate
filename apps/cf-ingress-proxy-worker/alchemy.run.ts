@@ -7,9 +7,10 @@ const app = await alchemy("ingress-proxy", {
 
 const isProduction = app.stage === "prd";
 
-const adminToken = process.env.INGRESS_PROXY_API_TOKEN?.trim();
+const adminToken =
+  process.env.INGRESS_PROXY_API_TOKEN?.trim() || process.env.CF_PROXY_WORKER_API_TOKEN?.trim();
 if (!adminToken) {
-  throw new Error("INGRESS_PROXY_API_TOKEN is required");
+  throw new Error("INGRESS_PROXY_API_TOKEN or CF_PROXY_WORKER_API_TOKEN is required");
 }
 
 const db = await D1Database("routes-db", {
