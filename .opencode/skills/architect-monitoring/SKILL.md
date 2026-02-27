@@ -1,12 +1,11 @@
 ---
 name: architect-monitoring
 description: "Monitoring workflow for architect: Fly/Cloudflare checks, task updates, and Slack escalation."
-publish: false
 ---
 
 # Architect Monitoring
 
-Use this when the task is Fly machine health/usage monitoring.
+Use this when the task is sandbox & OS health/usage monitoring.
 
 ## Inputs and playbooks
 

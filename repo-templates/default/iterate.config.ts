@@ -29,6 +29,21 @@ export default iterateConfig({
           restartPolicy: "on-failure",
         },
       },
+      {
+        name: "trigger-monitor-agent",
+        definition: {
+          command: "bash",
+          args: ["scripts/trigger-monitor-agent.sh"],
+          cwd: import.meta.dirname,
+        },
+        options: {
+          restartPolicy: "on-failure",
+        },
+        schedule: {
+          cron: "0 */3 * * *",
+          runOnStart: false,
+        },
+      },
     ],
   },
 });

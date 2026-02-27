@@ -1,7 +1,6 @@
 ---
 name: architect-diagnose-errors
 description: Diagnose error spikes and exception clusters with Cloudflare + PostHog evidence.
-publish: false
 ---
 
 # Diagnose Errors
