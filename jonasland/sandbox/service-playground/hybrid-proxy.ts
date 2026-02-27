@@ -12,9 +12,9 @@ import { createServer as createNetServer, connect, type Server } from "node:net"
 import { createServer as createHttpServer } from "node:http";
 import type { Hono } from "hono";
 
-const MANAGED_PATH_PREFIXES = ["/service/", "/openapi.json", "/orpc/"];
+const DEFAULT_MANAGED_PREFIXES = ["/service/", "/openapi.json"];
 
-function isHttpAndManaged(chunk: Buffer): boolean {
+function isHttpAndManaged(chunk: Buffer, prefixes: string[]): boolean {
   const head = chunk.toString("ascii", 0, Math.min(chunk.length, 512));
   if (!/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) /.test(head)) {
     return false;
@@ -22,12 +22,14 @@ function isHttpAndManaged(chunk: Buffer): boolean {
   const crlfIdx = head.indexOf("\r\n");
   const firstLine = crlfIdx === -1 ? head : head.slice(0, crlfIdx);
   const path = firstLine.split(" ")[1] || "";
-  return MANAGED_PATH_PREFIXES.some((p) => path.startsWith(p));
+  return prefixes.some((p) => path.startsWith(p));
 }
 
 export interface HybridProxyOptions {
   innerPort: number;
   app: Hono;
+  /** Extra path prefixes to route to the managed Hono app (e.g. "/orpc/") */
+  managedPrefixes?: string[];
 }
 
 export interface HybridProxyHandle {
@@ -36,7 +38,8 @@ export interface HybridProxyHandle {
 }
 
 export function createHybridProxy(opts: HybridProxyOptions): Promise<HybridProxyHandle> {
-  const { innerPort, app } = opts;
+  const { innerPort, app, managedPrefixes = [] } = opts;
+  const allPrefixes = [...DEFAULT_MANAGED_PREFIXES, ...managedPrefixes];
 
   // Internal HTTP server for managed routes — Hono handles the requests
   const httpServer = createHttpServer(async (req, res) => {
@@ -68,7 +71,9 @@ export function createHybridProxy(opts: HybridProxyOptions): Promise<HybridProxy
       }
       res.end();
     } catch {
-      res.writeHead(502);
+      if (!res.headersSent) {
+        res.writeHead(502);
+      }
       res.end("proxy error");
     }
   });
@@ -87,7 +92,7 @@ export function createHybridProxy(opts: HybridProxyOptions): Promise<HybridProxy
           socket.pause();
 
           // Decide where to route based on first bytes
-          const targetPort = isHttpAndManaged(firstChunk) ? httpPort : innerPort;
+          const targetPort = isHttpAndManaged(firstChunk, allPrefixes) ? httpPort : innerPort;
 
           const proxy = connect(targetPort, "127.0.0.1", () => {
             proxy.write(firstChunk);
