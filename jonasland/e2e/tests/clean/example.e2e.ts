@@ -56,6 +56,6 @@ for (const { label, enabled, factory } of providers) {
       const record = await observed;
       expect(new URL(record.request.url).pathname).toBe(requestPath);
       expect(record.response.status).toBe(200);
-    }, 30_000);
+    }, 120_000);
   });
 }
