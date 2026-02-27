@@ -1,24 +1,25 @@
 import alchemy from "alchemy";
 import { D1Database, Worker } from "alchemy/cloudflare";
 
-const app = await alchemy("cf-proxy-worker", {
+const app = await alchemy("ingress-proxy", {
   password: process.env.ALCHEMY_PASSWORD,
 });
 
 const isProduction = app.stage === "prd";
 
-const adminToken = process.env.CF_PROXY_WORKER_API_TOKEN?.trim();
+const adminToken = process.env.INGRESS_PROXY_API_TOKEN?.trim();
 if (!adminToken) {
-  throw new Error("CF_PROXY_WORKER_API_TOKEN is required");
+  throw new Error("INGRESS_PROXY_API_TOKEN is required");
 }
 
 const db = await D1Database("routes-db", {
-  name: isProduction ? "cf-proxy-worker-routes" : `cf-proxy-worker-routes-${app.stage}`,
+  name: isProduction ? "ingress-proxy-routes" : `ingress-proxy-routes-${app.stage}`,
+  migrationsDir: "./migrations",
   adopt: true,
 });
 
-const routePattern = process.env.CF_PROXY_WORKER_ROUTE_PATTERN?.trim();
-const routeZoneId = process.env.CF_PROXY_WORKER_ROUTE_ZONE_ID?.trim();
+const routePattern = process.env.INGRESS_PROXY_ROUTE_PATTERN?.trim();
+const routeZoneId = process.env.INGRESS_PROXY_ROUTE_ZONE_ID?.trim();
 const routes = routePattern
   ? [
       {
@@ -30,13 +31,14 @@ const routes = routePattern
   : undefined;
 
 export const worker = await Worker("worker", {
-  name: isProduction ? "cf-proxy-worker" : undefined,
+  name: isProduction ? "ingress-proxy" : undefined,
   entrypoint: "./server.ts",
   compatibilityDate: "2025-02-24",
   compatibility: "node",
   bindings: {
     DB: db,
-    CF_PROXY_WORKER_API_TOKEN: alchemy.secret(adminToken),
+    INGRESS_PROXY_API_TOKEN: alchemy.secret(adminToken),
+    TYPEID_PREFIX: process.env.TYPEID_PREFIX?.trim() || "ipr",
   },
   routes,
   adopt: true,

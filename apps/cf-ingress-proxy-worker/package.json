@@ -13,6 +13,7 @@
     "@orpc/server": "^1.13.4",
     "alchemy": "^0.83.0",
     "hono": "^4.11.3",
+    "typeid-js": "^1.2.0",
     "zod": "4.1.12"
   },
   "devDependencies": {
