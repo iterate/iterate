@@ -115,6 +115,14 @@ sudo mkdir -p "$STAGING"
     sudo mkdir -p "$(dirname "$REPO_DIR")"
     sudo chown iterate:iterate "${STAGING}" "${STAGING}/src" "${STAGING}/src/github.com" "${STAGING}/src/github.com/iterate" 2>/dev/null || true
 
+    # Fix ownership of dirs that may be root-owned from shared R2 bucket stale data.
+    # These are needed by pnpm, npm, opencode, etc. during first-boot install.
+    for dir in .cache .config .local .npm-global; do
+      if [[ -d "${STAGING}/${dir}" ]]; then
+        sudo chown -R iterate:iterate "${STAGING}/${dir}" 2>/dev/null || true
+      fi
+    done
+
     REPO_URL="${ITERATE_REPO_URL:-https://github.com/iterate/iterate.git}"
     REPO_REF="${GIT_SHA:-main}"
 
@@ -170,11 +178,13 @@ sudo mkdir -p "$STAGING"
       # Install dependencies
       echo "[archil] Installing dependencies (pnpm install)"
       cd "$REPO_DIR"
-      pnpm install --frozen-lockfile 2>&1
+      if ! pnpm install --frozen-lockfile 2>&1; then
+        echo "[archil] ERROR: pnpm install failed (exit $?)"
+      fi
 
       # Run post-sync steps (builds daemon frontend, runs migrations, etc.)
       echo "[archil] Running post-sync steps"
-      bash "$REPO_DIR/sandbox/after-repo-sync-steps.sh" 2>&1
+      bash "$REPO_DIR/sandbox/after-repo-sync-steps.sh" 2>&1 || echo "[archil] Warning: after-repo-sync-steps failed"
 
       # Install Chromium for agent-browser (persists on archil disk across machines)
       echo "[archil] Installing agent-browser chromium"
