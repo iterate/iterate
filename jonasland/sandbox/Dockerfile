@@ -55,6 +55,8 @@ RUN set -eux; \
     wait "$caddy_pid" || true; \
     test -f /root/.local/share/caddy/pki/authorities/local/root.crt; \
     test -f /root/.local/share/caddy/pki/authorities/local/root.key; \
+    cp /root/.local/share/caddy/pki/authorities/local/root.crt /usr/local/share/ca-certificates/caddy-local.crt; \
+    update-ca-certificates; \
     rm -f /tmp/caddy-bootstrap.Caddyfile /tmp/caddy-bootstrap.log
 
 RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
