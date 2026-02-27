@@ -9,6 +9,7 @@ import { RPCHandler } from "@orpc/server/fetch";
 import { onError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { createRouterClient } from "@orpc/server";
+import { initLogger } from "evlog";
 import { createWorkersLogger, initWorkersLogger } from "evlog/workers";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import {
@@ -87,12 +88,26 @@ const appStage =
 
 setRequestEvlogFlushHandler(sendEvlogExceptionToPostHog);
 
-initWorkersLogger({
-  env: {
-    service: "os",
-    environment: appStage,
-  },
-});
+if (import.meta.env.DEV) {
+  // Use initLogger directly in dev to enable pretty tree-format output.
+  // initWorkersLogger hardcodes pretty: false, which is correct for production
+  // (CF Workers dashboard needs raw objects) but noisy locally.
+  initLogger({
+    env: {
+      service: "os",
+      environment: appStage,
+    },
+    pretty: true,
+    stringify: false,
+  });
+} else {
+  initWorkersLogger({
+    env: {
+      service: "os",
+      environment: appStage,
+    },
+  });
+}
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
