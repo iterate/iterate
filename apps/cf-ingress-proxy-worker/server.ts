@@ -277,23 +277,22 @@ export async function listRoutes(db: D1Database): Promise<RouteRecord[]> {
   });
 }
 
-async function insertPatterns(params: {
+function buildInsertPatternStmts(params: {
   db: D1Database;
   routeId: string;
   patterns: Array<{ pattern: string; target: string; headers: RouteHeaders }>;
-}): Promise<void> {
+}): D1PreparedStatement[] {
   const { db, routeId, patterns } = params;
-  for (const item of patterns) {
-    await db
+  return patterns.map((item) =>
+    db
       .prepare(
         `
         INSERT INTO route_patterns (route_id, pattern, target, headers)
         VALUES (?1, ?2, ?3, ?4)
       `,
       )
-      .bind(routeId, item.pattern, item.target, JSON.stringify(item.headers))
-      .run();
-  }
+      .bind(routeId, item.pattern, item.target, JSON.stringify(item.headers)),
+  );
 }
 
 export async function createRoute(
@@ -316,17 +315,17 @@ export async function createRoute(
   const routeId = typeid(params.typeIdPrefix).toString();
   const metadata = normalizeMetadata(params.metadata);
 
-  await db
-    .prepare(
-      `
+  await db.batch([
+    db
+      .prepare(
+        `
       INSERT INTO routes (id, metadata)
       VALUES (?1, ?2)
     `,
-    )
-    .bind(routeId, JSON.stringify(metadata))
-    .run();
-
-  await insertPatterns({ db, routeId, patterns: normalizedPatterns });
+      )
+      .bind(routeId, JSON.stringify(metadata)),
+    ...buildInsertPatternStmts({ db, routeId, patterns: normalizedPatterns }),
+  ]);
 
   const created = await getRoute(db, routeId);
   if (!created) throw new Error("Failed to read route after create");
@@ -359,20 +358,19 @@ export async function updateRoute(
 
   const metadata = normalizeMetadata(params.metadata);
 
-  await db
-    .prepare(
-      `
+  await db.batch([
+    db
+      .prepare(
+        `
       UPDATE routes
       SET metadata = ?2, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?1
     `,
-    )
-    .bind(routeId, JSON.stringify(metadata))
-    .run();
-
-  await db.prepare(`DELETE FROM route_patterns WHERE route_id = ?1`).bind(routeId).run();
-
-  await insertPatterns({ db, routeId, patterns: normalizedPatterns });
+      )
+      .bind(routeId, JSON.stringify(metadata)),
+    db.prepare(`DELETE FROM route_patterns WHERE route_id = ?1`).bind(routeId),
+    ...buildInsertPatternStmts({ db, routeId, patterns: normalizedPatterns }),
+  ]);
 
   const updated = await getRoute(db, routeId);
   if (!updated) throw new Error("Failed to read route after update");
