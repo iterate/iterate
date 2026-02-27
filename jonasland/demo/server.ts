@@ -1433,7 +1433,11 @@ const server = createServer(async (req, res) => {
     const message = errorMessage(error);
     state.lastError = message;
     appendEvent(`error: ${message.split("\n")[0] ?? "unknown error"}`);
-    sendJson(res, 500, { error: message });
+    if (!res.headersSent) {
+      sendJson(res, 500, { error: message });
+    } else if (!res.writableEnded) {
+      res.end();
+    }
   }
 });
 
