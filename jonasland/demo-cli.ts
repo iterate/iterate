@@ -105,15 +105,6 @@ const processes: ProcessConfig[] = [
     },
     routeCheck: { host: "home.iterate.localhost", path: "/", timeoutMs: 60_000 },
   },
-  {
-    slug: "outerbase",
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/outerbase-service/src/server.ts"],
-      env: OTEL_SERVICE_ENV,
-    },
-    routeCheck: { host: "outerbase.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
-  },
   ...onDemandProcesses,
   {
     slug: "openobserve",
@@ -127,13 +118,6 @@ const processes: ProcessConfig[] = [
       },
     },
     routeCheck: { host: "openobserve.iterate.localhost", path: "/", timeoutMs: 120_000 },
-  },
-  {
-    slug: "clickstack",
-    definition: {
-      command: "/opt/jonasland-sandbox/clickstack-launcher.sh",
-    },
-    routeCheck: { host: "clickstack.iterate.localhost", path: "/", timeoutMs: 120_000 },
   },
   {
     slug: "otel-collector",
