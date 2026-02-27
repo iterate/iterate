@@ -14,15 +14,23 @@ pass()    { echo -e "  ${GREEN}✓ $1${RESET}"; }
 fail()    { echo -e "  ${RED}✗ $1${RESET}"; }
 info()    { echo -e "  ${YELLOW}→ $1${RESET}"; }
 
-# We mount FUSE at /mnt/fuse-home (simulating archil mounted over ~).
-# Then we try to bind-mount local node_modules on top of the FUSE path.
+# Strategy: mount FUSE at /mnt/fuse-home, create content THROUGH the FUSE
+# mount at runtime (not baked into the image), then try to bind-mount local
+# node_modules over the FUSE path. This exposes the overlay bypass: the bind
+# resolves through Docker's overlayfs layers, not the live FUSE mount.
 FUSE_MNT="/mnt/fuse-home"
 FUSE_SOURCE="/srv/testuser-home"
-NM_FUSE="$FUSE_MNT/project/node_modules"
+PROJECT="$FUSE_MNT/project"
+NM_FUSE="$PROJECT/node_modules"
 NM_LOCAL="/var/local-node-modules"
-WRITE_SENTINEL="write-test-$(date +%s).txt"
 
-verdict_bind_ok=true
+verdict_ok=true
+failures=()
+
+record_fail() {
+  verdict_ok=false
+  failures+=("$1")
+}
 
 # ---------- 1. Start sshd ----------
 section "1. Starting sshd"
@@ -36,11 +44,10 @@ else
 fi
 
 # ---------- 2. FUSE-mount via sshfs ----------
-section "2. Mounting sshfs at $FUSE_MNT (simulating archil FUSE)"
+section "2. Mounting sshfs at $FUSE_MNT"
 
 mkdir -p "$FUSE_MNT"
 
-# Use -f (foreground) + & because sshfs daemon mode hangs in containers.
 sshfs \
   -f \
   -o StrictHostKeyChecking=no \
@@ -59,157 +66,199 @@ else
   exit 1
 fi
 
-# ---------- 3. Verify FUSE content ----------
-section "3. Verifying FUSE-served content at $NM_FUSE"
+# ---------- 3. Create content AT RUNTIME through FUSE ----------
+# This is the key difference from the old test. Content created at runtime
+# through FUSE lives on the FUSE backing store (FUSE_SOURCE), NOT in the
+# overlay upperdir. This means the bind mount can't accidentally "work"
+# by reading the overlay cache.
+section "3. Creating project content THROUGH the FUSE mount (at runtime)"
 
-if [ -f "$NM_FUSE/fuse-marker.txt" ]; then
-  pass "fuse-marker.txt visible through FUSE"
-  info "contents: $(cat "$NM_FUSE/fuse-marker.txt")"
+mkdir -p "$NM_FUSE"
+echo "runtime-fuse-content-$(date +%s)" > "$NM_FUSE/fuse-runtime.txt"
+echo '{"name":"fuse-pkg"}' > "$NM_FUSE/package.json"
+
+# Verify content is visible through FUSE
+if [ -f "$NM_FUSE/fuse-runtime.txt" ]; then
+  pass "Runtime content visible through FUSE"
+  info "contents: $(cat "$NM_FUSE/fuse-runtime.txt")"
 else
-  fail "fuse-marker.txt NOT visible — FUSE mount broken"
+  fail "Runtime content NOT visible through FUSE"
   exit 1
 fi
 
-# ---------- 4. Attempt bind mount ----------
-section "4. Attempting: mount --bind $NM_LOCAL $NM_FUSE"
+# Verify it's actually on the backing store
+if [ -f "$FUSE_SOURCE/project/node_modules/fuse-runtime.txt" ]; then
+  pass "Content confirmed on FUSE backing store"
+else
+  fail "Content NOT on backing store — FUSE write didn't land"
+  exit 1
+fi
 
-info "Before bind mount:"
-info "  $NM_FUSE contains: $(ls "$NM_FUSE" 2>&1 || echo '(error listing)')"
-info "  $NM_LOCAL contains: $(ls "$NM_LOCAL" 2>&1 || echo '(error listing)')"
+# ---------- 4. Prepare local content for the bind ----------
+section "4. Local node_modules content (to bind over FUSE)"
+info "$NM_LOCAL contains: $(ls "$NM_LOCAL")"
+info "local-marker.txt: $(cat "$NM_LOCAL/local-marker.txt")"
+
+# ---------- 5. Attempt bind mount ----------
+section "5. mount --bind $NM_LOCAL -> $NM_FUSE"
+
+info "BEFORE bind:"
+info "  $NM_FUSE: $(ls "$NM_FUSE" 2>&1)"
+info "  $NM_LOCAL: $(ls "$NM_LOCAL" 2>&1)"
 
 bind_exit=0
 mount --bind "$NM_LOCAL" "$NM_FUSE" 2>&1 || bind_exit=$?
 
-# ---------- 5. Check exit code ----------
-section "5. Bind mount exit code"
 if [ "$bind_exit" -eq 0 ]; then
-  pass "mount --bind returned exit code 0 (appeared to succeed)"
+  pass "mount --bind returned exit code 0"
 else
   fail "mount --bind returned exit code $bind_exit"
-  verdict_bind_ok=false
+  record_fail "bind mount command failed"
 fi
 
-# ---------- 6. Check contents at mount point ----------
-section "6. Listing $NM_FUSE after bind mount"
+# ---------- 6. Check what's visible at NM_FUSE ----------
+section "6. What's at $NM_FUSE after bind?"
 
-actual_contents=$(ls -la "$NM_FUSE" 2>&1 || echo "(error)")
-echo "$actual_contents" | while IFS= read -r line; do info "$line"; done
+info "AFTER bind:"
+ls -la "$NM_FUSE" 2>&1 | while IFS= read -r line; do info "  $line"; done
 
-has_local_marker=false
-has_fuse_marker=false
-is_empty=false
+has_local=false
+has_fuse_runtime=false
 
 if [ -f "$NM_FUSE/local-marker.txt" ]; then
-  has_local_marker=true
-  pass "local-marker.txt IS visible (bind mount exposed local content)"
+  has_local=true
+  pass "local-marker.txt visible (bind exposed local content)"
 else
-  fail "local-marker.txt NOT visible (bind mount did NOT expose local content)"
-  verdict_bind_ok=false
+  fail "local-marker.txt NOT visible"
+  record_fail "Local content not visible through bind"
 fi
 
-if [ -f "$NM_FUSE/fuse-marker.txt" ]; then
-  has_fuse_marker=true
-  fail "fuse-marker.txt STILL visible (FUSE content leaking through — bind mount ineffective)"
-  verdict_bind_ok=false
+if [ -f "$NM_FUSE/fuse-runtime.txt" ]; then
+  has_fuse_runtime=true
+  fail "fuse-runtime.txt STILL visible (FUSE content leaking — bind ineffective)"
+  record_fail "FUSE content leaking through bind"
 else
-  pass "fuse-marker.txt NOT visible (FUSE content correctly hidden by bind mount)"
+  pass "fuse-runtime.txt hidden (bind mount covered FUSE content)"
 fi
 
-file_count=$(ls -1A "$NM_FUSE" 2>/dev/null | wc -l)
-if [ "$file_count" -eq 0 ]; then
-  is_empty=true
-  fail "Directory is EMPTY — bind mount target shows nothing"
-  verdict_bind_ok=false
+# ---------- 7. The real test: where do writes through the bind actually land? ----------
+section "7. Write test: WHERE does data written through the bind actually go?"
+
+SENTINEL="bind-write-test-$(date +%s).txt"
+echo "written-through-bind-path" > "$NM_FUSE/$SENTINEL"
+
+on_local=false
+on_fuse_backing=false
+on_overlay=false
+
+if [ -f "$NM_LOCAL/$SENTINEL" ]; then
+  on_local=true
+  pass "Write landed on LOCAL disk ($NM_LOCAL/$SENTINEL)"
 fi
 
-# ---------- 7. Write test ----------
-section "7. Write test: creating $NM_FUSE/$WRITE_SENTINEL"
-
-echo "written-through-bind" > "$NM_FUSE/$WRITE_SENTINEL" 2>&1 || true
-
-info "Checking where the write actually landed..."
-
-write_on_local=false
-write_on_fuse=false
-write_on_bind=false
-
-if [ -f "$NM_LOCAL/$WRITE_SENTINEL" ]; then
-  write_on_local=true
-  pass "File landed on LOCAL disk ($NM_LOCAL/$WRITE_SENTINEL)"
-  info "  contents: $(cat "$NM_LOCAL/$WRITE_SENTINEL")"
+if [ -f "$FUSE_SOURCE/project/node_modules/$SENTINEL" ]; then
+  on_fuse_backing=true
+  fail "Write landed on FUSE backing store"
 fi
 
-if [ -f "$FUSE_SOURCE/project/node_modules/$WRITE_SENTINEL" ]; then
-  write_on_fuse=true
-  fail "File landed on FUSE backing store ($FUSE_SOURCE/project/node_modules/$WRITE_SENTINEL)"
-  info "  contents: $(cat "$FUSE_SOURCE/project/node_modules/$WRITE_SENTINEL")"
-  verdict_bind_ok=false
+# Check if it went into overlay upperdir instead
+# On Docker: the overlay upper is typically at /upper/upper or similar
+# We can detect this by checking if the file exists at NM_FUSE but NOT
+# at NM_LOCAL — meaning it went to overlay, not where we intended.
+if [ -f "$NM_FUSE/$SENTINEL" ] && ! $on_local; then
+  on_overlay=true
+  fail "Write readable at $NM_FUSE but NOT on local disk — went to overlay upperdir"
+  record_fail "Writes route to overlay upperdir, not local disk"
 fi
 
-if [ -f "$NM_FUSE/$WRITE_SENTINEL" ]; then
-  write_on_bind=true
-  info "File readable back through bind mount path"
+if $on_local; then
+  info "Write correctly routed to local disk"
 else
-  fail "File NOT readable back through $NM_FUSE (write silently lost)"
-  verdict_bind_ok=false
+  info "Write did NOT land on local disk"
 fi
 
-if ! $write_on_local && ! $write_on_fuse; then
-  fail "File not found on either local disk or FUSE store — write was silently lost"
-  verdict_bind_ok=false
-fi
+# ---------- 8. Prove the overlay bypass with /proc/mounts ----------
+section "8. Mount table analysis"
 
-# ---------- 8. Mount table ----------
-section "8. Mount table (relevant entries)"
+info "Root filesystem:"
+mount | grep -E "^overlay" | head -3 | while IFS= read -r line; do info "  $line"; done
 
-mount | grep -E "(fuse|bind|overlay|$FUSE_MNT)" | while IFS= read -r line; do
-  info "$line"
-done
-
-# Also check /proc/mounts for the bind
 info ""
-info "From /proc/mounts:"
-grep -E "node_modules" /proc/mounts 2>/dev/null | while IFS= read -r line; do
-  info "$line"
-done || info "(no node_modules entry in /proc/mounts)"
+info "FUSE mount:"
+mount | grep fuse | while IFS= read -r line; do info "  $line"; done
 
-# ---------- 9. Verdict ----------
-section "9. VERDICT"
+info ""
+info "Bind mount (from /proc/mounts):"
+grep -E "node_modules" /proc/mounts 2>/dev/null | while IFS= read -r line; do
+  info "  $line"
+done || info "  (no node_modules entry — bind may have resolved through overlay)"
+
+# Check if bind shows overlay device instead of local device
+bind_device=$(grep "$NM_FUSE" /proc/mounts 2>/dev/null | awk '{print $1}' | head -1)
+if [ -n "$bind_device" ]; then
+  if echo "$bind_device" | grep -q overlay; then
+    fail "Bind mount device is 'overlay' — resolved through container overlay, not local disk"
+    record_fail "Bind device is overlay, not local filesystem"
+  else
+    info "Bind mount device: $bind_device"
+  fi
+else
+  info "No explicit bind entry in /proc/mounts (kernel merged it into overlay)"
+fi
+
+# ---------- 9. Unmount bind, verify FUSE content survived ----------
+section "9. After unmounting bind: is FUSE content still there?"
+
+umount "$NM_FUSE" 2>/dev/null || true
+
+if [ -f "$NM_FUSE/fuse-runtime.txt" ]; then
+  pass "FUSE content restored after bind unmount"
+  info "contents: $(cat "$NM_FUSE/fuse-runtime.txt")"
+else
+  fail "FUSE content LOST after bind unmount"
+  record_fail "FUSE content lost after bind unmount"
+fi
+
+if [ -f "$NM_FUSE/$SENTINEL" ]; then
+  fail "Write from bind path persisted on FUSE (unexpected — bind was supposed to route to local)"
+  record_fail "Write leaked to FUSE after unmount"
+else
+  info "Write from bind path NOT on FUSE (confirms it went to overlay, not FUSE)"
+fi
+
+# ---------- 10. Verdict ----------
+section "10. VERDICT"
 
 echo ""
-if $verdict_bind_ok; then
-  echo -e "${GREEN}${BOLD}  BIND MOUNT WORKED ON THIS SYSTEM${RESET}"
+if $verdict_ok; then
+  echo -e "${GREEN}${BOLD}  BIND MOUNT WORKED CORRECTLY${RESET}"
   echo ""
-  echo -e "  On this system ($(uname -r)), bind-mounting over a FUSE path succeeded."
-  echo -e "  However, in production Fly.io containers (which use overlayfs as"
-  echo -e "  the root filesystem), we observed this failing: mount --bind returns 0"
-  echo -e "  but the target is empty or shows the wrong content."
-  echo ""
-  echo -e "  ${YELLOW}The bind mount approach is unreliable across container runtimes.${RESET}"
+  echo -e "  Writes through the bind path landed on local disk as intended."
+  echo -e "  This approach may work on this system — but is not guaranteed"
+  echo -e "  across container runtimes."
 else
-  echo -e "${RED}${BOLD}  BIND MOUNT IS UNRELIABLE${RESET}"
+  echo -e "${RED}${BOLD}  BIND MOUNT OVER FUSE IS BROKEN${RESET}"
   echo ""
-  echo -e "  ${YELLOW}mount --bind returned 0 but the result is broken:${RESET}"
-  $has_local_marker || echo -e "    - Local content NOT visible at mount point"
-  $has_fuse_marker  && echo -e "    - FUSE content still leaking through"
-  $is_empty         && echo -e "    - Mount point is empty (neither local nor FUSE content)"
-  $write_on_fuse    && echo -e "    - Writes went to FUSE backing store, not local disk"
-  ! $write_on_local && ! $write_on_fuse && echo -e "    - Writes were silently lost"
+  echo -e "  Failures:"
+  for f in "${failures[@]}"; do
+    echo -e "    ${RED}• $f${RESET}"
+  done
   echo ""
-  echo -e "  ${YELLOW}Why this matters:${RESET}"
-  echo -e "    When the root filesystem is an overlay (Docker/Fly containers),"
-  echo -e "    bind-mounting on top of a FUSE mount may silently fail."
-  echo -e "    The kernel resolves the bind through the overlay's upper/lower"
-  echo -e "    layers rather than the live FUSE mount, so:"
-  echo -e "      - The target may appear empty"
-  echo -e "      - Writes may go to the overlay upper dir (not local disk)"
-  echo -e "      - The FUSE content may still be visible"
-  echo -e ""
-  echo -e "  ${YELLOW}Implication for pnpm + archil:${RESET}"
+  echo -e "  ${YELLOW}What happened:${RESET}"
+  echo -e "    mount --bind returned 0, but the bind resolved through Docker's"
+  echo -e "    overlay filesystem layers instead of the live FUSE mount."
+  if $on_overlay; then
+    echo -e "    Writes through the bind path went to the overlay upperdir —"
+    echo -e "    NOT to local disk as intended. This means:"
+    echo -e "      • node_modules writes would go to the ephemeral overlay"
+    echo -e "      • Data is lost when the container restarts"
+    echo -e "      • The local-disk performance benefit is an illusion"
+  fi
+  echo ""
+  echo -e "  ${YELLOW}Why this matters for archil:${RESET}"
   echo -e "    You cannot reliably bind-mount local node_modules on top of"
-  echo -e "    a FUSE-mounted home directory to avoid FUSE I/O overhead."
-  echo -e "    Instead, use symlinks, PNPM_HOME, or --virtual-store-dir"
-  echo -e "    to redirect pnpm to local disk."
+  echo -e "    a FUSE-mounted path in containers. The kernel's overlay layer"
+  echo -e "    intercepts the bind. Use symlinks or --virtual-store-dir instead."
 fi
 
 echo ""
