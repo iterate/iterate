@@ -284,7 +284,7 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow", () => {
       if (slackRecords.length >= 2) {
         lastSlackBodies = await Promise.all(
           slackRecords.map(
-            async (record) => (await record.request.json()) as Record<string, unknown>,
+            async (record) => (await record.request.clone().json()) as Record<string, unknown>,
           ),
         );
 
