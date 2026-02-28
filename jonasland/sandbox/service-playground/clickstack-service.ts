@@ -29,8 +29,7 @@ export const clickstackService = defineService({
   configSchema: z.object({
     /** Path to the clickstack launcher script */
     launcherPath: z.string().default("/opt/jonasland-sandbox/clickstack-launcher.sh"),
-    /** Max server memory for ClickHouse (bytes) */
-    maxMemory: z.number().default(2_147_483_648),
+
   }),
 
   async start(config) {

@@ -54,13 +54,24 @@ export function createServiceProxy(opts: ServiceProxyOptions): Promise<ServicePr
       }
     });
 
+    // Build headers properly to handle multi-value headers (e.g. Set-Cookie)
+    const responseHeaders = new Headers();
+    for (const [key, value] of Object.entries(proxyRes.headers)) {
+      if (value === undefined) continue;
+      if (Array.isArray(value)) {
+        for (const v of value) responseHeaders.append(key, v);
+      } else {
+        responseHeaders.set(key, value);
+      }
+    }
+
     return new Response(
       proxyRes.statusCode === 204 || proxyRes.statusCode === 304
         ? null
         : (Readable.toWeb(proxyRes as unknown as Readable) as ReadableStream),
       {
         status: proxyRes.statusCode,
-        headers: proxyRes.headers as Record<string, string>,
+        headers: responseHeaders,
       },
     );
   });

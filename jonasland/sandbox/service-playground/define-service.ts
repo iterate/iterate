@@ -11,6 +11,8 @@ export interface ServiceDefinition<TConfig extends z.ZodType = z.ZodType> {
 export interface ServiceStartResult {
   /** The address Caddy should route traffic to (e.g. "127.0.0.1:54321") */
   target: string;
+  /** Programmatic shutdown for tests. Production uses SIGTERM. */
+  close?: () => void;
 }
 
 export function defineService<TConfig extends z.ZodType>(
