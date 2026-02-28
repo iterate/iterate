@@ -54,7 +54,9 @@ export const echoService = defineService({
 
     // 2. Create our managed Hono app (health, openapi)
     const app = new Hono();
-    app.get("/service/health", (c) => c.json({ status: "ok", slug: "echo", innerPort: inner.port }));
+    app.get("/service/health", (c) =>
+      c.json({ status: "ok", slug: "echo", innerPort: inner.port }),
+    );
     app.get("/openapi.json", (c) =>
       c.json({
         openapi: "3.0.0",
