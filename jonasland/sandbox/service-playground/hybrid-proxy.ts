@@ -54,10 +54,20 @@ export function createServiceProxy(opts: ServiceProxyOptions): Promise<ServicePr
       }
     });
 
-    // Build headers properly to handle multi-value headers (e.g. Set-Cookie)
+    // Build headers properly: handle multi-value (Set-Cookie) and strip hop-by-hop
+    const HOP_BY_HOP = new Set([
+      "transfer-encoding",
+      "connection",
+      "keep-alive",
+      "proxy-authenticate",
+      "proxy-authorization",
+      "te",
+      "trailer",
+      "upgrade",
+    ]);
     const responseHeaders = new Headers();
     for (const [key, value] of Object.entries(proxyRes.headers)) {
-      if (value === undefined) continue;
+      if (value === undefined || HOP_BY_HOP.has(key)) continue;
       if (Array.isArray(value)) {
         for (const v of value) responseHeaders.append(key, v);
       } else {

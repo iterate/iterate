@@ -66,10 +66,16 @@ export const clickstackService = defineService({
     // 3. Proxy: managed routes handled by Hono, everything else to HyperDX UI
     const proxy = await createServiceProxy({ innerPort: inner.port, app });
 
-    // 4. Signal handling
-    const shutdown = () => {
+    // 4. Signal handling (guarded to prevent double-cleanup)
+    let closed = false;
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
       proxy.close();
       inner.kill();
+    };
+    const shutdown = () => {
+      cleanup();
       process.exit(0);
     };
     process.on("SIGTERM", shutdown);
@@ -77,10 +83,7 @@ export const clickstackService = defineService({
 
     return {
       target: `127.0.0.1:${proxy.port}`,
-      close() {
-        proxy.close();
-        inner.kill();
-      },
+      close: cleanup,
     };
   },
 });
