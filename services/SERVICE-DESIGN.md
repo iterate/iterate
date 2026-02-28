@@ -11,6 +11,7 @@ A **service** is a named, network-addressable unit of compute that:
 - Describes its API via a committed `openapi.json`
 - Self-registers with a **registry service** on startup
 - Declares a typed **config schema** ("here's what I need to run")
+- Speaks **HTTP** — all services expose HTTP endpoints
 - Is topology-agnostic — can run anywhere with a network path to registry + Caddy
 
 A service's external representation is exactly two things:
@@ -115,10 +116,11 @@ Every service — even non-TS ones — gets a thin TS definition package. This g
 
 Even when wrapping third-party software (ClickStack, Outerbase, etc.), the service is always a runnable TS program that conforms to the `ServiceDefinition` interface. The TS wrapper:
 
-1. Starts the inner process on an ephemeral port
-2. Starts its own HTTP server (also ephemeral port) that proxies to the inner process
-3. Can serve its own endpoints (`/openapi.json`, `/orpc/*`, health checks) alongside the proxy
-4. Reports its own port as the `target` to the registry
+1. Starts the inner HTTP process on an ephemeral port
+2. Starts a Hono HTTP server (also ephemeral port) with managed routes and a catch-all HTTP reverse proxy to the inner process
+3. Managed routes (`/openapi.json`, `/orpc/*`, `/service/health`) are handled by the Hono app
+4. All other HTTP traffic is proxied to the inner service
+5. Reports its own port as the `target` to the registry
 
 From Caddy's perspective, every service looks the same: one slug, one hostname, one backend. Internal routing (sub-services, admin panels, etc.) is the service's own business.
 
@@ -189,12 +191,12 @@ export default defineService({
 
 ## Proxying non-TS services (Node.js)
 
-When wrapping a non-TS service, the TS wrapper proxies HTTP and WebSocket traffic.
+When wrapping a non-TS service, the TS wrapper acts as an HTTP reverse proxy. Managed routes (health checks, OpenAPI spec, oRPC endpoints) are handled directly by Hono. Everything else is proxied through to the inner service.
 
-### HTTP proxy (via Hono + node:http)
+### HTTP proxy (via Hono catch-all)
 
 ```typescript
-import { createServer, request as httpRequest } from "node:http";
+import { request as httpRequest, type IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 
 function proxyTo(innerPort: number) {
@@ -216,7 +218,7 @@ function proxyTo(innerPort: number) {
       );
       proxyReq.on("error", reject);
       if (c.req.raw.body) {
-        Readable.fromWeb(c.req.raw.body as any).pipe(proxyReq);
+        Readable.fromWeb(c.req.raw.body as ReadableStream).pipe(proxyReq);
       } else {
         proxyReq.end();
       }
@@ -225,7 +227,7 @@ function proxyTo(innerPort: number) {
     return new Response(
       proxyRes.statusCode === 204 || proxyRes.statusCode === 304
         ? null
-        : (Readable.toWeb(proxyRes) as ReadableStream),
+        : (Readable.toWeb(proxyRes as unknown as Readable) as ReadableStream),
       {
         status: proxyRes.statusCode,
         headers: proxyRes.headers as Record<string, string>,
@@ -235,35 +237,7 @@ function proxyTo(innerPort: number) {
 }
 ```
 
-### WebSocket proxy (via node:net)
-
-The raw `upgrade` event on the HTTP server handles WebSocket passthrough at the TCP level — no WS library needed:
-
-```typescript
-import { connect } from "node:net";
-
-function attachWsProxy(server: import("node:http").Server, innerPort: number) {
-  server.on("upgrade", (req, socket, head) => {
-    const proxySocket = connect(innerPort, "127.0.0.1", () => {
-      const path = req.url || "/";
-      const headerLines = Object.entries(req.headers)
-        .filter(([k]) => k.toLowerCase() !== "host")
-        .map(([k, v]) => `${k}: ${v}`)
-        .join("\r\n");
-      proxySocket.write(
-        `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1:${innerPort}\r\n${headerLines}\r\n\r\n`,
-      );
-      proxySocket.write(head);
-      proxySocket.pipe(socket);
-      socket.pipe(proxySocket);
-    });
-    proxySocket.on("error", () => socket.destroy());
-    socket.on("error", () => proxySocket.destroy());
-  });
-}
-```
-
-The `upgrade` event fires before Hono sees the request, so Hono handles HTTP and the raw server handles WebSocket upgrades independently.
+The proxy is mounted as a catch-all `app.all("/*", proxyTo(innerPort))` — Hono routes are matched first, so managed paths are handled by the app and everything else falls through to the proxy.
 
 ## Routing model
 
@@ -277,7 +251,7 @@ This keeps the registry dead simple and pushes routing complexity to where it be
 
 ## oRPC services (TS-specific layer)
 
-The base `ServiceDefinition` is protocol-agnostic — it knows nothing about oRPC, HTTP, or any specific RPC framework. Not all services are oRPC services (e.g. wrapped third-party software, TCP services, static file servers).
+The base `ServiceDefinition` is protocol-agnostic — it knows nothing about oRPC or any specific RPC framework. Not all services are oRPC services (e.g. wrapped third-party software, static file servers).
 
 For our own TS services that use oRPC, we layer on a **contract** — a pure API shape that carries no identity:
 
@@ -434,5 +408,6 @@ export function defineService<TConfig extends z.ZodType>(
 - [ ] **OpenAPI client generation.** Typed oRPC-wrapped clients auto-generated from committed specs. Toolchain TBD.
 - [ ] **Package naming convention.** When a contract is shared between services, how do we name things?
 - [ ] **Migration path from current manifests.** Existing `ordersServiceManifest` etc. evolve into ServiceDefinitions incrementally.
-- [ ] **Proxy performance.** The TS proxy layer for wrapped services adds a hop. Probably negligible at our scale but worth benchmarking for high-throughput services.
+- [ ] **Proxy performance.** The HTTP reverse proxy for wrapped services adds a hop. Probably negligible at our scale but worth benchmarking for high-throughput services.
 - [ ] **Health checks.** Should the wrapper proxy health to the inner service, or own it? Leaning toward: wrapper owns it (it knows whether the inner process is alive).
+- [ ] **WebSocket support.** For services that need WebSocket, the proxy needs to handle `upgrade` events. Can be added per-service using the raw `node:http` server's `upgrade` event.

@@ -1,50 +1,75 @@
 /**
- * Example service definition wrapping a Go TCP echo server.
+ * Example service definition wrapping an HTTP echo server.
  *
- * Demonstrates the hybrid proxy: raw TCP traffic goes straight to the Go
- * process, while managed HTTP paths (/service/health, /openapi.json) are
- * handled by our TS layer.
+ * Demonstrates the service proxy: managed paths (/service/health,
+ * /openapi.json) are handled by our TS layer, everything else is
+ * proxied through to the inner HTTP echo server.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { createServer } from "node:http";
 import { Hono } from "hono";
 import { z } from "zod/v4";
 import { defineService } from "./define-service.ts";
-import { createHybridProxy } from "./hybrid-proxy.ts";
+import { createServiceProxy } from "./hybrid-proxy.ts";
+
+/** Start a simple HTTP echo server on an ephemeral port */
+function startEchoServer(): Promise<{ port: number; close: () => void }> {
+  return new Promise((resolve) => {
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        const body = Buffer.concat(chunks).toString();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            echo: true,
+            method: req.method,
+            url: req.url,
+            headers: req.headers,
+            body: body || undefined,
+          }),
+        );
+      });
+    });
+
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      if (!addr || typeof addr === "string") throw new Error("echo server bind failed");
+      resolve({
+        port: addr.port,
+        close: () => server.close(),
+      });
+    });
+  });
+}
 
 export const echoService = defineService({
   slug: "echo",
   version: "0.1.0",
-  configSchema: z.object({
-    binaryPath: z.string(),
-  }),
+  configSchema: z.object({}),
 
-  async start(config) {
-    // 1. Start the Go TCP echo server on an ephemeral port
-    const goProc = spawn(config.binaryPath, [], {
-      env: { ...process.env, PORT: "0" },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    const innerPort = await waitForPort(goProc);
+  async start() {
+    // 1. Start the inner HTTP echo server on an ephemeral port
+    const inner = await startEchoServer();
 
     // 2. Create our managed Hono app (health, openapi)
     const app = new Hono();
-    app.get("/service/health", (c) => c.json({ status: "ok", slug: "echo", pid: goProc.pid }));
+    app.get("/service/health", (c) => c.json({ status: "ok", slug: "echo", innerPort: inner.port }));
     app.get("/openapi.json", (c) =>
       c.json({
         openapi: "3.0.0",
-        info: { title: "Echo TCP Service", version: "0.1.0" },
+        info: { title: "Echo HTTP Service", version: "0.1.0" },
         paths: {},
       }),
     );
 
-    // 3. Create hybrid proxy: managed HTTP routes go to Hono, everything else L4 to Go
-    const proxy = await createHybridProxy({ innerPort, app });
+    // 3. Create service proxy: managed routes go to Hono, everything else proxied to inner
+    const proxy = await createServiceProxy({ innerPort: inner.port, app });
 
     // 4. Signal handling
     const shutdown = () => {
       proxy.close();
-      goProc.kill("SIGTERM");
+      inner.close();
       process.exit(0);
     };
     process.on("SIGTERM", shutdown);
@@ -53,32 +78,3 @@ export const echoService = defineService({
     return { target: `127.0.0.1:${proxy.port}` };
   },
 });
-
-/** Wait for the Go process to print "LISTENING:<port>" on stdout */
-function waitForPort(proc: ChildProcess): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Go process did not start in time")), 10_000);
-
-    let buffer = "";
-    proc.stdout!.on("data", (chunk: Buffer) => {
-      buffer += chunk.toString();
-      const match = buffer.match(/LISTENING:(\d+)/);
-      if (match) {
-        clearTimeout(timeout);
-        resolve(parseInt(match[1], 10));
-      }
-    });
-
-    proc.stderr!.on("data", (chunk: Buffer) => {
-      process.stderr.write(`[echo-go] ${chunk}`);
-    });
-
-    proc.on("exit", (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`Go process exited with code ${code}`));
-    });
-  });
-}
-
-// Re-export for tests
-export { waitForPort as _waitForPort };

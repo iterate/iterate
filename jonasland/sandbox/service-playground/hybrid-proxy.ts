@@ -1,122 +1,83 @@
 /**
- * Hybrid TCP/HTTP proxy.
+ * Service proxy — HTTP reverse proxy with managed routes.
  *
- * Sits in front of an inner service. Peeks at the first bytes of each
- * connection to decide:
- *   - If it's HTTP hitting one of our managed paths (/service/*, /openapi.json),
- *     route to our Hono app via an internal HTTP server.
- *   - Everything else (HTTP to the inner service, raw TCP, WebSocket upgrades)
- *     gets piped straight through as an L4 proxy. Zero inspection.
+ * Sits in front of an inner HTTP service. Managed paths (/service/*,
+ * /openapi.json) are handled by the Hono app. Everything else is
+ * proxied through to the inner service via HTTP.
  */
-import { createServer as createNetServer, connect, type Server } from "node:net";
 import { createServer as createHttpServer } from "node:http";
+import { request as httpRequest, type IncomingMessage } from "node:http";
+import { Readable } from "node:stream";
 import type { Hono } from "hono";
+import { serve } from "@hono/node-server";
 
 const DEFAULT_MANAGED_PREFIXES = ["/service/", "/openapi.json"];
 
-function isHttpAndManaged(chunk: Buffer, prefixes: string[]): boolean {
-  const head = chunk.toString("ascii", 0, Math.min(chunk.length, 512));
-  if (!/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) /.test(head)) {
-    return false;
-  }
-  const crlfIdx = head.indexOf("\r\n");
-  const firstLine = crlfIdx === -1 ? head : head.slice(0, crlfIdx);
-  const path = firstLine.split(" ")[1] || "";
-  return prefixes.some((p) => path.startsWith(p));
-}
-
-export interface HybridProxyOptions {
+export interface ServiceProxyOptions {
+  /** Port of the inner HTTP service to proxy to */
   innerPort: number;
+  /** Hono app handling managed routes + catch-all proxy */
   app: Hono;
-  /** Extra path prefixes to route to the managed Hono app (e.g. "/orpc/") */
-  managedPrefixes?: string[];
 }
 
-export interface HybridProxyHandle {
+export interface ServiceProxyHandle {
   port: number;
   close(): void;
 }
 
-export function createHybridProxy(opts: HybridProxyOptions): Promise<HybridProxyHandle> {
-  const { innerPort, app, managedPrefixes = [] } = opts;
-  const allPrefixes = [...DEFAULT_MANAGED_PREFIXES, ...managedPrefixes];
+/**
+ * Create an HTTP proxy that serves managed routes via Hono and
+ * proxies everything else to the inner service.
+ */
+export function createServiceProxy(opts: ServiceProxyOptions): Promise<ServiceProxyHandle> {
+  const { innerPort, app } = opts;
 
-  // Internal HTTP server for managed routes — Hono handles the requests
-  const httpServer = createHttpServer(async (req, res) => {
-    try {
-      const url = `http://127.0.0.1${req.url || "/"}`;
-      const headers = new Headers();
-      for (const [key, value] of Object.entries(req.headers)) {
-        if (value) headers.set(key, Array.isArray(value) ? value.join(", ") : value);
+  // Mount a catch-all that proxies to the inner service
+  app.all("/*", async (c) => {
+    const url = new URL(c.req.url);
+    const proxyRes = await new Promise<IncomingMessage>((resolve, reject) => {
+      const proxyReq = httpRequest(
+        {
+          hostname: "127.0.0.1",
+          port: innerPort,
+          path: url.pathname + url.search,
+          method: c.req.method,
+          headers: {
+            ...Object.fromEntries(c.req.raw.headers),
+            host: `127.0.0.1:${innerPort}`,
+          },
+        },
+        resolve,
+      );
+      proxyReq.on("error", reject);
+      if (c.req.raw.body) {
+        Readable.fromWeb(c.req.raw.body as ReadableStream).pipe(proxyReq);
+      } else {
+        proxyReq.end();
       }
-      const body =
-        req.method !== "GET" && req.method !== "HEAD"
-          ? await new Promise<Buffer>((resolve) => {
-              const chunks: Buffer[] = [];
-              req.on("data", (c: Buffer) => chunks.push(c));
-              req.on("end", () => resolve(Buffer.concat(chunks)));
-            })
-          : undefined;
+    });
 
-      const response = await app.fetch(new Request(url, { method: req.method, headers, body }));
-
-      res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
-      if (response.body) {
-        const reader = response.body.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          res.write(value);
-        }
-      }
-      res.end();
-    } catch {
-      if (!res.headersSent) {
-        res.writeHead(502);
-      }
-      res.end("proxy error");
-    }
+    return new Response(
+      proxyRes.statusCode === 204 || proxyRes.statusCode === 304
+        ? null
+        : (Readable.toWeb(proxyRes as unknown as Readable) as ReadableStream),
+      {
+        status: proxyRes.statusCode,
+        headers: proxyRes.headers as Record<string, string>,
+      },
+    );
   });
 
-  return new Promise<HybridProxyHandle>((resolve) => {
-    // Listen on an internal port for managed HTTP
-    httpServer.listen(0, "127.0.0.1", () => {
-      const httpAddr = httpServer.address();
-      if (!httpAddr || typeof httpAddr === "string") throw new Error("httpServer bind failed");
-      const httpPort = httpAddr.port;
-
-      // The outer TCP server — entrypoint for all connections
-      const tcpServer: Server = createNetServer((socket) => {
-        socket.once("data", (firstChunk: Buffer) => {
-          // Pause immediately to prevent data loss between once("data") and pipe()
-          socket.pause();
-
-          // Decide where to route based on first bytes
-          const targetPort = isHttpAndManaged(firstChunk, allPrefixes) ? httpPort : innerPort;
-
-          const proxy = connect(targetPort, "127.0.0.1", () => {
-            proxy.write(firstChunk);
-            socket.pipe(proxy); // pipe() calls resume() internally
-            proxy.pipe(socket);
-          });
-          proxy.on("error", () => socket.destroy());
-          socket.on("error", () => proxy.destroy());
-        });
-
-        socket.on("error", () => {});
-      });
-
-      tcpServer.listen(0, "127.0.0.1", () => {
-        const addr = tcpServer.address();
-        if (!addr || typeof addr === "string") throw new Error("tcpServer bind failed");
-        resolve({
-          port: addr.port,
-          close() {
-            tcpServer.close();
-            httpServer.close();
-          },
-        });
+  return new Promise<ServiceProxyHandle>((resolve) => {
+    const server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" }, (info) => {
+      resolve({
+        port: info.port,
+        close() {
+          server.close();
+        },
       });
     });
   });
 }
+
+export { DEFAULT_MANAGED_PREFIXES };
