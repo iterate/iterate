@@ -29,7 +29,6 @@ export const clickstackService = defineService({
   configSchema: z.object({
     /** Path to the clickstack launcher script */
     launcherPath: z.string().default("/opt/jonasland-sandbox/clickstack-launcher.sh"),
-
   }),
 
   async start(config) {
