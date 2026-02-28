@@ -77,6 +77,13 @@ export const echoService = defineService({
     process.on("SIGTERM", shutdown);
     process.on("SIGINT", shutdown);
 
-    return { target: `127.0.0.1:${proxy.port}` };
+    return {
+      target: `127.0.0.1:${proxy.port}`,
+      /** Programmatic shutdown for tests (production uses SIGTERM) */
+      close() {
+        proxy.close();
+        inner.close();
+      },
+    };
   },
 });

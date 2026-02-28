@@ -1,13 +1,19 @@
-import { describe, test, expect, beforeAll } from "vitest";
+import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { echoService } from "./echo-service.ts";
 
 describe("echo service (HTTP proxy)", () => {
   let target: string;
+  let close: () => void;
 
   beforeAll(async () => {
     const result = await echoService.start({});
     target = result.target;
+    close = result.close;
   }, 10_000);
+
+  afterAll(() => {
+    close?.();
+  });
 
   test("health endpoint responds via managed route", async () => {
     const res = await fetch(`http://${target}/service/health`);

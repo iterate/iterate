@@ -10,8 +10,6 @@ import { Readable } from "node:stream";
 import type { Hono } from "hono";
 import { serve } from "@hono/node-server";
 
-const DEFAULT_MANAGED_PREFIXES = ["/service/", "/openapi.json"];
-
 export interface ServiceProxyOptions {
   /** Port of the inner HTTP service to proxy to */
   innerPort: number;
@@ -78,5 +76,3 @@ export function createServiceProxy(opts: ServiceProxyOptions): Promise<ServicePr
     });
   });
 }
-
-export { DEFAULT_MANAGED_PREFIXES };
