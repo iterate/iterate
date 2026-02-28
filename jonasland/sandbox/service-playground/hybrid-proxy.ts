@@ -5,7 +5,6 @@
  * /openapi.json) are handled by the Hono app. Everything else is
  * proxied through to the inner service via HTTP.
  */
-import { createServer as createHttpServer } from "node:http";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import type { Hono } from "hono";
