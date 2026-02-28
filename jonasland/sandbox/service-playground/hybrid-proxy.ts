@@ -10,6 +10,18 @@ import { Readable } from "node:stream";
 import type { Hono } from "hono";
 import { serve } from "@hono/node-server";
 
+/** Headers that must not be forwarded by proxies (RFC 7230 §6.1) */
+const HOP_BY_HOP = new Set([
+  "transfer-encoding",
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "upgrade",
+]);
+
 export interface ServiceProxyOptions {
   /** Port of the inner HTTP service to proxy to */
   innerPort: number;
@@ -55,16 +67,6 @@ export function createServiceProxy(opts: ServiceProxyOptions): Promise<ServicePr
     });
 
     // Build headers properly: handle multi-value (Set-Cookie) and strip hop-by-hop
-    const HOP_BY_HOP = new Set([
-      "transfer-encoding",
-      "connection",
-      "keep-alive",
-      "proxy-authenticate",
-      "proxy-authorization",
-      "te",
-      "trailer",
-      "upgrade",
-    ]);
     const responseHeaders = new Headers();
     for (const [key, value] of Object.entries(proxyRes.headers)) {
       if (value === undefined || HOP_BY_HOP.has(key)) continue;
