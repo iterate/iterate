@@ -68,13 +68,17 @@ export async function spawnInner(opts: SpawnInnerOptions): Promise<SpawnInnerHan
     }
     // Check if process exited unexpectedly
     if (proc.exitCode !== null) {
-      throw new Error(`inner process exited with code ${String(proc.exitCode)} before becoming ready`);
+      throw new Error(
+        `inner process exited with code ${String(proc.exitCode)} before becoming ready`,
+      );
     }
     await sleep(500);
   }
 
   proc.kill("SIGTERM");
-  throw new Error(`inner process on port ${String(port)} did not become ready within ${String(timeoutMs)}ms`);
+  throw new Error(
+    `inner process on port ${String(port)} did not become ready within ${String(timeoutMs)}ms`,
+  );
 }
 
 function checkHttp(port: number, path: string, maxStatus: number): Promise<boolean> {

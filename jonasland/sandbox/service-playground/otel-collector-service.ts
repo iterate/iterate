@@ -37,11 +37,7 @@ export const otelCollectorService = defineService({
     // 1. Spawn otelcol-contrib
     const inner = await spawnInner({
       command: config.binaryPath,
-      args: [
-        "--config",
-        config.configPath,
-        "--set=service.telemetry.metrics.level=None",
-      ],
+      args: ["--config", config.configPath, "--set=service.telemetry.metrics.level=None"],
       port: HEALTH_CHECK_PORT,
       healthPath: "/",
       timeoutMs: 60_000,
