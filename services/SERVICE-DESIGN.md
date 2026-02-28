@@ -249,6 +249,48 @@ From the registry + Caddy perspective, a service is always: **one slug, one host
 
 This keeps the registry dead simple and pushes routing complexity to where it belongs — inside the service.
 
+### Subdomain routing
+
+Services that expose multiple distinct interfaces use **subdomains** of their slug:
+
+```
+{sub}.{slug}.iterate.localhost → same backend target
+```
+
+The service's Hono app inspects the `Host` header and routes internally. Examples:
+
+| Service   | Subdomain                           | Routes to         |
+|-----------|-------------------------------------|--------------------|
+| events    | `api.events.iterate.localhost`      | oRPC API           |
+| events    | `frontend.events.iterate.localhost` | Frontend/UI        |
+| clickstack| `ui.clickstack.iterate.localhost`   | HyperDX UI (8080)  |
+| clickstack| `ch.clickstack.iterate.localhost`   | ClickHouse HTTP (8123) |
+
+Caddy only needs the wildcard rule `*.{slug}.iterate.localhost → target`. The service decides what to do with each subdomain.
+
+**Why subdomains instead of path prefixes?**
+
+- **No path collision.** ClickHouse HTTP and HyperDX both use `/` — paths can't disambiguate.
+- **Standard HTTP.** Browsers, curl, SDKs all understand hostnames natively. No path rewriting.
+- **Isolates cookies/origins.** Each subdomain is its own origin — no cookie leakage between UI and API.
+- **Works with existing Caddy config.** The `*.{slug}.iterate.localhost` wildcard already exists.
+
+**Implementation in a service:**
+
+```typescript
+app.all("/*", async (c) => {
+  const host = c.req.header("host") ?? "";
+  const sub = host.split(".")[0]; // "ui", "ch", "api", etc.
+
+  switch (sub) {
+    case "ch":
+      return proxyTo(8123)(c); // ClickHouse HTTP
+    default:
+      return proxyTo(8080)(c); // HyperDX UI (default)
+  }
+});
+```
+
 ## oRPC services (TS-specific layer)
 
 The base `ServiceDefinition` is protocol-agnostic — it knows nothing about oRPC or any specific RPC framework. Not all services are oRPC services (e.g. wrapped third-party software, static file servers).
@@ -400,6 +442,46 @@ export function defineService<TConfig extends z.ZodType>(
   };
 }
 ```
+
+## Third-party service wrappers
+
+Third-party binaries (ClickStack, OpenObserve, otelcol-contrib, etc.) are wrapped in the same `ServiceDefinition` shape. The pattern:
+
+1. **`spawnInner()`** — spawn the binary as a child process, poll its HTTP port until ready
+2. **Hono app** — managed routes (`/service/health`, `/openapi.json`)
+3. **`createServiceProxy()`** — proxy everything else to the inner port
+4. **SIGTERM** — kill the child process on shutdown
+
+Third-party binaries can't use ephemeral ports (they don't support port 0). They bind to fixed, known ports. The `spawnInner()` helper takes the expected port and polls until it responds.
+
+### Current third-party services
+
+| Service | Slug | Binary | Primary HTTP port | Extra ports | Notes |
+|---------|------|--------|-------------------|-------------|-------|
+| **ClickStack** | `clickstack` | Shell script (chroot) | 8080 (HyperDX UI) | 8123 (CH HTTP), 9000 (CH native), 4317/4318 (OTLP) | Slow startup (~120s). Multiple internal services. |
+| **OpenObserve** | `openobserve` | `/usr/local/bin/openobserve` | 5080 (HTTP UI+API) | 5081 (gRPC) | Returns 3xx when ready. Config via env vars. |
+| **OTel Collector** | `otel-collector` | `/usr/local/bin/otelcol-contrib` | 15333 (health) | 15317 (OTLP gRPC), 15318 (OTLP HTTP) | No UI. Config via YAML. |
+| **CaddyManager** | `caddymanager` | `node server.mjs` | 8501 | — | Already Node.js. Manages Caddy routes. |
+
+### Multi-port services
+
+Some third-party services expose multiple ports (ClickStack has 5). The service wrapper only proxies the **primary HTTP surface** through Caddy. Other ports are consumed directly by other services on the same host:
+
+```
+                                    ┌─ proxy ─→ 8080 (HyperDX UI)
+                                    │
+Caddy ──→ clickstack proxy (ephemeral) ──┘
+                                    
+otel-collector ──→ 9000 (ClickHouse native)  ← direct, no proxy
+services ──→ 4317/4318 (OTLP)               ← direct, no proxy
+```
+
+This is fine because:
+- All services run on the same host (shared network namespace)
+- Internal ports are consumed by known callers, not external users
+- Caddy routing is for the "public" HTTP surface only
+
+If a service needs to expose multiple ports through Caddy (e.g. ClickHouse HTTP for debugging), it can use subdomain routing to multiplex onto the single proxy port.
 
 ## Open questions / future work
 
