@@ -2,7 +2,7 @@ import { oc as ocBase } from "@orpc/contract";
 import * as v from "valibot";
 import { ProcessDefinition } from "../lazy-process.ts";
 import { RestartingProcessOptions, RestartingProcessState } from "../restarting-process.ts";
-import { EnvOptions } from "../manager.ts";
+import { EnvOptions, ScheduleConfig, ProcessDependency } from "../manager.ts";
 
 const oc = ocBase.$input(v.void());
 
@@ -74,6 +74,8 @@ export const processes = {
         options: v.optional(RestartingProcessOptions),
         envOptions: v.optional(EnvOptions),
         tags: v.optional(v.array(v.string())),
+        dependsOn: v.optional(v.array(ProcessDependency)),
+        schedule: v.optional(ScheduleConfig),
         restartImmediately: v.optional(v.boolean()),
       }),
     )

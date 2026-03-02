@@ -1,6 +1,5 @@
 import type { RestartingProcessEntry } from "pidnap";
 import { createClient } from "pidnap/client";
-import type { IterateConfig } from "../../config/index.ts";
 import { loadConfig } from "../config-loader.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
 
@@ -17,6 +16,8 @@ type DesiredProcess = {
   };
   options?: RestartingProcessEntry["options"];
   envOptions?: RestartingProcessEntry["envOptions"];
+  dependsOn?: RestartingProcessEntry["dependsOn"];
+  schedule?: RestartingProcessEntry["schedule"];
   tags: string[];
 };
 
@@ -24,7 +25,9 @@ function dedupeTags(tags: string[]): string[] {
   return [...new Set(tags)];
 }
 
-function buildDesiredProcesses(config: IterateConfig): DesiredProcess[] {
+function buildDesiredProcesses(config: {
+  pidnap?: { processes?: RestartingProcessEntry[] };
+}): DesiredProcess[] {
   const seen = new Set<string>();
   const desired: DesiredProcess[] = [];
 
@@ -39,6 +42,8 @@ function buildDesiredProcesses(config: IterateConfig): DesiredProcess[] {
       definition: processConfig.definition,
       options: processConfig.options,
       envOptions: processConfig.envOptions,
+      dependsOn: processConfig.dependsOn,
+      schedule: processConfig.schedule,
       tags: dedupeTags([...(processConfig.tags ?? []), ITERATE_USER_TAG]),
     });
   }
@@ -51,6 +56,11 @@ export async function reconcilePidnapProcesses(): Promise<void> {
   const config = await loadConfig(cwd, { forceReload: true });
   const desired = buildDesiredProcesses(config);
 
+  if (desired.length === 0) {
+    console.log("[pidnap-reconcile] No user-defined processes in iterate.config.ts");
+    return;
+  }
+
   const client = createClient(process.env.PIDNAP_RPC_URL ?? "http://127.0.0.1:9876/rpc");
 
   for (const processConfig of desired) {
@@ -59,6 +69,8 @@ export async function reconcilePidnapProcesses(): Promise<void> {
       definition: processConfig.definition,
       options: processConfig.options,
       envOptions: processConfig.envOptions,
+      dependsOn: processConfig.dependsOn,
+      schedule: processConfig.schedule,
       tags: processConfig.tags,
       restartImmediately: false,
     });

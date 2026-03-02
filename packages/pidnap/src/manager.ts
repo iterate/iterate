@@ -752,6 +752,8 @@ export class Manager {
     options?: RestartingProcessOptions;
     envOptions?: EnvOptions;
     tags?: string[];
+    dependsOn?: ProcessDependency[];
+    schedule?: ScheduleConfig;
     persistence?: ProcessPersistence;
     desiredState?: DesiredProcessState;
     restartImmediately?: boolean;
@@ -767,8 +769,8 @@ export class Manager {
       options: input.options ?? currentEntry?.options,
       envOptions: input.envOptions ?? currentEntry?.envOptions,
       tags: input.tags ?? currentEntry?.tags,
-      dependsOn: currentEntry?.dependsOn,
-      schedule: currentEntry?.schedule,
+      dependsOn: input.dependsOn ?? currentEntry?.dependsOn,
+      schedule: input.schedule ?? currentEntry?.schedule,
       persistence: nextPersistence,
       desiredState: nextDesiredState,
     };
@@ -812,7 +814,14 @@ export class Manager {
           throw error;
         }
 
-        if (
+        // Set up cron scheduler if the process has a schedule
+        if (nextEntry.schedule) {
+          this.setupScheduler(nextEntry);
+        }
+
+        if (nextEntry.schedule && !nextEntry.schedule.runOnStart) {
+          this.logger.info(`Process ${processSlug} has schedule, waiting for first trigger`);
+        } else if (
           nextDesiredState === "running" &&
           this.dependencyResolver.areDependenciesMet(processSlug)
         ) {
