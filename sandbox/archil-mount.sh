@@ -41,8 +41,6 @@ build_persist_dirs() {
     ".ssh"                 # SSH keys
     ".config/opencode"     # opencode config + agents prompts
     ".cache/opencode"      # opencode cache
-    ".local/share/opencode" # opencode sqlite db + data
-    ".local/state/opencode" # opencode runtime state
     ".cache/claude"        # claude session state
   )
 
@@ -173,6 +171,31 @@ sudo mkdir -p "$PERSIST"
   done
 
   echo "[archil] Symlinks established"
+
+  # Keep OpenCode sqlite on local disk (not on archil mount). A live sqlite
+  # file on a network/object-backed fs can intermittently fail with:
+  # "SQLiteError: file is not a database".
+  OPENCODE_LOCAL_DIR="${HOME_DIR}/.local/share/opencode"
+  OPENCODE_PERSIST_DIR="${PERSIST}/.local/share/opencode"
+  OPENCODE_SNAPSHOT_DB="${PERSIST}/.iterate/opencode/opencode.db"
+
+  if [[ -L "${OPENCODE_LOCAL_DIR}" ]]; then
+    OPENCODE_LINK_TARGET="$(readlink -f "${OPENCODE_LOCAL_DIR}" || true)"
+    if [[ -n "${OPENCODE_LINK_TARGET}" ]] && [[ "${OPENCODE_LINK_TARGET}" == "${PERSIST}"* ]]; then
+      echo "[archil] Migrating opencode data dir from persisted symlink to local disk"
+      mkdir -p "${HOME_DIR}/.local/share"
+      rm -f "${OPENCODE_LOCAL_DIR}"
+      mkdir -p "${OPENCODE_LOCAL_DIR}"
+      if [[ -d "${OPENCODE_PERSIST_DIR}" ]]; then
+        cp -a "${OPENCODE_PERSIST_DIR}/." "${OPENCODE_LOCAL_DIR}/" || true
+      fi
+    fi
+  fi
+  mkdir -p "${OPENCODE_LOCAL_DIR}"
+  if [[ -f "${OPENCODE_SNAPSHOT_DB}" ]]; then
+    echo "[archil] Restoring opencode sqlite snapshot"
+    cp -f "${OPENCODE_SNAPSHOT_DB}" "${OPENCODE_LOCAL_DIR}/opencode.db"
+  fi
 
   # Restore uncommitted git changes if a stash was saved from a previous machine
   REPO_DIR="${HOME_DIR}/src/github.com/iterate/iterate"
