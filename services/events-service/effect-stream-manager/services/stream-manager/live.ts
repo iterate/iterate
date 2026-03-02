@@ -71,28 +71,48 @@ export const liveLayerWithOptions = (
           const shouldEmitStreamCreated = !knownPaths.has(pathKey);
           if (shouldEmitStreamCreated) {
             knownPaths.add(pathKey);
-            yield* storageManager.ensurePath({ path }).pipe(Effect.orDie);
+            yield* storageManager.ensurePath({ path }).pipe(
+              Effect.tapError(() =>
+                Effect.sync(() => {
+                  knownPaths.delete(pathKey);
+                }),
+              ),
+              Effect.orDie,
+            );
           }
 
           const stream = yield* getOrInitializeStream(path);
 
           if (shouldEmitStreamCreated && path !== EVENTS_META_STREAM_PATH) {
-            const metaPathKey = String(EVENTS_META_STREAM_PATH);
-            if (!knownPaths.has(metaPathKey)) {
-              knownPaths.add(metaPathKey);
-              yield* storageManager
-                .ensurePath({ path: EVENTS_META_STREAM_PATH })
-                .pipe(Effect.orDie);
-            }
+            yield* Effect.gen(function* () {
+              const metaPathKey = String(EVENTS_META_STREAM_PATH);
+              if (!knownPaths.has(metaPathKey)) {
+                knownPaths.add(metaPathKey);
+                yield* storageManager.ensurePath({ path: EVENTS_META_STREAM_PATH }).pipe(
+                  Effect.tapError(() =>
+                    Effect.sync(() => {
+                      knownPaths.delete(metaPathKey);
+                    }),
+                  ),
+                );
+              }
 
-            const metaStream = yield* getOrInitializeStream(EVENTS_META_STREAM_PATH);
-            const metaEvent = yield* metaStream.append(
-              EventInput.make({
-                type: EventType.make(STREAM_CREATED_TYPE),
-                payload: { path: pathKey },
-              }),
+              const metaStream = yield* getOrInitializeStream(EVENTS_META_STREAM_PATH);
+              const metaEvent = yield* metaStream.append(
+                EventInput.make({
+                  type: EventType.make(STREAM_CREATED_TYPE),
+                  payload: { path: pathKey },
+                }),
+              );
+              yield* PubSub.publish(globalPubSub, metaEvent);
+            }).pipe(
+              Effect.catchAllCause((cause) =>
+                Effect.sync(() => {
+                  knownPaths.delete(pathKey);
+                }).pipe(Effect.flatMap(() => Effect.failCause(cause))),
+              ),
+              Effect.orDie,
             );
-            yield* PubSub.publish(globalPubSub, metaEvent);
           }
 
           return stream;

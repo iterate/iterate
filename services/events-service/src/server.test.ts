@@ -33,10 +33,15 @@ describe("Durable Stream Server via oRPC", () => {
     const client = eventBus.client;
     const path = "/test/concurrent-initialize";
     const appendCount = 12;
+    let releaseStart: (() => void) | undefined;
+    const start = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
 
-    await Promise.all(
-      Array.from({ length: appendCount }, (_, index) =>
-        client.append({
+    const appendTasks = Array.from({ length: appendCount }, (_, index) =>
+      (async () => {
+        await start;
+        await client.append({
           path,
           events: [
             {
@@ -44,18 +49,25 @@ describe("Durable Stream Server via oRPC", () => {
               payload: { index },
             },
           ],
-        }),
-      ),
+        });
+      })(),
     );
+
+    releaseStart?.();
+    await Promise.all(appendTasks);
 
     const stream = await client.stream({ path, live: false });
     const events: Array<{ offset: string }> = [];
     try {
-      while (true) {
+      for (let index = 0; index < appendCount; index += 1) {
         const nextEvent = await stream.next();
-        if (nextEvent.done) break;
+        expect(nextEvent.done).toBe(false);
+        if (nextEvent.done) throw new Error("Expected stream event");
         events.push({ offset: nextEvent.value.offset });
       }
+
+      const terminalEvent = await stream.next();
+      expect(terminalEvent.done).toBe(true);
     } finally {
       await stream.return?.();
     }
@@ -63,7 +75,7 @@ describe("Durable Stream Server via oRPC", () => {
     const expectedOffsets = Array.from({ length: appendCount }, (_, index) =>
       String(index).padStart(16, "0"),
     );
-    const actualOffsets = events.map((event) => event.offset).sort();
+    const actualOffsets = events.map((event) => event.offset);
 
     expect(actualOffsets).toEqual(expectedOffsets);
   });
