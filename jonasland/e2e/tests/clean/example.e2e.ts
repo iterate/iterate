@@ -35,9 +35,6 @@ for (const { label, enabled, deploymentFactory } of providers) {
       });
 
       const requestPath = "/v1/chat/completions";
-      const observed = proxy.waitFor((req) => new URL(req.url).pathname === requestPath, {
-        timeout: 10_000,
-      });
 
       proxy.fetch = async () =>
         Response.json({
@@ -48,6 +45,9 @@ for (const { label, enabled, deploymentFactory } of providers) {
 
       const runEgressCheck = async (proxyUrl: string) => {
         await deployment.useEgressProxy({ proxyUrl });
+        const observed = proxy.waitFor((req) => new URL(req.url).pathname === requestPath, {
+          timeout: label === "fly" ? 120_000 : 20_000,
+        });
 
         const payloadJson = JSON.stringify({
           model: "gpt-4o",
