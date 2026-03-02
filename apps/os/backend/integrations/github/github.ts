@@ -851,6 +851,16 @@ async function recreateMachinesForAllProjects(params: {
 async function handleWorkflowRun({ payload, db, env }: WebhookEventParams<WorkflowRunEvent>) {
   const { workflow_run } = payload;
 
+  if (env.APP_STAGE !== "prd") {
+    logger.debug("[GitHub Webhook] Ignoring workflow_run outside prd", {
+      appStage: env.APP_STAGE,
+      action: payload.action,
+      branch: workflow_run.head_branch,
+      repo: workflow_run.repository.full_name,
+    });
+    return;
+  }
+
   // Check if this is an iterate/iterate CI completion on main
   if (!IterateCICompletion.safeParse(payload).success) {
     logger.debug("[GitHub Webhook] Ignoring workflow_run event", {
@@ -923,6 +933,16 @@ async function handleCommitComment({ payload, db, env }: WebhookEventParams<Comm
     logger.debug("[GitHub Webhook] commit_comment missing [refresh] tag", {
       commentId: comment.id,
       user: comment.user.login,
+    });
+    return;
+  }
+
+  const appStageTag = `[APP_STAGE=${env.APP_STAGE}]`;
+  if (!comment.body.includes(appStageTag)) {
+    logger.debug("[GitHub Webhook] commit_comment missing APP_STAGE tag", {
+      commentId: comment.id,
+      user: comment.user.login,
+      expectedTag: appStageTag,
     });
     return;
   }

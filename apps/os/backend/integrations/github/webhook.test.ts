@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Hono } from "hono";
+import { createMachineForProject } from "../../services/machine-creation.ts";
 import { githubApp } from "./github.ts";
 
 // Mock the dependencies
@@ -66,6 +67,11 @@ const validWorkflowRunPayload = {
 
 describe("GitHub Webhook Handler", () => {
   const WEBHOOK_SECRET = "test-webhook-secret";
+  const createMachineForProjectMock = vi.mocked(createMachineForProject);
+
+  beforeEach(() => {
+    createMachineForProjectMock.mockClear();
+  });
 
   function createMockDb() {
     return {
@@ -135,6 +141,10 @@ describe("GitHub Webhook Handler", () => {
 
   async function expectWebhookMatch(res: Response, expected: Record<string, unknown>) {
     expect(await res.json()).toMatchObject(expected);
+  }
+
+  async function flushBackgroundTasks() {
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
   describe("signature verification", () => {
@@ -420,6 +430,59 @@ describe("GitHub Webhook Handler", () => {
       const { app } = createTestApp("dev");
       const res = await makeWebhookRequest({ app, payload, event: "commit_comment" });
       await expectWebhookMatch(res, expected);
+    });
+  });
+
+  describe("recreation gating", () => {
+    it("does not recreate machines for workflow_run outside prd", async () => {
+      const { app, mockDb } = createTestApp("dev");
+      mockDb.query.project.findMany.mockResolvedValue([
+        {
+          id: "prj_123",
+          sandboxProvider: "daytona",
+          machines: [{ id: "mach_123", metadata: {} }],
+        },
+      ]);
+
+      const res = await makeWebhookRequest({
+        app,
+        payload: validWorkflowRunPayload,
+        event: "workflow_run",
+      });
+
+      await expectWebhookMatch(res, { received: true });
+      await flushBackgroundTasks();
+      expect(createMachineForProjectMock).not.toHaveBeenCalled();
+    });
+
+    it("does not recreate machines when APP_STAGE tag does not match", async () => {
+      const { app, mockDb } = createTestApp("dev");
+      mockDb.query.project.findMany.mockResolvedValue([
+        {
+          id: "prj_123",
+          sandboxProvider: "daytona",
+          machines: [{ id: "mach_123", metadata: {} }],
+        },
+      ]);
+
+      const res = await makeWebhookRequest({
+        app,
+        event: "commit_comment",
+        payload: {
+          action: "created",
+          comment: {
+            id: 12345,
+            body: "Testing [refresh] [APP_STAGE=prd]",
+            commit_id: "abc123def456",
+            user: { login: "testuser" },
+          },
+          repository: { full_name: "iterate/iterate" },
+        },
+      });
+
+      await expectWebhookMatch(res, { received: true });
+      await flushBackgroundTasks();
+      expect(createMachineForProjectMock).not.toHaveBeenCalled();
     });
   });
 });
