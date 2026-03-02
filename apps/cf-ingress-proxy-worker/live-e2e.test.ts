@@ -414,7 +414,7 @@ describe("live ingress-proxy E2E", () => {
     const websocketUrl = new URL(env.baseUrl);
     websocketUrl.protocol = websocketUrl.protocol === "https:" ? "wss:" : "ws:";
     websocketUrl.pathname = "/raw";
-    websocketUrl.search = `scenario=websocket-echo&suite=${encodeURIComponent(suiteId)}`;
+    websocketUrl.search = "";
 
     const payload = `echo-${suiteId}-${Date.now()}`;
     const echoed = await readWebsocketEchoWithRetry({

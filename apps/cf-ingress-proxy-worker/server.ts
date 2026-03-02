@@ -16,7 +16,6 @@ import {
   deleteRoutePatternsByRouteId,
   insertRoute,
   insertRoutePattern,
-  selectResolvedRouteByHost,
   selectRouteById,
   selectRoutePatterns,
   selectRoutePatternsByRouteId,
@@ -129,6 +128,26 @@ function normalizeInboundHost(rawHost: string | null): string | null {
     }
   }
   return host.replace(/\.$/, "") || null;
+}
+
+function patternMatchesHost(pattern: string, host: string): boolean {
+  if (!pattern.includes("*")) {
+    return pattern === host;
+  }
+  const escaped = pattern.replaceAll(/[.+?^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*");
+  return new RegExp(`^${escaped}$`).test(host);
+}
+
+function comparePatternPriority(a: RoutePatternRow, b: RoutePatternRow): number {
+  const aExact = a.pattern.includes("*") ? 0 : 1;
+  const bExact = b.pattern.includes("*") ? 0 : 1;
+  if (aExact !== bExact) {
+    return bExact - aExact;
+  }
+  if (a.pattern.length !== b.pattern.length) {
+    return b.pattern.length - a.pattern.length;
+  }
+  return a.id - b.id;
 }
 
 function parseTargetUrl(target: string): URL {
@@ -348,16 +367,22 @@ export async function resolveRoute(
   const host = normalizeInboundHost(request.headers.get("host"));
   if (!host) return null;
 
-  const row = await selectResolvedRouteByHost(db, { host });
+  const [routes, patterns] = await Promise.all([selectRoutes(db), selectRoutePatterns(db)]);
+  const routeById = new Map(routes.map((route) => [route.id, route] as const));
+  const winner = patterns
+    .filter((pattern) => patternMatchesHost(pattern.pattern, host))
+    .sort(comparePatternPriority)[0];
+  if (!winner) return null;
 
-  if (!row) return null;
+  const route = routeById.get(winner.route_id);
+  if (!route) return null;
 
   return {
-    routeId: row.routeId,
-    pattern: row.pattern,
-    targetUrl: parseTargetUrl(row.target),
-    headers: parseJsonObject(row.headers, "headers") as RouteHeaders,
-    metadata: parseJsonObject(row.metadata, "metadata"),
+    routeId: winner.route_id,
+    pattern: winner.pattern,
+    targetUrl: parseTargetUrl(winner.target),
+    headers: parseJsonObject(winner.headers, "headers") as RouteHeaders,
+    metadata: parseJsonObject(route.metadata, "metadata"),
   };
 }
 
@@ -398,16 +423,6 @@ function jsonError(status: number, error: string): Response {
   });
 }
 
-function applyHeaders(request: Request, headers: Headers): void {
-  const names = [...request.headers.keys()];
-  for (const name of names) {
-    request.headers.delete(name);
-  }
-  headers.forEach((value, key) => {
-    request.headers.set(key, value);
-  });
-}
-
 export async function proxyRequest(request: Request, env: ProxyWorkerEnv): Promise<Response> {
   const resolved = await resolveRoute(env.DB, request);
   if (!resolved) {
@@ -417,8 +432,11 @@ export async function proxyRequest(request: Request, env: ProxyWorkerEnv): Promi
   const inboundUrl = new URL(request.url);
   const upstreamUrl = buildUpstreamUrl(resolved.targetUrl, inboundUrl);
   const upstreamHeaders = createUpstreamHeaders(request, resolved.headers);
-  const upstreamRequest = new Request(upstreamUrl.toString(), request);
-  applyHeaders(upstreamRequest, upstreamHeaders);
+  const upstreamRequest = new Request(upstreamUrl.toString(), {
+    method: request.method,
+    headers: upstreamHeaders,
+    body: request.body,
+  });
 
   let upstreamResponse: Response;
   try {
