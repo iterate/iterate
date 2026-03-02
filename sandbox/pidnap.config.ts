@@ -6,6 +6,11 @@ const home = homedir();
 const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
 const sandboxDir = join(iterateRepo, "sandbox");
 const envFile = join(home, ".iterate/.env");
+const eventsServicePort = "17301";
+const eventsServiceDatabasePath = join(home, ".iterate/events.sqlite");
+const pidnapEventsCallbackURL =
+  process.env.PIDNAP_EVENTS_CALLBACK_URL?.trim() ||
+  `http://127.0.0.1:${eventsServicePort}/api/streams/pidnap`;
 const mitmproxyDir = join(home, ".mitmproxy");
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
@@ -45,6 +50,10 @@ export default defineConfig({
   http: {
     host: "0.0.0.0",
     port: 9876,
+  },
+  events: {
+    callbackURL: pidnapEventsCallbackURL,
+    timeoutMs: 2000,
   },
   logDir: "/var/log/pidnap",
   envFile,
@@ -90,6 +99,25 @@ export default defineConfig({
       },
       envOptions: {
         inheritGlobalEnv: false,
+        reloadDelay: false,
+      },
+      options: {
+        restartPolicy: "always",
+      },
+    },
+    {
+      name: "events",
+      definition: {
+        command: "tsx",
+        args: ["src/server.ts"],
+        cwd: `${iterateRepo}/services/events-service`,
+        env: {
+          NODE_ENV: "production",
+          PORT: eventsServicePort,
+          DATABASE_URL: eventsServiceDatabasePath,
+        },
+      },
+      envOptions: {
         reloadDelay: false,
       },
       options: {

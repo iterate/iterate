@@ -31,6 +31,7 @@ export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machine
 const PIDNAP_PROCESSES = [
   "daemon-backend",
   "daemon-frontend",
+  "events",
   "opencode",
   "egress-proxy",
   "project-ingress-proxy",

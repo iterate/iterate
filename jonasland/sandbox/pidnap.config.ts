@@ -9,6 +9,10 @@ export default {
   state: {
     autosaveFile: "/var/log/pidnap/state/autosave.json",
   },
+  events: {
+    callbackURL: pidnapEventsCallbackURL,
+    timeoutMs: 2000,
+  },
   logDir: "/var/log/pidnap",
   processes: [
     {
