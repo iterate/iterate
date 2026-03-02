@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
-import { mockttpFixture, waitForHttpOk } from "../test-helpers/index.ts";
+import { waitForHttpOk } from "@iterate-com/shared/jonasland/deployment";
+import { mockttpFixture } from "../test-helpers/mockttp-fixture.ts";
 
 const fixtureIds = Array.from({ length: 12 }, (_, index) => `fixture-${String(index + 1)}`);
 

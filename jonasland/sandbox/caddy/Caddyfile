@@ -93,6 +93,7 @@ http://clickstack.iterate.localhost {
     @frp_control_ws {
         header Connection *Upgrade*
         header Upgrade websocket
+        host 127.0.0.1 localhost *.fly.dev
     }
     handle @frp_control_ws {
         reverse_proxy 127.0.0.1:27000
@@ -161,6 +162,7 @@ http://clickstack.iterate.localhost {
     @frp_control_ws {
         header Connection *Upgrade*
         header Upgrade websocket
+        host 127.0.0.1 localhost *.fly.dev
     }
     handle @frp_control_ws {
         reverse_proxy 127.0.0.1:27000 {

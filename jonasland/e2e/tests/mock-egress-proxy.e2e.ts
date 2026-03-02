@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { mockEgressProxy } from "../test-helpers/index.ts";
+import { mockEgressProxy } from "../test-helpers/mock-egress-proxy.ts";
 
 describe("mock egress proxy", () => {
   test.concurrent("records requests and supports waitFor", async () => {

@@ -6,7 +6,6 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 import type { DeploymentRuntime } from "@iterate-com/shared/jonasland/deployment";
 
-const FRP_CONTROL_BIND_PORT = 27000;
 const FRP_DATA_REMOTE_PORT = 27180;
 const FRP_VERSION = "0.65.0";
 const CONNECT_TIMEOUT_MS = 45_000;
@@ -109,89 +108,11 @@ async function resolveFrpcBinary(explicit?: string): Promise<string> {
   return binaryPath;
 }
 
-async function configureFlyFrps(params: {
-  deployment: DeploymentRuntime;
-  processSlug: string;
-  token: string;
-}): Promise<void> {
-  const configPath = `/tmp/${params.processSlug}.frps.toml`;
-  const config = [
-    `bindAddr = ${tomlString("0.0.0.0")}`,
-    `bindPort = ${String(FRP_CONTROL_BIND_PORT)}`,
-    `auth.token = ${tomlString(params.token)}`,
-    "",
-  ].join("\n");
-
-  const writeConfig = await params.deployment.exec([
-    "sh",
-    "-ec",
-    `cat > ${configPath} <<'EOF_CFG'\n${config}\nEOF_CFG`,
-  ]);
-  if (writeConfig.exitCode !== 0) {
-    throw new Error(`failed writing frps config:\n${writeConfig.output}`);
-  }
-
-  const pidFile = `/tmp/${params.processSlug}.frps.pid`;
-  const logFile = `/tmp/${params.processSlug}.frps.log`;
-  const startScript = [
-    "set -euo pipefail",
-    "FRPS_BIN=/usr/local/bin/frps",
-    'if [ ! -x "$FRPS_BIN" ]; then echo "frps binary missing at /usr/local/bin/frps" >&2; exit 1; fi',
-    `PID_FILE=${shellSingleQuote(pidFile)}`,
-    `LOG_FILE=${shellSingleQuote(logFile)}`,
-    'if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then kill "$(cat "$PID_FILE")" || true; fi',
-    `nohup "$FRPS_BIN" -c ${shellSingleQuote(configPath)} > "$LOG_FILE" 2>&1 &`,
-    'echo $! > "$PID_FILE"',
-  ].join("\n");
-
-  const start = await params.deployment.exec(["bash", "-lc", startScript]);
-  if (start.exitCode !== 0) {
-    throw new Error(`failed to start frps:\n${start.output}`);
-  }
-
-  const waitPort = await params.deployment.exec([
-    "bash",
-    "-lc",
-    `for i in $(seq 1 120); do (echo > /dev/tcp/127.0.0.1/${String(FRP_CONTROL_BIND_PORT)}) >/dev/null 2>&1 && exit 0; sleep 0.5; done; exit 1`,
-  ]);
-  if (waitPort.exitCode !== 0) {
-    const logs = await params.deployment
-      .exec(["bash", "-lc", `tail -n 200 ${shellSingleQuote(logFile)} || true`])
-      .catch(() => ({ exitCode: 1, output: "" }));
-    throw new Error(`frps did not open port ${String(FRP_CONTROL_BIND_PORT)}:\n${logs.output}`);
-  }
-}
-
-async function stopFlyFrpsBestEffort(params: {
-  deployment: DeploymentRuntime;
-  processSlug: string;
-}): Promise<void> {
-  const pidFile = `/tmp/${params.processSlug}.frps.pid`;
-  await params.deployment
-    .exec([
-      "bash",
-      "-lc",
-      `if [ -f ${shellSingleQuote(pidFile)} ]; then kill "$(cat ${shellSingleQuote(pidFile)})" 2>/dev/null || true; rm -f ${shellSingleQuote(pidFile)}; fi; pkill -f ${shellSingleQuote(`${params.processSlug}.frps.toml`)} 2>/dev/null || true`,
-    ])
-    .catch(() => {});
-}
-
-async function readFlyFrpsLogsBestEffort(params: {
-  deployment: DeploymentRuntime;
-  processSlug: string;
-}): Promise<string> {
-  const logFile = `/tmp/${params.processSlug}.frps.log`;
-  const result = await params.deployment
-    .exec(["bash", "-lc", `tail -n 200 ${shellSingleQuote(logFile)} || true`])
-    .catch(() => ({ exitCode: 1, output: "" }));
-  return result.output.trim();
-}
-
 async function startFrpc(params: {
   controlServerHost: string;
   controlServerPort: number;
   controlTransportProtocol: "websocket" | "wss";
-  token: string;
+  localTargetHost: string;
   localTargetPort: number;
   frpcBin?: string;
 }): Promise<{
@@ -207,12 +128,11 @@ async function startFrpc(params: {
     `serverAddr = ${tomlString(params.controlServerHost)}`,
     `serverPort = ${String(params.controlServerPort)}`,
     `transport.protocol = ${tomlString(params.controlTransportProtocol)}`,
-    `auth.token = ${tomlString(params.token)}`,
     "",
     "[[proxies]]",
     `name = ${tomlString("vitest-mock-egress")}`,
     `type = ${tomlString("tcp")}`,
-    `localIP = ${tomlString("127.0.0.1")}`,
+    `localIP = ${tomlString(params.localTargetHost)}`,
     `localPort = ${String(params.localTargetPort)}`,
     `remotePort = ${String(FRP_DATA_REMOTE_PORT)}`,
     "",
@@ -254,7 +174,7 @@ async function startFrpc(params: {
       await sleep(50);
     }
 
-    if (child.exitCode === null && child.signalCode === null && !child.killed) {
+    if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGKILL");
     }
 
@@ -305,13 +225,13 @@ export interface FlyFrpEgressBridge extends AsyncDisposable {
 
 export async function startFlyFrpEgressBridge(params: {
   deployment: DeploymentRuntime;
+  localTargetHost?: string;
   localTargetPort: number;
   frpcBin?: string;
   runId?: string;
 }): Promise<FlyFrpEgressBridge> {
   let step = "init";
   let runId = "";
-  let processSlug = "";
   let controlServerHost = "";
   let controlServerPort = 443;
   let controlTransportProtocol: "websocket" | "wss" = "wss";
@@ -320,8 +240,7 @@ export async function startFlyFrpEgressBridge(params: {
   try {
     step = "compute-run-context";
     runId = sanitizeRunId(params.runId);
-    processSlug = `frps-${runId}`;
-    const token = randomUUID();
+
     const ingressUrl = new URL(await params.deployment.ingressUrl());
     controlServerHost = ingressUrl.hostname;
     controlServerPort =
@@ -333,19 +252,12 @@ export async function startFlyFrpEgressBridge(params: {
     controlTransportProtocol = ingressUrl.protocol === "https:" ? "wss" : "websocket";
     dataProxyUrl = `http://127.0.0.1:${String(FRP_DATA_REMOTE_PORT)}`;
 
-    step = "configure-fly-frps";
-    await configureFlyFrps({
-      deployment: params.deployment,
-      processSlug,
-      token,
-    });
-
     step = "start-frpc";
     const frpc = await startFrpc({
       controlServerHost,
       controlServerPort,
       controlTransportProtocol,
-      token,
+      localTargetHost: params.localTargetHost ?? "127.0.0.1",
       localTargetPort: params.localTargetPort,
       frpcBin: params.frpcBin,
     });
@@ -354,17 +266,9 @@ export async function startFlyFrpEgressBridge(params: {
       step = "wait-frpc-connected";
       await frpc.waitUntilConnected();
     } catch (error) {
-      const frpsLogs = await readFlyFrpsLogsBestEffort({
-        deployment: params.deployment,
-        processSlug,
-      });
       await frpc.stop().catch(() => {});
-      await stopFlyFrpsBestEffort({
-        deployment: params.deployment,
-        processSlug,
-      });
       throw new Error(
-        `frpc failed to connect (controlServerHost=${controlServerHost}, dataProxyUrl=${dataProxyUrl})\nfrps logs:\n${frpsLogs || "(empty)"}`,
+        `frpc failed to connect (controlServerHost=${controlServerHost}, dataProxyUrl=${dataProxyUrl})`,
         { cause: error },
       );
     }
@@ -373,12 +277,7 @@ export async function startFlyFrpEgressBridge(params: {
     const stop = async () => {
       if (stopped) return;
       stopped = true;
-
       await frpc.stop().catch(() => {});
-      await stopFlyFrpsBestEffort({
-        deployment: params.deployment,
-        processSlug,
-      });
     };
 
     return {
@@ -392,7 +291,7 @@ export async function startFlyFrpEgressBridge(params: {
     };
   } catch (error) {
     throw new Error(
-      `startFlyFrpEgressBridge failed during: ${step} (runId=${runId || "n/a"}, processSlug=${processSlug || "n/a"}, controlServerHost=${controlServerHost || "n/a"}, dataProxyUrl=${dataProxyUrl || "n/a"})`,
+      `startFlyFrpEgressBridge failed during: ${step} (runId=${runId || "n/a"}, controlServerHost=${controlServerHost || "n/a"}, dataProxyUrl=${dataProxyUrl || "n/a"})`,
       { cause: error },
     );
   }

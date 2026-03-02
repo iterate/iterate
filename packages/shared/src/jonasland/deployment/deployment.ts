@@ -1,5 +1,14 @@
-import { dockerDeploymentRuntime, type DeploymentRuntime } from "./docker-deployment.ts";
-import { flyDeploymentRuntime } from "./fly-deployment.ts";
+import {
+  dockerDeploymentRuntimeAttach,
+  dockerDeploymentRuntimeCreate,
+  type DeploymentRuntime,
+  type DockerDeploymentLocator,
+} from "./docker-deployment.ts";
+import {
+  flyDeploymentRuntimeAttach,
+  flyDeploymentRuntimeCreate,
+  type FlyDeploymentLocator,
+} from "./fly-deployment.ts";
 export type { DeploymentRuntime, SandboxFixture } from "./docker-deployment.ts";
 
 export type ProviderName = "docker" | "fly";
@@ -9,22 +18,26 @@ export type DeploymentCommandResult = {
   output: string;
 };
 
-export interface DeploymentConfig {
-  image: string;
-  name?: string;
-  extraHosts?: string[];
-  capAdd?: string[];
+export interface DeploymentCreateInputCommon {
+  name: string;
   env?: Record<string, string> | string[];
-}
-
-export interface DeploymentStartParams extends Partial<DeploymentConfig> {
   waitForReady?: boolean;
   readyTimeoutMs?: number;
 }
 
-export type DeploymentFactory<TDeployment extends Deployment = Deployment> = {
-  create(params?: DeploymentStartParams): Promise<TDeployment>;
-};
+export interface DockerDeploymentCreateInput extends DeploymentCreateInputCommon {
+  dockerImage: string;
+  extraHosts?: string[];
+  capAdd?: string[];
+}
+
+export interface FlyDeploymentCreateInput extends DeploymentCreateInputCommon {
+  flyImage: string;
+}
+
+export type DeploymentLocator = DockerDeploymentLocator | FlyDeploymentLocator;
+
+export type DeploymentOwnership = "owned" | "attached";
 
 const EGRESS_PROCESS_ENV = {
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
@@ -32,17 +45,6 @@ const EGRESS_PROCESS_ENV = {
   OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
   OTEL_PROPAGATORS: "tracecontext,baggage",
 };
-
-function mergeConfig(base: DeploymentConfig, override?: DeploymentStartParams): DeploymentConfig {
-  if (!override) return { ...base };
-  return {
-    image: override.image ?? base.image,
-    name: override.name ?? base.name,
-    extraHosts: override.extraHosts ?? base.extraHosts,
-    capAdd: override.capAdd ?? base.capAdd,
-    env: override.env ?? base.env,
-  };
-}
 
 function parseEnvContent(content: string): Record<string, string> {
   const env: Record<string, string> = {};
@@ -94,22 +96,35 @@ async function retry<T>(task: () => Promise<T>, attempts: number): Promise<T> {
   throw lastError;
 }
 
-abstract class DeploymentBase implements AsyncDisposable, DeploymentRuntime {
+type RuntimeCreateResult<TDeploymentLocator extends DeploymentLocator> = {
+  runtime: DeploymentRuntime;
+  deploymentLocator: TDeploymentLocator;
+};
+
+abstract class DeploymentBase<
+  TCreateInput extends DeploymentCreateInputCommon,
+  TDeploymentLocator extends DeploymentLocator,
+>
+  implements AsyncDisposable, DeploymentRuntime
+{
   static implemented: boolean = false;
 
   protected runtime: DeploymentRuntime | null = null;
-  protected state: "new" | "running" | "stopped" | "destroyed" = "new";
+  protected state: "new" | "running" | "destroyed" = "new";
+  protected ownership: DeploymentOwnership | null = null;
   private homeEnvFilePath: string | null = null;
-
-  constructor(public readonly config: DeploymentConfig) {}
+  private deploymentLocator: TDeploymentLocator | null = null;
 
   abstract readonly providerName: ProviderName;
 
-  protected abstract createRuntime(config: DeploymentConfig): Promise<DeploymentRuntime>;
+  protected abstract createRuntime(
+    input: TCreateInput,
+  ): Promise<RuntimeCreateResult<TDeploymentLocator>>;
+  protected abstract attachRuntime(locator: TDeploymentLocator): Promise<DeploymentRuntime>;
 
   protected requireRuntime(): DeploymentRuntime {
     if (!this.runtime) {
-      throw new Error(`${this.constructor.name} is not started`);
+      throw new Error(`${this.constructor.name} is not initialized`);
     }
     return this.runtime;
   }
@@ -146,17 +161,25 @@ abstract class DeploymentBase implements AsyncDisposable, DeploymentRuntime {
     this.requireRuntime().registry = value;
   }
 
-  async start(params?: DeploymentStartParams): Promise<this> {
+  protected clearLocalState(): void {
+    this.runtime = null;
+    this.deploymentLocator = null;
+    this.homeEnvFilePath = null;
+    this.ownership = null;
+  }
+
+  async create(input: TCreateInput): Promise<TDeploymentLocator> {
     if (this.state === "destroyed") {
       throw new Error(`${this.constructor.name} has been destroyed`);
     }
-
     if (this.runtime) {
-      return this;
+      throw new Error(`${this.constructor.name} already has an initialized runtime`);
     }
 
-    const config = mergeConfig(this.config, params);
-    this.runtime = await this.createRuntime(config);
+    const createResult = await this.createRuntime(input);
+    this.runtime = createResult.runtime;
+    this.deploymentLocator = createResult.deploymentLocator;
+    this.ownership = "owned";
     this.state = "running";
 
     if (params?.waitForReady ?? true) {
@@ -173,35 +196,47 @@ abstract class DeploymentBase implements AsyncDisposable, DeploymentRuntime {
       }
     }
 
-    return this;
+    return createResult.deploymentLocator;
+  }
+
+  async attach(locator: TDeploymentLocator): Promise<void> {
+    if (this.state === "destroyed") {
+      throw new Error(`${this.constructor.name} has been destroyed`);
+    }
+    if (this.runtime) {
+      throw new Error(`${this.constructor.name} already has an initialized runtime`);
+    }
+
+    this.runtime = await this.attachRuntime(locator);
+    this.deploymentLocator = locator;
+    this.ownership = "attached";
+    this.state = "running";
+  }
+
+  getDeploymentLocator(): TDeploymentLocator {
+    if (!this.deploymentLocator) {
+      throw new Error(`${this.constructor.name} has no deploymentLocator; call create() first`);
+    }
+    return this.deploymentLocator;
   }
 
   async restart(): Promise<void> {
     if (!this.runtime) {
-      await this.start();
-      return;
+      throw new Error(`${this.constructor.name} is not initialized`);
     }
 
     await this.runtime.restart();
     this.state = "running";
   }
 
-  async stop(): Promise<void> {
-    if (!this.runtime) return;
-
-    await this.runtime[Symbol.asyncDispose]();
-    this.runtime = null;
-    this.state = "stopped";
-  }
-
   async destroy(): Promise<void> {
     if (this.state === "destroyed") return;
 
-    if (this.runtime) {
+    if (this.runtime && this.ownership === "owned") {
       await this.runtime[Symbol.asyncDispose]();
-      this.runtime = null;
     }
 
+    this.clearLocalState();
     this.state = "destroyed";
   }
 
@@ -308,7 +343,7 @@ abstract class DeploymentBase implements AsyncDisposable, DeploymentRuntime {
       [
         "set -euo pipefail",
         `mkdir -p \"$(dirname ${shQuote(envFilePath)})\"`,
-        `TMP_FILE="$(mktemp ${shQuote(envFilePath + ".tmp.XXXXXX")})"`,
+        `TMP_FILE=\"$(mktemp ${shQuote(envFilePath + ".tmp.XXXXXX")})\"`,
         `printf '%s' ${shQuote(encoded)} | base64 -d > \"$TMP_FILE\"`,
         `mv \"$TMP_FILE\" ${shQuote(envFilePath)}`,
       ].join("\n"),
@@ -477,22 +512,6 @@ abstract class DeploymentBase implements AsyncDisposable, DeploymentRuntime {
     await this.ensureEgressProxyProcess({ externalProxyUrl: proxy.proxyUrl });
   }
 
-  async runEgressRequestViaCurl(params: {
-    requestPath: string;
-    payloadJson: string;
-  }): Promise<{ exitCode: number; output: string }> {
-    return await this.exec([
-      "sh",
-      "-ec",
-      [
-        "curl -4 -k -sS -i",
-        "-H 'content-type: application/json'",
-        `--data ${shQuote(params.payloadJson)}`,
-        `https://api.openai.com${params.requestPath}`,
-      ].join(" "),
-    ]);
-  }
-
   async providerExec(cmd: string | string[]): Promise<DeploymentCommandResult> {
     return await this.exec(cmd);
   }
@@ -513,8 +532,9 @@ abstract class DeploymentBase implements AsyncDisposable, DeploymentRuntime {
     return {
       kind: this.constructor.name,
       provider: this.providerName,
-      config: this.config,
       state: this.state,
+      ownership: this.ownership,
+      deploymentLocator: this.deploymentLocator,
     };
   }
 
@@ -536,50 +556,116 @@ abstract class DeploymentBase implements AsyncDisposable, DeploymentRuntime {
   }
 }
 
-export abstract class Deployment extends DeploymentBase {
+export abstract class Deployment<
+  TCreateInput extends DeploymentCreateInputCommon = DeploymentCreateInputCommon,
+  TDeploymentLocator extends DeploymentLocator = DeploymentLocator,
+> extends DeploymentBase<TCreateInput, TDeploymentLocator> {
   static override implemented: boolean = false;
 }
 
-export class DockerDeployment extends Deployment {
+function mergeCreateInput<TInput>(baseInput: TInput, override?: Partial<TInput>): TInput {
+  if (!override) return { ...(baseInput as object) } as TInput;
+  return { ...(baseInput as object), ...(override as object) } as TInput;
+}
+
+type RequiredKeys<T> = {
+  [K in keyof T]-?: {} extends Pick<T, K> ? never : K;
+}[keyof T];
+
+type CreateWithConfigInput<TAll, TProvided extends Partial<TAll>> = Omit<TAll, keyof TProvided> &
+  Partial<Pick<TAll, Extract<keyof TProvided, keyof TAll>>>;
+
+type RemainingRequiredKeys<TAll, TProvided extends Partial<TAll>> = Exclude<
+  RequiredKeys<TAll>,
+  keyof TProvided
+>;
+
+type CreateWithConfigArgs<TAll, TProvided extends Partial<TAll>> =
+  RemainingRequiredKeys<TAll, TProvided> extends never
+    ? [override?: CreateWithConfigInput<TAll, TProvided>]
+    : [override: CreateWithConfigInput<TAll, TProvided>];
+
+export class DockerDeployment extends Deployment<
+  DockerDeploymentCreateInput,
+  DockerDeploymentLocator
+> {
   static override implemented: boolean = true;
 
   readonly providerName = "docker";
 
-  protected override async createRuntime(config: DeploymentConfig): Promise<DeploymentRuntime> {
-    return await dockerDeploymentRuntime(config);
+  protected override async createRuntime(
+    input: DockerDeploymentCreateInput,
+  ): Promise<RuntimeCreateResult<DockerDeploymentLocator>> {
+    return await dockerDeploymentRuntimeCreate(input);
   }
 
-  static withConfig(config: DeploymentConfig): DeploymentFactory<DockerDeployment> {
-    return {
-      create: async (params) => {
-        const deployment = new DockerDeployment(config);
-        await deployment.start(params);
-        return deployment;
-      },
+  protected override async attachRuntime(
+    locator: DockerDeploymentLocator,
+  ): Promise<DeploymentRuntime> {
+    return await dockerDeploymentRuntimeAttach(locator);
+  }
+
+  static async create(input: DockerDeploymentCreateInput): Promise<DockerDeployment> {
+    const deployment = new DockerDeployment();
+    await deployment.create(input);
+    return deployment;
+  }
+
+  static createWithConfig<TProvided extends Partial<DockerDeploymentCreateInput>>(
+    baseInput: TProvided,
+  ) {
+    const create = async (
+      ...args: CreateWithConfigArgs<DockerDeploymentCreateInput, TProvided>
+    ): Promise<DockerDeployment> => {
+      const override = args[0];
+      return await DockerDeployment.create(
+        mergeCreateInput<DockerDeploymentCreateInput>(
+          baseInput as Partial<DockerDeploymentCreateInput> as DockerDeploymentCreateInput,
+          override,
+        ),
+      );
     };
+    return Object.assign(create, { create });
   }
 }
 
-export class FlyDeployment extends Deployment {
+export class FlyDeployment extends Deployment<FlyDeploymentCreateInput, FlyDeploymentLocator> {
   static override implemented: boolean = true;
 
   readonly providerName = "fly";
 
-  protected override async createRuntime(config: DeploymentConfig): Promise<DeploymentRuntime> {
-    return await flyDeploymentRuntime({
-      image: config.image,
-      name: config.name,
-      env: config.env,
-    });
+  protected override async createRuntime(
+    input: FlyDeploymentCreateInput,
+  ): Promise<RuntimeCreateResult<FlyDeploymentLocator>> {
+    return await flyDeploymentRuntimeCreate(input);
   }
 
-  static withConfig(config: DeploymentConfig): DeploymentFactory<FlyDeployment> {
-    return {
-      create: async (params) => {
-        const deployment = new FlyDeployment(config);
-        await deployment.start(params);
-        return deployment;
-      },
+  protected override async attachRuntime(
+    locator: FlyDeploymentLocator,
+  ): Promise<DeploymentRuntime> {
+    return await flyDeploymentRuntimeAttach(locator);
+  }
+
+  static async create(input: FlyDeploymentCreateInput): Promise<FlyDeployment> {
+    const deployment = new FlyDeployment();
+    await deployment.create(input);
+    return deployment;
+  }
+
+  static createWithConfig<TProvided extends Partial<FlyDeploymentCreateInput>>(
+    baseInput: TProvided,
+  ) {
+    const create = async (
+      ...args: CreateWithConfigArgs<FlyDeploymentCreateInput, TProvided>
+    ): Promise<FlyDeployment> => {
+      const override = args[0];
+      return await FlyDeployment.create(
+        mergeCreateInput<FlyDeploymentCreateInput>(
+          baseInput as Partial<FlyDeploymentCreateInput> as FlyDeploymentCreateInput,
+          override,
+        ),
+      );
     };
+    return Object.assign(create, { create });
   }
 }

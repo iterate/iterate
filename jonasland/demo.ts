@@ -7,7 +7,7 @@ import {
   FlyDeployment,
   type Deployment,
   type ProviderName,
-} from "./e2e/test-helpers/index.ts";
+} from "@iterate-com/shared/jonasland/deployment";
 
 type RouteCheck = {
   host: string;
@@ -342,22 +342,27 @@ async function main(): Promise<void> {
     throw new Error(`unknown jonasland command: ${subcommand}`);
   }
 
-  const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
+  const dockerImage = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
+  const flyImage = process.env.JONASLAND_E2E_FLY_IMAGE ?? "";
   const containerName = `jonasland-demo-${randomUUID().slice(0, 8)}`;
 
-  logLine(`building image: ${image}`);
-  execFileSync("pnpm", ["--filter", "./jonasland/sandbox", "build"], { stdio: "inherit" });
-
   const provider = resolveProvider();
+  if (provider === "docker") {
+    logLine(`building docker image: ${dockerImage}`);
+    execFileSync("pnpm", ["--filter", "./jonasland/sandbox", "build"], { stdio: "inherit" });
+  } else if (flyImage.trim().length === 0) {
+    throw new Error("Set JONASLAND_E2E_FLY_IMAGE for fly deployments");
+  }
+
   logLine(`starting deployment: ${containerName} (provider=${provider})`);
   const deployment =
     provider === "fly"
-      ? await FlyDeployment.withConfig({
-          image,
+      ? await FlyDeployment.createWithConfig({
+          flyImage,
           name: containerName,
         }).create()
-      : await DockerDeployment.withConfig({
-          image,
+      : await DockerDeployment.createWithConfig({
+          dockerImage,
           name: containerName,
           capAdd: ["NET_ADMIN", "SYS_ADMIN"],
           extraHosts: ["host.docker.internal:host-gateway"],
@@ -439,7 +444,9 @@ async function main(): Promise<void> {
   process.stdout.write("\n");
   process.stdout.write("jonasland demo is up\n");
   process.stdout.write(`container: ${containerName}\n`);
-  process.stdout.write(`image: ${image}\n`);
+  process.stdout.write(
+    provider === "fly" ? `flyImage: ${flyImage}\n` : `dockerImage: ${dockerImage}\n`,
+  );
   process.stdout.write(`ingress: ${ingressUrl}\n`);
   process.stdout.write("\n");
   process.stdout.write("URLs to visit\n");

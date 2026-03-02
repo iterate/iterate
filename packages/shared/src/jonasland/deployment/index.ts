@@ -1,6 +1,8 @@
 export {
   dockerContainerFixture,
   execInContainer,
+  dockerDeploymentRuntimeAttach,
+  dockerDeploymentRuntimeCreate,
   dockerDeploymentRuntime,
   sandboxFixture,
   waitForHttpOk,
@@ -9,17 +11,26 @@ export {
   waitForPidnapHostRoute,
   assertIptablesRedirect,
   createDeployment,
+  type DockerDeploymentLocator,
   type DeploymentRuntime,
   type SandboxFixture,
 } from "./docker-deployment.ts";
-export { flyDeploymentRuntime, type FlyDeploymentRuntimeParams } from "./fly-deployment.ts";
+export {
+  flyDeploymentRuntime,
+  flyDeploymentRuntimeAttach,
+  flyDeploymentRuntimeCreate,
+  type FlyDeploymentLocator,
+  type FlyDeploymentRuntimeCreateParams,
+} from "./fly-deployment.ts";
 export {
   Deployment,
   DockerDeployment,
   FlyDeployment,
   type DeploymentCommandResult,
-  type DeploymentConfig,
-  type DeploymentFactory,
-  type DeploymentStartParams,
+  type DeploymentCreateInputCommon,
+  type DeploymentLocator,
+  type DeploymentOwnership,
+  type DockerDeploymentCreateInput,
+  type FlyDeploymentCreateInput,
   type ProviderName,
 } from "./deployment.ts";

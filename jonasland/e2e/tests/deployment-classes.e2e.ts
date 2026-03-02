@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import { DockerDeployment, FlyDeployment, type Deployment } from "../test-helpers/index.ts";
+import {
+  DockerDeployment,
+  FlyDeployment,
+  type Deployment,
+} from "@iterate-com/shared/jonasland/deployment";
 
 type ProviderName = "docker" | "fly";
 
@@ -13,16 +17,16 @@ type ProviderCase = {
 const providerEnv = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const runAllProviders = providerEnv === "all";
 
-const DOCKER_IMAGE = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
-const FLY_IMAGE = process.env.JONASLAND_E2E_FLY_IMAGE ?? process.env.JONASLAND_SANDBOX_IMAGE ?? "";
+const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
+const FLY_IMAGE = process.env.JONASLAND_E2E_FLY_IMAGE ?? "";
 
 const providerCases: ProviderCase[] = [
   {
     name: "docker",
     enabled: runAllProviders || providerEnv === "docker",
     create: async () =>
-      await DockerDeployment.withConfig({
-        image: DOCKER_IMAGE,
+      await DockerDeployment.createWithConfig({
+        dockerImage: DOCKER_IMAGE,
       }).create({
         name: `jonasland-e2e-deployment-class-docker-${randomUUID().slice(0, 8)}`,
       }),
@@ -31,8 +35,8 @@ const providerCases: ProviderCase[] = [
     name: "fly",
     enabled: (runAllProviders || providerEnv === "fly") && FLY_IMAGE.trim().length > 0,
     create: async () =>
-      await FlyDeployment.withConfig({
-        image: FLY_IMAGE,
+      await FlyDeployment.createWithConfig({
+        flyImage: FLY_IMAGE,
       }).create({
         name: `jonasland-e2e-deployment-class-fly-${randomUUID().slice(0, 8)}`,
       }),

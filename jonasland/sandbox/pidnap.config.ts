@@ -57,6 +57,19 @@ export default {
       },
     },
     {
+      name: "frps",
+      definition: {
+        command: "/usr/local/bin/frps",
+        args: ["-c", "/opt/jonasland-sandbox/frps.toml"],
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: false,
+      },
+    },
+    {
       name: "events",
       definition: {
         command: "/opt/pidnap/node_modules/.bin/tsx",

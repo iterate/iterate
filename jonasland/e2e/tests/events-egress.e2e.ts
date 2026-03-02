@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { DockerDeployment, type DeploymentRuntime } from "@iterate-com/shared/jonasland/deployment";
-import { mockEgressProxy } from "../test-helpers/index.ts";
+import { mockEgressProxy } from "../test-helpers/mock-egress-proxy.ts";
 
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const RUN_DOCKER_E2E = E2E_PROVIDER === "docker";
-const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
+const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
 
 const OTEL_SERVICE_ENV = {
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
@@ -76,8 +76,8 @@ async function postEventsOrpc(
 
 describe.runIf(RUN_DOCKER_E2E)("jonasland events egress", () => {
   test("events service health + append/listStreams work inside the container", async () => {
-    await using deployment = await DockerDeployment.withConfig({
-      image,
+    await using deployment = await DockerDeployment.createWithConfig({
+      dockerImage: DOCKER_IMAGE,
       name: `jonasland-e2e-events-contract-${randomUUID()}`,
     }).create();
 
@@ -132,8 +132,8 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland events egress", () => {
       },
     });
 
-    await using deployment = await DockerDeployment.withConfig({
-      image,
+    await using deployment = await DockerDeployment.createWithConfig({
+      dockerImage: DOCKER_IMAGE,
       name: `jonasland-e2e-events-egress-${randomUUID()}`,
       env: {
         ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,

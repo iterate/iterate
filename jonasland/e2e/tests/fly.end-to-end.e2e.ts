@@ -5,7 +5,7 @@ import { FlyDeployment } from "@iterate-com/shared/jonasland/deployment";
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const RUN_FLY_E2E = E2E_PROVIDER === "fly";
 
-const image = process.env.JONASLAND_E2E_FLY_IMAGE ?? process.env.JONASLAND_SANDBOX_IMAGE ?? "";
+const FLY_IMAGE = process.env.JONASLAND_E2E_FLY_IMAGE ?? "";
 
 async function fetchWithRetry(url: string, timeoutMs = 30_000): Promise<Response> {
   const deadline = Date.now() + timeoutMs;
@@ -24,14 +24,14 @@ async function fetchWithRetry(url: string, timeoutMs = 30_000): Promise<Response
 
 describe.runIf(RUN_FLY_E2E)("jonasland fly e2e", () => {
   test("boots Fly machine and resolves public URL through registry", async () => {
-    if (image.trim().length === 0) {
-      throw new Error("Set JONASLAND_E2E_FLY_IMAGE or JONASLAND_SANDBOX_IMAGE for Fly e2e");
+    if (FLY_IMAGE.trim().length === 0) {
+      throw new Error("Set JONASLAND_E2E_FLY_IMAGE for Fly e2e");
     }
 
     let step = "create deployment";
     try {
-      await using deployment = await FlyDeployment.withConfig({
-        image,
+      await using deployment = await FlyDeployment.createWithConfig({
+        flyImage: FLY_IMAGE,
         name: `jonasland-e2e-fly-${randomUUID().slice(0, 8)}`,
       }).create();
 

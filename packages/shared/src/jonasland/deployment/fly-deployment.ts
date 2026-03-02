@@ -479,15 +479,21 @@ async function waitForRuntimeReady(params: {
   );
 }
 
-export interface FlyDeploymentRuntimeParams {
-  image: string;
+export interface FlyDeploymentRuntimeCreateParams {
+  flyImage: string;
   name?: string;
   env?: Record<string, string> | string[];
 }
 
-export async function flyDeploymentRuntime(
-  params: FlyDeploymentRuntimeParams,
-): Promise<DeploymentRuntime> {
+export interface FlyDeploymentLocator {
+  provider: "fly";
+  appName: string;
+  machineId?: string;
+}
+
+export async function flyDeploymentRuntimeCreate(
+  params: FlyDeploymentRuntimeCreateParams,
+): Promise<{ runtime: DeploymentRuntime; deploymentLocator: FlyDeploymentLocator }> {
   const rawEnv = process.env as Record<string, string | undefined>;
   const flyApiToken = rawEnv.FLY_API_TOKEN;
   if (!flyApiToken) {
@@ -511,7 +517,7 @@ export async function flyDeploymentRuntime(
         ITERATE_PUBLIC_BASE_URL_TYPE:
           envRecord.ITERATE_PUBLIC_BASE_URL_TYPE ?? "subdomain-wildcard",
       },
-      providerSnapshotId: params.image,
+      providerSnapshotId: params.flyImage,
     });
 
   const sandbox = await (async () => {
@@ -733,5 +739,221 @@ export async function flyDeploymentRuntime(
     },
   };
 
+  const deploymentLocator: FlyDeploymentLocator = {
+    provider: "fly",
+    appName: sandbox.appName,
+    machineId: await resolveMachineId().catch(() => undefined),
+  };
+  return { runtime: deployment, deploymentLocator };
+}
+
+export async function flyDeploymentRuntimeAttach(
+  locator: FlyDeploymentLocator,
+): Promise<DeploymentRuntime> {
+  if (locator.provider !== "fly") {
+    throw new Error(`fly attach expected provider=fly, got ${locator.provider}`);
+  }
+
+  const rawEnv = process.env as Record<string, string | undefined>;
+  const flyApiToken = rawEnv.FLY_API_TOKEN;
+  if (!flyApiToken) {
+    throw new Error("FLY_API_TOKEN is required for Fly project deployments");
+  }
+
+  const flyBaseDomain = rawEnv.FLY_BASE_DOMAIN ?? "fly.dev";
+  const fallbackIngressBaseUrl = `https://${locator.appName}.${flyBaseDomain}`;
+  const fallbackClientBaseUrl = toFlyClientBaseUrl(fallbackIngressBaseUrl);
+
+  const provider = new FlyProvider(rawEnv);
+  const sandbox = provider.getWithMachineId({
+    providerId: locator.appName,
+    machineId: locator.machineId,
+  });
+  if (!sandbox) {
+    throw new Error(`Could not attach Fly sandbox ${locator.appName}`);
+  }
+
+  await waitForHostResolution({
+    host: new URL(fallbackIngressBaseUrl).hostname,
+  });
+
+  let machineId: string | undefined = locator.machineId;
+
+  const resolveMachineId = async (): Promise<string> => {
+    if (machineId) return machineId;
+    machineId =
+      sandbox.machineId ??
+      (await resolveFlyMachineId({ token: flyApiToken, appName: sandbox.appName }));
+    return machineId;
+  };
+
+  let ingressBaseUrl = fallbackIngressBaseUrl;
+  let clientBaseUrl = fallbackClientBaseUrl;
+  let pidnap = createPidnapClient({
+    url: `${clientBaseUrl}/rpc`,
+    fetch: createFlyHostRoutedFetch({
+      ingressBaseUrl: clientBaseUrl,
+      hostHeader: "pidnap.iterate.localhost",
+    }),
+  });
+  let caddy = createFlyCaddyApiClient({
+    ingressBaseUrl: clientBaseUrl,
+    hostHeader: "caddy-admin.iterate.localhost",
+  });
+  let registry = createRegistryClient({
+    url: `${clientBaseUrl}/orpc`,
+    fetch: createFlyHostRoutedFetch({
+      ingressBaseUrl: clientBaseUrl,
+      hostHeader: "registry.iterate.localhost",
+    }),
+  });
+
+  const refreshClients = async () => {
+    ingressBaseUrl = await resolveIngressBaseUrl({
+      fallbackIngressBaseUrl,
+      registry,
+    });
+    clientBaseUrl = toFlyClientBaseUrl(ingressBaseUrl);
+
+    pidnap = createPidnapClient({
+      url: `${clientBaseUrl}/rpc`,
+      fetch: createFlyHostRoutedFetch({
+        ingressBaseUrl: clientBaseUrl,
+        hostHeader: "pidnap.iterate.localhost",
+      }),
+    });
+    caddy = createFlyCaddyApiClient({
+      ingressBaseUrl: clientBaseUrl,
+      hostHeader: "caddy-admin.iterate.localhost",
+    });
+    registry = createRegistryClient({
+      url: `${clientBaseUrl}/orpc`,
+      fetch: createFlyHostRoutedFetch({
+        ingressBaseUrl: clientBaseUrl,
+        hostHeader: "registry.iterate.localhost",
+      }),
+    });
+  };
+
+  const exec = async (cmd: string | string[]): Promise<{ exitCode: number; output: string }> => {
+    const argv = typeof cmd === "string" ? ["sh", "-ec", cmd] : cmd;
+
+    const resolvedMachineId = await resolveMachineId();
+    const payload = await flyApi<FlyExecResponse>({
+      token: flyApiToken,
+      method: "POST",
+      path: `/v1/apps/${encodeURIComponent(sandbox.appName)}/machines/${encodeURIComponent(resolvedMachineId)}/exec`,
+      body: {
+        command: argv,
+        timeout: 120,
+      },
+    });
+
+    const exitCode = payload.exit_code ?? 0;
+    const stdout = payload.stdout ?? "";
+    const stderr = payload.stderr ?? "";
+
+    return {
+      exitCode,
+      output: `${stdout}${stderr}`,
+    };
+  };
+
+  const waitReady = async () => {
+    let step = "wait-for-runtime-ready";
+    try {
+      await waitForRuntimeReady({
+        ingressBaseUrl,
+        pidnap,
+        exec,
+      });
+
+      step = "refresh-host-routed-clients";
+      await refreshClients();
+    } catch (error) {
+      throw new Error(`fly runtime attach failed during: ${step}`, { cause: error });
+    }
+  };
+
+  try {
+    await waitReady();
+  } catch (error) {
+    const bootstrapLogs = await exec([
+      "sh",
+      "-ec",
+      'for f in /var/log/pidnap/*.log; do echo "===== $f ====="; tail -n 200 "$f"; done 2>/dev/null || true',
+    ]).catch((logsError) => ({
+      exitCode: 1,
+      output: `failed to fetch bootstrap logs: ${logsError instanceof Error ? logsError.message : String(logsError)}`,
+    }));
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\nbootstrap logs:\n${bootstrapLogs.output}`,
+      { cause: error },
+    );
+  }
+
+  const deployment: DeploymentRuntime = {
+    ports: {
+      ingress: 443,
+    },
+    pidnap,
+    caddy,
+    registry,
+    ingressUrl: async () => ingressBaseUrl,
+    exec,
+    logs: async () => {
+      const result = await exec([
+        "sh",
+        "-ec",
+        'for f in /var/log/pidnap/*.log; do echo "===== $f ====="; tail -n 200 "$f"; done 2>/dev/null || true',
+      ]).catch((error) => ({
+        exitCode: 1,
+        output: `failed to fetch logs: ${error instanceof Error ? error.message : String(error)}`,
+      }));
+      return result.output;
+    },
+    waitForHealthyWithLogs: async ({ url }) =>
+      await waitForHealthyWithLogs({
+        url,
+        deployment,
+      }),
+    waitForCaddyHealthy: async ({ timeoutMs } = {}) => {
+      const ingress = await deployment.ingressUrl();
+      await waitForHttpOk({
+        url: `${ingress}/`,
+        timeoutMs: timeoutMs ?? 60_000,
+      });
+    },
+    waitForPidnapHostRoute: async ({ timeoutMs } = {}) =>
+      await waitForPidnapHostRoute({
+        deployment,
+        timeoutMs: timeoutMs ?? 60_000,
+      }),
+    assertIptablesRedirect: async () => await assertIptablesRedirect({ deployment }),
+    waitForPidnapProcessRunning: async ({ target, timeoutMs }) =>
+      await waitForPidnapProcessRunning({
+        client: pidnap,
+        target,
+        timeoutMs: timeoutMs ?? 60_000,
+      }),
+    restart: async () => {
+      await sandbox.restart();
+      machineId = undefined;
+      await refreshClients();
+      await waitReady();
+      deployment.pidnap = pidnap;
+      deployment.caddy = caddy;
+      deployment.registry = registry;
+    },
+    async [Symbol.asyncDispose]() {},
+  };
+
   return deployment;
+}
+
+export async function flyDeploymentRuntime(
+  params: FlyDeploymentRuntimeCreateParams,
+): Promise<DeploymentRuntime> {
+  const result = await flyDeploymentRuntimeCreate(params);
+  return result.runtime;
 }

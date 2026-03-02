@@ -5,7 +5,7 @@ import { DockerDeployment, type DeploymentRuntime } from "@iterate-com/shared/jo
 
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const RUN_DOCKER_E2E = E2E_PROVIDER === "docker";
-const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
+const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
 
 const ORDER_WORKFLOW_STARTED_EVENT_TYPE = "https://events.iterate.com/orders/workflow-started";
 const ORDER_WORKFLOW_COMPLETED_EVENT_TYPE = "https://events.iterate.com/orders/workflow-completed";
@@ -162,8 +162,8 @@ async function collectMatchingSseEvents(params: {
 
 describe.runIf(RUN_DOCKER_E2E)("jonasland firehose workflow", () => {
   test("firehose SSE captures delayed workflow events emitted by orders service", async () => {
-    await using deployment = await DockerDeployment.withConfig({
-      image,
+    await using deployment = await DockerDeployment.createWithConfig({
+      dockerImage: DOCKER_IMAGE,
       name: `jonasland-e2e-firehose-${randomUUID()}`,
     }).create();
 

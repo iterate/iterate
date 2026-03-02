@@ -493,25 +493,77 @@ export async function assertIptablesRedirect(params: {
   }
 }
 
-export async function createDeployment(params: {
-  image: string;
+export interface DockerDeploymentLocator {
+  provider: "docker";
+  containerId: string;
   name?: string;
-  extraHosts?: string[];
-  capAdd?: string[];
-  env?: Record<string, string> | string[];
-}): Promise<DeploymentRuntime> {
-  const requestedEnv = toEnvRecord(params.env);
-  const exposedPorts = ["80/tcp"];
-  const capAdd = params.capAdd ?? ["NET_ADMIN"];
-  const container = await dockerContainerFixture({
-    image: params.image,
-    name: params.name,
-    env: params.env,
-    exposedPorts,
-    extraHosts: withDefaultExtraHosts(params.extraHosts),
-    capAdd,
-  });
+}
 
+type ContainerRuntimeHandle = {
+  containerId: string;
+  publishedPort(params: { containerPort: string }): Promise<number>;
+  logs(): Promise<string>;
+  restart(): Promise<void>;
+  [Symbol.asyncDispose](): Promise<void>;
+};
+
+async function attachToExistingContainer(
+  locator: DockerDeploymentLocator,
+): Promise<ContainerRuntimeHandle> {
+  const docker = await dockerClient();
+  const inspect = await docker.containerInspect(locator.containerId);
+  const resolvedId = inspect.Id;
+  if (!resolvedId) {
+    throw new Error(`docker attach failed: could not inspect container ${locator.containerId}`);
+  }
+
+  return {
+    containerId: resolvedId,
+    async publishedPort(params: { containerPort: string }) {
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const latest = await docker.containerInspect(resolvedId);
+        const mapping = latest.NetworkSettings?.Ports?.[params.containerPort];
+        const hostPort = mapping?.[0]?.HostPort;
+        if (hostPort) return Number(hostPort);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error(`No published port for ${params.containerPort} on container ${resolvedId}`);
+    },
+    async logs() {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const stdoutCapture = captureOutput(stdout);
+      const stderrCapture = captureOutput(stderr);
+      await docker.containerLogs(resolvedId, stdout, stderr, {
+        stdout: true,
+        stderr: true,
+        tail: "all",
+      });
+      return `${stdoutCapture.flush()}${stderrCapture.flush()}`;
+    },
+    async restart() {
+      await docker.containerStop(resolvedId, { timeout: 10 }).catch(() => {});
+      await docker.containerStart(resolvedId);
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        const latest = await docker.containerInspect(resolvedId);
+        if (latest.State?.Running) return;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+      throw new Error(`container failed to restart: ${resolvedId}`);
+    },
+    async [Symbol.asyncDispose]() {},
+  };
+}
+
+async function createRuntimeFromContainer(params: {
+  container: ContainerRuntimeHandle;
+  requestedEnv: Record<string, string>;
+  writePublicBaseEnv: boolean;
+  destroyOnDispose: boolean;
+}): Promise<DeploymentRuntime> {
+  const { container, requestedEnv, writePublicBaseEnv, destroyOnDispose } = params;
   const ports = {
     ingress: await container.publishedPort({ containerPort: "80/tcp" }),
   };
@@ -541,6 +593,7 @@ export async function createDeployment(params: {
   };
 
   const updateIngressPublicBaseUrl = async (): Promise<void> => {
+    if (!writePublicBaseEnv) return;
     await waitForPidnapManagerReady({ client: pidnap, timeoutMs: 45_000 });
 
     const desiredBaseUrl =
@@ -622,14 +675,6 @@ export async function createDeployment(params: {
     });
   };
 
-  try {
-    await updateIngressPublicBaseUrl();
-    await waitForRuntimeReady();
-  } catch (error) {
-    await container[Symbol.asyncDispose]().catch(() => {});
-    throw error;
-  }
-
   const deployment: DeploymentRuntime = {
     ports,
     pidnap,
@@ -694,10 +739,77 @@ export async function createDeployment(params: {
       await waitForRuntimeReady();
     },
     async [Symbol.asyncDispose]() {
+      if (!destroyOnDispose) return;
       await container[Symbol.asyncDispose]();
     },
   };
+
+  try {
+    await updateIngressPublicBaseUrl();
+    await waitForRuntimeReady();
+  } catch (error) {
+    if (destroyOnDispose) {
+      await container[Symbol.asyncDispose]().catch(() => {});
+    }
+    throw error;
+  }
+
   return deployment;
+}
+
+export async function dockerDeploymentRuntimeCreate(params: {
+  dockerImage: string;
+  name?: string;
+  extraHosts?: string[];
+  capAdd?: string[];
+  env?: Record<string, string> | string[];
+}): Promise<{ runtime: DeploymentRuntime; deploymentLocator: DockerDeploymentLocator }> {
+  const requestedEnv = toEnvRecord(params.env);
+  const exposedPorts = ["80/tcp"];
+  const capAdd = params.capAdd ?? ["NET_ADMIN"];
+  const container = await dockerContainerFixture({
+    image: params.dockerImage,
+    name: params.name,
+    env: params.env,
+    exposedPorts,
+    extraHosts: withDefaultExtraHosts(params.extraHosts),
+    capAdd,
+  });
+  const deploymentLocator: DockerDeploymentLocator = {
+    provider: "docker",
+    containerId: container.containerId,
+    name: params.name,
+  };
+  const runtime = await createRuntimeFromContainer({
+    container,
+    requestedEnv,
+    writePublicBaseEnv: true,
+    destroyOnDispose: true,
+  });
+  return { runtime, deploymentLocator };
+}
+
+export async function dockerDeploymentRuntimeAttach(
+  locator: DockerDeploymentLocator,
+): Promise<DeploymentRuntime> {
+  const container = await attachToExistingContainer(locator);
+  return await createRuntimeFromContainer({
+    container,
+    requestedEnv: {},
+    writePublicBaseEnv: false,
+    destroyOnDispose: false,
+  });
+}
+
+export async function createDeployment(params: {
+  dockerImage: string;
+  name?: string;
+  extraHosts?: string[];
+  capAdd?: string[];
+  env?: Record<string, string> | string[];
+}): Promise<DeploymentRuntime> {
+  const result = await dockerDeploymentRuntimeCreate(params);
+  return result.runtime;
 }
 
 export const dockerDeploymentRuntime = createDeployment;

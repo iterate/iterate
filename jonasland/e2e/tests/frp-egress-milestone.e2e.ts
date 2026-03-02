@@ -4,10 +4,10 @@ import { describe, expect, test } from "vitest";
 import {
   DockerDeployment,
   FlyDeployment,
-  MockEgressProxy,
-  startFlyFrpEgressBridge,
   type Deployment,
-} from "../test-helpers/index.ts";
+} from "@iterate-com/shared/jonasland/deployment";
+import { startFlyFrpEgressBridge } from "../test-helpers/frp-egress-bridge.ts";
+import { MockEgressProxy } from "../test-helpers/mock-egress-proxy.ts";
 
 type ProviderName = "docker" | "fly";
 
@@ -20,16 +20,16 @@ type ProviderCase = {
 const providerEnv = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const runAllProviders = providerEnv === "all";
 
-const DOCKER_IMAGE = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
-const FLY_IMAGE = process.env.JONASLAND_E2E_FLY_IMAGE ?? process.env.JONASLAND_SANDBOX_IMAGE ?? "";
+const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
+const FLY_IMAGE = process.env.JONASLAND_E2E_FLY_IMAGE ?? "";
 
 const providerCases: ProviderCase[] = [
   {
     name: "docker",
     enabled: runAllProviders || providerEnv === "docker",
     create: async () =>
-      await DockerDeployment.withConfig({
-        image: DOCKER_IMAGE,
+      await DockerDeployment.createWithConfig({
+        dockerImage: DOCKER_IMAGE,
       }).create({
         name: deploymentNameForCurrentTest("docker"),
       }),
@@ -38,8 +38,8 @@ const providerCases: ProviderCase[] = [
     name: "fly",
     enabled: (runAllProviders || providerEnv === "fly") && FLY_IMAGE.trim().length > 0,
     create: async () =>
-      await FlyDeployment.withConfig({
-        image: FLY_IMAGE,
+      await FlyDeployment.createWithConfig({
+        flyImage: FLY_IMAGE,
       }).create({
         name: deploymentNameForCurrentTest("fly"),
       }),

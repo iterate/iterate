@@ -94,7 +94,7 @@ const providers: Array<{
     label: "docker",
     enabled: true,
     create: () =>
-      DockerDeployment.withConfig({ image: "jonasland-sandbox:local" }).create({
+      DockerDeployment.createWithConfig({ dockerImage: "jonasland-sandbox:local" }).create({
         name: "jonasland-vitest-docker-mini",
       }),
   },
@@ -102,7 +102,7 @@ const providers: Array<{
     label: "fly",
     enabled: Boolean(process.env.JONASLAND_E2E_FLY_IMAGE),
     create: () =>
-      FlyDeployment.withConfig({ image: process.env.JONASLAND_E2E_FLY_IMAGE! }).create({
+      FlyDeployment.createWithConfig({ flyImage: process.env.JONASLAND_E2E_FLY_IMAGE! }).create({
         name: "jonasland-vitest-fly-mini",
       }),
   },
@@ -115,7 +115,7 @@ for (const provider of providers) {
       // Keep the primitive low-level for now: plain fetch + waitFor.
       await using proxy = await MockEgressProxy.create();
 
-      // create() -> start() includes base readiness wait.
+      // create() provisions infra and includes base readiness wait.
       await using deployment = await provider.create();
 
       await using bridge = await startFlyFrpEgressBridge({
