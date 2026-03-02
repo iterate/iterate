@@ -1,4 +1,4 @@
-import { writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { writeFileSync, existsSync, mkdirSync, rmSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { EnvManager } from "../src/env-manager.ts";
@@ -208,6 +208,63 @@ describe("EnvManager - File Watching", () => {
     // After deletion, only global env should remain
     expect(envManager.getEnvVars("app")).toEqual({ GLOBAL: "1" });
 
+    envManager.close();
+  });
+
+  it("should preserve global env across atomic replace when global file is outside cwd", async () => {
+    const homeDir = join(testDir, "home");
+    const iterateDir = join(homeDir, ".iterate");
+    mkdirSync(iterateDir, { recursive: true });
+    const globalEnvPath = join(iterateDir, ".env");
+    writeFileSync(globalEnvPath, "GLOBAL=before");
+    writeFileSync(join(testDir, ".env.app"), "APP=1");
+
+    const envManager = new EnvManager(
+      {
+        cwd: testDir,
+        globalEnvFile: globalEnvPath,
+      },
+      logger,
+    );
+
+    expect(envManager.getEnvVars("app")).toEqual({ GLOBAL: "before", APP: "1" });
+
+    const tempPath = `${globalEnvPath}.tmp`;
+    writeFileSync(tempPath, "GLOBAL=after");
+    renameSync(tempPath, globalEnvPath);
+
+    await wait(500);
+
+    expect(envManager.getEnvVars("app")).toEqual({ GLOBAL: "after", APP: "1" });
+    envManager.close();
+  });
+
+  it("should detect global env recreation when global file is outside cwd", async () => {
+    const homeDir = join(testDir, "home");
+    const iterateDir = join(homeDir, ".iterate");
+    mkdirSync(iterateDir, { recursive: true });
+    const globalEnvPath = join(iterateDir, ".env");
+    writeFileSync(globalEnvPath, "GLOBAL=before");
+
+    const envManager = new EnvManager(
+      {
+        cwd: testDir,
+        globalEnvFile: globalEnvPath,
+      },
+      logger,
+    );
+
+    expect(envManager.getEnvVars("any")).toEqual({ GLOBAL: "before" });
+
+    await wait(200);
+    rmSync(globalEnvPath);
+    await wait(500);
+    expect(envManager.getEnvVars("any")).toEqual({});
+
+    writeFileSync(globalEnvPath, "GLOBAL=restored");
+    await wait(500);
+
+    expect(envManager.getEnvVars("any")).toEqual({ GLOBAL: "restored" });
     envManager.close();
   });
 });
