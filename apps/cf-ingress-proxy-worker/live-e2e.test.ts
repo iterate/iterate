@@ -9,6 +9,8 @@ const LONG_CANDIDATES = [
   "*-b.iterate.workers.dev",
   "*-c.iterate.workers.dev",
 ];
+const HTTP_ECHO_HOST = "httpbin.org";
+const HTTP_ECHO_ORIGIN = `https://${HTTP_ECHO_HOST}`;
 const WEBSOCKET_ECHO_HOST = "ws.postman-echo.com";
 
 function requireEnv() {
@@ -219,8 +221,8 @@ async function createFromCandidates(params: {
         patterns: [
           {
             pattern,
-            target: "https://httpbingo.org",
-            headers: { host: "httpbingo.org", "x-route-kind": params.routeHeader },
+            target: HTTP_ECHO_ORIGIN,
+            headers: { host: HTTP_ECHO_HOST, "x-route-kind": params.routeHeader },
           },
         ],
       });
@@ -280,8 +282,8 @@ describe("live ingress-proxy E2E", () => {
       patterns: [
         {
           pattern: requestHost,
-          target: "https://httpbingo.org",
-          headers: { host: "httpbingo.org", "x-route-kind": "exact" },
+          target: HTTP_ECHO_ORIGIN,
+          headers: { host: HTTP_ECHO_HOST, "x-route-kind": "exact" },
         },
       ],
     });
@@ -293,7 +295,7 @@ describe("live ingress-proxy E2E", () => {
       headers?: Record<string, string | string[]>;
       url?: string;
     };
-    expect(exactJson.url).toBe("https://httpbingo.org/anything?scenario=exact");
+    expect(exactJson.url).toBe(`${HTTP_ECHO_ORIGIN}/anything?scenario=exact`);
     expect(getHeaderValueCaseInsensitive(exactJson.headers, "x-route-kind")).toBe("exact");
 
     await deleteRoute({ baseUrl: env.baseUrl, apiToken: env.apiToken, routeId: exact.routeId });
@@ -305,7 +307,7 @@ describe("live ingress-proxy E2E", () => {
       headers?: Record<string, string | string[]>;
       url?: string;
     };
-    expect(wildcardJson.url).toBe("https://httpbingo.org/anything?scenario=wildcard-specificity");
+    expect(wildcardJson.url).toBe(`${HTTP_ECHO_ORIGIN}/anything?scenario=wildcard-specificity`);
     expect(getHeaderValueCaseInsensitive(wildcardJson.headers, "x-route-kind")).toBe("long");
 
     const selfUpdated = await updateRoute({
@@ -316,8 +318,8 @@ describe("live ingress-proxy E2E", () => {
       patterns: [
         {
           pattern: long.pattern,
-          target: "https://httpbingo.org",
-          headers: { host: "httpbingo.org", "x-route-kind": "long2" },
+          target: HTTP_ECHO_ORIGIN,
+          headers: { host: HTTP_ECHO_HOST, "x-route-kind": "long2" },
         },
       ],
     });
@@ -329,7 +331,7 @@ describe("live ingress-proxy E2E", () => {
       headers?: Record<string, string | string[]>;
       url?: string;
     };
-    expect(postUpdateJson.url).toBe("https://httpbingo.org/anything?scenario=post-update");
+    expect(postUpdateJson.url).toBe(`${HTTP_ECHO_ORIGIN}/anything?scenario=post-update`);
     expect(getHeaderValueCaseInsensitive(postUpdateJson.headers, "x-route-kind")).toBe("long2");
 
     const listed = await listRoutes(env);
