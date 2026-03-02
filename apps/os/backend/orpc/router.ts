@@ -21,6 +21,12 @@ export type ORPCContext = RequestHeadersPluginContext & {
 
 const os = implement(workerContract).$context<ORPCContext>();
 
+function parseGitHubFullName(fullName: string) {
+  const [owner, name] = fullName.split("/");
+  if (!owner || !name) return null;
+  return { owner, name };
+}
+
 /** Middleware that extracts and validates API key from Authorization header */
 const withApiKey = os.middleware(async ({ context, next }) => {
   const authHeader = context.reqHeaders?.get("authorization");
@@ -181,10 +187,14 @@ export const getConfigRepo = os.machines.getConfigRepo
     }
 
     const configRepoId = machineWithProject.project.configRepoId;
-    const configRepoOwner = machineWithProject.project.configRepoOwner;
-    const configRepoName = machineWithProject.project.configRepoName;
+    const configRepoFullName = machineWithProject.project.configRepoFullName;
     const configRepoBranch = machineWithProject.project.configRepoDefaultBranch;
-    if (!configRepoId || !configRepoOwner || !configRepoName || !configRepoBranch) {
+    if (!configRepoId || !configRepoFullName || !configRepoBranch) {
+      return { configRepo: null };
+    }
+
+    const parsedFullName = parseGitHubFullName(configRepoFullName);
+    if (!parsedFullName) {
       return { configRepo: null };
     }
 
@@ -198,10 +208,10 @@ export const getConfigRepo = os.machines.getConfigRepo
     return {
       configRepo: {
         repoId: configRepoId,
-        owner: configRepoOwner,
-        name: configRepoName,
+        owner: parsedFullName.owner,
+        name: parsedFullName.name,
         branch: configRepoBranch,
-        cloneUrl: `https://github.com/${configRepoOwner}/${configRepoName}.git`,
+        cloneUrl: `https://github.com/${parsedFullName.owner}/${parsedFullName.name}.git`,
       },
     };
   });

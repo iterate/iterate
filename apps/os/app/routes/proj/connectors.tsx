@@ -136,6 +136,18 @@ function ProjectConnectorsPage() {
     }),
   );
 
+  const configRepo = project?.configRepoFullName
+    ? (() => {
+        const [owner, name] = project.configRepoFullName.split("/");
+        if (!owner || !name) return null;
+        return {
+          owner,
+          name,
+          defaultBranch: project.configRepoDefaultBranch ?? "main",
+        };
+      })()
+    : null;
+
   return (
     <div className="space-y-8 p-4">
       <section className="space-y-4">
@@ -218,8 +230,8 @@ function ProjectConnectorsPage() {
                 )}
               </ItemTitle>
               <ItemDescription>
-                {project?.configRepoOwner && project?.configRepoName
-                  ? `Config repo: ${project.configRepoOwner}/${project.configRepoName}`
+                {project?.configRepoFullName
+                  ? `Config repo: ${project.configRepoFullName}`
                   : "No config repo selected. Using default template config."}
               </ItemDescription>
             </ItemContent>
@@ -227,15 +239,7 @@ function ProjectConnectorsPage() {
               <GitHubConfigRepoSetup
                 projectSlug={params.projectSlug}
                 connected={githubConnection.connected}
-                configRepo={
-                  project?.configRepoId && project?.configRepoOwner && project?.configRepoName
-                    ? {
-                        owner: project.configRepoOwner,
-                        name: project.configRepoName,
-                        defaultBranch: project.configRepoDefaultBranch ?? "main",
-                      }
-                    : null
-                }
+                configRepo={project?.configRepoId ? configRepo : null}
               />
             </ItemActions>
           </Item>

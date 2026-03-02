@@ -1,5 +1,5 @@
 {
-  "id": "516fe3d1-9074-40ae-878e-5ea80c4d5ff2",
+  "id": "2b033f98-7305-4c7c-98cd-e897dfe4d342",
   "prevId": "f0c094c5-a9e2-4a7f-99f0-9c4388b3371d",
   "version": "7",
   "dialect": "postgresql",
@@ -1409,20 +1409,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "config_repo_provider": {
-          "name": "config_repo_provider",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "config_repo_owner": {
-          "name": "config_repo_owner",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "config_repo_name": {
-          "name": "config_repo_name",
+        "config_repo_full_name": {
+          "name": "config_repo_full_name",
           "type": "text",
           "primaryKey": false,
           "notNull": false

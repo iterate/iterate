@@ -223,9 +223,7 @@ githubApp.get(
           .update(schema.project)
           .set({
             configRepoId: repo.id.toString(),
-            configRepoProvider: "github",
-            configRepoOwner: repo.owner.login,
-            configRepoName: repo.name,
+            configRepoFullName: repo.full_name,
             configRepoDefaultBranch: repo.default_branch,
           })
           .where(eq(schema.project.id, projectId));
@@ -680,8 +678,7 @@ githubApp.post("/webhook", async (c) => {
       // Look up project repo to get group association
       if (repoOwner && repoName) {
         const projectRecord = await db.query.project.findFirst({
-          where: (project, { eq, and }) =>
-            and(eq(project.configRepoOwner, repoOwner), eq(project.configRepoName, repoName)),
+          where: (project, { eq }) => eq(project.configRepoFullName, `${repoOwner}/${repoName}`),
           columns: { id: true, organizationId: true },
         });
         if (projectRecord) {

@@ -337,9 +337,7 @@ export const projectRouter = {
           .update(project)
           .set({
             configRepoId: null,
-            configRepoProvider: null,
-            configRepoOwner: null,
-            configRepoName: null,
+            configRepoFullName: null,
             configRepoDefaultBranch: null,
           })
           .where(eq(project.id, ctx.project.id));
@@ -357,9 +355,7 @@ export const projectRouter = {
         .update(project)
         .set({
           configRepoId: input.repo.id.toString(),
-          configRepoProvider: "github",
-          configRepoOwner: input.repo.owner,
-          configRepoName: input.repo.name,
+          configRepoFullName: `${input.repo.owner}/${input.repo.name}`,
           configRepoDefaultBranch: input.repo.defaultBranch,
         })
         .where(eq(project.id, ctx.project.id));
@@ -411,9 +407,7 @@ export const projectRouter = {
           .update(schema.project)
           .set({
             configRepoId: null,
-            configRepoProvider: null,
-            configRepoOwner: null,
-            configRepoName: null,
+            configRepoFullName: null,
             configRepoDefaultBranch: null,
           })
           .where(eq(project.id, ctx.project.id));

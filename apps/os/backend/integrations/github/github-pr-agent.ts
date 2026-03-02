@@ -259,11 +259,8 @@ async function forwardPromptToMachine(params: {
 
 async function listRepoMachineContexts(db: DB, repo: GitHubRepoCoordinates) {
   const projects = await db.query.project.findMany({
-    where: (project, { eq: whereEq, and: whereAnd }) =>
-      whereAnd(
-        whereEq(project.configRepoOwner, repo.owner),
-        whereEq(project.configRepoName, repo.name),
-      ),
+    where: (project, { eq: whereEq }) =>
+      whereEq(project.configRepoFullName, `${repo.owner}/${repo.name}`),
     with: {
       machines: {
         where: (m, { eq: whereEq }) => whereEq(m.state, "active"),

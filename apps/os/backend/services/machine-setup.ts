@@ -25,6 +25,12 @@ type RepoInfo = {
   name: string;
 };
 
+function parseGitHubFullName(fullName: string) {
+  const [owner, name] = fullName.split("/");
+  if (!owner || !name) return null;
+  return { owner, name };
+}
+
 function createDaemonClient(params: {
   baseUrl: string;
   fetcher?: SandboxFetcher;
@@ -76,22 +82,22 @@ export async function resolveMachineSetupData(
   const projectData = await db.query.project.findFirst({
     where: eq(schema.project.id, projectId),
     columns: {
-      configRepoOwner: true,
-      configRepoName: true,
+      configRepoFullName: true,
       configRepoDefaultBranch: true,
     },
   });
+  const parsedRepo = projectData?.configRepoFullName
+    ? parseGitHubFullName(projectData.configRepoFullName)
+    : null;
   const repos: RepoInfo[] =
-    projectData?.configRepoOwner &&
-    projectData?.configRepoName &&
-    projectData?.configRepoDefaultBranch
+    parsedRepo && projectData?.configRepoDefaultBranch
       ? [
           {
-            url: `https://github.com/${projectData.configRepoOwner}/${projectData.configRepoName}.git`,
+            url: `https://github.com/${parsedRepo.owner}/${parsedRepo.name}.git`,
             branch: projectData.configRepoDefaultBranch,
-            path: `/home/iterate/src/github.com/${projectData.configRepoOwner}/${projectData.configRepoName}`,
-            owner: projectData.configRepoOwner,
-            name: projectData.configRepoName,
+            path: `/home/iterate/src/github.com/${parsedRepo.owner}/${parsedRepo.name}`,
+            owner: parsedRepo.owner,
+            name: parsedRepo.name,
           },
         ]
       : [];
