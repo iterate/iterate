@@ -72,6 +72,10 @@ snapshot_name() {
 }
 
 # Restore all sqlite snapshots from persist volume → local disk.
+# IMPORTANT: Also removes any stale WAL/SHM files. The snapshot from
+# `sqlite3 .backup` is a fully checkpointed DB with no WAL. If a stale
+# WAL exists (from a previous opencode process or container image), SQLite
+# would replay it on open, overwriting our restored data with old state.
 restore_snapshots() {
   IFS=':' read -ra dbs <<< "${SYNC_DBS}"
   for db_path in "${dbs[@]}"; do
@@ -79,6 +83,8 @@ restore_snapshots() {
     local snap="${SNAPSHOT_DIR}/$(snapshot_name "$db_path")"
     if [[ -f "$snap" ]]; then
       mkdir -p "$(dirname "$db_path")"
+      # Remove stale WAL/SHM before restoring the clean snapshot
+      rm -f "${db_path}-wal" "${db_path}-shm"
       cp -f "$snap" "$db_path"
       echo "[archil] Restored snapshot: $db_path"
     fi
