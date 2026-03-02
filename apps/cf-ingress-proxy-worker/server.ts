@@ -21,7 +21,7 @@ import {
   selectRoutePatternsByRouteId,
   selectRoutes,
   updateRouteMetadata,
-} from "./sql/index.ts";
+} from "./sql/queries.ts";
 import { parseWorkerEnv, type ProxyWorkerEnv, type RawProxyWorkerEnv } from "./env.ts";
 
 export type RouteHeaders = Record<string, string>;

@@ -54,7 +54,7 @@ Adding a new SQL query:
 - keep query names unique and camelCase; this becomes the exported TS function name
 - use named params in SQL (`:routeId`, `:host`, etc.); TypeSQL will map to typed params
 - run `pnpm run db:types` to regenerate `sql/queries.ts`
-- import the generated function/type from `./sql/index.ts`
+- import the generated function/type from `./sql/queries.ts`
 
 When changing schema:
 

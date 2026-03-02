@@ -1,4 +1,4 @@
-import { selectPatternConflicts, selectPatternConflictsExcludingRoute } from "./sql/index.ts";
+import { selectPatternConflicts, selectPatternConflictsExcludingRoute } from "./sql/queries.ts";
 
 export class RouteInputError extends Error {}
 
