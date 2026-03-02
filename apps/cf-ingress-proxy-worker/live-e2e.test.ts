@@ -2,12 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const baseUrl = process.env.INGRESS_PROXY_E2E_BASE_URL;
 const apiToken = process.env.INGRESS_PROXY_E2E_API_TOKEN ?? process.env.INGRESS_PROXY_API_TOKEN;
-const SHORT_CANDIDATES = ["*.workers.dev", "**.workers.dev", "***.workers.dev", "****.workers.dev"];
+const SHORT_CANDIDATES = ["*.workers.dev", "*-a.workers.dev", "*-b.workers.dev", "*-c.workers.dev"];
 const LONG_CANDIDATES = [
   "*.iterate.workers.dev",
-  "**.iterate.workers.dev",
-  "***.iterate.workers.dev",
-  "****.iterate.workers.dev",
+  "*-a.iterate.workers.dev",
+  "*-b.iterate.workers.dev",
+  "*-c.iterate.workers.dev",
 ];
 const WEBSOCKET_ECHO_HOST = "ws.postman-echo.com";
 
