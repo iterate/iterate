@@ -7,7 +7,6 @@ import { z } from "zod/v4";
 import { normalizePattern, normalizeRouteId, RouteInputError } from "./route-conflicts.ts";
 import {
   deleteRouteById,
-  deleteRoutePatternsByRouteId,
   deleteRoutePatternsByRouteIdStmt,
   insertRoutePatternStmt,
   insertRouteStmt,
@@ -298,7 +297,6 @@ export async function updateRoute(
 
 export async function deleteRoute(db: D1Database, routeId: string): Promise<boolean> {
   const normalizedRouteId = normalizeRouteId(routeId);
-  await deleteRoutePatternsByRouteId(db, { routeId: normalizedRouteId });
   const result = await deleteRouteById(db, { routeId: normalizedRouteId });
   return (result.changes ?? 0) > 0;
 }
