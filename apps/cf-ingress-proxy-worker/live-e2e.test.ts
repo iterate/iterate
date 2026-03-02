@@ -9,7 +9,7 @@ const LONG_CANDIDATES = [
   "*-b.iterate.workers.dev",
   "*-c.iterate.workers.dev",
 ];
-const HTTP_ECHO_HOST = "httpbin.org";
+const HTTP_ECHO_HOST = "postman-echo.com";
 const HTTP_ECHO_ORIGIN = `https://${HTTP_ECHO_HOST}`;
 const WEBSOCKET_ECHO_HOST = "ws.postman-echo.com";
 
@@ -289,25 +289,25 @@ describe("live ingress-proxy E2E", () => {
     });
     createdRouteIds.add(exact.routeId);
 
-    const exactResponse = await fetch(`${env.baseUrl}/anything?scenario=exact`);
+    const exactResponse = await fetch(`${env.baseUrl}/get?scenario=exact`);
     expect(exactResponse.status).toBe(200);
     const exactJson = (await exactResponse.json()) as {
       headers?: Record<string, string | string[]>;
       url?: string;
     };
-    expect(exactJson.url).toBe(`${HTTP_ECHO_ORIGIN}/anything?scenario=exact`);
+    expect(exactJson.url).toBe(`${HTTP_ECHO_ORIGIN}/get?scenario=exact`);
     expect(getHeaderValueCaseInsensitive(exactJson.headers, "x-route-kind")).toBe("exact");
 
     await deleteRoute({ baseUrl: env.baseUrl, apiToken: env.apiToken, routeId: exact.routeId });
     createdRouteIds.delete(exact.routeId);
 
-    const wildcardResponse = await fetch(`${env.baseUrl}/anything?scenario=wildcard-specificity`);
+    const wildcardResponse = await fetch(`${env.baseUrl}/get?scenario=wildcard-specificity`);
     expect(wildcardResponse.status).toBe(200);
     const wildcardJson = (await wildcardResponse.json()) as {
       headers?: Record<string, string | string[]>;
       url?: string;
     };
-    expect(wildcardJson.url).toBe(`${HTTP_ECHO_ORIGIN}/anything?scenario=wildcard-specificity`);
+    expect(wildcardJson.url).toBe(`${HTTP_ECHO_ORIGIN}/get?scenario=wildcard-specificity`);
     expect(getHeaderValueCaseInsensitive(wildcardJson.headers, "x-route-kind")).toBe("long");
 
     const selfUpdated = await updateRoute({
@@ -325,13 +325,13 @@ describe("live ingress-proxy E2E", () => {
     });
     expect(selfUpdated.routeId).toBe(long.route.routeId);
 
-    const postUpdateResponse = await fetch(`${env.baseUrl}/anything?scenario=post-update`);
+    const postUpdateResponse = await fetch(`${env.baseUrl}/get?scenario=post-update`);
     expect(postUpdateResponse.status).toBe(200);
     const postUpdateJson = (await postUpdateResponse.json()) as {
       headers?: Record<string, string | string[]>;
       url?: string;
     };
-    expect(postUpdateJson.url).toBe(`${HTTP_ECHO_ORIGIN}/anything?scenario=post-update`);
+    expect(postUpdateJson.url).toBe(`${HTTP_ECHO_ORIGIN}/get?scenario=post-update`);
     expect(getHeaderValueCaseInsensitive(postUpdateJson.headers, "x-route-kind")).toBe("long2");
 
     const listed = await listRoutes(env);
