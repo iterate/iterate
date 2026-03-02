@@ -10,21 +10,29 @@ export type PatternConflict = {
 };
 
 export function normalizePattern(input: string): string {
-  const normalized = input.trim().toLowerCase().replace(/\.$/, "");
-  if (!normalized) throw new RouteInputError("pattern is required");
+  const trimmed = input.trim().toLowerCase();
+  if (!trimmed) throw new RouteInputError("pattern is required");
+  if (trimmed.includes("..")) {
+    throw new RouteInputError(`Invalid pattern: ${input}`);
+  }
+
+  const normalized = trimmed.replace(/\.$/, "");
+  if (!normalized) {
+    throw new RouteInputError(`Invalid pattern: ${input}`);
+  }
   if (!PATTERN_CHARS.test(normalized)) {
     throw new RouteInputError(`Invalid pattern: ${input}`);
   }
-  if (normalized.includes("..")) {
-    throw new RouteInputError(`Invalid pattern: ${input}`);
-  }
   const wildcardCount = (normalized.match(/\*/g) ?? []).length;
+  const wildcardTail = normalized.slice(1);
   if (
     wildcardCount > 0 &&
     (wildcardCount !== 1 ||
       !normalized.startsWith("*") ||
       normalized.length <= 1 ||
-      /^[a-z0-9]$/.test(normalized[1] ?? ""))
+      /^[a-z0-9]$/.test(normalized[1] ?? "") ||
+      !wildcardTail.includes(".") ||
+      !/[a-z0-9]/.test(wildcardTail))
   ) {
     throw new RouteInputError(`Invalid pattern: ${input}`);
   }
@@ -41,9 +49,12 @@ export async function findPatternConflicts(params: {
   db: D1Database;
   patterns: string[];
   excludeRouteId?: string;
+  patternsAreNormalized?: boolean;
 }): Promise<PatternConflict[]> {
-  const { db, excludeRouteId } = params;
-  const normalizedPatterns = [...new Set(params.patterns.map(normalizePattern))];
+  const { db, excludeRouteId, patternsAreNormalized } = params;
+  const normalizedPatterns = [
+    ...new Set(patternsAreNormalized ? params.patterns : params.patterns.map(normalizePattern)),
+  ];
   if (normalizedPatterns.length === 0) return [];
 
   if (excludeRouteId) {

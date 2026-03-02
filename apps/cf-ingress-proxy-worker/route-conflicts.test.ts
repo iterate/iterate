@@ -38,6 +38,9 @@ describe("normalizePattern", () => {
     ["*project.ingress.iterate.com", "Invalid pattern"],
     ["proj*ect.ingress.iterate.com", "Invalid pattern"],
     ["*.*.ingress.iterate.com", "Invalid pattern"],
+    ["*..", "Invalid pattern"],
+    ["*-", "Invalid pattern"],
+    ["*_", "Invalid pattern"],
     ["*.", "Invalid pattern"],
   ])("rejects invalid pattern %j", (input, message) => {
     expect(() => normalizePattern(input)).toThrow(message);
@@ -92,5 +95,17 @@ describe("findPatternConflicts", () => {
     });
 
     expect(conflicts).toEqual([]);
+  });
+
+  it("accepts pre-normalized patterns without re-normalizing", async () => {
+    await seedPattern("rte_a", "app.project.ingress.iterate.com");
+
+    const conflicts = await findPatternConflicts({
+      db: testEnv.DB,
+      patterns: ["app.project.ingress.iterate.com"],
+      patternsAreNormalized: true,
+    });
+
+    expect(conflicts).toEqual([{ routeId: "rte_a", pattern: "app.project.ingress.iterate.com" }]);
   });
 });

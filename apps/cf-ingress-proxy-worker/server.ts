@@ -85,6 +85,14 @@ class RouteGoneError extends Error {
   }
 }
 
+class RoutePatternClaimedError extends Error {
+  public constructor() {
+    super(
+      "Pattern conflicts with existing route patterns. A concurrent request may have claimed the pattern.",
+    );
+  }
+}
+
 function readBearerToken(headerValue: string | null): string | null {
   if (!headerValue) return null;
   const match = /^bearer\s+(.+)$/i.exec(headerValue);
@@ -254,6 +262,7 @@ export async function createRoute(
   const conflicts = await findPatternConflicts({
     db,
     patterns: normalizedPatterns.map((pattern) => pattern.pattern),
+    patternsAreNormalized: true,
   });
   if (conflicts.length > 0) {
     throw new RouteConflictError(conflicts);
@@ -290,7 +299,7 @@ export async function updateRoute(
   const routeId = normalizeRouteId(params.routeId);
   const existing = await getRoute(db, routeId);
   if (!existing) {
-    throw new ORPCError("NOT_FOUND", { message: "Route not found" });
+    throw new RouteGoneError();
   }
 
   const normalizedPatterns = normalizePatternInputs(params.patterns);
@@ -298,6 +307,7 @@ export async function updateRoute(
     db,
     patterns: normalizedPatterns.map((pattern) => pattern.pattern),
     excludeRouteId: routeId,
+    patternsAreNormalized: true,
   });
   if (conflicts.length > 0) {
     throw new RouteConflictError(conflicts);
@@ -319,6 +329,9 @@ export async function updateRoute(
   } catch (error) {
     if (isForeignKeyConstraintError(error)) {
       throw new RouteGoneError();
+    }
+    if (isUniqueConstraintError(error)) {
+      throw new RoutePatternClaimedError();
     }
     throw error;
   }
@@ -472,6 +485,12 @@ function mapRouteError(error: unknown): never {
     });
   }
 
+  if (error instanceof RoutePatternClaimedError) {
+    throw new ORPCError("CONFLICT", {
+      message: error.message,
+    });
+  }
+
   if (isUniqueConstraintError(error)) {
     throw new ORPCError("CONFLICT", {
       message:
@@ -576,11 +595,12 @@ function getParsedEnv(rawEnv: RawProxyWorkerEnv): ProxyWorkerEnv {
 }
 
 app.use("*", async (c, next) => {
+  if (c.req.path === "/health") return next();
   c.set("env", getParsedEnv(c.env));
   return next();
 });
 
-app.get("/health", () => new Response("OK", { status: 200 }));
+app.get("/health", (c) => c.text("OK"));
 
 app.all("/api/orpc/*", async (c) => {
   const { matched, response } = await orpcHandler.handle(c.req.raw, {
