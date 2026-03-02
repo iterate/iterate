@@ -1,26 +1,70 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import type http from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { once } from "node:events";
+import {
+  createNativeMswServer,
+  type NativeMswServer,
+  type TransformRequest,
+  type TransformWebSocketUrl,
+} from "@iterate-com/msw-http-server";
+import type { RequestHandler, SharedOptions, WebSocketHandler } from "msw";
+import type { SetupServerApi } from "msw/node";
+import type { Har } from "har-format";
+import httpProxy from "http-proxy";
 import mockttp from "mockttp";
 import { request } from "undici";
-import { expect } from "vitest";
-import { MockEgressProxy, type Har } from "../index.ts";
+import { HarJournal } from "../msw-http-proxy/har-journal.ts";
+import {
+  PROXY_HEADERS_TO_STRIP,
+  createProxyRequestTransform,
+  createProxyWebSocketUrlTransform,
+} from "../proxy-request-transform.ts";
+import { createSimpleHarReplayHandler } from "../simple-har-replay-handler.ts";
+
+type AnyHandler = RequestHandler | WebSocketHandler;
+type MockHttpServerMode = "record" | "replay" | "replay-or-record";
+
+export type UseMockHttpServerOptions = {
+  harPath?: string;
+  mode?: MockHttpServerMode;
+  handlers?: AnyHandler[];
+  onUnhandledRequest?: SharedOptions["onUnhandledRequest"];
+  port?: number;
+  host?: string;
+  /**
+   * Rewrite the incoming HTTP request before MSW handler resolution.
+   * Defaults to the standard iterate proxy header rewriter
+   * (x-iterate-target-url, x-iterate-original-host, etc.).
+   * Pass `false` to disable rewriting entirely.
+   */
+  transformRequest?: TransformRequest | false;
+  /**
+   * Rewrite the incoming WebSocket upgrade URL before MSW handler resolution.
+   * Defaults to the standard iterate proxy header rewriter.
+   * Pass `false` to disable rewriting entirely.
+   */
+  transformWebSocketUrl?: TransformWebSocketUrl | false;
+  /**
+   * Record requests handled by MSW handlers into HAR.
+   * Default: true.
+   */
+  recordHandledRequests?: boolean;
+};
+
+export type MockHttpServer = AsyncDisposable &
+  Pick<SetupServerApi, "use" | "resetHandlers" | "restoreHandlers" | "listHandlers" | "events"> & {
+    url: string;
+    port: number;
+    getHar(): Har;
+    writeHar(path?: string): Promise<void>;
+  };
 
 type TemporaryDirectoryFixture = Disposable & {
   path: string;
-};
-
-type UseMockHttpServerOptions = {
-  harDirectory: string;
-  port?: number;
-  harFileName?: string;
-};
-
-type MockHttpServerFixture = AsyncDisposable & {
-  url: string;
-  port: number;
-  getHar(): Har;
 };
 
 type UseMitmProxyOptions = {
@@ -33,6 +77,251 @@ type MitmProxyFixture = AsyncDisposable & {
   port: number;
   envForNode(): Record<string, string>;
 };
+
+function resolveMode(options: UseMockHttpServerOptions): MockHttpServerMode | undefined {
+  if (options.mode) return options.mode;
+  if (!options.harPath) return undefined;
+  return existsSync(options.harPath) ? "replay" : "record";
+}
+
+function resolveOnUnhandledRequest(
+  explicit: SharedOptions["onUnhandledRequest"] | undefined,
+  mode: MockHttpServerMode | undefined,
+): SharedOptions["onUnhandledRequest"] {
+  if (explicit) return explicit;
+  if (mode === "record" || mode === "replay-or-record") return "bypass";
+  return "error";
+}
+
+function headersToRecord(headers: Headers): Record<string, string> {
+  const mapped: Record<string, string> = {};
+  for (const [name, value] of headers.entries()) {
+    mapped[name] = value;
+  }
+  return mapped;
+}
+
+function mapNodeHeadersToHeaders(input: http.IncomingHttpHeaders): Headers {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(input)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        headers.append(name, item);
+      }
+      continue;
+    }
+    headers.set(name, value);
+  }
+  return headers;
+}
+
+function removeProxyHeadersFromIncoming(req: http.IncomingMessage): void {
+  for (const name of PROXY_HEADERS_TO_STRIP) {
+    delete req.headers[name];
+  }
+}
+
+export async function useMockHttpServer(
+  options: UseMockHttpServerOptions = {},
+): Promise<MockHttpServer> {
+  const mode = resolveMode(options);
+  const onUnhandledRequest = resolveOnUnhandledRequest(options.onUnhandledRequest, mode);
+  const harJournal = options.harPath
+    ? await HarJournal.fromSource(options.harPath).catch(() => new HarJournal())
+    : new HarJournal();
+
+  const builtinHandlers: RequestHandler[] = [];
+  if (mode === "replay" || mode === "replay-or-record") {
+    builtinHandlers.push(createSimpleHarReplayHandler({ harJournal }));
+  }
+
+  const allHandlers: AnyHandler[] = [...(options.handlers ?? []), ...builtinHandlers];
+  const passthroughEnabled = mode === "record" || mode === "replay-or-record";
+  const recordHandledRequests = options.recordHandledRequests ?? true;
+
+  const transformRequest =
+    options.transformRequest === false
+      ? undefined
+      : (options.transformRequest ?? createProxyRequestTransform());
+
+  const transformWebSocketUrl =
+    options.transformWebSocketUrl === false
+      ? undefined
+      : (options.transformWebSocketUrl ?? createProxyWebSocketUrlTransform());
+
+  const proxy = httpProxy.createProxyServer({
+    changeOrigin: true,
+    secure: false,
+    ws: true,
+    xfwd: true,
+  });
+
+  type PendingHttpPassthrough = {
+    startedAt: number;
+    targetUrl: URL;
+    method: string;
+    requestHeaders: Record<string, string>;
+    requestBody: Uint8Array | null;
+    requestBodyChunks: Buffer[];
+  };
+  const pendingHttpPassthrough = new WeakMap<http.IncomingMessage, PendingHttpPassthrough>();
+
+  proxy.on("proxyRes", (proxyRes, req) => {
+    const pending = pendingHttpPassthrough.get(req);
+    if (!pending) return;
+
+    const responseChunks: Buffer[] = [];
+    let finalized = false;
+    const finalize = () => {
+      if (finalized) return;
+      finalized = true;
+
+      if (pending.requestBodyChunks.length > 0) {
+        pending.requestBody = Buffer.concat(pending.requestBodyChunks);
+      }
+
+      const responseBody = Buffer.concat(responseChunks);
+      const responseHeaders = mapNodeHeadersToHeaders(proxyRes.headers);
+      const response = new Response(responseBody, {
+        status: proxyRes.statusCode ?? 0,
+        statusText: proxyRes.statusMessage ?? "",
+        headers: responseHeaders,
+      });
+
+      harJournal.appendHttpExchange({
+        startedAt: pending.startedAt,
+        durationMs: Date.now() - pending.startedAt,
+        method: pending.method,
+        targetUrl: pending.targetUrl,
+        requestHeaders: pending.requestHeaders,
+        requestBody: pending.requestBody,
+        response,
+        responseBody,
+      });
+      pendingHttpPassthrough.delete(req);
+    };
+
+    proxyRes.on("data", (chunk) => {
+      responseChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    proxyRes.on("end", finalize);
+    proxyRes.on("close", finalize);
+  });
+
+  const server: NativeMswServer = createNativeMswServer(
+    {
+      onUnhandledRequest,
+      transformRequest,
+      transformWebSocketUrl,
+      onMockedResponse: ({ request, response }) => {
+        if (!recordHandledRequests) return;
+
+        const startedAt = Date.now();
+        const requestHeaders = headersToRecord(request.headers);
+        const targetUrl = new URL(request.url);
+        harJournal.appendHttpExchange({
+          startedAt,
+          durationMs: Date.now() - startedAt,
+          method: request.method,
+          targetUrl,
+          requestHeaders,
+          requestBody: null,
+          response,
+          responseBody: null,
+        });
+      },
+      onUnhandledHttpRequest: ({ req, res, request }) => {
+        if (!passthroughEnabled || onUnhandledRequest === "error") {
+          return false;
+        }
+
+        const targetUrl = new URL(request.url);
+        const startedAt = Date.now();
+        const pending: PendingHttpPassthrough = {
+          startedAt,
+          targetUrl,
+          method: request.method,
+          requestHeaders: headersToRecord(request.headers),
+          requestBody: null,
+          requestBodyChunks: [],
+        };
+        req.on("data", (chunk) => {
+          pending.requestBodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        pendingHttpPassthrough.set(req, pending);
+
+        req.url = `${targetUrl.pathname}${targetUrl.search}`;
+        req.headers.host = targetUrl.host;
+        removeProxyHeadersFromIncoming(req);
+
+        proxy.web(
+          req,
+          res,
+          {
+            target: `${targetUrl.protocol}//${targetUrl.host}`,
+          },
+          () => {
+            pendingHttpPassthrough.delete(req);
+            if (!res.headersSent) {
+              res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+            }
+            res.end("proxy passthrough failed");
+          },
+        );
+
+        return true;
+      },
+      onUnhandledWebSocketUpgrade: ({ req, socket, head, requestUrl }) => {
+        if (!passthroughEnabled || onUnhandledRequest === "error") {
+          return false;
+        }
+
+        req.url = `${requestUrl.pathname}${requestUrl.search}`;
+        req.headers.host = requestUrl.host;
+        removeProxyHeadersFromIncoming(req);
+
+        proxy.ws(req, socket, head, {
+          target: `${requestUrl.protocol}//${requestUrl.host}`,
+        });
+        return true;
+      },
+    },
+    ...allHandlers,
+  );
+
+  const host = options.host ?? "127.0.0.1";
+  server.listen(options.port ?? 0, host);
+  await once(server, "listening");
+
+  const address = server.address() as AddressInfo;
+  const port = address.port;
+  const url = `http://${host}:${String(port)}`;
+
+  return {
+    url,
+    port,
+    use: server.use.bind(server),
+    resetHandlers: server.resetHandlers.bind(server),
+    restoreHandlers: server.restoreHandlers.bind(server),
+    listHandlers: server.listHandlers.bind(server),
+    events: server.events,
+    getHar() {
+      return harJournal.getHar();
+    },
+    async writeHar(path = options.harPath) {
+      if (!path) throw new Error("no harPath configured");
+      await harJournal.write(path);
+    },
+    async [Symbol.asyncDispose]() {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      proxy.close();
+      if (options.harPath) {
+        await harJournal.write(options.harPath);
+      }
+    },
+  };
+}
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
@@ -54,19 +343,6 @@ function toOriginalUrl(
   return new URL(rawUrl, `https://${host}`);
 }
 
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function currentTestHarPath(harDirectory: string): string {
-  const currentTestName = expect.getState().currentTestName;
-  const slug = slugify(currentTestName ?? "") || "unknown-test";
-  return join(harDirectory, `${slug}.har`);
-}
-
 export function useTemporaryDirectory(prefix = "mock-http-proxy-api-"): TemporaryDirectoryFixture {
   const path = mkdtempSync(join(tmpdir(), prefix));
   return {
@@ -77,31 +353,6 @@ export function useTemporaryDirectory(prefix = "mock-http-proxy-api-"): Temporar
   };
 }
 
-export async function useMockHttpServer(
-  options: UseMockHttpServerOptions,
-): Promise<MockHttpServerFixture> {
-  const harRecordingPath = options.harFileName
-    ? join(options.harDirectory, options.harFileName)
-    : currentTestHarPath(options.harDirectory);
-  const egress = await MockEgressProxy.start({
-    harRecordingPath,
-    port: options.port,
-  });
-
-  const fixture: MockHttpServerFixture = {
-    url: egress.url,
-    port: egress.port,
-    getHar() {
-      return egress.getHar();
-    },
-    async [Symbol.asyncDispose]() {
-      await egress.close();
-    },
-  };
-
-  return fixture;
-}
-
 export async function useMitmProxy(options: UseMitmProxyOptions): Promise<MitmProxyFixture> {
   const ca = await mockttp.generateCACertificate();
   const tempDirPath = await mkdtemp(join(tmpdir(), "mock-http-proxy-mitm-ca-"));
@@ -110,7 +361,7 @@ export async function useMitmProxy(options: UseMitmProxyOptions): Promise<MitmPr
 
   const mitmServer = mockttp.getLocal({ https: ca });
   const egressUrl = new URL(options.externalEgressProxyUrl);
-  const egressWsUrl = `ws://${egressUrl.host}`;
+  const _egressWsUrl = `ws://${egressUrl.host}`;
 
   await mitmServer.forAnyRequest().thenCallback(async (req) => {
     const originalUrl = toOriginalUrl(req.url, req.headers);

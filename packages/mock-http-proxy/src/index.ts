@@ -19,3 +19,8 @@ export {
   type MockMswHttpProxyRequestRewriteInput,
   type MockMswHttpProxyRequestRewriteResult,
 } from "./msw-http-proxy/index.ts";
+export {
+  createProxyRequestTransform,
+  createProxyWebSocketUrlTransform,
+} from "./proxy-request-transform.ts";
+export { createSimpleHarReplayHandler } from "./simple-har-replay-handler.ts";

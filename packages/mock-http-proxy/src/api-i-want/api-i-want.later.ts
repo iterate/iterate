@@ -1,6 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { http, HttpResponse } from "msw";
 import { x } from "tinyexec";
 import { describe, expect, test } from "vitest";
 import { useMitmProxy, useMockHttpServer, useTemporaryDirectory } from "./test-helpers.ts";
@@ -11,9 +12,8 @@ describe("records har archives for http-client-scripts", () => {
   using tmpDir = useTemporaryDirectory();
 
   test("for openai responses-websockets", async () => {
-    await using egress = await useMockHttpServer({
-      harDirectory: tmpDir.path,
-    });
+    const harPath = join(tmpDir.path, "openai-responses-websockets.har");
+    await using egress = await useMockHttpServer({ harPath, mode: "record" });
     await using mitm = await useMitmProxy({
       externalEgressProxyUrl: egress.url,
     });
@@ -43,9 +43,8 @@ describe("records har archives for http-client-scripts", () => {
   }, 30_000);
 
   test("for slack auth-test", async () => {
-    await using egress = await useMockHttpServer({
-      harDirectory: tmpDir.path,
-    });
+    const harPath = join(tmpDir.path, "slack-auth-test.har");
+    await using egress = await useMockHttpServer({ harPath, mode: "record" });
     await using mitm = await useMitmProxy({
       externalEgressProxyUrl: egress.url,
     });
@@ -74,12 +73,31 @@ describe("records har archives for http-client-scripts", () => {
     expect(egress.getHar().log.entries).toBeDefined();
   });
 
-  test("writes slugified HAR files into one shared directory", async () => {
+  test("uses MSW handlers directly without HAR", async () => {
+    await using server = await useMockHttpServer({
+      handlers: [
+        http.get("https://api.example.com/hello", () => {
+          return HttpResponse.json({ message: "mocked" });
+        }),
+      ],
+    });
+
+    const response = await fetch(`${server.url}/hello`, {
+      headers: {
+        "x-iterate-original-host": "api.example.com",
+        "x-iterate-original-proto": "https",
+      },
+    });
+    const body = await response.json();
+    expect(body).toEqual({ message: "mocked" });
+  });
+
+  test("writes HAR files into shared directory", async () => {
     const harNames = (await readdir(tmpDir.path)).filter((name) => name.endsWith(".har")).sort();
     expect(harNames).toMatchInlineSnapshot(`
       [
-        "records-har-archives-for-http-client-scripts-for-openai-responses-websockets.har",
-        "records-har-archives-for-http-client-scripts-for-slack-auth-test.har",
+        "openai-responses-websockets.har",
+        "slack-auth-test.har",
       ]
     `);
   });

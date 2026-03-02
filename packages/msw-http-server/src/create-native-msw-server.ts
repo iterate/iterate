@@ -21,6 +21,9 @@ type NativeMswServerApi = Pick<
 
 export type NativeMswServer = http.Server & NativeMswServerApi;
 
+export type TransformRequest = (request: Request) => Request;
+export type TransformWebSocketUrl = (url: URL, headers: Headers) => URL;
+
 export type CreateNativeMswServerOptions = {
   onUnhandledRequest?: SharedOptions["onUnhandledRequest"];
   /**
@@ -28,6 +31,42 @@ export type CreateNativeMswServerOptions = {
    * Useful for extension/e2e scenarios with pathname-only handlers.
    */
   resolutionContextBaseUrl?: string;
+  /**
+   * Rewrite the incoming HTTP request before MSW handler resolution.
+   * The default identity function passes the request through unchanged.
+   * Use this to reconstruct the original target URL from proxy headers.
+   */
+  transformRequest?: TransformRequest;
+  /**
+   * Rewrite the incoming WebSocket upgrade URL before MSW handler resolution.
+   * The default identity function passes the URL through unchanged.
+   * Use this to reconstruct the original target URL from proxy headers.
+   */
+  transformWebSocketUrl?: TransformWebSocketUrl;
+  /**
+   * Called when a request is handled by an MSW handler.
+   */
+  onMockedResponse?: (input: { request: Request; response: Response; requestId: string }) => void;
+  /**
+   * Called when MSW returns no response for an HTTP request.
+   * Return true when the callback handled the request and wrote to `res`.
+   */
+  onUnhandledHttpRequest?: (input: {
+    req: http.IncomingMessage;
+    res: http.ServerResponse;
+    request: Request;
+    requestId: string;
+  }) => boolean | Promise<boolean>;
+  /**
+   * Called when no MSW websocket handler matched an upgrade request.
+   * Return true when handled.
+   */
+  onUnhandledWebSocketUpgrade?: (input: {
+    req: http.IncomingMessage;
+    socket: tls.TLSSocket;
+    head: Buffer;
+    requestUrl: URL;
+  }) => boolean;
 };
 
 function isRequestHandler(handler: AnyHandler): handler is RequestHandler {
@@ -197,14 +236,7 @@ class NativeWebSocketServerConnection {
   }
 }
 
-function incomingToWebRequest(req: http.IncomingMessage): Request {
-  const protocol =
-    "encrypted" in req.socket && Boolean((req.socket as tls.TLSSocket).encrypted)
-      ? "https:"
-      : "http:";
-  const host = req.headers.host ?? "localhost";
-  const url = new URL(req.url ?? "/", `${protocol}//${host}`);
-
+function incomingToHeaders(req: http.IncomingMessage): Headers {
   const headers = new Headers();
   for (const [key, value] of Object.entries(req.headers)) {
     if (value === undefined) continue;
@@ -216,6 +248,17 @@ function incomingToWebRequest(req: http.IncomingMessage): Request {
     }
     headers.set(key, value);
   }
+  return headers;
+}
+
+function incomingToWebRequest(req: http.IncomingMessage): Request {
+  const protocol =
+    "encrypted" in req.socket && Boolean((req.socket as tls.TLSSocket).encrypted)
+      ? "https:"
+      : "http:";
+  const host = req.headers.host ?? "localhost";
+  const url = new URL(req.url ?? "/", `${protocol}//${host}`);
+  const headers = incomingToHeaders(req);
 
   const method = req.method ?? "GET";
   return new Request(url, {
@@ -293,11 +336,17 @@ export function createNativeMswServer(
   ).emitter;
   const onUnhandledRequest = options.onUnhandledRequest ?? "warn";
   const resolutionContextBaseUrl = options.resolutionContextBaseUrl;
+  const transformRequest = options.transformRequest;
+  const transformWebSocketUrl = options.transformWebSocketUrl;
+  const onMockedResponse = options.onMockedResponse;
+  const onUnhandledHttpRequest = options.onUnhandledHttpRequest;
+  const onUnhandledWebSocketUpgrade = options.onUnhandledWebSocketUpgrade;
   const webSocketServer = new WebSocketServer({ noServer: true });
 
   const nodeServer = http.createServer(async (req, res) => {
     try {
-      const webRequest = incomingToWebRequest(req);
+      const rawRequest = incomingToWebRequest(req);
+      const webRequest = transformRequest ? transformRequest(rawRequest) : rawRequest;
       const activeHandlers = msw.listHandlers().filter(isRequestHandler);
       const requestId = `native-${randomUUID()}`;
       const mockedResponse = await handleRequest(
@@ -319,7 +368,15 @@ export function createNativeMswServer(
           request: webRequest,
           requestId,
         });
+        onMockedResponse?.({ request: webRequest, response: mockedResponse, requestId });
         await sendWebResponse(res, mockedResponse);
+        return;
+      }
+
+      const handled = onUnhandledHttpRequest
+        ? await onUnhandledHttpRequest({ req, res, request: webRequest, requestId })
+        : false;
+      if (handled) {
         return;
       }
 
@@ -333,9 +390,26 @@ export function createNativeMswServer(
 
   nodeServer.on("upgrade", (req, socket, head) => {
     const webSocketHandlers = msw.listHandlers().filter(isWebSocketHandler);
-    if (webSocketHandlers.length === 0) return;
+    const rawWsUrl = incomingToWebSocketUrl(req);
+    const wsHeaders = incomingToHeaders(req);
+    const requestUrl = transformWebSocketUrl
+      ? transformWebSocketUrl(rawWsUrl, wsHeaders)
+      : rawWsUrl;
+    if (webSocketHandlers.length === 0) {
+      if (onUnhandledWebSocketUpgrade) {
+        const handled = onUnhandledWebSocketUpgrade({
+          req,
+          socket: socket as tls.TLSSocket,
+          head,
+          requestUrl,
+        });
+        if (handled) {
+          return;
+        }
+      }
+      return;
+    }
 
-    const requestUrl = incomingToWebSocketUrl(req);
     const resolutionContext = {
       baseUrl: normalizeWebSocketBaseUrl(resolutionContextBaseUrl, requestUrl),
     };
@@ -346,6 +420,17 @@ export function createNativeMswServer(
     });
 
     if (matchingHandlers.length === 0) {
+      if (onUnhandledWebSocketUpgrade) {
+        const handled = onUnhandledWebSocketUpgrade({
+          req,
+          socket: socket as tls.TLSSocket,
+          head,
+          requestUrl,
+        });
+        if (handled) {
+          return;
+        }
+      }
       return;
     }
 
