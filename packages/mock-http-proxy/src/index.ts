@@ -5,7 +5,7 @@ export {
   type MockEgressProxyRequestRewriteInput,
   type MockEgressProxyRequestRewriteResult,
 } from "./mock-egress-proxy.ts";
-export type { Har, HarEntry } from "./har-types.ts";
+export type { Entry as HarEntry, Har } from "har-format";
 export {
   HarJournal,
   MockMswHttpProxy,

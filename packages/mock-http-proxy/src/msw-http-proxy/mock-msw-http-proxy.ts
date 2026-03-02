@@ -2,7 +2,7 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createNativeMswServer, type NativeMswServer } from "@iterate-com/msw-http-server";
 import type { RequestHandler } from "msw";
-import type { Har } from "../har-types.ts";
+import type { Har } from "har-format";
 import { HarJournal } from "./har-journal.ts";
 import { createHarReplayHandler } from "./har-replay-handler.ts";
 import { createPassthroughRecordHandler } from "./passthrough-record-handler.ts";

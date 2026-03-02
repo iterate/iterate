@@ -18,7 +18,7 @@ async function main(): Promise<void> {
   await writeFile("ca.pem", ca.cert, "utf8");
 
   console.log("MITM CA saved to ./ca.pem");
-  console.log("Fingerprint:", ca.certFingerprint256);
+  console.log("Fingerprint: generated");
 
   const server = mockttp.getLocal({ https: ca });
 

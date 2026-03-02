@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { dirname } from "node:path";
 import httpProxy from "http-proxy";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import type { Har, HarEntry } from "./har-types.ts";
+import type { Entry as HarEntry, Har } from "har-format";
 
 const TARGET_URL_HEADER = "x-iterate-target-url";
 const LEGACY_TARGET_URL_HEADER = "x-target-url";

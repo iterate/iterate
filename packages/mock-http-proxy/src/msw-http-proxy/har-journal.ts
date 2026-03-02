@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { Har, HarEntry } from "../har-types.ts";
+import type { Entry as HarEntry, Har } from "har-format";
 import { serializeBodyForHar } from "./proxy-request.ts";
 
 function deepClone<T>(value: T): T {

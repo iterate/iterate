@@ -1,5 +1,5 @@
 import { http, type RequestHandler } from "msw";
-import type { HarEntry } from "../har-types.ts";
+import type { Entry as HarEntry } from "har-format";
 import type { HarJournal } from "./har-journal.ts";
 import {
   prepareProxyRequest,

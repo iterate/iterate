@@ -15,8 +15,8 @@
   "dependencies": {
     "@iterate-com/msw-http-server": "workspace:*",
     "http-proxy": "^1.18.1",
-    "msw": "^2.4.9",
     "mockttp": "^4.2.0",
+    "msw": "^2.4.9",
     "undici": "^7.16.0",
     "ws": "^8.19.0"
   },
@@ -28,6 +28,7 @@
     "@types/ws": "^8.18.1",
     "http-mitm-proxy": "^1.1.0",
     "openai": "^6.25.0",
+    "tinyexec": "^1.0.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"

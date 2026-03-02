@@ -257,40 +257,82 @@ describe("native transport e2e", () => {
     expect(message).toBe("hello");
   });
 
-  test("does not apply MSW ws handlers to native upgrade flow", async () => {
+  test("applies MSW ws handlers on native upgrade flow", async () => {
     let connectionHandled = false;
-    const chat = ws.link("ws://localhost/socket");
-    const wsHandler = chat.addEventListener("connection", () => {
+    const chat = ws.link("/socket");
+    const wsHandler = chat.addEventListener("connection", ({ client }) => {
       connectionHandled = true;
+      client.send("hello-from-handler");
+      client.addEventListener("message", (event) => {
+        if (event.data === "ping") {
+          client.send("pong");
+        }
+      });
     });
 
     const server = createNativeMswServer(wsHandler);
     const { port } = await listen(server);
 
-    const outcome = await new Promise<string>((resolve) => {
-      const client = new WebSocket(`ws://127.0.0.1:${String(port)}/socket`);
+    const client = new WebSocket(`ws://127.0.0.1:${String(port)}/socket`);
+    const messages: string[] = [];
+    client.on("message", (data: RawData) => {
+      messages.push(data.toString());
+    });
+    const openOutcome = await new Promise<string>((resolve) => {
       const timeout = setTimeout(() => {
-        client.terminate();
         resolve("timeout");
-      }, 500);
+      }, 1_000);
 
       client.once("open", () => {
         clearTimeout(timeout);
         resolve("open");
       });
-
       client.once("close", () => {
         clearTimeout(timeout);
         resolve("close");
       });
-
       client.once("error", () => {
         clearTimeout(timeout);
         resolve("error");
       });
     });
+    expect(openOutcome).toBe("open");
 
-    expect(connectionHandled).toBe(false);
-    expect(outcome === "close" || outcome === "error" || outcome === "timeout").toBe(true);
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Timed out waiting for first websocket message"));
+      }, 1_000);
+      const interval = setInterval(() => {
+        if (messages.length >= 1) {
+          clearInterval(interval);
+          clearTimeout(timeout);
+          resolve();
+        }
+      }, 5);
+      client.once("error", reject);
+    });
+    expect(messages[0]).toBe("hello-from-handler");
+
+    const secondMessagePromise = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Timed out waiting for second websocket message"));
+      }, 1_000);
+      const interval = setInterval(() => {
+        if (messages.length >= 2) {
+          clearInterval(interval);
+          clearTimeout(timeout);
+          resolve();
+        }
+      }, 5);
+      client.once("error", reject);
+    });
+    client.send("ping");
+    await secondMessagePromise;
+    expect(messages[1]).toBe("pong");
+
+    client.close();
+    await once(client, "close");
+
+    expect(connectionHandled).toBe(true);
   });
 });

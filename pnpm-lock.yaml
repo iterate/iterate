@@ -1228,6 +1228,9 @@ importers:
       openai:
         specifier: ^6.25.0
         version: 6.25.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
+      tinyexec:
+        specifier: ^1.0.2
+        version: 1.0.2
       tsx:
         specifier: ^4.20.6
         version: 4.21.0

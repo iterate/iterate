@@ -1,6 +1,6 @@
 import type { SharedOptions } from "msw";
 import type { RequestHandler } from "msw";
-import type { Har } from "../har-types.ts";
+import type { Har } from "har-format";
 
 export type MockMswHttpProxyMode = "record" | "replay" | "replay-or-record";
 

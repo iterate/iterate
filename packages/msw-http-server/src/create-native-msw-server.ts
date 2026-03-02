@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import type tls from "node:tls";
+import { WebSocketServer, type RawData as WsRawData, type WebSocket as WsSocket } from "ws";
 import {
   handleRequest,
   type LifeCycleEventsMap,
@@ -31,6 +32,169 @@ export type CreateNativeMswServerOptions = {
 
 function isRequestHandler(handler: AnyHandler): handler is RequestHandler {
   return (handler as unknown as { __kind?: string }).__kind === "RequestHandler";
+}
+
+function isWebSocketHandler(handler: AnyHandler): handler is WebSocketHandler {
+  return (handler as unknown as { __kind?: string }).__kind === "EventHandler";
+}
+
+function firstHeader(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value[0] ?? "";
+  return value ?? "";
+}
+
+function incomingToWebSocketUrl(req: http.IncomingMessage): URL {
+  const protocol =
+    "encrypted" in req.socket && Boolean((req.socket as tls.TLSSocket).encrypted) ? "wss:" : "ws:";
+  const host = req.headers.host ?? "localhost";
+  return new URL(req.url ?? "/", `${protocol}//${host}`);
+}
+
+function normalizeWebSocketBaseUrl(baseUrl: string | undefined, requestUrl: URL): string {
+  const parsed = new URL(baseUrl ?? requestUrl.origin);
+  if (parsed.protocol === "http:") parsed.protocol = "ws:";
+  if (parsed.protocol === "https:") parsed.protocol = "wss:";
+  return new URL("/", parsed).toString();
+}
+
+function parseWebSocketProtocols(headerValue: string): string | Array<string> | undefined {
+  if (!headerValue) return undefined;
+  const protocols = headerValue
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  if (protocols.length === 0) return undefined;
+  if (protocols.length === 1) return protocols[0];
+  return protocols;
+}
+
+function wsRawDataToPayload(data: WsRawData, isBinary: boolean): unknown {
+  if (!isBinary) {
+    if (typeof data === "string") return data;
+    if (Buffer.isBuffer(data)) return data.toString("utf8");
+    if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
+    return Buffer.from(data).toString("utf8");
+  }
+
+  if (Buffer.isBuffer(data)) return data;
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.from(data);
+}
+
+function createCloseEvent(code: number, reason: string, wasClean: boolean): Event {
+  const event = new Event("close");
+  Object.defineProperty(event, "code", { value: code, enumerable: true });
+  Object.defineProperty(event, "reason", { value: reason, enumerable: true });
+  Object.defineProperty(event, "wasClean", { value: wasClean, enumerable: true });
+  return event;
+}
+
+function createMessageEvent(data: unknown): Event {
+  const event = new Event("message", { cancelable: true });
+  Object.defineProperty(event, "data", { value: data, enumerable: true });
+  Object.defineProperty(event, "origin", { value: "", enumerable: true });
+  return event;
+}
+
+function wsDataToSendPayload(data: unknown): string | Buffer | ArrayBuffer | ArrayBufferView {
+  if (typeof data === "string") return data;
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return data;
+  if (ArrayBuffer.isView(data)) return data;
+  if (data instanceof Blob) {
+    throw new Error("Blob websocket payloads are not supported by native adapter");
+  }
+  return String(data);
+}
+
+class NativeWebSocketClientConnection {
+  public readonly id = randomUUID();
+  public readonly url: URL;
+  private readonly emitter = new EventTarget();
+
+  constructor(
+    private readonly socket: WsSocket,
+    url: URL,
+  ) {
+    this.url = url;
+
+    this.socket.on("message", (data, isBinary) => {
+      this.emitter.dispatchEvent(createMessageEvent(wsRawDataToPayload(data, isBinary)));
+    });
+    this.socket.on("close", (code, reason) => {
+      this.emitter.dispatchEvent(createCloseEvent(code, reason.toString("utf8"), true));
+    });
+  }
+
+  send(data: unknown): void {
+    try {
+      this.socket.send(wsDataToSendPayload(data));
+    } catch {
+      return;
+    }
+  }
+
+  close(code?: number, reason?: string): void {
+    this.socket.close(code, reason);
+  }
+
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: AddEventListenerOptions | boolean,
+  ): void {
+    this.emitter.addEventListener(type, listener, options);
+  }
+
+  removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: EventListenerOptions | boolean,
+  ): void {
+    this.emitter.removeEventListener(type, listener, options);
+  }
+}
+
+class NativeWebSocketServerConnection {
+  private readonly emitter = new EventTarget();
+  private connected = false;
+
+  connect(): void {
+    if (this.connected) return;
+    this.connected = true;
+    this.emitter.dispatchEvent(new Event("open"));
+  }
+
+  send(_data: unknown): void {
+    if (!this.connected) {
+      throw new Error(
+        'Failed to call "server.send()": no upstream websocket exists in native incoming-server mode',
+      );
+    }
+  }
+
+  close(): void {
+    if (!this.connected) return;
+    this.connected = false;
+    this.emitter.dispatchEvent(createCloseEvent(1000, "", true));
+  }
+
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: AddEventListenerOptions | boolean,
+  ): void {
+    this.emitter.addEventListener(type, listener, options);
+  }
+
+  removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: EventListenerOptions | boolean,
+  ): void {
+    this.emitter.removeEventListener(type, listener, options);
+  }
 }
 
 function incomingToWebRequest(req: http.IncomingMessage): Request {
@@ -129,6 +293,7 @@ export function createNativeMswServer(
   ).emitter;
   const onUnhandledRequest = options.onUnhandledRequest ?? "warn";
   const resolutionContextBaseUrl = options.resolutionContextBaseUrl;
+  const webSocketServer = new WebSocketServer({ noServer: true });
 
   const nodeServer = http.createServer(async (req, res) => {
     try {
@@ -164,6 +329,46 @@ export function createNativeMswServer(
       res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
       res.end(error instanceof Error ? error.message : String(error));
     }
+  });
+
+  nodeServer.on("upgrade", (req, socket, head) => {
+    const webSocketHandlers = msw.listHandlers().filter(isWebSocketHandler);
+    if (webSocketHandlers.length === 0) return;
+
+    const requestUrl = incomingToWebSocketUrl(req);
+    const resolutionContext = {
+      baseUrl: normalizeWebSocketBaseUrl(resolutionContextBaseUrl, requestUrl),
+    };
+
+    const matchingHandlers = webSocketHandlers.filter((handler) => {
+      const parsedResult = handler.parse({ url: requestUrl, resolutionContext });
+      return handler.predicate({ url: requestUrl, parsedResult });
+    });
+
+    if (matchingHandlers.length === 0) {
+      return;
+    }
+
+    webSocketServer.handleUpgrade(req, socket, head, (clientSocket) => {
+      const client = new NativeWebSocketClientConnection(clientSocket, requestUrl);
+      const server = new NativeWebSocketServerConnection();
+      const protocols = parseWebSocketProtocols(firstHeader(req.headers["sec-websocket-protocol"]));
+
+      void Promise.all(
+        matchingHandlers.map((handler) =>
+          handler.run(
+            {
+              client: client as never,
+              server: server as never,
+              info: { protocols },
+            },
+            resolutionContext,
+          ),
+        ),
+      ).catch(() => {
+        clientSocket.close(1011, "MSW websocket handler error");
+      });
+    });
   });
 
   const nodeOn = nodeServer.on.bind(nodeServer);
@@ -214,6 +419,10 @@ export function createNativeMswServer(
       return this;
     },
     close(callback?: (error?: Error) => void) {
+      for (const client of webSocketServer.clients) {
+        client.terminate();
+      }
+      webSocketServer.close();
       msw.close();
       return nodeClose(callback);
     },
