@@ -107,7 +107,7 @@ ENV PATH="/opt/uv/bin:$PATH"
 # so the iterate user can execute mitmproxy scripts via their shebang lines.
 RUN UV_TOOL_DIR=/opt/mitmproxy/tools UV_TOOL_BIN_DIR=/opt/mitmproxy/bin \
     UV_PYTHON_INSTALL_DIR=/opt/uv/python \
-    /opt/uv/bin/uv tool install mitmproxy==${SANDBOX_MITMPROXY_VERSION} && \
+    /opt/uv/bin/uv tool install --python 3.12 mitmproxy==${SANDBOX_MITMPROXY_VERSION} && \
     chmod -R a+rX /opt/uv /opt/mitmproxy
 ENV PATH="/opt/mitmproxy/bin:$PATH"
 
