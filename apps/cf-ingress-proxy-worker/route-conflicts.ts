@@ -18,6 +18,16 @@ export function normalizePattern(input: string): string {
   if (normalized.includes("..")) {
     throw new RouteInputError(`Invalid pattern: ${input}`);
   }
+  const wildcardCount = (normalized.match(/\*/g) ?? []).length;
+  if (
+    wildcardCount > 0 &&
+    (wildcardCount !== 1 ||
+      !normalized.startsWith("*") ||
+      normalized.length <= 1 ||
+      /^[a-z0-9]$/.test(normalized[1] ?? ""))
+  ) {
+    throw new RouteInputError(`Invalid pattern: ${input}`);
+  }
   return normalized;
 }
 

@@ -35,6 +35,10 @@ describe("normalizePattern", () => {
     ["bad pattern", "Invalid pattern"],
     ["a..b.iterate.com", "Invalid pattern"],
     ["app/project.iterate.com", "Invalid pattern"],
+    ["*project.ingress.iterate.com", "Invalid pattern"],
+    ["proj*ect.ingress.iterate.com", "Invalid pattern"],
+    ["*.*.ingress.iterate.com", "Invalid pattern"],
+    ["*.", "Invalid pattern"],
   ])("rejects invalid pattern %j", (input, message) => {
     expect(() => normalizePattern(input)).toThrow(message);
   });

@@ -7,7 +7,14 @@ const EnvSchema = z.object({
   WORKER_NAME: z.string().trim().min(1, "WORKER_NAME is required"),
   INGRESS_PROXY_API_TOKEN: z.string().trim().min(1).optional(),
   CF_PROXY_WORKER_API_TOKEN: z.string().trim().min(1).optional(),
-  TYPEID_PREFIX: z.string().trim().min(1).default("ipr"),
+  TYPEID_PREFIX: z
+    .string()
+    .trim()
+    .default("ipr")
+    .transform((value) => value.replace(/_+$/g, ""))
+    .refine((value) => /^[a-z]+$/.test(value), {
+      message: "TYPEID_PREFIX must contain lowercase letters only",
+    }),
   INGRESS_PROXY_ROUTE_PATTERN: z.string().trim().optional(),
   INGRESS_PROXY_ROUTE_ZONE_ID: z.string().trim().optional(),
 });
