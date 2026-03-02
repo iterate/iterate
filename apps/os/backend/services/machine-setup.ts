@@ -98,15 +98,19 @@ export async function resolveMachineSetupData(
       },
       createdAt: null,
     },
-    {
-      key: "ITERATE_CUSTOMER_REPO_PATH",
-      value: repos.length > 0 ? repos[0].path : "/home/iterate/src/github.com/iterate/iterate",
-      secret: null,
-      description: null,
-      egressProxyRule: null,
-      source: { type: "global" as const, description: "Customer repo path" },
-      createdAt: null,
-    },
+    ...(repos.length > 0
+      ? [
+          {
+            key: "ITERATE_CUSTOMER_REPO_PATH",
+            value: repos[0]!.path,
+            secret: null,
+            description: null,
+            egressProxyRule: null,
+            source: { type: "global" as const, description: "Customer repo path" },
+            createdAt: null,
+          },
+        ]
+      : []),
   ];
 
   const envFileContent = buildEnvFileContent(daemonEnvVars, {
