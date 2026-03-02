@@ -48,6 +48,14 @@ Commands:
 - `pnpm run db:types` rebuilds `.local.db` and regenerates `sql/queries.ts`.
 - `pnpm run db:watch` watches `sql/queries.sql`, `schema.sql`, and `migrations/**/*.sql` and regenerates `sql/queries.ts`.
 
+Adding a new SQL query:
+
+- add a new block to `sql/queries.sql` starting with `-- @query yourCamelCaseName`
+- keep query names unique and camelCase; this becomes the exported TS function name
+- use named params in SQL (`:routeId`, `:host`, etc.); TypeSQL will map to typed params
+- run `pnpm run db:types` to regenerate `sql/queries.ts`
+- import the generated function/type from `./sql/index.ts`
+
 When changing schema:
 
 1. update `schema.sql`
@@ -136,3 +144,10 @@ Alchemy manages worker + D1 resources.
 Pattern lookup optimization is intentionally deferred. Current matching prioritizes correctness and simplicity; optimize query narrowing later if route cardinality warrants it.
 
 - Add route TTL/expiry support (schema + API + resolver semantics + dedicated E2E coverage).
+
+## Related docs
+
+- project-ingress proxy app docs: `apps/project-ingress-proxy/README.md`
+- follow-up tasks:
+  - `tasks/project-ingress-proxy-improvements.md`
+  - `tasks/project-ingress-proxy-secret-auth.md`
