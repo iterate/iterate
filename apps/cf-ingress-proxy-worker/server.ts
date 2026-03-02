@@ -24,17 +24,6 @@ import {
 } from "./sql/index.ts";
 import { parseWorkerEnv, type ProxyWorkerEnv, type RawProxyWorkerEnv } from "./env.ts";
 
-const HOP_BY_HOP_HEADERS = new Set([
-  "connection",
-  "keep-alive",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "upgrade",
-]);
-
 export type RouteHeaders = Record<string, string>;
 export type RouteMetadata = Record<string, unknown>;
 
@@ -400,15 +389,6 @@ export function buildUpstreamUrl(targetUrl: URL, requestUrl: URL): URL {
 
 export function createUpstreamHeaders(request: Request, routeHeaders: RouteHeaders): Headers {
   const headers = new Headers(request.headers);
-  const isWebSocketRequest = request.headers.get("upgrade")?.toLowerCase() === "websocket";
-
-  for (const headerName of HOP_BY_HOP_HEADERS) {
-    if (isWebSocketRequest && (headerName === "connection" || headerName === "upgrade")) {
-      continue;
-    }
-    headers.delete(headerName);
-  }
-
   for (const [name, value] of Object.entries(routeHeaders)) {
     headers.set(name, value);
   }
@@ -431,12 +411,11 @@ export async function proxyRequest(request: Request, env: ProxyWorkerEnv): Promi
 
   const inboundUrl = new URL(request.url);
   const upstreamUrl = buildUpstreamUrl(resolved.targetUrl, inboundUrl);
-  const upstreamHeaders = createUpstreamHeaders(request, resolved.headers);
-  const upstreamRequest = new Request(upstreamUrl.toString(), {
-    method: request.method,
-    headers: upstreamHeaders,
-    body: request.body,
-  });
+  let upstreamRequest: Request = new Request(upstreamUrl.toString(), request);
+  if (Object.keys(resolved.headers).length > 0) {
+    const upstreamHeaders = createUpstreamHeaders(upstreamRequest, resolved.headers);
+    upstreamRequest = new Request(upstreamRequest, { headers: upstreamHeaders });
+  }
 
   let upstreamResponse: Response;
   try {
