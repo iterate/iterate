@@ -1223,6 +1223,9 @@ importers:
       '@docker/node-sdk':
         specifier: ^0.0.17
         version: 0.0.17
+      '@iterate-com/events-contract':
+        specifier: workspace:*
+        version: link:../../services/events-contract
       '@iterate-com/registry-service':
         specifier: workspace:*
         version: link:../../services/registry-service

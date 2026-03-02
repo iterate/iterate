@@ -1,4 +1,10 @@
 import {
+  type EventBusContract,
+  serviceManifest as eventsServiceManifest,
+} from "@iterate-com/events-contract";
+import { type ContractRouterClient } from "@orpc/contract";
+import { createOrpcRpcServiceClient } from "../index.ts";
+import {
   dockerDeploymentRuntimeAttach,
   dockerDeploymentRuntimeCreate,
   type DeploymentRuntime,
@@ -17,6 +23,18 @@ export type DeploymentCommandResult = {
   exitCode: number;
   output: string;
 };
+
+type EventBusClient = ContractRouterClient<EventBusContract>;
+
+export interface DeploymentEventsClient {
+  service: EventBusClient["service"];
+  append: EventBusClient["append"];
+  registerSubscription: EventBusClient["registerSubscription"];
+  ackOffset: EventBusClient["ackOffset"];
+  stream: EventBusClient["stream"];
+  listStreams: EventBusClient["listStreams"];
+  firehose: EventBusClient["firehose"];
+}
 
 export interface DeploymentCreateInputCommon {
   name: string;
@@ -114,6 +132,7 @@ abstract class DeploymentBase<
   protected ownership: DeploymentOwnership | null = null;
   private homeEnvFilePath: string | null = null;
   private deploymentLocator: TDeploymentLocator | null = null;
+  private eventsClient: DeploymentEventsClient | null = null;
 
   abstract readonly providerName: ProviderName;
 
@@ -161,11 +180,31 @@ abstract class DeploymentBase<
     this.requireRuntime().registry = value;
   }
 
+  get events(): DeploymentEventsClient {
+    this.requireRuntime();
+    if (this.eventsClient) return this.eventsClient;
+
+    const eventsClient = this.createOrpcClient({
+      host: "events.iterate.localhost",
+      path: "/orpc",
+      create: ({ url, fetch }) =>
+        createOrpcRpcServiceClient({
+          env: {},
+          manifest: eventsServiceManifest,
+          url,
+          fetch,
+        }),
+    }) as DeploymentEventsClient;
+    this.eventsClient = eventsClient;
+    return eventsClient;
+  }
+
   protected clearLocalState(): void {
     this.runtime = null;
     this.deploymentLocator = null;
     this.homeEnvFilePath = null;
     this.ownership = null;
+    this.eventsClient = null;
   }
 
   async create(input: TCreateInput): Promise<TDeploymentLocator> {

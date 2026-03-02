@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
 import { CaddyClient } from "@accelerated-software-development/caddy-api-client";
 import { createRegistryClient, type RegistryClient } from "@iterate-com/registry-service/client";
 import { createClient as createPidnapClient, type Client as PidnapClient } from "pidnap/client";
@@ -199,47 +197,10 @@ function createFlyHostRoutedFetch(params: {
 
     return await withRetriableSocketErrors(
       async () =>
-        await new Promise<Response>((resolve, reject) => {
-          const requestImpl = targetUrl.protocol === "https:" ? httpsRequest : httpRequest;
-          const req = requestImpl(
-            targetUrl,
-            {
-              method,
-              headers: Object.fromEntries(headers.entries()),
-            },
-            (res) => {
-              const chunks: Buffer[] = [];
-              res.on("data", (chunk) => {
-                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-              });
-              res.on("end", () => {
-                const responseHeaders = new Headers();
-                for (const [key, value] of Object.entries(res.headers)) {
-                  if (value === undefined) continue;
-                  if (Array.isArray(value)) {
-                    for (const entry of value) {
-                      responseHeaders.append(key, entry);
-                    }
-                    continue;
-                  }
-                  responseHeaders.set(key, String(value));
-                }
-                resolve(
-                  new Response(Buffer.concat(chunks), {
-                    status: res.statusCode ?? 0,
-                    statusText: res.statusMessage ?? "",
-                    headers: responseHeaders,
-                  }),
-                );
-              });
-            },
-          );
-
-          req.on("error", reject);
-          if (body !== undefined) {
-            req.write(body);
-          }
-          req.end();
+        await fetch(targetUrl, {
+          method,
+          headers,
+          body,
         }),
     );
   };
@@ -270,57 +231,14 @@ function createFlyCaddyApiClient(params: {
       headers.set("host", params.hostHeader);
     }
 
-    const body =
-      options.body === undefined || options.body === null
-        ? undefined
-        : typeof options.body === "string"
-          ? options.body
-          : await new Response(options.body).text();
+    const body = options.body;
 
     return await withRetriableSocketErrors(
       async () =>
-        await new Promise<Response>((resolve, reject) => {
-          const requestImpl = url.protocol === "https:" ? httpsRequest : httpRequest;
-          const req = requestImpl(
-            url,
-            {
-              method,
-              headers: Object.fromEntries(headers.entries()),
-            },
-            (res) => {
-              const chunks: Buffer[] = [];
-              res.on("data", (chunk) => {
-                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-              });
-              res.on("end", () => {
-                const responseHeaders = new Headers();
-                for (const [key, value] of Object.entries(res.headers)) {
-                  if (value === undefined) continue;
-                  if (Array.isArray(value)) {
-                    for (const entry of value) {
-                      responseHeaders.append(key, entry);
-                    }
-                    continue;
-                  }
-                  responseHeaders.set(key, String(value));
-                }
-
-                resolve(
-                  new Response(Buffer.concat(chunks), {
-                    status: res.statusCode ?? 0,
-                    statusText: res.statusMessage ?? "",
-                    headers: responseHeaders,
-                  }),
-                );
-              });
-            },
-          );
-
-          req.on("error", reject);
-          if (body !== undefined) {
-            req.write(body);
-          }
-          req.end();
+        await fetch(url, {
+          method,
+          headers,
+          body,
         }),
     );
   };
@@ -344,45 +262,6 @@ async function waitForHostResolution(params: { host: string; timeoutMs?: number 
   }
 
   throw new Error(`timed out waiting for DNS resolution of ${params.host}`, { cause: lastError });
-}
-
-function baseUrlFromPublicServiceUrl(publicServiceUrl: string): string | null {
-  try {
-    const parsed = new URL(publicServiceUrl);
-    const separator = parsed.hostname.indexOf("__");
-    if (separator <= 0) return null;
-    const suffixHost = parsed.hostname.slice(separator + 2);
-    if (!suffixHost) return null;
-    return `${parsed.protocol}//${suffixHost}`;
-  } catch {
-    return null;
-  }
-}
-
-function toFlyClientBaseUrl(ingressBaseUrl: string): string {
-  try {
-    const url = new URL(ingressBaseUrl);
-    if (url.hostname.endsWith(".fly.dev")) {
-      url.protocol = "http:";
-    }
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return ingressBaseUrl;
-  }
-}
-
-async function resolveIngressBaseUrl(params: {
-  fallbackIngressBaseUrl: string;
-  registry: RegistryClient;
-}): Promise<string> {
-  try {
-    const response = await params.registry.getPublicURL({
-      internalURL: "http://events.iterate.localhost/healthz",
-    });
-    return baseUrlFromPublicServiceUrl(response.publicURL) ?? params.fallbackIngressBaseUrl;
-  } catch {
-    return params.fallbackIngressBaseUrl;
-  }
 }
 
 async function waitForPidnapHealthy(params: {
@@ -503,7 +382,7 @@ export async function flyDeploymentRuntimeCreate(
   const flyBaseDomain = rawEnv.FLY_BASE_DOMAIN ?? "fly.dev";
   const externalId = normalizeFlyExternalId(params.name);
   const fallbackIngressBaseUrl = `https://${externalId}.${flyBaseDomain}`;
-  const fallbackClientBaseUrl = toFlyClientBaseUrl(fallbackIngressBaseUrl);
+  const fallbackClientBaseUrl = fallbackIngressBaseUrl;
 
   const provider = new FlyProvider(rawEnv);
   const envRecord = toEnvRecord(params.env);
@@ -590,11 +469,8 @@ export async function flyDeploymentRuntimeCreate(
   });
 
   const refreshClients = async () => {
-    ingressBaseUrl = await resolveIngressBaseUrl({
-      fallbackIngressBaseUrl,
-      registry,
-    });
-    clientBaseUrl = toFlyClientBaseUrl(ingressBaseUrl);
+    ingressBaseUrl = fallbackIngressBaseUrl;
+    clientBaseUrl = ingressBaseUrl;
 
     pidnap = createPidnapClient({
       url: `${clientBaseUrl}/rpc`,
@@ -762,7 +638,7 @@ export async function flyDeploymentRuntimeAttach(
 
   const flyBaseDomain = rawEnv.FLY_BASE_DOMAIN ?? "fly.dev";
   const fallbackIngressBaseUrl = `https://${locator.appName}.${flyBaseDomain}`;
-  const fallbackClientBaseUrl = toFlyClientBaseUrl(fallbackIngressBaseUrl);
+  const fallbackClientBaseUrl = fallbackIngressBaseUrl;
 
   const provider = new FlyProvider(rawEnv);
   const sandbox = provider.getWithMachineId({
@@ -809,11 +685,8 @@ export async function flyDeploymentRuntimeAttach(
   });
 
   const refreshClients = async () => {
-    ingressBaseUrl = await resolveIngressBaseUrl({
-      fallbackIngressBaseUrl,
-      registry,
-    });
-    clientBaseUrl = toFlyClientBaseUrl(ingressBaseUrl);
+    ingressBaseUrl = fallbackIngressBaseUrl;
+    clientBaseUrl = ingressBaseUrl;
 
     pidnap = createPidnapClient({
       url: `${clientBaseUrl}/rpc`,

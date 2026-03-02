@@ -15,6 +15,7 @@
   "dependencies": {
     "@accelerated-software-development/caddy-api-client": "^0.4.3",
     "@docker/node-sdk": "^0.0.17",
+    "@iterate-com/events-contract": "workspace:*",
     "@iterate-com/registry-service": "workspace:*",
     "@iterate-com/sandbox": "workspace:*",
     "@opentelemetry/api": "^1.9.0",

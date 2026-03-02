@@ -28,6 +28,7 @@ export {
   FlyDeployment,
   type DeploymentCommandResult,
   type DeploymentCreateInputCommon,
+  type DeploymentEventsClient,
   type DeploymentLocator,
   type DeploymentOwnership,
   type DockerDeploymentCreateInput,

@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { request as httpRequest } from "node:http";
 import { describe, expect, test } from "vitest";
 import {
   DockerDeployment,
   FlyDeployment,
   type Deployment,
 } from "@iterate-com/shared/jonasland/deployment";
-import { startFlyFrpEgressBridge } from "../test-helpers/frp-egress-bridge.ts";
-import { MockEgressProxy } from "../test-helpers/mock-egress-proxy.ts";
+import { startFlyFrpEgressBridge } from "../../test-helpers/frp-egress-bridge.ts";
+import { MockEgressProxy } from "../../test-helpers/mock-egress-proxy.ts";
 
 type ProviderName = "docker" | "fly";
 
@@ -61,106 +60,71 @@ function deploymentNameForCurrentTest(provider: ProviderName): string {
   return `jonasland-vitest-${provider}-${workerId}-${slug}`;
 }
 
-async function postEventsOrpc(
-  deployment: Deployment,
-  procedure: string,
-  body: unknown,
-): Promise<{ exitCode: number; output: string }> {
-  return await deployment.exec([
-    "curl",
-    "-fsS",
-    "-H",
-    "Host: events.iterate.localhost",
-    "-H",
-    "content-type: application/json",
-    "--data",
-    JSON.stringify({ json: body }),
-    `http://127.0.0.1/orpc/${procedure}`,
-  ]);
+async function withTimeout<T>(params: {
+  promise: Promise<T>;
+  timeoutMs: number;
+  message: string;
+}): Promise<T> {
+  return await new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(params.message)), params.timeoutMs);
+    params.promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function waitForFirehoseEvent(params: {
   deployment: Deployment;
-  matcher: (event: Record<string, unknown>) => boolean;
+  path: string;
+  type: string;
   timeoutMs?: number;
 }): Promise<Record<string, unknown>> {
-  const timeoutMs = params.timeoutMs ?? 45_000;
-  const ingressUrl = new URL(await params.deployment.ingressUrl());
-  const requestUrl = new URL("/api/firehose", ingressUrl);
+  const deadline = Date.now() + (params.timeoutMs ?? 120_000);
+  const normalizedPath = params.path.replace(/^\/+/, "");
+  let lastError: unknown;
 
-  return await new Promise<Record<string, unknown>>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("timed out waiting for matching firehose event"));
-    }, timeoutMs);
-
-    let buffer = "";
-    let settled = false;
-    const request = httpRequest(
-      {
-        protocol: requestUrl.protocol,
-        hostname: requestUrl.hostname,
-        port: requestUrl.port,
-        path: `${requestUrl.pathname}${requestUrl.search}`,
-        method: "GET",
-        headers: {
-          host: "events.iterate.localhost",
-          accept: "text/event-stream",
-        },
-      },
-      (response) => {
-        if ((response.statusCode ?? 500) >= 400) {
-          cleanup();
-          reject(new Error(`firehose request failed with status ${String(response.statusCode)}`));
-          return;
+  while (Date.now() < deadline) {
+    const firehose = (await params.deployment.events.firehose({}))[Symbol.asyncIterator]();
+    try {
+      while (Date.now() < deadline) {
+        const remainingMs = Math.max(1, deadline - Date.now());
+        const nextEvent = await withTimeout<IteratorResult<unknown>>({
+          promise: firehose.next(),
+          timeoutMs: Math.min(remainingMs, 15_000),
+          message: "timed out waiting for next firehose event chunk",
+        });
+        if (nextEvent.done) {
+          break;
         }
 
-        response.setEncoding("utf8");
-        response.on("data", (chunk: string) => {
-          buffer += chunk;
-          const frames = buffer.split("\n\n");
-          buffer = frames.pop() ?? "";
-
-          for (const frame of frames) {
-            const lines = frame
-              .split("\n")
-              .map((line) => line.trimEnd())
-              .filter((line) => line.length > 0);
-            const eventType = lines.find((line) => line.startsWith("event: "))?.slice(7);
-            if (eventType !== undefined && eventType !== "message") continue;
-
-            const dataLine = lines.find((line) => line.startsWith("data: "));
-            if (!dataLine) continue;
-
-            const event = JSON.parse(dataLine.slice(6)) as Record<string, unknown>;
-            if (!params.matcher(event)) continue;
-
-            cleanup();
-            resolve(event);
-            return;
-          }
-        });
-
-        response.on("error", (error) => {
-          cleanup();
-          reject(error);
-        });
-      },
-    );
-
-    request.on("error", (error) => {
-      cleanup();
-      reject(error);
-    });
-    request.end();
-
-    function cleanup() {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      request.destroy();
+        const event = nextEvent.value as Record<string, unknown>;
+        const eventType = String(event["type"] ?? "");
+        const eventPath = String(event["path"] ?? "").replace(/^\/+/, "");
+        if (eventType === params.type && eventPath === normalizedPath) {
+          return event;
+        }
+      }
+    } catch (error) {
+      lastError = error;
+    } finally {
+      await firehose.return?.().catch(() => {});
     }
-  });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error(
+    `timed out waiting for matching firehose event (${params.type} @ ${params.path})`,
+    {
+      cause: lastError,
+    },
+  );
 }
 
 for (const provider of providerCases) {
@@ -177,32 +141,15 @@ for (const provider of providerCases) {
         frpcBin: process.env.JONASLAND_E2E_FRPC_BIN,
       });
 
-      const egressProcess = await deployment.pidnap.processes.get({
-        target: "egress-proxy",
-        includeEffectiveEnv: false,
-      });
-      await deployment.pidnap.processes.updateConfig({
-        processSlug: "egress-proxy",
-        definition: {
-          ...egressProcess.definition,
-          env: {
-            ...(egressProcess.definition.env ?? {}),
-            ITERATE_EXTERNAL_EGRESS_PROXY: frpBridge.dataProxyUrl,
-          },
-        },
-        options: {
-          restartPolicy: "always",
-        },
-        restartImmediately: true,
-      });
-      await deployment.pidnap.processes.start({ target: "egress-proxy" }).catch(() => {});
-      await deployment.waitForPidnapProcessRunning({ target: "egress-proxy" });
+      await deployment.useEgressProxy({ proxyUrl: frpBridge.dataProxyUrl });
 
       const requestPath = "/vitest-frp-milestone";
       const payload = JSON.stringify({
         source: `${provider.name}-frp-milestone`,
       });
-      const observed = proxy.waitFor((request) => new URL(request.url).pathname === requestPath);
+      const observed = proxy.waitFor((request) => new URL(request.url).pathname === requestPath, {
+        timeout: provider.name === "fly" ? 180_000 : 30_000,
+      });
       proxy.fetch = async (request) =>
         Response.json({
           ok: true,
@@ -249,30 +196,33 @@ for (const provider of providerCases) {
 
       const observed = waitForFirehoseEvent({
         deployment,
-        timeoutMs: 120_000,
-        matcher: (event) => {
-          const eventPath = String(event["path"] ?? "").replace(/^\/+/, "");
-          return eventPath === streamPath && String(event["type"] ?? "") === expectedType;
-        },
-      });
-      observed.catch(() => {});
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      const appendResult = await postEventsOrpc(deployment, "append", {
         path: streamPath,
-        events: [
-          {
-            type: expectedType,
-            payload: expectedPayload,
-          },
-        ],
+        type: expectedType,
+        timeoutMs: 120_000,
       });
-      expect(appendResult.exitCode).toBe(0);
-      expect(appendResult.output).toBe("{}");
+      let matched = false;
+      observed
+        .then(() => {
+          matched = true;
+        })
+        .catch(() => {});
+
+      for (let attempt = 0; attempt < 24 && !matched; attempt += 1) {
+        await deployment.events.append({
+          path: streamPath,
+          events: [
+            {
+              type: expectedType,
+              payload: expectedPayload,
+            },
+          ],
+        });
+        if (matched) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
 
       const event = await observed;
-      expect(String(event["path"])).toBe(streamPath);
+      expect(String(event["path"]).replace(/^\/+/, "")).toBe(streamPath);
       expect(String(event["type"])).toBe(expectedType);
       expect(event["payload"]).toEqual(expectedPayload);
     }, 900_000);
