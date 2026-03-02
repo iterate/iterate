@@ -222,7 +222,7 @@ async function createFromCandidates(params: {
           {
             pattern,
             target: HTTP_ECHO_ORIGIN,
-            headers: { host: HTTP_ECHO_HOST, "x-route-kind": params.routeHeader },
+            headers: { "x-route-kind": params.routeHeader },
           },
         ],
       });
@@ -283,7 +283,7 @@ describe("live ingress-proxy E2E", () => {
         {
           pattern: requestHost,
           target: HTTP_ECHO_ORIGIN,
-          headers: { host: HTTP_ECHO_HOST, "x-route-kind": "exact" },
+          headers: { "x-route-kind": "exact" },
         },
       ],
     });
@@ -319,7 +319,7 @@ describe("live ingress-proxy E2E", () => {
         {
           pattern: long.pattern,
           target: HTTP_ECHO_ORIGIN,
-          headers: { host: HTTP_ECHO_HOST, "x-route-kind": "long2" },
+          headers: { "x-route-kind": "long2" },
         },
       ],
     });
