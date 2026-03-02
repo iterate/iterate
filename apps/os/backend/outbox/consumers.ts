@@ -11,6 +11,10 @@ import {
 } from "../services/machine-readiness-probe.ts";
 import { buildMachineEnvVars } from "../services/machine-creation.ts";
 import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
+import {
+  registerProjectCustomDomain,
+  removeProjectCustomDomain,
+} from "../services/cloudflare-custom-hostname.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
@@ -381,6 +385,68 @@ export const registerConsumers = () => {
       logger.set({ machine: { id: machineId } });
       logger.info("[deleteMachineViaProvider] Deleted machine");
       return `deleted machine ${machineId}`;
+    },
+  });
+
+  // ── Custom domain (Cloudflare for SaaS) pipeline ───────────────────────
+  //
+  // project:custom-domain-set    → registerCustomHostname
+  // project:custom-domain-removed → deleteCustomHostname
+  //
+  // When a project sets a custom domain, we register it as a CF for SaaS
+  // custom hostname so that CF handles SSL cert provisioning and routes
+  // traffic through the fallback origin to the os worker. No `*/*` route
+  // or per-domain worker routes needed.
+
+  cc.registerConsumer({
+    name: "registerCustomHostname",
+    on: "project:custom-domain-set",
+    retry: (job) => {
+      if (job.read_ct <= 3) return { retry: true, reason: "retrying CF API call", delay: "10s" };
+      return { retry: false, reason: "CF custom hostname registration failed after retries" };
+    },
+    async handler(params) {
+      const { projectId, customDomain, previousCustomDomain } = params.payload;
+
+      // If there was a previous custom domain, clean it up first
+      if (previousCustomDomain) {
+        logger.info(
+          `[registerCustomHostname] Removing previous hostname ${previousCustomDomain} for project ${projectId}`,
+        );
+        await removeProjectCustomDomain(env, previousCustomDomain);
+      }
+
+      // Register the new custom hostname with CF
+      const result = await registerProjectCustomDomain(env, customDomain);
+
+      logger.set({ project: { id: projectId } });
+      if (result) {
+        logger.info(
+          `[registerCustomHostname] Registered ${customDomain} id=${result.id} status=${result.status}`,
+        );
+        return `registered ${customDomain} (id=${result.id}, status=${result.status})`;
+      }
+
+      logger.info(`[registerCustomHostname] CF for SaaS not configured, skipped ${customDomain}`);
+      return `skipped: CF for SaaS not configured`;
+    },
+  });
+
+  cc.registerConsumer({
+    name: "deleteCustomHostname",
+    on: "project:custom-domain-removed",
+    retry: (job) => {
+      if (job.read_ct <= 3) return { retry: true, reason: "retrying CF API call", delay: "10s" };
+      return { retry: false, reason: "CF custom hostname deletion failed after retries" };
+    },
+    async handler(params) {
+      const { projectId, customDomain } = params.payload;
+
+      await removeProjectCustomDomain(env, customDomain);
+
+      logger.set({ project: { id: projectId } });
+      logger.info(`[deleteCustomHostname] Removed ${customDomain}`);
+      return `removed ${customDomain}`;
     },
   });
 };

@@ -429,6 +429,15 @@ const Env = z.object({
   // This bypasses the egress proxy and exposes secrets directly in env vars.
   // Only enable this for local development or trusted environments.
   DANGEROUS_RAW_SECRETS_ENABLED: BoolyString,
+  // Cloudflare for SaaS: custom hostname management for project custom domains.
+  // API token needs Custom Hostnames:Edit permission on the iterate.app zone.
+  CF_CUSTOM_HOSTNAME_API_TOKEN: Optional,
+  // Zone ID for the iterate.app zone where CF for SaaS custom hostnames are registered.
+  CF_CUSTOM_HOSTNAME_ZONE_ID: Optional,
+  // DCV Delegation UUID for the iterate.app zone. Used to compute per-domain
+  // Delegated DCV CNAME targets for wildcard SSL cert issuance/renewal.
+  // Retrieve once via: GET /zones/{zone_id}/dcv_delegation/uuid
+  CF_DCV_DELEGATION_ID: Optional,
 } satisfies Record<string, z.ZodType<unknown, string | undefined>> & {
   [K in GlobalSecretEnvVarName]: typeof Required;
 });
@@ -707,16 +716,26 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   const allowedDomains = [
     ...new Set([...domains, `*.${projectIngressDomain}`, projectIngressDomain]),
   ];
-  // TODO(custom-domain): Custom domains don't need explicit worker routes here.
-  // Use Cloudflare for SaaS (https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/)
-  // to register custom hostnames. CF for SaaS routes traffic through a "fallback origin"
-  // which should point to this worker. SSL certs are auto-provisioned.
-  // Setup steps:
+  // Custom domains use Cloudflare for SaaS (custom hostnames) with Delegated DCV.
+  // When a project sets a custom domain, an outbox event triggers CF API calls
+  // to register it as a wildcard custom hostname on the iterate.app zone. CF handles
+  // SSL cert provisioning and routes traffic through the fallback origin
+  // (cname.iterate.app) to this worker. No per-domain worker routes needed.
+  //
+  // Customers add 3 permanent CNAMEs (no TXT records):
+  //   1. kaletsky.com CNAME cname.iterate.app (apex)
+  //   2. *.kaletsky.com CNAME cname.iterate.app (wildcard for port subdomains)
+  //   3. _acme-challenge.kaletsky.com CNAME kaletsky.com.<DCV_ID>.dcv.cloudflare.com (Delegated DCV)
+  //
+  // Prerequisites (one-time CF dashboard setup):
   //   1. Enable CF for SaaS on the iterate.app zone
-  //   2. Create a fallback origin (e.g. fallback.iterate.app → this worker)
-  //   3. When a project sets a custom domain, call the CF API to create a custom hostname
-  //   4. Show the user DNS instructions (CNAME to fallback.iterate.app)
-  // The allowedDomains/routeHosts arrays above don't need custom domains — CF for SaaS handles routing.
+  //   2. Set fallback origin to cname.iterate.app (AAAA 100:: proxied)
+  //   3. Enable DCV Delegation on the zone
+  //   4. Set CF_CUSTOM_HOSTNAME_API_TOKEN, CF_CUSTOM_HOSTNAME_ZONE_ID, and
+  //      CF_DCV_DELEGATION_ID in Doppler
+  //
+  // See: backend/services/cloudflare-custom-hostname.ts
+  //      backend/outbox/consumers.ts (registerCustomHostname, deleteCustomHostname)
 
   const worker = await TanStackStart("os", {
     bindings: {

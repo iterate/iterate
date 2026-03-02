@@ -54,6 +54,18 @@ export type InternalEventTypes = {
     externalId: string;
     metadata: Record<string, unknown>;
   };
+  /** A custom domain was set on a project — register it with Cloudflare for SaaS. */
+  "project:custom-domain-set": {
+    projectId: string;
+    customDomain: string;
+    /** The previous custom domain, if any (needs cleanup). */
+    previousCustomDomain: string | null;
+  };
+  /** A custom domain was removed from a project — delete it from Cloudflare for SaaS. */
+  "project:custom-domain-removed": {
+    projectId: string;
+    customDomain: string;
+  };
 };
 
 type AppRouterEventTypes = RouterEventTypes<typeof appRouter>;

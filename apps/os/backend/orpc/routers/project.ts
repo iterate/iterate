@@ -39,6 +39,7 @@ import {
 } from "../../utils/sandbox-providers.ts";
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
+import { outboxClient } from "../../outbox/client.ts";
 
 export const projectRouter = {
   getAvailableSandboxProviders: publicProcedure.handler(({ context: ctx }) => {
@@ -213,6 +214,12 @@ export const projectRouter = {
         }
       }
 
+      const previousCustomDomain = ctx.project.customDomain;
+      const newCustomDomain =
+        input.customDomain !== undefined ? input.customDomain : previousCustomDomain;
+      const customDomainChanged =
+        input.customDomain !== undefined && input.customDomain !== previousCustomDomain;
+
       const [updated] = await ctx.db
         .update(project)
         .set({
@@ -223,6 +230,32 @@ export const projectRouter = {
         })
         .where(eq(project.id, ctx.project.id))
         .returning();
+
+      // Emit outbox events for CF for SaaS custom hostname management
+      if (customDomainChanged) {
+        if (newCustomDomain) {
+          // Domain was set or changed — register the new hostname (and clean up old one)
+          await outboxClient.send(
+            { transaction: ctx.db, parent: ctx.db },
+            "project:custom-domain-set",
+            {
+              projectId: ctx.project.id,
+              customDomain: newCustomDomain,
+              previousCustomDomain,
+            },
+          );
+        } else if (previousCustomDomain) {
+          // Domain was cleared — remove the old hostname
+          await outboxClient.send(
+            { transaction: ctx.db, parent: ctx.db },
+            "project:custom-domain-removed",
+            {
+              projectId: ctx.project.id,
+              customDomain: previousCustomDomain,
+            },
+          );
+        }
+      }
 
       return updated;
     }),
