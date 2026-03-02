@@ -1,201 +1,151 @@
-# cf-ingress-proxy-worker
+# ingress-proxy worker
 
-Transparent ingress proxy on Cloudflare Workers. Gives any backend instant public hostnames — no DNS propagation, no certificate provisioning, no waiting.
+`apps/cf-ingress-proxy-worker` is a tiny programmable ingress proxy on Cloudflare Workers.
 
-We built this for [Iterate](https://iterate.com) deployments, but the pattern is useful for any system that needs on-demand public URLs — coding agents, AI agent sandboxes, ephemeral preview environments, etc.
+It maps inbound host patterns to upstream targets stored in D1, then forwards HTTP/WebSocket traffic transparently.
 
-## The problem
+## Why this exists
 
-You have a single server (e.g. a Fly.io machine) running multiple apps behind Caddy. You need many publicly routable hostnames to reach it — one per app, per port, per test run. Normally this means:
+For ephemeral environments (E2E runs, agent sandboxes, preview stacks), we need many public hostnames quickly without provisioning per-host DNS + TLS each time.
 
-1. Create a DNS record per hostname
-2. Wait for propagation
-3. Provision TLS certificates
-4. Wait for certificate issuance
+Pattern:
 
-This takes minutes to hours and doesn't scale for ephemeral environments like E2E test runs.
-
-An alternative is tunnel services (ngrok, Cloudflare Tunnel, localtunnel) where each service gets a random public hostname. This works for one-off use, but breaks down at scale — you can't spin up dozens of concurrent tunnels for parallel E2E test runs without hitting connection limits, rate limits, and per-tunnel overhead.
-
-In production, we provision proper wildcard certificates and CNAME records per project. But in testing, we need hostnames that spin up and tear down in milliseconds. That's what this worker does.
-
-## The solution
-
-One wildcard DNS record + one wildcard TLS certificate + this proxy worker.
-
-```
-*.ingress.iterate.com  CNAME → cf-ingress-proxy-worker (Cloudflare Worker)
+```text
+*.ingress.iterate.com CNAME -> ingress-proxy worker
 ```
 
-Now any `<anything>.ingress.iterate.com` hostname hits this worker. The worker looks up a route table to decide where to forward the request. Routes are managed via an authenticated API.
+With wildcard DNS/TLS already available in Cloudflare, this also works for CNAME-driven setups and future subdomain patterns like iterate.app project hostnames.
 
-```
-                          Client
-                            │
-                            │  https://webapp__my-project.ingress.iterate.com/api/health
-                            ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                       Cloudflare Edge                                │
-│                                                                      │
-│  *.ingress.iterate.com  ─►  cf-ingress-proxy-worker                    │
-│                                                                      │
-│     1. Extract Host header                                           │
-│     2. Look up route (in-memory cache → D1 fallback)                 │
-│     3. Forward request transparently (HTTP + WebSocket)              │
-│                                                                      │
-│  Admin API: /api/orpc/{listRoutes, setRoute, deleteRoute}            │
-│                                                                      │
-└──────────────────────────────┬───────────────────────────────────────┘
-                               │
-                               ▼
-                  ┌─────────────────────────┐
-                  │      Fly.io machine      │
-                  │                          │
-                  │   ┌──────────────────┐   │
-                  │   │      Caddy       │   │
-                  │   │  routes by Host  │   │
-                  │   └──┬─────┬─────┬───┘   │
-                  │      │     │     │        │
-                  │      ▼     ▼     ▼        │
-                  │    :3000 :4096 :8080       │
-                  └─────────────────────────┘
-```
+## Design constraints
 
-The proxy is fully transparent — it forwards HTTP requests, WebSocket connections, and streaming bodies without inspecting or modifying payloads. CF Workers `fetch()` handles WebSocket upgrades natively with zero per-message overhead.
+- Transparent by default: preserve inbound `Host`, headers, body stream, and WebSocket upgrades.
+- Optional per-pattern header overrides for exceptional auth/routing cases.
+- Hostname tokens are opaque: this service does not interpret `__`, ports, or service names.
+- Conflict-safe writes: duplicate patterns across different routes are rejected with typed conflict errors.
+- Proxy responses are passthrough (including `101` websocket upgrades).
 
-## How routes work
+## Data model
 
-### Hostname conventions
+Two tables:
 
-In Iterate deployments, hostnames follow the pattern `<app-or-port>__<project-slug>.ingress.iterate.com`:
+- `routes`
+  - route group metadata
+  - stable external `routeId` (typeid)
+- `route_patterns`
+  - child rows for each pattern -> target (+ optional headers)
+  - `ON DELETE CASCADE`
 
-- `webapp__my-project.ingress.iterate.com` — route to the webapp service
-- `3000__my-project.ingress.iterate.com` — route to port 3000
-- `4096__my-project.ingress.iterate.com` — route to the OpenCode API on port 4096
+## SQL + schema workflow
 
-Caddy inside the Fly machine reads the `Host` header and routes to the right process/port.
+- `migrations/*.sql` are hand-written migration steps for D1.
+- `typesql.json` is the checked-in TypeSQL base config.
+- `sql/queries.sql` is the single query source file.
+- `sql/queries.ts` is the generated, committed wrapper module (`client: "d1"`) with zero runtime ORM overhead.
 
-### Exact routes
+Commands:
 
-```ts
-await client.setRoute({
-  route: "webapp__my-project.ingress.iterate.com",
-  target: "https://prd-my-project.fly.dev",
-  headers: { host: "webapp__my-project.ingress.iterate.com" },
-  ttlSeconds: 3600,
-});
-```
+- `pnpm run db:rebuild` rebuilds local `.local.db` by replaying `migrations/**/*.sql`.
+- `pnpm run db:types` rebuilds `.local.db` and regenerates `sql/queries.ts`.
+- `pnpm run db:watch` watches `sql/queries.sql`, `migrations/**/*.sql`, and `typesql.json` and regenerates `sql/queries.ts`.
 
-### Wildcard routes
+Adding a new SQL query:
 
-```ts
-// Route all subdomains for a project to its Fly machine
-await client.setRoute({
-  route: "*.my-project.ingress.iterate.com",
-  target: "https://prd-my-project.fly.dev",
-});
-```
+- add a new block to `sql/queries.sql` starting with `-- @query yourCamelCaseName`
+- keep query names unique and camelCase; this becomes the exported TS function name
+- use named params in SQL (`:routeId`, `:host`, etc.); TypeSQL will map to typed params
+- run `pnpm run db:types` to regenerate `sql/queries.ts`
+- import the generated function/type from `./sql/queries.ts`
 
-Now `webapp__my-project.ingress.iterate.com`, `3000__my-project.ingress.iterate.com`, etc. all route to the same Fly machine. Caddy inside differentiates by Host header.
+When changing schema:
 
-Exact matches always take priority over wildcards. Longer wildcard suffixes take priority over shorter ones.
+1. add a new migration in `migrations/`
+2. run `pnpm run db:types`
+3. commit migration, `sql/queries.sql`, and generated `sql/queries.ts`
 
-### Route lifecycle
+## Guardrails (read before editing)
 
-- `ttlSeconds` — optional auto-expiration
-- `status` — `active` | `expired` | `disabled`
-- Expired routes are lazily marked on next lookup attempt
+- Do not hand-edit generated file `sql/queries.ts`.
+- `sql/queries.sql` is the source for query codegen; always run `pnpm run db:types` after SQL edits.
+- migrations are canonical for both local introspection and remote D1 rollout.
+- if migrations change, regenerate `sql/queries.ts` before commit.
+- Resolver match ordering is critical:
+  - exact pattern must beat wildcard
+  - longer/more-specific wildcard must beat shorter wildcard
+- preserve this when editing the `selectResolvedRouteByHost` block in `sql/queries.sql`
+- Write-path internals (`createRoute`/`updateRoute`) are admin-only. Proxy request latency depends on resolver path (`resolveRoute`), not route-management calls.
 
-## Admin API
+## Safe change checklist
 
-All endpoints require `Authorization: Bearer <CF_PROXY_WORKER_API_TOKEN>`.
-
-| Endpoint      | Description                       |
-| ------------- | --------------------------------- |
-| `setRoute`    | Create or update a route (upsert) |
-| `deleteRoute` | Remove a route                    |
-| `listRoutes`  | List all routes                   |
-
-### Client setup
-
-```ts
-import { createORPCClient } from "@orpc/client";
-import { RPCLink } from "@orpc/client/fetch";
-
-const client = createORPCClient(
-  new RPCLink({
-    url: "https://<worker-domain>/api/orpc/",
-    fetch: (input, init) =>
-      fetch(input, {
-        ...init,
-        headers: {
-          ...(init?.headers as Record<string, string>),
-          authorization: `Bearer ${process.env.CF_PROXY_WORKER_API_TOKEN}`,
-        },
-      }),
-  }),
-);
-```
-
-### Concrete example: E2E test with multiple services
-
-```ts
-const projectSlug = "my-project";
-const flyTarget = "https://prd-my-project.fly.dev";
-
-// Route different apps/ports to the same Fly machine
-await client.setRoute({
-  route: `webapp__${projectSlug}.ingress.iterate.com`,
-  target: flyTarget,
-  headers: { host: `webapp__${projectSlug}.ingress.iterate.com` },
-  metadata: { project: projectSlug, service: "webapp" },
-  ttlSeconds: 3600,
-});
-
-await client.setRoute({
-  route: `4096__${projectSlug}.ingress.iterate.com`,
-  target: flyTarget,
-  headers: { host: `4096__${projectSlug}.ingress.iterate.com` },
-  metadata: { project: projectSlug, service: "opencode" },
-  ttlSeconds: 3600,
-});
-
-// Both hostnames hit the same Fly machine.
-// Caddy inside reads the Host header and routes to the right port.
-```
-
-## Schema
-
-`routes` table (D1/SQLite):
-
-| Column        | Type        | Description                                                                                |
-| ------------- | ----------- | ------------------------------------------------------------------------------------------ |
-| `route`       | TEXT PK     | Hostname pattern (e.g. `webapp__proj.ingress.iterate.com` or `*.proj.ingress.iterate.com`) |
-| `target`      | TEXT        | Upstream URL                                                                               |
-| `headers`     | TEXT (JSON) | Header overrides for upstream request                                                      |
-| `metadata`    | TEXT (JSON) | Arbitrary metadata (project slug, service name, etc.)                                      |
-| `status`      | TEXT        | `active` / `expired` / `disabled`                                                          |
-| `ttl_seconds` | INTEGER     | Optional TTL in seconds                                                                    |
-| `expires_at`  | TEXT        | Computed expiration timestamp                                                              |
-| `expired_at`  | TEXT        | When the route was marked expired                                                          |
-| `created_at`  | TEXT        | Creation timestamp                                                                         |
-| `updated_at`  | TEXT        | Last update timestamp                                                                      |
-
-## Caveats
-
-- **No route conflict detection.** Callers are trusted to not create overlapping or conflicting routes. This is fine for now because the only callers are our own control plane and test infrastructure.
-- **No multi-tenancy / auth scoping.** A single API token controls all routes. There's no per-project or per-user access control.
-- **Lazy TTL expiration only.** Expired routes are marked on next lookup, not proactively cleaned up. Stale rows accumulate until manually deleted.
-
-## Run / deploy
+From repo root:
 
 ```bash
-# Local dev
-pnpm --filter @iterate-com/cf-ingress-proxy-worker dev
-
-# Deploy to production
-pnpm --filter @iterate-com/cf-ingress-proxy-worker deploy:prd
-
-# Unit tests
+pnpm -C apps/cf-ingress-proxy-worker run db:types
+pnpm --filter @iterate-com/cf-ingress-proxy-worker typecheck
 pnpm --filter @iterate-com/cf-ingress-proxy-worker test
 ```
+
+For routing behavior changes (matching order, forwarding semantics), also run live E2E:
+
+```bash
+INGRESS_PROXY_E2E_BASE_URL=<https://...workers.dev> \
+INGRESS_PROXY_E2E_API_TOKEN=<token> \
+pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live
+```
+
+## Admin API (oRPC)
+
+All endpoints require `Authorization: Bearer <INGRESS_PROXY_API_TOKEN>`.
+
+- `createRoute`
+- `updateRoute`
+- `deleteRoute`
+- `getRoute`
+- `listRoutes`
+
+`createRoute`/`updateRoute` accept:
+
+- `metadata?: Record<string, unknown>`
+- `patterns: Array<{ pattern: string; target: string; headers?: Record<string, string> }>`
+
+## Env validation
+
+`env.ts` declares the worker env contract using Zod and throws on invalid config.
+
+- required: `DB`, `INGRESS_PROXY_API_TOKEN`
+- defaulted (non-secret): `TYPEID_PREFIX` (default `ipr`)
+
+## Deploy
+
+Alchemy manages worker + D1 resources.
+
+- set `WORKER_NAME` before running `alchemy.run.ts`
+- worker name: `<WORKER_NAME>`
+- D1 name: `<WORKER_NAME>-routes`
+- D1 schema applied via `migrations/`
+- deploy scripts:
+  - `pnpm run dev` (dev stage)
+  - `pnpm run deploy:prd` (prod)
+
+## Tests
+
+- SQLite-backed unit tests for conflict/matching internals.
+- E2E-style worker tests for API and proxy behavior.
+- Live deployment E2E (Vitest):
+  - `INGRESS_PROXY_E2E_BASE_URL=<https://...workers.dev> INGRESS_PROXY_E2E_API_TOKEN=<token> pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live`
+  - Covers exact vs wildcard priority, wildcard specificity, create/update conflict paths, self-update behavior, and deployed websocket proxy echo.
+- CI:
+  - PRs deploy ephemeral worker, run live E2E, then teardown.
+  - `main` runs the same live E2E flow first, then deploys production worker only if live E2E passes.
+
+## TODO (explicitly deferred)
+
+Pattern lookup optimization is intentionally deferred. Current matching prioritizes correctness and simplicity; optimize query narrowing later if route cardinality warrants it.
+
+- Add route TTL/expiry support (schema + API + resolver semantics + dedicated E2E coverage).
+
+## Related docs
+
+- project-ingress proxy app docs: `apps/project-ingress-proxy/README.md`
+- follow-up tasks:
+  - `tasks/project-ingress-proxy-improvements.md`
+  - `tasks/project-ingress-proxy-secret-auth.md`

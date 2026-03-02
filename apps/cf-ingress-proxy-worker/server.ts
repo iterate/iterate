@@ -2,169 +2,80 @@ import { Hono } from "hono";
 import { ORPCError, onError, os } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
 import { RequestHeadersPlugin, type RequestHeadersPluginContext } from "@orpc/server/plugins";
+import { typeid } from "typeid-js";
 import { z } from "zod/v4";
-
-export type ProxyWorkerEnv = {
-  DB: D1Database;
-  CF_PROXY_WORKER_API_TOKEN: string;
-};
+import { normalizePattern, normalizeRouteId, RouteInputError } from "./route-conflicts.ts";
+import {
+  deleteRouteById,
+  deleteRoutePatternsByRouteIdStmt,
+  insertRoutePatternStmt,
+  insertRouteStmt,
+  selectResolvedRouteByHost,
+  selectRouteById,
+  selectRoutePatterns,
+  selectRoutePatternsByRouteId,
+  selectRoutes,
+  updateRouteMetadataStmt,
+} from "./sql/queries.ts";
+import { parseWorkerEnv, type ProxyWorkerEnv, type RawProxyWorkerEnv } from "./env.ts";
 
 export type RouteHeaders = Record<string, string>;
 export type RouteMetadata = Record<string, unknown>;
-export type RouteStatus = "active" | "expired" | "disabled";
 
-export type RouteRecord = {
-  route: string;
+export type RoutePatternRecord = {
+  patternId: number;
+  pattern: string;
   target: string;
   headers: RouteHeaders;
-  metadata: RouteMetadata;
-  status: RouteStatus;
-  ttlSeconds: number | null;
-  expiresAt: string | null;
-  expiredAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
 
+export type RouteRecord = {
+  routeId: string;
+  metadata: RouteMetadata;
+  patterns: RoutePatternRecord[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ResolvedRoute = {
+  routeId: string;
+  pattern: string;
+  targetUrl: URL;
+  headers: RouteHeaders;
+  metadata: RouteMetadata;
+};
+
 type RouteRow = {
-  route: string;
-  target: string;
-  headers: string;
+  id: string;
   metadata: string;
-  status: string;
-  ttl_seconds: number | null;
-  expires_at: string | null;
-  expired_at: string | null;
   created_at: string;
   updated_at: string;
 };
 
-export type ResolvedRoute = RouteRecord & {
-  targetUrl: URL;
-};
-
-export type SetRouteInput = {
-  route: string;
+type RoutePatternRow = {
+  id: number;
+  route_id: string;
+  pattern: string;
   target: string;
-  headers?: RouteHeaders;
-  metadata?: RouteMetadata;
-  ttlSeconds?: number | null;
+  headers: string;
+  created_at: string;
+  updated_at: string;
 };
 
-class InputError extends Error {}
+const parsedEnvCache = new WeakMap<RawProxyWorkerEnv, ProxyWorkerEnv>();
 
-const HOP_BY_HOP_HEADERS = new Set([
-  "connection",
-  "keep-alive",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "upgrade",
-]);
+function getParsedEnv(env: RawProxyWorkerEnv): ProxyWorkerEnv {
+  const cached = parsedEnvCache.get(env);
+  if (cached) return cached;
 
-function parseJsonObject(value: string, field: "headers" | "metadata"): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new InputError(`${field} must be a JSON object`);
-    }
-    return parsed as Record<string, unknown>;
-  } catch (error) {
-    if (error instanceof InputError) throw error;
-    throw new InputError(`Invalid JSON in ${field}`);
-  }
-}
-
-function rowToRouteRecord(row: RouteRow): RouteRecord {
-  const status: RouteStatus =
-    row.status === "active" || row.status === "expired" || row.status === "disabled"
-      ? row.status
-      : "active";
-
-  return {
-    route: row.route,
-    target: row.target,
-    headers: parseJsonObject(row.headers, "headers") as RouteHeaders,
-    metadata: parseJsonObject(row.metadata, "metadata"),
-    status,
-    ttlSeconds: row.ttl_seconds,
-    expiresAt: row.expires_at,
-    expiredAt: row.expired_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function isValidHostname(hostname: string): boolean {
-  if (hostname.length < 1 || hostname.length > 253) return false;
-  if (!/^[a-z0-9._-]+$/.test(hostname)) return false;
-  if (hostname.includes("..")) return false;
-
-  const labels = hostname.split(".");
-  return labels.every((label) => {
-    if (!label || label.length > 63) return false;
-    if (label.startsWith("-") || label.endsWith("-")) return false;
-    return /^[a-z0-9_-]+$/.test(label);
-  });
-}
-
-function stripPort(rawHost: string): string {
-  if (rawHost.startsWith("[")) {
-    const closeBracketIndex = rawHost.indexOf("]");
-    if (closeBracketIndex > 0) {
-      return rawHost.slice(1, closeBracketIndex);
-    }
-  }
-
-  const firstColonIndex = rawHost.indexOf(":");
-  if (firstColonIndex === -1) return rawHost;
-  return rawHost.slice(0, firstColonIndex);
-}
-
-export function normalizeInboundHost(rawHost: string | null): string | null {
-  if (!rawHost) return null;
-  const stripped = stripPort(rawHost.trim().toLowerCase()).replace(/\.$/, "");
-  if (!stripped) return null;
-  return stripped;
-}
-
-export function normalizeRouteKey(input: string): string {
-  const raw = input.trim().toLowerCase().replace(/\.$/, "");
-  if (!raw) throw new InputError("route is required");
-
-  if (raw.startsWith("*.")) {
-    const suffix = raw.slice(2);
-    if (!isValidHostname(suffix)) {
-      throw new InputError(`Invalid wildcard route: ${input}`);
-    }
-    return `*.${suffix}`;
-  }
-
-  if (!isValidHostname(raw)) {
-    throw new InputError(`Invalid route: ${input}`);
-  }
-
-  return raw;
-}
-
-export function parseTargetUrl(target: string): URL {
-  let parsed: URL;
-  try {
-    parsed = new URL(target);
-  } catch {
-    throw new InputError("target must be a valid URL");
-  }
-
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new InputError("target URL must use http or https");
-  }
-
+  const parsed = parseWorkerEnv(env);
+  parsedEnvCache.set(env, parsed);
   return parsed;
 }
 
-export function readBearerToken(headerValue: string | null): string | null {
+function readBearerToken(headerValue: string | null): string | null {
   if (!headerValue) return null;
   const match = /^bearer\s+(.+)$/i.exec(headerValue);
   if (!match) return null;
@@ -172,216 +83,252 @@ export function readBearerToken(headerValue: string | null): string | null {
   return token.length > 0 ? token : null;
 }
 
-function toSqliteTimestamp(date: Date): string {
-  return date.toISOString().slice(0, 19).replace("T", " ");
-}
-
-function computeExpiresAt(ttlSeconds: number | null | undefined): string | null {
-  if (ttlSeconds === null || ttlSeconds === undefined) return null;
-  const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
-  return toSqliteTimestamp(expiresAt);
-}
-
-function isTtlExpired(route: RouteRecord, nowSql: string): boolean {
-  return route.expiresAt !== null && route.expiresAt <= nowSql;
-}
-
-async function runSchemaStatement(db: D1Database, sql: string): Promise<void> {
+function parseJsonObject(value: string, field: "headers" | "metadata"): Record<string, unknown> {
   try {
-    await db.prepare(sql).run();
-  } catch (error) {
-    if (!(error instanceof Error) || !/duplicate column name/i.test(error.message)) {
-      throw error;
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new RouteInputError(`${field} must be a JSON object`);
     }
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof RouteInputError) throw error;
+    throw new RouteInputError(`Invalid JSON in ${field}`);
   }
 }
 
-async function markRouteExpired(db: D1Database, routeKey: string, nowSql: string): Promise<void> {
-  await db
-    .prepare(`
-      UPDATE routes
-      SET
-        status = 'expired',
-        expired_at = COALESCE(expired_at, ?2),
-        updated_at = CURRENT_TIMESTAMP
-      WHERE route = ?1
-    `)
-    .bind(routeKey, nowSql)
-    .run();
+function normalizeInboundHost(rawHost: string | null): string | null {
+  if (!rawHost) return null;
+  const first = rawHost.split(",")[0]?.trim().toLowerCase() ?? "";
+  if (!first) return null;
+  let host: string;
+  if (first.startsWith("[")) {
+    const endBracket = first.indexOf("]");
+    if (endBracket === -1) return null;
+    host = first.slice(1, endBracket);
+  } else {
+    const lastColon = first.lastIndexOf(":");
+    if (lastColon !== -1 && first.indexOf(":") === lastColon) {
+      host = first.slice(0, lastColon);
+    } else {
+      host = first;
+    }
+  }
+  return host.replace(/\.$/, "") || null;
 }
 
-export async function ensureSchema(db: D1Database): Promise<void> {
-  await runSchemaStatement(
-    db,
-    `
-    CREATE TABLE IF NOT EXISTS routes (
-      route TEXT PRIMARY KEY,
-      target TEXT NOT NULL,
-      headers TEXT NOT NULL DEFAULT '{}',
-      metadata TEXT NOT NULL DEFAULT '{}',
-      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'expired', 'disabled')),
-      ttl_seconds INTEGER,
-      expires_at TEXT,
-      expired_at TEXT,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-  `,
-  );
+function parseTargetUrl(target: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(target);
+  } catch {
+    throw new RouteInputError("target must be a valid URL");
+  }
 
-  // Keep runtime schema self-healing for already-created early versions of the table.
-  await runSchemaStatement(
-    db,
-    "ALTER TABLE routes ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
-  );
-  await runSchemaStatement(db, "ALTER TABLE routes ADD COLUMN ttl_seconds INTEGER");
-  await runSchemaStatement(db, "ALTER TABLE routes ADD COLUMN expires_at TEXT");
-  await runSchemaStatement(db, "ALTER TABLE routes ADD COLUMN expired_at TEXT");
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new RouteInputError("target URL must use http or https");
+  }
 
-  await db
-    .prepare(
-      "CREATE INDEX IF NOT EXISTS idx_routes_status_expires_at ON routes(status, expires_at)",
-    )
-    .run();
-  await db.prepare("CREATE INDEX IF NOT EXISTS idx_routes_expires_at ON routes(expires_at)").run();
-  await db.prepare("CREATE INDEX IF NOT EXISTS idx_routes_status ON routes(status)").run();
+  return parsed;
+}
+
+function normalizeHeaders(headers: RouteHeaders | undefined): RouteHeaders {
+  if (!headers) return {};
+  const normalized: RouteHeaders = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const name = key.trim();
+    if (!name) {
+      throw new RouteInputError("header names cannot be empty");
+    }
+    normalized[name] = value;
+  }
+  return normalized;
+}
+
+function normalizeMetadata(metadata: RouteMetadata | undefined): RouteMetadata {
+  return metadata ?? {};
+}
+
+function normalizePatternInputs(
+  patterns: Array<{ pattern: string; target: string; headers?: RouteHeaders }>,
+): Array<{ pattern: string; target: string; headers: RouteHeaders }> {
+  const normalized = patterns.map((pattern) => {
+    const normalizedPattern = normalizePattern(pattern.pattern);
+    const normalizedTarget = parseTargetUrl(pattern.target).toString();
+    return {
+      pattern: normalizedPattern,
+      target: normalizedTarget,
+      headers: normalizeHeaders(pattern.headers),
+    };
+  });
+
+  const seen = new Set<string>();
+  for (const item of normalized) {
+    if (seen.has(item.pattern)) {
+      throw new RouteInputError(`Duplicate pattern in request: ${item.pattern}`);
+    }
+    seen.add(item.pattern);
+  }
+
+  return normalized;
+}
+
+function patternRowToRecord(row: RoutePatternRow): RoutePatternRecord {
+  return {
+    patternId: row.id,
+    pattern: row.pattern,
+    target: row.target,
+    headers: parseJsonObject(row.headers, "headers") as RouteHeaders,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function routeRowToRecord(row: RouteRow, patterns: RoutePatternRow[]): RouteRecord {
+  return {
+    routeId: row.id,
+    metadata: parseJsonObject(row.metadata, "metadata"),
+    patterns: patterns.map(patternRowToRecord),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function getRouteRowsById(
+  db: D1Database,
+  routeId: string,
+): Promise<{
+  route: RouteRow | null;
+  patterns: RoutePatternRow[];
+}> {
+  const normalizedRouteId = normalizeRouteId(routeId);
+  const route = await selectRouteById(db, { routeId: normalizedRouteId });
+  const patterns = await selectRoutePatternsByRouteId(db, { routeId: normalizedRouteId });
+
+  return {
+    route,
+    patterns,
+  };
+}
+
+export async function getRoute(db: D1Database, routeId: string): Promise<RouteRecord | null> {
+  const rows = await getRouteRowsById(db, routeId);
+  if (!rows.route) return null;
+  return routeRowToRecord(rows.route, rows.patterns);
 }
 
 export async function listRoutes(db: D1Database): Promise<RouteRecord[]> {
-  await ensureSchema(db);
+  const routeRows = await selectRoutes(db);
+  const patternRows = await selectRoutePatterns(db);
 
-  const rows = await db
-    .prepare(`
-      SELECT route, target, headers, metadata, status, ttl_seconds, expires_at, expired_at, created_at, updated_at
-      FROM routes
-      ORDER BY route ASC
-    `)
-    .all<RouteRow>();
+  const patternsByRouteId = new Map<string, RoutePatternRow[]>();
+  for (const pattern of patternRows) {
+    const group = patternsByRouteId.get(pattern.route_id) ?? [];
+    group.push(pattern);
+    patternsByRouteId.set(pattern.route_id, group);
+  }
 
-  return (rows.results ?? []).map(rowToRouteRecord);
+  return routeRows.map((route) => {
+    return routeRowToRecord(route, patternsByRouteId.get(route.id) ?? []);
+  });
 }
 
-export async function setRoute(db: D1Database, input: SetRouteInput): Promise<RouteRecord> {
-  await ensureSchema(db);
+export async function createRoute(
+  db: D1Database,
+  params: {
+    typeIdPrefix: string;
+    patterns: Array<{ pattern: string; target: string; headers?: RouteHeaders }>;
+    metadata?: RouteMetadata;
+  },
+): Promise<RouteRecord> {
+  const normalizedPatterns = normalizePatternInputs(params.patterns);
 
-  const route = normalizeRouteKey(input.route);
-  const target = parseTargetUrl(input.target).toString();
-  const headers = input.headers ?? {};
-  const metadata = input.metadata ?? {};
-  const ttlSeconds = input.ttlSeconds ?? null;
-  const expiresAt = computeExpiresAt(ttlSeconds);
+  const routeId = typeid(params.typeIdPrefix).toString();
+  const metadata = normalizeMetadata(params.metadata);
 
-  await db
-    .prepare(`
-      INSERT INTO routes (route, target, headers, metadata, status, ttl_seconds, expires_at, expired_at, updated_at)
-      VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, NULL, CURRENT_TIMESTAMP)
-      ON CONFLICT(route) DO UPDATE SET
-        target = excluded.target,
-        headers = excluded.headers,
-        metadata = excluded.metadata,
-        status = 'active',
-        ttl_seconds = excluded.ttl_seconds,
-        expires_at = excluded.expires_at,
-        expired_at = NULL,
-        updated_at = CURRENT_TIMESTAMP
-    `)
-    .bind(route, target, JSON.stringify(headers), JSON.stringify(metadata), ttlSeconds, expiresAt)
-    .run();
+  await db.batch([
+    insertRouteStmt(db, { routeId, metadata: JSON.stringify(metadata) }),
+    ...normalizedPatterns.map((pattern) => {
+      return insertRoutePatternStmt(db, {
+        routeId,
+        pattern: pattern.pattern,
+        target: pattern.target,
+        headers: JSON.stringify(pattern.headers),
+      });
+    }),
+  ]);
 
-  const row = await db
-    .prepare(`
-      SELECT route, target, headers, metadata, status, ttl_seconds, expires_at, expired_at, created_at, updated_at
-      FROM routes
-      WHERE route = ?1
-    `)
-    .bind(route)
-    .first<RouteRow>();
-
-  if (!row) throw new Error("Failed to read route after upsert");
-  return rowToRouteRecord(row);
+  const created = await getRoute(db, routeId);
+  if (!created) throw new Error("Failed to read route after create");
+  return created;
 }
 
-export async function deleteRoute(db: D1Database, routeInput: string): Promise<boolean> {
-  await ensureSchema(db);
+export async function updateRoute(
+  db: D1Database,
+  params: {
+    routeId: string;
+    patterns: Array<{ pattern: string; target: string; headers?: RouteHeaders }>;
+    metadata: RouteMetadata;
+  },
+): Promise<RouteRecord> {
+  const routeId = normalizeRouteId(params.routeId);
+  const existing = await getRoute(db, routeId);
+  if (!existing) {
+    throw new ORPCError("NOT_FOUND", { message: "Route not found" });
+  }
 
-  const route = normalizeRouteKey(routeInput);
+  const normalizedPatterns = normalizePatternInputs(params.patterns);
+  await db.batch([
+    updateRouteMetadataStmt(db, { metadata: JSON.stringify(params.metadata) }, { routeId }),
+    deleteRoutePatternsByRouteIdStmt(db, { routeId }),
+    ...normalizedPatterns.map((pattern) => {
+      return insertRoutePatternStmt(db, {
+        routeId,
+        pattern: pattern.pattern,
+        target: pattern.target,
+        headers: JSON.stringify(pattern.headers),
+      });
+    }),
+  ]);
 
-  const result = await db
-    .prepare(`
-      DELETE FROM routes
-      WHERE route = ?1
-    `)
-    .bind(route)
-    .run();
+  const updated = await getRoute(db, routeId);
+  if (!updated) throw new Error("Failed to read route after update");
+  return updated;
+}
 
-  return (result.meta.changes ?? 0) > 0;
+export async function deleteRoute(db: D1Database, routeId: string): Promise<boolean> {
+  const normalizedRouteId = normalizeRouteId(routeId);
+  const result = await deleteRouteById(db, { routeId: normalizedRouteId });
+  return (result.changes ?? 0) > 0;
 }
 
 export async function resolveRoute(
   db: D1Database,
   request: Request,
 ): Promise<ResolvedRoute | null> {
-  await ensureSchema(db);
+  return resolveRouteByHost(db, request.headers.get("host"));
+}
 
-  const host = normalizeInboundHost(request.headers.get("host"));
+export async function resolveRouteByHost(
+  db: D1Database,
+  rawHost: string | null,
+): Promise<ResolvedRoute | null> {
+  const host = normalizeInboundHost(rawHost);
   if (!host) return null;
-  const nowSql = toSqliteTimestamp(new Date());
 
-  const exactRow = await db
-    .prepare(`
-      SELECT route, target, headers, metadata, status, ttl_seconds, expires_at, expired_at, created_at, updated_at
-      FROM routes
-      WHERE route = ?1
-      LIMIT 1
-    `)
-    .bind(host)
-    .first<RouteRow>();
+  const winner = await selectResolvedRouteByHost(db, { host });
+  if (!winner) return null;
 
-  if (exactRow) {
-    const exact = rowToRouteRecord(exactRow);
-    if (exact.status !== "expired" && exact.status !== "disabled") {
-      if (isTtlExpired(exact, nowSql)) {
-        await markRouteExpired(db, exact.route, nowSql);
-      } else {
-        return { ...exact, targetUrl: parseTargetUrl(exact.target) };
-      }
-    }
-  }
-
-  const wildcardRows = await db
-    .prepare(`
-      SELECT route, target, headers, metadata, status, ttl_seconds, expires_at, expired_at, created_at, updated_at
-      FROM routes
-      WHERE route LIKE '*.%'
-    `)
-    .all<RouteRow>();
-
-  const wildcardMatches = (wildcardRows.results ?? [])
-    .map(rowToRouteRecord)
-    .filter((route) => {
-      if (!route.route.startsWith("*.")) return false;
-      const suffix = route.route.slice(2);
-      return host.length > suffix.length && host.endsWith(`.${suffix}`);
-    })
-    .sort((a, b) => b.route.length - a.route.length);
-
-  for (const wildcardMatch of wildcardMatches) {
-    if (wildcardMatch.status === "expired" || wildcardMatch.status === "disabled") {
-      continue;
-    }
-    if (isTtlExpired(wildcardMatch, nowSql)) {
-      await markRouteExpired(db, wildcardMatch.route, nowSql);
-      continue;
-    }
-    return { ...wildcardMatch, targetUrl: parseTargetUrl(wildcardMatch.target) };
-  }
-
-  return null;
+  return {
+    routeId: winner.routeId,
+    pattern: winner.pattern,
+    targetUrl: parseTargetUrl(winner.target),
+    headers: parseJsonObject(winner.headers, "headers") as RouteHeaders,
+    metadata: parseJsonObject(winner.metadata, "metadata"),
+  };
 }
 
 export function buildUpstreamUrl(targetUrl: URL, requestUrl: URL): URL {
   const upstreamUrl = new URL(targetUrl.toString());
-
   const targetPathPrefix =
     upstreamUrl.pathname === "/" ? "" : upstreamUrl.pathname.replace(/\/$/, "");
   const inboundPath = requestUrl.pathname || "/";
@@ -389,29 +336,28 @@ export function buildUpstreamUrl(targetUrl: URL, requestUrl: URL): URL {
   upstreamUrl.pathname = `${targetPathPrefix}${inboundPath}` || "/";
   upstreamUrl.search = requestUrl.search;
   upstreamUrl.hash = "";
-
   return upstreamUrl;
+}
+
+function hasExplicitHostHeader(routeHeaders: RouteHeaders): boolean {
+  return Object.keys(routeHeaders).some((name) => name.toLowerCase() === "host");
 }
 
 export function createUpstreamHeaders(
   request: Request,
-  targetHost: string,
   routeHeaders: RouteHeaders,
+  targetUrl: URL,
 ): Headers {
   const headers = new Headers(request.headers);
-  const isWebSocketRequest = request.headers.get("upgrade")?.toLowerCase() === "websocket";
-
-  for (const headerName of HOP_BY_HOP_HEADERS) {
-    if (isWebSocketRequest && (headerName === "connection" || headerName === "upgrade")) {
-      continue;
+  const explicitHostHeader = hasExplicitHostHeader(routeHeaders);
+  if (!explicitHostHeader) {
+    const inboundHost = request.headers.get("host")?.toLowerCase();
+    if (inboundHost && inboundHost !== targetUrl.host.toLowerCase()) {
+      headers.delete("host");
     }
-    headers.delete(headerName);
   }
-
-  headers.set("host", targetHost);
-
-  for (const [headerName, headerValue] of Object.entries(routeHeaders)) {
-    headers.set(headerName, headerValue);
+  for (const [name, value] of Object.entries(routeHeaders)) {
+    headers.set(name, value);
   }
 
   return headers;
@@ -420,9 +366,7 @@ export function createUpstreamHeaders(
 function jsonError(status: number, error: string): Response {
   return new Response(JSON.stringify({ error }), {
     status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-    },
+    headers: { "content-type": "application/json; charset=utf-8" },
   });
 }
 
@@ -434,21 +378,17 @@ export async function proxyRequest(request: Request, env: ProxyWorkerEnv): Promi
 
   const inboundUrl = new URL(request.url);
   const upstreamUrl = buildUpstreamUrl(resolved.targetUrl, inboundUrl);
-  const headers = createUpstreamHeaders(request, upstreamUrl.host, resolved.headers);
-
-  const method = request.method.toUpperCase();
-  const body = method === "GET" || method === "HEAD" ? undefined : request.body;
+  let upstreamRequest: Request = new Request(upstreamUrl.toString(), request);
+  const upstreamHeaders = createUpstreamHeaders(
+    upstreamRequest,
+    resolved.headers,
+    resolved.targetUrl,
+  );
+  upstreamRequest = new Request(upstreamRequest, { headers: upstreamHeaders });
 
   let upstreamResponse: Response;
   try {
-    upstreamResponse = await fetch(
-      new Request(upstreamUrl.toString(), {
-        method: request.method,
-        headers,
-        body,
-        redirect: "manual",
-      }),
-    );
+    upstreamResponse = await fetch(upstreamRequest, { redirect: "manual" });
   } catch {
     return jsonError(502, "proxy_error");
   }
@@ -480,7 +420,7 @@ type ORPCContext = RequestHeadersPluginContext & {
 const baseProcedure = os.$context<ORPCContext>();
 
 const authProcedure = baseProcedure.use(async ({ context, next }) => {
-  const expectedToken = context.env.CF_PROXY_WORKER_API_TOKEN;
+  const expectedToken = context.env.INGRESS_PROXY_API_TOKEN;
   const providedToken = readBearerToken(context.reqHeaders?.get("authorization") ?? null);
 
   if (!providedToken || providedToken !== expectedToken) {
@@ -492,62 +432,116 @@ const authProcedure = baseProcedure.use(async ({ context, next }) => {
   return next();
 });
 
-const SetRoute = z.object({
-  route: z.string().min(1),
+const PatternInput = z.object({
+  pattern: z.string().min(1),
   target: z.string().min(1),
   headers: z.record(z.string(), z.string()).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-  ttlSeconds: z
-    .number()
-    .int()
-    .positive()
-    .max(365 * 24 * 60 * 60)
-    .nullable()
-    .optional(),
 });
 
-const DeleteRoute = z.object({
-  route: z.string().min(1),
+const CreateRouteInput = z.object({
+  patterns: z.array(PatternInput).min(1),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
+
+const UpdateRouteInput = z.object({
+  routeId: z.string().min(1),
+  patterns: z.array(PatternInput).min(1),
+  metadata: z.record(z.string(), z.unknown()),
+});
+
+const RouteIdInput = z.object({
+  routeId: z.string().min(1),
+});
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Error && /UNIQUE constraint failed/i.test(error.message);
+}
+
+function isForeignKeyConstraintError(error: unknown): boolean {
+  return error instanceof Error && /FOREIGN KEY constraint failed/i.test(error.message);
+}
+
+function mapRouteError(error: unknown): never {
+  if (error instanceof ORPCError) {
+    throw error;
+  }
+
+  if (error instanceof RouteInputError) {
+    throw new ORPCError("BAD_REQUEST", { message: error.message });
+  }
+
+  if (isForeignKeyConstraintError(error)) {
+    throw new ORPCError("NOT_FOUND", { message: "Route not found" });
+  }
+
+  if (isUniqueConstraintError(error)) {
+    throw new ORPCError("CONFLICT", {
+      message:
+        "Pattern conflicts with existing route patterns. A concurrent request may have claimed the pattern.",
+    });
+  }
+
+  throw error;
+}
 
 export const listRoutesProcedure = authProcedure.handler(async ({ context }) => {
   return listRoutes(context.env.DB);
 });
 
-export const setRouteProcedure = authProcedure
-  .input(SetRoute)
+export const getRouteProcedure = authProcedure
+  .input(RouteIdInput)
+  .handler(async ({ context, input }) => {
+    const route = await getRoute(context.env.DB, input.routeId);
+    if (!route) {
+      throw new ORPCError("NOT_FOUND", { message: "Route not found" });
+    }
+    return route;
+  });
+
+export const createRouteProcedure = authProcedure
+  .input(CreateRouteInput)
   .handler(async ({ context, input }) => {
     try {
-      return await setRoute(context.env.DB, input);
+      return await createRoute(context.env.DB, {
+        typeIdPrefix: context.env.TYPEID_PREFIX,
+        patterns: input.patterns,
+        metadata: input.metadata,
+      });
     } catch (error) {
-      if (error instanceof InputError) {
-        throw new ORPCError("BAD_REQUEST", {
-          message: error.message,
-        });
-      }
-      throw error;
+      return mapRouteError(error);
+    }
+  });
+
+export const updateRouteProcedure = authProcedure
+  .input(UpdateRouteInput)
+  .handler(async ({ context, input }) => {
+    try {
+      return await updateRoute(context.env.DB, {
+        routeId: input.routeId,
+        patterns: input.patterns,
+        metadata: input.metadata,
+      });
+    } catch (error) {
+      return mapRouteError(error);
     }
   });
 
 export const deleteRouteProcedure = authProcedure
-  .input(DeleteRoute)
+  .input(RouteIdInput)
   .handler(async ({ context, input }) => {
     try {
-      const deleted = await deleteRoute(context.env.DB, input.route);
+      const deleted = await deleteRoute(context.env.DB, input.routeId);
       return { deleted };
     } catch (error) {
-      if (error instanceof InputError) {
-        throw new ORPCError("BAD_REQUEST", {
-          message: error.message,
-        });
-      }
-      throw error;
+      return mapRouteError(error);
     }
   });
 
 export const appRouter = {
   listRoutes: listRoutesProcedure,
-  setRoute: setRouteProcedure,
+  getRoute: getRouteProcedure,
+  createRoute: createRouteProcedure,
+  updateRoute: updateRouteProcedure,
   deleteRoute: deleteRouteProcedure,
 };
 
@@ -563,15 +557,18 @@ const orpcHandler = new RPCHandler(appRouter, {
   ],
 });
 
-export const app = new Hono<{ Bindings: ProxyWorkerEnv }>();
+export const app = new Hono<{
+  Bindings: RawProxyWorkerEnv;
+}>();
 
-app.get("/health", () => new Response("OK", { status: 200 }));
+app.get("/health", (c) => c.text("OK"));
 
 app.all("/api/orpc/*", async (c) => {
+  const parsedEnv = getParsedEnv(c.env);
   const { matched, response } = await orpcHandler.handle(c.req.raw, {
     prefix: "/api/orpc",
     context: {
-      env: c.env,
+      env: parsedEnv,
     },
   });
 
@@ -583,7 +580,8 @@ app.all("/api/orpc/*", async (c) => {
 });
 
 app.all("*", async (c) => {
-  return proxyRequest(c.req.raw, c.env);
+  const parsedEnv = getParsedEnv(c.env);
+  return proxyRequest(c.req.raw, parsedEnv);
 });
 
 export default app;
