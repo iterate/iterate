@@ -98,7 +98,17 @@ export const liveLayerWithOptions = (
             );
           }
 
-          const stream = yield* getOrInitializeStream(path);
+          const stream = yield* getOrInitializeStream(path).pipe(
+            Effect.catchAllCause((cause) => {
+              if (!shouldEmitStreamCreated) {
+                return Effect.failCause(cause);
+              }
+
+              return Effect.sync(() => {
+                knownPaths.delete(pathKey);
+              }).pipe(Effect.flatMap(() => Effect.failCause(cause)));
+            }),
+          );
 
           if (shouldEmitStreamCreated && path !== EVENTS_META_STREAM_PATH) {
             yield* Effect.gen(function* () {

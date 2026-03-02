@@ -170,6 +170,16 @@ describe("StreamManager live layer edge cases", () => {
     try {
       await expect(appendTestEvent(manager, retryPath)).rejects.toBeDefined();
       await expect(appendTestEvent(manager, retryPath)).resolves.toBeDefined();
+
+      const metaEvents = await readMetaEvents(manager);
+      expect(metaEvents.length).toBe(1);
+      const createdEvent = metaEvents[0];
+      expect(createdEvent).toBeDefined();
+      if (!createdEvent) {
+        throw new Error("expected one stream-created event");
+      }
+      expect(String(createdEvent.type)).toBe(STREAM_CREATED_TYPE);
+      expect((createdEvent.payload as Record<string, unknown>)["path"]).toBe(String(retryPath));
     } finally {
       await dispose();
     }
