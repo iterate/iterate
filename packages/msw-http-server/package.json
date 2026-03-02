@@ -1,0 +1,23 @@
+{
+  "name": "@iterate-com/msw-http-server",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "NODE_OPTIONS=--no-deprecation vitest run"
+  },
+  "dependencies": {
+    "msw": "^2.4.9"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18",
+    "ws": "^8.19.0"
+  }
+}
