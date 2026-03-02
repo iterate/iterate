@@ -1,12 +1,8 @@
 import { z } from "zod/v4";
 import { eq, and, or, gt, ne } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
-import { createORPCClient } from "@orpc/client";
-import { RPCLink } from "@orpc/client/fetch";
-import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import { createMachineStub, type MachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { buildMachinePortUrl } from "@iterate-com/shared/project-ingress";
-import type { RouterClient } from "@orpc/server";
 import {
   projectProtectedProcedure,
   projectProtectedMutation,
@@ -21,19 +17,9 @@ import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
 import { outboxClient } from "../../outbox/client.ts";
 import { getLatestMachineEvents, getMachineConsumers } from "../../utils/machine-metadata.ts";
+import { createDaemonClient } from "../../utils/daemon-orpc-client.ts";
 import { getIngressSchemeFromPublicUrl } from "../../utils/project-ingress-url.ts";
 import { getProjectSandboxProviderOptions } from "../../utils/sandbox-providers.ts";
-function createDaemonClient(params: { baseUrl: string; fetcher?: SandboxFetcher }) {
-  const { baseUrl, fetcher } = params;
-  return createORPCClient(
-    new RPCLink({
-      url: `${baseUrl}/api/orpc`,
-      ...(fetcher ? { fetch: fetcher } : {}),
-    }),
-  ) as unknown as RouterClient<
-    typeof import("../../../../daemon/server/orpc/app-router.ts").appRouter
-  >;
-}
 
 function parsePositiveIntegerOrDefault(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);

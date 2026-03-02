@@ -3,11 +3,19 @@ import { injectWebSocket } from "./utils/hono.ts";
 import app from "./app.ts";
 import { createWorkerClient } from "./orpc/client.ts";
 import { startCronTaskScheduler } from "./cron-tasks/scheduler.ts";
-import { loadConfig } from "./config-loader.ts";
+import { reloadConfigRepo } from "./routers/config-repo.ts";
 
 export const startServer = async (params: { port: number; hostname: string }) => {
-  // Load iterate.config.ts from CWD (or default) before starting server
-  await loadConfig();
+  try {
+    await reloadConfigRepo();
+  } catch (err) {
+    console.error("[config] Failed to load config repo during startup", err);
+    await reportStatusToPlatform({
+      status: "error",
+      message: err instanceof Error ? err.message : String(err),
+    }).catch(() => {});
+    throw err;
+  }
 
   return new Promise<ServerType>((resolve, reject) => {
     const server = serve({ fetch: app.fetch, ...params }, () => {
@@ -47,7 +55,10 @@ async function bootstrapWithControlPlane(): Promise<void> {
  * Report daemon status to the OS platform.
  * Sending "ready" triggers the OS to push setup data (env vars, repos) to this daemon.
  */
-export async function reportStatusToPlatform({ status }: Pick<ReportStatusInput, "status">) {
+export async function reportStatusToPlatform({
+  status,
+  message,
+}: Pick<ReportStatusInput, "status" | "message">) {
   if (!process.env.ITERATE_OS_BASE_URL) {
     console.error("[bootstrap] ITERATE_OS_BASE_URL not set, cannot report status");
     return;
@@ -63,6 +74,10 @@ export async function reportStatusToPlatform({ status }: Pick<ReportStatusInput,
   }
   const client = createWorkerClient();
 
-  const result = await client.machines.reportStatus({ machineId, status });
+  const result = await client.machines.reportStatus({
+    machineId,
+    status,
+    message,
+  });
   console.log(`[bootstrap] Successfully reported status ${status} to platform`, result);
 }

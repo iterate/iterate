@@ -226,7 +226,10 @@ async function forwardPromptToMachine(params: {
     const message = err instanceof Error ? err.message : String(err);
     if (!message.includes("No host port mapped for 8080")) throw err;
     const baseUrl = await runtime.getBaseUrl(3000);
-    logger.set({ machineId: params.machine.id, machineType: params.machine.type });
+    logger.set({
+      machineId: params.machine.id,
+      machineType: params.machine.type,
+    });
     logger.warn("[GitHub Webhook] Falling back to direct daemon base URL");
     fetcher = (input, init) => {
       const url =
@@ -255,33 +258,29 @@ async function forwardPromptToMachine(params: {
 // ── Data Fetching & Routing ─────────────────────────────────────────
 
 async function listRepoMachineContexts(db: DB, repo: GitHubRepoCoordinates) {
-  const repos = await db.query.projectRepo.findMany({
-    where: (pr, { eq: whereEq, and: whereAnd }) =>
-      whereAnd(whereEq(pr.owner, repo.owner), whereEq(pr.name, repo.name)),
+  const projects = await db.query.project.findMany({
+    where: (project, { eq: whereEq }) =>
+      whereEq(project.configRepoFullName, `${repo.owner}/${repo.name}`),
     with: {
-      project: {
-        with: {
-          machines: {
-            where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
-            limit: 1,
-          },
-        },
+      machines: {
+        where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
+        limit: 1,
       },
     },
   });
 
   const results = await Promise.all(
-    repos.map(async (r) => {
-      const machine = r.project?.machines?.[0];
+    projects.map(async (project) => {
+      const machine = project.machines[0];
       if (!machine) return null;
       const conn = await db.query.projectConnection.findFirst({
         where: (c, { eq: whereEq, and: whereAnd }) =>
-          whereAnd(whereEq(c.projectId, r.projectId), whereEq(c.provider, "github-app")),
+          whereAnd(whereEq(c.projectId, project.id), whereEq(c.provider, "github-app")),
       });
       const installationId = (conn?.providerData as { installationId?: number } | undefined)
         ?.installationId;
       if (!installationId) return null;
-      return { projectSlug: r.project.slug, machine, installationId };
+      return { projectSlug: project.slug, machine, installationId };
     }),
   );
 

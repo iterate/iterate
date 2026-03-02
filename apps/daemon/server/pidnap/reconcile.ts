@@ -20,6 +20,11 @@ type DesiredProcess = {
   tags: string[];
 };
 
+type ExistingProcess = {
+  name: string;
+  tags: string[];
+};
+
 function dedupeTags(tags: string[]): string[] {
   return [...new Set(tags)];
 }
@@ -46,12 +51,18 @@ function buildDesiredProcesses(config: IterateConfig): DesiredProcess[] {
   return desired;
 }
 
-export async function reconcilePidnapProcesses(): Promise<void> {
-  const cwd = getAgentWorkingDirectory();
+export async function reconcilePidnapProcesses(options?: { configCwd?: string }): Promise<void> {
+  const cwd = options?.configCwd ?? getAgentWorkingDirectory();
   const config = await loadConfig(cwd, { forceReload: true });
   const desired = buildDesiredProcesses(config);
+  const desiredNames = new Set(desired.map((processConfig) => processConfig.name));
 
   const client = createClient(process.env.PIDNAP_RPC_URL ?? "http://127.0.0.1:9876/rpc");
+  const existingProcesses = (await client.processes.list()) satisfies ExistingProcess[];
+
+  const managedExistingProcessNames = existingProcesses
+    .filter((processInfo) => processInfo.tags.includes(ITERATE_USER_TAG))
+    .map((processInfo) => processInfo.name);
 
   for (const processConfig of desired) {
     await client.processes.updateConfig({
@@ -63,5 +74,11 @@ export async function reconcilePidnapProcesses(): Promise<void> {
       restartImmediately: false,
     });
     console.log(`[pidnap-reconcile] upserted process: ${processConfig.name}`);
+  }
+
+  for (const processName of managedExistingProcessNames) {
+    if (desiredNames.has(processName)) continue;
+    await client.processes.delete({ processSlug: processName });
+    console.log(`[pidnap-reconcile] removed process: ${processName}`);
   }
 }
