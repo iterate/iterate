@@ -101,7 +101,7 @@ function parseQueries(sqlContent: string): QueryBlock[] {
 
     const sql = currentSqlLines.join("\n").trim();
     if (!sql) {
-      throw new Error(`Query \"${currentName}\" at line ${currentStart} is empty`);
+      throw new Error(`Query "${currentName}" at line ${currentStart} is empty`);
     }
 
     blocks.push({ name: currentName, sql });
@@ -122,7 +122,7 @@ function parseQueries(sqlContent: string): QueryBlock[] {
 
     const name = match[1] ?? "";
     if (names.has(name)) {
-      throw new Error(`Duplicate query name \"${name}\" at line ${index + 1}`);
+      throw new Error(`Duplicate query name "${name}" at line ${index + 1}`);
     }
 
     names.add(name);
