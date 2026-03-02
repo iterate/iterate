@@ -378,8 +378,23 @@ export function buildUpstreamUrl(targetUrl: URL, requestUrl: URL): URL {
   return upstreamUrl;
 }
 
-export function createUpstreamHeaders(request: Request, routeHeaders: RouteHeaders): Headers {
+function hasExplicitHostHeader(routeHeaders: RouteHeaders): boolean {
+  return Object.keys(routeHeaders).some((name) => name.toLowerCase() === "host");
+}
+
+export function createUpstreamHeaders(
+  request: Request,
+  routeHeaders: RouteHeaders,
+  targetUrl: URL,
+): Headers {
   const headers = new Headers(request.headers);
+  const explicitHostHeader = hasExplicitHostHeader(routeHeaders);
+  if (!explicitHostHeader) {
+    const inboundHost = request.headers.get("host")?.toLowerCase();
+    if (inboundHost && inboundHost !== targetUrl.host.toLowerCase()) {
+      headers.delete("host");
+    }
+  }
   for (const [name, value] of Object.entries(routeHeaders)) {
     headers.set(name, value);
   }
@@ -403,10 +418,12 @@ export async function proxyRequest(request: Request, env: ProxyWorkerEnv): Promi
   const inboundUrl = new URL(request.url);
   const upstreamUrl = buildUpstreamUrl(resolved.targetUrl, inboundUrl);
   let upstreamRequest: Request = new Request(upstreamUrl.toString(), request);
-  if (Object.keys(resolved.headers).length > 0) {
-    const upstreamHeaders = createUpstreamHeaders(upstreamRequest, resolved.headers);
-    upstreamRequest = new Request(upstreamRequest, { headers: upstreamHeaders });
-  }
+  const upstreamHeaders = createUpstreamHeaders(
+    upstreamRequest,
+    resolved.headers,
+    resolved.targetUrl,
+  );
+  upstreamRequest = new Request(upstreamRequest, { headers: upstreamHeaders });
 
   let upstreamResponse: Response;
   try {

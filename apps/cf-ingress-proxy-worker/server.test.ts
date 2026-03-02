@@ -121,19 +121,15 @@ describe("proxy behavior", () => {
     expect(upstream.toString()).toBe("https://target.fly.dev/base/foo/bar?x=1");
   });
 
-  test("preserves inbound Host header by default", async () => {
+  test("uses target host by default for cross-host proxying", async () => {
     await createRoute(testEnv.DB, {
       typeIdPrefix: "tst",
       patterns: [{ pattern: "app.ingress.iterate.com", target: "https://target.fly.dev/base" }],
     });
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const request = input as Request;
-      expect(request.url).toBe("https://target.fly.dev/base/path?y=2");
-      expect(request.headers.get("host")).toBe("app.ingress.iterate.com");
-      expect(request.headers.get("x-custom")).toBe("ok");
-      return new Response("proxied", { status: 200 });
-    });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response("proxied", { status: 200 }));
 
     const parsedEnv = parseWorkerEnv(testEnv);
     const response = await proxyRequest(
@@ -147,6 +143,10 @@ describe("proxy behavior", () => {
     );
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const request = fetchSpy.mock.calls[0]?.[0] as Request;
+    expect(request.url).toBe("https://target.fly.dev/base/path?y=2");
+    expect(request.headers.get("host")).not.toBe("app.ingress.iterate.com");
+    expect(request.headers.get("x-custom")).toBe("ok");
     expect(response.status).toBe(200);
   });
 
@@ -190,7 +190,7 @@ describe("proxy behavior", () => {
       },
     });
 
-    const headers = createUpstreamHeaders(request, {});
+    const headers = createUpstreamHeaders(request, {}, new URL("https://target.fly.dev/ws"));
     expect(headers.get("upgrade")?.toLowerCase()).toBe("websocket");
     expect(headers.get("connection")?.toLowerCase()).toContain("upgrade");
   });
