@@ -1,0 +1,31 @@
+{
+  "name": "@iterate-com/mock-http-proxy",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "NODE_OPTIONS=--no-deprecation vitest run",
+    "test:real-https": "RUN_REAL_HTTPS_PROXY_TESTS=1 NODE_OPTIONS=--no-deprecation vitest run tests/real-https-sdk-proxy.test.ts",
+    "test:real-https:doppler": "doppler run --config dev -- pnpm test:real-https"
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@slack/web-api": "^7.14.1",
+    "@types/har-format": "^1.2.16",
+    "@types/http-proxy": "^1.17.16",
+    "@types/node": "^25.0.10",
+    "@types/ws": "^8.18.1",
+    "http-mitm-proxy": "^1.1.0",
+    "openai": "^6.25.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
