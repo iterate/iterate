@@ -13,11 +13,15 @@ import {
 } from "./route-conflicts.ts";
 import {
   deleteRouteById,
+  deleteRoutePatternsByRouteIdStmt,
+  insertRoutePatternStmt,
+  insertRouteStmt,
   selectResolvedRouteByHost,
   selectRouteById,
   selectRoutePatterns,
   selectRoutePatternsByRouteId,
   selectRoutes,
+  updateRouteMetadataStmt,
 } from "./sql/queries.ts";
 import { parseWorkerEnv, type ProxyWorkerEnv, type RawProxyWorkerEnv } from "./env.ts";
 
@@ -253,23 +257,14 @@ export async function createRoute(
   const metadata = normalizeMetadata(params.metadata);
 
   await db.batch([
-    db
-      .prepare(
-        `
-      INSERT INTO routes (id, metadata)
-      VALUES (?1, ?2)
-    `,
-      )
-      .bind(routeId, JSON.stringify(metadata)),
+    insertRouteStmt(db, { routeId, metadata: JSON.stringify(metadata) }),
     ...normalizedPatterns.map((pattern) => {
-      return db
-        .prepare(
-          `
-        INSERT INTO route_patterns (route_id, pattern, target, headers)
-        VALUES (?1, ?2, ?3, ?4)
-      `,
-        )
-        .bind(routeId, pattern.pattern, pattern.target, JSON.stringify(pattern.headers));
+      return insertRoutePatternStmt(db, {
+        routeId,
+        pattern: pattern.pattern,
+        target: pattern.target,
+        headers: JSON.stringify(pattern.headers),
+      });
     }),
   ]);
 
@@ -303,25 +298,15 @@ export async function updateRoute(
   }
 
   await db.batch([
-    db
-      .prepare(
-        `
-      UPDATE routes
-      SET metadata = ?2, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?1
-    `,
-      )
-      .bind(routeId, JSON.stringify(params.metadata)),
-    db.prepare(`DELETE FROM route_patterns WHERE route_id = ?1`).bind(routeId),
+    updateRouteMetadataStmt(db, { metadata: JSON.stringify(params.metadata) }, { routeId }),
+    deleteRoutePatternsByRouteIdStmt(db, { routeId }),
     ...normalizedPatterns.map((pattern) => {
-      return db
-        .prepare(
-          `
-        INSERT INTO route_patterns (route_id, pattern, target, headers)
-        VALUES (?1, ?2, ?3, ?4)
-      `,
-        )
-        .bind(routeId, pattern.pattern, pattern.target, JSON.stringify(pattern.headers));
+      return insertRoutePatternStmt(db, {
+        routeId,
+        pattern: pattern.pattern,
+        target: pattern.target,
+        headers: JSON.stringify(pattern.headers),
+      });
     }),
   ]);
 

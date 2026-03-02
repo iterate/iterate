@@ -163,8 +163,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       typesql-cli:
-        specifier: ^0.22.0
-        version: 0.22.0(@types/node@24.10.1)
+        specifier: github:iterate/typesql#5687eb2
+        version: https://codeload.github.com/iterate/typesql/tar.gz/5687eb2(@types/node@24.10.1)
       vitest:
         specifier: 3.2.4
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.1)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
@@ -1149,7 +1149,7 @@ importers:
         version: 12.6.0
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
       http-proxy:
         specifier: ^1.18.1
         version: 1.18.1
@@ -1574,7 +1574,7 @@ importers:
         version: 12.6.0
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
       effect:
         specifier: ^3.19.15
         version: 3.19.19
@@ -1706,7 +1706,7 @@ importers:
         version: 12.6.0
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
       hono:
         specifier: ^4.11.10
         version: 4.12.2
@@ -1752,7 +1752,7 @@ importers:
         version: 12.6.0
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
     devDependencies:
       '@types/node':
         specifier: ^25.0.10
@@ -1814,7 +1814,7 @@ importers:
         version: 12.6.0
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
       react:
         specifier: ^19.2.0
         version: 19.2.3
@@ -12880,8 +12880,9 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  typesql-cli@0.22.0:
-    resolution: {integrity: sha512-Kle286+jZdhV7ZX1NOLiGCm7D13JCOdp4qH42g9bLY3q9egvK92PoKE96DulJPCOBrbDZocxUH+oH7CuPrqw2g==}
+  typesql-cli@https://codeload.github.com/iterate/typesql/tar.gz/5687eb2:
+    resolution: {tarball: https://codeload.github.com/iterate/typesql/tar.gz/5687eb2}
+    version: 0.22.0
     hasBin: true
 
   ufo@1.6.2:
@@ -22029,7 +22030,7 @@ snapshots:
       pg: 8.17.1
       postgres: 3.4.7
 
-  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7):
+  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7):
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260207.0
       '@libsql/client': 0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
@@ -26711,7 +26712,7 @@ snapshots:
 
   typescript@5.9.3: {}
 
-  typesql-cli@0.22.0(@types/node@24.10.1):
+  typesql-cli@https://codeload.github.com/iterate/typesql/tar.gz/5687eb2(@types/node@24.10.1):
     dependencies:
       '@wsporto/typesql-parser': 0.0.3
       better-sqlite3: 12.6.0

@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readdirSync,
@@ -8,7 +9,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
@@ -21,13 +23,24 @@ type SourceMtTimes = {
   queries: number;
   schema: number;
   migrations: number;
+  typesql: number;
+};
+
+type TypeSqlConfig = {
+  databaseUri: string;
+  sqlDir: string;
+  outDir?: string;
+  client: string;
+  moduleExtension?: string;
 };
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appDir = dirname(scriptDir);
+const require = createRequire(import.meta.url);
 const sqlDir = join(appDir, "sql");
 const queriesSqlPath = join(sqlDir, "queries.sql");
 const queriesTsPath = join(sqlDir, "queries.ts");
+const typesqlConfigPath = join(appDir, "typesql.json");
 const schemaPath = join(appDir, "schema.sql");
 const localDbPath = join(appDir, ".local.db");
 const migrationsDir = join(appDir, "migrations");
@@ -67,6 +80,7 @@ function getSourceMtTimes(): SourceMtTimes {
     queries: mtime(queriesSqlPath),
     schema: mtime(schemaPath),
     migrations,
+    typesql: mtime(typesqlConfigPath),
   };
 }
 
@@ -151,13 +165,65 @@ function run(command: string, argsList: string[]): void {
   }
 }
 
+function resolveTypeSqlCliInvocation(): { command: string; argsPrefix: string[] } {
+  const packageJsonPath = require.resolve("typesql-cli/package.json", { paths: [appDir] });
+  const packageDir = dirname(packageJsonPath);
+  const cliJsPath = join(packageDir, "cli.js");
+  const distCliJsPath = join(packageDir, "dist", "src", "cli.js");
+  const srcCliTsPath = join(packageDir, "src", "cli.ts");
+
+  if (existsSync(cliJsPath)) {
+    return { command: process.execPath, argsPrefix: [cliJsPath] };
+  }
+  if (existsSync(distCliJsPath)) {
+    return { command: process.execPath, argsPrefix: [distCliJsPath] };
+  }
+  if (existsSync(srcCliTsPath)) {
+    return { command: process.execPath, argsPrefix: ["--import", "tsx", srcCliTsPath] };
+  }
+
+  throw new Error(
+    "Unable to locate TypeSQL CLI entrypoint. Tried cli.js, dist/src/cli.js, and src/cli.ts.",
+  );
+}
+
 function rebuildLocalDb(): void {
   run("sh", ["-c", "rm -f .local.db && sqlite3 .local.db < schema.sql"]);
+}
+
+function resolveMaybeRelativePath(path: string): string {
+  if (path.includes("://") || isAbsolute(path)) return path;
+  return join(appDir, path);
+}
+
+function loadTypeSqlConfig(): TypeSqlConfig {
+  const parsed = JSON.parse(readFileSync(typesqlConfigPath, "utf8")) as Partial<TypeSqlConfig>;
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("typesql.json must be a JSON object");
+  }
+  if (!parsed.databaseUri || typeof parsed.databaseUri !== "string") {
+    throw new Error("typesql.json missing required string field: databaseUri");
+  }
+  if (!parsed.sqlDir || typeof parsed.sqlDir !== "string") {
+    throw new Error("typesql.json missing required string field: sqlDir");
+  }
+  if (!parsed.client || typeof parsed.client !== "string") {
+    throw new Error("typesql.json missing required string field: client");
+  }
+  return {
+    databaseUri: parsed.databaseUri,
+    sqlDir: parsed.sqlDir,
+    outDir: typeof parsed.outDir === "string" ? parsed.outDir : undefined,
+    client: parsed.client,
+    moduleExtension:
+      typeof parsed.moduleExtension === "string" ? parsed.moduleExtension : undefined,
+  };
 }
 
 function generateOnce(): void {
   const sqlContent = readFileSync(queriesSqlPath, "utf8");
   const blocks = parseQueries(sqlContent);
+  const baseConfig = loadTypeSqlConfig();
 
   const tempDir = mkdtempSync(join(tmpdir(), "cf-ingress-typesql-"));
   const tempSqlDir = join(tempDir, "sql");
@@ -171,11 +237,10 @@ function generateOnce(): void {
       join(tempDir, "typesql.json"),
       JSON.stringify(
         {
-          databaseUri: localDbPath,
+          ...baseConfig,
+          databaseUri: resolveMaybeRelativePath(baseConfig.databaseUri),
           sqlDir: tempSqlDir,
           outDir: tempOutDir,
-          client: "d1",
-          moduleExtension: "ts",
         },
         null,
         2,
@@ -186,8 +251,9 @@ function generateOnce(): void {
       writeFileSync(join(tempSqlDir, `${block.name}.sql`), `${block.sql}\n`);
     }
 
-    run("node", [
-      "./node_modules/typesql-cli/cli.js",
+    const typesqlCli = resolveTypeSqlCliInvocation();
+    run(typesqlCli.command, [
+      ...typesqlCli.argsPrefix,
       "compile",
       "--config",
       join(tempDir, "typesql.json"),
@@ -199,7 +265,7 @@ function generateOnce(): void {
 
       if (index > 0) {
         out = out
-          .replace(/^import type \{ D1Database \} from '@cloudflare\/workers-types';\s*/m, "")
+          .replace(/^import type \{[^}]+\} from '@cloudflare\/workers-types';\s*/m, "")
           .trim();
       }
 
@@ -218,7 +284,12 @@ function generateOnce(): void {
 function maybeGenerate(): void {
   const target = targetMtime();
   const sourceTimes = getSourceMtTimes();
-  const sourceMax = Math.max(sourceTimes.queries, sourceTimes.schema, sourceTimes.migrations);
+  const sourceMax = Math.max(
+    sourceTimes.queries,
+    sourceTimes.schema,
+    sourceTimes.migrations,
+    sourceTimes.typesql,
+  );
 
   const stale = target === 0 || sourceMax > target;
   const schemaChanged = sourceTimes.schema > target;
@@ -275,7 +346,9 @@ function watch(): void {
   };
 
   maybeGenerate();
-  console.log(`watching ${relative(appDir, queriesSqlPath)}, schema.sql, migrations/**/*.sql`);
+  console.log(
+    `watching ${relative(appDir, queriesSqlPath)}, schema.sql, migrations/**/*.sql, typesql.json`,
+  );
   setInterval(tick, 800);
 }
 

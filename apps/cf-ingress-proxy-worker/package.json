@@ -29,6 +29,6 @@
     "typescript": "^5.9.3",
     "vitest": "3.2.4",
     "wrangler": "^4.64.0",
-    "typesql-cli": "^0.22.0"
+    "typesql-cli": "github:iterate/typesql#5687eb2"
   }
 }

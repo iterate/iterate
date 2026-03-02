@@ -39,6 +39,7 @@ Two tables:
 
 - `schema.sql` is the canonical full schema.
 - `migrations/*.sql` are hand-written migration steps for D1.
+- `typesql.json` is the checked-in TypeSQL base config.
 - `sql/queries.sql` is the single query source file.
 - `sql/queries.ts` is the generated, committed wrapper module (`client: "d1"`) with zero runtime ORM overhead.
 
