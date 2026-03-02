@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { inspect } from "node:util";
 import { Hono, type Context } from "hono";
 import { stream } from "hono/streaming";
@@ -84,6 +86,31 @@ const inflightCreates = new Map<string, Promise<AgentRoute>>();
 // ──────────────────────────── oRPC sub-router ──────────────────────────────
 
 export const agentOrpcRouter = {
+  getCustomerRepoContext: publicProcedure.handler(async () => {
+    const repoPath = process.env.ITERATE_CUSTOMER_REPO_PATH;
+    if (!repoPath) {
+      return { context: "", files: [] };
+    }
+
+    const agentsPath = join(repoPath, "AGENTS.md");
+
+    try {
+      const agentsMd = await readFile(agentsPath, "utf8");
+      const trimmed = agentsMd.trim();
+
+      if (!trimmed) {
+        return { context: "", files: [] };
+      }
+
+      return {
+        context: `<system-reminder>\nInstructions from: ${agentsPath}\n${trimmed}\n</system-reminder>`,
+        files: [agentsPath],
+      };
+    } catch {
+      return { context: "", files: [] };
+    }
+  }),
+
   listAgents: publicProcedure.handler(async (): Promise<SerializedAgent[]> => {
     const rows = await db
       .select({ agent: schema.agents, route: schema.agentRoutes })
@@ -419,7 +446,11 @@ export const agentOrpcRouter = {
 
         const newRoute = db
           .update(schema.agentRoutes)
-          .set({ destination: routePath, metadata: routeMetadata, updatedAt: new Date() })
+          .set({
+            destination: routePath,
+            metadata: routeMetadata,
+            updatedAt: new Date(),
+          })
           .where(eq(schema.agentRoutes.id, result.pendingRoute!.id))
           .returning()
           .get();
@@ -491,9 +522,18 @@ async function forwardAgentRequest(c: Context): Promise<Response> {
     { attributes: { "agent.path": agentPath, "http.method": method } },
     async (span) => {
       const caller = createRouterClient(agentOrpcRouter, { context: {} });
+      const customerRepoContext = await caller.getCustomerRepoContext();
+
       const { route } = await caller.getOrCreateAgent({
         agentPath,
-        createWithEvents: [],
+        createWithEvents: customerRepoContext.context
+          ? [
+              {
+                type: "iterate:agent:prompt-added",
+                message: customerRepoContext.context,
+              },
+            ]
+          : [],
         newAgentPath: getNewAgentPath(agentPath),
       });
 

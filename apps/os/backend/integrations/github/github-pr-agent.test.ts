@@ -31,14 +31,19 @@ function responseJson(data: unknown): Response {
 function createDbMock() {
   return {
     query: {
-      projectRepo: {
+      project: {
         findMany: vi.fn().mockResolvedValue([
           {
-            projectId: "proj_1",
-            project: {
-              slug: "demo",
-              machines: [{ id: "mach_1", type: "docker", externalId: "ext_1", metadata: {} }],
-            },
+            id: "proj_1",
+            slug: "demo",
+            machines: [
+              {
+                id: "mach_1",
+                type: "docker",
+                externalId: "ext_1",
+                metadata: {},
+              },
+            ],
           },
         ]),
       },

@@ -8,6 +8,7 @@ import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { parseTokenIdFromApiKey } from "../egress-proxy/api-key-utils.ts";
 import { decrypt } from "../utils/encryption.ts";
+import { parseGitHubFullName } from "../utils/github-repo.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import type { CloudflareEnv } from "../../env.ts";
 import { outboxClient } from "../outbox/client.ts";
@@ -25,7 +26,9 @@ const os = implement(workerContract).$context<ORPCContext>();
 const withApiKey = os.middleware(async ({ context, next }) => {
   const authHeader = context.reqHeaders?.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) {
-    throw new ORPCError("UNAUTHORIZED", { message: "Missing or invalid Authorization header" });
+    throw new ORPCError("UNAUTHORIZED", {
+      message: "Missing or invalid Authorization header",
+    });
   }
 
   const apiKey = authHeader.slice(7); // Remove "Bearer " prefix
@@ -96,7 +99,9 @@ async function authenticateApiKey(
     logger.warn(
       `Machine does not belong to token's project machineProjectId=${machine.project.id} tokenProjectId=${accessToken.projectId}`,
     );
-    throw new ORPCError("FORBIDDEN", { message: "Machine doesn't belong to this project" });
+    throw new ORPCError("FORBIDDEN", {
+      message: "Machine doesn't belong to this project",
+    });
   }
 
   // Touch last-used timestamp in background
@@ -153,8 +158,62 @@ export const reportStatus = os.machines.reportStatus
     return { success: true };
   });
 
+export const getConfigRepo = os.machines.getConfigRepo
+  .use(withApiKey)
+  .handler(async ({ input, context }) => {
+    const { db } = context;
+    const { machine } = await authenticateApiKey(db, context.apiKey, input.machineId);
+
+    const machineWithProject = await db.query.machine.findFirst({
+      where: eq(schema.machine.id, machine.id),
+      with: {
+        project: {
+          with: {
+            connections: {
+              where: (connection, { eq: whereEq }) => whereEq(connection.provider, "github-app"),
+            },
+          },
+        },
+      },
+    });
+
+    if (!machineWithProject) {
+      throw new ORPCError("NOT_FOUND", { message: "Machine not found" });
+    }
+
+    const configRepoId = machineWithProject.project.configRepoId;
+    const configRepoFullName = machineWithProject.project.configRepoFullName;
+    const configRepoBranch = machineWithProject.project.configRepoDefaultBranch;
+    if (!configRepoId || !configRepoFullName || !configRepoBranch) {
+      return { configRepo: null };
+    }
+
+    const parsedFullName = parseGitHubFullName(configRepoFullName);
+    if (!parsedFullName) {
+      return { configRepo: null };
+    }
+
+    const githubConnection = machineWithProject.project.connections[0];
+    if (!githubConnection) {
+      throw new ORPCError("PRECONDITION_FAILED", {
+        message: "GitHub connection not found for project",
+      });
+    }
+
+    return {
+      configRepo: {
+        repoId: configRepoId,
+        owner: parsedFullName.owner,
+        name: parsedFullName.name,
+        branch: configRepoBranch,
+        cloneUrl: `https://github.com/${parsedFullName.owner}/${parsedFullName.name}.git`,
+      },
+    };
+  });
+
 export const workerRouter = os.router({
   machines: {
     reportStatus,
+    getConfigRepo,
   },
 });
