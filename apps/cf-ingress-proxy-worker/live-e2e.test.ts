@@ -9,6 +9,7 @@ const LONG_CANDIDATES = [
   "***.iterate.workers.dev",
   "****.iterate.workers.dev",
 ];
+const WEBSOCKET_ECHO_HOST = "ws.postman-echo.com";
 
 function requireEnv() {
   if (!baseUrl) {
@@ -30,6 +31,91 @@ function getHeaderValueCaseInsensitive(
     if (key.toLowerCase() === wanted) return Array.isArray(value) ? (value[0] ?? null) : value;
   }
   return null;
+}
+
+async function websocketDataToText(data: unknown): Promise<string> {
+  if (typeof data === "string") return data;
+  if (data instanceof Blob) return data.text();
+  if (data instanceof ArrayBuffer) {
+    return new TextDecoder().decode(new Uint8Array(data));
+  }
+  if (ArrayBuffer.isView(data)) {
+    return new TextDecoder().decode(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+  }
+  return String(data);
+}
+
+async function readWebsocketEcho(params: {
+  websocketUrl: string;
+  message: string;
+  timeoutMs: number;
+}): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const websocket = new WebSocket(params.websocketUrl);
+    let settled = false;
+
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      websocket.close();
+      reject(new Error("Timed out waiting for websocket response"));
+    }, params.timeoutMs);
+
+    websocket.addEventListener("open", () => {
+      websocket.send(params.message);
+    });
+
+    websocket.addEventListener("message", (event) => {
+      void websocketDataToText(event.data)
+        .then((text) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          websocket.close();
+          resolve(text);
+        })
+        .catch((error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          websocket.close();
+          reject(error);
+        });
+    });
+
+    websocket.addEventListener("error", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      websocket.close();
+      reject(new Error("Websocket request failed"));
+    });
+
+    websocket.addEventListener("close", (event) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(new Error(`Websocket closed before message: code=${event.code}`));
+    });
+  });
+}
+
+async function readWebsocketEchoWithRetry(params: {
+  websocketUrl: string;
+  message: string;
+  timeoutMs: number;
+  maxAttempts: number;
+}): Promise<string> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= params.maxAttempts; attempt += 1) {
+    try {
+      return await readWebsocketEcho(params);
+    } catch (error) {
+      lastError = error;
+      if (attempt === params.maxAttempts) break;
+    }
+  }
+  throw lastError;
 }
 
 async function callProcedure<T>(params: {
@@ -201,7 +287,6 @@ describe("live ingress-proxy E2E", () => {
 
     const exactResponse = await fetch(`${env.baseUrl}/anything?scenario=exact`);
     expect(exactResponse.status).toBe(200);
-    expect(exactResponse.headers.get("x-ingress-proxy-route-id")).toBe(exact.routeId);
     const exactJson = (await exactResponse.json()) as {
       headers?: Record<string, string | string[]>;
       url?: string;
@@ -214,7 +299,6 @@ describe("live ingress-proxy E2E", () => {
 
     const wildcardResponse = await fetch(`${env.baseUrl}/anything?scenario=wildcard-specificity`);
     expect(wildcardResponse.status).toBe(200);
-    expect(wildcardResponse.headers.get("x-ingress-proxy-route-id")).toBe(long.route.routeId);
     const wildcardJson = (await wildcardResponse.json()) as {
       headers?: Record<string, string | string[]>;
       url?: string;
@@ -238,7 +322,6 @@ describe("live ingress-proxy E2E", () => {
 
     const postUpdateResponse = await fetch(`${env.baseUrl}/anything?scenario=post-update`);
     expect(postUpdateResponse.status).toBe(200);
-    expect(postUpdateResponse.headers.get("x-ingress-proxy-route-id")).toBe(long.route.routeId);
     const postUpdateJson = (await postUpdateResponse.json()) as {
       headers?: Record<string, string | string[]>;
       url?: string;
@@ -312,4 +395,35 @@ describe("live ingress-proxy E2E", () => {
     },
     120_000,
   );
+
+  it("proxies websocket echo via deployed worker", async () => {
+    const requestHost = new URL(env.baseUrl).hostname;
+    const websocketRoute = await createRoute({
+      ...env,
+      metadata: { suiteId, kind: "websocket" },
+      patterns: [
+        {
+          pattern: requestHost,
+          target: `https://${WEBSOCKET_ECHO_HOST}`,
+          headers: { host: WEBSOCKET_ECHO_HOST },
+        },
+      ],
+    });
+    createdRouteIds.add(websocketRoute.routeId);
+
+    const websocketUrl = new URL(env.baseUrl);
+    websocketUrl.protocol = websocketUrl.protocol === "https:" ? "wss:" : "ws:";
+    websocketUrl.pathname = "/raw";
+    websocketUrl.search = `scenario=websocket-echo&suite=${encodeURIComponent(suiteId)}`;
+
+    const payload = `echo-${suiteId}-${Date.now()}`;
+    const echoed = await readWebsocketEchoWithRetry({
+      websocketUrl: websocketUrl.toString(),
+      message: payload,
+      timeoutMs: 15_000,
+      maxAttempts: 2,
+    });
+
+    expect(echoed).toBe(payload);
+  }, 120_000);
 });

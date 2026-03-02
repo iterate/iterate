@@ -148,7 +148,6 @@ describe("proxy behavior", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(200);
-    expect(response.headers.get("x-ingress-proxy-route-id")).toBeTruthy();
   });
 
   test("applies optional per-pattern header overrides", async () => {
@@ -194,6 +193,64 @@ describe("proxy behavior", () => {
     const headers = createUpstreamHeaders(request, {});
     expect(headers.get("upgrade")?.toLowerCase()).toBe("websocket");
     expect(headers.get("connection")?.toLowerCase()).toContain("upgrade");
+  });
+
+  test("proxies websocket upgrade transparently", async () => {
+    await createRoute(testEnv.DB, {
+      typeIdPrefix: "tst",
+      patterns: [{ pattern: "socket.ingress.iterate.com", target: "https://target.fly.dev/ws" }],
+    });
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair);
+      server.accept();
+      server.addEventListener("message", (event) => {
+        server.send(`echo:${String(event.data)}`);
+      });
+      return new Response(null, {
+        status: 101,
+        headers: { connection: "Upgrade", upgrade: "websocket" },
+        webSocket: client,
+      });
+    });
+
+    const response = await proxyRequest(
+      new Request("https://socket.ingress.iterate.com/ws", {
+        headers: {
+          host: "socket.ingress.iterate.com",
+          connection: "Upgrade",
+          upgrade: "websocket",
+        },
+      }),
+      parseWorkerEnv(testEnv),
+    );
+
+    expect(response.status).toBe(101);
+    const websocket = response.webSocket;
+    expect(websocket).toBeTruthy();
+    if (!websocket) {
+      throw new Error("Expected websocket on upgrade response");
+    }
+
+    const messagePromise = new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Timed out waiting for websocket echo"));
+      }, 2_000);
+      websocket.addEventListener("message", (event) => {
+        clearTimeout(timeout);
+        resolve(String(event.data));
+      });
+      websocket.addEventListener("error", () => {
+        clearTimeout(timeout);
+        reject(new Error("Websocket error"));
+      });
+    });
+
+    websocket.accept();
+    websocket.send("ping");
+    await expect(messagePromise).resolves.toBe("echo:ping");
+    websocket.close();
   });
 
   test("returns 404 when no route matches", async () => {

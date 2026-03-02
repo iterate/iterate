@@ -8,14 +8,6 @@ export default workflow({
     deployments: "write",
   },
   on: {
-    push: {
-      branches: ["main"],
-      paths: [
-        "apps/cf-ingress-proxy-worker/**",
-        ".github/ts-workflows/workflows/deploy-cf-ingress-proxy-worker.ts",
-        ".github/workflows/deploy-cf-ingress-proxy-worker.yml",
-      ],
-    },
     workflow_dispatch: {},
   },
   jobs: {

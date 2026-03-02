@@ -22,6 +22,7 @@ With wildcard DNS/TLS already available in Cloudflare, this also works for CNAME
 - Optional per-pattern header overrides for exceptional auth/routing cases.
 - Hostname tokens are opaque: this service does not interpret `__`, ports, or service names.
 - Conflict-safe writes: duplicate patterns across different routes are rejected with typed conflict errors.
+- Proxy responses are passthrough (including `101` websocket upgrades).
 
 ## Data model
 
@@ -125,7 +126,10 @@ Alchemy manages worker + D1 resources.
 - E2E-style worker tests for API and proxy behavior.
 - Live deployment E2E (Vitest):
   - `INGRESS_PROXY_E2E_BASE_URL=<https://...workers.dev> INGRESS_PROXY_E2E_API_TOKEN=<token> pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live`
-  - Covers exact vs wildcard priority, wildcard specificity, create/update conflict paths, and self-update behavior.
+  - Covers exact vs wildcard priority, wildcard specificity, create/update conflict paths, self-update behavior, and deployed websocket proxy echo.
+- CI:
+  - PRs deploy ephemeral worker, run live E2E, then teardown.
+  - `main` runs the same live E2E flow first, then deploys production worker only if live E2E passes.
 
 ## TODO (explicitly deferred)
 

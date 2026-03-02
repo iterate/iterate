@@ -427,15 +427,7 @@ export async function proxyRequest(request: Request, env: ProxyWorkerEnv): Promi
     return jsonError(502, "proxy_error");
   }
 
-  const responseHeaders = new Headers(upstreamResponse.headers);
-  responseHeaders.set("x-ingress-proxy-route-id", resolved.routeId);
-  responseHeaders.set("x-ingress-proxy-pattern", resolved.pattern);
-
-  return new Response(upstreamResponse.body, {
-    status: upstreamResponse.status,
-    statusText: upstreamResponse.statusText,
-    headers: responseHeaders,
-  });
+  return upstreamResponse;
 }
 
 type ORPCContext = RequestHeadersPluginContext & {

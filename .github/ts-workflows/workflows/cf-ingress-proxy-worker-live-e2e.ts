@@ -8,6 +8,14 @@ export default workflow({
     deployments: "write",
   },
   on: {
+    push: {
+      branches: ["main"],
+      paths: [
+        "apps/cf-ingress-proxy-worker/**",
+        ".github/ts-workflows/workflows/cf-ingress-proxy-worker-live-e2e.ts",
+        ".github/workflows/cf-ingress-proxy-worker-live-e2e.yml",
+      ],
+    },
     pull_request: {
       paths: [
         "apps/cf-ingress-proxy-worker/**",
@@ -19,7 +27,7 @@ export default workflow({
   },
   jobs: {
     "deploy-test-teardown": {
-      if: "github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.fork == false",
+      if: "github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.pull_request.head.repo.fork == false",
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       "timeout-minutes": 20,
       env: {
@@ -96,6 +104,23 @@ export default workflow({
             "fi",
             `doppler run --config stg -- sh -c 'WORKER_NAME="$WORKER_NAME" INGRESS_PROXY_API_TOKEN="$INGRESS_PROXY_API_TOKEN" pnpm exec tsx ./alchemy.run.ts cli --destroy --stage ci' || echo "Teardown command failed; check Alchemy state manually for $WORKER_NAME"`,
           ].join("\n"),
+        },
+      ],
+    },
+    "deploy-prd": {
+      if: "github.event_name == 'push'",
+      needs: ["deploy-test-teardown"],
+      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      steps: [
+        ...utils.setupRepo,
+        ...utils.setupDoppler({ config: "prd" }),
+        {
+          name: "Deploy apps/cf-ingress-proxy-worker",
+          "working-directory": "apps/cf-ingress-proxy-worker",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: "pnpm run deploy:prd",
         },
       ],
     },
