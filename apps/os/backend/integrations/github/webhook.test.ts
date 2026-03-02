@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Hono } from "hono";
+import { createMachineForProject } from "../../services/machine-creation.ts";
 import { githubApp } from "./github.ts";
 
 // Mock the dependencies
@@ -66,16 +67,27 @@ const validWorkflowRunPayload = {
 
 describe("GitHub Webhook Handler", () => {
   const WEBHOOK_SECRET = "test-webhook-secret";
+  const createMachineForProjectMock = vi.mocked(createMachineForProject);
 
-  // Create a test app with mocked db and env
-  function createTestApp() {
-    const mockDb = {
+  beforeEach(() => {
+    createMachineForProjectMock.mockClear();
+  });
+
+  function createMockDb() {
+    return {
       query: {
         event: {
           findFirst: vi.fn().mockResolvedValue(null),
         },
         project: {
           findMany: vi.fn().mockResolvedValue([]),
+        },
+        projectRepo: {
+          findMany: vi.fn().mockResolvedValue([]),
+          findFirst: vi.fn().mockResolvedValue(null),
+        },
+        projectConnection: {
+          findFirst: vi.fn().mockResolvedValue(null),
         },
       },
       insert: vi.fn().mockReturnValue({
@@ -86,16 +98,15 @@ describe("GitHub Webhook Handler", () => {
         }),
       }),
     };
+  }
 
-    const mockEnv = {
-      GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET,
-      APP_STAGE: "prd", // workflow_run filter requires prd
-    };
-
+  // Create a test app with mocked db and env
+  function createTestApp(appStage = "prd") {
+    const mockDb = createMockDb();
     const app = new Hono();
     app.use("*", async (c, next) => {
       c.set("db" as never, mockDb as never);
-      c.env = mockEnv as never;
+      c.env = { GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET, APP_STAGE: appStage } as never;
       await next();
     });
     app.route("/", githubApp);
@@ -103,36 +114,60 @@ describe("GitHub Webhook Handler", () => {
     return { app, mockDb };
   }
 
+  async function makeWebhookRequest(params: {
+    app: Hono;
+    payload: Record<string, unknown>;
+    event: string;
+    deliveryId?: string;
+    signature?: string | null;
+  }) {
+    const body = JSON.stringify(params.payload);
+    const signature =
+      params.signature === undefined
+        ? await generateSignature(WEBHOOK_SECRET, body)
+        : params.signature;
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      "x-github-event": params.event,
+      "x-github-delivery": params.deliveryId ?? `delivery-${Date.now()}`,
+    };
+    if (signature !== null) headers["x-hub-signature-256"] = signature;
+    return params.app.request("/webhook", {
+      method: "POST",
+      body,
+      headers,
+    });
+  }
+
+  async function expectWebhookMatch(res: Response, expected: Record<string, unknown>) {
+    expect(await res.json()).toMatchObject(expected);
+  }
+
+  async function flushBackgroundTasks() {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
   describe("signature verification", () => {
     it("rejects requests without signature", async () => {
       const { app } = createTestApp();
-      const body = JSON.stringify(validWorkflowRunPayload);
-
-      const res = await app.request("/webhook", {
-        method: "POST",
-        body,
-        headers: {
-          "content-type": "application/json",
-          "x-github-event": "workflow_run",
-        },
+      const res = await makeWebhookRequest({
+        app,
+        payload: validWorkflowRunPayload,
+        event: "workflow_run",
+        signature: null,
       });
 
       expect(res.status).toBe(401);
-      expect(await res.json()).toMatchObject({ error: "Invalid signature" });
+      await expectWebhookMatch(res, { error: "Invalid signature" });
     });
 
     it("rejects requests with invalid signature", async () => {
       const { app } = createTestApp();
-      const body = JSON.stringify(validWorkflowRunPayload);
-
-      const res = await app.request("/webhook", {
-        method: "POST",
-        body,
-        headers: {
-          "content-type": "application/json",
-          "x-github-event": "workflow_run",
-          "x-hub-signature-256": "sha256=invalid",
-        },
+      const res = await makeWebhookRequest({
+        app,
+        payload: validWorkflowRunPayload,
+        event: "workflow_run",
+        signature: "sha256=invalid",
       });
 
       expect(res.status).toBe(401);
@@ -140,18 +175,11 @@ describe("GitHub Webhook Handler", () => {
 
     it("accepts requests with valid signature", async () => {
       const { app } = createTestApp();
-      const body = JSON.stringify(validWorkflowRunPayload);
-      const signature = await generateSignature(WEBHOOK_SECRET, body);
-
-      const res = await app.request("/webhook", {
-        method: "POST",
-        body,
-        headers: {
-          "content-type": "application/json",
-          "x-github-event": "workflow_run",
-          "x-hub-signature-256": signature,
-          "x-github-delivery": "delivery-123",
-        },
+      const res = await makeWebhookRequest({
+        app,
+        payload: validWorkflowRunPayload,
+        event: "workflow_run",
+        deliveryId: "delivery-123",
       });
 
       expect(res.status).toBe(200);
@@ -159,121 +187,203 @@ describe("GitHub Webhook Handler", () => {
   });
 
   describe("event filtering", () => {
-    async function makeRequest(
-      app: Hono,
-      payload: Record<string, unknown>,
-      event = "workflow_run",
-    ) {
-      const body = JSON.stringify(payload);
-      const signature = await generateSignature(WEBHOOK_SECRET, body);
-
-      return app.request("/webhook", {
-        method: "POST",
-        body,
-        headers: {
-          "content-type": "application/json",
-          "x-github-event": event,
-          "x-hub-signature-256": signature,
-          "x-github-delivery": "delivery-123",
+    const cases = [
+      {
+        name: "acknowledges unrecognized event types",
+        appStage: "prd",
+        event: "push",
+        payload: {},
+        expected: { received: true },
+      },
+      {
+        name: "acknowledges workflow_run events that don't match handlers",
+        appStage: "prd",
+        event: "workflow_run",
+        payload: { ...validWorkflowRunPayload, action: "requested" },
+        expected: { received: true },
+      },
+      {
+        name: "acknowledges non-success conclusions",
+        appStage: "prd",
+        event: "workflow_run",
+        payload: {
+          ...validWorkflowRunPayload,
+          workflow_run: { ...validWorkflowRunPayload.workflow_run, conclusion: "failure" },
         },
+        expected: { received: true },
+      },
+      {
+        name: "acknowledges non-main branches",
+        appStage: "prd",
+        event: "workflow_run",
+        payload: {
+          ...validWorkflowRunPayload,
+          workflow_run: { ...validWorkflowRunPayload.workflow_run, head_branch: "feature-branch" },
+        },
+        expected: { received: true },
+      },
+      {
+        name: "acknowledges non-ci.yml workflows",
+        appStage: "prd",
+        event: "workflow_run",
+        payload: {
+          ...validWorkflowRunPayload,
+          workflow_run: {
+            ...validWorkflowRunPayload.workflow_run,
+            path: ".github/workflows/deploy.yml",
+          },
+        },
+        expected: { received: true },
+      },
+      {
+        name: "acknowledges non-iterate/iterate repos",
+        appStage: "prd",
+        event: "workflow_run",
+        payload: {
+          ...validWorkflowRunPayload,
+          workflow_run: {
+            ...validWorkflowRunPayload.workflow_run,
+            repository: { full_name: "other/repo" },
+          },
+        },
+        expected: { received: true },
+      },
+      {
+        name: "accepts valid CI completion events in prd",
+        appStage: "prd",
+        event: "workflow_run",
+        payload: validWorkflowRunPayload,
+        expected: { received: true },
+      },
+      {
+        name: "acknowledges workflow_run in non-prd environments",
+        appStage: "dev",
+        event: "workflow_run",
+        payload: validWorkflowRunPayload,
+        expected: { received: true },
+      },
+      {
+        name: "accepts PR-linked workflow_run in non-prd environments",
+        appStage: "dev",
+        event: "workflow_run",
+        payload: {
+          ...validWorkflowRunPayload,
+          workflow_run: {
+            ...validWorkflowRunPayload.workflow_run,
+            pull_requests: [{ number: 123 }],
+          },
+        },
+        expected: { received: true },
+      },
+    ] as const;
+
+    it.each(cases)("$name", async ({ appStage, event, payload, expected }) => {
+      const { app } = createTestApp(appStage);
+      const res = await makeWebhookRequest({
+        app,
+        payload,
+        event,
+        deliveryId: "delivery-123",
       });
-    }
-
-    it("filters out unrecognized event types", async () => {
-      const { app } = createTestApp();
-      const res = await makeRequest(app, {}, "push");
-      const json = await res.json();
-      expect(json).toMatchObject({ message: "No filter for event type push" });
+      await expectWebhookMatch(res, expected);
     });
+  });
 
-    it("acknowledges workflow_run events that don't match handlers", async () => {
-      const { app } = createTestApp();
-      // Non-completed action
-      const payload = { ...validWorkflowRunPayload, action: "requested" };
-      const res = await makeRequest(app, payload);
-      const json = await res.json();
-      expect(json).toMatchObject({ received: true });
-    });
-
-    it("acknowledges non-success conclusions", async () => {
-      const { app } = createTestApp();
-      const payload = {
-        ...validWorkflowRunPayload,
-        workflow_run: { ...validWorkflowRunPayload.workflow_run, conclusion: "failure" },
-      };
-      const res = await makeRequest(app, payload);
-      const json = await res.json();
-      expect(json).toMatchObject({ received: true });
-    });
-
-    it("filters out non-main branches via JSONata", async () => {
-      const { app } = createTestApp();
-      const payload = {
-        ...validWorkflowRunPayload,
-        workflow_run: { ...validWorkflowRunPayload.workflow_run, head_branch: "feature-branch" },
-      };
-      const res = await makeRequest(app, payload);
-      const json = await res.json();
-      expect(json).toMatchObject({ message: "Event filtered out" });
-    });
-
-    it("acknowledges non-ci.yml workflows", async () => {
-      const { app } = createTestApp();
-      const payload = {
-        ...validWorkflowRunPayload,
-        workflow_run: {
-          ...validWorkflowRunPayload.workflow_run,
-          path: ".github/workflows/deploy.yml",
+  describe("issue_comment filtering", () => {
+    const issueCommentCases = [
+      {
+        name: "acknowledges issue comments on issues",
+        payload: {
+          action: "created",
+          repository: { full_name: "iterate/iterate" },
+          issue: {
+            number: 12,
+            title: "Issue title",
+            body: "Issue body",
+            html_url: "https://github.com/iterate/iterate/issues/12",
+            user: { login: "alice" },
+            pull_request: null,
+          },
+          comment: {
+            id: 123,
+            body: "Hello",
+            user: { login: "alice" },
+          },
         },
-      };
-      const res = await makeRequest(app, payload);
-      const json = await res.json();
-      expect(json).toMatchObject({ received: true });
-    });
-
-    it("acknowledges non-iterate/iterate repos", async () => {
-      const { app } = createTestApp();
-      const payload = {
-        ...validWorkflowRunPayload,
-        workflow_run: {
-          ...validWorkflowRunPayload.workflow_run,
-          repository: { full_name: "other/repo" },
+        expected: { received: true },
+      },
+      {
+        name: "accepts issue comments on pull requests",
+        payload: {
+          action: "created",
+          repository: { full_name: "iterate/iterate" },
+          issue: {
+            number: 34,
+            title: "PR title",
+            body: "PR body",
+            html_url: "https://github.com/iterate/iterate/pull/34",
+            user: { login: "bob" },
+            pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/34" },
+          },
+          comment: {
+            id: 456,
+            body: "@iterate please check",
+            user: { login: "bob" },
+          },
         },
-      };
-      const res = await makeRequest(app, payload);
-      const json = await res.json();
-      expect(json).toMatchObject({ received: true });
-    });
+        expected: { received: true },
+      },
+    ] as const;
 
-    it("accepts valid CI completion events in prd", async () => {
+    it.each(issueCommentCases)("$name", async ({ payload, expected }) => {
       const { app } = createTestApp();
-      const res = await makeRequest(app, validWorkflowRunPayload);
-      const json = await res.json();
-      expect(json).toMatchObject({ received: true });
+      const res = await makeWebhookRequest({ app, payload, event: "issue_comment" });
+      await expectWebhookMatch(res, expected);
     });
+  });
 
-    it("filters out workflow_run in non-prd environments", async () => {
-      const mockDb = {
-        query: { event: { findFirst: vi.fn() }, project: { findMany: vi.fn() } },
-        insert: vi.fn().mockReturnValue({
-          values: vi.fn().mockReturnValue({
-            onConflictDoNothing: vi.fn().mockReturnValue({
-              returning: vi.fn().mockResolvedValue([{ id: "evt_test123" }]),
-            }),
-          }),
-        }),
-      };
-      const app = new Hono();
-      app.use("*", async (c, next) => {
-        c.set("db" as never, mockDb as never);
-        c.env = { GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET, APP_STAGE: "dev" } as never;
-        await next();
-      });
-      app.route("/", githubApp);
+  describe("pull_request filtering", () => {
+    const pullRequestCases = [
+      {
+        name: "acknowledges non-merged pull_request events",
+        payload: {
+          action: "closed",
+          repository: { full_name: "iterate/iterate" },
+          pull_request: {
+            number: 34,
+            title: "PR title",
+            body: "PR body",
+            html_url: "https://github.com/iterate/iterate/pull/34",
+            user: { login: "bob" },
+            merged: false,
+          },
+        },
+        expected: { received: true },
+      },
+      {
+        name: "accepts merged pull_request events",
+        payload: {
+          action: "closed",
+          repository: { full_name: "iterate/iterate" },
+          pull_request: {
+            number: 34,
+            title: "PR title",
+            body: "PR body",
+            html_url: "https://github.com/iterate/iterate/pull/34",
+            user: { login: "bob" },
+            merged: true,
+            merge_commit_sha: "abc123",
+            merged_by: { login: "bob" },
+          },
+        },
+        expected: { received: true },
+      },
+    ] as const;
 
-      const res = await makeRequest(app, validWorkflowRunPayload);
-      const json = await res.json();
-      expect(json).toMatchObject({ message: "Event filtered out" });
+    it.each(pullRequestCases)("$name", async ({ payload, expected }) => {
+      const { app } = createTestApp();
+      const res = await makeWebhookRequest({ app, payload, event: "pull_request" });
+      await expectWebhookMatch(res, expected);
     });
   });
 
@@ -289,75 +399,90 @@ describe("GitHub Webhook Handler", () => {
       repository: { full_name: "iterate/iterate" },
     };
 
-    async function makeRequest(app: Hono, payload: Record<string, unknown>) {
-      const body = JSON.stringify(payload);
-      const signature = await generateSignature(WEBHOOK_SECRET, body);
-      return app.request("/webhook", {
-        method: "POST",
-        body,
-        headers: {
-          "content-type": "application/json",
-          "x-github-event": "commit_comment",
-          "x-hub-signature-256": signature,
-          "x-github-delivery": `delivery-${Date.now()}`,
+    const commitCommentCases = [
+      {
+        name: "accepts commit_comment with matching APP_STAGE tag",
+        payload: validCommitCommentPayload,
+        expected: { received: true },
+      },
+      {
+        name: "acknowledges commit_comment without APP_STAGE tag",
+        payload: {
+          ...validCommitCommentPayload,
+          comment: { ...validCommitCommentPayload.comment, body: "Testing [refresh]" },
         },
-      });
-    }
-
-    function createDevApp() {
-      const mockDb = {
-        query: {
-          event: { findFirst: vi.fn() },
-          project: { findMany: vi.fn().mockResolvedValue([]) },
+        expected: { received: true },
+      },
+      {
+        name: "acknowledges commit_comment with wrong APP_STAGE tag",
+        payload: {
+          ...validCommitCommentPayload,
+          comment: {
+            ...validCommitCommentPayload.comment,
+            body: "Testing [refresh] [APP_STAGE=prd]",
+          },
         },
-        insert: vi.fn().mockReturnValue({
-          values: vi.fn().mockReturnValue({
-            onConflictDoNothing: vi.fn().mockReturnValue({
-              returning: vi.fn().mockResolvedValue([{ id: "evt_test123" }]),
-            }),
-          }),
-        }),
-      };
-      const app = new Hono();
-      app.use("*", async (c, next) => {
-        c.set("db" as never, mockDb as never);
-        c.env = { GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET, APP_STAGE: "dev" } as never;
-        await next();
-      });
-      app.route("/", githubApp);
-      return { app, mockDb };
-    }
+        expected: { received: true },
+      },
+    ] as const;
 
-    it("accepts commit_comment with matching APP_STAGE tag", async () => {
-      const { app } = createDevApp();
-      const res = await makeRequest(app, validCommitCommentPayload);
-      const json = await res.json();
-      expect(json).toMatchObject({ received: true });
+    it.each(commitCommentCases)("$name", async ({ payload, expected }) => {
+      const { app } = createTestApp("dev");
+      const res = await makeWebhookRequest({ app, payload, event: "commit_comment" });
+      await expectWebhookMatch(res, expected);
+    });
+  });
+
+  describe("recreation gating", () => {
+    it("does not recreate machines for workflow_run outside prd", async () => {
+      const { app, mockDb } = createTestApp("dev");
+      mockDb.query.project.findMany.mockResolvedValue([
+        {
+          id: "prj_123",
+          sandboxProvider: "daytona",
+          machines: [{ id: "mach_123", metadata: {} }],
+        },
+      ]);
+
+      const res = await makeWebhookRequest({
+        app,
+        payload: validWorkflowRunPayload,
+        event: "workflow_run",
+      });
+
+      await expectWebhookMatch(res, { received: true });
+      await flushBackgroundTasks();
+      expect(createMachineForProjectMock).not.toHaveBeenCalled();
     });
 
-    it("filters out commit_comment without APP_STAGE tag", async () => {
-      const { app } = createDevApp();
-      const payload = {
-        ...validCommitCommentPayload,
-        comment: { ...validCommitCommentPayload.comment, body: "Testing [refresh]" },
-      };
-      const res = await makeRequest(app, payload);
-      const json = await res.json();
-      expect(json).toMatchObject({ message: "Event filtered out" });
-    });
-
-    it("filters out commit_comment with wrong APP_STAGE tag", async () => {
-      const { app } = createDevApp();
-      const payload = {
-        ...validCommitCommentPayload,
-        comment: {
-          ...validCommitCommentPayload.comment,
-          body: "Testing [refresh] [APP_STAGE=prd]",
+    it("does not recreate machines when APP_STAGE tag does not match", async () => {
+      const { app, mockDb } = createTestApp("dev");
+      mockDb.query.project.findMany.mockResolvedValue([
+        {
+          id: "prj_123",
+          sandboxProvider: "daytona",
+          machines: [{ id: "mach_123", metadata: {} }],
         },
-      };
-      const res = await makeRequest(app, payload);
-      const json = await res.json();
-      expect(json).toMatchObject({ message: "Event filtered out" });
+      ]);
+
+      const res = await makeWebhookRequest({
+        app,
+        event: "commit_comment",
+        payload: {
+          action: "created",
+          comment: {
+            id: 12345,
+            body: "Testing [refresh] [APP_STAGE=prd]",
+            commit_id: "abc123def456",
+            user: { login: "testuser" },
+          },
+          repository: { full_name: "iterate/iterate" },
+        },
+      });
+
+      await expectWebhookMatch(res, { received: true });
+      await flushBackgroundTasks();
+      expect(createMachineForProjectMock).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,7 +1,16 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { createFileRoute, Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import {
+  ArrowLeft,
   Circle,
   Download,
   ExternalLink,
@@ -16,6 +25,7 @@ import {
 } from "lucide-react";
 import { z } from "zod/v4";
 import { toast } from "sonner";
+import Markdown from "markdown-to-jsx";
 import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
@@ -112,6 +122,81 @@ function buildUploadUrl(orgSlug: string, projectSlug: string, machineId: string)
   return `/org/${orgSlug}/proj/${projectSlug}/${machineId}/proxy/3001/api/files/upload`;
 }
 
+// --- Markdown rendering ---
+
+const markdownOptions = {
+  forceBlock: true,
+  overrides: {
+    h1: { props: { className: "text-lg font-semibold mt-3 mb-1" } },
+    h2: { props: { className: "text-base font-semibold mt-3 mb-1" } },
+    h3: { props: { className: "text-sm font-semibold mt-2 mb-1" } },
+    p: { props: { className: "mb-2 last:mb-0" } },
+    a: {
+      props: {
+        className: "underline underline-offset-2 hover:opacity-80",
+        target: "_blank",
+        rel: "noreferrer",
+      },
+    },
+    ul: { props: { className: "list-disc pl-4 mb-2 space-y-0.5" } },
+    ol: { props: { className: "list-decimal pl-4 mb-2 space-y-0.5" } },
+    li: { props: { className: "pl-0.5" } },
+    blockquote: {
+      props: { className: "border-l-2 border-current/20 pl-3 italic opacity-80 mb-2" },
+    },
+    pre: {
+      component: CodeBlock,
+      props: {
+        className: "rounded-md bg-black/10 dark:bg-white/10 p-3 overflow-x-auto mb-2 text-xs",
+      },
+    },
+    code: { component: InlineCode },
+    hr: { props: { className: "my-3 border-current/20" } },
+    table: { props: { className: "text-xs border-collapse mb-2 w-full" } },
+    th: { props: { className: "border border-current/20 px-2 py-1 text-left font-semibold" } },
+    td: { props: { className: "border border-current/20 px-2 py-1" } },
+  },
+};
+
+const InsidePreContext = createContext(false);
+
+function CodeBlock({ children, className, ...props }: React.ComponentProps<"pre">) {
+  return (
+    <InsidePreContext.Provider value={true}>
+      <pre className={className} {...props}>
+        {children}
+      </pre>
+    </InsidePreContext.Provider>
+  );
+}
+
+function InlineCode({ children, className, ...props }: React.ComponentProps<"code">) {
+  const insidePre = useContext(InsidePreContext);
+
+  // If inside <pre>, it's a fenced code block — render plain
+  if (insidePre) {
+    return (
+      <code className={className} {...props}>
+        {children}
+      </code>
+    );
+  }
+  // Inline code
+  return (
+    <code className="rounded bg-black/10 px-1 py-0.5 text-[0.85em] dark:bg-white/10" {...props}>
+      {children}
+    </code>
+  );
+}
+
+function MarkdownContent({ text }: { text: string }) {
+  return (
+    <div className="wrap-break-word">
+      <Markdown options={markdownOptions}>{text}</Markdown>
+    </div>
+  );
+}
+
 // --- Component ---
 
 function ProjectHomePage() {
@@ -123,7 +208,16 @@ function ProjectHomePage() {
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
+  const [mobileShowMessages, setMobileShowMessages] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync mobile view state with URL — when browser back removes the thread param,
+  // hide the messages panel on mobile
+  useEffect(() => {
+    if (!search.thread) {
+      setMobileShowMessages(false);
+    }
+  }, [search.thread]);
 
   const { data: projectData } = useSuspenseQuery(
     orpc.project.bySlug.queryOptions({ input: { projectSlug: params.projectSlug } }),
@@ -284,7 +378,10 @@ function ProjectHomePage() {
           type="button"
           size="sm"
           variant={isCreatingThread ? "default" : "outline"}
-          onClick={() => navigate({ search: { thread: "new" } })}
+          onClick={() => {
+            navigate({ search: { thread: "new" } });
+            setMobileShowMessages(true);
+          }}
         >
           <Plus className="h-4 w-4" />
           New Thread
@@ -309,8 +406,10 @@ function ProjectHomePage() {
       )}
 
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-        {/* Thread sidebar */}
-        <section className="space-y-3">
+        {/* Thread sidebar — hidden on mobile when viewing messages */}
+        <section
+          className={cn("space-y-3 overflow-y-auto", mobileShowMessages && "hidden lg:block")}
+        >
           {threadsData.threads.length === 0 ? (
             <Card className="p-4">
               <EmptyState
@@ -334,7 +433,10 @@ function ProjectHomePage() {
                       "hover:bg-muted/50",
                       isSelected ? "border-primary bg-primary/5" : "border-border",
                     )}
-                    onClick={() => navigate({ search: { thread: thread.threadId } })}
+                    onClick={() => {
+                      navigate({ search: { thread: thread.threadId } });
+                      setMobileShowMessages(true);
+                    }}
                   >
                     <p className="truncate text-sm font-medium">{thread.title}</p>
                     <p className="mt-1 truncate text-xs text-muted-foreground">
@@ -358,15 +460,34 @@ function ProjectHomePage() {
           )}
         </section>
 
-        {/* Messages + input */}
-        <section className="flex min-h-0 min-w-0 flex-col gap-3">
-          {selectedThreadId && messages.length > 0 ? (
-            <div className="flex shrink-0 items-center justify-between rounded-lg border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+        {/* Messages + input — hidden on mobile when viewing thread list */}
+        <section
+          className={cn(
+            "flex min-h-0 min-w-0 flex-col gap-3",
+            !mobileShowMessages && "hidden lg:flex",
+          )}
+        >
+          {/* Thread header with mobile back button */}
+          {selectedThreadId ? (
+            <div className="flex shrink-0 items-center gap-2 rounded-lg border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+              <button
+                type="button"
+                className="lg:hidden"
+                onClick={() => setMobileShowMessages(false)}
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </button>
               <span className="truncate font-medium">
                 {threadsData.threads.find((t) => t.threadId === selectedThreadId)?.title ??
                   "Thread"}
               </span>
-              {/* Attach removed for now; machine-detail page is canonical for attach/web links. */}
+            </div>
+          ) : isCreatingThread || mobileShowMessages ? (
+            <div className="flex shrink-0 items-center gap-2 rounded-lg border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground lg:hidden">
+              <button type="button" onClick={() => setMobileShowMessages(false)}>
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+              <span className="font-medium">New Thread</span>
             </div>
           ) : null}
           <Card className="min-h-0 flex-1 overflow-y-auto p-4 space-y-3">
@@ -393,7 +514,11 @@ function ProjectHomePage() {
                     )}
                   >
                     {message.text ? (
-                      <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
+                      message.role === "assistant" ? (
+                        <MarkdownContent text={message.text} />
+                      ) : (
+                        <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
+                      )
                     ) : null}
                     {message.attachments?.map((att, i) => (
                       <AttachmentPreview
@@ -499,7 +624,7 @@ function ProjectHomePage() {
                     e.target.value = "";
                   }}
                 />
-                <p className="text-xs text-muted-foreground">
+                <p className="hidden text-xs text-muted-foreground sm:block">
                   Shift+Enter for newline. Enter to send.
                 </p>
               </div>

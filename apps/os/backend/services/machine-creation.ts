@@ -70,6 +70,23 @@ export type CreateMachineParams = {
   metadata?: Record<string, unknown>;
 };
 
+const AGENT_STAGE_COMPONENT_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+
+function normalizeAgentStageComponent(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  return AGENT_STAGE_COMPONENT_PATTERN.test(normalized) ? normalized : null;
+}
+
+function buildAgentStageEnvValue(env: CloudflareEnv): string {
+  const appStage = normalizeAgentStageComponent(env.APP_STAGE || env.VITE_APP_STAGE) ?? "dev";
+  const projectName = normalizeAgentStageComponent(process.env.PROJECT_NAME);
+  const iterateUser = normalizeAgentStageComponent(process.env.ITERATE_USER);
+  const scope = [projectName, iterateUser]
+    .filter((part): part is string => Boolean(part))
+    .join("_");
+  return scope ? `${appStage}:${scope}` : appStage;
+}
 /**
  * Build the full env var map for a new machine.
  */
@@ -106,6 +123,7 @@ export async function buildMachineEnvVars(params: {
   });
 
   const envVars = Object.fromEntries(globalEnvVars.map((envVar) => [envVar.key, envVar.value]));
+  const agentStage = buildAgentStageEnvValue(env);
 
   const ingressEnvVars = buildMachineIngressEnvVars({
     projectSlug,
@@ -125,7 +143,9 @@ export async function buildMachineEnvVars(params: {
     ITERATE_ORG_SLUG: organizationSlug,
     ITERATE_PROJECT_ID: projectId,
     ITERATE_PROJECT_SLUG: projectSlug,
+    ITERATE_AGENT_STAGE: agentStage,
     ITERATE_EGRESS_PROXY_URL: `${env.VITE_PUBLIC_URL}/api/egress-proxy`,
+    ITERATE_GITHUB_APP_SLUG: env.GITHUB_APP_SLUG,
     ...(env.DANGEROUS_RAW_SECRETS_ENABLED === "true" ? { ITERATE_SKIP_PROXY: "true" } : {}),
     GH_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
     GITHUB_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,

@@ -3,7 +3,6 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
-import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
@@ -12,6 +11,7 @@ import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { trackWebhookEvent, linkExternalIdToGroups } from "../../lib/posthog.ts";
 import { withSpan } from "../../utils/otel.ts";
+import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
 
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
@@ -61,24 +61,8 @@ function createCorrelationContext(params: {
 async function buildMachineForwardFetcher(
   machine: typeof schema.machine.$inferSelect,
   env: CloudflareEnv,
-): Promise<((input: string | Request | URL, init?: RequestInit) => Promise<Response>) | null> {
-  const metadata = machine.metadata as Record<string, unknown> | null;
-
-  try {
-    const runtime = await createMachineStub({
-      type: machine.type,
-      env,
-      externalId: machine.externalId,
-      metadata: metadata ?? {},
-    });
-    return await runtime.getFetcher(3000);
-  } catch (err) {
-    logger.set({ machine: { id: machine.id } });
-    logger.warn(
-      `[Slack Webhook] Failed to build forward fetcher type=${machine.type} error=${err instanceof Error ? err.message : String(err)}`,
-    );
-    return null;
-  }
+) {
+  return buildMachineFetcher(machine, env, "Slack Webhook");
 }
 
 /**

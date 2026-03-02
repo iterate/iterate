@@ -153,6 +153,7 @@ jobs:
               let message = `🚨 ${failedJobs.join(", ")} failed on \${{ github.ref_name }}. ${outputsString}.`;
               message +=
                 " <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>";
+              message += "\n@iterate please investigate";
               await slack.chat.postMessage({
                 channel: slackChannelIds["#error-pulse"],
                 text: message,

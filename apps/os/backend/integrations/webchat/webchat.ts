@@ -1,11 +1,11 @@
 import { Hono, type Context } from "hono";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod/v4";
-import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
+import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
 
 const WebchatAttachment = z.object({
   fileName: z.string(),
@@ -80,24 +80,8 @@ export const webchatApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variabl
 async function buildMachineForwardFetcher(
   machine: typeof schema.machine.$inferSelect,
   env: CloudflareEnv,
-): Promise<((input: string | Request | URL, init?: RequestInit) => Promise<Response>) | null> {
-  const metadata = machine.metadata as Record<string, unknown> | null;
-
-  try {
-    const runtime = await createMachineStub({
-      type: machine.type,
-      env,
-      externalId: machine.externalId,
-      metadata: metadata ?? {},
-    });
-    return await runtime.getFetcher(3000);
-  } catch (error) {
-    logger.set({ machine: { id: machine.id } });
-    logger.warn(
-      `[webchat] Failed to build machine forward fetcher type=${machine.type} error=${error instanceof Error ? error.message : String(error)}`,
-    );
-    return null;
-  }
+) {
+  return buildMachineFetcher(machine, env, "webchat");
 }
 
 async function resolveProjectAndMachine(

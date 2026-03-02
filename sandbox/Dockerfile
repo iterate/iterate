@@ -4,7 +4,7 @@ FROM node:24
 # === Versions ===
 ARG SANDBOX_AGENT_BROWSER_VERSION=0.13.0
 ARG SANDBOX_CODEX_VERSION=0.98.0
-ARG SANDBOX_OPENCODE_VERSION=1.2.4
+ARG SANDBOX_OPENCODE_VERSION=1.2.15
 ARG SANDBOX_CLAUDE_CODE_VERSION=2.1.50
 ARG SANDBOX_PI_CODING_AGENT_VERSION=0.52.8
 ARG SANDBOX_MITMPROXY_VERSION=11.1.3
@@ -207,9 +207,17 @@ USER iterate
 ENV PATH="/home/iterate/.iterate/bin:/opt/claude/.local/bin:/opt/opencode/.opencode/bin:/opt/mitmproxy/bin:/opt/uv/bin:/opt/npm-global/bin:/opt/bun/bin:/opt/fly/bin:/usr/local/go/bin:/opt/go/bin:$PATH"
 
 # Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session.
-# Use a free model — no API keys are available at build time.
-# First verify opencode installed correctly, then allow warm-up to fail (network issues are OK).
-RUN opencode --version && (opencode run --model opencode/kimi-k2.5-free "Hello" || true) && \
+# No API keys exist at build time, so the LLM call itself will fail — that's expected.
+# We only care that opencode boots far enough to download its npm deps.
+# Errors we accept: model not found, auth failures, network issues.
+# Errors we do NOT accept: opencode binary missing or broken (checked by --version).
+RUN set -e && \
+    opencode --version && \
+    set +e && \
+    echo "--- opencode warm-up (errors below are expected) ---" && \
+    opencode run "Hello" 2>&1; \
+    warmup_exit=$?; \
+    echo "--- opencode warm-up finished (exit=$warmup_exit) ---" && \
     rm -rf /home/iterate/.cache
 
 # Repo path and working dir (used by COPY steps below).

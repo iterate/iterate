@@ -54,6 +54,49 @@ When creating a client with a custom base URL, include the `/rpc` suffix:
 const client = createClient("http://localhost:9876/rpc");
 ```
 
+## Event publishing (optional)
+
+Pidnap can publish process state change events to an events-service stream append endpoint:
+
+```ts
+const callbackURL = process.env.PIDNAP_EVENTS_CALLBACK_URL?.trim();
+
+export default defineConfig({
+  events: {
+    callbackURL: callbackURL ?? "http://127.0.0.1:19010/api/streams/pidnap",
+    timeoutMs: 2000,
+  },
+});
+```
+
+Run with a callback target:
+
+```bash
+PIDNAP_EVENTS_CALLBACK_URL=http://127.0.0.1:19010/api/streams/pidnap pidnap init
+```
+
+Posted body:
+
+```json
+{
+  "events": [
+    {
+      "type": "https://events.iterate.com/pidnap/process/state-changed",
+      "payload": {
+        "name": "worker",
+        "previousState": "idle",
+        "state": "running"
+      },
+      "version": "1"
+    }
+  ]
+}
+```
+
+Current event types:
+
+- `https://events.iterate.com/pidnap/process/state-changed`
+
 ## Architecture
 
 - CLI: `src/cli.ts` loads config, starts RPC server (with `/rpc` prefix), boots manager
