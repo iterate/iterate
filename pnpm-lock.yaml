@@ -1188,9 +1188,15 @@ importers:
 
   packages/mock-http-proxy:
     dependencies:
+      '@iterate-com/msw-http-server':
+        specifier: workspace:*
+        version: link:../msw-http-server
       http-proxy:
         specifier: ^1.18.1
         version: 1.18.1
+      msw:
+        specifier: ^2.4.9
+        version: 2.12.10(@types/node@25.0.10)(typescript@5.9.3)
       ws:
         specifier: ^8.19.0
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)

@@ -13,7 +13,9 @@
     "test:real-https:doppler": "doppler run --config dev -- pnpm test:real-https"
   },
   "dependencies": {
+    "@iterate-com/msw-http-server": "workspace:*",
     "http-proxy": "^1.18.1",
+    "msw": "^2.4.9",
     "ws": "^8.19.0"
   },
   "devDependencies": {
