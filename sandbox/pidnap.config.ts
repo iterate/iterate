@@ -8,9 +8,6 @@ const sandboxDir = join(iterateRepo, "sandbox");
 const envFile = join(home, ".iterate/.env");
 const eventsServicePort = "17301";
 const eventsServiceDatabasePath = join(home, ".iterate/events.sqlite");
-const pidnapEventsCallbackURL =
-  process.env.PIDNAP_EVENTS_CALLBACK_URL?.trim() ||
-  `http://127.0.0.1:${eventsServicePort}/api/streams/pidnap`;
 const mitmproxyDir = join(home, ".mitmproxy");
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
@@ -50,10 +47,6 @@ export default defineConfig({
   http: {
     host: "0.0.0.0",
     port: 9876,
-  },
-  events: {
-    callbackURL: pidnapEventsCallbackURL,
-    timeoutMs: 2000,
   },
   logDir: "/var/log/pidnap",
   envFile,
