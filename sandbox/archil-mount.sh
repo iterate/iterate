@@ -55,6 +55,7 @@ echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${PERSIST} (region: ${ARCHIL
 sudo mkdir -p "$PERSIST"
 
 # Post-mount setup runs in background since --no-fork blocks the main thread.
+
 (
   set +e
   trap 'echo "[archil] Background task error on line $LINENO: $BASH_COMMAND (exit $?)"' ERR
