@@ -79,6 +79,12 @@ class RouteConflictError extends Error {
   }
 }
 
+class RouteGoneError extends Error {
+  public constructor() {
+    super("Route not found");
+  }
+}
+
 function readBearerToken(headerValue: string | null): string | null {
   if (!headerValue) return null;
   const match = /^bearer\s+(.+)$/i.exec(headerValue);
@@ -297,18 +303,25 @@ export async function updateRoute(
     throw new RouteConflictError(conflicts);
   }
 
-  await db.batch([
-    updateRouteMetadataStmt(db, { metadata: JSON.stringify(params.metadata) }, { routeId }),
-    deleteRoutePatternsByRouteIdStmt(db, { routeId }),
-    ...normalizedPatterns.map((pattern) => {
-      return insertRoutePatternStmt(db, {
-        routeId,
-        pattern: pattern.pattern,
-        target: pattern.target,
-        headers: JSON.stringify(pattern.headers),
-      });
-    }),
-  ]);
+  try {
+    await db.batch([
+      updateRouteMetadataStmt(db, { metadata: JSON.stringify(params.metadata) }, { routeId }),
+      deleteRoutePatternsByRouteIdStmt(db, { routeId }),
+      ...normalizedPatterns.map((pattern) => {
+        return insertRoutePatternStmt(db, {
+          routeId,
+          pattern: pattern.pattern,
+          target: pattern.target,
+          headers: JSON.stringify(pattern.headers),
+        });
+      }),
+    ]);
+  } catch (error) {
+    if (isForeignKeyConstraintError(error)) {
+      throw new RouteGoneError();
+    }
+    throw error;
+  }
 
   const updated = await getRoute(db, routeId);
   if (!updated) throw new Error("Failed to read route after update");
@@ -436,9 +449,17 @@ function isUniqueConstraintError(error: unknown): boolean {
   return error instanceof Error && /UNIQUE constraint failed/i.test(error.message);
 }
 
+function isForeignKeyConstraintError(error: unknown): boolean {
+  return error instanceof Error && /FOREIGN KEY constraint failed/i.test(error.message);
+}
+
 function mapRouteError(error: unknown): never {
   if (error instanceof RouteInputError) {
     throw new ORPCError("BAD_REQUEST", { message: error.message });
+  }
+
+  if (error instanceof RouteGoneError) {
+    throw new ORPCError("NOT_FOUND", { message: error.message });
   }
 
   if (error instanceof RouteConflictError) {
@@ -541,8 +562,21 @@ export const app = new Hono<{
   };
 }>();
 
+let cachedRawEnv: RawProxyWorkerEnv | null = null;
+let cachedParsedEnv: ProxyWorkerEnv | null = null;
+
+function getParsedEnv(rawEnv: RawProxyWorkerEnv): ProxyWorkerEnv {
+  if (cachedRawEnv === rawEnv && cachedParsedEnv != null) {
+    return cachedParsedEnv;
+  }
+  const parsedEnv = parseWorkerEnv(rawEnv);
+  cachedRawEnv = rawEnv;
+  cachedParsedEnv = parsedEnv;
+  return parsedEnv;
+}
+
 app.use("*", async (c, next) => {
-  c.set("env", parseWorkerEnv(c.env));
+  c.set("env", getParsedEnv(c.env));
   return next();
 });
 
