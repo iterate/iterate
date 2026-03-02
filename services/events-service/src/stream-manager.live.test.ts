@@ -121,7 +121,10 @@ const createManagerWithOneSyncBootFailure = async (pathThatFailsOnce: string) =>
               Stream.unwrap(
                 Effect.sync(() => {
                   failedOnce.add(pathThatFailsOnce);
-                  return Stream.fail(new Error(`sync boot failure for ${pathThatFailsOnce}`));
+                  const failedRead = Stream.fail(
+                    new Error(`sync boot failure for ${pathThatFailsOnce}`),
+                  );
+                  return failedRead as unknown as ReturnType<typeof scopedStorage.read>;
                 }),
               ),
           };
@@ -212,8 +215,13 @@ describe("StreamManager live layer edge cases", () => {
 
       const metaEvents = await readMetaEvents(manager);
       expect(metaEvents.length).toBe(1);
-      expect(String(metaEvents[0]?.type)).toBe(STREAM_CREATED_TYPE);
-      expect((metaEvents[0]?.payload as Record<string, unknown>)["path"]).toBe(String(targetPath));
+      const createdEvent = metaEvents[0];
+      expect(createdEvent).toBeDefined();
+      if (!createdEvent) {
+        throw new Error("expected one stream-created event");
+      }
+      expect(String(createdEvent.type)).toBe(STREAM_CREATED_TYPE);
+      expect((createdEvent.payload as Record<string, unknown>)["path"]).toBe(String(targetPath));
     } finally {
       await dispose();
     }
@@ -231,8 +239,13 @@ describe("StreamManager live layer edge cases", () => {
 
       const metaEvents = await readMetaEvents(manager);
       expect(metaEvents.length).toBe(1);
-      expect(String(metaEvents[0]?.type)).toBe(STREAM_CREATED_TYPE);
-      expect((metaEvents[0]?.payload as Record<string, unknown>)["path"]).toBe(String(targetPath));
+      const createdEvent = metaEvents[0];
+      expect(createdEvent).toBeDefined();
+      if (!createdEvent) {
+        throw new Error("expected one stream-created event");
+      }
+      expect(String(createdEvent.type)).toBe(STREAM_CREATED_TYPE);
+      expect((createdEvent.payload as Record<string, unknown>)["path"]).toBe(String(targetPath));
     } finally {
       await dispose();
     }
