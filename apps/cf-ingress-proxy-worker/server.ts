@@ -351,7 +351,14 @@ export async function resolveRoute(
   db: D1Database,
   request: Request,
 ): Promise<ResolvedRoute | null> {
-  const host = normalizeInboundHost(request.headers.get("host"));
+  return resolveRouteByHost(db, request.headers.get("host"));
+}
+
+export async function resolveRouteByHost(
+  db: D1Database,
+  rawHost: string | null,
+): Promise<ResolvedRoute | null> {
+  const host = normalizeInboundHost(rawHost);
   if (!host) return null;
 
   const winner = await selectResolvedRouteByHost(db, { host });

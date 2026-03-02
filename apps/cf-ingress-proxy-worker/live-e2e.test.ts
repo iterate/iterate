@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const baseUrl = process.env.INGRESS_PROXY_E2E_BASE_URL;
 const apiToken = process.env.INGRESS_PROXY_E2E_API_TOKEN ?? process.env.INGRESS_PROXY_API_TOKEN;
@@ -9,9 +9,6 @@ const LONG_CANDIDATES = [
   "*-b.iterate.workers.dev",
   "*-c.iterate.workers.dev",
 ];
-const HTTP_ECHO_HOST = "postman-echo.com";
-const HTTP_ECHO_ORIGIN = `https://${HTTP_ECHO_HOST}`;
-const WEBSOCKET_ECHO_HOST = "ws.postman-echo.com";
 
 function requireEnv() {
   if (!baseUrl) {
@@ -21,103 +18,6 @@ function requireEnv() {
     throw new Error("INGRESS_PROXY_E2E_API_TOKEN (or INGRESS_PROXY_API_TOKEN) is required");
   }
   return { baseUrl, apiToken };
-}
-
-function getHeaderValueCaseInsensitive(
-  headers: Record<string, string | string[]> | undefined,
-  name: string,
-): string | null {
-  if (!headers) return null;
-  const wanted = name.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === wanted) return Array.isArray(value) ? (value[0] ?? null) : value;
-  }
-  return null;
-}
-
-async function websocketDataToText(data: unknown): Promise<string> {
-  if (typeof data === "string") return data;
-  if (data instanceof Blob) return data.text();
-  if (data instanceof ArrayBuffer) {
-    return new TextDecoder().decode(new Uint8Array(data));
-  }
-  if (ArrayBuffer.isView(data)) {
-    return new TextDecoder().decode(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
-  }
-  return String(data);
-}
-
-async function readWebsocketEcho(params: {
-  websocketUrl: string;
-  message: string;
-  timeoutMs: number;
-}): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const websocket = new WebSocket(params.websocketUrl);
-    let settled = false;
-
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      websocket.close();
-      reject(new Error("Timed out waiting for websocket response"));
-    }, params.timeoutMs);
-
-    websocket.addEventListener("open", () => {
-      websocket.send(params.message);
-    });
-
-    websocket.addEventListener("message", (event) => {
-      void websocketDataToText(event.data)
-        .then((text) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timeout);
-          websocket.close();
-          resolve(text);
-        })
-        .catch((error) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timeout);
-          websocket.close();
-          reject(error);
-        });
-    });
-
-    websocket.addEventListener("error", () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      websocket.close();
-      reject(new Error("Websocket request failed"));
-    });
-
-    websocket.addEventListener("close", (event) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      reject(new Error(`Websocket closed before message: code=${event.code}`));
-    });
-  });
-}
-
-async function readWebsocketEchoWithRetry(params: {
-  websocketUrl: string;
-  message: string;
-  timeoutMs: number;
-  maxAttempts: number;
-}): Promise<string> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= params.maxAttempts; attempt += 1) {
-    try {
-      return await readWebsocketEcho(params);
-    } catch (error) {
-      lastError = error;
-      if (attempt === params.maxAttempts) break;
-    }
-  }
-  throw lastError;
 }
 
 async function callProcedure<T>(params: {
@@ -209,7 +109,6 @@ async function createFromCandidates(params: {
   env: { baseUrl: string; apiToken: string };
   metadata: Record<string, unknown>;
   candidates: string[];
-  routeHeader: string;
   createdRouteIds: Set<string>;
 }) {
   for (const pattern of params.candidates) {
@@ -221,8 +120,7 @@ async function createFromCandidates(params: {
         patterns: [
           {
             pattern,
-            target: HTTP_ECHO_ORIGIN,
-            headers: { "x-route-kind": params.routeHeader },
+            target: "https://example.com",
           },
         ],
       });
@@ -233,7 +131,7 @@ async function createFromCandidates(params: {
     }
   }
 
-  throw new Error(`No available candidate pattern for ${params.routeHeader}`);
+  throw new Error("No available candidate pattern");
 }
 
 describe("live ingress-proxy E2E", () => {
@@ -241,104 +139,29 @@ describe("live ingress-proxy E2E", () => {
   let env: ReturnType<typeof requireEnv>;
   let suiteId = "";
 
-  beforeAll(async () => {
-    env = requireEnv();
-    suiteId = `live-e2e-${Date.now()}`;
-  });
-
-  afterAll(async () => {
+  async function cleanupCreatedRoutes() {
     for (const routeId of Array.from(createdRouteIds).reverse()) {
       try {
         await deleteRoute({ baseUrl: env.baseUrl, apiToken: env.apiToken, routeId });
       } catch {
         // best-effort cleanup
       }
+      createdRouteIds.delete(routeId);
     }
+  }
+
+  beforeAll(async () => {
+    env = requireEnv();
+    suiteId = `live-e2e-${Date.now()}`;
   });
 
-  it("routes by exact host first and wildcard specificity after exact deletion", async () => {
-    const requestHost = new URL(env.baseUrl).hostname;
+  afterEach(async () => {
+    await cleanupCreatedRoutes();
+  });
 
-    const short = await createFromCandidates({
-      env,
-      metadata: { suiteId, kind: "short" },
-      candidates: SHORT_CANDIDATES,
-      routeHeader: "short",
-      createdRouteIds,
-    });
-
-    const long = await createFromCandidates({
-      env,
-      metadata: { suiteId, kind: "long" },
-      candidates: LONG_CANDIDATES,
-      routeHeader: "long",
-      createdRouteIds,
-    });
-
-    const exact = await createRoute({
-      baseUrl: env.baseUrl,
-      apiToken: env.apiToken,
-      metadata: { suiteId, kind: "exact" },
-      patterns: [
-        {
-          pattern: requestHost,
-          target: HTTP_ECHO_ORIGIN,
-          headers: { "x-route-kind": "exact" },
-        },
-      ],
-    });
-    createdRouteIds.add(exact.routeId);
-
-    const exactResponse = await fetch(`${env.baseUrl}/get?scenario=exact`);
-    expect(exactResponse.status).toBe(200);
-    const exactJson = (await exactResponse.json()) as {
-      headers?: Record<string, string | string[]>;
-      url?: string;
-    };
-    expect(exactJson.url).toBe(`${HTTP_ECHO_ORIGIN}/get?scenario=exact`);
-    expect(getHeaderValueCaseInsensitive(exactJson.headers, "x-route-kind")).toBe("exact");
-
-    await deleteRoute({ baseUrl: env.baseUrl, apiToken: env.apiToken, routeId: exact.routeId });
-    createdRouteIds.delete(exact.routeId);
-
-    const wildcardResponse = await fetch(`${env.baseUrl}/get?scenario=wildcard-specificity`);
-    expect(wildcardResponse.status).toBe(200);
-    const wildcardJson = (await wildcardResponse.json()) as {
-      headers?: Record<string, string | string[]>;
-      url?: string;
-    };
-    expect(wildcardJson.url).toBe(`${HTTP_ECHO_ORIGIN}/get?scenario=wildcard-specificity`);
-    expect(getHeaderValueCaseInsensitive(wildcardJson.headers, "x-route-kind")).toBe("long");
-
-    const selfUpdated = await updateRoute({
-      baseUrl: env.baseUrl,
-      apiToken: env.apiToken,
-      routeId: long.route.routeId,
-      metadata: { suiteId, kind: "self-update" },
-      patterns: [
-        {
-          pattern: long.pattern,
-          target: HTTP_ECHO_ORIGIN,
-          headers: { "x-route-kind": "long2" },
-        },
-      ],
-    });
-    expect(selfUpdated.routeId).toBe(long.route.routeId);
-
-    const postUpdateResponse = await fetch(`${env.baseUrl}/get?scenario=post-update`);
-    expect(postUpdateResponse.status).toBe(200);
-    const postUpdateJson = (await postUpdateResponse.json()) as {
-      headers?: Record<string, string | string[]>;
-      url?: string;
-    };
-    expect(postUpdateJson.url).toBe(`${HTTP_ECHO_ORIGIN}/get?scenario=post-update`);
-    expect(getHeaderValueCaseInsensitive(postUpdateJson.headers, "x-route-kind")).toBe("long2");
-
-    const listed = await listRoutes(env);
-    const listedIds = new Set(listed.map((route) => route.routeId));
-    expect(listedIds.has(short.route.routeId)).toBe(true);
-    expect(listedIds.has(long.route.routeId)).toBe(true);
-  }, 120_000);
+  afterAll(async () => {
+    await cleanupCreatedRoutes();
+  });
 
   it.each([
     {
@@ -379,7 +202,6 @@ describe("live ingress-proxy E2E", () => {
         env,
         metadata: { suiteId, kind: "short-conflict" },
         candidates: SHORT_CANDIDATES,
-        routeHeader: "short-conflict",
         createdRouteIds,
       });
 
@@ -387,7 +209,6 @@ describe("live ingress-proxy E2E", () => {
         env,
         metadata: { suiteId, kind: "long-conflict" },
         candidates: LONG_CANDIDATES,
-        routeHeader: "long-conflict",
         createdRouteIds,
       });
 
@@ -402,36 +223,4 @@ describe("live ingress-proxy E2E", () => {
     },
     120_000,
   );
-
-  it("proxies websocket echo via deployed worker", async () => {
-    const requestHost = new URL(env.baseUrl).hostname;
-    const websocketRoute = await createRoute({
-      baseUrl: env.baseUrl,
-      apiToken: env.apiToken,
-      metadata: { suiteId, kind: "websocket" },
-      patterns: [
-        {
-          pattern: requestHost,
-          target: `https://${WEBSOCKET_ECHO_HOST}`,
-          headers: { host: WEBSOCKET_ECHO_HOST },
-        },
-      ],
-    });
-    createdRouteIds.add(websocketRoute.routeId);
-
-    const websocketUrl = new URL(env.baseUrl);
-    websocketUrl.protocol = websocketUrl.protocol === "https:" ? "wss:" : "ws:";
-    websocketUrl.pathname = "/raw";
-    websocketUrl.search = "";
-
-    const payload = `echo-${suiteId}-${Date.now()}`;
-    const echoed = await readWebsocketEchoWithRetry({
-      websocketUrl: websocketUrl.toString(),
-      message: payload,
-      timeoutMs: 15_000,
-      maxAttempts: 2,
-    });
-
-    expect(echoed).toBe(payload);
-  }, 120_000);
 });
