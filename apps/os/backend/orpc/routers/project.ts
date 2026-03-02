@@ -13,7 +13,7 @@ import {
   OrgInput,
   ProjectInput,
 } from "../procedures.ts";
-import { project, verification, projectRepo, projectConnection } from "../../db/schema.ts";
+import { project, verification, projectConnection } from "../../db/schema.ts";
 import * as schema from "../../db/schema.ts";
 import { slugify, slugifyWithSuffix } from "../../utils/slug.ts";
 import {
@@ -106,7 +106,9 @@ export const projectRouter = {
     .handler(async ({ context: ctx, input }) => {
       const availableProviders = getAvailableProjectSandboxProviders(ctx.env, import.meta.env.DEV);
       if (availableProviders.length === 0) {
-        throw new ORPCError("PRECONDITION_FAILED", { message: "No sandbox providers are enabled" });
+        throw new ORPCError("PRECONDITION_FAILED", {
+          message: "No sandbox providers are enabled",
+        });
       }
       const sandboxProvider =
         input.sandboxProvider ?? getDefaultProjectSandboxProvider(ctx.env, import.meta.env.DEV);
@@ -141,7 +143,9 @@ export const projectRouter = {
         .returning();
 
       if (!newProject) {
-        throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Failed to create project" });
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
+          message: "Failed to create project",
+        });
       }
 
       return newProject;
@@ -217,9 +221,15 @@ export const projectRouter = {
         .update(project)
         .set({
           ...(input.name && { name: input.name }),
-          ...(input.sandboxProvider && { sandboxProvider: input.sandboxProvider }),
-          ...(input.customDomain !== undefined && { customDomain: input.customDomain }),
-          ...(input.defaultPort !== undefined && { defaultPort: input.defaultPort }),
+          ...(input.sandboxProvider && {
+            sandboxProvider: input.sandboxProvider,
+          }),
+          ...(input.customDomain !== undefined && {
+            customDomain: input.customDomain,
+          }),
+          ...(input.defaultPort !== undefined && {
+            defaultPort: input.defaultPort,
+          }),
         })
         .where(eq(project.id, ctx.project.id))
         .returning();
@@ -307,71 +317,49 @@ export const projectRouter = {
       }
     }),
 
-  listProjectRepos: projectProtectedProcedure
-    .input(ProjectInput)
-    .handler(async ({ context: ctx }) => {
-      return ctx.project.projectRepos;
-    }),
-
-  addProjectRepo: projectProtectedMutation
+  setConfigRepo: projectProtectedMutation
     .input(
       z.object({
         ...ProjectInput.shape,
-        repoId: z.number(),
-        owner: z.string(),
-        name: z.string(),
-        defaultBranch: z.string().default("main"),
+        repo: z
+          .object({
+            id: z.number(),
+            owner: z.string(),
+            name: z.string(),
+            defaultBranch: z.string().default("main"),
+          })
+          .nullable(),
       }),
     )
     .handler(async ({ context: ctx, input }) => {
-      const existingRepo = await ctx.db.query.projectRepo.findFirst({
-        where: and(
-          eq(projectRepo.projectId, ctx.project.id),
-          eq(projectRepo.owner, input.owner),
-          eq(projectRepo.name, input.name),
-        ),
-      });
-
-      if (existingRepo) {
+      if (input.repo === null) {
         await ctx.db
-          .update(projectRepo)
+          .update(project)
           .set({
-            externalId: input.repoId.toString(),
-            defaultBranch: input.defaultBranch,
+            configRepoId: null,
+            configRepoFullName: null,
+            configRepoDefaultBranch: null,
           })
-          .where(eq(projectRepo.id, existingRepo.id));
-      } else {
-        await ctx.db.insert(projectRepo).values({
-          projectId: ctx.project.id,
-          provider: "github",
-          externalId: input.repoId.toString(),
-          owner: input.owner,
-          name: input.name,
-          defaultBranch: input.defaultBranch,
-        });
+          .where(eq(project.id, ctx.project.id));
+
+        return { success: true };
       }
+
+      await ctx.db
+        .update(project)
+        .set({
+          configRepoId: input.repo.id.toString(),
+          configRepoFullName: `${input.repo.owner}/${input.repo.name}`,
+          configRepoDefaultBranch: input.repo.defaultBranch,
+        })
+        .where(eq(project.id, ctx.project.id));
 
       // Link GitHub repo to org/project in PostHog
       linkExternalIdToGroups(ctx.env, {
-        distinctId: `github:${input.owner}/${input.name}`,
+        distinctId: `github:${input.repo.owner}/${input.repo.name}`,
         organizationId: ctx.organization.id,
         projectId: ctx.project.id,
       });
-
-      return { success: true };
-    }),
-
-  removeProjectRepo: projectProtectedMutation
-    .input(
-      z.object({
-        ...ProjectInput.shape,
-        repoId: z.string(),
-      }),
-    )
-    .handler(async ({ context: ctx, input }) => {
-      await ctx.db
-        .delete(projectRepo)
-        .where(and(eq(projectRepo.projectId, ctx.project.id), eq(projectRepo.id, input.repoId)));
 
       return { success: true };
     }),
@@ -410,6 +398,15 @@ export const projectRouter = {
 
       await ctx.db.transaction(async (tx) => {
         await tx
+          .update(schema.project)
+          .set({
+            configRepoId: null,
+            configRepoFullName: null,
+            configRepoDefaultBranch: null,
+          })
+          .where(eq(project.id, ctx.project.id));
+
+        await tx
           .delete(schema.projectConnection)
           .where(
             and(
@@ -417,8 +414,6 @@ export const projectRouter = {
               eq(projectConnection.provider, "github-app"),
             ),
           );
-
-        await tx.delete(schema.projectRepo).where(eq(projectRepo.projectId, ctx.project.id));
       });
 
       return { success: true };
@@ -487,11 +482,15 @@ export const projectRouter = {
       const connection = ctx.project.connections.find((c) => c.provider === "slack");
 
       if (!connection) {
-        throw new ORPCError("NOT_FOUND", { message: "No Slack connection found for this project" });
+        throw new ORPCError("NOT_FOUND", {
+          message: "No Slack connection found for this project",
+        });
       }
 
       // Revoke the Slack token (best effort - don't fail disconnect if revocation fails)
-      const providerData = connection.providerData as { encryptedAccessToken?: string };
+      const providerData = connection.providerData as {
+        encryptedAccessToken?: string;
+      };
       if (providerData.encryptedAccessToken) {
         try {
           const accessToken = await decrypt(providerData.encryptedAccessToken);
@@ -533,7 +532,9 @@ export const projectRouter = {
       });
 
       if (!existingConnection) {
-        throw new ORPCError("NOT_FOUND", { message: "Slack workspace connection not found" });
+        throw new ORPCError("NOT_FOUND", {
+          message: "Slack workspace connection not found",
+        });
       }
 
       // TODO: In the future, we may want to verify user has access to both projects.
@@ -551,7 +552,9 @@ export const projectRouter = {
       const sourceProjectId = existingConnection.projectId;
       const targetProjectId = ctx.project.id;
       const encryptedAccessToken = (
-        existingConnection.providerData as { encryptedAccessToken?: string } | null
+        existingConnection.providerData as {
+          encryptedAccessToken?: string;
+        } | null
       )?.encryptedAccessToken;
 
       // Keep connection and secret in sync when moving Slack workspaces between projects.
@@ -710,7 +713,9 @@ export const projectRouter = {
       }
 
       // Revoke the Google token (best effort - don't fail disconnect if revocation fails)
-      const providerData = connection.providerData as { encryptedAccessToken?: string };
+      const providerData = connection.providerData as {
+        encryptedAccessToken?: string;
+      };
       if (providerData.encryptedAccessToken) {
         try {
           const accessToken = await decrypt(providerData.encryptedAccessToken);

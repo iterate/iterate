@@ -211,6 +211,13 @@
       "when": 1772023135177,
       "tag": "0029_last_scarecrow",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1772452484324,
+      "tag": "0030_mute_shaman",
+      "breakpoints": true
     }
   ]
 }

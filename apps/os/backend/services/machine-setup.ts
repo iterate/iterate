@@ -4,22 +4,16 @@
  */
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { createORPCClient } from "@orpc/client";
-import { RPCLink } from "@orpc/client/fetch";
-import type { RouterClient } from "@orpc/server";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
-import type { AppRouter } from "../../../daemon/server/orpc/app-router.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import type { CloudflareEnv } from "../../env.ts";
+import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
 import { getUnifiedEnvVars } from "../utils/env-vars.ts";
 import { buildEnvFileContent } from "../utils/env-file-builder.ts";
-import {
-  getGitHubInstallationTokenWithDiagnostics,
-  getRepositoryById,
-} from "../integrations/github/github.ts";
+import { parseGitHubFullName } from "../utils/github-repo.ts";
 
 type RepoInfo = {
   url: string;
@@ -28,19 +22,6 @@ type RepoInfo = {
   owner: string;
   name: string;
 };
-
-function createDaemonClient(params: {
-  baseUrl: string;
-  fetcher?: SandboxFetcher;
-}): RouterClient<AppRouter> {
-  const link = new RPCLink({
-    url: `${params.baseUrl}/api/orpc`,
-    ...(params.fetcher
-      ? { fetch: params.fetcher as typeof globalThis.fetch }
-      : {}),
-  });
-  return createORPCClient(link);
-}
 
 async function buildDaemonTransport(
   machine: typeof schema.machine.$inferSelect,
@@ -68,7 +49,7 @@ export async function resolveMachineSetupData(
   db: DB,
   env: CloudflareEnv,
   projectId: string,
-  machineId: string,
+  _machineId: string,
 ): Promise<{ envFileContent: string; repos: RepoInfo[] }> {
   const dangerousRawSecrets = env.DANGEROUS_RAW_SECRETS_ENABLED === "true";
 
@@ -78,75 +59,34 @@ export async function resolveMachineSetupData(
     encryptionSecret: dangerousRawSecrets ? env.ENCRYPTION_SECRET : undefined,
   });
 
-  // Fetch project connections and repos
+  // Fetch project config repo
   const projectData = await db.query.project.findFirst({
     where: eq(schema.project.id, projectId),
-    with: {
-      connections: {
-        where: (connection, { eq: whereEq }) =>
-          whereEq(connection.provider, "github-app"),
-      },
-      projectRepos: true,
+    columns: {
+      configRepoFullName: true,
+      configRepoDefaultBranch: true,
     },
   });
-  const githubConnection = projectData?.connections[0] ?? null;
-  const projectRepos = projectData?.projectRepos ?? [];
-
-  // Get GitHub installation token for repo access
-  let installationToken: string | null = null;
-  if (githubConnection) {
-    const providerData = githubConnection.providerData as {
-      installationId?: number;
-    };
-    const installationId = providerData.installationId;
-    if (installationId) {
-      const tokenResult = await getGitHubInstallationTokenWithDiagnostics(
-        env,
-        installationId,
-      );
-      installationToken = tokenResult.token;
-      if (!tokenResult.token) {
-        logger.set({ machine: { id: machineId }, project: { id: projectId } });
-        logger.warn(
-          `[machine-setup] Failed to get GitHub installation token installationId=${installationId}`,
-        );
-      }
-    }
-  }
-
-  // Resolve repo info
-  const repoResults =
-    installationToken && projectRepos.length > 0
-      ? await Promise.all(
-          projectRepos.map(async (repo): Promise<RepoInfo | null> => {
-            const repoInfo = await getRepositoryById(
-              installationToken!,
-              repo.externalId,
-            );
-            if (!repoInfo) {
-              logger.warn(
-                `[machine-setup] Could not fetch repo info repoId=${repo.externalId}`,
-              );
-              return null;
-            }
-            return {
-              url: `https://github.com/${repoInfo.owner}/${repoInfo.name}.git`,
-              branch: repoInfo.defaultBranch,
-              path: `/home/iterate/src/github.com/${repoInfo.owner}/${repoInfo.name}`,
-              owner: repoInfo.owner,
-              name: repoInfo.name,
-            };
-          }),
-        )
+  const parsedRepo = projectData?.configRepoFullName
+    ? parseGitHubFullName(projectData.configRepoFullName)
+    : null;
+  const repos: RepoInfo[] =
+    parsedRepo && projectData?.configRepoDefaultBranch
+      ? [
+          {
+            url: `https://github.com/${parsedRepo.owner}/${parsedRepo.name}.git`,
+            branch: projectData.configRepoDefaultBranch,
+            path: `/home/iterate/src/github.com/${parsedRepo.owner}/${parsedRepo.name}`,
+            owner: parsedRepo.owner,
+            name: parsedRepo.name,
+          },
+        ]
       : [];
-  const repos = repoResults.filter((r): r is RepoInfo => r !== null);
 
   // Customer repo / workspace path: first cloned repo, or the default iterate repo.
   // Archil persistent storage mounts at ~/workspace (separate from the repo path).
   const customerRepoPath =
-    repos.length > 0
-      ? repos[0].path
-      : "/home/iterate/src/github.com/iterate/iterate";
+    repos.length > 0 ? repos[0].path : "/home/iterate/src/github.com/iterate/iterate";
 
   // Add daemon-specific env vars
   const daemonEnvVars = [
@@ -206,14 +146,9 @@ export async function getPushMachineSetupInput(
 
   const setupFingerprint = hashSetupIntent(envFileContent, repos);
   const existingSentinel = await client.tool.readFile({ path: sentinelPath });
-  if (
-    existingSentinel.exists &&
-    existingSentinel.content?.trim() === setupFingerprint
-  ) {
+  if (existingSentinel.exists && existingSentinel.content?.trim() === setupFingerprint) {
     logger.set({ machine: { id: machine.id } });
-    logger.info(
-      "[machine-setup] Setup already completed (sentinel matches), skipping",
-    );
+    logger.info("[machine-setup] Setup already completed (sentinel matches), skipping");
     return null;
   }
 
@@ -232,9 +167,7 @@ export async function pushSetupToMachine(
 
   // Write env file first so pidnap picks up env vars immediately
   logger.set({ machine: { id: machine.id } });
-  logger.info(
-    `[machine-setup] Writing .env to machine contentLength=${envFileContent.length}`,
-  );
+  logger.info(`[machine-setup] Writing .env to machine contentLength=${envFileContent.length}`);
   await client.tool.writeFile({
     path: "~/.iterate/.env",
     content: envFileContent,
@@ -260,24 +193,14 @@ export async function pushSetupToMachine(
       .catch(() => false);
 
     if (dirCheck) {
-      logger.info(
-        `[machine-setup] Repo already cloned, skipping repo=${repo.owner}/${repo.name}`,
-      );
+      logger.info(`[machine-setup] Repo already cloned, skipping repo=${repo.owner}/${repo.name}`);
       continue;
     }
 
     // Clone — try with branch first, fall back to default
     try {
       await client.tool.execCommand({
-        command: [
-          "git",
-          "clone",
-          "--branch",
-          repo.branch,
-          "--single-branch",
-          repo.url,
-          repo.path,
-        ],
+        command: ["git", "clone", "--branch", repo.branch, "--single-branch", repo.url, repo.path],
         timeout: 120_000,
       });
     } catch {
@@ -317,10 +240,7 @@ export async function pushEnvToRunningMachines(
 ): Promise<void> {
   const runningMachines = await db.query.machine.findMany({
     where: (machine, { eq: whereEq, and: whereAnd }) =>
-      whereAnd(
-        whereEq(machine.projectId, projectId),
-        whereEq(machine.state, "active"),
-      ),
+      whereAnd(whereEq(machine.projectId, projectId), whereEq(machine.state, "active")),
   });
 
   if (runningMachines.length === 0) {
@@ -335,12 +255,7 @@ export async function pushEnvToRunningMachines(
   );
 
   // Resolve env data once, push to all machines
-  const { envFileContent } = await resolveMachineSetupData(
-    db,
-    env,
-    projectId,
-    "env-refresh",
-  );
+  const { envFileContent } = await resolveMachineSetupData(db, env, projectId, "env-refresh");
 
   await Promise.all(
     runningMachines.map(async (machine) => {
