@@ -2,7 +2,7 @@ import alchemy from "alchemy";
 import { D1Database, Worker } from "alchemy/cloudflare";
 import { z } from "zod/v4";
 
-const EnvSchema = z.object({
+const Env = z.object({
   ALCHEMY_PASSWORD: z.string().optional(),
   WORKER_NAME: z.string().trim().min(1, "WORKER_NAME is required"),
   INGRESS_PROXY_API_TOKEN: z.string().trim().min(1).optional(),
@@ -19,7 +19,7 @@ const EnvSchema = z.object({
   INGRESS_PROXY_ROUTE_ZONE_ID: z.string().trim().optional(),
 });
 
-const env = EnvSchema.parse(process.env);
+const env = Env.parse(process.env);
 const adminToken = env.INGRESS_PROXY_API_TOKEN ?? env.CF_PROXY_WORKER_API_TOKEN;
 if (!adminToken) {
   throw new Error("INGRESS_PROXY_API_TOKEN or CF_PROXY_WORKER_API_TOKEN is required");

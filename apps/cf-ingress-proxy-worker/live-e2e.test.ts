@@ -213,7 +213,8 @@ async function createFromCandidates(params: {
   for (const pattern of params.candidates) {
     try {
       const route = await createRoute({
-        ...params.env,
+        baseUrl: params.env.baseUrl,
+        apiToken: params.env.apiToken,
         metadata: params.metadata,
         patterns: [
           {
@@ -244,9 +245,9 @@ describe("live ingress-proxy E2E", () => {
   });
 
   afterAll(async () => {
-    for (const routeId of [...createdRouteIds].reverse()) {
+    for (const routeId of Array.from(createdRouteIds).reverse()) {
       try {
-        await deleteRoute({ ...env, routeId });
+        await deleteRoute({ baseUrl: env.baseUrl, apiToken: env.apiToken, routeId });
       } catch {
         // best-effort cleanup
       }
@@ -273,7 +274,8 @@ describe("live ingress-proxy E2E", () => {
     });
 
     const exact = await createRoute({
-      ...env,
+      baseUrl: env.baseUrl,
+      apiToken: env.apiToken,
       metadata: { suiteId, kind: "exact" },
       patterns: [
         {
@@ -294,7 +296,7 @@ describe("live ingress-proxy E2E", () => {
     expect(exactJson.url).toBe("https://httpbingo.org/anything?scenario=exact");
     expect(getHeaderValueCaseInsensitive(exactJson.headers, "x-route-kind")).toBe("exact");
 
-    await deleteRoute({ ...env, routeId: exact.routeId });
+    await deleteRoute({ baseUrl: env.baseUrl, apiToken: env.apiToken, routeId: exact.routeId });
     createdRouteIds.delete(exact.routeId);
 
     const wildcardResponse = await fetch(`${env.baseUrl}/anything?scenario=wildcard-specificity`);
@@ -307,7 +309,8 @@ describe("live ingress-proxy E2E", () => {
     expect(getHeaderValueCaseInsensitive(wildcardJson.headers, "x-route-kind")).toBe("long");
 
     const selfUpdated = await updateRoute({
-      ...env,
+      baseUrl: env.baseUrl,
+      apiToken: env.apiToken,
       routeId: long.route.routeId,
       metadata: { suiteId, kind: "self-update" },
       patterns: [
@@ -345,7 +348,8 @@ describe("live ingress-proxy E2E", () => {
         shortRouteId: string;
       }) =>
         createRoute({
-          ...params.env,
+          baseUrl: params.env.baseUrl,
+          apiToken: params.env.apiToken,
           metadata: { suiteId: params.suiteId, kind: "conflict-create" },
           patterns: [{ pattern: params.longPattern, target: "https://example.com" }],
         }),
@@ -359,7 +363,8 @@ describe("live ingress-proxy E2E", () => {
         shortRouteId: string;
       }) =>
         updateRoute({
-          ...params.env,
+          baseUrl: params.env.baseUrl,
+          apiToken: params.env.apiToken,
           routeId: params.shortRouteId,
           metadata: { suiteId: params.suiteId, kind: "conflict-update" },
           patterns: [{ pattern: params.longPattern, target: "https://example.com" }],
@@ -399,7 +404,8 @@ describe("live ingress-proxy E2E", () => {
   it("proxies websocket echo via deployed worker", async () => {
     const requestHost = new URL(env.baseUrl).hostname;
     const websocketRoute = await createRoute({
-      ...env,
+      baseUrl: env.baseUrl,
+      apiToken: env.apiToken,
       metadata: { suiteId, kind: "websocket" },
       patterns: [
         {
