@@ -237,10 +237,19 @@ const forceDispose = async (key: string, entry: RuntimeEntry): Promise<void> => 
 };
 
 export const getEventOperations = async (env: EventsServiceEnv): Promise<EventOperations> => {
+  const key = envKey(env);
   const entry = getOrCreateEntry(env);
   entry.count += 1;
-  const { operations } = await entry.promise;
-  return operations;
+  try {
+    const { operations } = await entry.promise;
+    return operations;
+  } catch (error) {
+    entry.count -= 1;
+    if (entry.count <= 0 && runtimeEntries.get(key) === entry) {
+      runtimeEntries.delete(key);
+    }
+    throw error;
+  }
 };
 
 export const disposeEventOperations = async (env?: EventsServiceEnv): Promise<void> => {
