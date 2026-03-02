@@ -28,6 +28,7 @@ function getRepoPath(repo: NonNullable<ConfigRepo>): string {
 
 async function runGit(args: string[], options?: { cwd?: string }): Promise<void> {
   await exec("git", args, {
+    throwOnError: true,
     nodeOptions: {
       cwd: options?.cwd,
       timeout: 120_000,
@@ -38,6 +39,7 @@ async function runGit(args: string[], options?: { cwd?: string }): Promise<void>
 
 async function installConfigRepoDependencies(repoPath: string): Promise<void> {
   await exec("pnpm", ["install"], {
+    throwOnError: true,
     nodeOptions: {
       cwd: repoPath,
       timeout: 300_000,

@@ -4,13 +4,9 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod/v4";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
-import { createORPCClient } from "@orpc/client";
-import { RPCLink } from "@orpc/client/fetch";
-import type { RouterClient } from "@orpc/server";
 import { eq } from "drizzle-orm";
 import * as arctic from "arctic";
 import * as jose from "jose";
-import type { AppRouter } from "../../../../daemon/server/orpc/app-router.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
@@ -18,6 +14,7 @@ import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
+import { createDaemonClient } from "../../utils/daemon-orpc-client.ts";
 import { stripMachineStateMetadata } from "../../utils/machine-metadata.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
 import { trackWebhookEvent } from "../../lib/posthog.ts";
@@ -791,17 +788,6 @@ function parseGitRefBranch(ref: string): string | null {
   const prefix = "refs/heads/";
   if (!ref.startsWith(prefix)) return null;
   return ref.slice(prefix.length);
-}
-
-function createDaemonClient(params: {
-  baseUrl: string;
-  fetcher?: SandboxFetcher;
-}): RouterClient<AppRouter> {
-  const link = new RPCLink({
-    url: `${params.baseUrl}/api/orpc`,
-    ...(params.fetcher ? { fetch: params.fetcher as typeof globalThis.fetch } : {}),
-  });
-  return createORPCClient(link);
 }
 
 async function reloadConfigRepoOnMachine(params: {

@@ -345,12 +345,6 @@ export const projectRouter = {
         return { success: true };
       }
 
-      if (input.repo.defaultBranch !== "main") {
-        throw new ORPCError("BAD_REQUEST", {
-          message: "Config repo must use main as default branch",
-        });
-      }
-
       await ctx.db
         .update(project)
         .set({

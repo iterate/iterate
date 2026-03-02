@@ -4,18 +4,16 @@
  */
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { createORPCClient } from "@orpc/client";
-import { RPCLink } from "@orpc/client/fetch";
-import type { RouterClient } from "@orpc/server";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
-import type { AppRouter } from "../../../daemon/server/orpc/app-router.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import type { CloudflareEnv } from "../../env.ts";
+import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
 import { getUnifiedEnvVars } from "../utils/env-vars.ts";
 import { buildEnvFileContent } from "../utils/env-file-builder.ts";
+import { parseGitHubFullName } from "../utils/github-repo.ts";
 
 type RepoInfo = {
   url: string;
@@ -24,23 +22,6 @@ type RepoInfo = {
   owner: string;
   name: string;
 };
-
-function parseGitHubFullName(fullName: string) {
-  const [owner, name] = fullName.split("/");
-  if (!owner || !name) return null;
-  return { owner, name };
-}
-
-function createDaemonClient(params: {
-  baseUrl: string;
-  fetcher?: SandboxFetcher;
-}): RouterClient<AppRouter> {
-  const link = new RPCLink({
-    url: `${params.baseUrl}/api/orpc`,
-    ...(params.fetcher ? { fetch: params.fetcher as typeof globalThis.fetch } : {}),
-  });
-  return createORPCClient(link);
-}
 
 async function buildDaemonTransport(
   machine: typeof schema.machine.$inferSelect,

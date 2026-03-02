@@ -8,6 +8,7 @@ import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { parseTokenIdFromApiKey } from "../egress-proxy/api-key-utils.ts";
 import { decrypt } from "../utils/encryption.ts";
+import { parseGitHubFullName } from "../utils/github-repo.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import type { CloudflareEnv } from "../../env.ts";
 import { outboxClient } from "../outbox/client.ts";
@@ -20,12 +21,6 @@ export type ORPCContext = RequestHeadersPluginContext & {
 };
 
 const os = implement(workerContract).$context<ORPCContext>();
-
-function parseGitHubFullName(fullName: string) {
-  const [owner, name] = fullName.split("/");
-  if (!owner || !name) return null;
-  return { owner, name };
-}
 
 /** Middleware that extracts and validates API key from Authorization header */
 const withApiKey = os.middleware(async ({ context, next }) => {
