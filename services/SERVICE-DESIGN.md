@@ -1,0 +1,496 @@
+# Service Abstraction Design
+
+Living document. Tracks the design of the service abstraction for Iterate deployments.
+
+## What is a service?
+
+A **service** is a named, network-addressable unit of compute that:
+
+- Receives HTTP traffic routed through Caddy
+- Is addressable at `{slug}.iterate.localhost` (and all subdomains of that)
+- Describes its API via a committed `openapi.json`
+- Self-registers with a **registry service** on startup
+- Declares a typed **config schema** ("here's what I need to run")
+- Speaks **HTTP** — all services expose HTTP endpoints
+- Is topology-agnostic — can run anywhere with a network path to registry + Caddy
+
+A service's external representation is exactly two things:
+
+1. A hostname you can address
+2. An OpenAPI spec describing what HTTP requests it accepts
+
+## ServiceDefinition
+
+The canonical type. A service definition is a **TS package** that exports this shape:
+
+```typescript
+interface ServiceDefinition<TConfig extends z.ZodType = z.ZodType> {
+  /** Unique identifier. Used in hostnames, file paths, registry keys. kebab-case. */
+  slug: string;
+
+  /** Semver */
+  version: string;
+
+  /**
+   * Typed config schema — what this service needs to run.
+   * NOT env vars. The registry provides values for this schema.
+   * Think of it as the service's "constructor parameters".
+   */
+  configSchema: TConfig;
+
+  /** Path to a SQLite DB that should appear in the viewer, if any */
+  sqliteDbPath?: string;
+
+  /**
+   * Start the service. Receives parsed, validated config.
+   * Returns `{ target }` — the address where Caddy should send traffic.
+   *
+   * The service listens on an OS-assigned ephemeral port (port 0),
+   * then reports that port as part of the target.
+   *
+   * Graceful shutdown is handled via POSIX signals (SIGTERM), not a stop() function.
+   */
+  start(config: z.infer<TConfig>): Promise<ServiceStartResult>;
+}
+
+interface ServiceStartResult {
+  /** The address Caddy should route traffic to (e.g. "127.0.0.1:54321") */
+  target: string;
+}
+```
+
+### Why `{ target }` and not `stop()`?
+
+Shutdown is handled via POSIX signals, not an explicit `stop()` function:
+
+- **SIGTERM is how processes die in production.** Pidnap, Docker, systemd all send SIGTERM. No custom API needed.
+- **Composes naturally.** The TS wrapper catches SIGTERM, kills child processes, cleans up, exits.
+- **Works for non-TS services for free.** Every process understands signals.
+- **No awkward "who calls stop?"** The service IS the process. The OS manages its lifecycle.
+
+A service's `start()` function should set up signal handlers as part of its initialization:
+
+```typescript
+async start(config) {
+  const db = createDb(config.dbPath);
+  const app = new Hono();
+  // mount handlers...
+  const server = createServer(nodeHandler(app));
+  const port = await listen(server, 0);
+
+  // Graceful shutdown via signals
+  const shutdown = async () => {
+    server.close();
+    await db.close();
+    process.exit(0);
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+
+  await registerWithRegistry(this, port);
+  return { target: `127.0.0.1:${port}` };
+}
+```
+
+### Why ephemeral ports?
+
+Services do NOT have hardcoded ports. They request port 0 from the OS and get whatever's available. The actual port is reported to the registry as part of the `target`.
+
+This is essential because:
+
+- **Shared namespace.** In a non-containerized deployment, all services share the same host. Hardcoded ports collide.
+- **Topology-agnostic.** The abstraction should work identically whether services are co-located or distributed.
+- **Caddy handles addressing.** Callers never use ports directly — they use `{slug}.iterate.localhost` and Caddy routes to the right backend.
+
+A `port` field on the definition can still exist as a **hint/preferred port** for local development convenience, but the system never depends on it being available.
+
+### Why a package with start()?
+
+Every service — even non-TS ones — gets a thin TS definition package. This gives us:
+
+- **Uniform entrypoint.** Pidnap, registry, test harnesses all call `start()`. No separate "how to run this" config.
+- **Typed config pipeline.** Config schema is Zod (TS anyway). `start()` receives parsed, validated config.
+- **Adapter layer for non-TS services.** The `start()` function can spawn a child process and proxy to it. The wrapper is tiny.
+
+### Every service is a TS program
+
+Even when wrapping third-party software (ClickStack, Outerbase, etc.), the service is always a runnable TS program that conforms to the `ServiceDefinition` interface. The TS wrapper:
+
+1. Starts the inner HTTP process on an ephemeral port
+2. Starts a Hono HTTP server (also ephemeral port) with managed routes and a catch-all HTTP reverse proxy to the inner process
+3. Managed routes (`/openapi.json`, `/orpc/*`, `/service/health`) are handled by the Hono app
+4. All other HTTP traffic is proxied to the inner service
+5. Reports its own port as the `target` to the registry
+
+From Caddy's perspective, every service looks the same: one slug, one hostname, one backend. Internal routing (sub-services, admin panels, etc.) is the service's own business.
+
+```typescript
+// Example: wrapping a non-TS service
+export default defineService({
+  slug: "outerbase",
+  configSchema: z.object({ dbUrl: z.string() }),
+  async start(config) {
+    // 1. Start the inner process
+    const proc = spawn("outerbase-server", {
+      env: { ...process.env, DATABASE_URL: config.dbUrl, PORT: "0" },
+    });
+    const innerPort = await waitForPort(proc);
+
+    // 2. Create a proxy app in front of it
+    const app = new Hono();
+    app.get("/openapi.json", (c) => c.json(spec));
+    app.all("/*", proxyTo(innerPort));
+
+    const server = createServer(nodeHandler(app));
+    attachWsProxy(server, innerPort); // WebSocket passthrough
+    const port = await listen(server, 0);
+
+    // 3. Signal handling
+    const shutdown = async () => {
+      server.close();
+      proc.kill("SIGTERM");
+      process.exit(0);
+    };
+    process.on("SIGTERM", shutdown);
+    process.on("SIGINT", shutdown);
+
+    return { target: `127.0.0.1:${port}` };
+  },
+});
+
+// Example: native TS/oRPC service (no proxy needed)
+export default defineService({
+  slug: "orders",
+  contract: ordersContract,
+  configSchema: z.object({
+    dbPath: z.string(),
+    eventsServiceUrl: z.string(),
+  }),
+  async start(config) {
+    const db = createDb(config.dbPath);
+    const app = new Hono();
+    // mount oRPC handlers, openapi.json, etc.
+
+    const server = createServer(nodeHandler(app));
+    const port = await listen(server, 0);
+
+    process.on("SIGTERM", () => {
+      server.close();
+      process.exit(0);
+    });
+    process.on("SIGINT", () => {
+      server.close();
+      process.exit(0);
+    });
+
+    await registerWithRegistry({ slug: "orders", target: `127.0.0.1:${port}` });
+    return { target: `127.0.0.1:${port}` };
+  },
+});
+```
+
+## Proxying non-TS services (Node.js)
+
+When wrapping a non-TS service, the TS wrapper acts as an HTTP reverse proxy. Managed routes (health checks, OpenAPI spec, oRPC endpoints) are handled directly by Hono. Everything else is proxied through to the inner service.
+
+### HTTP proxy (via Hono catch-all)
+
+```typescript
+import { request as httpRequest, type IncomingMessage } from "node:http";
+import { Readable } from "node:stream";
+
+function proxyTo(innerPort: number) {
+  return async (c: Context) => {
+    const url = new URL(c.req.url);
+    const proxyRes = await new Promise<IncomingMessage>((resolve, reject) => {
+      const proxyReq = httpRequest(
+        {
+          hostname: "127.0.0.1",
+          port: innerPort,
+          path: url.pathname + url.search,
+          method: c.req.method,
+          headers: {
+            ...Object.fromEntries(c.req.raw.headers),
+            host: `127.0.0.1:${innerPort}`,
+          },
+        },
+        resolve,
+      );
+      proxyReq.on("error", reject);
+      if (c.req.raw.body) {
+        Readable.fromWeb(c.req.raw.body as ReadableStream).pipe(proxyReq);
+      } else {
+        proxyReq.end();
+      }
+    });
+
+    return new Response(
+      proxyRes.statusCode === 204 || proxyRes.statusCode === 304
+        ? null
+        : (Readable.toWeb(proxyRes as unknown as Readable) as ReadableStream),
+      {
+        status: proxyRes.statusCode,
+        headers: proxyRes.headers as Record<string, string>,
+      },
+    );
+  };
+}
+```
+
+The proxy is mounted as a catch-all `app.all("/*", proxyTo(innerPort))` — Hono routes are matched first, so managed paths are handled by the app and everything else falls through to the proxy.
+
+## Routing model
+
+From the registry + Caddy perspective, a service is always: **one slug, one hostname, one backend.**
+
+- Caddy routes `{slug}.iterate.localhost` and `*.{slug}.iterate.localhost` to the service's `target`
+- The registry is a flat `hostname -> target` map
+- Internal sub-routing (admin panels, sub-services) is the service's own business
+
+This keeps the registry dead simple and pushes routing complexity to where it belongs — inside the service.
+
+### Subdomain routing
+
+Services that expose multiple distinct interfaces use **subdomains** of their slug:
+
+```
+{sub}.{slug}.iterate.localhost → same backend target
+```
+
+The service's Hono app inspects the `Host` header and routes internally. Examples:
+
+| Service    | Subdomain                           | Routes to              |
+| ---------- | ----------------------------------- | ---------------------- |
+| events     | `api.events.iterate.localhost`      | oRPC API               |
+| events     | `frontend.events.iterate.localhost` | Frontend/UI            |
+| clickstack | `ui.clickstack.iterate.localhost`   | HyperDX UI (8080)      |
+| clickstack | `ch.clickstack.iterate.localhost`   | ClickHouse HTTP (8123) |
+
+Caddy only needs the wildcard rule `*.{slug}.iterate.localhost → target`. The service decides what to do with each subdomain.
+
+**Why subdomains instead of path prefixes?**
+
+- **No path collision.** ClickHouse HTTP and HyperDX both use `/` — paths can't disambiguate.
+- **Standard HTTP.** Browsers, curl, SDKs all understand hostnames natively. No path rewriting.
+- **Isolates cookies/origins.** Each subdomain is its own origin — no cookie leakage between UI and API.
+- **Works with existing Caddy config.** The `*.{slug}.iterate.localhost` wildcard already exists.
+
+**Implementation in a service:**
+
+```typescript
+app.all("/*", async (c) => {
+  const host = c.req.header("host") ?? "";
+  const sub = host.split(".")[0]; // "ui", "ch", "api", etc.
+
+  switch (sub) {
+    case "ch":
+      return proxyTo(8123)(c); // ClickHouse HTTP
+    default:
+      return proxyTo(8080)(c); // HyperDX UI (default)
+  }
+});
+```
+
+## oRPC services (TS-specific layer)
+
+The base `ServiceDefinition` is protocol-agnostic — it knows nothing about oRPC or any specific RPC framework. Not all services are oRPC services (e.g. wrapped third-party software, static file servers).
+
+For our own TS services that use oRPC, we layer on a **contract** — a pure API shape that carries no identity:
+
+```typescript
+interface OrpcServiceDefinition<
+  TContract extends AnyContractRouter,
+  TConfig extends z.ZodType = z.ZodType,
+> extends ServiceDefinition<TConfig> {
+  /** The oRPC contract this service implements */
+  contract: TContract;
+}
+```
+
+### ServiceRef (for callers of oRPC services)
+
+What a caller needs to create a typed client:
+
+```typescript
+interface ServiceRef<TContract extends AnyContractRouter> {
+  slug: string;
+  contract: TContract;
+}
+```
+
+An `OrpcServiceDefinition` naturally satisfies `ServiceRef`.
+
+### Same contract, different services
+
+Two services CAN implement the same contract with different slugs. A caller depends on the **contract** (for types) and the **slug** (for addressing):
+
+```typescript
+// widget-contract package exports the contract shape
+export const widgetContract = oc.router({ ... });
+
+// service-a definition
+export const serviceA = defineOrpcService({
+  slug: "service-a",
+  contract: widgetContract,
+  // ...
+});
+
+// service-b definition — same shape, different identity
+export const serviceB = defineOrpcService({
+  slug: "service-b",
+  contract: widgetContract,
+  // ...
+});
+```
+
+## Registration protocol
+
+On startup, `start()` calls the registry:
+
+1. Knows exactly one thing: the registry base URL (env var: `REGISTRY_URL`)
+2. Sends a `register` request:
+   ```typescript
+   {
+     slug: string;
+     version: string;
+     target: string;          // where Caddy can reach me (e.g. "127.0.0.1:54321")
+     configSchema?: object;   // JSON Schema of what I need
+     openapiSpec?: object;    // the full openapi.json (or URL to fetch it)
+     sqliteDbPath?: string;
+   }
+   ```
+3. Registry responds with:
+   ```typescript
+   {
+     config: Record<string, unknown>; // values matching configSchema
+     caddy: {
+       configured: boolean;
+     } // confirmation that routing is set up
+   }
+   ```
+4. Service applies config and starts accepting traffic
+
+On SIGTERM, the service deregisters before exiting.
+
+## Lifecycle
+
+```
+[start(config)]
+  -> bind to port 0, get ephemeral port
+  -> POST /register { slug, version, target: "127.0.0.1:<port>", ... }
+  <- { config, caddy: { configured: true } }
+  -> mount handlers, start accepting traffic
+  -> return { target }
+  ...running...
+  [SIGTERM received]
+  -> stop accepting traffic
+  -> POST /deregister { slug }
+  -> close server, cleanup resources
+  -> process.exit(0)
+```
+
+## Committed openapi.json
+
+Design goal: `openapi.json` files are committed in the repo, not just generated at runtime.
+
+Approach:
+
+- Each service definition package has a script: `pnpm generate:openapi`
+- This script imports the contract, uses `@orpc/openapi` to generate the spec, writes to `services/{slug}/openapi.json`
+- CI verifies specs are up-to-date (generate + diff)
+- Other services/tools can import the committed spec for codegen, docs, etc.
+
+## `defineService()` helper
+
+Utility function that handles boilerplate. A service author writes the minimum; `defineService()` wires up:
+
+- OTEL initialization
+- SIGTERM/SIGINT signal handlers with graceful shutdown
+- Registry registration + deregistration
+- Health check endpoint
+- OpenAPI spec serving
+
+```typescript
+export function defineService<TConfig extends z.ZodType>(
+  def: ServiceDefinitionInput<TConfig>,
+): ServiceDefinition<TConfig> {
+  return {
+    ...def,
+    async start(config) {
+      initializeServiceOtel(def.slug);
+
+      // Call the user's start logic
+      const result = await def.start(config);
+
+      // Wire up signal handlers if not already done
+      const shutdown = async () => {
+        await deregisterFromRegistry(def.slug);
+        process.exit(0);
+      };
+      process.on("SIGTERM", shutdown);
+      process.on("SIGINT", shutdown);
+
+      // Register with registry
+      await registerWithRegistry({
+        slug: def.slug,
+        target: result.target,
+        version: def.version,
+      });
+
+      return result;
+    },
+  };
+}
+```
+
+## Third-party service wrappers
+
+Third-party binaries (ClickStack, OpenObserve, otelcol-contrib, etc.) are wrapped in the same `ServiceDefinition` shape. The pattern:
+
+1. **`spawnInner()`** — spawn the binary as a child process, poll its HTTP port until ready
+2. **Hono app** — managed routes (`/service/health`, `/openapi.json`)
+3. **`createServiceProxy()`** — proxy everything else to the inner port
+4. **SIGTERM** — kill the child process on shutdown
+
+Third-party binaries can't use ephemeral ports (they don't support port 0). They bind to fixed, known ports. The `spawnInner()` helper takes the expected port and polls until it responds.
+
+### Current third-party services
+
+| Service            | Slug             | Binary                           | Primary HTTP port  | Extra ports                                        | Notes                                             |
+| ------------------ | ---------------- | -------------------------------- | ------------------ | -------------------------------------------------- | ------------------------------------------------- |
+| **ClickStack**     | `clickstack`     | Shell script (chroot)            | 8080 (HyperDX UI)  | 8123 (CH HTTP), 9000 (CH native), 4317/4318 (OTLP) | Slow startup (~120s). Multiple internal services. |
+| **OpenObserve**    | `openobserve`    | `/usr/local/bin/openobserve`     | 5080 (HTTP UI+API) | 5081 (gRPC)                                        | Returns 3xx when ready. Config via env vars.      |
+| **OTel Collector** | `otel-collector` | `/usr/local/bin/otelcol-contrib` | 15333 (health)     | 15317 (OTLP gRPC), 15318 (OTLP HTTP)               | No UI. Config via YAML.                           |
+| **CaddyManager**   | `caddymanager`   | `node server.mjs`                | 8501               | —                                                  | Already Node.js. Manages Caddy routes.            |
+
+### Multi-port services
+
+Some third-party services expose multiple ports (ClickStack has 5). The service wrapper only proxies the **primary HTTP surface** through Caddy. Other ports are consumed directly by other services on the same host:
+
+```
+                                    ┌─ proxy ─→ 8080 (HyperDX UI)
+                                    │
+Caddy ──→ clickstack proxy (ephemeral) ──┘
+
+otel-collector ──→ 9000 (ClickHouse native)  ← direct, no proxy
+services ──→ 4317/4318 (OTLP)               ← direct, no proxy
+```
+
+This is fine because:
+
+- All services run on the same host (shared network namespace)
+- Internal ports are consumed by known callers, not external users
+- Caddy routing is for the "public" HTTP surface only
+
+If a service needs to expose multiple ports through Caddy (e.g. ClickHouse HTTP for debugging), it can use subdomain routing to multiplex onto the single proxy port.
+
+## Open questions / future work
+
+- [ ] **Auth between service <-> registry.** Bearer token? mTLS? For now, same-machine trust is fine.
+- [ ] **Config distribution details.** Does the registry push config updates, or does the service poll?
+- [ ] **OpenAPI client generation.** Typed oRPC-wrapped clients auto-generated from committed specs. Toolchain TBD.
+- [ ] **Package naming convention.** When a contract is shared between services, how do we name things?
+- [ ] **Migration path from current manifests.** Existing `ordersServiceManifest` etc. evolve into ServiceDefinitions incrementally.
+- [ ] **Proxy performance.** The HTTP reverse proxy for wrapped services adds a hop. Probably negligible at our scale but worth benchmarking for high-throughput services.
+- [ ] **Health checks.** Should the wrapper proxy health to the inner service, or own it? Leaning toward: wrapper owns it (it knows whether the inner process is alive).
+- [ ] **WebSocket support.** For services that need WebSocket, the proxy needs to handle `upgrade` events. Can be added per-service using the raw `node:http` server's `upgrade` event.
