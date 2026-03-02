@@ -87,15 +87,6 @@ function updateRoute(params: {
   });
 }
 
-function listRoutes(params: { baseUrl: string; apiToken: string }) {
-  return callProcedure<Array<{ routeId: string }>>({
-    name: "listRoutes",
-    input: {},
-    baseUrl: params.baseUrl,
-    apiToken: params.apiToken,
-  });
-}
-
 function deleteRoute(params: { baseUrl: string; apiToken: string; routeId: string }) {
   return callProcedure<{ deleted: boolean }>({
     name: "deleteRoute",
