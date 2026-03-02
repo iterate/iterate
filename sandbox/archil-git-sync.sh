@@ -26,32 +26,59 @@ if [[ "${SKIP_MOUNT_WAIT}" != "true" ]]; then
 fi
 
 sync_once() {
+  local ts
+  ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
   # Skip if repo doesn't exist or isn't a git repo
   if [[ ! -d "${REPO_DIR}/.git" ]]; then
+    echo "[git-sync] ${ts} skip: repo missing or not git (${REPO_DIR})"
     return
   fi
 
   cd "$REPO_DIR"
 
   # Generate a diff of all tracked uncommitted changes (staged + unstaged)
-  DIFF=$(git diff HEAD 2>/dev/null || true)
-  UNTRACKED=$(git ls-files --others --exclude-standard 2>/dev/null || true)
+  local DIFF UNTRACKED_NON_IGNORED ALL_UNTRACKED
+  DIFF="$(git diff HEAD 2>/dev/null || true)"
+  UNTRACKED_NON_IGNORED="$(git ls-files --others --exclude-standard 2>/dev/null || true)"
+  ALL_UNTRACKED="$(git ls-files --others 2>/dev/null || true)"
 
-  if [[ -n "$DIFF" ]] || [[ -n "$UNTRACKED" ]]; then
-    # Save tracked changes patch
-    git diff HEAD > "$PATCH_FILE" 2>/dev/null || true
-
-    # Save untracked file list + archive so next machine can restore them.
-    if [[ -n "$UNTRACKED" ]]; then
-      echo "$UNTRACKED" > "${UNTRACKED_LIST_FILE}"
-      tar -C "$REPO_DIR" -czf "${UNTRACKED_ARCHIVE_FILE}" -T "${UNTRACKED_LIST_FILE}" 2>/dev/null || true
+  if [[ -z "$DIFF" ]] && [[ -z "$UNTRACKED_NON_IGNORED" ]]; then
+    if [[ -n "$ALL_UNTRACKED" ]]; then
+      echo "[git-sync] ${ts} skip: only ignored/untracked-excluded files present"
     else
-      rm -f "${UNTRACKED_LIST_FILE}" "${UNTRACKED_ARCHIVE_FILE}"
+      echo "[git-sync] ${ts} skip: no tracked/untracked changes"
+    fi
+    rm -f "$PATCH_FILE" "${UNTRACKED_LIST_FILE}" "${UNTRACKED_ARCHIVE_FILE}"
+    return
+  fi
+
+  # Save tracked changes patch.
+  if ! git diff HEAD > "${PATCH_FILE}" 2>/dev/null; then
+    echo "[git-sync] ${ts} error: failed writing tracked patch to ${PATCH_FILE}"
+    return
+  fi
+
+  # Save untracked file list + archive so next machine can restore them.
+  if [[ -n "$UNTRACKED_NON_IGNORED" ]]; then
+    if ! printf "%s\n" "$UNTRACKED_NON_IGNORED" > "${UNTRACKED_LIST_FILE}"; then
+      echo "[git-sync] ${ts} error: failed writing untracked list to ${UNTRACKED_LIST_FILE}"
+      return
+    fi
+    if ! tar -C "$REPO_DIR" -czf "${UNTRACKED_ARCHIVE_FILE}" -T "${UNTRACKED_LIST_FILE}" 2>/dev/null; then
+      echo "[git-sync] ${ts} error: failed writing untracked archive to ${UNTRACKED_ARCHIVE_FILE}"
+      return
     fi
   else
-    # No changes, clean up old artifacts
-    rm -f "$PATCH_FILE" "${UNTRACKED_LIST_FILE}" "${UNTRACKED_ARCHIVE_FILE}"
+    rm -f "${UNTRACKED_LIST_FILE}" "${UNTRACKED_ARCHIVE_FILE}"
   fi
+
+  local tracked_status untracked_status
+  tracked_status="clean"
+  untracked_status="clean"
+  [[ -s "${PATCH_FILE}" ]] && tracked_status="dirty"
+  [[ -f "${UNTRACKED_LIST_FILE}" ]] && untracked_status="dirty"
+  echo "[git-sync] ${ts} synced: tracked=${tracked_status} untracked=${untracked_status}"
 }
 
 while true; do
