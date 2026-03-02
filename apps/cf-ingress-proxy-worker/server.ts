@@ -619,7 +619,7 @@ function getParsedEnv(rawEnv: RawProxyWorkerEnv): ProxyWorkerEnv {
 }
 
 app.use("*", async (c, next) => {
-  if (c.req.path === "/health") return next();
+  if (c.req.path === "/health" && c.req.method === "GET") return next();
   c.set("env", getParsedEnv(c.env));
   return next();
 });

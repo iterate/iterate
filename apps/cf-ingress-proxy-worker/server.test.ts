@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
+  app,
   buildUpstreamUrl,
   createRoute,
   createUpstreamHeaders,
@@ -282,5 +283,18 @@ describe("proxy behavior", () => {
 
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({ error: "proxy_error" });
+  });
+
+  test("POST /health does not skip env parsing and falls through safely", async () => {
+    const response = await app.fetch(
+      new Request("https://ingress.iterate.com/health", {
+        method: "POST",
+        headers: { host: "ingress.iterate.com" },
+      }),
+      testEnv,
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "route_not_found" });
   });
 });
