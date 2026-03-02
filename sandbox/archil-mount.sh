@@ -130,6 +130,17 @@ sudo mkdir -p "$PERSIST"
   ln -sfn "${PERSIST}/persisted" "${HOME_DIR}/persisted"
   echo "[archil] ~/persisted → ${PERSIST}/persisted"
 
+  # Migrate old single-db snapshot layout → new multi-db layout.
+  # Old: /mnt/persist/.opencode-snapshot/opencode.db
+  # New: /mnt/persist/.sqlite-snapshots/home-iterate-.local-share-opencode-opencode.db
+  OLD_SNAPSHOT="${PERSIST}/.opencode-snapshot/opencode.db"
+  NEW_SNAPSHOT="${SNAPSHOT_DIR}/$(snapshot_name "${HOME_DIR}/.local/share/opencode/opencode.db")"
+  if [[ -f "${OLD_SNAPSHOT}" ]] && [[ ! -f "${NEW_SNAPSHOT}" ]]; then
+    mkdir -p "${SNAPSHOT_DIR}"
+    mv -f "${OLD_SNAPSHOT}" "${NEW_SNAPSHOT}"
+    echo "[archil] Migrated old opencode snapshot to new layout"
+  fi
+
   # Restore sqlite snapshots before signaling ready
   restore_snapshots
 

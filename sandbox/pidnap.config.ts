@@ -103,20 +103,20 @@ export default defineConfig({
       dependsOn: ["egress-proxy"],
     },
     {
+      // Gate process: polls for /tmp/archil-repo-ready (touched by archil-mount.sh
+      // after mount + snapshot restore), then exits 0. Uses restartPolicy "never"
+      // so the default dependsOn condition is "completed" — dependents wait for exit.
       name: "archil-repo-ready",
       definition: {
         command: "bash",
-        args: [
-          "-lc",
-          "while [ ! -f /tmp/archil-repo-ready ]; do sleep 1; done; exec sleep infinity",
-        ],
+        args: ["-c", "while [ ! -f /tmp/archil-repo-ready ]; do sleep 1; done"],
       },
       envOptions: {
         inheritGlobalEnv: false,
         reloadDelay: false,
       },
       options: {
-        restartPolicy: "always",
+        restartPolicy: "never",
       },
       dependsOn: ["archil-mount"],
     },
