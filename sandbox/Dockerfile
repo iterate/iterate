@@ -41,6 +41,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     libcups2 \
     libdbus-1-3 \
     libdrm2 \
+    libfuse2 \
     libgbm1 \
     libgtk-3-0 \
     libnspr4 \
@@ -92,6 +93,10 @@ RUN corepack prepare pnpm@10.24.0 --activate && \
 RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
+
+# Install Archil client (persistent POSIX volumes backed by S3/R2)
+# Installs to /usr/bin/archil by default (system path)
+RUN curl -s https://s3.amazonaws.com/archil-client/install | sh || true
 
 # Create non-root user with passwordless sudo
 RUN useradd -m -s /bin/bash iterate && \
