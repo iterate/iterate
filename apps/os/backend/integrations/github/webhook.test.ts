@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Hono } from "hono";
+import { createMachineForProject } from "../../services/machine-creation.ts";
 import { githubApp } from "./github.ts";
 
 // Mock the dependencies
@@ -66,6 +67,11 @@ const validWorkflowRunPayload = {
 
 describe("GitHub Webhook Handler", () => {
   const WEBHOOK_SECRET = "test-webhook-secret";
+  const createMachineForProjectMock = vi.mocked(createMachineForProject);
+
+  beforeEach(() => {
+    createMachineForProjectMock.mockClear();
+  });
 
   function createMockDb() {
     return {
@@ -137,6 +143,10 @@ describe("GitHub Webhook Handler", () => {
     expect(await res.json()).toMatchObject(expected);
   }
 
+  async function flushBackgroundTasks() {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
   describe("signature verification", () => {
     it("rejects requests without signature", async () => {
       const { app } = createTestApp();
@@ -179,11 +189,11 @@ describe("GitHub Webhook Handler", () => {
   describe("event filtering", () => {
     const cases = [
       {
-        name: "filters out unrecognized event types",
+        name: "acknowledges unrecognized event types",
         appStage: "prd",
         event: "push",
         payload: {},
-        expected: { message: "No filter for event type push" },
+        expected: { received: true },
       },
       {
         name: "acknowledges workflow_run events that don't match handlers",
@@ -203,14 +213,14 @@ describe("GitHub Webhook Handler", () => {
         expected: { received: true },
       },
       {
-        name: "filters out non-main branches via JSONata",
+        name: "acknowledges non-main branches",
         appStage: "prd",
         event: "workflow_run",
         payload: {
           ...validWorkflowRunPayload,
           workflow_run: { ...validWorkflowRunPayload.workflow_run, head_branch: "feature-branch" },
         },
-        expected: { message: "Event filtered out" },
+        expected: { received: true },
       },
       {
         name: "acknowledges non-ci.yml workflows",
@@ -246,11 +256,11 @@ describe("GitHub Webhook Handler", () => {
         expected: { received: true },
       },
       {
-        name: "filters out workflow_run in non-prd environments",
+        name: "acknowledges workflow_run in non-prd environments",
         appStage: "dev",
         event: "workflow_run",
         payload: validWorkflowRunPayload,
-        expected: { message: "Event filtered out" },
+        expected: { received: true },
       },
       {
         name: "accepts PR-linked workflow_run in non-prd environments",
@@ -282,7 +292,7 @@ describe("GitHub Webhook Handler", () => {
   describe("issue_comment filtering", () => {
     const issueCommentCases = [
       {
-        name: "filters out issue comments on issues",
+        name: "acknowledges issue comments on issues",
         payload: {
           action: "created",
           repository: { full_name: "iterate/iterate" },
@@ -300,7 +310,7 @@ describe("GitHub Webhook Handler", () => {
             user: { login: "alice" },
           },
         },
-        expected: { message: "Event filtered out" },
+        expected: { received: true },
       },
       {
         name: "accepts issue comments on pull requests",
@@ -335,7 +345,7 @@ describe("GitHub Webhook Handler", () => {
   describe("pull_request filtering", () => {
     const pullRequestCases = [
       {
-        name: "filters out non-merged pull_request events",
+        name: "acknowledges non-merged pull_request events",
         payload: {
           action: "closed",
           repository: { full_name: "iterate/iterate" },
@@ -348,7 +358,7 @@ describe("GitHub Webhook Handler", () => {
             merged: false,
           },
         },
-        expected: { message: "Event filtered out" },
+        expected: { received: true },
       },
       {
         name: "accepts merged pull_request events",
@@ -396,15 +406,15 @@ describe("GitHub Webhook Handler", () => {
         expected: { received: true },
       },
       {
-        name: "filters out commit_comment without APP_STAGE tag",
+        name: "acknowledges commit_comment without APP_STAGE tag",
         payload: {
           ...validCommitCommentPayload,
           comment: { ...validCommitCommentPayload.comment, body: "Testing [refresh]" },
         },
-        expected: { message: "Event filtered out" },
+        expected: { received: true },
       },
       {
-        name: "filters out commit_comment with wrong APP_STAGE tag",
+        name: "acknowledges commit_comment with wrong APP_STAGE tag",
         payload: {
           ...validCommitCommentPayload,
           comment: {
@@ -412,7 +422,7 @@ describe("GitHub Webhook Handler", () => {
             body: "Testing [refresh] [APP_STAGE=prd]",
           },
         },
-        expected: { message: "Event filtered out" },
+        expected: { received: true },
       },
     ] as const;
 
@@ -420,6 +430,59 @@ describe("GitHub Webhook Handler", () => {
       const { app } = createTestApp("dev");
       const res = await makeWebhookRequest({ app, payload, event: "commit_comment" });
       await expectWebhookMatch(res, expected);
+    });
+  });
+
+  describe("recreation gating", () => {
+    it("does not recreate machines for workflow_run outside prd", async () => {
+      const { app, mockDb } = createTestApp("dev");
+      mockDb.query.project.findMany.mockResolvedValue([
+        {
+          id: "prj_123",
+          sandboxProvider: "daytona",
+          machines: [{ id: "mach_123", metadata: {} }],
+        },
+      ]);
+
+      const res = await makeWebhookRequest({
+        app,
+        payload: validWorkflowRunPayload,
+        event: "workflow_run",
+      });
+
+      await expectWebhookMatch(res, { received: true });
+      await flushBackgroundTasks();
+      expect(createMachineForProjectMock).not.toHaveBeenCalled();
+    });
+
+    it("does not recreate machines when APP_STAGE tag does not match", async () => {
+      const { app, mockDb } = createTestApp("dev");
+      mockDb.query.project.findMany.mockResolvedValue([
+        {
+          id: "prj_123",
+          sandboxProvider: "daytona",
+          machines: [{ id: "mach_123", metadata: {} }],
+        },
+      ]);
+
+      const res = await makeWebhookRequest({
+        app,
+        event: "commit_comment",
+        payload: {
+          action: "created",
+          comment: {
+            id: 12345,
+            body: "Testing [refresh] [APP_STAGE=prd]",
+            commit_id: "abc123def456",
+            user: { login: "testuser" },
+          },
+          repository: { full_name: "iterate/iterate" },
+        },
+      });
+
+      await expectWebhookMatch(res, { received: true });
+      await flushBackgroundTasks();
+      expect(createMachineForProjectMock).not.toHaveBeenCalled();
     });
   });
 });
