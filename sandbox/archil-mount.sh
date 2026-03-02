@@ -1,21 +1,31 @@
 #!/bin/bash
-# Archil persistent volume mount + opencode sqlite sync — managed by pidnap.
+# Archil persistent volume mount + sqlite sync — managed by pidnap.
 #
 # Mounts archil at /mnt/persist (NOT over ~). The Docker image already has the
 # repo + node_modules baked in, so boot is instant.
 #
 # Persisted state:
 #   - ~/persisted → /mnt/persist/persisted (user files that survive reprovisioning)
-#   - OpenCode sqlite snapshot (restored on boot, synced periodically)
+#   - SQLite databases (restored on boot, synced periodically via `sqlite3 .backup`)
 #
 # Env vars (from process env, set by Fly from project env vars):
 #   ARCHIL_DISK_NAME   — disk ID (e.g. dsk-0000000000003139)
 #   ARCHIL_MOUNT_TOKEN — auth token for mount
 #   ARCHIL_REGION      — region (e.g. us-east-1, auto-prefixed to aws-us-east-1)
+#
+# ARCHIL_SYNC_DBS: colon-separated list of sqlite db paths to sync.
+# Each db at <path> gets a snapshot at /mnt/persist/.sqlite-snapshots/<mangled-path>.db
+# and is restored on boot if a snapshot exists.
 set -euo pipefail
 
 HOME_DIR="/home/iterate"
 PERSIST="/mnt/persist"
+ITERATE_REPO="${ITERATE_REPO:-${HOME_DIR}/src/github.com/iterate/iterate}"
+SNAPSHOT_DIR="${PERSIST}/.sqlite-snapshots"
+
+# Default dbs to sync — extend by setting ARCHIL_SYNC_DBS
+DEFAULT_SYNC_DBS="${HOME_DIR}/.local/share/opencode/opencode.db:${HOME_DIR}/.iterate/events.sqlite:${ITERATE_REPO}/apps/daemon/db.sqlite"
+SYNC_DBS="${ARCHIL_SYNC_DBS:-${DEFAULT_SYNC_DBS}}"
 
 # Source env vars from .env files if not already set via process env
 if [[ -z "${ARCHIL_DISK_NAME:-}" ]] && [[ -f "${HOME_DIR}/.iterate/.env" ]]; then
@@ -44,39 +54,64 @@ esac
 
 export ARCHIL_MOUNT_TOKEN="${ARCHIL_MOUNT_TOKEN:-}"
 
-echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${PERSIST} (region: ${ARCHIL_CLI_REGION})"
-sudo mkdir -p "$PERSIST"
+# Mangle a db path into a safe filename for the snapshot dir.
+# e.g. /home/iterate/.local/share/opencode/opencode.db → home-iterate-.local-share-opencode-opencode.db
+snapshot_name() {
+  echo "$1" | sed 's|^/||; s|/|-|g'
+}
 
-# Periodic opencode sqlite snapshot. Runs forever after setup completes.
-opencode_sync_loop() {
-  local live_db="${HOME_DIR}/.local/share/opencode/opencode.db"
-  local snapshot_dir="${PERSIST}/.opencode-snapshot"
-  local snapshot_db="${snapshot_dir}/opencode.db"
-  local tmp_db="${snapshot_db}.tmp"
-  local interval="${ARCHIL_OPENCODE_SYNC_INTERVAL_SEC:-20}"
-  local last_sig=""
-
-  mkdir -p "${snapshot_dir}"
-  echo "[archil] opencode sync started (interval=${interval}s)"
-
-  while true; do
-    if [[ -f "${live_db}" ]]; then
-      local sig
-      sig="$(stat -c '%s:%Y' "${live_db}" 2>/dev/null || true)"
-      if [[ -n "${sig}" ]] && [[ "${sig}" != "${last_sig}" ]]; then
-        if sqlite3 "${live_db}" ".backup '${tmp_db}'"; then
-          mv -f "${tmp_db}" "${snapshot_db}"
-          last_sig="${sig}"
-          echo "[archil] opencode snapshot updated (${sig})"
-        else
-          rm -f "${tmp_db}"
-          echo "[archil] opencode snapshot failed; will retry"
-        fi
-      fi
+# Restore all sqlite snapshots from persist volume → local disk.
+restore_snapshots() {
+  IFS=':' read -ra dbs <<< "${SYNC_DBS}"
+  for db_path in "${dbs[@]}"; do
+    [[ -z "$db_path" ]] && continue
+    local snap="${SNAPSHOT_DIR}/$(snapshot_name "$db_path")"
+    if [[ -f "$snap" ]]; then
+      mkdir -p "$(dirname "$db_path")"
+      cp -f "$snap" "$db_path"
+      echo "[archil] Restored snapshot: $db_path"
     fi
-    sleep "${interval}"
   done
 }
+
+# Periodic sqlite snapshot loop. Backs up each db that exists and has changed.
+sqlite_sync_loop() {
+  local interval="${ARCHIL_SQLITE_SYNC_INTERVAL_SEC:-20}"
+  mkdir -p "${SNAPSHOT_DIR}"
+
+  # Track last-seen size:mtime per db
+  declare -A last_sigs
+
+  echo "[archil] sqlite sync started (interval=${interval}s, dbs=${SYNC_DBS})"
+
+  while true; do
+    IFS=':' read -ra dbs <<< "${SYNC_DBS}"
+    for db_path in "${dbs[@]}"; do
+      [[ -z "$db_path" ]] && continue
+      [[ -f "$db_path" ]] || continue
+
+      local sig
+      sig="$(stat -c '%s:%Y' "$db_path" 2>/dev/null || true)"
+      [[ -z "$sig" ]] && continue
+      [[ "$sig" == "${last_sigs[$db_path]:-}" ]] && continue
+
+      local snap="${SNAPSHOT_DIR}/$(snapshot_name "$db_path")"
+      local tmp="${snap}.tmp"
+      if sqlite3 "$db_path" ".backup '${tmp}'" 2>/dev/null; then
+        mv -f "$tmp" "$snap"
+        last_sigs[$db_path]="$sig"
+        echo "[archil] snapshot: $(basename "$db_path") (${sig})"
+      else
+        rm -f "$tmp"
+        echo "[archil] snapshot failed: $(basename "$db_path"); will retry"
+      fi
+    done
+    sleep "$interval"
+  done
+}
+
+echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${PERSIST} (region: ${ARCHIL_CLI_REGION})"
+sudo mkdir -p "$PERSIST"
 
 # Post-mount setup runs in background since --no-fork blocks the main thread.
 (
@@ -95,24 +130,15 @@ opencode_sync_loop() {
   ln -sfn "${PERSIST}/persisted" "${HOME_DIR}/persisted"
   echo "[archil] ~/persisted → ${PERSIST}/persisted"
 
-  # Restore opencode sqlite snapshot from persist volume.
-  # Keep the live sqlite on local disk (not on archil mount) to avoid
-  # "SQLiteError: file is not a database" on network-backed fs.
-  OPENCODE_LOCAL_DIR="${HOME_DIR}/.local/share/opencode"
-  OPENCODE_SNAPSHOT_DB="${PERSIST}/.opencode-snapshot/opencode.db"
-
-  mkdir -p "${OPENCODE_LOCAL_DIR}"
-  if [[ -f "${OPENCODE_SNAPSHOT_DB}" ]]; then
-    echo "[archil] Restoring opencode sqlite snapshot"
-    cp -f "${OPENCODE_SNAPSHOT_DB}" "${OPENCODE_LOCAL_DIR}/opencode.db"
-  fi
+  # Restore sqlite snapshots before signaling ready
+  restore_snapshots
 
   # Signal ready — dependents (opencode, daemon, etc.) can start now
   touch /tmp/archil-repo-ready
   echo "[archil] Setup complete, repo ready"
 
-  # Enter the opencode sync loop (runs forever)
-  opencode_sync_loop
+  # Enter the sqlite sync loop (runs forever)
+  sqlite_sync_loop
 ) &
 
 # --force: claim ownership even if stale delegation exists from a previous machine.
