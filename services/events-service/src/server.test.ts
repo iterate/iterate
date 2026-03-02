@@ -80,6 +80,58 @@ describe("Durable Stream Server via oRPC", () => {
     expect(actualOffsets).toEqual(expectedOffsets);
   });
 
+  test("concurrent first appends emit one stream-created meta event", async () => {
+    await using eventBus = await startEventBusTestFixture();
+    const client = eventBus.client;
+    const path = "/test/stream-created-once";
+    const appendCount = 16;
+    let releaseStart: (() => void) | undefined;
+    const start = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+
+    const appendTasks = Array.from({ length: appendCount }, (_, index) =>
+      (async () => {
+        await start;
+        await client.append({
+          path,
+          events: [
+            {
+              type: "https://events.iterate.com/events/test/concurrent-stream-created-recorded",
+              payload: { index },
+            },
+          ],
+        });
+      })(),
+    );
+
+    releaseStart?.();
+    await Promise.all(appendTasks);
+
+    const metaStream = await client.stream({ path: "/events/_meta", live: false });
+    const metaEvents: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    try {
+      while (true) {
+        const nextEvent = await metaStream.next();
+        if (nextEvent.done) break;
+        metaEvents.push({
+          type: nextEvent.value.type,
+          payload: nextEvent.value.payload as Record<string, unknown>,
+        });
+      }
+    } finally {
+      await metaStream.return?.();
+    }
+
+    const createdForTargetPath = metaEvents.filter(
+      (event) =>
+        event.type === "https://events.iterate.com/events/stream/created" &&
+        event.payload["path"] === "test/stream-created-once",
+    );
+
+    expect(createdForTargetPath.length).toBe(1);
+  });
+
   test("listStreams includes a live-connected stream", async () => {
     await using eventBus = await startEventBusTestFixture();
     const client = eventBus.client;
