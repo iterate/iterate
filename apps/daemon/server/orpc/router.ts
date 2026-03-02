@@ -3,7 +3,7 @@ import { agentOrpcRouter } from "../routers/agents.ts";
 import { configRepoOrpcRouter } from "../routers/config-repo.ts";
 import type { SerializedAgent, SerializedAgentRoute } from "../routers/agents.ts";
 import { publicProcedure } from "./init.ts";
-import { getCustomerRepoPath } from "./platform.ts";
+import { getCustomerRepoPathOrNull } from "./platform.ts";
 
 const baseProcedures = {
   hello: publicProcedure.handler(() => ({ message: "Hello from oRPC!" })),
@@ -12,7 +12,7 @@ const baseProcedures = {
     return {
       cwd: process.cwd(),
       homeDir: homedir(),
-      customerRepoPath: await getCustomerRepoPath(),
+      customerRepoPath: getCustomerRepoPathOrNull(),
     };
   }),
 
