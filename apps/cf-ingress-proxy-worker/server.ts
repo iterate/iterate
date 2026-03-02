@@ -13,14 +13,11 @@ import {
 } from "./route-conflicts.ts";
 import {
   deleteRouteById,
-  deleteRoutePatternsByRouteId,
-  insertRoute,
-  insertRoutePattern,
+  selectResolvedRouteByHost,
   selectRouteById,
   selectRoutePatterns,
   selectRoutePatternsByRouteId,
   selectRoutes,
-  updateRouteMetadata,
 } from "./sql/queries.ts";
 import { parseWorkerEnv, type ProxyWorkerEnv, type RawProxyWorkerEnv } from "./env.ts";
 
@@ -117,26 +114,6 @@ function normalizeInboundHost(rawHost: string | null): string | null {
     }
   }
   return host.replace(/\.$/, "") || null;
-}
-
-function patternMatchesHost(pattern: string, host: string): boolean {
-  if (!pattern.includes("*")) {
-    return pattern === host;
-  }
-  const escaped = pattern.replaceAll(/[.+?^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*");
-  return new RegExp(`^${escaped}$`).test(host);
-}
-
-function comparePatternPriority(a: RoutePatternRow, b: RoutePatternRow): number {
-  const aExact = a.pattern.includes("*") ? 0 : 1;
-  const bExact = b.pattern.includes("*") ? 0 : 1;
-  if (aExact !== bExact) {
-    return bExact - aExact;
-  }
-  if (a.pattern.length !== b.pattern.length) {
-    return b.pattern.length - a.pattern.length;
-  }
-  return a.id - b.id;
 }
 
 function parseTargetUrl(target: string): URL {
@@ -275,18 +252,26 @@ export async function createRoute(
   const routeId = typeid(params.typeIdPrefix).toString();
   const metadata = normalizeMetadata(params.metadata);
 
-  await insertRoute(db, {
-    routeId,
-    metadata: JSON.stringify(metadata),
-  });
-  for (const pattern of normalizedPatterns) {
-    await insertRoutePattern(db, {
-      routeId,
-      pattern: pattern.pattern,
-      target: pattern.target,
-      headers: JSON.stringify(pattern.headers),
-    });
-  }
+  await db.batch([
+    db
+      .prepare(
+        `
+      INSERT INTO routes (id, metadata)
+      VALUES (?1, ?2)
+    `,
+      )
+      .bind(routeId, JSON.stringify(metadata)),
+    ...normalizedPatterns.map((pattern) => {
+      return db
+        .prepare(
+          `
+        INSERT INTO route_patterns (route_id, pattern, target, headers)
+        VALUES (?1, ?2, ?3, ?4)
+      `,
+        )
+        .bind(routeId, pattern.pattern, pattern.target, JSON.stringify(pattern.headers));
+    }),
+  ]);
 
   const created = await getRoute(db, routeId);
   if (!created) throw new Error("Failed to read route after create");
@@ -298,7 +283,7 @@ export async function updateRoute(
   params: {
     routeId: string;
     patterns: Array<{ pattern: string; target: string; headers?: RouteHeaders }>;
-    metadata?: RouteMetadata;
+    metadata: RouteMetadata;
   },
 ): Promise<RouteRecord> {
   const routeId = normalizeRouteId(params.routeId);
@@ -317,26 +302,28 @@ export async function updateRoute(
     throw new RouteConflictError(conflicts);
   }
 
-  const metadata = normalizeMetadata(params.metadata);
-
-  await updateRouteMetadata(
-    db,
-    {
-      metadata: JSON.stringify(metadata),
-    },
-    {
-      routeId,
-    },
-  );
-  await deleteRoutePatternsByRouteId(db, { routeId });
-  for (const pattern of normalizedPatterns) {
-    await insertRoutePattern(db, {
-      routeId,
-      pattern: pattern.pattern,
-      target: pattern.target,
-      headers: JSON.stringify(pattern.headers),
-    });
-  }
+  await db.batch([
+    db
+      .prepare(
+        `
+      UPDATE routes
+      SET metadata = ?2, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?1
+    `,
+      )
+      .bind(routeId, JSON.stringify(params.metadata)),
+    db.prepare(`DELETE FROM route_patterns WHERE route_id = ?1`).bind(routeId),
+    ...normalizedPatterns.map((pattern) => {
+      return db
+        .prepare(
+          `
+        INSERT INTO route_patterns (route_id, pattern, target, headers)
+        VALUES (?1, ?2, ?3, ?4)
+      `,
+        )
+        .bind(routeId, pattern.pattern, pattern.target, JSON.stringify(pattern.headers));
+    }),
+  ]);
 
   const updated = await getRoute(db, routeId);
   if (!updated) throw new Error("Failed to read route after update");
@@ -356,22 +343,15 @@ export async function resolveRoute(
   const host = normalizeInboundHost(request.headers.get("host"));
   if (!host) return null;
 
-  const [routes, patterns] = await Promise.all([selectRoutes(db), selectRoutePatterns(db)]);
-  const routeById = new Map(routes.map((route) => [route.id, route] as const));
-  const winner = patterns
-    .filter((pattern) => patternMatchesHost(pattern.pattern, host))
-    .sort(comparePatternPriority)[0];
+  const winner = await selectResolvedRouteByHost(db, { host });
   if (!winner) return null;
 
-  const route = routeById.get(winner.route_id);
-  if (!route) return null;
-
   return {
-    routeId: winner.route_id,
+    routeId: winner.routeId,
     pattern: winner.pattern,
     targetUrl: parseTargetUrl(winner.target),
     headers: parseJsonObject(winner.headers, "headers") as RouteHeaders,
-    metadata: parseJsonObject(route.metadata, "metadata"),
+    metadata: parseJsonObject(winner.metadata, "metadata"),
   };
 }
 
@@ -460,7 +440,7 @@ const CreateRouteInput = z.object({
 const UpdateRouteInput = z.object({
   routeId: z.string().min(1),
   patterns: z.array(PatternInput).min(1),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()),
 });
 
 const RouteIdInput = z.object({
