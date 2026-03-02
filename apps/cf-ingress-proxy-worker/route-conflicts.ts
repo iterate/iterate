@@ -1,3 +1,5 @@
+import { selectPatternConflicts, selectPatternConflictsExcludingRoute } from "./sql/index.ts";
+
 export class RouteInputError extends Error {}
 
 const PATTERN_CHARS = /^[a-z0-9*._-]+$/;
@@ -34,25 +36,16 @@ export async function findPatternConflicts(params: {
   const normalizedPatterns = [...new Set(params.patterns.map(normalizePattern))];
   if (normalizedPatterns.length === 0) return [];
 
-  const bindValues: string[] = [...normalizedPatterns];
-  const patternPlaceholders = normalizedPatterns.map((_, i) => `?${i + 1}`).join(", ");
-
-  let sql = `
-    SELECT route_id AS routeId, pattern
-    FROM route_patterns
-    WHERE pattern IN (${patternPlaceholders})
-  `;
-
   if (excludeRouteId) {
-    bindValues.push(normalizeRouteId(excludeRouteId));
-    sql += ` AND route_id != ?${bindValues.length}`;
+    const rows = await selectPatternConflictsExcludingRoute(db, {
+      patterns: normalizedPatterns,
+      excludeRouteId: normalizeRouteId(excludeRouteId),
+    });
+    return rows;
   }
 
-  sql += " ORDER BY route_id ASC, pattern ASC";
-
-  const rows = await db
-    .prepare(sql)
-    .bind(...bindValues)
-    .all<PatternConflict>();
-  return rows.results ?? [];
+  const rows = await selectPatternConflicts(db, {
+    patterns: normalizedPatterns,
+  });
+  return rows;
 }

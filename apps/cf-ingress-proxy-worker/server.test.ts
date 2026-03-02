@@ -11,47 +11,19 @@ import {
   resolveRoute,
   updateRoute,
 } from "./server.ts";
-import { parseWorkerEnv } from "./env.ts";
+import { parseWorkerEnv, type RawProxyWorkerEnv } from "./env.ts";
+import { resetDb } from "./test-db.ts";
 
-const TEST_SCHEMA_STATEMENTS = [
-  `
-  CREATE TABLE IF NOT EXISTS routes (
-    id TEXT PRIMARY KEY,
-    metadata TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  )
-`,
-  `
-  CREATE TABLE IF NOT EXISTS route_patterns (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    route_id TEXT NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
-    pattern TEXT NOT NULL,
-    target TEXT NOT NULL,
-    headers TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(pattern)
-  )
-`,
-];
-
-async function resetDb(): Promise<void> {
-  await env.DB.prepare("DROP TABLE IF EXISTS route_patterns").run();
-  await env.DB.prepare("DROP TABLE IF EXISTS routes").run();
-  for (const statement of TEST_SCHEMA_STATEMENTS) {
-    await env.DB.prepare(statement).run();
-  }
-}
+const testEnv = env as RawProxyWorkerEnv;
 
 beforeEach(async () => {
   vi.restoreAllMocks();
-  await resetDb();
+  await resetDb(testEnv.DB);
 });
 
 describe("route groups", () => {
   test("create/get/list/update/delete", async () => {
-    const created = await createRoute(env.DB, {
+    const created = await createRoute(testEnv.DB, {
       typeIdPrefix: "tst",
       metadata: { project: "abc" },
       patterns: [
@@ -63,14 +35,14 @@ describe("route groups", () => {
     expect(created.routeId.startsWith("tst_")).toBe(true);
     expect(created.patterns).toHaveLength(2);
 
-    const fetched = await getRoute(env.DB, created.routeId);
+    const fetched = await getRoute(testEnv.DB, created.routeId);
     expect(fetched?.routeId).toBe(created.routeId);
     expect(fetched?.metadata).toEqual({ project: "abc" });
 
-    const listed = await listRoutes(env.DB);
+    const listed = await listRoutes(testEnv.DB);
     expect(listed).toHaveLength(1);
 
-    const updated = await updateRoute(env.DB, {
+    const updated = await updateRoute(testEnv.DB, {
       routeId: created.routeId,
       metadata: { project: "def" },
       patterns: [
@@ -86,18 +58,18 @@ describe("route groups", () => {
     expect(updated.patterns).toHaveLength(1);
     expect(updated.patterns[0]?.pattern).toBe("api.project.ingress.iterate.com");
 
-    await expect(deleteRoute(env.DB, created.routeId)).resolves.toBe(true);
-    await expect(getRoute(env.DB, created.routeId)).resolves.toBeNull();
+    await expect(deleteRoute(testEnv.DB, created.routeId)).resolves.toBe(true);
+    await expect(getRoute(testEnv.DB, created.routeId)).resolves.toBeNull();
   });
 
   test("create rejects conflicting pattern", async () => {
-    await createRoute(env.DB, {
+    await createRoute(testEnv.DB, {
       typeIdPrefix: "tst",
       patterns: [{ pattern: "same.ingress.iterate.com", target: "https://one.fly.dev" }],
     });
 
     await expect(
-      createRoute(env.DB, {
+      createRoute(testEnv.DB, {
         typeIdPrefix: "tst",
         patterns: [{ pattern: "same.ingress.iterate.com", target: "https://two.fly.dev" }],
       }),
@@ -105,12 +77,12 @@ describe("route groups", () => {
   });
 
   test("resolve prioritizes exact over wildcard", async () => {
-    const wildcard = await createRoute(env.DB, {
+    const wildcard = await createRoute(testEnv.DB, {
       typeIdPrefix: "tst",
       patterns: [{ pattern: "*.proj.ingress.iterate.com", target: "https://wild.fly.dev" }],
     });
 
-    const exact = await createRoute(env.DB, {
+    const exact = await createRoute(testEnv.DB, {
       typeIdPrefix: "tst",
       patterns: [{ pattern: "app.proj.ingress.iterate.com", target: "https://exact.fly.dev" }],
     });
@@ -119,13 +91,13 @@ describe("route groups", () => {
       headers: { host: "app.proj.ingress.iterate.com" },
     });
 
-    const resolved = await resolveRoute(env.DB, request);
+    const resolved = await resolveRoute(testEnv.DB, request);
     expect(resolved?.routeId).toBe(exact.routeId);
     expect(resolved?.routeId).not.toBe(wildcard.routeId);
   });
 
   test("double underscore hostnames are treated as opaque strings", async () => {
-    await createRoute(env.DB, {
+    await createRoute(testEnv.DB, {
       typeIdPrefix: "tst",
       patterns: [{ pattern: "*__proj.ingress.iterate.com", target: "https://proj.fly.dev" }],
     });
@@ -134,7 +106,7 @@ describe("route groups", () => {
       headers: { host: "web__proj.ingress.iterate.com" },
     });
 
-    const resolved = await resolveRoute(env.DB, request);
+    const resolved = await resolveRoute(testEnv.DB, request);
     expect(resolved?.pattern).toBe("*__proj.ingress.iterate.com");
   });
 });
@@ -150,7 +122,7 @@ describe("proxy behavior", () => {
   });
 
   test("preserves inbound Host header by default", async () => {
-    await createRoute(env.DB, {
+    await createRoute(testEnv.DB, {
       typeIdPrefix: "tst",
       patterns: [{ pattern: "app.ingress.iterate.com", target: "https://target.fly.dev/base" }],
     });
@@ -163,7 +135,7 @@ describe("proxy behavior", () => {
       return new Response("proxied", { status: 200 });
     });
 
-    const parsedEnv = parseWorkerEnv(env);
+    const parsedEnv = parseWorkerEnv(testEnv);
     const response = await proxyRequest(
       new Request("https://app.ingress.iterate.com/path?y=2", {
         headers: {
@@ -180,7 +152,7 @@ describe("proxy behavior", () => {
   });
 
   test("applies optional per-pattern header overrides", async () => {
-    await createRoute(env.DB, {
+    await createRoute(testEnv.DB, {
       typeIdPrefix: "tst",
       patterns: [
         {
@@ -204,7 +176,7 @@ describe("proxy behavior", () => {
           authorization: "Bearer inbound",
         },
       }),
-      parseWorkerEnv(env),
+      parseWorkerEnv(testEnv),
     );
 
     expect(response.status).toBe(200);
@@ -229,7 +201,7 @@ describe("proxy behavior", () => {
       new Request("https://none.ingress.iterate.com", {
         headers: { host: "none.ingress.iterate.com" },
       }),
-      parseWorkerEnv(env),
+      parseWorkerEnv(testEnv),
     );
 
     expect(response.status).toBe(404);
@@ -237,7 +209,7 @@ describe("proxy behavior", () => {
   });
 
   test("returns 502 when upstream fetch fails", async () => {
-    await createRoute(env.DB, {
+    await createRoute(testEnv.DB, {
       typeIdPrefix: "tst",
       patterns: [{ pattern: "fail.ingress.iterate.com", target: "https://target.fly.dev" }],
     });
@@ -248,7 +220,7 @@ describe("proxy behavior", () => {
       new Request("https://fail.ingress.iterate.com", {
         headers: { host: "fail.ingress.iterate.com" },
       }),
-      parseWorkerEnv(env),
+      parseWorkerEnv(testEnv),
     );
 
     expect(response.status).toBe(502);

@@ -1,18 +1,19 @@
 import { z } from "zod/v4";
 
-const TypeIdPrefix = z
-  .string()
-  .trim()
-  .default("ipr")
-  .transform((value) => value.replace(/_+$/g, ""))
-  .refine((value) => /^[a-z]+$/.test(value), {
-    message: "TYPEID_PREFIX must contain lowercase letters only",
-  });
-
 export const WorkerEnv = z.object({
-  DB: z.custom<D1Database>((v) => typeof v === "object" && v !== null && "prepare" in v),
+  DB: z.custom<D1Database>(
+    (value) => typeof value === "object" && value !== null && "prepare" in value,
+    { message: "DB binding is required" },
+  ),
   INGRESS_PROXY_API_TOKEN: z.string().trim().min(1, "INGRESS_PROXY_API_TOKEN is required"),
-  TYPEID_PREFIX: TypeIdPrefix,
+  TYPEID_PREFIX: z
+    .string()
+    .trim()
+    .default("ipr")
+    .transform((value) => value.replace(/_+$/g, ""))
+    .refine((value) => /^[a-z]+$/.test(value), {
+      message: "TYPEID_PREFIX must contain lowercase letters only",
+    }),
 });
 
 export type RawProxyWorkerEnv = z.input<typeof WorkerEnv>;

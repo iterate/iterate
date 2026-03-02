@@ -1,6 +1,11 @@
 # Project ingress proxy
 
-Main doc moved to `apps/project-ingress-proxy/README.md`.
+Main project-ingress app doc: `apps/project-ingress-proxy/README.md`.
+
+Related worker doc for Cloudflare ingress routing:
+
+- `apps/cf-ingress-proxy-worker/README.md`
+- `docs/cf-ingress-proxy-worker.md`
 
 Tracked follow-up tasks:
 

@@ -11,6 +11,18 @@ import {
   RouteInputError,
   type PatternConflict,
 } from "./route-conflicts.ts";
+import {
+  deleteRouteById,
+  deleteRoutePatternsByRouteId,
+  insertRoute,
+  insertRoutePattern,
+  selectResolvedRouteByHost,
+  selectRouteById,
+  selectRoutePatterns,
+  selectRoutePatternsByRouteId,
+  selectRoutes,
+  updateRouteMetadata,
+} from "./sql/index.ts";
 import { parseWorkerEnv, type ProxyWorkerEnv, type RawProxyWorkerEnv } from "./env.ts";
 
 const HOP_BY_HOP_HEADERS = new Set([
@@ -67,14 +79,6 @@ type RoutePatternRow = {
   headers: string;
   created_at: string;
   updated_at: string;
-};
-
-type ResolvedRouteRow = {
-  routeId: string;
-  pattern: string;
-  target: string;
-  headers: string;
-  metadata: string;
 };
 
 class RouteConflictError extends Error {
@@ -212,33 +216,12 @@ async function getRouteRowsById(
   patterns: RoutePatternRow[];
 }> {
   const normalizedRouteId = normalizeRouteId(routeId);
-  const route =
-    (await db
-      .prepare(
-        `
-      SELECT id, metadata, created_at, updated_at
-      FROM routes
-      WHERE id = ?1
-    `,
-      )
-      .bind(normalizedRouteId)
-      .first<RouteRow>()) ?? null;
-
-  const patterns = await db
-    .prepare(
-      `
-      SELECT id, route_id, pattern, target, headers, created_at, updated_at
-      FROM route_patterns
-      WHERE route_id = ?1
-      ORDER BY id ASC
-    `,
-    )
-    .bind(normalizedRouteId)
-    .all<RoutePatternRow>();
+  const route = await selectRouteById(db, { routeId: normalizedRouteId });
+  const patterns = await selectRoutePatternsByRouteId(db, { routeId: normalizedRouteId });
 
   return {
     route,
-    patterns: patterns.results ?? [],
+    patterns,
   };
 }
 
@@ -249,54 +232,19 @@ export async function getRoute(db: D1Database, routeId: string): Promise<RouteRe
 }
 
 export async function listRoutes(db: D1Database): Promise<RouteRecord[]> {
-  const routeRows = await db
-    .prepare(
-      `
-      SELECT id, metadata, created_at, updated_at
-      FROM routes
-      ORDER BY created_at ASC, id ASC
-    `,
-    )
-    .all<RouteRow>();
-
-  const patternRows = await db
-    .prepare(
-      `
-      SELECT id, route_id, pattern, target, headers, created_at, updated_at
-      FROM route_patterns
-      ORDER BY route_id ASC, id ASC
-    `,
-    )
-    .all<RoutePatternRow>();
+  const routeRows = await selectRoutes(db);
+  const patternRows = await selectRoutePatterns(db);
 
   const patternsByRouteId = new Map<string, RoutePatternRow[]>();
-  for (const pattern of patternRows.results ?? []) {
+  for (const pattern of patternRows) {
     const group = patternsByRouteId.get(pattern.route_id) ?? [];
     group.push(pattern);
     patternsByRouteId.set(pattern.route_id, group);
   }
 
-  return (routeRows.results ?? []).map((route) => {
+  return routeRows.map((route) => {
     return routeRowToRecord(route, patternsByRouteId.get(route.id) ?? []);
   });
-}
-
-function buildInsertPatternStmts(params: {
-  db: D1Database;
-  routeId: string;
-  patterns: Array<{ pattern: string; target: string; headers: RouteHeaders }>;
-}): D1PreparedStatement[] {
-  const { db, routeId, patterns } = params;
-  return patterns.map((item) =>
-    db
-      .prepare(
-        `
-        INSERT INTO route_patterns (route_id, pattern, target, headers)
-        VALUES (?1, ?2, ?3, ?4)
-      `,
-      )
-      .bind(routeId, item.pattern, item.target, JSON.stringify(item.headers)),
-  );
 }
 
 export async function createRoute(
@@ -319,17 +267,18 @@ export async function createRoute(
   const routeId = typeid(params.typeIdPrefix).toString();
   const metadata = normalizeMetadata(params.metadata);
 
-  await db.batch([
-    db
-      .prepare(
-        `
-      INSERT INTO routes (id, metadata)
-      VALUES (?1, ?2)
-    `,
-      )
-      .bind(routeId, JSON.stringify(metadata)),
-    ...buildInsertPatternStmts({ db, routeId, patterns: normalizedPatterns }),
-  ]);
+  await insertRoute(db, {
+    routeId,
+    metadata: JSON.stringify(metadata),
+  });
+  for (const pattern of normalizedPatterns) {
+    await insertRoutePattern(db, {
+      routeId,
+      pattern: pattern.pattern,
+      target: pattern.target,
+      headers: JSON.stringify(pattern.headers),
+    });
+  }
 
   const created = await getRoute(db, routeId);
   if (!created) throw new Error("Failed to read route after create");
@@ -362,19 +311,24 @@ export async function updateRoute(
 
   const metadata = normalizeMetadata(params.metadata);
 
-  await db.batch([
-    db
-      .prepare(
-        `
-      UPDATE routes
-      SET metadata = ?2, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?1
-    `,
-      )
-      .bind(routeId, JSON.stringify(metadata)),
-    db.prepare(`DELETE FROM route_patterns WHERE route_id = ?1`).bind(routeId),
-    ...buildInsertPatternStmts({ db, routeId, patterns: normalizedPatterns }),
-  ]);
+  await updateRouteMetadata(
+    db,
+    {
+      metadata: JSON.stringify(metadata),
+    },
+    {
+      routeId,
+    },
+  );
+  await deleteRoutePatternsByRouteId(db, { routeId });
+  for (const pattern of normalizedPatterns) {
+    await insertRoutePattern(db, {
+      routeId,
+      pattern: pattern.pattern,
+      target: pattern.target,
+      headers: JSON.stringify(pattern.headers),
+    });
+  }
 
   const updated = await getRoute(db, routeId);
   if (!updated) throw new Error("Failed to read route after update");
@@ -383,8 +337,8 @@ export async function updateRoute(
 
 export async function deleteRoute(db: D1Database, routeId: string): Promise<boolean> {
   const normalizedRouteId = normalizeRouteId(routeId);
-  const result = await db.prepare(`DELETE FROM routes WHERE id = ?1`).bind(normalizedRouteId).run();
-  return (result.meta.changes ?? 0) > 0;
+  const result = await deleteRouteById(db, { routeId: normalizedRouteId });
+  return (result.changes ?? 0) > 0;
 }
 
 export async function resolveRoute(
@@ -394,27 +348,7 @@ export async function resolveRoute(
   const host = normalizeInboundHost(request.headers.get("host"));
   if (!host) return null;
 
-  const row = await db
-    .prepare(
-      `
-      SELECT
-        rp.route_id AS routeId,
-        rp.pattern AS pattern,
-        rp.target AS target,
-        rp.headers AS headers,
-        r.metadata AS metadata
-      FROM route_patterns rp
-      INNER JOIN routes r ON r.id = rp.route_id
-      WHERE ?1 GLOB rp.pattern
-      ORDER BY
-        CASE WHEN instr(rp.pattern, '*') = 0 THEN 1 ELSE 0 END DESC,
-        length(rp.pattern) DESC,
-        rp.id ASC
-      LIMIT 1
-    `,
-    )
-    .bind(host)
-    .first<ResolvedRouteRow>();
+  const row = await selectResolvedRouteByHost(db, { host });
 
   if (!row) return null;
 
