@@ -37,7 +37,6 @@ Two tables:
 
 ## SQL + schema workflow
 
-- `schema.sql` is the canonical full schema.
 - `migrations/*.sql` are hand-written migration steps for D1.
 - `typesql.json` is the checked-in TypeSQL base config.
 - `sql/queries.sql` is the single query source file.
@@ -45,9 +44,9 @@ Two tables:
 
 Commands:
 
-- `pnpm run db:rebuild` rebuilds local `.local.db` from `schema.sql`.
+- `pnpm run db:rebuild` rebuilds local `.local.db` by replaying `migrations/**/*.sql`.
 - `pnpm run db:types` rebuilds `.local.db` and regenerates `sql/queries.ts`.
-- `pnpm run db:watch` watches `sql/queries.sql`, `schema.sql`, and `migrations/**/*.sql` and regenerates `sql/queries.ts`.
+- `pnpm run db:watch` watches `sql/queries.sql`, `migrations/**/*.sql`, and `typesql.json` and regenerates `sql/queries.ts`.
 
 Adding a new SQL query:
 
@@ -59,18 +58,16 @@ Adding a new SQL query:
 
 When changing schema:
 
-1. update `schema.sql`
-2. add a new migration in `migrations/`
-3. run `pnpm run db:types`
-4. commit schema, migration, `sql/queries.sql`, and generated `sql/queries.ts`
+1. add a new migration in `migrations/`
+2. run `pnpm run db:types`
+3. commit migration, `sql/queries.sql`, and generated `sql/queries.ts`
 
 ## Guardrails (read before editing)
 
 - Do not hand-edit generated file `sql/queries.ts`.
 - `sql/queries.sql` is the source for query codegen; always run `pnpm run db:types` after SQL edits.
-- `schema.sql` is canonical for TypeSQL introspection; migrations are canonical for remote D1 rollout. Keep both aligned.
-- If `schema.sql` changes without a migration, deploys can succeed with stale remote schema assumptions.
-- If a migration changes without updating `schema.sql`, generated query types can become wrong for new schema state.
+- migrations are canonical for both local introspection and remote D1 rollout.
+- if migrations change, regenerate `sql/queries.ts` before commit.
 - Resolver match ordering is critical:
   - exact pattern must beat wildcard
   - longer/more-specific wildcard must beat shorter wildcard

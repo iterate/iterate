@@ -4,13 +4,7 @@ import { RPCHandler } from "@orpc/server/fetch";
 import { RequestHeadersPlugin, type RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { typeid } from "typeid-js";
 import { z } from "zod/v4";
-import {
-  findPatternConflicts,
-  normalizePattern,
-  normalizeRouteId,
-  RouteInputError,
-  type PatternConflict,
-} from "./route-conflicts.ts";
+import { normalizePattern, normalizeRouteId, RouteInputError } from "./route-conflicts.ts";
 import {
   deleteRouteById,
   deleteRoutePatternsByRouteIdStmt,
@@ -69,29 +63,6 @@ type RoutePatternRow = {
   created_at: string;
   updated_at: string;
 };
-
-class RouteConflictError extends Error {
-  public conflicts: PatternConflict[];
-
-  public constructor(conflicts: PatternConflict[]) {
-    super("Pattern conflicts with existing route(s)");
-    this.conflicts = conflicts;
-  }
-}
-
-class RouteGoneError extends Error {
-  public constructor() {
-    super("Route not found");
-  }
-}
-
-class RoutePatternClaimedError extends Error {
-  public constructor() {
-    super(
-      "Pattern conflicts with existing route patterns. A concurrent request may have claimed the pattern.",
-    );
-  }
-}
 
 function readBearerToken(headerValue: string | null): string | null {
   if (!headerValue) return null;
@@ -259,14 +230,6 @@ export async function createRoute(
   },
 ): Promise<RouteRecord> {
   const normalizedPatterns = normalizePatternInputs(params.patterns);
-  const conflicts = await findPatternConflicts({
-    db,
-    patterns: normalizedPatterns.map((pattern) => pattern.pattern),
-    patternsAreNormalized: true,
-  });
-  if (conflicts.length > 0) {
-    throw new RouteConflictError(conflicts);
-  }
 
   const routeId = typeid(params.typeIdPrefix).toString();
   const metadata = normalizeMetadata(params.metadata);
@@ -299,42 +262,22 @@ export async function updateRoute(
   const routeId = normalizeRouteId(params.routeId);
   const existing = await getRoute(db, routeId);
   if (!existing) {
-    throw new RouteGoneError();
+    throw new ORPCError("NOT_FOUND", { message: "Route not found" });
   }
 
   const normalizedPatterns = normalizePatternInputs(params.patterns);
-  const conflicts = await findPatternConflicts({
-    db,
-    patterns: normalizedPatterns.map((pattern) => pattern.pattern),
-    excludeRouteId: routeId,
-    patternsAreNormalized: true,
-  });
-  if (conflicts.length > 0) {
-    throw new RouteConflictError(conflicts);
-  }
-
-  try {
-    await db.batch([
-      updateRouteMetadataStmt(db, { metadata: JSON.stringify(params.metadata) }, { routeId }),
-      deleteRoutePatternsByRouteIdStmt(db, { routeId }),
-      ...normalizedPatterns.map((pattern) => {
-        return insertRoutePatternStmt(db, {
-          routeId,
-          pattern: pattern.pattern,
-          target: pattern.target,
-          headers: JSON.stringify(pattern.headers),
-        });
-      }),
-    ]);
-  } catch (error) {
-    if (isForeignKeyConstraintError(error)) {
-      throw new RouteGoneError();
-    }
-    if (isUniqueConstraintError(error)) {
-      throw new RoutePatternClaimedError();
-    }
-    throw error;
-  }
+  await db.batch([
+    updateRouteMetadataStmt(db, { metadata: JSON.stringify(params.metadata) }, { routeId }),
+    deleteRoutePatternsByRouteIdStmt(db, { routeId }),
+    ...normalizedPatterns.map((pattern) => {
+      return insertRoutePatternStmt(db, {
+        routeId,
+        pattern: pattern.pattern,
+        target: pattern.target,
+        headers: JSON.stringify(pattern.headers),
+      });
+    }),
+  ]);
 
   const updated = await getRoute(db, routeId);
   if (!updated) throw new Error("Failed to read route after update");
@@ -491,28 +434,16 @@ function isForeignKeyConstraintError(error: unknown): boolean {
 }
 
 function mapRouteError(error: unknown): never {
+  if (error instanceof ORPCError) {
+    throw error;
+  }
+
   if (error instanceof RouteInputError) {
     throw new ORPCError("BAD_REQUEST", { message: error.message });
   }
 
-  if (error instanceof RouteGoneError) {
-    throw new ORPCError("NOT_FOUND", { message: error.message });
-  }
-
-  if (error instanceof RouteConflictError) {
-    throw new ORPCError("CONFLICT", {
-      message:
-        "Pattern conflicts with existing route patterns. Delete conflicting routes or use updateRoute on the existing route.",
-      data: {
-        conflicts: error.conflicts,
-      },
-    });
-  }
-
-  if (error instanceof RoutePatternClaimedError) {
-    throw new ORPCError("CONFLICT", {
-      message: error.message,
-    });
+  if (isForeignKeyConstraintError(error)) {
+    throw new ORPCError("NOT_FOUND", { message: "Route not found" });
   }
 
   if (isUniqueConstraintError(error)) {
@@ -600,37 +531,16 @@ const orpcHandler = new RPCHandler(appRouter, {
 
 export const app = new Hono<{
   Bindings: RawProxyWorkerEnv;
-  Variables: {
-    env: ProxyWorkerEnv;
-  };
 }>();
-
-let cachedRawEnv: RawProxyWorkerEnv | null = null;
-let cachedParsedEnv: ProxyWorkerEnv | null = null;
-
-function getParsedEnv(rawEnv: RawProxyWorkerEnv): ProxyWorkerEnv {
-  if (cachedRawEnv === rawEnv && cachedParsedEnv != null) {
-    return cachedParsedEnv;
-  }
-  const parsedEnv = parseWorkerEnv(rawEnv);
-  cachedRawEnv = rawEnv;
-  cachedParsedEnv = parsedEnv;
-  return parsedEnv;
-}
-
-app.use("*", async (c, next) => {
-  if (c.req.path === "/health" && c.req.method === "GET") return next();
-  c.set("env", getParsedEnv(c.env));
-  return next();
-});
 
 app.get("/health", (c) => c.text("OK"));
 
 app.all("/api/orpc/*", async (c) => {
+  const parsedEnv = parseWorkerEnv(c.env);
   const { matched, response } = await orpcHandler.handle(c.req.raw, {
     prefix: "/api/orpc",
     context: {
-      env: c.var.env,
+      env: parsedEnv,
     },
   });
 
@@ -642,7 +552,8 @@ app.all("/api/orpc/*", async (c) => {
 });
 
 app.all("*", async (c) => {
-  return proxyRequest(c.req.raw, c.var.env);
+  const parsedEnv = parseWorkerEnv(c.env);
+  return proxyRequest(c.req.raw, parsedEnv);
 });
 
 export default app;

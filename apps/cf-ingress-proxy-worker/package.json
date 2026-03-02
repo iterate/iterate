@@ -9,7 +9,7 @@
     "test": "vitest run",
     "test:e2e-live": "vitest run --config ./vitest.live.config.ts",
     "typecheck": "tsc --noEmit",
-    "db:rebuild": "rm -f .local.db && sqlite3 .local.db < schema.sql",
+    "db:rebuild": "rm -f .local.db && sqlite3 .local.db '' && find migrations -name '*.sql' -print | sort | while read -r file; do sqlite3 .local.db < \"$file\"; done",
     "db:types": "pnpm run db:rebuild && tsx ./scripts/generate-queries.ts --force",
     "db:types:stale": "tsx ./scripts/generate-queries.ts --if-stale",
     "db:watch": "pnpm run db:rebuild && tsx ./scripts/generate-queries.ts --watch"

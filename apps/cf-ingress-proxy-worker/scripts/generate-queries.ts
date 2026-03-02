@@ -21,7 +21,6 @@ type QueryBlock = {
 
 type SourceMtTimes = {
   queries: number;
-  schema: number;
   migrations: number;
   typesql: number;
 };
@@ -41,7 +40,6 @@ const sqlDir = join(appDir, "sql");
 const queriesSqlPath = join(sqlDir, "queries.sql");
 const queriesTsPath = join(sqlDir, "queries.ts");
 const typesqlConfigPath = join(appDir, "typesql.json");
-const schemaPath = join(appDir, "schema.sql");
 const localDbPath = join(appDir, ".local.db");
 const migrationsDir = join(appDir, "migrations");
 const queryMarker = /^--\s*@query\s+([a-z][A-Za-z0-9]*)\s*$/;
@@ -78,7 +76,6 @@ function getSourceMtTimes(): SourceMtTimes {
 
   return {
     queries: mtime(queriesSqlPath),
-    schema: mtime(schemaPath),
     migrations,
     typesql: mtime(typesqlConfigPath),
   };
@@ -188,7 +185,10 @@ function resolveTypeSqlCliInvocation(): { command: string; argsPrefix: string[] 
 }
 
 function rebuildLocalDb(): void {
-  run("sh", ["-c", "rm -f .local.db && sqlite3 .local.db < schema.sql"]);
+  run("sh", [
+    "-c",
+    "rm -f .local.db && sqlite3 .local.db '' && find migrations -name '*.sql' -print | sort | while read -r file; do sqlite3 .local.db < \"$file\"; done",
+  ]);
 }
 
 function resolveMaybeRelativePath(path: string): string {
@@ -284,17 +284,11 @@ function generateOnce(): void {
 function maybeGenerate(): void {
   const target = targetMtime();
   const sourceTimes = getSourceMtTimes();
-  const sourceMax = Math.max(
-    sourceTimes.queries,
-    sourceTimes.schema,
-    sourceTimes.migrations,
-    sourceTimes.typesql,
-  );
+  const sourceMax = Math.max(sourceTimes.queries, sourceTimes.migrations, sourceTimes.typesql);
 
   const stale = target === 0 || sourceMax > target;
-  const schemaChanged = sourceTimes.schema > target;
   const migrationsChanged = sourceTimes.migrations > target;
-  const needsSchemaRefresh = !forceMode && (schemaChanged || migrationsChanged);
+  const needsSchemaRefresh = !forceMode && migrationsChanged;
 
   if (!forceMode && !stale) {
     console.log("queries.ts is up to date");
@@ -346,9 +340,7 @@ function watch(): void {
   };
 
   maybeGenerate();
-  console.log(
-    `watching ${relative(appDir, queriesSqlPath)}, schema.sql, migrations/**/*.sql, typesql.json`,
-  );
+  console.log(`watching ${relative(appDir, queriesSqlPath)}, migrations/**/*.sql, typesql.json`);
   setInterval(tick, 800);
 }
 

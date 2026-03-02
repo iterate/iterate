@@ -14,19 +14,6 @@ VALUES (:routeId, :pattern, :target, :headers)
 INSERT INTO routes (id, metadata)
 VALUES (:routeId, :metadata)
 
--- @query selectPatternConflictsExcludingRoute
-SELECT route_id AS routeId, pattern
-FROM route_patterns
-WHERE pattern IN (:patterns)
-  AND route_id != :excludeRouteId
-ORDER BY route_id ASC, pattern ASC
-
--- @query selectPatternConflicts
-SELECT route_id AS routeId, pattern
-FROM route_patterns
-WHERE pattern IN (:patterns)
-ORDER BY route_id ASC, pattern ASC
-
 -- @query selectResolvedRouteByHost
 SELECT
   rp.route_id AS routeId,

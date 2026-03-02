@@ -1,13 +1,6 @@
-import { selectPatternConflicts, selectPatternConflictsExcludingRoute } from "./sql/queries.ts";
-
 export class RouteInputError extends Error {}
 
 const PATTERN_CHARS = /^[a-z0-9*._-]+$/;
-
-export type PatternConflict = {
-  routeId: string;
-  pattern: string;
-};
 
 export function normalizePattern(input: string): string {
   const trimmed = input.trim().toLowerCase();
@@ -43,30 +36,4 @@ export function normalizeRouteId(input: string): string {
   const routeId = input.trim();
   if (!routeId) throw new RouteInputError("routeId is required");
   return routeId;
-}
-
-export async function findPatternConflicts(params: {
-  db: D1Database;
-  patterns: string[];
-  excludeRouteId?: string;
-  patternsAreNormalized?: boolean;
-}): Promise<PatternConflict[]> {
-  const { db, excludeRouteId, patternsAreNormalized } = params;
-  const normalizedPatterns = [
-    ...new Set(patternsAreNormalized ? params.patterns : params.patterns.map(normalizePattern)),
-  ];
-  if (normalizedPatterns.length === 0) return [];
-
-  if (excludeRouteId) {
-    const rows = await selectPatternConflictsExcludingRoute(db, {
-      patterns: normalizedPatterns,
-      excludeRouteId: normalizeRouteId(excludeRouteId),
-    });
-    return rows;
-  }
-
-  const rows = await selectPatternConflicts(db, {
-    patterns: normalizedPatterns,
-  });
-  return rows;
 }

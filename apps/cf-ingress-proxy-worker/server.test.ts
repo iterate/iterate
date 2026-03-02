@@ -22,6 +22,36 @@ beforeEach(async () => {
   await resetDb(testEnv.DB);
 });
 
+async function createSinglePatternRoute(params: {
+  pattern: string;
+  target: string;
+  headers?: Record<string, string>;
+}) {
+  return createRoute(testEnv.DB, {
+    typeIdPrefix: "tst",
+    patterns: [
+      {
+        pattern: params.pattern,
+        target: params.target,
+        headers: params.headers,
+      },
+    ],
+  });
+}
+
+function buildInboundRequest(params: {
+  host: string;
+  path: string;
+  headers?: Record<string, string>;
+}) {
+  return new Request(`https://${params.host}${params.path}`, {
+    headers: {
+      host: params.host,
+      ...(params.headers ?? {}),
+    },
+  });
+}
+
 describe("route groups", () => {
   test("create/get/list/update/delete", async () => {
     const created = await createRoute(testEnv.DB, {
@@ -74,18 +104,18 @@ describe("route groups", () => {
         typeIdPrefix: "tst",
         patterns: [{ pattern: "same.ingress.iterate.com", target: "https://two.fly.dev" }],
       }),
-    ).rejects.toThrow("Pattern conflicts");
+    ).rejects.toThrow("UNIQUE constraint failed");
   });
 
   test("resolve prioritizes exact over wildcard", async () => {
-    const wildcard = await createRoute(testEnv.DB, {
-      typeIdPrefix: "tst",
-      patterns: [{ pattern: "*.proj.ingress.iterate.com", target: "https://wild.fly.dev" }],
+    const wildcard = await createSinglePatternRoute({
+      pattern: "*.proj.ingress.iterate.com",
+      target: "https://wild.fly.dev",
     });
 
-    const exact = await createRoute(testEnv.DB, {
-      typeIdPrefix: "tst",
-      patterns: [{ pattern: "app.proj.ingress.iterate.com", target: "https://exact.fly.dev" }],
+    const exact = await createSinglePatternRoute({
+      pattern: "app.proj.ingress.iterate.com",
+      target: "https://exact.fly.dev",
     });
 
     const request = new Request("https://app.proj.ingress.iterate.com/hello", {
@@ -98,9 +128,9 @@ describe("route groups", () => {
   });
 
   test("double underscore hostnames are treated as opaque strings", async () => {
-    await createRoute(testEnv.DB, {
-      typeIdPrefix: "tst",
-      patterns: [{ pattern: "*__proj.ingress.iterate.com", target: "https://proj.fly.dev" }],
+    await createSinglePatternRoute({
+      pattern: "*__proj.ingress.iterate.com",
+      target: "https://proj.fly.dev",
     });
 
     const request = new Request("https://web__proj.ingress.iterate.com/path", {
@@ -123,9 +153,9 @@ describe("proxy behavior", () => {
   });
 
   test("uses target host by default for cross-host proxying", async () => {
-    await createRoute(testEnv.DB, {
-      typeIdPrefix: "tst",
-      patterns: [{ pattern: "app.ingress.iterate.com", target: "https://target.fly.dev/base" }],
+    await createSinglePatternRoute({
+      pattern: "app.ingress.iterate.com",
+      target: "https://target.fly.dev/base",
     });
 
     const fetchSpy = vi
@@ -134,11 +164,10 @@ describe("proxy behavior", () => {
 
     const parsedEnv = parseWorkerEnv(testEnv);
     const response = await proxyRequest(
-      new Request("https://app.ingress.iterate.com/path?y=2", {
-        headers: {
-          host: "app.ingress.iterate.com",
-          "x-custom": "ok",
-        },
+      buildInboundRequest({
+        host: "app.ingress.iterate.com",
+        path: "/path?y=2",
+        headers: { "x-custom": "ok" },
       }),
       parsedEnv,
     );
@@ -152,15 +181,10 @@ describe("proxy behavior", () => {
   });
 
   test("applies optional per-pattern header overrides", async () => {
-    await createRoute(testEnv.DB, {
-      typeIdPrefix: "tst",
-      patterns: [
-        {
-          pattern: "api.ingress.iterate.com",
-          target: "https://target.fly.dev",
-          headers: { authorization: "Bearer from-route" },
-        },
-      ],
+    await createSinglePatternRoute({
+      pattern: "api.ingress.iterate.com",
+      target: "https://target.fly.dev",
+      headers: { authorization: "Bearer from-route" },
     });
 
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -170,11 +194,10 @@ describe("proxy behavior", () => {
     });
 
     const response = await proxyRequest(
-      new Request("https://api.ingress.iterate.com/v1", {
-        headers: {
-          host: "api.ingress.iterate.com",
-          authorization: "Bearer inbound",
-        },
+      buildInboundRequest({
+        host: "api.ingress.iterate.com",
+        path: "/v1",
+        headers: { authorization: "Bearer inbound" },
       }),
       parseWorkerEnv(testEnv),
     );
@@ -197,9 +220,9 @@ describe("proxy behavior", () => {
   });
 
   test("proxies websocket upgrade transparently", async () => {
-    await createRoute(testEnv.DB, {
-      typeIdPrefix: "tst",
-      patterns: [{ pattern: "socket.ingress.iterate.com", target: "https://target.fly.dev/ws" }],
+    await createSinglePatternRoute({
+      pattern: "socket.ingress.iterate.com",
+      target: "https://target.fly.dev/ws",
     });
 
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
@@ -217,9 +240,10 @@ describe("proxy behavior", () => {
     });
 
     const response = await proxyRequest(
-      new Request("https://socket.ingress.iterate.com/ws", {
+      buildInboundRequest({
+        host: "socket.ingress.iterate.com",
+        path: "/ws",
         headers: {
-          host: "socket.ingress.iterate.com",
           connection: "Upgrade",
           upgrade: "websocket",
         },
@@ -256,8 +280,9 @@ describe("proxy behavior", () => {
 
   test("returns 404 when no route matches", async () => {
     const response = await proxyRequest(
-      new Request("https://none.ingress.iterate.com", {
-        headers: { host: "none.ingress.iterate.com" },
+      buildInboundRequest({
+        host: "none.ingress.iterate.com",
+        path: "/",
       }),
       parseWorkerEnv(testEnv),
     );
@@ -267,16 +292,17 @@ describe("proxy behavior", () => {
   });
 
   test("returns 502 when upstream fetch fails", async () => {
-    await createRoute(testEnv.DB, {
-      typeIdPrefix: "tst",
-      patterns: [{ pattern: "fail.ingress.iterate.com", target: "https://target.fly.dev" }],
+    await createSinglePatternRoute({
+      pattern: "fail.ingress.iterate.com",
+      target: "https://target.fly.dev",
     });
 
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("boom"));
 
     const response = await proxyRequest(
-      new Request("https://fail.ingress.iterate.com", {
-        headers: { host: "fail.ingress.iterate.com" },
+      buildInboundRequest({
+        host: "fail.ingress.iterate.com",
+        path: "/",
       }),
       parseWorkerEnv(testEnv),
     );
