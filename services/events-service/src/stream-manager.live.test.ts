@@ -99,6 +99,48 @@ const createManagerWithBlockedReadDuringInitialization = async (blockedPath: str
   };
 };
 
+const createManagerWithOneSyncBootFailure = async (pathThatFailsOnce: string) => {
+  const failedOnce = new Set<string>();
+
+  const flakyStorageLayer = Layer.effect(
+    StreamStorageManager,
+    Effect.gen(function* () {
+      const baseStorage = yield* StreamStorageManager;
+
+      return StreamStorageManager.of({
+        ...baseStorage,
+        forPath: (path) => {
+          const scopedStorage = baseStorage.forPath(path);
+          if (String(path) !== pathThatFailsOnce || failedOnce.has(pathThatFailsOnce)) {
+            return scopedStorage;
+          }
+
+          return {
+            ...scopedStorage,
+            read: () =>
+              Stream.unwrap(
+                Effect.sync(() => {
+                  failedOnce.add(pathThatFailsOnce);
+                  return Stream.fail(new Error(`sync boot failure for ${pathThatFailsOnce}`));
+                }),
+              ),
+          };
+        },
+      });
+    }),
+  ).pipe(Layer.provide(inMemoryLayer));
+
+  const runtime = ManagedRuntime.make(
+    liveLayerWithOptions().pipe(Layer.provide(flakyStorageLayer)),
+  );
+  const manager = await runtime.runPromise(StreamManager);
+
+  return {
+    manager,
+    dispose: () => runtime.dispose(),
+  };
+};
+
 const appendTestEvent = (manager: StreamManager["Type"], path: StreamPath) =>
   Effect.runPromise(
     manager.append({
@@ -118,6 +160,18 @@ const readMetaEvents = (manager: StreamManager["Type"]) =>
   );
 
 describe("StreamManager live layer edge cases", () => {
+  test("retry after synchronous stream boot failure succeeds", async () => {
+    const retryPath = StreamPath.make("init/sync-fail-once");
+    const { manager, dispose } = await createManagerWithOneSyncBootFailure(String(retryPath));
+
+    try {
+      await expect(appendTestEvent(manager, retryPath)).rejects.toBeDefined();
+      await expect(appendTestEvent(manager, retryPath)).resolves.toBeDefined();
+    } finally {
+      await dispose();
+    }
+  });
+
   test("initializing one path does not block appends on a different path", async () => {
     const blockedPath = StreamPath.make("init/blocked");
     const fastPath = StreamPath.make("init/fast");
