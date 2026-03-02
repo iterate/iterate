@@ -35,6 +35,36 @@ if [[ -z "${ARCHIL_DISK_NAME:-}" ]]; then
   exec sleep infinity
 fi
 
+build_persist_dirs() {
+  local -a defaults=(
+    ".iterate"             # platform config, credentials, bin wrappers
+    ".ssh"                 # SSH keys
+    ".config/opencode"     # opencode config + agents prompts
+    ".cache/opencode"      # opencode cache
+    ".local/share/opencode" # opencode sqlite db + data
+    ".local/state/opencode" # opencode runtime state
+    ".cache/claude"        # claude session state
+  )
+
+  if [[ -n "${ARCHIL_PERSIST_DIRS:-}" ]]; then
+    local -a custom
+    IFS=',' read -r -a custom <<<"${ARCHIL_PERSIST_DIRS}"
+    local -a cleaned=()
+    local item
+    for item in "${custom[@]}"; do
+      item="$(echo "$item" | xargs)"
+      [[ -z "$item" ]] && continue
+      cleaned+=("$item")
+    done
+    if [[ ${#cleaned[@]} -gt 0 ]]; then
+      printf '%s\n' "${cleaned[@]}"
+      return
+    fi
+  fi
+
+  printf '%s\n' "${defaults[@]}"
+}
+
 # Already mounted? Sleep to keep process alive.
 if grep -q "archil" /proc/mounts 2>/dev/null; then
   echo "[archil] Already mounted"
@@ -66,13 +96,9 @@ sudo mkdir -p "$PERSIST"
 
   sudo chown iterate:iterate "$PERSIST"
 
-  # Dirs we persist on archil and symlink into ~
-  PERSIST_DIRS=(
-    ".iterate"        # platform config, credentials, bin wrappers
-    ".ssh"            # SSH keys
-    ".cache/opencode" # opencode session state
-    ".cache/claude"   # claude session state
-  )
+  # Dirs we persist on archil and symlink into ~.
+  # Override with ARCHIL_PERSIST_DIRS=dir1,dir2 if needed.
+  mapfile -t PERSIST_DIRS < <(build_persist_dirs)
 
   # Files we persist on archil and symlink into ~
   PERSIST_FILES=(
