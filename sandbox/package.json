@@ -18,6 +18,7 @@
     "fly:bootstrap-apps": "doppler run -- sh -c 'tsx providers/fly/bootstrap-apps.ts \"$@\"' --",
     "fly:cleanup": "doppler run -- tsx providers/fly/cleanup-machines.ts",
     "test": "vitest run",
+    "test:archil-sync": "bash ./test/test-archil-sync.sh",
     "test:docker": "RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=docker pnpm test",
     "test:daytona": "doppler run -- sh -c 'RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=daytona pnpm test'",
     "typecheck": "tsc --noEmit"

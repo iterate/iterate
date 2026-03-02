@@ -150,10 +150,12 @@ sudo mkdir -p "$PERSIST"
   # Restore uncommitted git changes if a stash was saved from a previous machine
   REPO_DIR="${HOME_DIR}/src/github.com/iterate/iterate"
   PATCH_FILE="${PERSIST}/uncommitted-changes.patch"
-  if [[ -f "$PATCH_FILE" ]] && [[ -d "$REPO_DIR/.git" ]]; then
+  UNTRACKED_ARCHIVE="${PERSIST}/untracked-files.tar.gz"
+  if [[ -d "$REPO_DIR/.git" ]] && ([[ -f "$PATCH_FILE" ]] || [[ -f "$UNTRACKED_ARCHIVE" ]]); then
     echo "[archil] Restoring uncommitted changes from previous machine"
-    cd "$REPO_DIR"
-    git apply --allow-empty "$PATCH_FILE" 2>&1 || echo "[archil] Warning: could not apply saved changes"
+    ARCHIL_PERSIST_DIR="${PERSIST}" ITERATE_REPO="${REPO_DIR}" \
+      bash "${REPO_DIR}/sandbox/archil-restore-git-state.sh" 2>&1 ||
+      echo "[archil] Warning: could not apply saved changes"
   fi
 
   # Signal that the repo is ready (it's baked into the image, no clone needed)
