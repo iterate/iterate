@@ -1,6 +1,0 @@
-{
-  "databaseUri": ".local.db",
-  "sqlDir": "./sql",
-  "client": "d1",
-  "moduleExtension": "ts"
-}

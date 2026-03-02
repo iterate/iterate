@@ -10,8 +10,9 @@
     "test:e2e-live": "vitest run --config ./vitest.live.config.ts",
     "typecheck": "tsc --noEmit",
     "db:rebuild": "rm -f .local.db && sqlite3 .local.db < schema.sql",
-    "db:types": "pnpm run db:rebuild && typesql compile",
-    "db:watch": "typesql compile --watch"
+    "db:types": "pnpm run db:rebuild && tsx ./scripts/generate-queries.ts --force",
+    "db:types:stale": "tsx ./scripts/generate-queries.ts --if-stale",
+    "db:watch": "pnpm run db:rebuild && tsx ./scripts/generate-queries.ts --watch"
   },
   "dependencies": {
     "@orpc/server": "^1.13.4",

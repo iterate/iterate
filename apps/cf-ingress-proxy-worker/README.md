@@ -39,33 +39,33 @@ Two tables:
 
 - `schema.sql` is the canonical full schema.
 - `migrations/*.sql` are hand-written migration steps for D1.
-- `sql/*.sql` are query sources for TypeSQL.
-- `sql/*.ts` are generated, committed wrappers (`client: "d1"`) with zero runtime ORM overhead.
+- `sql/queries.sql` is the single query source file.
+- `sql/queries.ts` is the generated, committed wrapper module (`client: "d1"`) with zero runtime ORM overhead.
 
 Commands:
 
 - `pnpm run db:rebuild` rebuilds local `.local.db` from `schema.sql`.
-- `pnpm run db:types` rebuilds `.local.db` and regenerates `sql/*.ts`.
-- `pnpm run db:watch` runs TypeSQL in watch mode.
+- `pnpm run db:types` rebuilds `.local.db` and regenerates `sql/queries.ts`.
+- `pnpm run db:watch` watches `sql/queries.sql`, `schema.sql`, and `migrations/**/*.sql` and regenerates `sql/queries.ts`.
 
 When changing schema:
 
 1. update `schema.sql`
 2. add a new migration in `migrations/`
 3. run `pnpm run db:types`
-4. commit schema, migration, `.sql` query changes, and generated `sql/*.ts`
+4. commit schema, migration, `sql/queries.sql`, and generated `sql/queries.ts`
 
 ## Guardrails (read before editing)
 
-- Do not hand-edit generated files in `sql/*.ts`.
-- `sql/*.sql` is the source for query codegen; always run `pnpm run db:types` after SQL edits.
+- Do not hand-edit generated file `sql/queries.ts`.
+- `sql/queries.sql` is the source for query codegen; always run `pnpm run db:types` after SQL edits.
 - `schema.sql` is canonical for TypeSQL introspection; migrations are canonical for remote D1 rollout. Keep both aligned.
 - If `schema.sql` changes without a migration, deploys can succeed with stale remote schema assumptions.
 - If a migration changes without updating `schema.sql`, generated query types can become wrong for new schema state.
 - Resolver match ordering is critical:
   - exact pattern must beat wildcard
   - longer/more-specific wildcard must beat shorter wildcard
-  - preserve this when editing `select-resolved-route-by-host.sql`
+- preserve this when editing the `selectResolvedRouteByHost` block in `sql/queries.sql`
 - Write-path internals (`createRoute`/`updateRoute`) are admin-only. Proxy request latency depends on resolver path (`resolveRoute`), not route-management calls.
 
 ## Safe change checklist
