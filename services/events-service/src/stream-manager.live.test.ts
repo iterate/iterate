@@ -56,6 +56,49 @@ const createManagerWithTransientEnsurePathFailure = async (
   };
 };
 
+const createManagerWithBlockedReadDuringInitialization = async (blockedPath: string) => {
+  let releaseBlockedRead: (() => void) | undefined;
+  const blockedRead = new Promise<void>((resolve) => {
+    releaseBlockedRead = resolve;
+  });
+
+  const blockingStorageLayer = Layer.effect(
+    StreamStorageManager,
+    Effect.gen(function* () {
+      const baseStorage = yield* StreamStorageManager;
+
+      return StreamStorageManager.of({
+        ...baseStorage,
+        forPath: (path) => {
+          const scopedStorage = baseStorage.forPath(path);
+          if (String(path) !== blockedPath) return scopedStorage;
+
+          return {
+            ...scopedStorage,
+            read: (options) =>
+              Stream.unwrap(
+                Effect.promise(() =>
+                  blockedRead.then(() => Promise.resolve(scopedStorage.read(options))),
+                ),
+              ),
+          };
+        },
+      });
+    }),
+  ).pipe(Layer.provide(inMemoryLayer));
+
+  const runtime = ManagedRuntime.make(
+    liveLayerWithOptions().pipe(Layer.provide(blockingStorageLayer)),
+  );
+  const manager = await runtime.runPromise(StreamManager);
+
+  return {
+    manager,
+    releaseBlockedRead: () => releaseBlockedRead?.(),
+    dispose: () => runtime.dispose(),
+  };
+};
+
 const appendTestEvent = (manager: StreamManager["Type"], path: StreamPath) =>
   Effect.runPromise(
     manager.append({
@@ -75,6 +118,34 @@ const readMetaEvents = (manager: StreamManager["Type"]) =>
   );
 
 describe("StreamManager live layer edge cases", () => {
+  test("initializing one path does not block appends on a different path", async () => {
+    const blockedPath = StreamPath.make("init/blocked");
+    const fastPath = StreamPath.make("init/fast");
+    const { manager, releaseBlockedRead, dispose } =
+      await createManagerWithBlockedReadDuringInitialization(String(blockedPath));
+
+    const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+    try {
+      const slowAppend = appendTestEvent(manager, blockedPath);
+      await sleep(20);
+
+      let fastDone = false;
+      const fastAppend = appendTestEvent(manager, fastPath).then(() => {
+        fastDone = true;
+      });
+
+      await sleep(80);
+      expect(fastDone).toBe(true);
+
+      releaseBlockedRead();
+      await Promise.allSettled([slowAppend, fastAppend]);
+    } finally {
+      releaseBlockedRead();
+      await dispose();
+    }
+  });
+
   test("retries still emit stream-created after transient ensurePath failure on target stream", async () => {
     const targetPath = StreamPath.make("retry/target-path");
     const { manager, dispose } = await createManagerWithTransientEnsurePathFailure([

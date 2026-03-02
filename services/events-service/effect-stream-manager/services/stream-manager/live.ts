@@ -2,6 +2,7 @@
  * Live implementation of StreamManager
  */
 import { Effect, Layer, PubSub, Stream } from "effect";
+import { Runtime } from "effect";
 
 import { Event, EventInput, EventType, Offset, StreamPath } from "../../domain.ts";
 import { EVENTS_META_STREAM_PATH, STREAM_CREATED_TYPE } from "../../stream-metadata.ts";
@@ -36,11 +37,13 @@ export const liveLayerWithOptions = (
     Effect.gen(function* () {
       const storageManager = yield* StreamStorageManager;
       const streams = new Map<StreamPath, EventStream.EventStream>();
+      const initializingStreams = new Map<StreamPath, Promise<EventStream.EventStream>>();
       const knownPaths = new Set(
         (yield* storageManager.listPaths().pipe(Effect.orDie)).map((path) => String(path)),
       );
       const websocketIdleDisconnectMs = parseWebsocketIdleDisconnectMs(options.env);
-      const streamInitializationSemaphore = yield* Effect.makeSemaphore(1);
+      const runtime = yield* Effect.runtime<never>();
+      const runPromise = Runtime.runPromise(runtime);
 
       // Global PubSub for all events (used for "all paths" subscriptions)
       const globalPubSub = yield* PubSub.unbounded<Event>();
@@ -50,7 +53,12 @@ export const liveLayerWithOptions = (
           const existing = streams.get(path);
           if (existing !== undefined) return existing;
 
-          return yield* streamInitializationSemaphore.withPermits(1)(
+          const initializing = initializingStreams.get(path);
+          if (initializing !== undefined) {
+            return yield* Effect.promise(() => initializing);
+          }
+
+          const initializationPromise = runPromise(
             Effect.gen(function* () {
               const initialized = streams.get(path);
               if (initialized !== undefined) return initialized;
@@ -61,8 +69,17 @@ export const liveLayerWithOptions = (
               });
               streams.set(path, stream);
               return stream;
-            }),
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  initializingStreams.delete(path);
+                }),
+              ),
+            ),
           );
+
+          initializingStreams.set(path, initializationPromise);
+          return yield* Effect.promise(() => initializationPromise);
         });
 
       const getOrCreateStream = (path: StreamPath): Effect.Effect<EventStream.EventStream> =>
