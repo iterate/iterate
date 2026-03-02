@@ -10,6 +10,7 @@ import { effectEventStreamManager } from "../effect-stream-manager/runtime.ts";
 
 describe("StreamManager race safety", () => {
   test("concurrent first appends on new paths do not collide on offset", async () => {
+    // Regression for https://github.com/iterate/iterate/pull/1102
     const tempDir = await mkdtemp(join(tmpdir(), "events-stream-race-"));
     const databasePath = join(tempDir, "events.sqlite");
 
@@ -22,8 +23,8 @@ describe("StreamManager race safety", () => {
       });
 
       try {
-        const rounds = 20;
-        const concurrency = 16;
+        const rounds = 40;
+        const concurrency = 24;
 
         for (let round = 0; round < rounds; round += 1) {
           const path = StreamPath.make(`race-${String(round)}`);
