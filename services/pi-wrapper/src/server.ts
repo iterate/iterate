@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createAdaptorServer } from "@hono/node-server";
 import {
+  createCodingTools,
   createAgentSession,
   discoverAuthStorage,
   discoverModels,
@@ -407,7 +408,7 @@ async function createPiSessionRecord(agentPath: string): Promise<SessionRecord> 
     cwd: env.PI_WORKING_DIRECTORY,
     agentDir: env.PI_AGENT_DIR,
     sessionManager: SessionManager.inMemory(),
-    tools: [],
+    tools: createCodingTools(env.PI_WORKING_DIRECTORY),
     extensions: [],
     skills: [],
     contextFiles: [],

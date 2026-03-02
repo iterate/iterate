@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createAdaptorServer } from "@hono/node-server";
@@ -151,6 +152,24 @@ const wsServer = new WebSocketServer({ noServer: true });
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+const LOCAL_IMAGE_PATH_REGEX = /\/[^\s"'<>]+\.(?:png|jpe?g|gif|webp|svg)\b/gi;
+
+function imageMimeTypeFromPath(imagePath: string): string {
+  const extension = path.extname(imagePath).toLowerCase();
+  if (extension === ".png") return "image/png";
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".gif") return "image/gif";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".svg") return "image/svg+xml";
+  return "application/octet-stream";
+}
+
+function extractLocalImagePaths(text: string): string[] {
+  const matches = text.match(LOCAL_IMAGE_PATH_REGEX) ?? [];
+  const normalized = matches.map((value) => value.replace(/[),.;:!?]+$/g, ""));
+  return [...new Set(normalized)];
 }
 
 function sanitizeSlug(input: string): string {
@@ -545,6 +564,49 @@ async function postSlackMessage(payload: {
   }
 }
 
+async function postSlackImage(payload: {
+  channel: string;
+  thread_ts: string;
+  imagePath: string;
+  initial_comment?: string;
+}): Promise<void> {
+  const fileBuffer = await readFile(payload.imagePath);
+  const filename = path.basename(payload.imagePath);
+  const form = new FormData();
+  form.set("channels", payload.channel);
+  form.set("thread_ts", payload.thread_ts);
+  form.set("filename", filename);
+  form.set("title", filename);
+  if (payload.initial_comment && payload.initial_comment.trim().length > 0) {
+    form.set("initial_comment", payload.initial_comment.trim());
+  }
+  form.set(
+    "file",
+    new Blob([fileBuffer], { type: imageMimeTypeFromPath(payload.imagePath) }),
+    filename,
+  );
+
+  const response = await fetch(`${env.SLACK_API_BASE_URL}/api/files.upload`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${process.env.SLACK_BOT_TOKEN ?? "xoxb-test"}`,
+    },
+    body: form,
+  });
+
+  if (!response.ok) {
+    throw new Error(`slack file upload failed: ${response.status} ${await response.text()}`);
+  }
+
+  const payloadJson = (await response.json().catch(() => null)) as {
+    ok?: boolean;
+    error?: string;
+  } | null;
+  if (payloadJson?.ok === false) {
+    throw new Error(`slack file upload failed: ${payloadJson.error ?? "unknown error"}`);
+  }
+}
+
 async function callAgentsGetOrCreate(params: { agentPath: string }): Promise<{
   agent: {
     agentPath: string;
@@ -710,6 +772,16 @@ async function consumeAgentStreamEvent(body: {
       thread_ts: replyTarget.threadTs,
       text: payload.data.text,
     });
+
+    const imagePaths = extractLocalImagePaths(payload.data.text);
+    for (const imagePath of imagePaths) {
+      await postSlackImage({
+        channel: replyTarget.channel,
+        thread_ts: replyTarget.threadTs,
+        imagePath,
+        initial_comment: `Generated image: ${path.basename(imagePath)}`,
+      });
+    }
     return;
   }
 

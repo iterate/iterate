@@ -604,4 +604,216 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow (pi)", () => {
     const unmatchedCount = proxy.records.filter((record) => record.response.status === 599).length;
     expect(unmatchedCount).toBe(0);
   }, 300_000);
+
+  test("pi tool call can generate a local image and slack uploads it to the thread", async () => {
+    await using proxy = await mockEgressProxy();
+
+    const imagePath = "/tmp/slack-tool-image.png";
+    const imagePngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO1ZkZQAAAAASUVORK5CYII=";
+    const bashCommand = `printf %s ${imagePngBase64} | base64 -d > ${imagePath}`;
+    let responsesCallCount = 0;
+
+    proxy.fetch = async (request) => {
+      const url = new URL(request.url);
+
+      if (url.pathname === "/api/chat.postMessage") {
+        return Response.json({ ok: true, ts: "123.456" });
+      }
+
+      if (url.pathname === "/api/files.upload") {
+        return Response.json({ ok: true, file: { id: "F_TEST_IMAGE" } });
+      }
+
+      if (url.pathname === "/v1/models") {
+        return Response.json({
+          object: "list",
+          data: [{ id: "gpt-4o-mini", object: "model" }],
+        });
+      }
+
+      if (url.pathname === "/v1/responses") {
+        responsesCallCount += 1;
+
+        if (responsesCallCount === 1) {
+          const argumentsJson = JSON.stringify({ command: bashCommand });
+          return sseResponse([
+            {
+              type: "response.output_item.added",
+              output_index: 0,
+              item: {
+                id: "fc_1",
+                type: "function_call",
+                status: "in_progress",
+                name: "bash",
+                call_id: "call_1",
+                arguments: "",
+              },
+            },
+            {
+              type: "response.function_call_arguments.delta",
+              output_index: 0,
+              item_id: "fc_1",
+              delta: argumentsJson,
+            },
+            {
+              type: "response.function_call_arguments.done",
+              output_index: 0,
+              item_id: "fc_1",
+              arguments: argumentsJson,
+            },
+            {
+              type: "response.output_item.done",
+              output_index: 0,
+              item: {
+                id: "fc_1",
+                type: "function_call",
+                status: "completed",
+                name: "bash",
+                call_id: "call_1",
+                arguments: argumentsJson,
+              },
+            },
+            {
+              type: "response.completed",
+              response: {
+                status: "completed",
+                usage: {
+                  input_tokens: 20,
+                  output_tokens: 8,
+                  total_tokens: 28,
+                  input_tokens_details: { cached_tokens: 0 },
+                },
+              },
+            },
+          ]);
+        }
+
+        return sseResponse([
+          {
+            type: "response.output_item.added",
+            item: {
+              id: "msg_1",
+              type: "message",
+              status: "in_progress",
+              role: "assistant",
+              content: [],
+            },
+          },
+          {
+            type: "response.content_part.added",
+            part: {
+              type: "output_text",
+              text: "",
+              annotations: [],
+            },
+          },
+          {
+            type: "response.output_text.delta",
+            delta: `Generated image: ${imagePath}`,
+          },
+          {
+            type: "response.output_item.done",
+            item: {
+              id: "msg_1",
+              type: "message",
+              status: "completed",
+              role: "assistant",
+              content: [
+                {
+                  type: "output_text",
+                  text: `Generated image: ${imagePath}`,
+                  annotations: [],
+                },
+              ],
+            },
+          },
+          {
+            type: "response.completed",
+            response: {
+              status: "completed",
+              usage: {
+                input_tokens: 24,
+                output_tokens: 12,
+                total_tokens: 36,
+                input_tokens_details: { cached_tokens: 0 },
+              },
+            },
+          },
+        ]);
+      }
+
+      return Response.json({ ok: true });
+    };
+
+    await using deployment = await projectDeployment({
+      image,
+      name: `jonasland-e2e-slack-pi-tool-image-${randomUUID()}`,
+      extraHosts: ["host.docker.internal:host-gateway"],
+      runtimeProcessTargets: ["caddy", "registry", "events"],
+      env: {
+        ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
+      },
+    });
+
+    await startOnDemandProcess(deployment, "egress-proxy");
+    await startOnDemandProcess(deployment, "agents");
+    await startOnDemandProcess(deployment, "pi-wrapper");
+    await startOnDemandProcess(deployment, "slack");
+
+    const webhookResponseBody = await postSlackWebhook(deployment, {
+      event: {
+        type: "app_mention",
+        user: "U123",
+        text: "<@BOT> use bash to create a tiny PNG at /tmp/slack-tool-image.png and share it",
+        channel: "C123",
+        ts: "1730000000.000300",
+        thread_ts: "1730000000.000300",
+      },
+    });
+    expect(webhookResponseBody).toContain('"streamPath":"/integrations/slack/webhooks"');
+
+    const agentStream = await waitForPiAgentStream(deployment);
+    const events = await waitForPromptCount(deployment, agentStream.path, 1);
+    expect(
+      events.some((event) => event["type"] === "https://events.iterate.com/agents/prompt-added"),
+    ).toBe(true);
+    expect(
+      events.some((event) => {
+        if (event["type"] !== "https://events.iterate.com/agents/status-updated") return false;
+        const payload = event["payload"] as { phase?: unknown; text?: unknown } | undefined;
+        return payload?.phase === "tool-running" && payload?.text === ":hammer_and_wrench: bash";
+      }),
+    ).toBe(true);
+    expect(
+      events.some((event) => {
+        if (event["type"] !== "https://events.iterate.com/agents/response-added") return false;
+        const payload = event["payload"] as { text?: unknown } | undefined;
+        return payload?.text === `Generated image: ${imagePath}`;
+      }),
+    ).toBe(true);
+
+    let fileUploadRecord: (typeof proxy.records)[number] | undefined;
+    const fileUploadDeadline = Date.now() + 90_000;
+    while (Date.now() < fileUploadDeadline) {
+      fileUploadRecord = proxy.records.find((record) =>
+        new URL(record.request.url).pathname.endsWith("/files.upload"),
+      );
+      if (fileUploadRecord) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    expect(fileUploadRecord).toBeDefined();
+
+    if (fileUploadRecord) {
+      const formData = await fileUploadRecord.request.formData();
+      expect(formData.get("channels")).toBe("C123");
+      expect(formData.get("thread_ts")).toBe("1730000000.000300");
+      expect(formData.get("filename")).toBe("slack-tool-image.png");
+    }
+
+    expect(responsesCallCount).toBeGreaterThanOrEqual(2);
+
+    const unmatchedCount = proxy.records.filter((record) => record.response.status === 599).length;
+    expect(unmatchedCount).toBe(0);
+  }, 300_000);
 });
