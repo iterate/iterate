@@ -12,7 +12,7 @@ import {
   updateRoute,
 } from "./server.ts";
 import { parseWorkerEnv, type RawProxyWorkerEnv } from "./env.ts";
-import { resetDb } from "./test-db.ts";
+import { resetDb } from "./test/test-helpers.ts";
 
 const testEnv = env as RawProxyWorkerEnv;
 

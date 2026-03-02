@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { findPatternConflicts, normalizePattern } from "./route-conflicts.ts";
-import { resetDb } from "./test-db.ts";
+import { resetDb } from "./test/test-helpers.ts";
 
 const testEnv = env as { DB: D1Database };
 
