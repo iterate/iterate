@@ -1,6 +1,7 @@
 {
   "permissions": {
     "allow": [
+      "*(*)",
       "Bash(git checkout:*)",
       "Bash(git:*)",
       "Bash(ls:*)",
@@ -8,7 +9,13 @@
       "Bash(pnpm lint:*)",
       "Bash(pnpm format:*)",
       "Bash(pnpm:*)",
-      "Bash(doppler run:*)"
+      "Bash(doppler run:*)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:opencode.ai)",
+      "WebFetch(domain:deepwiki.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(python3:*)"
     ]
   }
 }
