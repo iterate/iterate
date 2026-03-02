@@ -64,17 +64,7 @@ opencode_sync_loop() {
       local sig
       sig="$(stat -c '%s:%Y' "${live_db}" 2>/dev/null || true)"
       if [[ -n "${sig}" ]] && [[ "${sig}" != "${last_sig}" ]]; then
-        if python3 - "${live_db}" "${tmp_db}" <<'PY'
-import sqlite3, sys
-source = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
-target = sqlite3.connect(sys.argv[2])
-try:
-    source.backup(target)
-finally:
-    target.close()
-    source.close()
-PY
-        then
+        if sqlite3 "${live_db}" ".backup '${tmp_db}'"; then
           mv -f "${tmp_db}" "${snapshot_db}"
           last_sig="${sig}"
           echo "[archil] opencode snapshot updated (${sig})"
