@@ -1,12 +1,12 @@
 #!/bin/bash
-# Archil persistent volume mount — managed by pidnap.
+# Archil persistent volume mount + opencode sqlite sync — managed by pidnap.
 #
 # Mounts archil at /mnt/persist (NOT over ~). The Docker image already has the
 # repo + node_modules baked in, so boot is instant.
 #
 # Persisted state:
 #   - ~/persisted → /mnt/persist/persisted (user files that survive reprovisioning)
-#   - OpenCode sqlite snapshot (restored on boot, synced periodically by archil-opencode-sync)
+#   - OpenCode sqlite snapshot (restored on boot, synced periodically)
 #
 # Env vars (from process env, set by Fly from project env vars):
 #   ARCHIL_DISK_NAME   — disk ID (e.g. dsk-0000000000003139)
@@ -47,6 +47,47 @@ export ARCHIL_MOUNT_TOKEN="${ARCHIL_MOUNT_TOKEN:-}"
 echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${PERSIST} (region: ${ARCHIL_CLI_REGION})"
 sudo mkdir -p "$PERSIST"
 
+# Periodic opencode sqlite snapshot. Runs forever after setup completes.
+opencode_sync_loop() {
+  local live_db="${HOME_DIR}/.local/share/opencode/opencode.db"
+  local snapshot_dir="${PERSIST}/.opencode-snapshot"
+  local snapshot_db="${snapshot_dir}/opencode.db"
+  local tmp_db="${snapshot_db}.tmp"
+  local interval="${ARCHIL_OPENCODE_SYNC_INTERVAL_SEC:-20}"
+  local last_sig=""
+
+  mkdir -p "${snapshot_dir}"
+  echo "[archil] opencode sync started (interval=${interval}s)"
+
+  while true; do
+    if [[ -f "${live_db}" ]]; then
+      local sig
+      sig="$(stat -c '%s:%Y' "${live_db}" 2>/dev/null || true)"
+      if [[ -n "${sig}" ]] && [[ "${sig}" != "${last_sig}" ]]; then
+        if python3 - "${live_db}" "${tmp_db}" <<'PY'
+import sqlite3, sys
+source = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+target = sqlite3.connect(sys.argv[2])
+try:
+    source.backup(target)
+finally:
+    target.close()
+    source.close()
+PY
+        then
+          mv -f "${tmp_db}" "${snapshot_db}"
+          last_sig="${sig}"
+          echo "[archil] opencode snapshot updated (${sig})"
+        else
+          rm -f "${tmp_db}"
+          echo "[archil] opencode snapshot failed; will retry"
+        fi
+      fi
+    fi
+    sleep "${interval}"
+  done
+}
+
 # Post-mount setup runs in background since --no-fork blocks the main thread.
 (
   set +e
@@ -76,9 +117,12 @@ sudo mkdir -p "$PERSIST"
     cp -f "${OPENCODE_SNAPSHOT_DB}" "${OPENCODE_LOCAL_DIR}/opencode.db"
   fi
 
-  # Signal that the repo is ready (it's baked into the image, no clone needed)
+  # Signal ready — dependents (opencode, daemon, etc.) can start now
   touch /tmp/archil-repo-ready
   echo "[archil] Setup complete, repo ready"
+
+  # Enter the opencode sync loop (runs forever)
+  opencode_sync_loop
 ) &
 
 # --force: claim ownership even if stale delegation exists from a previous machine.

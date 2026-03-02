@@ -121,26 +121,6 @@ export default defineConfig({
       dependsOn: ["archil-mount"],
     },
     {
-      name: "archil-opencode-sync",
-      definition: {
-        command: "bash",
-        args: [`${sandboxDir}/archil-opencode-sync.sh`],
-      },
-      envOptions: {
-        inheritGlobalEnv: false,
-        reloadDelay: false,
-      },
-      options: {
-        restartPolicy: "always",
-        backoff: {
-          type: "exponential",
-          initialDelayMs: 3000,
-          maxDelayMs: 60000,
-        },
-      },
-      dependsOn: ["archil-repo-ready"],
-    },
-    {
       name: "project-ingress-proxy",
       definition: {
         command: "tsx",
