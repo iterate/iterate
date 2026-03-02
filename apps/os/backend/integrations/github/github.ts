@@ -1,5 +1,4 @@
 import { timingSafeEqual } from "node:crypto";
-import jsonata from "jsonata";
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod/v4";
@@ -18,7 +17,6 @@ import { createMachineForProject } from "../../services/machine-creation.ts";
 import { trackWebhookEvent } from "../../lib/posthog.ts";
 import type { ProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
-import { routePullRequestSignalToAgent } from "./github-pr-agent.ts";
 
 /**
  * Derive the correct provider-specific snapshot/image name from a short SHA.
@@ -594,12 +592,6 @@ export async function listInstallationRepositories(
 
 type WebhookEventParams<T = unknown> = { payload: T; db: DB; env: CloudflareEnv };
 
-type GitHubRepoCoordinates = {
-  owner: string;
-  name: string;
-  fullName: string;
-};
-
 // ── Webhook Schemas ────────────────────────────────────────────────
 
 const RepositoryPayload = z.object({
@@ -609,11 +601,6 @@ const RepositoryPayload = z.object({
 });
 
 type RepositoryPayload = z.infer<typeof RepositoryPayload>;
-
-const PullRequestRef = z.object({
-  number: z.number(),
-  html_url: z.string(),
-});
 
 const WorkflowRunEvent = z.object({
   action: z.string(),
@@ -649,62 +636,6 @@ const CommitCommentEvent = z.object({
 
 type CommitCommentEvent = z.infer<typeof CommitCommentEvent>;
 
-const PullRequestReviewEvent = z.object({
-  action: z.string(),
-  repository: RepositoryPayload,
-  pull_request: PullRequestRef,
-  review: z.object({
-    body: z.string().nullable().optional(),
-    html_url: z.string().optional(),
-    user: z.object({ login: z.string() }),
-  }),
-});
-
-type PullRequestReviewEvent = z.infer<typeof PullRequestReviewEvent>;
-
-const PullRequestReviewCommentEvent = z.object({
-  action: z.string(),
-  repository: RepositoryPayload,
-  pull_request: PullRequestRef,
-  comment: z.object({
-    body: z.string(),
-    html_url: z.string().optional(),
-    user: z.object({ login: z.string() }),
-  }),
-});
-
-type PullRequestReviewCommentEvent = z.infer<typeof PullRequestReviewCommentEvent>;
-
-const IssueCommentEvent = z.object({
-  action: z.string(),
-  repository: RepositoryPayload,
-  issue: z.object({
-    number: z.number(),
-    html_url: z.string(),
-    pull_request: z.unknown().optional(),
-  }),
-  comment: z.object({
-    body: z.string(),
-    html_url: z.string().optional(),
-    user: z.object({ login: z.string() }),
-  }),
-});
-
-type IssueCommentEvent = z.infer<typeof IssueCommentEvent>;
-
-const PullRequestEvent = z.object({
-  action: z.string(),
-  repository: RepositoryPayload,
-  pull_request: PullRequestRef.extend({
-    merged: z.boolean().optional(),
-    merge_commit_sha: z.string().nullable().optional(),
-    merged_by: z.object({ login: z.string() }).nullable().optional(),
-  }),
-  sender: z.object({ login: z.string() }).optional(),
-});
-
-type PullRequestEvent = z.infer<typeof PullRequestEvent>;
-
 const IterateCICompletion = z.object({
   action: z.literal("completed"),
   workflow_run: z.object({
@@ -716,64 +647,6 @@ const IterateCICompletion = z.object({
     }),
   }),
 });
-
-// ── Webhook Constants ──────────────────────────────────────────────
-
-// JSONata filters for webhook events - evaluated against { payload, env }
-// Return true to process the event, false to skip
-const WEBHOOK_FILTERS = {
-  // workflow_run: process PR-linked runs in all stages, plus main-branch refresh flow in prd
-  workflow_run:
-    "(payload.workflow_run.pull_requests and $count(payload.workflow_run.pull_requests) > 0) or (env.APP_STAGE = 'prd' and payload.workflow_run.head_branch = 'main')",
-  // commit_comment: require APP_STAGE=xxx tag in comment body to target specific environment
-  commit_comment: `$contains(payload.comment.body, '[APP_STAGE=' & env.APP_STAGE & ']')`,
-  pull_request_review: "true",
-  pull_request_review_comment: "true",
-  issue_comment: "payload.issue.pull_request != null",
-  pull_request: "payload.action = 'closed' and payload.pull_request.merged = true",
-};
-
-// ── Webhook Dispatcher ─────────────────────────────────────────────
-
-type WebhookDispatcher = (deliveryId: string, payload: unknown, db: DB, env: CloudflareEnv) => void;
-
-function makeDispatcher<T>(
-  eventName: string,
-  eventSchema: z.ZodType<T>,
-  handler: (params: WebhookEventParams<T>) => Promise<void>,
-): WebhookDispatcher {
-  return (deliveryId, payload, db, env) => {
-    const result = eventSchema.safeParse(payload);
-    if (result.success) {
-      waitUntil(
-        handler({ payload: result.data, db, env }).catch((err) => {
-          logger.error(`[GitHub Webhook] ${eventName} error`, err);
-        }),
-      );
-    } else {
-      logger.error(
-        `[GitHub Webhook] ${eventName} ${deliveryId} parse error: ${z.prettifyError(result.error)}`,
-      );
-    }
-  };
-}
-
-const webhookDispatchers: Record<keyof typeof WEBHOOK_FILTERS, WebhookDispatcher> = {
-  workflow_run: makeDispatcher("workflow_run", WorkflowRunEvent, handleWorkflowRun),
-  commit_comment: makeDispatcher("commit_comment", CommitCommentEvent, handleCommitComment),
-  pull_request_review: makeDispatcher(
-    "pull_request_review",
-    PullRequestReviewEvent,
-    handlePullRequestReview,
-  ),
-  pull_request_review_comment: makeDispatcher(
-    "pull_request_review_comment",
-    PullRequestReviewCommentEvent,
-    handlePullRequestReviewComment,
-  ),
-  issue_comment: makeDispatcher("issue_comment", IssueCommentEvent, handleIssueComment),
-  pull_request: makeDispatcher("pull_request", PullRequestEvent, handlePullRequest),
-};
 
 // ── Webhook App ────────────────────────────────────────────────────
 
@@ -839,19 +712,10 @@ githubApp.post("/webhook", async (c) => {
   }
   const externalId = deliveryId;
 
-  if (!xGithubEvent || !(xGithubEvent in WEBHOOK_FILTERS)) {
-    return c.json({ message: `No filter for event type ${xGithubEvent}` }, 200);
+  if (!xGithubEvent) {
+    return c.json({ error: "Missing x-github-event" }, 400);
   }
-  const eventType = xGithubEvent as keyof typeof WEBHOOK_FILTERS;
-
-  const jsonataExpression = WEBHOOK_FILTERS[eventType];
-
-  const filterContext = { payload, env: { APP_STAGE: c.env.APP_STAGE } };
-  const matches = await jsonata(jsonataExpression).evaluate(filterContext);
-  if (!matches) {
-    logger.debug("[GitHub Webhook] Event filtered out", { eventType, filter: jsonataExpression });
-    return c.json({ message: `Event filtered out` }, 200);
-  }
+  const eventType = xGithubEvent;
 
   const [inserted] = await c.var.db
     .insert(schema.event)
@@ -869,7 +733,11 @@ githubApp.post("/webhook", async (c) => {
     return c.json({ received: true, duplicate: true });
   }
 
-  webhookDispatchers[eventType](deliveryId, payload, db, env);
+  waitUntil(
+    processGitHubWebhookEvent({ eventType, payload, deliveryId, db, env }).catch((err) => {
+      logger.error("[GitHub Webhook] Failed to process webhook", err);
+    }),
+  );
 
   return c.json({ received: true });
 });
@@ -905,18 +773,6 @@ async function verifyGitHubSignature(
 }
 
 // ── Webhook Utilities ──────────────────────────────────────────────
-
-function resolveRepoCoordinates(repository: RepositoryPayload): GitHubRepoCoordinates | null {
-  const split = repository.full_name.split("/");
-  const fallbackOwner = split[0]?.trim();
-  const fallbackName = split[1]?.trim();
-
-  const owner = repository.owner?.login?.trim() || fallbackOwner;
-  const name = repository.name?.trim() || fallbackName;
-
-  if (!owner || !name) return null;
-  return { owner, name, fullName: `${owner}/${name}` };
-}
 
 // ── Shared Machine Recreation ──────────────────────────────────────
 
@@ -995,48 +851,9 @@ async function recreateMachinesForAllProjects(params: {
 async function handleWorkflowRun({ payload, db, env }: WebhookEventParams<WorkflowRunEvent>) {
   const { workflow_run } = payload;
 
-  const workflowRepo = resolveRepoCoordinates(payload.repository);
-  const routedPrSignals = Boolean(workflowRepo) && workflow_run.pull_requests.length > 0;
-  if (routedPrSignals && workflowRepo) {
-    for (const pullRequest of workflow_run.pull_requests) {
-      try {
-        await routePullRequestSignalToAgent({
-          db,
-          env,
-          signal: {
-            repo: workflowRepo,
-            prNumber: pullRequest.number,
-            eventKind: "workflow_run",
-            action: payload.action,
-            actorLogin: "github-actions[bot]",
-            eventBody: `Workflow: ${workflow_run.name}\nConclusion: ${workflow_run.conclusion ?? "unknown"}\nHead branch: ${workflow_run.head_branch}`,
-            eventUrl: workflow_run.html_url ?? "",
-          },
-        });
-      } catch (err) {
-        logger.error("[GitHub Webhook] PR signal routing failed during workflow_run", {
-          repo: workflowRepo.fullName,
-          prNumber: pullRequest.number,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-  }
-
   // Check if this is an iterate/iterate CI completion on main
   if (!IterateCICompletion.safeParse(payload).success) {
-    if (routedPrSignals) {
-      logger.debug("[GitHub Webhook] workflow_run handled via PR signal routing", {
-        action: payload.action,
-        conclusion: workflow_run.conclusion,
-        branch: workflow_run.head_branch,
-        path: workflow_run.path,
-        repo: workflow_run.repository.full_name,
-      });
-      return;
-    }
-
-    logger.debug("[GitHub Webhook] workflow_run not matching any handlers", {
+    logger.debug("[GitHub Webhook] Ignoring workflow_run event", {
       action: payload.action,
       conclusion: workflow_run.conclusion,
       branch: workflow_run.head_branch,
@@ -1055,99 +872,40 @@ async function handleWorkflowRun({ payload, db, env }: WebhookEventParams<Workfl
   await recreateMachinesForAllProjects({ db, env, shortSha, namePrefix: "ci", logContext: "" });
 }
 
-async function handlePullRequestReview({
-  payload,
-  db,
-  env,
-}: WebhookEventParams<PullRequestReviewEvent>) {
-  if (payload.action === "dismissed") return;
+async function processGitHubWebhookEvent(params: {
+  eventType: string;
+  payload: unknown;
+  deliveryId: string;
+  db: DB;
+  env: CloudflareEnv;
+}): Promise<void> {
+  if (params.eventType === "workflow_run") {
+    const parsed = WorkflowRunEvent.safeParse(params.payload);
+    if (!parsed.success) {
+      logger.error(
+        `[GitHub Webhook] workflow_run ${params.deliveryId} parse error: ${z.prettifyError(parsed.error)}`,
+      );
+      return;
+    }
+    await handleWorkflowRun({ payload: parsed.data, db: params.db, env: params.env });
+    return;
+  }
 
-  const repo = resolveRepoCoordinates(payload.repository);
-  if (!repo) return;
+  if (params.eventType === "commit_comment") {
+    const parsed = CommitCommentEvent.safeParse(params.payload);
+    if (!parsed.success) {
+      logger.error(
+        `[GitHub Webhook] commit_comment ${params.deliveryId} parse error: ${z.prettifyError(parsed.error)}`,
+      );
+      return;
+    }
+    await handleCommitComment({ payload: parsed.data, db: params.db, env: params.env });
+    return;
+  }
 
-  await routePullRequestSignalToAgent({
-    db,
-    env,
-    signal: {
-      repo,
-      prNumber: payload.pull_request.number,
-      eventKind: "pull_request_review",
-      action: payload.action,
-      actorLogin: payload.review.user.login,
-      eventBody: payload.review.body?.trim() ?? "",
-      eventUrl: payload.review.html_url ?? payload.pull_request.html_url,
-    },
-  });
-}
-
-async function handlePullRequestReviewComment({
-  payload,
-  db,
-  env,
-}: WebhookEventParams<PullRequestReviewCommentEvent>) {
-  if (payload.action === "deleted") return;
-
-  const repo = resolveRepoCoordinates(payload.repository);
-  if (!repo) return;
-
-  await routePullRequestSignalToAgent({
-    db,
-    env,
-    signal: {
-      repo,
-      prNumber: payload.pull_request.number,
-      eventKind: "pull_request_review_comment",
-      action: payload.action,
-      actorLogin: payload.comment.user.login,
-      eventBody: payload.comment.body,
-      eventUrl: payload.comment.html_url ?? payload.pull_request.html_url,
-    },
-  });
-}
-
-async function handleIssueComment({ payload, db, env }: WebhookEventParams<IssueCommentEvent>) {
-  if (!payload.issue.pull_request) return;
-  if (payload.action === "deleted") return;
-
-  const repo = resolveRepoCoordinates(payload.repository);
-  if (!repo) return;
-
-  await routePullRequestSignalToAgent({
-    db,
-    env,
-    signal: {
-      repo,
-      prNumber: payload.issue.number,
-      eventKind: "issue_comment",
-      action: payload.action,
-      actorLogin: payload.comment.user.login,
-      eventBody: payload.comment.body,
-      eventUrl: payload.comment.html_url ?? payload.issue.html_url,
-    },
-  });
-}
-
-async function handlePullRequest({ payload, db, env }: WebhookEventParams<PullRequestEvent>) {
-  if (payload.action !== "closed") return;
-  if (!payload.pull_request.merged) return;
-
-  const repo = resolveRepoCoordinates(payload.repository);
-  if (!repo) return;
-
-  const mergedBy = payload.pull_request.merged_by?.login ?? payload.sender?.login ?? "unknown";
-
-  await routePullRequestSignalToAgent({
-    db,
-    env,
-    signal: {
-      repo,
-      prNumber: payload.pull_request.number,
-      eventKind: "pull_request",
-      action: payload.action,
-      actorLogin: mergedBy,
-      eventBody: `PR merged by: ${mergedBy}\nMerge commit: ${payload.pull_request.merge_commit_sha ?? "unknown"}`,
-      eventUrl: payload.pull_request.html_url,
-    },
+  logger.debug("[GitHub Webhook] Ignoring non-recreation event", {
+    eventType: params.eventType,
+    deliveryId: params.deliveryId,
   });
 }
 
