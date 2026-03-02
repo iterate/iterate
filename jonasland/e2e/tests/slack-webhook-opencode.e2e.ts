@@ -24,8 +24,19 @@ type OnDemandProcessConfig = {
   routeCheck?: { host: string; path: string };
   directHttpCheck?: { url: string };
 };
-const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> =
-  ON_DEMAND_PROCESSES_BY_NAME;
+const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = {
+  ...ON_DEMAND_PROCESSES_BY_NAME,
+  agents: {
+    ...ON_DEMAND_PROCESSES_BY_NAME.agents,
+    definition: {
+      ...ON_DEMAND_PROCESSES_BY_NAME.agents.definition,
+      env: {
+        ...ON_DEMAND_PROCESSES_BY_NAME.agents.definition.env,
+        AGENTS_DEFAULT_PROVIDER: "opencode",
+      },
+    },
+  },
+};
 
 async function waitForHostRoute(
   deployment: ProjectDeployment,

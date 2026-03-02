@@ -72,6 +72,7 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
       env: {
         ...ON_DEMAND_OTEL_SERVICE_ENV,
         AGENTS_SERVICE_PORT: "19061",
+        AGENTS_DEFAULT_PROVIDER: "pi",
         OPENCODE_WRAPPER_BASE_URL: "http://127.0.0.1:19062",
         PI_WRAPPER_BASE_URL: "http://127.0.0.1:19064",
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010",
@@ -129,7 +130,6 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
         AGENTS_SERVICE_BASE_URL: "http://127.0.0.1:19061",
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010",
         SLACK_API_BASE_URL: "http://slack.com",
-        SLACK_AGENT_PROVIDER: "opencode",
       },
     },
     routeCheck: { host: "slack.iterate.localhost", path: "/healthz" },

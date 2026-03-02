@@ -29,6 +29,7 @@ const inFlightGetOrCreate = new Map<string, Promise<AgentProvisioningRecord>>();
 
 const env = agentsServiceManifest.envVars.parse(process.env);
 const port = env.AGENTS_SERVICE_PORT;
+const defaultAgentProvider = env.AGENTS_DEFAULT_PROVIDER;
 const serviceRegistryHost = "agents.iterate.localhost";
 const serviceRegistryOpenApiPath = "/api/openapi.json";
 const MIGRATIONS_FOLDER = path.resolve(fileURLToPath(new URL("../drizzle", import.meta.url)));
@@ -69,17 +70,20 @@ const docsRouter = docsOs.router({
     })),
   },
   agents: {
-    getOrCreate: docsOs.agents.getOrCreate.handler(async ({ input }) => ({
-      agent: {
-        agentPath: input.agentPath,
-        provider: input.provider,
-        sessionId: "stub-session",
-        streamPath: `/agents/${input.provider}/stub-session`,
-        createdAt: new Date(0).toISOString(),
-        updatedAt: new Date(0).toISOString(),
-      },
-      wasNewlyCreated: false,
-    })),
+    getOrCreate: docsOs.agents.getOrCreate.handler(async ({ input }) => {
+      const provider = normalizeProvider(input.provider ?? defaultAgentProvider);
+      return {
+        agent: {
+          agentPath: input.agentPath,
+          provider,
+          sessionId: "stub-session",
+          streamPath: `/agents/${provider}/stub-session`,
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        },
+        wasNewlyCreated: false,
+      };
+    }),
     appendToStream: docsOs.agents.appendToStream.handler(async () => undefined),
     registerStreamSubscription: docsOs.agents.registerStreamSubscription.handler(
       async () => undefined,
@@ -444,9 +448,10 @@ app.post("/api/agents/get-or-create", async (c) => {
   }
 
   try {
+    const requestedProvider = body.provider ?? defaultAgentProvider;
     const { agent, wasNewlyCreated } = await getOrCreateAgentProvisioning({
       agentPath,
-      provider: normalizeProvider(body.provider),
+      provider: normalizeProvider(requestedProvider),
     });
     return c.json({ agent, wasNewlyCreated });
   } catch (error) {

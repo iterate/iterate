@@ -82,7 +82,7 @@ const docsRouter = docsOs.router({
     decideWebhook: docsOs.slack.decideWebhook.handler(async () => ({
       shouldCreateAgent: true,
       shouldAppendPrompt: true,
-      getOrCreateInput: { agentPath: "/agents/slack/demo/demo", provider: "opencode" },
+      getOrCreateInput: { agentPath: "/agents/slack/demo/demo" },
       reasonCodes: ["stub"],
       debug: {},
     })),
@@ -545,10 +545,7 @@ async function postSlackMessage(payload: {
   }
 }
 
-async function callAgentsGetOrCreate(params: {
-  agentPath: string;
-  provider: AgentProvider;
-}): Promise<{
+async function callAgentsGetOrCreate(params: { agentPath: string }): Promise<{
   agent: {
     agentPath: string;
     provider: AgentProvider;
@@ -592,7 +589,6 @@ async function processIntegrationWebhookEvent(input: {
   const decision = decideSlackWebhook({
     webhook: input.webhook,
     existingRoutes: routes.map(toSlackContractRoute),
-    provider: env.SLACK_AGENT_PROVIDER,
   });
 
   if (decision.shouldCreateAgent && decision.getOrCreateInput) {
@@ -805,7 +801,7 @@ app.post("/api/slack/debug/decide-webhook", async (c) => {
   const decision = decideSlackWebhook({
     webhook: normalized.event,
     existingRoutes: Array.isArray(body.existingRoutes) ? body.existingRoutes : [],
-    provider: body.provider === "pi" ? "pi" : env.SLACK_AGENT_PROVIDER,
+    provider: body.provider === "opencode" ? "opencode" : "pi",
   });
   return c.json(decision);
 });

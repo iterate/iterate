@@ -15,14 +15,24 @@ describe("decideSlackWebhook", () => {
     const result = decideSlackWebhook({
       webhook: baseWebhook,
       existingRoutes: [],
-      provider: "opencode",
     });
 
     expect(result.shouldCreateAgent).toBe(true);
     expect(result.shouldAppendPrompt).toBe(true);
     expect(result.getOrCreateInput?.agentPath).toBe("/agents/slack/C123/1730000000-123456");
-    expect(result.getOrCreateInput?.provider).toBe("opencode");
     expect(result.reasonCodes).toEqual(["route.missing-create-agent"]);
+    expect(result.debug).toEqual(expect.objectContaining({ provider: null }));
+  });
+
+  test("includes provider in debug when provided", () => {
+    const result = decideSlackWebhook({
+      webhook: baseWebhook,
+      existingRoutes: [],
+      provider: "opencode",
+    });
+
+    expect(result.shouldCreateAgent).toBe(true);
+    expect(result.debug).toEqual(expect.objectContaining({ provider: "opencode" }));
   });
 
   test("does not create when route already exists", () => {
@@ -37,7 +47,6 @@ describe("decideSlackWebhook", () => {
           agentStreamPath: "/agents/opencode/sess-1",
         },
       ],
-      provider: "opencode",
     });
 
     expect(result.shouldCreateAgent).toBe(false);
@@ -50,7 +59,6 @@ describe("decideSlackWebhook", () => {
     const result = decideSlackWebhook({
       webhook: { ...baseWebhook, text: "   " },
       existingRoutes: [],
-      provider: "opencode",
     });
 
     expect(result.shouldCreateAgent).toBe(false);
@@ -62,7 +70,6 @@ describe("decideSlackWebhook", () => {
     const result = decideSlackWebhook({
       webhook: { ...baseWebhook, subtype: "message_changed" },
       existingRoutes: [],
-      provider: "opencode",
     });
 
     expect(result.shouldCreateAgent).toBe(false);

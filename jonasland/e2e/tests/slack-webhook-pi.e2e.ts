@@ -27,13 +27,6 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
   ...ON_DEMAND_PROCESSES_BY_NAME,
   slack: {
     ...ON_DEMAND_PROCESSES_BY_NAME.slack,
-    definition: {
-      ...ON_DEMAND_PROCESSES_BY_NAME.slack.definition,
-      env: {
-        ...ON_DEMAND_PROCESSES_BY_NAME.slack.definition.env,
-        SLACK_AGENT_PROVIDER: "pi",
-      },
-    },
     directHttpCheck: { url: "http://127.0.0.1:19063/healthz" },
   },
   agents: {
@@ -170,127 +163,212 @@ function sseResponse(events: unknown[]): Response {
   });
 }
 
+type StreamRecord = { path: string; eventCount: number };
+
+function createPiMockEgressFetch(): (request: Request) => Promise<Response> {
+  return async (request) => {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/api/chat.postMessage") {
+      return Response.json({ ok: true, ts: "123.456" });
+    }
+
+    if (url.pathname === "/v1/models") {
+      return Response.json({
+        object: "list",
+        data: [{ id: "gpt-4o-mini", object: "model" }],
+      });
+    }
+
+    if (url.pathname === "/v1/chat/completions") {
+      return sseResponse([
+        {
+          id: "chatcmpl_test",
+          object: "chat.completion.chunk",
+          created: 1_730_000_001,
+          model: "gpt-4o-mini",
+          choices: [
+            {
+              index: 0,
+              delta: { content: "The answer is 42" },
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl_test",
+          object: "chat.completion.chunk",
+          created: 1_730_000_001,
+          model: "gpt-4o-mini",
+          choices: [
+            {
+              index: 0,
+              delta: {},
+              finish_reason: "stop",
+            },
+          ],
+          usage: {
+            prompt_tokens: 12,
+            completion_tokens: 6,
+            total_tokens: 18,
+          },
+        },
+      ]);
+    }
+
+    if (url.pathname === "/v1/responses") {
+      return sseResponse([
+        {
+          type: "response.output_item.added",
+          item: {
+            id: "msg_1",
+            type: "message",
+            status: "in_progress",
+            role: "assistant",
+            content: [],
+          },
+        },
+        {
+          type: "response.content_part.added",
+          part: {
+            type: "output_text",
+            text: "",
+            annotations: [],
+          },
+        },
+        {
+          type: "response.output_text.delta",
+          delta: "The answer is 42",
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            id: "msg_1",
+            type: "message",
+            status: "completed",
+            role: "assistant",
+            content: [{ type: "output_text", text: "The answer is 42", annotations: [] }],
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            status: "completed",
+            usage: {
+              input_tokens: 12,
+              output_tokens: 6,
+              total_tokens: 18,
+              input_tokens_details: { cached_tokens: 0 },
+            },
+          },
+        },
+      ]);
+    }
+
+    if (url.pathname === "/v1/messages") {
+      return Response.json({
+        id: "msg_test",
+        type: "message",
+        role: "assistant",
+        model: "claude-test",
+        content: [{ type: "text", text: "The answer is 42" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 6 },
+      });
+    }
+
+    if (url.pathname === "/v1/messages/count_tokens") {
+      return Response.json({ input_tokens: 10 });
+    }
+
+    return Response.json({ ok: true });
+  };
+}
+
+async function postSlackWebhook(
+  deployment: ProjectDeployment,
+  payload: Record<string, unknown>,
+): Promise<string> {
+  const webhook = await deployment.exec([
+    "curl",
+    "-sS",
+    "-i",
+    "-H",
+    "content-type: application/json",
+    "--data",
+    JSON.stringify(payload),
+    "http://127.0.0.1:19063/webhook",
+  ]);
+
+  if (!/HTTP\/\d(?:\.\d)? 200/.test(webhook.output)) {
+    const logs = await deployment.logs();
+    throw new Error(`webhook failed:\n${webhook.output}\n\ncontainer logs:\n${logs}`);
+  }
+
+  return webhook.output
+    .split(/\r?\n\r?\n/)
+    .slice(1)
+    .join("\n\n")
+    .trim();
+}
+
+async function listStreams(deployment: ProjectDeployment): Promise<StreamRecord[]> {
+  const listResult = await postEventsOrpc(deployment, "listStreams", {});
+  if (listResult.exitCode !== 0) {
+    throw new Error(`failed to list streams: ${listResult.output}`);
+  }
+
+  const streamsPayload = JSON.parse(listResult.output) as { json: StreamRecord[] };
+  return streamsPayload.json;
+}
+
+async function waitForPiAgentStream(deployment: ProjectDeployment): Promise<StreamRecord> {
+  let streams: StreamRecord[] = [];
+  const streamsDeadline = Date.now() + 20_000;
+  while (Date.now() < streamsDeadline) {
+    streams = await listStreams(deployment);
+    const stream = streams.find((value) => value.path.startsWith("/agents/pi/"));
+    if (stream) return stream;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  throw new Error(`available streams: ${JSON.stringify(streams.map((stream) => stream.path))}`);
+}
+
+function isAgentOutputEvent(event: Record<string, unknown>): boolean {
+  return (
+    event["type"] === "https://events.iterate.com/agents/status-updated" ||
+    event["type"] === "https://events.iterate.com/agents/response-added" ||
+    event["type"] === "https://events.iterate.com/agents/error"
+  );
+}
+
+async function waitForPromptCount(
+  deployment: ProjectDeployment,
+  streamPath: string,
+  minimumPromptCount: number,
+): Promise<Array<Record<string, unknown>>> {
+  let agentEvents: Array<Record<string, unknown>> = [];
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    agentEvents = await readStreamEvents(deployment, streamPath);
+    const promptCount = agentEvents.filter(
+      (event) => event["type"] === "https://events.iterate.com/agents/prompt-added",
+    ).length;
+    const hasOutput = agentEvents.some((event) => isAgentOutputEvent(event));
+    if (promptCount >= minimumPromptCount && hasOutput) {
+      return agentEvents;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  throw new Error(`timed out waiting for ${String(minimumPromptCount)} prompt events`);
+}
+
 describe.runIf(RUN_E2E)("jonasland slack webhook flow (pi)", () => {
   test("slack webhook goes through events mediation, triggers pi sdk call, and posts slack updates", async () => {
     await using proxy = await mockEgressProxy();
-
-    proxy.fetch = async (request) => {
-      const url = new URL(request.url);
-
-      if (url.pathname === "/api/chat.postMessage") {
-        return Response.json({ ok: true, ts: "123.456" });
-      }
-
-      if (url.pathname === "/v1/models") {
-        return Response.json({
-          object: "list",
-          data: [{ id: "gpt-4o-mini", object: "model" }],
-        });
-      }
-
-      if (url.pathname === "/v1/chat/completions") {
-        return sseResponse([
-          {
-            id: "chatcmpl_test",
-            object: "chat.completion.chunk",
-            created: 1_730_000_001,
-            model: "gpt-4o-mini",
-            choices: [
-              {
-                index: 0,
-                delta: { content: "The answer is 42" },
-                finish_reason: null,
-              },
-            ],
-          },
-          {
-            id: "chatcmpl_test",
-            object: "chat.completion.chunk",
-            created: 1_730_000_001,
-            model: "gpt-4o-mini",
-            choices: [
-              {
-                index: 0,
-                delta: {},
-                finish_reason: "stop",
-              },
-            ],
-            usage: {
-              prompt_tokens: 12,
-              completion_tokens: 6,
-              total_tokens: 18,
-            },
-          },
-        ]);
-      }
-
-      if (url.pathname === "/v1/responses") {
-        return sseResponse([
-          {
-            type: "response.output_item.added",
-            item: {
-              id: "msg_1",
-              type: "message",
-              status: "in_progress",
-              role: "assistant",
-              content: [],
-            },
-          },
-          {
-            type: "response.content_part.added",
-            part: {
-              type: "output_text",
-              text: "",
-              annotations: [],
-            },
-          },
-          {
-            type: "response.output_text.delta",
-            delta: "The answer is 42",
-          },
-          {
-            type: "response.output_item.done",
-            item: {
-              id: "msg_1",
-              type: "message",
-              status: "completed",
-              role: "assistant",
-              content: [{ type: "output_text", text: "The answer is 42", annotations: [] }],
-            },
-          },
-          {
-            type: "response.completed",
-            response: {
-              status: "completed",
-              usage: {
-                input_tokens: 12,
-                output_tokens: 6,
-                total_tokens: 18,
-                input_tokens_details: { cached_tokens: 0 },
-              },
-            },
-          },
-        ]);
-      }
-
-      if (url.pathname === "/v1/messages") {
-        return Response.json({
-          id: "msg_test",
-          type: "message",
-          role: "assistant",
-          model: "claude-test",
-          content: [{ type: "text", text: "The answer is 42" }],
-          stop_reason: "end_turn",
-          usage: { input_tokens: 10, output_tokens: 6 },
-        });
-      }
-
-      if (url.pathname === "/v1/messages/count_tokens") {
-        return Response.json({ input_tokens: 10 });
-      }
-
-      return Response.json({ ok: true });
-    };
+    proxy.fetch = createPiMockEgressFetch();
 
     await using deployment = await projectDeployment({
       image,
@@ -318,27 +396,7 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow (pi)", () => {
       },
     };
 
-    const webhook = await deployment.exec([
-      "curl",
-      "-sS",
-      "-i",
-      "-H",
-      "content-type: application/json",
-      "--data",
-      JSON.stringify(webhookPayload),
-      "http://127.0.0.1:19063/webhook",
-    ]);
-
-    if (!/HTTP\/\d(?:\.\d)? 200/.test(webhook.output)) {
-      const logs = await deployment.logs();
-      throw new Error(`webhook failed:\n${webhook.output}\n\ncontainer logs:\n${logs}`);
-    }
-
-    const webhookResponseBody = webhook.output
-      .split(/\r?\n\r?\n/)
-      .slice(1)
-      .join("\n\n")
-      .trim();
+    const webhookResponseBody = await postSlackWebhook(deployment, webhookPayload);
     expect(webhookResponseBody).toContain('"streamPath":"/integrations/slack/webhooks"');
 
     const slackRecords = proxy.records.filter(
@@ -357,29 +415,7 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow (pi)", () => {
       ).toBe(true);
     }
 
-    let streams: Array<{ path: string; eventCount: number }> = [];
-    const streamsDeadline = Date.now() + 20_000;
-    while (Date.now() < streamsDeadline) {
-      const listResult = await postEventsOrpc(deployment, "listStreams", {});
-      expect(listResult.exitCode).toBe(0);
-      const streamsPayload = JSON.parse(listResult.output) as {
-        json: Array<{ path: string; eventCount: number }>;
-      };
-      streams = streamsPayload.json;
-
-      const hasPiAgentStream = streams.some((stream) => stream.path.startsWith("/agents/pi/"));
-      if (hasPiAgentStream) {
-        break;
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-
-    const agentStream = streams.find((stream) => stream.path.startsWith("/agents/pi/"));
-    expect(
-      agentStream,
-      `available streams: ${JSON.stringify(streams.map((stream) => stream.path))}`,
-    ).toBeDefined();
+    const agentStream = await waitForPiAgentStream(deployment);
 
     let agentEvents: Array<Record<string, unknown>> = [];
     let hasStatusEvent = false;
@@ -387,7 +423,7 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow (pi)", () => {
     let hasErrorEvent = false;
     const agentEventsDeadline = Date.now() + 90_000;
     while (Date.now() < agentEventsDeadline) {
-      agentEvents = await readStreamEvents(deployment, agentStream!.path);
+      agentEvents = await readStreamEvents(deployment, agentStream.path);
       hasStatusEvent = agentEvents.some(
         (event) => event["type"] === "https://events.iterate.com/agents/status-updated",
       );
@@ -448,7 +484,7 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow (pi)", () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
     if (providerRecords.length < 1) {
-      agentEvents = await readStreamEvents(deployment, agentStream!.path);
+      agentEvents = await readStreamEvents(deployment, agentStream.path);
       const logs = await deployment.logs();
       throw new Error(
         `expected at least one provider request, got none.\nagent events:\n${JSON.stringify(agentEvents, null, 2)}\n\nlogs:\n${logs}`,
@@ -459,4 +495,113 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow (pi)", () => {
     const unmatchedCount = proxy.records.filter((record) => record.response.status === 599).length;
     expect(unmatchedCount).toBe(0);
   }, 240_000);
+
+  test("slack webhook supports multi-turn in one thread and reuses the same pi agent stream", async () => {
+    await using proxy = await mockEgressProxy();
+    proxy.fetch = createPiMockEgressFetch();
+
+    await using deployment = await projectDeployment({
+      image,
+      name: `jonasland-e2e-slack-pi-multiturn-${randomUUID()}`,
+      extraHosts: ["host.docker.internal:host-gateway"],
+      runtimeProcessTargets: ["caddy", "registry", "events"],
+      env: {
+        ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
+      },
+    });
+
+    await startOnDemandProcess(deployment, "egress-proxy");
+    await startOnDemandProcess(deployment, "agents");
+    await startOnDemandProcess(deployment, "pi-wrapper");
+    await startOnDemandProcess(deployment, "slack");
+
+    const firstPrompt = "<@BOT> please summarize the problem";
+    const secondPrompt = "<@BOT> now give me one concrete action item";
+
+    const firstWebhookBody = await postSlackWebhook(deployment, {
+      event: {
+        type: "app_mention",
+        user: "U123",
+        text: firstPrompt,
+        channel: "C123",
+        ts: "1730000000.000100",
+        thread_ts: "1730000000.000100",
+      },
+    });
+    expect(firstWebhookBody).toContain('"streamPath":"/integrations/slack/webhooks"');
+
+    const agentStream = await waitForPiAgentStream(deployment);
+    let events = await waitForPromptCount(deployment, agentStream.path, 1);
+    expect(
+      events.some((event) => {
+        if (event["type"] !== "https://events.iterate.com/agents/prompt-added") return false;
+        const payload = event["payload"] as { prompt?: unknown } | undefined;
+        return payload?.prompt === firstPrompt;
+      }),
+    ).toBe(true);
+
+    const providerRecordsAfterFirstTurn = proxy.records.filter((record) => {
+      const path = new URL(record.request.url).pathname;
+      return path !== "/api/chat.postMessage" && record.request.method !== "OPTIONS";
+    }).length;
+    expect(providerRecordsAfterFirstTurn).toBeGreaterThan(0);
+
+    const secondWebhookBody = await postSlackWebhook(deployment, {
+      event: {
+        type: "app_mention",
+        user: "U123",
+        text: secondPrompt,
+        channel: "C123",
+        ts: "1730000000.000200",
+        thread_ts: "1730000000.000100",
+      },
+    });
+    expect(secondWebhookBody).toContain('"streamPath":"/integrations/slack/webhooks"');
+
+    events = await waitForPromptCount(deployment, agentStream.path, 2);
+    const promptEvents = events.filter(
+      (event) => event["type"] === "https://events.iterate.com/agents/prompt-added",
+    );
+    const promptTexts = promptEvents
+      .map((event) => (event["payload"] as { prompt?: unknown } | undefined)?.prompt)
+      .filter((prompt): prompt is string => typeof prompt === "string");
+    expect(promptTexts).toContain(firstPrompt);
+    expect(promptTexts).toContain(secondPrompt);
+
+    let providerRecordsAfterSecondTurn = providerRecordsAfterFirstTurn;
+    const providerDeadline = Date.now() + 90_000;
+    while (Date.now() < providerDeadline) {
+      providerRecordsAfterSecondTurn = proxy.records.filter((record) => {
+        const path = new URL(record.request.url).pathname;
+        return path !== "/api/chat.postMessage" && record.request.method !== "OPTIONS";
+      }).length;
+      if (providerRecordsAfterSecondTurn > providerRecordsAfterFirstTurn) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    expect(providerRecordsAfterSecondTurn).toBeGreaterThan(providerRecordsAfterFirstTurn);
+
+    const streams = await listStreams(deployment);
+    const piAgentStreams = streams.filter((stream) => stream.path.startsWith("/agents/pi/"));
+    expect(piAgentStreams.length).toBe(1);
+    expect(piAgentStreams[0]?.path).toBe(agentStream.path);
+
+    const slackRecords = proxy.records.filter(
+      (record) => new URL(record.request.url).pathname === "/api/chat.postMessage",
+    );
+    if (slackRecords.length > 0) {
+      const slackBodies = await Promise.all(
+        slackRecords.map(
+          async (record) => (await record.request.json()) as Record<string, unknown>,
+        ),
+      );
+      expect(
+        slackBodies.every(
+          (body) => body.channel === "C123" && body.thread_ts === "1730000000.000100",
+        ),
+      ).toBe(true);
+    }
+
+    const unmatchedCount = proxy.records.filter((record) => record.response.status === 599).length;
+    expect(unmatchedCount).toBe(0);
+  }, 300_000);
 });

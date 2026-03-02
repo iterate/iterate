@@ -41,7 +41,6 @@ export const SlackWebhookDecisionOutput = z.object({
   getOrCreateInput: z
     .object({
       agentPath: z.string().min(1),
-      provider: AgentProvider,
     })
     .optional(),
   reasonCodes: z.array(z.string().min(1)),
@@ -114,7 +113,6 @@ export const SlackServiceEnv = z.object({
   AGENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19061"),
   EVENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19010"),
   SLACK_API_BASE_URL: z.string().default("https://slack.com"),
-  SLACK_AGENT_PROVIDER: AgentProvider.default("opencode"),
   SERVICES_ORPC_URL: z.string().default("http://127.0.0.1:8777/orpc"),
 });
 

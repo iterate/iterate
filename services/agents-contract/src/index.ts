@@ -20,7 +20,7 @@ export const Agent = z.object({
 
 export const GetOrCreateAgentInput = z.object({
   agentPath: z.string().min(1),
-  provider: z.enum(["opencode", "pi"]).default("opencode"),
+  provider: z.enum(["opencode", "pi"]).optional(),
 });
 
 const EventInputPayload = z.object({
@@ -107,6 +107,7 @@ export const agentsContract = oc.router({
 
 export const AgentsServiceEnv = z.object({
   AGENTS_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(19061),
+  AGENTS_DEFAULT_PROVIDER: z.enum(["opencode", "pi"]).default("pi"),
   OPENCODE_WRAPPER_BASE_URL: z.string().default("http://127.0.0.1:19062"),
   PI_WRAPPER_BASE_URL: z.string().default("http://127.0.0.1:19064"),
   EVENTS_SERVICE_BASE_URL: z.string().default("http://127.0.0.1:19010"),
