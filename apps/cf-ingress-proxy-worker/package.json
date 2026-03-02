@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "doppler run --config dev -- sh -c 'WORKER_NAME=ingress-proxy-dev tsx ./alchemy.run.ts cli --dev --stage dev'",
-    "deploy:prd": "doppler run --config prd -- sh -c 'WORKER_NAME=ingress-proxy INGRESS_PROXY_ROUTE_PATTERN=ingress.iterate.com tsx ./alchemy.run.ts cli deploy --stage prd'",
+    "deploy:prd": "doppler run --config prd -- sh -c 'WORKER_NAME=ingress-proxy tsx ./alchemy.run.ts cli deploy --stage prd'",
     "deploy": "pnpm run deploy:prd",
     "test": "vitest run",
     "test:e2e-live": "vitest run --config ./vitest.live.config.ts",
