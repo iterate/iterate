@@ -10,11 +10,11 @@ export const startServer = async (params: { port: number; hostname: string }) =>
     await reloadConfigRepo();
   } catch (err) {
     console.error("[config] Failed to load config repo during startup", err);
-    await reportStatusToPlatform({
-      status: "error",
-      message: err instanceof Error ? err.message : String(err),
-    }).catch(() => {});
-    throw err;
+    // await reportStatusToPlatform({
+    //   status: "error",
+    //   message: err instanceof Error ? err.message : String(err),
+    // }).catch(() => {});
+    // throw err;
   }
 
   return new Promise<ServerType>((resolve, reject) => {
