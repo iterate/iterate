@@ -110,6 +110,7 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
         PI_WRAPPER_SERVICE_PORT: "19064",
         PI_MODEL_PROVIDER: "openai",
         PI_MODEL_ID: "gpt-4o-mini",
+        PI_MODEL_TRANSPORT: "sse",
         PI_AGENT_DIR: "/var/lib/jonasland/pi-agent",
         PI_WORKING_DIRECTORY: "/tmp",
         OPENAI_API_KEY: "test-key",

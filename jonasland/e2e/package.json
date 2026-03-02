@@ -11,8 +11,10 @@
     "@accelerated-software-development/caddy-api-client": "^0.4.3",
     "@docker/node-sdk": "^0.0.17",
     "@types/node": "^25.0.10",
+    "@types/ws": "^8.18.1",
     "mockttp": "^4.2.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.0.18",
+    "ws": "^8.18.3"
   }
 }

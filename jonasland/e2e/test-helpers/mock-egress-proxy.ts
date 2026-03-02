@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { WebSocketServer, type RawData, type WebSocket } from "ws";
 
 /**
  * Why this helper exists:
@@ -18,6 +19,29 @@ export interface MockEgressRecord {
   duration: number;
 }
 
+export interface MockEgressWebSocketMessage {
+  direction: "inbound" | "outbound";
+  text: string;
+  createdAt: number;
+}
+
+export interface MockEgressWebSocketRecord {
+  offset: number;
+  request: Request;
+  createdAt: number;
+  messages: MockEgressWebSocketMessage[];
+}
+
+export interface MockEgressWebSocketContext {
+  request: Request;
+  socket: WebSocket;
+  record: MockEgressWebSocketRecord;
+}
+
+export type MockEgressWebSocketHandler = (
+  context: MockEgressWebSocketContext,
+) => void | Promise<void>;
+
 export interface MockEgressWaitForHandle extends Promise<MockEgressRecord> {
   respondWith(response: Response): void;
 }
@@ -28,12 +52,14 @@ export interface MockEgressProxyOptions {
 
 export interface MockEgressProxy extends AsyncIterable<MockEgressRecord>, AsyncDisposable {
   fetch: MockEgressFetch;
+  websocket: MockEgressWebSocketHandler;
   readonly port: number;
   readonly url: string;
   readonly proxyUrl: string;
   readonly hostProxyUrl: string;
   urlFor(path: string): string;
   readonly records: ReadonlyArray<MockEgressRecord>;
+  readonly wsRecords: ReadonlyArray<MockEgressWebSocketRecord>;
   waitFor(
     matcher: (request: Request) => boolean,
     options?: { timeout?: number },
@@ -170,20 +196,35 @@ function safeMatch(matcher: (request: Request) => boolean, request: Request): bo
   }
 }
 
+function decodeWebSocketMessage(data: RawData): string {
+  if (typeof data === "string") return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf-8");
+  if (Array.isArray(data)) {
+    return Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf-8");
+  }
+  return data.toString("utf-8");
+}
+
 export async function mockEgressProxy(options?: MockEgressProxyOptions): Promise<MockEgressProxy> {
   const records: MockEgressRecord[] = [];
+  const wsRecords: MockEgressWebSocketRecord[] = [];
   const waiters: PendingWaiter[] = [];
   const broadcaster = new RecordBroadcaster();
   let offset = 0;
+  let wsOffset = 0;
   let closed = false;
   let closePromise: Promise<void> | undefined;
   let port = 0;
   let url = "";
   let proxyUrl = "";
   let hostProxyUrl = "";
+  const wsServer = new WebSocketServer({ noServer: true });
 
   const proxy: MockEgressProxy = {
     fetch: async () => new Response("mock-egress-proxy: handler not configured", { status: 501 }),
+    websocket: ({ socket }) => {
+      socket.close(1011, "mock-egress-proxy websocket handler not configured");
+    },
     get port() {
       return port;
     },
@@ -202,6 +243,9 @@ export async function mockEgressProxy(options?: MockEgressProxyOptions): Promise
     },
     get records() {
       return records;
+    },
+    get wsRecords() {
+      return wsRecords;
     },
     waitFor(
       matcher: (request: Request) => boolean,
@@ -255,6 +299,9 @@ export async function mockEgressProxy(options?: MockEgressProxyOptions): Promise
           settleWaiter(waiters, waiter);
           waiter.reject(new Error("mock-egress-proxy closed before waitFor matched"));
         }
+        wsServer.clients.forEach((socket: WebSocket) => {
+          socket.close(1001, "mock-egress-proxy closing");
+        });
         server.close(() => resolve());
       });
       return await closePromise;
@@ -310,6 +357,52 @@ export async function mockEgressProxy(options?: MockEgressProxyOptions): Promise
       settleWaiter(waiters, waiter);
       waiter.resolve(record);
     }
+  });
+
+  server.on("upgrade", async (incoming, socket, head) => {
+    const request = await toRequest(incoming, port).catch(() => null);
+    if (!request) {
+      socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    wsServer.handleUpgrade(incoming, socket, head, (ws: WebSocket) => {
+      const record: MockEgressWebSocketRecord = {
+        offset: wsOffset,
+        request,
+        createdAt: Date.now(),
+        messages: [],
+      };
+      wsOffset += 1;
+      wsRecords.push(record);
+
+      ws.on("message", (data: RawData) => {
+        record.messages.push({
+          direction: "inbound",
+          text: decodeWebSocketMessage(data),
+          createdAt: Date.now(),
+        });
+      });
+
+      const originalSend = ws.send.bind(ws);
+      ws.send = ((...args: Parameters<typeof originalSend>) => {
+        const [data] = args;
+        const text = decodeWebSocketMessage(data as RawData);
+        record.messages.push({
+          direction: "outbound",
+          text,
+          createdAt: Date.now(),
+        });
+        return originalSend(...args);
+      }) as typeof ws.send;
+
+      void Promise.resolve(proxy.websocket({ request: request.clone(), socket: ws, record })).catch(
+        () => {
+          ws.close(1011, "mock-egress-proxy websocket handler error");
+        },
+      );
+    });
   });
 
   await new Promise<void>((resolve, reject) => {

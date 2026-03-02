@@ -51,6 +51,7 @@ export const PiWrapperServiceEnv = z.object({
   PI_WRAPPER_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(19064),
   PI_MODEL_PROVIDER: z.string().default("openai"),
   PI_MODEL_ID: z.string().default("gpt-4o-mini"),
+  PI_MODEL_TRANSPORT: z.enum(["sse", "websocket", "auto"]).default("sse"),
   PI_AGENT_DIR: z.string().default("/var/lib/jonasland/pi-agent"),
   PI_WORKING_DIRECTORY: z.string().default("/tmp"),
   OPENAI_API_KEY: z.string().optional(),

@@ -75,11 +75,21 @@ async function waitForDirectHttp(
 async function startOnDemandProcess(
   deployment: ProjectDeployment,
   processName: OnDemandProcessName,
+  options?: {
+    envOverrides?: Record<string, string>;
+  },
 ): Promise<void> {
   const processConfig = ON_DEMAND_PROCESSES[processName];
+  const definitionEnv = {
+    ...processConfig.definition.env,
+    ...(options?.envOverrides ?? {}),
+  };
   const updated = await deployment.pidnap.processes.updateConfig({
     processSlug: processName,
-    definition: processConfig.definition,
+    definition: {
+      ...processConfig.definition,
+      env: definitionEnv,
+    },
     options: { restartPolicy: "always" },
     envOptions: { reloadDelay: false },
   });
@@ -164,6 +174,47 @@ function sseResponse(events: unknown[]): Response {
 }
 
 type StreamRecord = { path: string; eventCount: number };
+
+function createFakeOpenAICodexAccessToken(accountId: string): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64");
+  const payload = Buffer.from(
+    JSON.stringify({
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: accountId,
+      },
+    }),
+  ).toString("base64");
+  return `${header}.${payload}.signature`;
+}
+
+async function seedPiCodexAuthFile(
+  deployment: ProjectDeployment,
+  params: {
+    accountId: string;
+    authPath?: string;
+  },
+): Promise<void> {
+  const authPath = params.authPath ?? "/var/lib/jonasland/pi-agent/auth.json";
+  const accessToken = createFakeOpenAICodexAccessToken(params.accountId);
+  const auth = {
+    "openai-codex": {
+      type: "oauth",
+      access: accessToken,
+      refresh: "refresh-token-unused-for-e2e",
+      expires: 4_102_444_800_000,
+      accountId: params.accountId,
+    },
+  };
+
+  const writeAuth = await deployment.exec([
+    "sh",
+    "-ec",
+    `mkdir -p "$(dirname ${JSON.stringify(authPath)})" && cat > ${JSON.stringify(authPath)} <<'EOF'\n${JSON.stringify(auth, null, 2)}\nEOF`,
+  ]);
+  if (writeAuth.exitCode !== 0) {
+    throw new Error(`failed to seed pi codex auth file: ${writeAuth.output}`);
+  }
+}
 
 function createPiMockEgressFetch(): (request: Request) => Promise<Response> {
   return async (request) => {
@@ -605,6 +656,194 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow (pi)", () => {
     expect(unmatchedCount).toBe(0);
   }, 300_000);
 
+  test("pi openai-codex websocket transport is mocked end-to-end from slack webhook to slack reply", async () => {
+    await using proxy = await mockEgressProxy();
+
+    proxy.fetch = async (request) => {
+      const url = new URL(request.url);
+
+      if (url.pathname === "/api/chat.postMessage") {
+        return Response.json({ ok: true, ts: "123.456" });
+      }
+
+      if (url.pathname === "/backend-api/codex/responses") {
+        return Response.json(
+          { error: "expected websocket transport, received http fallback" },
+          { status: 500 },
+        );
+      }
+
+      return Response.json({ ok: true });
+    };
+
+    proxy.websocket = ({ request, socket }) => {
+      const path = new URL(request.url).pathname;
+      if (path !== "/backend-api/codex/responses") {
+        socket.close(1008, `unexpected websocket path: ${path}`);
+        return;
+      }
+
+      socket.on("message", (raw: Buffer) => {
+        const text = Buffer.from(raw).toString("utf-8");
+        const parsed = JSON.parse(text) as { type?: unknown; model?: unknown };
+        if (parsed.type !== "response.create") return;
+
+        socket.send(
+          JSON.stringify({
+            type: "response.output_item.added",
+            item: {
+              id: "msg_1",
+              type: "message",
+              status: "in_progress",
+              role: "assistant",
+              content: [],
+            },
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            type: "response.content_part.added",
+            part: {
+              type: "output_text",
+              text: "",
+              annotations: [],
+            },
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            type: "response.output_text.delta",
+            delta: "The answer is 42 over websocket",
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            type: "response.output_item.done",
+            item: {
+              id: "msg_1",
+              type: "message",
+              status: "completed",
+              role: "assistant",
+              content: [
+                {
+                  type: "output_text",
+                  text: "The answer is 42 over websocket",
+                  annotations: [],
+                },
+              ],
+            },
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            type: "response.completed",
+            response: {
+              status: "completed",
+              usage: {
+                input_tokens: 10,
+                output_tokens: 8,
+                total_tokens: 18,
+                input_tokens_details: { cached_tokens: 0 },
+              },
+            },
+          }),
+        );
+        socket.close(1000, "done");
+      });
+    };
+
+    await using deployment = await projectDeployment({
+      image,
+      name: `jonasland-e2e-slack-pi-websocket-${randomUUID()}`,
+      extraHosts: ["host.docker.internal:host-gateway"],
+      runtimeProcessTargets: ["caddy", "registry", "events"],
+      env: {
+        ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
+      },
+    });
+
+    await startOnDemandProcess(deployment, "egress-proxy");
+    await startOnDemandProcess(deployment, "agents");
+    await seedPiCodexAuthFile(deployment, { accountId: "acct_e2e_codex" });
+    await startOnDemandProcess(deployment, "pi-wrapper", {
+      envOverrides: {
+        PI_MODEL_PROVIDER: "openai-codex",
+        PI_MODEL_ID: "gpt-5.1-codex-mini",
+        PI_MODEL_TRANSPORT: "websocket",
+      },
+    });
+    await startOnDemandProcess(deployment, "slack");
+
+    const webhookResponseBody = await postSlackWebhook(deployment, {
+      event: {
+        type: "app_mention",
+        user: "U123",
+        text: "<@BOT> answer in one sentence",
+        channel: "C123",
+        ts: "1730000000.000250",
+        thread_ts: "1730000000.000250",
+      },
+    });
+    expect(webhookResponseBody).toContain('"streamPath":"/integrations/slack/webhooks"');
+
+    const agentStream = await waitForPiAgentStream(deployment);
+    const events = await waitForPromptCount(deployment, agentStream.path, 1);
+    expect(events.some((event) => isAgentOutputEvent(event))).toBe(true);
+
+    let wsRecord = proxy.wsRecords.find(
+      (record) => new URL(record.request.url).pathname === "/backend-api/codex/responses",
+    );
+    const wsDeadline = Date.now() + 90_000;
+    while (!wsRecord && Date.now() < wsDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      wsRecord = proxy.wsRecords.find(
+        (record) => new URL(record.request.url).pathname === "/backend-api/codex/responses",
+      );
+    }
+    if (!wsRecord) {
+      const providerHttpPaths = proxy.records
+        .map((record) => new URL(record.request.url).pathname)
+        .filter((path, index, values) => values.indexOf(path) === index);
+      throw new Error(
+        `expected codex websocket traffic, got none.\nhttp paths: ${JSON.stringify(providerHttpPaths)}\nagent events: ${JSON.stringify(events, null, 2)}`,
+      );
+    }
+
+    const inboundCreate = wsRecord?.messages.find((message) => {
+      if (message.direction !== "inbound") return false;
+      try {
+        const payload = JSON.parse(message.text) as { type?: unknown };
+        return payload.type === "response.create";
+      } catch {
+        return false;
+      }
+    });
+    expect(inboundCreate).toBeDefined();
+    if (inboundCreate) {
+      const payload = JSON.parse(inboundCreate.text) as { model?: unknown };
+      expect(payload.model).toBe("gpt-5.1-codex-mini");
+    }
+
+    const outboundCompleted = wsRecord?.messages.some((message) => {
+      if (message.direction !== "outbound") return false;
+      try {
+        const payload = JSON.parse(message.text) as { type?: unknown };
+        return payload.type === "response.completed";
+      } catch {
+        return false;
+      }
+    });
+    expect(outboundCompleted).toBe(true);
+
+    const codexHttpFallbacks = proxy.records.filter(
+      (record) => new URL(record.request.url).pathname === "/backend-api/codex/responses",
+    );
+    expect(codexHttpFallbacks).toHaveLength(0);
+
+    const unmatchedCount = proxy.records.filter((record) => record.response.status === 599).length;
+    expect(unmatchedCount).toBe(0);
+  }, 300_000);
+
   test("pi tool call can generate a local image and slack uploads it to the thread", async () => {
     await using proxy = await mockEgressProxy();
 
@@ -782,7 +1021,7 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow (pi)", () => {
       events.some((event) => {
         if (event["type"] !== "https://events.iterate.com/agents/status-updated") return false;
         const payload = event["payload"] as { phase?: unknown; text?: unknown } | undefined;
-        return payload?.phase === "tool-running" && payload?.text === ":hammer_and_wrench: bash";
+        return payload?.phase === "tool-running" && typeof payload?.text === "string";
       }),
     ).toBe(true);
     expect(

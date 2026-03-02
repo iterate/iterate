@@ -3,14 +3,16 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createAdaptorServer } from "@hono/node-server";
 import {
+  AuthStorage,
   createCodingTools,
   createAgentSession,
-  discoverAuthStorage,
-  discoverModels,
+  ModelRegistry,
+  SettingsManager,
   SessionManager,
   type AgentSession,
   type AgentSessionEvent,
 } from "@mariozechner/pi-coding-agent";
+import { getApiProvider, registerApiProvider } from "@mariozechner/pi-ai";
 import { piWrapperServiceManifest } from "@iterate-com/pi-wrapper-contract";
 import { createRegistryClient } from "@iterate-com/registry-service/client";
 import { Hono } from "hono";
@@ -50,13 +52,48 @@ interface SessionRecord {
 }
 
 const env = piWrapperServiceManifest.envVars.parse(process.env);
-const authStorage = discoverAuthStorage(env.PI_AGENT_DIR);
-const modelRegistry = discoverModels(authStorage, env.PI_AGENT_DIR);
+const authStorage = AuthStorage.create(path.join(env.PI_AGENT_DIR, "auth.json"));
+const modelRegistry = new ModelRegistry(authStorage, path.join(env.PI_AGENT_DIR, "models.json"));
 const sessionsById = new Map<string, SessionRecord>();
 const sessionIdByStreamPath = new Map<string, string>();
 const app = new Hono();
 const serviceRegistryHost = "pi-wrapper.iterate.localhost";
 const serviceRegistryOpenApiPath = "/api/openapi.json";
+
+function patchCodexStreamSimpleTransport(): void {
+  const api = "openai-codex-responses" as const;
+  const provider = getApiProvider(api);
+  if (!provider) return;
+
+  registerApiProvider(
+    {
+      api,
+      stream: provider.stream,
+      // pi-ai@0.55.3 drops `transport` in streamSimple for codex; preserve it here.
+      streamSimple: (model, context, options) => {
+        const streamOptions = {
+          apiKey: options?.apiKey,
+          temperature: options?.temperature,
+          maxTokens: options?.maxTokens,
+          signal: options?.signal,
+          cacheRetention: options?.cacheRetention,
+          sessionId: options?.sessionId,
+          headers: options?.headers,
+          onPayload: options?.onPayload,
+          maxRetryDelayMs: options?.maxRetryDelayMs,
+          metadata: options?.metadata,
+          transport: options?.transport,
+          ...(options?.reasoning ? { reasoningEffort: options.reasoning } : {}),
+        } as unknown as Parameters<typeof provider.stream>[2];
+
+        return provider.stream(model, context, streamOptions);
+      },
+    },
+    "pi-wrapper-codex-transport-patch",
+  );
+}
+
+patchCodexStreamSimpleTransport();
 
 const docsOs = implement(piWrapperServiceManifest.orpcContract);
 const docsRouter = docsOs.router({
@@ -409,10 +446,9 @@ async function createPiSessionRecord(agentPath: string): Promise<SessionRecord> 
     agentDir: env.PI_AGENT_DIR,
     sessionManager: SessionManager.inMemory(),
     tools: createCodingTools(env.PI_WORKING_DIRECTORY),
-    extensions: [],
-    skills: [],
-    contextFiles: [],
-    promptTemplates: [],
+    settingsManager: SettingsManager.inMemory({
+      transport: env.PI_MODEL_TRANSPORT,
+    }),
   });
 
   const sessionId = normalizeText(session.sessionId);
