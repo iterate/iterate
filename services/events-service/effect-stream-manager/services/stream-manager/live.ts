@@ -40,6 +40,7 @@ export const liveLayerWithOptions = (
         (yield* storageManager.listPaths().pipe(Effect.orDie)).map((path) => String(path)),
       );
       const websocketIdleDisconnectMs = parseWebsocketIdleDisconnectMs(options.env);
+      const streamInitializationSemaphore = yield* Effect.makeSemaphore(1);
 
       // Global PubSub for all events (used for "all paths" subscriptions)
       const globalPubSub = yield* PubSub.unbounded<Event>();
@@ -49,32 +50,39 @@ export const liveLayerWithOptions = (
           const existing = streams.get(path);
           if (existing !== undefined) return existing;
 
-          const storage = storageManager.forPath(path);
-          const stream = yield* EventStream.make(storage, path, {
-            websocketIdleDisconnectMs,
-          });
-          streams.set(path, stream);
-          return stream;
+          return yield* streamInitializationSemaphore.withPermits(1)(
+            Effect.gen(function* () {
+              const initialized = streams.get(path);
+              if (initialized !== undefined) return initialized;
+
+              const storage = storageManager.forPath(path);
+              const stream = yield* EventStream.make(storage, path, {
+                websocketIdleDisconnectMs,
+              });
+              streams.set(path, stream);
+              return stream;
+            }),
+          );
         });
 
       const getOrCreateStream = (path: StreamPath): Effect.Effect<EventStream.EventStream> =>
         Effect.gen(function* () {
           const pathKey = String(path);
-          const isNewPath = !knownPaths.has(pathKey);
-          if (isNewPath) {
-            yield* storageManager.ensurePath({ path }).pipe(Effect.orDie);
+          const shouldEmitStreamCreated = !knownPaths.has(pathKey);
+          if (shouldEmitStreamCreated) {
             knownPaths.add(pathKey);
+            yield* storageManager.ensurePath({ path }).pipe(Effect.orDie);
           }
 
           const stream = yield* getOrInitializeStream(path);
 
-          if (isNewPath && path !== EVENTS_META_STREAM_PATH) {
+          if (shouldEmitStreamCreated && path !== EVENTS_META_STREAM_PATH) {
             const metaPathKey = String(EVENTS_META_STREAM_PATH);
             if (!knownPaths.has(metaPathKey)) {
+              knownPaths.add(metaPathKey);
               yield* storageManager
                 .ensurePath({ path: EVENTS_META_STREAM_PATH })
                 .pipe(Effect.orDie);
-              knownPaths.add(metaPathKey);
             }
 
             const metaStream = yield* getOrInitializeStream(EVENTS_META_STREAM_PATH);

@@ -28,6 +28,46 @@ describe("Durable Stream Server via oRPC", () => {
     expect((event.value.payload as Record<string, unknown>)["msg"]).toBe("hello");
   });
 
+  test("concurrent first appends to a new path produce unique offsets", async () => {
+    await using eventBus = await startEventBusTestFixture();
+    const client = eventBus.client;
+    const path = "/test/concurrent-initialize";
+    const appendCount = 12;
+
+    await Promise.all(
+      Array.from({ length: appendCount }, (_, index) =>
+        client.append({
+          path,
+          events: [
+            {
+              type: "https://events.iterate.com/events/test/concurrent-recorded",
+              payload: { index },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const stream = await client.stream({ path, live: false });
+    const events: Array<{ offset: string }> = [];
+    try {
+      while (true) {
+        const nextEvent = await stream.next();
+        if (nextEvent.done) break;
+        events.push({ offset: nextEvent.value.offset });
+      }
+    } finally {
+      await stream.return?.();
+    }
+
+    const expectedOffsets = Array.from({ length: appendCount }, (_, index) =>
+      String(index).padStart(16, "0"),
+    );
+    const actualOffsets = events.map((event) => event.offset).sort();
+
+    expect(actualOffsets).toEqual(expectedOffsets);
+  });
+
   test("listStreams includes a live-connected stream", async () => {
     await using eventBus = await startEventBusTestFixture();
     const client = eventBus.client;
