@@ -11,6 +11,10 @@ import {
 } from "../server/mock-http-server-fixture.ts";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
+const isCi = process.env.CI === "true";
+const openAiReplayScriptTimeoutMs = isCi ? 6_000 : 2_500;
+const replayStepTimeoutMs = isCi ? 10_000 : 4_000;
+const replayTestTimeoutMs = isCi ? 20_000 : 10_000;
 
 type OpenAiScriptOutput = {
   ok: boolean;
@@ -138,46 +142,54 @@ async function withTimeout<T>(label: string, promise: Promise<T>, timeoutMs: num
 describe("replays parallel HAR fixture via source traffic handlers", () => {
   using tmpDir = useTemporaryDirectory("mock-http-proxy-api-replay-fixture-");
 
-  test("replays openai + slack + curl in parallel from fixture HAR", async () => {
-    const sourceHarPath = join(thisDir, "fixtures", "parallel-openai-slack-curl.har");
-    const sourceHar = await readHarFile(sourceHarPath);
-    const replayHarPath = join(tmpDir.path, "parallel-openai-slack-curl.replay-output.har");
-    const replayHandlers = fromTrafficWithWebSocket(sourceHar);
+  test(
+    "replays openai + slack + curl in parallel from fixture HAR",
+    async () => {
+      const sourceHarPath = join(thisDir, "fixtures", "parallel-openai-slack-curl.har");
+      const sourceHar = await readHarFile(sourceHarPath);
+      const replayHarPath = join(tmpDir.path, "parallel-openai-slack-curl.replay-output.har");
+      const replayHandlers = fromTrafficWithWebSocket(sourceHar);
 
-    await using egress = await useMockHttpServer({
-      recorder: { harPath: replayHarPath },
-      onUnhandledRequest: "error",
-    });
-    egress.use(...replayHandlers);
-    await using mitm = await useMitmProxy({
-      externalEgressProxyUrl: egress.url,
-    });
+      await using egress = await useMockHttpServer({
+        recorder: { harPath: replayHarPath },
+        onUnhandledRequest: "error",
+      });
+      egress.use(...replayHandlers);
+      await using mitm = await useMitmProxy({
+        externalEgressProxyUrl: egress.url,
+      });
 
-    const mitmEnv = mitm.envForNode();
-    const proxyCaCertPath = mitmEnv.NODE_EXTRA_CA_CERTS;
-    if (!proxyCaCertPath) {
-      throw new Error("missing NODE_EXTRA_CA_CERTS from useMitmProxy env");
-    }
+      const mitmEnv = mitm.envForNode();
+      const proxyCaCertPath = mitmEnv.NODE_EXTRA_CA_CERTS;
+      if (!proxyCaCertPath) {
+        throw new Error("missing NODE_EXTRA_CA_CERTS from useMitmProxy env");
+      }
 
-    const [openaiOutput, slackOutput] = await Promise.all([
-      withTimeout(
-        "openai websocket replay",
-        runOpenAiScript({
-          mitmEnv,
-          timeoutMs: 2_500,
-        }),
-        4_000,
-      ),
-      withTimeout("slack replay", runSlackScript(egress.url), 4_000),
-      withTimeout("curl replay", runCurlThroughMitm(mitm.url, proxyCaCertPath), 4_000),
-    ]);
+      const [openaiOutput, slackOutput] = await Promise.all([
+        withTimeout(
+          "openai websocket replay",
+          runOpenAiScript({
+            mitmEnv,
+            timeoutMs: openAiReplayScriptTimeoutMs,
+          }),
+          replayStepTimeoutMs,
+        ),
+        withTimeout("slack replay", runSlackScript(egress.url), replayStepTimeoutMs),
+        withTimeout(
+          "curl replay",
+          runCurlThroughMitm(mitm.url, proxyCaCertPath),
+          replayStepTimeoutMs,
+        ),
+      ]);
 
-    expect(openaiOutput.ok).toBe(true);
-    expect(openaiOutput.endpoint).toBe("openai.websocket-mode");
-    expect(openaiOutput.sendCount).toBe(2);
-    expect(openaiOutput.completedCount).toBe(2);
-    expect(openaiOutput.receiveEventCount).toBeGreaterThanOrEqual(2);
-    expect(openaiOutput.responseChain.length).toBeGreaterThanOrEqual(2);
-    expect(slackOutput).toMatchObject({ ok: true, endpoint: "slack.auth.test" });
-  }, 10_000);
+      expect(openaiOutput.ok).toBe(true);
+      expect(openaiOutput.endpoint).toBe("openai.websocket-mode");
+      expect(openaiOutput.sendCount).toBe(2);
+      expect(openaiOutput.completedCount).toBe(2);
+      expect(openaiOutput.receiveEventCount).toBeGreaterThanOrEqual(2);
+      expect(openaiOutput.responseChain.length).toBeGreaterThanOrEqual(2);
+      expect(slackOutput).toMatchObject({ ok: true, endpoint: "slack.auth.test" });
+    },
+    replayTestTimeoutMs,
+  );
 });
