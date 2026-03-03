@@ -49,6 +49,10 @@ doppler run --config dev -- env | grep SOME_VAR
 
 For tests needing credentials (Fly, Stripe, etc.), wrap with `doppler run`.
 
+## Building OS features
+
+Follow spec-driven development when building features that touch the OS worker. Look at the `spec/` folder for existing specs and the AGENTS.md file there for spec writing guidelines. You can use the `playwriter-spec` skill to run a spec dynamically when the feature or the spec itself are in flux and not yet validated. Doing this before running via playwright directly can result in a much faster feedback loop, and allow you to adapt the spec/the product as you step through the test.
+
 ## Critical rules
 
 - No `console` in backend — use `apps/os/backend/tag-logger.ts`
