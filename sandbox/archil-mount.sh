@@ -59,11 +59,11 @@ sudo mkdir -p "$PERSIST"
 
   sudo chown iterate:iterate "$PERSIST"
 
-  # Create persistent directories on the volume
-  mkdir -p "${PERSIST}/persisted"
-  mkdir -p "${PERSIST}/.local/share/opencode"
-  mkdir -p "${PERSIST}/.local/share/daemon"
-  mkdir -p "${PERSIST}/.local/share/events-service"
+  # Create persistent directories on the volume (sudo needed — FUSE mount is root-owned)
+  sudo mkdir -p "${PERSIST}/persisted"
+  sudo mkdir -p "${PERSIST}/.local/share/opencode"
+  sudo mkdir -p "${PERSIST}/.local/share/daemon"
+  sudo mkdir -p "${PERSIST}/.local/share/events-service"
   sudo chown -R iterate:iterate "${PERSIST}/persisted"
   sudo chown -R iterate:iterate "${PERSIST}/.local"
 

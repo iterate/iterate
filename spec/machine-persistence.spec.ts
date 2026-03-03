@@ -1,4 +1,5 @@
 // oxlint-disable iterate/spec-restricted-syntax
+import { execSync } from "node:child_process";
 import { type Page, expect } from "@playwright/test";
 import { createOrganization, createProject, login, sidebarButton, test } from "./test-helpers.ts";
 import { spinnerWaiter } from "./plugins/spinner-waiter.ts";
@@ -9,7 +10,18 @@ type ExecResult = {
   stderr: string;
 };
 
-async function createMachineFromUi(page: Page, machineName: string) {
+// Resolve the Fly image tag to use for machine creation.
+// Uses SANDBOX_IMAGE_TAG env var if set, otherwise reads FLY_DEFAULT_IMAGE from Doppler.
+function resolveImageTag(): string {
+  if (process.env.SANDBOX_IMAGE_TAG) return process.env.SANDBOX_IMAGE_TAG;
+  try {
+    return execSync("doppler run -- sh -c 'echo $FLY_DEFAULT_IMAGE'", { encoding: "utf-8" }).trim();
+  } catch {
+    return "";
+  }
+}
+
+async function createMachineFromUi(page: Page, machineName: string, imageTag?: string) {
   await sidebarButton(page, "Machines").click();
   await page
     .getByRole("link", { name: "Create Machine" })
@@ -17,8 +29,16 @@ async function createMachineFromUi(page: Page, machineName: string) {
     .click();
 
   await page.getByPlaceholder("Machine name").fill(machineName);
+
+  // Fill in the image tag if provided (overrides the Doppler default in the dev server)
+  if (imageTag) {
+    const imageInput = page.getByPlaceholder(/registry\.fly\.io/);
+    await imageInput.fill(imageTag);
+  }
+
   await page.getByRole("button", { name: "Create" }).click();
 
+  // Machine pipeline: create → provision (50-120s) → setup → 30s delay → probe → activate.
   await spinnerWaiter.settings.run({ spinnerTimeout: 300_000 }, async () => {
     await page.getByRole("heading", { name: "Active Machine", exact: true }).waitFor();
   });
@@ -68,6 +88,7 @@ test.describe("machine persistence", () => {
       "Set MACHINE_PERSISTENCE_SPEC=1 to run machine persistence specs",
     );
 
+    const imageTag = resolveImageTag();
     const now = Date.now();
     const testEmail = `persist-files-${now}+test@nustom.com`;
     const machineA = `Persist A ${now}`;
@@ -79,7 +100,7 @@ test.describe("machine persistence", () => {
     await createOrganization(page);
     await createProject(page);
 
-    await createMachineFromUi(page, machineA);
+    await createMachineFromUi(page, machineA, imageTag);
     const machineAIterateUrl = await openMachineDetail(page, machineA);
     const machineADaemonUrl = buildDaemonBaseUrl(machineAIterateUrl);
     const writeResult = await execDaemonCommand(page, machineADaemonUrl, [
@@ -90,7 +111,7 @@ test.describe("machine persistence", () => {
     expect(writeResult.exitCode).toBe(0);
     expect(writeResult.stdout).toContain(marker);
 
-    await createMachineFromUi(page, machineB);
+    await createMachineFromUi(page, machineB, imageTag);
     const machineBIterateUrl = await openMachineDetail(page, machineB);
     const machineBDaemonUrl = buildDaemonBaseUrl(machineBIterateUrl);
     const readResult = await execDaemonCommand(page, machineBDaemonUrl, [
@@ -109,6 +130,7 @@ test.describe("machine persistence", () => {
       "Set MACHINE_PERSISTENCE_SPEC=1 to run machine persistence specs",
     );
 
+    const imageTag = resolveImageTag();
     const now = Date.now();
     const testEmail = `persist-opencode-${now}+test@nustom.com`;
     const machineA = `OpenCode A ${now}`;
@@ -120,7 +142,7 @@ test.describe("machine persistence", () => {
     await createOrganization(page);
     await createProject(page);
 
-    await createMachineFromUi(page, machineA);
+    await createMachineFromUi(page, machineA, imageTag);
     const machineAIterateUrl = await openMachineDetail(page, machineA);
     const machineADaemonUrl = buildDaemonBaseUrl(machineAIterateUrl);
 
@@ -136,7 +158,7 @@ test.describe("machine persistence", () => {
     expect(writeResult.exitCode).toBe(0);
     expect(writeResult.stdout).toContain(marker);
 
-    await createMachineFromUi(page, machineB);
+    await createMachineFromUi(page, machineB, imageTag);
     const machineBIterateUrl = await openMachineDetail(page, machineB);
     const machineBDaemonUrl = buildDaemonBaseUrl(machineBIterateUrl);
     const readResult = await execDaemonCommand(page, machineBDaemonUrl, [
