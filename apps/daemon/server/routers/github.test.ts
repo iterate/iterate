@@ -312,6 +312,42 @@ describe("github router", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(0);
   });
 
+  it("accepts marker comments with trailing annotation text", async () => {
+    const response = await githubRouter.request("/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventType: "issue_comment",
+        deliveryId: "d-marker-annotated",
+        payload: {
+          action: "created",
+          repository: {
+            full_name: "iterate/iterate",
+            owner: { login: "iterate" },
+            name: "iterate",
+          },
+          issue: {
+            number: 1201,
+            html_url: "https://github.com/iterate/iterate/pull/1201",
+            body: "<!-- iterate:agent-pr # from your environment variable -->",
+            pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/1201" },
+          },
+          comment: {
+            body: "looks good",
+            html_url: "https://github.com/iterate/iterate/pull/1201#issuecomment-1",
+            user: { login: "alice" },
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "http://localhost:3001/api/agents/github/iterate/iterate/pr-1201",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("resolves marker session_id even when route is inactive", async () => {
     sqlite
       .prepare("INSERT INTO agents (path, working_directory) VALUES (?, ?)")

@@ -1191,7 +1191,15 @@ async function processGitHubWebhookEvent(params: {
   db: DB;
   env: CloudflareEnv;
 }): Promise<void> {
-  await forwardWebhookToRepoMachine(params);
+  try {
+    await forwardWebhookToRepoMachine(params);
+  } catch (err) {
+    logger.error("[GitHub Webhook] Forwarding failed; continuing lifecycle handlers", {
+      eventType: params.eventType,
+      deliveryId: params.deliveryId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   const lifecycleHandler = lifecycleEventHandlers[params.eventType];
   if (!lifecycleHandler) {

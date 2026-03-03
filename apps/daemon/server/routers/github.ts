@@ -27,7 +27,10 @@ const AppSlug =
     .slice(0, 64) || "iterate";
 
 const escapedAppSlug = AppSlug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const slugMarkerRegex = new RegExp(`<!--\\s*${escapedAppSlug}:agent-pr\\s*-->`, "i");
+const slugMarkerRegex = new RegExp(
+  `<!--\\s*${escapedAppSlug}:agent-pr(?:\\s+[\\s\\S]*?)?\\s*-->`,
+  "i",
+);
 const slugMentionRegex = new RegExp(`(^|\\s)@${escapedAppSlug}(?=\\s|$|[.,:;!?])`, "i");
 const iterateAgentContextRegex = /<!--\s*iterate-agent-context([\s\S]*?)-->/gi;
 

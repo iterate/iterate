@@ -112,7 +112,7 @@ When creating PRs, always include attribution in the PR description so reviewers
 <!-- iterate-agent-context
 session_id: ses_xxxxx  # from get-current-session-id tool
 -->
-<!-- ${ITERATE_GITHUB_APP_SLUG}:agent-pr # from your environment variable -->
+<!-- ${ITERATE_GITHUB_APP_SLUG}:agent-pr -->
 ```
 
 If session ID cannot be resolved for some reason, fallback to explicit `agent_path: /...` (real path only, never placeholder).
