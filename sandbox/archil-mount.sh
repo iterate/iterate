@@ -7,7 +7,6 @@
 #
 # Persisted directories:
 #   ~/.local/share → /mnt/persist/.local/share  (opencode DB, session storage)
-#   ~/persisted    → /mnt/persist/persisted      (user files)
 #
 # Env vars (from process env, set by Fly from project env vars):
 #   ARCHIL_DISK_NAME   — disk ID (e.g. dsk-0000000000003139)
@@ -19,21 +18,22 @@ HOME_DIR="/home/iterate"
 PERSIST="/mnt/persist"
 
 setup_symlinks() {
-  sudo mkdir -p "${PERSIST}/persisted"
   sudo mkdir -p "${PERSIST}/.local/share"
-  sudo chown -R iterate:iterate "${PERSIST}/persisted"
   sudo chown -R iterate:iterate "${PERSIST}/.local"
-
-  ln -sfn "${PERSIST}/persisted" "${HOME_DIR}/persisted"
-  echo "[archil] ~/persisted → ${PERSIST}/persisted"
 
   rm -rf "${HOME_DIR}/.local/share"
   mkdir -p "${HOME_DIR}/.local"
   ln -sfn "${PERSIST}/.local/share" "${HOME_DIR}/.local/share"
   echo "[archil] ~/.local/share → ${PERSIST}/.local/share"
 
-  touch /tmp/archil-repo-ready
-  echo "[archil] Setup complete, repo ready"
+  touch /tmp/persistence-ready
+  echo "[persist] Setup complete, persistence ready"
+}
+
+setup_local_persistence() {
+  sudo mkdir -p "${PERSIST}"
+  setup_symlinks
+  exec sleep infinity
 }
 
 # Source env vars from .env files if not already set via process env
@@ -41,24 +41,31 @@ if [[ -z "${ARCHIL_DISK_NAME:-}" ]] && [[ -f "${HOME_DIR}/.iterate/.env" ]]; the
   eval "$(grep -E '^(ARCHIL_DISK_NAME|ARCHIL_MOUNT_TOKEN|ARCHIL_REGION)=' "${HOME_DIR}/.iterate/.env")"
 fi
 
+PERSISTENCE_MODE="${ITERATE_PERSISTENCE_MODE:-auto}"
+
+if [[ "${PERSISTENCE_MODE}" == "local" ]]; then
+  echo "[persist] ITERATE_PERSISTENCE_MODE=local"
+  setup_local_persistence
+fi
+
 if [[ -z "${ARCHIL_DISK_NAME:-}" ]]; then
-  echo "[archil] No ARCHIL_DISK_NAME set, using local persist dir"
-  sudo mkdir -p "${PERSIST}"
-  setup_symlinks
-  exec sleep infinity
+  echo "[persist] No ARCHIL_DISK_NAME set, using local persist dir"
+  setup_local_persistence
 fi
 
 if [[ ! -e /dev/fuse ]]; then
-  echo "[archil] /dev/fuse unavailable, using local persist dir"
-  sudo mkdir -p "${PERSIST}"
-  setup_symlinks
-  exec sleep infinity
+  if [[ "${PERSISTENCE_MODE}" == "archil" ]]; then
+    echo "[persist] ITERATE_PERSISTENCE_MODE=archil but /dev/fuse unavailable"
+    exit 1
+  fi
+  echo "[persist] /dev/fuse unavailable, using local persist dir"
+  setup_local_persistence
 fi
 
 # Already mounted? Just set up symlinks and sleep.
 if grep -q "archil" /proc/mounts 2>/dev/null; then
   echo "[archil] Already mounted"
-  touch /tmp/archil-repo-ready
+  setup_symlinks
   exec sleep infinity
 fi
 

@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { defineConfig } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import alchemy from "alchemy/cloudflare/tanstack-start";
@@ -31,6 +32,22 @@ export default defineConfig({
     ],
   },
   plugins: [
+    {
+      // can't use execSync or fs in miniflare, don't want to put doppler secrets in the env, so we inject in a transform
+      name: "runtime-doppler-variable-injector",
+      transform(code) {
+        const safeDopplerVariables = ["DOCKER_DEFAULT_IMAGE", "FLY_DEFAULT_IMAGE"];
+        for (const variable of safeDopplerVariables) {
+          const viteEnvVar = `import.meta.env.VITE_PUBLIC_${variable}`;
+          if (code.includes(viteEnvVar)) {
+            const command = `doppler secrets get ${variable} --plain --no-exit-on-missing-secret`;
+            const replacement = execSync(command).toString().trim();
+            return code.replace(viteEnvVar, JSON.stringify(replacement));
+          }
+        }
+        return code;
+      },
+    },
     {
       name: "iterate-os-banner",
       configureServer(server) {

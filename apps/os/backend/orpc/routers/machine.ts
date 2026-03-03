@@ -438,9 +438,10 @@ export const machineRouter = {
   // Get default snapshot/image for each provider (used by create-machine UI)
   getDefaultSnapshots: publicProcedure.handler(({ context: ctx }) => {
     return {
-      daytona: ctx.env.DAYTONA_DEFAULT_SNAPSHOT ?? null,
-      fly: ctx.env.FLY_DEFAULT_IMAGE ?? null,
-      docker: ctx.env.DOCKER_DEFAULT_IMAGE ?? null,
+      daytona: ctx.env.DAYTONA_DEFAULT_SNAPSHOT || null,
+      fly: ctx.env.FLY_DEFAULT_IMAGE || null,
+      docker:
+        import.meta.env.VITE_PUBLIC_DOCKER_DEFAULT_IMAGE || ctx.env.DOCKER_DEFAULT_IMAGE || null,
       flyMachineCpus: parsePositiveIntegerOrDefault(ctx.env.FLY_DEFAULT_CPUS, 4),
     };
   }),

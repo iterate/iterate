@@ -59,6 +59,10 @@ const DockerEnv = z.object({
   DOCKER_DEFAULT_SERVICE_TRANSPORT: z.enum(["port-map", "cloudflare-tunnel"]).default("port-map"),
   DOCKER_HOST_OS_PORT: z.string().optional(),
   DOCKER_TUNNEL_PORTS: z.string().optional(),
+  DOCKER_USE_LOCAL_IMAGE_TAG: z
+    .string()
+    .optional()
+    .transform((v) => v === "true"),
   DOCKER_HOST_SYNC_ENABLED: z
     .string()
     .optional()
@@ -305,6 +309,12 @@ export class DockerProvider extends SandboxProvider {
     let imageName = resolveBaseImage({
       imageName: opts.providerSnapshotId ?? this.defaultSnapshotId,
     });
+    if (this.env.DOCKER_USE_LOCAL_IMAGE_TAG) {
+      const depotMatch = imageName.match(DEPOT_SHA_TAG_PATTERN);
+      if (depotMatch) {
+        imageName = `iterate-sandbox:${depotMatch[1]}`;
+      }
+    }
     const entrypointArguments = opts.entrypointArguments;
     const hasEntrypointArguments = Boolean(entrypointArguments?.length);
 
@@ -374,6 +384,7 @@ export class DockerProvider extends SandboxProvider {
     const dockerEnv: Record<string, string> = {
       ...rewrittenEnvVars,
       ITERATE_DEV: "true",
+      ITERATE_PERSISTENCE_MODE: "local",
       DOCKER_DEFAULT_SERVICE_TRANSPORT: this.env.DOCKER_DEFAULT_SERVICE_TRANSPORT,
       ...(this.env.DOCKER_TUNNEL_PORTS
         ? { DOCKER_TUNNEL_PORTS: this.env.DOCKER_TUNNEL_PORTS }
@@ -401,37 +412,20 @@ export class DockerProvider extends SandboxProvider {
       ExtraHosts: ["host.docker.internal:host-gateway"],
     };
 
-    const createContainer = async (candidateImageName: string) =>
-      dockerApi<{ Id: string }>({
-        method: "POST",
-        endpoint: `/containers/create?name=${encodeURIComponent(containerName)}`,
-        body: {
-          Image: candidateImageName,
-          ...(hasEntrypointArguments ? { Cmd: entrypointArguments } : {}),
-          Env: envArray,
-          ExposedPorts: exposedPorts,
-          HostConfig: hostConfig,
-          Labels: labels,
-        },
-      });
-
-    let createResponse: { Id: string };
-    try {
-      createResponse = await createContainer(imageName);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const depotMatch = imageName.match(DEPOT_SHA_TAG_PATTERN);
-      if (/No such image:/i.test(message) && depotMatch) {
-        const shaTag = depotMatch[1];
-        const fallbackImageName = `registry.fly.io/iterate-sandbox:${shaTag}`;
-        createResponse = await createContainer(fallbackImageName).catch((fallbackError) => {
-          throw withDockerImagePullHint({ error: fallbackError, imageName: fallbackImageName });
-        });
-        imageName = fallbackImageName;
-      } else {
-        throw withDockerImagePullHint({ error, imageName });
-      }
-    }
+    const createResponse = await dockerApi<{ Id: string }>({
+      method: "POST",
+      endpoint: `/containers/create?name=${encodeURIComponent(containerName)}`,
+      body: {
+        Image: imageName,
+        ...(hasEntrypointArguments ? { Cmd: entrypointArguments } : {}),
+        Env: envArray,
+        ExposedPorts: exposedPorts,
+        HostConfig: hostConfig,
+        Labels: labels,
+      },
+    }).catch((error) => {
+      throw withDockerImagePullHint({ error, imageName });
+    });
 
     const containerId = createResponse.Id;
     await dockerApi({ method: "POST", endpoint: `/containers/${containerId}/start`, body: {} });

@@ -7,7 +7,7 @@ const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/itera
 const sandboxDir = join(iterateRepo, "sandbox");
 const envFile = join(home, ".iterate/.env");
 const eventsServicePort = "17301";
-// All DBs under ~/.local/share — persisted across machine replacement via archil symlink
+// All DBs under ~/.local/share — persisted across machine replacement.
 const eventsServiceDatabasePath = join(home, ".local/share/events-service/events.sqlite");
 const daemonDatabasePath = join(home, ".local/share/daemon/db.sqlite");
 const mitmproxyDir = join(home, ".mitmproxy");
@@ -105,13 +105,13 @@ export default defineConfig({
       dependsOn: ["egress-proxy"],
     },
     {
-      // Gate process: polls for /tmp/archil-repo-ready (touched by archil-mount.sh
+      // Gate process: polls for /tmp/persistence-ready (touched by archil-mount.sh
       // after mount + symlink setup), then exits 0. Uses restartPolicy "never"
       // so the default dependsOn condition is "completed" — dependents wait for exit.
       name: "archil-repo-ready",
       definition: {
         command: "bash",
-        args: ["-c", "while [ ! -f /tmp/archil-repo-ready ]; do sleep 1; done"],
+        args: ["-c", "while [ ! -f /tmp/persistence-ready ]; do sleep 1; done"],
       },
       envOptions: {
         inheritGlobalEnv: false,
