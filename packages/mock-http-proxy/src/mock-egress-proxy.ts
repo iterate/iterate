@@ -478,6 +478,7 @@ export class MockEgressProxy implements AsyncDisposable {
       entry.response.status = 101;
       entry.response.statusText = "Switching Protocols";
       entry.response.content.mimeType = "x-application/websocket";
+      entry._resourceType = "websocket";
       entry._webSocketMessages = [];
       this.har.log.entries.push(entry);
       const startedAt = Date.now();

@@ -1,6 +1,12 @@
 import type { TransformRequest, TransformWebSocketUrl } from "@iterate-com/msw-http-server";
 
 const FORWARDED_HEADER = "forwarded";
+const ORIGINAL_HOST_HEADER = "x-iterate-original-host";
+const LEGACY_ORIGINAL_HOST_HEADER = "x-original-host";
+const ORIGINAL_PROTO_HEADER = "x-iterate-original-proto";
+const LEGACY_ORIGINAL_PROTO_SHORT_HEADER = "x-original-proto";
+const LEGACY_ORIGINAL_PROTO_HEADER = "x-original-protocol";
+const LEGACY_ORIGINAL_SCHEME_HEADER = "x-original-scheme";
 
 const PROXY_HEADERS_TO_STRIP = new Set([FORWARDED_HEADER]);
 
@@ -43,10 +49,23 @@ function normalizeProtocol(url: URL, scheme: "http" | "ws"): void {
 
 function resolveTargetUrl(requestUrl: URL, headers: Headers, scheme: "http" | "ws"): URL | null {
   const parsedForwarded = parseForwardedHeader(headers.get(FORWARDED_HEADER) ?? "");
-  const host = parsedForwarded.host ?? headers.get("host") ?? "";
+  const host =
+    parsedForwarded.host ??
+    headers.get(ORIGINAL_HOST_HEADER) ??
+    headers.get(LEGACY_ORIGINAL_HOST_HEADER) ??
+    headers.get("host") ??
+    "";
   if (!host) return null;
 
-  const proto = parsedForwarded.proto ?? "";
+  const proto = (
+    parsedForwarded.proto ??
+    headers.get(ORIGINAL_PROTO_HEADER) ??
+    headers.get(LEGACY_ORIGINAL_PROTO_SHORT_HEADER) ??
+    headers.get(LEGACY_ORIGINAL_PROTO_HEADER) ??
+    headers.get(LEGACY_ORIGINAL_SCHEME_HEADER) ??
+    headers.get("x-forwarded-proto") ??
+    ""
+  ).toLowerCase();
 
   let targetScheme: string;
   if (scheme === "ws") {

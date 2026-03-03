@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Entry as HarEntry, Har } from "har-format";
+import type { HarWebSocketMessage } from "../har-type.ts";
 import { serializeBodyForHar } from "./proxy-request.ts";
 
 function deepClone<T>(value: T): T {
@@ -38,6 +39,17 @@ export type AppendHttpExchangeInput = {
   requestBody: Uint8Array | null;
   response: Response;
   responseBody: Uint8Array | null;
+};
+
+export type AppendWebSocketExchangeInput = {
+  startedAt: number;
+  durationMs: number;
+  targetUrl: URL;
+  requestHeaders: Record<string, string>;
+  responseStatus: number;
+  responseStatusText: string;
+  responseHeaders: Headers;
+  messages: HarWebSocketMessage[];
 };
 
 export class HarJournal {
@@ -120,6 +132,50 @@ export class HarJournal {
         wait: 0,
         receive: 0,
       },
+    };
+
+    this.har.log.entries.push(entry);
+  }
+
+  appendWebSocketExchange(input: AppendWebSocketExchangeInput): void {
+    const entry: HarEntry = {
+      startedDateTime: new Date(input.startedAt).toISOString(),
+      time: input.durationMs,
+      request: {
+        method: "GET",
+        url: input.targetUrl.toString(),
+        httpVersion: "HTTP/1.1",
+        cookies: [],
+        headers: mapRecordHeaders(input.requestHeaders),
+        queryString: Array.from(input.targetUrl.searchParams.entries()).map(([name, value]) => ({
+          name,
+          value,
+        })),
+        headersSize: -1,
+        bodySize: 0,
+      },
+      response: {
+        status: input.responseStatus,
+        statusText: input.responseStatusText,
+        httpVersion: "HTTP/1.1",
+        cookies: [],
+        headers: mapResponseHeaders(input.responseHeaders),
+        content: {
+          size: 0,
+          mimeType: "x-application/websocket",
+        },
+        redirectURL: "",
+        headersSize: -1,
+        bodySize: 0,
+      },
+      cache: {},
+      timings: {
+        send: 0,
+        wait: 0,
+        receive: 0,
+      },
+      _resourceType: "websocket",
+      _webSocketMessages: input.messages,
     };
 
     this.har.log.entries.push(entry);

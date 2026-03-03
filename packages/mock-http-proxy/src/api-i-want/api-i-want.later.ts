@@ -11,6 +11,20 @@ const thisDir = dirname(fileURLToPath(import.meta.url));
 describe("records har archives for http-client-scripts", () => {
   using tmpDir = useTemporaryDirectory();
 
+  console.log(
+    [
+      "--------------------------------",
+      "HAR archive folder:",
+      tmpDir.path,
+      "",
+      "1. Open folder in finder:",
+      `open "${tmpDir.path}"`,
+      "2. Open about:blank in Chrome",
+      "3. Drag har onto network tab",
+      "--------------------------------",
+    ].join("\n"),
+  );
+
   test("for openai responses-websockets", async () => {
     const harPath = join(tmpDir.path, "openai-responses-websockets.har");
     await using egress = await useMockHttpServer({ harPath, mode: "record" });

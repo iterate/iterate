@@ -7,21 +7,62 @@ function required(name: string): string {
   return value;
 }
 
+function parseTimeoutMs(value: string | undefined, fallbackMs: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallbackMs;
+  return Math.floor(parsed);
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+}
+
 async function main() {
   const apiKey = required("OPENAI_API_KEY");
-  const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime";
+  const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-4o-mini-realtime-preview";
+  const timeoutMs = parseTimeoutMs(process.env.OPENAI_REALTIME_TIMEOUT_MS, 4_000);
+  const updateCount = parsePositiveInt(process.env.OPENAI_REALTIME_UPDATE_COUNT, 2);
 
-  const client = new OpenAI({ apiKey });
-  const socket = await OpenAIRealtimeWebSocket.create(client, { model });
+  const client = new OpenAI({ apiKey, timeout: timeoutMs });
+  const socket = await Promise.race([
+    OpenAIRealtimeWebSocket.create(client, { model }),
+    new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`timed out creating realtime websocket after ${String(timeoutMs)}ms`));
+      }, timeoutMs);
+    }),
+  ]);
 
-  const result = await new Promise<{ eventType: string | null }>((resolve, reject) => {
+  const closeSocket = () => {
+    const rawSocket = socket.socket as unknown as { terminate?: () => void };
+    if (typeof rawSocket.terminate === "function") {
+      rawSocket.terminate();
+      return;
+    }
+    socket.close();
+  };
+
+  const result = await new Promise<{
+    eventType: string;
+    eventTypes: string[];
+    sendCount: number;
+    receiveEventCount: number;
+    sessionUpdatedCount: number;
+  }>((resolve, reject) => {
     const timeout = setTimeout(() => {
       done(() => {
-        socket.close();
-        resolve({ eventType: null });
+        closeSocket();
+        reject(new Error(`timed out waiting for realtime event after ${String(timeoutMs)}ms`));
       });
-    }, 15_000);
+    }, timeoutMs);
 
+    const eventTypes: string[] = [];
+    let nextUpdateToSend = 0;
+    let sendCount = 0;
+    let receiveEventCount = 0;
+    let sessionUpdatedCount = 0;
     let finished = false;
     const done = (fn: () => void) => {
       if (finished) return;
@@ -30,31 +71,60 @@ async function main() {
       fn();
     };
 
+    const maybeSendNextUpdate = () => {
+      if (nextUpdateToSend >= updateCount) return;
+      nextUpdateToSend += 1;
+      sendCount += 1;
+      socket.send({
+        type: "session.update",
+        session: {
+          type: "realtime",
+          instructions: `Say ok ${String(nextUpdateToSend)}`,
+        },
+      });
+    };
+
     socket.on("error", (error) => {
       done(() => reject(error));
     });
 
     socket.on("event", (event) => {
-      done(() => {
-        socket.close();
-        resolve({ eventType: event.type });
-      });
+      receiveEventCount += 1;
+      eventTypes.push(event.type);
+
+      if (event.type === "session.updated") {
+        sessionUpdatedCount += 1;
+      }
+
+      if (sendCount >= updateCount && receiveEventCount >= 2) {
+        done(() => {
+          closeSocket();
+          resolve({
+            eventType: event.type,
+            eventTypes,
+            sendCount,
+            receiveEventCount,
+            sessionUpdatedCount,
+          });
+        });
+        return;
+      }
+
+      if (event.type === "session.created" || event.type === "session.updated") {
+        maybeSendNextUpdate();
+      }
     });
 
-    const sendRequest = () => {
-      socket.send({
-        type: "session.update",
-        session: {
-          type: "realtime",
-          instructions: "Say ok",
-        },
-      });
-    };
-
     if (socket.socket.readyState === 1) {
-      sendRequest();
+      maybeSendNextUpdate();
     } else {
-      socket.socket.addEventListener("open", sendRequest, { once: true });
+      socket.socket.addEventListener(
+        "open",
+        () => {
+          maybeSendNextUpdate();
+        },
+        { once: true },
+      );
     }
   });
 
@@ -63,7 +133,13 @@ async function main() {
       ok: true,
       endpoint: "openai.websocket-mode",
       eventType: result.eventType,
+      eventTypes: result.eventTypes,
+      sendCount: result.sendCount,
+      receiveEventCount: result.receiveEventCount,
+      sessionUpdatedCount: result.sessionUpdatedCount,
+      updateCount,
       model,
+      timeoutMs,
     })}\n`,
   );
 }

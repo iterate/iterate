@@ -17,6 +17,7 @@ import type { Har } from "har-format";
 import httpProxy from "http-proxy";
 import mockttp from "mockttp";
 import { request } from "undici";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { HarJournal } from "../msw-http-proxy/har-journal.ts";
 import {
   PROXY_HEADERS_TO_STRIP,
@@ -121,6 +122,52 @@ function removeProxyHeadersFromIncoming(req: http.IncomingMessage): void {
   }
 }
 
+function toBuffer(data: RawData): Buffer {
+  if (typeof data === "string") return Buffer.from(data);
+  if (Buffer.isBuffer(data)) return data;
+  if (Array.isArray(data)) return Buffer.concat(data.map((chunk) => toBuffer(chunk)));
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  }
+  return Buffer.from(data);
+}
+
+function wsMessageData(data: RawData, isBinary: boolean): string {
+  const buffer = toBuffer(data);
+  return isBinary ? buffer.toString("base64") : buffer.toString("utf8");
+}
+
+function webSocketProtocolsFromRequest(req: http.IncomingMessage): string[] {
+  const raw = firstHeaderValue(req.headers["sec-websocket-protocol"]);
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
+function buildUpstreamWebSocketHeaders(req: http.IncomingMessage): Record<string, string> {
+  const excluded = new Set([
+    "host",
+    "connection",
+    "upgrade",
+    "proxy-connection",
+    "sec-websocket-key",
+    "sec-websocket-version",
+    "sec-websocket-extensions",
+    "sec-websocket-protocol",
+    ...PROXY_HEADERS_TO_STRIP,
+  ]);
+
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (excluded.has(name)) continue;
+    if (value === undefined) continue;
+    headers[name] = Array.isArray(value) ? value.join(", ") : value;
+  }
+  return headers;
+}
+
 export async function useMockHttpServer(
   options: UseMockHttpServerOptions = {},
 ): Promise<MockHttpServer> {
@@ -155,6 +202,7 @@ export async function useMockHttpServer(
     ws: true,
     xfwd: true,
   });
+  const wsPassthroughServer = new WebSocketServer({ noServer: true });
 
   type PendingHttpPassthrough = {
     startedAt: number;
@@ -276,12 +324,126 @@ export async function useMockHttpServer(
           return false;
         }
 
-        req.url = `${requestUrl.pathname}${requestUrl.search}`;
-        req.headers.host = requestUrl.host;
-        removeProxyHeadersFromIncoming(req);
+        const startedAt = Date.now();
+        const requestHeaders = headersToRecord(mapNodeHeadersToHeaders(req.headers));
+        const webSocketMessages: Array<{
+          type: "send" | "receive";
+          time: number;
+          opcode: number;
+          data: string;
+        }> = [];
 
-        proxy.ws(req, socket, head, {
-          target: `${requestUrl.protocol}//${requestUrl.host}`,
+        let responseStatus = 101;
+        let responseStatusText = "Switching Protocols";
+        let responseHeaders = new Headers();
+        let finalized = false;
+        const finalize = () => {
+          if (finalized) return;
+          finalized = true;
+          harJournal.appendWebSocketExchange({
+            startedAt,
+            durationMs: Date.now() - startedAt,
+            targetUrl: requestUrl,
+            requestHeaders,
+            responseStatus,
+            responseStatusText,
+            responseHeaders,
+            messages: webSocketMessages,
+          });
+        };
+
+        removeProxyHeadersFromIncoming(req);
+        wsPassthroughServer.handleUpgrade(req, socket, head, (clientSocket) => {
+          const upstreamHeaders = buildUpstreamWebSocketHeaders(req);
+          const upstreamProtocols = webSocketProtocolsFromRequest(req);
+          const upstreamSocket =
+            upstreamProtocols.length > 0
+              ? new WebSocket(requestUrl.toString(), upstreamProtocols, {
+                  headers: upstreamHeaders,
+                })
+              : new WebSocket(requestUrl.toString(), { headers: upstreamHeaders });
+
+          const queuedClientMessages: Array<{ data: RawData; isBinary: boolean }> = [];
+
+          upstreamSocket.on("upgrade", (response) => {
+            responseStatus = response.statusCode ?? 101;
+            responseStatusText = response.statusMessage ?? "Switching Protocols";
+            responseHeaders = mapNodeHeadersToHeaders(response.headers);
+          });
+
+          clientSocket.on("message", (data, isBinary) => {
+            webSocketMessages.push({
+              type: "send",
+              time: Date.now() / 1000,
+              opcode: isBinary ? 2 : 1,
+              data: wsMessageData(data, isBinary),
+            });
+
+            if (upstreamSocket.readyState === WebSocket.OPEN) {
+              upstreamSocket.send(data, { binary: isBinary });
+              return;
+            }
+            queuedClientMessages.push({ data, isBinary });
+          });
+
+          upstreamSocket.on("open", () => {
+            for (const queued of queuedClientMessages) {
+              upstreamSocket.send(queued.data, { binary: queued.isBinary });
+            }
+            queuedClientMessages.length = 0;
+          });
+
+          upstreamSocket.on("message", (data, isBinary) => {
+            webSocketMessages.push({
+              type: "receive",
+              time: Date.now() / 1000,
+              opcode: isBinary ? 2 : 1,
+              data: wsMessageData(data, isBinary),
+            });
+            if (clientSocket.readyState === WebSocket.OPEN) {
+              clientSocket.send(data, { binary: isBinary });
+            }
+          });
+
+          clientSocket.on("close", () => {
+            if (
+              upstreamSocket.readyState === WebSocket.OPEN ||
+              upstreamSocket.readyState === WebSocket.CONNECTING
+            ) {
+              upstreamSocket.close();
+            }
+            finalize();
+          });
+
+          upstreamSocket.on("close", () => {
+            if (
+              clientSocket.readyState === WebSocket.OPEN ||
+              clientSocket.readyState === WebSocket.CONNECTING
+            ) {
+              clientSocket.close();
+            }
+            finalize();
+          });
+
+          clientSocket.on("error", () => {
+            if (
+              upstreamSocket.readyState === WebSocket.OPEN ||
+              upstreamSocket.readyState === WebSocket.CONNECTING
+            ) {
+              upstreamSocket.close();
+            }
+            finalize();
+          });
+
+          upstreamSocket.on("error", () => {
+            if (
+              clientSocket.readyState === WebSocket.OPEN ||
+              clientSocket.readyState === WebSocket.CONNECTING
+            ) {
+              clientSocket.close();
+            }
+            finalize();
+          });
         });
         return true;
       },
@@ -315,6 +477,7 @@ export async function useMockHttpServer(
     async [Symbol.asyncDispose]() {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       proxy.close();
+      wsPassthroughServer.close();
       if (options.harPath) {
         await harJournal.write(options.harPath);
       }
