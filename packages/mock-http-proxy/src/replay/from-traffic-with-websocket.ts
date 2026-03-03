@@ -1,7 +1,11 @@
 import { fromTraffic } from "@mswjs/source/traffic";
 import type { Entry as HarEntry, Har } from "har-format";
 import { ws, type RequestHandler, type WebSocketHandler } from "msw";
-import type { HarEntryWithExtensions, HarWebSocketMessage, HarWithExtensions } from "./har-type.ts";
+import type {
+  HarEntryWithExtensions,
+  HarWebSocketMessage,
+  HarWithExtensions,
+} from "../har/har-extensions.ts";
 
 export type TrafficReplayHandler = RequestHandler | WebSocketHandler;
 

@@ -4,8 +4,12 @@ import { fileURLToPath } from "node:url";
 import { http, HttpResponse } from "msw";
 import { x } from "tinyexec";
 import { describe, expect, test } from "vitest";
-import type { HarEntryWithExtensions, HarWithExtensions } from "../har-type.ts";
-import { useMitmProxy, useMockHttpServer, useTemporaryDirectory } from "./test-helpers.ts";
+import type { HarEntryWithExtensions, HarWithExtensions } from "../har/har-extensions.ts";
+import {
+  useMitmProxy,
+  useMockHttpServer,
+  useTemporaryDirectory,
+} from "../server/mock-http-server-fixture.ts";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 

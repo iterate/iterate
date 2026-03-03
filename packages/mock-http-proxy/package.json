@@ -8,8 +8,10 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "doppler run --config dev -- sh -c 'NODE_OPTIONS=--no-deprecation vitest run'",
-    "test:real-https": "doppler run --config dev -- sh -c 'NODE_OPTIONS=--no-deprecation vitest run src/api-i-want/api-i-want.test.ts'"
+    "test": "doppler run --config dev -- sh -c 'NODE_OPTIONS=--no-deprecation vitest run src/server src/har src/replay'",
+    "test:integration": "doppler run --config dev -- sh -c 'NODE_OPTIONS=--no-deprecation vitest run src/integration/recording-shapes.integration.test.ts src/integration/har-replay.integration.test.ts'",
+    "test:external": "doppler run --config dev -- sh -c 'NODE_OPTIONS=--no-deprecation vitest run src/integration/real-egress.integration.test.ts'",
+    "test:all": "doppler run --config dev -- sh -c 'NODE_OPTIONS=--no-deprecation vitest run'"
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",

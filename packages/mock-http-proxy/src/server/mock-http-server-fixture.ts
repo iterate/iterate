@@ -10,9 +10,9 @@ import {
   type NativeMswServer,
   type TransformRequest,
   type TransformWebSocketUrl,
-} from "../msw-server-adapter.ts";
-import { incomingHeadersToHeaders } from "../msw-server-adapter.http-utils.ts";
-import { bridgeWebSocketToUpstream } from "../msw-server-adapter.websocket-upstream-bridge.ts";
+} from "./msw-server-adapter.ts";
+import { incomingHeadersToHeaders } from "./http-utils.ts";
+import { bridgeWebSocketToUpstream } from "./websocket-upstream-bridge.ts";
 import { buildForwardedHeader } from "@iterate-com/shared/forwarded-header";
 import type * as msw from "msw";
 import type * as mswNode from "msw/node";
@@ -20,12 +20,12 @@ import type { Har } from "har-format";
 import mockttp from "mockttp";
 import { request } from "undici";
 import { WebSocketServer, type RawData } from "ws";
-import { HarRecorder, type RecorderOpts } from "./recorder.ts";
+import { HarRecorder, type RecorderOpts } from "../har/har-recorder.ts";
 import {
   PROXY_HEADERS_TO_STRIP,
   createProxyRequestTransform,
   createProxyWebSocketUrlTransform,
-} from "../proxy-request-transform.ts";
+} from "./proxy-request-transform.ts";
 
 export type UseMockHttpServerOptions = {
   recorder?: RecorderOpts;

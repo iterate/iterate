@@ -3,9 +3,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { x } from "tinyexec";
 import { describe, expect, test } from "vitest";
-import type { HarWithExtensions } from "../har-type.ts";
-import { fromTrafficWithWebSocket } from "../from-traffic-with-websocket.ts";
-import { useMitmProxy, useMockHttpServer, useTemporaryDirectory } from "./test-helpers.ts";
+import type { HarWithExtensions } from "../har/har-extensions.ts";
+import { fromTrafficWithWebSocket } from "../replay/from-traffic-with-websocket.ts";
+import {
+  useMitmProxy,
+  useMockHttpServer,
+  useTemporaryDirectory,
+} from "../server/mock-http-server-fixture.ts";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 

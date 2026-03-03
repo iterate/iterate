@@ -1,10 +1,7 @@
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import type { Har } from "har-format";
-import type {
-  AppendHttpExchangeInput,
-  AppendWebSocketExchangeInput,
-} from "../msw-http-proxy/har-journal.ts";
-import { HarJournal } from "../msw-http-proxy/har-journal.ts";
+import type { AppendHttpExchangeInput, AppendWebSocketExchangeInput } from "./har-journal.ts";
+import { HarJournal } from "./har-journal.ts";
 
 export type RecorderContentEncoding = "br" | "gzip" | "deflate";
 export type RecorderEntryKind = "http" | "websocket";

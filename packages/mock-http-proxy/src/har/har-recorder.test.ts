@@ -7,7 +7,7 @@ import { once } from "node:events";
 import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import { request } from "undici";
 import { describe, expect, test } from "vitest";
-import { HarRecorder } from "./recorder.ts";
+import { HarRecorder } from "./har-recorder.ts";
 
 function harHeaderValue(
   headers: Array<{ name: string; value: string }>,

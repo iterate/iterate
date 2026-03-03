@@ -1,51 +1,73 @@
 # @iterate-com/mock-http-proxy
 
-Internal test utilities for outbound HTTP/WebSocket egress mocking + HAR record/replay.
+Private workspace package for outbound HTTP/WebSocket egress mocking, passthrough proxying, and HAR record/replay.
 
-## Status
+## Package layout
 
-This package is private to this monorepo.
+- `src/server/`
+  - `mock-http-server-fixture.ts`: main fixture (`useMockHttpServer`, `useMitmProxy`, `useTemporaryDirectory`)
+  - `msw-server-adapter.ts`: HTTP + websocket bridge to MSW handlers
+  - `proxy-request-transform.ts`: `Forwarded`-header URL rewrite helpers
+- `src/har/`
+  - `har-recorder.ts`: recorder API (`HarRecorder`)
+  - `har-journal.ts`, `har-serialize.ts`: HAR assembly internals
+  - `har-extensions.ts`: HAR extension types (websocket messages/resource type)
+- `src/replay/`
+  - `from-traffic-with-websocket.ts`: replay handlers from HAR (`@mswjs/source/traffic` + websocket replay)
+- `src/integration/`
+  - real-network and replay integration tests
+  - `http-client-scripts/` and `fixtures/` used by those tests
 
-## Exports
+## Public exports
 
-- `useMockHttpServer()` / `useMitmProxy()` / `useTemporaryDirectory()`
-- `fromTrafficWithWebSocket()`
-- `createProxyRequestTransform()` / `createProxyWebSocketUrlTransform()`
+From [`src/index.ts`](./src/index.ts):
+
+- `useMockHttpServer`
+- `useMitmProxy`
+- `useTemporaryDirectory`
+- `fromTrafficWithWebSocket`
+- `createProxyRequestTransform`
+- `createProxyWebSocketUrlTransform`
 - `HarRecorder`
-- HAR extension types from `har-type.ts`
+- HAR extension types
 
-## Minimal usage
+## `useMockHttpServer` fixture contract
 
-```ts
-import { useMockHttpServer } from "@iterate-com/mock-http-proxy";
+Source: [`src/server/mock-http-server-fixture.ts`](./src/server/mock-http-server-fixture.ts)
 
-await using server = await useMockHttpServer({
-  recorder: { harPath: "/tmp/egress.har" },
-  onUnhandledRequest: "bypass",
-});
+Defaults and behavior:
 
-// Point your app's outbound proxy to server.url.
-```
+- default `onUnhandledRequest` is `"error"`
+- register handlers at runtime via `.use(...)`
+- no constructor `handlers`
+- no `proxyUrl()`
 
-## Replay from HAR
+Fixture API surface:
 
-```ts
-import { fromTrafficWithWebSocket, useMockHttpServer } from "@iterate-com/mock-http-proxy";
+- SetupServerApi subset: `use`, `resetHandlers`, `restoreHandlers`, `listHandlers`, `events`
+- Fixture fields: `url`, `host`, `port`, `close()`, `getHar()`, `writeHar()`
 
-const handlers = fromTrafficWithWebSocket(harArchive);
-await using server = await useMockHttpServer({
-  handlers,
-  recorder: { harPath: "/tmp/replay-output.har" },
-  onUnhandledRequest: "error",
-});
-```
+## Test suites
 
-## Real-network scenario tests
+Representative suites:
 
-Run with Doppler secrets:
+- adapter API + parity: [`src/server/msw-server-adapter.api.test.ts`](./src/server/msw-server-adapter.api.test.ts), [`src/server/msw-server-adapter.http-parity.test.ts`](./src/server/msw-server-adapter.http-parity.test.ts), [`src/server/msw-server-adapter.transport.test.ts`](./src/server/msw-server-adapter.transport.test.ts)
+- recorder/unit: [`src/har/har-recorder.test.ts`](./src/har/har-recorder.test.ts)
+- replay/unit: [`src/replay/from-traffic-with-websocket.test.ts`](./src/replay/from-traffic-with-websocket.test.ts)
+- integration/replay + real egress:
+  - [`src/integration/recording-shapes.integration.test.ts`](./src/integration/recording-shapes.integration.test.ts)
+  - [`src/integration/har-replay.integration.test.ts`](./src/integration/har-replay.integration.test.ts)
+  - [`src/integration/real-egress.integration.test.ts`](./src/integration/real-egress.integration.test.ts)
 
-```bash
-doppler run --config dev -- pnpm --filter @iterate-com/mock-http-proxy test:real-https
-```
+## Commands
 
-This executes `src/api-i-want/api-i-want.test.ts`.
+All tests run through Doppler `dev` env.
+
+- unit/core suites:
+  - `pnpm --filter @iterate-com/mock-http-proxy test`
+- integration (recording + replay):
+  - `pnpm --filter @iterate-com/mock-http-proxy test:integration`
+- external real-egress only (OpenAI/Slack/curl):
+  - `pnpm --filter @iterate-com/mock-http-proxy test:external`
+- everything:
+  - `pnpm --filter @iterate-com/mock-http-proxy test:all`

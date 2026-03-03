@@ -1,9 +1,9 @@
 import { once } from "node:events";
 import { WebSocket } from "ws";
 import { describe, expect, test } from "vitest";
-import type { HarEntryWithExtensions, HarWithExtensions } from "./har-type.ts";
+import type { HarEntryWithExtensions, HarWithExtensions } from "../har/har-extensions.ts";
 import { fromTrafficWithWebSocket } from "./from-traffic-with-websocket.ts";
-import { useMockHttpServer } from "./api-i-want/test-helpers.ts";
+import { useMockHttpServer } from "../server/mock-http-server-fixture.ts";
 
 function baseEntry(): Omit<HarEntryWithExtensions, "request" | "response"> {
   return {

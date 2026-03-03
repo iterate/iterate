@@ -7,12 +7,12 @@ import { handleRequest, RequestHandler, WebSocketHandler } from "msw";
 import type * as msw from "msw";
 import { setupServer } from "msw/node";
 import type * as mswNode from "msw/node";
-import { incomingHeadersToHeaders } from "./msw-server-adapter.http-utils.ts";
+import { incomingHeadersToHeaders } from "./http-utils.ts";
 import {
   bridgeWebSocketToUpstream,
   firstHeaderValue,
   parseWebSocketProtocols,
-} from "./msw-server-adapter.websocket-upstream-bridge.ts";
+} from "./websocket-upstream-bridge.ts";
 
 type AnyHandler = msw.RequestHandler | msw.WebSocketHandler;
 type UnhandledAction = "bypass" | "error";

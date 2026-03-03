@@ -1,12 +1,12 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { x } from "tinyexec";
-import { useMitmProxy, useMockHttpServer } from "./test-helpers.ts";
+import { useMitmProxy, useMockHttpServer } from "../server/mock-http-server-fixture.ts";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 
 async function main() {
-  await using egress = await useMockHttpServer({ mode: "record" });
+  await using egress = await useMockHttpServer();
   await using mitm = await useMitmProxy({ externalEgressProxyUrl: egress.url });
 
   const startedAt = Date.now();

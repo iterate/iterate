@@ -1,8 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Entry as HarEntry, Har } from "har-format";
-import type { HarWebSocketMessage } from "../har-type.ts";
-import { serializeBodyForHar } from "./proxy-request.ts";
+import type { HarWebSocketMessage } from "./har-extensions.ts";
+import { serializeBodyForHar } from "./har-serialize.ts";
 
 function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;

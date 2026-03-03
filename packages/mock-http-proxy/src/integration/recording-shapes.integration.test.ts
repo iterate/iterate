@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { buildForwardedHeader } from "@iterate-com/shared/forwarded-header";
 import { HttpResponse, http } from "msw";
 import { describe, expect, test } from "vitest";
-import type { HarWithExtensions } from "../har-type.ts";
-import { useMockHttpServer, useTemporaryDirectory } from "./test-helpers.ts";
+import type { HarWithExtensions } from "../har/har-extensions.ts";
+import { useMockHttpServer, useTemporaryDirectory } from "../server/mock-http-server-fixture.ts";
 
 async function readHar(path: string): Promise<HarWithExtensions> {
   return JSON.parse(await readFile(path, "utf8")) as HarWithExtensions;
