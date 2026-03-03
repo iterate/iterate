@@ -114,9 +114,14 @@ USER iterate
 # Keep both in sync! The .iterate/bin paths must be prepended last so wrappers win.
 ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
-# Install uv and use that to install mitmproxy
+# Install uv and use that to install mitmproxy to /opt/mitmproxy (NOT ~/.local/share).
+# ~/.local/share is symlinked to archil persistent storage at runtime, so nothing
+# baked into the image should live there.
 RUN curl -fsSL https://astral.sh/uv/install.sh | sh
-RUN uv tool install mitmproxy==${SANDBOX_MITMPROXY_VERSION}
+RUN UV_TOOL_DIR=/opt/mitmproxy/tools UV_TOOL_BIN_DIR=/opt/mitmproxy/bin \
+    uv tool install mitmproxy==${SANDBOX_MITMPROXY_VERSION} && \
+    chmod -R a+rX /opt/mitmproxy
+ENV PATH="/opt/mitmproxy/bin:$PATH"
 
 # Generate mitmproxy CA certificate at build time.
 # This certificate is baked into the image and shared across all sandbox instances.
@@ -126,7 +131,7 @@ RUN uv tool install mitmproxy==${SANDBOX_MITMPROXY_VERSION}
 # 3. No sandbox can intercept another sandbox's traffic
 # Note: The CA keypair is regenerated when SANDBOX_MITMPROXY_VERSION changes (layer invalidation).
 RUN mkdir -p /home/iterate/.mitmproxy && \
-    /home/iterate/.local/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
+    /opt/mitmproxy/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
     PID=$! && \
     # TODO: replace this polling hack with a direct cert-generation command.
     # Track in tasks/mitmproxy-direct-cert-command.md.

@@ -61,22 +61,22 @@ sudo mkdir -p "$PERSIST"
 
   # Create persistent directories on the volume (sudo needed — FUSE mount is root-owned)
   sudo mkdir -p "${PERSIST}/persisted"
-  sudo mkdir -p "${PERSIST}/.local-share/opencode"
+  sudo mkdir -p "${PERSIST}/.local/share"
   sudo chown -R iterate:iterate "${PERSIST}/persisted"
-  sudo chown -R iterate:iterate "${PERSIST}/.local-share"
+  sudo chown -R iterate:iterate "${PERSIST}/.local"
 
   # Symlink ~/persisted → /mnt/persist/persisted
   ln -sfn "${PERSIST}/persisted" "${HOME_DIR}/persisted"
   echo "[archil] ~/persisted → ${PERSIST}/persisted"
 
-  # Symlink ~/.local/share/opencode to the archil volume.
-  # Only opencode needs persistence (sessions, messages, storage/).
-  # Daemon and events-service DBs are ephemeral (no cross-machine persistence needed).
-  # We can't symlink all of ~/.local/share because it also contains
-  # uv/tools/mitmproxy (baked into the Docker image at build time).
-  rm -rf "${HOME_DIR}/.local/share/opencode"
-  ln -sfn "${PERSIST}/.local-share/opencode" "${HOME_DIR}/.local/share/opencode"
-  echo "[archil] ~/.local/share/opencode → ${PERSIST}/.local-share/opencode"
+  # Symlink ~/.local/share → /mnt/persist/.local/share
+  # Everything under ~/.local/share is persisted: opencode sessions,
+  # daemon DB, events-service DB, and anything else apps put here (XDG convention).
+  # mitmproxy is installed to /opt/mitmproxy (not ~/.local/share) to avoid conflicts.
+  rm -rf "${HOME_DIR}/.local/share"
+  mkdir -p "${HOME_DIR}/.local"
+  ln -sfn "${PERSIST}/.local/share" "${HOME_DIR}/.local/share"
+  echo "[archil] ~/.local/share → ${PERSIST}/.local/share"
 
   # Signal ready — dependents (opencode, daemon, etc.) can start now
   touch /tmp/archil-repo-ready
