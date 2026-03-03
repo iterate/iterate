@@ -552,6 +552,8 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
   const originalMethod = c.req.header("X-Iterate-Original-Method") || c.req.method;
   const apiKey = c.req.header("X-Iterate-API-Key");
 
+  logger.set({ egressTarget: { url: originalURL, host: originalHost, method: originalMethod } });
+
   // Validate required headers
   if (!originalURL) {
     logger.warn("Egress proxy request missing X-Iterate-Original-URL");
@@ -579,7 +581,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     originalUrl: originalURL,
   };
 
-  logger.debug("Egress proxy forwarding", { method: originalMethod, url: originalURL });
+  logger.set({ egressTarget: { projectSlug: context.projectSlug } });
 
   // Check for Resend email sending - validate recipients before forwarding
   // This prevents using Iterate's Resend account to send spam to arbitrary addresses

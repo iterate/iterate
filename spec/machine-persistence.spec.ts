@@ -27,7 +27,11 @@ function createDaemonClient(daemonBaseUrl: string, page: Page): RouterClient<App
   const link = new RPCLink({
     url: `${daemonBaseUrl}/api/orpc`,
     // Playwright's page.request.fetch carries auth-bridge cookies automatically.
-    fetch: page.request.fetch.bind(page.request) as unknown as typeof globalThis.fetch,
+    fetch: (input, init) =>
+      page.request.fetch(input as any, {
+        timeout: 10_000,
+        ...(init as any),
+      }) as any,
   });
   return createORPCClient(link);
 }
@@ -81,6 +85,64 @@ function buildDaemonBaseUrl(iterateBaseUrl: string): string {
   return `${parsed.protocol}//3001__${parsed.host}`;
 }
 
+type WebchatMessage = { role: "user" | "assistant"; text: string; messageId?: string };
+
+async function postWebchatMessage(
+  page: Page,
+  daemonBaseUrl: string,
+  input: { threadId: string; messageId: string; text: string },
+) {
+  const response = await page.request.post(`${daemonBaseUrl}/api/integrations/webchat/webhook`, {
+    data: {
+      type: "webchat:message",
+      threadId: input.threadId,
+      messageId: input.messageId,
+      text: input.text,
+      userId: "spec",
+      userName: "Spec Test",
+      createdAt: Date.now(),
+    },
+    timeout: 10_000,
+  });
+  if (!response.ok()) {
+    throw new Error(
+      `Failed to post webchat message: ${response.status()} ${await response.text()}`.slice(0, 300),
+    );
+  }
+  return response;
+}
+
+async function waitForAssistantReply(
+  page: Page,
+  daemonBaseUrl: string,
+  input: { threadId: string; afterMessageId: string; timeoutMs?: number },
+): Promise<WebchatMessage> {
+  const timeoutMs = input.timeoutMs ?? 120_000;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const response = await page.request.get(
+      `${daemonBaseUrl}/api/integrations/webchat/threads/${encodeURIComponent(input.threadId)}/messages`,
+      { timeout: 10_000 },
+    );
+
+    if (response.ok()) {
+      const body = (await response.json()) as { messages?: WebchatMessage[] };
+      const messages = body.messages ?? [];
+      const userIndex = messages.findIndex((m) => m.messageId === input.afterMessageId);
+      const from = userIndex >= 0 ? userIndex + 1 : 0;
+      const assistantReply = messages
+        .slice(from)
+        .find((m) => m.role === "assistant" && m.text.trim());
+      if (assistantReply) return assistantReply;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+
+  throw new Error(`Timed out waiting for assistant reply in thread ${input.threadId}`);
+}
+
 test.describe("machine persistence", () => {
   test("~/.local/share/iterate file persists across machine replacement", async ({ page }) => {
     test.setTimeout(900_000);
@@ -126,7 +188,7 @@ test.describe("machine persistence", () => {
     expect(readResult.stdout).toContain(marker);
   });
 
-  test("opencode sqlite db persists across machine replacement", async ({ page }) => {
+  test("webchat conversation persists across machine replacement", async ({ page }) => {
     test.setTimeout(900_000);
     test.skip(
       process.env.MACHINE_PERSISTENCE_SPEC !== "1",
@@ -138,8 +200,7 @@ test.describe("machine persistence", () => {
     const testEmail = `persist-opencode-${now}+test@nustom.com`;
     const machineA = `OpenCode A ${now}`;
     const machineB = `OpenCode B ${now}`;
-    const marker = `banana-${now}`;
-    const key = "opencode-session-marker";
+    const threadId = `persist-thread-${now}`;
 
     await login(page, testEmail);
     await createOrganization(page);
@@ -148,34 +209,34 @@ test.describe("machine persistence", () => {
     await createMachineFromUi(page, machineA, imageTag);
     const machineAIterateUrl = await openMachineDetail(page, machineA);
     const machineADaemonUrl = buildDaemonBaseUrl(machineAIterateUrl);
-    const daemonA = createDaemonClient(machineADaemonUrl, page);
 
-    const writeResult = await daemonA.tool.execCommand({
-      command: [
-        "bash",
-        "-lc",
-        [
-          'sqlite3 ~/.local/share/opencode/opencode.db "CREATE TABLE IF NOT EXISTS iterate_sync_e2e (k TEXT PRIMARY KEY, v TEXT NOT NULL);',
-          `INSERT INTO iterate_sync_e2e(k, v) VALUES ('${key}', '${marker}') ON CONFLICT(k) DO UPDATE SET v=excluded.v;`,
-          `SELECT v FROM iterate_sync_e2e WHERE k='${key}';"`,
-        ].join(" "),
-      ],
+    const machineAUserMessageId = `msg-a-${now}`;
+    await postWebchatMessage(page, machineADaemonUrl, {
+      threadId,
+      messageId: machineAUserMessageId,
+      text: "the secret word is banana",
     });
-    expect(writeResult.exitCode).toBe(0);
-    expect(writeResult.stdout).toContain(marker);
+
+    await waitForAssistantReply(page, machineADaemonUrl, {
+      threadId,
+      afterMessageId: machineAUserMessageId,
+    });
 
     await createMachineFromUi(page, machineB, imageTag);
     const machineBIterateUrl = await openMachineDetail(page, machineB);
     const machineBDaemonUrl = buildDaemonBaseUrl(machineBIterateUrl);
-    const daemonB = createDaemonClient(machineBDaemonUrl, page);
-    const readResult = await daemonB.tool.execCommand({
-      command: [
-        "bash",
-        "-lc",
-        `sqlite3 ~/.local/share/opencode/opencode.db "SELECT v FROM iterate_sync_e2e WHERE k='${key}';"`,
-      ],
+
+    const machineBUserMessageId = `msg-b-${now}`;
+    await postWebchatMessage(page, machineBDaemonUrl, {
+      threadId,
+      messageId: machineBUserMessageId,
+      text: "what's the secret word? reply with just the word",
     });
-    expect(readResult.exitCode).toBe(0);
-    expect(readResult.stdout).toContain(marker);
+
+    const machineBReply = await waitForAssistantReply(page, machineBDaemonUrl, {
+      threadId,
+      afterMessageId: machineBUserMessageId,
+    });
+    expect(machineBReply.text.toLowerCase()).toContain("banana");
   });
 });
