@@ -345,8 +345,7 @@ describe("records har archives for handled msw traffic", () => {
       headers: {
         "content-type": "application/json",
         "x-client-id": "msw-handled-test",
-        "x-iterate-original-host": "api.example.com",
-        "x-iterate-original-proto": "https",
+        forwarded: "for=203.0.113.42; host=api.example.com; proto=https",
       },
       body: JSON.stringify({ message: "hello-from-client" }),
     });

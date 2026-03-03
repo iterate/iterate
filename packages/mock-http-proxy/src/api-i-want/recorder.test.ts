@@ -1,7 +1,11 @@
 import { mkdtemp, readFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { brotliCompressSync } from "node:zlib";
+import { once } from "node:events";
+import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
+import { request } from "undici";
 import { describe, expect, test } from "vitest";
 import { HarRecorder } from "./recorder.ts";
 
@@ -10,6 +14,76 @@ function harHeaderValue(
   name: string,
 ): string | undefined {
   return headers.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value;
+}
+
+async function listen(server: Server): Promise<string> {
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address() as AddressInfo;
+  return `http://127.0.0.1:${String(address.port)}`;
+}
+
+async function close(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function toHeaders(input: Record<string, string | string[] | undefined>): Headers {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(input)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        headers.append(name, item);
+      }
+      continue;
+    }
+    headers.set(name, value);
+  }
+  return headers;
+}
+
+async function getCompressedResponse(
+  encoding: "br" | "gzip" | "deflate",
+  plainText: string,
+): Promise<{ response: Response; responseBody: Buffer; targetUrl: URL }> {
+  const compressor =
+    encoding === "br" ? brotliCompressSync : encoding === "gzip" ? gzipSync : deflateSync;
+  const server = createServer((_, res) => {
+    const compressed = compressor(Buffer.from(plainText, "utf8"));
+    res.writeHead(200, {
+      "content-type": "text/plain; charset=utf-8",
+      "content-encoding": encoding,
+      "content-length": String(compressed.byteLength),
+    });
+    res.end(compressed);
+  });
+
+  const baseUrl = await listen(server);
+  const targetUrl = new URL(`${baseUrl}/compressed`);
+  try {
+    const upstream = await request(targetUrl.toString(), {
+      method: "GET",
+      headers: {
+        "accept-encoding": encoding,
+      },
+    });
+    const responseBody = Buffer.from(await upstream.body.arrayBuffer());
+    const response = new Response(responseBody, {
+      status: upstream.statusCode,
+      headers: toHeaders(upstream.headers),
+    });
+    return { response, responseBody, targetUrl };
+  } finally {
+    await close(server);
+  }
 }
 
 describe("HarRecorder", () => {
@@ -175,4 +249,43 @@ describe("HarRecorder", () => {
     };
     expect(parsed.log.entries.map((entry) => entry.request.url)).toEqual(["https://example.com/"]);
   });
+
+  test.each(["br", "gzip", "deflate"] as const)(
+    "decodes %s response bodies from a real upstream server",
+    async (encoding) => {
+      const plainText = `encoded-${encoding}-payload`;
+      const { response, responseBody, targetUrl } = await getCompressedResponse(
+        encoding,
+        plainText,
+      );
+      const recorder = await HarRecorder.create({
+        decodeContentEncodings: ["br", "gzip", "deflate"],
+      });
+
+      recorder.appendHttpExchange(
+        {
+          startedAt: Date.now(),
+          durationMs: 3,
+          method: "GET",
+          targetUrl,
+          requestHeaders: {},
+          requestBody: null,
+          response,
+          responseBody,
+        },
+        "passthrough",
+      );
+
+      const entry = recorder.getHar().log.entries[0];
+      expect(entry).toBeDefined();
+      if (!entry) {
+        throw new Error("missing entry");
+      }
+      expect(entry.response.content.text).toBe(plainText);
+      expect(harHeaderValue(entry.response.headers, "content-encoding")).toBeUndefined();
+      expect(harHeaderValue(entry.response.headers, "content-length")).toBe(
+        String(Buffer.byteLength(plainText, "utf8")),
+      );
+    },
+  );
 });

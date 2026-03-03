@@ -1,71 +1,16 @@
 import type { TransformRequest, TransformWebSocketUrl } from "@iterate-com/msw-http-server";
+import { parseForwardedHeader } from "@iterate-com/shared/forwarded-header";
 
 const FORWARDED_HEADER = "forwarded";
-const ORIGINAL_HOST_HEADER = "x-iterate-original-host";
-const LEGACY_ORIGINAL_HOST_HEADER = "x-original-host";
-const ORIGINAL_PROTO_HEADER = "x-iterate-original-proto";
-const LEGACY_ORIGINAL_PROTO_SHORT_HEADER = "x-original-proto";
-const LEGACY_ORIGINAL_PROTO_HEADER = "x-original-protocol";
-const LEGACY_ORIGINAL_SCHEME_HEADER = "x-original-scheme";
 
 const PROXY_HEADERS_TO_STRIP = new Set([FORWARDED_HEADER]);
 
-type ParsedForwarded = {
-  host?: string;
-  proto?: string;
-};
-
-function parseForwardedHeader(forwarded: string): ParsedForwarded {
-  const firstEntry = forwarded.split(",")[0]?.trim() ?? "";
-  if (!firstEntry) return {};
-
-  const attributes = firstEntry.split(";");
-  let host: string | undefined;
-  let proto: string | undefined;
-
-  for (const rawAttribute of attributes) {
-    const [rawKey, ...rawValueParts] = rawAttribute.split("=");
-    const key = rawKey?.trim().toLowerCase();
-    const rawValue = rawValueParts.join("=").trim();
-    const value = rawValue.replace(/^"|"$/g, "");
-
-    if (!key || !value) continue;
-    if (key === "host") host = value;
-    if (key === "proto") proto = value.toLowerCase();
-  }
-
-  return { host, proto };
-}
-
-function normalizeProtocol(url: URL, scheme: "http" | "ws"): void {
-  if (scheme === "ws") {
-    if (url.protocol === "http:") url.protocol = "ws:";
-    if (url.protocol === "https:") url.protocol = "wss:";
-  } else {
-    if (url.protocol === "ws:") url.protocol = "http:";
-    if (url.protocol === "wss:") url.protocol = "https:";
-  }
-}
-
 function resolveTargetUrl(requestUrl: URL, headers: Headers, scheme: "http" | "ws"): URL | null {
   const parsedForwarded = parseForwardedHeader(headers.get(FORWARDED_HEADER) ?? "");
-  const host =
-    parsedForwarded.host ??
-    headers.get(ORIGINAL_HOST_HEADER) ??
-    headers.get(LEGACY_ORIGINAL_HOST_HEADER) ??
-    headers.get("host") ??
-    "";
+  const host = parsedForwarded.host ?? headers.get("host") ?? "";
   if (!host) return null;
 
-  const proto = (
-    parsedForwarded.proto ??
-    headers.get(ORIGINAL_PROTO_HEADER) ??
-    headers.get(LEGACY_ORIGINAL_PROTO_SHORT_HEADER) ??
-    headers.get(LEGACY_ORIGINAL_PROTO_HEADER) ??
-    headers.get(LEGACY_ORIGINAL_SCHEME_HEADER) ??
-    headers.get("x-forwarded-proto") ??
-    ""
-  ).toLowerCase();
+  const proto = parsedForwarded.proto ?? "";
 
   let targetScheme: string;
   if (scheme === "ws") {

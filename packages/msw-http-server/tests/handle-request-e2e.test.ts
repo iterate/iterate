@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { request as httpRequest } from "node:http";
+import { createServer, request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import { HttpResponse, http, passthrough } from "msw";
@@ -7,6 +7,7 @@ import type { LifeCycleEventsMap } from "msw";
 import { createNativeMswServer, type NativeMswServer } from "../src/index.ts";
 
 const activeServers = new Set<NativeMswServer>();
+const activeUpstreamServers = new Set<Server>();
 const lifecycleEventNames = [
   "request:start",
   "request:match",
@@ -41,6 +42,30 @@ async function close(server: NativeMswServer): Promise<void> {
     });
   });
   activeServers.delete(server);
+}
+
+async function listenUpstream(server: Server): Promise<{ baseUrl: string; port: number }> {
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  activeUpstreamServers.add(server);
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${String(address.port)}`,
+    port: address.port,
+  };
+}
+
+async function closeUpstream(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+  activeUpstreamServers.delete(server);
 }
 
 function observeLifecycle(server: NativeMswServer): Array<LifecycleEventCall> {
@@ -106,10 +131,13 @@ afterEach(async () => {
   for (const server of activeServers) {
     await close(server);
   }
+  for (const server of activeUpstreamServers) {
+    await closeUpstream(server);
+  }
 });
 
 describe("native server e2e parity with MSW handleRequest tests", () => {
-  test('returns 404 for "accept: msw/passthrough" and does not emit request:unhandled', async () => {
+  test('returns 502 for "accept: msw/passthrough" and does not emit request:unhandled', async () => {
     const onUnhandledRequest = vi.fn();
     const server = createNativeMswServer({ onUnhandledRequest });
     const { baseUrl } = await listen(server);
@@ -121,7 +149,7 @@ describe("native server e2e parity with MSW handleRequest tests", () => {
       },
     });
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(502);
     expect(onUnhandledRequest).not.toHaveBeenCalled();
     expect(eventNames(events)).toEqual(["request:start", "request:end"]);
   });
@@ -161,13 +189,13 @@ describe("native server e2e parity with MSW handleRequest tests", () => {
     const events = observeLifecycle(server);
 
     const response = await fetch(`${baseUrl}/user`);
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(502);
 
     expect(eventNames(events)).toEqual(["request:start", "request:unhandled", "request:end"]);
     expect(onUnhandledRequest).toHaveBeenCalledTimes(1);
   });
 
-  test("returns 404 when a matching handler returns no response", async () => {
+  test("returns 502 when a matching handler returns no response", async () => {
     const onUnhandledRequest = vi.fn();
     const server = createNativeMswServer(
       { onUnhandledRequest },
@@ -179,7 +207,7 @@ describe("native server e2e parity with MSW handleRequest tests", () => {
     const events = observeLifecycle(server);
 
     const response = await fetch(`${baseUrl}/user`);
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(502);
     expect(eventNames(events)).toEqual(["request:start", "request:end"]);
     expect(onUnhandledRequest).not.toHaveBeenCalled();
   });
@@ -204,7 +232,7 @@ describe("native server e2e parity with MSW handleRequest tests", () => {
     ]);
   });
 
-  test("returns 404 without warning on passthrough()", async () => {
+  test("returns 502 without warning on passthrough()", async () => {
     const onUnhandledRequest = vi.fn();
     const server = createNativeMswServer(
       { onUnhandledRequest },
@@ -216,7 +244,7 @@ describe("native server e2e parity with MSW handleRequest tests", () => {
     const events = observeLifecycle(server);
 
     const response = await fetch(`${baseUrl}/user`);
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(502);
     expect(eventNames(events)).toEqual(["request:start", "request:end"]);
     expect(onUnhandledRequest).not.toHaveBeenCalled();
   });
@@ -353,7 +381,7 @@ describe("native server e2e parity with MSW handleRequest tests", () => {
       hostHeader: "not-the-base-url.com",
       path: "/resource",
     });
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(502);
   });
 
   test("custom predicate matches when returning true", async () => {
@@ -414,8 +442,65 @@ describe("native server e2e parity with MSW handleRequest tests", () => {
       body: JSON.stringify({ username: "test", password: "passwordd" }),
     });
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(502);
     expect(eventNames(events)).toEqual(["request:start", "request:unhandled", "request:end"]);
     expect(onUnhandledRequest).toHaveBeenCalledTimes(1);
+  });
+
+  test('bypasses unmatched HTTP requests to real upstream when onUnhandledRequest is "bypass"', async () => {
+    let upstreamRequestCount = 0;
+    const upstream = createServer((req, res) => {
+      upstreamRequestCount += 1;
+      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+      res.end(`upstream:${req.method}:${req.url}`);
+    });
+    const { port: upstreamPort } = await listenUpstream(upstream);
+
+    const server = createNativeMswServer({
+      onUnhandledRequest: "bypass",
+      transformRequest: (request) => {
+        const url = new URL(request.url);
+        return new Request(`http://127.0.0.1:${String(upstreamPort)}${url.pathname}${url.search}`, {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+          duplex: "half",
+        } as RequestInit);
+      },
+    });
+    const { baseUrl } = await listen(server);
+
+    const response = await fetch(`${baseUrl}/fallthrough?x=1`);
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe("upstream:GET:/fallthrough?x=1");
+    expect(upstreamRequestCount).toBe(1);
+  });
+
+  test('denies unmatched HTTP requests when onUnhandledRequest is "error"', async () => {
+    let upstreamRequestCount = 0;
+    const upstream = createServer((_req, res) => {
+      upstreamRequestCount += 1;
+      res.writeHead(200);
+      res.end("ok");
+    });
+    const { port: upstreamPort } = await listenUpstream(upstream);
+
+    const server = createNativeMswServer({
+      onUnhandledRequest: "error",
+      transformRequest: (request) => {
+        const url = new URL(request.url);
+        return new Request(`http://127.0.0.1:${String(upstreamPort)}${url.pathname}${url.search}`, {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+          duplex: "half",
+        } as RequestInit);
+      },
+    });
+    const { baseUrl } = await listen(server);
+
+    const response = await fetch(`${baseUrl}/denied`);
+    expect(response.status).toBe(500);
+    expect(upstreamRequestCount).toBe(0);
   });
 });

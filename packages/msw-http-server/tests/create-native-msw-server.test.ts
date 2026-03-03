@@ -94,12 +94,12 @@ describe("createNativeMswServer", () => {
     expect(seen.mocked).toBe(1);
   });
 
-  test("returns 404 when unhandled", async () => {
+  test("returns 502 when unhandled bypass target resolves to self", async () => {
     const server = createNativeMswServer();
     const baseUrl = await listen(server);
 
     const response = await fetch(`${baseUrl}/no-match`);
-    expect(response.status).toBe(404);
-    await expect(response.text()).resolves.toContain("No MSW handler matched");
+    expect(response.status).toBe(502);
+    await expect(response.text()).resolves.toContain("Refusing to bypass request");
   });
 });

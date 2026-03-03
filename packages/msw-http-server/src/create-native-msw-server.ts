@@ -1,18 +1,27 @@
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import http from "node:http";
 import type tls from "node:tls";
 import { WebSocketServer, type RawData as WsRawData, type WebSocket as WsSocket } from "ws";
 import {
   handleRequest,
+  RequestHandler,
+  WebSocketHandler,
   type LifeCycleEventsMap,
-  type RequestHandler,
   type SharedOptions,
-  type WebSocketHandler,
 } from "msw";
 import { setupServer, type SetupServerApi } from "msw/node";
+import { incomingHeadersToHeaders } from "./http-utils.ts";
+import {
+  bridgeWebSocketToUpstream,
+  firstHeaderValue,
+  parseWebSocketProtocols,
+} from "./websocket-upstream-bridge.ts";
 
 type AnyHandler = RequestHandler | WebSocketHandler;
-type NativeMswLifecycleEventName = `${string}:${string}`;
+type NativeMswLifecycleEventName = keyof LifeCycleEventsMap;
+type UnhandledAction = "bypass" | "error";
+type LifecycleEmitter = Pick<EventEmitter, "on" | "emit" | "removeListener" | "removeAllListeners">;
 
 type NativeMswServerApi = Pick<
   SetupServerApi,
@@ -46,7 +55,19 @@ export type CreateNativeMswServerOptions = {
   /**
    * Called when a request is handled by an MSW handler.
    */
-  onMockedResponse?: (input: { request: Request; response: Response; requestId: string }) => void;
+  onMockedResponse?: (input: {
+    request: Request;
+    response: Response;
+    requestId: string;
+  }) => void | Promise<void>;
+  /**
+   * Called when an unhandled request is bypassed to the real upstream.
+   */
+  onPassthroughResponse?: (input: {
+    request: Request;
+    response: Response;
+    requestId: string;
+  }) => void | Promise<void>;
   /**
    * Called when MSW returns no response for an HTTP request.
    * Return true when the callback handled the request and wrote to `res`.
@@ -70,16 +91,11 @@ export type CreateNativeMswServerOptions = {
 };
 
 function isRequestHandler(handler: AnyHandler): handler is RequestHandler {
-  return (handler as unknown as { __kind?: string }).__kind === "RequestHandler";
+  return handler instanceof RequestHandler;
 }
 
 function isWebSocketHandler(handler: AnyHandler): handler is WebSocketHandler {
-  return (handler as unknown as { __kind?: string }).__kind === "EventHandler";
-}
-
-function firstHeader(value: string | string[] | undefined): string {
-  if (Array.isArray(value)) return value[0] ?? "";
-  return value ?? "";
+  return handler instanceof WebSocketHandler;
 }
 
 function incomingToWebSocketUrl(req: http.IncomingMessage): URL {
@@ -96,16 +112,84 @@ function normalizeWebSocketBaseUrl(baseUrl: string | undefined, requestUrl: URL)
   return new URL("/", parsed).toString();
 }
 
-function parseWebSocketProtocols(headerValue: string): string | Array<string> | undefined {
-  if (!headerValue) return undefined;
-  const protocols = headerValue
-    .split(",")
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
+function normalizeSocketHost(value: string): string {
+  return value.replace(/^\[|\]$/g, "").toLowerCase();
+}
 
-  if (protocols.length === 0) return undefined;
-  if (protocols.length === 1) return protocols[0];
-  return protocols;
+function isLoopbackHost(host: string): boolean {
+  const normalized = normalizeSocketHost(host);
+  return (
+    normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "127.0.0.1" ||
+    normalized.startsWith("127.")
+  );
+}
+
+function resolvedPort(url: URL): number {
+  if (url.port) return Number(url.port);
+  if (url.protocol === "https:" || url.protocol === "wss:") return 443;
+  return 80;
+}
+
+function isSelfTargetUrl(targetUrl: URL, req: http.IncomingMessage): boolean {
+  const localPort = req.socket.localPort;
+  if (!localPort) return false;
+  if (resolvedPort(targetUrl) !== localPort) return false;
+
+  const targetHost = normalizeSocketHost(targetUrl.hostname);
+  const localAddress = normalizeSocketHost(req.socket.localAddress ?? "");
+  if (isLoopbackHost(targetHost)) return true;
+  if (localAddress && targetHost === localAddress) return true;
+  return false;
+}
+
+function writeHttpError(res: http.ServerResponse, status: number, message: string): void {
+  if (res.headersSent) {
+    res.end();
+    return;
+  }
+  res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
+  res.end(message);
+}
+
+function writeUpgradeError(socket: tls.TLSSocket, status: number, message: string): void {
+  const statusText = status === 502 ? "Bad Gateway" : "Internal Server Error";
+  socket.write(
+    [
+      `HTTP/1.1 ${String(status)} ${statusText}`,
+      "Connection: close",
+      "Content-Type: text/plain; charset=utf-8",
+      `Content-Length: ${String(Buffer.byteLength(message, "utf8"))}`,
+      "",
+      message,
+    ].join("\r\n"),
+  );
+  socket.destroy();
+}
+
+function resolveUnhandledAction(
+  strategy: SharedOptions["onUnhandledRequest"],
+  request: Request,
+): UnhandledAction {
+  const effectiveStrategy = strategy ?? "warn";
+  if (typeof effectiveStrategy === "function") {
+    let action: UnhandledAction = "bypass";
+    try {
+      effectiveStrategy(request, {
+        warning() {
+          action = "bypass";
+        },
+        error() {
+          action = "error";
+        },
+      });
+    } catch {
+      return "error";
+    }
+    return action;
+  }
+  return effectiveStrategy === "error" ? "error" : "bypass";
 }
 
 function wsRawDataToPayload(data: WsRawData, isBinary: boolean): unknown {
@@ -236,21 +320,6 @@ class NativeWebSocketServerConnection {
   }
 }
 
-function incomingToHeaders(req: http.IncomingMessage): Headers {
-  const headers = new Headers();
-  for (const [key, value] of Object.entries(req.headers)) {
-    if (value === undefined) continue;
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        headers.append(key, item);
-      }
-      continue;
-    }
-    headers.set(key, value);
-  }
-  return headers;
-}
-
 function incomingToWebRequest(req: http.IncomingMessage): Request {
   const protocol =
     "encrypted" in req.socket && Boolean((req.socket as tls.TLSSocket).encrypted)
@@ -258,7 +327,7 @@ function incomingToWebRequest(req: http.IncomingMessage): Request {
       : "http:";
   const host = req.headers.host ?? "localhost";
   const url = new URL(req.url ?? "/", `${protocol}//${host}`);
-  const headers = incomingToHeaders(req);
+  const headers = incomingHeadersToHeaders(req.headers);
 
   const method = req.method ?? "GET";
   return new Request(url, {
@@ -269,13 +338,30 @@ function incomingToWebRequest(req: http.IncomingMessage): Request {
   } as RequestInit);
 }
 
-async function sendWebResponse(res: http.ServerResponse, mswRes: Response): Promise<void> {
+async function sendWebResponse(
+  res: http.ServerResponse,
+  mswRes: Response,
+  options: { stripContentHeaders?: boolean } = {},
+): Promise<void> {
   res.statusCode = mswRes.status;
   res.statusMessage = mswRes.statusText;
 
-  mswRes.headers.forEach((value, key) => {
-    res.setHeader(key, value);
-  });
+  const blockedHeaderNames = new Set<string>(
+    options.stripContentHeaders ? ["content-length", "content-encoding", "transfer-encoding"] : [],
+  );
+  const groupedHeaders = new Map<string, string[]>();
+  for (const [name, value] of mswRes.headers.entries()) {
+    if (blockedHeaderNames.has(name.toLowerCase())) continue;
+    const existing = groupedHeaders.get(name);
+    if (existing) {
+      existing.push(value);
+      continue;
+    }
+    groupedHeaders.set(name, [value]);
+  }
+  for (const [name, values] of groupedHeaders.entries()) {
+    res.setHeader(name, values.length === 1 ? values[0]! : values);
+  }
 
   if (mswRes.body) {
     const reader = mswRes.body.getReader();
@@ -289,8 +375,36 @@ async function sendWebResponse(res: http.ServerResponse, mswRes: Response): Prom
   res.end();
 }
 
+async function passthroughHttpRequest(request: Request): Promise<Response> {
+  const method = request.method.toUpperCase();
+  const headers = new Headers(request.headers);
+  headers.delete("host");
+  headers.set("accept-encoding", "identity");
+
+  const init: RequestInit = {
+    method,
+    headers,
+    redirect: "manual",
+  };
+  if (method !== "GET" && method !== "HEAD") {
+    init.body = request.body;
+    (init as { duplex?: "half" }).duplex = "half";
+  }
+
+  return await fetch(request.url, init);
+}
+
 function isLifecycleEventName(event: string | symbol): event is NativeMswLifecycleEventName {
-  return typeof event === "string" && event.includes(":");
+  if (typeof event !== "string") return false;
+  return (
+    event === "request:start" ||
+    event === "request:match" ||
+    event === "request:unhandled" ||
+    event === "request:end" ||
+    event === "response:mocked" ||
+    event === "response:bypass" ||
+    event === "unhandledException"
+  );
 }
 
 export function createNativeMswServer(
@@ -312,7 +426,8 @@ export function createNativeMswServer(
   const hasOptions =
     typeof optionsOrHandler === "object" &&
     optionsOrHandler !== null &&
-    !("__kind" in (optionsOrHandler as object));
+    !(optionsOrHandler instanceof RequestHandler) &&
+    !(optionsOrHandler instanceof WebSocketHandler);
   const options = (hasOptions ? optionsOrHandler : {}) as CreateNativeMswServerOptions;
   const handlers = (
     hasOptions
@@ -321,27 +436,17 @@ export function createNativeMswServer(
   ) as AnyHandler[];
 
   const msw = setupServer(...handlers);
-  const internalEmitter = (
-    msw as unknown as {
-      emitter: {
-        emit: (event: keyof LifeCycleEventsMap, ...args: Array<any>) => void;
-        on: (event: keyof LifeCycleEventsMap, listener: (...args: Array<any>) => void) => void;
-        removeListener: (
-          event: keyof LifeCycleEventsMap,
-          listener: (...args: Array<any>) => void,
-        ) => void;
-        removeAllListeners: (event?: keyof LifeCycleEventsMap) => void;
-      };
-    }
-  ).emitter;
+  const lifecycleEmitter: LifecycleEmitter = new EventEmitter();
   const onUnhandledRequest = options.onUnhandledRequest ?? "warn";
   const resolutionContextBaseUrl = options.resolutionContextBaseUrl;
   const transformRequest = options.transformRequest;
   const transformWebSocketUrl = options.transformWebSocketUrl;
   const onMockedResponse = options.onMockedResponse;
+  const onPassthroughResponse = options.onPassthroughResponse;
   const onUnhandledHttpRequest = options.onUnhandledHttpRequest;
   const onUnhandledWebSocketUpgrade = options.onUnhandledWebSocketUpgrade;
   const webSocketServer = new WebSocketServer({ noServer: true });
+  const passthroughWebSocketServer = new WebSocketServer({ noServer: true });
 
   const nodeServer = http.createServer(async (req, res) => {
     try {
@@ -354,7 +459,7 @@ export function createNativeMswServer(
         requestId,
         activeHandlers,
         { onUnhandledRequest },
-        internalEmitter as never,
+        lifecycleEmitter as never,
         {
           resolutionContext: {
             baseUrl: resolutionContextBaseUrl ?? new URL(webRequest.url).origin,
@@ -363,12 +468,12 @@ export function createNativeMswServer(
       );
 
       if (mockedResponse) {
-        internalEmitter.emit("response:mocked", {
+        lifecycleEmitter.emit("response:mocked", {
           response: mockedResponse,
           request: webRequest,
           requestId,
         });
-        onMockedResponse?.({ request: webRequest, response: mockedResponse, requestId });
+        await onMockedResponse?.({ request: webRequest, response: mockedResponse, requestId });
         await sendWebResponse(res, mockedResponse);
         return;
       }
@@ -380,33 +485,103 @@ export function createNativeMswServer(
         return;
       }
 
-      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-      res.end("No MSW handler matched");
+      if (isSelfTargetUrl(new URL(webRequest.url), req)) {
+        writeHttpError(
+          res,
+          502,
+          "Refusing to bypass request: resolved upstream target points to this same server",
+        );
+        return;
+      }
+
+      try {
+        const response = await passthroughHttpRequest(webRequest);
+        lifecycleEmitter.emit("response:bypass", {
+          response,
+          request: webRequest,
+          requestId,
+        });
+        await onPassthroughResponse?.({ request: webRequest, response, requestId });
+        await sendWebResponse(res, response, { stripContentHeaders: true });
+      } catch (passthroughError) {
+        const message =
+          passthroughError instanceof Error ? passthroughError.message : String(passthroughError);
+        writeHttpError(res, 502, `Unhandled request bypass failed: ${message}`);
+      }
     } catch (error) {
-      res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
-      res.end(error instanceof Error ? error.message : String(error));
+      writeHttpError(res, 500, error instanceof Error ? error.message : String(error));
     }
   });
+
+  const bridgeUnhandledWebSocket = (
+    req: http.IncomingMessage,
+    socket: tls.TLSSocket,
+    head: Buffer,
+    targetUrl: URL,
+  ): void => {
+    if (isSelfTargetUrl(targetUrl, req)) {
+      writeUpgradeError(
+        socket,
+        502,
+        "Refusing to bypass websocket upgrade: resolved upstream target points to this same server",
+      );
+      return;
+    }
+
+    bridgeWebSocketToUpstream({
+      req,
+      socket,
+      head,
+      targetUrl,
+      upgradeServer: passthroughWebSocketServer,
+      closeClientOnUpstreamError: {
+        code: 1011,
+        reason: "Unhandled websocket bypass failed",
+      },
+    });
+  };
+
+  const handleUnhandledWebSocketUpgrade = (
+    req: http.IncomingMessage,
+    socket: tls.TLSSocket,
+    head: Buffer,
+    requestUrl: URL,
+  ): void => {
+    if (onUnhandledWebSocketUpgrade) {
+      const handled = onUnhandledWebSocketUpgrade({ req, socket, head, requestUrl });
+      if (handled) return;
+    }
+
+    const action = resolveUnhandledAction(
+      onUnhandledRequest,
+      new Request(requestUrl, {
+        headers: {
+          connection: "upgrade",
+          upgrade: "websocket",
+        },
+      }),
+    );
+    if (action === "error") {
+      writeUpgradeError(socket, 500, "Unhandled websocket request denied by onUnhandledRequest");
+      return;
+    }
+
+    if (isSelfTargetUrl(requestUrl, req) && nodeServer.listenerCount("upgrade") > 1) {
+      return;
+    }
+
+    bridgeUnhandledWebSocket(req, socket, head, requestUrl);
+  };
 
   nodeServer.on("upgrade", (req, socket, head) => {
     const webSocketHandlers = msw.listHandlers().filter(isWebSocketHandler);
     const rawWsUrl = incomingToWebSocketUrl(req);
-    const wsHeaders = incomingToHeaders(req);
+    const wsHeaders = incomingHeadersToHeaders(req.headers);
     const requestUrl = transformWebSocketUrl
       ? transformWebSocketUrl(rawWsUrl, wsHeaders)
       : rawWsUrl;
     if (webSocketHandlers.length === 0) {
-      if (onUnhandledWebSocketUpgrade) {
-        const handled = onUnhandledWebSocketUpgrade({
-          req,
-          socket: socket as tls.TLSSocket,
-          head,
-          requestUrl,
-        });
-        if (handled) {
-          return;
-        }
-      }
+      handleUnhandledWebSocketUpgrade(req, socket as tls.TLSSocket, head, requestUrl);
       return;
     }
 
@@ -420,24 +595,16 @@ export function createNativeMswServer(
     });
 
     if (matchingHandlers.length === 0) {
-      if (onUnhandledWebSocketUpgrade) {
-        const handled = onUnhandledWebSocketUpgrade({
-          req,
-          socket: socket as tls.TLSSocket,
-          head,
-          requestUrl,
-        });
-        if (handled) {
-          return;
-        }
-      }
+      handleUnhandledWebSocketUpgrade(req, socket as tls.TLSSocket, head, requestUrl);
       return;
     }
 
     webSocketServer.handleUpgrade(req, socket, head, (clientSocket) => {
       const client = new NativeWebSocketClientConnection(clientSocket, requestUrl);
       const server = new NativeWebSocketServerConnection();
-      const protocols = parseWebSocketProtocols(firstHeader(req.headers["sec-websocket-protocol"]));
+      const protocols = parseWebSocketProtocols(
+        firstHeaderValue(req.headers["sec-websocket-protocol"]),
+      );
 
       void Promise.all(
         matchingHandlers.map((handler) =>
@@ -461,6 +628,25 @@ export function createNativeMswServer(
   const nodeOff = nodeServer.off.bind(nodeServer);
   const nodeRemoveAllListeners = nodeServer.removeAllListeners.bind(nodeServer);
   const nodeClose = nodeServer.close.bind(nodeServer);
+  const lifecycleEvents = {
+    on: lifecycleEmitter.on.bind(lifecycleEmitter),
+    removeListener: lifecycleEmitter.removeListener.bind(lifecycleEmitter),
+    removeAllListeners: lifecycleEmitter.removeAllListeners.bind(lifecycleEmitter),
+  };
+  const onceWrappersByEvent = new Map<
+    NativeMswLifecycleEventName,
+    Map<(...args: Array<any>) => void, (...args: Array<any>) => void>
+  >();
+
+  const getOnceWrapperMap = (
+    event: NativeMswLifecycleEventName,
+  ): Map<(...args: Array<any>) => void, (...args: Array<any>) => void> => {
+    const existing = onceWrappersByEvent.get(event);
+    if (existing) return existing;
+    const created = new Map<(...args: Array<any>) => void, (...args: Array<any>) => void>();
+    onceWrappersByEvent.set(event, created);
+    return created;
+  };
 
   return Object.assign(nodeServer, {
     use: msw.use.bind(msw),
@@ -468,38 +654,55 @@ export function createNativeMswServer(
     restoreHandlers: msw.restoreHandlers.bind(msw),
     listHandlers: msw.listHandlers.bind(msw),
     boundary: msw.boundary.bind(msw),
-    events: msw.events,
+    events: lifecycleEvents,
     on(event: string | symbol, listener: (...args: Array<any>) => void) {
-      nodeOn(event, listener);
       if (isLifecycleEventName(event)) {
-        msw.events.on(event as never, listener as never);
+        lifecycleEmitter.on(event, listener as never);
+        return this;
       }
+      nodeOn(event, listener);
       return this;
     },
     once(event: string | symbol, listener: (...args: Array<any>) => void) {
-      nodeOnce(event, listener);
       if (isLifecycleEventName(event)) {
         const onceListener = (...args: Array<any>) => {
-          msw.events.removeListener(event as never, onceListener as never);
+          lifecycleEmitter.removeListener(event, onceListener as never);
+          getOnceWrapperMap(event).delete(listener);
           listener(...args);
         };
-        msw.events.on(event as never, onceListener as never);
+        getOnceWrapperMap(event).set(listener, onceListener);
+        lifecycleEmitter.on(event, onceListener as never);
+        return this;
       }
+      nodeOnce(event, listener);
       return this;
     },
     off(event: string | symbol, listener: (...args: Array<any>) => void) {
-      nodeOff(event, listener);
       if (isLifecycleEventName(event)) {
-        msw.events.removeListener(event as never, listener as never);
+        const onceWrapper = getOnceWrapperMap(event).get(listener);
+        if (onceWrapper) {
+          lifecycleEmitter.removeListener(event, onceWrapper as never);
+          getOnceWrapperMap(event).delete(listener);
+        } else {
+          lifecycleEmitter.removeListener(event, listener as never);
+        }
+        return this;
       }
+      nodeOff(event, listener);
       return this;
     },
     removeAllListeners(event?: string | symbol) {
-      nodeRemoveAllListeners(event);
       if (event && isLifecycleEventName(event)) {
-        msw.events.removeAllListeners(event as never);
+        lifecycleEmitter.removeAllListeners(event);
+        onceWrappersByEvent.delete(event);
       } else if (!event) {
-        msw.events.removeAllListeners();
+        lifecycleEmitter.removeAllListeners();
+        onceWrappersByEvent.clear();
+      } else {
+        nodeRemoveAllListeners(event);
+      }
+      if (!event) {
+        nodeRemoveAllListeners();
       }
       return this;
     },
@@ -507,7 +710,11 @@ export function createNativeMswServer(
       for (const client of webSocketServer.clients) {
         client.terminate();
       }
+      for (const client of passthroughWebSocketServer.clients) {
+        client.terminate();
+      }
       webSocketServer.close();
+      passthroughWebSocketServer.close();
       msw.close();
       return nodeClose(callback);
     },

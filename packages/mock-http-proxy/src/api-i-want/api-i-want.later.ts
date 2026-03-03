@@ -98,8 +98,7 @@ describe("records har archives for http-client-scripts", () => {
 
     const response = await fetch(`${server.url}/hello`, {
       headers: {
-        "x-iterate-original-host": "api.example.com",
-        "x-iterate-original-proto": "https",
+        forwarded: "for=203.0.113.42; host=api.example.com; proto=https",
       },
     });
     const body = await response.json();

@@ -6,18 +6,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
 import {
+  bridgeWebSocketToUpstream,
   createNativeMswServer,
+  incomingHeadersToHeaders,
   type NativeMswServer,
   type TransformRequest,
   type TransformWebSocketUrl,
 } from "@iterate-com/msw-http-server";
+import { buildForwardedHeader } from "@iterate-com/shared/forwarded-header";
 import type { RequestHandler, SharedOptions, WebSocketHandler } from "msw";
 import type { SetupServerApi } from "msw/node";
 import type { Har } from "har-format";
-import httpProxy from "http-proxy";
 import mockttp from "mockttp";
 import { request } from "undici";
-import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { WebSocketServer, type RawData } from "ws";
 import { HarRecorder, type RecorderOpts } from "./recorder.ts";
 import {
   PROXY_HEADERS_TO_STRIP,
@@ -93,27 +95,6 @@ function headersToRecord(headers: Headers): Record<string, string> {
   return mapped;
 }
 
-function mapNodeHeadersToHeaders(input: http.IncomingHttpHeaders): Headers {
-  const headers = new Headers();
-  for (const [name, value] of Object.entries(input)) {
-    if (value === undefined) continue;
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        headers.append(name, item);
-      }
-      continue;
-    }
-    headers.set(name, value);
-  }
-  return headers;
-}
-
-function removeProxyHeadersFromIncoming(req: http.IncomingMessage): void {
-  for (const name of PROXY_HEADERS_TO_STRIP) {
-    delete req.headers[name];
-  }
-}
-
 function toBuffer(data: RawData): Buffer {
   if (typeof data === "string") return Buffer.from(data);
   if (Buffer.isBuffer(data)) return data;
@@ -127,37 +108,6 @@ function toBuffer(data: RawData): Buffer {
 function wsMessageData(data: RawData, isBinary: boolean): string {
   const buffer = toBuffer(data);
   return isBinary ? buffer.toString("base64") : buffer.toString("utf8");
-}
-
-function webSocketProtocolsFromRequest(req: http.IncomingMessage): string[] {
-  const raw = firstHeaderValue(req.headers["sec-websocket-protocol"]);
-  if (!raw) return [];
-  return raw
-    .split(",")
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-}
-
-function buildUpstreamWebSocketHeaders(req: http.IncomingMessage): Record<string, string> {
-  const excluded = new Set([
-    "host",
-    "connection",
-    "upgrade",
-    "proxy-connection",
-    "sec-websocket-key",
-    "sec-websocket-version",
-    "sec-websocket-extensions",
-    "sec-websocket-protocol",
-    ...PROXY_HEADERS_TO_STRIP,
-  ]);
-
-  const headers: Record<string, string> = {};
-  for (const [name, value] of Object.entries(req.headers)) {
-    if (excluded.has(name)) continue;
-    if (value === undefined) continue;
-    headers[name] = Array.isArray(value) ? value.join(", ") : value;
-  }
-  return headers;
 }
 
 export async function useMockHttpServer(
@@ -177,7 +127,6 @@ export async function useMockHttpServer(
   const recorder = await HarRecorder.create(recorderOptions);
 
   const allHandlers: AnyHandler[] = [...(options.handlers ?? [])];
-  const passthroughEnabled = true;
 
   const transformRequest =
     options.transformRequest === false
@@ -189,78 +138,29 @@ export async function useMockHttpServer(
       ? undefined
       : (options.transformWebSocketUrl ?? createProxyWebSocketUrlTransform());
 
-  const proxy = httpProxy.createProxyServer({
-    changeOrigin: true,
-    secure: false,
-    ws: true,
-    xfwd: true,
-  });
   const wsPassthroughServer = new WebSocketServer({ noServer: true });
-
-  type PendingHttpPassthrough = {
-    startedAt: number;
-    targetUrl: URL;
-    method: string;
-    requestHeaders: Record<string, string>;
-    requestBody: Uint8Array | null;
-    requestBodyChunks: Buffer[];
-  };
-  const pendingHttpPassthrough = new WeakMap<http.IncomingMessage, PendingHttpPassthrough>();
-
-  proxy.on("proxyRes", (proxyRes, req) => {
-    const pending = pendingHttpPassthrough.get(req);
-    if (!pending) return;
-
-    const responseChunks: Buffer[] = [];
-    let finalized = false;
-    const finalize = () => {
-      if (finalized) return;
-      finalized = true;
-
-      if (pending.requestBodyChunks.length > 0) {
-        pending.requestBody = Buffer.concat(pending.requestBodyChunks);
-      }
-
-      const responseBody = Buffer.concat(responseChunks);
-      const responseHeaders = mapNodeHeadersToHeaders(proxyRes.headers);
-      const response = new Response(responseBody, {
-        status: proxyRes.statusCode ?? 0,
-        statusText: proxyRes.statusMessage ?? "",
-        headers: responseHeaders,
-      });
-
-      recorder.appendHttpExchange(
-        {
-          startedAt: pending.startedAt,
-          durationMs: Date.now() - pending.startedAt,
-          method: pending.method,
-          targetUrl: pending.targetUrl,
-          requestHeaders: pending.requestHeaders,
-          requestBody: pending.requestBody,
-          response,
-          responseBody,
-        },
-        "passthrough",
-      );
-      pendingHttpPassthrough.delete(req);
-    };
-
-    proxyRes.on("data", (chunk) => {
-      responseChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-    proxyRes.on("end", finalize);
-    proxyRes.on("close", finalize);
-  });
 
   const server: NativeMswServer = createNativeMswServer(
     {
       onUnhandledRequest,
       transformRequest,
       transformWebSocketUrl,
-      onMockedResponse: ({ request, response }) => {
+      onMockedResponse: async ({ request, response }) => {
         const startedAt = Date.now();
         const requestHeaders = headersToRecord(request.headers);
         const targetUrl = new URL(request.url);
+        let requestBody: Uint8Array | null = null;
+        if (request.method !== "GET" && request.method !== "HEAD" && !request.bodyUsed) {
+          try {
+            requestBody = Buffer.from(await request.clone().arrayBuffer());
+          } catch {
+            requestBody = null;
+          }
+        }
+        const responseBody = response.body
+          ? Buffer.from(await response.clone().arrayBuffer())
+          : null;
+
         recorder.appendHttpExchange(
           {
             startedAt,
@@ -268,61 +168,43 @@ export async function useMockHttpServer(
             method: request.method,
             targetUrl,
             requestHeaders,
-            requestBody: null,
+            requestBody,
             response,
-            responseBody: null,
+            responseBody,
           },
           "handled",
         );
       },
-      onUnhandledHttpRequest: ({ req, res, request }) => {
-        if (!passthroughEnabled || onUnhandledRequest === "error") {
-          return false;
-        }
-
-        const targetUrl = new URL(request.url);
+      onPassthroughResponse: async ({ request, response }) => {
         const startedAt = Date.now();
-        const pending: PendingHttpPassthrough = {
-          startedAt,
-          targetUrl,
-          method: request.method,
-          requestHeaders: headersToRecord(request.headers),
-          requestBody: null,
-          requestBodyChunks: [],
-        };
-        req.on("data", (chunk) => {
-          pending.requestBodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        });
-        pendingHttpPassthrough.set(req, pending);
+        const targetUrl = new URL(request.url);
+        const requestHeaders = headersToRecord(request.headers);
+        const requestBody = null;
+        const responseBody = response.body
+          ? Buffer.from(await response.clone().arrayBuffer())
+          : null;
 
-        req.url = `${targetUrl.pathname}${targetUrl.search}`;
-        req.headers.host = targetUrl.host;
-        removeProxyHeadersFromIncoming(req);
-
-        proxy.web(
-          req,
-          res,
+        recorder.appendHttpExchange(
           {
-            target: `${targetUrl.protocol}//${targetUrl.host}`,
+            startedAt,
+            durationMs: Date.now() - startedAt,
+            method: request.method,
+            targetUrl,
+            requestHeaders,
+            requestBody,
+            response,
+            responseBody,
           },
-          () => {
-            pendingHttpPassthrough.delete(req);
-            if (!res.headersSent) {
-              res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
-            }
-            res.end("proxy passthrough failed");
-          },
+          "passthrough",
         );
-
-        return true;
       },
       onUnhandledWebSocketUpgrade: ({ req, socket, head, requestUrl }) => {
-        if (!passthroughEnabled || onUnhandledRequest === "error") {
+        if (onUnhandledRequest === "error") {
           return false;
         }
 
         const startedAt = Date.now();
-        const requestHeaders = headersToRecord(mapNodeHeadersToHeaders(req.headers));
+        const requestHeaders = headersToRecord(incomingHeadersToHeaders(req.headers));
         const webSocketMessages: Array<{
           type: "send" | "receive";
           time: number;
@@ -349,98 +231,35 @@ export async function useMockHttpServer(
           });
         };
 
-        removeProxyHeadersFromIncoming(req);
-        wsPassthroughServer.handleUpgrade(req, socket, head, (clientSocket) => {
-          const upstreamHeaders = buildUpstreamWebSocketHeaders(req);
-          const upstreamProtocols = webSocketProtocolsFromRequest(req);
-          const upstreamSocket =
-            upstreamProtocols.length > 0
-              ? new WebSocket(requestUrl.toString(), upstreamProtocols, {
-                  headers: upstreamHeaders,
-                })
-              : new WebSocket(requestUrl.toString(), { headers: upstreamHeaders });
-
-          const queuedClientMessages: Array<{ data: RawData; isBinary: boolean }> = [];
-
-          upstreamSocket.on("upgrade", (response) => {
+        bridgeWebSocketToUpstream({
+          req,
+          socket,
+          head,
+          targetUrl: requestUrl,
+          upgradeServer: wsPassthroughServer,
+          excludeRequestHeaderNames: PROXY_HEADERS_TO_STRIP,
+          onUpstreamUpgrade: (response) => {
             responseStatus = response.statusCode ?? 101;
             responseStatusText = response.statusMessage ?? "Switching Protocols";
-            responseHeaders = mapNodeHeadersToHeaders(response.headers);
-          });
-
-          clientSocket.on("message", (data, isBinary) => {
+            responseHeaders = incomingHeadersToHeaders(response.headers);
+          },
+          onClientMessage: (data, isBinary) => {
             webSocketMessages.push({
               type: "send",
               time: Date.now() / 1000,
               opcode: isBinary ? 2 : 1,
-              data: wsMessageData(data, isBinary),
+              data: wsMessageData(data as RawData, isBinary),
             });
-
-            if (upstreamSocket.readyState === WebSocket.OPEN) {
-              upstreamSocket.send(data, { binary: isBinary });
-              return;
-            }
-            queuedClientMessages.push({ data, isBinary });
-          });
-
-          upstreamSocket.on("open", () => {
-            for (const queued of queuedClientMessages) {
-              upstreamSocket.send(queued.data, { binary: queued.isBinary });
-            }
-            queuedClientMessages.length = 0;
-          });
-
-          upstreamSocket.on("message", (data, isBinary) => {
+          },
+          onUpstreamMessage: (data, isBinary) => {
             webSocketMessages.push({
               type: "receive",
               time: Date.now() / 1000,
               opcode: isBinary ? 2 : 1,
-              data: wsMessageData(data, isBinary),
+              data: wsMessageData(data as RawData, isBinary),
             });
-            if (clientSocket.readyState === WebSocket.OPEN) {
-              clientSocket.send(data, { binary: isBinary });
-            }
-          });
-
-          clientSocket.on("close", () => {
-            if (
-              upstreamSocket.readyState === WebSocket.OPEN ||
-              upstreamSocket.readyState === WebSocket.CONNECTING
-            ) {
-              upstreamSocket.close();
-            }
-            finalize();
-          });
-
-          upstreamSocket.on("close", () => {
-            if (
-              clientSocket.readyState === WebSocket.OPEN ||
-              clientSocket.readyState === WebSocket.CONNECTING
-            ) {
-              clientSocket.close();
-            }
-            finalize();
-          });
-
-          clientSocket.on("error", () => {
-            if (
-              upstreamSocket.readyState === WebSocket.OPEN ||
-              upstreamSocket.readyState === WebSocket.CONNECTING
-            ) {
-              upstreamSocket.close();
-            }
-            finalize();
-          });
-
-          upstreamSocket.on("error", () => {
-            if (
-              clientSocket.readyState === WebSocket.OPEN ||
-              clientSocket.readyState === WebSocket.CONNECTING
-            ) {
-              clientSocket.close();
-            }
-            finalize();
-          });
+          },
+          onFinalize: finalize,
         });
         return true;
       },
@@ -472,16 +291,15 @@ export async function useMockHttpServer(
     },
     async [Symbol.asyncDispose]() {
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      proxy.close();
       wsPassthroughServer.close();
       await recorder.writeConfiguredIfAny();
     },
   };
 }
 
-function firstHeaderValue(value: string | string[] | undefined): string | undefined {
-  if (Array.isArray(value)) return value[0];
-  return value;
+function firstHeaderValue(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value[0] ?? "";
+  return value ?? "";
 }
 
 function toOriginalUrl(
@@ -522,16 +340,32 @@ export async function useMitmProxy(options: UseMitmProxyOptions): Promise<MitmPr
   await mitmServer.forAnyRequest().thenCallback(async (req) => {
     const originalUrl = toOriginalUrl(req.url, req.headers);
     const bodyBuffer = req.body ? await req.body.getDecodedBuffer() : undefined;
+    const forwarded = buildForwardedHeader({
+      for: req.remoteIpAddress,
+      host: originalUrl.host,
+      proto: originalUrl.protocol,
+    });
+
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(req.headers)) {
+      if (typeof value === "string") {
+        headers.set(name, value);
+        continue;
+      }
+      if (Array.isArray(value)) {
+        headers.set(name, value.join(", "));
+      }
+    }
+    headers.set("host", egressUrl.host);
+    if (forwarded) {
+      headers.set("forwarded", forwarded);
+    }
 
     const response = await request(
       `${options.externalEgressProxyUrl}${originalUrl.pathname}${originalUrl.search}`,
       {
         method: req.method,
-        headers: {
-          ...req.headers,
-          host: egressUrl.host,
-          forwarded: `host=${originalUrl.host};proto=${originalUrl.protocol.replace(":", "")}`,
-        },
+        headers,
         body: bodyBuffer,
       },
     );

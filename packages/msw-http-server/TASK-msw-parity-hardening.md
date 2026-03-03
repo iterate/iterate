@@ -1,412 +1,255 @@
 ---
-state: todo
+state: in_progress
 priority: p1
 size: l
 dependsOn: []
 ---
 
-# Task: Make `@iterate-com/msw-http-server` closer to MSW-native semantics
+# Task: MSW Parity Hardening (v2)
 
-## Goal
+## Why this file was refreshed
 
-Make the native HTTP server adapter feel MSW-idiomatic while keeping real socket/server behavior.
+Previous version described earlier architecture. Current code has already shipped several fixes (lifecycle correctness, less private-MSW coupling, bypass semantics, ws bridge extraction). This task now focuses on what is still missing.
 
-Concretely:
+## Current code shape
 
-- keep API + lifecycle behavior as close as possible to `setupServer` expectations;
-- harden transport correctness (abort, streaming errors, multi-value headers);
-- reduce accidental coupling to MSW internals where feasible;
-- codify all parity claims with tests.
+Implementation:
 
-## Current package files
+- `packages/msw-http-server/src/create-native-msw-server.ts` (~732 LOC)
+- `packages/msw-http-server/src/http-utils.ts` (~16 LOC)
+- `packages/msw-http-server/src/websocket-upstream-bridge.ts` (~146 LOC)
 
-- Implementation: `packages/msw-http-server/src/create-native-msw-server.ts`
-- API export: `packages/msw-http-server/src/index.ts`
-- Tests:
-  - `packages/msw-http-server/tests/create-native-msw-server.test.ts`
-  - `packages/msw-http-server/tests/handle-request-e2e.test.ts`
-  - `packages/msw-http-server/tests/transport-e2e.test.ts`
+Tests:
 
-## Why this task exists (local code references)
+- `packages/msw-http-server/tests/create-native-msw-server.test.ts` (~105 LOC)
+- `packages/msw-http-server/tests/handle-request-e2e.test.ts` (~506 LOC)
+- `packages/msw-http-server/tests/transport-e2e.test.ts` (~489 LOC)
 
-### 1) Multi-value response headers (`Set-Cookie`) are overwritten
+## Broad strokes design (today)
 
-Current code sets headers one-by-one:
+### HTTP request path
 
-- `create-native-msw-server.ts:214-216`
+1. Convert incoming Node request to Fetch `Request`.
+2. Optional transform (`transformRequest`) rewrites URL/headers.
+3. Call MSW `handleRequest` with current request handlers.
+4. If mocked:
+   - emit `response:mocked`
+   - call `onMockedResponse`
+   - forward response to Node `res`.
+5. If unhandled:
+   - optional advanced override `onUnhandledHttpRequest`
+   - otherwise bypass to real upstream via fetch
+   - emit `response:bypass`
+   - call `onPassthroughResponse`
+   - forward passthrough response.
 
-Using `res.setHeader(key, value)` repeatedly overwrites prior values for the same key. This is a correctness bug for `set-cookie`.
+### WebSocket upgrade path
 
-### 2) Stream error path can break response handling after headers already sent
+1. Build ws URL from incoming socket + optional transform.
+2. Match MSW ws handlers.
+3. If no match:
+   - resolve unhandled action (`bypass` or `error`)
+   - on bypass, bridge client <-> upstream websocket
+   - on error, reject upgrade.
 
-Current flow:
+### Lifecycle/events model
 
-- stream loop writes chunks: `create-native-msw-server.ts:218-224`
-- outer `catch` writes `500`: `create-native-msw-server.ts:309-312`
+- Adapter exposes setupServer-like methods (`use`, `resetHandlers`, `listHandlers`, `events`, etc).
+- Lifecycle events are proxied through an adapter-owned emitter for known names:
+  - `request:start`
+  - `request:match`
+  - `request:unhandled`
+  - `request:end`
+  - `response:mocked`
+  - `response:bypass`
+  - `unhandledException`
+- Non-lifecycle names still go to native Node server events.
 
-If body streaming fails after first chunk, writing a new status/header in catch is invalid and can throw `ERR_HTTP_HEADERS_SENT`.
+## What is done already
 
-### 3) Request abort is not wired into Fetch `Request.signal`
+### Done 1: header overwrite bug addressed
 
-Current request conversion:
+Response headers are grouped before calling `res.setHeader`, so duplicate header names no longer overwrite by default.
 
-- `create-native-msw-server.ts:181-208`
+### Done 2: lifecycle once/off mismatch fixed
 
-`new Request(...)` is built without `signal`, so handlers cannot observe client disconnect abort.
+`once` wrappers are tracked and `off` correctly removes wrapped listeners.
 
-### 4) Convenience lifecycle API has `once`/`off` mismatch
+### Done 3: lifecycle detection fixed
 
-Current listener wiring:
+No longer uses `event.includes(":")`; explicit event-name list includes `unhandledException`.
 
-- `once`: `create-native-msw-server.ts:375-383`
-- `off`: `create-native-msw-server.ts:386-390`
+### Done 4: private MSW coupling reduced
 
-`once` wraps listener, `off` removes original function, so lifecycle listener remains and still fires.
+- Handler type detection uses `instanceof RequestHandler/WebSocketHandler`.
+- Adapter no longer reads private `msw.emitter`.
+- Adapter now uses its own lifecycle emitter with `handleRequest`.
 
-### 5) Lifecycle event detection is incomplete
+### Done 5: unhandled semantics updated
 
-Current check:
+- Unhandled HTTP and ws bypass to real upstream by default strategy.
+- Self-loop guards for bypass paths.
+- Added `onPassthroughResponse` callback for recording/instrumentation.
 
-- `create-native-msw-server.ts:230-232`
+## Remaining gaps (this is the real work now)
 
-`event.includes(":")` misses valid MSW lifecycle event `unhandledException`.
+## Gap A: request abort propagation to handler signal (high)
 
-### 6) Adapter relies on MSW private fields
+Current `new Request(...)` has no abort signal wiring from Node request lifecycle.
 
-Current private coupling:
+Impact:
 
-- handler kind checks via `__kind`: `create-native-msw-server.ts:33-39`, `250-254`
-- internal emitter cast access: `create-native-msw-server.ts:262-274`
+- Long handlers may continue work after client disconnect.
+- `request.signal` listeners in handlers may never fire on client abort.
 
-This is upgrade-risky if internals change.
+Design:
 
-## Upstream references to align with
+- Create `AbortController` per incoming HTTP request.
+- Abort controller on:
+  - `req.aborted`
+  - `req.close` where socket closed before normal completion
+  - defensive `req.error`.
+- Pass `signal` into `new Request(...)`.
+- Ensure listeners are detached when request handling completes.
 
-MSW core and node behavior references:
+## Gap B: response body streaming robustness (high)
 
-- `handleRequest` implementation:
-  - https://github.com/mswjs/msw/blob/main/src/core/utils/handleRequest.ts
-- `handleRequest` tests:
-  - https://github.com/mswjs/msw/blob/main/src/core/utils/handleRequest.test.ts
-- Lifecycle events node tests:
-  - https://github.com/mswjs/msw/blob/main/test/node/msw-api/setup-server/life-cycle-events/on.node.test.ts
-- Fall-through semantics:
-  - https://github.com/mswjs/msw/blob/main/test/node/msw-api/setup-server/scenarios/fall-through.node.test.ts
-- Passthrough semantics:
-  - https://github.com/mswjs/msw/blob/main/test/node/msw-api/req/passthrough.node.test.ts
-- Unhandled request strategies:
-  - https://github.com/mswjs/msw/blob/main/test/node/msw-api/setup-server/scenarios/on-unhandled-request/default.node.test.ts
-  - https://github.com/mswjs/msw/blob/main/test/node/msw-api/setup-server/scenarios/on-unhandled-request/error.node.test.ts
-  - https://github.com/mswjs/msw/blob/main/test/node/msw-api/setup-server/scenarios/on-unhandled-request/callback.node.test.ts
-- Prior art for node middleware shape:
-  - https://github.com/mswjs/http-middleware/blob/main/src/middleware.ts
+Current stream forwarding is a simple read/write loop.
 
-Node transport references:
+Missing behavior:
 
-- HTTP server/header behavior:
-  - https://nodejs.org/api/http.html
-- Stream/backpressure/error behavior:
-  - https://nodejs.org/api/stream.html
-- Fetch/Request behavior in Node:
-  - https://nodejs.org/api/globals.html#class-request
-
-## Implementation plan (detailed)
-
-### Phase A: Lock in failing tests first
-
-Add a new file: `packages/msw-http-server/tests/parity-regressions.test.ts`
-
-Purpose: prove current behavior gaps before code changes.
-
-#### Failing test A1: preserves multiple `Set-Cookie` headers
-
-Expected today: fails because only last cookie survives.
-
-```ts
-import { once } from "node:events";
-import { request as httpRequest } from "node:http";
-import type { AddressInfo } from "node:net";
-import { afterEach, expect, test } from "vitest";
-import { http } from "msw";
-import { createNativeMswServer, type NativeMswServer } from "../src/index.ts";
-
-const activeServers = new Set<NativeMswServer>();
-
-async function listen(server: NativeMswServer): Promise<number> {
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  activeServers.add(server);
-  return (server.address() as AddressInfo).port;
-}
-
-afterEach(async () => {
-  for (const server of activeServers) {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-    activeServers.delete(server);
-  }
-});
-
-test("preserves multiple set-cookie response headers", async () => {
-  const server = createNativeMswServer(
-    http.get("/cookies", () => {
-      const headers = new Headers();
-      headers.append("set-cookie", "a=1; Path=/");
-      headers.append("set-cookie", "b=2; Path=/");
-      return new Response("ok", { headers });
-    }),
-  );
-
-  const port = await listen(server);
-
-  const result = await new Promise<{ status: number; setCookie: string[] | undefined }>(
-    (resolve, reject) => {
-      const req = httpRequest(
-        { host: "127.0.0.1", port, path: "/cookies", method: "GET" },
-        (res) => {
-          resolve({
-            status: res.statusCode ?? 0,
-            setCookie: res.headers["set-cookie"],
-          });
-        },
-      );
-      req.on("error", reject);
-      req.end();
-    },
-  );
-
-  expect(result.status).toBe(200);
-  expect(result.setCookie).toEqual(["a=1; Path=/", "b=2; Path=/"]);
-});
-```
-
-#### Failing test A2: `server.off` removes listener previously added via `server.once`
-
-Expected today: fails because wrapped listener is not removed.
-
-```ts
-test("server.off removes lifecycle once listener", async () => {
-  const listener = vi.fn();
-  const server = createNativeMswServer(http.get("/x", () => new Response("ok")));
-  const { baseUrl } = await listen(server);
-
-  server.once("request:match", listener);
-  server.off("request:match", listener);
-
-  const res = await fetch(`${baseUrl}/x`);
-  expect(res.status).toBe(200);
-  expect(listener).not.toHaveBeenCalled();
-});
-```
-
-#### Failing test A3: convenience `server.on("unhandledException")` receives MSW event
-
-Expected today: fails because `isLifecycleEventName` only matches names containing `:`.
-
-```ts
-test("forwards unhandledException lifecycle event via server.on", async () => {
-  const server = createNativeMswServer(
-    http.get("/boom", () => {
-      throw new Error("resolver failed");
-    }),
-  );
-  const { baseUrl } = await listen(server);
-
-  const unhandledExceptionSpy = vi.fn();
-  server.on("unhandledException", unhandledExceptionSpy);
-
-  const response = await fetch(`${baseUrl}/boom`);
-  expect(response.status).toBe(500);
-  expect(unhandledExceptionSpy).toHaveBeenCalledTimes(1);
-});
-```
-
-#### Failing test A4: aborting client request aborts handler `request.signal`
-
-Expected today: fails because request signal is never wired to incoming socket abort.
-
-```ts
-test("propagates client abort to request.signal", async () => {
-  let sawAbort = false;
-
-  const server = createNativeMswServer(
-    http.post("/slow", async ({ request }) => {
-      await new Promise<void>((resolve) => {
-        request.signal.addEventListener(
-          "abort",
-          () => {
-            sawAbort = true;
-            resolve();
-          },
-          { once: true },
-        );
-
-        setTimeout(resolve, 200);
-      });
-
-      return new Response("ok");
-    }),
-  );
-
-  const port = await listen(server);
-
-  await new Promise<void>((resolve, reject) => {
-    const req = httpRequest(
-      {
-        host: "127.0.0.1",
-        port,
-        path: "/slow",
-        method: "POST",
-        headers: { "content-type": "text/plain" },
-      },
-      () => {},
-    );
-
-    req.on("error", () => resolve());
-    req.write("hello");
-    req.end();
+- backpressure (`res.write(...) === false` then wait `drain`)
+- early destination close/error handling
+- reader cancellation on destination termination
+- explicit behavior for read errors after headers/chunks sent
 
-    setTimeout(() => {
-      req.destroy(new Error("abort-client-request"));
-      resolve();
-    }, 10);
-  });
+Design:
 
-  await new Promise((r) => setTimeout(r, 20));
-  expect(sawAbort).toBe(true);
-});
-```
+- Introduce helper: `pipeWebResponseBodyToNode(res, body, context)`.
+- Use `await once(res, "drain")` when backpressured.
+- Stop writes if `res.destroyed` or `res.writableEnded`.
+- On `res.close`/`res.error`, cancel reader.
+- On read error:
+  - if headers not sent, return controlled 502/500
+  - if already sent, destroy socket and stop.
 
-#### Failing test A5: stream failure after initial chunk does not crash server
+## Gap C: explicit set-cookie regression lock (medium)
 
-Expected today: likely fails/flaky due headers-sent error path.
+Even though header grouping is in place, parity needs a hard test for `set-cookie` array behavior.
 
-```ts
-test("stream errors after first chunk do not break subsequent requests", async () => {
-  let sentFirstChunk = false;
+Design:
 
-  const server = createNativeMswServer(
-    http.get("/unstable", () => {
-      const encoder = new TextEncoder();
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(encoder.encode("first\\n"));
-          sentFirstChunk = true;
-          queueMicrotask(() => controller.error(new Error("stream exploded")));
-        },
-      });
-      return new Response(stream, { status: 200 });
-    }),
-    http.get("/health", () => new Response("ok", { status: 200 })),
-  );
+- Add test that returns two `Set-Cookie` values from an MSW handler.
+- Assert Node client sees `res.headers["set-cookie"]` as two items.
 
-  const { baseUrl } = await listen(server);
+## Gap D: parity-focused regression test file (medium)
 
-  await fetch(`${baseUrl}/unstable`).catch(() => undefined);
-  expect(sentFirstChunk).toBe(true);
+Current tests are broad e2e. Need focused parity tests to catch edge regressions quickly.
 
-  const health = await fetch(`${baseUrl}/health`);
-  expect(health.status).toBe(200);
-  await expect(health.text()).resolves.toBe("ok");
-});
-```
+Create:
 
-### Phase B: Implement transport/lifecycle fixes
+- `packages/msw-http-server/tests/parity-regressions.test.ts`
 
-#### B1. Response header serialization
+Target cases:
 
-In `sendWebResponse` (`create-native-msw-server.ts`):
+1. multi-value `set-cookie` survives
+2. `off` removes lifecycle `once`
+3. `unhandledException` forwarded through adapter `on`
+4. client abort triggers handler `request.signal`
+5. stream error after partial write does not poison subsequent requests.
 
-- preserve `set-cookie` as array using `mswRes.headers.getSetCookie()`;
-- for other duplicate headers, append or accumulate rather than overwrite.
+## Gap E: docs for intentional non-parity choices (low-medium)
 
-Acceptance:
+Need explicit note on differences from `setupServer` expectations where intentional.
 
-- A1 passes.
+Candidates to document:
 
-#### B2. Robust streaming bridge
+- unhandled bypass uses real upstream network
+- self-loop protection behavior for HTTP/ws bypass
+- optional advanced hooks (`onUnhandledHttpRequest`, `onUnhandledWebSocketUpgrade`, `onPassthroughResponse`).
 
-In `sendWebResponse`:
+## Implementation plan (v2)
 
-- guard for `res.destroyed` / `res.writableEnded`;
-- handle `reader.read()` errors without rewriting headers if already sent;
-- respect backpressure (`res.write()` false => await `drain`);
-- cancel reader on `res.close`/`res.error`.
+### Phase 0: parity test harness first
 
-Acceptance:
+- Add `parity-regressions.test.ts` with failing tests for Gap A/B/C.
+- Keep tests isolated, no external network.
 
-- A5 passes reliably.
+### Phase 1: abort plumbing
 
-#### B3. Propagate client abort into `Request.signal`
+- Add abort controller wiring to request construction.
+- Thread signal into `new Request`.
+- Add cleanup semantics.
 
-In `incomingToWebRequest` and call site:
+### Phase 2: stream pipe hardening
 
-- create `AbortController` per incoming request;
-- bind `req.on("aborted")` and `req.on("close")` to `controller.abort()`;
-- pass `signal` into `new Request(...)`.
+- Extract body pipe helper.
+- Implement backpressure + cancellation + failure semantics.
+- Preserve existing behavior for successful paths.
 
-Acceptance:
+### Phase 3: header parity lock
 
-- A4 passes.
+- Add explicit set-cookie test.
+- If needed, use `Headers.getSetCookie()` when available to guarantee exact cookie list semantics.
 
-#### B4. Lifecycle convenience API correctness
+### Phase 4: docs
 
-In server wrapper (`on`/`once`/`off`/`removeAllListeners`):
+- Short README/task note for non-parity behaviors.
 
-- replace `isLifecycleEventName` heuristic with explicit lifecycle event-name set from `LifeCycleEventsMap` keys;
-- track wrapped once listeners in map so `off` can remove wrapper;
-- ensure `removeAllListeners(event)` clears both node + lifecycle wrappers for that event.
+## Estimated LOC (remaining work)
 
-Acceptance:
+These are realistic ranges, not optimistic minimums.
 
-- A2 and A3 pass.
+### Implementation LOC
 
-### Phase C: De-risk private MSW internals (incremental)
+- Abort propagation plumbing: `+30` to `+55`
+- Stream pipe hardening helper + call-site integration: `+90` to `+160`
+- Minor header parity adjustments (if needed): `+10` to `+25`
+- Cleanup/refactor glue: `+20` to `+45`
 
-Current use of `__kind` and `msw.emitter` is fragile.
+Estimated implementation total: `+150` to `+285` LOC
 
-Short-term:
+### Test LOC
 
-- isolate private access in tiny helper fns with comments + runtime invariant checks;
-- add one test that fails loudly if expected private shape changes.
+- New `parity-regressions.test.ts` scaffold + helpers: `+50` to `+90`
+- A/B/C cases and assertions: `+140` to `+260`
+- Small updates to existing tests for behavior shifts: `+20` to `+60`
 
-Longer-term:
+Estimated test total: `+210` to `+410` LOC
 
-- adopt architecture closer to `@mswjs/http-middleware` (own emitter + explicit `handleRequest` wiring), reducing dependence on private `setupServer` internals.
+### Documentation LOC
 
-Acceptance:
+- Task/README parity notes: `+25` to `+70`
 
-- behavior unchanged;
-- private-surface usage is centralized and documented.
+### Combined estimate
 
-## Optional parity follow-ups (not blocking this task)
+Net added LOC likely: `+385` to `+765`
 
-- Add characterization test for `onUnhandledRequest: "error"` and callback-throw paths.
-- Add requestId correlation assertions across `request:*` and `response:*` events.
-- Decide/document passthrough semantics explicitly:
-  - keep 404 contract as intentional adapter behavior, or
-  - add configurable `onPassthrough(req, res)` hook for fallback/proxy.
+Large variance driver is stream-failure test quality and how defensive the pipe helper becomes.
+
+## Risk notes
+
+- Highest risk: stream-hardening changes can subtly alter connection close behavior in existing transport tests.
+- Medium risk: abort wiring can fire too aggressively if close semantics are not filtered.
+- Low risk: set-cookie lock test should be straightforward.
 
 ## Validation checklist
 
-Run:
+Run at minimum:
 
-```bash
-pnpm --filter @iterate-com/msw-http-server test
-pnpm --filter @iterate-com/msw-http-server typecheck
-```
+- `pnpm --filter @iterate-com/msw-http-server typecheck`
+- `pnpm --filter @iterate-com/msw-http-server test`
 
-Expected end state:
+Recommended focused repeats after stream/abort work:
 
-- all new parity-regression tests pass;
-- no existing tests regressed;
-- behavior differences vs `setupServer` are explicitly documented in README or package doc.
+- `pnpm --filter @iterate-com/msw-http-server exec vitest run tests/transport-e2e.test.ts`
+- `pnpm --filter @iterate-com/msw-http-server exec vitest run tests/parity-regressions.test.ts`
 
-## Definition of done
+## Definition of done (v2)
 
-- [ ] Added `tests/parity-regressions.test.ts` with A1-A5 tests.
-- [ ] Confirmed tests fail on current baseline.
-- [ ] Implemented B1-B4.
-- [ ] Confirmed A1-A5 now pass.
-- [ ] Added brief docs note about intentional non-parity areas (if any remain).
+- [ ] Added `tests/parity-regressions.test.ts` with abort + stream + set-cookie + lifecycle cases.
+- [ ] Abort propagation wired into `Request.signal`.
+- [ ] Response streaming path hardened for backpressure/close/error.
+- [ ] Explicit `Set-Cookie` regression test passing.
+- [ ] Existing suite still green.
+- [ ] Non-parity behavior documented briefly.

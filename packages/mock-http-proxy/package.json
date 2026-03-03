@@ -3,17 +3,19 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
-  "exports": {},
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "NODE_OPTIONS=--no-deprecation vitest run",
-    "test:real-https": "RUN_REAL_HTTPS_PROXY_TESTS=1 NODE_OPTIONS=--no-deprecation vitest run tests/real-https-sdk-proxy.test.ts",
+    "test:real-https": "RUN_REAL_HTTPS_PROXY_TESTS=1 NODE_OPTIONS=--no-deprecation vitest run src/api-i-want/api-i-want.test.ts",
     "test:real-https:doppler": "doppler run --config dev -- pnpm test:real-https"
   },
   "dependencies": {
     "@iterate-com/msw-http-server": "workspace:*",
+    "@iterate-com/shared": "workspace:*",
     "@mswjs/source": "^0.5.0",
-    "http-proxy": "^1.18.1",
     "https-proxy-agent": "^7.0.6",
     "mockttp": "^4.2.0",
     "msw": "^2.4.9",
@@ -23,7 +25,6 @@
   "devDependencies": {
     "@slack/web-api": "^7.14.1",
     "@types/har-format": "^1.2.16",
-    "@types/http-proxy": "^1.17.16",
     "@types/node": "^25.0.10",
     "@types/ws": "^8.18.1",
     "http-mitm-proxy": "^1.1.0",
