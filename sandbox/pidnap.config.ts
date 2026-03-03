@@ -159,6 +159,7 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
+      dependsOn: ["archil-repo-ready"],
     },
     {
       name: "daemon-backend",
