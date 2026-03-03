@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { createServer } from "node:http";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { CaddyClient, buildHostRoute } from "@accelerated-software-development/caddy-api-client";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import {
@@ -27,6 +27,7 @@ import { RPCHandler } from "@orpc/server/node";
 import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
 import { createServer as createViteServer, searchForWorkspaceRoot, type ViteDevServer } from "vite";
 import { WebSocketServer, type WebSocket } from "ws";
+import { reconcileCaddyConfig } from "./caddy-sync.ts";
 import { ServicesStore } from "./db.ts";
 import { ResolvePublicUrlError, resolvePublicUrl } from "./resolve-public-url.ts";
 
@@ -38,59 +39,6 @@ interface RegistryContext {
   log: ServiceRequestLogger;
   store: ServicesStore;
   env: RegistryEnv;
-}
-
-function buildCaddyLoadPayload(params: {
-  routes: Array<{
-    host: string;
-    target: string;
-  }>;
-  listenAddress: string;
-}): Record<string, unknown> {
-  const staticRoutes: unknown[] = [
-    buildHostRoute({ host: "pidnap.iterate.localhost", dial: "127.0.0.1:9876" }),
-    buildHostRoute({ host: "registry.iterate.localhost", dial: "127.0.0.1:8777" }),
-    buildHostRoute({ host: "docs.iterate.localhost", dial: "127.0.0.1:19050" }),
-    buildHostRoute({ host: "home.iterate.localhost", dial: "127.0.0.1:19030" }),
-    buildHostRoute({ host: "outerbase.iterate.localhost", dial: "127.0.0.1:19040" }),
-    buildHostRoute({ host: "caddy-admin.iterate.localhost", dial: "127.0.0.1:2019" }),
-  ];
-
-  const dynamicRoutes = params.routes.map((route) =>
-    buildHostRoute({
-      host: route.host,
-      dial: route.target,
-    }),
-  );
-
-  return {
-    admin: {
-      listen: "0.0.0.0:2019",
-      origins: ["*"],
-    },
-    apps: {
-      http: {
-        servers: {
-          srv0: {
-            listen: [params.listenAddress],
-            routes: [
-              ...staticRoutes,
-              ...dynamicRoutes,
-              {
-                handle: [
-                  {
-                    handler: "reverse_proxy",
-                    upstreams: [{ dial: "127.0.0.1:19000" }],
-                  },
-                ],
-                terminal: true,
-              },
-            ],
-          },
-        },
-      },
-    },
-  };
 }
 
 let storePromise: Promise<ServicesStore> | null = null;
@@ -144,6 +92,64 @@ const os = implement(registryContract).$context<RegistryContext>();
 initializeServiceOtel(serviceName);
 initializeServiceEvlog(serviceName);
 
+async function synchronizeCaddyFromStore(params: {
+  store: ServicesStore;
+  env: RegistryEnv;
+  forceReload?: boolean;
+}) {
+  const routes = await params.store.listRoutes();
+  const result = await reconcileCaddyConfig({
+    routes,
+    caddyConfigDir: params.env.CADDY_CONFIG_DIR,
+    rootCaddyfilePath: params.env.CADDY_ROOT_CADDYFILE,
+    caddyBinPath: params.env.CADDY_BIN_PATH,
+    iteratePublicBaseUrl: params.env.ITERATE_PUBLIC_BASE_URL,
+    iteratePublicBaseUrlType: params.env.ITERATE_PUBLIC_BASE_URL_TYPE,
+    forceReload: params.forceReload,
+  });
+
+  return {
+    routes,
+    result,
+  };
+}
+
+async function upsertRouteAndSynchronize(params: {
+  input: {
+    host: string;
+    target: string;
+    metadata?: Record<string, string>;
+    tags?: string[];
+  };
+  context: RegistryContext;
+}) {
+  const route = await params.context.store.upsertRoute(params.input);
+  const sync = await synchronizeCaddyFromStore({
+    store: params.context.store,
+    env: params.context.env,
+  });
+
+  return {
+    route,
+    routes: sync.routes,
+    sync: sync.result,
+  };
+}
+
+async function removeRouteAndSynchronize(params: { host: string; context: RegistryContext }) {
+  const removed = await params.context.store.removeRoute(params.host);
+  const sync = await synchronizeCaddyFromStore({
+    store: params.context.store,
+    env: params.context.env,
+  });
+
+  return {
+    removed,
+    routes: sync.routes,
+    sync: sync.result,
+  };
+}
+
 async function handleCaddyLoadInvocation(params: {
   input: {
     listenAddress?: string;
@@ -155,10 +161,13 @@ async function handleCaddyLoadInvocation(params: {
   const listenAddress = params.input.listenAddress ?? params.context.env.CADDY_LISTEN_ADDRESS;
   const adminUrl = params.input.adminUrl ?? params.context.env.CADDY_ADMIN_URL;
   const routes = await params.context.store.listRoutes();
-  const payload = buildCaddyLoadPayload({
-    routes,
+  const payload = {
+    note: "registry now uses caddy validate/reload with file fragments in CADDY_CONFIG_DIR",
     listenAddress,
-  });
+    routeHosts: routes.map((route) => route.host),
+    caddyConfigDir: params.context.env.CADDY_CONFIG_DIR,
+    caddyRootCaddyfile: params.context.env.CADDY_ROOT_CADDYFILE,
+  };
 
   const invocation = {
     method: "POST" as const,
@@ -168,16 +177,11 @@ async function handleCaddyLoadInvocation(params: {
   };
 
   if (params.input.apply === true) {
-    const caddy = new CaddyClient({ adminUrl });
-    const response = await caddy.request(invocation.path, {
-      method: invocation.method,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(invocation.body),
+    await synchronizeCaddyFromStore({
+      store: params.context.store,
+      env: params.context.env,
+      forceReload: true,
     });
-
-    if (!response.ok) {
-      throw new Error(`caddy /load failed: ${response.status} ${response.statusText}`);
-    }
   }
 
   return {
@@ -222,6 +226,42 @@ async function readJsonBody(
   return parsed as Record<string, unknown>;
 }
 
+async function ensureInitialCaddySynchronization(params: {
+  store: ServicesStore;
+  env: RegistryEnv;
+}) {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= 30; attempt += 1) {
+    try {
+      const sync = await synchronizeCaddyFromStore({
+        store: params.store,
+        env: params.env,
+        forceReload: true,
+      });
+
+      serviceLog.info({
+        event: "registry.caddy.initial_sync_ok",
+        route_count: sync.routes.length,
+        changed_files: sync.result.changedFiles.length,
+        removed_files: sync.result.removedFiles.length,
+        attempt,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      serviceLog.warn({
+        event: "registry.caddy.initial_sync_retry",
+        attempt,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      await sleep(1_000);
+    }
+  }
+
+  throw new Error("failed initial caddy synchronization", { cause: lastError });
+}
+
 export const registryRouter = os.router({
   getPublicURL: os.getPublicURL.handler(async ({ input, context }) => {
     try {
@@ -262,11 +302,16 @@ export const registryRouter = os.router({
   },
   routes: {
     upsert: os.routes.upsert.handler(async ({ input, context }) => {
-      const route = await context.store.upsertRoute(input);
-      const routes = await context.store.listRoutes();
+      const { route, routes, sync } = await upsertRouteAndSynchronize({
+        input,
+        context,
+      });
       infoFromContext(context, "registry.routes.upsert", {
         host: route.host,
         route_count: routes.length,
+        caddy_reloaded: sync.reloaded,
+        caddy_changed_files: sync.changedFiles.length,
+        caddy_removed_files: sync.removedFiles.length,
       });
       return {
         route,
@@ -274,12 +319,17 @@ export const registryRouter = os.router({
       };
     }),
     remove: os.routes.remove.handler(async ({ input, context }) => {
-      const removed = await context.store.removeRoute(input.host);
-      const routes = await context.store.listRoutes();
+      const { removed, routes, sync } = await removeRouteAndSynchronize({
+        host: input.host,
+        context,
+      });
       infoFromContext(context, "registry.routes.remove", {
         host: input.host,
         removed,
         route_count: routes.length,
+        caddy_reloaded: sync.reloaded,
+        caddy_changed_files: sync.changedFiles.length,
+        caddy_removed_files: sync.removedFiles.length,
       });
       return {
         removed,
@@ -434,15 +484,19 @@ export async function startRegistryService(options?: {
 
         if (req.method === "POST" && pathname === "/api/routes/upsert") {
           const body = await readJsonBody(req);
-          const route = await store.upsertRoute({
+          const input = {
             host: String(body.host ?? ""),
             target: String(body.target ?? ""),
             ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
               ? { metadata: body.metadata as Record<string, string> }
               : {}),
             ...(Array.isArray(body.tags) ? { tags: body.tags.map((tag) => String(tag)) } : {}),
+          };
+
+          const { route, routes } = await upsertRouteAndSynchronize({
+            input,
+            context,
           });
-          const routes = await store.listRoutes();
           writeJsonResponse(res, 200, { route, routeCount: routes.length });
           return;
         }
@@ -450,8 +504,10 @@ export async function startRegistryService(options?: {
         if (req.method === "POST" && pathname === "/api/routes/remove") {
           const body = await readJsonBody(req);
           const host = String(body.host ?? "");
-          const removed = await store.removeRoute(host);
-          const routes = await store.listRoutes();
+          const { removed, routes } = await removeRouteAndSynchronize({
+            host,
+            context,
+          });
           writeJsonResponse(res, 200, { removed, routeCount: routes.length });
           return;
         }
@@ -612,6 +668,11 @@ export async function startRegistryService(options?: {
 
   await new Promise<void>((resolve) => {
     server.listen(port, host, () => resolve());
+  });
+
+  await ensureInitialCaddySynchronization({
+    store,
+    env,
   });
 
   serviceLog.info({

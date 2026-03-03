@@ -227,6 +227,9 @@ export const RegistryServiceEnv = z.object({
   REGISTRY_DB_PATH: nonEmptyStringWithTrimDefault("/var/lib/jonasland/registry.sqlite"),
   CADDY_ADMIN_URL: nonEmptyStringWithTrimDefault("http://127.0.0.1:2019"),
   CADDY_LISTEN_ADDRESS: nonEmptyStringWithTrimDefault(":80"),
+  CADDY_CONFIG_DIR: nonEmptyStringWithTrimDefault("/home/iterate/.iterate/caddy"),
+  CADDY_ROOT_CADDYFILE: nonEmptyStringWithTrimDefault("/home/iterate/.iterate/caddy/Caddyfile"),
+  CADDY_BIN_PATH: nonEmptyStringWithTrimDefault("/usr/local/bin/caddy"),
   ITERATE_PUBLIC_BASE_URL: optionalNonEmptyStringWithTrim(),
   ITERATE_PUBLIC_BASE_URL_TYPE: publicBaseUrlType,
 });

@@ -1,23 +1,34 @@
 # Registry Service
 
-The registry service tracks service routes and acts as the system bridge to Caddy.
+Registry owns service route records and renders Caddy config from that state.
 
-Caddy is the first point of contact for all ingress into a deployment. `getPublicURL` is the
-single procedure responsible for turning an internal URL into a public URL.
+## Caddy integration
 
-## `getPublicURL`
+- Root file: `~/.iterate/caddy/Caddyfile`
+- Managed fragments: `~/.iterate/caddy/*.caddy`
+- On any route change, registry:
+
+1. rewrites managed fragment files
+2. removes stale managed fragments
+3. runs `caddy validate --config <root> --adapter caddyfile`
+4. runs `caddy reload --config <root> --adapter caddyfile`
+
+`persist_config off` is expected in the root Caddyfile, so runtime state stays fully file-driven.
+
+Environment variables:
+
+- `CADDY_CONFIG_DIR` (default `/home/iterate/.iterate/caddy`)
+- `CADDY_ROOT_CADDYFILE` (default `/home/iterate/.iterate/caddy/Caddyfile`)
+- `CADDY_BIN_PATH` (default `/usr/local/bin/caddy`)
+
+## Public URL resolution
 
 Procedure: `registry.getPublicURL`
 
-Input:
+Input: `internalURL: string`
+Output: `publicURL: string`
 
-- `internalURL: string`
-
-Output:
-
-- `publicURL: string`
-
-Environment variables used:
+Environment variables:
 
 - `ITERATE_PUBLIC_BASE_URL`
 - `ITERATE_PUBLIC_BASE_URL_TYPE` (`prefix` or `subdomain`, default `prefix`)

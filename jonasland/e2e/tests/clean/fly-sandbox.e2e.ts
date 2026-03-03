@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { FlyDeployment } from "@iterate-com/shared/jonasland/deployment";
+import { waitForBuiltInServicesOnline } from "../../test-helpers/deployment-bootstrap.ts";
 
 const providerEnv = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const runFly = providerEnv === "fly" || providerEnv === "all";
@@ -24,6 +25,9 @@ describe.runIf(runFly)("clean fly sandbox", () => {
 
       step = "provider status";
       expect(await deployment.providerStatus()).toBe("running");
+
+      step = "wait built-ins";
+      await waitForBuiltInServicesOnline({ deployment });
 
       step = "resolve ingress";
       const ingress = await deployment.ingressUrl();

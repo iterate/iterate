@@ -476,17 +476,13 @@ abstract class DeploymentBase<
       await this.ensureIngressProxyRoute(this.ingressConfig);
       this.state = "running";
 
-    if (params?.waitForReady ?? true) {
-      const readyTimeoutMs = params?.readyTimeoutMs ?? 120_000;
-      try {
+      if (input.waitForReady ?? true) {
+        const readyTimeoutMs = input.readyTimeoutMs ?? 120_000;
         await this.waitForPidnapHostRoute({ timeoutMs: readyTimeoutMs });
         await this.waitForDirectHttp({
           url: "http://127.0.0.1/",
           timeoutMs: readyTimeoutMs,
         });
-      } catch (error) {
-        await this.destroy().catch(() => {});
-        throw error;
       }
     } catch (error) {
       await this.deleteIngressProxyRouteIfNeeded();

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { DockerDeployment, FlyDeployment } from "@iterate-com/shared/jonasland/deployment";
 import { startFlyFrpEgressBridge } from "../../test-helpers/frp-egress-bridge.ts";
+import { waitForBuiltInServicesOnline } from "../../test-helpers/deployment-bootstrap.ts";
 import { mockEgressProxy } from "../../test-helpers/mock-egress-proxy.ts";
 import { useDockerPublicIngress } from "../../test-helpers/use-docker-public-ingress.ts";
 
@@ -60,6 +61,7 @@ for (const { label, enabled, deploymentFactory, setupPublicIngress } of provider
       await using deployment = await deploymentFactory({
         name: `jonasland-e2e-clean-example-${label}-${randomUUID().slice(0, 8)}`,
       });
+      await waitForBuiltInServicesOnline({ deployment });
       await using _publicIngress =
         setupPublicIngress && deployment instanceof DockerDeployment
           ? await useDockerPublicIngress({

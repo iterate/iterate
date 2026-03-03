@@ -405,6 +405,18 @@ async function waitForHostRouteViaContainer(params: {
   const timeoutMs = params.timeoutMs ?? 45_000;
   const deadline = Date.now() + timeoutMs;
 
+  while (Date.now() < deadline) {
+    const result = await execInContainer({
+      containerId: params.containerId,
+      cmd: ["curl", "-fsS", "-H", `Host: ${params.host}`, `http://127.0.0.1${params.path}`],
+    }).catch(() => ({ exitCode: 1, output: "" }));
+    if (result.exitCode === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  throw new Error(`timed out waiting for host route ${params.host}${params.path}`);
+}
+
 export interface DeploymentRuntime {
   ports: {
     ingress: number;
@@ -580,68 +592,6 @@ async function createRuntimeFromContainer(params: {
   const resolvePublicBaseUrlType = (fallback?: string): "prefix" | "subdomain" => {
     const candidate = requestedEnv.ITERATE_PUBLIC_BASE_URL_TYPE ?? fallback;
     return candidate === "subdomain" ? "subdomain" : "prefix";
-  };
-
-  const updateIngressPublicBaseUrl = async (): Promise<void> => {
-    if (!writePublicBaseEnv) return;
-    await waitForPidnapManagerReady({ client: pidnap, timeoutMs: 45_000 });
-
-    const desiredBaseUrl =
-      requestedEnv.ITERATE_PUBLIC_BASE_URL ?? `http://iterate.localhost:${String(ports.ingress)}`;
-    const currentRegistry = await pidnap.processes.get({
-      target: "registry",
-      includeEffectiveEnv: false,
-    });
-    const desiredType = resolvePublicBaseUrlType(
-      currentRegistry.definition.env?.ITERATE_PUBLIC_BASE_URL_TYPE,
-    );
-    const currentEnv = currentRegistry.definition.env ?? {};
-    const nextEnv = {
-      ...currentEnv,
-      ITERATE_PUBLIC_BASE_URL: desiredBaseUrl,
-      ITERATE_PUBLIC_BASE_URL_TYPE: desiredType,
-    };
-
-    const envFileWrite = await execInContainer({
-      containerId: container.containerId,
-      cmd: [
-        "sh",
-        "-ec",
-        [
-          "mkdir -p /opt/jonasland-sandbox",
-          `printf 'ITERATE_PUBLIC_BASE_URL=%s\\nITERATE_PUBLIC_BASE_URL_TYPE=%s\\n' ${shellSingleQuote(desiredBaseUrl)} ${shellSingleQuote(desiredType)} > /opt/jonasland-sandbox/.env`,
-        ].join(" && "),
-      ],
-    });
-    if (envFileWrite.exitCode !== 0) {
-      throw new Error(`failed writing /opt/jonasland-sandbox/.env:\n${envFileWrite.output}`);
-    }
-
-    const needsUpdate =
-      currentEnv.ITERATE_PUBLIC_BASE_URL !== desiredBaseUrl ||
-      currentEnv.ITERATE_PUBLIC_BASE_URL_TYPE !== desiredType;
-
-    if (!needsUpdate) return;
-
-    await pidnap.processes.updateConfig({
-      processSlug: "registry",
-      definition: {
-        ...currentRegistry.definition,
-        env: nextEnv,
-      },
-      restartImmediately: true,
-    });
-
-    await waitForPidnapProcessRunning({
-      client: pidnap,
-      target: "registry",
-      timeoutMs: 60_000,
-    });
-  };
-
-  const resolvePublicBaseUrlType = (fallback?: string): "prefixed" | "subdomain-wildcard" => {
-    const candidate = requestedEnv.ITERATE_PUBLIC_BASE_URL_TYPE ?? fallback;
-    return candidate === "subdomain-wildcard" ? "subdomain-wildcard" : "prefixed";
   };
 
   const updateIngressPublicBaseUrl = async (): Promise<void> => {

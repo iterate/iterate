@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { DockerDeployment } from "@iterate-com/shared/jonasland/deployment";
+import { waitForBuiltInServicesOnline } from "../../test-helpers/deployment-bootstrap.ts";
 import { useDockerPublicIngress } from "../../test-helpers/use-docker-public-ingress.ts";
 
 const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
@@ -11,6 +12,7 @@ describe("clean events firehose (docker)", () => {
       dockerImage: DOCKER_IMAGE,
       name: `jonasland-e2e-firehose-docker-${randomUUID().slice(0, 8)}`,
     });
+    await waitForBuiltInServicesOnline({ deployment });
 
     const expectedType = "https://events.iterate.com/events/test/deployment-firehose-observed";
     const path = `/jonasland/e2e/firehose/docker/${randomUUID()}`;
@@ -45,6 +47,7 @@ describe("clean events firehose (docker-public)", () => {
       dockerImage: DOCKER_IMAGE,
       name: `jonasland-e2e-firehose-pub-${randomUUID().slice(0, 8)}`,
     });
+    await waitForBuiltInServicesOnline({ deployment });
     await using _ingress = await useDockerPublicIngress({
       deployment,
       testSlug: "events-firehose-pub",

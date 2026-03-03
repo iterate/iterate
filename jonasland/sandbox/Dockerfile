@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iptables \
     libcap2-bin \
     procps \
+    rsync \
     sudo \
     tini \
     util-linux \
@@ -62,11 +63,10 @@ RUN groupadd -g 1001 iterate && \
     chmod 0440 /etc/sudoers.d/iterate && \
     mkdir -p \
       "$ITERATE_REPO" \
-      /caddy-data \
       /var/lib/jonasland \
       /var/lib/openobserve \
       /var/log/pidnap && \
-    chown -R iterate:iterate /home/iterate /caddy-data /var/lib/jonasland /var/lib/openobserve /var/log/pidnap
+    chown -R iterate:iterate /home/iterate /var/lib/jonasland /var/lib/openobserve /var/log/pidnap
 
 WORKDIR /opt
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml /opt/
@@ -87,9 +87,11 @@ RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
     --filter @iterate-com/shared \
     --filter @iterate-com/ui
 RUN pnpm -r rebuild better-sqlite3 esbuild protobufjs
-RUN chmod +x "$ITERATE_REPO/jonasland/sandbox/start.sh" "$ITERATE_REPO/jonasland/sandbox/clickstack-launcher.sh"
+RUN chmod +x \
+    "$ITERATE_REPO/jonasland/sandbox/start.sh" \
+    "$ITERATE_REPO/jonasland/sandbox/clickstack-launcher.sh" \
+    "$ITERATE_REPO/jonasland/sandbox/sync-home-skeleton.sh"
 
-VOLUME ["/caddy-data"]
 EXPOSE 80
 HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=20 \
   CMD curl -fsS http://127.0.0.1/healthz >/dev/null || exit 1

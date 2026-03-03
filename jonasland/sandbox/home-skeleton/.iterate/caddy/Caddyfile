@@ -1,0 +1,52 @@
+{
+    admin 0.0.0.0:2019 {
+        origins *
+    }
+    local_certs
+    auto_https off
+    persist_config off
+}
+
+(iterate_cors_openapi) {
+    @iterate_api_preflight {
+        method OPTIONS
+        path /api/*
+        header_regexp Origin ^https?://([a-z0-9-]+\.)?iterate\.localhost(:[0-9]+)?$
+    }
+    respond @iterate_api_preflight 204
+
+    @iterate_api_cors {
+        path /api/*
+        header_regexp Origin ^https?://([a-z0-9-]+\.)?iterate\.localhost(:[0-9]+)?$
+    }
+    header @iterate_api_cors Access-Control-Allow-Origin "{http.request.header.Origin}"
+    header @iterate_api_cors Access-Control-Allow-Methods "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    header @iterate_api_cors Access-Control-Allow-Headers "authorization,content-type,x-request-id,traceparent,tracestate,baggage"
+    header @iterate_api_cors Access-Control-Expose-Headers "content-type,x-request-id"
+    header @iterate_api_cors Access-Control-Max-Age "600"
+    header @iterate_api_cors Vary "Origin"
+}
+
+:80, :8080 {
+    @health path /healthz
+    respond @health "ok" 200
+
+    import ~/.iterate/caddy/*.caddy
+
+    @local host 127.0.0.1 localhost
+    handle @local {
+        respond "caddy ok" 200
+    }
+
+    reverse_proxy 127.0.0.1:19000
+}
+
+:443, :8443 {
+    tls internal {
+        on_demand
+    }
+
+    import ~/.iterate/caddy/*.caddy
+
+    reverse_proxy 127.0.0.1:19000
+}

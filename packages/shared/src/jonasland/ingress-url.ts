@@ -67,12 +67,12 @@ export function resolvePublicIngressUrl(input: ResolvePublicIngressUrlInput): st
   const internalUrl = parseInternalUrl(input.internalUrl);
   const mode = normalizePublicIngressUrlType(input.publicBaseUrlType);
   const outputUrl = new URL(baseUrl.toString());
+  const token = firstHostnameLabel(internalUrl.hostname);
 
   if (mode === "prefix") {
-    const token = firstHostnameLabel(internalUrl.hostname);
     outputUrl.hostname = `${token}__${baseUrl.hostname}`;
   } else {
-    outputUrl.hostname = internalUrl.hostname;
+    outputUrl.hostname = `${token}.${baseUrl.hostname}`;
   }
 
   outputUrl.pathname = internalUrl.pathname || "/";
