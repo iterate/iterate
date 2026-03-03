@@ -77,6 +77,35 @@ async function waitForTryCloudflareUrl(params: {
   });
 }
 
+async function waitForTunnelReady(params: {
+  tunnelUrl: string;
+  timeoutMs: number;
+  logs: string[];
+}): Promise<void> {
+  const deadline = Date.now() + params.timeoutMs;
+  let lastFailure = "unknown failure";
+  const probeUrl = new URL("/healthz", params.tunnelUrl).toString();
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(probeUrl, {
+        method: "GET",
+        redirect: "manual",
+      });
+      if (response.ok) return;
+      const body = await response.text().catch(() => "");
+      lastFailure = `status=${String(response.status)} body=${body.slice(0, 200)}`;
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.message : String(error);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error(
+    `timed out waiting for cloudflared tunnel readiness at ${probeUrl}: ${lastFailure}\ncloudflared logs:\n${params.logs.join("")}`,
+  );
+}
+
 export async function useCloudflareTunnel(
   options: UseCloudflareTunnelOptions,
 ): Promise<CloudflareTunnelHandle> {
@@ -123,6 +152,11 @@ export async function useCloudflareTunnel(
   try {
     const tunnelUrl = await waitForTryCloudflareUrl({
       child,
+      timeoutMs,
+      logs,
+    });
+    await waitForTunnelReady({
+      tunnelUrl,
       timeoutMs,
       logs,
     });

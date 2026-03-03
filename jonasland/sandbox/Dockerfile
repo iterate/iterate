@@ -68,12 +68,14 @@ RUN groupadd -g 1001 iterate && \
       /var/log/pidnap && \
     chown -R iterate:iterate /home/iterate /var/lib/jonasland /var/lib/openobserve /var/log/pidnap
 
-WORKDIR /opt
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml /opt/
-COPY services /opt/services
-COPY packages /opt/packages
+WORKDIR $ITERATE_REPO
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml $ITERATE_REPO/
+COPY services $ITERATE_REPO/services
+COPY packages $ITERATE_REPO/packages
+COPY jonasland/sandbox $ITERATE_REPO/jonasland/sandbox
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
     --filter pidnap \
+    --filter @iterate-com/jonasland-sandbox \
     --filter @iterate-com/registry-service \
     --filter @iterate-com/events-service \
     --filter @iterate-com/orders-service \

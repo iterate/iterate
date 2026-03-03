@@ -213,8 +213,8 @@ for (const provider of providerCases) {
       expect(new URL(request.url).pathname).toBe(requestPath);
       expect(await request.text()).toBe(payload);
       expect(request.headers.get("host")).toContain("127.0.0.1:27180");
-      expect(request.headers.get("forwarded")?.toLowerCase()).toContain("host=");
-      expect(request.headers.get("forwarded")?.toLowerCase()).toContain("proto=");
+      expect(request.headers.get("x-forwarded-host")).toBeTruthy();
+      expect(request.headers.get("x-forwarded-proto")).toBeTruthy();
       expect(response.status).toBe(200);
     }, 900_000);
   });

@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { DockerDeployment, FlyDeployment } from "@iterate-com/shared/jonasland/deployment";
+import { waitForBuiltInServicesOnline } from "../../test-helpers/deployment-bootstrap.ts";
 import {
-  startOnDemandServiceViaPidnap,
-  waitForBuiltInServicesOnline,
-} from "../../test-helpers/deployment-bootstrap.ts";
-import { useDockerPublicIngress } from "../../test-helpers/use-docker-public-ingress.ts";
+  allocateLoopbackPort,
+  buildIngressPublicBaseUrl,
+  resolveIngressProxyConfig,
+} from "../../test-helpers/public-ingress-config.ts";
+import { useCloudflareTunnel } from "../../test-helpers/use-cloudflare-tunnel.ts";
 
 const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
 const FLY_IMAGE = process.env.JONASLAND_E2E_FLY_IMAGE ?? "";
@@ -20,43 +22,74 @@ const runDockerPublic = dockerAccessModes.has("all") || dockerAccessModes.has("p
 const providerEnv = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const runFly = providerEnv === "fly" || providerEnv === "all";
 
+type ProviderRuntime = {
+  deployment: DockerDeployment | FlyDeployment;
+  tunnel?: AsyncDisposable;
+};
+
 type ProviderCase = {
   label: "docker" | "docker-public" | "fly";
   enabled: boolean;
-  create: () => Promise<DockerDeployment | FlyDeployment>;
-  setupPublicIngress: boolean;
+  create: () => Promise<ProviderRuntime>;
 };
 
 const providers: ProviderCase[] = [
   {
     label: "docker",
     enabled: providerEnv === "docker" || providerEnv === "all",
-    create: async () =>
-      await DockerDeployment.create({
+    create: async () => ({
+      deployment: await DockerDeployment.create({
         dockerImage: DOCKER_IMAGE,
         name: `jonasland-e2e-clean-bootstrap-docker-${randomUUID().slice(0, 8)}`,
       }),
-    setupPublicIngress: false,
+    }),
   },
   {
     label: "docker-public",
     enabled: (providerEnv === "docker" || providerEnv === "all") && runDockerPublic,
-    create: async () =>
-      await DockerDeployment.create({
+    create: async () => {
+      const ingress = resolveIngressProxyConfig();
+      const ingressHostPort = await allocateLoopbackPort();
+      const tunnel = await useCloudflareTunnel({
+        localPort: ingressHostPort,
+        cloudflaredBin: process.env.JONASLAND_E2E_CLOUDFLARED_BIN,
+      });
+      const publicBaseUrl = buildIngressPublicBaseUrl({
+        testSlug: "bootstrap-docker-public",
+        ingressProxyDomain: ingress.ingressProxyDomain,
+      });
+
+      const deployment = await DockerDeployment.create({
         dockerImage: DOCKER_IMAGE,
         name: `jonasland-e2e-clean-bootstrap-docker-public-${randomUUID().slice(0, 8)}`,
-      }),
-    setupPublicIngress: true,
+        ingressHostPort,
+        ingress: {
+          publicBaseUrl,
+          publicBaseUrlType: "prefix",
+          createIngressProxyRoutes: true,
+          ingressProxyBaseUrl: ingress.ingressProxyBaseUrl,
+          ingressProxyApiKey: ingress.ingressProxyApiKey,
+          ingressProxyTargetUrl: tunnel.tunnelUrl,
+        },
+      }).catch(async (error) => {
+        try {
+          await Promise.resolve(tunnel[Symbol.asyncDispose]());
+        } catch {}
+        throw error;
+      });
+
+      return { deployment, tunnel };
+    },
   },
   {
     label: "fly",
     enabled: runFly && FLY_IMAGE.trim().length > 0,
-    create: async () =>
-      await FlyDeployment.create({
+    create: async () => ({
+      deployment: await FlyDeployment.create({
         flyImage: FLY_IMAGE,
         name: `jonasland-e2e-clean-bootstrap-fly-${randomUUID().slice(0, 8)}`,
       }),
-    setupPublicIngress: false,
+    }),
   },
 ];
 
@@ -65,38 +98,34 @@ for (const provider of providers) {
     `clean bootstrap + on-demand service (${provider.label})`,
     () => {
       test("boot built-ins, start docs via pidnap, serve through public ingress hostname", async () => {
-        await using deployment = await provider.create();
-        await using _publicIngress =
-          provider.setupPublicIngress && deployment instanceof DockerDeployment
-            ? await useDockerPublicIngress({
-                deployment,
-                testSlug: `bootstrap-${provider.label}`,
-              })
-            : undefined;
+        const runtime = await provider.create();
+        await using deployment = runtime.deployment;
+        await using _tunnel = runtime.tunnel;
 
         await waitForBuiltInServicesOnline({ deployment });
 
-        await startOnDemandServiceViaPidnap({
-          deployment,
+        const docsPort = 19050;
+        await deployment.pidnap.processes.updateConfig({
           processSlug: "docs",
           definition: {
-            command: "/opt/pidnap/node_modules/.bin/tsx",
-            args: ["/opt/services/docs-service/src/server.ts"],
+            command: "npx",
+            args: ["tsx", "services/docs-service/src/server.ts"],
+            env: { PORT: String(docsPort) },
+          },
+          tags: ["on-demand"],
+          restartImmediately: true,
+          healthCheck: {
+            url: "http://docs.iterate.localhost/api/service/health",
+            intervalMs: 2_000,
           },
         });
-
-        await deployment.registry.routes.upsert({
-          host: "docs.iterate.localhost",
-          target: "127.0.0.1:19050",
-          metadata: {
-            openapiPath: "/openapi.json",
-            title: "Docs Service",
-          },
-          tags: ["docs", "openapi"],
+        await deployment.pidnap.processes.waitForRunning({
+          processSlug: "docs",
+          timeoutMs: 60_000,
         });
 
         const { publicURL: publicDocsHealthUrl } = await deployment.registry.getPublicURL({
-          internalURL: "http://docs.iterate.localhost/healthz",
+          internalURL: "http://docs.iterate.localhost/api/service/health",
         });
 
         const response = await fetch(publicDocsHealthUrl, {

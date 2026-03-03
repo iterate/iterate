@@ -1,6 +1,8 @@
 {
-    admin 0.0.0.0:2019 {
-        origins *
+    admin 127.0.0.1:2019
+    servers {
+        trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+        client_ip_headers X-Forwarded-For CF-Connecting-IP Fly-Client-IP
     }
     local_certs
     auto_https off
@@ -27,9 +29,247 @@
     header @iterate_api_cors Vary "Origin"
 }
 
+http://pidnap.iterate.localhost {
+    reverse_proxy 127.0.0.1:17300
+}
+
+http://registry.iterate.localhost {
+    import iterate_cors_openapi
+    reverse_proxy 127.0.0.1:17310
+}
+
+http://events.iterate.localhost {
+    import iterate_cors_openapi
+    tracing {
+        span "caddy-events-http"
+    }
+
+    reverse_proxy 127.0.0.1:17320
+}
+
+http://orders.iterate.localhost {
+    import iterate_cors_openapi
+    tracing {
+        span "caddy-orders-http"
+    }
+
+    reverse_proxy 127.0.0.1:19020
+}
+
+http://docs.iterate.localhost {
+    import iterate_cors_openapi
+    reverse_proxy 127.0.0.1:19050
+}
+
+http://home.iterate.localhost {
+    import iterate_cors_openapi
+    reverse_proxy 127.0.0.1:19030
+}
+
+http://outerbase.iterate.localhost {
+    import iterate_cors_openapi
+    reverse_proxy 127.0.0.1:19040
+}
+
+http://caddymanager.iterate.localhost {
+    reverse_proxy 127.0.0.1:8501
+}
+
+http://caddy-admin.iterate.localhost {
+    reverse_proxy 127.0.0.1:2019
+}
+
+http://caddy.iterate.localhost {
+    reverse_proxy 127.0.0.1:2019
+}
+
+http://openobserve.iterate.localhost {
+    reverse_proxy 127.0.0.1:5080 {
+        header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
+    }
+}
+
+http://clickstack.iterate.localhost {
+    reverse_proxy 127.0.0.1:8080
+}
+
 :80, :8080 {
     @health path /healthz
     respond @health "ok" 200
+
+    @iterate_pidnap path /__iterate/pidnap/*
+    handle @iterate_pidnap {
+        uri strip_prefix /__iterate/pidnap
+        reverse_proxy 127.0.0.1:17300
+    }
+
+    @iterate_registry path /__iterate/registry/*
+    handle @iterate_registry {
+        uri strip_prefix /__iterate/registry
+        reverse_proxy 127.0.0.1:17310
+    }
+
+    @iterate_events path /__iterate/events/*
+    handle @iterate_events {
+        uri strip_prefix /__iterate/events
+        reverse_proxy 127.0.0.1:17320
+    }
+
+    @iterate_orders path /__iterate/orders/*
+    handle @iterate_orders {
+        uri strip_prefix /__iterate/orders
+        reverse_proxy 127.0.0.1:19020
+    }
+
+    @iterate_docs path /__iterate/docs/*
+    handle @iterate_docs {
+        uri strip_prefix /__iterate/docs
+        reverse_proxy 127.0.0.1:19050
+    }
+
+    @iterate_home path /__iterate/home/*
+    handle @iterate_home {
+        uri strip_prefix /__iterate/home
+        reverse_proxy 127.0.0.1:19030
+    }
+
+    @iterate_outerbase path /__iterate/outerbase/*
+    handle @iterate_outerbase {
+        uri strip_prefix /__iterate/outerbase
+        reverse_proxy 127.0.0.1:19040
+    }
+
+    @iterate_caddy_admin path /__iterate/caddy-admin/*
+    handle @iterate_caddy_admin {
+        uri strip_prefix /__iterate/caddy-admin
+        reverse_proxy 127.0.0.1:2019
+    }
+
+    @iterate_caddymanager path /__iterate/caddymanager/*
+    handle @iterate_caddymanager {
+        uri strip_prefix /__iterate/caddymanager
+        reverse_proxy 127.0.0.1:8501
+    }
+
+    @iterate_openobserve path /__iterate/openobserve/*
+    handle @iterate_openobserve {
+        uri strip_prefix /__iterate/openobserve
+        reverse_proxy 127.0.0.1:5080 {
+            header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
+        }
+    }
+
+    @iterate_clickstack path /__iterate/clickstack/*
+    handle @iterate_clickstack {
+        uri strip_prefix /__iterate/clickstack
+        reverse_proxy 127.0.0.1:8080
+    }
+
+    @external_proxy_host header_regexp external_proxy_host Host ^([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
+    handle @external_proxy_host {
+        map {re.external_proxy_host.1} {iterate_service_upstream} {iterate_service_host} {
+            events 127.0.0.1:17320 events.iterate.localhost
+            orders 127.0.0.1:19020 orders.iterate.localhost
+            docs 127.0.0.1:19050 docs.iterate.localhost
+            home 127.0.0.1:19030 home.iterate.localhost
+            outerbase 127.0.0.1:19040 outerbase.iterate.localhost
+            registry 127.0.0.1:17310 registry.iterate.localhost
+            pidnap 127.0.0.1:17300 pidnap.iterate.localhost
+            caddy 127.0.0.1:2019 caddy.iterate.localhost
+            caddy-admin 127.0.0.1:2019 caddy-admin.iterate.localhost
+            caddymanager 127.0.0.1:8501 caddymanager.iterate.localhost
+            openobserve 127.0.0.1:5080 openobserve.iterate.localhost
+            clickstack 127.0.0.1:8080 clickstack.iterate.localhost
+            default "" ""
+        }
+
+        @known_service expression `{iterate_service_upstream} != ""`
+        handle @known_service {
+            import iterate_cors_openapi
+            reverse_proxy {iterate_service_upstream} {
+                header_up Host {iterate_service_host}
+            }
+        }
+
+        respond "unknown service host pattern" 404
+    }
+
+    @external_proxy_xfh header_regexp external_proxy_xfh X-Forwarded-Host ^([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
+    handle @external_proxy_xfh {
+        map {re.external_proxy_xfh.1} {iterate_service_upstream} {iterate_service_host} {
+            events 127.0.0.1:17320 events.iterate.localhost
+            orders 127.0.0.1:19020 orders.iterate.localhost
+            docs 127.0.0.1:19050 docs.iterate.localhost
+            home 127.0.0.1:19030 home.iterate.localhost
+            outerbase 127.0.0.1:19040 outerbase.iterate.localhost
+            registry 127.0.0.1:17310 registry.iterate.localhost
+            pidnap 127.0.0.1:17300 pidnap.iterate.localhost
+            caddy 127.0.0.1:2019 caddy.iterate.localhost
+            caddy-admin 127.0.0.1:2019 caddy-admin.iterate.localhost
+            caddymanager 127.0.0.1:8501 caddymanager.iterate.localhost
+            openobserve 127.0.0.1:5080 openobserve.iterate.localhost
+            clickstack 127.0.0.1:8080 clickstack.iterate.localhost
+            default "" ""
+        }
+
+        @known_xfh_external expression `{iterate_service_upstream} != ""`
+        handle @known_xfh_external {
+            import iterate_cors_openapi
+            reverse_proxy {iterate_service_upstream} {
+                header_up Host {iterate_service_host}
+            }
+        }
+
+        respond "unknown x-forwarded-host external service" 404
+    }
+
+    @xfh_service header_regexp xfh_service X-Forwarded-Host ^([a-z0-9-]+)\.iterate\.localhost(?::[0-9]+)?$
+    handle @xfh_service {
+        map {re.xfh_service.1} {iterate_service_upstream} {iterate_service_host} {
+            events 127.0.0.1:17320 events.iterate.localhost
+            orders 127.0.0.1:19020 orders.iterate.localhost
+            docs 127.0.0.1:19050 docs.iterate.localhost
+            home 127.0.0.1:19030 home.iterate.localhost
+            outerbase 127.0.0.1:19040 outerbase.iterate.localhost
+            registry 127.0.0.1:17310 registry.iterate.localhost
+            pidnap 127.0.0.1:17300 pidnap.iterate.localhost
+            caddy 127.0.0.1:2019 caddy.iterate.localhost
+            caddy-admin 127.0.0.1:2019 caddy-admin.iterate.localhost
+            caddymanager 127.0.0.1:8501 caddymanager.iterate.localhost
+            openobserve 127.0.0.1:5080 openobserve.iterate.localhost
+            clickstack 127.0.0.1:8080 clickstack.iterate.localhost
+            default "" ""
+        }
+
+        @known_xfh_service expression `{iterate_service_upstream} != ""`
+        handle @known_xfh_service {
+            import iterate_cors_openapi
+            reverse_proxy {iterate_service_upstream} {
+                header_up Host {iterate_service_host}
+            }
+        }
+
+        respond "unknown x-forwarded-host service" 404
+    }
+
+    @frp_control_local header_regexp frp_control_local Host ^frp\.iterate\.localhost(?::[0-9]+)?$
+    handle @frp_control_local {
+        reverse_proxy 127.0.0.1:27000
+    }
+
+    @frp_control_localhost_ws {
+        header Connection *Upgrade*
+        header Upgrade websocket
+        header_regexp frp_control_localhost_ws_host Host ^(localhost|127\.0\.0\.1)(?::[0-9]+)?$
+    }
+    handle @frp_control_localhost_ws {
+        reverse_proxy 127.0.0.1:27000
+    }
+
+    @frp_control_external header_regexp frp_control_external Host ^frp(__[a-z0-9-]+)?\.ingress\.iterate\.com(?::[0-9]+)?$
+    handle @frp_control_external {
+        reverse_proxy 127.0.0.1:27000
+    }
 
     import ~/.iterate/caddy/*.caddy
 
@@ -44,6 +284,132 @@
 :443, :8443 {
     tls internal {
         on_demand
+    }
+
+    @events host events.iterate.localhost
+    handle @events {
+        import iterate_cors_openapi
+        tracing {
+            span "caddy-events-https"
+        }
+
+        reverse_proxy 127.0.0.1:17320
+    }
+
+    @orders host orders.iterate.localhost
+    handle @orders {
+        import iterate_cors_openapi
+        tracing {
+            span "caddy-orders-https"
+        }
+
+        reverse_proxy 127.0.0.1:19020
+    }
+
+    @docs host docs.iterate.localhost
+    handle @docs {
+        import iterate_cors_openapi
+        reverse_proxy 127.0.0.1:19050
+    }
+
+    @openobserve host openobserve.iterate.localhost
+    handle @openobserve {
+        reverse_proxy 127.0.0.1:5080 {
+            header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
+        }
+    }
+
+    @clickstack host clickstack.iterate.localhost
+    handle @clickstack {
+        reverse_proxy 127.0.0.1:8080
+    }
+
+    @caddymanager host caddymanager.iterate.localhost
+    handle @caddymanager {
+        reverse_proxy 127.0.0.1:8501
+    }
+
+    @external_proxy_xfh header_regexp external_proxy_xfh X-Forwarded-Host ^([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
+    handle @external_proxy_xfh {
+        map {re.external_proxy_xfh.1} {iterate_service_upstream} {iterate_service_host} {
+            events 127.0.0.1:17320 events.iterate.localhost
+            orders 127.0.0.1:19020 orders.iterate.localhost
+            docs 127.0.0.1:19050 docs.iterate.localhost
+            home 127.0.0.1:19030 home.iterate.localhost
+            outerbase 127.0.0.1:19040 outerbase.iterate.localhost
+            registry 127.0.0.1:17310 registry.iterate.localhost
+            pidnap 127.0.0.1:17300 pidnap.iterate.localhost
+            caddy 127.0.0.1:2019 caddy.iterate.localhost
+            caddy-admin 127.0.0.1:2019 caddy-admin.iterate.localhost
+            caddymanager 127.0.0.1:8501 caddymanager.iterate.localhost
+            openobserve 127.0.0.1:5080 openobserve.iterate.localhost
+            clickstack 127.0.0.1:8080 clickstack.iterate.localhost
+            default "" ""
+        }
+
+        @known_xfh_external expression `{iterate_service_upstream} != ""`
+        handle @known_xfh_external {
+            import iterate_cors_openapi
+            reverse_proxy {iterate_service_upstream} {
+                header_up Host {iterate_service_host}
+            }
+        }
+
+        respond "unknown x-forwarded-host external service" 404
+    }
+
+    @xfh_service header_regexp xfh_service X-Forwarded-Host ^([a-z0-9-]+)\.iterate\.localhost(?::[0-9]+)?$
+    handle @xfh_service {
+        map {re.xfh_service.1} {iterate_service_upstream} {iterate_service_host} {
+            events 127.0.0.1:17320 events.iterate.localhost
+            orders 127.0.0.1:19020 orders.iterate.localhost
+            docs 127.0.0.1:19050 docs.iterate.localhost
+            home 127.0.0.1:19030 home.iterate.localhost
+            outerbase 127.0.0.1:19040 outerbase.iterate.localhost
+            registry 127.0.0.1:17310 registry.iterate.localhost
+            pidnap 127.0.0.1:17300 pidnap.iterate.localhost
+            caddy 127.0.0.1:2019 caddy.iterate.localhost
+            caddy-admin 127.0.0.1:2019 caddy-admin.iterate.localhost
+            caddymanager 127.0.0.1:8501 caddymanager.iterate.localhost
+            openobserve 127.0.0.1:5080 openobserve.iterate.localhost
+            clickstack 127.0.0.1:8080 clickstack.iterate.localhost
+            default "" ""
+        }
+
+        @known_xfh_service expression `{iterate_service_upstream} != ""`
+        handle @known_xfh_service {
+            import iterate_cors_openapi
+            reverse_proxy {iterate_service_upstream} {
+                header_up Host {iterate_service_host}
+            }
+        }
+
+        respond "unknown x-forwarded-host service" 404
+    }
+
+    @frp_control_local header_regexp frp_control_local Host ^frp\.iterate\.localhost(?::[0-9]+)?$
+    handle @frp_control_local {
+        reverse_proxy 127.0.0.1:27000 {
+            stream_close_delay 5m
+        }
+    }
+
+    @frp_control_localhost_ws {
+        header Connection *Upgrade*
+        header Upgrade websocket
+        header_regexp frp_control_localhost_ws_host Host ^(localhost|127\.0\.0\.1)(?::[0-9]+)?$
+    }
+    handle @frp_control_localhost_ws {
+        reverse_proxy 127.0.0.1:27000 {
+            stream_close_delay 5m
+        }
+    }
+
+    @frp_control_external header_regexp frp_control_external Host ^frp(__[a-z0-9-]+)?\.ingress\.iterate\.com(?::[0-9]+)?$
+    handle @frp_control_external {
+        reverse_proxy 127.0.0.1:27000 {
+            stream_close_delay 5m
+        }
     }
 
     import ~/.iterate/caddy/*.caddy

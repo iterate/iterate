@@ -7,7 +7,6 @@ import {
 } from "node:http";
 import { pathToFileURL } from "node:url";
 import httpProxy from "http-proxy";
-import { buildForwardedHeader, firstForwardedEntry } from "@iterate-com/shared/forwarded-header";
 import {
   createServiceRequestLogger,
   getOtelRuntimeConfig,
@@ -51,7 +50,9 @@ type ProxyRequestResolution = {
   mode: EgressMode;
   targetOrigin: string;
   pathWithQuery: string;
-  forwardedHeader: string;
+  forwardedHost: string;
+  forwardedProto: ForwardedProto;
+  forwardedFor?: string;
 };
 
 function parsePort(value: string, key: string): number {
@@ -125,14 +126,14 @@ function resolveForwardingContext(
   req: IncomingMessage,
   protocolKind: ProtocolKind,
 ): ForwardingContext {
-  const forwarded = firstForwardedEntry(firstHeaderValue(req.headers.forwarded));
-  const forwardedHost = forwarded?.host?.trim();
+  const forwardedHost = firstHeaderValue(req.headers["x-forwarded-host"]).trim();
+  const forwardedProto = firstHeaderValue(req.headers["x-forwarded-proto"]).trim();
+  const forwardedFor = firstHeaderValue(req.headers["x-forwarded-for"]).split(",")[0]?.trim();
   const fallbackHost = firstHeaderValue(req.headers.host).trim();
-  const forwardedFor = forwarded?.for?.trim();
 
   return {
     host: forwardedHost && forwardedHost.length > 0 ? forwardedHost : fallbackHost || null,
-    proto: normalizeForwardedProto(forwarded?.proto, protocolKind),
+    proto: normalizeForwardedProto(forwardedProto || undefined, protocolKind),
     forValue:
       forwardedFor && forwardedFor.length > 0
         ? forwardedFor
@@ -225,17 +226,14 @@ function resolveProxyRequest(
 
   const targetUrl = new URL(target.url);
   const forwardedHost = forwardingContext.host ?? targetUrl.host;
-  const forwardedHeader = buildForwardedHeader({
-    host: forwardedHost,
-    proto: forwardingContext.proto,
-    for: forwardingContext.forValue,
-  });
 
   return {
     mode: target.mode,
     targetOrigin: `${targetUrl.protocol}//${targetUrl.host}`,
     pathWithQuery: `${targetUrl.pathname}${targetUrl.search}`,
-    forwardedHeader,
+    forwardedHost,
+    forwardedProto: forwardingContext.proto,
+    forwardedFor: forwardingContext.forValue,
   };
 }
 
@@ -361,7 +359,11 @@ export async function startEgressService(options?: {
     req.url = resolved.pathWithQuery;
     req.headers.host = new URL(resolved.targetOrigin).host;
     stripForwardingContextHeaders(req.headers);
-    req.headers.forwarded = resolved.forwardedHeader;
+    req.headers["x-forwarded-host"] = resolved.forwardedHost;
+    req.headers["x-forwarded-proto"] = resolved.forwardedProto;
+    if (resolved.forwardedFor) {
+      req.headers["x-forwarded-for"] = resolved.forwardedFor;
+    }
     req.headers[iterateEgressSeenHeader] = "1";
     req.headers[iterateEgressModeHeader] = resolved.mode;
 
@@ -386,7 +388,11 @@ export async function startEgressService(options?: {
     req.url = resolved.pathWithQuery;
     req.headers.host = new URL(resolved.targetOrigin).host;
     stripForwardingContextHeaders(req.headers);
-    req.headers.forwarded = resolved.forwardedHeader;
+    req.headers["x-forwarded-host"] = resolved.forwardedHost;
+    req.headers["x-forwarded-proto"] = resolved.forwardedProto;
+    if (resolved.forwardedFor) {
+      req.headers["x-forwarded-for"] = resolved.forwardedFor;
+    }
     req.headers[iterateEgressSeenHeader] = "1";
     req.headers[iterateEgressModeHeader] = resolved.mode;
 

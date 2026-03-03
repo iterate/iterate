@@ -4,7 +4,6 @@ import { RPCHandler } from "@orpc/server/fetch";
 import { RequestHeadersPlugin, type RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { typeid } from "typeid-js";
 import { z } from "zod/v4";
-import { buildForwardedHeader, firstForwardedEntry } from "@iterate-com/shared/forwarded-header";
 import {
   MAX_PATTERN_LENGTH,
   normalizePattern,
@@ -71,8 +70,8 @@ type RoutePatternRow = {
 
 type ForwardedProto = "http" | "https" | "ws" | "wss";
 
-const forwardedContextHeaderPrefixes = ["x-forwarded-"] as const;
-const forwardedContextHeaderNames = new Set(["forwarded"]);
+const forwardingContextHeaderPrefixes = ["x-forwarded-"] as const;
+const forwardingContextHeaderNames = new Set(["forwarded"]);
 
 const parsedEnvCache = new WeakMap<RawProxyWorkerEnv, ProxyWorkerEnv>();
 
@@ -134,8 +133,8 @@ function firstHeaderToken(rawHeader: string | null | undefined): string | null {
 
 function isForwardingContextHeader(name: string): boolean {
   const lowered = name.toLowerCase();
-  if (forwardedContextHeaderNames.has(lowered)) return true;
-  if (forwardedContextHeaderPrefixes.some((prefix) => lowered.startsWith(prefix))) return true;
+  if (forwardingContextHeaderNames.has(lowered)) return true;
+  if (forwardingContextHeaderPrefixes.some((prefix) => lowered.startsWith(prefix))) return true;
   return lowered.startsWith("x-") && lowered.includes("-original-");
 }
 
@@ -163,21 +162,31 @@ function normalizeForwardedProto(proto: string | undefined, request: Request): F
   return requestProto;
 }
 
-function buildForwardingContextHeader(request: Request, targetUrl: URL): string {
-  const forwarded = firstForwardedEntry(request.headers.get("forwarded"));
+function resolveForwardingContext(
+  request: Request,
+  targetUrl: URL,
+): {
+  host: string;
+  proto: ForwardedProto;
+  forValue: string | null;
+} {
   const host =
-    firstHeaderToken(forwarded?.host) ??
+    firstHeaderToken(request.headers.get("x-forwarded-host")) ??
     firstHeaderToken(request.headers.get("host")) ??
     targetUrl.host;
-  const proto = normalizeForwardedProto(forwarded?.proto, request);
+  const proto = normalizeForwardedProto(
+    firstHeaderToken(request.headers.get("x-forwarded-proto")) ?? undefined,
+    request,
+  );
   const forValue =
-    firstHeaderToken(forwarded?.for) ?? firstHeaderToken(request.headers.get("cf-connecting-ip"));
+    firstHeaderToken(request.headers.get("x-forwarded-for")) ??
+    firstHeaderToken(request.headers.get("cf-connecting-ip"));
 
-  return buildForwardedHeader({
+  return {
     host,
     proto,
-    for: forValue,
-  });
+    forValue,
+  };
 }
 
 function hostMatchesPattern(host: string, pattern: string): boolean {
@@ -437,22 +446,23 @@ export function createUpstreamHeaders(
   targetUrl: URL,
 ): Headers {
   const headers = new Headers(request.headers);
-  const forwardedHeader = buildForwardingContextHeader(request, targetUrl);
+  const forwardingContext = resolveForwardingContext(request, targetUrl);
   stripForwardingContextHeaders(headers);
 
   const explicitHostHeader = hasExplicitHostHeader(routeHeaders);
   if (!explicitHostHeader) {
-    const inboundHost = request.headers.get("host")?.toLowerCase();
-    if (inboundHost && inboundHost !== targetUrl.host.toLowerCase()) {
-      headers.delete("host");
-    }
+    headers.delete("host");
   }
   for (const [name, value] of Object.entries(routeHeaders)) {
     headers.set(name, value);
   }
 
   stripForwardingContextHeaders(headers);
-  headers.set("forwarded", forwardedHeader);
+  headers.set("x-forwarded-host", forwardingContext.host);
+  headers.set("x-forwarded-proto", forwardingContext.proto);
+  if (forwardingContext.forValue) {
+    headers.set("x-forwarded-for", forwardingContext.forValue);
+  }
 
   return headers;
 }
@@ -488,7 +498,7 @@ export async function proxyRequest(request: Request, env: ProxyWorkerEnv): Promi
   }
 
   const responseHeaders = new Headers(upstreamResponse.headers);
-  responseHeaders.set("x-cf-proxy-route", resolved.route);
+  responseHeaders.set("x-cf-proxy-route", resolved.routeId);
 
   if (upstreamResponse.status === 101) {
     const init = {

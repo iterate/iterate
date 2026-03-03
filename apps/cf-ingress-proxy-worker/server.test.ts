@@ -201,10 +201,9 @@ describe("proxy behavior", () => {
     expect(request.url).toBe("https://target.fly.dev/base/path?y=2");
     expect(request.headers.get("host")).not.toBe("app.ingress.iterate.com");
     expect(request.headers.get("x-custom")).toBe("ok");
-    expect(request.headers.get("forwarded")).toContain("host=app.ingress.iterate.com");
-    expect(request.headers.get("forwarded")).toContain("proto=https");
-    expect(request.headers.get("x-forwarded-host")).toBeNull();
-    expect(request.headers.get("x-forwarded-proto")).toBeNull();
+    expect(request.headers.get("forwarded")).toBeNull();
+    expect(request.headers.get("x-forwarded-host")).toBe("app.ingress.iterate.com");
+    expect(request.headers.get("x-forwarded-proto")).toBe("https");
     expect(response.status).toBe(200);
   });
 
@@ -247,11 +246,10 @@ describe("proxy behavior", () => {
     expect(headers.get("connection")?.toLowerCase()).toContain("upgrade");
   });
 
-  test("uses inbound forwarded context and strips forwarding-context x-headers", () => {
+  test("uses inbound x-forwarded context and strips other forwarding headers", () => {
     const request = new Request("https://socket.ingress.iterate.com/ws", {
       headers: {
         host: "socket.ingress.iterate.com",
-        forwarded: "for=198.51.100.10;host=public.example.com;proto=https",
         "x-forwarded-host": "legacy.example.com",
         "x-forwarded-proto": "http",
         "x-legacy-original-host": "legacy.example.com",
@@ -267,20 +265,18 @@ describe("proxy behavior", () => {
         "x-forwarded-host": "route-legacy.example.com",
         "x-forwarded-proto": "http",
         "x-route-original-host": "route-legacy.example.com",
-        forwarded: "for=10.0.0.1;host=route.example.com;proto=http",
         "x-custom": "ok",
       },
       new URL("https://target.fly.dev/ws"),
     );
 
     expect(headers.get("x-custom")).toBe("ok");
-    expect(headers.get("x-forwarded-host")).toBeNull();
-    expect(headers.get("x-forwarded-proto")).toBeNull();
     expect(headers.get("x-legacy-original-host")).toBeNull();
     expect(headers.get("x-route-original-host")).toBeNull();
-    expect(headers.get("forwarded")).toContain("for=198.51.100.10");
-    expect(headers.get("forwarded")).toContain("host=public.example.com");
-    expect(headers.get("forwarded")).toContain("proto=wss");
+    expect(headers.get("forwarded")).toBeNull();
+    expect(headers.get("x-forwarded-for")).toBe("203.0.113.20");
+    expect(headers.get("x-forwarded-host")).toBe("legacy.example.com");
+    expect(headers.get("x-forwarded-proto")).toBe("ws");
   });
 
   test("proxies websocket upgrade transparently", async () => {

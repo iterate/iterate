@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { DockerDeployment } from "@iterate-com/shared/jonasland/deployment";
 import { waitForBuiltInServicesOnline } from "../../test-helpers/deployment-bootstrap.ts";
-import { useDockerPublicIngress } from "../../test-helpers/use-docker-public-ingress.ts";
+import {
+  allocateLoopbackPort,
+  buildIngressPublicBaseUrl,
+  resolveIngressProxyConfig,
+} from "../../test-helpers/public-ingress-config.ts";
+import { useCloudflareTunnel } from "../../test-helpers/use-cloudflare-tunnel.ts";
 
 const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
 const providerEnv = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
@@ -56,15 +61,31 @@ describe.runIf(runDockerLocal)("clean events firehose (docker)", () => {
 
 describe.runIf(runDockerPublic)("clean events firehose (docker-public)", () => {
   test("firehose works through cloudflare tunnel + ingress proxy", async () => {
+    const ingress = resolveIngressProxyConfig();
+    const ingressHostPort = await allocateLoopbackPort();
+    await using tunnel = await useCloudflareTunnel({
+      localPort: ingressHostPort,
+      cloudflaredBin: process.env.JONASLAND_E2E_CLOUDFLARED_BIN,
+    });
+    const publicBaseUrl = buildIngressPublicBaseUrl({
+      testSlug: "events-firehose-pub",
+      ingressProxyDomain: ingress.ingressProxyDomain,
+    });
+
     await using deployment = await DockerDeployment.create({
       dockerImage: DOCKER_IMAGE,
       name: `jonasland-e2e-firehose-pub-${randomUUID().slice(0, 8)}`,
+      ingressHostPort,
+      ingress: {
+        publicBaseUrl,
+        publicBaseUrlType: "prefix",
+        createIngressProxyRoutes: true,
+        ingressProxyBaseUrl: ingress.ingressProxyBaseUrl,
+        ingressProxyApiKey: ingress.ingressProxyApiKey,
+        ingressProxyTargetUrl: tunnel.tunnelUrl,
+      },
     });
     await waitForBuiltInServicesOnline({ deployment });
-    await using _ingress = await useDockerPublicIngress({
-      deployment,
-      testSlug: "events-firehose-pub",
-    });
 
     const expectedType = "https://events.iterate.com/events/test/deployment-firehose-observed";
     const path = `/jonasland/e2e/firehose/docker-public/${randomUUID()}`;

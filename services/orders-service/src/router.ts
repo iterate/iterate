@@ -11,7 +11,7 @@ import {
   ordersServiceManifest,
 } from "@iterate-com/orders-contract";
 import {
-  createOrpcRpcServiceClient,
+  createLocalServiceOrpcClient,
   infoFromContext,
   transformSqlResultSet,
   type ServiceRequestLogger,
@@ -37,12 +37,9 @@ const ORDER_PLACED_EVENT_TYPE = "https://events.iterate.com/orders/order-placed"
 const ORDER_WORKFLOW_STARTED_EVENT_TYPE = "https://events.iterate.com/orders/workflow-started";
 const ORDER_WORKFLOW_COMPLETED_EVENT_TYPE = "https://events.iterate.com/orders/workflow-completed";
 const os = implement(ordersContract).$context<OrdersContext>();
-const env = ordersServiceEnvSchema.parse(process.env);
 
-const eventsClient = createOrpcRpcServiceClient<typeof eventBusContract>({
-  env: {},
+const eventsClient = createLocalServiceOrpcClient({
   manifest: eventsServiceManifest,
-  url: resolveEventsServiceOrpcUrl(env),
   headers: (clientContext: { context?: EventsClientContext }) => {
     const headers: Record<string, string> = {};
     if (clientContext.context?.requestId) {
@@ -51,10 +48,6 @@ const eventsClient = createOrpcRpcServiceClient<typeof eventBusContract>({
     return headers;
   },
 });
-
-function resolveEventsServiceOrpcUrl(parsedEnv: { EVENTS_SERVICE_BASE_URL: string }) {
-  return parsedEnv.EVENTS_SERVICE_BASE_URL;
-}
 
 function normalizeStreamPath(path: string): string {
   const normalized = path.replace(/^\/+/, "");

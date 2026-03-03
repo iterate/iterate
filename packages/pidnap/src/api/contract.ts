@@ -61,6 +61,14 @@ export const manager = {
   status: oc.output(ManagerStatusSchema),
 };
 
+export const HealthCheckConfig = v.object({
+  url: v.string(),
+  intervalMs: v.optional(v.number()),
+  timeoutMs: v.optional(v.number()),
+});
+
+export type HealthCheckConfig = v.InferOutput<typeof HealthCheckConfig>;
+
 export const processes = {
   get: oc
     .input(v.object({ target: ResourceTarget, includeEffectiveEnv: v.optional(v.boolean()) }))
@@ -75,6 +83,7 @@ export const processes = {
         envOptions: v.optional(EnvOptions),
         tags: v.optional(v.array(v.string())),
         restartImmediately: v.optional(v.boolean()),
+        healthCheck: v.optional(HealthCheckConfig),
       }),
     )
     .output(RestartingProcessInfoSchema),
@@ -89,11 +98,11 @@ export const processes = {
   waitForRunning: oc
     .input(
       v.object({
-        target: ResourceTarget,
-        timeoutMs: v.optional(v.number()), // default 60000
-        pollIntervalMs: v.optional(v.number()), // default 500
-        includeLogs: v.optional(v.boolean()), // default true
-        logTailLines: v.optional(v.number()), // default 100
+        processSlug: v.string(),
+        timeoutMs: v.optional(v.number()),
+        pollIntervalMs: v.optional(v.number()),
+        includeLogs: v.optional(v.boolean()),
+        logTailLines: v.optional(v.number()),
       }),
     )
     .output(WaitForRunningResponseSchema),

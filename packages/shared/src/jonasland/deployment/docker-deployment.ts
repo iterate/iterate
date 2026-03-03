@@ -46,9 +46,15 @@ function exposedPortsMap(exposedPorts?: string[]): Record<string, {}> | undefine
 
 function portBindingsMap(
   exposedPorts?: string[],
+  hostPorts?: Record<string, string | number>,
 ): Record<string, Array<{ HostPort: string }>> | undefined {
   if (!exposedPorts || exposedPorts.length === 0) return undefined;
-  return Object.fromEntries(exposedPorts.map((port) => [port, [{ HostPort: "" }]]));
+  return Object.fromEntries(
+    exposedPorts.map((port) => {
+      const hostPort = hostPorts?.[port];
+      return [port, [{ HostPort: hostPort === undefined ? "" : String(hostPort) }]];
+    }),
+  );
 }
 
 function captureOutput(stream: PassThrough): { flush: () => string } {
@@ -216,6 +222,7 @@ export async function dockerContainerFixture(params: {
   name?: string;
   env?: Record<string, string> | string[];
   exposedPorts?: string[];
+  portBindings?: Record<string, string | number>;
   extraHosts?: string[];
   capAdd?: string[];
   binds?: string[];
@@ -228,7 +235,7 @@ export async function dockerContainerFixture(params: {
       Env: toEnvArray(params.env),
       ExposedPorts: exposedPortsMap(params.exposedPorts),
       HostConfig: {
-        PortBindings: portBindingsMap(params.exposedPorts),
+        PortBindings: portBindingsMap(params.exposedPorts, params.portBindings),
         ExtraHosts: params.extraHosts,
         CapAdd: params.capAdd,
         Binds: params.binds,
@@ -342,9 +349,10 @@ export async function waitForPidnapProcessRunning(params: {
   target: string | number;
   timeoutMs?: number;
 }): Promise<void> {
+  const processSlug = typeof params.target === "string" ? params.target : String(params.target);
   const timeoutMs = params.timeoutMs ?? 45_000;
   const result = await params.client.processes.waitForRunning({
-    target: params.target,
+    processSlug,
     timeoutMs,
     pollIntervalMs: 250,
     includeLogs: true,
@@ -354,7 +362,7 @@ export async function waitForPidnapProcessRunning(params: {
   if (result.state === "running") return;
 
   throw new Error(
-    `pidnap process "${String(params.target)}" did not become running (state=${result.state}, elapsedMs=${String(result.elapsedMs)}, restarts=${String(result.restarts)})\n${result.logs ?? ""}`,
+    `pidnap process "${processSlug}" did not become running (state=${result.state}, elapsedMs=${String(result.elapsedMs)}, restarts=${String(result.restarts)})\n${result.logs ?? ""}`,
   );
 }
 
@@ -579,7 +587,7 @@ async function createRuntimeFromContainer(params: {
   });
   let caddy = createCaddyApiClient({
     adminUrl: ingressBaseUrl,
-    hostHeader: "caddy-admin.iterate.localhost",
+    hostHeader: "caddy.iterate.localhost",
   });
   let registry = createRegistryClient({
     url: `${ingressBaseUrl}/orpc`,
@@ -672,7 +680,7 @@ async function createRuntimeFromContainer(params: {
     await waitForHostRouteViaContainer({
       containerId: container.containerId,
       host: "events.iterate.localhost",
-      path: "/healthz",
+      path: "/api/service/health",
       timeoutMs: 60_000,
     });
   };
@@ -725,7 +733,7 @@ async function createRuntimeFromContainer(params: {
       });
       caddy = createCaddyApiClient({
         adminUrl: ingressBaseUrl,
-        hostHeader: "caddy-admin.iterate.localhost",
+        hostHeader: "caddy.iterate.localhost",
       });
       registry = createRegistryClient({
         url: `${ingressBaseUrl}/orpc`,
@@ -765,15 +773,21 @@ export async function dockerDeploymentRuntimeCreate(params: {
   extraHosts?: string[];
   capAdd?: string[];
   env?: Record<string, string> | string[];
+  ingressHostPort?: number;
 }): Promise<{ runtime: DeploymentRuntime; deploymentLocator: DockerDeploymentLocator }> {
   const requestedEnv = toEnvRecord(params.env);
   const exposedPorts = ["80/tcp"];
   const capAdd = params.capAdd ?? ["NET_ADMIN"];
+  const ingressHostPort =
+    typeof params.ingressHostPort === "number" && Number.isInteger(params.ingressHostPort)
+      ? params.ingressHostPort
+      : undefined;
   const container = await dockerContainerFixture({
     image: params.dockerImage,
     name: params.name,
     env: params.env,
     exposedPorts,
+    portBindings: ingressHostPort ? { "80/tcp": ingressHostPort } : undefined,
     extraHosts: withDefaultExtraHosts(params.extraHosts),
     capAdd,
   });
@@ -809,6 +823,7 @@ export async function createDeployment(params: {
   extraHosts?: string[];
   capAdd?: string[];
   env?: Record<string, string> | string[];
+  ingressHostPort?: number;
 }): Promise<DeploymentRuntime> {
   const result = await dockerDeploymentRuntimeCreate(params);
   return result.runtime;

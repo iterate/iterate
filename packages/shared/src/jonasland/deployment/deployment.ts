@@ -12,7 +12,13 @@ import {
   type PublicIngressUrlType,
   type PublicIngressUrlTypeInput,
 } from "../ingress-url.ts";
-import { createOrpcRpcServiceClient, type ServiceManifestLike } from "../index.ts";
+import {
+  createOrpcRpcServiceClient,
+  localHostForService,
+  serviceManifestToPidnapConfig,
+  type ServiceManifestLike,
+  type ServiceManifestWithEntryPoint,
+} from "../index.ts";
 import {
   dockerDeploymentRuntimeAttach,
   dockerDeploymentRuntimeCreate,
@@ -57,6 +63,7 @@ export interface DockerDeploymentCreateInput extends DeploymentCreateInputCommon
   dockerImage: string;
   extraHosts?: string[];
   capAdd?: string[];
+  ingressHostPort?: number;
 }
 
 export interface FlyDeploymentCreateInput extends DeploymentCreateInputCommon {
@@ -93,7 +100,6 @@ const EGRESS_PROCESS_ENV = {
 };
 const DEFAULT_ITERATE_REPO = "/home/iterate/src/github.com/iterate/iterate";
 const DEFAULT_INGRESS_PROXY_BASE_URL = "https://ingress.iterate.com";
-const DEFAULT_INGRESS_PROXY_DOMAIN = "ingress.iterate.com";
 
 function parseEnvContent(content: string): Record<string, string> {
   const env: Record<string, string> = {};
@@ -174,11 +180,7 @@ function extractIterateServiceName(host: string): string | null {
 }
 
 function serviceHostFromManifestSlug(slug: string): string {
-  const normalized = slug.trim().toLowerCase();
-  const base = normalized.endsWith("-service")
-    ? normalized.slice(0, normalized.length - "-service".length)
-    : normalized;
-  return `${base}.iterate.localhost`;
+  return localHostForService({ slug });
 }
 
 async function requestWithExplicitHost(params: {
@@ -419,12 +421,33 @@ abstract class DeploymentBase<
     const baseHost = new URL(config.publicBaseUrl).hostname;
     const wildcardPattern =
       config.publicBaseUrlType === "prefix" ? `*__${baseHost}` : `*.${baseHost}`;
+    const routeTargetHost = new URL(config.ingressProxyTargetUrl).host;
     const patterns =
       wildcardPattern === baseHost
-        ? [{ pattern: baseHost, target: config.ingressProxyTargetUrl }]
+        ? [
+            {
+              pattern: baseHost,
+              target: config.ingressProxyTargetUrl,
+              headers: {
+                Host: routeTargetHost,
+              },
+            },
+          ]
         : [
-            { pattern: baseHost, target: config.ingressProxyTargetUrl },
-            { pattern: wildcardPattern, target: config.ingressProxyTargetUrl },
+            {
+              pattern: baseHost,
+              target: config.ingressProxyTargetUrl,
+              headers: {
+                Host: routeTargetHost,
+              },
+            },
+            {
+              pattern: wildcardPattern,
+              target: config.ingressProxyTargetUrl,
+              headers: {
+                Host: routeTargetHost,
+              },
+            },
           ];
 
     const route = await callIngressProxyProcedure<{ routeId: string }>({
@@ -599,16 +622,16 @@ abstract class DeploymentBase<
       if (publicServiceUrl.hostname.toLowerCase().endsWith(".iterate.localhost")) {
         const runtimeIngressUrl = await this.requireRuntime().ingressUrl();
         targetUrl = new URL(`${requestUrl.pathname}${requestUrl.search}`, runtimeIngressUrl);
-        headers.set("host", publicServiceUrl.host);
       } else {
         targetUrl = publicServiceUrl;
-        headers.delete("host");
       }
     } else {
       const runtimeIngressUrl = await this.requireRuntime().ingressUrl();
       targetUrl = new URL(`${requestUrl.pathname}${requestUrl.search}`, runtimeIngressUrl);
-      headers.set("host", host);
     }
+    headers.delete("host");
+    headers.set("x-forwarded-host", host);
+    headers.set("x-forwarded-proto", targetUrl.protocol.replace(/:$/, "").toLowerCase());
     headers.delete("content-length");
 
     const body =
@@ -647,8 +670,12 @@ abstract class DeploymentBase<
   }): TClient {
     return params.create({
       url: `http://${params.host}${params.path}`,
-      fetch: async (request: Request) => await this.fetchWithHost(request, params.host),
+      fetch: this.getServiceFetcher(params.host),
     });
+  }
+
+  getServiceFetcher(serviceHost: string): (request: Request) => Promise<Response> {
+    return async (request: Request) => await this.fetchWithHost(request, serviceHost);
   }
 
   createServiceOrpcClient<TContract extends AnyContractRouter>(params: {
@@ -667,6 +694,20 @@ abstract class DeploymentBase<
           fetch,
         }),
     });
+  }
+
+  async startServiceFromManifest<TContract extends AnyContractRouter>(params: {
+    manifest: ServiceManifestWithEntryPoint<TContract>;
+    env?: Record<string, string>;
+    timeoutMs?: number;
+  }): Promise<ContractRouterClient<TContract>> {
+    const pidnap = this.requireRuntime().pidnap;
+    await pidnap.processes.updateConfig(serviceManifestToPidnapConfig(params));
+    await pidnap.processes.waitForRunning({
+      processSlug: params.manifest.slug,
+      timeoutMs: params.timeoutMs ?? 60_000,
+    });
+    return this.createServiceOrpcClient({ manifest: params.manifest });
   }
 
   async readEnvFile(): Promise<Record<string, string>> {
@@ -1050,11 +1091,6 @@ export class FlyDeployment extends Deployment<FlyDeploymentCreateInput, FlyDeplo
     )
       .trim()
       .replace(/\/+$/, "");
-    const ingressProxyDomain = (
-      rawEnv.JONASLAND_E2E_INGRESS_PROXY_DOMAIN ??
-      rawEnv.INGRESS_PROXY_DOMAIN ??
-      DEFAULT_INGRESS_PROXY_DOMAIN
-    ).trim();
     const ingressProxyApiKey = (
       rawEnv.INGRESS_PROXY_API_TOKEN ??
       rawEnv.INGRESS_PROXY_E2E_API_TOKEN ??
@@ -1063,9 +1099,9 @@ export class FlyDeployment extends Deployment<FlyDeploymentCreateInput, FlyDeplo
     const runtimeIngressUrl = await params.createResult.runtime.ingressUrl();
 
     return {
-      publicBaseUrl: `https://${params.createResult.deploymentLocator.appName}.${ingressProxyDomain}`,
+      publicBaseUrl: runtimeIngressUrl,
       publicBaseUrlType: "prefix",
-      createIngressProxyRoutes: true,
+      createIngressProxyRoutes: false,
       ingressProxyBaseUrl,
       ingressProxyApiKey,
       ingressProxyTargetUrl: runtimeIngressUrl,

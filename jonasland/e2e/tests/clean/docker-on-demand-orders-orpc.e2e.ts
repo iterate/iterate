@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { ordersServiceManifest } from "@iterate-com/orders-contract";
 import { DockerDeployment } from "@iterate-com/shared/jonasland/deployment";
-import {
-  startOnDemandServiceViaPidnap,
-  waitForBuiltInServicesOnline,
-} from "../../test-helpers/deployment-bootstrap.ts";
+import { waitForBuiltInServicesOnline } from "../../test-helpers/deployment-bootstrap.ts";
 
 const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
 const providerEnv = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
@@ -29,33 +26,9 @@ describe.runIf(runDockerLocal)("clean docker on-demand orders oRPC", () => {
 
     await waitForBuiltInServicesOnline({ deployment });
 
-    await startOnDemandServiceViaPidnap({
-      deployment,
-      processSlug: "orders",
-      definition: {
-        command: "/opt/pidnap/node_modules/.bin/tsx",
-        args: ["/opt/services/orders-service/src/server.ts"],
-        env: {
-          ORDERS_SERVICE_PORT: "19020",
-          EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
-          SERVICES_ORPC_URL: "http://127.0.0.1:8777/orpc",
-        },
-      },
-      healthHost: "orders.iterate.localhost",
-      healthPath: "/healthz",
+    const orders = await deployment.startServiceFromManifest({
+      manifest: ordersServiceManifest,
     });
-
-    await deployment.registry.routes.upsert({
-      host: "orders.iterate.localhost",
-      target: "127.0.0.1:19020",
-      metadata: {
-        openapiPath: "/api/openapi.json",
-        title: "Orders Service",
-      },
-      tags: ["orders", "openapi"],
-    });
-
-    const orders = deployment.createServiceOrpcClient({ manifest: ordersServiceManifest });
 
     const ping = await orders.orders.ping({});
     expect(ping.ok).toBe(true);

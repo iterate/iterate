@@ -6,6 +6,8 @@ import { DockerDeployment, type DeploymentRuntime } from "@iterate-com/shared/jo
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const RUN_DOCKER_E2E = E2E_PROVIDER === "docker";
 const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
+const ITERATE_REPO = "/home/iterate/src/github.com/iterate/iterate";
+const PIDNAP_TSX_PATH = `${ITERATE_REPO}/packages/pidnap/node_modules/.bin/tsx`;
 
 const ORDER_WORKFLOW_STARTED_EVENT_TYPE = "https://events.iterate.com/orders/workflow-started";
 const ORDER_WORKFLOW_COMPLETED_EVENT_TYPE = "https://events.iterate.com/orders/workflow-completed";
@@ -44,10 +46,7 @@ async function startOrdersProcess(deployment: DeploymentRuntime): Promise<void> 
     definition: {
       command: PIDNAP_TSX_PATH,
       args: [`${ITERATE_REPO}/services/orders-service/src/server.ts`],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
-      },
+      env: OTEL_SERVICE_ENV,
     },
     options: { restartPolicy: "always" },
     envOptions: { reloadDelay: false },
@@ -60,7 +59,7 @@ async function startOrdersProcess(deployment: DeploymentRuntime): Promise<void> 
   await deployment.waitForPidnapProcessRunning({ target: "orders", timeoutMs: 45_000 });
   await waitForHostRoute(deployment, {
     host: "orders.iterate.localhost",
-    path: "/healthz",
+    path: "/api/service/health",
     timeoutMs: 45_000,
   });
 }

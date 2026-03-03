@@ -82,8 +82,8 @@ describe.runIf(runFly)("clean frp egress minimal (fly)", () => {
     expect(new URL(observedRecord.request.url).pathname).toBe(requestPath);
     expect(await observedRecord.request.text()).toBe(requestBody);
     expect(observedRecord.request.headers.get("host")).toContain("127.0.0.1:27180");
-    expect(observedRecord.request.headers.get("forwarded")?.toLowerCase()).toContain("host=");
-    expect(observedRecord.request.headers.get("forwarded")?.toLowerCase()).toContain("proto=");
+    expect(observedRecord.request.headers.get("x-forwarded-host")).toBeTruthy();
+    expect(observedRecord.request.headers.get("x-forwarded-proto")).toBeTruthy();
     expect(observedRecord.response.status).toBe(200);
   }, 300_000);
 });

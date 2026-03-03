@@ -660,7 +660,7 @@ async function waitForRuntimeReady(params: {
         await waitForHostHealthViaExec({
           exec: params.exec,
           host: `${processName}.iterate.localhost`,
-          path: "/healthz",
+          path: "/api/service/health",
           timeoutMs: 120_000,
         });
       }
@@ -764,7 +764,7 @@ export async function flyDeploymentRuntimeCreate(
   });
   let caddy = createFlyCaddyApiClient({
     ingressBaseUrl: clientBaseUrl,
-    hostHeader: "caddy-admin.iterate.localhost",
+    hostHeader: "caddy.iterate.localhost",
   });
   let registry = createRegistryClient({
     url: `${clientBaseUrl}/orpc`,
@@ -787,7 +787,7 @@ export async function flyDeploymentRuntimeCreate(
     });
     caddy = createFlyCaddyApiClient({
       ingressBaseUrl: clientBaseUrl,
-      hostHeader: "caddy-admin.iterate.localhost",
+      hostHeader: "caddy.iterate.localhost",
     });
     registry = createRegistryClient({
       url: `${clientBaseUrl}/orpc`,
@@ -990,7 +990,7 @@ export async function flyDeploymentRuntimeAttach(
   });
   let caddy = createFlyCaddyApiClient({
     ingressBaseUrl: clientBaseUrl,
-    hostHeader: "caddy-admin.iterate.localhost",
+    hostHeader: "caddy.iterate.localhost",
   });
   let registry = createRegistryClient({
     url: `${clientBaseUrl}/orpc`,
@@ -1013,7 +1013,7 @@ export async function flyDeploymentRuntimeAttach(
     });
     caddy = createFlyCaddyApiClient({
       ingressBaseUrl: clientBaseUrl,
-      hostHeader: "caddy-admin.iterate.localhost",
+      hostHeader: "caddy.iterate.localhost",
     });
     registry = createRegistryClient({
       url: `${clientBaseUrl}/orpc`,

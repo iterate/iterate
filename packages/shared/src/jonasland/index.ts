@@ -629,6 +629,14 @@ export interface ServiceManifestLike<TContract extends AnyContractRouter = AnyCo
   orpcContract: TContract;
 }
 
+export function localHostForService(params: { slug: string }): string {
+  const normalized = params.slug.trim().toLowerCase();
+  const base = normalized.endsWith("-service")
+    ? normalized.slice(0, -"-service".length)
+    : normalized;
+  return `${base}.iterate.localhost`;
+}
+
 export type RpcWebSocket = LinkWebsocketClientOptions["websocket"];
 
 export interface CreateOrpcRpcServiceClientOptions<TContract extends AnyContractRouter> {
@@ -727,4 +735,88 @@ export function createOrpcRpcWebSocketServiceClient<TContract extends AnyContrac
 ): ContractRouterClient<TContract> {
   const link = new WebSocketRPCLink({ websocket: options.websocket });
   return createORPCClient(link);
+}
+
+const REGISTRY_BASE_URL = "http://registry.iterate.localhost";
+
+export async function registerServiceWithRegistry(params: {
+  manifest: ServiceManifestLike & { slug: string };
+  port: number;
+  metadata?: { openapiPath?: string; title?: string };
+  tags?: string[];
+}): Promise<void> {
+  const { createRegistryClient } = await import("@iterate-com/registry-service/client");
+  const registryClient = createRegistryClient({ url: `${REGISTRY_BASE_URL}/orpc` });
+  const host = localHostForService({ slug: params.manifest.slug });
+  const target = `127.0.0.1:${String(params.port)}`;
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      const result = await registryClient.routes.upsert({
+        host,
+        target,
+        ...(params.metadata ? { metadata: params.metadata } : {}),
+        ...(params.tags ? { tags: params.tags } : {}),
+      });
+
+      serviceLog.info({
+        event: "service.registry.registered",
+        host,
+        target,
+        route_count: result.routeCount,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  }
+
+  serviceLog.warn({
+    event: "service.registry.register_failed",
+    host,
+    message: lastError instanceof Error ? lastError.message : String(lastError),
+  });
+}
+
+export function createLocalServiceOrpcClient<TContract extends AnyContractRouter>(params: {
+  manifest: ServiceManifestLike<TContract>;
+  headers?: RPCLinkOptions<any>["headers"];
+}): ContractRouterClient<TContract> {
+  const url = `http://${localHostForService({ slug: params.manifest.slug })}/orpc`;
+  const link = new RPCLink({
+    url,
+    method: inferRPCMethodFromContractRouter(params.manifest.orpcContract),
+    ...(params.headers ? { headers: params.headers } : {}),
+  });
+  return createORPCClient(link);
+}
+
+export interface ServiceManifestWithEntryPoint<
+  TContract extends AnyContractRouter = AnyContractRouter,
+> extends ServiceManifestLike<TContract> {
+  serverEntryPoint: string;
+}
+
+export function serviceManifestToPidnapConfig(params: {
+  manifest: ServiceManifestWithEntryPoint;
+  env?: Record<string, string>;
+}) {
+  const { manifest } = params;
+  const host = localHostForService({ slug: manifest.slug });
+  return {
+    processSlug: manifest.slug,
+    definition: {
+      command: "npx",
+      args: ["tsx", manifest.serverEntryPoint],
+      env: { PORT: String(manifest.port), ...params.env },
+    },
+    tags: ["on-demand"],
+    restartImmediately: true,
+    healthCheck: {
+      url: `http://${host}/api/service/health`,
+      intervalMs: 2_000,
+    },
+  };
 }

@@ -6,6 +6,8 @@ import { mockEgressProxy } from "../test-helpers/mock-egress-proxy.ts";
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const RUN_DOCKER_E2E = E2E_PROVIDER === "docker";
 const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
+const ITERATE_REPO = "/home/iterate/src/github.com/iterate/iterate";
+const PIDNAP_TSX_PATH = `${ITERATE_REPO}/packages/pidnap/node_modules/.bin/tsx`;
 const OTEL_SERVICE_ENV = {
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
@@ -33,12 +35,9 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
     definition: {
       command: PIDNAP_TSX_PATH,
       args: [`${ITERATE_REPO}/services/orders-service/src/server.ts`],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
-      },
+      env: OTEL_SERVICE_ENV,
     },
-    routeCheck: { host: "orders.iterate.localhost", path: "/healthz" },
+    routeCheck: { host: "orders.iterate.localhost", path: "/api/service/health" },
   },
   home: {
     definition: {
@@ -221,7 +220,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
     const discoveryHost = `fixture-${randomUUID().slice(0, 8)}.iterate.localhost`;
     const upsert = await deployment.registry.routes.upsert({
       host: discoveryHost,
-      target: "127.0.0.1:9876",
+      target: "127.0.0.1:17300",
       metadata: { source: "e2e" },
     });
     expect(upsert.route.host).toBe(discoveryHost);
@@ -364,7 +363,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
     expect(docsHome.exitCode).toBe(0);
     expect(docsHome.output).toContain("jonasland API Docs");
 
-    const sourcesPayload = await deployment.waitForDocsSources([
+    const sourcesPayload = await waitForDocsSources(deployment, [
       "events.iterate.localhost",
       "orders.iterate.localhost",
     ]);
@@ -410,7 +409,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
     const routeHost = `persist-${randomUUID().slice(0, 8)}.iterate.localhost`;
     await deployment.registry.routes.upsert({
       host: routeHost,
-      target: "127.0.0.1:19010",
+      target: "127.0.0.1:17320",
       metadata: { source: "persistence-test" },
       tags: ["caddy"],
     });

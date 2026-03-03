@@ -13,7 +13,7 @@ describe("Event operations singleton recovery", () => {
     await mkdir(blockedDbPath);
 
     const env = {
-      PORT: 17301,
+      PORT: 17320,
       DATABASE_URL: blockedDbPath,
       ITERATE_EVENTS_WS_IDLE_DISCONNECT_MS: 30_000,
     };

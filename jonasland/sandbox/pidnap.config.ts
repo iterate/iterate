@@ -13,7 +13,7 @@ const iteratePublicBaseUrlType = process.env.ITERATE_PUBLIC_BASE_URL_TYPE ?? "pr
 export default defineConfig({
   http: {
     host: "0.0.0.0",
-    port: 9876,
+    port: 17300,
   },
   state: {
     autosaveFile: "/var/log/pidnap/state/autosave.json",
@@ -43,7 +43,7 @@ export default defineConfig({
         command: tsxPath,
         args: [`${iterateRepo}/services/registry-service/src/server.ts`],
         env: {
-          REGISTRY_SERVICE_PORT: "8777",
+          REGISTRY_SERVICE_PORT: "17310",
           CADDY_CONFIG_DIR: caddyConfigDir,
           CADDY_ROOT_CADDYFILE: caddyRootCaddyfile,
           CADDY_BIN_PATH: "/usr/local/bin/caddy",
@@ -81,7 +81,7 @@ export default defineConfig({
         command: tsxPath,
         args: [`${iterateRepo}/services/events-service/src/server.ts`],
         env: {
-          PORT: "19010",
+          PORT: "17320",
           OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
           OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",

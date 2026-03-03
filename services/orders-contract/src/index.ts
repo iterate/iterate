@@ -166,8 +166,6 @@ const nonEmptyStringWithTrimDefault = (defaultValue: string) =>
 export const OrdersServiceEnv = z.object({
   ORDERS_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(19020),
   ORDERS_DB_PATH: nonEmptyStringWithTrimDefault("/var/lib/jonasland/orders-service.sqlite"),
-  EVENTS_SERVICE_BASE_URL: nonEmptyStringWithTrimDefault("http://127.0.0.1:17301/orpc"),
-  SERVICES_ORPC_URL: nonEmptyStringWithTrimDefault("http://127.0.0.1:8777/orpc"),
 });
 
 export type OrdersServiceEnv = z.infer<typeof OrdersServiceEnv>;
@@ -186,6 +184,7 @@ export const ordersServiceManifest = {
   slug: "orders-service",
   version: packageJson.version ?? "0.0.0",
   port: 19020,
+  serverEntryPoint: "services/orders-service/src/server.ts",
   orpcContract: ordersContract,
   envVars: OrdersServiceEnv,
 } as const;

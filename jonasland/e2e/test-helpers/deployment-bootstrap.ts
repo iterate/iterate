@@ -60,64 +60,13 @@ export async function waitForBuiltInServicesOnline(params: {
   await waitForHostHealthViaLoopback({
     deployment: params.deployment,
     host: "registry.iterate.localhost",
-    path: "/healthz",
+    path: "/orpc/service/health",
     timeoutMs,
   });
   await waitForHostHealthViaLoopback({
     deployment: params.deployment,
     host: "events.iterate.localhost",
-    path: "/healthz",
+    path: "/api/service/health",
     timeoutMs,
   });
-}
-
-export async function startOnDemandServiceViaPidnap(params: {
-  deployment: Pick<Deployment, "pidnap" | "waitForPidnapProcessRunning" | "exec">;
-  processSlug: string;
-  definition: {
-    command: string;
-    args: string[];
-    env?: Record<string, string>;
-  };
-  healthHost?: string;
-  healthPath?: string;
-  timeoutMs?: number;
-}): Promise<void> {
-  const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-
-  const updateResult = await params.deployment.pidnap.processes.updateConfig({
-    processSlug: params.processSlug,
-    definition: {
-      command: params.definition.command,
-      args: params.definition.args,
-      ...(params.definition.env ? { env: params.definition.env } : {}),
-    },
-    options: {
-      restartPolicy: "always",
-    },
-    envOptions: {
-      reloadDelay: false,
-    },
-    restartImmediately: true,
-  });
-
-  if (updateResult.state !== "running") {
-    await params.deployment.pidnap.processes.start({
-      target: params.processSlug,
-    });
-  }
-
-  await params.deployment.waitForPidnapProcessRunning({
-    target: params.processSlug,
-    timeoutMs,
-  });
-
-  if (params.healthHost) {
-    await waitForHostHealthViaLoopback({
-      deployment: params.deployment,
-      host: params.healthHost,
-      path: params.healthPath,
-      timeoutMs,
-    });
-  }
 }

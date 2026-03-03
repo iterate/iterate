@@ -46,19 +46,19 @@ const BUILTIN_ROUTES: ManagedRoute[] = [
   {
     slug: "pidnap",
     host: "pidnap.iterate.localhost",
-    target: "127.0.0.1:9876",
+    target: "127.0.0.1:17300",
     cors: false,
   },
   {
     slug: "registry",
     host: "registry.iterate.localhost",
-    target: "127.0.0.1:8777",
+    target: "127.0.0.1:17310",
     cors: true,
   },
   {
     slug: "events",
     host: "events.iterate.localhost",
-    target: "127.0.0.1:19010",
+    target: "127.0.0.1:17320",
     cors: true,
   },
   {
@@ -67,6 +67,12 @@ const BUILTIN_ROUTES: ManagedRoute[] = [
     target: "127.0.0.1:27000",
     cors: false,
     streamCloseDelay: "5m",
+  },
+  {
+    slug: "caddy",
+    host: "caddy.iterate.localhost",
+    target: "127.0.0.1:2019",
+    cors: false,
   },
   {
     slug: "caddy-admin",
@@ -127,9 +133,9 @@ function renderReverseProxyBlock(params: {
   const lines: string[] = [];
   const escapedHost = escapeForRegex(params.hostToMatch.toLowerCase());
 
-  const renderHandle = (matcherId: string): string[] => {
+  const renderHandle = (handleParams: { matcherId: string; upstreamHost: string }): string[] => {
     const block: string[] = [];
-    block.push(`handle @${matcherId} {`);
+    block.push(`handle @${handleParams.matcherId} {`);
 
     if (params.route.cors) {
       block.push("    import iterate_cors_openapi");
@@ -138,10 +144,11 @@ function renderReverseProxyBlock(params: {
     if (params.route.streamCloseDelay) {
       block.push(`    reverse_proxy ${params.route.target} {`);
       block.push(`        stream_close_delay ${params.route.streamCloseDelay}`);
+      block.push(`        header_up Host ${handleParams.upstreamHost}`);
       block.push("    }");
     } else {
       block.push(`    reverse_proxy ${params.route.target} {`);
-      block.push(`        header_up Host ${params.route.host}`);
+      block.push(`        header_up Host ${handleParams.upstreamHost}`);
       block.push("    }");
     }
 
@@ -151,10 +158,20 @@ function renderReverseProxyBlock(params: {
 
   lines.push(`@${params.matcherIdBase}_host host ${params.hostToMatch}`);
   lines.push(
-    `@${params.matcherIdBase}_forwarded header_regexp ${params.matcherIdBase}_forwarded Forwarded (?i)(^|[,;])\\s*host="?${escapedHost}(?::[0-9]+)?"?(\\s*[,;]|$)`,
+    `@${params.matcherIdBase}_xfh header_regexp ${params.matcherIdBase}_xfh X-Forwarded-Host (?i)^${escapedHost}(?::[0-9]+)?$`,
   );
-  lines.push(...renderHandle(`${params.matcherIdBase}_host`));
-  lines.push(...renderHandle(`${params.matcherIdBase}_forwarded`));
+  lines.push(
+    ...renderHandle({
+      matcherId: `${params.matcherIdBase}_xfh`,
+      upstreamHost: "{http.request.header.X-Forwarded-Host}",
+    }),
+  );
+  lines.push(
+    ...renderHandle({
+      matcherId: `${params.matcherIdBase}_host`,
+      upstreamHost: params.route.host,
+    }),
+  );
   return lines;
 }
 

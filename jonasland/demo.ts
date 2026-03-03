@@ -49,7 +49,7 @@ const processes: ProcessConfig[] = [
       args: [`${ITERATE_REPO}/services/orders-service/src/server.ts`],
       env: {
         ...OTEL_SERVICE_ENV,
-        EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
+        EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:17320/orpc",
       },
     },
     routeCheck: { host: "orders.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },

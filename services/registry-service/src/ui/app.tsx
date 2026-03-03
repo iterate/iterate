@@ -68,7 +68,7 @@ export function App() {
   const [selectedHost, setSelectedHost] = useState("");
 
   const [host, setHost] = useState("demo.iterate.localhost");
-  const [target, setTarget] = useState("127.0.0.1:19010");
+  const [target, setTarget] = useState("127.0.0.1:17320");
   const [tagsInput, setTagsInput] = useState("demo");
   const [metadataInput, setMetadataInput] = useState('{\n  "owner": "registry-ui"\n}');
 

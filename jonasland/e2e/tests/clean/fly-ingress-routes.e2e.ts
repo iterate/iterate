@@ -99,7 +99,7 @@ function createIngressProxyClient(params: {
 }
 
 describe.runIf(runFly)("clean fly ingress routes", () => {
-  test("creates and deletes ingress routes with deployment lifecycle", async () => {
+  test("creates and deletes ingress routes with deployment lifecycle (opt-in)", async () => {
     if (FLY_IMAGE.trim().length === 0) {
       throw new Error("Set JONASLAND_E2E_FLY_IMAGE for Fly tests");
     }
@@ -107,6 +107,10 @@ describe.runIf(runFly)("clean fly ingress routes", () => {
     const ingressProxyConfig = resolveIngressProxyConfig();
     const ingressClient = createIngressProxyClient(ingressProxyConfig);
 
+    const publicHost = `fly-routes-${randomUUID().slice(0, 8)}.${ingressProxyConfig.domain}`;
+    const publicBaseUrl = `https://${publicHost}`;
+    const expectedBasePattern = publicHost;
+    const expectedWildcardPattern = `*__${publicHost}`;
     const createdRouteIds: string[] = [];
     let deployment: FlyDeployment | undefined;
 
@@ -115,14 +119,17 @@ describe.runIf(runFly)("clean fly ingress routes", () => {
         flyImage: FLY_IMAGE,
       }).create({
         name: `jonasland-e2e-clean-fly-ingress-routes-${randomUUID().slice(0, 8)}`,
+        ingress: {
+          publicBaseUrl,
+          publicBaseUrlType: "prefix",
+          createIngressProxyRoutes: true,
+          ingressProxyBaseUrl: ingressProxyConfig.baseUrl,
+          ingressProxyApiKey: ingressProxyConfig.apiToken,
+        },
       });
 
-      const locator = deployment.getDeploymentLocator();
-      const expectedBasePattern = `${locator.appName}.${ingressProxyConfig.domain}`;
-      const expectedWildcardPattern = `*__${locator.appName}.${ingressProxyConfig.domain}`;
-
       const ingressUrl = await deployment.ingressUrl();
-      expect(new URL(ingressUrl).host).toBe(expectedBasePattern);
+      expect(new URL(ingressUrl).host).toBe(publicHost);
 
       const routes = await ingressClient.listRoutes();
       const ownedRoutes = routes.filter((route) =>

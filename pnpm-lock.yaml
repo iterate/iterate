@@ -1096,6 +1096,9 @@ importers:
 
   jonasland/e2e:
     dependencies:
+      '@iterate-com/orders-contract':
+        specifier: workspace:*
+        version: link:../../services/orders-contract
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -1139,6 +1142,9 @@ importers:
       http-proxy:
         specifier: ^1.18.1
         version: 1.18.1
+      pidnap:
+        specifier: workspace:*
+        version: link:../../packages/pidnap
       tsx:
         specifier: ^4.20.6
         version: 4.21.0

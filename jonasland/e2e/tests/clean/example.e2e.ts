@@ -4,7 +4,12 @@ import { DockerDeployment, FlyDeployment } from "@iterate-com/shared/jonasland/d
 import { startFlyFrpEgressBridge } from "../../test-helpers/frp-egress-bridge.ts";
 import { waitForBuiltInServicesOnline } from "../../test-helpers/deployment-bootstrap.ts";
 import { mockEgressProxy } from "../../test-helpers/mock-egress-proxy.ts";
-import { useDockerPublicIngress } from "../../test-helpers/use-docker-public-ingress.ts";
+import {
+  allocateLoopbackPort,
+  buildIngressPublicBaseUrl,
+  resolveIngressProxyConfig,
+} from "../../test-helpers/public-ingress-config.ts";
+import { useCloudflareTunnel } from "../../test-helpers/use-cloudflare-tunnel.ts";
 
 const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
 const FLY_IMAGE = process.env.JONASLAND_E2E_FLY_IMAGE ?? "";
@@ -24,51 +29,85 @@ const runDockerPublic = dockerAccessModes.has("all") || dockerAccessModes.has("p
 const providerEnv = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const runAllProviders = providerEnv === "all";
 
+type ProviderRuntime = {
+  deployment: DockerDeployment | FlyDeployment;
+  tunnel?: AsyncDisposable;
+};
+
 type ProviderCase = {
   label: "docker" | "docker-public" | "fly";
   enabled: boolean;
-  deploymentFactory:
-    | ReturnType<typeof DockerDeployment.createWithConfig<{ dockerImage: string }>>
-    | ReturnType<typeof FlyDeployment.createWithConfig<{ flyImage: string }>>;
-  setupPublicIngress?: boolean;
+  create: (name: string) => Promise<ProviderRuntime>;
 };
 
 const providers: ProviderCase[] = [
   {
     label: "docker",
     enabled: (runAllProviders || providerEnv === "docker") && runDockerLocal,
-    deploymentFactory: DockerDeployment.createWithConfig({ dockerImage: DOCKER_IMAGE }),
-    setupPublicIngress: false,
+    create: async (name) => ({
+      deployment: await DockerDeployment.createWithConfig({ dockerImage: DOCKER_IMAGE }).create({
+        name,
+      }),
+    }),
   },
   {
     label: "docker-public",
     enabled: (runAllProviders || providerEnv === "docker") && runDockerPublic,
-    deploymentFactory: DockerDeployment.createWithConfig({ dockerImage: DOCKER_IMAGE }),
-    setupPublicIngress: true,
+    create: async (name) => {
+      const ingress = resolveIngressProxyConfig();
+      const ingressHostPort = await allocateLoopbackPort();
+      const tunnel = await useCloudflareTunnel({
+        localPort: ingressHostPort,
+        cloudflaredBin: process.env.JONASLAND_E2E_CLOUDFLARED_BIN,
+      });
+      const publicBaseUrl = buildIngressPublicBaseUrl({
+        testSlug: `example-${name}`,
+        ingressProxyDomain: ingress.ingressProxyDomain,
+      });
+
+      const deployment = await DockerDeployment.create({
+        dockerImage: DOCKER_IMAGE,
+        name,
+        ingressHostPort,
+        ingress: {
+          publicBaseUrl,
+          publicBaseUrlType: "prefix",
+          createIngressProxyRoutes: true,
+          ingressProxyBaseUrl: ingress.ingressProxyBaseUrl,
+          ingressProxyApiKey: ingress.ingressProxyApiKey,
+          ingressProxyTargetUrl: tunnel.tunnelUrl,
+        },
+      }).catch(async (error) => {
+        try {
+          await Promise.resolve(tunnel[Symbol.asyncDispose]());
+        } catch {}
+        throw error;
+      });
+
+      return { deployment, tunnel };
+    },
   },
   {
     label: "fly",
     enabled: (runAllProviders || providerEnv === "fly") && FLY_IMAGE.trim().length > 0,
-    deploymentFactory: FlyDeployment.createWithConfig({ flyImage: FLY_IMAGE }),
-    setupPublicIngress: false,
+    create: async (name) => ({
+      deployment: await FlyDeployment.createWithConfig({ flyImage: FLY_IMAGE }).create({
+        name,
+      }),
+    }),
   },
 ];
 
-for (const { label, enabled, deploymentFactory, setupPublicIngress } of providers) {
+for (const { label, enabled, create } of providers) {
   describe.runIf(enabled)(`example end2end (${label})`, () => {
     test("egress request is observable from the test runner", async () => {
       await using proxy = await mockEgressProxy();
-      await using deployment = await deploymentFactory({
-        name: `jonasland-e2e-clean-example-${label}-${randomUUID().slice(0, 8)}`,
-      });
+      const runtime = await create(
+        `jonasland-e2e-clean-example-${label}-${randomUUID().slice(0, 8)}`,
+      );
+      await using deployment = runtime.deployment;
+      await using _tunnel = runtime.tunnel;
       await waitForBuiltInServicesOnline({ deployment });
-      await using _publicIngress =
-        setupPublicIngress && deployment instanceof DockerDeployment
-          ? await useDockerPublicIngress({
-              deployment,
-              testSlug: `example-${label}`,
-            })
-          : undefined;
 
       const requestPath = "/v1/chat/completions";
 
@@ -79,7 +118,10 @@ for (const { label, enabled, deploymentFactory, setupPublicIngress } of provider
           choices: [{ index: 0, message: { role: "assistant", content: "Hello from mock" } }],
         });
 
-      const runEgressCheck = async (proxyUrl: string, options?: { expectForwarded: boolean }) => {
+      const runEgressCheck = async (
+        proxyUrl: string,
+        options?: { expectForwardingHeaders: boolean },
+      ) => {
         const observed = proxy.waitFor((req) => new URL(req.url).pathname === requestPath, {
           timeout: label === "fly" ? 120_000 : 20_000,
         });
@@ -106,9 +148,9 @@ for (const { label, enabled, deploymentFactory, setupPublicIngress } of provider
 
         const record = await observed;
         expect(new URL(record.request.url).pathname).toBe(requestPath);
-        if (options?.expectForwarded) {
-          expect(record.request.headers.get("forwarded")?.toLowerCase()).toContain("host=");
-          expect(record.request.headers.get("forwarded")?.toLowerCase()).toContain("proto=");
+        if (options?.expectForwardingHeaders) {
+          expect(record.request.headers.get("x-forwarded-host")).toBeTruthy();
+          expect(record.request.headers.get("x-forwarded-proto")).toBeTruthy();
         }
         expect(record.response.status).toBe(200);
       };
@@ -124,11 +166,11 @@ for (const { label, enabled, deploymentFactory, setupPublicIngress } of provider
           localTargetPort: proxy.port,
           frpcBin: process.env.JONASLAND_E2E_FRPC_BIN,
         });
-        await runEgressCheck(frpBridge.dataProxyUrl, { expectForwarded: true });
+        await runEgressCheck(frpBridge.dataProxyUrl, { expectForwardingHeaders: true });
         return;
       }
 
-      await runEgressCheck(proxy.proxyUrl, { expectForwarded: false });
+      await runEgressCheck(proxy.proxyUrl, { expectForwardingHeaders: false });
     }, 300_000);
   });
 }
