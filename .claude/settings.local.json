@@ -15,7 +15,13 @@
       "WebFetch(domain:opencode.ai)",
       "WebFetch(domain:deepwiki.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(do:*)",
+      "Bash(docker run:*)",
+      "Bash(docker build:*)",
+      "WebFetch(domain:docs.archil.com)",
+      "WebFetch(domain:archil.com)",
+      "WebFetch(domain:news.ycombinator.com)"
     ]
   }
 }
