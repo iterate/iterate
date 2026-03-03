@@ -236,6 +236,49 @@ describe("github router", () => {
     );
   });
 
+  it("retries buffered flush after transient agent post failure", async () => {
+    sqlite
+      .prepare(
+        "INSERT INTO github_pr_agent_path (owner, repo, pr_number, agent_path, source) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("iterate", "iterate", 1300, "/github/iterate/iterate/pr-1300", "deterministic");
+
+    fetchSpy
+      .mockRejectedValueOnce(new Error("agent unavailable"))
+      .mockResolvedValue(new Response("{}", { status: 200 }));
+
+    const payload = {
+      action: "completed",
+      repository: { full_name: "iterate/iterate", owner: { login: "iterate" }, name: "iterate" },
+      workflow_run: {
+        name: "CI",
+        conclusion: "failure",
+        head_branch: "feature",
+        html_url: "https://github.com/iterate/iterate/actions/runs/22",
+        pull_requests: [{ number: 1300 }],
+      },
+    };
+
+    await githubRouter.request("/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ eventType: "workflow_run", deliveryId: "d-retry", payload }),
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      "http://localhost:3001/api/agents/github/iterate/iterate/pr-1300",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("resolves marker session_id to active agent path", async () => {
     sqlite
       .prepare("INSERT INTO agents (path, working_directory) VALUES (?, ?)")

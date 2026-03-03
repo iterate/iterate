@@ -741,8 +741,22 @@ async function enqueueBufferedSignal(params: {
 async function flushBufferedSignalsForAgent(agentPath: string): Promise<void> {
   const rows = bufferedSignalsByAgentPath.get(agentPath) ?? [];
   if (!rows.length) return;
-  bufferedSignalsByAgentPath.delete(agentPath);
-  await flushBufferedRows(agentPath, rows);
+
+  const rowsToFlush = [...rows];
+  try {
+    await flushBufferedRows(agentPath, rowsToFlush);
+  } catch (error) {
+    scheduleFlush(agentPath);
+    throw error;
+  }
+
+  const currentRows = bufferedSignalsByAgentPath.get(agentPath) ?? [];
+  if (currentRows.length <= rowsToFlush.length) {
+    bufferedSignalsByAgentPath.delete(agentPath);
+    return;
+  }
+
+  bufferedSignalsByAgentPath.set(agentPath, currentRows.slice(rowsToFlush.length));
 }
 
 async function flushBufferedRows(agentPath: string, rows: BufferedSignal[]): Promise<void> {
