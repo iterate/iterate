@@ -8,11 +8,15 @@ import type { AppRouter } from "../apps/daemon/server/orpc/app-router.ts";
 import { spinnerWaiter } from "./plugins/spinner-waiter.ts";
 import { createOrganization, createProject, login, sidebarButton, test } from "./test-helpers.ts";
 
-// Resolve the Fly image tag to use for machine creation.
-// Uses SANDBOX_IMAGE_TAG env var if set, otherwise reads FLY_DEFAULT_IMAGE from Doppler.
+// Resolve the image tag to use for machine creation.
+// Priority: SANDBOX_IMAGE_TAG -> DOCKER_DEFAULT_IMAGE -> FLY_DEFAULT_IMAGE.
 function resolveImageTag(): string {
   if (process.env.SANDBOX_IMAGE_TAG) return process.env.SANDBOX_IMAGE_TAG;
   try {
+    const dockerDefault = execSync("doppler run -- sh -c 'echo $DOCKER_DEFAULT_IMAGE'", {
+      encoding: "utf-8",
+    }).trim();
+    if (dockerDefault) return dockerDefault;
     return execSync("doppler run -- sh -c 'echo $FLY_DEFAULT_IMAGE'", { encoding: "utf-8" }).trim();
   } catch {
     return "";
@@ -39,7 +43,9 @@ async function createMachineFromUi(page: Page, machineName: string, imageTag?: s
 
   // Fill in the image tag if provided (overrides the Doppler default in the dev server)
   if (imageTag) {
-    const imageInput = page.getByPlaceholder(/registry\.fly\.io/);
+    const imageInput = page.getByRole("textbox", {
+      name: /iterate-sandbox:sha-<shortSha>|leave blank for default/i,
+    });
     await imageInput.fill(imageTag);
   }
 
@@ -149,7 +155,7 @@ test.describe("machine persistence", () => {
         "bash",
         "-lc",
         [
-          'opencode db "CREATE TABLE IF NOT EXISTS iterate_sync_e2e (k TEXT PRIMARY KEY, v TEXT NOT NULL);',
+          'sqlite3 ~/.local/share/opencode/opencode.db "CREATE TABLE IF NOT EXISTS iterate_sync_e2e (k TEXT PRIMARY KEY, v TEXT NOT NULL);',
           `INSERT INTO iterate_sync_e2e(k, v) VALUES ('${key}', '${marker}') ON CONFLICT(k) DO UPDATE SET v=excluded.v;`,
           `SELECT v FROM iterate_sync_e2e WHERE k='${key}';"`,
         ].join(" "),
@@ -163,7 +169,11 @@ test.describe("machine persistence", () => {
     const machineBDaemonUrl = buildDaemonBaseUrl(machineBIterateUrl);
     const daemonB = createDaemonClient(machineBDaemonUrl, page);
     const readResult = await daemonB.tool.execCommand({
-      command: ["bash", "-lc", `opencode db "SELECT v FROM iterate_sync_e2e WHERE k='${key}';"`],
+      command: [
+        "bash",
+        "-lc",
+        `sqlite3 ~/.local/share/opencode/opencode.db "SELECT v FROM iterate_sync_e2e WHERE k='${key}';"`,
+      ],
     });
     expect(readResult.exitCode).toBe(0);
     expect(readResult.stdout).toContain(marker);
