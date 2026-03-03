@@ -16,7 +16,7 @@ Private workspace package for outbound HTTP/WebSocket egress mocking, passthroug
   - `from-traffic-with-websocket.ts`: replay handlers from HAR (`@mswjs/source/traffic` + websocket replay)
 - `src/integration/`
   - non-internet higher-level tests + fixtures/scripts
-- `src/e2e/`
+- `e2e-tests/`
   - internet-hitting tests (requires Doppler env)
 
 ## Public exports
@@ -60,7 +60,7 @@ We only use two categories:
 2. E2E tests (internet + secrets required)
 
 - `pnpm --filter @iterate-com/mock-http-proxy test:e2e`
-- Runs [`src/e2e/real-egress.e2e.test.ts`](./src/e2e/real-egress.e2e.test.ts) via `doppler run --config dev`.
+- Runs [`e2e-tests/real-egress.e2e.test.ts`](./e2e-tests/real-egress.e2e.test.ts) via `doppler run --config dev`.
 
 Representative suites:
 
@@ -68,4 +68,4 @@ Representative suites:
 - unit/recorder: [`src/har/har-recorder.test.ts`](./src/har/har-recorder.test.ts)
 - unit/replay: [`src/replay/from-traffic-with-websocket.test.ts`](./src/replay/from-traffic-with-websocket.test.ts)
 - unit/non-internet integration: [`src/integration/recording-shapes.integration.test.ts`](./src/integration/recording-shapes.integration.test.ts), [`src/integration/har-replay.integration.test.ts`](./src/integration/har-replay.integration.test.ts)
-- e2e/internet: [`src/e2e/real-egress.e2e.test.ts`](./src/e2e/real-egress.e2e.test.ts)
+- e2e/internet: [`e2e-tests/real-egress.e2e.test.ts`](./e2e-tests/real-egress.e2e.test.ts)

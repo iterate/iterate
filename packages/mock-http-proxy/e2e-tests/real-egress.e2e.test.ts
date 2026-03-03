@@ -4,12 +4,12 @@ import { fileURLToPath } from "node:url";
 import { http, HttpResponse } from "msw";
 import { x } from "tinyexec";
 import { describe, expect, test } from "vitest";
-import type { HarEntryWithExtensions, HarWithExtensions } from "../har/har-extensions.ts";
+import type { HarEntryWithExtensions, HarWithExtensions } from "../src/har/har-extensions.ts";
 import {
   useMitmProxy,
   useMockHttpServer,
   useTemporaryDirectory,
-} from "../server/mock-http-server-fixture.ts";
+} from "../src/server/mock-http-server-fixture.ts";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 
@@ -47,7 +47,14 @@ async function runOpenAiScript(options: {
     [
       "exec",
       "tsx",
-      join(thisDir, "..", "integration", "http-client-scripts", "openai-responses-websockets.ts"),
+      join(
+        thisDir,
+        "..",
+        "src",
+        "integration",
+        "http-client-scripts",
+        "openai-responses-websockets.ts",
+      ),
     ],
     {
       throwOnError: true,
@@ -58,7 +65,7 @@ async function runOpenAiScript(options: {
           OPENAI_API_KEY: process.env.OPENAI_API_KEY,
           OPENAI_REALTIME_TIMEOUT_MS: String(options.timeoutMs),
         },
-        cwd: join(thisDir, "..", ".."),
+        cwd: join(thisDir, ".."),
         stdio: "pipe",
       },
     },
@@ -73,7 +80,7 @@ async function runSlackScript(egressUrl: string): Promise<SlackScriptOutput> {
     [
       "exec",
       "tsx",
-      join(thisDir, "..", "integration", "http-client-scripts", "slack-auth-test.ts"),
+      join(thisDir, "..", "src", "integration", "http-client-scripts", "slack-auth-test.ts"),
     ],
     {
       throwOnError: true,
@@ -84,7 +91,7 @@ async function runSlackScript(egressUrl: string): Promise<SlackScriptOutput> {
           SLACK_API_URL: `${egressUrl}/api/`,
           SLACK_TARGET_URL: "https://slack.com",
         },
-        cwd: join(thisDir, "..", ".."),
+        cwd: join(thisDir, ".."),
         stdio: "pipe",
       },
     },

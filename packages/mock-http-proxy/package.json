@@ -8,8 +8,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "NODE_OPTIONS=--no-deprecation vitest run src/server src/har src/replay src/integration/recording-shapes.integration.test.ts src/integration/har-replay.integration.test.ts",
-    "test:e2e": "doppler run --config dev -- sh -c 'NODE_OPTIONS=--no-deprecation vitest run src/e2e'"
+    "test": "NODE_OPTIONS=--no-deprecation vitest run --project unit",
+    "test:e2e": "doppler run --config dev -- sh -c \"NODE_OPTIONS=--no-deprecation vitest run --project e2e\""
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",
