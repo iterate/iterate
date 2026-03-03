@@ -6,7 +6,8 @@
   "exports": {
     "./jonasland": "./src/jonasland/index.ts",
     "./force-public-url-vite-plugin": "./src/dev/force-public-url-vite-plugin.ts",
-    "./project-ingress": "./src/project-ingress.ts"
+    "./project-ingress": "./src/project-ingress.ts",
+    "./github-agent-path": "./src/github-agent-path.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { and, desc, eq, lt } from "drizzle-orm";
 import { z } from "zod/v4";
+import {
+  buildDefaultGitHubPrAgentPath,
+  normalizeAgentPath,
+  toPathSegment,
+} from "@iterate-com/shared/github-agent-path";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 
@@ -424,33 +429,6 @@ function collectSignals(input: ForwardedWebhookInput): ResolvedPrSignal[] {
   return collect ? collect(input) : [];
 }
 
-function toPathSegment(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "x"
-  );
-}
-
-function buildDefaultAgentPath(repo: RepoCoords, prNumber: number): string {
-  return `/github/${toPathSegment(repo.owner)}/${toPathSegment(repo.name)}/pr-${prNumber}`;
-}
-
-function normalizeAgentPath(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("/")) return null;
-  if (/\s/.test(trimmed)) return null;
-  if (!/^\/[a-zA-Z0-9._~/-]+$/.test(trimmed)) return null;
-  const segments = trimmed.split("/").slice(1);
-  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
-    return null;
-  }
-  return trimmed;
-}
-
 function parseAgentPathFromBody(body: string | null | undefined): string | null {
   return normalizeAgentPath(parseContextValue(body, "agent_path"));
 }
@@ -559,7 +537,7 @@ async function resolveAgentPath(params: {
 }): Promise<AgentPathResolution> {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + PR_MAPPING_TTL_MS);
-  const defaultPath = buildDefaultAgentPath(params.repo, params.prNumber);
+  const defaultPath = buildDefaultGitHubPrAgentPath(params.repo, params.prNumber);
   const markerSessionId = parseSessionIdFromBody(params.markerBody);
   const sessionPath = markerSessionId ? await resolveAgentPathFromSessionId(markerSessionId) : null;
   const parsedMarkerPath = parseAgentPathFromBody(params.markerBody);
@@ -675,6 +653,16 @@ async function upsertWebhookState(params: {
     existing?.lastEventHash === params.eventHash &&
     existing.lastEventAtMs !== null &&
     nowMs - existing.lastEventAtMs < DEBOUNCE_MS;
+
+  if (duplicate) {
+    webhookStateByAgentPath.set(params.agentPath, {
+      instructionsSentAtMs: existing?.instructionsSentAtMs ?? null,
+      lastEventHash: existing?.lastEventHash ?? null,
+      lastEventAtMs: existing?.lastEventAtMs ?? null,
+      lastSeenAtMs: nowMs,
+    });
+    return { includeInstructions: false, duplicate: true };
+  }
 
   const includeInstructions =
     !existing?.instructionsSentAtMs || nowMs - existing.instructionsSentAtMs > INSTRUCTIONS_TTL_MS;
