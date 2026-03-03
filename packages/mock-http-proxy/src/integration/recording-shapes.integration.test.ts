@@ -137,4 +137,59 @@ describe("records mocked request/response shapes", () => {
     expect(entry?.response.content.mimeType).toContain("text/event-stream");
     expect(entry?.response.content.text).toBe(sseBody);
   });
+
+  test("records handled msw request + response", async () => {
+    const harPath = join(tmpDir.path, "handled-msw.har");
+
+    await using server = await useMockHttpServer({
+      recorder: { harPath, includeHandledRequests: true },
+      onUnhandledRequest: "error",
+    });
+    server.use(
+      http.post("https://api.example.com/echo", async ({ request }) => {
+        const body = (await request.json()) as { message?: string };
+        return HttpResponse.json(
+          { ok: true, echoed: body.message ?? null },
+          { status: 201, headers: { "x-msw-handler": "echo" } },
+        );
+      }),
+    );
+
+    const response = await fetch(`${server.url}/echo?source=msw`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-client-id": "msw-handled-test",
+        forwarded: "for=203.0.113.42; host=api.example.com; proto=https",
+      },
+      body: JSON.stringify({ message: "hello-from-client" }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ ok: true, echoed: "hello-from-client" });
+
+    await server.writeHar();
+    const har = await readHar(harPath);
+    const entry = har.log.entries.find(
+      (candidate) => candidate.request.url === "https://api.example.com/echo?source=msw",
+    );
+    expect(entry).toBeDefined();
+    if (!entry) {
+      throw new Error("expected handled msw entry in HAR");
+    }
+
+    expect(entry.request.method).toBe("POST");
+    expect(
+      entry.request.headers.some(
+        (header) =>
+          header.name.toLowerCase() === "x-client-id" && header.value === "msw-handled-test",
+      ),
+    ).toBe(true);
+    expect(entry.response.status).toBe(201);
+    expect(
+      entry.response.headers.some(
+        (header) => header.name.toLowerCase() === "x-msw-handler" && header.value === "echo",
+      ),
+    ).toBe(true);
+  });
 });
