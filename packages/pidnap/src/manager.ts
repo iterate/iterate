@@ -53,12 +53,25 @@ export type EnvOptions = v.InferOutput<typeof EnvOptions>;
 export const DependencyCondition = v.picklist(["completed", "healthy", "started"]);
 export type DependencyCondition = v.InferOutput<typeof DependencyCondition>;
 
+/** Sentinel file dependency: wait for a file to exist before starting. */
+export const SentinelDependency = v.object({
+  type: v.literal("sentinel"),
+  /** Absolute or relative path to the sentinel file. */
+  path: v.string(),
+  /** Timeout before giving up (ms). Default: 60000 (60s). */
+  timeout: v.optional(v.number()),
+  /** Poll interval (ms). Default: 1000 (1s). */
+  pollInterval: v.optional(v.number()),
+});
+export type SentinelDependency = v.InferOutput<typeof SentinelDependency>;
+
 export const ProcessDependency = v.union([
   v.string(), // shorthand: just process name (condition defaults based on target's restartPolicy)
   v.object({
     process: v.string(),
     condition: v.optional(DependencyCondition),
   }),
+  SentinelDependency,
 ]);
 export type ProcessDependency = v.InferOutput<typeof ProcessDependency>;
 
@@ -725,6 +738,7 @@ export class Manager {
     this.stateChangeUnsubscribes.delete(name);
     this.schedulers.get(name)?.stop();
     this.schedulers.delete(name);
+    this.dependencyResolver.stopSentinelWatchers(name);
     this.envManager.unregisterCustomFile(name);
     this.envReloadConfig.delete(name);
     const timer = this.envReloadTimers.get(name);
@@ -914,6 +928,13 @@ export class Manager {
       }
     }
 
+    // Start sentinel watchers for processes that have sentinel deps but aren't yet met
+    for (const entry of entries) {
+      if (this.dependencyResolver.hasSentinelDependencies(entry.name)) {
+        this.startSentinelWatchersForProcess(entry.name);
+      }
+    }
+
     // Start processes with no dependencies (unless they have a schedule and runOnStart is false)
     for (const entry of entries) {
       if (this.dependencyResolver.areDependenciesMet(entry.name)) {
@@ -951,6 +972,44 @@ export class Manager {
 
     this.schedulers.set(entry.name, scheduler);
     this.logger.info(`Scheduled process ${entry.name} with cron: ${cronExpr}`);
+  }
+
+  /**
+   * Start sentinel file watchers for a process.
+   * When all sentinels are met, attempts to start the process if other deps are also met.
+   */
+  private startSentinelWatchersForProcess(processName: string): void {
+    this.dependencyResolver.startSentinelWatchers(
+      processName,
+      () => {
+        // All sentinels met - try starting if process deps are also met
+        this.logger.info(`All sentinel files found for process "${processName}"`);
+        this.tryStartProcessAfterDeps(processName);
+      },
+      (path) => {
+        this.logger.error(
+          `Sentinel file "${path}" timed out for process "${processName}"`,
+        );
+      },
+    );
+  }
+
+  /**
+   * Try to start a process after sentinel/process dependencies change.
+   * Only starts if all deps (both process and sentinel) are met.
+   */
+  private tryStartProcessAfterDeps(processName: string): void {
+    if (this._state !== "running") return;
+    const proc = this.restartingProcesses.get(processName);
+    if (!proc || proc.state !== "idle") return;
+
+    const entry = this.getProcessEntryByName(processName);
+    if ((entry?.desiredState ?? "running") === "stopped") return;
+
+    if (this.dependencyResolver.areDependenciesMet(processName)) {
+      proc.start();
+      this.logger.info(`Started process: ${processName} (all dependencies met)`);
+    }
   }
 
   /**
@@ -1053,6 +1112,9 @@ export class Manager {
       scheduler.stop();
     }
     this.schedulers.clear();
+
+    // Stop all sentinel watchers
+    this.dependencyResolver.stopAllSentinelWatchers();
 
     // Unsubscribe from env changes
     if (this.envChangeUnsubscribe) {
