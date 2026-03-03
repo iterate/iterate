@@ -32,6 +32,7 @@ const DEFAULT_LOCAL_OS_PORT = 5173;
 const LOCAL_OS_PORT_SCAN_RANGE = 10;
 const DEV_ITERATE_HOST_PATTERN = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)+dev\.iterate\.com(?::\d+)?/i;
 const DEV_ITERATE_HOST_CAPTURE = /(?:https?:\/\/)?((?:[a-z0-9-]+\.)+dev\.iterate\.com)(?::\d+)?/i;
+const DEPOT_SHA_TAG_PATTERN = /^registry\.depot\.dev\/.+:(sha-[a-z0-9._-]+)$/i;
 
 // Port definitions matching backend/daemons.ts
 const DAEMON_PORTS = [
@@ -301,7 +302,7 @@ export class DockerProvider extends SandboxProvider {
   }
 
   async create(opts: CreateSandboxOptions): Promise<DockerSandbox> {
-    const imageName = resolveBaseImage({
+    let imageName = resolveBaseImage({
       imageName: opts.providerSnapshotId ?? this.defaultSnapshotId,
     });
     const entrypointArguments = opts.entrypointArguments;
@@ -329,6 +330,23 @@ export class DockerProvider extends SandboxProvider {
       binds.push(`${this.gitInfo.repoRoot}:/host/repo-checkout:ro`);
       binds.push(`${this.gitInfo.gitDir}:/host/gitdir:ro`);
       binds.push(`${this.gitInfo.commonDir}:/host/commondir:ro`);
+    }
+
+    const projectId = opts.envVars.ITERATE_PROJECT_ID;
+    if (projectId) {
+      const persistVolume = `iterate-persist-${projectId}`;
+      await dockerApi({
+        method: "POST",
+        endpoint: "/volumes/create",
+        body: {
+          Name: persistVolume,
+          Labels: {
+            "com.iterate.persist": "true",
+            "com.iterate.project_id": projectId,
+          },
+        },
+      });
+      binds.push(`${persistVolume}:/mnt/persist`);
     }
 
     const shouldResolveLocalOsPort = Object.values(opts.envVars).some((value) =>
@@ -383,20 +401,37 @@ export class DockerProvider extends SandboxProvider {
       ExtraHosts: ["host.docker.internal:host-gateway"],
     };
 
-    const createResponse = await dockerApi<{ Id: string }>({
-      method: "POST",
-      endpoint: `/containers/create?name=${encodeURIComponent(containerName)}`,
-      body: {
-        Image: imageName,
-        ...(hasEntrypointArguments ? { Cmd: entrypointArguments } : {}),
-        Env: envArray,
-        ExposedPorts: exposedPorts,
-        HostConfig: hostConfig,
-        Labels: labels,
-      },
-    }).catch((error) => {
-      throw withDockerImagePullHint({ error, imageName });
-    });
+    const createContainer = async (candidateImageName: string) =>
+      dockerApi<{ Id: string }>({
+        method: "POST",
+        endpoint: `/containers/create?name=${encodeURIComponent(containerName)}`,
+        body: {
+          Image: candidateImageName,
+          ...(hasEntrypointArguments ? { Cmd: entrypointArguments } : {}),
+          Env: envArray,
+          ExposedPorts: exposedPorts,
+          HostConfig: hostConfig,
+          Labels: labels,
+        },
+      });
+
+    let createResponse: { Id: string };
+    try {
+      createResponse = await createContainer(imageName);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const depotMatch = imageName.match(DEPOT_SHA_TAG_PATTERN);
+      if (/No such image:/i.test(message) && depotMatch) {
+        const shaTag = depotMatch[1];
+        const fallbackImageName = `registry.fly.io/iterate-sandbox:${shaTag}`;
+        createResponse = await createContainer(fallbackImageName).catch((fallbackError) => {
+          throw withDockerImagePullHint({ error: fallbackError, imageName: fallbackImageName });
+        });
+        imageName = fallbackImageName;
+      } else {
+        throw withDockerImagePullHint({ error, imageName });
+      }
+    }
 
     const containerId = createResponse.Id;
     await dockerApi({ method: "POST", endpoint: `/containers/${containerId}/start`, body: {} });

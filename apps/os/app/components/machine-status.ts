@@ -56,5 +56,12 @@ export function getMachineStatus(
     return { loading: true, label: `${current}. Running ${consumerLabel}...` };
   }
 
-  return { label: `Status: ${current}. Waiting for daemon...`, loading: true };
+  const minutesAgo = (Date.now() - new Date(lastEvent?.createdAt || Date.now()).getTime()) / 60_000;
+  if (minutesAgo > 1) {
+    const unit = minutesAgo >= 2 ? "minutes" : "minute";
+    const label = `Status: ${current}, but no status from daemon for ${Math.floor(minutesAgo)} ${unit}.`;
+    return { label, loading: false, errored: true };
+  }
+
+  return { label: `Status: ${current}.  Waiting for daemon...`, loading: true };
 }

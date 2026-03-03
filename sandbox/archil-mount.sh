@@ -18,14 +18,40 @@ set -euo pipefail
 HOME_DIR="/home/iterate"
 PERSIST="/mnt/persist"
 
+setup_symlinks() {
+  sudo mkdir -p "${PERSIST}/persisted"
+  sudo mkdir -p "${PERSIST}/.local/share"
+  sudo chown -R iterate:iterate "${PERSIST}/persisted"
+  sudo chown -R iterate:iterate "${PERSIST}/.local"
+
+  ln -sfn "${PERSIST}/persisted" "${HOME_DIR}/persisted"
+  echo "[archil] ~/persisted → ${PERSIST}/persisted"
+
+  rm -rf "${HOME_DIR}/.local/share"
+  mkdir -p "${HOME_DIR}/.local"
+  ln -sfn "${PERSIST}/.local/share" "${HOME_DIR}/.local/share"
+  echo "[archil] ~/.local/share → ${PERSIST}/.local/share"
+
+  touch /tmp/archil-repo-ready
+  echo "[archil] Setup complete, repo ready"
+}
+
 # Source env vars from .env files if not already set via process env
 if [[ -z "${ARCHIL_DISK_NAME:-}" ]] && [[ -f "${HOME_DIR}/.iterate/.env" ]]; then
   eval "$(grep -E '^(ARCHIL_DISK_NAME|ARCHIL_MOUNT_TOKEN|ARCHIL_REGION)=' "${HOME_DIR}/.iterate/.env")"
 fi
 
 if [[ -z "${ARCHIL_DISK_NAME:-}" ]]; then
-  echo "[archil] No ARCHIL_DISK_NAME set, skipping mount"
-  touch /tmp/archil-repo-ready
+  echo "[archil] No ARCHIL_DISK_NAME set, using local persist dir"
+  sudo mkdir -p "${PERSIST}"
+  setup_symlinks
+  exec sleep infinity
+fi
+
+if [[ ! -e /dev/fuse ]]; then
+  echo "[archil] /dev/fuse unavailable, using local persist dir"
+  sudo mkdir -p "${PERSIST}"
+  setup_symlinks
   exec sleep infinity
 fi
 
@@ -60,27 +86,11 @@ sudo mkdir -p "$PERSIST"
   sudo chown iterate:iterate "$PERSIST"
 
   # Create persistent directories on the volume (sudo needed — FUSE mount is root-owned)
-  sudo mkdir -p "${PERSIST}/persisted"
-  sudo mkdir -p "${PERSIST}/.local/share"
-  sudo chown -R iterate:iterate "${PERSIST}/persisted"
-  sudo chown -R iterate:iterate "${PERSIST}/.local"
-
-  # Symlink ~/persisted → /mnt/persist/persisted
-  ln -sfn "${PERSIST}/persisted" "${HOME_DIR}/persisted"
-  echo "[archil] ~/persisted → ${PERSIST}/persisted"
-
-  # Symlink ~/.local/share → /mnt/persist/.local/share
+  # Symlink persistent directories and signal ready.
   # Everything under ~/.local/share is persisted: opencode sessions,
   # daemon DB, events-service DB, and anything else apps put here (XDG convention).
   # mitmproxy is installed to /opt/mitmproxy (not ~/.local/share) to avoid conflicts.
-  rm -rf "${HOME_DIR}/.local/share"
-  mkdir -p "${HOME_DIR}/.local"
-  ln -sfn "${PERSIST}/.local/share" "${HOME_DIR}/.local/share"
-  echo "[archil] ~/.local/share → ${PERSIST}/.local/share"
-
-  # Signal ready — dependents (opencode, daemon, etc.) can start now
-  touch /tmp/archil-repo-ready
-  echo "[archil] Setup complete, repo ready"
+  setup_symlinks
 ) &
 
 # --force: claim ownership even if stale delegation exists from a previous machine.
