@@ -61,23 +61,24 @@ sudo mkdir -p "$PERSIST"
 
   # Create persistent directories on the volume (sudo needed — FUSE mount is root-owned)
   sudo mkdir -p "${PERSIST}/persisted"
-  sudo mkdir -p "${PERSIST}/.local/share/opencode"
-  sudo mkdir -p "${PERSIST}/.local/share/daemon"
-  sudo mkdir -p "${PERSIST}/.local/share/events-service"
+  sudo mkdir -p "${PERSIST}/.local-share/opencode"
+  sudo mkdir -p "${PERSIST}/.local-share/daemon"
+  sudo mkdir -p "${PERSIST}/.local-share/events-service"
   sudo chown -R iterate:iterate "${PERSIST}/persisted"
-  sudo chown -R iterate:iterate "${PERSIST}/.local"
+  sudo chown -R iterate:iterate "${PERSIST}/.local-share"
 
   # Symlink ~/persisted → /mnt/persist/persisted
   ln -sfn "${PERSIST}/persisted" "${HOME_DIR}/persisted"
   echo "[archil] ~/persisted → ${PERSIST}/persisted"
 
-  # Symlink ~/.local/share → /mnt/persist/.local/share
-  # This covers opencode (~/.local/share/opencode/), and any other XDG data dirs.
-  # Remove existing dir first (Docker image may have created it).
-  rm -rf "${HOME_DIR}/.local/share"
-  mkdir -p "${HOME_DIR}/.local"
-  ln -sfn "${PERSIST}/.local/share" "${HOME_DIR}/.local/share"
-  echo "[archil] ~/.local/share → ${PERSIST}/.local/share"
+  # Symlink individual ~/.local/share/<app> dirs to the archil volume.
+  # We can't symlink all of ~/.local/share because it also contains
+  # uv/tools/mitmproxy (baked into the Docker image at build time).
+  for app_dir in opencode daemon events-service; do
+    rm -rf "${HOME_DIR}/.local/share/${app_dir}"
+    ln -sfn "${PERSIST}/.local-share/${app_dir}" "${HOME_DIR}/.local/share/${app_dir}"
+    echo "[archil] ~/.local/share/${app_dir} → ${PERSIST}/.local-share/${app_dir}"
+  done
 
   # Signal ready — dependents (opencode, daemon, etc.) can start now
   touch /tmp/archil-repo-ready
