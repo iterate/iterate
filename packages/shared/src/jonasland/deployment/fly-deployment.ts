@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { CaddyClient } from "@accelerated-software-development/caddy-api-client";
 import { createRegistryClient } from "@iterate-com/registry-service/client";
+import createClient, { type Client } from "openapi-fetch";
 import pRetry from "p-retry";
 import pWaitFor from "p-wait-for";
 import { createClient as createPidnapClient } from "pidnap/client";
@@ -13,23 +14,7 @@ import {
   type DeploymentOpts,
 } from "./deployment.ts";
 import { isRetriableNetworkError, nodeHttpRequest, toEnvRecord } from "./deployment-utils.ts";
-import { createFlyApiClient, type FlyApiClient } from "./fly-api/client.ts";
-import {
-  appIpAssignmentsCreate,
-  appsCreate,
-  appsDelete,
-  machinesCreate,
-  machinesDelete,
-  machinesExec,
-  machinesList,
-  machinesRestart,
-  machinesStart,
-  machinesStop,
-  machinesWait,
-  type CreateMachineRequest,
-  type FlyMachineConfig,
-  type Machine,
-} from "./fly-api/generated/index.ts";
+import type { components, paths } from "./fly-api/generated/openapi.gen.ts";
 
 const NETWORK_RETRY_OPTS = {
   retries: 9,
@@ -49,6 +34,17 @@ const FLY_WAIT_TIMEOUT_SECONDS = 300;
 const FLY_MAX_WAIT_STEP_SECONDS = 60;
 const PIDNAP_LOG_TAIL_CMD =
   'for f in /var/log/pidnap/*.log; do echo "===== $f ====="; tail -n 200 "$f"; done 2>/dev/null || true';
+
+type FlyMachineLike = {
+  id?: string;
+  name?: string;
+  config?: {
+    metadata?: Record<string, string | undefined>;
+  };
+};
+
+type FlyCreateMachineRequest = components["schemas"]["CreateMachineRequest"];
+type FlyApiClient = Client<paths>;
 
 function sanitizeFlyNamePart(value: string): string {
   return value
@@ -113,10 +109,28 @@ function isWaitTimeoutError(error: unknown): boolean {
   );
 }
 
+function throwFlyApiError(params: {
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  path: string;
+  response: Response;
+  error: unknown;
+}): never {
+  let details = "";
+  try {
+    details = `: ${JSON.stringify(params.error)}`;
+  } catch {
+    details = `: ${String(params.error)}`;
+  }
+
+  throw new Error(
+    `Fly API request failed (${params.response.status}) ${params.method} ${params.path}${details}`,
+  );
+}
+
 function resolveSandboxMachine(params: {
-  machines: Machine[];
+  machines: FlyMachineLike[];
   preferredName: string;
-}): Machine | null {
+}): FlyMachineLike | null {
   const byName = params.machines.find((machine) => machine.name === params.preferredName);
   if (byName) return byName;
 
@@ -504,40 +518,70 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
     const machineId = await this.resolveMachineId();
 
     try {
-      await pRetry(
-        () =>
-          machinesRestart<true>({
-            client: this.requireFlyApiClient(),
-            path: {
-              app_name: appName,
-              machine_id: machineId,
+      await pRetry(async () => {
+        const { error, response } = await this.flyApi.POST(
+          "/apps/{app_name}/machines/{machine_id}/restart",
+          {
+            params: {
+              path: {
+                app_name: appName,
+                machine_id: machineId,
+              },
             },
-          }),
-        NETWORK_RETRY_OPTS,
-      );
+          },
+        );
+        if (error) {
+          throwFlyApiError({
+            method: "POST",
+            path: "/apps/{app_name}/machines/{machine_id}/restart",
+            response,
+            error,
+          });
+        }
+      }, NETWORK_RETRY_OPTS);
     } catch {
-      await pRetry(
-        () =>
-          machinesStop<true>({
-            client: this.requireFlyApiClient(),
-            path: {
-              app_name: appName,
-              machine_id: machineId,
+      await pRetry(async () => {
+        const { error, response } = await this.flyApi.POST(
+          "/apps/{app_name}/machines/{machine_id}/stop",
+          {
+            params: {
+              path: {
+                app_name: appName,
+                machine_id: machineId,
+              },
             },
-          }),
-        NETWORK_RETRY_OPTS,
-      ).catch(() => {});
-      await pRetry(
-        () =>
-          machinesStart<true>({
-            client: this.requireFlyApiClient(),
-            path: {
-              app_name: appName,
-              machine_id: machineId,
+          },
+        );
+        if (error) {
+          throwFlyApiError({
+            method: "POST",
+            path: "/apps/{app_name}/machines/{machine_id}/stop",
+            response,
+            error,
+          });
+        }
+      }, NETWORK_RETRY_OPTS).catch(() => {});
+      await pRetry(async () => {
+        const { error, response } = await this.flyApi.POST(
+          "/apps/{app_name}/machines/{machine_id}/start",
+          {
+            params: {
+              path: {
+                app_name: appName,
+                machine_id: machineId,
+              },
             },
-          }),
-        NETWORK_RETRY_OPTS,
-      );
+          },
+        );
+        if (error) {
+          throwFlyApiError({
+            method: "POST",
+            path: "/apps/{app_name}/machines/{machine_id}/start",
+            response,
+            error,
+          });
+        }
+      }, NETWORK_RETRY_OPTS);
     }
 
     await this.waitForMachineState({
@@ -569,26 +613,41 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
     const machineId = await this.resolveMachineId();
     const command = typeof cmd === "string" ? ["sh", "-ec", cmd] : cmd;
 
-    const response = await pRetry(
-      () =>
-        machinesExec<true>({
-          client: this.requireFlyApiClient(),
-          path: {
-            app_name: appName,
-            machine_id: machineId,
+    const result = await pRetry(async () => {
+      const { data, error, response } = await this.flyApi.POST(
+        "/apps/{app_name}/machines/{machine_id}/exec",
+        {
+          params: {
+            path: {
+              app_name: appName,
+              machine_id: machineId,
+            },
           },
           body: {
             command,
             timeout: 120,
           },
-        }),
-      NETWORK_RETRY_OPTS,
-    );
+        },
+      );
+      if (error) {
+        throwFlyApiError({
+          method: "POST",
+          path: "/apps/{app_name}/machines/{machine_id}/exec",
+          response,
+          error,
+        });
+      }
+      return data;
+    }, NETWORK_RETRY_OPTS);
 
-    const result = response.data;
-    const exitCode = result.exit_code ?? 0;
-    const stdout = result.stdout ?? "";
-    const stderr = result.stderr ?? "";
+    const execResponse = result as {
+      exit_code?: number;
+      stdout?: string;
+      stderr?: string;
+    };
+    const exitCode = execResponse.exit_code ?? 0;
+    const stdout = execResponse.stdout ?? "";
+    const stderr = execResponse.stderr ?? "";
 
     return {
       exitCode,
@@ -617,13 +676,16 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
     this.flyBaseDomain = flyBaseDomain;
     this.flyApiClient =
       opts.flyApiClient ??
-      createFlyApiClient({
-        apiToken: flyApiToken,
-        baseUrl: opts.flyApiBaseUrl,
+      createClient<paths>({
+        baseUrl: opts.flyApiBaseUrl ?? "https://api.machines.dev/v1",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${flyApiToken}`,
+        },
       });
   }
 
-  private requireFlyApiClient(): FlyApiClient {
+  private get flyApi(): FlyApiClient {
     if (!this.flyApiClient) {
       throw new Error("fly api client is not initialized");
     }
@@ -645,18 +707,25 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
   }
 
   private async resolveMachineIdForApp(appName: string): Promise<string> {
-    const response = await pRetry(
-      () =>
-        machinesList<true>({
-          client: this.requireFlyApiClient(),
+    const machines = await pRetry(async () => {
+      const { data, error, response } = await this.flyApi.GET("/apps/{app_name}/machines", {
+        params: {
           path: {
             app_name: appName,
           },
-        }),
-      NETWORK_RETRY_OPTS,
-    );
+        },
+      });
+      if (error) {
+        throwFlyApiError({
+          method: "GET",
+          path: "/apps/{app_name}/machines",
+          response,
+          error,
+        });
+      }
+      return data;
+    }, NETWORK_RETRY_OPTS);
 
-    const machines = response.data;
     if (!Array.isArray(machines)) {
       throw new Error(`Could not resolve machines for Fly app ${appName}`);
     }
@@ -675,8 +744,8 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
     appName: string;
     opts: FlyDeploymentOpts;
     envRecord: Record<string, string>;
-  }): CreateMachineRequest {
-    const machineConfig: FlyMachineConfig = {
+  }): FlyCreateMachineRequest {
+    const machineConfig: NonNullable<FlyCreateMachineRequest["config"]> = {
       image: params.opts.flyImage,
       env: {
         ...params.envRecord,
@@ -726,23 +795,32 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
 
   private async createMachine(appName: string, opts: FlyDeploymentOpts): Promise<string> {
     const envRecord = toEnvRecord(opts.env);
-    const createdMachine = await pRetry(
-      () =>
-        machinesCreate<true>({
-          client: this.requireFlyApiClient(),
+    const createdMachine = await pRetry(async () => {
+      const { data, error, response } = await this.flyApi.POST("/apps/{app_name}/machines", {
+        params: {
           path: {
             app_name: appName,
           },
-          body: this.buildMachineCreateRequest({
-            appName,
-            opts,
-            envRecord,
-          }),
+        },
+        body: this.buildMachineCreateRequest({
+          appName,
+          opts,
+          envRecord,
         }),
-      NETWORK_RETRY_OPTS,
-    );
+      });
+      if (error) {
+        throwFlyApiError({
+          method: "POST",
+          path: "/apps/{app_name}/machines",
+          response,
+          error,
+        });
+      }
+      return data;
+    }, NETWORK_RETRY_OPTS);
 
-    const machineId = createdMachine.data.id ?? (await this.resolveMachineIdForApp(appName));
+    const machineId =
+      (createdMachine as { id?: string }).id ?? (await this.resolveMachineIdForApp(appName));
     if (!machineId) {
       throw new Error(`Fly machine creation did not return an id for app ${appName}`);
     }
@@ -769,21 +847,31 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
 
       const stepTimeoutSeconds = Math.max(1, Math.min(remainingSeconds, FLY_MAX_WAIT_STEP_SECONDS));
       try {
-        await pRetry(
-          () =>
-            machinesWait<true>({
-              client: this.requireFlyApiClient(),
-              path: {
-                app_name: params.appName,
-                machine_id: params.machineId,
+        await pRetry(async () => {
+          const { error, response } = await this.flyApi.GET(
+            "/apps/{app_name}/machines/{machine_id}/wait",
+            {
+              params: {
+                path: {
+                  app_name: params.appName,
+                  machine_id: params.machineId,
+                },
+                query: {
+                  state: params.state,
+                  timeout: stepTimeoutSeconds,
+                },
               },
-              query: {
-                state: params.state,
-                timeout: stepTimeoutSeconds,
-              },
-            }),
-          NETWORK_RETRY_OPTS,
-        );
+            },
+          );
+          if (error) {
+            throwFlyApiError({
+              method: "GET",
+              path: "/apps/{app_name}/machines/{machine_id}/wait",
+              response,
+              error,
+            });
+          }
+        }, NETWORK_RETRY_OPTS);
         return;
       } catch (error) {
         if (!isWaitTimeoutError(error)) {
@@ -795,18 +883,23 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
 
   private async ensureAppExists(appName: string, opts: FlyDeploymentOpts): Promise<void> {
     try {
-      await pRetry(
-        () =>
-          appsCreate<true>({
-            client: this.requireFlyApiClient(),
-            body: {
-              name: appName,
-              org_slug: opts.flyOrgSlug ?? DEFAULT_FLY_ORG_SLUG,
-              ...(opts.flyNetwork ? { network: opts.flyNetwork } : {}),
-            },
-          }),
-        NETWORK_RETRY_OPTS,
-      );
+      await pRetry(async () => {
+        const { error, response } = await this.flyApi.POST("/apps", {
+          body: {
+            name: appName,
+            org_slug: opts.flyOrgSlug ?? DEFAULT_FLY_ORG_SLUG,
+            ...(opts.flyNetwork ? { network: opts.flyNetwork } : {}),
+          },
+        });
+        if (error) {
+          throwFlyApiError({
+            method: "POST",
+            path: "/apps",
+            response,
+            error,
+          });
+        }
+      }, NETWORK_RETRY_OPTS);
     } catch (error) {
       if (!isAlreadyExistsError(error)) {
         throw error;
@@ -817,21 +910,28 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
   private async ensureAppIngress(appName: string, opts: FlyDeploymentOpts): Promise<void> {
     const assignIp = async (ipType: "v6" | "shared_v4") => {
       try {
-        await pRetry(
-          () =>
-            appIpAssignmentsCreate<true>({
-              client: this.requireFlyApiClient(),
+        await pRetry(async () => {
+          const { error, response } = await this.flyApi.POST("/apps/{app_name}/ip_assignments", {
+            params: {
               path: {
                 app_name: appName,
               },
-              body: {
-                type: ipType,
-                org_slug: opts.flyOrgSlug ?? DEFAULT_FLY_ORG_SLUG,
-                ...(opts.flyNetwork ? { network: opts.flyNetwork } : {}),
-              },
-            }),
-          NETWORK_RETRY_OPTS,
-        );
+            },
+            body: {
+              type: ipType,
+              org_slug: opts.flyOrgSlug ?? DEFAULT_FLY_ORG_SLUG,
+              ...(opts.flyNetwork ? { network: opts.flyNetwork } : {}),
+            },
+          });
+          if (error) {
+            throwFlyApiError({
+              method: "POST",
+              path: "/apps/{app_name}/ip_assignments",
+              response,
+              error,
+            });
+          }
+        }, NETWORK_RETRY_OPTS);
       } catch (error) {
         if (!isAlreadyExistsError(error) && !isIpAlreadyAllocatedError(error)) {
           throw error;
@@ -850,32 +950,52 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
     const machineId =
       this.machineId ?? (await this.resolveMachineIdForApp(appName).catch(() => undefined));
     if (machineId) {
-      await pRetry(
-        () =>
-          machinesDelete<true>({
-            client: this.requireFlyApiClient(),
-            path: {
-              app_name: appName,
-              machine_id: machineId,
+      await pRetry(async () => {
+        const { error, response } = await this.flyApi.DELETE(
+          "/apps/{app_name}/machines/{machine_id}",
+          {
+            params: {
+              path: {
+                app_name: appName,
+                machine_id: machineId,
+              },
+              query: {
+                force: true,
+              },
             },
-            query: {
-              force: true,
-            },
-          }),
-        NETWORK_RETRY_OPTS,
-      ).catch((error) => {
+          },
+        );
+        if (error) {
+          throwFlyApiError({
+            method: "DELETE",
+            path: "/apps/{app_name}/machines/{machine_id}",
+            response,
+            error,
+          });
+        }
+      }, NETWORK_RETRY_OPTS).catch((error) => {
         if (!isNotFoundError(error)) throw error;
       });
     }
 
     await pRetry(
-      () =>
-        appsDelete<true>({
-          client: this.requireFlyApiClient(),
-          path: {
-            app_name: appName,
+      async () => {
+        const { error, response } = await this.flyApi.DELETE("/apps/{app_name}", {
+          params: {
+            path: {
+              app_name: appName,
+            },
           },
-        }),
+        });
+        if (error) {
+          throwFlyApiError({
+            method: "DELETE",
+            path: "/apps/{app_name}",
+            response,
+            error,
+          });
+        }
+      },
       {
         retries: 8,
         minTimeout: 500,

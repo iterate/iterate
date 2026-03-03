@@ -52,3 +52,27 @@ For a new provider, implement:
 
 - Docker: `{ provider: "docker", containerId, name? }`
 - Fly: `{ provider: "fly", appName, machineId? }`
+
+## Fly API Schema + Type Regeneration (JONASLAND)
+
+Source spec (official Fly Machines OpenAPI):
+
+- https://docs.machines.dev/spec/openapi3.json
+
+Refresh local snapshot:
+
+```bash
+curl -fsSL https://docs.machines.dev/spec/openapi3.json \
+  -o packages/shared/src/jonasland/deployment/fly-api/openapi/openapi3.json
+```
+
+Regenerate typed paths:
+
+```bash
+pnpm --filter @iterate-com/shared exec openapi-typescript \
+  ./src/jonasland/deployment/fly-api/openapi/openapi3.json \
+  --generate-path-params \
+  -o ./src/jonasland/deployment/fly-api/generated/openapi.gen.ts
+```
+
+`--generate-path-params` is required because Fly's published spec may omit path parameter declarations.

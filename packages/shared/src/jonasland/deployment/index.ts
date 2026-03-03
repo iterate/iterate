@@ -21,8 +21,7 @@ export {
   type FlyDeploymentLocator,
   type FlyDeploymentOpts,
 } from "./fly-deployment.ts";
-export { createFlyApiClient, type FlyApiClient, type FlyApiClientOpts } from "./fly-api/client.ts";
-export * as flyApi from "./fly-api/generated/index.ts";
+export * as flyApi from "./fly-api/generated/openapi.gen.ts";
 export {
   onDemandProcesses,
   type DocsSourcesPayload,
