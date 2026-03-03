@@ -20,7 +20,6 @@ const DEBOUNCE_MS = 30_000;
 const PR_MAPPING_TTL_MS = 60 * 24 * 60 * 60 * 1000;
 const STATE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const BUFFER_TTL_MS = 2 * 60 * 60 * 1000;
-const INSTRUCTIONS_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const NON_GITHUB_PATH_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
 const AppSlug =
@@ -176,7 +175,6 @@ const bufferedSignalsByAgentPath = new Map<string, BufferedSignal[]>();
 const webhookStateByAgentPath = new Map<
   string,
   {
-    instructionsSentAtMs: number | null;
     lastEventHash: string | null;
     lastEventAtMs: number | null;
     lastSeenAtMs: number;
@@ -232,7 +230,7 @@ githubRouter.post("/webhook", async (c) => {
       const agentPath = resolution.agentPath;
 
       const eventHash = hashSignal(signal, input.deliveryId);
-      const { includeInstructions, duplicate } = await upsertWebhookState({
+      const { duplicate } = await upsertWebhookState({
         agentPath,
         eventHash,
       });
@@ -259,7 +257,7 @@ githubRouter.post("/webhook", async (c) => {
       });
 
       if (signal.immediate) {
-        const prompt = await buildPrompt({ signal, agentPath, includeInstructions });
+        const prompt = await buildPrompt({ signal });
         await postPromptToAgent(agentPath, prompt);
         logger.debug("[daemon/github] Forwarded immediate signal to agent", {
           deliveryId: input.deliveryId,
@@ -651,7 +649,7 @@ function hashSignal(signal: ResolvedPrSignal, deliveryId: string): string {
 async function upsertWebhookState(params: {
   agentPath: string;
   eventHash: string;
-}): Promise<{ includeInstructions: boolean; duplicate: boolean }> {
+}): Promise<{ duplicate: boolean }> {
   const nowMs = Date.now();
   const existing = webhookStateByAgentPath.get(params.agentPath);
 
@@ -662,38 +660,26 @@ async function upsertWebhookState(params: {
 
   if (duplicate) {
     webhookStateByAgentPath.set(params.agentPath, {
-      instructionsSentAtMs: existing?.instructionsSentAtMs ?? null,
       lastEventHash: existing?.lastEventHash ?? null,
       lastEventAtMs: existing?.lastEventAtMs ?? null,
       lastSeenAtMs: nowMs,
     });
-    return { includeInstructions: false, duplicate: true };
+    return { duplicate: true };
   }
 
-  const includeInstructions =
-    !existing?.instructionsSentAtMs || nowMs - existing.instructionsSentAtMs > INSTRUCTIONS_TTL_MS;
-
   webhookStateByAgentPath.set(params.agentPath, {
-    instructionsSentAtMs: includeInstructions ? nowMs : (existing?.instructionsSentAtMs ?? null),
     lastEventHash: params.eventHash,
     lastEventAtMs: nowMs,
     lastSeenAtMs: nowMs,
   });
 
-  return { includeInstructions, duplicate };
+  return { duplicate };
 }
 
-async function buildPrompt(params: {
-  signal: ResolvedPrSignal;
-  agentPath: string;
-  includeInstructions: boolean;
-}): Promise<string> {
-  const { signal, includeInstructions } = params;
+async function buildPrompt(params: { signal: ResolvedPrSignal }): Promise<string> {
+  const { signal } = params;
   const summary = `[github] ${signal.repo.fullName}#${signal.prNumber} ${signal.eventKind}/${signal.action} by ${signal.actorLogin}${signal.eventUrl ? ` ${signal.eventUrl}` : ""}`;
   const body = compactText(signal.eventBody, 600);
-  if (!includeInstructions) {
-    return body ? `${summary}\n\n${body}` : summary;
-  }
   return body ? `${summary}\n\n${body}` : summary;
 }
 
@@ -774,7 +760,6 @@ async function flushBufferedRows(
   }
 
   for (const [bucketKey, bucketRows] of byBucket) {
-    const includeInstructions = await markSeenAndCheckInstructions(agentPath);
     const events = bucketRows
       .map((row) => {
         const payload = row.payload as {
@@ -788,16 +773,7 @@ async function flushBufferedRows(
       })
       .join("\n");
 
-    const prompt = [
-      `[GitHub PR Event Batch] ${bucketKey}`,
-      `${bucketRows.length} events in last ${Math.round(DEBOUNCE_MS / 1000)}s.`,
-      events,
-      includeInstructions
-        ? "\nGuidance: handle the latest CI signal first, then only revisit older failures if still relevant."
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
+    const prompt = [`[github-batch] ${bucketKey}`, events].filter(Boolean).join("\n");
 
     try {
       await postPromptToAgent(agentPath, prompt);
@@ -815,22 +791,6 @@ async function flushBufferedRows(
   }
 
   return flushedRows;
-}
-
-async function markSeenAndCheckInstructions(agentPath: string): Promise<boolean> {
-  const nowMs = Date.now();
-  const existing = webhookStateByAgentPath.get(agentPath);
-  const includeInstructions =
-    !existing?.instructionsSentAtMs || nowMs - existing.instructionsSentAtMs > INSTRUCTIONS_TTL_MS;
-
-  webhookStateByAgentPath.set(agentPath, {
-    instructionsSentAtMs: includeInstructions ? nowMs : (existing?.instructionsSentAtMs ?? null),
-    lastEventHash: existing?.lastEventHash ?? null,
-    lastEventAtMs: existing?.lastEventAtMs ?? null,
-    lastSeenAtMs: nowMs,
-  });
-
-  return includeInstructions;
 }
 
 async function pruneExpiredState(): Promise<void> {
