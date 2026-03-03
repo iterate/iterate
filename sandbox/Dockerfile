@@ -118,10 +118,12 @@ ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 # ~/.local/share is symlinked to archil persistent storage at runtime, so nothing
 # baked into the image should live there.
 RUN curl -fsSL https://astral.sh/uv/install.sh | sh
-RUN sudo mkdir -p /opt/mitmproxy && sudo chown iterate:iterate /opt/mitmproxy && \
+RUN sudo mkdir -p /opt/mitmproxy /opt/uv/python && \
+    sudo chown -R iterate:iterate /opt/mitmproxy /opt/uv && \
     UV_TOOL_DIR=/opt/mitmproxy/tools UV_TOOL_BIN_DIR=/opt/mitmproxy/bin \
-    uv tool install mitmproxy==${SANDBOX_MITMPROXY_VERSION} && \
-    chmod -R a+rX /opt/mitmproxy
+    UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    uv tool install --python 3.12 mitmproxy==${SANDBOX_MITMPROXY_VERSION} && \
+    chmod -R a+rX /opt/mitmproxy /opt/uv
 ENV PATH="/opt/mitmproxy/bin:$PATH"
 
 # Generate mitmproxy CA certificate at build time.
