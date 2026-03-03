@@ -103,7 +103,8 @@ describe("fromTrafficWithWebSocket", () => {
 
     const httpResponse = await fetch(`${server.url}/hello`, {
       headers: {
-        forwarded: "for=203.0.113.42; host=api.example.com; proto=https",
+        "x-forwarded-host": "api.example.com",
+        "x-forwarded-proto": "https",
       },
     });
     expect(httpResponse.status).toBe(200);

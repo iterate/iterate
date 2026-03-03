@@ -13,7 +13,6 @@ import {
 } from "./msw-server-adapter.ts";
 import { incomingHeadersToHeaders } from "./http-utils.ts";
 import { bridgeWebSocketToUpstream, firstHeaderValue } from "./websocket-upstream-bridge.ts";
-import { buildForwardedHeader } from "@iterate-com/shared/forwarded-header";
 import type * as msw from "msw";
 import type * as mswNode from "msw/node";
 import type { Har } from "har-format";
@@ -34,13 +33,13 @@ export type UseMockHttpServerOptions = {
   host?: string;
   /**
    * Rewrite the incoming HTTP request before MSW handler resolution.
-   * Defaults to the standard `Forwarded` header rewriter.
+   * Defaults to `x-forwarded-host`/`x-forwarded-proto` URL rewriting.
    * Pass `false` to disable rewriting entirely.
    */
   transformRequest?: TransformRequest | false;
   /**
    * Rewrite the incoming WebSocket upgrade URL before MSW handler resolution.
-   * Defaults to the standard `Forwarded` header rewriter.
+   * Defaults to `x-forwarded-host`/`x-forwarded-proto` URL rewriting.
    * Pass `false` to disable rewriting entirely.
    */
   transformWebSocketUrl?: TransformWebSocketUrl | false;
@@ -353,11 +352,6 @@ export async function useMitmProxy(options: UseMitmProxyOptions): Promise<MitmPr
   await mitmServer.forAnyRequest().thenCallback(async (req) => {
     const originalUrl = toOriginalUrl(req.url, req.headers);
     const bodyBuffer = req.body ? await req.body.getDecodedBuffer() : undefined;
-    const forwarded = buildForwardedHeader({
-      for: req.remoteIpAddress,
-      host: originalUrl.host,
-      proto: originalUrl.protocol,
-    });
 
     const headers = new Headers();
     for (const [name, value] of Object.entries(req.headers)) {
@@ -370,9 +364,8 @@ export async function useMitmProxy(options: UseMitmProxyOptions): Promise<MitmPr
       }
     }
     headers.set("host", egressUrl.host);
-    if (forwarded) {
-      headers.set("forwarded", forwarded);
-    }
+    headers.set("x-forwarded-host", originalUrl.host);
+    headers.set("x-forwarded-proto", originalUrl.protocol.replace(/:$/, ""));
 
     const response = await request(
       `${options.externalEgressProxyUrl}${originalUrl.pathname}${originalUrl.search}`,

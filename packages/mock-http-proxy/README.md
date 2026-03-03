@@ -7,7 +7,7 @@ Private workspace package for outbound HTTP/WebSocket egress mocking, passthroug
 - `src/server/`
   - `mock-http-server-fixture.ts`: main fixture (`useMockHttpServer`, `useMitmProxy`, `useTemporaryDirectory`)
   - `msw-server-adapter.ts`: HTTP + websocket bridge to MSW handlers
-  - `proxy-request-transform.ts`: `Forwarded`-header URL rewrite helpers
+  - `proxy-request-transform.ts`: `x-forwarded-host`/`x-forwarded-proto` URL rewrite helpers
 - `src/har/`
   - `har-recorder.ts`: recorder API (`HarRecorder`)
   - `har-journal.ts`, `har-serialize.ts`: HAR assembly internals

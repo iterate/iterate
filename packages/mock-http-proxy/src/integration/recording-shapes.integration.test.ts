@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { buildForwardedHeader } from "@iterate-com/shared/forwarded-header";
 import { HttpResponse, http } from "msw";
 import { describe, expect, test } from "vitest";
 import type { HarWithExtensions } from "../har/har-extensions.ts";
@@ -11,16 +10,9 @@ async function readHar(path: string): Promise<HarWithExtensions> {
 }
 
 function proxyHeaders(host: string): Record<string, string> {
-  const forwarded = buildForwardedHeader({
-    for: "203.0.113.42",
-    host,
-    proto: "https",
-  });
-  if (!forwarded) {
-    throw new Error("expected forwarded header value");
-  }
   return {
-    forwarded,
+    "x-forwarded-host": host,
+    "x-forwarded-proto": "https",
   };
 }
 
@@ -160,7 +152,8 @@ describe("records mocked request/response shapes", () => {
       headers: {
         "content-type": "application/json",
         "x-client-id": "msw-handled-test",
-        forwarded: "for=203.0.113.42; host=api.example.com; proto=https",
+        "x-forwarded-host": "api.example.com",
+        "x-forwarded-proto": "https",
       },
       body: JSON.stringify({ message: "hello-from-client" }),
     });

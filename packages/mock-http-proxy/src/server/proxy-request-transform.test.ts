@@ -1,53 +1,24 @@
-import { buildForwardedHeader, parseForwardedHeader } from "@iterate-com/shared/forwarded-header";
 import { describe, expect, test } from "vitest";
 import {
   createProxyRequestTransform,
   createProxyWebSocketUrlTransform,
 } from "./proxy-request-transform.ts";
 
-describe("forwarded-header shared utility", () => {
-  test("builds canonical forwarded header", () => {
-    const value = buildForwardedHeader({
-      for: "203.0.113.42",
-      host: "external.example.com",
-      proto: "https:",
-    });
-    expect(value).toBe("for=203.0.113.42; host=external.example.com; proto=https");
-  });
-
-  test("omits for when unavailable", () => {
-    const value = buildForwardedHeader({
-      host: "external.example.com",
-      proto: "https",
-    });
-    expect(value).toBe("host=external.example.com; proto=https");
-  });
-
-  test("parses first forwarded entry", () => {
-    const parsed = parseForwardedHeader(
-      "for=203.0.113.42; host=external.example.com; proto=https, for=10.0.0.1; host=ignored.test",
-    );
-    expect(parsed).toEqual({
-      for: "203.0.113.42",
-      host: "external.example.com",
-      proto: "https",
-    });
-  });
-});
-
 describe("createProxyRequestTransform", () => {
-  test("rewrites HTTP request using forwarded header only", () => {
+  test("rewrites HTTP request using x-forwarded headers", () => {
     const transform = createProxyRequestTransform();
     const request = new Request("http://127.0.0.1:9000/v1/models?x=1", {
       headers: {
-        forwarded: "for=203.0.113.42; host=api.example.com; proto=https",
+        "x-forwarded-host": "api.example.com",
+        "x-forwarded-proto": "https",
       },
     });
 
     const transformed = transform(request);
     expect(transformed.url).toBe("https://api.example.com/v1/models?x=1");
     expect(transformed.headers.get("host")).toBe("api.example.com");
-    expect(transformed.headers.get("forwarded")).toBeNull();
+    expect(transformed.headers.get("x-forwarded-host")).toBeNull();
+    expect(transformed.headers.get("x-forwarded-proto")).toBeNull();
   });
 
   test("does not use non-standard proxy hint headers", () => {
@@ -62,21 +33,35 @@ describe("createProxyRequestTransform", () => {
     const transformed = transform(request);
     expect(new URL(transformed.url).host).toBe("127.0.0.1:9000");
   });
+
+  test("accepts x-forwarded-proto values with trailing colon", () => {
+    const transform = createProxyRequestTransform();
+    const request = new Request("http://127.0.0.1:9000/v1/models", {
+      headers: {
+        "x-forwarded-host": "api.example.com",
+        "x-forwarded-proto": "https:",
+      },
+    });
+
+    const transformed = transform(request);
+    expect(transformed.url).toBe("https://api.example.com/v1/models");
+  });
 });
 
 describe("createProxyWebSocketUrlTransform", () => {
-  test("rewrites websocket URL using forwarded header", () => {
+  test("rewrites websocket URL using x-forwarded headers", () => {
     const transform = createProxyWebSocketUrlTransform();
     const transformed = transform(
       new URL("ws://127.0.0.1:9000/realtime"),
       new Headers({
-        forwarded: "for=203.0.113.42; host=external.example.com; proto=https",
+        "x-forwarded-host": "external.example.com",
+        "x-forwarded-proto": "https",
       }),
     );
     expect(transformed.toString()).toBe("wss://external.example.com/realtime");
   });
 
-  test("defaults websocket URL scheme to ws for loopback hosts without forwarded proto", () => {
+  test("defaults websocket URL scheme to ws for loopback hosts without x-forwarded-proto", () => {
     const transform = createProxyWebSocketUrlTransform();
     const transformed = transform(
       new URL("ws://127.0.0.1:9000/realtime"),
@@ -87,7 +72,7 @@ describe("createProxyWebSocketUrlTransform", () => {
     expect(transformed.toString()).toBe("ws://127.0.0.1:9001/realtime");
   });
 
-  test("defaults websocket URL scheme to wss for external hosts without forwarded proto", () => {
+  test("defaults websocket URL scheme to wss for external hosts without x-forwarded-proto", () => {
     const transform = createProxyWebSocketUrlTransform();
     const transformed = transform(
       new URL("ws://127.0.0.1:9000/realtime"),

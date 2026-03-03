@@ -1,9 +1,12 @@
 import type { TransformRequest, TransformWebSocketUrl } from "./msw-server-adapter.ts";
-import { parseForwardedHeader } from "@iterate-com/shared/forwarded-header";
 
-const FORWARDED_HEADER = "forwarded";
+const X_FORWARDED_HOST_HEADER = "x-forwarded-host";
+const X_FORWARDED_PROTO_HEADER = "x-forwarded-proto";
 
-const PROXY_HEADERS_TO_STRIP: ReadonlySet<string> = new Set([FORWARDED_HEADER]);
+const PROXY_HEADERS_TO_STRIP: ReadonlySet<string> = new Set([
+  X_FORWARDED_HOST_HEADER,
+  X_FORWARDED_PROTO_HEADER,
+]);
 
 function isLoopbackHost(host: string): boolean {
   const name =
@@ -14,12 +17,15 @@ function isLoopbackHost(host: string): boolean {
   return name === "localhost" || name === "::1" || name === "127.0.0.1" || name.startsWith("127.");
 }
 
+function normalizeProto(value: string): string {
+  return value.trim().toLowerCase().replace(/:$/, "");
+}
+
 function resolveTargetUrl(requestUrl: URL, headers: Headers, scheme: "http" | "ws"): URL | null {
-  const parsedForwarded = parseForwardedHeader(headers.get(FORWARDED_HEADER) ?? "");
-  const host = parsedForwarded.host ?? headers.get("host") ?? "";
+  const host = headers.get(X_FORWARDED_HOST_HEADER) ?? headers.get("host") ?? "";
   if (!host) return null;
 
-  const proto = parsedForwarded.proto ?? "";
+  const proto = normalizeProto(headers.get(X_FORWARDED_PROTO_HEADER) ?? "");
 
   let targetScheme: string;
   if (scheme === "ws") {
@@ -48,9 +54,9 @@ function stripProxyHeaders(headers: Headers): Headers {
 
 /**
  * Creates a TransformRequest that rewrites the incoming proxy request URL
- * to the original target URL using the standard `Forwarded` header.
+ * to the original target URL using `x-forwarded-host` + `x-forwarded-proto`.
  *
- * Also strips the proxy-specific headers from the outgoing Request so MSW
+ * Also strips proxy-specific headers from the outgoing Request so MSW
  * handlers see a clean request matching the original target.
  */
 export function createProxyRequestTransform(): TransformRequest {
@@ -73,7 +79,7 @@ export function createProxyRequestTransform(): TransformRequest {
 
 /**
  * Creates a TransformWebSocketUrl that rewrites the incoming WebSocket upgrade
- * URL to the original target using the same iterate proxy headers.
+ * URL to the original target using the same proxy headers.
  */
 export function createProxyWebSocketUrlTransform(): TransformWebSocketUrl {
   return (url: URL, headers: Headers): URL => {
