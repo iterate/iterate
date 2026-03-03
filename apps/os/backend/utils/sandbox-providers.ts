@@ -66,7 +66,7 @@ export function getAvailableProjectSandboxProviders(
 ): ProjectSandboxProvider[] {
   const preference = env.SANDBOX_PROVIDER_PREFERENCE ?? "fly,docker,daytona";
   const ordering = Object.fromEntries(
-    preference.split(",").map((provider, index) => [provider, index]),
+    preference.split(",").map((provider, index) => [provider.trim(), index]),
   );
   return getProjectSandboxProviderOptions(env, isDev)
     .filter((option) => !option.disabledReason)
