@@ -38,7 +38,8 @@
     "**/evalite-export/**",
     ".tmp-ci-build*",
     "**/*ignoreme*",
-    "packages/shared/src/jonasland/deployment/fly-api/generated/**"
+    "packages/shared/src/jonasland/deployment/fly-api/generated/**",
+    "**/old/**"
   ],
   "jsPlugins": [
     "./eslint.config.js",

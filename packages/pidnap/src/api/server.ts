@@ -7,6 +7,8 @@ import {
   type RestartingProcessInfo,
   type ManagerStatus,
   type WaitForRunningResponse,
+  type WaitForResponse,
+  type WaitCondition,
 } from "./contract.ts";
 
 const os = implement(api).$context<{ manager: Manager }>();
@@ -254,6 +256,78 @@ const waitForRunning = os.processes.waitForRunning.handler(
   },
 );
 
+async function checkHealthy(processSlug: string): Promise<boolean> {
+  const hc = healthCheckConfigs.get(processSlug);
+  if (!hc) return true;
+  try {
+    const response = await fetch(hc.url, { signal: AbortSignal.timeout(5_000) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function conditionMet(
+  manager: Manager,
+  slug: string,
+  condition: WaitCondition,
+  healthy: boolean,
+): boolean {
+  const proc = manager.getProcessByTarget(slug);
+  const state = proc?.state ?? "idle";
+  if (condition === "healthy") return state === "running" && healthy;
+  return state === condition;
+}
+
+const waitFor = os.processes.waitFor.handler(
+  async ({ input, context }): Promise<WaitForResponse> => {
+    const timeoutMs = input.timeoutMs ?? 30_000;
+    const start = Date.now();
+    const slugs = Object.keys(input.processes);
+    const POLL_INTERVAL = 500;
+
+    while (Date.now() - start < timeoutMs) {
+      if (context.manager.state === "running") break;
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+    }
+
+    if (context.manager.state !== "running") {
+      const results: WaitForResponse["results"] = {};
+      for (const slug of slugs) {
+        results[slug] = { state: "idle", healthy: false, elapsedMs: Date.now() - start };
+      }
+      return { results, allMet: false };
+    }
+
+    while (Date.now() - start < timeoutMs) {
+      const results: WaitForResponse["results"] = {};
+      let allMet = true;
+
+      for (const slug of slugs) {
+        const condition = input.processes[slug]!;
+        const proc = context.manager.getProcessByTarget(slug);
+        const state = proc?.state ?? "idle";
+        const isRunning = state === "running";
+        const healthy = isRunning ? await checkHealthy(slug) : false;
+        const met = conditionMet(context.manager, slug, condition, healthy);
+        results[slug] = { state, healthy, elapsedMs: Date.now() - start };
+        if (!met) allMet = false;
+      }
+
+      if (allMet) return { results, allMet: true };
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+    }
+
+    const results: WaitForResponse["results"] = {};
+    for (const slug of slugs) {
+      const proc = context.manager.getProcessByTarget(slug);
+      const state = proc?.state ?? "idle";
+      results[slug] = { state, healthy: false, elapsedMs: Date.now() - start };
+    }
+    return { results, allMet: false };
+  },
+);
+
 // Simple health check endpoint
 const health = os.health.handler(async () => {
   return { status: "ok" as const };
@@ -273,5 +347,6 @@ export const router = os.router({
     restart: restartProcess,
     delete: deleteProcess,
     waitForRunning: waitForRunning,
+    waitFor: waitFor,
   },
 });

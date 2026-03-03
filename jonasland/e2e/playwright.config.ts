@@ -5,6 +5,7 @@ const videoMode = !!process.env.VIDEO_MODE;
 export default defineConfig({
   testDir: "spec",
   testMatch: "**/*.spec.ts",
+  testIgnore: ["**/old/**"],
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

@@ -56,6 +56,31 @@ export const WaitForRunningResponseSchema = v.object({
 
 export type WaitForRunningResponse = v.InferOutput<typeof WaitForRunningResponseSchema>;
 
+// Wait condition: any process state plus derived "healthy"
+export const WaitCondition = v.picklist([
+  "idle",
+  "running",
+  "restarting",
+  "stopping",
+  "stopped",
+  "crash-loop-backoff",
+  "max-restarts-reached",
+  "healthy",
+]);
+export type WaitCondition = v.InferOutput<typeof WaitCondition>;
+
+export const WaitForResultEntry = v.object({
+  state: RestartingProcessState,
+  healthy: v.boolean(),
+  elapsedMs: v.number(),
+});
+
+export const WaitForResponseSchema = v.object({
+  results: v.record(v.string(), WaitForResultEntry),
+  allMet: v.boolean(),
+});
+export type WaitForResponse = v.InferOutput<typeof WaitForResponseSchema>;
+
 // API contract
 export const manager = {
   status: oc.output(ManagerStatusSchema),
@@ -106,6 +131,14 @@ export const processes = {
       }),
     )
     .output(WaitForRunningResponseSchema),
+  waitFor: oc
+    .input(
+      v.object({
+        processes: v.record(v.string(), WaitCondition),
+        timeoutMs: v.optional(v.number()),
+      }),
+    )
+    .output(WaitForResponseSchema),
 };
 
 // Simple health check response
