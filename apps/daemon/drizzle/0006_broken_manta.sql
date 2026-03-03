@@ -9,4 +9,4 @@ CREATE TABLE `github_pr_agent_path` (
 	`expires_at` integer
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `github_pr_agent_path_owner_repo_pr_number_unique` ON `github_pr_agent_path` (`owner`,`repo`,`pr_number`);--> statement-breakpoint
+CREATE UNIQUE INDEX `github_pr_agent_path_owner_repo_pr_number_unique` ON `github_pr_agent_path` (`owner`,`repo`,`pr_number`);
