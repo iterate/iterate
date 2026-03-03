@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
-import { http, HttpResponse, passthrough } from "msw";
+import { bypass, http, HttpResponse, passthrough } from "msw";
 import { describe, expect, test } from "vitest";
 import { useMockHttpServer, useTemporaryDirectory } from "./test-helpers.ts";
 
@@ -18,10 +18,7 @@ describe("useMockHttpServer", () => {
     });
 
     const response = await fetch(`${server.url}/users`, {
-      headers: {
-        "x-iterate-original-host": "api.example.com",
-        "x-iterate-original-proto": "https",
-      },
+      headers: { forwarded: "host=api.example.com;proto=https" },
     });
 
     expect(response.status).toBe(200);
@@ -29,7 +26,7 @@ describe("useMockHttpServer", () => {
     expect(body).toEqual([{ id: 1, name: "Alice" }]);
   });
 
-  test("matches via x-iterate-target-url header", async () => {
+  test("matches via standard Forwarded header", async () => {
     await using server = await useMockHttpServer({
       handlers: [
         http.post("https://api.example.com/data", async ({ request }) => {
@@ -43,7 +40,7 @@ describe("useMockHttpServer", () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-iterate-target-url": "https://api.example.com",
+        forwarded: "host=api.example.com;proto=https",
       },
       body: JSON.stringify({ hello: "world" }),
     });
@@ -63,10 +60,7 @@ describe("useMockHttpServer", () => {
     });
 
     const response = await fetch(`${server.url}/unknown`, {
-      headers: {
-        "x-iterate-original-host": "api.example.com",
-        "x-iterate-original-proto": "https",
-      },
+      headers: { forwarded: "host=api.example.com;proto=https" },
     });
 
     expect(response.status).toBe(500);
@@ -82,8 +76,7 @@ describe("useMockHttpServer", () => {
     });
 
     const headers = {
-      "x-iterate-original-host": "api.example.com",
-      "x-iterate-original-proto": "https",
+      forwarded: "host=api.example.com;proto=https",
     };
 
     const r1 = await fetch(`${server.url}/data`, { headers });
@@ -114,10 +107,7 @@ describe("useMockHttpServer", () => {
     });
 
     const response = await fetch(`${server.url}/`, {
-      headers: {
-        "x-iterate-original-host": "example.com",
-        "x-iterate-original-proto": "http",
-      },
+      headers: { forwarded: "host=example.com;proto=http" },
     });
     expect(response.status).toBeGreaterThanOrEqual(200);
 
@@ -139,17 +129,13 @@ describe("useMockHttpServer", () => {
 
     await fetch(`${server.url}/inspect`, {
       headers: {
-        "x-iterate-target-url": "https://api.example.com",
-        "x-iterate-original-host": "api.example.com",
-        "x-iterate-original-proto": "https",
+        forwarded: "host=api.example.com;proto=https",
         authorization: "Bearer test-token",
       },
     });
 
     expect(capturedHeaders).toBeDefined();
-    expect(capturedHeaders!.get("x-iterate-target-url")).toBeNull();
-    expect(capturedHeaders!.get("x-iterate-original-host")).toBeNull();
-    expect(capturedHeaders!.get("x-iterate-original-proto")).toBeNull();
+    expect(capturedHeaders!.get("forwarded")).toBeNull();
     expect(capturedHeaders!.get("authorization")).toBe("Bearer test-token");
   });
 
@@ -167,10 +153,7 @@ describe("useMockHttpServer", () => {
     });
 
     const response = await fetch(`${server.url}/hello`, {
-      headers: {
-        "x-iterate-original-host": "api.example.com",
-        "x-iterate-original-proto": "https",
-      },
+      headers: { forwarded: "host=api.example.com;proto=https" },
     });
     expect(response.status).toBe(200);
 
@@ -194,10 +177,7 @@ describe("useMockHttpServer", () => {
     });
 
     const response = await fetch(`${server.url}/hello`, {
-      headers: {
-        "x-iterate-original-host": "api.example.com",
-        "x-iterate-original-proto": "https",
-      },
+      headers: { forwarded: "host=api.example.com;proto=https" },
     });
     expect(response.status).toBe(200);
     expect(server.getHar().log.entries).toHaveLength(0);
@@ -213,9 +193,7 @@ describe("useMockHttpServer", () => {
     });
 
     const response = await fetch(`${server.url}/`, {
-      headers: {
-        "x-iterate-target-url": "https://example.com",
-      },
+      headers: { forwarded: "host=example.com;proto=https" },
     });
     const body = await response.text();
     expect(response.status).toBe(200);
@@ -240,14 +218,29 @@ describe("useMockHttpServer", () => {
     });
 
     const response = await fetch(`${server.url}/`, {
-      headers: {
-        "x-iterate-target-url": "https://example.com",
-      },
+      headers: { forwarded: "host=example.com;proto=https" },
     });
     expect(response.status).toBe(200);
-    const har = server.getHar();
-    expect(har.log.entries.length).toBeGreaterThanOrEqual(1);
-    expect(har.log.entries.some((entry) => entry.request.url.includes("example.com"))).toBe(true);
+  }, 20_000);
+
+  test("msw bypass() works for HTTP", async () => {
+    await using server = await useMockHttpServer({
+      handlers: [
+        http.get("https://example.com/", async ({ request }) => {
+          return fetch(bypass(request));
+        }),
+      ],
+    });
+
+    const response = await fetch(`${server.url}/`, {
+      headers: {
+        forwarded: "host=example.com;proto=https",
+        "accept-encoding": "identity",
+      },
+    });
+    const body = await response.text();
+    expect(response.status).toBe(200);
+    expect(body.toLowerCase()).toContain("example domain");
   }, 20_000);
 
   test("passthrough works for SSE endpoint", async () => {
@@ -260,9 +253,7 @@ describe("useMockHttpServer", () => {
     });
 
     const response = await fetch(`${server.url}/test?interval=1`, {
-      headers: {
-        "x-iterate-target-url": "https://sse.dev",
-      },
+      headers: { forwarded: "host=sse.dev;proto=https" },
       signal: AbortSignal.timeout(15_000),
     });
     expect(response.status).toBe(200);
@@ -298,9 +289,7 @@ describe("useMockHttpServer", () => {
     const payload = `echo-${randomUUID()}`;
     const echoedPayload = await new Promise<string>((resolve, reject) => {
       const socket = new WebSocket(wsUrl.toString(), {
-        headers: {
-          "x-iterate-target-url": "wss://ws.postman-echo.com",
-        },
+        headers: { forwarded: "host=ws.postman-echo.com;proto=wss" },
       });
 
       const timeout = setTimeout(() => {

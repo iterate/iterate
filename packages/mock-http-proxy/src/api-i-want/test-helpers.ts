@@ -37,14 +37,13 @@ export type UseMockHttpServerOptions = {
   host?: string;
   /**
    * Rewrite the incoming HTTP request before MSW handler resolution.
-   * Defaults to the standard iterate proxy header rewriter
-   * (x-iterate-target-url, x-iterate-original-host, etc.).
+   * Defaults to the standard `Forwarded` header rewriter.
    * Pass `false` to disable rewriting entirely.
    */
   transformRequest?: TransformRequest | false;
   /**
    * Rewrite the incoming WebSocket upgrade URL before MSW handler resolution.
-   * Defaults to the standard iterate proxy header rewriter.
+   * Defaults to the standard `Forwarded` header rewriter.
    * Pass `false` to disable rewriting entirely.
    */
   transformWebSocketUrl?: TransformWebSocketUrl | false;
@@ -374,9 +373,7 @@ export async function useMitmProxy(options: UseMitmProxyOptions): Promise<MitmPr
         headers: {
           ...req.headers,
           host: egressUrl.host,
-          "x-iterate-target-url": originalUrl.origin,
-          "x-iterate-original-host": originalUrl.host,
-          "x-iterate-original-proto": originalUrl.protocol.replace(":", ""),
+          forwarded: `host=${originalUrl.host};proto=${originalUrl.protocol.replace(":", "")}`,
         },
         body: bodyBuffer,
       },

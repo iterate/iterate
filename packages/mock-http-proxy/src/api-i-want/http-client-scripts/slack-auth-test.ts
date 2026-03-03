@@ -9,12 +9,13 @@ function required(name: string): string {
 async function main() {
   const slackApiUrl = process.env.SLACK_API_URL ?? "https://slack.com/api/";
   const slackTargetUrl = process.env.SLACK_TARGET_URL ?? "https://slack.com";
+  const slackTarget = new URL(slackTargetUrl);
   const client = new WebClient(required("SLACK_BOT_TOKEN"), {
     slackApiUrl,
     headers:
       process.env.SLACK_API_URL !== undefined
         ? {
-            "x-iterate-target-url": slackTargetUrl,
+            forwarded: `host=${slackTarget.host};proto=${slackTarget.protocol.replace(":", "")}`,
           }
         : undefined,
   });

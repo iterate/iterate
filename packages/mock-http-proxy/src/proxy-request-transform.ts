@@ -1,50 +1,34 @@
 import type { TransformRequest, TransformWebSocketUrl } from "@iterate-com/msw-http-server";
 
-const TARGET_URL_HEADER = "x-iterate-target-url";
-const LEGACY_TARGET_URL_HEADER = "x-target-url";
-const ORIGINAL_HOST_HEADER = "x-iterate-original-host";
-const LEGACY_ORIGINAL_HOST_HEADER = "x-original-host";
-const ORIGINAL_PROTO_HEADER = "x-iterate-original-proto";
-const LEGACY_ORIGINAL_PROTO_SHORT_HEADER = "x-original-proto";
-const LEGACY_ORIGINAL_PROTO_HEADER = "x-original-protocol";
-const LEGACY_ORIGINAL_SCHEME_HEADER = "x-original-scheme";
-const TARGET_PATH_PREFIX = "/__iterate_target__/";
+const FORWARDED_HEADER = "forwarded";
 
-const PROXY_HEADERS_TO_STRIP = new Set([
-  TARGET_URL_HEADER,
-  LEGACY_TARGET_URL_HEADER,
-  ORIGINAL_HOST_HEADER,
-  LEGACY_ORIGINAL_HOST_HEADER,
-  ORIGINAL_PROTO_HEADER,
-  LEGACY_ORIGINAL_PROTO_SHORT_HEADER,
-  LEGACY_ORIGINAL_PROTO_HEADER,
-  LEGACY_ORIGINAL_SCHEME_HEADER,
-]);
+const PROXY_HEADERS_TO_STRIP = new Set([FORWARDED_HEADER]);
 
-function firstHeaderValue(headers: Headers, ...names: string[]): string {
-  for (const name of names) {
-    const value = headers.get(name);
-    if (value) return value;
+type ParsedForwarded = {
+  host?: string;
+  proto?: string;
+};
+
+function parseForwardedHeader(forwarded: string): ParsedForwarded {
+  const firstEntry = forwarded.split(",")[0]?.trim() ?? "";
+  if (!firstEntry) return {};
+
+  const attributes = firstEntry.split(";");
+  let host: string | undefined;
+  let proto: string | undefined;
+
+  for (const rawAttribute of attributes) {
+    const [rawKey, ...rawValueParts] = rawAttribute.split("=");
+    const key = rawKey?.trim().toLowerCase();
+    const rawValue = rawValueParts.join("=").trim();
+    const value = rawValue.replace(/^"|"$/g, "");
+
+    if (!key || !value) continue;
+    if (key === "host") host = value;
+    if (key === "proto") proto = value.toLowerCase();
   }
-  return "";
-}
 
-function targetFromEncodedPath(
-  pathname: string,
-  search: string,
-  scheme: "http" | "ws",
-): URL | null {
-  if (!pathname.startsWith(TARGET_PATH_PREFIX)) return null;
-
-  const rest = pathname.slice(TARGET_PATH_PREFIX.length);
-  const slashIndex = rest.indexOf("/");
-  if (slashIndex <= 0) return null;
-
-  const encodedBase = rest.slice(0, slashIndex);
-  const base = new URL(decodeURIComponent(encodedBase));
-  normalizeProtocol(base, scheme);
-  const relativePath = rest.slice(slashIndex);
-  return new URL(`${relativePath}${search}`, base);
+  return { host, proto };
 }
 
 function normalizeProtocol(url: URL, scheme: "http" | "ws"): void {
@@ -58,29 +42,11 @@ function normalizeProtocol(url: URL, scheme: "http" | "ws"): void {
 }
 
 function resolveTargetUrl(requestUrl: URL, headers: Headers, scheme: "http" | "ws"): URL | null {
-  const pathTarget = targetFromEncodedPath(requestUrl.pathname, requestUrl.search, scheme);
-  if (pathTarget) return pathTarget;
-
-  const headerTarget = firstHeaderValue(headers, TARGET_URL_HEADER, LEGACY_TARGET_URL_HEADER);
-  if (headerTarget) {
-    const base = new URL(headerTarget);
-    normalizeProtocol(base, scheme);
-    const result = new URL(`${requestUrl.pathname}${requestUrl.search}`, base);
-    normalizeProtocol(result, scheme);
-    return result;
-  }
-
-  const host = firstHeaderValue(headers, ORIGINAL_HOST_HEADER, LEGACY_ORIGINAL_HOST_HEADER, "host");
+  const parsedForwarded = parseForwardedHeader(headers.get(FORWARDED_HEADER) ?? "");
+  const host = parsedForwarded.host ?? headers.get("host") ?? "";
   if (!host) return null;
 
-  const proto = firstHeaderValue(
-    headers,
-    ORIGINAL_PROTO_HEADER,
-    LEGACY_ORIGINAL_PROTO_SHORT_HEADER,
-    LEGACY_ORIGINAL_PROTO_HEADER,
-    LEGACY_ORIGINAL_SCHEME_HEADER,
-    "x-forwarded-proto",
-  ).toLowerCase();
+  const proto = parsedForwarded.proto ?? "";
 
   let targetScheme: string;
   if (scheme === "ws") {
@@ -103,8 +69,7 @@ function stripProxyHeaders(headers: Headers): Headers {
 
 /**
  * Creates a TransformRequest that rewrites the incoming proxy request URL
- * to the original target URL using standard iterate proxy headers
- * (x-iterate-target-url, x-iterate-original-host, x-iterate-original-proto, etc.).
+ * to the original target URL using the standard `Forwarded` header.
  *
  * Also strips the proxy-specific headers from the outgoing Request so MSW
  * handlers see a clean request matching the original target.
