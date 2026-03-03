@@ -62,8 +62,6 @@ sudo mkdir -p "$PERSIST"
   # Create persistent directories on the volume (sudo needed — FUSE mount is root-owned)
   sudo mkdir -p "${PERSIST}/persisted"
   sudo mkdir -p "${PERSIST}/.local-share/opencode"
-  sudo mkdir -p "${PERSIST}/.local-share/daemon"
-  sudo mkdir -p "${PERSIST}/.local-share/events-service"
   sudo chown -R iterate:iterate "${PERSIST}/persisted"
   sudo chown -R iterate:iterate "${PERSIST}/.local-share"
 
@@ -71,14 +69,14 @@ sudo mkdir -p "$PERSIST"
   ln -sfn "${PERSIST}/persisted" "${HOME_DIR}/persisted"
   echo "[archil] ~/persisted → ${PERSIST}/persisted"
 
-  # Symlink individual ~/.local/share/<app> dirs to the archil volume.
+  # Symlink ~/.local/share/opencode to the archil volume.
+  # Only opencode needs persistence (sessions, messages, storage/).
+  # Daemon and events-service DBs are ephemeral (no cross-machine persistence needed).
   # We can't symlink all of ~/.local/share because it also contains
   # uv/tools/mitmproxy (baked into the Docker image at build time).
-  for app_dir in opencode daemon events-service; do
-    rm -rf "${HOME_DIR}/.local/share/${app_dir}"
-    ln -sfn "${PERSIST}/.local-share/${app_dir}" "${HOME_DIR}/.local/share/${app_dir}"
-    echo "[archil] ~/.local/share/${app_dir} → ${PERSIST}/.local-share/${app_dir}"
-  done
+  rm -rf "${HOME_DIR}/.local/share/opencode"
+  ln -sfn "${PERSIST}/.local-share/opencode" "${HOME_DIR}/.local/share/opencode"
+  echo "[archil] ~/.local/share/opencode → ${PERSIST}/.local-share/opencode"
 
   # Signal ready — dependents (opencode, daemon, etc.) can start now
   touch /tmp/archil-repo-ready

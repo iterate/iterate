@@ -7,9 +7,7 @@ const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/itera
 const sandboxDir = join(iterateRepo, "sandbox");
 const envFile = join(home, ".iterate/.env");
 const eventsServicePort = "17301";
-// XDG convention: ~/.local/share/<app>/ — automatically persisted via archil symlink
-const eventsServiceDatabasePath = join(home, ".local/share/events-service/events.sqlite");
-const daemonDatabasePath = join(home, ".local/share/daemon/db.sqlite");
+const eventsServiceDatabasePath = join(home, ".iterate/events.sqlite");
 const mitmproxyDir = join(home, ".mitmproxy");
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
@@ -159,7 +157,6 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
-      dependsOn: ["archil-repo-ready"],
     },
     {
       name: "daemon-backend",
@@ -171,7 +168,6 @@ export default defineConfig({
           HOSTNAME: "0.0.0.0",
           PORT: "3001",
           NODE_ENV: "production",
-          DATABASE_URL: daemonDatabasePath,
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:4318/v1/traces",
         },
       },
