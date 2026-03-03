@@ -833,6 +833,11 @@ export class Manager {
           throw error;
         }
 
+        // Start sentinel watchers if needed
+        if (this.dependencyResolver.hasSentinelDependencies(processSlug)) {
+          this.startSentinelWatchersForProcess(processSlug);
+        }
+
         if (
           nextDesiredState === "running" &&
           this.dependencyResolver.areDependenciesMet(processSlug)
