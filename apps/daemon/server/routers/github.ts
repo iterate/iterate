@@ -480,7 +480,12 @@ function getAuthorizationSource(
 ): "marker" | "mention" | "mapping" | null {
   if (hasAppSlugMarker(signal.markerBody)) return "marker";
   if (hasAppSlugMention(signal.eventBody)) return "mention";
-  if (signal.eventKind === "workflow_run" && hasStoredMapping) return "mapping";
+  if (
+    hasStoredMapping &&
+    (signal.eventKind === "workflow_run" || signal.eventKind === "pull_request")
+  ) {
+    return "mapping";
+  }
   return null;
 }
 
