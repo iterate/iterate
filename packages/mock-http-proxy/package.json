@@ -3,9 +3,7 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  },
+  "exports": {},
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "NODE_OPTIONS=--no-deprecation vitest run",
@@ -15,6 +13,7 @@
   "dependencies": {
     "@iterate-com/msw-http-server": "workspace:*",
     "http-proxy": "^1.18.1",
+    "https-proxy-agent": "^7.0.6",
     "mockttp": "^4.2.0",
     "msw": "^2.4.9",
     "undici": "^7.16.0",

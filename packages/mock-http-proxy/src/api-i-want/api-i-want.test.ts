@@ -15,10 +15,11 @@ type OpenAiScriptOutput = {
   eventTypes: string[];
   sendCount: number;
   receiveEventCount: number;
-  sessionUpdatedCount: number;
-  updateCount: number;
+  completedCount: number;
+  responseChain: string[];
   model: string;
   timeoutMs: number;
+  proxyEnabled: boolean;
 };
 
 type SlackScriptOutput = {
@@ -167,11 +168,11 @@ describe("records har archives for http-client-scripts", () => {
     expect(output).toMatchObject({
       ok: true,
       endpoint: "openai.websocket-mode",
-      updateCount: 2,
       sendCount: 2,
+      completedCount: 2,
     });
     expect(output.receiveEventCount).toBeGreaterThanOrEqual(2);
-    expect(output.sessionUpdatedCount).toBeGreaterThanOrEqual(1);
+    expect(output.responseChain.length).toBeGreaterThanOrEqual(2);
 
     await egress.writeHar();
     const har = await readHarFile(harPath);
@@ -282,8 +283,9 @@ describe("records har archives for http-client-scripts", () => {
 
     expect(openaiOutput.ok).toBe(true);
     expect(openaiOutput.sendCount).toBe(2);
+    expect(openaiOutput.completedCount).toBe(2);
     expect(openaiOutput.receiveEventCount).toBeGreaterThanOrEqual(2);
-    expect(openaiOutput.sessionUpdatedCount).toBeGreaterThanOrEqual(1);
+    expect(openaiOutput.responseChain.length).toBeGreaterThanOrEqual(2);
     expect(slackOutput).toMatchObject({ ok: true, endpoint: "slack.auth.test" });
 
     await egress.writeHar();

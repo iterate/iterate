@@ -1,5 +1,5 @@
-import OpenAI from "openai";
-import { OpenAIRealtimeWebSocket } from "openai/realtime/websocket";
+import { HttpsProxyAgent } from "https-proxy-agent";
+import { WebSocket } from "ws";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -13,35 +13,48 @@ function parseTimeoutMs(value: string | undefined, fallbackMs: number): number {
   return Math.floor(parsed);
 }
 
-function parsePositiveInt(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return Math.floor(parsed);
+function getProxyUrl(): string | undefined {
+  return (
+    process.env.HTTPS_PROXY ??
+    process.env.https_proxy ??
+    process.env.HTTP_PROXY ??
+    process.env.http_proxy
+  );
+}
+
+function responseIdFromEvent(event: Record<string, unknown>): string | undefined {
+  const response = event.response;
+  if (!response || typeof response !== "object") return undefined;
+  const id = (response as { id?: unknown }).id;
+  return typeof id === "string" ? id : undefined;
+}
+
+function userMessage(text: string): Array<Record<string, unknown>> {
+  return [
+    {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text }],
+    },
+  ];
 }
 
 async function main() {
   const apiKey = required("OPENAI_API_KEY");
-  const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-4o-mini-realtime-preview";
+  const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-5.2";
   const timeoutMs = parseTimeoutMs(process.env.OPENAI_REALTIME_TIMEOUT_MS, 4_000);
-  const updateCount = parsePositiveInt(process.env.OPENAI_REALTIME_UPDATE_COUNT, 2);
 
-  const client = new OpenAI({ apiKey, timeout: timeoutMs });
-  const socket = await Promise.race([
-    OpenAIRealtimeWebSocket.create(client, { model }),
-    new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(new Error(`timed out creating realtime websocket after ${String(timeoutMs)}ms`));
-      }, timeoutMs);
-    }),
-  ]);
+  const proxyUrl = getProxyUrl();
+  const socket = new WebSocket("wss://api.openai.com/v1/responses", {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    ...(proxyUrl ? { agent: new HttpsProxyAgent(proxyUrl) } : {}),
+  });
 
   const closeSocket = () => {
-    const rawSocket = socket.socket as unknown as { terminate?: () => void };
-    if (typeof rawSocket.terminate === "function") {
-      rawSocket.terminate();
-      return;
-    }
-    socket.close();
+    if (socket.readyState === WebSocket.CLOSED) return;
+    socket.terminate();
   };
 
   const result = await new Promise<{
@@ -49,21 +62,25 @@ async function main() {
     eventTypes: string[];
     sendCount: number;
     receiveEventCount: number;
-    sessionUpdatedCount: number;
+    completedCount: number;
+    responseChain: string[];
   }>((resolve, reject) => {
     const timeout = setTimeout(() => {
       done(() => {
         closeSocket();
-        reject(new Error(`timed out waiting for realtime event after ${String(timeoutMs)}ms`));
+        reject(new Error(`timed out waiting for websocket events after ${String(timeoutMs)}ms`));
       });
     }, timeoutMs);
 
     const eventTypes: string[] = [];
-    let nextUpdateToSend = 0;
+    const responseChain: string[] = [];
     let sendCount = 0;
     let receiveEventCount = 0;
-    let sessionUpdatedCount = 0;
+    let completedCount = 0;
+    let latestResponseId: string | undefined;
+    let phase: "warmup" | "generate" = "warmup";
     let finished = false;
+
     const done = (fn: () => void) => {
       if (finished) return;
       finished = true;
@@ -71,61 +88,102 @@ async function main() {
       fn();
     };
 
-    const maybeSendNextUpdate = () => {
-      if (nextUpdateToSend >= updateCount) return;
-      nextUpdateToSend += 1;
+    const sendWarmup = () => {
+      socket.send(
+        JSON.stringify({
+          type: "response.create",
+          model,
+          store: false,
+          generate: false,
+          input: userMessage("Ping."),
+          tools: [],
+        }),
+      );
       sendCount += 1;
-      socket.send({
-        type: "session.update",
-        session: {
-          type: "realtime",
-          instructions: `Say ok ${String(nextUpdateToSend)}`,
-        },
-      });
     };
 
-    socket.on("error", (error) => {
-      done(() => reject(error));
+    const sendGenerate = (previousResponseId: string) => {
+      socket.send(
+        JSON.stringify({
+          type: "response.create",
+          model,
+          store: false,
+          previous_response_id: previousResponseId,
+          input: userMessage("Reply with exactly OK."),
+          max_output_tokens: 8,
+          tools: [],
+        }),
+      );
+      sendCount += 1;
+    };
+
+    socket.on("open", () => {
+      sendWarmup();
     });
 
-    socket.on("event", (event) => {
+    socket.on("error", (error) => {
+      done(() => {
+        closeSocket();
+        reject(error);
+      });
+    });
+
+    socket.on("message", (raw) => {
       receiveEventCount += 1;
-      eventTypes.push(event.type);
 
-      if (event.type === "session.updated") {
-        sessionUpdatedCount += 1;
-      }
-
-      if (sendCount >= updateCount && receiveEventCount >= 2) {
+      let event: Record<string, unknown>;
+      try {
+        event = JSON.parse(raw.toString()) as Record<string, unknown>;
+      } catch (error) {
         done(() => {
           closeSocket();
-          resolve({
-            eventType: event.type,
-            eventTypes,
-            sendCount,
-            receiveEventCount,
-            sessionUpdatedCount,
-          });
+          reject(error instanceof Error ? error : new Error(String(error)));
         });
         return;
       }
 
-      if (event.type === "session.created" || event.type === "session.updated") {
-        maybeSendNextUpdate();
+      const eventType = event.type;
+      if (typeof eventType !== "string") return;
+      eventTypes.push(eventType);
+
+      const responseId = responseIdFromEvent(event);
+      if (responseId) {
+        latestResponseId = responseId;
+      }
+
+      if (eventType === "response.completed") {
+        completedCount += 1;
+        if (latestResponseId) {
+          responseChain.push(latestResponseId);
+        }
+
+        if (phase === "warmup") {
+          if (!latestResponseId) {
+            done(() => {
+              closeSocket();
+              reject(new Error("missing response id after warmup response.completed"));
+            });
+            return;
+          }
+
+          phase = "generate";
+          sendGenerate(latestResponseId);
+          return;
+        }
+
+        done(() => {
+          closeSocket();
+          resolve({
+            eventType,
+            eventTypes,
+            sendCount,
+            receiveEventCount,
+            completedCount,
+            responseChain,
+          });
+        });
       }
     });
-
-    if (socket.socket.readyState === 1) {
-      maybeSendNextUpdate();
-    } else {
-      socket.socket.addEventListener(
-        "open",
-        () => {
-          maybeSendNextUpdate();
-        },
-        { once: true },
-      );
-    }
   });
 
   process.stdout.write(
@@ -136,10 +194,11 @@ async function main() {
       eventTypes: result.eventTypes,
       sendCount: result.sendCount,
       receiveEventCount: result.receiveEventCount,
-      sessionUpdatedCount: result.sessionUpdatedCount,
-      updateCount,
+      completedCount: result.completedCount,
+      responseChain: result.responseChain,
       model,
       timeoutMs,
+      proxyEnabled: Boolean(proxyUrl),
     })}\n`,
   );
 }
