@@ -5,14 +5,14 @@ import {
   type EventBusContract,
   serviceManifest as eventsServiceManifest,
 } from "@iterate-com/events-contract";
-import { type ContractRouterClient } from "@orpc/contract";
+import { type AnyContractRouter, type ContractRouterClient } from "@orpc/contract";
 import {
   normalizePublicIngressUrlType,
   resolvePublicIngressUrl,
   type PublicIngressUrlType,
   type PublicIngressUrlTypeInput,
 } from "../ingress-url.ts";
-import { createOrpcRpcServiceClient } from "../index.ts";
+import { createOrpcRpcServiceClient, type ServiceManifestLike } from "../index.ts";
 import {
   dockerDeploymentRuntimeAttach,
   dockerDeploymentRuntimeCreate,
@@ -171,6 +171,14 @@ function extractIterateServiceName(host: string): string | null {
   const normalized = host.trim().toLowerCase();
   const match = /^([a-z0-9-]+)\.iterate\.localhost$/.exec(normalized);
   return match?.[1] ?? null;
+}
+
+function serviceHostFromManifestSlug(slug: string): string {
+  const normalized = slug.trim().toLowerCase();
+  const base = normalized.endsWith("-service")
+    ? normalized.slice(0, normalized.length - "-service".length)
+    : normalized;
+  return `${base}.iterate.localhost`;
 }
 
 async function requestWithExplicitHost(params: {
@@ -640,6 +648,24 @@ abstract class DeploymentBase<
     return params.create({
       url: `http://${params.host}${params.path}`,
       fetch: async (request: Request) => await this.fetchWithHost(request, params.host),
+    });
+  }
+
+  createServiceOrpcClient<TContract extends AnyContractRouter>(params: {
+    manifest: ServiceManifestLike<TContract>;
+    host?: string;
+  }): ContractRouterClient<TContract> {
+    const host = params.host ?? serviceHostFromManifestSlug(params.manifest.slug);
+    return this.createOrpcClient({
+      host,
+      path: "/orpc",
+      create: ({ url, fetch }) =>
+        createOrpcRpcServiceClient({
+          env: {},
+          manifest: params.manifest,
+          url,
+          fetch,
+        }),
     });
   }
 
