@@ -385,6 +385,7 @@ const Env = z.object({
   SANDBOX_DOCKER_ENABLED: BoolyString,
   SANDBOX_FLY_ENABLED: BoolyString,
   SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd"]),
+  SANDBOX_PROVIDER_PREFERENCE: Optional, // comma-separated list of providers in order of preference
   FLY_API_TOKEN: Optional,
   FLY_ORG: Optional,
   FLY_DEFAULT_REGION: Optional,
