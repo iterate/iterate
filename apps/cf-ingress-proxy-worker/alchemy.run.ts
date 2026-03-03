@@ -1,24 +1,36 @@
 import alchemy from "alchemy";
 import { D1Database, Worker } from "alchemy/cloudflare";
+import { z } from "zod/v4";
+import { TypeIdPrefixSchema } from "./typeid-prefix.ts";
 
-const app = await alchemy("cf-proxy-worker", {
-  password: process.env.ALCHEMY_PASSWORD,
+const Env = z.object({
+  ALCHEMY_PASSWORD: z.string().optional(),
+  WORKER_NAME: z.string().trim().min(1, "WORKER_NAME is required"),
+  INGRESS_PROXY_API_TOKEN: z.string().trim().min(1).optional(),
+  CF_PROXY_WORKER_API_TOKEN: z.string().trim().min(1).optional(),
+  TYPEID_PREFIX: TypeIdPrefixSchema,
+  INGRESS_PROXY_ROUTE_PATTERN: z.string().trim().optional(),
+  INGRESS_PROXY_ROUTE_ZONE_ID: z.string().trim().optional(),
 });
 
-const isProduction = app.stage === "prd";
-
-const adminToken = process.env.CF_PROXY_WORKER_API_TOKEN?.trim();
+const env = Env.parse(process.env);
+const adminToken = env.INGRESS_PROXY_API_TOKEN ?? env.CF_PROXY_WORKER_API_TOKEN;
 if (!adminToken) {
-  throw new Error("CF_PROXY_WORKER_API_TOKEN is required");
+  throw new Error("INGRESS_PROXY_API_TOKEN or CF_PROXY_WORKER_API_TOKEN is required");
 }
 
+const app = await alchemy("ingress-proxy", {
+  password: env.ALCHEMY_PASSWORD,
+});
+
 const db = await D1Database("routes-db", {
-  name: isProduction ? "cf-proxy-worker-routes" : `cf-proxy-worker-routes-${app.stage}`,
+  name: `${env.WORKER_NAME}-routes`,
+  migrationsDir: "./migrations",
   adopt: true,
 });
 
-const routePattern = process.env.CF_PROXY_WORKER_ROUTE_PATTERN?.trim();
-const routeZoneId = process.env.CF_PROXY_WORKER_ROUTE_ZONE_ID?.trim();
+const routePattern = env.INGRESS_PROXY_ROUTE_PATTERN;
+const routeZoneId = env.INGRESS_PROXY_ROUTE_ZONE_ID;
 const routes = routePattern
   ? [
       {
@@ -30,13 +42,14 @@ const routes = routePattern
   : undefined;
 
 export const worker = await Worker("worker", {
-  name: isProduction ? "cf-proxy-worker" : undefined,
+  name: env.WORKER_NAME,
   entrypoint: "./server.ts",
   compatibilityDate: "2025-02-24",
   compatibility: "node",
   bindings: {
     DB: db,
-    CF_PROXY_WORKER_API_TOKEN: alchemy.secret(adminToken),
+    INGRESS_PROXY_API_TOKEN: alchemy.secret(adminToken),
+    TYPEID_PREFIX: env.TYPEID_PREFIX,
   },
   routes,
   adopt: true,

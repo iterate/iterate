@@ -1,22 +1,30 @@
 import { homedir } from "node:os";
 import { inspect } from "node:util";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { Hono } from "hono";
 import { createOpencodeClient, type Event as OpencodeEvent } from "@opencode-ai/sdk/v2";
 import { createRouterClient } from "@orpc/server";
 import { AgentEventsPayload } from "../types/events.ts";
-import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
 import { daemonRouter } from "../orpc/router.ts";
+import { getCustomerRepoPathOrNull } from "../orpc/platform.ts";
 import { withSpan } from "../utils/otel.ts";
 
 // Opencode sessions are project-bound - use homedir as neutral location for global sessions
 function getOpencodeWorkingDirectory(): string {
-  const dir = getAgentWorkingDirectory();
-  // If it's the default fallback (cwd), use homedir instead for global accessibility
-  if (dir === process.cwd()) {
+  const customerRepoPath = getCustomerRepoPathOrNull();
+  if (!customerRepoPath) {
     return homedir();
   }
-  return dir;
+
+  try {
+    if (statSync(customerRepoPath).isDirectory()) {
+      return customerRepoPath;
+    }
+  } catch {
+    // Fall through to homedir when customer repo path is stale/missing.
+  }
+
+  return homedir();
 }
 
 // ---------------------------------------------------------------------------

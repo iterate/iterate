@@ -8,3 +8,7 @@ export async function getCustomerRepoPath(): Promise<string> {
   }
   return process.env.ITERATE_CUSTOMER_REPO_PATH;
 }
+
+export function getCustomerRepoPathOrNull(): string | null {
+  return process.env.ITERATE_CUSTOMER_REPO_PATH ?? null;
+}
