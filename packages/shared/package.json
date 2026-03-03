@@ -7,7 +7,6 @@
     "./jonasland": "./src/jonasland/index.ts",
     "./force-public-url-vite-plugin": "./src/dev/force-public-url-vite-plugin.ts",
     "./project-ingress": "./src/project-ingress.ts",
-    "./forwarded-header": "./src/forwarded-header.ts",
     "./github-agent-path": "./src/github-agent-path.ts"
   },
   "scripts": {

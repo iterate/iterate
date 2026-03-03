@@ -17,9 +17,8 @@ function proxyHeaders(host: string): Record<string, string> {
 }
 
 describe("records mocked request/response shapes", () => {
-  using tmpDir = useTemporaryDirectory("mock-http-proxy-api-recording-shapes-");
-
   test("records mocked binary file upload", async () => {
+    using tmpDir = useTemporaryDirectory("mock-http-proxy-api-recording-shapes-");
     const harPath = join(tmpDir.path, "mocked-binary-upload.har");
     const body = Buffer.from([0, 255, 7, 9, 11, 13]);
 
@@ -54,6 +53,7 @@ describe("records mocked request/response shapes", () => {
   });
 
   test("records mocked multipart form upload", async () => {
+    using tmpDir = useTemporaryDirectory("mock-http-proxy-api-recording-shapes-");
     const harPath = join(tmpDir.path, "mocked-multipart.har");
 
     await using server = await useMockHttpServer({
@@ -97,6 +97,7 @@ describe("records mocked request/response shapes", () => {
   });
 
   test("records mocked SSE response body", async () => {
+    using tmpDir = useTemporaryDirectory("mock-http-proxy-api-recording-shapes-");
     const harPath = join(tmpDir.path, "mocked-sse.har");
     const sseBody = "event: status\ndata: one\n\nevent: status\ndata: two\n\n";
 
@@ -131,6 +132,7 @@ describe("records mocked request/response shapes", () => {
   });
 
   test("records handled msw request + response", async () => {
+    using tmpDir = useTemporaryDirectory("mock-http-proxy-api-recording-shapes-");
     const harPath = join(tmpDir.path, "handled-msw.har");
 
     await using server = await useMockHttpServer({

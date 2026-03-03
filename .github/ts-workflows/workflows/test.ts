@@ -22,13 +22,6 @@ export default workflow({
           },
           run: "doppler run -- pnpm test",
         },
-        {
-          name: "Run mock-http-proxy e2e tests",
-          env: {
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-          },
-          run: "pnpm --filter @iterate-com/mock-http-proxy test:e2e",
-        },
       ],
     },
   },

@@ -140,11 +140,10 @@ async function withTimeout<T>(label: string, promise: Promise<T>, timeoutMs: num
 }
 
 describe("replays parallel HAR fixture via source traffic handlers", () => {
-  using tmpDir = useTemporaryDirectory("mock-http-proxy-api-replay-fixture-");
-
   test(
     "replays openai + slack + curl in parallel from fixture HAR",
     async () => {
+      using tmpDir = useTemporaryDirectory("mock-http-proxy-api-replay-fixture-");
       const sourceHarPath = join(thisDir, "fixtures", "parallel-openai-slack-curl.har");
       const sourceHar = await readHarFile(sourceHarPath);
       const replayHarPath = join(tmpDir.path, "parallel-openai-slack-curl.replay-output.har");
@@ -156,7 +155,7 @@ describe("replays parallel HAR fixture via source traffic handlers", () => {
       });
       egress.use(...replayHandlers);
       await using mitm = await useMitmProxy({
-        externalEgressProxyUrl: egress.url,
+        proxyTargetUrl: egress.url,
       });
 
       const mitmEnv = mitm.envForNode();

@@ -179,21 +179,16 @@
         "**/*.e2e.ts",
         "**/*.test.tsx",
         "**/test-setup.ts",
-        "**/test-utils.ts",
-        "**/*.spec.ts",
-        "**/*.spec.tsx"
+        "**/test-utils.ts"
       ],
       "rules": {
-        "no-console": "off",
-        "react-hooks/rules-of-hooks": "off",
-        "react-hooks/exhaustive-deps": "off"
+        "no-console": "off"
       }
     },
     {
       "files": ["spec/**/*"],
       "rules": {
         "react-hooks/rules-of-hooks": "off",
-        "react-hooks/exhaustive-deps": "off",
         "no-console": "off",
         "no-restricted-imports": [
           "error",

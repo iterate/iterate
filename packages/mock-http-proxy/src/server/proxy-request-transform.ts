@@ -9,11 +9,17 @@ const PROXY_HEADERS_TO_STRIP: ReadonlySet<string> = new Set([
 ]);
 
 function isLoopbackHost(host: string): boolean {
-  const name =
-    host
-      .split(":")[0]
-      ?.replace(/^\[|\]$/g, "")
-      .toLowerCase() ?? "";
+  const trimmedHost = host.trim();
+  let name = "";
+  if (trimmedHost.startsWith("[")) {
+    const closingBracket = trimmedHost.indexOf("]");
+    name = (
+      closingBracket > 0 ? trimmedHost.slice(1, closingBracket) : trimmedHost.slice(1)
+    ).toLowerCase();
+  } else {
+    name = (trimmedHost.split(":")[0] ?? "").toLowerCase();
+  }
+
   return name === "localhost" || name === "::1" || name === "127.0.0.1" || name.startsWith("127.");
 }
 

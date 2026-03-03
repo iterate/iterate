@@ -63,7 +63,7 @@ type TemporaryDirectoryFixture = Disposable & {
 };
 
 type UseMitmProxyOptions = {
-  externalEgressProxyUrl: string;
+  proxyTargetUrl: string;
   port?: number;
 };
 
@@ -346,7 +346,7 @@ export async function useMitmProxy(options: UseMitmProxyOptions): Promise<MitmPr
   await writeFile(caCertPath, ca.cert, "utf8");
 
   const mitmServer = mockttp.getLocal({ https: ca });
-  const egressUrl = new URL(options.externalEgressProxyUrl);
+  const egressUrl = new URL(options.proxyTargetUrl);
 
   await mitmServer.forAnyRequest().thenCallback(async (req) => {
     const originalUrl = toOriginalUrl(req.url, req.headers);
@@ -367,7 +367,7 @@ export async function useMitmProxy(options: UseMitmProxyOptions): Promise<MitmPr
     headers.set("x-forwarded-proto", originalUrl.protocol.replace(/:$/, ""));
 
     const response = await request(
-      `${options.externalEgressProxyUrl}${originalUrl.pathname}${originalUrl.search}`,
+      `${options.proxyTargetUrl}${originalUrl.pathname}${originalUrl.search}`,
       {
         method: req.method,
         headers,

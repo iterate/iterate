@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readdirSync,
@@ -9,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
@@ -33,6 +35,7 @@ type TypeSqlConfig = {
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appDir = dirname(scriptDir);
+const require = createRequire(import.meta.url);
 const sqlDir = join(appDir, "sql");
 const queriesSqlPath = join(sqlDir, "queries.sql");
 const queriesTsPath = join(sqlDir, "queries.ts");
@@ -160,25 +163,25 @@ function run(command: string, argsList: string[]): void {
 }
 
 function resolveTypeSqlCliInvocation(): { command: string; argsPrefix: string[] } {
-  const command = process.env.TYPESQL_CLI?.trim() || "typesql";
-  const probe = spawnSync(command, ["--version"], {
-    cwd: appDir,
-    stdio: "ignore",
-  });
+  const packageJsonPath = require.resolve("typesql-cli/package.json", { paths: [appDir] });
+  const packageDir = dirname(packageJsonPath);
+  const cliJsPath = join(packageDir, "cli.js");
+  const distCliJsPath = join(packageDir, "dist", "src", "cli.js");
+  const srcCliTsPath = join(packageDir, "src", "cli.ts");
 
-  const missing =
-    probe.error &&
-    typeof probe.error === "object" &&
-    "code" in probe.error &&
-    (probe.error as NodeJS.ErrnoException).code === "ENOENT";
-
-  if (missing) {
-    throw new Error(
-      "TypeSQL CLI not found. Install it (for example: npm i -g github:iterate/typesql#5687eb2) or set TYPESQL_CLI to an executable path.",
-    );
+  if (existsSync(cliJsPath)) {
+    return { command: process.execPath, argsPrefix: [cliJsPath] };
+  }
+  if (existsSync(distCliJsPath)) {
+    return { command: process.execPath, argsPrefix: [distCliJsPath] };
+  }
+  if (existsSync(srcCliTsPath)) {
+    return { command: process.execPath, argsPrefix: ["--import", "tsx", srcCliTsPath] };
   }
 
-  return { command, argsPrefix: [] };
+  throw new Error(
+    "Unable to locate TypeSQL CLI entrypoint. Tried cli.js, dist/src/cli.js, and src/cli.ts.",
+  );
 }
 
 function rebuildLocalDb(): void {

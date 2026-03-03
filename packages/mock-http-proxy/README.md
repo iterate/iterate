@@ -1,25 +1,30 @@
 # @iterate-com/mock-http-proxy
 
-Private workspace package for outbound HTTP/WebSocket egress mocking, passthrough proxying, and HAR record/replay.
+MSW-backed egress test harness for Node services.
 
-## Package layout
+Use it to:
 
-- `src/server/`
-  - `mock-http-server-fixture.ts`: main fixture (`useMockHttpServer`, `useMitmProxy`, `useTemporaryDirectory`)
-  - `msw-server-adapter.ts`: HTTP + websocket bridge to MSW handlers
-  - `proxy-request-transform.ts`: `x-forwarded-host`/`x-forwarded-proto` URL rewrite helpers
-- `src/har/`
-  - `har-recorder.ts`: recorder API (`HarRecorder`)
-  - `har-journal.ts`, `har-serialize.ts`: HAR assembly internals
-  - `har-extensions.ts`: HAR extension types (websocket messages/resource type)
-- `src/replay/`
-  - `from-traffic-with-websocket.ts`: replay handlers from HAR (`@mswjs/source/traffic` + websocket replay)
-- `src/integration/`
-  - non-internet higher-level tests + fixtures/scripts
-- `e2e-tests/`
-  - internet-hitting tests (requires Doppler env)
+- run a local HTTP/WebSocket egress endpoint (`useMockHttpServer`)
+- optionally force outbound traffic through a MITM proxy (`useMitmProxy`)
+- record HAR (including websocket frames)
+- replay HAR traffic deterministically (`fromTrafficWithWebSocket`)
 
-## Public exports
+Goal: record real internet traffic once, then replay it in deterministic tests without calling third-party APIs.
+
+## What You Get
+
+- HTTP + WebSocket interception via MSW server adapter
+- optional MITM proxy layer for transparent interception from clients that only support proxy env/flags
+- HAR recording with websocket extension fields (`_resourceType`, `_webSocketMessages`)
+- HAR replay from `@mswjs/source/traffic` + websocket session replay
+
+Main implementation:
+
+- [`src/server/mock-http-server-fixture.ts`](./src/server/mock-http-server-fixture.ts)
+- [`src/har/har-recorder.ts`](./src/har/har-recorder.ts)
+- [`src/replay/from-traffic-with-websocket.ts`](./src/replay/from-traffic-with-websocket.ts)
+
+## Core API
 
 From [`src/index.ts`](./src/index.ts):
 
@@ -30,42 +35,140 @@ From [`src/index.ts`](./src/index.ts):
 - `createProxyRequestTransform`
 - `createProxyWebSocketUrlTransform`
 - `HarRecorder`
-- HAR extension types
 
-## `useMockHttpServer` fixture contract
+### `useMockHttpServer` defaults
 
-Source: [`src/server/mock-http-server-fixture.ts`](./src/server/mock-http-server-fixture.ts)
+- default `onUnhandledRequest`: `"error"`
+- runtime handler registration: `server.use(...)`
+- fixture fields: `url`, `host`, `port`, `close()`, `getHar()`, `writeHar()`
 
-Defaults and behavior:
+### `useMitmProxy` option
 
-- default `onUnhandledRequest` is `"error"`
-- register handlers at runtime via `.use(...)`
-- no constructor `handlers`
-- no `proxyUrl()`
+```ts
+await useMitmProxy({ proxyTargetUrl: egress.url });
+```
 
-Fixture API surface:
+`envForNode()` returns proxy + CA env vars (`HTTP_PROXY`, `HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, etc).
 
-- SetupServerApi subset: `use`, `resetHandlers`, `restoreHandlers`, `listHandlers`, `events`
-- Fixture fields: `url`, `host`, `port`, `close()`, `getHar()`, `writeHar()`
+## Record Real Traffic Then Replay
 
-## Test types
+```ts
+import { readFile } from "node:fs/promises";
+import {
+  fromTrafficWithWebSocket,
+  useMockHttpServer,
+  type HarWithExtensions,
+} from "@iterate-com/mock-http-proxy";
 
-We only use two categories:
+// replay from previously recorded HAR
+const har = JSON.parse(await readFile("./traffic.har", "utf8")) as HarWithExtensions;
 
-1. Unit tests (no internet, no Doppler required)
+await using egress = await useMockHttpServer({
+  onUnhandledRequest: "error",
+});
 
-- `pnpm --filter @iterate-com/mock-http-proxy test`
-- Includes server/har/replay tests and local non-internet integration tests.
+egress.use(...fromTrafficWithWebSocket(har));
+```
 
-2. E2E tests (internet + secrets required)
+## Example: curl OpenAI Responses API Through MITM And Record HAR
 
-- `pnpm --filter @iterate-com/mock-http-proxy test:e2e`
-- Runs [`e2e-tests/real-egress.e2e.test.ts`](./e2e-tests/real-egress.e2e.test.ts) via `doppler run --config dev`.
+```ts
+import { x } from "tinyexec";
+import { useMitmProxy, useMockHttpServer } from "@iterate-com/mock-http-proxy";
 
-Representative suites:
+await using egress = await useMockHttpServer({
+  recorder: { harPath: "./openai-responses-recorded.har" },
+  onUnhandledRequest: "bypass", // allow real upstream requests
+});
 
-- unit/server parity: [`src/server/msw-server-adapter.http-parity.test.ts`](./src/server/msw-server-adapter.http-parity.test.ts)
-- unit/recorder: [`src/har/har-recorder.test.ts`](./src/har/har-recorder.test.ts)
-- unit/replay: [`src/replay/from-traffic-with-websocket.test.ts`](./src/replay/from-traffic-with-websocket.test.ts)
-- unit/non-internet integration: [`src/integration/recording-shapes.integration.test.ts`](./src/integration/recording-shapes.integration.test.ts), [`src/integration/har-replay.integration.test.ts`](./src/integration/har-replay.integration.test.ts)
-- e2e/internet: [`e2e-tests/real-egress.e2e.test.ts`](./e2e-tests/real-egress.e2e.test.ts)
+await using mitm = await useMitmProxy({
+  proxyTargetUrl: egress.url,
+});
+
+const mitmEnv = mitm.envForNode();
+
+await x(
+  "curl",
+  [
+    "--silent",
+    "--show-error",
+    "--fail",
+    "--proxy",
+    mitm.url,
+    "--proxy-cacert",
+    mitmEnv.NODE_EXTRA_CA_CERTS,
+    "https://api.openai.com/v1/responses",
+    "-H",
+    `Authorization: Bearer ${process.env.OPENAI_API_KEY}`,
+    "-H",
+    "Content-Type: application/json",
+    "-d",
+    JSON.stringify({
+      model: "gpt-5.2",
+      input: "Say hello in one short sentence.",
+    }),
+  ],
+  { throwOnError: true, nodeOptions: { stdio: "inherit" } },
+);
+
+await egress.writeHar(); // writes ./openai-responses-recorded.har
+```
+
+## Example: curl OpenAI Responses API Through MITM With Mocked Response
+
+```ts
+import { x } from "tinyexec";
+import { http, HttpResponse } from "msw";
+import { useMitmProxy, useMockHttpServer } from "@iterate-com/mock-http-proxy";
+
+await using egress = await useMockHttpServer({
+  recorder: { harPath: "./openai-responses-mocked.har", includeHandledRequests: true },
+  onUnhandledRequest: "error",
+});
+
+egress.use(
+  http.post("https://api.openai.com/v1/responses", () => {
+    return HttpResponse.json({
+      id: "resp_mock_123",
+      object: "response",
+      output_text: "hello from mock",
+    });
+  }),
+);
+
+await using mitm = await useMitmProxy({
+  proxyTargetUrl: egress.url,
+});
+
+const mitmEnv = mitm.envForNode();
+
+await x(
+  "curl",
+  [
+    "--silent",
+    "--show-error",
+    "--fail",
+    "--proxy",
+    mitm.url,
+    "--proxy-cacert",
+    mitmEnv.NODE_EXTRA_CA_CERTS,
+    "https://api.openai.com/v1/responses",
+    "-H",
+    "Authorization: Bearer sk-test-mocked",
+    "-H",
+    "Content-Type: application/json",
+    "-d",
+    JSON.stringify({ model: "gpt-5.2", input: "ignored by mock" }),
+  ],
+  { throwOnError: true, nodeOptions: { stdio: "inherit" } },
+);
+
+await egress.writeHar(); // writes ./openai-responses-mocked.har
+```
+
+## Validate Locally
+
+- Unit/integration (no internet):
+  - `pnpm --filter @iterate-com/mock-http-proxy test`
+- Internet e2e (Doppler creds required):
+  - `pnpm --filter @iterate-com/mock-http-proxy test:e2e`

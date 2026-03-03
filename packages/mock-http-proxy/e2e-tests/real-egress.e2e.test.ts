@@ -2,7 +2,7 @@ import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { x } from "tinyexec";
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { readHarFile } from "../src/har/har-extensions.ts";
 import {
   useMitmProxy,
@@ -15,7 +15,15 @@ const packageRoot = join(thisDir, "..");
 const httpClientScriptsDir = join(packageRoot, "src", "integration", "http-client-scripts");
 
 describe("records HAR archives for real egress traffic", () => {
-  using tmpDir = useTemporaryDirectory("mock-http-proxy-real-egress-clean-");
+  let tmpDir!: ReturnType<typeof useTemporaryDirectory>;
+
+  beforeAll(() => {
+    tmpDir = useTemporaryDirectory("mock-http-proxy-real-egress-clean-");
+  });
+
+  afterAll(() => {
+    tmpDir[Symbol.dispose]();
+  });
 
   test.concurrent("OpenAI websocket script", async () => {
     const harPath = join(tmpDir.path, "openai-responses-websockets.har");
@@ -26,7 +34,7 @@ describe("records HAR archives for real egress traffic", () => {
     });
 
     await using mitm = await useMitmProxy({
-      externalEgressProxyUrl: egress.url,
+      proxyTargetUrl: egress.url,
     });
 
     const result = await x(
@@ -127,7 +135,7 @@ describe("records HAR archives for real egress traffic", () => {
     });
 
     await using mitm = await useMitmProxy({
-      externalEgressProxyUrl: egress.url,
+      proxyTargetUrl: egress.url,
     });
 
     const mitmEnv = mitm.envForNode();
@@ -164,7 +172,7 @@ describe("records HAR archives for real egress traffic", () => {
     });
 
     await using mitm = await useMitmProxy({
-      externalEgressProxyUrl: egress.url,
+      proxyTargetUrl: egress.url,
     });
 
     const mitmEnv = mitm.envForNode();
