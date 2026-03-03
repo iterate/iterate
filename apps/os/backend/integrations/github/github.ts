@@ -67,6 +67,10 @@ export type GitHubOAuthStateData = {
   callbackURL?: string;
 };
 
+type GitHubInstallationConflict = {
+  installationId: number;
+};
+
 export function createGitHubClient(env: CloudflareEnv) {
   const redirectURI = `${env.VITE_PUBLIC_URL}/api/integrations/github/callback`;
   return new arctic.GitHub(env.GITHUB_APP_CLIENT_ID, env.GITHUB_APP_CLIENT_SECRET, redirectURI);
@@ -186,8 +190,27 @@ githubApp.get(
     };
 
     const encryptedAccessToken = await encrypt(accessToken);
+    const installationConflictState: { value: GitHubInstallationConflict | null } = { value: null };
 
     const project = await c.var.db.transaction(async (tx) => {
+      const existingInstallationConnection = await tx.query.projectConnection.findFirst({
+        where: (pc, { eq, and }) =>
+          and(eq(pc.provider, "github-app"), eq(pc.externalId, installation_id.toString())),
+      });
+
+      if (
+        existingInstallationConnection &&
+        existingInstallationConnection.projectId !== projectId
+      ) {
+        installationConflictState.value = { installationId: installation_id };
+        return tx.query.project.findFirst({
+          where: eq(schema.project.id, projectId),
+          with: {
+            organization: true,
+          },
+        });
+      }
+
       const existingConnection = await tx.query.projectConnection.findFirst({
         where: (pc, { eq, and }) => and(eq(pc.projectId, projectId), eq(pc.provider, "github-app")),
       });
@@ -304,6 +327,16 @@ githubApp.get(
         logger.error("[GitHub OAuth] Failed to poke machines for refresh", err);
       }),
     );
+
+    const installationConflict = installationConflictState.value;
+    if (installationConflict) {
+      const params = new URLSearchParams({
+        kind: "github-installation",
+        installationId: installationConflict.installationId.toString(),
+        newProjectId: projectId,
+      });
+      return c.redirect(`/connection-conflict?${params.toString()}`);
+    }
 
     const redirectPath = callbackURL || (project ? `/proj/${project.slug}/connectors` : "/");
     return c.redirect(redirectPath);

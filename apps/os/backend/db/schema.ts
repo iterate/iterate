@@ -471,7 +471,7 @@ export const projectConnection = pgTable(
     scopes: t.text(),
     ...withTimestamps,
   }),
-  (t) => [index().on(t.provider, t.externalId), index().on(t.projectId)],
+  (t) => [uniqueIndex().on(t.provider, t.externalId), index().on(t.projectId)],
 );
 
 export const projectConnectionRelations = relations(projectConnection, ({ one }) => ({

@@ -339,9 +339,9 @@ function GitHubConfigRepoSetup({
         defaultBranch: string;
       } | null,
     ) => orpcClient.project.setConfigRepo({ projectSlug, repo }),
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("Config repository updated");
-      queryClient.invalidateQueries({
+      await queryClient.invalidateQueries({
         queryKey: orpc.project.bySlug.key({ input: { projectSlug } }),
       });
       setOpen(false);

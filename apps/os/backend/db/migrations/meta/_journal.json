@@ -218,6 +218,13 @@
       "when": 1772452484324,
       "tag": "0030_mute_shaman",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1772551409882,
+      "tag": "0031_warm_kylun",
+      "breakpoints": true
     }
   ]
 }

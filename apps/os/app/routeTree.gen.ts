@@ -13,7 +13,7 @@ import { Route as logoutRouteImport } from './routes/logout.tsx'
 import { Route as loginRouteImport } from './routes/login.tsx'
 import { Route as deviceRouteImport } from './routes/device.tsx'
 import { Route as authRequiredDotlayoutRouteImport } from './routes/auth-required.layout.tsx'
-import { Route as slackConflictRouteImport } from './routes/slack-conflict.tsx'
+import { Route as connectionConflictRouteImport } from './routes/connection-conflict.tsx'
 import { Route as adminLayoutRouteImport } from './routes/admin/layout.tsx'
 import { Route as indexRouteImport } from './routes/index.tsx'
 import { Route as adminIndexRouteImport } from './routes/admin/index.tsx'
@@ -56,9 +56,9 @@ const authRequiredDotlayoutRoute = authRequiredDotlayoutRouteImport.update({
   id: '/_auth',
   getParentRoute: () => rootRouteImport,
 } as any)
-const slackConflictRoute = slackConflictRouteImport.update({
-  id: '/slack-conflict',
-  path: '/slack-conflict',
+const connectionConflictRoute = connectionConflictRouteImport.update({
+  id: '/connection-conflict',
+  path: '/connection-conflict',
   getParentRoute: () => authRequiredDotlayoutRoute,
 } as any)
 const adminLayoutRoute = adminLayoutRouteImport.update({
@@ -178,7 +178,7 @@ export interface FileRoutesByFullPath {
   '/logout': typeof logoutRoute
   '/': typeof indexRoute
   '/admin': typeof adminLayoutRouteWithChildren
-  '/slack-conflict': typeof slackConflictRoute
+  '/connection-conflict': typeof connectionConflictRoute
   '/admin/api-tools': typeof adminApiToolsRoute
   '/admin/outbox': typeof adminOutboxRoute
   '/admin/session-info': typeof adminSessionInfoRoute
@@ -205,7 +205,7 @@ export interface FileRoutesByTo {
   '/login': typeof loginRoute
   '/logout': typeof logoutRoute
   '/': typeof indexRoute
-  '/slack-conflict': typeof slackConflictRoute
+  '/connection-conflict': typeof connectionConflictRoute
   '/admin/api-tools': typeof adminApiToolsRoute
   '/admin/outbox': typeof adminOutboxRoute
   '/admin/session-info': typeof adminSessionInfoRoute
@@ -233,7 +233,7 @@ export interface FileRoutesById {
   '/logout': typeof logoutRoute
   '/_auth/': typeof indexRoute
   '/_auth/admin': typeof adminLayoutRouteWithChildren
-  '/_auth/slack-conflict': typeof slackConflictRoute
+  '/_auth/connection-conflict': typeof connectionConflictRoute
   '/_auth/admin/api-tools': typeof adminApiToolsRoute
   '/_auth/admin/outbox': typeof adminOutboxRoute
   '/_auth/admin/session-info': typeof adminSessionInfoRoute
@@ -263,7 +263,7 @@ export interface FileRouteTypes {
     | '/logout'
     | '/'
     | '/admin'
-    | '/slack-conflict'
+    | '/connection-conflict'
     | '/admin/api-tools'
     | '/admin/outbox'
     | '/admin/session-info'
@@ -290,7 +290,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/logout'
     | '/'
-    | '/slack-conflict'
+    | '/connection-conflict'
     | '/admin/api-tools'
     | '/admin/outbox'
     | '/admin/session-info'
@@ -317,7 +317,7 @@ export interface FileRouteTypes {
     | '/logout'
     | '/_auth/'
     | '/_auth/admin'
-    | '/_auth/slack-conflict'
+    | '/_auth/connection-conflict'
     | '/_auth/admin/api-tools'
     | '/_auth/admin/outbox'
     | '/_auth/admin/session-info'
@@ -377,11 +377,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof authRequiredDotlayoutRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_auth/slack-conflict': {
-      id: '/_auth/slack-conflict'
-      path: '/slack-conflict'
-      fullPath: '/slack-conflict'
-      preLoaderRoute: typeof slackConflictRouteImport
+    '/_auth/connection-conflict': {
+      id: '/_auth/connection-conflict'
+      path: '/connection-conflict'
+      fullPath: '/connection-conflict'
+      preLoaderRoute: typeof connectionConflictRouteImport
       parentRoute: typeof authRequiredDotlayoutRoute
     }
     '/_auth/admin': {
@@ -618,7 +618,7 @@ const projLayoutRouteWithChildren = projLayoutRoute._addFileChildren(
 interface authRequiredDotlayoutRouteChildren {
   indexRoute: typeof indexRoute
   adminLayoutRoute: typeof adminLayoutRouteWithChildren
-  slackConflictRoute: typeof slackConflictRoute
+  connectionConflictRoute: typeof connectionConflictRoute
   orgLayoutRoute: typeof orgLayoutRouteWithChildren
   projLayoutRoute: typeof projLayoutRouteWithChildren
   userSettingsRoute: typeof userSettingsRoute
@@ -627,7 +627,7 @@ interface authRequiredDotlayoutRouteChildren {
 const authRequiredDotlayoutRouteChildren: authRequiredDotlayoutRouteChildren = {
   indexRoute: indexRoute,
   adminLayoutRoute: adminLayoutRouteWithChildren,
-  slackConflictRoute: slackConflictRoute,
+  connectionConflictRoute: connectionConflictRoute,
   orgLayoutRoute: orgLayoutRouteWithChildren,
   projLayoutRoute: projLayoutRouteWithChildren,
   userSettingsRoute: userSettingsRoute,

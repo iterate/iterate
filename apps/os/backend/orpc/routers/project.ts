@@ -345,11 +345,13 @@ export const projectRouter = {
         return { success: true };
       }
 
+      const fullName = `${input.repo.owner}/${input.repo.name}`;
+
       await ctx.db
         .update(project)
         .set({
           configRepoId: input.repo.id.toString(),
-          configRepoFullName: `${input.repo.owner}/${input.repo.name}`,
+          configRepoFullName: fullName,
           configRepoDefaultBranch: input.repo.defaultBranch,
         })
         .where(eq(project.id, ctx.project.id));
@@ -362,6 +364,133 @@ export const projectRouter = {
       });
 
       return { success: true };
+    }),
+
+  transferGithubConnection: projectProtectedMutation
+    .input(
+      z.object({
+        ...ProjectInput.shape,
+        installationId: z.number(),
+      }),
+    )
+    .handler(async ({ context: ctx, input }) => {
+      const existingConnection = await ctx.db.query.projectConnection.findFirst({
+        where: and(
+          eq(projectConnection.provider, "github-app"),
+          eq(projectConnection.externalId, input.installationId.toString()),
+        ),
+        with: { project: true },
+      });
+
+      if (!existingConnection) {
+        throw new ORPCError("NOT_FOUND", {
+          message: "GitHub installation connection not found",
+        });
+      }
+
+      const targetProjectConnection = ctx.project.connections.find(
+        (c) => c.provider === "github-app",
+      );
+      if (targetProjectConnection && targetProjectConnection.id !== existingConnection.id) {
+        throw new ORPCError("CONFLICT", {
+          message: "Target project already has a GitHub connection. Disconnect it first.",
+        });
+      }
+
+      const sourceProjectId = existingConnection.projectId;
+      const targetProjectId = ctx.project.id;
+      const githubEgressRule =
+        "$contains(url.hostname, 'github.com') or $contains(url.hostname, 'githubcopilot.com')";
+
+      await ctx.db.transaction(async (tx) => {
+        await tx
+          .update(schema.projectConnection)
+          .set({
+            projectId: targetProjectId,
+          })
+          .where(eq(schema.projectConnection.id, existingConnection.id));
+
+        const sourceSecret = await tx.query.secret.findFirst({
+          where: and(
+            eq(schema.secret.projectId, sourceProjectId),
+            eq(schema.secret.key, "github.access_token"),
+            isNull(schema.secret.userId),
+          ),
+        });
+
+        if (sourceSecret) {
+          const targetSecret = await tx.query.secret.findFirst({
+            where: and(
+              eq(schema.secret.projectId, targetProjectId),
+              eq(schema.secret.key, "github.access_token"),
+              isNull(schema.secret.userId),
+            ),
+          });
+
+          if (targetSecret) {
+            await tx
+              .update(schema.secret)
+              .set({
+                encryptedValue: sourceSecret.encryptedValue,
+                organizationId: ctx.organization.id,
+                metadata: sourceSecret.metadata,
+                egressProxyRule: githubEgressRule,
+                lastSuccessAt: new Date(),
+              })
+              .where(eq(schema.secret.id, targetSecret.id));
+          } else {
+            await tx.insert(schema.secret).values({
+              key: "github.access_token",
+              encryptedValue: sourceSecret.encryptedValue,
+              organizationId: ctx.organization.id,
+              projectId: targetProjectId,
+              metadata: sourceSecret.metadata,
+              egressProxyRule: githubEgressRule,
+              lastSuccessAt: new Date(),
+            });
+          }
+        }
+
+        if (sourceProjectId !== targetProjectId) {
+          await tx
+            .update(schema.project)
+            .set({
+              configRepoId: null,
+              configRepoFullName: null,
+              configRepoDefaultBranch: null,
+            })
+            .where(eq(schema.project.id, sourceProjectId));
+
+          await tx
+            .delete(schema.secret)
+            .where(
+              and(
+                eq(schema.secret.projectId, sourceProjectId),
+                eq(schema.secret.key, "github.access_token"),
+                isNull(schema.secret.userId),
+              ),
+            );
+        }
+      });
+
+      const projectIdsToRefresh =
+        sourceProjectId === targetProjectId
+          ? [targetProjectId]
+          : [targetProjectId, sourceProjectId];
+      waitUntil(
+        Promise.all(
+          projectIdsToRefresh.map((projectId) =>
+            pokeRunningMachinesToRefresh(ctx.db, projectId, ctx.env),
+          ),
+        ).catch((err) => {
+          logger.error("[project.transferGithubConnection] Failed to poke machines", err);
+        }),
+      );
+
+      return {
+        success: true,
+        previousProjectSlug: existingConnection.project?.slug,
+      };
     }),
 
   // Get GitHub connection status
@@ -377,7 +506,7 @@ export const projectRouter = {
       };
     }),
 
-  // Disconnect GitHub (removes connection and repo, revokes installation)
+  // Disconnect GitHub (removes connection and repo, revokes installation if unused)
   disconnectGithub: projectProtectedMutation
     .input(ProjectInput)
     .handler(async ({ context: ctx }) => {
@@ -387,12 +516,22 @@ export const projectRouter = {
         : null;
 
       if (installationId) {
-        const githubUninstalled = await deleteGitHubInstallation(ctx.env, installationId);
-        if (!githubUninstalled) {
-          throw new ORPCError("INTERNAL_SERVER_ERROR", {
-            message:
-              "Failed to revoke GitHub App installation. Please try again or remove it manually from GitHub Settings.",
-          });
+        const otherConnection = await ctx.db.query.projectConnection.findFirst({
+          where: and(
+            eq(projectConnection.provider, "github-app"),
+            eq(projectConnection.externalId, installationId.toString()),
+            ne(projectConnection.projectId, ctx.project.id),
+          ),
+        });
+
+        if (!otherConnection) {
+          const githubUninstalled = await deleteGitHubInstallation(ctx.env, installationId);
+          if (!githubUninstalled) {
+            throw new ORPCError("INTERNAL_SERVER_ERROR", {
+              message:
+                "Failed to revoke GitHub App installation. Please try again or remove it manually from GitHub Settings.",
+            });
+          }
         }
       }
 
