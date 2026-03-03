@@ -716,7 +716,8 @@ function compactText(value: string | null | undefined, maxLength: number): strin
   if (!value) return "";
   const normalized = value.replace(/\s+/g, " ").trim();
   if (normalized.length <= maxLength) return normalized;
-  return `${normalized.slice(0, maxLength - 1)}...`;
+  if (maxLength <= 3) return normalized.slice(0, maxLength);
+  return `${normalized.slice(0, maxLength - 3)}...`;
 }
 
 async function postPromptToAgent(agentPath: string, prompt: string): Promise<void> {
