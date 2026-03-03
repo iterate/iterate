@@ -5,8 +5,21 @@ import { waitForBuiltInServicesOnline } from "../../test-helpers/deployment-boot
 import { useDockerPublicIngress } from "../../test-helpers/use-docker-public-ingress.ts";
 
 const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
+const providerEnv = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
+const runDocker = providerEnv === "docker" || providerEnv === "all";
+const dockerAccessModes = new Set(
+  (process.env.JONASLAND_E2E_DOCKER_ACCESS_MODES ?? "local")
+    .split(",")
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => part.length > 0),
+);
+const runDockerLocal =
+  runDocker &&
+  (dockerAccessModes.has("all") || dockerAccessModes.has("local") || dockerAccessModes.size === 0);
+const runDockerPublic =
+  runDocker && (dockerAccessModes.has("all") || dockerAccessModes.has("public-ingress"));
 
-describe("clean events firehose (docker)", () => {
+describe.runIf(runDockerLocal)("clean events firehose (docker)", () => {
   test("deployment.events.firehose() yields appended events", async () => {
     await using deployment = await DockerDeployment.create({
       dockerImage: DOCKER_IMAGE,
@@ -41,7 +54,7 @@ describe("clean events firehose (docker)", () => {
   }, 300_000);
 });
 
-describe("clean events firehose (docker-public)", () => {
+describe.runIf(runDockerPublic)("clean events firehose (docker-public)", () => {
   test("firehose works through cloudflare tunnel + ingress proxy", async () => {
     await using deployment = await DockerDeployment.create({
       dockerImage: DOCKER_IMAGE,
