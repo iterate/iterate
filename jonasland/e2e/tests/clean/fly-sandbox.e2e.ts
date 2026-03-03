@@ -17,8 +17,10 @@ describe.runIf(runFly)("clean fly sandbox", () => {
     let deployment: FlyDeployment | undefined;
 
     try {
-      deployment = await FlyDeployment.createWithConfig({
+      deployment = await FlyDeployment.createWithOpts({
         flyImage: FLY_IMAGE,
+        flyApiToken: process.env.FLY_API_TOKEN!,
+        flyBaseDomain: process.env.FLY_BASE_DOMAIN ?? "fly.dev",
       }).create({
         name: `jonasland-e2e-clean-fly-sandbox-${randomUUID().slice(0, 8)}`,
       });

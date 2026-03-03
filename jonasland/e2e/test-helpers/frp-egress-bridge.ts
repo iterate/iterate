@@ -4,7 +4,7 @@ import { arch, platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
-import type { DeploymentRuntime } from "@iterate-com/shared/jonasland/deployment";
+import type { Deployment } from "@iterate-com/shared/jonasland/deployment";
 
 const FRP_DATA_REMOTE_PORT = 27180;
 const FRP_VERSION = "0.65.0";
@@ -325,7 +325,7 @@ export interface FrpEgressBridge extends AsyncDisposable {
 }
 
 export async function startFrpEgressBridge(params: {
-  deployment: DeploymentRuntime;
+  deployment: Deployment;
   localTargetHost?: string;
   localTargetPort: number;
   frpcBin?: string;

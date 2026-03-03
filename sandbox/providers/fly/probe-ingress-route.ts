@@ -228,10 +228,10 @@ async function main(): Promise<void> {
   console.log(`Route IDs: ${baseRoute.routeId}, ${wildcardRoute.routeId}`);
   console.log("Cleanup:");
   console.log(
-    `  doppler run --config dev -- sh -lc 'curl -sS ${ingressProxyBaseUrl}/api/orpc/deleteRoute -H \"authorization: Bearer $INGRESS_PROXY_API_TOKEN\" -H \"content-type: application/json\" --data \"{\\\"json\\\":{\\\"routeId\\\":\\\"${baseRoute.routeId}\\\"}}\"'`,
+    `  doppler run --config dev -- sh -lc 'curl -sS ${ingressProxyBaseUrl}/api/orpc/deleteRoute -H "authorization: Bearer $INGRESS_PROXY_API_TOKEN" -H "content-type: application/json" --data "{\\"json\\":{\\"routeId\\":\\"${baseRoute.routeId}\\"}}"'`,
   );
   console.log(
-    `  doppler run --config dev -- sh -lc 'curl -sS ${ingressProxyBaseUrl}/api/orpc/deleteRoute -H \"authorization: Bearer $INGRESS_PROXY_API_TOKEN\" -H \"content-type: application/json\" --data \"{\\\"json\\\":{\\\"routeId\\\":\\\"${wildcardRoute.routeId}\\\"}}\"'`,
+    `  doppler run --config dev -- sh -lc 'curl -sS ${ingressProxyBaseUrl}/api/orpc/deleteRoute -H "authorization: Bearer $INGRESS_PROXY_API_TOKEN" -H "content-type: application/json" --data "{\\"json\\":{\\"routeId\\":\\"${wildcardRoute.routeId}\\"}}"'`,
   );
   console.log(`  doppler run --config dev -- fly apps destroy ${externalId} -y`);
 }

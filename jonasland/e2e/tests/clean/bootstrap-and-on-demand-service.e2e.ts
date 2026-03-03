@@ -87,6 +87,8 @@ const providers: ProviderCase[] = [
     create: async () => ({
       deployment: await FlyDeployment.create({
         flyImage: FLY_IMAGE,
+        flyApiToken: process.env.FLY_API_TOKEN!,
+        flyBaseDomain: process.env.FLY_BASE_DOMAIN ?? "fly.dev",
         name: `jonasland-e2e-clean-bootstrap-fly-${randomUUID().slice(0, 8)}`,
       }),
     }),

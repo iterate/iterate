@@ -19,7 +19,7 @@ const ingressBaseUrl = buildIngressPublicBaseUrl({
   testSlug: "debug-firehose",
   ingressProxyDomain: ingress.ingressProxyDomain,
 });
-const dep = await DockerDeployment.createWithConfig({ dockerImage: image }).create({
+const dep = await DockerDeployment.createWithOpts({ dockerImage: image }).create({
   name: `debug-firehose-${Math.random().toString(36).slice(2, 8)}`,
   ingressHostPort,
   ingress: {

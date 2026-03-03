@@ -30,8 +30,10 @@ describe.runIf(RUN_FLY_E2E)("jonasland fly e2e", () => {
 
     let step = "create deployment";
     try {
-      await using deployment = await FlyDeployment.createWithConfig({
+      await using deployment = await FlyDeployment.createWithOpts({
         flyImage: FLY_IMAGE,
+        flyApiToken: process.env.FLY_API_TOKEN!,
+        flyBaseDomain: process.env.FLY_BASE_DOMAIN ?? "fly.dev",
         name: `jonasland-e2e-fly-${randomUUID().slice(0, 8)}`,
       }).create();
 

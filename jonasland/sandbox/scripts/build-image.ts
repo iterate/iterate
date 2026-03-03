@@ -15,8 +15,6 @@
 import { execFileSync, execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { computeImageRefs } from "./image-refs.ts";
-
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
 
 // --- Git info ---

@@ -1,38 +1,30 @@
 export {
-  dockerContainerFixture,
-  execInContainer,
-  dockerDeploymentRuntimeAttach,
-  dockerDeploymentRuntimeCreate,
-  dockerDeploymentRuntime,
-  sandboxFixture,
-  waitForHttpOk,
-  waitForPidnapProcessRunning,
-  waitForHealthyWithLogs,
-  waitForPidnapHostRoute,
-  assertIptablesRedirect,
-  createDeployment,
-  type DockerDeploymentLocator,
-  type DeploymentRuntime,
-  type SandboxFixture,
-} from "./docker-deployment.ts";
-export {
-  flyDeploymentRuntime,
-  flyDeploymentRuntimeAttach,
-  flyDeploymentRuntimeCreate,
-  type FlyDeploymentLocator,
-  type FlyDeploymentRuntimeCreateParams,
-} from "./fly-deployment.ts";
-export {
   Deployment,
-  DockerDeployment,
-  FlyDeployment,
+  waitForHttpOk,
   type DeploymentCommandResult,
-  type DeploymentCreateInputCommon,
   type DeploymentEventsClient,
-  type DeploymentIngressInput,
-  type DeploymentLocator,
+  type DeploymentIngressOpts,
+  type DeploymentOpts,
   type DeploymentOwnership,
-  type DockerDeploymentCreateInput,
-  type FlyDeploymentCreateInput,
+  type HostRequestParams,
   type ProviderName,
 } from "./deployment.ts";
+export {
+  DockerDeployment,
+  dockerContainerFixture,
+  execInContainer,
+  type DockerDeploymentLocator,
+  type DockerDeploymentOpts,
+} from "./docker-deployment.ts";
+export {
+  FlyDeployment,
+  type FlyDeploymentLocator,
+  type FlyDeploymentOpts,
+} from "./fly-deployment.ts";
+export { createFlyApiClient, type FlyApiClient, type FlyApiClientOpts } from "./fly-api/client.ts";
+export * as flyApi from "./fly-api/generated/index.ts";
+export {
+  onDemandProcesses,
+  type DocsSourcesPayload,
+  type OnDemandProcessName,
+} from "./on-demand.ts";

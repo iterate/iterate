@@ -115,8 +115,10 @@ describe.runIf(runFly)("clean fly ingress routes", () => {
     let deployment: FlyDeployment | undefined;
 
     try {
-      deployment = await FlyDeployment.createWithConfig({
+      deployment = await FlyDeployment.createWithOpts({
         flyImage: FLY_IMAGE,
+        flyApiToken: process.env.FLY_API_TOKEN!,
+        flyBaseDomain: process.env.FLY_BASE_DOMAIN ?? "fly.dev",
       }).create({
         name: `jonasland-e2e-clean-fly-ingress-routes-${randomUUID().slice(0, 8)}`,
         ingress: {

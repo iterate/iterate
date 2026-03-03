@@ -37,7 +37,8 @@
     "test-results/**",
     "**/evalite-export/**",
     ".tmp-ci-build*",
-    "**/*ignoreme*"
+    "**/*ignoreme*",
+    "packages/shared/src/jonasland/deployment/fly-api/generated/**"
   ],
   "jsPlugins": [
     "./eslint.config.js",
@@ -158,8 +159,6 @@
         "radix": "off",
         "prefer-numeric-literals": "error",
         "no-new-func": "error",
-        "react-hooks/rules-of-hooks": "error",
-        "react-hooks/exhaustive-deps": "warn",
         "jsx-a11y/click-events-have-key-events": "off",
         "codegen/codegen": "error",
         "react/only-export-components": [
@@ -170,6 +169,14 @@
         ]
       },
       "plugins": ["typescript", "import", "react", "jsx-a11y"]
+    },
+    {
+      "files": ["**/*.tsx", "**/*.jsx"],
+      "rules": {
+        "react-hooks/rules-of-hooks": "error",
+        "react-hooks/exhaustive-deps": "warn"
+      },
+      "plugins": ["react"]
     },
     {
       "files": [
@@ -217,7 +224,7 @@
       "plugins": ["react"]
     },
     {
-      "files": ["apps/os/app/routes/**/*.ts", "apps/os/app/routes/**/*.tsx"],
+      "files": ["apps/os/app/**/*.ts", "apps/os/app/**/*.tsx"],
       "plugins": ["typescript", "import", "react", "jsx-a11y"],
       "rules": {
         "jsx-a11y/no-autofocus": "off",
@@ -226,7 +233,7 @@
       }
     },
     {
-      "files": ["apps/daemon/client/routes/**/*.ts", "apps/daemon/client/routes/**/*.tsx"],
+      "files": ["apps/daemon/client/**/*.ts", "apps/daemon/client/**/*.tsx"],
       "plugins": ["typescript", "import", "react", "jsx-a11y"],
       "rules": {
         "jsx-a11y/no-autofocus": "off",

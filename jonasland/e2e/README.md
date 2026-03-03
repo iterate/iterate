@@ -130,7 +130,7 @@ const providers: Array<{
     name: "docker",
     enabled: true,
     create: () =>
-      DockerDeployment.createWithConfig({ dockerImage: "jonasland-sandbox:local" }).create({
+      DockerDeployment.createWithOpts({ dockerImage: "jonasland-sandbox:local" }).create({
         name: "jonasland-vitest-docker-my-test",
       }),
   },
@@ -138,7 +138,11 @@ const providers: Array<{
     name: "fly",
     enabled: Boolean(process.env.JONASLAND_E2E_FLY_IMAGE),
     create: () =>
-      FlyDeployment.createWithConfig({ flyImage: process.env.JONASLAND_E2E_FLY_IMAGE! }).create({
+      FlyDeployment.createWithOpts({
+        flyImage: process.env.JONASLAND_E2E_FLY_IMAGE!,
+        flyApiToken: process.env.FLY_API_TOKEN!,
+        flyBaseDomain: process.env.FLY_BASE_DOMAIN ?? "fly.dev",
+      }).create({
         name: "jonasland-vitest-fly-my-test",
       }),
   },

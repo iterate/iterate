@@ -360,11 +360,13 @@ async function main(): Promise<void> {
   logLine(`starting deployment: ${containerName} (provider=${provider})`);
   const deployment =
     provider === "fly"
-      ? await FlyDeployment.createWithConfig({
+      ? await FlyDeployment.createWithOpts({
           flyImage,
+          flyApiToken: process.env.FLY_API_TOKEN!,
+          flyBaseDomain: process.env.FLY_BASE_DOMAIN ?? "fly.dev",
           name: containerName,
         }).create()
-      : await DockerDeployment.createWithConfig({
+      : await DockerDeployment.createWithOpts({
           dockerImage,
           name: containerName,
           capAdd: ["NET_ADMIN", "SYS_ADMIN"],

@@ -28,8 +28,10 @@ function deploymentNameForCurrentTest(): string {
 describe.runIf(runFly)("clean frp egress minimal (fly)", () => {
   test("curl from deployment reaches outside mock through frp egress", async () => {
     await using outsideMock = await mockEgressProxy();
-    await using deployment = await FlyDeployment.createWithConfig({
+    await using deployment = await FlyDeployment.createWithOpts({
       flyImage: FLY_IMAGE,
+      flyApiToken: process.env.FLY_API_TOKEN!,
+      flyBaseDomain: process.env.FLY_BASE_DOMAIN ?? "fly.dev",
     }).create({
       name: deploymentNameForCurrentTest(),
     });

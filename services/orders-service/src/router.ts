@@ -1,15 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { desc, eq, sql } from "drizzle-orm";
-import {
-  eventBusContract,
-  serviceManifest as eventsServiceManifest,
-} from "@iterate-com/events-contract";
-import {
-  orderSchema,
-  ordersContract,
-  ordersServiceEnvSchema,
-  ordersServiceManifest,
-} from "@iterate-com/orders-contract";
+import { serviceManifest as eventsServiceManifest } from "@iterate-com/events-contract";
+import { orderSchema, ordersContract, ordersServiceManifest } from "@iterate-com/orders-contract";
 import {
   createLocalServiceOrpcClient,
   infoFromContext,

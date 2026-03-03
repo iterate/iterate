@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import { DockerDeployment, type DeploymentRuntime } from "@iterate-com/shared/jonasland/deployment";
+import { DockerDeployment, type Deployment } from "@iterate-com/shared/jonasland/deployment";
 import { mockEgressProxy } from "../test-helpers/mock-egress-proxy.ts";
 
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
@@ -20,7 +20,7 @@ const EVENTS_HOST_HEADER = "Host: events.iterate.localhost";
 const EVENTS_JSON_HEADER = "content-type: application/json";
 
 async function waitForDirectHttp(
-  deployment: DeploymentRuntime,
+  deployment: Deployment,
   params: { url: string; timeoutMs?: number },
 ): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 45_000;
@@ -35,7 +35,7 @@ async function waitForDirectHttp(
   throw new Error(`timed out waiting for direct http ${params.url}`);
 }
 
-async function startEgressProxyProcess(deployment: DeploymentRuntime): Promise<void> {
+async function startEgressProxyProcess(deployment: Deployment): Promise<void> {
   const updated = await deployment.pidnap.processes.updateConfig({
     processSlug: "egress-proxy",
     definition: {
@@ -59,7 +59,7 @@ async function startEgressProxyProcess(deployment: DeploymentRuntime): Promise<v
 }
 
 async function postEventsOrpc(
-  deployment: DeploymentRuntime,
+  deployment: Deployment,
   procedure: string,
   body: unknown,
 ): Promise<{ exitCode: number; output: string }> {
@@ -78,7 +78,7 @@ async function postEventsOrpc(
 
 describe.runIf(RUN_DOCKER_E2E)("jonasland events egress", () => {
   test("events service health + append/listStreams work inside the container", async () => {
-    await using deployment = await DockerDeployment.createWithConfig({
+    await using deployment = await DockerDeployment.createWithOpts({
       dockerImage: DOCKER_IMAGE,
       name: `jonasland-e2e-events-contract-${randomUUID()}`,
     }).create();
@@ -134,7 +134,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland events egress", () => {
       },
     });
 
-    await using deployment = await DockerDeployment.createWithConfig({
+    await using deployment = await DockerDeployment.createWithOpts({
       dockerImage: DOCKER_IMAGE,
       name: `jonasland-e2e-events-egress-${randomUUID()}`,
       env: {

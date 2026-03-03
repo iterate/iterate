@@ -47,7 +47,7 @@ const providerCases: ProviderCase[] = [
     name: "docker",
     enabled: (runAllProviders || providerEnv === "docker") && runDockerLocal,
     create: async () => ({
-      deployment: await DockerDeployment.createWithConfig({
+      deployment: await DockerDeployment.createWithOpts({
         dockerImage: DOCKER_IMAGE,
       }).create({
         name: deploymentNameForCurrentTest("docker"),
@@ -95,8 +95,10 @@ const providerCases: ProviderCase[] = [
     name: "fly",
     enabled: (runAllProviders || providerEnv === "fly") && FLY_IMAGE.trim().length > 0,
     create: async () => ({
-      deployment: await FlyDeployment.createWithConfig({
+      deployment: await FlyDeployment.createWithOpts({
         flyImage: FLY_IMAGE,
+        flyApiToken: process.env.FLY_API_TOKEN!,
+        flyBaseDomain: process.env.FLY_BASE_DOMAIN ?? "fly.dev",
       }).create({
         name: deploymentNameForCurrentTest("fly"),
       }),
