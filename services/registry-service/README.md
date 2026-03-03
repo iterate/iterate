@@ -20,4 +20,4 @@ Output:
 Environment variables used:
 
 - `ITERATE_PUBLIC_BASE_URL`
-- `ITERATE_PUBLIC_BASE_URL_TYPE` (`prefixed` or `subdomain-wildcard`, default `prefixed`)
+- `ITERATE_PUBLIC_BASE_URL_TYPE` (`prefix` or `subdomain`, default `prefix`)

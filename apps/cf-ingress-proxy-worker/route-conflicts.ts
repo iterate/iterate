@@ -1,6 +1,7 @@
 export class RouteInputError extends Error {}
 
 const PATTERN_CHARS = /^[a-z0-9*._-]+$/;
+export const MAX_PATTERN_LENGTH = 253;
 
 export function normalizePattern(input: string): string {
   const trimmed = input.trim().toLowerCase();
@@ -11,6 +12,9 @@ export function normalizePattern(input: string): string {
 
   const normalized = trimmed.replace(/\.$/, "");
   if (!normalized) {
+    throw new RouteInputError(`Invalid pattern: ${input}`);
+  }
+  if (normalized.length > MAX_PATTERN_LENGTH) {
     throw new RouteInputError(`Invalid pattern: ${input}`);
   }
   if (!PATTERN_CHARS.test(normalized)) {

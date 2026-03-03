@@ -24,7 +24,7 @@ interface ConfigEntry {
 
 interface IngressEnvValues {
   readonly ITERATE_PUBLIC_BASE_URL: string | null;
-  readonly ITERATE_PUBLIC_BASE_URL_TYPE: "prefixed" | "subdomain-wildcard";
+  readonly ITERATE_PUBLIC_BASE_URL_TYPE: "prefix" | "subdomain";
 }
 
 const parseJsonObject = (raw: string): Record<string, string> => {
@@ -279,7 +279,7 @@ export function App() {
             <p className="break-all text-[11px]">
               ITERATE_PUBLIC_BASE_URL_TYPE:{" "}
               <span className="font-mono">
-                {ingressEnv?.ITERATE_PUBLIC_BASE_URL_TYPE ?? "prefixed"}
+                {ingressEnv?.ITERATE_PUBLIC_BASE_URL_TYPE ?? "prefix"}
               </span>
             </p>
           </div>

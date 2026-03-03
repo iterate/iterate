@@ -1,7 +1,28 @@
 import { describe, expect, test } from "vitest";
-import { ResolvePublicUrlError, resolvePublicUrl } from "./resolve-public-url.ts";
+import {
+  PublicIngressUrlError,
+  normalizePublicIngressUrlType,
+  resolvePublicIngressUrl,
+} from "./ingress-url.ts";
 
-describe("resolvePublicUrl", () => {
+describe("normalizePublicIngressUrlType", () => {
+  test.each([
+    [undefined, "prefix"],
+    ["", "prefix"],
+    ["prefix", "prefix"],
+    ["subdomain", "subdomain"],
+  ])("normalizes %s -> %s", (input, expected) => {
+    expect(normalizePublicIngressUrlType(input)).toBe(expected);
+  });
+
+  test("rejects unknown types", () => {
+    expect(() => normalizePublicIngressUrlType("path" as never)).toThrowError(
+      PublicIngressUrlError,
+    );
+  });
+});
+
+describe("resolvePublicIngressUrl", () => {
   test.each([
     ["", "", "http://events.iterate.localhost", "throw"],
     [
@@ -42,26 +63,24 @@ describe("resolvePublicUrl", () => {
     ],
     ["https://bla.proxy.iterate.com", "prefix", "http://", "throw"],
   ])(
-    "baseUrl=%s baseUrlType=%s internalURL=%s => %s",
-    (baseUrl, baseUrlType, internalURL, expected) => {
+    "baseUrl=%s baseUrlType=%s internalUrl=%s => %s",
+    (publicBaseUrl, publicBaseUrlType, internalUrl, expected) => {
       if (expected === "throw") {
         expect(() =>
-          resolvePublicUrl({
-            ITERATE_PUBLIC_BASE_URL: baseUrl || undefined,
-            ITERATE_PUBLIC_BASE_URL_TYPE:
-              baseUrlType === "prefix" || baseUrlType === "subdomain" ? baseUrlType : undefined,
-            internalURL,
+          resolvePublicIngressUrl({
+            publicBaseUrl: publicBaseUrl || undefined,
+            publicBaseUrlType: publicBaseUrlType || undefined,
+            internalUrl,
           }),
-        ).toThrowError(ResolvePublicUrlError);
+        ).toThrowError(PublicIngressUrlError);
         return;
       }
 
       expect(
-        resolvePublicUrl({
-          ITERATE_PUBLIC_BASE_URL: baseUrl || undefined,
-          ITERATE_PUBLIC_BASE_URL_TYPE:
-            baseUrlType === "prefix" || baseUrlType === "subdomain" ? baseUrlType : undefined,
-          internalURL,
+        resolvePublicIngressUrl({
+          publicBaseUrl: publicBaseUrl || undefined,
+          publicBaseUrlType: publicBaseUrlType || undefined,
+          internalUrl,
         }),
       ).toBe(expected);
     },

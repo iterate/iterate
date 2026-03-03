@@ -87,7 +87,8 @@ pnpm --filter @iterate-com/cf-ingress-proxy-worker test
 For routing behavior changes (matching order, forwarding semantics), also run live E2E:
 
 ```bash
-INGRESS_PROXY_E2E_BASE_URL=<https://...workers.dev> \
+INGRESS_PROXY_E2E_BASE_URL=https://ci-ingress.iterate.com \
+INGRESS_PROXY_E2E_PROXY_BASE_DOMAIN=ci-ingress.iterate.com \
 INGRESS_PROXY_E2E_API_TOKEN=<token> \
 pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live
 ```
@@ -119,11 +120,15 @@ All endpoints require `Authorization: Bearer <INGRESS_PROXY_API_TOKEN>`.
 Alchemy manages worker + D1 resources.
 
 - set `WORKER_NAME` before running `alchemy.run.ts`
+- set `INGRESS_PROXY_HOSTNAME` for the base hostname (optional; defaults to `ingress.iterate.com`)
 - worker name: `<WORKER_NAME>`
 - D1 name: `<WORKER_NAME>-routes`
+- route patterns default to `<INGRESS_PROXY_HOSTNAME>/*` and `*.<INGRESS_PROXY_HOSTNAME>/*`
+- deploy also upserts proxied CNAME records for derived route hosts (requires `CLOUDFLARE_API_TOKEN`)
 - D1 schema applied via `migrations/`
 - deploy scripts:
   - `pnpm run dev` (dev stage)
+  - `pnpm run deploy:stg` (stg stage)
   - `pnpm run deploy:prd` (prod)
 
 ## Tests
@@ -131,11 +136,11 @@ Alchemy manages worker + D1 resources.
 - SQLite-backed unit tests for conflict/matching internals.
 - E2E-style worker tests for API and proxy behavior.
 - Live deployment E2E (Vitest):
-  - `INGRESS_PROXY_E2E_BASE_URL=<https://...workers.dev> INGRESS_PROXY_E2E_API_TOKEN=<token> pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live`
+  - `INGRESS_PROXY_E2E_BASE_URL=https://ci-ingress.iterate.com INGRESS_PROXY_E2E_PROXY_BASE_DOMAIN=ci-ingress.iterate.com INGRESS_PROXY_E2E_API_TOKEN=<token> pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live`
   - Covers exact vs wildcard priority, wildcard specificity, create/update conflict paths, self-update behavior, and deployed websocket proxy echo.
 - CI:
-  - PRs deploy ephemeral worker, run live E2E, then teardown.
-  - `main` runs the same live E2E flow first, then deploys production worker only if live E2E passes.
+  - PRs/pushes deploy shared `ci-ingress`, then run live E2E against `https://ci-ingress.iterate.com`.
+  - `main` runs live E2E first, then deploys production worker only if live E2E passes.
 
 ## TODO (explicitly deferred)
 

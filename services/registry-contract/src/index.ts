@@ -218,8 +218,8 @@ const publicBaseUrlType = z
     if (typeof value !== "string") return value;
     const trimmed = value.trim();
     return trimmed.length === 0 ? undefined : trimmed;
-  }, z.enum(["prefixed", "subdomain-wildcard"]).optional())
-  .default("prefixed");
+  }, z.enum(["prefix", "subdomain"]).optional())
+  .default("prefix");
 
 export const RegistryServiceEnv = z.object({
   REGISTRY_SERVICE_HOST: nonEmptyStringWithTrimDefault("0.0.0.0"),

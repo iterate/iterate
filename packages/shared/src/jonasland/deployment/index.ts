@@ -29,6 +29,7 @@ export {
   type DeploymentCommandResult,
   type DeploymentCreateInputCommon,
   type DeploymentEventsClient,
+  type DeploymentIngressInput,
   type DeploymentLocator,
   type DeploymentOwnership,
   type DockerDeploymentCreateInput,

@@ -95,6 +95,18 @@ const FLY_ALLOCATE_SHARED_V4_MUTATION = `
   }
 `;
 
+const FLY_ALLOCATE_V6_MUTATION = `
+  mutation FlyAllocateV6($appId: ID!) {
+    allocateIpAddress(input: { appId: $appId, type: v6 }) {
+      ipAddress {
+        address
+        type
+        region
+      }
+    }
+  }
+`;
+
 const FLY_ORG_APPS_QUERY = `
   query FlyOrgApps($orgSlug: String!, $first: Int!, $after: String) {
     organization(slug: $orgSlug) {
@@ -273,7 +285,19 @@ function isTransientFlyError(error: unknown): boolean {
 
 function isAlreadyExistsError(error: unknown): boolean {
   const message = String(error).toLowerCase();
-  return message.includes("already exists") || message.includes("has already been taken");
+  return (
+    message.includes("already exists") ||
+    message.includes("has already been taken") ||
+    message.includes("uniqueness constraint violated")
+  );
+}
+
+function isIpAlreadyAllocatedError(error: unknown): boolean {
+  const message = String(error).toLowerCase();
+  return (
+    message.includes("already has") &&
+    (message.includes("ip") || message.includes("ipv4") || message.includes("ipv6"))
+  );
 }
 
 function isNotFoundError(error: unknown): boolean {
@@ -317,6 +341,20 @@ async function ensureFlyAppExists(params: { env: FlyEnv; appName: string }): Pro
 async function ensureFlyIngress(params: { env: FlyEnv; appName: string }): Promise<void> {
   const { env, appName } = params;
 
+  // Required for public routing of <app>.fly.dev when apps are created via Machines API.
+  // This call is idempotent; if IPv6 already exists, Fly returns an "already has" style error.
+  try {
+    await flyGraphQL<FlyAllocateIp>({
+      env,
+      query: FLY_ALLOCATE_V6_MUTATION,
+      variables: { appId: appName },
+    });
+  } catch (error) {
+    if (!isAlreadyExistsError(error) && !isIpAlreadyAllocatedError(error)) {
+      throw error;
+    }
+  }
+
   const appNetwork = await flyGraphQL<FlyAppNetwork>({
     env,
     query: FLY_APP_NETWORK_QUERY,
@@ -326,23 +364,21 @@ async function ensureFlyIngress(params: { env: FlyEnv; appName: string }): Promi
     throw new Error(`Fly app ${appName} not found after creation`);
   }
 
-  if (appNetwork.app.sharedIpAddress) {
-    return;
-  }
+  if (!appNetwork.app.sharedIpAddress) {
+    await flyGraphQL<FlyAllocateIp>({
+      env,
+      query: FLY_ALLOCATE_SHARED_V4_MUTATION,
+      variables: { appId: appName },
+    });
 
-  await flyGraphQL<FlyAllocateIp>({
-    env,
-    query: FLY_ALLOCATE_SHARED_V4_MUTATION,
-    variables: { appId: appName },
-  });
-
-  const verify = await flyGraphQL<FlyAppNetwork>({
-    env,
-    query: FLY_APP_NETWORK_QUERY,
-    variables: { appName },
-  });
-  if (!verify.app?.sharedIpAddress) {
-    throw new Error(`Failed to allocate shared IPv4 for Fly app ${appName}`);
+    const verify = await flyGraphQL<FlyAppNetwork>({
+      env,
+      query: FLY_APP_NETWORK_QUERY,
+      variables: { appName },
+    });
+    if (!verify.app?.sharedIpAddress) {
+      throw new Error(`Failed to allocate shared IPv4 for Fly app ${appName}`);
+    }
   }
 }
 

@@ -5,17 +5,21 @@
   "type": "module",
   "exports": {
     "./jonasland": "./src/jonasland/index.ts",
+    "./jonasland/ingress-url": "./src/jonasland/ingress-url.ts",
     "./jonasland/deployment": "./src/jonasland/deployment/index.ts",
+    "./forwarded-header": "./src/forwarded-header.ts",
     "./force-public-url-vite-plugin": "./src/dev/force-public-url-vite-plugin.ts",
     "./project-ingress": "./src/project-ingress.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --environment node src/jonasland/ingress-url.test.ts"
   },
   "dependencies": {
     "@accelerated-software-development/caddy-api-client": "^0.4.3",
     "@docker/node-sdk": "^0.0.17",
     "@iterate-com/events-contract": "workspace:*",
+    "@iterate-com/orders-contract": "workspace:*",
     "@iterate-com/registry-service": "workspace:*",
     "@iterate-com/sandbox": "workspace:*",
     "@opentelemetry/api": "^1.9.0",
@@ -39,6 +43,7 @@
   "devDependencies": {
     "@types/node": "^25.0.10",
     "typescript": "^5.9.3",
-    "vite": "7.2.4"
+    "vite": "7.2.4",
+    "vitest": "^4.0.18"
   }
 }

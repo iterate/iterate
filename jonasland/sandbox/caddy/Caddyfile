@@ -90,12 +90,119 @@ http://clickstack.iterate.localhost {
     @health path /healthz
     respond @health "ok" 200
 
-    @frp_control_ws {
+    @iterate_pidnap path /__iterate/pidnap/*
+    handle @iterate_pidnap {
+        uri strip_prefix /__iterate/pidnap
+        reverse_proxy 127.0.0.1:9876
+    }
+
+    @iterate_registry path /__iterate/registry/*
+    handle @iterate_registry {
+        uri strip_prefix /__iterate/registry
+        reverse_proxy 127.0.0.1:8777
+    }
+
+    @iterate_events path /__iterate/events/*
+    handle @iterate_events {
+        uri strip_prefix /__iterate/events
+        reverse_proxy 127.0.0.1:19010
+    }
+
+    @iterate_orders path /__iterate/orders/*
+    handle @iterate_orders {
+        uri strip_prefix /__iterate/orders
+        reverse_proxy 127.0.0.1:19020
+    }
+
+    @iterate_docs path /__iterate/docs/*
+    handle @iterate_docs {
+        uri strip_prefix /__iterate/docs
+        reverse_proxy 127.0.0.1:19050
+    }
+
+    @iterate_home path /__iterate/home/*
+    handle @iterate_home {
+        uri strip_prefix /__iterate/home
+        reverse_proxy 127.0.0.1:19030
+    }
+
+    @iterate_outerbase path /__iterate/outerbase/*
+    handle @iterate_outerbase {
+        uri strip_prefix /__iterate/outerbase
+        reverse_proxy 127.0.0.1:19040
+    }
+
+    @iterate_caddy_admin path /__iterate/caddy-admin/*
+    handle @iterate_caddy_admin {
+        uri strip_prefix /__iterate/caddy-admin
+        reverse_proxy 127.0.0.1:2019
+    }
+
+    @iterate_caddymanager path /__iterate/caddymanager/*
+    handle @iterate_caddymanager {
+        uri strip_prefix /__iterate/caddymanager
+        reverse_proxy 127.0.0.1:8501
+    }
+
+    @iterate_openobserve path /__iterate/openobserve/*
+    handle @iterate_openobserve {
+        uri strip_prefix /__iterate/openobserve
+        reverse_proxy 127.0.0.1:5080 {
+            header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
+        }
+    }
+
+    @iterate_clickstack path /__iterate/clickstack/*
+    handle @iterate_clickstack {
+        uri strip_prefix /__iterate/clickstack
+        reverse_proxy 127.0.0.1:8080
+    }
+
+    @external_proxy_host header_regexp external_proxy_host Host ^([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
+    handle @external_proxy_host {
+        map {re.external_proxy_host.1} {iterate_service_upstream} {iterate_service_host} {
+            events 127.0.0.1:19010 events.iterate.localhost
+            orders 127.0.0.1:19020 orders.iterate.localhost
+            docs 127.0.0.1:19050 docs.iterate.localhost
+            home 127.0.0.1:19030 home.iterate.localhost
+            outerbase 127.0.0.1:19040 outerbase.iterate.localhost
+            registry 127.0.0.1:8777 registry.iterate.localhost
+            pidnap 127.0.0.1:9876 pidnap.iterate.localhost
+            caddy-admin 127.0.0.1:2019 caddy-admin.iterate.localhost
+            caddymanager 127.0.0.1:8501 caddymanager.iterate.localhost
+            openobserve 127.0.0.1:5080 openobserve.iterate.localhost
+            clickstack 127.0.0.1:8080 clickstack.iterate.localhost
+            default "" ""
+        }
+
+        @known_service expression `{iterate_service_upstream} != ""`
+        handle @known_service {
+            import iterate_cors_openapi
+            reverse_proxy {iterate_service_upstream} {
+                header_up Host {iterate_service_host}
+                header_up Forwarded "for={http.request.remote.host}; host={http.request.header.Host}; proto={http.request.scheme}"
+            }
+        }
+
+        respond "unknown service host pattern" 404
+    }
+
+    @frp_control_local header_regexp frp_control_local Host ^frp\.iterate\.localhost(?::[0-9]+)?$
+    handle @frp_control_local {
+        reverse_proxy 127.0.0.1:27000
+    }
+
+    @frp_control_localhost_ws {
         header Connection *Upgrade*
         header Upgrade websocket
-        host 127.0.0.1 localhost *.fly.dev
+        header_regexp frp_control_localhost_ws_host Host ^(localhost|127\.0\.0\.1)(?::[0-9]+)?$
     }
-    handle @frp_control_ws {
+    handle @frp_control_localhost_ws {
+        reverse_proxy 127.0.0.1:27000
+    }
+
+    @frp_control_external header_regexp frp_control_external Host ^frp(__[a-z0-9-]+)?\.ingress\.iterate\.com(?::[0-9]+)?$
+    handle @frp_control_external {
         reverse_proxy 127.0.0.1:27000
     }
 
@@ -105,9 +212,7 @@ http://clickstack.iterate.localhost {
     }
 
     reverse_proxy 127.0.0.1:19000 {
-        header_up X-Iterate-Original-Host {http.request.header.Host}
-        header_up X-Iterate-Original-SNI {http.request.tls.server_name}
-        header_up X-Iterate-Original-Proto {http.request.scheme}
+        header_up Forwarded "for={http.request.remote.host}; host={http.request.header.Host}; proto={http.request.scheme}"
     }
 }
 
@@ -159,20 +264,32 @@ http://clickstack.iterate.localhost {
         reverse_proxy 127.0.0.1:8501
     }
 
-    @frp_control_ws {
+    @frp_control_local header_regexp frp_control_local Host ^frp\.iterate\.localhost(?::[0-9]+)?$
+    handle @frp_control_local {
+        reverse_proxy 127.0.0.1:27000 {
+            stream_close_delay 5m
+        }
+    }
+
+    @frp_control_localhost_ws {
         header Connection *Upgrade*
         header Upgrade websocket
-        host 127.0.0.1 localhost *.fly.dev
+        header_regexp frp_control_localhost_ws_host Host ^(localhost|127\.0\.0\.1)(?::[0-9]+)?$
     }
-    handle @frp_control_ws {
+    handle @frp_control_localhost_ws {
+        reverse_proxy 127.0.0.1:27000 {
+            stream_close_delay 5m
+        }
+    }
+
+    @frp_control_external header_regexp frp_control_external Host ^frp(__[a-z0-9-]+)?\.ingress\.iterate\.com(?::[0-9]+)?$
+    handle @frp_control_external {
         reverse_proxy 127.0.0.1:27000 {
             stream_close_delay 5m
         }
     }
 
     reverse_proxy 127.0.0.1:19000 {
-        header_up X-Iterate-Original-Host {http.request.header.Host}
-        header_up X-Iterate-Original-SNI {http.request.tls.server_name}
-        header_up X-Iterate-Original-Proto {http.request.scheme}
+        header_up Forwarded "for={http.request.remote.host}; host={http.request.header.Host}; proto={http.request.scheme}"
     }
 }

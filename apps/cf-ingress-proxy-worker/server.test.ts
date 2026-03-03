@@ -140,6 +140,30 @@ describe("route groups", () => {
     const resolved = await resolveRoute(testEnv.DB, request);
     expect(resolved?.pattern).toBe("*__proj.ingress.iterate.com");
   });
+
+  test("ignores oversized legacy patterns during resolution", async () => {
+    await testEnv.DB.batch([
+      testEnv.DB.prepare("INSERT INTO routes (id, metadata) VALUES (?, ?)").bind(
+        "legacy",
+        JSON.stringify({ kind: "legacy" }),
+      ),
+      testEnv.DB.prepare(
+        "INSERT INTO route_patterns (route_id, pattern, target, headers) VALUES (?, ?, ?, ?)",
+      ).bind("legacy", `${"a".repeat(60_000)}.ingress.iterate.com`, "https://legacy.fly.dev", "{}"),
+    ]);
+
+    const created = await createSinglePatternRoute({
+      pattern: "app.proj.ingress.iterate.com",
+      target: "https://exact.fly.dev",
+    });
+
+    const request = new Request("https://app.proj.ingress.iterate.com/hello", {
+      headers: { host: "app.proj.ingress.iterate.com" },
+    });
+
+    const resolved = await resolveRoute(testEnv.DB, request);
+    expect(resolved?.routeId).toBe(created.routeId);
+  });
 });
 
 describe("proxy behavior", () => {
@@ -177,6 +201,10 @@ describe("proxy behavior", () => {
     expect(request.url).toBe("https://target.fly.dev/base/path?y=2");
     expect(request.headers.get("host")).not.toBe("app.ingress.iterate.com");
     expect(request.headers.get("x-custom")).toBe("ok");
+    expect(request.headers.get("forwarded")).toContain("host=app.ingress.iterate.com");
+    expect(request.headers.get("forwarded")).toContain("proto=https");
+    expect(request.headers.get("x-forwarded-host")).toBeNull();
+    expect(request.headers.get("x-forwarded-proto")).toBeNull();
     expect(response.status).toBe(200);
   });
 
@@ -217,6 +245,42 @@ describe("proxy behavior", () => {
     const headers = createUpstreamHeaders(request, {}, new URL("https://target.fly.dev/ws"));
     expect(headers.get("upgrade")?.toLowerCase()).toBe("websocket");
     expect(headers.get("connection")?.toLowerCase()).toContain("upgrade");
+  });
+
+  test("uses inbound forwarded context and strips forwarding-context x-headers", () => {
+    const request = new Request("https://socket.ingress.iterate.com/ws", {
+      headers: {
+        host: "socket.ingress.iterate.com",
+        forwarded: "for=198.51.100.10;host=public.example.com;proto=https",
+        "x-forwarded-host": "legacy.example.com",
+        "x-forwarded-proto": "http",
+        "x-legacy-original-host": "legacy.example.com",
+        "cf-connecting-ip": "203.0.113.20",
+        upgrade: "websocket",
+        connection: "Upgrade",
+      },
+    });
+
+    const headers = createUpstreamHeaders(
+      request,
+      {
+        "x-forwarded-host": "route-legacy.example.com",
+        "x-forwarded-proto": "http",
+        "x-route-original-host": "route-legacy.example.com",
+        forwarded: "for=10.0.0.1;host=route.example.com;proto=http",
+        "x-custom": "ok",
+      },
+      new URL("https://target.fly.dev/ws"),
+    );
+
+    expect(headers.get("x-custom")).toBe("ok");
+    expect(headers.get("x-forwarded-host")).toBeNull();
+    expect(headers.get("x-forwarded-proto")).toBeNull();
+    expect(headers.get("x-legacy-original-host")).toBeNull();
+    expect(headers.get("x-route-original-host")).toBeNull();
+    expect(headers.get("forwarded")).toContain("for=198.51.100.10");
+    expect(headers.get("forwarded")).toContain("host=public.example.com");
+    expect(headers.get("forwarded")).toContain("proto=wss");
   });
 
   test("proxies websocket upgrade transparently", async () => {

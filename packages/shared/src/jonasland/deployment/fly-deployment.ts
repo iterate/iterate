@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { lookup as dnsLookup } from "node:dns/promises";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { Readable } from "node:stream";
 import { CaddyClient } from "@accelerated-software-development/caddy-api-client";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
 import { createRegistryClient, type RegistryClient } from "@iterate-com/registry-service/client";
 import { createClient as createPidnapClient, type Client as PidnapClient } from "pidnap/client";
 import {
@@ -29,6 +34,54 @@ type FlyMachineRecord = {
   config?: {
     metadata?: Record<string, unknown>;
   };
+};
+
+const DEFAULT_INGRESS_PROXY_BASE_URL = "https://ingress.iterate.com";
+const DEFAULT_INGRESS_PROXY_DOMAIN = "ingress.iterate.com";
+
+type IngressRouteHeaders = Record<string, string>;
+
+type IngressRoutePatternInput = {
+  pattern: string;
+  target: string;
+  headers?: IngressRouteHeaders;
+};
+
+type IngressRoutePatternRecord = {
+  patternId: number;
+  pattern: string;
+  target: string;
+  headers: IngressRouteHeaders;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type IngressRouteRecord = {
+  routeId: string;
+  metadata: Record<string, unknown>;
+  patterns: IngressRoutePatternRecord[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type IngressProxyClient = {
+  createRoute(input: {
+    metadata?: Record<string, unknown>;
+    patterns: IngressRoutePatternInput[];
+  }): Promise<IngressRouteRecord>;
+  deleteRoute(input: { routeId: string }): Promise<{ deleted: boolean }>;
+};
+
+type IngressProxyConfig = {
+  baseUrl: string;
+  domain: string;
+  apiToken: string;
+};
+
+type FlyIngressRouteSet = {
+  baseHost: string;
+  wildcardHostPattern: string;
+  routeIds: string[];
 };
 
 function errorCode(error: unknown): string | undefined {
@@ -175,13 +228,29 @@ function createFlyHostRoutedFetch(params: {
   ingressBaseUrl: string;
   hostHeader: string;
 }): (request: Request) => Promise<Response> {
+  const serviceName = params.hostHeader
+    .replace(/\.iterate\.localhost$/i, "")
+    .trim()
+    .toLowerCase();
+  const ingressBase = new URL(params.ingressBaseUrl);
+  const ingressHostParts = ingressBase.hostname.split(".");
+  const deploymentId = ingressHostParts[0] ?? "";
+  const ingressDomain = ingressHostParts.slice(1).join(".");
+
+  if (!deploymentId || !ingressDomain) {
+    throw new Error(`invalid ingress base host for Fly service routing: ${ingressBase.hostname}`);
+  }
+
   return async (request: Request): Promise<Response> => {
     const requestUrl = new URL(request.url);
-    const targetUrl = new URL(`${requestUrl.pathname}${requestUrl.search}`, params.ingressBaseUrl);
+    const targetUrl = new URL(params.ingressBaseUrl);
+    targetUrl.hostname = `${serviceName}__${deploymentId}.${ingressDomain}`;
+    targetUrl.pathname = requestUrl.pathname;
+    targetUrl.search = requestUrl.search;
     const method = request.method.toUpperCase();
     const headers = new Headers(request.headers);
-    headers.set("host", params.hostHeader);
     headers.set("connection", "close");
+    headers.delete("host");
     headers.delete("content-length");
 
     const body =
@@ -195,14 +264,50 @@ function createFlyHostRoutedFetch(params: {
       headers.set("content-length", body.byteLength.toString());
     }
 
-    return await withRetriableSocketErrors(
-      async () =>
-        await fetch(targetUrl, {
-          method,
-          headers,
-          body,
-        }),
-    );
+    return await withRetriableSocketErrors(async () => {
+      return await new Promise<Response>((resolve, reject) => {
+        const requestImpl = targetUrl.protocol === "https:" ? httpsRequest : httpRequest;
+        const req = requestImpl(
+          targetUrl,
+          {
+            method,
+            headers: Object.fromEntries(headers.entries()),
+          },
+          (res) => {
+            const responseHeaders = new Headers();
+            for (const [key, value] of Object.entries(res.headers)) {
+              if (value === undefined) continue;
+              if (Array.isArray(value)) {
+                for (const entry of value) {
+                  responseHeaders.append(key, entry);
+                }
+                continue;
+              }
+              responseHeaders.set(key, String(value));
+            }
+
+            const status = res.statusCode ?? 500;
+            const responseBody =
+              status === 204 || status === 304
+                ? undefined
+                : (Readable.toWeb(res as unknown as Readable) as ReadableStream<Uint8Array>);
+            resolve(
+              new Response(responseBody, {
+                status,
+                statusText: res.statusMessage ?? "",
+                headers: responseHeaders,
+              }),
+            );
+          },
+        );
+
+        req.on("error", reject);
+        if (body !== undefined) {
+          req.write(body);
+        }
+        req.end();
+      });
+    });
   };
 }
 
@@ -210,10 +315,26 @@ function createFlyCaddyApiClient(params: {
   ingressBaseUrl: string;
   hostHeader?: string;
 }): CaddyClient {
+  const serviceName = (params.hostHeader ?? "")
+    .replace(/\.iterate\.localhost$/i, "")
+    .trim()
+    .toLowerCase();
+  const ingressBase = new URL(params.ingressBaseUrl);
+  const ingressHostParts = ingressBase.hostname.split(".");
+  const deploymentId = ingressHostParts[0] ?? "";
+  const ingressDomain = ingressHostParts.slice(1).join(".");
+  if (serviceName.length > 0 && (!deploymentId || !ingressDomain)) {
+    throw new Error(`invalid ingress base host for Fly service routing: ${ingressBase.hostname}`);
+  }
   const caddy = new CaddyClient({ adminUrl: params.ingressBaseUrl });
 
   caddy.request = async (path: string, options: RequestInit = {}): Promise<Response> => {
-    const url = new URL(path, params.ingressBaseUrl);
+    const baseUrl = new URL(params.ingressBaseUrl);
+    if (serviceName.length > 0) {
+      baseUrl.hostname = `${serviceName}__${deploymentId}.${ingressDomain}`;
+    }
+    const pathValue = path.startsWith("/") ? path : `/${path}`;
+    const url = new URL(pathValue, baseUrl);
     const method = options.method ?? "GET";
     const headers = new Headers(options.headers);
 
@@ -227,20 +348,63 @@ function createFlyCaddyApiClient(params: {
     headers.delete("sec-fetch-dest");
     headers.delete("origin");
 
-    if (params.hostHeader) {
-      headers.set("host", params.hostHeader);
+    headers.delete("host");
+
+    const body =
+      options.body === undefined || options.body === null
+        ? undefined
+        : Buffer.from(await new Response(options.body).arrayBuffer());
+    if (body !== undefined) {
+      headers.set("content-length", body.byteLength.toString());
+    }
+    if (body === undefined) {
+      headers.delete("content-length");
     }
 
-    const body = options.body;
+    return await withRetriableSocketErrors(async () => {
+      return await new Promise<Response>((resolve, reject) => {
+        const requestImpl = url.protocol === "https:" ? httpsRequest : httpRequest;
+        const req = requestImpl(
+          url,
+          {
+            method,
+            headers: Object.fromEntries(headers.entries()),
+          },
+          (res) => {
+            const responseHeaders = new Headers();
+            for (const [key, value] of Object.entries(res.headers)) {
+              if (value === undefined) continue;
+              if (Array.isArray(value)) {
+                for (const entry of value) {
+                  responseHeaders.append(key, entry);
+                }
+                continue;
+              }
+              responseHeaders.set(key, String(value));
+            }
 
-    return await withRetriableSocketErrors(
-      async () =>
-        await fetch(url, {
-          method,
-          headers,
-          body,
-        }),
-    );
+            const status = res.statusCode ?? 500;
+            const responseBody =
+              status === 204 || status === 304
+                ? undefined
+                : (Readable.toWeb(res as unknown as Readable) as ReadableStream<Uint8Array>);
+            resolve(
+              new Response(responseBody, {
+                status,
+                statusText: res.statusMessage ?? "",
+                headers: responseHeaders,
+              }),
+            );
+          },
+        );
+
+        req.on("error", reject);
+        if (body !== undefined) {
+          req.write(body);
+        }
+        req.end();
+      });
+    });
   };
 
   return caddy;
@@ -262,6 +426,152 @@ async function waitForHostResolution(params: { host: string; timeoutMs?: number 
   }
 
   throw new Error(`timed out waiting for DNS resolution of ${params.host}`, { cause: lastError });
+}
+
+function normalizeBaseUrl(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
+function resolveIngressProxyConfig(rawEnv: Record<string, string | undefined>): IngressProxyConfig {
+  const baseUrl = normalizeBaseUrl(
+    (
+      rawEnv.JONASLAND_E2E_INGRESS_PROXY_BASE_URL ??
+      rawEnv.INGRESS_PROXY_BASE_URL ??
+      DEFAULT_INGRESS_PROXY_BASE_URL
+    ).trim(),
+  );
+  const domain = (
+    rawEnv.JONASLAND_E2E_INGRESS_PROXY_DOMAIN ??
+    rawEnv.INGRESS_PROXY_DOMAIN ??
+    DEFAULT_INGRESS_PROXY_DOMAIN
+  ).trim();
+  const apiToken = (
+    rawEnv.INGRESS_PROXY_API_TOKEN ??
+    rawEnv.INGRESS_PROXY_E2E_API_TOKEN ??
+    ""
+  ).trim();
+
+  if (!baseUrl) {
+    throw new Error(
+      "Missing ingress proxy base URL (set JONASLAND_E2E_INGRESS_PROXY_BASE_URL or INGRESS_PROXY_BASE_URL)",
+    );
+  }
+  if (!domain) {
+    throw new Error(
+      "Missing ingress proxy domain (set JONASLAND_E2E_INGRESS_PROXY_DOMAIN or INGRESS_PROXY_DOMAIN)",
+    );
+  }
+  if (!apiToken) {
+    throw new Error(
+      "Missing ingress proxy API token (set INGRESS_PROXY_API_TOKEN or INGRESS_PROXY_E2E_API_TOKEN)",
+    );
+  }
+
+  return { baseUrl, domain, apiToken };
+}
+
+function resolveIngressProxyDomain(rawEnv: Record<string, string | undefined>): string {
+  return (
+    rawEnv.JONASLAND_E2E_INGRESS_PROXY_DOMAIN ??
+    rawEnv.INGRESS_PROXY_DOMAIN ??
+    DEFAULT_INGRESS_PROXY_DOMAIN
+  ).trim();
+}
+
+function createIngressProxyClient(config: IngressProxyConfig): IngressProxyClient {
+  const link = new RPCLink({
+    url: `${config.baseUrl}/api/orpc`,
+    fetch: async (request: URL | Request, init?: RequestInit) => {
+      const headers = new Headers(request instanceof Request ? request.headers : init?.headers);
+      headers.set("authorization", `Bearer ${config.apiToken}`);
+      if (!headers.has("content-type")) {
+        headers.set("content-type", "application/json");
+      }
+      return await fetch(request, { ...init, headers });
+    },
+  });
+  return createORPCClient(link) as IngressProxyClient;
+}
+
+function resolveFlyIngressHosts(params: { testId: string; ingressProxyDomain: string }): {
+  baseHost: string;
+  wildcardHostPattern: string;
+} {
+  return {
+    baseHost: `${params.testId}.${params.ingressProxyDomain}`,
+    wildcardHostPattern: `*__${params.testId}.${params.ingressProxyDomain}`,
+  };
+}
+
+async function createFlyIngressRoutes(params: {
+  client: IngressProxyClient;
+  testId: string;
+  ingressProxyDomain: string;
+  targetUrl: string;
+}): Promise<FlyIngressRouteSet> {
+  const hosts = resolveFlyIngressHosts({
+    testId: params.testId,
+    ingressProxyDomain: params.ingressProxyDomain,
+  });
+
+  const routeIds: string[] = [];
+  try {
+    const baseRoute = await params.client.createRoute({
+      metadata: {
+        source: "jonasland-fly-deployment",
+        testId: params.testId,
+        routeType: "base",
+      },
+      patterns: [
+        {
+          pattern: hosts.baseHost,
+          target: params.targetUrl,
+          headers: {
+            Host: hosts.baseHost,
+          },
+        },
+      ],
+    });
+    routeIds.push(baseRoute.routeId);
+
+    const wildcardRoute = await params.client.createRoute({
+      metadata: {
+        source: "jonasland-fly-deployment",
+        testId: params.testId,
+        routeType: "service-wildcard",
+      },
+      patterns: [
+        {
+          pattern: hosts.wildcardHostPattern,
+          target: params.targetUrl,
+        },
+      ],
+    });
+    routeIds.push(wildcardRoute.routeId);
+  } catch (error) {
+    for (const routeId of routeIds.reverse()) {
+      await params.client.deleteRoute({ routeId }).catch(() => {});
+    }
+    throw new Error(
+      `failed creating ingress routes for fly deployment ${params.testId} (${hosts.baseHost}, ${hosts.wildcardHostPattern})`,
+      { cause: error },
+    );
+  }
+
+  return {
+    baseHost: hosts.baseHost,
+    wildcardHostPattern: hosts.wildcardHostPattern,
+    routeIds,
+  };
+}
+
+async function deleteFlyIngressRoutes(params: {
+  client: IngressProxyClient;
+  routeIds: string[];
+}): Promise<void> {
+  for (const routeId of [...params.routeIds].reverse()) {
+    await params.client.deleteRoute({ routeId });
+  }
 }
 
 async function waitForPidnapHealthy(params: {
@@ -381,8 +691,9 @@ export async function flyDeploymentRuntimeCreate(
 
   const flyBaseDomain = rawEnv.FLY_BASE_DOMAIN ?? "fly.dev";
   const externalId = normalizeFlyExternalId(params.name);
-  const fallbackIngressBaseUrl = `https://${externalId}.${flyBaseDomain}`;
-  const fallbackClientBaseUrl = fallbackIngressBaseUrl;
+  const flyPublicBaseUrl = `https://${externalId}.${flyBaseDomain}`;
+  const ingressBaseUrlFromRoute = flyPublicBaseUrl;
+  const clientBaseUrlFromRoute = ingressBaseUrlFromRoute;
 
   const provider = new FlyProvider(rawEnv);
   const envRecord = toEnvRecord(params.env);
@@ -392,9 +703,8 @@ export async function flyDeploymentRuntimeCreate(
       name: params.name ?? externalId,
       envVars: {
         ...envRecord,
-        ITERATE_PUBLIC_BASE_URL: envRecord.ITERATE_PUBLIC_BASE_URL ?? fallbackIngressBaseUrl,
-        ITERATE_PUBLIC_BASE_URL_TYPE:
-          envRecord.ITERATE_PUBLIC_BASE_URL_TYPE ?? "subdomain-wildcard",
+        ITERATE_PUBLIC_BASE_URL: envRecord.ITERATE_PUBLIC_BASE_URL ?? flyPublicBaseUrl,
+        ITERATE_PUBLIC_BASE_URL_TYPE: envRecord.ITERATE_PUBLIC_BASE_URL_TYPE ?? "subdomain",
       },
       providerSnapshotId: params.flyImage,
     });
@@ -432,10 +742,6 @@ export async function flyDeploymentRuntimeCreate(
     throw new Error(`failed to create or recover Fly sandbox ${externalId}`);
   })();
 
-  await waitForHostResolution({
-    host: new URL(fallbackIngressBaseUrl).hostname,
-  });
-
   let deleted = false;
   let machineId: string | undefined;
 
@@ -447,8 +753,8 @@ export async function flyDeploymentRuntimeCreate(
     return machineId;
   };
 
-  let ingressBaseUrl = fallbackIngressBaseUrl;
-  let clientBaseUrl = fallbackClientBaseUrl;
+  let ingressBaseUrl = ingressBaseUrlFromRoute;
+  let clientBaseUrl = clientBaseUrlFromRoute;
   let pidnap = createPidnapClient({
     url: `${clientBaseUrl}/rpc`,
     fetch: createFlyHostRoutedFetch({
@@ -469,7 +775,7 @@ export async function flyDeploymentRuntimeCreate(
   });
 
   const refreshClients = async () => {
-    ingressBaseUrl = fallbackIngressBaseUrl;
+    ingressBaseUrl = ingressBaseUrlFromRoute;
     clientBaseUrl = ingressBaseUrl;
 
     pidnap = createPidnapClient({
@@ -611,7 +917,17 @@ export async function flyDeploymentRuntimeCreate(
     async [Symbol.asyncDispose]() {
       if (deleted) return;
       deleted = true;
-      await sandbox.delete().catch(() => {});
+      const cleanupErrors: string[] = [];
+
+      await sandbox.delete().catch((error) => {
+        cleanupErrors.push(
+          `failed deleting fly sandbox: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+
+      if (cleanupErrors.length > 0) {
+        throw new Error(cleanupErrors.join("\n"));
+      }
     },
   };
 
@@ -637,8 +953,8 @@ export async function flyDeploymentRuntimeAttach(
   }
 
   const flyBaseDomain = rawEnv.FLY_BASE_DOMAIN ?? "fly.dev";
-  const fallbackIngressBaseUrl = `https://${locator.appName}.${flyBaseDomain}`;
-  const fallbackClientBaseUrl = fallbackIngressBaseUrl;
+  const ingressBaseUrlFromRoute = `https://${locator.appName}.${flyBaseDomain}`;
+  const clientBaseUrlFromRoute = ingressBaseUrlFromRoute;
 
   const provider = new FlyProvider(rawEnv);
   const sandbox = provider.getWithMachineId({
@@ -650,7 +966,7 @@ export async function flyDeploymentRuntimeAttach(
   }
 
   await waitForHostResolution({
-    host: new URL(fallbackIngressBaseUrl).hostname,
+    host: new URL(ingressBaseUrlFromRoute).hostname,
   });
 
   let machineId: string | undefined = locator.machineId;
@@ -663,8 +979,8 @@ export async function flyDeploymentRuntimeAttach(
     return machineId;
   };
 
-  let ingressBaseUrl = fallbackIngressBaseUrl;
-  let clientBaseUrl = fallbackClientBaseUrl;
+  let ingressBaseUrl = ingressBaseUrlFromRoute;
+  let clientBaseUrl = clientBaseUrlFromRoute;
   let pidnap = createPidnapClient({
     url: `${clientBaseUrl}/rpc`,
     fetch: createFlyHostRoutedFetch({
@@ -685,7 +1001,7 @@ export async function flyDeploymentRuntimeAttach(
   });
 
   const refreshClients = async () => {
-    ingressBaseUrl = fallbackIngressBaseUrl;
+    ingressBaseUrl = ingressBaseUrlFromRoute;
     clientBaseUrl = ingressBaseUrl;
 
     pidnap = createPidnapClient({

@@ -6,18 +6,29 @@ import {
   type Deployment,
 } from "@iterate-com/shared/jonasland/deployment";
 import { startFlyFrpEgressBridge } from "../../test-helpers/frp-egress-bridge.ts";
-import { MockEgressProxy } from "../../test-helpers/mock-egress-proxy.ts";
+import { mockEgressProxy } from "../../test-helpers/mock-egress-proxy.ts";
+import { useDockerPublicIngress } from "../../test-helpers/use-docker-public-ingress.ts";
 
-type ProviderName = "docker" | "fly";
+type ProviderName = "docker" | "docker-public" | "fly";
 
 type ProviderCase = {
   name: ProviderName;
   enabled: boolean;
   create: () => Promise<Deployment>;
+  setupPublicIngress?: boolean;
 };
 
 const providerEnv = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const runAllProviders = providerEnv === "all";
+const dockerAccessModes = new Set(
+  (process.env.JONASLAND_E2E_DOCKER_ACCESS_MODES ?? "local")
+    .split(",")
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => part.length > 0),
+);
+const runDockerLocal =
+  dockerAccessModes.has("all") || dockerAccessModes.has("local") || dockerAccessModes.size === 0;
+const runDockerPublic = dockerAccessModes.has("all") || dockerAccessModes.has("public-ingress");
 
 const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "jonasland-sandbox:local";
 const FLY_IMAGE = process.env.JONASLAND_E2E_FLY_IMAGE ?? "";
@@ -25,13 +36,24 @@ const FLY_IMAGE = process.env.JONASLAND_E2E_FLY_IMAGE ?? "";
 const providerCases: ProviderCase[] = [
   {
     name: "docker",
-    enabled: runAllProviders || providerEnv === "docker",
+    enabled: (runAllProviders || providerEnv === "docker") && runDockerLocal,
     create: async () =>
       await DockerDeployment.createWithConfig({
         dockerImage: DOCKER_IMAGE,
       }).create({
         name: deploymentNameForCurrentTest("docker"),
       }),
+  },
+  {
+    name: "docker-public",
+    enabled: (runAllProviders || providerEnv === "docker") && runDockerPublic,
+    create: async () =>
+      await DockerDeployment.createWithConfig({
+        dockerImage: DOCKER_IMAGE,
+      }).create({
+        name: deploymentNameForCurrentTest("docker"),
+      }),
+    setupPublicIngress: true,
   },
   {
     name: "fly",
@@ -91,7 +113,11 @@ async function waitForFirehoseEvent(params: {
   let lastError: unknown;
 
   while (Date.now() < deadline) {
-    const firehose = (await params.deployment.events.firehose({}))[Symbol.asyncIterator]();
+    const stream = await params.deployment.events.firehose({});
+    if (!stream || typeof (stream as AsyncIterable<unknown>)[Symbol.asyncIterator] !== "function") {
+      throw new Error(`events.firehose() returned non-iterator: ${String(stream)}`);
+    }
+    const firehose = stream[Symbol.asyncIterator]();
     try {
       while (Date.now() < deadline) {
         const remainingMs = Math.max(1, deadline - Date.now());
@@ -131,9 +157,16 @@ for (const provider of providerCases) {
   // Tip: run a single provider with `pnpm jonasland e2e -t docker` or `-t fly`.
   describe.runIf(provider.enabled)(`frp egress milestone (${provider.name})`, () => {
     test("routes external-proxy egress via frp to local mock", async () => {
-      await using proxy = await MockEgressProxy.create();
+      await using proxy = await mockEgressProxy();
 
       await using deployment = await provider.create();
+      await using _publicIngress =
+        provider.setupPublicIngress && deployment instanceof DockerDeployment
+          ? await useDockerPublicIngress({
+              deployment,
+              testSlug: `frp-egress-milestone-${provider.name}`,
+            })
+          : undefined;
 
       await using frpBridge = await startFlyFrpEgressBridge({
         deployment,
@@ -181,11 +214,20 @@ for (const provider of providerCases) {
       expect(new URL(request.url).pathname).toBe(requestPath);
       expect(await request.text()).toBe(payload);
       expect(request.headers.get("host")).toContain("127.0.0.1:27180");
+      expect(request.headers.get("forwarded")?.toLowerCase()).toContain("host=");
+      expect(request.headers.get("forwarded")?.toLowerCase()).toContain("proto=");
       expect(response.status).toBe(200);
     }, 900_000);
 
     test("events firehose SSE emits appended event", async () => {
       await using deployment = await provider.create();
+      await using _publicIngress =
+        provider.setupPublicIngress && deployment instanceof DockerDeployment
+          ? await useDockerPublicIngress({
+              deployment,
+              testSlug: `frp-firehose-${provider.name}`,
+            })
+          : undefined;
 
       const streamPath = `frp-milestone/events/${randomUUID().slice(0, 8)}`;
       const expectedType = "https://events.iterate.com/events/test/frp-milestone-sse";

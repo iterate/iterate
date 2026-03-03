@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { normalizePattern } from "./route-conflicts.ts";
+import { MAX_PATTERN_LENGTH, normalizePattern } from "./route-conflicts.ts";
 import { resetDb } from "./test/test-helpers.ts";
 
 const testEnv = env as { DB: D1Database };
@@ -31,6 +31,7 @@ describe("normalizePattern", () => {
     ["*-", "Invalid pattern"],
     ["*_", "Invalid pattern"],
     ["*.", "Invalid pattern"],
+    ["a".repeat(MAX_PATTERN_LENGTH + 1), "Invalid pattern"],
   ])("rejects invalid pattern %j", (input, message) => {
     expect(() => normalizePattern(input)).toThrow(message);
   });

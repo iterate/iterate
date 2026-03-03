@@ -6,7 +6,7 @@ import {
   type Deployment,
 } from "@iterate-com/shared/jonasland/deployment";
 import { startFlyFrpEgressBridge } from "../test-helpers/frp-egress-bridge.ts";
-import { MockEgressProxy } from "../test-helpers/mock-egress-proxy.ts";
+import { mockEgressProxy } from "../test-helpers/mock-egress-proxy.ts";
 
 type ProviderName = "docker" | "fly";
 
@@ -146,7 +146,7 @@ for (const provider of providerCases) {
     }, 900_000);
 
     test("frp + egress external-proxy mode delivers payload to local vitest mock", async () => {
-      await using proxy = await MockEgressProxy.create();
+      await using proxy = await mockEgressProxy();
 
       await using deployment = await provider.create();
 
@@ -213,6 +213,8 @@ for (const provider of providerCases) {
       expect(new URL(request.url).pathname).toBe(requestPath);
       expect(await request.text()).toBe(payload);
       expect(request.headers.get("host")).toContain("127.0.0.1:27180");
+      expect(request.headers.get("forwarded")?.toLowerCase()).toContain("host=");
+      expect(request.headers.get("forwarded")?.toLowerCase()).toContain("proto=");
       expect(response.status).toBe(200);
     }, 900_000);
   });

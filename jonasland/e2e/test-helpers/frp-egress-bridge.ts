@@ -9,6 +9,8 @@ import type { DeploymentRuntime } from "@iterate-com/shared/jonasland/deployment
 const FRP_DATA_REMOTE_PORT = 27180;
 const FRP_VERSION = "0.65.0";
 const CONNECT_TIMEOUT_MS = 45_000;
+const DEFAULT_INGRESS_PROXY_BASE_URL = "https://ingress.iterate.com";
+const DEFAULT_INGRESS_PROXY_DOMAIN = "ingress.iterate.com";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -127,6 +129,7 @@ async function startFrpc(params: {
   const config = [
     `serverAddr = ${tomlString(params.controlServerHost)}`,
     `serverPort = ${String(params.controlServerPort)}`,
+    "loginFailExit = false",
     `transport.protocol = ${tomlString(params.controlTransportProtocol)}`,
     "",
     "[[proxies]]",
@@ -216,40 +219,169 @@ async function startFrpc(params: {
   };
 }
 
-export interface FlyFrpEgressBridge extends AsyncDisposable {
+type IngressRouteRecord = {
+  routeId: string;
+};
+
+async function callIngressProxyProcedure<TResponse>(params: {
+  baseUrl: string;
+  apiToken: string;
+  name: string;
+  input: unknown;
+}): Promise<TResponse> {
+  const response = await fetch(`${params.baseUrl}/api/orpc/${params.name}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${params.apiToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ json: params.input }),
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as {
+    json?: TResponse;
+    error?: unknown;
+  };
+
+  if (!response.ok) {
+    throw new Error(
+      `ingress proxy ${params.name} failed (${response.status}): ${JSON.stringify(payload.json ?? payload.error ?? payload)}`,
+    );
+  }
+
+  if (payload.json === undefined) {
+    throw new Error(`ingress proxy ${params.name} returned no json payload`);
+  }
+
+  return payload.json;
+}
+
+async function createIngressRoute(params: {
+  baseUrl: string;
+  apiToken: string;
+  host: string;
+  target: string;
+  metadata?: Record<string, unknown>;
+}): Promise<IngressRouteRecord> {
+  return await callIngressProxyProcedure<IngressRouteRecord>({
+    baseUrl: params.baseUrl,
+    apiToken: params.apiToken,
+    name: "createRoute",
+    input: {
+      metadata: params.metadata ?? {},
+      patterns: [
+        {
+          pattern: params.host,
+          target: params.target,
+          headers: {
+            Host: params.host,
+          },
+        },
+      ],
+    },
+  });
+}
+
+async function deleteIngressRoute(params: {
+  baseUrl: string;
+  apiToken: string;
+  routeId: string;
+}): Promise<void> {
+  await callIngressProxyProcedure<{ deleted: boolean }>({
+    baseUrl: params.baseUrl,
+    apiToken: params.apiToken,
+    name: "deleteRoute",
+    input: {
+      routeId: params.routeId,
+    },
+  });
+}
+
+function resolveIngressProxyApiToken(): string {
+  const token =
+    process.env.INGRESS_PROXY_API_TOKEN ?? process.env.INGRESS_PROXY_E2E_API_TOKEN ?? "";
+  if (token.trim().length === 0) {
+    throw new Error(
+      "Missing ingress proxy API token (set INGRESS_PROXY_API_TOKEN or INGRESS_PROXY_E2E_API_TOKEN)",
+    );
+  }
+  return token;
+}
+
+function resolveDockerFrpControlHost(): string {
+  const override = process.env.JONASLAND_E2E_DOCKER_FRP_CONTROL_HOST?.trim();
+  if (override && override.length > 0) return override;
+  return "frp.iterate.localhost";
+}
+
+export interface FrpEgressBridge extends AsyncDisposable {
   runId: string;
   dataProxyUrl: string;
+  controlServerHost: string;
+  controlServerPort: number;
+  controlTransportProtocol: "websocket" | "wss";
   clientLogs(): string;
   stop(): Promise<void>;
 }
 
-export async function startFlyFrpEgressBridge(params: {
+export async function startFrpEgressBridge(params: {
   deployment: DeploymentRuntime;
   localTargetHost?: string;
   localTargetPort: number;
   frpcBin?: string;
   runId?: string;
-}): Promise<FlyFrpEgressBridge> {
+}): Promise<FrpEgressBridge> {
   let step = "init";
   let runId = "";
   let controlServerHost = "";
-  let controlServerPort = 443;
-  let controlTransportProtocol: "websocket" | "wss" = "wss";
+  let controlServerPort = 80;
+  let controlTransportProtocol: "websocket" | "wss" = "websocket";
   let dataProxyUrl = "";
+  let createdIngressRoute: { baseUrl: string; apiToken: string; routeId: string } | null = null;
 
   try {
     step = "compute-run-context";
     runId = sanitizeRunId(params.runId);
 
     const ingressUrl = new URL(await params.deployment.ingressUrl());
-    controlServerHost = ingressUrl.hostname;
-    controlServerPort =
-      ingressUrl.port.length > 0
-        ? Number.parseInt(ingressUrl.port, 10)
-        : ingressUrl.protocol === "https:"
-          ? 443
-          : 80;
-    controlTransportProtocol = ingressUrl.protocol === "https:" ? "wss" : "websocket";
+    const ingressHostname = ingressUrl.hostname.toLowerCase();
+
+    if (ingressHostname.endsWith(".fly.dev") || ingressHostname.endsWith(".ingress.iterate.com")) {
+      step = "create-fly-ingress-proxy-route";
+      const ingressProxyBaseUrl =
+        process.env.JONASLAND_E2E_INGRESS_PROXY_BASE_URL ?? DEFAULT_INGRESS_PROXY_BASE_URL;
+      const ingressProxyDomain =
+        process.env.JONASLAND_E2E_INGRESS_PROXY_DOMAIN ?? DEFAULT_INGRESS_PROXY_DOMAIN;
+      const ingressProxyApiToken = resolveIngressProxyApiToken();
+
+      controlServerHost = `frp__${runId}.${ingressProxyDomain}`;
+      controlServerPort = 443;
+      controlTransportProtocol = "wss";
+
+      const route = await createIngressRoute({
+        baseUrl: ingressProxyBaseUrl,
+        apiToken: ingressProxyApiToken,
+        host: controlServerHost,
+        target: `https://${ingressHostname}`,
+        metadata: {
+          source: "jonasland-e2e-frp-bridge",
+          runId,
+          targetHost: ingressHostname,
+          createdAt: new Date().toISOString(),
+        },
+      });
+
+      createdIngressRoute = {
+        baseUrl: ingressProxyBaseUrl,
+        apiToken: ingressProxyApiToken,
+        routeId: route.routeId,
+      };
+    } else {
+      controlServerHost = resolveDockerFrpControlHost();
+      controlServerPort = Number.parseInt(ingressUrl.port || "80", 10);
+      controlTransportProtocol = "websocket";
+    }
+
     dataProxyUrl = `http://127.0.0.1:${String(FRP_DATA_REMOTE_PORT)}`;
 
     step = "start-frpc";
@@ -278,11 +410,19 @@ export async function startFlyFrpEgressBridge(params: {
       if (stopped) return;
       stopped = true;
       await frpc.stop().catch(() => {});
+
+      if (createdIngressRoute) {
+        await deleteIngressRoute(createdIngressRoute).catch(() => {});
+        createdIngressRoute = null;
+      }
     };
 
     return {
       runId,
       dataProxyUrl,
+      controlServerHost,
+      controlServerPort,
+      controlTransportProtocol,
       clientLogs: () => frpc.logs(),
       stop,
       async [Symbol.asyncDispose]() {
@@ -290,9 +430,18 @@ export async function startFlyFrpEgressBridge(params: {
       },
     };
   } catch (error) {
+    if (createdIngressRoute) {
+      await deleteIngressRoute(createdIngressRoute).catch(() => {});
+      createdIngressRoute = null;
+    }
+
     throw new Error(
-      `startFlyFrpEgressBridge failed during: ${step} (runId=${runId || "n/a"}, controlServerHost=${controlServerHost || "n/a"}, dataProxyUrl=${dataProxyUrl || "n/a"})`,
+      `startFrpEgressBridge failed during: ${step} (runId=${runId || "n/a"}, controlServerHost=${controlServerHost || "n/a"}, dataProxyUrl=${dataProxyUrl || "n/a"})`,
       { cause: error },
     );
   }
 }
+
+// Backward-compatible alias for existing tests.
+export const startFlyFrpEgressBridge = startFrpEgressBridge;
+export type FlyFrpEgressBridge = FrpEgressBridge;
