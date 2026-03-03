@@ -505,4 +505,38 @@ export const machineRouter = {
       ]);
       return { agents, customerRepoPath: serverInfo.customerRepoPath };
     }),
+
+  // Execute a command on the machine (proxies to daemon)
+  execCommand: projectProtectedMutation
+    .input(
+      z.object({
+        ...ProjectInput.shape,
+        machineId: z.string(),
+        command: z.array(z.string()).describe("Command and arguments"),
+        cwd: z.string().optional(),
+        timeout: z.number().optional(),
+      }),
+    )
+    .handler(async ({ context: ctx, input }) => {
+      const { runtime } = await getProviderForMachine(
+        ctx.db,
+        ctx.project.id,
+        input.machineId,
+        ctx.env,
+      );
+
+      const [daemonBaseUrl, daemonFetcher] = await Promise.all([
+        runtime.getBaseUrl(3000),
+        runtime.getFetcher(3000),
+      ]);
+      const daemonClient = createDaemonClient({
+        baseUrl: daemonBaseUrl,
+        fetcher: daemonFetcher,
+      });
+      return daemonClient.tool.execCommand({
+        command: input.command,
+        cwd: input.cwd,
+        timeout: input.timeout,
+      });
+    }),
 };

@@ -994,9 +994,13 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
   // Parse the token ID from the API key
   const tokenId = parseTokenIdFromApiKey(apiKey);
   if (!tokenId) {
+    logger.set({ apiKeyPrefix: apiKey.slice(0, 30) });
     logger.warn("Invalid API key format");
     return null;
   }
+
+  logger.set({ egress_diag: { tokenId, apiKeyLen: apiKey.length } });
+  logger.info(`[egress-diag] Looking up token ${tokenId}`);
 
   // Look up the token with project and org relations in a single query
   const accessToken = await db.query.projectAccessToken.findFirst({
@@ -1011,7 +1015,17 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
   });
 
   if (!accessToken) {
-    logger.set({ token: { id: tokenId } });
+    // Diagnostic: try a simpler query to see if the token exists at all
+    const simpleToken = await db.query.projectAccessToken.findFirst({
+      where: eq(schema.projectAccessToken.id, tokenId),
+    });
+    logger.set({
+      token: { id: tokenId },
+      diag: {
+        simpleQueryFound: !!simpleToken,
+        simpleTokenProjectId: simpleToken?.projectId ?? "N/A",
+      },
+    });
     logger.warn("Access token not found");
     return null;
   }

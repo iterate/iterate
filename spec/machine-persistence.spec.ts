@@ -1,10 +1,6 @@
 // oxlint-disable iterate/spec-restricted-syntax
 import { execSync } from "node:child_process";
-import { createORPCClient } from "@orpc/client";
-import { RPCLink } from "@orpc/client/fetch";
-import type { RouterClient } from "@orpc/server";
 import { type Page, expect } from "@playwright/test";
-import type { AppRouter } from "../apps/daemon/server/orpc/app-router.ts";
 import { spinnerWaiter } from "./plugins/spinner-waiter.ts";
 import { createOrganization, createProject, login, sidebarButton, test } from "./test-helpers.ts";
 
@@ -23,19 +19,6 @@ function resolveImageTag(): string {
   }
 }
 
-function createDaemonClient(daemonBaseUrl: string, page: Page): RouterClient<AppRouter> {
-  const link = new RPCLink({
-    url: `${daemonBaseUrl}/api/orpc`,
-    // Playwright's page.request.fetch carries auth-bridge cookies automatically.
-    fetch: (input, init) =>
-      page.request.fetch(input as any, {
-        timeout: 10_000,
-        ...(init as any),
-      }) as any,
-  });
-  return createORPCClient(link);
-}
-
 async function createMachineFromUi(page: Page, machineName: string, imageTag?: string) {
   await sidebarButton(page, "Machines").click();
   await page
@@ -45,7 +28,6 @@ async function createMachineFromUi(page: Page, machineName: string, imageTag?: s
 
   await page.getByPlaceholder("Machine name").fill(machineName);
 
-  // Fill in the image tag if provided (overrides the Doppler default in the dev server)
   if (imageTag) {
     const imageInput = page.getByRole("textbox", {
       name: /iterate-sandbox:sha-<shortSha>|leave blank for default/i,
@@ -55,11 +37,10 @@ async function createMachineFromUi(page: Page, machineName: string, imageTag?: s
 
   await page.getByRole("button", { name: "Create" }).click();
 
-  // Navigate to this machine's detail page. The DaemonStatus component renders
-  // <Spinner aria-label="Loading"> while state === "starting", and the detail page
-  // polls every 3s in that state. spinner-waiter holds until the spinner clears
-  // (machine activated), then the waitFor resolves immediately.
-  await page.getByRole("link", { name: machineName }).first().click();
+  // Wait for the machine to appear in the list (may need a re-fetch cycle).
+  const machineLink = page.getByRole("link", { name: machineName }).first();
+  await machineLink.waitFor({ timeout: 30_000 });
+  await machineLink.click();
 
   await spinnerWaiter.settings.run({ spinnerTimeout: 360_000 }, async () => {
     await page
@@ -69,78 +50,38 @@ async function createMachineFromUi(page: Page, machineName: string, imageTag?: s
   });
 }
 
-async function openMachineDetail(page: Page, machineName: string): Promise<string> {
-  await sidebarButton(page, "Machines").click();
-  await page.getByRole("link", { name: machineName }).first().click();
-  // The service link renders as "Iterate :3000" (name + port).
-  const iterateLink = page.getByRole("link", { name: /^Iterate\b/ }).first();
-  await iterateLink.waitFor({ timeout: 120_000 });
-  const iterateHref = await iterateLink.getAttribute("href");
-  if (!iterateHref) throw new Error("Iterate service link missing on machine detail page");
-  return iterateHref;
+/** Run a shell command on the machine via the "Run command" button on the detail page. */
+async function runCommandOnMachine(page: Page, command: string): Promise<string> {
+  // Intercept the browser prompt() to inject the command automatically.
+  await page.evaluate((cmd) => (window.prompt = () => cmd), command);
+  await page.getByRole("button", { name: "Run command" }).click();
+
+  // Wait for the result wrapper with data-testid="exec-command-result".
+  const resultBlock = page.getByTestId("exec-command-result");
+  await expect(resultBlock).toBeVisible({ timeout: 30_000 });
+  return (await resultBlock.textContent()) ?? "";
 }
 
-function buildDaemonBaseUrl(iterateBaseUrl: string): string {
-  const parsed = new URL(iterateBaseUrl);
-  return `${parsed.protocol}//3001__${parsed.host}`;
-}
+/** Send a message via the webchat UI and wait for the assistant to finish replying. */
+async function sendWebchatMessage(page: Page, text: string) {
+  const input = page.getByTestId("webchat-input");
+  await input.fill(text);
+  await page.getByTestId("webchat-send").click();
 
-type WebchatMessage = { role: "user" | "assistant"; text: string; messageId?: string };
-
-async function postWebchatMessage(
-  page: Page,
-  daemonBaseUrl: string,
-  input: { threadId: string; messageId: string; text: string },
-) {
-  const response = await page.request.post(`${daemonBaseUrl}/api/integrations/webchat/webhook`, {
-    data: {
-      type: "webchat:message",
-      threadId: input.threadId,
-      messageId: input.messageId,
-      text: input.text,
-      userId: "spec",
-      userName: "Spec Test",
-      createdAt: Date.now(),
-    },
+  // Wait for the user message to appear, then for the assistant spinner to clear.
+  await expect(page.getByTestId("webchat-message-user").last()).toContainText(text, {
     timeout: 10_000,
   });
-  if (!response.ok()) {
-    throw new Error(
-      `Failed to post webchat message: ${response.status()} ${await response.text()}`.slice(0, 300),
-    );
-  }
-  return response;
+  // The thread status spinner (.animate-spin) is visible while the assistant is
+  // processing. Wait for it to disappear — that means the reply is complete.
+  await expect(page.locator(".animate-spin")).toBeHidden({ timeout: 120_000 });
 }
 
-async function waitForAssistantReply(
-  page: Page,
-  daemonBaseUrl: string,
-  input: { threadId: string; afterMessageId: string; timeoutMs?: number },
-): Promise<WebchatMessage> {
-  const timeoutMs = input.timeoutMs ?? 120_000;
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    const response = await page.request.get(
-      `${daemonBaseUrl}/api/integrations/webchat/threads/${encodeURIComponent(input.threadId)}/messages`,
-      { timeout: 10_000 },
-    );
-
-    if (response.ok()) {
-      const body = (await response.json()) as { messages?: WebchatMessage[] };
-      const messages = body.messages ?? [];
-      const userIndex = messages.findIndex((m) => m.messageId === input.afterMessageId);
-      const from = userIndex >= 0 ? userIndex + 1 : 0;
-      const assistantReply = messages
-        .slice(from)
-        .find((m) => m.role === "assistant" && m.text.trim());
-      if (assistantReply) return assistantReply;
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
-
-  throw new Error(`Timed out waiting for assistant reply in thread ${input.threadId}`);
+/** Return the text content of the last assistant message in the current thread. */
+async function getLastAssistantReply(page: Page): Promise<string> {
+  const reply = page.getByTestId("webchat-message-assistant").last();
+  await expect(reply).toBeVisible({ timeout: 10_000 });
+  return (await reply.textContent()) ?? "";
 }
 
 test.describe("machine persistence", () => {
@@ -163,29 +104,18 @@ test.describe("machine persistence", () => {
     await createOrganization(page);
     await createProject(page);
 
+    // Machine A: create, write a marker file to the persisted directory.
     await createMachineFromUi(page, machineA, imageTag);
-    const machineAIterateUrl = await openMachineDetail(page, machineA);
-    const machineADaemonUrl = buildDaemonBaseUrl(machineAIterateUrl);
-    const daemonA = createDaemonClient(machineADaemonUrl, page);
-    const writeResult = await daemonA.tool.execCommand({
-      command: [
-        "bash",
-        "-lc",
-        `mkdir -p ~/.local/share/iterate && printf '%s' '${marker}' > ${markerPath} && cat ${markerPath}`,
-      ],
-    });
-    expect(writeResult.exitCode).toBe(0);
-    expect(writeResult.stdout).toContain(marker);
+    const writeOutput = await runCommandOnMachine(
+      page,
+      `mkdir -p ~/.local/share/iterate && printf '%s' '${marker}' > ${markerPath} && cat ${markerPath}`,
+    );
+    expect(writeOutput).toContain(marker);
 
+    // Machine B: replace machine, read the marker file back.
     await createMachineFromUi(page, machineB, imageTag);
-    const machineBIterateUrl = await openMachineDetail(page, machineB);
-    const machineBDaemonUrl = buildDaemonBaseUrl(machineBIterateUrl);
-    const daemonB = createDaemonClient(machineBDaemonUrl, page);
-    const readResult = await daemonB.tool.execCommand({
-      command: ["bash", "-lc", `cat ${markerPath}`],
-    });
-    expect(readResult.exitCode).toBe(0);
-    expect(readResult.stdout).toContain(marker);
+    const readOutput = await runCommandOnMachine(page, `cat ${markerPath}`);
+    expect(readOutput).toContain(marker);
   });
 
   test("webchat conversation persists across machine replacement", async ({ page }) => {
@@ -197,46 +127,25 @@ test.describe("machine persistence", () => {
 
     const imageTag = resolveImageTag();
     const now = Date.now();
-    const testEmail = `persist-opencode-${now}+test@nustom.com`;
-    const machineA = `OpenCode A ${now}`;
-    const machineB = `OpenCode B ${now}`;
-    const threadId = `persist-thread-${now}`;
+    const testEmail = `persist-webchat-${now}+test@nustom.com`;
+    const machineA = `Chat A ${now}`;
+    const machineB = `Chat B ${now}`;
 
     await login(page, testEmail);
     await createOrganization(page);
     await createProject(page);
 
+    // Machine A: create, activate, then send a message via the webchat UI.
     await createMachineFromUi(page, machineA, imageTag);
-    const machineAIterateUrl = await openMachineDetail(page, machineA);
-    const machineADaemonUrl = buildDaemonBaseUrl(machineAIterateUrl);
+    await sidebarButton(page, "Home").click();
+    await sendWebchatMessage(page, "the secret word is banana");
+    await getLastAssistantReply(page);
 
-    const machineAUserMessageId = `msg-a-${now}`;
-    await postWebchatMessage(page, machineADaemonUrl, {
-      threadId,
-      messageId: machineAUserMessageId,
-      text: "the secret word is banana",
-    });
-
-    await waitForAssistantReply(page, machineADaemonUrl, {
-      threadId,
-      afterMessageId: machineAUserMessageId,
-    });
-
+    // Machine B: replace machine, then ask for the secret word in the same thread.
     await createMachineFromUi(page, machineB, imageTag);
-    const machineBIterateUrl = await openMachineDetail(page, machineB);
-    const machineBDaemonUrl = buildDaemonBaseUrl(machineBIterateUrl);
-
-    const machineBUserMessageId = `msg-b-${now}`;
-    await postWebchatMessage(page, machineBDaemonUrl, {
-      threadId,
-      messageId: machineBUserMessageId,
-      text: "what's the secret word? reply with just the word",
-    });
-
-    const machineBReply = await waitForAssistantReply(page, machineBDaemonUrl, {
-      threadId,
-      afterMessageId: machineBUserMessageId,
-    });
-    expect(machineBReply.text.toLowerCase()).toContain("banana");
+    await sidebarButton(page, "Home").click();
+    await sendWebchatMessage(page, "what's the secret word? reply with just the word");
+    const reply = await getLastAssistantReply(page);
+    expect(reply.toLowerCase()).toContain("banana");
   });
 });
