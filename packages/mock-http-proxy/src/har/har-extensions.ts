@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { Entry as HarEntry, Har } from "har-format";
 
 /**
@@ -23,3 +24,7 @@ export type HarWithExtensions = Omit<Har, "log"> & {
     entries: HarEntryWithExtensions[];
   };
 };
+
+export async function readHarFile(path: string) {
+  return JSON.parse(await readFile(path, "utf8")) as HarWithExtensions;
+}

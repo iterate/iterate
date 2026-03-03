@@ -1,9 +1,8 @@
-import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { x } from "tinyexec";
 import { describe, expect, test } from "vitest";
-import type { HarWithExtensions } from "../har/har-extensions.ts";
+import { readHarFile } from "../har/har-extensions.ts";
 import { fromTrafficWithWebSocket } from "../replay/from-traffic-with-websocket.ts";
 import {
   useMitmProxy,
@@ -26,10 +25,6 @@ type SlackScriptOutput = {
   ok: boolean;
   endpoint: "slack.auth.test";
 };
-
-async function readHarFile(path: string): Promise<HarWithExtensions> {
-  return JSON.parse(await readFile(path, "utf8")) as HarWithExtensions;
-}
 
 async function runOpenAiScript(options: {
   mitmEnv: Record<string, string>;
