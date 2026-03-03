@@ -152,6 +152,20 @@ type BufferedSignal = {
   createdAtMs: number;
 };
 
+class BufferedFlushPartialError extends Error {
+  readonly flushedRows: ReadonlySet<BufferedSignal>;
+
+  constructor(
+    message: string,
+    flushedRows: ReadonlySet<BufferedSignal>,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "BufferedFlushPartialError";
+    this.flushedRows = flushedRows;
+  }
+}
+
 type AgentPathResolution = {
   agentPath: string;
   source: "session" | "marker" | "mapping" | "default" | "session-unresolved" | "unsafe-fallback";
@@ -744,23 +758,34 @@ async function flushBufferedSignalsForAgent(agentPath: string): Promise<void> {
 
   const rowsToFlush = [...rows];
   try {
-    await flushBufferedRows(agentPath, rowsToFlush);
+    const flushedRows = await flushBufferedRows(agentPath, rowsToFlush);
+    removeFlushedRows(agentPath, flushedRows);
   } catch (error) {
+    if (error instanceof BufferedFlushPartialError) {
+      removeFlushedRows(agentPath, error.flushedRows);
+    }
     scheduleFlush(agentPath);
     throw error;
   }
+}
 
+function removeFlushedRows(agentPath: string, flushedRows: ReadonlySet<BufferedSignal>): void {
+  if (flushedRows.size === 0) return;
   const currentRows = bufferedSignalsByAgentPath.get(agentPath) ?? [];
-  if (currentRows.length <= rowsToFlush.length) {
+  const kept = currentRows.filter((row) => !flushedRows.has(row));
+  if (kept.length === 0) {
     bufferedSignalsByAgentPath.delete(agentPath);
     return;
   }
-
-  bufferedSignalsByAgentPath.set(agentPath, currentRows.slice(rowsToFlush.length));
+  bufferedSignalsByAgentPath.set(agentPath, kept);
 }
 
-async function flushBufferedRows(agentPath: string, rows: BufferedSignal[]): Promise<void> {
+async function flushBufferedRows(
+  agentPath: string,
+  rows: BufferedSignal[],
+): Promise<ReadonlySet<BufferedSignal>> {
   const byBucket = new Map<string, BufferedSignal[]>();
+  const flushedRows = new Set<BufferedSignal>();
   for (const row of rows) {
     byBucket.set(row.bucketKey, [...(byBucket.get(row.bucketKey) ?? []), row]);
   }
@@ -791,13 +816,22 @@ async function flushBufferedRows(agentPath: string, rows: BufferedSignal[]): Pro
       .filter(Boolean)
       .join("\n");
 
-    await postPromptToAgent(agentPath, prompt);
+    try {
+      await postPromptToAgent(agentPath, prompt);
+    } catch (error) {
+      throw new BufferedFlushPartialError("Buffered flush partially succeeded", flushedRows, {
+        cause: error,
+      });
+    }
+    for (const row of bucketRows) flushedRows.add(row);
     logger.debug("[daemon/github] Flushed buffered webhook batch", {
       agentPath,
       bucketKey,
       eventCount: bucketRows.length,
     });
   }
+
+  return flushedRows;
 }
 
 async function markSeenAndCheckInstructions(agentPath: string): Promise<boolean> {

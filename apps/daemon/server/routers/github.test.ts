@@ -279,6 +279,75 @@ describe("github router", () => {
     );
   });
 
+  it("does not resend already-flushed buckets after partial flush failure", async () => {
+    sqlite
+      .prepare(
+        "INSERT INTO github_pr_agent_path (owner, repo, pr_number, agent_path, source) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("iterate", "iterate", 1400, "/github/iterate/iterate/pr-1400", "deterministic");
+    sqlite
+      .prepare(
+        "INSERT INTO github_pr_agent_path (owner, repo, pr_number, agent_path, source) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("iterate", "iterate", 1401, "/github/iterate/iterate/pr-1400", "deterministic");
+
+    fetchSpy
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }))
+      .mockRejectedValueOnce(new Error("second bucket failed"))
+      .mockResolvedValue(new Response("{}", { status: 200 }));
+
+    const payload1400 = {
+      action: "completed",
+      repository: { full_name: "iterate/iterate", owner: { login: "iterate" }, name: "iterate" },
+      workflow_run: {
+        name: "CI-A",
+        conclusion: "failure",
+        head_branch: "feature",
+        html_url: "https://github.com/iterate/iterate/actions/runs/1400",
+        pull_requests: [{ number: 1400 }],
+      },
+    };
+
+    const payload1401 = {
+      action: "completed",
+      repository: { full_name: "iterate/iterate", owner: { login: "iterate" }, name: "iterate" },
+      workflow_run: {
+        name: "CI-B",
+        conclusion: "failure",
+        head_branch: "feature",
+        html_url: "https://github.com/iterate/iterate/actions/runs/1401",
+        pull_requests: [{ number: 1401 }],
+      },
+    };
+
+    await githubRouter.request("/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventType: "workflow_run",
+        deliveryId: "d-partial-a",
+        payload: payload1400,
+      }),
+    });
+    await githubRouter.request("/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventType: "workflow_run",
+        deliveryId: "d-partial-b",
+        payload: payload1401,
+      }),
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
   it("resolves marker session_id to active agent path", async () => {
     sqlite
       .prepare("INSERT INTO agents (path, working_directory) VALUES (?, ?)")
