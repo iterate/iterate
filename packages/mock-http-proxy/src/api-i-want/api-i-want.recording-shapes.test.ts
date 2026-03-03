@@ -34,12 +34,12 @@ describe("records mocked request/response shapes", () => {
     await using server = await useMockHttpServer({
       recorder: { harPath, includeHandledRequests: true },
       onUnhandledRequest: "error",
-      handlers: [
-        http.put("https://upload.example.com/files", () => {
-          return HttpResponse.json({ ok: true, bytes: body.byteLength });
-        }),
-      ],
     });
+    server.use(
+      http.put("https://upload.example.com/files", () => {
+        return HttpResponse.json({ ok: true, bytes: body.byteLength });
+      }),
+    );
 
     const response = await fetch(`${server.url}/files`, {
       method: "PUT",
@@ -67,16 +67,16 @@ describe("records mocked request/response shapes", () => {
     await using server = await useMockHttpServer({
       recorder: { harPath, includeHandledRequests: true },
       onUnhandledRequest: "error",
-      handlers: [
-        http.post("https://forms.example.com/submit", () => {
-          return HttpResponse.json({
-            ok: true,
-            note: "hello-form",
-            fileName: "note.txt",
-          });
-        }),
-      ],
     });
+    server.use(
+      http.post("https://forms.example.com/submit", () => {
+        return HttpResponse.json({
+          ok: true,
+          note: "hello-form",
+          fileName: "note.txt",
+        });
+      }),
+    );
 
     const form = new FormData();
     form.set("note", "hello-form");
@@ -111,18 +111,18 @@ describe("records mocked request/response shapes", () => {
     await using server = await useMockHttpServer({
       recorder: { harPath, includeHandledRequests: true },
       onUnhandledRequest: "error",
-      handlers: [
-        http.get("https://events.example.com/stream", () => {
-          return new HttpResponse(sseBody, {
-            status: 200,
-            headers: {
-              "content-type": "text/event-stream",
-              "cache-control": "no-cache",
-            },
-          });
-        }),
-      ],
     });
+    server.use(
+      http.get("https://events.example.com/stream", () => {
+        return new HttpResponse(sseBody, {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream",
+            "cache-control": "no-cache",
+          },
+        });
+      }),
+    );
 
     const response = await fetch(`${server.url}/stream`, {
       headers: proxyHeaders("events.example.com"),

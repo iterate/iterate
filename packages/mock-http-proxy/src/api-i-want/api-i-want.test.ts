@@ -153,7 +153,10 @@ describe("records har archives for http-client-scripts", () => {
       tmpDir.path,
       "records-har-archives-for-http-client-scripts-for-openai-responses-websockets.har",
     );
-    await using egress = await useMockHttpServer({ recorder: { harPath } });
+    await using egress = await useMockHttpServer({
+      recorder: { harPath },
+      onUnhandledRequest: "bypass",
+    });
     await using mitm = await useMitmProxy({
       externalEgressProxyUrl: egress.url,
     });
@@ -196,7 +199,10 @@ describe("records har archives for http-client-scripts", () => {
       tmpDir.path,
       "records-har-archives-for-http-client-scripts-for-slack-auth-test.har",
     );
-    await using egress = await useMockHttpServer({ recorder: { harPath } });
+    await using egress = await useMockHttpServer({
+      recorder: { harPath },
+      onUnhandledRequest: "bypass",
+    });
 
     const output = await runSlackScript(egress.url);
     expect(output).toMatchObject({
@@ -221,7 +227,10 @@ describe("records har archives for http-client-scripts", () => {
       tmpDir.path,
       "records-har-archives-for-http-client-scripts-for-curl-via-proxy-only-mode.har",
     );
-    await using egress = await useMockHttpServer({ recorder: { harPath } });
+    await using egress = await useMockHttpServer({
+      recorder: { harPath },
+      onUnhandledRequest: "bypass",
+    });
     await using mitm = await useMitmProxy({
       externalEgressProxyUrl: egress.url,
     });
@@ -249,7 +258,10 @@ describe("records har archives for http-client-scripts", () => {
       tmpDir.path,
       "records-har-archives-for-http-client-scripts-for-parallel-openai-slack-curl.har",
     );
-    await using egress = await useMockHttpServer({ recorder: { harPath } });
+    await using egress = await useMockHttpServer({
+      recorder: { harPath },
+      onUnhandledRequest: "bypass",
+    });
     await using mitm = await useMitmProxy({
       externalEgressProxyUrl: egress.url,
     });
@@ -329,16 +341,16 @@ describe("records har archives for handled msw traffic", () => {
     await using server = await useMockHttpServer({
       recorder: { harPath, includeHandledRequests: true },
       onUnhandledRequest: "error",
-      handlers: [
-        http.post("https://api.example.com/echo", async ({ request }) => {
-          const body = (await request.json()) as { message?: string };
-          return HttpResponse.json(
-            { ok: true, echoed: body.message ?? null },
-            { status: 201, headers: { "x-msw-handler": "echo" } },
-          );
-        }),
-      ],
     });
+    server.use(
+      http.post("https://api.example.com/echo", async ({ request }) => {
+        const body = (await request.json()) as { message?: string };
+        return HttpResponse.json(
+          { ok: true, echoed: body.message ?? null },
+          { status: 201, headers: { "x-msw-handler": "echo" } },
+        );
+      }),
+    );
 
     const response = await fetch(`${server.url}/echo?source=msw`, {
       method: "POST",

@@ -97,9 +97,9 @@ describe("fromTrafficWithWebSocket", () => {
       strictSendMatch: true,
     });
     await using server = await useMockHttpServer({
-      handlers,
       onUnhandledRequest: "error",
     });
+    server.use(...handlers);
 
     const httpResponse = await fetch(`${server.url}/hello`, {
       headers: {

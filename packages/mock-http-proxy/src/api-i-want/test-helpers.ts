@@ -14,7 +14,7 @@ import {
   type TransformWebSocketUrl,
 } from "@iterate-com/msw-http-server";
 import { buildForwardedHeader } from "@iterate-com/shared/forwarded-header";
-import type { RequestHandler, SharedOptions, WebSocketHandler } from "msw";
+import type { SharedOptions } from "msw";
 import type { SetupServerApi } from "msw/node";
 import type { Har } from "har-format";
 import mockttp from "mockttp";
@@ -27,15 +27,12 @@ import {
   createProxyWebSocketUrlTransform,
 } from "../proxy-request-transform.ts";
 
-type AnyHandler = RequestHandler | WebSocketHandler;
-
 export type UseMockHttpServerOptions = {
   /**
    * @deprecated Use recorder.harPath instead.
    */
   harPath?: string;
   recorder?: RecorderOpts;
-  handlers?: AnyHandler[];
   onUnhandledRequest?: SharedOptions["onUnhandledRequest"];
   port?: number;
   host?: string;
@@ -84,7 +81,7 @@ function resolveOnUnhandledRequest(
   explicit: SharedOptions["onUnhandledRequest"] | undefined,
 ): SharedOptions["onUnhandledRequest"] {
   if (explicit) return explicit;
-  return "bypass";
+  return "error";
 }
 
 function headersToRecord(headers: Headers): Record<string, string> {
@@ -126,8 +123,6 @@ export async function useMockHttpServer(
   };
   const recorder = await HarRecorder.create(recorderOptions);
 
-  const allHandlers: AnyHandler[] = [...(options.handlers ?? [])];
-
   const transformRequest =
     options.transformRequest === false
       ? undefined
@@ -140,132 +135,125 @@ export async function useMockHttpServer(
 
   const wsPassthroughServer = new WebSocketServer({ noServer: true });
 
-  const server: NativeMswServer = createNativeMswServer(
-    {
-      onUnhandledRequest,
-      transformRequest,
-      transformWebSocketUrl,
-      onMockedResponse: async ({ request, response }) => {
-        const startedAt = Date.now();
-        const requestHeaders = headersToRecord(request.headers);
-        const targetUrl = new URL(request.url);
-        let requestBody: Uint8Array | null = null;
-        if (request.method !== "GET" && request.method !== "HEAD" && !request.bodyUsed) {
-          try {
-            requestBody = Buffer.from(await request.clone().arrayBuffer());
-          } catch {
-            requestBody = null;
-          }
+  const server: NativeMswServer = createNativeMswServer({
+    onUnhandledRequest,
+    transformRequest,
+    transformWebSocketUrl,
+    onMockedResponse: async ({ request, response }) => {
+      const startedAt = Date.now();
+      const requestHeaders = headersToRecord(request.headers);
+      const targetUrl = new URL(request.url);
+      let requestBody: Uint8Array | null = null;
+      if (request.method !== "GET" && request.method !== "HEAD" && !request.bodyUsed) {
+        try {
+          requestBody = Buffer.from(await request.clone().arrayBuffer());
+        } catch {
+          requestBody = null;
         }
-        const responseBody = response.body
-          ? Buffer.from(await response.clone().arrayBuffer())
-          : null;
+      }
+      const responseBody = response.body ? Buffer.from(await response.clone().arrayBuffer()) : null;
 
-        recorder.appendHttpExchange(
-          {
-            startedAt,
-            durationMs: Date.now() - startedAt,
-            method: request.method,
-            targetUrl,
-            requestHeaders,
-            requestBody,
-            response,
-            responseBody,
-          },
-          "handled",
-        );
-      },
-      onPassthroughResponse: async ({ request, response }) => {
-        const startedAt = Date.now();
-        const targetUrl = new URL(request.url);
-        const requestHeaders = headersToRecord(request.headers);
-        const requestBody = null;
-        const responseBody = response.body
-          ? Buffer.from(await response.clone().arrayBuffer())
-          : null;
-
-        recorder.appendHttpExchange(
-          {
-            startedAt,
-            durationMs: Date.now() - startedAt,
-            method: request.method,
-            targetUrl,
-            requestHeaders,
-            requestBody,
-            response,
-            responseBody,
-          },
-          "passthrough",
-        );
-      },
-      onUnhandledWebSocketUpgrade: ({ req, socket, head, requestUrl }) => {
-        if (onUnhandledRequest === "error") {
-          return false;
-        }
-
-        const startedAt = Date.now();
-        const requestHeaders = headersToRecord(incomingHeadersToHeaders(req.headers));
-        const webSocketMessages: Array<{
-          type: "send" | "receive";
-          time: number;
-          opcode: number;
-          data: string;
-        }> = [];
-
-        let responseStatus = 101;
-        let responseStatusText = "Switching Protocols";
-        let responseHeaders = new Headers();
-        let finalized = false;
-        const finalize = () => {
-          if (finalized) return;
-          finalized = true;
-          recorder.appendWebSocketExchange({
-            startedAt,
-            durationMs: Date.now() - startedAt,
-            targetUrl: requestUrl,
-            requestHeaders,
-            responseStatus,
-            responseStatusText,
-            responseHeaders,
-            messages: webSocketMessages,
-          });
-        };
-
-        bridgeWebSocketToUpstream({
-          req,
-          socket,
-          head,
-          targetUrl: requestUrl,
-          upgradeServer: wsPassthroughServer,
-          excludeRequestHeaderNames: PROXY_HEADERS_TO_STRIP,
-          onUpstreamUpgrade: (response) => {
-            responseStatus = response.statusCode ?? 101;
-            responseStatusText = response.statusMessage ?? "Switching Protocols";
-            responseHeaders = incomingHeadersToHeaders(response.headers);
-          },
-          onClientMessage: (data, isBinary) => {
-            webSocketMessages.push({
-              type: "send",
-              time: Date.now() / 1000,
-              opcode: isBinary ? 2 : 1,
-              data: wsMessageData(data as RawData, isBinary),
-            });
-          },
-          onUpstreamMessage: (data, isBinary) => {
-            webSocketMessages.push({
-              type: "receive",
-              time: Date.now() / 1000,
-              opcode: isBinary ? 2 : 1,
-              data: wsMessageData(data as RawData, isBinary),
-            });
-          },
-          onFinalize: finalize,
-        });
-        return true;
-      },
+      recorder.appendHttpExchange(
+        {
+          startedAt,
+          durationMs: Date.now() - startedAt,
+          method: request.method,
+          targetUrl,
+          requestHeaders,
+          requestBody,
+          response,
+          responseBody,
+        },
+        "handled",
+      );
     },
-    ...allHandlers,
-  );
+    onPassthroughResponse: async ({ request, response }) => {
+      const startedAt = Date.now();
+      const targetUrl = new URL(request.url);
+      const requestHeaders = headersToRecord(request.headers);
+      const requestBody = null;
+      const responseBody = response.body ? Buffer.from(await response.clone().arrayBuffer()) : null;
+
+      recorder.appendHttpExchange(
+        {
+          startedAt,
+          durationMs: Date.now() - startedAt,
+          method: request.method,
+          targetUrl,
+          requestHeaders,
+          requestBody,
+          response,
+          responseBody,
+        },
+        "passthrough",
+      );
+    },
+    onUnhandledWebSocketUpgrade: ({ req, socket, head, requestUrl }) => {
+      if (onUnhandledRequest === "error") {
+        return false;
+      }
+
+      const startedAt = Date.now();
+      const requestHeaders = headersToRecord(incomingHeadersToHeaders(req.headers));
+      const webSocketMessages: Array<{
+        type: "send" | "receive";
+        time: number;
+        opcode: number;
+        data: string;
+      }> = [];
+
+      let responseStatus = 101;
+      let responseStatusText = "Switching Protocols";
+      let responseHeaders = new Headers();
+      let finalized = false;
+      const finalize = () => {
+        if (finalized) return;
+        finalized = true;
+        recorder.appendWebSocketExchange({
+          startedAt,
+          durationMs: Date.now() - startedAt,
+          targetUrl: requestUrl,
+          requestHeaders,
+          responseStatus,
+          responseStatusText,
+          responseHeaders,
+          messages: webSocketMessages,
+        });
+      };
+
+      bridgeWebSocketToUpstream({
+        req,
+        socket,
+        head,
+        targetUrl: requestUrl,
+        upgradeServer: wsPassthroughServer,
+        excludeRequestHeaderNames: PROXY_HEADERS_TO_STRIP,
+        onUpstreamUpgrade: (response) => {
+          responseStatus = response.statusCode ?? 101;
+          responseStatusText = response.statusMessage ?? "Switching Protocols";
+          responseHeaders = incomingHeadersToHeaders(response.headers);
+        },
+        onClientMessage: (data, isBinary) => {
+          webSocketMessages.push({
+            type: "send",
+            time: Date.now() / 1000,
+            opcode: isBinary ? 2 : 1,
+            data: wsMessageData(data as RawData, isBinary),
+          });
+        },
+        onUpstreamMessage: (data, isBinary) => {
+          webSocketMessages.push({
+            type: "receive",
+            time: Date.now() / 1000,
+            opcode: isBinary ? 2 : 1,
+            data: wsMessageData(data as RawData, isBinary),
+          });
+        },
+        onFinalize: finalize,
+      });
+      return true;
+    },
+  });
 
   const host = options.host ?? "127.0.0.1";
   server.listen(options.port ?? 0, host);

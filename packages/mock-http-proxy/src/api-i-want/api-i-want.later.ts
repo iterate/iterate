@@ -27,7 +27,10 @@ describe("records har archives for http-client-scripts", () => {
 
   test("for openai responses-websockets", async () => {
     const harPath = join(tmpDir.path, "openai-responses-websockets.har");
-    await using egress = await useMockHttpServer({ recorder: { harPath } });
+    await using egress = await useMockHttpServer({
+      recorder: { harPath },
+      onUnhandledRequest: "bypass",
+    });
     await using mitm = await useMitmProxy({
       externalEgressProxyUrl: egress.url,
     });
@@ -58,7 +61,10 @@ describe("records har archives for http-client-scripts", () => {
 
   test("for slack auth-test", async () => {
     const harPath = join(tmpDir.path, "slack-auth-test.har");
-    await using egress = await useMockHttpServer({ recorder: { harPath } });
+    await using egress = await useMockHttpServer({
+      recorder: { harPath },
+      onUnhandledRequest: "bypass",
+    });
     await using mitm = await useMitmProxy({
       externalEgressProxyUrl: egress.url,
     });
@@ -88,13 +94,12 @@ describe("records har archives for http-client-scripts", () => {
   });
 
   test("uses MSW handlers directly without HAR", async () => {
-    await using server = await useMockHttpServer({
-      handlers: [
-        http.get("https://api.example.com/hello", () => {
-          return HttpResponse.json({ message: "mocked" });
-        }),
-      ],
-    });
+    await using server = await useMockHttpServer();
+    server.use(
+      http.get("https://api.example.com/hello", () => {
+        return HttpResponse.json({ message: "mocked" });
+      }),
+    );
 
     const response = await fetch(`${server.url}/hello`, {
       headers: {

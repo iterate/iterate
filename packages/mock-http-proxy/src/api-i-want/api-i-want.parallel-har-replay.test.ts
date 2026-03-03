@@ -147,9 +147,9 @@ describe("replays parallel HAR fixture via source traffic handlers", () => {
 
     await using egress = await useMockHttpServer({
       recorder: { harPath: replayHarPath },
-      handlers: replayHandlers,
       onUnhandledRequest: "error",
     });
+    egress.use(...replayHandlers);
     await using mitm = await useMitmProxy({
       externalEgressProxyUrl: egress.url,
     });
