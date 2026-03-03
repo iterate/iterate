@@ -5,6 +5,7 @@
       "Bash(git checkout:*)",
       "Bash(git:*)",
       "Bash(ls:*)",
+      "Bash(*)",
       "Bash(pnpm typecheck:*)",
       "Bash(pnpm lint:*)",
       "Bash(pnpm format:*)",
@@ -21,7 +22,10 @@
       "Bash(docker build:*)",
       "WebFetch(domain:docs.archil.com)",
       "WebFetch(domain:archil.com)",
-      "WebFetch(domain:news.ycombinator.com)"
+      "WebFetch(domain:news.ycombinator.com)",
+      "Bash(SANDBOX_BUILD_PLATFORM=linux/amd64 pnpm sandbox:*)",
+      "Bash(curl:*)",
+      "Bash(MACHINE_PERSISTENCE_SPEC=1 npx playwright:*)"
     ]
   }
 }
