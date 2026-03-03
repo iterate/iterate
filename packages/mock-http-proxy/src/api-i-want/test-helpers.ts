@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -18,20 +18,21 @@ import httpProxy from "http-proxy";
 import mockttp from "mockttp";
 import { request } from "undici";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import { HarJournal } from "../msw-http-proxy/har-journal.ts";
+import { HarRecorder, type RecorderOpts } from "./recorder.ts";
 import {
   PROXY_HEADERS_TO_STRIP,
   createProxyRequestTransform,
   createProxyWebSocketUrlTransform,
 } from "../proxy-request-transform.ts";
-import { createSimpleHarReplayHandler } from "../simple-har-replay-handler.ts";
 
 type AnyHandler = RequestHandler | WebSocketHandler;
-type MockHttpServerMode = "record" | "replay" | "replay-or-record";
 
 export type UseMockHttpServerOptions = {
+  /**
+   * @deprecated Use recorder.harPath instead.
+   */
   harPath?: string;
-  mode?: MockHttpServerMode;
+  recorder?: RecorderOpts;
   handlers?: AnyHandler[];
   onUnhandledRequest?: SharedOptions["onUnhandledRequest"];
   port?: number;
@@ -49,8 +50,7 @@ export type UseMockHttpServerOptions = {
    */
   transformWebSocketUrl?: TransformWebSocketUrl | false;
   /**
-   * Record requests handled by MSW handlers into HAR.
-   * Default: true.
+   * @deprecated Use recorder.includeHandledRequests instead.
    */
   recordHandledRequests?: boolean;
 };
@@ -78,19 +78,11 @@ type MitmProxyFixture = AsyncDisposable & {
   envForNode(): Record<string, string>;
 };
 
-function resolveMode(options: UseMockHttpServerOptions): MockHttpServerMode | undefined {
-  if (options.mode) return options.mode;
-  if (!options.harPath) return undefined;
-  return existsSync(options.harPath) ? "replay" : "record";
-}
-
 function resolveOnUnhandledRequest(
   explicit: SharedOptions["onUnhandledRequest"] | undefined,
-  mode: MockHttpServerMode | undefined,
 ): SharedOptions["onUnhandledRequest"] {
   if (explicit) return explicit;
-  if (mode === "record" || mode === "replay-or-record") return "bypass";
-  return "error";
+  return "bypass";
 }
 
 function headersToRecord(headers: Headers): Record<string, string> {
@@ -171,20 +163,21 @@ function buildUpstreamWebSocketHeaders(req: http.IncomingMessage): Record<string
 export async function useMockHttpServer(
   options: UseMockHttpServerOptions = {},
 ): Promise<MockHttpServer> {
-  const mode = resolveMode(options);
-  const onUnhandledRequest = resolveOnUnhandledRequest(options.onUnhandledRequest, mode);
-  const harJournal = options.harPath
-    ? await HarJournal.fromSource(options.harPath).catch(() => new HarJournal())
-    : new HarJournal();
+  const onUnhandledRequest = resolveOnUnhandledRequest(options.onUnhandledRequest);
+  const recorderOptions: RecorderOpts = {
+    ...(options.recorder ?? {}),
+    ...(options.harPath !== undefined && options.recorder?.harPath === undefined
+      ? { harPath: options.harPath }
+      : {}),
+    ...(options.recordHandledRequests !== undefined &&
+    options.recorder?.includeHandledRequests === undefined
+      ? { includeHandledRequests: options.recordHandledRequests }
+      : {}),
+  };
+  const recorder = await HarRecorder.create(recorderOptions);
 
-  const builtinHandlers: RequestHandler[] = [];
-  if (mode === "replay" || mode === "replay-or-record") {
-    builtinHandlers.push(createSimpleHarReplayHandler({ harJournal }));
-  }
-
-  const allHandlers: AnyHandler[] = [...(options.handlers ?? []), ...builtinHandlers];
-  const passthroughEnabled = mode === "record" || mode === "replay-or-record";
-  const recordHandledRequests = options.recordHandledRequests ?? true;
+  const allHandlers: AnyHandler[] = [...(options.handlers ?? [])];
+  const passthroughEnabled = true;
 
   const transformRequest =
     options.transformRequest === false
@@ -236,16 +229,19 @@ export async function useMockHttpServer(
         headers: responseHeaders,
       });
 
-      harJournal.appendHttpExchange({
-        startedAt: pending.startedAt,
-        durationMs: Date.now() - pending.startedAt,
-        method: pending.method,
-        targetUrl: pending.targetUrl,
-        requestHeaders: pending.requestHeaders,
-        requestBody: pending.requestBody,
-        response,
-        responseBody,
-      });
+      recorder.appendHttpExchange(
+        {
+          startedAt: pending.startedAt,
+          durationMs: Date.now() - pending.startedAt,
+          method: pending.method,
+          targetUrl: pending.targetUrl,
+          requestHeaders: pending.requestHeaders,
+          requestBody: pending.requestBody,
+          response,
+          responseBody,
+        },
+        "passthrough",
+      );
       pendingHttpPassthrough.delete(req);
     };
 
@@ -262,21 +258,22 @@ export async function useMockHttpServer(
       transformRequest,
       transformWebSocketUrl,
       onMockedResponse: ({ request, response }) => {
-        if (!recordHandledRequests) return;
-
         const startedAt = Date.now();
         const requestHeaders = headersToRecord(request.headers);
         const targetUrl = new URL(request.url);
-        harJournal.appendHttpExchange({
-          startedAt,
-          durationMs: Date.now() - startedAt,
-          method: request.method,
-          targetUrl,
-          requestHeaders,
-          requestBody: null,
-          response,
-          responseBody: null,
-        });
+        recorder.appendHttpExchange(
+          {
+            startedAt,
+            durationMs: Date.now() - startedAt,
+            method: request.method,
+            targetUrl,
+            requestHeaders,
+            requestBody: null,
+            response,
+            responseBody: null,
+          },
+          "handled",
+        );
       },
       onUnhandledHttpRequest: ({ req, res, request }) => {
         if (!passthroughEnabled || onUnhandledRequest === "error") {
@@ -340,7 +337,7 @@ export async function useMockHttpServer(
         const finalize = () => {
           if (finalized) return;
           finalized = true;
-          harJournal.appendWebSocketExchange({
+          recorder.appendWebSocketExchange({
             startedAt,
             durationMs: Date.now() - startedAt,
             targetUrl: requestUrl,
@@ -468,19 +465,16 @@ export async function useMockHttpServer(
     listHandlers: server.listHandlers.bind(server),
     events: server.events,
     getHar() {
-      return harJournal.getHar();
+      return recorder.getHar();
     },
-    async writeHar(path = options.harPath) {
-      if (!path) throw new Error("no harPath configured");
-      await harJournal.write(path);
+    async writeHar(path = recorder.configuredHarPath()) {
+      await recorder.write(path);
     },
     async [Symbol.asyncDispose]() {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       proxy.close();
       wsPassthroughServer.close();
-      if (options.harPath) {
-        await harJournal.write(options.harPath);
-      }
+      await recorder.writeConfiguredIfAny();
     },
   };
 }

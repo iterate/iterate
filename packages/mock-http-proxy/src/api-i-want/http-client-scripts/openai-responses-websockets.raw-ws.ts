@@ -1,10 +1,5 @@
 import { HttpsProxyAgent } from "https-proxy-agent";
-import OpenAI from "openai";
-import type {
-  ResponsesClientEvent,
-  ResponsesServerEvent,
-} from "openai/resources/responses/responses";
-import { ResponsesWS } from "openai/resources/responses/ws";
+import { WebSocket } from "ws";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -34,14 +29,14 @@ function responseIdFromEvent(event: Record<string, unknown>): string | undefined
   return typeof id === "string" ? id : undefined;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function userMessage(text: string): string {
-  return text;
+function userMessage(text: string): Array<Record<string, unknown>> {
+  return [
+    {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text }],
+    },
+  ];
 }
 
 async function main() {
@@ -50,17 +45,16 @@ async function main() {
   const timeoutMs = parseTimeoutMs(process.env.OPENAI_REALTIME_TIMEOUT_MS, 4_000);
 
   const proxyUrl = getProxyUrl();
-  const debugEvents = process.env.OPENAI_RESPONSES_WS_DEBUG === "1";
-  const client = new OpenAI({ apiKey });
-  const ws = new ResponsesWS(client, {
+  const socket = new WebSocket("wss://api.openai.com/v1/responses", {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
     ...(proxyUrl ? { agent: new HttpsProxyAgent(proxyUrl) } : {}),
   });
 
   const closeSocket = () => {
-    ws.close();
-    if (ws.socket.readyState !== 3) {
-      ws.socket.terminate();
-    }
+    if (socket.readyState === WebSocket.CLOSED) return;
+    socket.terminate();
   };
 
   const result = await new Promise<{
@@ -70,7 +64,6 @@ async function main() {
     receiveEventCount: number;
     completedCount: number;
     responseChain: string[];
-    responseTexts: string[];
   }>((resolve, reject) => {
     const timeout = setTimeout(() => {
       done(() => {
@@ -81,8 +74,6 @@ async function main() {
 
     const eventTypes: string[] = [];
     const responseChain: string[] = [];
-    const responseTexts: string[] = [];
-    let currentResponseText = "";
     let sendCount = 0;
     let receiveEventCount = 0;
     let completedCount = 0;
@@ -97,71 +88,70 @@ async function main() {
       fn();
     };
 
-    const sendEvent = (event: ResponsesClientEvent) => {
-      ws.send(event);
+    const sendWarmup = () => {
+      socket.send(
+        JSON.stringify({
+          type: "response.create",
+          model,
+          generate: false,
+          input: userMessage("Ping."),
+        }),
+      );
       sendCount += 1;
     };
 
-    const sendWarmup = () => {
-      sendEvent({
-        type: "response.create",
-        model,
-        input: userMessage("Ping."),
-      });
-    };
-
     const sendGenerate = (previousResponseId: string) => {
-      sendEvent({
-        type: "response.create",
-        model,
-        previous_response_id: previousResponseId,
-        input: userMessage("Reply with exactly OK."),
-      });
+      socket.send(
+        JSON.stringify({
+          type: "response.create",
+          model,
+          previous_response_id: previousResponseId,
+          input: userMessage("Reply with exactly OK."),
+        }),
+      );
+      sendCount += 1;
     };
 
-    ws.socket.on("open", () => {
+    socket.on("open", () => {
       sendWarmup();
     });
 
-    ws.on("error", (error) => {
+    socket.on("error", (error) => {
       done(() => {
         closeSocket();
         reject(error);
       });
     });
 
-    ws.on("event", (event: ResponsesServerEvent) => {
+    socket.on("message", (raw) => {
       receiveEventCount += 1;
-      const eventType = event.type;
-      if (typeof eventType !== "string") return;
-      eventTypes.push(eventType);
-      if (debugEvents) {
-        process.stderr.write(`[responses-ws] event=${eventType}\n`);
-      }
 
-      if (eventType === "error") {
+      let event: Record<string, unknown>;
+      try {
+        event = JSON.parse(raw.toString()) as Record<string, unknown>;
+      } catch (error) {
         done(() => {
           closeSocket();
-          reject(new Error(`websocket server error event: ${JSON.stringify(event ?? null)}`));
+          reject(error instanceof Error ? error : new Error(String(error)));
         });
         return;
       }
 
-      const responseId = responseIdFromEvent(asRecord(event) ?? {});
+      const eventType = event.type;
+      if (typeof eventType !== "string") return;
+      eventTypes.push(eventType);
+
+      if (eventType === "error") {
+        done(() => {
+          closeSocket();
+          reject(new Error(`websocket server error event: ${JSON.stringify(event)}`));
+        });
+        return;
+      }
+
+      const responseId = responseIdFromEvent(event);
       if (responseId) {
         latestResponseId = responseId;
-      }
-
-      if (eventType === "response.output_text.delta") {
-        const delta = asRecord(event)?.delta;
-        if (typeof delta === "string") {
-          currentResponseText += delta;
-          if (debugEvents) process.stderr.write(delta);
-        }
-      }
-
-      if (eventType === "response.output_text.done" && debugEvents) {
-        process.stderr.write("\n");
       }
 
       if (eventType === "response.completed") {
@@ -169,10 +159,6 @@ async function main() {
         if (latestResponseId) {
           responseChain.push(latestResponseId);
         }
-        if (currentResponseText.trim().length > 0) {
-          responseTexts.push(currentResponseText.trim());
-        }
-        currentResponseText = "";
 
         if (phase === "warmup") {
           if (!latestResponseId) {
@@ -197,7 +183,6 @@ async function main() {
             receiveEventCount,
             completedCount,
             responseChain,
-            responseTexts,
           });
         });
       }
@@ -214,7 +199,6 @@ async function main() {
       receiveEventCount: result.receiveEventCount,
       completedCount: result.completedCount,
       responseChain: result.responseChain,
-      responseTexts: result.responseTexts,
       model,
       timeoutMs,
       proxyEnabled: Boolean(proxyUrl),

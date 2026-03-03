@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { http, HttpResponse } from "msw";
 import { x } from "tinyexec";
 import { describe, expect, test } from "vitest";
 import type { HarEntryWithExtensions, HarWithExtensions } from "../har-type.ts";
@@ -152,10 +153,7 @@ describe("records har archives for http-client-scripts", () => {
       tmpDir.path,
       "records-har-archives-for-http-client-scripts-for-openai-responses-websockets.har",
     );
-    await using egress = await useMockHttpServer({
-      harPath,
-      mode: "record",
-    });
+    await using egress = await useMockHttpServer({ recorder: { harPath } });
     await using mitm = await useMitmProxy({
       externalEgressProxyUrl: egress.url,
     });
@@ -198,10 +196,7 @@ describe("records har archives for http-client-scripts", () => {
       tmpDir.path,
       "records-har-archives-for-http-client-scripts-for-slack-auth-test.har",
     );
-    await using egress = await useMockHttpServer({
-      harPath,
-      mode: "record",
-    });
+    await using egress = await useMockHttpServer({ recorder: { harPath } });
 
     const output = await runSlackScript(egress.url);
     expect(output).toMatchObject({
@@ -226,10 +221,7 @@ describe("records har archives for http-client-scripts", () => {
       tmpDir.path,
       "records-har-archives-for-http-client-scripts-for-curl-via-proxy-only-mode.har",
     );
-    await using egress = await useMockHttpServer({
-      harPath,
-      mode: "record",
-    });
+    await using egress = await useMockHttpServer({ recorder: { harPath } });
     await using mitm = await useMitmProxy({
       externalEgressProxyUrl: egress.url,
     });
@@ -257,10 +249,7 @@ describe("records har archives for http-client-scripts", () => {
       tmpDir.path,
       "records-har-archives-for-http-client-scripts-for-parallel-openai-slack-curl.har",
     );
-    await using egress = await useMockHttpServer({
-      harPath,
-      mode: "record",
-    });
+    await using egress = await useMockHttpServer({ recorder: { harPath } });
     await using mitm = await useMitmProxy({
       externalEgressProxyUrl: egress.url,
     });
@@ -328,5 +317,65 @@ describe("records har archives for http-client-scripts", () => {
         "records-har-archives-for-http-client-scripts-for-slack-auth-test.har",
       ]
     `);
+  });
+});
+
+describe("records har archives for handled msw traffic", () => {
+  using tmpDir = useTemporaryDirectory("mock-http-proxy-api-msw-handled-");
+
+  test("captures handled request + response into har", async () => {
+    const harPath = join(tmpDir.path, "handled-msw.har");
+
+    await using server = await useMockHttpServer({
+      recorder: { harPath, includeHandledRequests: true },
+      onUnhandledRequest: "error",
+      handlers: [
+        http.post("https://api.example.com/echo", async ({ request }) => {
+          const body = (await request.json()) as { message?: string };
+          return HttpResponse.json(
+            { ok: true, echoed: body.message ?? null },
+            { status: 201, headers: { "x-msw-handler": "echo" } },
+          );
+        }),
+      ],
+    });
+
+    const response = await fetch(`${server.url}/echo?source=msw`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-client-id": "msw-handled-test",
+        "x-iterate-original-host": "api.example.com",
+        "x-iterate-original-proto": "https",
+      },
+      body: JSON.stringify({ message: "hello-from-client" }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ ok: true, echoed: "hello-from-client" });
+
+    await server.writeHar();
+    const har = await readHarFile(harPath);
+    const entry = har.log.entries.find(
+      (candidate) => candidate.request.url === "https://api.example.com/echo?source=msw",
+    );
+    expect(entry).toBeDefined();
+    if (!entry) {
+      throw new Error("expected handled msw entry in HAR");
+    }
+
+    expect(entry.request.method).toBe("POST");
+    expect(
+      entry.request.headers.some(
+        (header) =>
+          header.name.toLowerCase() === "x-client-id" && header.value === "msw-handled-test",
+      ),
+    ).toBe(true);
+    expect(entry.response.status).toBe(201);
+    expect(
+      entry.response.headers.some(
+        (header) => header.name.toLowerCase() === "x-msw-handler" && header.value === "echo",
+      ),
+    ).toBe(true);
   });
 });

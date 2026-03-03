@@ -27,7 +27,7 @@ describe("records har archives for http-client-scripts", () => {
 
   test("for openai responses-websockets", async () => {
     const harPath = join(tmpDir.path, "openai-responses-websockets.har");
-    await using egress = await useMockHttpServer({ harPath, mode: "record" });
+    await using egress = await useMockHttpServer({ recorder: { harPath } });
     await using mitm = await useMitmProxy({
       externalEgressProxyUrl: egress.url,
     });
@@ -58,7 +58,7 @@ describe("records har archives for http-client-scripts", () => {
 
   test("for slack auth-test", async () => {
     const harPath = join(tmpDir.path, "slack-auth-test.har");
-    await using egress = await useMockHttpServer({ harPath, mode: "record" });
+    await using egress = await useMockHttpServer({ recorder: { harPath } });
     await using mitm = await useMitmProxy({
       externalEgressProxyUrl: egress.url,
     });
