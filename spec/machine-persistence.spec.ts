@@ -27,7 +27,11 @@ async function createMachineFromUi(page: Page, machineName: string) {
 async function openMachineDetail(page: Page, machineName: string): Promise<string> {
   await sidebarButton(page, "Machines").click();
   await page.getByRole("link", { name: machineName }).first().click();
-  const iterateHref = await page.getByRole("link", { name: /^Iterate$/ }).getAttribute("href");
+  // Services section loads async after machine detail page renders.
+  // The machine must be fully active for the "Iterate" service link to appear.
+  const iterateLink = page.getByRole("link", { name: /^Iterate$/ });
+  await iterateLink.waitFor({ timeout: 120_000 });
+  const iterateHref = await iterateLink.getAttribute("href");
   if (!iterateHref) throw new Error("Iterate service link missing on machine detail page");
   return iterateHref;
 }
