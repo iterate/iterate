@@ -7,7 +7,9 @@ const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/itera
 const sandboxDir = join(iterateRepo, "sandbox");
 const envFile = join(home, ".iterate/.env");
 const eventsServicePort = "17301";
-const eventsServiceDatabasePath = join(home, ".iterate/events.sqlite");
+// XDG convention: ~/.local/share/<app>/ — automatically persisted via archil symlink
+const eventsServiceDatabasePath = join(home, ".local/share/events-service/events.sqlite");
+const daemonDatabasePath = join(home, ".local/share/daemon/db.sqlite");
 const mitmproxyDir = join(home, ".mitmproxy");
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
@@ -104,7 +106,7 @@ export default defineConfig({
     },
     {
       // Gate process: polls for /tmp/archil-repo-ready (touched by archil-mount.sh
-      // after mount + snapshot restore), then exits 0. Uses restartPolicy "never"
+      // after mount + symlink setup), then exits 0. Uses restartPolicy "never"
       // so the default dependsOn condition is "completed" — dependents wait for exit.
       name: "archil-repo-ready",
       definition: {
@@ -168,6 +170,7 @@ export default defineConfig({
           HOSTNAME: "0.0.0.0",
           PORT: "3001",
           NODE_ENV: "production",
+          DATABASE_URL: daemonDatabasePath,
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:4318/v1/traces",
         },
       },
