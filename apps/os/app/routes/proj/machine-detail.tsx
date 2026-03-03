@@ -144,14 +144,18 @@ function MachineDetailPage() {
     },
   });
 
-  const { data: machine } = useSuspenseQuery(
-    orpc.machine.byId.queryOptions({
+  const { data: machine } = useSuspenseQuery({
+    ...orpc.machine.byId.queryOptions({
       input: {
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       },
     }),
-  );
+    refetchInterval: (query) => {
+      const m = query.state.data;
+      return m?.state === "starting" ? 3000 : false;
+    },
+  });
 
   const metadata = machine.metadata as MachineMetadata;
   const { services } = machine;

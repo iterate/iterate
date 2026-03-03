@@ -1,14 +1,12 @@
 // oxlint-disable iterate/spec-restricted-syntax
 import { execSync } from "node:child_process";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
+import type { RouterClient } from "@orpc/server";
 import { type Page, expect } from "@playwright/test";
-import { createOrganization, createProject, login, sidebarButton, test } from "./test-helpers.ts";
+import type { AppRouter } from "../apps/daemon/server/orpc/app-router.ts";
 import { spinnerWaiter } from "./plugins/spinner-waiter.ts";
-
-type ExecResult = {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-};
+import { createOrganization, createProject, login, sidebarButton, test } from "./test-helpers.ts";
 
 // Resolve the Fly image tag to use for machine creation.
 // Uses SANDBOX_IMAGE_TAG env var if set, otherwise reads FLY_DEFAULT_IMAGE from Doppler.
@@ -19,6 +17,15 @@ function resolveImageTag(): string {
   } catch {
     return "";
   }
+}
+
+function createDaemonClient(daemonBaseUrl: string, page: Page): RouterClient<AppRouter> {
+  const link = new RPCLink({
+    url: `${daemonBaseUrl}/api/orpc`,
+    // Playwright's page.request.fetch carries auth-bridge cookies automatically.
+    fetch: page.request.fetch.bind(page.request) as unknown as typeof globalThis.fetch,
+  });
+  return createORPCClient(link);
 }
 
 async function createMachineFromUi(page: Page, machineName: string, imageTag?: string) {
@@ -38,13 +45,18 @@ async function createMachineFromUi(page: Page, machineName: string, imageTag?: s
 
   await page.getByRole("button", { name: "Create" }).click();
 
-  // Machine pipeline: create → provision (50-120s) → setup → 30s delay → probe → activate.
-  // Wait for the "Active Machine" heading to appear, with a long timeout.
-  // Don't use spinnerWaiter here — the machine list page's loading indicator
-  // isn't always detected by the spinner pattern.
-  await page
-    .getByRole("heading", { name: "Active Machine", exact: true })
-    .waitFor({ timeout: 300_000 });
+  // Navigate to this machine's detail page. The DaemonStatus component renders
+  // <Spinner aria-label="Loading"> while state === "starting", and the detail page
+  // polls every 3s in that state. spinner-waiter holds until the spinner clears
+  // (machine activated), then the waitFor resolves immediately.
+  await page.getByRole("link", { name: machineName }).first().click();
+
+  await spinnerWaiter.settings.run({ spinnerTimeout: 360_000 }, async () => {
+    await page
+      .locator("dd")
+      .filter({ hasText: /^active$/ })
+      .waitFor();
+  });
 }
 
 async function openMachineDetail(page: Page, machineName: string): Promise<string> {
@@ -63,27 +75,8 @@ function buildDaemonBaseUrl(iterateBaseUrl: string): string {
   return `${parsed.protocol}//3001__${parsed.host}`;
 }
 
-async function execDaemonCommand(
-  page: Page,
-  daemonBaseUrl: string,
-  command: string[],
-): Promise<ExecResult> {
-  const response = await page.request.post(`${daemonBaseUrl}/api/orpc/tool/execCommand`, {
-    data: { command },
-  });
-  expect(response.ok()).toBeTruthy();
-
-  const body = (await response.json()) as Record<string, unknown>;
-  const result = (body.result ?? body) as Record<string, unknown>;
-  return {
-    exitCode: Number(result.exitCode ?? 0),
-    stdout: String(result.stdout ?? ""),
-    stderr: String(result.stderr ?? ""),
-  };
-}
-
 test.describe("machine persistence", () => {
-  test("~/persisted file persists across machine replacement", async ({ page }) => {
+  test("~/.local/share/iterate file persists across machine replacement", async ({ page }) => {
     test.setTimeout(900_000);
     test.skip(
       process.env.MACHINE_PERSISTENCE_SPEC !== "1",
@@ -96,7 +89,7 @@ test.describe("machine persistence", () => {
     const machineA = `Persist A ${now}`;
     const machineB = `Persist B ${now}`;
     const marker = `persist-marker-${now}`;
-    const markerPath = "~/persisted/spec-marker.txt";
+    const markerPath = "~/.local/share/iterate/spec-marker.txt";
 
     await login(page, testEmail);
     await createOrganization(page);
@@ -105,22 +98,24 @@ test.describe("machine persistence", () => {
     await createMachineFromUi(page, machineA, imageTag);
     const machineAIterateUrl = await openMachineDetail(page, machineA);
     const machineADaemonUrl = buildDaemonBaseUrl(machineAIterateUrl);
-    const writeResult = await execDaemonCommand(page, machineADaemonUrl, [
-      "bash",
-      "-lc",
-      `printf '%s' '${marker}' > ${markerPath} && cat ${markerPath}`,
-    ]);
+    const daemonA = createDaemonClient(machineADaemonUrl, page);
+    const writeResult = await daemonA.tool.execCommand({
+      command: [
+        "bash",
+        "-lc",
+        `mkdir -p ~/.local/share/iterate && printf '%s' '${marker}' > ${markerPath} && cat ${markerPath}`,
+      ],
+    });
     expect(writeResult.exitCode).toBe(0);
     expect(writeResult.stdout).toContain(marker);
 
     await createMachineFromUi(page, machineB, imageTag);
     const machineBIterateUrl = await openMachineDetail(page, machineB);
     const machineBDaemonUrl = buildDaemonBaseUrl(machineBIterateUrl);
-    const readResult = await execDaemonCommand(page, machineBDaemonUrl, [
-      "bash",
-      "-lc",
-      `cat ${markerPath}`,
-    ]);
+    const daemonB = createDaemonClient(machineBDaemonUrl, page);
+    const readResult = await daemonB.tool.execCommand({
+      command: ["bash", "-lc", `cat ${markerPath}`],
+    });
     expect(readResult.exitCode).toBe(0);
     expect(readResult.stdout).toContain(marker);
   });
@@ -147,27 +142,29 @@ test.describe("machine persistence", () => {
     await createMachineFromUi(page, machineA, imageTag);
     const machineAIterateUrl = await openMachineDetail(page, machineA);
     const machineADaemonUrl = buildDaemonBaseUrl(machineAIterateUrl);
+    const daemonA = createDaemonClient(machineADaemonUrl, page);
 
-    const writeResult = await execDaemonCommand(page, machineADaemonUrl, [
-      "bash",
-      "-lc",
-      [
-        'opencode db "CREATE TABLE IF NOT EXISTS iterate_sync_e2e (k TEXT PRIMARY KEY, v TEXT NOT NULL);',
-        `INSERT INTO iterate_sync_e2e(k, v) VALUES ('${key}', '${marker}') ON CONFLICT(k) DO UPDATE SET v=excluded.v;`,
-        `SELECT v FROM iterate_sync_e2e WHERE k='${key}';"`,
-      ].join(" "),
-    ]);
+    const writeResult = await daemonA.tool.execCommand({
+      command: [
+        "bash",
+        "-lc",
+        [
+          'opencode db "CREATE TABLE IF NOT EXISTS iterate_sync_e2e (k TEXT PRIMARY KEY, v TEXT NOT NULL);',
+          `INSERT INTO iterate_sync_e2e(k, v) VALUES ('${key}', '${marker}') ON CONFLICT(k) DO UPDATE SET v=excluded.v;`,
+          `SELECT v FROM iterate_sync_e2e WHERE k='${key}';"`,
+        ].join(" "),
+      ],
+    });
     expect(writeResult.exitCode).toBe(0);
     expect(writeResult.stdout).toContain(marker);
 
     await createMachineFromUi(page, machineB, imageTag);
     const machineBIterateUrl = await openMachineDetail(page, machineB);
     const machineBDaemonUrl = buildDaemonBaseUrl(machineBIterateUrl);
-    const readResult = await execDaemonCommand(page, machineBDaemonUrl, [
-      "bash",
-      "-lc",
-      `opencode db "SELECT v FROM iterate_sync_e2e WHERE k='${key}';"`,
-    ]);
+    const daemonB = createDaemonClient(machineBDaemonUrl, page);
+    const readResult = await daemonB.tool.execCommand({
+      command: ["bash", "-lc", `opencode db "SELECT v FROM iterate_sync_e2e WHERE k='${key}';"`],
+    });
     expect(readResult.exitCode).toBe(0);
     expect(readResult.stdout).toContain(marker);
   });

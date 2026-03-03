@@ -72,5 +72,9 @@
       "workerd": "1.20260205.0",
       "miniflare": "4.20260205.0"
     }
+  },
+  "dependencies": {
+    "@orpc/client": "^1.13.6",
+    "@orpc/server": "^1.13.6"
   }
 }
