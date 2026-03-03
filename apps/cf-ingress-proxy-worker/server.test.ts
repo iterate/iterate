@@ -1,180 +1,326 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
+  app,
   buildUpstreamUrl,
+  createRoute,
   createUpstreamHeaders,
   deleteRoute,
+  getRoute,
   listRoutes,
-  readBearerToken,
+  proxyRequest,
   resolveRoute,
-  setRoute,
+  updateRoute,
 } from "./server.ts";
+import { parseWorkerEnv, type RawProxyWorkerEnv } from "./env.ts";
+import { resetDb } from "./test/test-helpers.ts";
+
+const testEnv = env as RawProxyWorkerEnv;
 
 beforeEach(async () => {
-  await env.DB.exec("DROP TABLE IF EXISTS routes;");
+  vi.restoreAllMocks();
+  await resetDb(testEnv.DB);
 });
 
-describe("route table", () => {
-  test("set/list/delete route", async () => {
-    await setRoute(env.DB, {
-      route: "app1__someapp.cf-ingress-worker.com",
-      target: "https://someapp.fly.dev",
-      headers: { host: "app1__someapp.cf-ingress-worker.com" },
-      metadata: { app: "app1" },
-      ttlSeconds: 3600,
+async function createSinglePatternRoute(params: {
+  pattern: string;
+  target: string;
+  headers?: Record<string, string>;
+}) {
+  return createRoute(testEnv.DB, {
+    typeIdPrefix: "tst",
+    patterns: [
+      {
+        pattern: params.pattern,
+        target: params.target,
+        headers: params.headers,
+      },
+    ],
+  });
+}
+
+function buildInboundRequest(params: {
+  host: string;
+  path: string;
+  headers?: Record<string, string>;
+}) {
+  return new Request(`https://${params.host}${params.path}`, {
+    headers: {
+      host: params.host,
+      ...(params.headers ?? {}),
+    },
+  });
+}
+
+describe("route groups", () => {
+  test("create/get/list/update/delete", async () => {
+    const created = await createRoute(testEnv.DB, {
+      typeIdPrefix: "tst",
+      metadata: { project: "abc" },
+      patterns: [
+        { pattern: "app.project.ingress.iterate.com", target: "https://project.fly.dev" },
+        { pattern: "*.project.ingress.iterate.com", target: "https://project.fly.dev" },
+      ],
     });
 
-    const routes = await listRoutes(env.DB);
-    expect(routes).toHaveLength(1);
-    expect(routes[0]?.route).toBe("app1__someapp.cf-ingress-worker.com");
-    expect(routes[0]?.target).toBe("https://someapp.fly.dev/");
-    expect(routes[0]?.status).toBe("active");
-    expect(routes[0]?.ttlSeconds).toBe(3600);
-    expect(routes[0]?.expiresAt).not.toBeNull();
-    expect(routes[0]?.expiredAt).toBeNull();
+    expect(created.routeId.startsWith("tst_")).toBe(true);
+    expect(created.patterns).toHaveLength(2);
 
-    const deleted = await deleteRoute(env.DB, "app1__someapp.cf-ingress-worker.com");
-    expect(deleted).toBe(true);
-    await expect(listRoutes(env.DB)).resolves.toHaveLength(0);
+    const fetched = await getRoute(testEnv.DB, created.routeId);
+    expect(fetched?.routeId).toBe(created.routeId);
+    expect(fetched?.metadata).toEqual({ project: "abc" });
+
+    const listed = await listRoutes(testEnv.DB);
+    expect(listed).toHaveLength(1);
+
+    const updated = await updateRoute(testEnv.DB, {
+      routeId: created.routeId,
+      metadata: { project: "def" },
+      patterns: [
+        {
+          pattern: "api.project.ingress.iterate.com",
+          target: "https://project.fly.dev/base",
+          headers: { authorization: "Bearer test" },
+        },
+      ],
+    });
+
+    expect(updated.metadata).toEqual({ project: "def" });
+    expect(updated.patterns).toHaveLength(1);
+    expect(updated.patterns[0]?.pattern).toBe("api.project.ingress.iterate.com");
+
+    await expect(deleteRoute(testEnv.DB, created.routeId)).resolves.toBe(true);
+    await expect(getRoute(testEnv.DB, created.routeId)).resolves.toBeNull();
   });
 
-  test("resolve prefers exact route over wildcard", async () => {
-    await setRoute(env.DB, {
-      route: "*.cf-ingress-worker.com",
-      target: "https://wildcard.fly.dev",
-      metadata: { kind: "wildcard" },
+  test("create rejects conflicting pattern", async () => {
+    await createRoute(testEnv.DB, {
+      typeIdPrefix: "tst",
+      patterns: [{ pattern: "same.ingress.iterate.com", target: "https://one.fly.dev" }],
     });
 
-    await setRoute(env.DB, {
-      route: "app2__someapp.cf-ingress-worker.com",
+    await expect(
+      createRoute(testEnv.DB, {
+        typeIdPrefix: "tst",
+        patterns: [{ pattern: "same.ingress.iterate.com", target: "https://two.fly.dev" }],
+      }),
+    ).rejects.toThrow("UNIQUE constraint failed");
+  });
+
+  test("resolve prioritizes exact over wildcard", async () => {
+    const wildcard = await createSinglePatternRoute({
+      pattern: "*.proj.ingress.iterate.com",
+      target: "https://wild.fly.dev",
+    });
+
+    const exact = await createSinglePatternRoute({
+      pattern: "app.proj.ingress.iterate.com",
       target: "https://exact.fly.dev",
-      metadata: { kind: "exact" },
     });
 
-    const exactRequest = new Request("https://app2__someapp.cf-ingress-worker.com/a", {
-      headers: {
-        host: "app2__someapp.cf-ingress-worker.com",
-      },
+    const request = new Request("https://app.proj.ingress.iterate.com/hello", {
+      headers: { host: "app.proj.ingress.iterate.com" },
     });
 
-    const wildcardRequest = new Request("https://other.cf-ingress-worker.com/b", {
-      headers: {
-        host: "other.cf-ingress-worker.com",
-      },
-    });
-
-    const exact = await resolveRoute(env.DB, exactRequest);
-    const wildcard = await resolveRoute(env.DB, wildcardRequest);
-
-    expect(exact?.route).toBe("app2__someapp.cf-ingress-worker.com");
-    expect(exact?.metadata.kind).toBe("exact");
-    expect(wildcard?.route).toBe("*.cf-ingress-worker.com");
-    expect(wildcard?.metadata.kind).toBe("wildcard");
+    const resolved = await resolveRoute(testEnv.DB, request);
+    expect(resolved?.routeId).toBe(exact.routeId);
+    expect(resolved?.routeId).not.toBe(wildcard.routeId);
   });
 
-  test("upstream URL and header rewriting", async () => {
-    await setRoute(env.DB, {
-      route: "app3__someapp.cf-ingress-worker.com",
-      target: "https://someapp.fly.dev/base",
-      headers: {
-        host: "app3__someapp.cf-ingress-worker.com",
-        "x-custom-upstream": "yes",
-      },
+  test("double underscore hostnames are treated as opaque strings", async () => {
+    await createSinglePatternRoute({
+      pattern: "*__proj.ingress.iterate.com",
+      target: "https://proj.fly.dev",
     });
 
-    const request = new Request("https://app3__someapp.cf-ingress-worker.com/path/inside?x=1", {
-      method: "GET",
-      headers: {
-        host: "app3__someapp.cf-ingress-worker.com",
-      },
+    const request = new Request("https://web__proj.ingress.iterate.com/path", {
+      headers: { host: "web__proj.ingress.iterate.com" },
     });
 
-    const resolved = await resolveRoute(env.DB, request);
-    expect(resolved).not.toBeNull();
+    const resolved = await resolveRoute(testEnv.DB, request);
+    expect(resolved?.pattern).toBe("*__proj.ingress.iterate.com");
+  });
+});
 
-    const upstreamUrl = buildUpstreamUrl(resolved!.targetUrl, new URL(request.url));
-    expect(upstreamUrl.toString()).toBe("https://someapp.fly.dev/base/path/inside?x=1");
+describe("proxy behavior", () => {
+  test("builds upstream URL using target base path", () => {
+    const upstream = buildUpstreamUrl(
+      new URL("https://target.fly.dev/base"),
+      new URL("https://app.ingress.iterate.com/foo/bar?x=1"),
+    );
 
-    const upstreamHeaders = createUpstreamHeaders(request, upstreamUrl.host, resolved!.headers);
-    expect(upstreamHeaders.get("host")).toBe("app3__someapp.cf-ingress-worker.com");
-    expect(upstreamHeaders.get("x-custom-upstream")).toBe("yes");
+    expect(upstream.toString()).toBe("https://target.fly.dev/base/foo/bar?x=1");
   });
 
-  test("expired TTL matching rows are marked expired and ignored", async () => {
-    await setRoute(env.DB, {
-      route: "app4__someapp.cf-ingress-worker.com",
-      target: "https://someapp.fly.dev",
-      ttlSeconds: 60,
+  test("uses target host by default for cross-host proxying", async () => {
+    await createSinglePatternRoute({
+      pattern: "app.ingress.iterate.com",
+      target: "https://target.fly.dev/base",
     });
 
-    await env.DB.prepare(`
-        UPDATE routes
-        SET status = 'active', expires_at = datetime('now', '-1 second'), expired_at = NULL
-        WHERE route = ?1
-      `)
-      .bind("app4__someapp.cf-ingress-worker.com")
-      .run();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response("proxied", { status: 200 }));
 
-    const request = new Request("https://app4__someapp.cf-ingress-worker.com/path", {
+    const parsedEnv = parseWorkerEnv(testEnv);
+    const response = await proxyRequest(
+      buildInboundRequest({
+        host: "app.ingress.iterate.com",
+        path: "/path?y=2",
+        headers: { "x-custom": "ok" },
+      }),
+      parsedEnv,
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const request = fetchSpy.mock.calls[0]?.[0] as Request;
+    expect(request.url).toBe("https://target.fly.dev/base/path?y=2");
+    expect(request.headers.get("host")).not.toBe("app.ingress.iterate.com");
+    expect(request.headers.get("x-custom")).toBe("ok");
+    expect(response.status).toBe(200);
+  });
+
+  test("applies optional per-pattern header overrides", async () => {
+    await createSinglePatternRoute({
+      pattern: "api.ingress.iterate.com",
+      target: "https://target.fly.dev",
+      headers: { authorization: "Bearer from-route" },
+    });
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const request = input as Request;
+      expect(request.headers.get("authorization")).toBe("Bearer from-route");
+      return new Response("ok", { status: 200 });
+    });
+
+    const response = await proxyRequest(
+      buildInboundRequest({
+        host: "api.ingress.iterate.com",
+        path: "/v1",
+        headers: { authorization: "Bearer inbound" },
+      }),
+      parseWorkerEnv(testEnv),
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  test("keeps websocket upgrade headers", () => {
+    const request = new Request("https://socket.ingress.iterate.com/ws", {
       headers: {
-        host: "app4__someapp.cf-ingress-worker.com",
+        host: "socket.ingress.iterate.com",
+        upgrade: "websocket",
+        connection: "Upgrade",
       },
     });
 
-    await expect(resolveRoute(env.DB, request)).resolves.toBeNull();
-
-    const row = await env.DB.prepare(`SELECT status, expired_at FROM routes WHERE route = ?1`)
-      .bind("app4__someapp.cf-ingress-worker.com")
-      .first<{ status: string; expired_at: string | null }>();
-
-    expect(row?.status).toBe("expired");
-    expect(row?.expired_at).not.toBeNull();
+    const headers = createUpstreamHeaders(request, {}, new URL("https://target.fly.dev/ws"));
+    expect(headers.get("upgrade")?.toLowerCase()).toBe("websocket");
+    expect(headers.get("connection")?.toLowerCase()).toContain("upgrade");
   });
 
-  test("falls back to wildcard when exact route is expired", async () => {
-    await setRoute(env.DB, {
-      route: "*.cf-ingress-worker.com",
-      target: "https://wildcard.fly.dev",
-      metadata: { kind: "wildcard" },
+  test("proxies websocket upgrade transparently", async () => {
+    await createSinglePatternRoute({
+      pattern: "socket.ingress.iterate.com",
+      target: "https://target.fly.dev/ws",
     });
 
-    await setRoute(env.DB, {
-      route: "app5__someapp.cf-ingress-worker.com",
-      target: "https://exact.fly.dev",
-      ttlSeconds: 60,
-      metadata: { kind: "exact" },
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair);
+      server.accept();
+      server.addEventListener("message", (event) => {
+        server.send(`echo:${String(event.data)}`);
+      });
+      return new Response(null, {
+        status: 101,
+        headers: { connection: "Upgrade", upgrade: "websocket" },
+        webSocket: client,
+      });
     });
 
-    await env.DB.prepare(`
-        UPDATE routes
-        SET status = 'active', expires_at = datetime('now', '-1 second'), expired_at = NULL
-        WHERE route = ?1
-      `)
-      .bind("app5__someapp.cf-ingress-worker.com")
-      .run();
+    const response = await proxyRequest(
+      buildInboundRequest({
+        host: "socket.ingress.iterate.com",
+        path: "/ws",
+        headers: {
+          connection: "Upgrade",
+          upgrade: "websocket",
+        },
+      }),
+      parseWorkerEnv(testEnv),
+    );
 
-    const request = new Request("https://app5__someapp.cf-ingress-worker.com/path", {
-      headers: {
-        host: "app5__someapp.cf-ingress-worker.com",
-      },
+    expect(response.status).toBe(101);
+    const websocket = response.webSocket;
+    expect(websocket).toBeTruthy();
+    if (!websocket) {
+      throw new Error("Expected websocket on upgrade response");
+    }
+
+    const messagePromise = new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Timed out waiting for websocket echo"));
+      }, 2_000);
+      websocket.addEventListener("message", (event) => {
+        clearTimeout(timeout);
+        resolve(String(event.data));
+      });
+      websocket.addEventListener("error", () => {
+        clearTimeout(timeout);
+        reject(new Error("Websocket error"));
+      });
     });
 
-    const resolved = await resolveRoute(env.DB, request);
-    expect(resolved?.route).toBe("*.cf-ingress-worker.com");
-    expect(resolved?.metadata.kind).toBe("wildcard");
-
-    const row = await env.DB.prepare(`SELECT status, expired_at FROM routes WHERE route = ?1`)
-      .bind("app5__someapp.cf-ingress-worker.com")
-      .first<{ status: string; expired_at: string | null }>();
-
-    expect(row?.status).toBe("expired");
-    expect(row?.expired_at).not.toBeNull();
+    websocket.accept();
+    websocket.send("ping");
+    await expect(messagePromise).resolves.toBe("echo:ping");
+    websocket.close();
   });
 
-  test("bearer token parsing", () => {
-    expect(readBearerToken("Bearer abc123")).toBe("abc123");
-    expect(readBearerToken("bearer abc123")).toBe("abc123");
-    expect(readBearerToken("Token abc123")).toBeNull();
-    expect(readBearerToken(null)).toBeNull();
+  test("returns 404 when no route matches", async () => {
+    const response = await proxyRequest(
+      buildInboundRequest({
+        host: "none.ingress.iterate.com",
+        path: "/",
+      }),
+      parseWorkerEnv(testEnv),
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "route_not_found" });
+  });
+
+  test("returns 502 when upstream fetch fails", async () => {
+    await createSinglePatternRoute({
+      pattern: "fail.ingress.iterate.com",
+      target: "https://target.fly.dev",
+    });
+
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("boom"));
+
+    const response = await proxyRequest(
+      buildInboundRequest({
+        host: "fail.ingress.iterate.com",
+        path: "/",
+      }),
+      parseWorkerEnv(testEnv),
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "proxy_error" });
+  });
+
+  test("POST /health does not skip env parsing and falls through safely", async () => {
+    const response = await app.fetch(
+      new Request("https://ingress.iterate.com/health", {
+        method: "POST",
+        headers: { host: "ingress.iterate.com" },
+      }),
+      testEnv,
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "route_not_found" });
   });
 });

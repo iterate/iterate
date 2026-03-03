@@ -2,6 +2,7 @@
  * Live implementation of StreamManager
  */
 import { Effect, Layer, PubSub, Stream } from "effect";
+import { Runtime } from "effect";
 
 import { Event, EventInput, EventType, Offset, StreamPath } from "../../domain.ts";
 import { EVENTS_META_STREAM_PATH, STREAM_CREATED_TYPE } from "../../stream-metadata.ts";
@@ -36,10 +37,13 @@ export const liveLayerWithOptions = (
     Effect.gen(function* () {
       const storageManager = yield* StreamStorageManager;
       const streams = new Map<StreamPath, EventStream.EventStream>();
+      const initializingStreams = new Map<StreamPath, Promise<EventStream.EventStream>>();
       const knownPaths = new Set(
         (yield* storageManager.listPaths().pipe(Effect.orDie)).map((path) => String(path)),
       );
       const websocketIdleDisconnectMs = parseWebsocketIdleDisconnectMs(options.env);
+      const runtime = yield* Effect.runtime<never>();
+      const runPromise = Runtime.runPromise(runtime);
 
       // Global PubSub for all events (used for "all paths" subscriptions)
       const globalPubSub = yield* PubSub.unbounded<Event>();
@@ -49,42 +53,83 @@ export const liveLayerWithOptions = (
           const existing = streams.get(path);
           if (existing !== undefined) return existing;
 
-          const storage = storageManager.forPath(path);
-          const stream = yield* EventStream.make(storage, path, {
-            websocketIdleDisconnectMs,
-          });
-          streams.set(path, stream);
-          return stream;
+          const initializing = initializingStreams.get(path);
+          if (initializing !== undefined) {
+            return yield* Effect.promise(() => initializing);
+          }
+
+          const initializationPromise = runPromise(
+            Effect.gen(function* () {
+              const initialized = streams.get(path);
+              if (initialized !== undefined) return initialized;
+
+              const storage = storageManager.forPath(path);
+              const stream = yield* EventStream.make(storage, path, {
+                websocketIdleDisconnectMs,
+              });
+              streams.set(path, stream);
+              return stream;
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  initializingStreams.delete(path);
+                }),
+              ),
+            ),
+          );
+
+          initializingStreams.set(path, initializationPromise);
+          return yield* Effect.promise(() => initializationPromise);
         });
 
       const getOrCreateStream = (path: StreamPath): Effect.Effect<EventStream.EventStream> =>
         Effect.gen(function* () {
           const pathKey = String(path);
-          const isNewPath = !knownPaths.has(pathKey);
-          if (isNewPath) {
-            yield* storageManager.ensurePath({ path }).pipe(Effect.orDie);
+          const shouldEmitStreamCreated = !knownPaths.has(pathKey);
+          if (shouldEmitStreamCreated) {
             knownPaths.add(pathKey);
+            yield* storageManager.ensurePath({ path }).pipe(
+              Effect.tapError(() =>
+                Effect.sync(() => {
+                  knownPaths.delete(pathKey);
+                }),
+              ),
+              Effect.orDie,
+            );
           }
 
           const stream = yield* getOrInitializeStream(path);
 
-          if (isNewPath && path !== EVENTS_META_STREAM_PATH) {
-            const metaPathKey = String(EVENTS_META_STREAM_PATH);
-            if (!knownPaths.has(metaPathKey)) {
-              yield* storageManager
-                .ensurePath({ path: EVENTS_META_STREAM_PATH })
-                .pipe(Effect.orDie);
-              knownPaths.add(metaPathKey);
-            }
+          if (shouldEmitStreamCreated && path !== EVENTS_META_STREAM_PATH) {
+            yield* Effect.gen(function* () {
+              const metaPathKey = String(EVENTS_META_STREAM_PATH);
+              if (!knownPaths.has(metaPathKey)) {
+                knownPaths.add(metaPathKey);
+                yield* storageManager.ensurePath({ path: EVENTS_META_STREAM_PATH }).pipe(
+                  Effect.tapError(() =>
+                    Effect.sync(() => {
+                      knownPaths.delete(metaPathKey);
+                    }),
+                  ),
+                );
+              }
 
-            const metaStream = yield* getOrInitializeStream(EVENTS_META_STREAM_PATH);
-            const metaEvent = yield* metaStream.append(
-              EventInput.make({
-                type: EventType.make(STREAM_CREATED_TYPE),
-                payload: { path: pathKey },
-              }),
+              const metaStream = yield* getOrInitializeStream(EVENTS_META_STREAM_PATH);
+              const metaEvent = yield* metaStream.append(
+                EventInput.make({
+                  type: EventType.make(STREAM_CREATED_TYPE),
+                  payload: { path: pathKey },
+                }),
+              );
+              yield* PubSub.publish(globalPubSub, metaEvent);
+            }).pipe(
+              Effect.catchAllCause((cause) =>
+                Effect.sync(() => {
+                  knownPaths.delete(pathKey);
+                }).pipe(Effect.flatMap(() => Effect.failCause(cause))),
+              ),
+              Effect.orDie,
             );
-            yield* PubSub.publish(globalPubSub, metaEvent);
           }
 
           return stream;

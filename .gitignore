@@ -57,6 +57,9 @@ session-ses*.md
 # local lint-staged config
 lint-staged.local.cjs
 
+# local Claude overrides
+.claude/settings.local.json
+
 playwriter-screenshot-*
 
 # PR video recordings

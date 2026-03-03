@@ -100,7 +100,7 @@ git worktree add "$WORKTREE_PATH" "$BRANCH_NAME"
 
 When creating PRs, always include attribution in the PR description so reviewers know the context.
 
-**Important:** Always include the hidden routing block at the very end of the PR body. This enables automated webhook routing back to the current agent path (even when the PR was created outside the default `/github/<owner>/<repo>/pr-<number>` path). Use the `ITERATE_GITHUB_APP_SLUG` env var (falls back to `iterate` if not set).
+**Important:** Always include the hidden routing block at the very end of the PR body. Route by current OpenCode session ID (preferred) so webhook handling can resolve the right agent path deterministically. Never use placeholders like `pr-NEW`. Use `ITERATE_GITHUB_APP_SLUG` (falls back to `iterate` if not set).
 
 ```markdown
 ## Context
@@ -110,10 +110,12 @@ When creating PRs, always include attribution in the PR description so reviewers
 - **Agent session:** [clickable link to attach]
 
 <!-- iterate-agent-context
-agent_path: /github/<owner>/<repo>/pr-<number>  # replace with your current agent path
+session_id: ses_xxxxx  # from get-current-session-id tool
 -->
-<!-- ${ITERATE_GITHUB_APP_SLUG:-iterate}:agent-pr -->
+<!-- ${ITERATE_GITHUB_APP_SLUG}:agent-pr -->
 ```
+
+If session ID cannot be resolved for some reason, fallback to explicit `agent_path: /...` (real path only, never placeholder).
 
 **GitHub @-tagging rule:** When attributing a PR to a user with a GitHub `@username`, you MUST verify that username appears in recent git history first (e.g., `git log --format='%an <%ae>' | sort -u` and cross-reference). If you cannot confirm the GitHub username from git history, do NOT guess — just write "Requested by: Their Name on Slack" instead.
 

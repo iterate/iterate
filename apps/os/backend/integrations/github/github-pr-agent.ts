@@ -1,4 +1,8 @@
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
+import {
+  buildDefaultGitHubPrAgentPath,
+  normalizeAgentPath,
+} from "@iterate-com/shared/github-agent-path";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
@@ -48,33 +52,6 @@ type ParsedPrRoutingMarker = {
 
 const LOW_TRUST_PATTERNS = [/bugbot/i, /pullfrog/i, /cursor/i];
 const LOW_RISK_PATTERN = /\blow[-\s]?risk\b/i;
-
-function toPathSegment(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "x"
-  );
-}
-
-function buildDefaultAgentPath(repo: GitHubRepoCoordinates, prNumber: number): string {
-  return `/github/${toPathSegment(repo.owner)}/${toPathSegment(repo.name)}/pr-${prNumber}`;
-}
-
-function normalizeAgentPath(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("/")) return null;
-  if (/\s/.test(trimmed)) return null;
-  if (!/^\/[a-zA-Z0-9._~/-]+$/.test(trimmed)) return null;
-  const segments = trimmed.split("/").slice(1);
-  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
-    return null;
-  }
-  return trimmed;
-}
 
 function parseAgentPathFromBody(body: string | null | undefined): string | null {
   if (!body) return null;
@@ -346,7 +323,10 @@ export async function routePullRequestSignalToAgent(params: {
     return;
   }
 
-  const fallbackAgentPath = buildDefaultAgentPath(params.signal.repo, params.signal.prNumber);
+  const fallbackAgentPath = buildDefaultGitHubPrAgentPath(
+    params.signal.repo,
+    params.signal.prNumber,
+  );
 
   for (const ctx of contexts) {
     try {
