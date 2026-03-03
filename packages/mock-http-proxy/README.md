@@ -15,8 +15,9 @@ Private workspace package for outbound HTTP/WebSocket egress mocking, passthroug
 - `src/replay/`
   - `from-traffic-with-websocket.ts`: replay handlers from HAR (`@mswjs/source/traffic` + websocket replay)
 - `src/integration/`
-  - real-network and replay integration tests
-  - `http-client-scripts/` and `fixtures/` used by those tests
+  - non-internet higher-level tests + fixtures/scripts
+- `src/e2e/`
+  - internet-hitting tests (requires Doppler env)
 
 ## Public exports
 
@@ -47,27 +48,24 @@ Fixture API surface:
 - SetupServerApi subset: `use`, `resetHandlers`, `restoreHandlers`, `listHandlers`, `events`
 - Fixture fields: `url`, `host`, `port`, `close()`, `getHar()`, `writeHar()`
 
-## Test suites
+## Test types
+
+We only use two categories:
+
+1. Unit tests (no internet, no Doppler required)
+
+- `pnpm --filter @iterate-com/mock-http-proxy test`
+- Includes server/har/replay tests and local non-internet integration tests.
+
+2. E2E tests (internet + secrets required)
+
+- `pnpm --filter @iterate-com/mock-http-proxy test:e2e`
+- Runs [`src/e2e/real-egress.e2e.test.ts`](./src/e2e/real-egress.e2e.test.ts) via `doppler run --config dev`.
 
 Representative suites:
 
-- adapter API + parity: [`src/server/msw-server-adapter.api.test.ts`](./src/server/msw-server-adapter.api.test.ts), [`src/server/msw-server-adapter.http-parity.test.ts`](./src/server/msw-server-adapter.http-parity.test.ts), [`src/server/msw-server-adapter.transport.test.ts`](./src/server/msw-server-adapter.transport.test.ts)
-- recorder/unit: [`src/har/har-recorder.test.ts`](./src/har/har-recorder.test.ts)
-- replay/unit: [`src/replay/from-traffic-with-websocket.test.ts`](./src/replay/from-traffic-with-websocket.test.ts)
-- integration/replay + real egress:
-  - [`src/integration/recording-shapes.integration.test.ts`](./src/integration/recording-shapes.integration.test.ts)
-  - [`src/integration/har-replay.integration.test.ts`](./src/integration/har-replay.integration.test.ts)
-  - [`src/integration/real-egress.integration.test.ts`](./src/integration/real-egress.integration.test.ts)
-
-## Commands
-
-All tests run through Doppler `dev` env.
-
-- unit/core suites:
-  - `pnpm --filter @iterate-com/mock-http-proxy test`
-- integration (recording + replay):
-  - `pnpm --filter @iterate-com/mock-http-proxy test:integration`
-- external real-egress only (OpenAI/Slack/curl):
-  - `pnpm --filter @iterate-com/mock-http-proxy test:external`
-- everything:
-  - `pnpm --filter @iterate-com/mock-http-proxy test:all`
+- unit/server parity: [`src/server/msw-server-adapter.http-parity.test.ts`](./src/server/msw-server-adapter.http-parity.test.ts)
+- unit/recorder: [`src/har/har-recorder.test.ts`](./src/har/har-recorder.test.ts)
+- unit/replay: [`src/replay/from-traffic-with-websocket.test.ts`](./src/replay/from-traffic-with-websocket.test.ts)
+- unit/non-internet integration: [`src/integration/recording-shapes.integration.test.ts`](./src/integration/recording-shapes.integration.test.ts), [`src/integration/har-replay.integration.test.ts`](./src/integration/har-replay.integration.test.ts)
+- e2e/internet: [`src/e2e/real-egress.e2e.test.ts`](./src/e2e/real-egress.e2e.test.ts)

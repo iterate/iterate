@@ -44,7 +44,7 @@ async function runOpenAiScript(options: {
         env: {
           ...process.env,
           ...options.mitmEnv,
-          OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+          OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "sk-test-replay-key",
           OPENAI_REALTIME_TIMEOUT_MS: String(options.timeoutMs),
         },
         cwd: join(thisDir, "..", ".."),
@@ -75,7 +75,7 @@ async function runSlackScript(egressUrl: string): Promise<SlackScriptOutput> {
       nodeOptions: {
         env: {
           ...process.env,
-          SLACK_BOT_TOKEN: process.env.SLACK_CI_BOT_TOKEN,
+          SLACK_BOT_TOKEN: process.env.SLACK_CI_BOT_TOKEN ?? "xoxb-replay-token",
           SLACK_API_URL: `${egressUrl}/api/`,
           SLACK_TARGET_URL: "https://slack.com",
         },

@@ -45,7 +45,11 @@ async function runOpenAiScript(options: {
 }): Promise<OpenAiScriptOutput> {
   const result = await x(
     "pnpm",
-    ["exec", "tsx", join(thisDir, "http-client-scripts", "openai-responses-websockets.ts")],
+    [
+      "exec",
+      "tsx",
+      join(thisDir, "..", "integration", "http-client-scripts", "openai-responses-websockets.ts"),
+    ],
     {
       throwOnError: true,
       nodeOptions: {
@@ -68,7 +72,11 @@ async function runOpenAiScript(options: {
 async function runSlackScript(egressUrl: string): Promise<SlackScriptOutput> {
   const result = await x(
     "pnpm",
-    ["exec", "tsx", join(thisDir, "http-client-scripts", "slack-auth-test.ts")],
+    [
+      "exec",
+      "tsx",
+      join(thisDir, "..", "integration", "http-client-scripts", "slack-auth-test.ts"),
+    ],
     {
       throwOnError: true,
       nodeOptions: {
