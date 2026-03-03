@@ -15,7 +15,6 @@ import {
   Download,
   ExternalLink,
   File,
-  Loader2,
   MessageSquare,
   Paperclip,
   Plus,
@@ -31,6 +30,7 @@ import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { EmptyState } from "../../components/empty-state.tsx";
 import { HeaderActions } from "../../components/header-actions.tsx";
+import { Spinner } from "../../components/ui/spinner.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
 import { cn } from "../../lib/utils.ts";
 
@@ -537,7 +537,7 @@ function ProjectHomePage() {
             )}
             {threadStatus ? (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <Spinner className="h-3 w-3" />
                 <span>{threadStatus}</span>
               </div>
             ) : null}

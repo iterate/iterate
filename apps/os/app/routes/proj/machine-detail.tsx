@@ -504,7 +504,7 @@ function MachineDetailPage() {
             }}
           >
             <Play className="h-4 w-4" />
-            Run command
+            {execCommand.isPending ? "Running..." : "Run command"}
           </Button>
           <Button
             variant="outline"
@@ -528,7 +528,7 @@ function MachineDetailPage() {
           )}
         </div>
 
-        {execCommand.data && (
+        {execCommand.isSuccess && execCommand.data && (
           <div data-testid="exec-command-result">
             <SerializedObjectCodeBlock data={execCommand.data} className="max-h-[20rem]" />
           </div>

@@ -1,4 +1,3 @@
-// oxlint-disable iterate/spec-restricted-syntax
 import { execSync } from "node:child_process";
 import { type Page, expect } from "@playwright/test";
 import { spinnerWaiter } from "./plugins/spinner-waiter.ts";
@@ -52,36 +51,11 @@ async function createMachineFromUi(page: Page, machineName: string, imageTag?: s
 
 /** Run a shell command on the machine via the "Run command" button on the detail page. */
 async function runCommandOnMachine(page: Page, command: string): Promise<string> {
-  // Intercept the browser prompt() to inject the command automatically.
   await page.evaluate((cmd) => (window.prompt = () => cmd), command);
   await page.getByRole("button", { name: "Run command" }).click();
-
-  // Wait for the result wrapper with data-testid="exec-command-result".
   const resultBlock = page.getByTestId("exec-command-result");
-  await expect(resultBlock).toBeVisible({ timeout: 30_000 });
+  await resultBlock.waitFor();
   return (await resultBlock.textContent()) ?? "";
-}
-
-/** Send a message via the webchat UI and wait for the assistant to finish replying. */
-async function sendWebchatMessage(page: Page, text: string) {
-  const input = page.getByTestId("webchat-input");
-  await input.fill(text);
-  await page.getByTestId("webchat-send").click();
-
-  // Wait for the user message to appear, then for the assistant spinner to clear.
-  await expect(page.getByTestId("webchat-message-user").last()).toContainText(text, {
-    timeout: 10_000,
-  });
-  // The thread status spinner (.animate-spin) is visible while the assistant is
-  // processing. Wait for it to disappear — that means the reply is complete.
-  await expect(page.locator(".animate-spin")).toBeHidden({ timeout: 120_000 });
-}
-
-/** Return the text content of the last assistant message in the current thread. */
-async function getLastAssistantReply(page: Page): Promise<string> {
-  const reply = page.getByTestId("webchat-message-assistant").last();
-  await expect(reply).toBeVisible({ timeout: 10_000 });
-  return (await reply.textContent()) ?? "";
 }
 
 test.describe("machine persistence", () => {
@@ -138,14 +112,17 @@ test.describe("machine persistence", () => {
     // Machine A: create, activate, then send a message via the webchat UI.
     await createMachineFromUi(page, machineA, imageTag);
     await sidebarButton(page, "Home").click();
-    await sendWebchatMessage(page, "the secret word is banana");
-    await getLastAssistantReply(page);
+    await page.getByTestId("webchat-input").fill("the secret word is banana");
+    await page.getByTestId("webchat-send").click();
+    await page.getByTestId("webchat-message-assistant").waitFor();
 
     // Machine B: replace machine, then ask for the secret word in the same thread.
     await createMachineFromUi(page, machineB, imageTag);
     await sidebarButton(page, "Home").click();
-    await sendWebchatMessage(page, "what's the secret word? reply with just the word");
-    const reply = await getLastAssistantReply(page);
-    expect(reply.toLowerCase()).toContain("banana");
+    await page
+      .getByTestId("webchat-input")
+      .fill("what's the secret word? reply with just the word");
+    await page.getByTestId("webchat-send").click();
+    await page.getByTestId("webchat-message-assistant").getByText("banana").waitFor();
   });
 });
