@@ -39,9 +39,12 @@ async function createMachineFromUi(page: Page, machineName: string, imageTag?: s
   await page.getByRole("button", { name: "Create" }).click();
 
   // Machine pipeline: create → provision (50-120s) → setup → 30s delay → probe → activate.
-  await spinnerWaiter.settings.run({ spinnerTimeout: 300_000 }, async () => {
-    await page.getByRole("heading", { name: "Active Machine", exact: true }).waitFor();
-  });
+  // Wait for the "Active Machine" heading to appear, with a long timeout.
+  // Don't use spinnerWaiter here — the machine list page's loading indicator
+  // isn't always detected by the spinner pattern.
+  await page
+    .getByRole("heading", { name: "Active Machine", exact: true })
+    .waitFor({ timeout: 300_000 });
 }
 
 async function openMachineDetail(page: Page, machineName: string): Promise<string> {
