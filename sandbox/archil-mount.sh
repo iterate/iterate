@@ -61,10 +61,11 @@ sudo mkdir -p "$PERSIST"
 
   # Create persistent directories on the volume
   mkdir -p "${PERSIST}/persisted"
-  mkdir -p "${PERSIST}/.local/share"
-  sudo chown iterate:iterate "${PERSIST}/persisted"
-  sudo chown iterate:iterate "${PERSIST}/.local"
-  sudo chown iterate:iterate "${PERSIST}/.local/share"
+  mkdir -p "${PERSIST}/.local/share/opencode"
+  mkdir -p "${PERSIST}/.local/share/daemon"
+  mkdir -p "${PERSIST}/.local/share/events-service"
+  sudo chown -R iterate:iterate "${PERSIST}/persisted"
+  sudo chown -R iterate:iterate "${PERSIST}/.local"
 
   # Symlink ~/persisted → /mnt/persist/persisted
   ln -sfn "${PERSIST}/persisted" "${HOME_DIR}/persisted"
