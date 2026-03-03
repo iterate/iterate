@@ -221,9 +221,7 @@ export class DependencyResolver {
   getDependents(processName: string): string[] {
     const result: string[] = [];
     for (const [name, node] of this.nodes) {
-      if (
-        node.dependsOn.some((dep) => dep.type === "process" && dep.process === processName)
-      ) {
+      if (node.dependsOn.some((dep) => dep.type === "process" && dep.process === processName)) {
         result.push(name);
       }
     }

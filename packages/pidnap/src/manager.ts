@@ -987,9 +987,7 @@ export class Manager {
         this.tryStartProcessAfterDeps(processName);
       },
       (path) => {
-        this.logger.error(
-          `Sentinel file "${path}" timed out for process "${processName}"`,
-        );
+        this.logger.error(`Sentinel file "${path}" timed out for process "${processName}"`);
       },
     );
   }

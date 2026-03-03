@@ -534,9 +534,7 @@ describe("Sentinel dependencies", () => {
         {
           name: "a",
           definition: { command: "echo" },
-          dependsOn: [
-            { type: "sentinel", path: sentinelPath, timeout: 5000, pollInterval: 100 },
-          ],
+          dependsOn: [{ type: "sentinel", path: sentinelPath, timeout: 5000, pollInterval: 100 }],
         },
       ];
       resolver.buildGraph(entries, new Map());
@@ -655,9 +653,7 @@ describe("Sentinel dependencies", () => {
         {
           name: "a",
           definition: { command: "echo" },
-          dependsOn: [
-            { type: "sentinel", path: sentinelPath, pollInterval: 50, timeout: 5000 },
-          ],
+          dependsOn: [{ type: "sentinel", path: sentinelPath, pollInterval: 50, timeout: 5000 }],
         },
       ];
       resolver.buildGraph(entries, new Map());
@@ -684,9 +680,7 @@ describe("Sentinel dependencies", () => {
         {
           name: "a",
           definition: { command: "echo" },
-          dependsOn: [
-            { type: "sentinel", path: sentinelPath, pollInterval: 20, timeout: 80 },
-          ],
+          dependsOn: [{ type: "sentinel", path: sentinelPath, pollInterval: 20, timeout: 80 }],
         },
       ];
       resolver.buildGraph(entries, new Map());
@@ -736,9 +730,7 @@ describe("Sentinel dependencies", () => {
         {
           name: "a",
           definition: { command: "echo" },
-          dependsOn: [
-            { type: "sentinel", path: sentinelPath, pollInterval: 50, timeout: 60000 },
-          ],
+          dependsOn: [{ type: "sentinel", path: sentinelPath, pollInterval: 50, timeout: 60000 }],
         },
       ];
       resolver.buildGraph(entries, new Map());
@@ -760,9 +752,7 @@ describe("Sentinel dependencies", () => {
         {
           name: "a",
           definition: { command: "echo" },
-          dependsOn: [
-            { type: "sentinel", path: sentinelPath, pollInterval: 20, timeout: 50 },
-          ],
+          dependsOn: [{ type: "sentinel", path: sentinelPath, pollInterval: 20, timeout: 50 }],
         },
       ];
       resolver.buildGraph(entries, new Map());
