@@ -97,11 +97,3 @@ export const githubPrAgentPaths = sqliteTable(
     ),
   }),
 );
-
-export const githubWebhookState = sqliteTable("github_webhook_state", {
-  agentPath: text("agent_path").primaryKey(),
-  instructionsSentAt: integer("instructions_sent_at", { mode: "timestamp" }),
-  lastEventHash: text("last_event_hash"),
-  lastEventAt: integer("last_event_at", { mode: "timestamp" }),
-  lastSeenAt: integer("last_seen_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
-});

@@ -151,6 +151,15 @@ type AgentPathResolution = {
 
 const flushTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const bufferedSignalsByAgentPath = new Map<string, BufferedSignal[]>();
+const webhookStateByAgentPath = new Map<
+  string,
+  {
+    instructionsSentAtMs: number | null;
+    lastEventHash: string | null;
+    lastEventAtMs: number | null;
+    lastSeenAtMs: number;
+  }
+>();
 
 export const githubRouter = new Hono();
 
@@ -656,40 +665,23 @@ async function upsertWebhookState(params: {
   agentPath: string;
   eventHash: string;
 }): Promise<{ includeInstructions: boolean; duplicate: boolean }> {
-  const now = new Date();
-  const [existing] = await db
-    .select()
-    .from(schema.githubWebhookState)
-    .where(eq(schema.githubWebhookState.agentPath, params.agentPath))
-    .limit(1);
+  const nowMs = Date.now();
+  const existing = webhookStateByAgentPath.get(params.agentPath);
 
   const duplicate =
     existing?.lastEventHash === params.eventHash &&
-    Boolean(existing.lastEventAt) &&
-    now.getTime() - existing.lastEventAt!.getTime() < DEBOUNCE_MS;
+    existing.lastEventAtMs !== null &&
+    nowMs - existing.lastEventAtMs < DEBOUNCE_MS;
 
   const includeInstructions =
-    !existing?.instructionsSentAt ||
-    now.getTime() - existing.instructionsSentAt.getTime() > INSTRUCTIONS_TTL_MS;
+    !existing?.instructionsSentAtMs || nowMs - existing.instructionsSentAtMs > INSTRUCTIONS_TTL_MS;
 
-  await db
-    .insert(schema.githubWebhookState)
-    .values({
-      agentPath: params.agentPath,
-      instructionsSentAt: includeInstructions ? now : existing?.instructionsSentAt,
-      lastEventHash: params.eventHash,
-      lastEventAt: now,
-      lastSeenAt: now,
-    })
-    .onConflictDoUpdate({
-      target: schema.githubWebhookState.agentPath,
-      set: {
-        instructionsSentAt: includeInstructions ? now : (existing?.instructionsSentAt ?? null),
-        lastEventHash: params.eventHash,
-        lastEventAt: now,
-        lastSeenAt: now,
-      },
-    });
+  webhookStateByAgentPath.set(params.agentPath, {
+    instructionsSentAtMs: includeInstructions ? nowMs : (existing?.instructionsSentAtMs ?? null),
+    lastEventHash: params.eventHash,
+    lastEventAtMs: nowMs,
+    lastSeenAtMs: nowMs,
+  });
 
   return { includeInstructions, duplicate };
 }
@@ -803,31 +795,17 @@ async function flushBufferedRows(agentPath: string, rows: BufferedSignal[]): Pro
 }
 
 async function markSeenAndCheckInstructions(agentPath: string): Promise<boolean> {
-  const now = new Date();
-  const [existing] = await db
-    .select()
-    .from(schema.githubWebhookState)
-    .where(eq(schema.githubWebhookState.agentPath, agentPath))
-    .limit(1);
-
+  const nowMs = Date.now();
+  const existing = webhookStateByAgentPath.get(agentPath);
   const includeInstructions =
-    !existing?.instructionsSentAt ||
-    now.getTime() - existing.instructionsSentAt.getTime() > INSTRUCTIONS_TTL_MS;
+    !existing?.instructionsSentAtMs || nowMs - existing.instructionsSentAtMs > INSTRUCTIONS_TTL_MS;
 
-  await db
-    .insert(schema.githubWebhookState)
-    .values({
-      agentPath,
-      instructionsSentAt: includeInstructions ? now : existing?.instructionsSentAt,
-      lastSeenAt: now,
-    })
-    .onConflictDoUpdate({
-      target: schema.githubWebhookState.agentPath,
-      set: {
-        instructionsSentAt: includeInstructions ? now : (existing?.instructionsSentAt ?? null),
-        lastSeenAt: now,
-      },
-    });
+  webhookStateByAgentPath.set(agentPath, {
+    instructionsSentAtMs: includeInstructions ? nowMs : (existing?.instructionsSentAtMs ?? null),
+    lastEventHash: existing?.lastEventHash ?? null,
+    lastEventAtMs: existing?.lastEventAtMs ?? null,
+    lastSeenAtMs: nowMs,
+  });
 
   return includeInstructions;
 }
@@ -837,9 +815,12 @@ async function pruneExpiredState(): Promise<void> {
   await db
     .delete(schema.githubPrAgentPaths)
     .where(lt(schema.githubPrAgentPaths.updatedAt, new Date(now - PR_MAPPING_TTL_MS)));
-  await db
-    .delete(schema.githubWebhookState)
-    .where(lt(schema.githubWebhookState.lastSeenAt, new Date(now - STATE_TTL_MS)));
+
+  for (const [agentPath, state] of webhookStateByAgentPath) {
+    if (now - state.lastSeenAtMs > STATE_TTL_MS) {
+      webhookStateByAgentPath.delete(agentPath);
+    }
+  }
 
   for (const [agentPath, rows] of bufferedSignalsByAgentPath) {
     const kept = rows.filter((row) => now - row.createdAtMs <= BUFFER_TTL_MS);

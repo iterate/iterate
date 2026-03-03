@@ -10,10 +10,3 @@ CREATE TABLE `github_pr_agent_path` (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `github_pr_agent_path_owner_repo_pr_number_unique` ON `github_pr_agent_path` (`owner`,`repo`,`pr_number`);--> statement-breakpoint
-CREATE TABLE `github_webhook_state` (
-	`agent_path` text PRIMARY KEY NOT NULL,
-	`instructions_sent_at` integer,
-	`last_event_hash` text,
-	`last_event_at` integer,
-	`last_seen_at` integer DEFAULT (unixepoch())
-);

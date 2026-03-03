@@ -817,7 +817,7 @@ function resolveRepoCoordinates(repository: {
 
 async function listRepoMachineContexts(db: DB, repo: GitHubRepoCoordinates) {
   const projects = await db.query.project.findMany({
-    where: (project, { eq: whereEq }) => eq(project.configRepoFullName, repo.fullName),
+    where: (project, { eq: whereEq }) => whereEq(project.configRepoFullName, repo.fullName),
     columns: { id: true },
     with: {
       machines: {
