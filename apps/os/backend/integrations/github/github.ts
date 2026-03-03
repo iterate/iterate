@@ -17,6 +17,7 @@ import { encrypt } from "../../utils/encryption.ts";
 import { createDaemonClient } from "../../utils/daemon-orpc-client.ts";
 import { stripMachineStateMetadata } from "../../utils/machine-metadata.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
+import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
 import { trackWebhookEvent } from "../../lib/posthog.ts";
 import type { ProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";

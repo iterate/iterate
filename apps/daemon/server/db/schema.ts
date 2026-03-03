@@ -76,3 +76,24 @@ export const agentRoutes = sqliteTable(
 
 export type AgentRoute = typeof agentRoutes.$inferSelect;
 export type NewAgentRoute = typeof agentRoutes.$inferInsert;
+
+export const githubPrAgentPaths = sqliteTable(
+  "github_pr_agent_path",
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    owner: text().notNull(),
+    repo: text().notNull(),
+    prNumber: integer("pr_number").notNull(),
+    agentPath: text("agent_path").notNull(),
+    source: text().notNull().default("deterministic"),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
+    expiresAt: integer("expires_at", { mode: "timestamp" }),
+  },
+  (table) => ({
+    repoPrUnique: uniqueIndex("github_pr_agent_path_owner_repo_pr_number_unique").on(
+      table.owner,
+      table.repo,
+      table.prNumber,
+    ),
+  }),
+);

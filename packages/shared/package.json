@@ -8,7 +8,8 @@
     "./jonasland/ingress-url": "./src/jonasland/ingress-url.ts",
     "./jonasland/deployment": "./src/jonasland/deployment/index.ts",
     "./force-public-url-vite-plugin": "./src/dev/force-public-url-vite-plugin.ts",
-    "./project-ingress": "./src/project-ingress.ts"
+    "./project-ingress": "./src/project-ingress.ts",
+    "./github-agent-path": "./src/github-agent-path.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

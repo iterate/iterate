@@ -115,6 +115,8 @@ agent_path: /github/<owner>/<repo>/pr-<number>  # replace with your current agen
 <!-- ${ITERATE_GITHUB_APP_SLUG:-iterate}:agent-pr -->
 ```
 
+If session ID cannot be resolved for some reason, fallback to explicit `agent_path: /...` (real path only, never placeholder).
+
 **GitHub @-tagging rule:** When attributing a PR to a user with a GitHub `@username`, you MUST verify that username appears in recent git history first (e.g., `git log --format='%an <%ae>' | sort -u` and cross-reference). If you cannot confirm the GitHub username from git history, do NOT guess — just write "Requested by: Their Name on Slack" instead.
 
 **Building Slack thread links:** Use `slack.auth.test()` to discover the workspace domain dynamically — do NOT hardcode or guess the workspace name:
