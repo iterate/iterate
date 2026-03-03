@@ -5,7 +5,6 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
-import { incomingHeadersToHeaders } from "./http-utils.ts";
 import { bridgeWebSocketToUpstream, firstHeaderValue } from "./websocket-upstream-bridge.ts";
 import type * as msw from "msw";
 import type * as mswNode from "msw/node";
@@ -14,6 +13,7 @@ import mockttp from "mockttp";
 import { request } from "undici";
 import { WebSocketServer, type RawData } from "ws";
 import { HarRecorder, type RecorderOpts } from "../har/har-recorder.ts";
+import { incomingHeadersToHeaders } from "./http-utils.ts";
 import {
   createNativeMswServer,
   type NativeMswServer,
