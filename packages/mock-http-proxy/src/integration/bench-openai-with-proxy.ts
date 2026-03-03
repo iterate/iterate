@@ -6,7 +6,7 @@ import { useMitmProxy, useMockHttpServer } from "../server/mock-http-server-fixt
 const thisDir = dirname(fileURLToPath(import.meta.url));
 
 async function main() {
-  await using egress = await useMockHttpServer();
+  await using egress = await useMockHttpServer({ onUnhandledRequest: "bypass" });
   await using mitm = await useMitmProxy({ externalEgressProxyUrl: egress.url });
 
   const startedAt = Date.now();

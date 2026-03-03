@@ -440,6 +440,97 @@ describe("native transport e2e", () => {
     await once(client, "close");
   });
 
+  test("reports request timing in mocked and passthrough callbacks", async () => {
+    let mockedDurationMs = -1;
+    let passthroughDurationMs = -1;
+
+    const upstreamHttpServer = createServer((_req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end("upstream-ok");
+      }, 40);
+    });
+    const { port: upstreamPort } = await listenUpstreamHttpServer(upstreamHttpServer);
+
+    const server = createNativeMswServer(
+      {
+        onUnhandledRequest: "bypass",
+        transformRequest: (request) => {
+          const url = new URL(request.url);
+          if (url.pathname !== "/slow-pass") return request;
+          return new Request(
+            `http://127.0.0.1:${String(upstreamPort)}${url.pathname}${url.search}`,
+            {
+              method: request.method,
+              headers: request.headers,
+            },
+          );
+        },
+        onMockedResponse: ({ durationMs }) => {
+          mockedDurationMs = durationMs;
+        },
+        onPassthroughResponse: ({ durationMs }) => {
+          passthroughDurationMs = durationMs;
+        },
+      },
+      http.get("/slow-mock", async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return HttpResponse.text("mock-ok");
+      }),
+    );
+
+    const { baseUrl } = await listen(server);
+
+    const mockedResponse = await fetch(`${baseUrl}/slow-mock`);
+    expect(mockedResponse.status).toBe(200);
+    await expect(mockedResponse.text()).resolves.toBe("mock-ok");
+
+    const passthroughResponse = await fetch(`${baseUrl}/slow-pass`);
+    expect(passthroughResponse.status).toBe(200);
+    await expect(passthroughResponse.text()).resolves.toBe("upstream-ok");
+
+    expect(mockedDurationMs).toBeGreaterThanOrEqual(20);
+    expect(passthroughDurationMs).toBeGreaterThanOrEqual(20);
+  });
+
+  test("throws when websocket handler calls server.send in native incoming mode", async () => {
+    let serverSendError: string | null = null;
+    const chat = ws.link("/socket");
+    const wsHandler = chat.addEventListener("connection", ({ client, server }) => {
+      server.connect();
+      try {
+        server.send("ignored");
+      } catch (error) {
+        serverSendError = error instanceof Error ? error.message : String(error);
+        client.send("server-send-failed");
+      }
+    });
+
+    const server = createNativeMswServer(wsHandler);
+    const { port } = await listen(server);
+
+    const message = await new Promise<string>((resolve, reject) => {
+      const client = new WebSocket(`ws://127.0.0.1:${String(port)}/socket`);
+      const timeout = setTimeout(() => {
+        client.terminate();
+        reject(new Error("Timed out waiting for websocket message"));
+      }, 1_000);
+
+      client.once("message", (data: RawData) => {
+        clearTimeout(timeout);
+        resolve(data.toString());
+        client.close();
+      });
+
+      client.once("error", (error: Error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+    });
+
+    expect(message).toBe("server-send-failed");
+    expect(serverSendError).toContain("no upstream websocket exists");
+  });
   test('denies unmatched websocket upgrades when onUnhandledRequest is "error"', async () => {
     const upstreamWebSocketServer = new WebSocketServer({ noServer: true });
     activeWebSocketServers.add(upstreamWebSocketServer);

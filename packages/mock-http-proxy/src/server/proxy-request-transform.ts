@@ -3,7 +3,16 @@ import { parseForwardedHeader } from "@iterate-com/shared/forwarded-header";
 
 const FORWARDED_HEADER = "forwarded";
 
-const PROXY_HEADERS_TO_STRIP = new Set([FORWARDED_HEADER]);
+const PROXY_HEADERS_TO_STRIP: ReadonlySet<string> = new Set([FORWARDED_HEADER]);
+
+function isLoopbackHost(host: string): boolean {
+  const name =
+    host
+      .split(":")[0]
+      ?.replace(/^\[|\]$/g, "")
+      .toLowerCase() ?? "";
+  return name === "localhost" || name === "::1" || name === "127.0.0.1" || name.startsWith("127.");
+}
 
 function resolveTargetUrl(requestUrl: URL, headers: Headers, scheme: "http" | "ws"): URL | null {
   const parsedForwarded = parseForwardedHeader(headers.get(FORWARDED_HEADER) ?? "");
@@ -14,7 +23,13 @@ function resolveTargetUrl(requestUrl: URL, headers: Headers, scheme: "http" | "w
 
   let targetScheme: string;
   if (scheme === "ws") {
-    targetScheme = proto === "http" || proto === "ws" ? "ws" : "wss";
+    if (proto === "https" || proto === "wss") {
+      targetScheme = "wss";
+    } else if (proto === "http" || proto === "ws") {
+      targetScheme = "ws";
+    } else {
+      targetScheme = isLoopbackHost(host) ? "ws" : "wss";
+    }
   } else {
     targetScheme = proto === "https" || proto === "wss" ? "https" : "http";
   }

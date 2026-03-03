@@ -75,4 +75,26 @@ describe("createProxyWebSocketUrlTransform", () => {
     );
     expect(transformed.toString()).toBe("wss://external.example.com/realtime");
   });
+
+  test("defaults websocket URL scheme to ws for loopback hosts without forwarded proto", () => {
+    const transform = createProxyWebSocketUrlTransform();
+    const transformed = transform(
+      new URL("ws://127.0.0.1:9000/realtime"),
+      new Headers({
+        host: "127.0.0.1:9001",
+      }),
+    );
+    expect(transformed.toString()).toBe("ws://127.0.0.1:9001/realtime");
+  });
+
+  test("defaults websocket URL scheme to wss for external hosts without forwarded proto", () => {
+    const transform = createProxyWebSocketUrlTransform();
+    const transformed = transform(
+      new URL("ws://127.0.0.1:9000/realtime"),
+      new Headers({
+        host: "api.openai.com",
+      }),
+    );
+    expect(transformed.toString()).toBe("wss://api.openai.com/realtime");
+  });
 });

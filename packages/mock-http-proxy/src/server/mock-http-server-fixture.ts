@@ -82,6 +82,38 @@ function resolveOnUnhandledRequest(
   return "error";
 }
 
+function shouldBypassUnhandledWebSocket(
+  strategy: msw.SharedOptions["onUnhandledRequest"],
+  requestUrl: URL,
+): boolean {
+  if (typeof strategy === "function") {
+    let action: "bypass" | "error" = "bypass";
+    try {
+      strategy(
+        new Request(requestUrl, {
+          headers: {
+            connection: "upgrade",
+            upgrade: "websocket",
+          },
+        }),
+        {
+          warning() {
+            action = "bypass";
+          },
+          error() {
+            action = "error";
+          },
+        },
+      );
+    } catch {
+      return false;
+    }
+    return (action as string) !== "error";
+  }
+
+  return String(strategy) !== "error";
+}
+
 function headersToRecord(headers: Headers): Record<string, string> {
   const mapped: Record<string, string> = {};
   for (const [name, value] of headers.entries()) {
@@ -130,8 +162,7 @@ export async function useMockHttpServer(
     onUnhandledRequest,
     transformRequest,
     transformWebSocketUrl,
-    onMockedResponse: async ({ request, response }) => {
-      const startedAt = Date.now();
+    onMockedResponse: async ({ request, response, startedAt, durationMs }) => {
       const requestHeaders = headersToRecord(request.headers);
       const targetUrl = new URL(request.url);
       let requestBody: Uint8Array | null = null;
@@ -147,7 +178,7 @@ export async function useMockHttpServer(
       recorder.appendHttpExchange(
         {
           startedAt,
-          durationMs: Date.now() - startedAt,
+          durationMs,
           method: request.method,
           targetUrl,
           requestHeaders,
@@ -158,8 +189,7 @@ export async function useMockHttpServer(
         "handled",
       );
     },
-    onPassthroughResponse: async ({ request, response }) => {
-      const startedAt = Date.now();
+    onPassthroughResponse: async ({ request, response, startedAt, durationMs }) => {
       const targetUrl = new URL(request.url);
       const requestHeaders = headersToRecord(request.headers);
       const requestBody = null;
@@ -168,7 +198,7 @@ export async function useMockHttpServer(
       recorder.appendHttpExchange(
         {
           startedAt,
-          durationMs: Date.now() - startedAt,
+          durationMs,
           method: request.method,
           targetUrl,
           requestHeaders,
@@ -180,7 +210,7 @@ export async function useMockHttpServer(
       );
     },
     onUnhandledWebSocketUpgrade: ({ req, socket, head, requestUrl }) => {
-      if (onUnhandledRequest === "error") {
+      if (!shouldBypassUnhandledWebSocket(onUnhandledRequest, requestUrl)) {
         return false;
       }
 

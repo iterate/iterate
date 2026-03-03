@@ -54,6 +54,8 @@ export type CreateNativeMswServerOptions = {
     request: Request;
     response: Response;
     requestId: string;
+    startedAt: number;
+    durationMs: number;
   }) => void | Promise<void>;
   /**
    * Called when an unhandled request is bypassed to the real upstream.
@@ -62,6 +64,8 @@ export type CreateNativeMswServerOptions = {
     request: Request;
     response: Response;
     requestId: string;
+    startedAt: number;
+    durationMs: number;
   }) => void | Promise<void>;
   /**
    * Called when MSW returns no response for an HTTP request.
@@ -285,11 +289,9 @@ class NativeWebSocketServerConnection {
   }
 
   send(_data: unknown): void {
-    if (!this.connected) {
-      throw new Error(
-        'Failed to call "server.send()": no upstream websocket exists in native incoming-server mode',
-      );
-    }
+    throw new Error(
+      'Failed to call "server.send()": no upstream websocket exists in native incoming-server mode',
+    );
   }
 
   close(): void {
@@ -432,6 +434,7 @@ export function createNativeMswServer(
 
   const nodeServer = http.createServer(async (req, res) => {
     try {
+      const startedAt = Date.now();
       const rawRequest = incomingToWebRequest(req);
       const webRequest = transformRequest ? transformRequest(rawRequest) : rawRequest;
       const activeHandlers = msw.listHandlers().filter(isRequestHandler);
@@ -455,7 +458,14 @@ export function createNativeMswServer(
           request: webRequest,
           requestId,
         });
-        await onMockedResponse?.({ request: webRequest, response: mockedResponse, requestId });
+        const durationMs = Date.now() - startedAt;
+        await onMockedResponse?.({
+          request: webRequest,
+          response: mockedResponse,
+          requestId,
+          startedAt,
+          durationMs,
+        });
         await sendWebResponse(res, mockedResponse);
         return;
       }
@@ -483,7 +493,14 @@ export function createNativeMswServer(
           request: webRequest,
           requestId,
         });
-        await onPassthroughResponse?.({ request: webRequest, response, requestId });
+        const durationMs = Date.now() - startedAt;
+        await onPassthroughResponse?.({
+          request: webRequest,
+          response,
+          requestId,
+          startedAt,
+          durationMs,
+        });
         await sendWebResponse(res, response, { stripContentHeaders: true });
       } catch (passthroughError) {
         const message =
