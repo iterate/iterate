@@ -1188,9 +1188,6 @@ importers:
 
   packages/mock-http-proxy:
     dependencies:
-      '@iterate-com/msw-http-server':
-        specifier: workspace:*
-        version: link:../msw-http-server
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../shared
@@ -1243,28 +1240,6 @@ importers:
       vitest:
         specifier: ^4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.0.10)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.31.1)(msw@2.12.10(@types/node@25.0.10)(typescript@5.9.3))(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
-
-  packages/msw-http-server:
-    dependencies:
-      msw:
-        specifier: ^2.4.9
-        version: 2.12.10(@types/node@25.0.10)(typescript@5.9.3)
-    devDependencies:
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.0.10
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.0.18
-        version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.0.10)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.31.1)(msw@2.12.10(@types/node@25.0.10)(typescript@5.9.3))(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
-      ws:
-        specifier: ^8.19.0
-        version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
 
   packages/pidnap:
     dependencies:

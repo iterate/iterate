@@ -17,6 +17,7 @@ export {
   useMitmProxy,
   useMockHttpServer,
   useTemporaryDirectory,
+  type MockHttpServerFixture,
   type MockHttpServer,
   type UseMockHttpServerOptions,
 } from "./api-i-want/test-helpers.ts";

@@ -8,12 +8,10 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "NODE_OPTIONS=--no-deprecation vitest run",
-    "test:real-https": "RUN_REAL_HTTPS_PROXY_TESTS=1 NODE_OPTIONS=--no-deprecation vitest run src/api-i-want/api-i-want.test.ts",
-    "test:real-https:doppler": "doppler run --config dev -- pnpm test:real-https"
+    "test": "doppler run --config dev -- sh -c 'NODE_OPTIONS=--no-deprecation vitest run'",
+    "test:real-https": "doppler run --config dev -- sh -c 'NODE_OPTIONS=--no-deprecation vitest run src/api-i-want/api-i-want.test.ts'"
   },
   "dependencies": {
-    "@iterate-com/msw-http-server": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@mswjs/source": "^0.5.0",
     "https-proxy-agent": "^7.0.6",

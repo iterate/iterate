@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { HttpResponse, http, ws } from "msw";
 import { WebSocket, WebSocketServer } from "ws";
 import type { RawData } from "ws";
-import { createNativeMswServer, type NativeMswServer } from "../src/index.ts";
+import { createNativeMswServer, type NativeMswServer } from "./msw-server-adapter.ts";
 
 const activeServers = new Set<NativeMswServer>();
 const activeWebSocketServers = new Set<WebSocketServer>();

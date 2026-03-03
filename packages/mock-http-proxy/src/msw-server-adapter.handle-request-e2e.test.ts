@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import { HttpResponse, http, passthrough } from "msw";
 import type { LifeCycleEventsMap } from "msw";
-import { createNativeMswServer, type NativeMswServer } from "../src/index.ts";
+import { createNativeMswServer, type NativeMswServer } from "./msw-server-adapter.ts";
 
 const activeServers = new Set<NativeMswServer>();
 const activeUpstreamServers = new Set<Server>();

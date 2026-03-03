@@ -2,7 +2,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, test } from "vitest";
 import { HttpResponse, http } from "msw";
-import { createNativeMswServer, type NativeMswServer } from "../src/index.ts";
+import { createNativeMswServer, type NativeMswServer } from "./msw-server-adapter.ts";
 
 const activeServers = new Set<NativeMswServer>();
 
@@ -64,7 +64,7 @@ describe("createNativeMswServer", () => {
     await expect(fetchJson()).resolves.toEqual({ source: "once" });
   });
 
-  test("emits lifecycle events on both server.events and server.on convenience API", async () => {
+  test("emits lifecycle events via server.events", async () => {
     const server = createNativeMswServer(
       http.get("/v1/events", () => HttpResponse.json({ ok: true })),
     );
@@ -72,7 +72,6 @@ describe("createNativeMswServer", () => {
 
     const seen = {
       eventsApiMatch: 0,
-      convenienceMatch: 0,
       mocked: 0,
     };
 
@@ -82,15 +81,10 @@ describe("createNativeMswServer", () => {
     server.events.on("response:mocked", () => {
       seen.mocked += 1;
     });
-    server.on("request:match", () => {
-      seen.convenienceMatch += 1;
-    });
-
     const response = await fetch(`${baseUrl}/v1/events`);
     expect(response.status).toBe(200);
 
     expect(seen.eventsApiMatch).toBe(1);
-    expect(seen.convenienceMatch).toBe(1);
     expect(seen.mocked).toBe(1);
   });
 

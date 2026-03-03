@@ -1,4 +1,4 @@
-import type { TransformRequest, TransformWebSocketUrl } from "@iterate-com/msw-http-server";
+import type { TransformRequest, TransformWebSocketUrl } from "./msw-server-adapter.ts";
 import { parseForwardedHeader } from "@iterate-com/shared/forwarded-header";
 
 const FORWARDED_HEADER = "forwarded";

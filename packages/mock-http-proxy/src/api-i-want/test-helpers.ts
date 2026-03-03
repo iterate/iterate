@@ -6,16 +6,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
 import {
-  bridgeWebSocketToUpstream,
   createNativeMswServer,
-  incomingHeadersToHeaders,
   type NativeMswServer,
   type TransformRequest,
   type TransformWebSocketUrl,
-} from "@iterate-com/msw-http-server";
+} from "../msw-server-adapter.ts";
+import { incomingHeadersToHeaders } from "../msw-server-adapter.http-utils.ts";
+import { bridgeWebSocketToUpstream } from "../msw-server-adapter.websocket-upstream-bridge.ts";
 import { buildForwardedHeader } from "@iterate-com/shared/forwarded-header";
-import type { SharedOptions } from "msw";
-import type { SetupServerApi } from "msw/node";
+import type * as msw from "msw";
+import type * as mswNode from "msw/node";
 import type { Har } from "har-format";
 import mockttp from "mockttp";
 import { request } from "undici";
@@ -28,12 +28,8 @@ import {
 } from "../proxy-request-transform.ts";
 
 export type UseMockHttpServerOptions = {
-  /**
-   * @deprecated Use recorder.harPath instead.
-   */
-  harPath?: string;
   recorder?: RecorderOpts;
-  onUnhandledRequest?: SharedOptions["onUnhandledRequest"];
+  onUnhandledRequest?: msw.SharedOptions["onUnhandledRequest"];
   port?: number;
   host?: string;
   /**
@@ -48,19 +44,21 @@ export type UseMockHttpServerOptions = {
    * Pass `false` to disable rewriting entirely.
    */
   transformWebSocketUrl?: TransformWebSocketUrl | false;
-  /**
-   * @deprecated Use recorder.includeHandledRequests instead.
-   */
-  recordHandledRequests?: boolean;
 };
 
-export type MockHttpServer = AsyncDisposable &
-  Pick<SetupServerApi, "use" | "resetHandlers" | "restoreHandlers" | "listHandlers" | "events"> & {
+export type MockHttpServerFixture = AsyncDisposable &
+  Pick<
+    mswNode.SetupServerApi,
+    "use" | "resetHandlers" | "restoreHandlers" | "listHandlers" | "events"
+  > & {
     url: string;
+    host: string;
     port: number;
+    close(): Promise<void>;
     getHar(): Har;
     writeHar(path?: string): Promise<void>;
   };
+export type MockHttpServer = MockHttpServerFixture;
 
 type TemporaryDirectoryFixture = Disposable & {
   path: string;
@@ -78,8 +76,8 @@ type MitmProxyFixture = AsyncDisposable & {
 };
 
 function resolveOnUnhandledRequest(
-  explicit: SharedOptions["onUnhandledRequest"] | undefined,
-): SharedOptions["onUnhandledRequest"] {
+  explicit: msw.SharedOptions["onUnhandledRequest"] | undefined,
+): msw.SharedOptions["onUnhandledRequest"] {
   if (explicit) return explicit;
   return "error";
 }
@@ -109,17 +107,10 @@ function wsMessageData(data: RawData, isBinary: boolean): string {
 
 export async function useMockHttpServer(
   options: UseMockHttpServerOptions = {},
-): Promise<MockHttpServer> {
+): Promise<MockHttpServerFixture> {
   const onUnhandledRequest = resolveOnUnhandledRequest(options.onUnhandledRequest);
   const recorderOptions: RecorderOpts = {
     ...(options.recorder ?? {}),
-    ...(options.harPath !== undefined && options.recorder?.harPath === undefined
-      ? { harPath: options.harPath }
-      : {}),
-    ...(options.recordHandledRequests !== undefined &&
-    options.recorder?.includeHandledRequests === undefined
-      ? { includeHandledRequests: options.recordHandledRequests }
-      : {}),
   };
   const recorder = await HarRecorder.create(recorderOptions);
 
@@ -262,15 +253,27 @@ export async function useMockHttpServer(
   const address = server.address() as AddressInfo;
   const port = address.port;
   const url = `http://${host}:${String(port)}`;
+  let disposed = false;
+  const dispose = async (): Promise<void> => {
+    if (disposed) return;
+    disposed = true;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    wsPassthroughServer.close();
+    await recorder.writeConfiguredIfAny();
+  };
 
   return {
     url,
+    host,
     port,
     use: server.use.bind(server),
     resetHandlers: server.resetHandlers.bind(server),
     restoreHandlers: server.restoreHandlers.bind(server),
     listHandlers: server.listHandlers.bind(server),
     events: server.events,
+    async close() {
+      await dispose();
+    },
     getHar() {
       return recorder.getHar();
     },
@@ -278,9 +281,7 @@ export async function useMockHttpServer(
       await recorder.write(path);
     },
     async [Symbol.asyncDispose]() {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      wsPassthroughServer.close();
-      await recorder.writeConfiguredIfAny();
+      await dispose();
     },
   };
 }

@@ -3,29 +3,24 @@ import { EventEmitter } from "node:events";
 import http from "node:http";
 import type tls from "node:tls";
 import { WebSocketServer, type RawData as WsRawData, type WebSocket as WsSocket } from "ws";
-import {
-  handleRequest,
-  RequestHandler,
-  WebSocketHandler,
-  type LifeCycleEventsMap,
-  type SharedOptions,
-} from "msw";
-import { setupServer, type SetupServerApi } from "msw/node";
-import { incomingHeadersToHeaders } from "./http-utils.ts";
+import { handleRequest, RequestHandler, WebSocketHandler } from "msw";
+import type * as msw from "msw";
+import { setupServer } from "msw/node";
+import type * as mswNode from "msw/node";
+import { incomingHeadersToHeaders } from "./msw-server-adapter.http-utils.ts";
 import {
   bridgeWebSocketToUpstream,
   firstHeaderValue,
   parseWebSocketProtocols,
-} from "./websocket-upstream-bridge.ts";
+} from "./msw-server-adapter.websocket-upstream-bridge.ts";
 
-type AnyHandler = RequestHandler | WebSocketHandler;
-type NativeMswLifecycleEventName = keyof LifeCycleEventsMap;
+type AnyHandler = msw.RequestHandler | msw.WebSocketHandler;
 type UnhandledAction = "bypass" | "error";
 type LifecycleEmitter = Pick<EventEmitter, "on" | "emit" | "removeListener" | "removeAllListeners">;
 
 type NativeMswServerApi = Pick<
-  SetupServerApi,
-  "use" | "resetHandlers" | "restoreHandlers" | "listHandlers" | "events" | "boundary"
+  mswNode.SetupServerApi,
+  "use" | "resetHandlers" | "restoreHandlers" | "listHandlers" | "events"
 >;
 
 export type NativeMswServer = http.Server & NativeMswServerApi;
@@ -34,7 +29,7 @@ export type TransformRequest = (request: Request) => Request;
 export type TransformWebSocketUrl = (url: URL, headers: Headers) => URL;
 
 export type CreateNativeMswServerOptions = {
-  onUnhandledRequest?: SharedOptions["onUnhandledRequest"];
+  onUnhandledRequest?: msw.SharedOptions["onUnhandledRequest"];
   /**
    * Advanced option mirroring MSW's internal `resolutionContext.baseUrl`.
    * Useful for extension/e2e scenarios with pathname-only handlers.
@@ -90,11 +85,11 @@ export type CreateNativeMswServerOptions = {
   }) => boolean;
 };
 
-function isRequestHandler(handler: AnyHandler): handler is RequestHandler {
+function isRequestHandler(handler: AnyHandler): handler is msw.RequestHandler {
   return handler instanceof RequestHandler;
 }
 
-function isWebSocketHandler(handler: AnyHandler): handler is WebSocketHandler {
+function isWebSocketHandler(handler: AnyHandler): handler is msw.WebSocketHandler {
   return handler instanceof WebSocketHandler;
 }
 
@@ -169,7 +164,7 @@ function writeUpgradeError(socket: tls.TLSSocket, status: number, message: strin
 }
 
 function resolveUnhandledAction(
-  strategy: SharedOptions["onUnhandledRequest"],
+  strategy: msw.SharedOptions["onUnhandledRequest"],
   request: Request,
 ): UnhandledAction {
   const effectiveStrategy = strategy ?? "warn";
@@ -394,30 +389,17 @@ async function passthroughHttpRequest(request: Request): Promise<Response> {
   return await fetch(request.url, init);
 }
 
-function isLifecycleEventName(event: string | symbol): event is NativeMswLifecycleEventName {
-  if (typeof event !== "string") return false;
-  return (
-    event === "request:start" ||
-    event === "request:match" ||
-    event === "request:unhandled" ||
-    event === "request:end" ||
-    event === "response:mocked" ||
-    event === "response:bypass" ||
-    event === "unhandledException"
-  );
-}
-
 export function createNativeMswServer(
-  ...initialHandlers: Array<RequestHandler | WebSocketHandler>
+  ...initialHandlers: Array<msw.RequestHandler | msw.WebSocketHandler>
 ): NativeMswServer;
 export function createNativeMswServer(): NativeMswServer;
 export function createNativeMswServer(
   options: CreateNativeMswServerOptions,
-  ...initialHandlers: Array<RequestHandler | WebSocketHandler>
+  ...initialHandlers: Array<msw.RequestHandler | msw.WebSocketHandler>
 ): NativeMswServer;
 export function createNativeMswServer(
-  optionsOrHandler?: CreateNativeMswServerOptions | RequestHandler | WebSocketHandler,
-  ...restHandlers: Array<RequestHandler | WebSocketHandler>
+  optionsOrHandler?: CreateNativeMswServerOptions | msw.RequestHandler | msw.WebSocketHandler,
+  ...restHandlers: Array<msw.RequestHandler | msw.WebSocketHandler>
 ): NativeMswServer {
   if (optionsOrHandler === undefined) {
     return createNativeMswServer({});
@@ -432,7 +414,7 @@ export function createNativeMswServer(
   const handlers = (
     hasOptions
       ? restHandlers
-      : [optionsOrHandler as RequestHandler | WebSocketHandler, ...restHandlers]
+      : [optionsOrHandler as msw.RequestHandler | msw.WebSocketHandler, ...restHandlers]
   ) as AnyHandler[];
 
   const msw = setupServer(...handlers);
@@ -623,29 +605,11 @@ export function createNativeMswServer(
     });
   });
 
-  const nodeOn = nodeServer.on.bind(nodeServer);
-  const nodeOnce = nodeServer.once.bind(nodeServer);
-  const nodeOff = nodeServer.off.bind(nodeServer);
-  const nodeRemoveAllListeners = nodeServer.removeAllListeners.bind(nodeServer);
   const nodeClose = nodeServer.close.bind(nodeServer);
   const lifecycleEvents = {
     on: lifecycleEmitter.on.bind(lifecycleEmitter),
     removeListener: lifecycleEmitter.removeListener.bind(lifecycleEmitter),
     removeAllListeners: lifecycleEmitter.removeAllListeners.bind(lifecycleEmitter),
-  };
-  const onceWrappersByEvent = new Map<
-    NativeMswLifecycleEventName,
-    Map<(...args: Array<any>) => void, (...args: Array<any>) => void>
-  >();
-
-  const getOnceWrapperMap = (
-    event: NativeMswLifecycleEventName,
-  ): Map<(...args: Array<any>) => void, (...args: Array<any>) => void> => {
-    const existing = onceWrappersByEvent.get(event);
-    if (existing) return existing;
-    const created = new Map<(...args: Array<any>) => void, (...args: Array<any>) => void>();
-    onceWrappersByEvent.set(event, created);
-    return created;
   };
 
   return Object.assign(nodeServer, {
@@ -653,59 +617,7 @@ export function createNativeMswServer(
     resetHandlers: msw.resetHandlers.bind(msw),
     restoreHandlers: msw.restoreHandlers.bind(msw),
     listHandlers: msw.listHandlers.bind(msw),
-    boundary: msw.boundary.bind(msw),
     events: lifecycleEvents,
-    on(event: string | symbol, listener: (...args: Array<any>) => void) {
-      if (isLifecycleEventName(event)) {
-        lifecycleEmitter.on(event, listener as never);
-        return this;
-      }
-      nodeOn(event, listener);
-      return this;
-    },
-    once(event: string | symbol, listener: (...args: Array<any>) => void) {
-      if (isLifecycleEventName(event)) {
-        const onceListener = (...args: Array<any>) => {
-          lifecycleEmitter.removeListener(event, onceListener as never);
-          getOnceWrapperMap(event).delete(listener);
-          listener(...args);
-        };
-        getOnceWrapperMap(event).set(listener, onceListener);
-        lifecycleEmitter.on(event, onceListener as never);
-        return this;
-      }
-      nodeOnce(event, listener);
-      return this;
-    },
-    off(event: string | symbol, listener: (...args: Array<any>) => void) {
-      if (isLifecycleEventName(event)) {
-        const onceWrapper = getOnceWrapperMap(event).get(listener);
-        if (onceWrapper) {
-          lifecycleEmitter.removeListener(event, onceWrapper as never);
-          getOnceWrapperMap(event).delete(listener);
-        } else {
-          lifecycleEmitter.removeListener(event, listener as never);
-        }
-        return this;
-      }
-      nodeOff(event, listener);
-      return this;
-    },
-    removeAllListeners(event?: string | symbol) {
-      if (event && isLifecycleEventName(event)) {
-        lifecycleEmitter.removeAllListeners(event);
-        onceWrappersByEvent.delete(event);
-      } else if (!event) {
-        lifecycleEmitter.removeAllListeners();
-        onceWrappersByEvent.clear();
-      } else {
-        nodeRemoveAllListeners(event);
-      }
-      if (!event) {
-        nodeRemoveAllListeners();
-      }
-      return this;
-    },
     close(callback?: (error?: Error) => void) {
       for (const client of webSocketServer.clients) {
         client.terminate();
