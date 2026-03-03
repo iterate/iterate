@@ -625,7 +625,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   // and injected as env bindings for the worker (where execSync is unavailable).
   const dockerBindings = {
     DOCKER_DEFAULT_IMAGE: "",
-    DOCKER_USE_LOCAL_IMAGE_TAG: "",
     DOCKER_COMPOSE_PROJECT_NAME: "",
     DOCKER_HOST_SYNC_ENABLED: "",
     DOCKER_HOST_GIT_REPO_ROOT: "",
@@ -660,7 +659,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     const hostSyncEnabled = repoCheckout && gitDir && commonDir ? "true" : "";
     Object.assign(dockerBindings, {
       DOCKER_DEFAULT_IMAGE: imageName,
-      DOCKER_USE_LOCAL_IMAGE_TAG: "true",
       DOCKER_COMPOSE_PROJECT_NAME: composeProjectName,
       DOCKER_HOST_SYNC_ENABLED: process.env.DOCKER_HOST_SYNC_ENABLED ?? hostSyncEnabled,
       DOCKER_HOST_GIT_REPO_ROOT: repoCheckout,

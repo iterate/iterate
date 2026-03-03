@@ -22,6 +22,8 @@ Sacrifice grammar for concision. Don't waste tokens. Skip obvious context.
 
 Run before PRs: `pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test`
 
+For local Docker machines, refresh the sandbox image + default tag with: `pnpm sandbox buildx`
+
 ## Working with GitHub
 
 - Commit/push frequently (small, scoped commits)

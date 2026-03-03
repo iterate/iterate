@@ -32,7 +32,6 @@ const DEFAULT_LOCAL_OS_PORT = 5173;
 const LOCAL_OS_PORT_SCAN_RANGE = 10;
 const DEV_ITERATE_HOST_PATTERN = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)+dev\.iterate\.com(?::\d+)?/i;
 const DEV_ITERATE_HOST_CAPTURE = /(?:https?:\/\/)?((?:[a-z0-9-]+\.)+dev\.iterate\.com)(?::\d+)?/i;
-const DEPOT_SHA_TAG_PATTERN = /^registry\.depot\.dev\/.+:(sha-[a-z0-9._-]+)$/i;
 
 // Port definitions matching backend/daemons.ts
 const DAEMON_PORTS = [
@@ -59,10 +58,6 @@ const DockerEnv = z.object({
   DOCKER_DEFAULT_SERVICE_TRANSPORT: z.enum(["port-map", "cloudflare-tunnel"]).default("port-map"),
   DOCKER_HOST_OS_PORT: z.string().optional(),
   DOCKER_TUNNEL_PORTS: z.string().optional(),
-  DOCKER_USE_LOCAL_IMAGE_TAG: z
-    .string()
-    .optional()
-    .transform((v) => v === "true"),
   DOCKER_HOST_SYNC_ENABLED: z
     .string()
     .optional()
@@ -306,15 +301,9 @@ export class DockerProvider extends SandboxProvider {
   }
 
   async create(opts: CreateSandboxOptions): Promise<DockerSandbox> {
-    let imageName = resolveBaseImage({
+    const imageName = resolveBaseImage({
       imageName: opts.providerSnapshotId ?? this.defaultSnapshotId,
     });
-    if (this.env.DOCKER_USE_LOCAL_IMAGE_TAG) {
-      const depotMatch = imageName.match(DEPOT_SHA_TAG_PATTERN);
-      if (depotMatch) {
-        imageName = `iterate-sandbox:${depotMatch[1]}`;
-      }
-    }
     const entrypointArguments = opts.entrypointArguments;
     const hasEntrypointArguments = Boolean(entrypointArguments?.length);
 
