@@ -64,9 +64,14 @@ export function getAvailableProjectSandboxProviders(
   env: CloudflareEnv,
   isDev: boolean,
 ): ProjectSandboxProvider[] {
+  const preference = env.SANDBOX_PROVIDER_PREFERENCE ?? "fly,docker,daytona";
+  const ordering = Object.fromEntries(
+    preference.split(",").map((provider, index) => [provider, index]),
+  );
   return getProjectSandboxProviderOptions(env, isDev)
     .filter((option) => !option.disabledReason)
-    .map((option) => option.type);
+    .map((option) => option.type)
+    .sort((a, b) => (ordering[a] ?? 1000) - (ordering[b] ?? 1000));
 }
 
 export function getDefaultProjectSandboxProvider(
@@ -74,18 +79,5 @@ export function getDefaultProjectSandboxProvider(
   isDev: boolean,
 ): ProjectSandboxProvider {
   const availableProviders = getAvailableProjectSandboxProviders(env, isDev);
-
-  if (availableProviders.includes("fly")) {
-    return "fly";
-  }
-
-  if (availableProviders.includes("docker")) {
-    return "docker";
-  }
-
-  if (availableProviders.includes("daytona")) {
-    return "daytona";
-  }
-
   return availableProviders[0] ?? "fly";
 }
