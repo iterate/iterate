@@ -517,19 +517,6 @@ async function resolveAgentPathFromSessionId(sessionId: string): Promise<string 
   return route?.agentPath ?? null;
 }
 
-async function getSessionIdForAgentPath(agentPath: string): Promise<string | null> {
-  const [route] = await db
-    .select()
-    .from(schema.agentRoutes)
-    .where(and(eq(schema.agentRoutes.agentPath, agentPath), eq(schema.agentRoutes.active, true)))
-    .limit(1);
-
-  const destination = route?.destination;
-  if (!destination) return null;
-  const match = destination.match(/^\/opencode\/sessions\/(.+)$/);
-  return match?.[1] ?? null;
-}
-
 function isValidGitHubPrPathForSignal(params: {
   path: string;
   repo: RepoCoords;
@@ -701,22 +688,13 @@ async function buildPrompt(params: {
   agentPath: string;
   includeInstructions: boolean;
 }): Promise<string> {
-  const { signal, agentPath, includeInstructions } = params;
+  const { signal, includeInstructions } = params;
   const summary = `[github] ${signal.repo.fullName}#${signal.prNumber} ${signal.eventKind}/${signal.action} by ${signal.actorLogin}${signal.eventUrl ? ` ${signal.eventUrl}` : ""}`;
   const body = compactText(signal.eventBody, 600);
   if (!includeInstructions) {
     return body ? `${summary}\n\n${body}` : summary;
   }
-
-  const sessionId = await getSessionIdForAgentPath(agentPath);
-  const routingHint = [
-    `routing: marker=<!-- ${AppSlug}:agent-pr -->`,
-    `session_id=${sessionId ?? "<current-session-id>"}`,
-    `agent_path=${agentPath}`,
-    `mention=@${AppSlug}`,
-  ].join(" | ");
-
-  return [summary, body, routingHint].filter(Boolean).join("\n\n");
+  return body ? `${summary}\n\n${body}` : summary;
 }
 
 function compactText(value: string | null | undefined, maxLength: number): string {
