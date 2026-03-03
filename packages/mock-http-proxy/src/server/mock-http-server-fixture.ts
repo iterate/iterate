@@ -12,7 +12,7 @@ import {
   type TransformWebSocketUrl,
 } from "./msw-server-adapter.ts";
 import { incomingHeadersToHeaders } from "./http-utils.ts";
-import { bridgeWebSocketToUpstream } from "./websocket-upstream-bridge.ts";
+import { bridgeWebSocketToUpstream, firstHeaderValue } from "./websocket-upstream-bridge.ts";
 import { buildForwardedHeader } from "@iterate-com/shared/forwarded-header";
 import type * as msw from "msw";
 import type * as mswNode from "msw/node";
@@ -286,11 +286,6 @@ export async function useMockHttpServer(
   };
 }
 
-function firstHeaderValue(value: string | string[] | undefined): string {
-  if (Array.isArray(value)) return value[0] ?? "";
-  return value ?? "";
-}
-
 function toOriginalUrl(
   rawUrl: string,
   headers: Record<string, string | string[] | undefined>,
@@ -324,7 +319,6 @@ export async function useMitmProxy(options: UseMitmProxyOptions): Promise<MitmPr
 
   const mitmServer = mockttp.getLocal({ https: ca });
   const egressUrl = new URL(options.externalEgressProxyUrl);
-  const _egressWsUrl = `ws://${egressUrl.host}`;
 
   await mitmServer.forAnyRequest().thenCallback(async (req) => {
     const originalUrl = toOriginalUrl(req.url, req.headers);

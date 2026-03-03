@@ -41,7 +41,6 @@ async function readHarFile(path: string): Promise<HarWithExtensions> {
 async function runOpenAiScript(options: {
   mitmEnv: Record<string, string>;
   timeoutMs: number;
-  updateCount: number;
 }): Promise<OpenAiScriptOutput> {
   const result = await x(
     "pnpm",
@@ -58,7 +57,6 @@ async function runOpenAiScript(options: {
           ...options.mitmEnv,
           OPENAI_API_KEY: process.env.OPENAI_API_KEY,
           OPENAI_REALTIME_TIMEOUT_MS: String(options.timeoutMs),
-          OPENAI_REALTIME_UPDATE_COUNT: String(options.updateCount),
         },
         cwd: join(thisDir, "..", ".."),
         stdio: "pipe",
@@ -176,7 +174,6 @@ describe("records har archives for http-client-scripts", () => {
     const output = await runOpenAiScript({
       mitmEnv: mitm.envForNode(),
       timeoutMs: 4_000,
-      updateCount: 2,
     });
     expect(output).toMatchObject({
       ok: true,
@@ -288,7 +285,6 @@ describe("records har archives for http-client-scripts", () => {
       runOpenAiScript({
         mitmEnv,
         timeoutMs: 4_000,
-        updateCount: 2,
       }),
       runSlackScript(egress.url),
       runCurlThroughMitm(mitm.url, proxyCaCertPath),

@@ -4,16 +4,6 @@ export type SerializedHarBody = {
   size: number;
 };
 
-export async function readRequestBodyBytes(request: Request): Promise<Uint8Array | null> {
-  const method = request.method.toUpperCase();
-  if (method === "GET" || method === "HEAD") return null;
-
-  const cloned = request.clone();
-  const arrayBuffer = await cloned.arrayBuffer();
-  if (arrayBuffer.byteLength === 0) return null;
-  return new Uint8Array(arrayBuffer);
-}
-
 export function shouldTreatAsText(contentType: string): boolean {
   const normalized = contentType.toLowerCase();
   return (
