@@ -342,12 +342,25 @@ export const projectRouter = {
 
   // List available GitHub repos from connected installation
   listAvailableGithubRepos: projectProtectedProcedure
-    .input(ProjectInput)
-    .handler(async ({ context: ctx }) => {
+    .input(
+      z.object({
+        ...ProjectInput.shape,
+        page: z.number().int().min(1).default(1),
+        perPage: z.number().int().min(1).max(50).default(10),
+      }),
+    )
+    .handler(async ({ context: ctx, input }) => {
       const connection = ctx.project.connections.find((c) => c.provider === "github-app");
 
       if (!connection) {
-        return { connected: false as const, repositories: [] };
+        return {
+          connected: false as const,
+          repositories: [],
+          totalCount: 0,
+          page: input.page,
+          perPage: input.perPage,
+          hasNextPage: false,
+        };
       }
 
       const providerData = connection.providerData as {
@@ -360,9 +373,10 @@ export const projectRouter = {
         const repositories = await listInstallationRepositories(
           accessToken,
           providerData.installationId,
+          { page: input.page, perPage: input.perPage },
         );
 
-        return { connected: true as const, repositories };
+        return { connected: true as const, ...repositories };
       } catch (error) {
         throw new ORPCError("INTERNAL_SERVER_ERROR", {
           message: "Failed to fetch repositories from GitHub",

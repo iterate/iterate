@@ -1,7 +1,15 @@
-import { Suspense, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute, useParams, useSearch } from "@tanstack/react-router";
-import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Mail, MessageSquare, ExternalLink, Github, ChevronDown, Check } from "lucide-react";
+import { useSuspenseQuery, useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
+import {
+  Mail,
+  MessageSquare,
+  ExternalLink,
+  Github,
+  ChevronLeft,
+  ChevronRight,
+  Check,
+} from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod/v4";
 import { Button } from "../../components/ui/button.tsx";
@@ -16,12 +24,6 @@ import {
   ItemActions,
   ItemGroup,
 } from "../../components/ui/item.tsx";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "../../components/ui/dropdown-menu.tsx";
 import {
   Dialog,
   DialogContent,
@@ -418,12 +420,10 @@ function GitHubConfigRepoSetup({
             </DialogDescription>
           </DialogHeader>
 
-          <Suspense fallback={<RepoPickerSkeleton />}>
-            <ConfigRepoPicker
-              projectSlug={projectSlug}
-              onSetConfigRepo={(repo) => setConfigRepo.mutateAsync(repo)}
-            />
-          </Suspense>
+          <ConfigRepoPicker
+            projectSlug={projectSlug}
+            onSetConfigRepo={(repo) => setConfigRepo.mutateAsync(repo)}
+          />
         </DialogContent>
       </Dialog>
     </>
@@ -459,12 +459,19 @@ function ConfigRepoPicker({
     name: string;
     defaultBranch: string;
   } | null>(null);
+  const [page, setPage] = useState(1);
+  const perPage = 10;
 
-  const { data: reposData } = useSuspenseQuery(
-    orpc.project.listAvailableGithubRepos.queryOptions({
-      input: { projectSlug },
+  const {
+    data: reposData,
+    isPending,
+    isFetching,
+  } = useQuery({
+    ...orpc.project.listAvailableGithubRepos.queryOptions({
+      input: { projectSlug, page, perPage },
     }),
-  );
+    placeholderData: (prev) => prev,
+  });
 
   const saveConfigRepo = useMutation({
     mutationFn: (repo: { id: number; owner: string; name: string; defaultBranch: string }) =>
@@ -480,9 +487,13 @@ function ConfigRepoPicker({
     onError: (error) => toast.error(`Failed to update GitHub permissions: ${error.message}`),
   });
 
+  if (isPending || !reposData) {
+    return <RepoPickerSkeleton />;
+  }
+
   const allRepositories = reposData.repositories;
 
-  if (allRepositories.length === 0) {
+  if (reposData.totalCount === 0) {
     return (
       <div className="space-y-4">
         <p className="text-sm text-muted-foreground">
@@ -510,17 +521,15 @@ function ConfigRepoPicker({
           This repo will be used to load iterate.config.ts.
         </p>
       </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" className="w-full justify-between">
-            {selectedRepo ? `${selectedRepo.owner}/${selectedRepo.name}` : "Select repository..."}
-            <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent className="max-h-[300px] w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto">
-          {allRepositories.map((repo) => (
-            <DropdownMenuItem
+      <div className={isFetching ? "space-y-2 opacity-50 transition-opacity" : "space-y-2"}>
+        {allRepositories.map((repo) => {
+          const isSelected = selectedRepo?.id === repo.id;
+          return (
+            <Button
               key={repo.id}
+              variant="outline"
+              className="h-auto w-full justify-between px-3 py-2"
+              disabled={isFetching}
               onClick={() =>
                 setSelectedRepo({
                   id: repo.id,
@@ -530,14 +539,38 @@ function ConfigRepoPicker({
                 })
               }
             >
-              <span className="flex-1">{repo.fullName}</span>
-              {selectedRepo?.owner === repo.owner && selectedRepo?.name === repo.name && (
-                <Check className="h-4 w-4" />
-              )}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+              <span className="text-left text-sm">{repo.fullName}</span>
+              {isSelected ? <Check className="h-4 w-4" /> : null}
+            </Button>
+          );
+        })}
+      </div>
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">
+          Page {reposData.page} · {reposData.totalCount} repos
+        </p>
+        <div className="flex items-center gap-2">
+          {isFetching ? <Spinner className="h-3 w-3" /> : null}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setPage((currentPage) => Math.max(1, currentPage - 1))}
+            disabled={reposData.page <= 1 || isFetching}
+          >
+            <ChevronLeft className="mr-1 h-4 w-4" />
+            Prev
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setPage((currentPage) => currentPage + 1)}
+            disabled={!reposData.hasNextPage || isFetching}
+          >
+            Next
+            <ChevronRight className="ml-1 h-4 w-4" />
+          </Button>
+        </div>
+      </div>
       <div className="flex gap-2">
         <Button
           onClick={() => {
