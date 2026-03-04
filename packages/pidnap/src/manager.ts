@@ -833,17 +833,21 @@ export class Manager {
           throw error;
         }
 
-        // Start sentinel watchers if needed
+        // Start sentinel watchers if needed.
+        // Note: if sentinel files already exist, onMet fires synchronously and
+        // tryStartProcessAfterDeps may start the process immediately. Guard the
+        // manual start below with an idle check to avoid double-start.
         if (this.dependencyResolver.hasSentinelDependencies(processSlug)) {
           this.startSentinelWatchersForProcess(processSlug);
         }
 
         if (
           nextDesiredState === "running" &&
+          restartingProcess.state === "idle" &&
           this.dependencyResolver.areDependenciesMet(processSlug)
         ) {
           restartingProcess.start();
-        } else if (nextDesiredState === "running") {
+        } else if (nextDesiredState === "running" && restartingProcess.state === "idle") {
           this.logger.info(`Process ${processSlug} waiting for dependencies before start`);
         }
       } else {
@@ -944,6 +948,7 @@ export class Manager {
     for (const entry of entries) {
       if (this.dependencyResolver.areDependenciesMet(entry.name)) {
         const proc = this.restartingProcesses.get(entry.name)!;
+        if (proc.state !== "idle") continue; // sentinel watcher may have already started it
         if ((entry.desiredState ?? "running") === "stopped") {
           this.logger.info(`Process ${entry.name} desiredState=stopped, skipping auto-start`);
           continue;

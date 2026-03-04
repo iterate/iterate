@@ -13,6 +13,8 @@
  * considers archil-mount "started" the instant start() is called.
  */
 
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RestartingProcess } from "../src/restarting-process.ts";
 import { Manager } from "../src/manager.ts";
@@ -163,6 +165,72 @@ describe("dependency startup ordering", () => {
       await expect.poll(() => gate?.state, { timeout: POLL_TIMEOUT_MS }).toBe("stopped");
 
       // Now worker should start
+      await expect.poll(() => worker?.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
+    });
+
+    it("does not double-start when sentinel file already exists at startup", async () => {
+      const sentinelPath = join(tempDir, "ready.txt");
+      writeFileSync(sentinelPath, "ready");
+
+      const logger = createMockLogger();
+      manager = new Manager(
+        {
+          logDir: tempDir,
+          processes: [
+            {
+              name: "worker",
+              definition: longRunningProcess,
+              options: { restartPolicy: "always" },
+              dependsOn: [{ type: "sentinel", path: sentinelPath }],
+            },
+          ],
+        },
+        logger,
+      );
+
+      // Before the fix, start() would call startSentinelWatchersForProcess
+      // which synchronously fires onMet → tryStartProcessAfterDeps → proc.start(),
+      // then the startup loop would also call proc.start() → throw.
+      await manager.start();
+
+      const worker = manager.getProcessByTarget("worker");
+      await expect.poll(() => worker?.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
+    });
+
+    it("updateProcessConfig does not double-start when sentinel file already exists", async () => {
+      const sentinelPath = join(tempDir, "ready.txt");
+      writeFileSync(sentinelPath, "ready");
+
+      const logger = createMockLogger();
+      manager = new Manager(
+        {
+          logDir: tempDir,
+          processes: [
+            // Pre-declare with sentinel dep; will be updated at runtime
+            {
+              name: "worker",
+              definition: longRunningProcess,
+              options: { restartPolicy: "always" },
+              desiredState: "stopped",
+              dependsOn: [{ type: "sentinel", path: sentinelPath }],
+            },
+          ],
+        },
+        logger,
+      );
+
+      await manager.start();
+
+      // Now update the process to running via updateProcessConfig.
+      // The entry already has dependsOn from the constructor config.
+      await manager.updateProcessConfig({
+        processSlug: "worker",
+        definition: longRunningProcess,
+        options: { restartPolicy: "always" },
+        desiredState: "running",
+      });
+
+      const worker = manager.getProcessByTarget("worker");
       await expect.poll(() => worker?.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
     });
   });
