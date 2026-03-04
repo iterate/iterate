@@ -6,7 +6,10 @@ import { FlyDeployment } from "@iterate-com/shared/jonasland/deployment/fly-depl
 const DOCKER_IMAGE = process.env.E2E_DOCKER_IMAGE_REF ?? process.env.JONASLAND_SANDBOX_IMAGE ?? "";
 const FLY_IMAGE = process.env.E2E_FLY_IMAGE_REF ?? process.env.JONASLAND_SANDBOX_IMAGE ?? "";
 const FLY_API_TOKEN = process.env.FLY_API_TOKEN ?? "";
-const runFly = FLY_IMAGE.length > 0 && FLY_API_TOKEN.length > 0;
+const runFly =
+  process.env.JONASLAND_E2E_ENABLE_FLY === "true" &&
+  FLY_IMAGE.length > 0 &&
+  FLY_API_TOKEN.length > 0;
 
 const dockerFactory = async (overrides = {}) =>
   await DockerDeployment.create({

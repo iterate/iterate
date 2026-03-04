@@ -5,6 +5,7 @@ import { useCloudflareTunnel } from "../../test-helpers/old/use-cloudflare-tunne
 import { useIngressProxyRoutes } from "../../test-helpers/old/use-ingress-proxy-routes.ts";
 
 const DOCKER_IMAGE = process.env.E2E_DOCKER_IMAGE_REF ?? process.env.JONASLAND_SANDBOX_IMAGE ?? "";
+const runPlayground = process.env.JONASLAND_E2E_ENABLE_PLAYGROUND === "true";
 const DEFAULT_INGRESS_PROXY_BASE_URL = "https://ingress.iterate.com";
 const DEFAULT_INGRESS_PROXY_DOMAIN = "ingress.iterate.com";
 
@@ -18,7 +19,7 @@ async function waitForSigint(): Promise<void> {
   });
 }
 
-describe.runIf(DOCKER_IMAGE.length > 0)("playground", () => {
+describe.runIf(runPlayground && DOCKER_IMAGE.length > 0)("playground", () => {
   test("docker deployment + cloudflare tunnel + ingress routes playground", async () => {
     const ingressProxyApiKey =
       process.env.INGRESS_PROXY_API_TOKEN?.trim() ??
