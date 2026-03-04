@@ -112,17 +112,26 @@ test.describe("machine persistence", () => {
     // Machine A: create, activate, then send a message via the webchat UI.
     await createMachineFromUi(page, machineA, imageTag);
     await sidebarButton(page, "Home").click();
-    await page.getByTestId("webchat-input").fill("the secret word is banana");
-    await page.getByTestId("webchat-send").click();
-    await page.getByTestId("webchat-message-assistant").waitFor();
+    await webchatSend(page, "the secret word is banana");
 
     // Machine B: replace machine, then ask for the secret word in the same thread.
     await createMachineFromUi(page, machineB, imageTag);
     await sidebarButton(page, "Home").click();
-    await page
-      .getByTestId("webchat-input")
-      .fill("what's the secret word? reply with just the word");
-    await page.getByTestId("webchat-send").click();
-    await page.getByTestId("webchat-message-assistant").getByText("banana").waitFor();
+    const reply = await webchatSend(page, "what's the secret word? reply with just the word");
+    await reply.getByText("banana").waitFor();
   });
 });
+
+async function webchatSend(page: Page, text: string) {
+  await page.getByTestId("webchat-input").fill(text);
+  await page.getByTestId("webchat-send").click();
+  const userMessage = page.getByTestId("webchat-message-user").filter({ hasText: text });
+  await userMessage.waitFor();
+  const userMessageId = await userMessage.getAttribute("data-message-id");
+
+  const reply = page
+    .locator(`[data-message-id="${userMessageId}"] ~ [data-testid="webchat-message-assistant"]`)
+    .first();
+  await reply.waitFor();
+  return reply;
+}

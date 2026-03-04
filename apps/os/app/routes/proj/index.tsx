@@ -317,9 +317,19 @@ function ProjectHomePage() {
       if (result.threadId && result.threadId !== selectedThreadId) {
         void navigate({ search: { thread: result.threadId }, replace: true });
       }
-      await queryClient.invalidateQueries({
-        queryKey: orpc.webchat.listThreads.key({ input: { projectSlug: params.projectSlug } }),
-      });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: orpc.webchat.listThreads.key({ input: { projectSlug: params.projectSlug } }),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: orpc.webchat.getThreadMessages.key({
+            input: {
+              projectSlug: params.projectSlug,
+              threadId: result.threadId ?? selectedThreadId,
+            },
+          }),
+        }),
+      ]);
     },
     onError: (error) => {
       toast.error(`Failed to send message: ${error.message}`);
@@ -503,23 +513,16 @@ function ProjectHomePage() {
                 <div
                   key={message.messageId}
                   data-testid={`webchat-message-${message.role}`}
-                  className={cn("flex", message.role === "user" ? "justify-end" : "justify-start")}
+                  data-message-id={message.messageId}
+                  className={cn("flex justify-start", message.role === "user" && "justify-end")}
                 >
                   <div
                     className={cn(
-                      "max-w-[92%] rounded-lg px-3 py-2 text-sm space-y-2",
-                      message.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-foreground",
+                      "max-w-[92%] rounded-lg px-3 py-2 text-sm space-y-2 bg-muted text-foreground",
+                      message.role === "user" && "bg-primary text-primary-foreground",
                     )}
                   >
-                    {message.text ? (
-                      message.role === "assistant" ? (
-                        <MarkdownContent text={message.text} />
-                      ) : (
-                        <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
-                      )
-                    ) : null}
+                    <MarkdownContent text={message.text} />
                     {message.attachments?.map((att, i) => (
                       <AttachmentPreview
                         key={i}
