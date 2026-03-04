@@ -12,8 +12,6 @@ export type LlmRecoverOptions = {
   model?: string;
   /** Max tokens for LLM response. Default: 4096 */
   maxTokens?: number;
-  /** Whether to include page HTML (truncated) in the prompt. Default: true */
-  includeHtml?: boolean;
   /** Max HTML length to send. Default: 50_000 */
   maxHtmlLength?: number;
   /** Override the LLM call for testing. Return JS function body string, or null to rethrow. */
@@ -38,6 +36,7 @@ export type RecoveryContext = {
   errorStack: string;
   screenshotBase64: string | null;
   html: string | null;
+  accessibilitySnapshotYaml: string | null;
 };
 
 export type RequestRecoveryCodeFn = (
@@ -199,31 +198,25 @@ async function gatherContext(
   options: LlmRecoverOptions,
 ): Promise<RecoveryContext> {
   const { page, locator, method, args, testInfo } = ctx;
-  const includeHtml = options.includeHtml ?? true;
   const maxHtmlLength = options.maxHtmlLength ?? 50_000;
 
   // Screenshot
-  let screenshotBase64: string | null = null;
-  try {
-    const buffer = await page.screenshot({ type: "png" });
-    screenshotBase64 = buffer.toString("base64");
-  } catch {
-    // page may be crashed/closed
-  }
+  const screenshotBase64 = await page
+    .screenshot({ type: "png" })
+    .then((buffer) => buffer.toString("base64"))
+    .catch(() => null);
 
   // HTML
-  let html: string | null = null;
-  if (includeHtml) {
-    try {
-      const content = await page.content();
-      html =
-        content.length > maxHtmlLength
-          ? content.slice(0, maxHtmlLength) + "\n<!-- truncated -->"
-          : content;
-    } catch {
-      // page may be crashed/closed
-    }
-  }
+  const html = await page
+    .content()
+    .then((content) => {
+      if (content.length < maxHtmlLength) return content;
+      return content.slice(0, maxHtmlLength) + "\n<!-- truncated -->";
+    })
+    .catch(() => "<!-- HTML unavailable -->");
+
+  // Accessibility snapshot (YAML)
+  const accessibilitySnapshotYaml = await page.locator("body").ariaSnapshot();
 
   // Parse failing line from stack
   const failingLine = parseFailingLine(error.stack ?? "");
@@ -239,6 +232,7 @@ async function gatherContext(
     errorStack: error.stack ?? "",
     screenshotBase64,
     html,
+    accessibilitySnapshotYaml,
   };
 }
 
@@ -260,6 +254,7 @@ function parseFailingLine(stack: string): string {
 }
 
 function writeArtifact(testInfo: ActionContext["testInfo"], data: Record<string, unknown>) {
+  if (!testInfo) return "(no-test-info)";
   const dir = path.join(testInfo.outputDir, "llm-recover");
   fs.mkdirSync(dir, { recursive: true });
   const filename = `attempt-${Date.now()}.json`;
@@ -278,6 +273,7 @@ const SYSTEM_PROMPT = dedent`
   - The locator and method that failed
   - The error message and stack trace
   - A screenshot of the page at the time of failure
+  - An accessibility snapshot in YAML format (preferred source for element names/roles/states)
   - Optionally, the page HTML
 
   Your job: respond with a JavaScript function body, wrapped by \`<code>...\<\/code>\` tags. It must be an async function named \`recover\` that takes a single context argument:
@@ -353,6 +349,7 @@ function createAnthropicProvider(options: LlmRecoverOptions): RequestRecoveryCod
       `**Method:** ${context.method}(${context.args})`,
       `**Error:** ${context.errorMessage}`,
       `**Stack:**\n\`\`\`\n${context.errorStack.slice(0, 2000)}\n\`\`\``,
+      `**Accessibility snapshot (YAML):**\n\`\`\`yaml\n${context.accessibilitySnapshotYaml}\n\`\`\``,
     ];
 
     if (context.html) {
