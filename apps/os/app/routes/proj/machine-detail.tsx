@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { orpc, orpcClient } from "../../lib/orpc.tsx";
+import { createDaemonProxyClient } from "../../lib/daemon-client.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog.tsx";
 import { DaemonStatus } from "../../components/daemon-status.tsx";
@@ -145,6 +146,12 @@ function MachineDetailPage() {
     },
   });
 
+  // todo: make the proxy only need project slug. orgSlug is not needed now that project slugs are globally unique.
+  const { data: projectWithOrg } = useSuspenseQuery(
+    orpc.project.bySlug.queryOptions({ input: { projectSlug: params.projectSlug } }),
+  );
+  const orgSlug = projectWithOrg.organization?.slug ?? "";
+
   const { data: machine } = useSuspenseQuery({
     ...orpc.machine.byId.queryOptions({
       input: {
@@ -156,6 +163,12 @@ function MachineDetailPage() {
       const m = query.state.data;
       return m?.state === "starting" ? 3000 : false;
     },
+  });
+
+  const daemonClient = createDaemonProxyClient({
+    orgSlug,
+    projectSlug: params.projectSlug,
+    machineId: params.machineId,
   });
 
   const metadata = machine.metadata as MachineMetadata;
@@ -212,9 +225,7 @@ function MachineDetailPage() {
 
   const execCommand = useMutation({
     mutationFn: async (command: string) =>
-      orpcClient.machine.execCommand({
-        projectSlug: params.projectSlug,
-        machineId: params.machineId,
+      daemonClient.tool.execCommand({
         command: ["bash", "-lc", command],
       }),
     onError: (error) => {
@@ -227,26 +238,22 @@ function MachineDetailPage() {
     toast.success(`Copied: ${text}`);
   };
 
-  const { data: agentsData, isLoading: agentsLoading } = useQuery(
-    orpc.machine.listAgents.queryOptions({
-      input: {
-        projectSlug: params.projectSlug,
-        machineId: params.machineId,
-      },
-      // TODO: this breaks after restart — lastEvent becomes machine:restart-requested
-      // or machine:daemon-status-reported, disabling the query permanently.
-      // Fix: fetch all events for the machine (not just lastEvent), then check
-      // events.has("machine:activated"). That way even detached machines still
-      // render their agents list, which is useful.
-      enabled:
-        machine.state === "active" &&
-        (machine.lastEvent?.name === "machine:activated" ||
-          machine.lastEvent?.name === "machine:probe-succeeded"),
-      refetchInterval: 10000,
-    }),
-  );
+  const { data: agentsData, isLoading: agentsLoading } = useQuery({
+    queryKey: ["daemon", params.machineId, "listAgents"],
+    queryFn: () => daemonClient.daemon.listAgents(),
+    // TODO: this breaks after restart — lastEvent becomes machine:restart-requested
+    // or machine:daemon-status-reported, disabling the query permanently.
+    // Fix: fetch all events for the machine (not just lastEvent), then check
+    // events.has("machine:activated"). That way even detached machines still
+    // render their agents list, which is useful.
+    enabled:
+      machine.state === "active" &&
+      (machine.lastEvent?.name === "machine:activated" ||
+        machine.lastEvent?.name === "machine:probe-succeeded"),
+    refetchInterval: 10000,
+  });
 
-  const agents = [...(agentsData?.agents ?? [])].sort(
+  const agents = [...(agentsData ?? [])].sort(
     (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
   );
 
