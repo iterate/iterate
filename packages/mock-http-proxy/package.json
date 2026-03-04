@@ -1,0 +1,35 @@
+{
+  "name": "@iterate-com/mock-http-proxy",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "NODE_OPTIONS=--no-deprecation vitest run --project unit",
+    "test:e2e": "doppler run --config dev -- sh -c \"NODE_OPTIONS=--no-deprecation vitest run --project e2e\""
+  },
+  "dependencies": {
+    "@iterate-com/shared": "workspace:*",
+    "@mswjs/source": "^0.5.0",
+    "https-proxy-agent": "^7.0.6",
+    "mockttp": "^4.2.0",
+    "msw": "^2.4.9",
+    "undici": "^7.16.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@slack/web-api": "^7.14.1",
+    "@types/har-format": "^1.2.16",
+    "@types/node": "^25.0.10",
+    "@types/ws": "^8.18.1",
+    "http-mitm-proxy": "^1.1.0",
+    "openai": "^6.25.0",
+    "tinyexec": "^1.0.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

@@ -1,0 +1,23 @@
+FROM node:24 AS builder
+WORKDIR /app
+RUN corepack enable
+COPY package.json ./
+RUN pnpm install
+COPY . .
+RUN pnpm build
+RUN pnpm pack
+RUN mv *.tgz pidnap.tgz
+
+
+FROM node:24 AS runner
+WORKDIR /app
+RUN apt-get update && apt-get install -y tini btop neovim
+RUN corepack enable
+RUN npm install -g opencode-ai
+COPY --from=builder /app/pidnap.tgz /tmp/pidnap.tgz
+RUN npm install -g /tmp/pidnap.tgz
+COPY docker/package.json docker/pidnap.config.ts docker/.env* /app/
+RUN sed -i 's|link:../|file:/tmp/pidnap.tgz|g' package.json
+RUN pnpm install
+ENTRYPOINT [ "tini", "-sg", "--" ]
+CMD ["pidnap", "init"]
