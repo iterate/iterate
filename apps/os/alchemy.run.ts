@@ -415,10 +415,10 @@ const Env = z.object({
   RESEND_BOT_API_KEY: Required,
   RESEND_BOT_WEBHOOK_SECRET: Optional,
   // Archil — persistent POSIX volumes backed by R2
+  // Bucket name and endpoint are derived in alchemy.run.ts and passed as computed bindings.
+  // Only the API key and R2 credentials need to live in Doppler.
   ARCHIL_API_KEY: Optional,
   ARCHIL_REGION: NonEmpty.default("us-east-1"),
-  ARCHIL_R2_BUCKET_NAME: Optional,
-  ARCHIL_R2_ENDPOINT: Optional,
   ARCHIL_R2_ACCESS_KEY_ID: Optional,
   ARCHIL_R2_SECRET_ACCESS_KEY: Optional,
   POSTHOG_PUBLIC_KEY: Optional,
@@ -729,12 +729,19 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
 
   // Archil R2 bucket — one bucket per stage, with per-project prefixes inside.
   // Archil's FUSE client talks to R2 via S3 protocol using the API token credentials from Doppler.
+  const archilBucketName = `iterate-archil-${app.stage}`;
   const _archilBucket = await R2Bucket("archil-data", {
-    name: `iterate-archil-${app.stage}`,
+    name: archilBucketName,
     locationHint: "enam", // US East — colocate with worker + PlanetScale
     adopt: true,
     dev: { remote: true }, // always create real bucket, even in dev (Archil needs actual R2)
   });
+
+  // Derive R2 endpoint so it doesn't need to be in Doppler per-stack.
+  const cloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  if (!cloudflareAccountId) throw new Error("CLOUDFLARE_ACCOUNT_ID is required");
+
+  const archilR2Endpoint = `https://${cloudflareAccountId}.r2.cloudflarestorage.com`;
 
   const worker = await TanStackStart("os", {
     bindings: {
@@ -746,6 +753,9 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
       PROJECT_INGRESS_DOMAIN: projectIngressDomain,
+      // Archil R2: derived from alchemy state, not Doppler
+      ARCHIL_R2_BUCKET_NAME: archilBucketName,
+      ARCHIL_R2_ENDPOINT: archilR2Endpoint,
       // Workerd can't exec in dev, so git/compose info must be injected via env vars here.
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,
