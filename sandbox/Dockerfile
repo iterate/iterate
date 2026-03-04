@@ -41,6 +41,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     libcups2 \
     libdbus-1-3 \
     libdrm2 \
+    libfuse2 \
     libgbm1 \
     libgtk-3-0 \
     libnspr4 \
@@ -93,6 +94,10 @@ RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
+# Install Archil client (persistent POSIX volumes backed by S3/R2)
+# Installs to /usr/bin/archil by default (system path)
+RUN curl -s https://s3.amazonaws.com/archil-client/install | sh || true
+
 # Create non-root user with passwordless sudo
 RUN useradd -m -s /bin/bash iterate && \
     echo 'iterate ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/iterate && \
@@ -109,9 +114,17 @@ USER iterate
 # Keep both in sync! The .iterate/bin paths must be prepended last so wrappers win.
 ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
-# Install uv and use that to install mitmproxy
+# Install uv and use that to install mitmproxy to /opt/mitmproxy (NOT ~/.local/share).
+# ~/.local/share is symlinked to archil persistent storage at runtime, so nothing
+# baked into the image should live there.
 RUN curl -fsSL https://astral.sh/uv/install.sh | sh
-RUN uv tool install mitmproxy==${SANDBOX_MITMPROXY_VERSION}
+RUN sudo mkdir -p /opt/mitmproxy /opt/uv/python && \
+    sudo chown -R iterate:iterate /opt/mitmproxy /opt/uv && \
+    UV_TOOL_DIR=/opt/mitmproxy/tools UV_TOOL_BIN_DIR=/opt/mitmproxy/bin \
+    UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    uv tool install --python 3.12 mitmproxy==${SANDBOX_MITMPROXY_VERSION} && \
+    chmod -R a+rX /opt/mitmproxy /opt/uv
+ENV PATH="/opt/mitmproxy/bin:$PATH"
 
 # Generate mitmproxy CA certificate at build time.
 # This certificate is baked into the image and shared across all sandbox instances.
@@ -121,7 +134,7 @@ RUN uv tool install mitmproxy==${SANDBOX_MITMPROXY_VERSION}
 # 3. No sandbox can intercept another sandbox's traffic
 # Note: The CA keypair is regenerated when SANDBOX_MITMPROXY_VERSION changes (layer invalidation).
 RUN mkdir -p /home/iterate/.mitmproxy && \
-    /home/iterate/.local/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
+    /opt/mitmproxy/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
     PID=$! && \
     # TODO: replace this polling hack with a direct cert-generation command.
     # Track in tasks/mitmproxy-direct-cert-command.md.

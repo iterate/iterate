@@ -4,7 +4,7 @@ import type { CloudflareEnv } from "../../env.ts";
 import type * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 
-export const PROBE_THREAD_ID = "__readiness-probe__";
+export const PROBE_THREAD_PREFIX = "__readiness-probe__";
 const PROBE_TEXT = "What is one plus two? Reply with just the answer, nothing else.";
 const EXPECTED_ANSWER = /3|three/i;
 const POLL_INTERVAL_MS = 3_000;
@@ -46,15 +46,17 @@ export async function buildMachineFetcher(
  */
 export async function sendProbeMessage(
   fetcher: SandboxFetcher,
+  opts: { machineId: string; probeId: string | number },
 ): Promise<{ ok: true; threadId: string; messageId: string } | { ok: false; detail: string }> {
   const deadline = Date.now() + SEND_MAX_WAIT_MS;
   let lastDetail = "";
+  const threadId = `${PROBE_THREAD_PREFIX}:${opts.machineId}:${opts.probeId}`;
 
   while (Date.now() < deadline) {
     const messageId = `probe_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
     const payload = {
       type: "webchat:message",
-      threadId: PROBE_THREAD_ID,
+      threadId,
       messageId,
       text: PROBE_TEXT,
       userId: "__system__",
@@ -72,7 +74,7 @@ export async function sendProbeMessage(
 
       if (response.ok) {
         const data = (await response.json()) as { threadId?: string };
-        return { ok: true, threadId: data.threadId ?? PROBE_THREAD_ID, messageId };
+        return { ok: true, threadId: data.threadId ?? threadId, messageId };
       }
 
       const body = await response.text().catch(() => "<no body>");

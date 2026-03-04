@@ -318,6 +318,11 @@ const plugin = {
               return {
                 CallExpression: (node) => {
                   if (node.callee.type === "Identifier" && node.callee.name === "expect") {
+                    let expr = node;
+                    while ((expr = expr.parent)) {
+                      if (expr.type === "AwaitExpression") break;
+                    }
+                    if (!expr) return;
                     context.report({
                       node,
                       message: `Use locators, not expect. Locators are configured to wait for loading UI to complete, so allow for faster failures and more reliable assertions. For example: page.getByText("...").waitFor() instead of expect(page.getByText("...")).toBeVisible(). If you can't use a locator and must use polling, expect.poll is acceptable.`,

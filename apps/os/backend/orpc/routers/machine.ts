@@ -437,10 +437,12 @@ export const machineRouter = {
 
   // Get default snapshot/image for each provider (used by create-machine UI)
   getDefaultSnapshots: publicProcedure.handler(({ context: ctx }) => {
+    // VITE_PUBLIC_* env vars are injected by the runtime-doppler-variable-injector transform in dev
     return {
-      daytona: ctx.env.DAYTONA_DEFAULT_SNAPSHOT ?? null,
-      fly: ctx.env.FLY_DEFAULT_IMAGE ?? null,
-      docker: ctx.env.DOCKER_DEFAULT_IMAGE ?? null,
+      daytona: ctx.env.DAYTONA_DEFAULT_SNAPSHOT || null,
+      fly: import.meta.env.VITE_PUBLIC_FLY_DEFAULT_IMAGE || ctx.env.FLY_DEFAULT_IMAGE || null,
+      docker:
+        import.meta.env.VITE_PUBLIC_DOCKER_DEFAULT_IMAGE || ctx.env.DOCKER_DEFAULT_IMAGE || null,
       flyMachineCpus: parsePositiveIntegerOrDefault(ctx.env.FLY_DEFAULT_CPUS, 4),
     };
   }),
@@ -502,5 +504,39 @@ export const machineRouter = {
         daemonClient.daemon.getServerCwd(),
       ]);
       return { agents, customerRepoPath: serverInfo.customerRepoPath };
+    }),
+
+  // Execute a command on the machine (proxies to daemon)
+  execCommand: projectProtectedMutation
+    .input(
+      z.object({
+        ...ProjectInput.shape,
+        machineId: z.string(),
+        command: z.array(z.string()).describe("Command and arguments"),
+        cwd: z.string().optional(),
+        timeout: z.number().optional(),
+      }),
+    )
+    .handler(async ({ context: ctx, input }) => {
+      const { runtime } = await getProviderForMachine(
+        ctx.db,
+        ctx.project.id,
+        input.machineId,
+        ctx.env,
+      );
+
+      const [daemonBaseUrl, daemonFetcher] = await Promise.all([
+        runtime.getBaseUrl(3000),
+        runtime.getFetcher(3000),
+      ]);
+      const daemonClient = createDaemonClient({
+        baseUrl: daemonBaseUrl,
+        fetcher: daemonFetcher,
+      });
+      return daemonClient.tool.execCommand({
+        command: input.command,
+        cwd: input.cwd,
+        timeout: input.timeout,
+      });
     }),
 };

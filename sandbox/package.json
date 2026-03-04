@@ -13,6 +13,7 @@
   },
   "scripts": {
     "build": "doppler run -- tsx providers/docker/build-image.ts",
+    "buildx": "(cd .. && docker buildx build --load -f sandbox/Dockerfile -t iterate-sandbox:local --build-arg GIT_SHA=$(git rev-parse HEAD) . && doppler secrets set DOCKER_DEFAULT_IMAGE iterate-sandbox:local && touch apps/os/backend/orpc/routers/machine.ts)",
     "daytona:push": "doppler run -- sh -c 'tsx providers/daytona/push-snapshot.ts \"$@\"' --",
     "shell": "doppler run -- tsx providers/docker/shell.ts",
     "fly:bootstrap-apps": "doppler run -- sh -c 'tsx providers/fly/bootstrap-apps.ts \"$@\"' --",

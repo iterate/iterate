@@ -67,6 +67,7 @@ export const spinnerWaiter = Object.assign(
         const actionOptions = (args.at(optionIndex) || {}) as { skipSpinnerCheck?: boolean };
         if (actionOptions.skipSpinnerCheck) return next();
 
+        const start = Date.now();
         settings.log(`${locator}.${method}(...) starting`);
 
         // Quick check if element is already visible
@@ -121,7 +122,7 @@ export const spinnerWaiter = Object.assign(
         } catch (error) {
           const message =
             waitResult === "spinner-gone"
-              ? `Loading finished (spinner disappeared) but the expected element never appeared.`
+              ? `Loading finished (spinner disappeared after ${Date.now() - start}ms) but the expected element never appeared.`
               : `Spinner was still visible after ${settings.spinnerTimeout}ms, the UI is likely stuck.`;
           adjustError(error as Error, [message], "spinner-waiter.ts");
           throw error;

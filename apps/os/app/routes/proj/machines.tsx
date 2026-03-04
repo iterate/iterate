@@ -91,9 +91,13 @@ function ProjectMachinesPage() {
   );
   const sandboxProvider = project.sandboxProvider;
 
-  const { data: defaultSnapshots } = useSuspenseQuery(
-    orpc.machine.getDefaultSnapshots.queryOptions(),
-  );
+  const getDefaultSnapshotsQueryOptions = orpc.machine.getDefaultSnapshots.queryOptions({
+    staleTime: 0,
+  });
+  const { data: defaultSnapshots } = useSuspenseQuery({
+    ...getDefaultSnapshotsQueryOptions,
+    queryKey: [...getDefaultSnapshotsQueryOptions.queryKey, createSheetOpen], // refetch when create sheet is opened/closed
+  });
   const defaultSnapshotForProvider =
     sandboxProvider === "daytona"
       ? (defaultSnapshots.daytona ?? "")
@@ -103,7 +107,8 @@ function ProjectMachinesPage() {
   const defaultFlyMachineCpus = defaultSnapshots.flyMachineCpus;
 
   const [newMachineName, setNewMachineName] = useState(`${sandboxProvider}-${dateSlug()}`);
-  const [snapshotOverride, setSnapshotOverride] = useState(defaultSnapshotForProvider);
+  const [rawSnapshotOverride, setSnapshotOverride] = useState<string | undefined>();
+  const snapshotOverride = rawSnapshotOverride || defaultSnapshotForProvider;
   const [flyMachineCpus, setFlyMachineCpus] = useState(String(defaultFlyMachineCpus));
 
   const machineListQueryOptions = orpc.machine.list.queryOptions({
@@ -142,7 +147,7 @@ function ProjectMachinesPage() {
     onSuccess: () => {
       setCreateSheetOpen(false);
       setNewMachineName(`${sandboxProvider}-${dateSlug()}`);
-      setSnapshotOverride(defaultSnapshotForProvider);
+      setSnapshotOverride(undefined);
       setFlyMachineCpus(String(defaultFlyMachineCpus));
       toast.success("Machine created!");
       queryClient.invalidateQueries({ queryKey: machineListQueryOptions.queryKey });

@@ -331,6 +331,23 @@ export class DockerProvider extends SandboxProvider {
       binds.push(`${this.gitInfo.commonDir}:/host/commondir:ro`);
     }
 
+    const projectId = opts.envVars.ITERATE_PROJECT_ID;
+    if (projectId) {
+      const persistVolume = `iterate-persist-${projectId}`;
+      await dockerApi({
+        method: "POST",
+        endpoint: "/volumes/create",
+        body: {
+          Name: persistVolume,
+          Labels: {
+            "com.iterate.persist": "true",
+            "com.iterate.project_id": projectId,
+          },
+        },
+      });
+      binds.push(`${persistVolume}:/mnt/persist`);
+    }
+
     const shouldResolveLocalOsPort = Object.values(opts.envVars).some((value) =>
       DEV_ITERATE_HOST_PATTERN.test(String(value)),
     );
@@ -356,6 +373,7 @@ export class DockerProvider extends SandboxProvider {
     const dockerEnv: Record<string, string> = {
       ...rewrittenEnvVars,
       ITERATE_DEV: "true",
+      ITERATE_PERSISTENCE_MODE: "local",
       DOCKER_DEFAULT_SERVICE_TRANSPORT: this.env.DOCKER_DEFAULT_SERVICE_TRANSPORT,
       ...(this.env.DOCKER_TUNNEL_PORTS
         ? { DOCKER_TUNNEL_PORTS: this.env.DOCKER_TUNNEL_PORTS }

@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { serviceManifest } from "@iterate-com/events-contract";
@@ -8,6 +9,8 @@ import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlit
 
 const eventsDbPath = serviceManifest.envVars.parse(process.env).DATABASE_URL;
 
+// Ensure directory exists before opening — DB path may be on a freshly-mounted volume
+mkdirSync(dirname(eventsDbPath), { recursive: true });
 const dbConnection = drizzle(eventsDbPath);
 const client = dbConnection.$client;
 export const db = dbConnection;
