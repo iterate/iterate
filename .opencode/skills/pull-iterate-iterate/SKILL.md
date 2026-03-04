@@ -41,14 +41,13 @@ If there are local uncommitted changes:
 - These shouldn't exist on production machines. Run `git stash` to save them, then proceed.
 - After reset, the stash is available if needed but don't pop it automatically.
 
-### 3. Reset to the fetched ref
+### 3. Switch to the branch and reset to the fetched ref
 
 ```bash
-git checkout -B main FETCH_HEAD
-git reset --hard FETCH_HEAD
+git checkout -B <ref> origin/<ref>
 ```
 
-This detaches from whatever synthetic history existed and points to the real commit.
+This creates or resets the local branch to match the remote, just like a normal `git checkout` workflow. The local branch name will reflect the actual remote branch (e.g. `main`, `greetinghello`, etc.).
 
 ### 4. Install dependencies AND run post-sync steps (single command)
 
