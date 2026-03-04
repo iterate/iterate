@@ -301,10 +301,9 @@ export async function withWorktree<T>(params: {
 
 // ============ Provider Factory ============
 
-/**
- * Create a sandbox provider based on TEST_CONFIG.
- */
-export function createTestProvider(envOverrides?: Record<string, string>): SandboxProvider {
+function getTestProviderEnv(
+  envOverrides?: Record<string, string | undefined>,
+): Record<string, string | undefined> {
   const env = { ...process.env, ...envOverrides } as Record<string, string | undefined>;
 
   // Apply snapshot ID override if set
@@ -317,6 +316,15 @@ export function createTestProvider(envOverrides?: Record<string, string>): Sandb
       env.FLY_DEFAULT_IMAGE = TEST_CONFIG.snapshotId;
     }
   }
+
+  return env;
+}
+
+/**
+ * Create a sandbox provider based on TEST_CONFIG.
+ */
+export function createTestProvider(envOverrides?: Record<string, string>): SandboxProvider {
+  const env = getTestProviderEnv(envOverrides);
 
   switch (TEST_CONFIG.provider) {
     case "docker": {
@@ -351,6 +359,7 @@ export async function withSandbox<T>(params: {
   fn: (sandbox: Sandbox) => Promise<T>;
 }): Promise<T> {
   const { envOverrides, sandboxOptions, skip, fn } = params;
+  const providerEnv = getTestProviderEnv(envOverrides);
   const provider = createTestProvider(envOverrides as Record<string, string> | undefined);
 
   // Use default options if none provided
@@ -363,6 +372,34 @@ export async function withSandbox<T>(params: {
 
   let sandbox: Sandbox;
   try {
+    const safeEnv = {
+      SANDBOX_TEST_PROVIDER: providerEnv.SANDBOX_TEST_PROVIDER,
+      SANDBOX_TEST_SNAPSHOT_ID: providerEnv.SANDBOX_TEST_SNAPSHOT_ID,
+      DOCKER_DEFAULT_IMAGE: providerEnv.DOCKER_DEFAULT_IMAGE,
+      DAYTONA_DEFAULT_SNAPSHOT: providerEnv.DAYTONA_DEFAULT_SNAPSHOT,
+      FLY_DEFAULT_IMAGE: providerEnv.FLY_DEFAULT_IMAGE,
+      SANDBOX_NAME_PREFIX: providerEnv.SANDBOX_NAME_PREFIX,
+    };
+
+    const safeOpts = {
+      externalId: opts.externalId,
+      id: opts.id,
+      name: opts.name,
+      providerSnapshotId: opts.providerSnapshotId,
+      entrypointArguments: opts.entrypointArguments,
+      envVarKeys: Object.keys(opts.envVars ?? {}),
+    };
+
+    console.log(
+      `[sandbox-test] provider.create config=${JSON.stringify({
+        provider: TEST_CONFIG.provider,
+        snapshotId: TEST_CONFIG.snapshotId ?? null,
+        testBaseSnapshotId: TEST_BASE_SNAPSHOT_ID,
+        env: safeEnv,
+        opts: safeOpts,
+      })}`,
+    );
+
     sandbox = await provider.create(opts);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
