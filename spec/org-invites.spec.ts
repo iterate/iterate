@@ -194,7 +194,7 @@ test.describe("organization invites", () => {
 
     // Now leave the org from user settings
     await page.goto("/user/settings");
-    await page.getByText("Organizations").waitFor();
+    await page.getByText("Organizations", { exact: true }).waitFor();
 
     // Click leave button on the org card (LogOut icon button)
     const orgCard = page.locator("div.border.rounded-lg").filter({ hasText: orgName });

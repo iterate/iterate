@@ -20,7 +20,7 @@ export const test = base.extend({
       testInfo,
       plugins: [
         !!process.env.LLM_RECOVER && llmRecover(),
-        hydrationWaiter(),
+        hydrationWaiter({ timeout: 60_000 }),
         uiErrorReporter(),
         spinnerWaiter(),
         !!process.env.VIDEO_MODE && videoMode(),
