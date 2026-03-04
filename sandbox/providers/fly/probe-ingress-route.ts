@@ -139,7 +139,7 @@ async function main(): Promise<void> {
   const flyBaseDomain = rawEnv.FLY_BASE_DOMAIN ?? "fly.dev";
   const externalId =
     rawEnv.FLY_PROBE_EXTERNAL_ID?.trim() || `dev-fly-ingress-probe-${randomUUID().slice(0, 8)}`;
-  const flyPublicBaseUrl = `https://${externalId}.${flyBaseDomain}`;
+  const flyPublicBaseHost = `${externalId}.${flyBaseDomain}`;
   const ingressBaseHost = `${externalId}.${ingressProxyDomain}`;
   const ingressServiceHost = `events__${externalId}.${ingressProxyDomain}`;
 
@@ -148,8 +148,8 @@ async function main(): Promise<void> {
     externalId,
     name: externalId,
     envVars: {
-      ITERATE_PUBLIC_BASE_URL: flyPublicBaseUrl,
-      ITERATE_PUBLIC_BASE_URL_TYPE: "subdomain",
+      ITERATE_PUBLIC_BASE_HOST: flyPublicBaseHost,
+      ITERATE_PUBLIC_BASE_HOST_TYPE: "subdomain",
     },
     providerSnapshotId: image,
   });
@@ -159,10 +159,10 @@ async function main(): Promise<void> {
   );
 
   const publicProbe = await waitForReachable({
-    url: `${flyPublicBaseUrl}/healthz`,
+    url: `https://${flyPublicBaseHost}/healthz`,
     timeoutMs: 240_000,
   });
-  console.log(`[ready] ${flyPublicBaseUrl}/healthz status=${String(publicProbe.status)}`);
+  console.log(`[ready] https://${flyPublicBaseHost}/healthz status=${String(publicProbe.status)}`);
 
   const baseRoute = await createRoute({
     baseUrl: ingressProxyBaseUrl,
@@ -176,7 +176,7 @@ async function main(): Promise<void> {
     patterns: [
       {
         pattern: ingressBaseHost,
-        target: flyPublicBaseUrl,
+        target: `https://${flyPublicBaseHost}`,
         headers: {
           Host: ingressBaseHost,
         },
@@ -196,7 +196,7 @@ async function main(): Promise<void> {
     patterns: [
       {
         pattern: `*__${externalId}.${ingressProxyDomain}`,
-        target: flyPublicBaseUrl,
+        target: `https://${flyPublicBaseHost}`,
       },
     ],
   });

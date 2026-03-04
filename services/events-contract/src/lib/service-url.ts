@@ -1,6 +1,6 @@
 const DEFAULT_TARGET_PORT = 3000;
 
-const buildProjectPortUrl = (params: {
+const _buildProjectPortUrl = (params: {
   readonly projectBaseUrl: string;
   readonly port: number;
   readonly path?: string;

@@ -1,13 +1,13 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { serviceManifest as eventsServiceManifest } from "../../services/events-contract/src/events/index.ts";
-import { registryServiceManifest } from "../../services/registry-contract/src/index.ts";
+import type { AnyContractRouter } from "@orpc/contract";
+import { defineConfig } from "pidnap";
 import {
   serviceManifestToPidnapConfig,
   type ServiceManifestWithEntryPoint,
 } from "../../packages/shared/src/jonasland/index.ts";
-import type { AnyContractRouter } from "@orpc/contract";
-import { defineConfig } from "pidnap";
+import { serviceManifest as eventsServiceManifest } from "../../services/events-contract/src/events/index.ts";
+import { registryServiceManifest } from "../../services/registry-contract/src/index.ts";
 
 const home = homedir();
 const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
@@ -78,7 +78,7 @@ export default defineConfig({
         restartPolicy: "always",
       },
       envOptions: {
-        // registry must pick up ITERATE_PUBLIC_BASE_URL(_TYPE) changes from ~/.iterate/.env
+        // registry must pick up ITERATE_PUBLIC_BASE_HOST(_TYPE) changes from ~/.iterate/.env
         reloadDelay: 500,
       },
     },

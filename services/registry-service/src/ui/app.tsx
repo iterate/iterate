@@ -13,6 +13,7 @@ interface RouteRecord {
   readonly target: string;
   readonly metadata: Record<string, string>;
   readonly tags: string[];
+  readonly caddyDirectives: string[];
   readonly updatedAt: string;
 }
 
@@ -23,8 +24,8 @@ interface ConfigEntry {
 }
 
 interface IngressEnvValues {
-  readonly ITERATE_PUBLIC_BASE_URL: string | null;
-  readonly ITERATE_PUBLIC_BASE_URL_TYPE: "prefix" | "subdomain";
+  readonly ITERATE_PUBLIC_BASE_HOST: string | null;
+  readonly ITERATE_PUBLIC_BASE_HOST_TYPE: "prefix" | "subdomain";
 }
 
 const parseJsonObject = (raw: string): Record<string, string> => {
@@ -273,13 +274,13 @@ export function App() {
               Result: <span className="font-mono">{publicURL || "—"}</span>
             </p>
             <p className="break-all text-[11px]">
-              ITERATE_PUBLIC_BASE_URL:{" "}
-              <span className="font-mono">{ingressEnv?.ITERATE_PUBLIC_BASE_URL ?? "unset"}</span>
+              ITERATE_PUBLIC_BASE_HOST:{" "}
+              <span className="font-mono">{ingressEnv?.ITERATE_PUBLIC_BASE_HOST ?? "unset"}</span>
             </p>
             <p className="break-all text-[11px]">
-              ITERATE_PUBLIC_BASE_URL_TYPE:{" "}
+              ITERATE_PUBLIC_BASE_HOST_TYPE:{" "}
               <span className="font-mono">
-                {ingressEnv?.ITERATE_PUBLIC_BASE_URL_TYPE ?? "prefix"}
+                {ingressEnv?.ITERATE_PUBLIC_BASE_HOST_TYPE ?? "prefix"}
               </span>
             </p>
           </div>

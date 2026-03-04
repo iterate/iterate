@@ -26,50 +26,50 @@ describe("resolvePublicIngressUrl", () => {
   test.each([
     ["", "", "http://events.iterate.localhost", "throw"],
     [
-      "https://bla.proxy.iterate.com",
+      "bla.proxy.iterate.com",
       "prefix",
       "http://events.iterate.localhost",
       "https://events__bla.proxy.iterate.com/",
     ],
     [
-      "http://iterate.localhost:12345",
+      "iterate.localhost:12345",
       "subdomain",
       "http://events.iterate.localhost",
       "http://events.iterate.localhost:12345/",
     ],
     [
-      "https://bla.proxy.iterate.com",
+      "bla.proxy.iterate.com",
       "prefix",
       "events.iterate.localhost",
       "https://events__bla.proxy.iterate.com/",
     ],
     [
-      "https://bla.proxy.iterate.com",
+      "bla.proxy.iterate.com",
       "prefix",
       "http://events.iterate.localhost/a/b?x=1#frag",
       "https://events__bla.proxy.iterate.com/a/b?x=1#frag",
     ],
     [
-      "https://bla.proxy.iterate.com",
+      "bla.proxy.iterate.com",
       "",
       "http://events.iterate.localhost",
       "https://events__bla.proxy.iterate.com/",
     ],
     [
-      "https://bla.proxy.iterate.com",
+      "bla.proxy.iterate.com",
       "prefix",
       "http://foo.bar.iterate.localhost",
       "https://foo__bla.proxy.iterate.com/",
     ],
-    ["https://bla.proxy.iterate.com", "prefix", "http://", "throw"],
+    ["bla.proxy.iterate.com", "prefix", "http://", "throw"],
   ])(
     "baseUrl=%s baseUrlType=%s internalUrl=%s => %s",
-    (publicBaseUrl, publicBaseUrlType, internalUrl, expected) => {
+    (publicBaseHost, publicBaseHostType, internalUrl, expected) => {
       if (expected === "throw") {
         expect(() =>
           resolvePublicIngressUrl({
-            publicBaseUrl: publicBaseUrl || undefined,
-            publicBaseUrlType: publicBaseUrlType || undefined,
+            publicBaseHost: publicBaseHost || undefined,
+            publicBaseHostType: publicBaseHostType || undefined,
             internalUrl,
           }),
         ).toThrowError(PublicIngressUrlError);
@@ -78,8 +78,8 @@ describe("resolvePublicIngressUrl", () => {
 
       expect(
         resolvePublicIngressUrl({
-          publicBaseUrl: publicBaseUrl || undefined,
-          publicBaseUrlType: publicBaseUrlType || undefined,
+          publicBaseHost: publicBaseHost || undefined,
+          publicBaseHostType: publicBaseHostType || undefined,
           internalUrl,
         }),
       ).toBe(expected);

@@ -85,9 +85,9 @@ class FlyProvider implements DeploymentProvider<FlyDeploymentOpts, FlyDeployment
               image: opts.flyImage,
               env: {
                 ...envRecord,
-                ITERATE_PUBLIC_BASE_URL:
-                  envRecord.ITERATE_PUBLIC_BASE_URL ?? `https://${appName}.${FLY_BASE_DOMAIN}`,
-                ITERATE_PUBLIC_BASE_URL_TYPE: envRecord.ITERATE_PUBLIC_BASE_URL_TYPE ?? "prefix",
+                ITERATE_PUBLIC_BASE_HOST:
+                  envRecord.ITERATE_PUBLIC_BASE_HOST ?? `${appName}.${FLY_BASE_DOMAIN}`,
+                ITERATE_PUBLIC_BASE_HOST_TYPE: envRecord.ITERATE_PUBLIC_BASE_HOST_TYPE ?? "prefix",
               },
               guest: {
                 cpu_kind: "shared",
@@ -154,7 +154,7 @@ class FlyProvider implements DeploymentProvider<FlyDeploymentOpts, FlyDeployment
         appName,
         machineId,
       },
-      baseUrl: `https://${appName}.${FLY_BASE_DOMAIN}`,
+      baseUrl: `${appName}.${FLY_BASE_DOMAIN}`,
     };
   }
 
@@ -240,7 +240,7 @@ function createFlyApi(opts: FlyDeploymentOpts): Client<paths> {
 }
 
 async function flyCall<TData>(
-  api: Client<paths>,
+  _api: Client<paths>,
   method: string,
   path: string,
   call: () => Promise<{ data?: TData; error?: unknown; response: Response }>,

@@ -1,23 +1,10 @@
 /**
- * Registry public URL lifecycle test.
+ * Registry public URL lifecycle + host-routing behavior.
  *
- * Verifies the full pipeline: env change -> registry reload -> public URL
- * resolution -> in-container routing via iptables -> Caddy -> service.
- *
- * Steps:
- *   1. Create deployment, wait for alive.
- *   2. Note the default public URL for events (defaults to iterate.localhost).
- *   3. Start example service on-demand, wait for route registration.
- *   4. Set ITERATE_PUBLIC_BASE_URL + _TYPE to a custom ingress hostname.
- *      Pidnap detects the env change (reloadDelay: 500) and reloads registry,
- *      which picks up the new env and re-syncs Caddy fragments.
- *   5. Poll getPublicURL until it reflects the new base URL for both
- *      events (built-in) and example (dynamic).
- *   6. Curl the public URLs from INSIDE the container. iptables redirects
- *      all outbound TCP to Caddy, so the request goes:
- *        curl -> iptables -> Caddy -> Host match -> service
- *      This approach also works on Fly (where external Host must be *.fly.dev)
- *      because the request never leaves the machine.
+ * This verifies:
+ * 1) public URL generation updates after ITERATE_PUBLIC_BASE_HOST changes
+ * 2) subdomain and dunder public forms both route
+ * 3) Host header arriving at example service reflects the incoming host
  */
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
@@ -54,13 +41,30 @@ async function waitForRouteRegistered(
   throw new Error(`route ${host} not registered within ${String(timeoutMs)}ms`);
 }
 
+async function curlJsonWithHost(params: {
+  deployment: Deployment;
+  host: string;
+  path: string;
+}): Promise<Record<string, unknown>> {
+  const result = await params.deployment.exec([
+    "curl",
+    "-fsS",
+    "--max-time",
+    "10",
+    "-H",
+    `Host: ${params.host}`,
+    `http://127.0.0.1${params.path}`,
+  ]);
+  if (result.exitCode !== 0) {
+    throw new Error(`curl failed for host=${params.host}: ${result.output}`);
+  }
+  return JSON.parse(result.output) as Record<string, unknown>;
+}
+
 describe.runIf(DOCKER_IMAGE.length > 0)("registry public URL lifecycle", () => {
   test(
-    "public URL resolution updates after env change and routes work in-container",
+    "public URL resolution updates after env change and host forms route correctly",
     async () => {
-      // ---------------------------------------------------------------
-      // Phase 1: create deployment, note default public URL.
-      // ---------------------------------------------------------------
       await using deployment = await DockerDeployment.create({
         dockerImage: DOCKER_IMAGE,
         name: `e2e-registry-lifecycle-${randomUUID().slice(0, 8)}`,
@@ -68,15 +72,10 @@ describe.runIf(DOCKER_IMAGE.length > 0)("registry public URL lifecycle", () => {
       });
       await deployment.waitUntilAlive({ signal: AbortSignal.timeout(120_000 + HOST_SYNC_OFFSET) });
 
-      // Registry defaults ITERATE_PUBLIC_BASE_URL to "http://iterate.localhost".
-      // getPublicURL should return something based on that default.
       const eventsInternalURL = "http://events.iterate.localhost/api/service/health";
       const defaultEventsPublicURL = await getPublicURL(deployment, eventsInternalURL);
       expect(defaultEventsPublicURL).toContain("iterate.localhost");
 
-      // ---------------------------------------------------------------
-      // Phase 2: start example service, wait for it to register.
-      // ---------------------------------------------------------------
       const pidnapConfigs = serviceManifestToPidnapConfig({
         manifests: [exampleServiceManifest],
       });
@@ -91,34 +90,26 @@ describe.runIf(DOCKER_IMAGE.length > 0)("registry public URL lifecycle", () => {
       const defaultExamplePublicURL = await getPublicURL(deployment, exampleInternalURL);
       expect(defaultExamplePublicURL).toContain("iterate.localhost");
 
-      // ---------------------------------------------------------------
-      // Phase 3: set custom ITERATE_PUBLIC_BASE_URL + _TYPE.
-      // ---------------------------------------------------------------
       const slug = randomUUID().slice(0, 8);
-      const publicBaseUrl = `https://${slug}.ingress.iterate.com`;
+      const publicBaseHost = `${slug}.ingress.iterate.com`;
 
       await deployment.setEnvVars({
-        ITERATE_PUBLIC_BASE_URL: publicBaseUrl,
-        ITERATE_PUBLIC_BASE_URL_TYPE: "prefix",
+        ITERATE_PUBLIC_BASE_HOST: publicBaseHost,
+        ITERATE_PUBLIC_BASE_HOST_TYPE: "prefix",
       });
 
       // Compute expected public URLs with the new base.
       const expectedEventsPublicURL = resolvePublicIngressUrl({
-        publicBaseUrl,
-        publicBaseUrlType: "prefix",
+        publicBaseHost,
+        publicBaseHostType: "prefix",
         internalUrl: eventsInternalURL,
       });
       const expectedExamplePublicURL = resolvePublicIngressUrl({
-        publicBaseUrl,
-        publicBaseUrlType: "prefix",
+        publicBaseHost,
+        publicBaseHostType: "prefix",
         internalUrl: exampleInternalURL,
       });
 
-      // ---------------------------------------------------------------
-      // Phase 4: poll until getPublicURL reflects the new base URL.
-      // Registry reloads automatically via pidnap env watcher.
-      // ---------------------------------------------------------------
-      // Poll with retry — registry/caddy may be mid-reload.
       const publicUrlDeadline = Date.now() + 30_000;
       let eventsPublicURL = "";
       while (Date.now() < publicUrlDeadline) {
@@ -146,48 +137,75 @@ describe.runIf(DOCKER_IMAGE.length > 0)("registry public URL lifecycle", () => {
       }
       expect(examplePublicURL).toBe(expectedExamplePublicURL);
 
-      // ---------------------------------------------------------------
-      // Phase 5: curl public URLs from INSIDE the container.
-      //
-      // iptables redirects all outbound TCP to Caddy. Caddy sees the
-      // public hostname (e.g. events__abc.ingress.iterate.com), matches
-      // it via the external proxy snippet or a registry .caddy fragment,
-      // and reverse-proxies to the right local service.
-      //
-      // This works identically on Fly where the only way in is through
-      // Caddy — the request never leaves the machine.
-      // ---------------------------------------------------------------
-      const eventsPublicHost = new URL(expectedEventsPublicURL).hostname;
-      const eventsPublicPath = new URL(expectedEventsPublicURL).pathname;
+      const eventsSubdomainHost = new URL(
+        resolvePublicIngressUrl({
+          publicBaseHost,
+          publicBaseHostType: "subdomain",
+          internalUrl: eventsInternalURL,
+        }),
+      ).hostname;
+      const eventsPrefixHost = new URL(
+        resolvePublicIngressUrl({
+          publicBaseHost,
+          publicBaseHostType: "prefix",
+          internalUrl: eventsInternalURL,
+        }),
+      ).hostname;
 
-      const curlEventsResult = await deployment.exec([
+      for (const host of ["events.iterate.localhost", eventsSubdomainHost, eventsPrefixHost]) {
+        const result = await deployment.exec([
+          "curl",
+          "-fsS",
+          "--max-time",
+          "10",
+          "-H",
+          `Host: ${host}`,
+          "http://127.0.0.1/api/service/health",
+        ]);
+        expect(result.exitCode, `curl events for host=${host}: ${result.output}`).toBe(0);
+      }
+
+      const exampleSubdomainHost = new URL(
+        resolvePublicIngressUrl({
+          publicBaseHost,
+          publicBaseHostType: "subdomain",
+          internalUrl: "http://example.iterate.localhost/api/echo",
+        }),
+      ).hostname;
+      const examplePrefixHost = new URL(
+        resolvePublicIngressUrl({
+          publicBaseHost,
+          publicBaseHostType: "prefix",
+          internalUrl: "http://example.iterate.localhost/api/echo",
+        }),
+      ).hostname;
+
+      const echoCases = ["example.iterate.localhost", exampleSubdomainHost, examplePrefixHost];
+      for (const host of echoCases) {
+        const payload = await curlJsonWithHost({
+          deployment,
+          host,
+          path: "/api/echo?from=routing-test",
+        });
+        expect(payload.host).toBe(host);
+        expect(String(payload.url)).toContain("/api/echo?from=routing-test");
+      }
+
+      // Simulate ingress worker behavior that sends X-Forwarded-Host.
+      const forwarded = await deployment.exec([
         "curl",
         "-fsS",
         "--max-time",
         "10",
-        `http://${eventsPublicHost}${eventsPublicPath}`,
+        "-H",
+        "Host: ignored.localhost",
+        "-H",
+        `X-Forwarded-Host: ${examplePrefixHost}`,
+        "http://127.0.0.1/api/echo?from=xfh",
       ]);
-      expect(curlEventsResult.exitCode, `curl events: ${curlEventsResult.output}`).toBe(0);
-
-      const examplePublicHost = new URL(expectedExamplePublicURL).hostname;
-      const examplePublicPath = new URL(expectedExamplePublicURL).pathname;
-
-      // Example's public host may need a moment for caddy-sync to render
-      // the fragment with the public hostname and reload Caddy.
-      const curlExampleDeadline = Date.now() + 30_000;
-      let curlExampleResult = { exitCode: 1, output: "" };
-      while (Date.now() < curlExampleDeadline) {
-        curlExampleResult = await deployment.exec([
-          "curl",
-          "-fsS",
-          "--max-time",
-          "5",
-          `http://${examplePublicHost}${examplePublicPath}`,
-        ]);
-        if (curlExampleResult.exitCode === 0) break;
-        await sleep(1_000);
-      }
-      expect(curlExampleResult.exitCode, `curl example: ${curlExampleResult.output}`).toBe(0);
+      expect(forwarded.exitCode, forwarded.output).toBe(0);
+      const forwardedPayload = JSON.parse(forwarded.output) as Record<string, unknown>;
+      expect(forwardedPayload.host).toBe(examplePrefixHost);
     },
     120_000 + HOST_SYNC_OFFSET,
   );

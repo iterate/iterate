@@ -2,8 +2,8 @@ export type PublicIngressUrlType = "prefix" | "subdomain";
 export type PublicIngressUrlTypeInput = PublicIngressUrlType | "" | undefined | null;
 
 export interface ResolvePublicIngressUrlInput {
-  publicBaseUrl?: string;
-  publicBaseUrlType?: PublicIngressUrlTypeInput;
+  publicBaseHost?: string;
+  publicBaseHostType?: PublicIngressUrlTypeInput;
   internalUrl: string;
 }
 
@@ -27,14 +27,27 @@ export function normalizePublicIngressUrlType(
 function parsePublicBaseUrl(rawBaseUrl: string | undefined): URL {
   const trimmed = rawBaseUrl?.trim();
   if (!trimmed) {
-    throw new PublicIngressUrlError("publicBaseUrl is required");
+    throw new PublicIngressUrlError("publicBaseHost is required");
   }
 
   try {
-    return new URL(trimmed);
+    const normalized = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(trimmed)
+      ? trimmed
+      : `${inferPublicScheme(trimmed)}://${trimmed}`;
+    return new URL(normalized);
   } catch {
-    throw new PublicIngressUrlError(`Invalid publicBaseUrl: ${trimmed}`);
+    throw new PublicIngressUrlError(`Invalid publicBaseHost: ${trimmed}`);
   }
+}
+
+function inferPublicScheme(hostLike: string): "http" | "https" {
+  const normalized = hostLike.trim().toLowerCase();
+  const host =
+    normalized.includes(":") && !normalized.endsWith("]") ? normalized.split(":")[0] : normalized;
+  if (host === "localhost" || host === "127.0.0.1" || host.endsWith(".localhost")) {
+    return "http";
+  }
+  return "https";
 }
 
 function parseInternalUrl(rawInternalUrl: string): URL {
@@ -63,9 +76,9 @@ function firstHostnameLabel(hostname: string): string {
 }
 
 export function resolvePublicIngressUrl(input: ResolvePublicIngressUrlInput): string {
-  const baseUrl = parsePublicBaseUrl(input.publicBaseUrl);
+  const baseUrl = parsePublicBaseUrl(input.publicBaseHost);
   const internalUrl = parseInternalUrl(input.internalUrl);
-  const mode = normalizePublicIngressUrlType(input.publicBaseUrlType);
+  const mode = normalizePublicIngressUrlType(input.publicBaseHostType);
   const outputUrl = new URL(baseUrl.toString());
   const token = firstHostnameLabel(internalUrl.hostname);
 

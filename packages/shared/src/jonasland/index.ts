@@ -29,7 +29,8 @@ import {
   type Log,
   type RequestLogger,
 } from "evlog";
-import { createOTLPDrain } from "evlog/otlp";
+import { sendBatchToOTLP } from "evlog/otlp";
+import type { DrainContext } from "evlog";
 import type { Plugin } from "vite";
 import { z } from "zod/v4";
 
@@ -335,6 +336,22 @@ export function initializeServiceOtel(serviceName: string): void {
   process.once("SIGINT", shutdown);
 }
 
+function createSilentOTLPDrain(endpoint: string): (ctx: DrainContext) => Promise<void> {
+  let logged = false;
+  return async (ctx: DrainContext) => {
+    try {
+      await sendBatchToOTLP([ctx.event], { endpoint });
+    } catch {
+      if (!logged) {
+        logged = true;
+        console.warn(
+          `[evlog/otlp] OTLP endpoint ${endpoint} unreachable, suppressing further errors`,
+        );
+      }
+    }
+  };
+}
+
 export function initializeServiceEvlog(serviceName: string): void {
   const drainEndpoint = resolveEvlogDrainEndpoint();
 
@@ -347,7 +364,7 @@ export function initializeServiceEvlog(serviceName: string): void {
     pretty: process.env.NODE_ENV !== "production",
     ...(drainEndpoint
       ? {
-          drain: createOTLPDrain({ endpoint: drainEndpoint }),
+          drain: createSilentOTLPDrain(drainEndpoint),
         }
       : {}),
   });

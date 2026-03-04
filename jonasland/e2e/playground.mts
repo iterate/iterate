@@ -82,7 +82,6 @@ async function runSelfChecks(params: {
 }): Promise<void> {
   const eventsHost = `events__${params.slug}.${params.ingressProxyDomain}`;
   const eventsOrigin = `https://${eventsHost}`;
-  const ingressListStreamsUrl = `${eventsOrigin}/orpc/listStreams`;
   const ingressHealthUrl = `${eventsOrigin}/api/service/health`;
   const tunnelListStreamsUrl = `${params.tunnelUrl}/orpc/listStreams`;
   const tunnelHealthUrl = `${params.tunnelUrl}/api/service/health`;
@@ -107,7 +106,7 @@ async function runSelfChecks(params: {
     },
   });
   console.log(
-    `[playground] self-check PASS: registry uses ITERATE_PUBLIC_BASE_URL=${expectedPublicBaseUrl}`,
+    `[playground] self-check PASS: registry uses ITERATE_PUBLIC_BASE_HOST=${expectedPublicBaseUrl}`,
   );
 
   console.log("[playground] self-check 1/4 waiting for events ingress health (required)");
@@ -291,11 +290,11 @@ async function main(): Promise<void> {
   const slug = `playground-${randomUUID().slice(0, 8)}`;
   const wildcardHost = `*__${slug}.${ingressProxyDomain}`;
   const rootHost = `${slug}.${ingressProxyDomain}`;
-  const publicBaseUrl = `https://${slug}.${ingressProxyDomain}`;
-  const publicBaseUrlType =
+  const publicBaseHost = `${slug}.${ingressProxyDomain}`;
+  const publicBaseHostType =
     firstNonEmpty([
-      process.env.JONASLAND_E2E_PUBLIC_BASE_URL_TYPE,
-      process.env.ITERATE_PUBLIC_BASE_URL_TYPE,
+      process.env.JONASLAND_E2E_PUBLIC_BASE_HOST_TYPE,
+      process.env.ITERATE_PUBLIC_BASE_HOST_TYPE,
     ]) || "prefix";
 
   console.log("[playground] 3/4 creating ingress routes");
@@ -315,11 +314,11 @@ async function main(): Promise<void> {
 
   console.log(`[playground] route IDs: ${routes.routeIds.join(", ")}`);
   console.log(
-    `[playground] setting deployment env vars: ITERATE_PUBLIC_BASE_URL=${publicBaseUrl} ITERATE_PUBLIC_BASE_URL_TYPE=${publicBaseUrlType}`,
+    `[playground] setting deployment env vars: ITERATE_PUBLIC_BASE_HOST=${publicBaseHost} ITERATE_PUBLIC_BASE_HOST_TYPE=${publicBaseHostType}`,
   );
   await deployment.setEnvVars({
-    ITERATE_PUBLIC_BASE_URL: publicBaseUrl,
-    ITERATE_PUBLIC_BASE_URL_TYPE: publicBaseUrlType,
+    ITERATE_PUBLIC_BASE_HOST: publicBaseHost,
+    ITERATE_PUBLIC_BASE_HOST_TYPE: publicBaseHostType,
   });
   console.log("[playground] waiting for registry to pick up ~/.iterate/.env changes");
   await runSelfChecks({

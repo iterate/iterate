@@ -32,7 +32,6 @@ Current built-ins routed directly by root Caddyfile:
 - `registry.iterate.localhost` -> `127.0.0.1:17310`
 - `events.iterate.localhost` -> `127.0.0.1:17320`
 - `caddy.iterate.localhost` -> `127.0.0.1:2019`
-- `caddy-admin.iterate.localhost` -> `127.0.0.1:2019`
 - `openobserve.iterate.localhost` -> `127.0.0.1:5080`
 - `otel-collector.iterate.localhost` -> `127.0.0.1:15333`
 - `frp.iterate.localhost` -> `127.0.0.1:27000`

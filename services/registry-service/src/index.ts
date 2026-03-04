@@ -4,5 +4,5 @@ export {
   ResolvePublicUrlError,
   resolvePublicUrl,
   type ResolvePublicUrlInput,
-  type PublicBaseUrlType,
+  type PublicBaseHostType,
 } from "./resolve-public-url.ts";

@@ -30,5 +30,5 @@ Output: `publicURL: string`
 
 Environment variables:
 
-- `ITERATE_PUBLIC_BASE_URL`
-- `ITERATE_PUBLIC_BASE_URL_TYPE` (`prefix` or `subdomain`, default `prefix`)
+- `ITERATE_PUBLIC_BASE_HOST`
+- `ITERATE_PUBLIC_BASE_HOST_TYPE` (`prefix` or `subdomain`, default `prefix`)

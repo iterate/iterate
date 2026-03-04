@@ -42,6 +42,28 @@ interface RegistryContext {
   env: RegistryEnv;
 }
 
+// These will eventually be run with a service registry wrapper that registers them
+// with the service registry. But in the meantime we have this
+const SEEDED_ROUTE_DEFINITIONS = [
+  {
+    host: "openobserve.iterate.localhost",
+    target: "127.0.0.1:5080",
+    caddyDirectives: [
+      // Keep local sandbox login friction-free.
+      'header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="',
+    ],
+  },
+  {
+    host: "otel-collector.iterate.localhost",
+    target: "127.0.0.1:15333",
+  },
+  {
+    host: "frp.iterate.localhost",
+    target: "127.0.0.1:27000",
+    caddyDirectives: ["stream_close_delay 5m"],
+  },
+] as const;
+
 let storePromise: Promise<ServicesStore> | null = null;
 let envCache: RegistryEnv | null = null;
 
@@ -129,8 +151,8 @@ async function synchronizeCaddyFromStore(params: {
     caddyConfigDir: params.env.CADDY_CONFIG_DIR,
     rootCaddyfilePath: params.env.CADDY_ROOT_CADDYFILE,
     caddyBinPath: params.env.CADDY_BIN_PATH,
-    iteratePublicBaseUrl: params.env.ITERATE_PUBLIC_BASE_URL,
-    iteratePublicBaseUrlType: params.env.ITERATE_PUBLIC_BASE_URL_TYPE,
+    iteratePublicBaseHost: params.env.ITERATE_PUBLIC_BASE_HOST,
+    iteratePublicBaseHostType: params.env.ITERATE_PUBLIC_BASE_HOST_TYPE,
     forceReload: params.forceReload,
   });
 
@@ -146,6 +168,7 @@ async function upsertRouteAndSynchronize(params: {
     target: string;
     metadata?: Record<string, string>;
     tags?: string[];
+    caddyDirectives?: string[];
   };
   context: RegistryContext;
 }) {
@@ -288,13 +311,28 @@ async function ensureInitialCaddySynchronization(params: {
   throw new Error("failed initial caddy synchronization", { cause: lastError });
 }
 
+async function ensureSeededRoutes(params: { store: ServicesStore }): Promise<void> {
+  // Seed built-in platform services that do not yet run through a service wrapper
+  // with automatic registry registration. Aspiration: all of these eventually
+  // self-register, making this seed list unnecessary.
+  for (const route of SEEDED_ROUTE_DEFINITIONS) {
+    await params.store.upsertRoute({
+      host: route.host,
+      target: route.target,
+      caddyDirectives: "caddyDirectives" in route ? [...route.caddyDirectives] : [],
+      tags: ["seeded"],
+      metadata: { source: "registry-seed" },
+    });
+  }
+}
+
 export const registryRouter = os.router({
   getPublicURL: os.getPublicURL.handler(async ({ input, context }) => {
     try {
       return {
         publicURL: resolvePublicUrl({
-          ITERATE_PUBLIC_BASE_URL: context.env.ITERATE_PUBLIC_BASE_URL,
-          ITERATE_PUBLIC_BASE_URL_TYPE: context.env.ITERATE_PUBLIC_BASE_URL_TYPE,
+          ITERATE_PUBLIC_BASE_HOST: context.env.ITERATE_PUBLIC_BASE_HOST,
+          ITERATE_PUBLIC_BASE_HOST_TYPE: context.env.ITERATE_PUBLIC_BASE_HOST_TYPE,
           internalURL: input.internalURL,
         }),
       };
@@ -523,8 +561,8 @@ export async function startRegistryService(options?: {
       try {
         if (req.method === "GET" && pathname === "/api/ingress-env") {
           writeJsonResponse(res, 200, {
-            ITERATE_PUBLIC_BASE_URL: env.ITERATE_PUBLIC_BASE_URL ?? null,
-            ITERATE_PUBLIC_BASE_URL_TYPE: env.ITERATE_PUBLIC_BASE_URL_TYPE,
+            ITERATE_PUBLIC_BASE_HOST: env.ITERATE_PUBLIC_BASE_HOST ?? null,
+            ITERATE_PUBLIC_BASE_HOST_TYPE: env.ITERATE_PUBLIC_BASE_HOST_TYPE,
           });
           return;
         }
@@ -544,6 +582,11 @@ export async function startRegistryService(options?: {
               ? { metadata: body.metadata as Record<string, string> }
               : {}),
             ...(Array.isArray(body.tags) ? { tags: body.tags.map((tag) => String(tag)) } : {}),
+            ...(Array.isArray(body.caddyDirectives)
+              ? {
+                  caddyDirectives: body.caddyDirectives.map((directive) => String(directive)),
+                }
+              : {}),
           };
 
           const { route, routes } = await upsertRouteAndSynchronize({
@@ -722,6 +765,8 @@ export async function startRegistryService(options?: {
   await new Promise<void>((resolve) => {
     server.listen(port, host, () => resolve());
   });
+
+  await ensureSeededRoutes({ store });
 
   await ensureInitialCaddySynchronization({
     store,

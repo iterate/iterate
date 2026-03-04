@@ -48,8 +48,8 @@ export type HostRequestParams = {
 };
 
 export interface DeploymentIngressOpts {
-  publicBaseUrl?: string;
-  publicBaseUrlType?: PublicIngressUrlTypeInput;
+  publicBaseHost?: string;
+  publicBaseHostType?: PublicIngressUrlTypeInput;
   createIngressProxyRoutes?: boolean;
   ingressProxyBaseUrl?: string;
   ingressProxyApiKey?: string;
@@ -66,8 +66,8 @@ export interface DeploymentOpts {
 }
 
 type ResolvedDeploymentIngressOpts = {
-  publicBaseUrl: string;
-  publicBaseUrlType: PublicIngressUrlType;
+  publicBaseHost: string;
+  publicBaseHostType: PublicIngressUrlType;
   createIngressProxyRoutes: boolean;
   ingressProxyBaseUrl?: string;
   ingressProxyApiKey?: string;
@@ -231,20 +231,20 @@ export abstract class Deployment<
       ...provided,
     };
 
-    const hasPublicBaseUrl = Boolean(merged.publicBaseUrl?.trim());
+    const hasPublicBaseUrl = Boolean(merged.publicBaseHost?.trim());
     const hasIngressTarget = Boolean(merged.ingressProxyTargetUrl?.trim());
     const needsRuntimeIngress = !hasPublicBaseUrl || !hasIngressTarget;
     const runtimeIngressUrl = needsRuntimeIngress ? await this.providerIngressUrl() : undefined;
-    const publicBaseUrl = merged.publicBaseUrl?.trim() || runtimeIngressUrl || "";
-    const publicBaseUrlType = normalizePublicIngressUrlType(merged.publicBaseUrlType);
+    const publicBaseHost = merged.publicBaseHost?.trim() || runtimeIngressUrl || "";
+    const publicBaseHostType = normalizePublicIngressUrlType(merged.publicBaseHostType);
     const createIngressProxyRoutes = merged.createIngressProxyRoutes ?? false;
     const ingressProxyBaseUrl = merged.ingressProxyBaseUrl?.trim();
     const ingressProxyApiKey = merged.ingressProxyApiKey?.trim();
     const ingressProxyTargetUrl = merged.ingressProxyTargetUrl?.trim() || runtimeIngressUrl || "";
 
     return {
-      publicBaseUrl,
-      publicBaseUrlType,
+      publicBaseHost,
+      publicBaseHostType,
       createIngressProxyRoutes,
       ingressProxyBaseUrl,
       ingressProxyApiKey,
@@ -261,9 +261,9 @@ export abstract class Deployment<
       throw new Error("createIngressProxyRoutes=true requires ingressProxyApiKey");
     }
 
-    const baseHost = new URL(config.publicBaseUrl).hostname;
+    const baseHost = new URL(config.publicBaseHost).hostname;
     const wildcardPattern =
-      config.publicBaseUrlType === "prefix" ? `*__${baseHost}` : `*.${baseHost}`;
+      config.publicBaseHostType === "prefix" ? `*__${baseHost}` : `*.${baseHost}`;
     const routeTargetHost = new URL(config.ingressProxyTargetUrl).host;
     const patterns = [
       {
@@ -290,8 +290,8 @@ export abstract class Deployment<
         metadata: {
           source: "jonasland-base-deployment",
           provider: this.providerName,
-          publicBaseUrl: config.publicBaseUrl,
-          publicBaseUrlType: config.publicBaseUrlType,
+          publicBaseHost: config.publicBaseHost,
+          publicBaseHostType: config.publicBaseHostType,
         },
         patterns,
       },
@@ -437,7 +437,7 @@ export abstract class Deployment<
 
   async ingressUrl(): Promise<string> {
     if (this.ingressConfig) {
-      return this.ingressConfig.publicBaseUrl;
+      return this.ingressConfig.publicBaseHost;
     }
     return await this.providerIngressUrl();
   }
@@ -579,8 +579,8 @@ export abstract class Deployment<
     if (isIterateServiceHost && this.ingressConfig) {
       const publicServiceUrl = new URL(
         resolvePublicIngressUrl({
-          publicBaseUrl: this.ingressConfig.publicBaseUrl,
-          publicBaseUrlType: this.ingressConfig.publicBaseUrlType,
+          publicBaseHost: this.ingressConfig.publicBaseHost,
+          publicBaseHostType: this.ingressConfig.publicBaseHostType,
           internalUrl: `http://${host}${requestUrl.pathname}${requestUrl.search}`,
         }),
       );

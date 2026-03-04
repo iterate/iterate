@@ -520,8 +520,8 @@ export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDep
     });
 
     const desiredBaseUrl =
-      this.requestedEnv.ITERATE_PUBLIC_BASE_URL ??
-      `http://iterate.localhost:${String(this.ports.ingress)}`;
+      this.requestedEnv.ITERATE_PUBLIC_BASE_HOST ??
+      `iterate.localhost:${String(this.ports.ingress)}`;
 
     const currentRegistry = await this.pidnap.processes.get({
       target: "registry",
@@ -529,20 +529,20 @@ export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDep
     });
 
     const desiredType =
-      this.requestedEnv.ITERATE_PUBLIC_BASE_URL_TYPE ??
-      currentRegistry.definition.env?.ITERATE_PUBLIC_BASE_URL_TYPE ??
+      this.requestedEnv.ITERATE_PUBLIC_BASE_HOST_TYPE ??
+      currentRegistry.definition.env?.ITERATE_PUBLIC_BASE_HOST_TYPE ??
       "prefix";
 
     const currentEnv = currentRegistry.definition.env ?? {};
     const nextEnv = {
       ...currentEnv,
-      ITERATE_PUBLIC_BASE_URL: desiredBaseUrl,
-      ITERATE_PUBLIC_BASE_URL_TYPE: desiredType,
+      ITERATE_PUBLIC_BASE_HOST: desiredBaseUrl,
+      ITERATE_PUBLIC_BASE_HOST_TYPE: desiredType,
     };
 
     const needsUpdate =
-      currentEnv.ITERATE_PUBLIC_BASE_URL !== desiredBaseUrl ||
-      currentEnv.ITERATE_PUBLIC_BASE_URL_TYPE !== desiredType;
+      currentEnv.ITERATE_PUBLIC_BASE_HOST !== desiredBaseUrl ||
+      currentEnv.ITERATE_PUBLIC_BASE_HOST_TYPE !== desiredType;
 
     if (!needsUpdate) return;
 
@@ -553,7 +553,7 @@ export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDep
         "-ec",
         [
           "mkdir -p /opt/jonasland-sandbox",
-          `printf 'ITERATE_PUBLIC_BASE_URL=%s\\nITERATE_PUBLIC_BASE_URL_TYPE=%s\\n' ${shQuote(desiredBaseUrl)} ${shQuote(desiredType)} > /opt/jonasland-sandbox/.env`,
+          `printf 'ITERATE_PUBLIC_BASE_HOST=%s\\nITERATE_PUBLIC_BASE_HOST_TYPE=%s\\n' ${shQuote(desiredBaseUrl)} ${shQuote(desiredType)} > /opt/jonasland-sandbox/.env`,
         ].join(" && "),
       ],
     });
@@ -613,8 +613,8 @@ export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDep
     const runtimeIngress = new URL(this.ingressBaseUrl);
     const port = runtimeIngress.port || (runtimeIngress.protocol === "https:" ? "443" : "80");
     return {
-      publicBaseUrl: `http://iterate.localhost:${port}`,
-      publicBaseUrlType: "subdomain",
+      publicBaseHost: `iterate.localhost:${port}`,
+      publicBaseHostType: "subdomain",
       ingressProxyTargetUrl: this.ingressBaseUrl,
     };
   }

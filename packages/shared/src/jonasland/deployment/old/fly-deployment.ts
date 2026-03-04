@@ -747,10 +747,10 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
       image: params.opts.flyImage,
       env: {
         ...params.envRecord,
-        ITERATE_PUBLIC_BASE_URL:
-          params.envRecord.ITERATE_PUBLIC_BASE_URL ??
+        ITERATE_PUBLIC_BASE_HOST:
+          params.envRecord.ITERATE_PUBLIC_BASE_HOST ??
           `https://${params.appName}.${this.flyBaseDomain}`,
-        ITERATE_PUBLIC_BASE_URL_TYPE: params.envRecord.ITERATE_PUBLIC_BASE_URL_TYPE ?? "prefix",
+        ITERATE_PUBLIC_BASE_HOST_TYPE: params.envRecord.ITERATE_PUBLIC_BASE_HOST_TYPE ?? "prefix",
       },
       guest: {
         cpu_kind: "shared",
@@ -991,8 +991,8 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
 
   private buildDefaultIngressOpts(): DeploymentIngressOpts {
     return {
-      publicBaseUrl: this.ingressBaseUrl,
-      publicBaseUrlType: "prefix",
+      publicBaseHost: this.ingressBaseUrl,
+      publicBaseHostType: "prefix",
       ingressProxyTargetUrl: this.ingressBaseUrl,
     };
   }

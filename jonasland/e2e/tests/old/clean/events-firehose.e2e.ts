@@ -67,7 +67,7 @@ describe.runIf(runDockerPublic)("clean events firehose (docker-public)", () => {
       localPort: ingressHostPort,
       cloudflaredBin: process.env.JONASLAND_E2E_CLOUDFLARED_BIN,
     });
-    const publicBaseUrl = buildIngressPublicBaseUrl({
+    const publicBaseHost = buildIngressPublicBaseUrl({
       testSlug: "events-firehose-pub",
       ingressProxyDomain: ingress.ingressProxyDomain,
     });
@@ -77,8 +77,8 @@ describe.runIf(runDockerPublic)("clean events firehose (docker-public)", () => {
       name: `jonasland-e2e-firehose-pub-${randomUUID().slice(0, 8)}`,
       ingressHostPort,
       ingress: {
-        publicBaseUrl,
-        publicBaseUrlType: "prefix",
+        publicBaseHost,
+        publicBaseHostType: "prefix",
         createIngressProxyRoutes: true,
         ingressProxyBaseUrl: ingress.ingressProxyBaseUrl,
         ingressProxyApiKey: ingress.ingressProxyApiKey,

@@ -13,7 +13,6 @@ import {
   createServiceObservabilityHandler,
   createServiceRequestLogger,
   extractIncomingTraceContext,
-  getOtelRuntimeConfig,
   getRequestIdHeader,
   initializeServiceEvlog,
   initializeServiceOtel,
@@ -134,6 +133,18 @@ app.get("/api/observability", createServiceObservabilityHandler(getExampleDbRunt
 app.get("/", async (c) => {
   const html = await readFile(viteUiIndexHtmlPath, "utf8");
   return c.html(html);
+});
+
+app.all("/api/echo", async (c) => {
+  const request = c.req.raw;
+  const bodyText = await request.clone().text();
+  return c.json({
+    method: request.method,
+    url: request.url,
+    host: request.headers.get("host") ?? "",
+    headers: Object.fromEntries(request.headers.entries()),
+    body: bodyText,
+  });
 });
 
 app.all("/orpc/*", async (c) => {

@@ -141,7 +141,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
     await deployment.waitForHealthyWithLogs({ url: `${await deployment.ingressUrl()}/` });
 
     const rejectResult = await deployment.exec(
-      "code=$(curl -sS -o /tmp/j5-admin-reject.json -w '%{http_code}' -H 'Host: caddy-admin.iterate.localhost' -H 'Sec-Fetch-Mode: navigate' http://127.0.0.1/config/ || true); echo \"$code\"; cat /tmp/j5-admin-reject.json",
+      "code=$(curl -sS -o /tmp/j5-admin-reject.json -w '%{http_code}' -H 'Host: caddy.iterate.localhost' -H 'Sec-Fetch-Mode: navigate' http://127.0.0.1/config/ || true); echo \"$code\"; cat /tmp/j5-admin-reject.json",
     );
     expect(rejectResult.exitCode).toBe(0);
     expect(rejectResult.output).toContain("403");

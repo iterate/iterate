@@ -54,7 +54,7 @@ const providers: ProviderCase[] = [
         localPort: ingressHostPort,
         cloudflaredBin: process.env.JONASLAND_E2E_CLOUDFLARED_BIN,
       });
-      const publicBaseUrl = buildIngressPublicBaseUrl({
+      const publicBaseHost = buildIngressPublicBaseUrl({
         testSlug: "bootstrap-docker-public",
         ingressProxyDomain: ingress.ingressProxyDomain,
       });
@@ -64,8 +64,8 @@ const providers: ProviderCase[] = [
         name: `jonasland-e2e-clean-bootstrap-docker-public-${randomUUID().slice(0, 8)}`,
         ingressHostPort,
         ingress: {
-          publicBaseUrl,
-          publicBaseUrlType: "prefix",
+          publicBaseHost,
+          publicBaseHostType: "prefix",
           createIngressProxyRoutes: true,
           ingressProxyBaseUrl: ingress.ingressProxyBaseUrl,
           ingressProxyApiKey: ingress.ingressProxyApiKey,

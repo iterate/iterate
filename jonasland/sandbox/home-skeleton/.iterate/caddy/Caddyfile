@@ -2,65 +2,89 @@
 # Iterate Sandbox Caddyfile
 # =============================================================================
 #
-# Built-in routing source of truth lives in THIS file.
-# These routes must keep working before registry starts or reloads.
+# TRAFFIC MODEL:
+# Caddy is the single chokepoint for ALL HTTP(S) traffic on this machine —
+# both ingress (external requests reaching sandbox services) and egress
+# (processes inside the sandbox making outbound HTTP/HTTPS calls).
 #
-# Dynamic registry-managed routes are additive fragments loaded from:
-#   /home/iterate/.iterate/caddy/*.caddy
+# This is enforced by iptables NAT rules in start.sh:
 #
-# Optional apps (for example: home/docs/outerbase/example) are not hard-coded
-# here. They become routable when they start and register routes via registry.
-# See: jonasland/sandbox/pidnap.config.ts
+#   iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-ports 80
+#   iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 443
 #
-# ROUTING MODEL:
-# All inbound traffic arrives at the :80 or :443 catch-all blocks below.
-# The first thing each block does is rewrite Host from X-Forwarded-Host
-# (if present). After that, everything — built-in routes, dynamic fragments,
-# FRP — matches purely on Host. No separate vhost blocks needed.
+# Every outbound TCP connection to port 80/443 is redirected back to Caddy.
+#
+#   Ingress path:
+#     External request → Fly/CF proxy → Caddy :80/:443 → matched service
+#
+#   Egress path:
+#     Process on machine → connect to external host:443 → iptables redirects
+#     to Caddy :443 → Caddy terminates TLS with on-demand self-signed certs
+#     (MITM) → request falls through to egress proxy on :19000 → internet.
+#     The machine's CA trust store includes Caddy's root CA so TLS clients
+#     accept the self-signed certs transparently.
+#
+# ROUTING:
+# The :80/:443 blocks rewrite Host from X-Forwarded-Host (if present), then
+# match purely on Host against built-in routes, dynamic .caddy fragments,
+# and FRP. Unmatched traffic falls through to the egress proxy (:19000).
+#
+# ROUTE SOURCES:
+# - Built-in routes live in THIS file (must work before registry starts).
+# - Dynamic registry-managed routes are fragments loaded from:
+#     /home/iterate/.iterate/caddy/*.caddy
+# - Optional apps (home/docs/outerbase/example) register via registry-service.
+#   See: jonasland/sandbox/pidnap.config.ts
 #
 # NOTE ON TRACING:
 # Caddy tracing is intentionally OFF right now to reduce noise and startup cost.
-# To re-enable later, add tracing blocks in iterate_service_proxy and/or host
-# handlers below.
 #
 # =============================================================================
-
 {
-    # Caddy admin API (local-only inside sandbox container).
-    admin 127.0.0.1:2019
+	# Caddy admin API 
+	admin 127.0.0.1:2019
 
-    servers {
-        # Trust CF/Fly proxy hops for client IP derivation.
-        trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
-        client_ip_headers X-Forwarded-For CF-Connecting-IP Fly-Client-IP
-    }
+	servers {
+		# Trust CF/Fly proxy hops for client IP derivation.
+		trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+		client_ip_headers X-Forwarded-For CF-Connecting-IP Fly-Client-IP
+	}
 
-    local_certs
-    auto_https off
-    # Keep runtime config file-driven (registry fragments + this root file).
-    persist_config off
+	# On-demand self-signed certs for ANY hostname. On the egress path, Caddy
+	# acts as a MITM TLS proxy: iptables redirects outbound :443 here, Caddy
+	# generates a cert for the target hostname, terminates TLS, then forwards
+	# the request to the egress proxy. The machine trusts Caddy's root CA.
+	local_certs
+	auto_https off
+	# Keep runtime config file-driven (registry fragments + this root file).
+	persist_config off
 }
 
 # -----------------------------------------------------------------------------
 # Shared CORS helper
 # -----------------------------------------------------------------------------
 (iterate_cors_openapi) {
-    @iterate_api_preflight {
-        method OPTIONS
-        header_regexp Origin ^https?://(([a-z0-9-]+\.)?iterate\.localhost|([a-z0-9-]+(__[a-z0-9-]+)?)\.(proxy|ingress)\.iterate\.com|([a-z0-9-]+\.)*trycloudflare\.com)(:[0-9]+)?$
-    }
-    @iterate_api_cors {
-        header_regexp Origin ^https?://(([a-z0-9-]+\.)?iterate\.localhost|([a-z0-9-]+(__[a-z0-9-]+)?)\.(proxy|ingress)\.iterate\.com|([a-z0-9-]+\.)*trycloudflare\.com)(:[0-9]+)?$
-    }
-    header @iterate_api_cors {
-        Access-Control-Allow-Origin "{http.request.header.Origin}"
-        Access-Control-Allow-Methods "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-        Access-Control-Allow-Headers "authorization,content-type,x-request-id,traceparent,tracestate,baggage"
-        Access-Control-Expose-Headers "content-type,x-request-id"
-        Access-Control-Max-Age "600"
-        Vary "Origin"
-    }
-    respond @iterate_api_preflight 204
+	# CORS allowlist should be strict and mirror routed host patterns:
+	#   1) {$ITERATE_PUBLIC_BASE_HOST}
+	#   2) *.{$ITERATE_PUBLIC_BASE_HOST}
+	#   3) *__{$ITERATE_PUBLIC_BASE_HOST}  (intentionally no extra dot after __)
+	# Plus local dev hosts on iterate.localhost.
+	@iterate_api_preflight {
+		method OPTIONS
+		header_regexp Origin ^https?://((([a-z0-9-]+\.)?iterate\.localhost)|({$ITERATE_PUBLIC_BASE_HOST})|([a-z0-9-]+\.{$ITERATE_PUBLIC_BASE_HOST})|([a-z0-9-]+__{$ITERATE_PUBLIC_BASE_HOST}))(:[0-9]+)?$
+	}
+	@iterate_api_cors {
+		header_regexp Origin ^https?://((([a-z0-9-]+\.)?iterate\.localhost)|({$ITERATE_PUBLIC_BASE_HOST})|([a-z0-9-]+\.{$ITERATE_PUBLIC_BASE_HOST})|([a-z0-9-]+__{$ITERATE_PUBLIC_BASE_HOST}))(:[0-9]+)?$
+	}
+	header @iterate_api_cors {
+		Access-Control-Allow-Origin "{http.request.header.Origin}"
+		Access-Control-Allow-Methods "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+		Access-Control-Allow-Headers "authorization,content-type,x-request-id,traceparent,tracestate,baggage"
+		Access-Control-Expose-Headers "content-type,x-request-id"
+		Access-Control-Max-Age "600"
+		Vary "Origin"
+	}
+	respond @iterate_api_preflight 204
 }
 
 # -----------------------------------------------------------------------------
@@ -75,179 +99,97 @@
 # X-Forwarded-For (client IP) and X-Forwarded-Proto (scheme) are already
 # handled natively by Caddy's trusted_proxies / client_ip_headers config.
 (iterate_rewrite_xfh_to_host) {
-    @has_xfh header X-Forwarded-Host *
-    request_header @has_xfh Host {http.request.header.X-Forwarded-Host}
+	@has_xfh header X-Forwarded-Host *
+	request_header @has_xfh Host {http.request.header.X-Forwarded-Host}
 }
 
 # -----------------------------------------------------------------------------
-# Built-in service routes (snippet, imported after XFH rewrite)
+# Bootstrap routes (must work before registry starts)
 # -----------------------------------------------------------------------------
-# These are the always-on platform services. They match on Host after the
-# XFH->Host rewrite, so they work for both direct access (Host: foo.iterate.localhost)
-# and proxied access (X-Forwarded-Host: foo.iterate.localhost).
-(iterate_builtin_routes) {
-    @pidnap host pidnap.iterate.localhost
-    handle @pidnap {
-        reverse_proxy 127.0.0.1:17300
-    }
+# These routes are intentionally duplicated in shape with registry-managed
+# routes: each service has one handle block that matches:
+#   1) internal host      -> <service>.iterate.localhost
+#   2) subdomain public   -> <service>.{$ITERATE_PUBLIC_BASE_HOST}
+#   3) prefix public      -> <service>__{$ITERATE_PUBLIC_BASE_HOST}
+#
+# Why keep both subdomain + prefix forms?
+# - URL generation picks one mode, but accepting both at the proxy is almost
+#   certainly harmless and makes routing/debugging significantly clearer.
+#
+# Why only these three services in root?
+# - pidnap/registry/caddy must remain routable before registry-service starts.
+# - Everything else is emitted by registry into a single registry-service-routes.caddy fragment.
+(iterate_bootstrap_routes) {
+	@pidnap host pidnap.iterate.localhost pidnap.{$ITERATE_PUBLIC_BASE_HOST} pidnap__{$ITERATE_PUBLIC_BASE_HOST}
+	handle @pidnap {
+		reverse_proxy 127.0.0.1:17300
+	}
 
-    @registry host registry.iterate.localhost
-    handle @registry {
-        import iterate_cors_openapi
-        reverse_proxy 127.0.0.1:17310
-    }
+	@registry host registry.iterate.localhost registry.{$ITERATE_PUBLIC_BASE_HOST} registry__{$ITERATE_PUBLIC_BASE_HOST}
+	handle @registry {
+		import iterate_cors_openapi
+		reverse_proxy 127.0.0.1:17310
+	}
 
-    @events host events.iterate.localhost
-    handle @events {
-        import iterate_cors_openapi
-        reverse_proxy 127.0.0.1:17320
-    }
-
-    @caddy host caddy.iterate.localhost caddy-admin.iterate.localhost
-    handle @caddy {
-        reverse_proxy 127.0.0.1:2019
-    }
-
-    @openobserve host openobserve.iterate.localhost
-    handle @openobserve {
-        reverse_proxy 127.0.0.1:5080 {
-            # Keep local sandbox login friction-free.
-            header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
-        }
-    }
-
-    @otel_collector host otel-collector.iterate.localhost
-    handle @otel_collector {
-        reverse_proxy 127.0.0.1:15333
-    }
-}
-
-# -----------------------------------------------------------------------------
-# External ingress host-pattern routing
-# -----------------------------------------------------------------------------
-# After the XFH->Host rewrite, Host may be an external ingress form:
-#   [<port>__]<service>__<id>.(proxy|ingress).iterate.com
-# This snippet extracts the <service> token and proxies to the right built-in.
-# Dynamic (registry-managed) services are handled by .caddy fragments instead.
-(iterate_builtin_service_map_entries) {
-    pidnap         127.0.0.1:17300 pidnap.iterate.localhost
-    registry       127.0.0.1:17310 registry.iterate.localhost
-    events         127.0.0.1:17320 events.iterate.localhost
-    caddy          127.0.0.1:2019  caddy.iterate.localhost
-    caddy-admin    127.0.0.1:2019  caddy-admin.iterate.localhost
-    openobserve    127.0.0.1:5080  openobserve.iterate.localhost
-    otel-collector 127.0.0.1:15333 otel-collector.iterate.localhost
-    default "" ""
-}
-
-(iterate_service_proxy) {
-    map {args[0]} {iterate_service_upstream} {iterate_service_host} {
-        import iterate_builtin_service_map_entries
-    }
-    # Only handle if the service key maps to a known built-in upstream.
-    # Unknown keys (e.g. dynamic services) fall through to the registry
-    # .caddy fragments imported further down in the site block.
-    @known_service expression `{iterate_service_upstream} != ""`
-    handle @known_service {
-        import iterate_cors_openapi
-        reverse_proxy {iterate_service_upstream} {
-            header_up Host {iterate_service_host}
-        }
-    }
-}
-
-(iterate_external_proxy) {
-    @external_proxy_host header_regexp external_proxy_host Host ^(?:[0-9]+__)?([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
-    handle @external_proxy_host {
-        import iterate_service_proxy {re.external_proxy_host.1} "unknown service host pattern"
-    }
-
-    @external_proxy_root_host header_regexp external_proxy_root_host Host ^[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
-    handle @external_proxy_root_host {
-        import iterate_service_proxy {$ITERATE_DEFAULT_INGRESS_SERVICE:home} "unknown default ingress service"
-    }
-}
-
-# -----------------------------------------------------------------------------
-# Shared FRP control plane routing
-# -----------------------------------------------------------------------------
-(iterate_frp_control) {
-    @frp_control_local header_regexp frp_control_local Host ^frp\.iterate\.localhost(?::[0-9]+)?$
-    handle @frp_control_local {
-        reverse_proxy 127.0.0.1:27000 {args[0]}
-    }
-
-    @frp_control_localhost_ws {
-        header Connection *Upgrade*
-        header Upgrade websocket
-        header_regexp frp_control_localhost_ws_host Host ^(localhost|127\.0\.0\.1)(?::[0-9]+)?$
-    }
-    handle @frp_control_localhost_ws {
-        reverse_proxy 127.0.0.1:27000 {args[0]}
-    }
-
-    @frp_control_external header_regexp frp_control_external Host ^frp(__[a-z0-9-]+)?\.ingress\.iterate\.com(?::[0-9]+)?$
-    handle @frp_control_external {
-        reverse_proxy 127.0.0.1:27000 {args[0]}
-    }
+	@caddy host caddy.iterate.localhost caddy.{$ITERATE_PUBLIC_BASE_HOST} caddy__{$ITERATE_PUBLIC_BASE_HOST}
+	handle @caddy {
+		reverse_proxy 127.0.0.1:2019
+	}
 }
 
 # =============================================================================
 # Main HTTP listener
 # =============================================================================
-:80, :8080 {
-    # Step 1: rewrite Host from X-Forwarded-Host (if present) so all
-    # downstream matchers only need to match on Host.
-    import iterate_rewrite_xfh_to_host
+:80 {
+	# Step 1: rewrite Host from X-Forwarded-Host (if present) so all
+	# downstream matchers only need to match on Host.
+	import iterate_rewrite_xfh_to_host
 
-    @health path /healthz
-    respond @health "ok" 200
+	@health path /healthz
+	respond @health "ok" 200
 
-    # Step 2: built-in platform service routes (pidnap, registry, events, etc).
-    import iterate_builtin_routes
+	# Step 2: bootstrap routes that must work before registry starts.
+	import iterate_bootstrap_routes
 
-    # Step 3: registry-managed dynamic routes. These go BEFORE the external
-    # proxy snippet so that dynamic services with public host fragments
-    # (e.g. example__slug.ingress.iterate.com) match before the built-in
-    # service map extraction in iterate_external_proxy.
-    import /home/iterate/.iterate/caddy/*.caddy
+	# Step 3: registry-managed routes in a single generated fragment.
+	# This file includes both seeded built-ins (events/openobserve/frp/etc)
+	# and dynamically registered service routes.
+	import /home/iterate/.iterate/caddy/registry-service-routes.caddy
 
-    # Step 4: external ingress host patterns for built-in services only.
-    import iterate_external_proxy
-    import iterate_frp_control ""
+	@local host 127.0.0.1 localhost
+	handle @local {
+		respond "caddy ok" 200
+	}
 
-    @local host 127.0.0.1 localhost
-    handle @local {
-        respond "caddy ok" 200
-    }
-
-    # KEEP THIS FALLBACK:
-    # machine-wide TCP egress is redirected to Caddy; unmatched traffic must
-    # continue to egress proxy on :19000 or outbound networking breaks.
-    reverse_proxy 127.0.0.1:19000
+	# EGRESS FALLBACK — do not remove.
+	# iptables redirects ALL outbound :80 traffic here. Requests that don't
+	# match any ingress route are outbound HTTP calls from sandbox processes.
+	# Forward them to the egress proxy so they reach the internet.
+	reverse_proxy 127.0.0.1:19000
 }
 
 # =============================================================================
-# Main HTTPS listener
+# Main HTTPS listener (ingress + MITM egress proxy)
 # =============================================================================
-:443, :8443 {
-    tls internal {
-        on_demand
-    }
+:443 {
+	# On-demand internal TLS: for ingress this is cosmetic (upstream proxies
+	# already terminated real TLS); for egress this is the MITM step — Caddy
+	# mints a self-signed cert for whatever hostname the client requested.
+	tls internal {
+		on_demand
+	}
 
-    # Step 1: rewrite Host from X-Forwarded-Host (same as HTTP block).
-    import iterate_rewrite_xfh_to_host
+	# Step 1: rewrite Host from X-Forwarded-Host (same as HTTP block).
+	import iterate_rewrite_xfh_to_host
 
-    # Step 2: built-in platform service routes.
-    import iterate_builtin_routes
+	# Step 2: bootstrap routes that must work before registry starts.
+	import iterate_bootstrap_routes
 
-    # Step 3: registry-managed dynamic routes (before external proxy, same as HTTP).
-    import /home/iterate/.iterate/caddy/*.caddy
+	# Step 3: registry-managed routes in a single generated fragment.
+	import /home/iterate/.iterate/caddy/registry-service-routes.caddy
 
-    # Step 4: external ingress host patterns for built-in services only.
-    import iterate_external_proxy
-    import iterate_frp_control "{ stream_close_delay 5m }"
-
-    # Same egress fallback behavior as HTTP listener.
-    reverse_proxy 127.0.0.1:19000
+	# EGRESS FALLBACK — same as :80 block above.
+	# Unmatched HTTPS requests are outbound calls from sandbox processes;
+	# forward to egress proxy so they reach the internet.
+	reverse_proxy 127.0.0.1:19000
 }

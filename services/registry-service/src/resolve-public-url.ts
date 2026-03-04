@@ -4,11 +4,11 @@ import {
   type PublicIngressUrlType,
 } from "@iterate-com/shared/jonasland/ingress-url";
 
-export type PublicBaseUrlType = PublicIngressUrlType;
+export type PublicBaseHostType = PublicIngressUrlType;
 
 export interface ResolvePublicUrlInput {
-  ITERATE_PUBLIC_BASE_URL?: string;
-  ITERATE_PUBLIC_BASE_URL_TYPE?: PublicBaseUrlType;
+  ITERATE_PUBLIC_BASE_HOST?: string;
+  ITERATE_PUBLIC_BASE_HOST_TYPE?: PublicBaseHostType;
   internalURL: string;
 }
 
@@ -19,8 +19,8 @@ export class ResolvePublicUrlError extends PublicIngressUrlError {
 export function resolvePublicUrl(input: ResolvePublicUrlInput): string {
   try {
     return resolvePublicIngressUrl({
-      publicBaseUrl: input.ITERATE_PUBLIC_BASE_URL,
-      publicBaseUrlType: input.ITERATE_PUBLIC_BASE_URL_TYPE,
+      publicBaseHost: input.ITERATE_PUBLIC_BASE_HOST,
+      publicBaseHostType: input.ITERATE_PUBLIC_BASE_HOST_TYPE,
       internalUrl: input.internalURL,
     });
   } catch (error) {

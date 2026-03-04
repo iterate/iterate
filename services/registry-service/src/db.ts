@@ -8,6 +8,7 @@ interface PersistedRoute {
   target: string;
   metadata: Record<string, string>;
   tags: string[];
+  caddyDirectives: string[];
   updatedAt: string;
 }
 
@@ -35,6 +36,13 @@ function toTags(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+function toCaddyDirectives(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => entry.length > 0);
+}
+
 function parseJson(value: unknown): unknown {
   if (typeof value !== "string") return undefined;
   try {
@@ -50,6 +58,7 @@ function parseRouteRow(row: Record<string, unknown>): PersistedRoute {
     target: String(row.target ?? ""),
     metadata: toRecord(parseJson(row.metadata_json)),
     tags: toTags(parseJson(row.tags_json)),
+    caddyDirectives: toCaddyDirectives(parseJson(row.caddy_directives_json)),
     updatedAt: String(row.updated_at ?? new Date(0).toISOString()),
   };
 }
@@ -111,6 +120,7 @@ export class ServicesStore {
         target TEXT NOT NULL,
         metadata_json TEXT NOT NULL DEFAULT '{}',
         tags_json TEXT NOT NULL DEFAULT '[]',
+        caddy_directives_json TEXT NOT NULL DEFAULT '[]',
         updated_at TEXT NOT NULL
       );
 
@@ -120,6 +130,17 @@ export class ServicesStore {
         updated_at TEXT NOT NULL
       );
     `);
+    const routeColumns = this.sqlite.prepare("PRAGMA table_info(routes)").all() as Array<{
+      name?: string;
+    }>;
+    const hasCaddyDirectivesJson = routeColumns.some(
+      (column) => column.name === "caddy_directives_json",
+    );
+    if (!hasCaddyDirectivesJson) {
+      this.sqlite.exec(`
+        ALTER TABLE routes ADD COLUMN caddy_directives_json TEXT NOT NULL DEFAULT '[]';
+      `);
+    }
   }
 
   async upsertRoute(input: {
@@ -127,32 +148,43 @@ export class ServicesStore {
     target: string;
     metadata?: Record<string, string>;
     tags?: string[];
+    caddyDirectives?: string[];
   }): Promise<PersistedRoute> {
     const host = input.host.trim().toLowerCase();
     const target = input.target.trim();
     const metadata = toRecord(input.metadata ?? {});
     const tags = toTags(input.tags ?? []);
+    const caddyDirectives = toCaddyDirectives(input.caddyDirectives ?? []);
     const updatedAt = new Date().toISOString();
 
     this.sqlite
       .prepare(
         `
-          INSERT INTO routes (host, target, metadata_json, tags_json, updated_at)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO routes (host, target, metadata_json, tags_json, caddy_directives_json, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(host) DO UPDATE SET
             target = excluded.target,
             metadata_json = excluded.metadata_json,
             tags_json = excluded.tags_json,
+            caddy_directives_json = excluded.caddy_directives_json,
             updated_at = excluded.updated_at
         `,
       )
-      .run(host, target, JSON.stringify(metadata), JSON.stringify(tags), updatedAt);
+      .run(
+        host,
+        target,
+        JSON.stringify(metadata),
+        JSON.stringify(tags),
+        JSON.stringify(caddyDirectives),
+        updatedAt,
+      );
 
     return {
       host,
       target,
       metadata,
       tags,
+      caddyDirectives,
       updatedAt,
     };
   }
@@ -166,7 +198,7 @@ export class ServicesStore {
   async listRoutes(): Promise<PersistedRoute[]> {
     const rows = this.sqlite
       .prepare(
-        "SELECT host, target, metadata_json, tags_json, updated_at FROM routes ORDER BY host ASC",
+        "SELECT host, target, metadata_json, tags_json, caddy_directives_json, updated_at FROM routes ORDER BY host ASC",
       )
       .all() as Record<string, unknown>[];
 

@@ -2,11 +2,6 @@ import { execFile as execFileCallback } from "node:child_process";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import {
-  normalizePublicIngressUrlType,
-  resolvePublicIngressUrl,
-  type PublicIngressUrlTypeInput,
-} from "@iterate-com/shared/jonasland/ingress-url";
 
 const execFile = promisify(execFileCallback);
 
@@ -15,6 +10,7 @@ interface RouteRecord {
   target: string;
   metadata?: Record<string, string>;
   tags?: string[];
+  caddyDirectives?: string[];
 }
 
 interface ManagedRoute {
@@ -22,7 +18,7 @@ interface ManagedRoute {
   host: string;
   target: string;
   cors: boolean;
-  streamCloseDelay?: string;
+  caddyDirectives: string[];
 }
 
 export interface ReconcileCaddyConfigInput {
@@ -30,8 +26,8 @@ export interface ReconcileCaddyConfigInput {
   caddyConfigDir: string;
   rootCaddyfilePath: string;
   caddyBinPath: string;
-  iteratePublicBaseUrl?: string;
-  iteratePublicBaseUrlType?: string;
+  iteratePublicBaseHost?: string;
+  iteratePublicBaseHostType?: string;
   forceReload?: boolean;
 }
 
@@ -41,6 +37,8 @@ export interface ReconcileCaddyConfigResult {
   removedFiles: string[];
   renderedFiles: string[];
 }
+
+const ROUTES_FRAGMENT_FILE_NAME = "registry-service-routes.caddy";
 
 function firstHostToken(host: string): string {
   const normalized = host.trim().toLowerCase();
@@ -61,95 +59,114 @@ function toMatcherId(value: string): string {
   return value.replaceAll(/[^a-z0-9_]+/g, "_").replaceAll(/^_+|_+$/g, "");
 }
 
-function resolvePublicHost(params: {
-  internalHost: string;
-  iteratePublicBaseUrl?: string;
-  iteratePublicBaseUrlType?: string;
-}): string | undefined {
-  const baseUrl = params.iteratePublicBaseUrl?.trim();
-  if (!baseUrl) return undefined;
-
-  const mode = normalizePublicIngressUrlType(
-    params.iteratePublicBaseUrlType as PublicIngressUrlTypeInput,
-  );
-  const resolved = resolvePublicIngressUrl({
-    publicBaseUrl: baseUrl,
-    publicBaseUrlType: mode,
-    internalUrl: `http://${params.internalHost}`,
-  });
-
-  return new URL(resolved).hostname;
+function toCaddyDirectives(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => entry.length > 0);
 }
 
-// Caddy's catch-all blocks already rewrite Host from X-Forwarded-Host
-// (via iterate_rewrite_xfh_to_host), so fragments only need host matchers.
-function renderReverseProxyBlock(params: {
-  route: ManagedRoute;
-  matcherIdBase: string;
-  hostToMatch: string;
-}): string[] {
-  const lines: string[] = [];
-  const matcherId = `${params.matcherIdBase}_host`;
+function normalizePublicBaseHostForRouting(rawHost?: string): string | undefined {
+  const trimmed = rawHost?.trim();
+  if (!trimmed) return undefined;
+  try {
+    const asUrl = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(trimmed)
+      ? new URL(trimmed)
+      : new URL(`https://${trimmed}`);
+    return asUrl.hostname;
+  } catch {
+    return undefined;
+  }
+}
 
-  lines.push(`@${matcherId} host ${params.hostToMatch}`);
+function routeHostsForMatcher(params: {
+  internalHost: string;
+  publicBaseHostForRouting?: string;
+}): string[] {
+  const service = firstHostToken(params.internalHost);
+  const hosts = [params.internalHost];
+  if (params.publicBaseHostForRouting && service.length > 0) {
+    // We intentionally accept both forms even when URL generation selects one mode.
+    hosts.push(`${service}.${params.publicBaseHostForRouting}`);
+    hosts.push(`${service}__${params.publicBaseHostForRouting}`);
+  }
+  return [...new Set(hosts)];
+}
+
+function renderRouteHandleBlock(params: {
+  route: ManagedRoute;
+  publicBaseHostForRouting?: string;
+}): string[] {
+  const matcherId = `${toMatcherId(`route_${params.route.slug}`)}_hosts`;
+  const matchHosts = routeHostsForMatcher({
+    internalHost: params.route.host,
+    publicBaseHostForRouting: params.publicBaseHostForRouting,
+  });
+  const lines: string[] = [];
+
+  lines.push(`@${matcherId} host ${matchHosts.join(" ")}`);
   lines.push(`handle @${matcherId} {`);
 
   if (params.route.cors) {
     lines.push("    import iterate_cors_openapi");
   }
 
-  if (params.route.streamCloseDelay) {
-    lines.push(`    reverse_proxy ${params.route.target} {`);
-    lines.push(`        stream_close_delay ${params.route.streamCloseDelay}`);
-    lines.push(`        header_up Host ${params.route.host}`);
-    lines.push("    }");
-  } else {
-    lines.push(`    reverse_proxy ${params.route.target} {`);
-    lines.push(`        header_up Host ${params.route.host}`);
-    lines.push("    }");
+  lines.push(`    reverse_proxy ${params.route.target} {`);
+  for (const directive of params.route.caddyDirectives) {
+    lines.push(`        ${directive}`);
   }
-
+  lines.push("    }");
   lines.push("}");
   return lines;
 }
 
-function renderRouteFragment(params: {
-  route: ManagedRoute;
-  iteratePublicBaseUrl?: string;
-  iteratePublicBaseUrlType?: string;
+function renderRoutesFragment(params: {
+  routes: ManagedRoute[];
+  iteratePublicBaseHost?: string;
 }): string {
-  const matcherBase = toMatcherId(`route_${params.route.slug}`);
   const lines: string[] = [];
+  const publicBaseHostForRouting = normalizePublicBaseHostForRouting(params.iteratePublicBaseHost);
 
-  lines.push(`# managed by registry-service (dynamic routes only)`);
-  lines.push(`# slug: ${params.route.slug}`);
-  lines.push(
-    ...renderReverseProxyBlock({
-      route: params.route,
-      matcherIdBase: `${matcherBase}_internal`,
-      hostToMatch: params.route.host,
-    }),
-  );
+  lines.push("# managed by registry-service (seeded + dynamic routes)");
+  lines.push("# Keep both subdomain and prefix host forms routable even when URL generation");
+  lines.push("# selects one mode. This is typically harmless and easier to reason about.");
 
-  const publicHost = resolvePublicHost({
-    internalHost: params.route.host,
-    iteratePublicBaseUrl: params.iteratePublicBaseUrl,
-    iteratePublicBaseUrlType: params.iteratePublicBaseUrlType,
-  });
-
-  if (publicHost && publicHost !== params.route.host) {
+  for (const route of params.routes) {
     lines.push("");
+    lines.push(`# slug: ${route.slug}`);
     lines.push(
-      ...renderReverseProxyBlock({
-        route: params.route,
-        matcherIdBase: `${matcherBase}_public`,
-        hostToMatch: publicHost,
+      ...renderRouteHandleBlock({
+        route,
+        publicBaseHostForRouting,
       }),
     );
   }
 
   lines.push("");
   return `${lines.join("\n")}`;
+}
+
+export function renderRoutesFragmentForTest(params: {
+  routes: Array<{
+    host: string;
+    target: string;
+    caddyDirectives?: string[];
+  }>;
+  iteratePublicBaseHost?: string;
+}): string {
+  const managedRoutes = buildManagedRoutes(
+    params.routes.map((route) => ({
+      host: route.host,
+      target: route.target,
+      caddyDirectives: route.caddyDirectives,
+      metadata: {},
+      tags: [],
+    })),
+  );
+  return renderRoutesFragment({
+    routes: managedRoutes,
+    iteratePublicBaseHost: params.iteratePublicBaseHost,
+  });
 }
 
 function buildManagedRoutes(routes: RouteRecord[]): ManagedRoute[] {
@@ -166,6 +183,7 @@ function buildManagedRoutes(routes: RouteRecord[]): ManagedRoute[] {
       host,
       target: route.target.trim(),
       cors: true,
+      caddyDirectives: toCaddyDirectives(route.caddyDirectives),
     });
   }
 
@@ -181,9 +199,9 @@ function rewriteRootCaddyImportForStage(params: {
   caddyConfigDir: string;
   stageDir: string;
 }): string {
-  const primaryImport = `${normalizeImportGlobPath(params.caddyConfigDir)}/*.caddy`;
-  const defaultImport = "/home/iterate/.iterate/caddy/*.caddy";
-  const stagedImport = `${normalizeImportGlobPath(params.stageDir)}/*.caddy`;
+  const primaryImport = `${normalizeImportGlobPath(params.caddyConfigDir)}/${ROUTES_FRAGMENT_FILE_NAME}`;
+  const defaultImport = `/home/iterate/.iterate/caddy/${ROUTES_FRAGMENT_FILE_NAME}`;
+  const stagedImport = `${normalizeImportGlobPath(params.stageDir)}/${ROUTES_FRAGMENT_FILE_NAME}`;
   return params.rootCaddyfileContent
     .replaceAll(primaryImport, stagedImport)
     .replaceAll(defaultImport, stagedImport);
@@ -216,20 +234,11 @@ export async function reconcileCaddyConfig(
   await mkdir(input.caddyConfigDir, { recursive: true });
 
   const managedRoutes = buildManagedRoutes(input.routes);
-  const desiredFiles = new Map<string, string>();
-  const desiredByName = new Map<string, string>();
-
-  for (const route of managedRoutes) {
-    const fileName = `${route.slug}.caddy`;
-    const filePath = join(input.caddyConfigDir, fileName);
-    const content = renderRouteFragment({
-      route,
-      iteratePublicBaseUrl: input.iteratePublicBaseUrl,
-      iteratePublicBaseUrlType: input.iteratePublicBaseUrlType,
-    });
-    desiredFiles.set(filePath, content);
-    desiredByName.set(fileName, content);
-  }
+  const routesFragmentPath = join(input.caddyConfigDir, ROUTES_FRAGMENT_FILE_NAME);
+  const desiredContent = renderRoutesFragment({
+    routes: managedRoutes,
+    iteratePublicBaseHost: input.iteratePublicBaseHost,
+  });
 
   const existingFiles = (await readdir(input.caddyConfigDir))
     .filter((entry) => entry.endsWith(".caddy"))
@@ -237,22 +246,20 @@ export async function reconcileCaddyConfig(
 
   const changedFiles: string[] = [];
   const previousContents = new Map<string, string | undefined>();
-  for (const [filePath, content] of desiredFiles.entries()) {
-    let current = "";
-    try {
-      current = await readFile(filePath, "utf8");
-    } catch {
-      current = "";
-    }
-
-    if (current === content) continue;
-    previousContents.set(filePath, current.length > 0 ? current : undefined);
-    changedFiles.push(filePath);
+  let current = "";
+  try {
+    current = await readFile(routesFragmentPath, "utf8");
+  } catch {
+    current = "";
+  }
+  if (current !== desiredContent) {
+    previousContents.set(routesFragmentPath, current.length > 0 ? current : undefined);
+    changedFiles.push(routesFragmentPath);
   }
 
   const removedFiles: string[] = [];
   for (const filePath of existingFiles) {
-    if (desiredFiles.has(filePath)) continue;
+    if (filePath === routesFragmentPath) continue;
     const previous = await readFile(filePath, "utf8").catch(() => "");
     previousContents.set(filePath, previous.length > 0 ? previous : undefined);
     removedFiles.push(filePath);
@@ -265,7 +272,7 @@ export async function reconcileCaddyConfig(
       reloaded: false,
       changedFiles,
       removedFiles,
-      renderedFiles: [...desiredFiles.keys()],
+      renderedFiles: [routesFragmentPath],
     };
   }
 
@@ -276,9 +283,7 @@ export async function reconcileCaddyConfig(
 
   try {
     await mkdir(stageDir, { recursive: true });
-    for (const [fileName, content] of desiredByName.entries()) {
-      await writeFile(join(stageDir, fileName), content, "utf8");
-    }
+    await writeFile(join(stageDir, ROUTES_FRAGMENT_FILE_NAME), desiredContent, "utf8");
 
     const rootContent = await readFile(input.rootCaddyfilePath, "utf8");
     const stagedRootPath = join(stageDir, "Caddyfile.staged");
@@ -297,11 +302,10 @@ export async function reconcileCaddyConfig(
       "caddyfile",
     ]);
 
-    for (const [filePath, content] of desiredFiles.entries()) {
-      if (!changedFiles.includes(filePath)) continue;
-      const tempPath = `${filePath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      await writeFile(tempPath, content, "utf8");
-      await rename(tempPath, filePath);
+    if (changedFiles.includes(routesFragmentPath)) {
+      const tempPath = `${routesFragmentPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await writeFile(tempPath, desiredContent, "utf8");
+      await rename(tempPath, routesFragmentPath);
     }
 
     for (const filePath of removedFiles) {
@@ -330,6 +334,6 @@ export async function reconcileCaddyConfig(
     reloaded: true,
     changedFiles,
     removedFiles,
-    renderedFiles: [...desiredFiles.keys()],
+    renderedFiles: [routesFragmentPath],
   };
 }

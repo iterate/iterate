@@ -108,7 +108,7 @@ describe.runIf(runFly)("clean fly ingress routes", () => {
     const ingressClient = createIngressProxyClient(ingressProxyConfig);
 
     const publicHost = `fly-routes-${randomUUID().slice(0, 8)}.${ingressProxyConfig.domain}`;
-    const publicBaseUrl = `https://${publicHost}`;
+    const publicBaseHost = publicHost;
     const expectedBasePattern = publicHost;
     const expectedWildcardPattern = `*__${publicHost}`;
     const createdRouteIds: string[] = [];
@@ -122,8 +122,8 @@ describe.runIf(runFly)("clean fly ingress routes", () => {
       }).create({
         name: `jonasland-e2e-clean-fly-ingress-routes-${randomUUID().slice(0, 8)}`,
         ingress: {
-          publicBaseUrl,
-          publicBaseUrlType: "prefix",
+          publicBaseHost,
+          publicBaseHostType: "prefix",
           createIngressProxyRoutes: true,
           ingressProxyBaseUrl: ingressProxyConfig.baseUrl,
           ingressProxyApiKey: ingressProxyConfig.apiToken,

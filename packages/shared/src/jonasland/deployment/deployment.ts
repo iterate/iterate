@@ -11,12 +11,7 @@ import {
   localHostForService,
   type ServiceManifestLike,
 } from "../index.ts";
-import {
-  createCaddyAdminClient,
-  createHostRoutedFetch,
-  isRetriableNetworkError,
-  networkErrorCode,
-} from "./deployment-utils.ts";
+import { createCaddyAdminClient, createHostRoutedFetch } from "./deployment-utils.ts";
 
 export type DeploymentCommandResult = {
   exitCode: number;
@@ -80,7 +75,7 @@ function assertValidEnvVarKey(key: string): void {
 }
 
 function shellSingleQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\"'\"'`)}'`;
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 /**

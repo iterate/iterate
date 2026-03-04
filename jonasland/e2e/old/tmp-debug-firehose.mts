@@ -23,8 +23,8 @@ const dep = await DockerDeployment.createWithOpts({ dockerImage: image }).create
   name: `debug-firehose-${Math.random().toString(36).slice(2, 8)}`,
   ingressHostPort,
   ingress: {
-    publicBaseUrl: ingressBaseUrl,
-    publicBaseUrlType: "prefix",
+    publicBaseHost: ingressBaseUrl,
+    publicBaseHostType: "prefix",
     createIngressProxyRoutes: true,
     ingressProxyBaseUrl: ingress.ingressProxyBaseUrl,
     ingressProxyApiKey: ingress.ingressProxyApiKey,

@@ -88,7 +88,7 @@ async function main(): Promise<void> {
   const provider = new FlyProvider(process.env as Record<string, string | undefined>);
   const externalId = process.env.FLY_ASSERT_EXTERNAL_ID ?? makeExternalId();
   const baseDomain = process.env.FLY_BASE_DOMAIN ?? "fly.dev";
-  const publicBaseUrl = `https://${externalId}.${baseDomain}`;
+  const publicBaseHost = `${externalId}.${baseDomain}`;
 
   let sandbox: Awaited<ReturnType<FlyProvider["create"]>> | null = null;
   const startedAt = Date.now();
@@ -100,8 +100,8 @@ async function main(): Promise<void> {
           externalId,
           name: externalId,
           envVars: {
-            ITERATE_PUBLIC_BASE_URL: publicBaseUrl,
-            ITERATE_PUBLIC_BASE_URL_TYPE: "subdomain",
+            ITERATE_PUBLIC_BASE_HOST: publicBaseHost,
+            ITERATE_PUBLIC_BASE_HOST_TYPE: "subdomain",
           },
           providerSnapshotId: image,
         });

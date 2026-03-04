@@ -60,7 +60,7 @@ const providers: ProviderCase[] = [
         localPort: ingressHostPort,
         cloudflaredBin: process.env.JONASLAND_E2E_CLOUDFLARED_BIN,
       });
-      const publicBaseUrl = buildIngressPublicBaseUrl({
+      const publicBaseHost = buildIngressPublicBaseUrl({
         testSlug: `example-${name}`,
         ingressProxyDomain: ingress.ingressProxyDomain,
       });
@@ -70,8 +70,8 @@ const providers: ProviderCase[] = [
         name,
         ingressHostPort,
         ingress: {
-          publicBaseUrl,
-          publicBaseUrlType: "prefix",
+          publicBaseHost,
+          publicBaseHostType: "prefix",
           createIngressProxyRoutes: true,
           ingressProxyBaseUrl: ingress.ingressProxyBaseUrl,
           ingressProxyApiKey: ingress.ingressProxyApiKey,

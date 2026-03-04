@@ -4,12 +4,14 @@ import { z } from "zod/v4";
 import packageJson from "../package.json" with { type: "json" };
 
 const RouteMetadata = z.record(z.string(), z.string());
+const RouteCaddyDirectives = z.array(z.string()).default([]);
 
 export const RouteRecord = z.object({
   host: z.string(),
   target: z.string(),
   metadata: RouteMetadata.default({}),
   tags: z.array(z.string()).default([]),
+  caddyDirectives: RouteCaddyDirectives,
   updatedAt: z.string(),
 });
 
@@ -18,6 +20,7 @@ export const RouteUpsertInput = z.object({
   target: z.string(),
   metadata: RouteMetadata.optional(),
   tags: z.array(z.string()).optional(),
+  caddyDirectives: z.array(z.string()).optional(),
 });
 
 export const ConfigEntry = z.object({
@@ -206,14 +209,14 @@ const nonEmptyStringWithTrimDefault = (defaultValue: string) =>
     }, z.string().min(1).optional())
     .default(defaultValue);
 
-const optionalNonEmptyStringWithTrim = () =>
+const _optionalNonEmptyStringWithTrim = () =>
   z.preprocess((value) => {
     if (typeof value !== "string") return value;
     const trimmed = value.trim();
     return trimmed.length === 0 ? undefined : trimmed;
   }, z.string().min(1).optional());
 
-const publicBaseUrlType = z
+const publicBaseHostType = z
   .preprocess((value) => {
     if (typeof value !== "string") return value;
     const trimmed = value.trim();
@@ -230,8 +233,8 @@ export const RegistryServiceEnv = z.object({
   CADDY_CONFIG_DIR: nonEmptyStringWithTrimDefault("/home/iterate/.iterate/caddy"),
   CADDY_ROOT_CADDYFILE: nonEmptyStringWithTrimDefault("/home/iterate/.iterate/caddy/Caddyfile"),
   CADDY_BIN_PATH: nonEmptyStringWithTrimDefault("/usr/local/bin/caddy"),
-  ITERATE_PUBLIC_BASE_URL: nonEmptyStringWithTrimDefault("http://iterate.localhost"),
-  ITERATE_PUBLIC_BASE_URL_TYPE: publicBaseUrlType,
+  ITERATE_PUBLIC_BASE_HOST: nonEmptyStringWithTrimDefault("iterate.localhost"),
+  ITERATE_PUBLIC_BASE_HOST_TYPE: publicBaseHostType,
 });
 
 export type RegistryServiceEnv = z.infer<typeof RegistryServiceEnv>;
