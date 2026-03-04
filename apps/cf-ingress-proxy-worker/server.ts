@@ -199,13 +199,15 @@ function hostMatchesPattern(host: string, pattern: string): boolean {
   return new RegExp(`^${regexPattern}$`).test(host);
 }
 
-function comparePatternSpecificity(a: RoutePatternRow, b: RoutePatternRow): number {
+function comparePatternSpecificity(
+  a: { pattern: string; id: number },
+  b: { pattern: string; id: number },
+): number {
   const aHasWildcard = a.pattern.includes("*");
   const bHasWildcard = b.pattern.includes("*");
   if (aHasWildcard !== bHasWildcard) {
     return aHasWildcard ? 1 : -1;
   }
-
   const lengthDelta = b.pattern.length - a.pattern.length;
   if (lengthDelta !== 0) return lengthDelta;
   return a.id - b.id;

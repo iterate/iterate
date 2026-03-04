@@ -154,7 +154,7 @@ const nonEmptyStringWithTrimDefault = (defaultValue: string) =>
     .default(defaultValue);
 
 export const ExampleServiceEnv = z.object({
-  EXAMPLE_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(19030),
+  EXAMPLE_SERVICE_PORT: z.coerce.number().int().min(0).max(65535).default(0),
   EXAMPLE_DB_PATH: nonEmptyStringWithTrimDefault("/var/lib/jonasland/example.sqlite"),
 });
 
@@ -174,7 +174,7 @@ export const exampleServiceManifest = {
   name: packageJson.name,
   slug: "example",
   version: packageJson.version ?? "0.0.0",
-  port: 19030,
+  port: 0,
   serverEntryPoint: "services/example/src/server.ts",
   orpcContract: exampleContract,
   envVars: ExampleServiceEnv,

@@ -16,6 +16,15 @@ type DockerSdkClient = Awaited<ReturnType<typeof DockerClient.fromDockerConfig>>
 type DockerCreateBody = Parameters<DockerSdkClient["containerCreate"]>[0];
 type DockerHostConfig = NonNullable<DockerCreateBody["HostConfig"]>;
 
+export interface DockerHostSyncConfig {
+  repoRoot: string;
+  gitDir?: string;
+  commonDir?: string;
+  repoCheckoutMountPath?: string;
+  gitDirMountPath?: string;
+  commonDirMountPath?: string;
+}
+
 export interface DockerDeploymentLocator {
   provider: "docker";
   containerId: string;
@@ -26,14 +35,17 @@ export interface DockerDeploymentOpts extends Omit<DeploymentOpts, "env"> {
   env?: Record<string, string>;
   dockerImage?: string;
   dockerHostConfig?: DockerHostConfig;
-  dockerHostSync?: {
-    repoRoot: string;
-    gitDir?: string;
-    commonDir?: string;
-    repoCheckoutMountPath?: string;
-    gitDirMountPath?: string;
-    commonDirMountPath?: string;
-  };
+  /**
+   * Enable host-repo sync during sandbox boot.
+   *
+   * This sets `DOCKER_HOST_SYNC_ENABLED=true` inside the container and mounts
+   * host checkout paths so `jonasland/sandbox/start.sh` can run
+   * `providers/docker/sync-repo-from-host.sh` before pidnap starts.
+   *
+   * - `true`: derive host paths from `DOCKER_HOST_GIT_*` env vars on the caller.
+   * - object: use explicit host paths/mounts.
+   */
+  dockerHostSync?: true | DockerHostSyncConfig;
 }
 
 let dockerClientPromise: Promise<DockerClient> | undefined;
@@ -259,10 +271,8 @@ function dedupeStringList(values: Array<string | undefined>): string[] | undefin
   return unique.length > 0 ? unique : undefined;
 }
 
-function resolveDockerHostSync(
-  opts: DockerDeploymentOpts,
-): NonNullable<DockerDeploymentOpts["dockerHostSync"]> | null {
-  if (opts.dockerHostSync) {
+function resolveDockerHostSync(opts: DockerDeploymentOpts): DockerHostSyncConfig | null {
+  if (opts.dockerHostSync && opts.dockerHostSync !== true) {
     return {
       repoCheckoutMountPath: "/host/repo-checkout",
       gitDirMountPath: "/host/gitdir",
@@ -271,7 +281,7 @@ function resolveDockerHostSync(
     };
   }
 
-  if (process.env.DOCKER_HOST_SYNC_ENABLED !== "true") {
+  if (opts.dockerHostSync !== true && process.env.DOCKER_HOST_SYNC_ENABLED !== "true") {
     return null;
   }
 

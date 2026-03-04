@@ -11,7 +11,12 @@ import {
   localHostForService,
   type ServiceManifestLike,
 } from "../index.ts";
-import { createCaddyAdminClient, createHostRoutedFetch } from "./deployment-utils.ts";
+import {
+  createCaddyAdminClient,
+  createHostRoutedFetch,
+  isRetriableNetworkError,
+  networkErrorCode,
+} from "./deployment-utils.ts";
 
 export type DeploymentCommandResult = {
   exitCode: number;
@@ -66,6 +71,16 @@ export function throwIfAborted(signal?: AbortSignal): void {
   throw signal.reason instanceof Error
     ? signal.reason
     : new Error(`Operation aborted${signal.reason ? `: ${String(signal.reason)}` : ""}`);
+}
+
+function assertValidEnvVarKey(key: string): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    throw new Error(`Invalid environment variable key: ${key}`);
+  }
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\"'\"'`)}'`;
 }
 
 /**
@@ -127,12 +142,16 @@ export class Deployment<
     return provisioned.locator;
   }
 
+  private routedFetch(host: string): (request: Request) => Promise<Response> {
+    return createHostRoutedFetch({ baseUrl: this.baseUrl, host });
+  }
+
   get pidnapService(): PidnapClient {
     this.assertRunning();
     if (this._pidnapService) return this._pidnapService;
     this._pidnapService = createPidnapClient({
       url: `${this.baseUrl}/rpc`,
-      fetch: createHostRoutedFetch({ baseUrl: this.baseUrl, host: "pidnap.iterate.localhost" }),
+      fetch: this.routedFetch("pidnap.iterate.localhost"),
     });
     return this._pidnapService;
   }
@@ -152,7 +171,7 @@ export class Deployment<
     if (this._registryService) return this._registryService;
     this._registryService = createRegistryClient({
       url: `${this.baseUrl}/orpc`,
-      fetch: createHostRoutedFetch({ baseUrl: this.baseUrl, host: "registry.iterate.localhost" }),
+      fetch: this.routedFetch("registry.iterate.localhost"),
     });
     return this._registryService;
   }
@@ -164,7 +183,7 @@ export class Deployment<
       env: {},
       manifest: eventsServiceManifest,
       url: `${this.baseUrl}/orpc`,
-      fetch: createHostRoutedFetch({ baseUrl: this.baseUrl, host: "events.iterate.localhost" }),
+      fetch: this.routedFetch("events.iterate.localhost"),
     });
     return this._eventsService;
   }
@@ -188,6 +207,7 @@ export class Deployment<
   async waitUntilAlive(params?: { signal?: AbortSignal }): Promise<void> {
     this.assertRunning();
     const signal = params?.signal;
+    const startedAt = Date.now();
 
     console.log(`[deployment] waiting for caddy at ${this.baseUrl}/healthz...`);
     await pWaitFor(
@@ -195,21 +215,24 @@ export class Deployment<
         const resp = await fetch(`${this.baseUrl}/healthz`, { signal }).catch(() => null);
         return resp?.ok ?? false;
       },
-      { interval: 250, signal },
+      { interval: 500, signal },
     );
-    console.log(`[deployment] caddy alive, waiting for core processes...`);
+    console.log(`[deployment] caddy alive, waiting for core processes + routes...`);
 
-    const result = await this.pidnapService.processes.waitFor({
-      processes: { caddy: "healthy", registry: "healthy", events: "healthy" },
-      timeoutMs: 120_000,
-    });
-    if (!result.allMet) {
-      const summary = Object.entries(result.results)
-        .map(([name, r]) => `${name}: state=${r.state} healthy=${String(r.healthy)}`)
-        .join(", ");
-      throw new Error(`[deployment] core processes not ready: ${summary}`);
-    }
-    console.log(`[deployment] all core processes healthy, verifying routes...`);
+    await pWaitFor(
+      async () => {
+        try {
+          const result = await this.pidnapService.processes.waitFor({
+            processes: { caddy: "running", registry: "running", events: "running" },
+            timeoutMs: 5_000,
+          });
+          return result.allMet;
+        } catch {
+          return false;
+        }
+      },
+      { interval: 1_000, signal },
+    );
 
     const routeChecks = [
       { host: "registry.iterate.localhost", path: "/orpc/service/health" },
@@ -221,40 +244,27 @@ export class Deployment<
           const resp = await this.fetch(check.host, check.path).catch(() => null);
           return resp?.ok ?? false;
         },
-        { interval: 250, signal },
+        { interval: 1_000, signal },
       );
     }
-    console.log(`[deployment] all service routes verified`);
+    console.log(`[deployment] alive in ${String(Date.now() - startedAt)}ms`);
   }
 
   async fetch(host: string, path: string, init?: RequestInit): Promise<Response> {
     this.assertRunning();
-    const url = new URL(path.startsWith("/") ? path : `/${path}`, this.baseUrl);
-    const headers = new Headers(init?.headers);
-    headers.set("x-forwarded-host", host);
-    return await fetch(url, { ...init, headers });
-  }
-
-  private createOrpcClient<TClient>(params: {
-    host: string;
-    path: "/rpc" | "/orpc";
-    create: (options: { url: string; fetch: (request: Request) => Promise<Response> }) => TClient;
-  }): TClient {
-    return params.create({
-      url: `http://${params.host}${params.path}`,
-      fetch: createHostRoutedFetch({ baseUrl: this.baseUrl, host: params.host }),
-    });
+    const req = new Request(new URL(path.startsWith("/") ? path : `/${path}`, this.baseUrl), init);
+    return await this.routedFetch(host)(req);
   }
 
   createServiceClient<TContract extends AnyContractRouter>(params: {
     manifest: ServiceManifestLike<TContract>;
   }): ContractRouterClient<TContract> {
     const host = localHostForService({ slug: params.manifest.slug });
-    return this.createOrpcClient({
-      host,
-      path: "/orpc",
-      create: ({ url, fetch }) =>
-        createOrpcRpcServiceClient({ env: {}, manifest: params.manifest, url, fetch }),
+    return createOrpcRpcServiceClient({
+      env: {},
+      manifest: params.manifest,
+      url: `${this.baseUrl}/orpc`,
+      fetch: this.routedFetch(host),
     });
   }
 
@@ -265,6 +275,25 @@ export class Deployment<
       opts: this.opts,
       cmd,
     });
+  }
+
+  async setEnvVars(env: Record<string, string>): Promise<void> {
+    this.assertRunning();
+    const entries = Object.entries(env);
+    if (entries.length === 0) return;
+
+    for (const [key] of entries) {
+      assertValidEnvVarKey(key);
+    }
+
+    const lines = entries.map(
+      ([key, value]) => `echo ${shellSingleQuote(`${key}=${value}`)} >> ~/.iterate/.env`,
+    );
+
+    const result = await this.exec(["sh", "-ec", ["mkdir -p ~/.iterate", ...lines].join("\n")]);
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed writing env vars to ~/.iterate/.env: ${result.output}`);
+    }
   }
 
   async logs(): Promise<string> {

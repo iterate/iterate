@@ -230,7 +230,7 @@ export const RegistryServiceEnv = z.object({
   CADDY_CONFIG_DIR: nonEmptyStringWithTrimDefault("/home/iterate/.iterate/caddy"),
   CADDY_ROOT_CADDYFILE: nonEmptyStringWithTrimDefault("/home/iterate/.iterate/caddy/Caddyfile"),
   CADDY_BIN_PATH: nonEmptyStringWithTrimDefault("/usr/local/bin/caddy"),
-  ITERATE_PUBLIC_BASE_URL: optionalNonEmptyStringWithTrim(),
+  ITERATE_PUBLIC_BASE_URL: nonEmptyStringWithTrimDefault("http://iterate.localhost"),
   ITERATE_PUBLIC_BASE_URL_TYPE: publicBaseUrlType,
 });
 

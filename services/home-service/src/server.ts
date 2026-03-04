@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
+import { createRegistryClient } from "@iterate-com/registry-service";
 import {
   createServiceRequestLogger,
   getOtelRuntimeConfig,
@@ -11,7 +12,45 @@ import {
 
 const serviceName = "jonasland-home-service";
 
-const platformLinks = [
+type LinkSeed = {
+  label: string;
+  host: string;
+  path: string;
+  hint?: string;
+};
+
+type ServiceSeed = {
+  label: string;
+  host: string;
+  frontendPath?: string;
+  apiPath?: string;
+  docsPath?: string;
+  frontendHint?: string;
+  apiHint?: string;
+  docsHint?: string;
+};
+
+type RenderLink = {
+  label: string;
+  href: string;
+  hint?: string;
+};
+
+type RenderService = {
+  label: string;
+  frontendURL?: string;
+  apiURL?: string;
+  docsURL?: string;
+  frontendHint?: string;
+  apiHint?: string;
+  docsHint?: string;
+};
+
+type RouteRecord = Awaited<
+  ReturnType<ReturnType<typeof createRegistryClient>["routes"]["list"]>
+>["routes"][number];
+
+const platformLinks: ReadonlyArray<LinkSeed> = [
   { label: "Home", host: "home.iterate.localhost", path: "/" },
   { label: "Docs", host: "docs.iterate.localhost", path: "/" },
   {
@@ -24,7 +63,7 @@ const platformLinks = [
   { label: "Caddy Manager", host: "caddymanager.iterate.localhost", path: "/" },
 ] as const;
 
-const platformServices = [
+const platformServices: ReadonlyArray<ServiceSeed> = [
   {
     label: "Events Service",
     host: "events.iterate.localhost",
@@ -55,7 +94,7 @@ const platformServices = [
   },
 ] as const;
 
-const services = [
+const services: ReadonlyArray<ServiceSeed> = [
   {
     label: "Orders Service",
     host: "orders.iterate.localhost",
@@ -88,6 +127,7 @@ function getEnv() {
       process.env.HOME_SERVICE_PORT ?? process.env.PORT ?? "19030",
       "HOME_SERVICE_PORT",
     ),
+    registryOrpcURL: process.env.HOME_REGISTRY_ORPC_URL?.trim() || "http://127.0.0.1:17310/orpc",
   };
 }
 
@@ -100,10 +140,90 @@ function writeJson(response: ServerResponse, statusCode: number, body: unknown):
   response.end(JSON.stringify(body));
 }
 
-function buildHomeHtml(): string {
-  const platformLinksJson = JSON.stringify(platformLinks).replaceAll("<", "\\u003c");
-  const platformServicesJson = JSON.stringify(platformServices).replaceAll("<", "\\u003c");
-  const servicesJson = JSON.stringify(services).replaceAll("<", "\\u003c");
+function toInternalURL(host: string, path: string): string {
+  return `http://${host}${path}`;
+}
+
+async function resolvePublicURL(
+  registry: ReturnType<typeof createRegistryClient>,
+  internalURL: string,
+): Promise<string> {
+  const resolved = await registry.getPublicURL({ internalURL });
+  return resolved.publicURL;
+}
+
+async function resolveLink(
+  registry: ReturnType<typeof createRegistryClient>,
+  link: LinkSeed,
+): Promise<RenderLink> {
+  const internalURL = toInternalURL(link.host, link.path);
+  return {
+    label: link.label,
+    href: await resolvePublicURL(registry, internalURL),
+    ...(link.hint ? { hint: link.hint } : {}),
+  };
+}
+
+async function resolveService(
+  registry: ReturnType<typeof createRegistryClient>,
+  service: ServiceSeed,
+): Promise<RenderService> {
+  const frontendURL =
+    service.frontendPath === undefined
+      ? undefined
+      : await resolvePublicURL(registry, toInternalURL(service.host, service.frontendPath));
+  const apiURL =
+    service.apiPath === undefined
+      ? undefined
+      : await resolvePublicURL(registry, toInternalURL(service.host, service.apiPath));
+  const docsURL =
+    service.docsPath === undefined
+      ? undefined
+      : await resolvePublicURL(registry, toInternalURL(service.host, service.docsPath));
+
+  return {
+    label: service.label,
+    ...(frontendURL ? { frontendURL } : {}),
+    ...(apiURL ? { apiURL } : {}),
+    ...(docsURL ? { docsURL } : {}),
+    ...(service.frontendHint ? { frontendHint: service.frontendHint } : {}),
+    ...(service.apiHint ? { apiHint: service.apiHint } : {}),
+    ...(service.docsHint ? { docsHint: service.docsHint } : {}),
+  };
+}
+
+async function resolveHomeData(registry: ReturnType<typeof createRegistryClient>): Promise<{
+  platformLinks: RenderLink[];
+  platformServices: RenderService[];
+  services: RenderService[];
+  routes: RouteRecord[];
+}> {
+  const [resolvedPlatformLinks, resolvedPlatformServices, resolvedServices, routesResult] =
+    await Promise.all([
+      Promise.all(platformLinks.map((link) => resolveLink(registry, link))),
+      Promise.all(platformServices.map((service) => resolveService(registry, service))),
+      Promise.all(services.map((service) => resolveService(registry, service))),
+      registry.routes.list({}),
+    ]);
+
+  return {
+    platformLinks: resolvedPlatformLinks,
+    platformServices: resolvedPlatformServices,
+    services: resolvedServices,
+    routes: routesResult.routes,
+  };
+}
+
+function buildHomeHtml(data: {
+  platformLinks: RenderLink[];
+  platformServices: RenderService[];
+  services: RenderService[];
+  routes: RouteRecord[];
+}): string {
+  const platformLinksJson = JSON.stringify(data.platformLinks).replaceAll("<", "\\u003c");
+  const platformServicesJson = JSON.stringify(data.platformServices).replaceAll("<", "\\u003c");
+  const servicesJson = JSON.stringify(data.services).replaceAll("<", "\\u003c");
+  const routesJson = JSON.stringify(data.routes).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -259,6 +379,8 @@ function buildHomeHtml(): string {
         <section class="column">
           <h2>Services</h2>
           <ul id="service-list" class="service-list" aria-label="Service links"></ul>
+          <p class="section-label">Registry Routes</p>
+          <ul id="route-list" class="service-list" aria-label="Registry routes"></ul>
         </section>
       </div>
     </main>
@@ -266,29 +388,26 @@ function buildHomeHtml(): string {
       const platformLinks = ${platformLinksJson};
       const platformServices = ${platformServicesJson};
       const services = ${servicesJson};
-      const port = window.location.port ? ":" + window.location.port : "";
-      const protocol = window.location.protocol || "http:";
-      const hrefFor = (host, path) => protocol + "//" + host + port + path;
+      const routes = ${routesJson};
 
       const platformList = document.getElementById("platform-links");
       platformList.innerHTML = platformLinks.map((item) => {
-        const href = hrefFor(item.host, item.path);
         const hint = item.hint ? '<div class="platform-hint">' + item.hint + "</div>" : "";
-        return '<li class="platform-item"><span class="platform-label">' + item.label + "</span>" + hint + '<a class="url-line" href="' + href + '" title="' + href + '">' + href + "</a></li>";
+        return '<li class="platform-item"><span class="platform-label">' + item.label + "</span>" + hint + '<a class="url-line" href="' + item.href + '" title="' + item.href + '">' + item.href + "</a></li>";
       }).join("");
 
-      const renderRow = (name, host, path, emptyText) => {
-        const value = path
-          ? '<a class="url-line" href="' + hrefFor(host, path) + '" title="' + hrefFor(host, path) + '">' + hrefFor(host, path) + "</a>"
+      const renderRow = (name, url, emptyText) => {
+        const value = url
+          ? '<a class="url-line" href="' + url + '" title="' + url + '">' + url + "</a>"
           : '<span class="row-empty">' + (emptyText || "n/a") + "</span>";
         return '<div class="service-row"><span class="row-label">' + name + "</span>" + value + "</div>";
       };
 
       const renderServiceItem = (service) => {
         return '<li class="service-item"><h3 class="service-name">' + service.label + '</h3><div class="service-rows">'
-          + renderRow("Frontend", service.host, service.frontendPath, service.frontendHint || "has no frontend")
-          + renderRow("API", service.host, service.apiPath, service.apiHint || "has no api")
-          + renderRow("Docs", service.host, service.docsPath, service.docsHint || "has no docs")
+          + renderRow("Frontend", service.frontendURL, service.frontendHint || "has no frontend")
+          + renderRow("API", service.apiURL, service.apiHint || "has no api")
+          + renderRow("Docs", service.docsURL, service.docsHint || "has no docs")
           + "</div></li>";
       };
 
@@ -297,6 +416,14 @@ function buildHomeHtml(): string {
 
       const serviceList = document.getElementById("service-list");
       serviceList.innerHTML = services.map(renderServiceItem).join("");
+
+      const routeList = document.getElementById("route-list");
+      routeList.innerHTML = routes.length === 0
+        ? '<li class="service-item"><span class="row-empty">no routes registered</span></li>'
+        : routes.map((route) => {
+            const tags = Array.isArray(route.tags) && route.tags.length > 0 ? " [" + route.tags.join(",") + "]" : "";
+            return '<li class="service-item"><span class="platform-label">' + route.host + tags + '</span><span class="row-empty">' + route.target + "</span></li>";
+          }).join("");
     </script>
   </body>
 </html>`;
@@ -309,11 +436,12 @@ export async function startHomeService(options?: {
   const env = getEnv();
   const host = options?.host ?? env.host;
   const port = options?.port ?? env.port;
+  const registry = createRegistryClient({ url: env.registryOrpcURL });
 
   initializeServiceOtel(serviceName);
   initializeServiceEvlog(serviceName);
 
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     const requestId = randomUUID();
     const requestLog = createServiceRequestLogger({
       requestId,
@@ -344,7 +472,47 @@ export async function startHomeService(options?: {
       if (req.method === "GET") {
         status = 200;
         res.writeHead(status, { "content-type": "text/html; charset=utf-8" });
-        res.end(buildHomeHtml());
+        const homeData = await resolveHomeData(registry).catch((error) => {
+          serviceLog.warn({
+            event: "home.registry.resolve_failed",
+            message: toError(error).message,
+          });
+          return {
+            platformLinks: platformLinks.map((link) => ({
+              label: link.label,
+              href: toInternalURL(link.host, link.path),
+              ...(link.hint ? { hint: link.hint } : {}),
+            })),
+            platformServices: platformServices.map((service) => ({
+              label: service.label,
+              ...(service.frontendPath
+                ? { frontendURL: toInternalURL(service.host, service.frontendPath) }
+                : {}),
+              ...(service.apiPath ? { apiURL: toInternalURL(service.host, service.apiPath) } : {}),
+              ...(service.docsPath
+                ? { docsURL: toInternalURL(service.host, service.docsPath) }
+                : {}),
+              ...(service.frontendHint ? { frontendHint: service.frontendHint } : {}),
+              ...(service.apiHint ? { apiHint: service.apiHint } : {}),
+              ...(service.docsHint ? { docsHint: service.docsHint } : {}),
+            })),
+            services: services.map((service) => ({
+              label: service.label,
+              ...(service.frontendPath
+                ? { frontendURL: toInternalURL(service.host, service.frontendPath) }
+                : {}),
+              ...(service.apiPath ? { apiURL: toInternalURL(service.host, service.apiPath) } : {}),
+              ...(service.docsPath
+                ? { docsURL: toInternalURL(service.host, service.docsPath) }
+                : {}),
+              ...(service.frontendHint ? { frontendHint: service.frontendHint } : {}),
+              ...(service.apiHint ? { apiHint: service.apiHint } : {}),
+              ...(service.docsHint ? { docsHint: service.docsHint } : {}),
+            })),
+            routes: [],
+          };
+        });
+        res.end(buildHomeHtml(homeData));
         return;
       }
 

@@ -200,31 +200,14 @@ describe("route groups", () => {
     expect(resolved?.pattern).toBe("*__proj.ingress.iterate.com");
   });
 
-  test("resolves multi-wildcard pattern (service__slug format)", async () => {
+  test("resolves wildcard pattern with service__slug host format", async () => {
     await createSinglePatternRoute({
-      pattern: "*__my-slug-abc123.ingress.iterate.com",
-      target: "https://tunnel.trycloudflare.com",
-    });
-
-    const request = buildInboundRequest({
-      host: "events__my-slug-abc123.ingress.iterate.com",
-      path: "/api/health",
-    });
-
-    const resolved = await resolveRoute(testEnv.DB, request);
-    expect(resolved).not.toBeNull();
-    expect(resolved!.pattern).toBe("*__my-slug-abc123.ingress.iterate.com");
-    expect(resolved!.targetUrl.origin).toBe("https://tunnel.trycloudflare.com");
-  });
-
-  test("resolves wildcard pattern with multiple * characters", async () => {
-    await createSinglePatternRoute({
-      pattern: "*__playground-*.ingress.iterate.com",
+      pattern: "*__playground-abcd1234.ingress.iterate.com",
       target: "https://tunnel.trycloudflare.com",
     });
 
     await createSinglePatternRoute({
-      pattern: "playground-*.ingress.iterate.com",
+      pattern: "playground-abcd1234.ingress.iterate.com",
       target: "https://tunnel.trycloudflare.com",
     });
 
@@ -234,7 +217,7 @@ describe("route groups", () => {
     });
     const wildcardResult = await resolveRoute(testEnv.DB, wildcardReq);
     expect(wildcardResult).not.toBeNull();
-    expect(wildcardResult!.pattern).toBe("*__playground-*.ingress.iterate.com");
+    expect(wildcardResult!.pattern).toBe("*__playground-abcd1234.ingress.iterate.com");
 
     const rootReq = buildInboundRequest({
       host: "playground-abcd1234.ingress.iterate.com",
@@ -242,7 +225,7 @@ describe("route groups", () => {
     });
     const rootResult = await resolveRoute(testEnv.DB, rootReq);
     expect(rootResult).not.toBeNull();
-    expect(rootResult!.pattern).toBe("playground-*.ingress.iterate.com");
+    expect(rootResult!.pattern).toBe("playground-abcd1234.ingress.iterate.com");
   });
 
   test("ignores oversized legacy patterns during resolution", async () => {

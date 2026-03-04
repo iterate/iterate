@@ -30,7 +30,7 @@ const cases = [
     id: "fly-default",
     enabled: runFly,
     create: flyFactory,
-    timeoutOffsetMs: 560_000,
+    timeoutOffsetMs: 300_000,
   },
 ].filter((entry) => entry.enabled);
 

@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@iterate-com/registry-service": "workspace:*",
     "@iterate-com/shared": "workspace:*"
   },
   "devDependencies": {

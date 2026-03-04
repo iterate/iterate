@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { createAdaptorServer, type HttpBindings } from "@hono/node-server";
 import { RESPONSE_ALREADY_SENT } from "@hono/node-server/utils/response";
@@ -208,9 +209,11 @@ app.use("*", async (c) => {
 
 const server = createAdaptorServer({ fetch: app.fetch });
 server.listen(port, "0.0.0.0", () => {
+  const address = server.address();
+  const boundPort = address && typeof address === "object" ? (address as AddressInfo).port : port;
   void registerServiceWithRegistry({
     manifest: exampleServiceManifest,
-    port,
+    port: boundPort,
     metadata: { openapiPath: "/api/openapi.json", title: "Example Service" },
     tags: ["openapi", "example"],
   });

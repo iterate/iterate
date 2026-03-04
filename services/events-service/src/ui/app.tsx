@@ -31,10 +31,10 @@ const FIREHOSE_PAGE_PATH = "/firehose";
 const TRANSPORT_QUERY_PARAM = "transport";
 
 const runtimeServicePort = Number.parseInt(location.port, 10);
-const runtimeServiceManifest =
-  Number.isFinite(runtimeServicePort) && runtimeServicePort > 0
-    ? { ...serviceManifest, port: runtimeServicePort }
-    : serviceManifest;
+const hasExplicitPort = Number.isFinite(runtimeServicePort) && runtimeServicePort > 0;
+const runtimeServiceManifest = hasExplicitPort
+  ? { ...serviceManifest, port: runtimeServicePort }
+  : serviceManifest;
 
 const serviceClientOptions = {
   env: { ITERATE_PROJECT_BASE_URL: location.origin },

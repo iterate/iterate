@@ -65,7 +65,7 @@ jobs:
           fi
           echo "base_url=$base_url" >> "$GITHUB_OUTPUT"
           echo "Deployed ephemeral worker at: $base_url"
-      - name: Run live Vitest E2E against ephemeral deployment
+      - name: Run live Vitest E2E against ci-ingress
         working-directory: apps/cf-ingress-proxy-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

@@ -1,6 +1,5 @@
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { Readable } from "node:stream";
 import { CaddyClient } from "@accelerated-software-development/caddy-api-client";
 
 export function networkErrorCode(error: unknown): string | undefined {
@@ -53,153 +52,81 @@ export function toEnvRecord(env?: Record<string, string> | string[]): Record<str
   return record;
 }
 
-function parseResponseHeaders(raw: Record<string, string | string[] | undefined>): Headers {
-  const headers = new Headers();
-  for (const [key, value] of Object.entries(raw)) {
-    if (value === undefined) continue;
-    if (Array.isArray(value)) {
-      for (const entry of value) {
-        headers.append(key, entry);
-      }
-      continue;
-    }
-    headers.set(key, String(value));
-  }
-  return headers;
-}
-
-export async function nodeHttpRequest(params: {
+/**
+ * HTTP/1.1 request that buffers the entire response body.
+ * Uses node:http / node:https to avoid HTTP/2 connection-reuse issues
+ * with Fly's proxy layer.
+ */
+function http1Request(params: {
   url: URL;
   method: string;
-  headers: Headers;
+  headers: Record<string, string>;
   body?: Buffer;
-  buffered?: boolean;
 }): Promise<Response> {
-  return await new Promise<Response>((resolve, reject) => {
-    const requestImpl = params.url.protocol === "https:" ? httpsRequest : httpRequest;
-    const req = requestImpl(
-      params.url,
-      {
-        method: params.method,
-        headers: Object.fromEntries(params.headers.entries()),
-      },
-      (res) => {
-        const responseHeaders = parseResponseHeaders(
-          res.headers as Record<string, string | string[] | undefined>,
-        );
-        const status = res.statusCode ?? 500;
-
-        if (params.buffered) {
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk: Buffer | string) => {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          });
-          res.on("end", () => {
-            resolve(
-              new Response(Buffer.concat(chunks), {
-                status,
-                statusText: res.statusMessage ?? "",
-                headers: responseHeaders,
-              }),
-            );
-          });
-          return;
+  return new Promise<Response>((resolve, reject) => {
+    const impl = params.url.protocol === "https:" ? httpsRequest : httpRequest;
+    const req = impl(params.url, { method: params.method, headers: params.headers }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => {
+        const h = new Headers();
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (v === undefined) continue;
+          if (Array.isArray(v)) for (const e of v) h.append(k, e);
+          else h.set(k, v);
         }
-
-        const responseBody =
-          status === 204 || status === 304
-            ? undefined
-            : (Readable.toWeb(res as unknown as Readable) as ReadableStream<Uint8Array>);
-        resolve(
-          new Response(responseBody, {
-            status,
-            statusText: res.statusMessage ?? "",
-            headers: responseHeaders,
-          }),
-        );
-      },
-    );
-
+        resolve(new Response(Buffer.concat(chunks), { status: res.statusCode ?? 500, headers: h }));
+      });
+    });
     req.on("error", reject);
-    if (params.body !== undefined) {
-      req.write(params.body);
-    }
+    if (params.body) req.write(params.body);
     req.end();
   });
 }
 
-async function forwardedRequest(params: {
-  baseUrl: string;
-  host: string;
-  path: string;
-  method: string;
-  headers?: RequestInit["headers"];
-  body?: Buffer;
-  buffered?: boolean;
-  defaultContentType?: string;
-}): Promise<Response> {
-  const url = new URL(
-    params.path.startsWith("/") ? params.path : `/${params.path}`,
-    params.baseUrl,
-  );
-  const headers = new Headers(params.headers);
-  if (params.defaultContentType && !headers.has("content-type")) {
-    headers.set("content-type", params.defaultContentType);
-  }
-  headers.set("x-forwarded-host", params.host);
-  headers.delete("host");
-  headers.delete("content-length");
-  if (params.body !== undefined) {
-    headers.set("content-length", params.body.byteLength.toString());
-  }
-  return await nodeHttpRequest({
-    url,
-    method: params.method.toUpperCase(),
-    headers,
-    body: params.body,
-    buffered: params.buffered,
-  });
-}
-
+/**
+ * Returns a fetch function that rewrites URLs to `baseUrl` and adds
+ * `x-forwarded-host` so Caddy routes to the right service.
+ * Uses HTTP/1.1 under the hood to avoid HTTP/2 stream issues on Fly.
+ */
 export function createHostRoutedFetch(params: {
   baseUrl: string;
   host: string;
 }): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     const requestUrl = new URL(request.url);
-    const method = request.method.toUpperCase();
-    const body =
-      method === "GET" || method === "HEAD"
-        ? undefined
-        : Buffer.from(await request.clone().arrayBuffer());
-    return await forwardedRequest({
-      baseUrl: params.baseUrl,
-      host: params.host,
-      path: `${requestUrl.pathname}${requestUrl.search}`,
-      method,
-      headers: request.headers,
-      body,
+    const url = new URL(`${requestUrl.pathname}${requestUrl.search}`, params.baseUrl);
+    const headers: Record<string, string> = {};
+    request.headers.forEach((v, k) => {
+      headers[k] = v;
     });
+    headers["x-forwarded-host"] = params.host;
+    headers["host"] = params.host;
+    const method = request.method;
+    const body =
+      method === "GET" || method === "HEAD" ? undefined : Buffer.from(await request.arrayBuffer());
+    return await http1Request({ url, method, headers, body });
   };
 }
 
 export function createCaddyAdminClient(params: { baseUrl: string; host: string }): CaddyClient {
   const caddy = new CaddyClient({ adminUrl: params.baseUrl });
   caddy.request = async (path: string, options: RequestInit = {}): Promise<Response> => {
+    const url = new URL(path.startsWith("/") ? path : `/${path}`, params.baseUrl);
+    const headers: Record<string, string> = { "x-forwarded-host": params.host };
+    if (options.headers) {
+      new Headers(options.headers).forEach((v, k) => {
+        headers[k] = v;
+      });
+    }
+    if (options.body != null && !headers["content-type"]) {
+      headers["content-type"] = "application/json";
+    }
     const body =
       options.body == null
         ? undefined
         : Buffer.from(await new Response(options.body).arrayBuffer());
-    return await forwardedRequest({
-      baseUrl: params.baseUrl,
-      host: params.host,
-      path,
-      method: options.method ?? "GET",
-      headers: options.headers,
-      body,
-      buffered: true,
-      defaultContentType: "application/json",
-    });
+    return await http1Request({ url, method: options.method ?? "GET", headers, body });
   };
   return caddy;
 }

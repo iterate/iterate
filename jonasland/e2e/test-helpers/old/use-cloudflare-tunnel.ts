@@ -8,6 +8,8 @@ export interface UseCloudflareTunnelOptions {
   localHost?: string;
   cloudflaredBin?: string;
   timeoutMs?: number;
+  onDebug?: (message: string) => void;
+  waitForReady?: boolean;
 }
 
 export interface CloudflareTunnelHandle extends AsyncDisposable {
@@ -34,12 +36,16 @@ async function waitForTryCloudflareUrl(params: {
   child: ChildProcessByStdio<null, Readable, Readable>;
   timeoutMs: number;
   logs: string[];
+  onDebug?: (message: string) => void;
 }): Promise<string> {
   let settled = false;
+  const debug = params.onDebug ?? (() => {});
+  const startedAt = Date.now();
 
   const fail = (reject: (error: Error) => void, message: string) => {
     if (settled) return;
     settled = true;
+    debug(`[cloudflare-tunnel] fail: ${message}`);
     reject(new Error(`${message}\ncloudflared logs:\n${params.logs.join("")}`));
   };
 
@@ -50,25 +56,38 @@ async function waitForTryCloudflareUrl(params: {
         `timed out waiting for cloudflared tunnel URL after ${String(params.timeoutMs)}ms`,
       );
     }, params.timeoutMs);
+    const heartbeat = setInterval(() => {
+      if (settled) return;
+      const elapsedMs = Date.now() - startedAt;
+      debug(`[cloudflare-tunnel] waiting for URL elapsed=${String(elapsedMs)}ms`);
+    }, 5_000);
 
-    const onChunk = (chunk: Buffer | string) => {
+    const onChunk = (source: "stdout" | "stderr", chunk: Buffer | string) => {
       const text = String(chunk);
       params.logs.push(text);
+      const trimmed = text.trim();
+      if (trimmed.length > 0) {
+        debug(`[cloudflare-tunnel:${source}] ${trimmed}`);
+      }
       TRYCLOUDFLARE_URL_REGEX.lastIndex = 0;
       const match = TRYCLOUDFLARE_URL_REGEX.exec(text);
       if (!match || !match[0]) return;
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      clearInterval(heartbeat);
+      debug(`[cloudflare-tunnel] discovered tunnel URL: ${match[0]}`);
       resolve(match[0]);
     };
 
-    params.child.stdout.on("data", onChunk);
-    params.child.stderr.on("data", onChunk);
+    params.child.stdout.on("data", (chunk) => onChunk("stdout", chunk));
+    params.child.stderr.on("data", (chunk) => onChunk("stderr", chunk));
     params.child.once("error", (error) => {
+      clearInterval(heartbeat);
       fail(reject, `cloudflared failed to start: ${error.message}`);
     });
     params.child.once("exit", (code, signal) => {
+      clearInterval(heartbeat);
       fail(
         reject,
         `cloudflared exited before tunnel URL was discovered (code=${String(code)}, signal=${String(signal)})`,
@@ -81,10 +100,13 @@ async function waitForTunnelReady(params: {
   tunnelUrl: string;
   timeoutMs: number;
   logs: string[];
+  onDebug?: (message: string) => void;
 }): Promise<void> {
   const deadline = Date.now() + params.timeoutMs;
   let lastFailure = "unknown failure";
   const probeUrl = new URL("/healthz", params.tunnelUrl).toString();
+  const debug = params.onDebug ?? (() => {});
+  debug(`[cloudflare-tunnel] probing readiness at ${probeUrl}`);
 
   while (Date.now() < deadline) {
     try {
@@ -92,7 +114,10 @@ async function waitForTunnelReady(params: {
         method: "GET",
         redirect: "manual",
       });
-      if (response.ok) return;
+      if (response.ok) {
+        debug(`[cloudflare-tunnel] readiness OK (${String(response.status)})`);
+        return;
+      }
       const body = await response.text().catch(() => "");
       lastFailure = `status=${String(response.status)} body=${body.slice(0, 200)}`;
     } catch (error) {
@@ -109,7 +134,9 @@ async function waitForTunnelReady(params: {
 export async function useCloudflareTunnel(
   options: UseCloudflareTunnelOptions,
 ): Promise<CloudflareTunnelHandle> {
+  const debug = options.onDebug ?? (() => {});
   const cloudflaredBin = options.cloudflaredBin?.trim() || "cloudflared";
+  debug(`[cloudflare-tunnel] checking binary ${cloudflaredBin}`);
   const exists = await commandExists(cloudflaredBin);
   if (!exists) {
     throw new Error(
@@ -118,9 +145,11 @@ export async function useCloudflareTunnel(
   }
 
   const timeoutMs = options.timeoutMs ?? 45_000;
+  const waitForReady = options.waitForReady ?? true;
   const localHost = options.localHost ?? "127.0.0.1";
   const targetUrl = `http://${localHost}:${String(options.localPort)}`;
   const logs: string[] = [];
+  debug(`[cloudflare-tunnel] starting: ${cloudflaredBin} tunnel --url ${targetUrl}`);
 
   const child = spawn(
     cloudflaredBin,
@@ -139,6 +168,7 @@ export async function useCloudflareTunnel(
   const stop = async () => {
     if (stopped) return;
     stopped = true;
+    debug("[cloudflare-tunnel] stopping cloudflared");
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");
       await Promise.race([waitForExit, new Promise((resolve) => setTimeout(resolve, 5_000))]);
@@ -147,6 +177,7 @@ export async function useCloudflareTunnel(
       child.kill("SIGKILL");
       await waitForExit;
     }
+    debug("[cloudflare-tunnel] stopped");
   };
 
   try {
@@ -154,12 +185,18 @@ export async function useCloudflareTunnel(
       child,
       timeoutMs,
       logs,
+      onDebug: debug,
     });
-    await waitForTunnelReady({
-      tunnelUrl,
-      timeoutMs,
-      logs,
-    });
+    if (waitForReady) {
+      await waitForTunnelReady({
+        tunnelUrl,
+        timeoutMs,
+        logs,
+        onDebug: debug,
+      });
+    } else {
+      debug("[cloudflare-tunnel] skipping readiness probe");
+    }
 
     return {
       tunnelUrl,

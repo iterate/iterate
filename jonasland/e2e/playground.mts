@@ -305,11 +305,10 @@ async function main(): Promise<void> {
     routes: [
       {
         metadata: { source: "playground-script", slug },
-        patterns: [{ pattern: wildcardHost, target: tunnel.tunnelUrl }],
-      },
-      {
-        metadata: { source: "playground-script", slug },
-        patterns: [{ pattern: rootHost, target: tunnel.tunnelUrl }],
+        patterns: [
+          { pattern: wildcardHost, target: tunnel.tunnelUrl },
+          { pattern: rootHost, target: tunnel.tunnelUrl },
+        ],
       },
     ],
   });

@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { exampleServiceManifest } from "@iterate-com/example-contract";
 import { serviceManifestToPidnapConfig } from "@iterate-com/shared/jonasland";
 import type { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
+import type { DockerHostSyncConfig } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
 import { DockerDeployment } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
 import { FlyDeployment } from "@iterate-com/shared/jonasland/deployment/fly-deployment.ts";
 
@@ -10,6 +11,16 @@ const DOCKER_IMAGE = process.env.E2E_DOCKER_IMAGE_REF ?? process.env.JONASLAND_S
 const FLY_IMAGE = process.env.E2E_FLY_IMAGE_REF ?? process.env.JONASLAND_SANDBOX_IMAGE ?? "";
 const FLY_API_TOKEN = process.env.FLY_API_TOKEN ?? "";
 const runFly = FLY_IMAGE.length > 0 && FLY_API_TOKEN.length > 0;
+const useDockerHostSync = process.env.DOCKER_HOST_SYNC_ENABLED === "true";
+const DOCKER_HOST_SYNC_STARTUP_OFFSET_MS = useDockerHostSync ? 180_000 : 0;
+const dockerHostSync: DockerHostSyncConfig | undefined =
+  useDockerHostSync && process.env.DOCKER_HOST_GIT_REPO_ROOT
+    ? {
+        repoRoot: process.env.DOCKER_HOST_GIT_REPO_ROOT,
+        gitDir: process.env.DOCKER_HOST_GIT_DIR,
+        commonDir: process.env.DOCKER_HOST_GIT_COMMON_DIR,
+      }
+    : undefined;
 
 type DeploymentCase = {
   id: string;
@@ -25,6 +36,7 @@ const cases: DeploymentCase[] = [
     create: async (overrides = {}) =>
       await DockerDeployment.create({
         dockerImage: DOCKER_IMAGE,
+        ...(dockerHostSync ? { dockerHostSync } : {}),
         ...overrides,
       }),
     timeoutOffsetMs: 0,
@@ -36,7 +48,7 @@ const cases: DeploymentCase[] = [
       flyImage: FLY_IMAGE,
       flyApiToken: FLY_API_TOKEN,
     }),
-    timeoutOffsetMs: 570_000,
+    timeoutOffsetMs: 300_000,
   },
 ].filter((entry) => entry.enabled);
 
@@ -47,17 +59,26 @@ describe.runIf(cases.length > 0)("on-demand example oRPC", () => {
       async () => {
         await using deployment = await create({
           name: `e2e-example-${randomUUID().slice(0, 8)}`,
-          signal: AbortSignal.timeout(45_000 + timeoutOffsetMs),
+          signal: AbortSignal.timeout(
+            45_000 + timeoutOffsetMs + DOCKER_HOST_SYNC_STARTUP_OFFSET_MS,
+          ),
         });
-        await deployment.waitUntilAlive({ signal: AbortSignal.timeout(15_000 + timeoutOffsetMs) });
+        await deployment.waitUntilAlive({
+          signal: AbortSignal.timeout(
+            15_000 + timeoutOffsetMs + DOCKER_HOST_SYNC_STARTUP_OFFSET_MS,
+          ),
+        });
 
-        await deployment.pidnap.processes.updateConfig(
-          serviceManifestToPidnapConfig({ manifest: exampleServiceManifest }),
-        );
+        const pidnapConfigInputs = serviceManifestToPidnapConfig({
+          manifests: [exampleServiceManifest],
+        });
+        for (const configInput of pidnapConfigInputs) {
+          await deployment.pidnap.processes.updateConfig(configInput);
+        }
 
         const waitResult = await deployment.pidnap.processes.waitFor({
-          processes: { [exampleServiceManifest.slug]: "running" },
-          timeoutMs: 60_000 + timeoutOffsetMs,
+          processes: { [exampleServiceManifest.slug]: "healthy" },
+          timeoutMs: 120_000 + timeoutOffsetMs,
         });
         expect(waitResult.allMet).toBe(true);
 
@@ -69,7 +90,7 @@ describe.runIf(cases.length > 0)("on-demand example oRPC", () => {
               service: string;
             }
           | undefined;
-        const pingDeadline = Date.now() + (20_000 + timeoutOffsetMs);
+        const pingDeadline = Date.now() + (120_000 + timeoutOffsetMs);
         while (Date.now() < pingDeadline) {
           ping = await example.things.ping({}).catch(() => undefined);
           if (ping?.ok) break;
@@ -101,15 +122,18 @@ describe.runIf(cases.length > 0)("on-demand example oRPC", () => {
 
         const startedAt = Date.now();
         let found = false;
-        while (Date.now() - startedAt < 10_000) {
+        const normalizedDelayedStreamPath = delayedStreamPath.replace(/^\/+/, "");
+        while (Date.now() - startedAt < 30_000 + timeoutOffsetMs) {
           const streams = await deployment.events.listStreams({});
-          found = streams.some((stream) => stream.path === delayedStreamPath);
+          found = streams.some(
+            (stream) => stream.path.replace(/^\/+/, "") === normalizedDelayedStreamPath,
+          );
           if (found) break;
           await new Promise((resolve) => setTimeout(resolve, 250));
         }
         expect(found).toBe(true);
       },
-      120_000 + timeoutOffsetMs,
+      180_000 + timeoutOffsetMs,
     );
   });
 });

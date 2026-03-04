@@ -43,7 +43,7 @@ const cases: DeploymentCase[] = [
         flyApiToken: FLY_API_TOKEN,
         ...overrides,
       }),
-    timeoutOffsetMs: 560_000,
+    timeoutOffsetMs: 300_000,
   },
 ].filter((entry) => entry.enabled);
 
@@ -52,6 +52,22 @@ async function expectExitCodeZero(
   label: string,
 ): Promise<void> {
   expect(result.exitCode, `${label}\n${result.output}`).toBe(0);
+}
+
+async function waitForCommandOutput(params: {
+  deployment: Deployment;
+  cmd: string[];
+  timeoutMs: number;
+  matches: (output: string) => boolean;
+}): Promise<{ exitCode: number; output: string }> {
+  const deadline = Date.now() + params.timeoutMs;
+  let last = { exitCode: 1, output: "" };
+  while (Date.now() < deadline) {
+    last = await params.deployment.exec(params.cmd);
+    if (last.exitCode === 0 && params.matches(last.output)) return last;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return last;
 }
 
 async function startEgressProcess(deployment: Deployment): Promise<void> {
@@ -66,6 +82,10 @@ async function startEgressProcess(deployment: Deployment): Promise<void> {
     },
     options: { restartPolicy: "always" },
     envOptions: { reloadDelay: false },
+    healthCheck: {
+      url: "http://127.0.0.1:19001/healthz",
+      intervalMs: 2_000,
+    },
   });
   const waitResult = await deployment.pidnap.processes.waitFor({
     processes: { "egress-proxy": "healthy" },
@@ -93,12 +113,24 @@ async function startInlineLoggingProxy(deployment: Deployment): Promise<void> {
     },
     options: { restartPolicy: "always" },
     envOptions: { reloadDelay: false },
+    healthCheck: {
+      url: "http://127.0.0.1:19123/healthz",
+      intervalMs: 2_000,
+    },
   });
   const waitResult = await deployment.pidnap.processes.waitFor({
-    processes: { "test-egress-proxy-logger": "running" },
+    processes: { "test-egress-proxy-logger": "healthy" },
     timeoutMs: 20_000,
   });
   expect(waitResult.allMet).toBe(true);
+
+  const loggerReady = await waitForCommandOutput({
+    deployment,
+    cmd: ["curl", "-sS", "-i", "http://127.0.0.1:19123/healthz"],
+    timeoutMs: 20_000,
+    matches: (output) => output.toLowerCase().includes("x-test-egress-hit: 1"),
+  });
+  await expectExitCodeZero(loggerReady, "inline egress logger did not become reachable");
 }
 
 describe.runIf(cases.length > 0)("network smoke", () => {
@@ -133,15 +165,22 @@ describe.runIf(cases.length > 0)("network smoke", () => {
         ]);
         await expectExitCodeZero(localhostLookup, "localhost dns lookup failed");
 
-        const egressed = await deployment.exec([
-          "curl",
-          "-k",
-          "-sS",
-          "-i",
-          "-H",
-          "x-iterate-from-test: yes",
-          "https://api.openai.com/v1/models",
-        ]);
+        const egressed = await waitForCommandOutput({
+          deployment,
+          cmd: [
+            "curl",
+            "-k",
+            "-sS",
+            "-i",
+            "-H",
+            "x-iterate-from-test: yes",
+            "https://api.openai.com/v1/models",
+          ],
+          timeoutMs: 20_000 + timeoutOffsetMs,
+          matches: (output) =>
+            output.toLowerCase().includes("x-test-egress-hit: 1") &&
+            output.toLowerCase().includes("x-iterate-egress-proxy-seen: 1"),
+        });
         await expectExitCodeZero(egressed, "egressed request failed");
         const egressOutput = egressed.output.toLowerCase();
         expect(egressOutput).toContain("x-test-egress-hit: 1");

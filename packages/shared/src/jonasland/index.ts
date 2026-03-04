@@ -870,11 +870,40 @@ export interface ServiceManifestWithEntryPoint<
   serverEntryPoint: string;
 }
 
+export interface PidnapServiceConfig {
+  processSlug: string;
+  definition: {
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+  };
+  tags: string[];
+  restartImmediately: boolean;
+  healthCheck: {
+    url: string;
+    intervalMs: number;
+  };
+}
+
 export function serviceManifestToPidnapConfig(params: {
   manifest: ServiceManifestWithEntryPoint;
   env?: Record<string, string>;
-}) {
-  const { manifest } = params;
+}): PidnapServiceConfig;
+export function serviceManifestToPidnapConfig(params: {
+  manifests: ServiceManifestWithEntryPoint[];
+  env?: Record<string, string>;
+}): PidnapServiceConfig[];
+export function serviceManifestToPidnapConfig(params: {
+  manifest?: ServiceManifestWithEntryPoint;
+  manifests?: ServiceManifestWithEntryPoint[];
+  env?: Record<string, string>;
+}): PidnapServiceConfig | PidnapServiceConfig[] {
+  if (params.manifests) {
+    return params.manifests.map((manifest) =>
+      serviceManifestToPidnapConfig({ manifest, env: params.env }),
+    );
+  }
+  const manifest = params.manifest!;
   const host = localHostForService({ slug: manifest.slug });
   return {
     processSlug: manifest.slug,

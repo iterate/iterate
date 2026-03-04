@@ -285,6 +285,17 @@ const waitFor = os.processes.waitFor.handler(
     const start = Date.now();
     const slugs = Object.keys(input.processes);
     const POLL_INTERVAL = 500;
+    const healthyWithoutHealthCheck = slugs.filter(
+      (slug) => input.processes[slug] === "healthy" && !healthCheckConfigs.has(slug),
+    );
+
+    if (healthyWithoutHealthCheck.length > 0) {
+      throw new ORPCError("BAD_REQUEST", {
+        message:
+          `waitFor condition "healthy" requires healthCheck config via updateConfig({ healthCheck }) ` +
+          `for: ${healthyWithoutHealthCheck.join(", ")}`,
+      });
+    }
 
     while (Date.now() - start < timeoutMs) {
       if (context.manager.state === "running") break;

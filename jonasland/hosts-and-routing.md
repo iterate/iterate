@@ -103,3 +103,41 @@ Refs:
 
 - [deployment.ts](/Users/jonastemplestein/.superset/worktrees/iterate/fly-v2/packages/shared/src/jonasland/deployment/deployment.ts)
 - [fly-deployment.ts](/Users/jonastemplestein/.superset/worktrees/iterate/fly-v2/packages/shared/src/jonasland/deployment/fly-deployment.ts)
+
+# Public routing
+
+The `registry` service is responsible for
+
+1. Producing publicly routable URLs for services
+2. Producing caddyfile route fragments for each service
+
+The `registry` service takes two config options (currently in the form of env vars)
+
+`ITERATE_PUBLIC_BASE_URL_TYPE` is either "prefix" or "subdomain"
+`ITERATE_PUBLIC_BASE_URL` is
+
+- in e2e tests we normally use `https://<random>.ingress.iterate.com`
+- in production it is normally `https://<project-slug>.iterate.app` but could also be `https://project.app`
+
+The registry service maintains a record of all services it knows about in a sqlite database.
+
+In E2E tests we generally create a deployment FIRST and _then_ hook up the iterate public base URL later.
+
+In this case the flow is:
+
+1. Create deployment (not publicly routable yet)
+2. Create ingress routes in cf ingress proxy worker, pointing at fly deployment (or CF tunnel locally on docker)
+3. Update ~/.iterate/.env with the two above env vars pointing at ingress hostnames
+4. pidnap restarts the registry service and that updates caddy
+
+TODO
+
+- rename env var to ITERATE_PUBLIC_HOST and \_HOST_TYPE so it's easier to use in e.g. caddyfile maybe?
+
+# Ports
+
+- Any service that doesn't register itself with the `registry` gets
+- This is principally two categories
+  - non-service software that doesn't have a "service manifest" and doesn't use orpc: `pidnap` (though it IS an iterate software), `caddy`, `openobserve`, `otel-collector`
+  - iterate services that are part of the core platform / always started: `events`, `registry`, `home`
+- All other services start themselves with PORT=0, get a port from the operating system and register themselves in the `registry` service

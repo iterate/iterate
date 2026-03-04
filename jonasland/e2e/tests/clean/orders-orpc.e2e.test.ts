@@ -36,7 +36,7 @@ const cases: DeploymentCase[] = [
       flyImage: FLY_IMAGE,
       flyApiToken: FLY_API_TOKEN,
     }),
-    timeoutOffsetMs: 570_000,
+    timeoutOffsetMs: 300_000,
   },
 ].filter((entry) => entry.enabled);
 

@@ -56,40 +56,41 @@
 # Used inside `map` directives via `import iterate_service_map_entries`.
 # To add a new service, add a line here — it propagates everywhere.
 (iterate_service_map_entries) {
-    events      127.0.0.1:17320 events.iterate.localhost
-    orders      127.0.0.1:19020 orders.iterate.localhost
-    docs        127.0.0.1:19050 docs.iterate.localhost
-    home        127.0.0.1:19030 home.iterate.localhost
-    outerbase   127.0.0.1:19040 outerbase.iterate.localhost
-    registry    127.0.0.1:17310 registry.iterate.localhost
-    pidnap      127.0.0.1:17300 pidnap.iterate.localhost
-    caddy       127.0.0.1:2019  caddy.iterate.localhost
-    caddy-admin 127.0.0.1:2019  caddy-admin.iterate.localhost
-    caddymanager 127.0.0.1:8501 caddymanager.iterate.localhost
-    openobserve 127.0.0.1:5080  openobserve.iterate.localhost
-    clickstack  127.0.0.1:8080  clickstack.iterate.localhost
+    pidnap       127.0.0.1:17300 pidnap.iterate.localhost
+    registry     127.0.0.1:17310 registry.iterate.localhost
+    caddy        127.0.0.1:2019  caddy.iterate.localhost
+    events       127.0.0.1:17320 events.iterate.localhost
+    orders       127.0.0.1:19020 orders.iterate.localhost
+    home         127.0.0.1:19030 home.iterate.localhost
+    outerbase    127.0.0.1:19040 outerbase.iterate.localhost
+    docs         127.0.0.1:19050 docs.iterate.localhost
+    caddy-admin  127.0.0.1:2019  caddy-admin.iterate.localhost
+    caddymanager 127.0.0.1:8501  caddymanager.iterate.localhost
+    openobserve  127.0.0.1:5080  openobserve.iterate.localhost
+    clickstack   127.0.0.1:8080  clickstack.iterate.localhost
     default "" ""
 }
 
 
 # -----------------------------------------------------------------------------
-# (iterate_cors_openapi) — CORS headers for /api/* paths
+# (iterate_cors_openapi) — CORS headers for all paths
 # -----------------------------------------------------------------------------
 # Caddy has no built-in CORS directive; this is the idiomatic pattern.
 # Handles both preflight (OPTIONS → 204) and actual requests.
-# Only allows origins matching *.iterate.localhost (with optional port).
+# Allows local dev and public playground origins:
+# - *.iterate.localhost
+# - *.(ingress|proxy).iterate.com (including service__id forms)
+# - *.trycloudflare.com
 (iterate_cors_openapi) {
     # Preflight: browser sends OPTIONS before cross-origin requests
     @iterate_api_preflight {
         method OPTIONS
-        path /api/*
-        header_regexp Origin ^https?://([a-z0-9-]+\.)?iterate\.localhost(:[0-9]+)?$
+        header_regexp Origin ^https?://(([a-z0-9-]+\.)?iterate\.localhost|([a-z0-9-]+(__[a-z0-9-]+)?)\.(proxy|ingress)\.iterate\.com|([a-z0-9-]+\.)*trycloudflare\.com)(:[0-9]+)?$
     }
 
-    # Non-preflight requests that need CORS response headers
+    # All origin-bearing requests that need CORS response headers
     @iterate_api_cors {
-        path /api/*
-        header_regexp Origin ^https?://([a-z0-9-]+\.)?iterate\.localhost(:[0-9]+)?$
+        header_regexp Origin ^https?://(([a-z0-9-]+\.)?iterate\.localhost|([a-z0-9-]+(__[a-z0-9-]+)?)\.(proxy|ingress)\.iterate\.com|([a-z0-9-]+\.)*trycloudflare\.com)(:[0-9]+)?$
     }
 
     # CORS headers — block syntax avoids repeating the matcher on every line
@@ -141,17 +142,34 @@
 #   1. Host: <service>__<id>.(proxy|ingress).iterate.com — external proxy via Host
 #   2. X-Forwarded-Host: <service>__<id>.(proxy|ingress).iterate.com — external via XFH
 #   3. X-Forwarded-Host: <service>.iterate.localhost — internal via XFH
+#   4. Host/XFH: <id>.(proxy|ingress).iterate.com — fallback to home service
 (iterate_xfh_and_external_proxy) {
+    # Pattern 0a: Port-prefixed external host
+    # e.g. Host: 17320__events__abc123.ingress.iterate.com -> route to events
+    @external_proxy_host_port_prefixed header_regexp external_proxy_host_port_prefixed Host ^[0-9]+__([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
+    handle @external_proxy_host_port_prefixed {
+        import iterate_service_proxy {re.external_proxy_host_port_prefixed.1} "unknown service host pattern"
+    }
+
+    # Pattern 0b: Port-prefixed external X-Forwarded-Host
+    # e.g. XFH: 17320__events__abc123.ingress.iterate.com -> route to events
+    @external_proxy_xfh_port_prefixed header_regexp external_proxy_xfh_port_prefixed X-Forwarded-Host ^[0-9]+__([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
+    handle @external_proxy_xfh_port_prefixed {
+        import iterate_service_proxy {re.external_proxy_xfh_port_prefixed.1} "unknown x-forwarded-host external service"
+    }
+
     # Pattern 1: External proxy identified by Host header
     # e.g. Host: events__abc123.proxy.iterate.com → route to events service
-    @external_proxy_host header_regexp external_proxy_host Host ^([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
+    # Also supports optional port-prefix host forms:
+    # 17320__events__abc123.ingress.iterate.com → route to events
+    @external_proxy_host header_regexp external_proxy_host Host ^(?:[0-9]+__)?([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
     handle @external_proxy_host {
         import iterate_service_proxy {re.external_proxy_host.1} "unknown service host pattern"
     }
 
     # Pattern 2: External proxy identified by X-Forwarded-Host header
     # Same format as above but CF/Fly sets XFH instead of Host
-    @external_proxy_xfh header_regexp external_proxy_xfh X-Forwarded-Host ^([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
+    @external_proxy_xfh header_regexp external_proxy_xfh X-Forwarded-Host ^(?:[0-9]+__)?([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
     handle @external_proxy_xfh {
         import iterate_service_proxy {re.external_proxy_xfh.1} "unknown x-forwarded-host external service"
     }
@@ -161,6 +179,19 @@
     @xfh_service header_regexp xfh_service X-Forwarded-Host ^([a-z0-9-]+)\.iterate\.localhost(?::[0-9]+)?$
     handle @xfh_service {
         import iterate_service_proxy {re.xfh_service.1} "unknown x-forwarded-host service"
+    }
+
+    # Pattern 4: Root ingress/proxy host fallback
+    # e.g. Host: playground-abc.ingress.iterate.com → home service
+    @external_proxy_root_host header_regexp external_proxy_root_host Host ^[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
+    handle @external_proxy_root_host {
+        import iterate_service_proxy home "unknown default ingress service"
+    }
+
+    # Same fallback via X-Forwarded-Host.
+    @external_proxy_root_xfh header_regexp external_proxy_root_xfh X-Forwarded-Host ^[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
+    handle @external_proxy_root_xfh {
+        import iterate_service_proxy home "unknown default ingress service"
     }
 }
 
@@ -346,7 +377,7 @@ http://clickstack.iterate.localhost {
     # -------------------------------------------------------------------------
     # Dynamic service configs (e.g. user-registered services via caddymanager)
     # -------------------------------------------------------------------------
-    import ~/.iterate/caddy/*.caddy
+    import /home/iterate/.iterate/caddy/*.caddy
 
     # Localhost health response (for internal connectivity checks)
     @local host 127.0.0.1 localhost
@@ -432,7 +463,7 @@ http://clickstack.iterate.localhost {
     # -------------------------------------------------------------------------
     # Dynamic service configs
     # -------------------------------------------------------------------------
-    import ~/.iterate/caddy/*.caddy
+    import /home/iterate/.iterate/caddy/*.caddy
 
     # -------------------------------------------------------------------------
     # Default fallback — proxy to the user's primary service on port 19000

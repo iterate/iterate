@@ -21,13 +21,17 @@ export function normalizePattern(input: string): string {
     throw new RouteInputError(`Invalid pattern: ${input}`);
   }
   const wildcardCount = (normalized.match(/\*/g) ?? []).length;
-  if (wildcardCount > 0) {
-    if (!normalized.includes(".") || !/[a-z0-9]/.test(normalized)) {
-      throw new RouteInputError(`Invalid pattern: ${input}`);
-    }
-    if (normalized === "*") {
-      throw new RouteInputError(`Invalid pattern: ${input}`);
-    }
+  const wildcardTail = normalized.slice(1);
+  if (
+    wildcardCount > 0 &&
+    (wildcardCount !== 1 ||
+      !normalized.startsWith("*") ||
+      normalized.length <= 1 ||
+      /^[a-z0-9]$/.test(normalized[1] ?? "") ||
+      !wildcardTail.includes(".") ||
+      !/[a-z0-9]/.test(wildcardTail))
+  ) {
+    throw new RouteInputError(`Invalid pattern: ${input}`);
   }
   return normalized;
 }

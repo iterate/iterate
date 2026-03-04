@@ -45,8 +45,32 @@ interface RegistryContext {
 let storePromise: Promise<ServicesStore> | null = null;
 let envCache: RegistryEnv | null = null;
 
+const registryRuntimeDefaults = {
+  CADDY_CONFIG_DIR: "/home/iterate/.iterate/caddy",
+  CADDY_ROOT_CADDYFILE: "/home/iterate/.iterate/caddy/Caddyfile",
+  CADDY_BIN_PATH: "/usr/local/bin/caddy",
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
+  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
+  OTEL_PROPAGATORS: "tracecontext,baggage",
+} as const;
+
+function applyRegistryRuntimeEnvDefaults() {
+  for (const [key, value] of Object.entries(registryRuntimeDefaults)) {
+    const current = process.env[key];
+    if (current === undefined || current.trim().length === 0) {
+      process.env[key] = value;
+    }
+  }
+}
+
 function getEnv() {
-  envCache ??= registryServiceEnvSchema.parse(process.env);
+  envCache ??= registryServiceEnvSchema.parse({
+    ...process.env,
+    CADDY_CONFIG_DIR: registryRuntimeDefaults.CADDY_CONFIG_DIR,
+    CADDY_ROOT_CADDYFILE: registryRuntimeDefaults.CADDY_ROOT_CADDYFILE,
+    CADDY_BIN_PATH: registryRuntimeDefaults.CADDY_BIN_PATH,
+  });
   return envCache;
 }
 
@@ -90,6 +114,7 @@ function contentTypeForPath(filePath: string): string {
 }
 
 const os = implement(registryContract).$context<RegistryContext>();
+applyRegistryRuntimeEnvDefaults();
 initializeServiceOtel(serviceName);
 initializeServiceEvlog(serviceName);
 
