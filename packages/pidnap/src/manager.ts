@@ -998,6 +998,20 @@ export class Manager {
       },
       (path) => {
         this.logger.error(`Sentinel file "${path}" timed out for process "${processName}"`);
+        this.eventPublisher.publish({
+          type: "pidnap/process/state-changed",
+          payload: {
+            managerState: this._state,
+            name: processName,
+            previousState: "idle",
+            state: "idle",
+            restarts: 0,
+            tags: this.restartingProcesses.get(processName)?.tags ?? [],
+            desiredState: this.getProcessEntryByName(processName)?.desiredState ?? "running",
+            persistence: this.getProcessEntryByName(processName)?.persistence ?? "durable",
+            failedDependency: `sentinel:${path}`,
+          },
+        });
       },
     );
   }
