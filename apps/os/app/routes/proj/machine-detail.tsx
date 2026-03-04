@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { createFileRoute, Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -165,11 +165,15 @@ function MachineDetailPage() {
     },
   });
 
-  const daemonClient = createDaemonProxyClient({
-    orgSlug,
-    projectSlug: params.projectSlug,
-    machineId: params.machineId,
-  });
+  const daemonClient = useMemo(
+    () =>
+      createDaemonProxyClient({
+        orgSlug,
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      }),
+    [orgSlug, params.projectSlug, params.machineId],
+  );
 
   const metadata = machine.metadata as MachineMetadata;
   const { services } = machine;
@@ -247,6 +251,7 @@ function MachineDetailPage() {
     // events.has("machine:activated"). That way even detached machines still
     // render their agents list, which is useful.
     enabled:
+      typeof window !== "undefined" &&
       machine.state === "active" &&
       (machine.lastEvent?.name === "machine:activated" ||
         machine.lastEvent?.name === "machine:probe-succeeded"),
