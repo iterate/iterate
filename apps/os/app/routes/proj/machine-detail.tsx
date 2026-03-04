@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import {
   AlertTriangle,
   Copy,
+  Download,
   ExternalLink,
   Globe,
   List,
@@ -219,6 +220,16 @@ function MachineDetailPage() {
       }),
     onError: (error) => {
       toast.error("Command failed: " + error.message);
+    },
+  });
+
+  const pullIterateIterate = useMutation({
+    mutationFn: async (ref: string) => daemonClient.daemon.pullIterateIterate({ ref }),
+    onSuccess: (data) => {
+      toast.success(`Pull triggered (ref: ${data.ref}, agent: ${data.agentPath})`);
+    },
+    onError: (error) => {
+      toast.error("Pull failed: " + error.message);
     },
   });
 
@@ -509,6 +520,18 @@ function MachineDetailPage() {
           <Button
             variant="outline"
             size="sm"
+            disabled={pullIterateIterate.isPending || machine.state !== "active"}
+            onClick={() => {
+              const ref = prompt("Git ref to pull (branch, tag, or SHA):", "main");
+              if (ref) pullIterateIterate.mutate(ref);
+            }}
+          >
+            <Download className="h-4 w-4" />
+            {pullIterateIterate.isPending ? "Pulling..." : "Pull iterate/iterate"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setDeleteConfirmOpen(true)}
             className="text-destructive hover:text-destructive"
           >
@@ -531,6 +554,12 @@ function MachineDetailPage() {
         {execCommand.isSuccess && execCommand.data && (
           <div data-testid="exec-command-result">
             <SerializedObjectCodeBlock data={execCommand.data} className="max-h-[20rem]" />
+          </div>
+        )}
+
+        {pullIterateIterate.isSuccess && pullIterateIterate.data && (
+          <div data-testid="pull-iterate-result">
+            <SerializedObjectCodeBlock data={pullIterateIterate.data} className="max-h-[20rem]" />
           </div>
         )}
 

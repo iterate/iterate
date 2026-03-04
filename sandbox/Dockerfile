@@ -244,7 +244,8 @@ RUN git init && \
     git config user.name "iterate-bot" && \
     git add . && \
     git commit -m "snapshot ${GIT_SHA}" && \
-    git branch -M main
+    git branch -M main && \
+    git remote add origin https://github.com/iterate/iterate
 
 ENV GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA
