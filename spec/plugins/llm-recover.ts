@@ -216,7 +216,10 @@ async function gatherContext(
     .catch(() => "<!-- HTML unavailable -->");
 
   // Accessibility snapshot (YAML)
-  const accessibilitySnapshotYaml = await page.locator("body").ariaSnapshot();
+  const accessibilitySnapshotYaml = await page
+    .locator("body")
+    .ariaSnapshot()
+    .catch((e) => `<!-- accessibility snapshot unavailable (${e}) -->`);
 
   // Parse failing line from stack
   const failingLine = parseFailingLine(error.stack ?? "");
