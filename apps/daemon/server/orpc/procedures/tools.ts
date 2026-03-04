@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { exec } from "tinyexec";
+import { and, desc, eq } from "drizzle-orm";
 import { LogLevel, WebClient } from "@slack/web-api";
 import dedent from "dedent";
 import Replicate from "replicate";
@@ -11,6 +13,9 @@ import { Resend } from "resend";
 import { z } from "zod/v4";
 import { tsImport } from "tsx/esm/api";
 import { ORPCError } from "@orpc/server";
+import { db } from "../../db/index.ts";
+import * as schema from "../../db/schema.ts";
+import { getAgentWorkingDirectory } from "../../utils/agent-working-directory.ts";
 import { logEmitterStorage, publicProcedure } from "../init.ts";
 import type { ExecutionContext, WebchatClient } from "./execution-context.ts";
 import { wrapCodeWithExportDefault } from "./wrap-code.ts";
@@ -70,6 +75,127 @@ function getContextTypeSource(generatedDir: string): string {
   let rel = path.relative(generatedDir, executionContextSourcePath);
   if (!rel.startsWith(".")) rel = `./${rel}`;
   return `export type { ExecutionContext } from ${JSON.stringify(rel)};`;
+}
+
+function normalizeAgentPath(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("/")) return null;
+  if (/\s/.test(trimmed)) return null;
+  if (!/^\/[a-zA-Z0-9._~/-]+$/.test(trimmed)) return null;
+  const segments = trimmed.split("/").slice(1);
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    return null;
+  }
+  return trimmed;
+}
+
+async function resolveAgentPathForSubscription(params: {
+  sessionId?: string;
+  agentPath?: string;
+}): Promise<string> {
+  const normalizedFromInput = normalizeAgentPath(params.agentPath);
+  if (normalizedFromInput) return normalizedFromInput;
+  if (params.agentPath) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: "Invalid agentPath format.",
+    });
+  }
+
+  const sessionId = params.sessionId?.trim();
+  if (!sessionId) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: "Provide either agentPath or sessionId.",
+    });
+  }
+
+  const destination = `/opencode/sessions/${sessionId}`;
+  const [activeRoute] = await db
+    .select({ agentPath: schema.agentRoutes.agentPath })
+    .from(schema.agentRoutes)
+    .where(
+      and(eq(schema.agentRoutes.destination, destination), eq(schema.agentRoutes.active, true)),
+    )
+    .limit(1);
+
+  if (activeRoute?.agentPath) {
+    return activeRoute.agentPath;
+  }
+
+  const [recentRoute] = await db
+    .select({ agentPath: schema.agentRoutes.agentPath })
+    .from(schema.agentRoutes)
+    .where(eq(schema.agentRoutes.destination, destination))
+    .orderBy(desc(schema.agentRoutes.updatedAt), desc(schema.agentRoutes.id))
+    .limit(1);
+
+  if (recentRoute?.agentPath) {
+    const [activeRecentRoute] = await db
+      .select({ destination: schema.agentRoutes.destination })
+      .from(schema.agentRoutes)
+      .where(
+        and(
+          eq(schema.agentRoutes.agentPath, recentRoute.agentPath),
+          eq(schema.agentRoutes.active, true),
+        ),
+      )
+      .limit(1);
+
+    if (activeRecentRoute?.destination === destination) {
+      return recentRoute.agentPath;
+    }
+
+    if (!activeRecentRoute) {
+      await db
+        .insert(schema.agentRoutes)
+        .values({
+          agentPath: recentRoute.agentPath,
+          destination,
+          active: true,
+          metadata: {
+            agentHarness: "opencode",
+            opencodeSessionId: sessionId,
+            source: "subscribe-slack-thread",
+          },
+          updatedAt: new Date(),
+        })
+        .onConflictDoNothing();
+      return recentRoute.agentPath;
+    }
+  }
+
+  const sanitizedSessionId = sessionId
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  const sessionHash = createHash("sha1").update(sessionId).digest("hex").slice(0, 12);
+  const fallbackAgentPath = `/opencode/session-${sanitizedSessionId || "unknown"}-${sessionHash}`;
+
+  await db
+    .insert(schema.agents)
+    .values({
+      path: fallbackAgentPath,
+      workingDirectory: getAgentWorkingDirectory(),
+    })
+    .onConflictDoNothing();
+
+  await db
+    .insert(schema.agentRoutes)
+    .values({
+      agentPath: fallbackAgentPath,
+      destination,
+      active: true,
+      metadata: {
+        agentHarness: "opencode",
+        opencodeSessionId: sessionId,
+        source: "subscribe-slack-thread",
+      },
+      updatedAt: new Date(),
+    })
+    .onConflictDoNothing();
+
+  return fallbackAgentPath;
 }
 
 /** Lazy-initialized clients available inside execTs/execJs code */
@@ -180,6 +306,63 @@ export const toolsRouter = {
         exitCode: result.exitCode ?? 0,
         stdout: result.stdout,
         stderr: result.stderr,
+      };
+    }),
+
+  subscribeSlackThread: publicProcedure
+    .input(
+      z
+        .object({
+          channel: z.string().min(1).describe("Slack channel ID, e.g. C09K1CTN4M7"),
+          threadTs: z.string().min(1).describe("Slack thread_ts value"),
+          sessionId: z
+            .string()
+            .optional()
+            .describe("OpenCode session id, e.g. ses_abc123 (optional if agentPath given)"),
+          agentPath: z
+            .string()
+            .optional()
+            .describe(
+              "Agent path, e.g. /github/iterate/iterate/pr-123 (optional if sessionId given)",
+            ),
+          source: z.string().optional().default("manual-tool"),
+        })
+        .refine((value) => Boolean(value.sessionId || value.agentPath), {
+          message: "Provide either sessionId or agentPath",
+        }),
+    )
+    .handler(async ({ input }) => {
+      const agentPath = await resolveAgentPathForSubscription({
+        sessionId: input.sessionId,
+        agentPath: input.agentPath,
+      });
+
+      await db
+        .insert(schema.slackThreadSubscriptions)
+        .values({
+          channel: input.channel,
+          threadTs: input.threadTs,
+          agentPath,
+          source: input.source,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: [
+            schema.slackThreadSubscriptions.channel,
+            schema.slackThreadSubscriptions.threadTs,
+          ],
+          set: {
+            agentPath,
+            source: input.source,
+            updatedAt: new Date(),
+          },
+        });
+
+      return {
+        ok: true,
+        channel: input.channel,
+        threadTs: input.threadTs,
+        agentPath,
       };
     }),
 
