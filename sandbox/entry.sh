@@ -47,8 +47,11 @@ mkfifo "$CONSOLE_FIFO"
 tee -a "$CONSOLE_LOG" < "$CONSOLE_FIFO" &
 
 # pidnap watches /home/iterate/.iterate/.env itself, so avoid tsx --env-file-if-exists
-# Pidnap take the wheel - redirect stdout/stderr to FIFO
+# Note: tsx --watch was removed because it restarts pidnap on any source file change,
+# which kills in-flight operations (e.g. an agent running pnpm install after git pull).
+# Instead, the pull-iterate-iterate skill uses pidnap's HTTP API to restart only the
+# processes that need it after a code update.
 exec tini -sg -- \
-  tsx --watch \
+  tsx \
   "$ITERATE_REPO/packages/pidnap/src/cli.ts" \
   init -c "$ITERATE_REPO/sandbox/pidnap.config.ts" > "$CONSOLE_FIFO" 2>&1

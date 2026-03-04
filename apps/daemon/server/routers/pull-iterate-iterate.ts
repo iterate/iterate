@@ -32,7 +32,7 @@ export const pullIterateIterateRouter = {
       const prompt = [
         `Use the skill at .opencode/skills/pull-iterate-iterate/SKILL.md to pull the iterate/iterate repo to ref: ${ref}`,
         "",
-        "Follow every step in the skill. Do not skip the daemon restart at the end.",
+        "Follow every step in the skill. Do not skip the process restarts at the end.",
       ].join("\n");
 
       await sendPromptToAgent(AGENT_PATH, prompt);
