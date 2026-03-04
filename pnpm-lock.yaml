@@ -1112,9 +1112,6 @@ importers:
       '@iterate-com/example-contract':
         specifier: workspace:*
         version: link:../../services/example-contract
-      '@iterate-com/orders-contract':
-        specifier: workspace:*
-        version: link:../../services/orders-contract
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -1827,110 +1824,6 @@ importers:
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-    devDependencies:
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.0.10
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  services/orders:
-    dependencies:
-      '@hono/node-server':
-        specifier: ^1.19.9
-        version: 1.19.9(hono@4.12.2)
-      '@iterate-com/events-contract':
-        specifier: workspace:*
-        version: link:../events-contract
-      '@iterate-com/orders-contract':
-        specifier: workspace:*
-        version: link:../orders-contract
-      '@iterate-com/registry-service':
-        specifier: workspace:*
-        version: link:../registry-service
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      '@iterate-com/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
-      '@opentelemetry/api':
-        specifier: ^1.9.0
-        version: 1.9.0
-      '@orpc/client':
-        specifier: ^1.13.5
-        version: 1.13.5(@opentelemetry/api@1.9.0)
-      '@orpc/contract':
-        specifier: ^1.13.5
-        version: 1.13.5(@opentelemetry/api@1.9.0)
-      '@orpc/openapi':
-        specifier: ^1.13.5
-        version: 1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
-      '@orpc/server':
-        specifier: ^1.13.5
-        version: 1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
-      '@orpc/zod':
-        specifier: ^1.13.5
-        version: 1.13.5(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.5(@opentelemetry/api@1.9.0))(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
-      '@tailwindcss/vite':
-        specifier: ^4.1.17
-        version: 4.1.17(vite@7.3.1(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))
-      '@vitejs/plugin-react':
-        specifier: ^5.1.2
-        version: 5.1.2(vite@7.3.1(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))
-      better-sqlite3:
-        specifier: ^12.4.1
-        version: 12.6.0
-      drizzle-orm:
-        specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
-      hono:
-        specifier: ^4.11.10
-        version: 4.12.2
-      react:
-        specifier: ^19.2.0
-        version: 19.2.3
-      react-dom:
-        specifier: ^19.2.0
-        version: 19.2.3(react@19.2.3)
-      tailwindcss:
-        specifier: ^4.1.17
-        version: 4.2.1
-      vite:
-        specifier: ^7.3.1
-        version: 7.3.1(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
-      ws:
-        specifier: ^8.18.3
-        version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
-    devDependencies:
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.0.10
-      '@types/react':
-        specifier: ^19.2.3
-        version: 19.2.7
-      '@types/react-dom':
-        specifier: ^19.2.2
-        version: 19.2.3(@types/react@19.2.7)
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  services/orders-contract:
-    dependencies:
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      '@orpc/contract':
-        specifier: ^1.13.5
-        version: 1.13.5(@opentelemetry/api@1.9.0)
-      zod:
-        specifier: ^4.1.11
-        version: 4.3.6
     devDependencies:
       '@types/node':
         specifier: ^25.0.10

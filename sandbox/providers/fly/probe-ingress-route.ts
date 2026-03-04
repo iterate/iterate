@@ -217,8 +217,8 @@ async function main(): Promise<void> {
 
   await probeUrl(`https://${ingressBaseHost}/healthz`);
   await probeUrl(`http://${ingressBaseHost}/healthz`);
-  await probeUrl(`https://${ingressBaseHost}/__iterate/pidnap/healthz`);
-  await probeUrl(`http://${ingressBaseHost}/__iterate/pidnap/healthz`);
+  await probeUrl(`https://${ingressBaseHost}/healthz`);
+  await probeUrl(`http://${ingressBaseHost}/healthz`);
   await probeUrl(`https://${ingressServiceHost}/healthz`);
   await probeUrl(`http://${ingressServiceHost}/healthz`);
 

@@ -42,46 +42,6 @@ export interface ReconcileCaddyConfigResult {
   renderedFiles: string[];
 }
 
-const BUILTIN_ROUTES: ManagedRoute[] = [
-  {
-    slug: "pidnap",
-    host: "pidnap.iterate.localhost",
-    target: "127.0.0.1:17300",
-    cors: false,
-  },
-  {
-    slug: "registry",
-    host: "registry.iterate.localhost",
-    target: "127.0.0.1:17310",
-    cors: true,
-  },
-  {
-    slug: "events",
-    host: "events.iterate.localhost",
-    target: "127.0.0.1:17320",
-    cors: true,
-  },
-  {
-    slug: "frp",
-    host: "frp.iterate.localhost",
-    target: "127.0.0.1:27000",
-    cors: false,
-    streamCloseDelay: "5m",
-  },
-  {
-    slug: "caddy",
-    host: "caddy.iterate.localhost",
-    target: "127.0.0.1:2019",
-    cors: false,
-  },
-  {
-    slug: "caddy-admin",
-    host: "caddy-admin.iterate.localhost",
-    target: "127.0.0.1:2019",
-    cors: false,
-  },
-];
-
 function firstHostToken(host: string): string {
   const normalized = host.trim().toLowerCase();
   return normalized.split(".").find((part) => part.length > 0) ?? "";
@@ -163,7 +123,7 @@ function renderReverseProxyBlock(params: {
   lines.push(
     ...renderHandle({
       matcherId: `${params.matcherIdBase}_xfh`,
-      upstreamHost: "{http.request.header.X-Forwarded-Host}",
+      upstreamHost: params.route.host,
     }),
   );
   lines.push(
@@ -183,7 +143,7 @@ function renderRouteFragment(params: {
   const matcherBase = toMatcherId(`route_${params.route.slug}`);
   const lines: string[] = [];
 
-  lines.push(`# managed by registry-service`);
+  lines.push(`# managed by registry-service (dynamic routes only)`);
   lines.push(`# slug: ${params.route.slug}`);
   lines.push(
     ...renderReverseProxyBlock({
@@ -217,10 +177,6 @@ function renderRouteFragment(params: {
 function buildManagedRoutes(routes: RouteRecord[]): ManagedRoute[] {
   const bySlug = new Map<string, ManagedRoute>();
 
-  for (const route of BUILTIN_ROUTES) {
-    bySlug.set(route.slug, route);
-  }
-
   for (const route of routes) {
     const host = route.host.trim().toLowerCase();
     const token = firstHostToken(host);
@@ -236,6 +192,23 @@ function buildManagedRoutes(routes: RouteRecord[]): ManagedRoute[] {
   }
 
   return [...bySlug.values()].sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+function normalizeImportGlobPath(value: string): string {
+  return value.replaceAll("\\", "/").replaceAll(/\/+$/g, "");
+}
+
+function rewriteRootCaddyImportForStage(params: {
+  rootCaddyfileContent: string;
+  caddyConfigDir: string;
+  stageDir: string;
+}): string {
+  const primaryImport = `${normalizeImportGlobPath(params.caddyConfigDir)}/*.caddy`;
+  const defaultImport = "/home/iterate/.iterate/caddy/*.caddy";
+  const stagedImport = `${normalizeImportGlobPath(params.stageDir)}/*.caddy`;
+  return params.rootCaddyfileContent
+    .replaceAll(primaryImport, stagedImport)
+    .replaceAll(defaultImport, stagedImport);
 }
 
 async function runCaddyValidateAndReload(params: {
@@ -266,6 +239,7 @@ export async function reconcileCaddyConfig(
 
   const managedRoutes = buildManagedRoutes(input.routes);
   const desiredFiles = new Map<string, string>();
+  const desiredByName = new Map<string, string>();
 
   for (const route of managedRoutes) {
     const fileName = `${route.slug}.caddy`;
@@ -276,6 +250,7 @@ export async function reconcileCaddyConfig(
       iteratePublicBaseUrlType: input.iteratePublicBaseUrlType,
     });
     desiredFiles.set(filePath, content);
+    desiredByName.set(fileName, content);
   }
 
   const existingFiles = (await readdir(input.caddyConfigDir))
@@ -283,6 +258,7 @@ export async function reconcileCaddyConfig(
     .map((entry) => join(input.caddyConfigDir, entry));
 
   const changedFiles: string[] = [];
+  const previousContents = new Map<string, string | undefined>();
   for (const [filePath, content] of desiredFiles.entries()) {
     let current = "";
     try {
@@ -292,31 +268,88 @@ export async function reconcileCaddyConfig(
     }
 
     if (current === content) continue;
-
-    const tempPath = `${filePath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    await writeFile(tempPath, content, "utf8");
-    await rename(tempPath, filePath);
+    previousContents.set(filePath, current.length > 0 ? current : undefined);
     changedFiles.push(filePath);
   }
 
   const removedFiles: string[] = [];
   for (const filePath of existingFiles) {
     if (desiredFiles.has(filePath)) continue;
-    await rm(filePath, { force: true });
+    const previous = await readFile(filePath, "utf8").catch(() => "");
+    previousContents.set(filePath, previous.length > 0 ? previous : undefined);
     removedFiles.push(filePath);
   }
 
   const shouldReload =
     input.forceReload === true || changedFiles.length > 0 || removedFiles.length > 0;
-  if (shouldReload) {
+  if (!shouldReload) {
+    return {
+      reloaded: false,
+      changedFiles,
+      removedFiles,
+      renderedFiles: [...desiredFiles.keys()],
+    };
+  }
+
+  const stageDir = join(
+    input.caddyConfigDir,
+    `.registry-stage-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+
+  try {
+    await mkdir(stageDir, { recursive: true });
+    for (const [fileName, content] of desiredByName.entries()) {
+      await writeFile(join(stageDir, fileName), content, "utf8");
+    }
+
+    const rootContent = await readFile(input.rootCaddyfilePath, "utf8");
+    const stagedRootPath = join(stageDir, "Caddyfile.staged");
+    const stagedRootContent = rewriteRootCaddyImportForStage({
+      rootCaddyfileContent: rootContent,
+      caddyConfigDir: input.caddyConfigDir,
+      stageDir,
+    });
+    await writeFile(stagedRootPath, stagedRootContent, "utf8");
+
+    await execFile(input.caddyBinPath, [
+      "validate",
+      "--config",
+      stagedRootPath,
+      "--adapter",
+      "caddyfile",
+    ]);
+
+    for (const [filePath, content] of desiredFiles.entries()) {
+      if (!changedFiles.includes(filePath)) continue;
+      const tempPath = `${filePath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await writeFile(tempPath, content, "utf8");
+      await rename(tempPath, filePath);
+    }
+
+    for (const filePath of removedFiles) {
+      await rm(filePath, { force: true });
+    }
+
     await runCaddyValidateAndReload({
       caddyBinPath: input.caddyBinPath,
       rootCaddyfilePath: input.rootCaddyfilePath,
     });
+  } catch (error) {
+    // Best-effort rollback of touched files if validate/reload fails post-promotion.
+    for (const [filePath, previous] of previousContents.entries()) {
+      if (previous === undefined) {
+        await rm(filePath, { force: true }).catch(() => {});
+        continue;
+      }
+      await writeFile(filePath, previous, "utf8").catch(() => {});
+    }
+    throw error;
+  } finally {
+    await rm(stageDir, { recursive: true, force: true }).catch(() => {});
   }
 
   return {
-    reloaded: shouldReload,
+    reloaded: true,
     changedFiles,
     removedFiles,
     renderedFiles: [...desiredFiles.keys()],

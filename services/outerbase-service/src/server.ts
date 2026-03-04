@@ -16,7 +16,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 const serviceName = "jonasland-outerbase-service";
 const DEFAULT_SQLITE_PATHS = [
   "/var/lib/jonasland/events-service.sqlite",
-  "/var/lib/jonasland/orders-service.sqlite",
+  "/var/lib/jonasland/example.sqlite",
 ].join(",");
 
 let studioOrigin = "";
@@ -634,26 +634,26 @@ function buildPageHtml(mainAlias: string): string {
         .map((database) => "<li><code>" + escapeHtml(database.name) + "</code> -> <code>" + escapeHtml(database.path) + "</code></li>")
         .join("");
       const helpQueryExamples = [
-        "-- 1) Latest orders joined to events",
-        "SELECT o.id AS order_id, o.status, o.sku, e.type AS event_type, o.created_at",
-        "FROM orders_service.orders o",
-        "LEFT JOIN events_service.events e ON e.id = o.event_id",
-        "ORDER BY o.created_at DESC",
+        "-- 1) Latest example things joined to events",
+        "SELECT t.id AS thing_id, t.thing, e.type AS event_type, t.created_at",
+        "FROM example.things t",
+        "LEFT JOIN events_service.events e ON e.id = t.event_id",
+        "ORDER BY t.created_at DESC",
         "LIMIT 20;",
         "",
-        "-- 2) Count orders by status + event type",
-        "SELECT COALESCE(e.type, '<no_event>') AS event_type, o.status, COUNT(*) AS order_count",
-        "FROM orders_service.orders o",
-        "LEFT JOIN events_service.events e ON e.id = o.event_id",
-        "GROUP BY COALESCE(e.type, '<no_event>'), o.status",
-        "ORDER BY order_count DESC, event_type ASC, o.status ASC",
+        "-- 2) Count things by event type",
+        "SELECT COALESCE(e.type, '<no_event>') AS event_type, COUNT(*) AS thing_count",
+        "FROM example.things t",
+        "LEFT JOIN events_service.events e ON e.id = t.event_id",
+        "GROUP BY COALESCE(e.type, '<no_event>')",
+        "ORDER BY thing_count DESC, event_type ASC",
         "LIMIT 50;",
         "",
-        "-- 3) Events with no matching order",
+        "-- 3) Events with no matching thing",
         "SELECT e.id AS event_id, e.type, e.created_at",
         "FROM events_service.events e",
-        "LEFT JOIN orders_service.orders o ON o.event_id = e.id",
-        "WHERE o.id IS NULL",
+        "LEFT JOIN example.things t ON t.event_id = e.id",
+        "WHERE t.id IS NULL",
         "ORDER BY e.created_at DESC",
         "LIMIT 20;",
       ].join("\\n");
@@ -665,7 +665,7 @@ function buildPageHtml(mainAlias: string): string {
           "</section>" +
           "<section>" +
             "<h3 class='help-section-title'>How to query</h3>" +
-            "<p class='help-copy'>Copy any query block below. Use explicit aliases <code>events_service</code> and <code>orders_service</code> so it runs no matter which DB is selected as <code>main</code>.</p>" +
+            "<p class='help-copy'>Copy any query block below. Use explicit aliases <code>events_service</code> and <code>example</code> so it runs no matter which DB is selected as <code>main</code>.</p>" +
             "<pre>" + helpQueryExamples + "</pre>" +
           "</section>" +
         "</div>";

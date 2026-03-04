@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@iterate-com/example-contract": "workspace:*",
-    "@iterate-com/orders-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*"
   },
   "devDependencies": {

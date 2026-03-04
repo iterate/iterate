@@ -41,7 +41,7 @@ Move `nonEmptyStringWithTrimDefault` to shared.
 Files:
 
 - `services/shared/src/index.ts` — add export
-- `services/orders-contract/src/index.ts` — import, remove local
+- `services/example-contract/src/index.ts` — import, remove local
 - `services/events-contract/src/index.ts` — import, remove local
 - `services/services-contract/src/index.ts` — import, remove local
 
@@ -59,19 +59,19 @@ Use `createServiceSubRouterHandlers()` that's defined but never imported.
 
 Files:
 
-- `services/orders/src/router.ts` — use factory
+- `services/example/src/router.ts` — use factory
 - `services/events/src/router.ts` — use factory
 
 ## Phase 3: Create Server Factory
 
-Extract ~190 LOC duplicated between orders/events servers.
+Extract ~190 LOC duplicated between example/events servers.
 
 Create: `services/shared/src/hono-server-factory.ts`
 
 Modify:
 
 - `services/shared/package.json` — add Hono deps
-- `services/orders/src/server.ts` — reduce to ~30 lines
+- `services/example/src/server.ts` — reduce to ~30 lines
 - `services/events/src/server.ts` — reduce to ~30 lines
 
 Interface:
@@ -92,13 +92,13 @@ Result:
 
 ```typescript
 await createHonoServiceServer({
-  serviceName: "jonasland-orders-service",
-  manifest: ordersServiceManifest,
-  router: ordersRouter,
-  portEnvKey: "ORDERS_SERVICE_PORT",
-  openAPITitle: "jonasland orders-service API",
-  initializeDb: initializeOrdersDb,
-  getDbRuntimeConfig: getOrdersDbRuntimeConfig,
+  serviceName: "jonasland-example",
+  manifest: exampleServiceManifest,
+  router: exampleRouter,
+  portEnvKey: "EXAMPLE_SERVICE_PORT",
+  openAPITitle: "jonasland example API",
+  initializeDb: initializeExampleDb,
+  getDbRuntimeConfig: getExampleDbRuntimeConfig,
 });
 ```
 

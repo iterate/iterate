@@ -60,7 +60,6 @@ const platformLinks: ReadonlyArray<LinkSeed> = [
     hint: "login: root@example.com / Complexpass#123",
   },
   { label: "ClickStack", host: "clickstack.iterate.localhost", path: "/" },
-  { label: "Caddy Manager", host: "caddymanager.iterate.localhost", path: "/" },
 ] as const;
 
 const platformServices: ReadonlyArray<ServiceSeed> = [
@@ -96,10 +95,10 @@ const platformServices: ReadonlyArray<ServiceSeed> = [
 
 const services: ReadonlyArray<ServiceSeed> = [
   {
-    label: "Orders Service",
-    host: "orders.iterate.localhost",
+    label: "Example Service",
+    host: "example.iterate.localhost",
     frontendPath: "/",
-    apiPath: "/healthz",
+    apiPath: "/orpc/service/health",
     docsPath: "/api/docs",
   },
   {

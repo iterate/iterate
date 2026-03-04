@@ -85,8 +85,11 @@ function http1Request(params: {
 }
 
 /**
- * Returns a fetch function that rewrites URLs to `baseUrl` and adds
- * `x-forwarded-host` so Caddy routes to the right service.
+ * Returns a fetch function that rewrites URLs to `baseUrl` and sets `Host`
+ * so Caddy routes to the right service via vhost matching.
+ * Does NOT set `X-Forwarded-Host` — that header is for external ingress
+ * gateways only; setting it here would cause the XFH catch-all in the
+ * root Caddyfile to intercept before dynamic registry fragments match.
  * Uses HTTP/1.1 under the hood to avoid HTTP/2 stream issues on Fly.
  */
 export function createHostRoutedFetch(params: {
@@ -100,7 +103,6 @@ export function createHostRoutedFetch(params: {
     request.headers.forEach((v, k) => {
       headers[k] = v;
     });
-    headers["x-forwarded-host"] = params.host;
     headers["host"] = params.host;
     const method = request.method;
     const body =

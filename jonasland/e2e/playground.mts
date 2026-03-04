@@ -340,7 +340,7 @@ async function main(): Promise<void> {
   console.log(`[playground] - https://registry__${slug}.${ingressProxyDomain}/api/routes`);
   console.log(`[playground] - https://home__${slug}.${ingressProxyDomain}/`);
   console.log(
-    `[playground] tunnel direct (host-agnostic path): ${tunnel.tunnelUrl}/__iterate/events/api/service/health`,
+    `[playground] tunnel direct with x-forwarded-host: ${tunnel.tunnelUrl}/api/service/health`,
   );
   console.log("[playground] 4/4 press Enter to teardown");
   console.log("");

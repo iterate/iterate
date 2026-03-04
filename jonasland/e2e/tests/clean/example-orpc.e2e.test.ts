@@ -82,7 +82,18 @@ describe.runIf(cases.length > 0)("on-demand example oRPC", () => {
         });
         expect(waitResult.allMet).toBe(true);
 
-        const example = deployment.createServiceClient({ manifest: exampleServiceManifest });
+        // example service self-registers with registry on listen; wait until the host route exists
+        // before exercising the typed client through caddy host routing.
+        const expectedExampleHost = "example.iterate.localhost";
+        const routeDeadline = Date.now() + (60_000 + timeoutOffsetMs);
+        let routeReady = false;
+        while (Date.now() < routeDeadline) {
+          const listedRoutes = await deployment.registry.routes.list({});
+          routeReady = listedRoutes.routes.some((route) => route.host === expectedExampleHost);
+          if (routeReady) break;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        expect(routeReady).toBe(true);
 
         let ping:
           | {
@@ -90,35 +101,100 @@ describe.runIf(cases.length > 0)("on-demand example oRPC", () => {
               service: string;
             }
           | undefined;
+        let lastPingError = "";
         const pingDeadline = Date.now() + (120_000 + timeoutOffsetMs);
         while (Date.now() < pingDeadline) {
-          ping = await example.things.ping({}).catch(() => undefined);
+          const response = await deployment
+            .fetch(expectedExampleHost, "/api/things/ping")
+            .catch((error) => {
+              lastPingError = error instanceof Error ? error.message : String(error);
+              return undefined;
+            });
+          if (!response) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            continue;
+          }
+          if (!response.ok) {
+            lastPingError = `status=${String(response.status)}`;
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            continue;
+          }
+          ping = (await response.json()) as { ok: true; service: string };
           if (ping?.ok) break;
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
-        expect(ping?.ok).toBe(true);
+        expect(ping?.ok, `last ping error: ${lastPingError}`).toBe(true);
 
-        const created = await example.things.create({ thing: `thing-${randomUUID().slice(0, 6)}` });
+        const createdResponse = await deployment.fetch(expectedExampleHost, "/api/things", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ thing: `thing-${randomUUID().slice(0, 6)}` }),
+        });
+        expect(createdResponse.ok).toBe(true);
+        const created = (await createdResponse.json()) as { id: string; thing: string };
         expect(created.thing.length).toBeGreaterThan(0);
 
-        const listed = await example.things.list({ limit: 20 });
+        const listedResponse = await deployment.fetch(expectedExampleHost, "/api/things?limit=20");
+        expect(listedResponse.ok).toBe(true);
+        const listed = (await listedResponse.json()) as {
+          things: Array<{ id: string }>;
+          total: number;
+        };
         expect(listed.things.some((thing) => thing.id === created.id)).toBe(true);
 
-        const updated = await example.things.update({ id: created.id, thing: "updated thing" });
+        const updatedResponse = await deployment.fetch(
+          expectedExampleHost,
+          `/api/things/${created.id}`,
+          {
+            method: "PATCH",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ id: created.id, thing: "updated thing" }),
+          },
+        );
+        expect(updatedResponse.ok).toBe(true);
+        const updated = (await updatedResponse.json()) as { thing: string };
         expect(updated.thing).toBe("updated thing");
 
-        const removed = await example.things.remove({ id: created.id });
+        const removedResponse = await deployment.fetch(
+          expectedExampleHost,
+          `/api/things/${created.id}`,
+          {
+            method: "DELETE",
+          },
+        );
+        expect(removedResponse.ok).toBe(true);
+        const removed = (await removedResponse.json()) as { deleted: boolean };
         expect(removed.deleted).toBe(true);
 
         const delayedStreamPath = `example/tests/${randomUUID().slice(0, 8)}`;
         const delayedType = "https://events.iterate.com/example/test-delayed";
-        const delayed = await example.things.delayedPublish({
-          streamPath: delayedStreamPath,
-          type: delayedType,
-          delayMs: 250,
-          payload: { source: "e2e" },
-        });
+        const delayedResponse = await deployment.fetch(
+          expectedExampleHost,
+          "/api/things/test/delayed-publish",
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              streamPath: delayedStreamPath,
+              type: delayedType,
+              delayMs: 250,
+              payload: { source: "e2e" },
+            }),
+          },
+        );
+        expect(delayedResponse.ok).toBe(true);
+        const delayed = (await delayedResponse.json()) as {
+          accepted: true;
+          streamPath: string;
+        };
         expect(delayed.accepted).toBe(true);
+        expect(delayed.streamPath.length).toBeGreaterThan(0);
 
         const startedAt = Date.now();
         let found = false;

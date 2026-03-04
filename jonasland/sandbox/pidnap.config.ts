@@ -23,12 +23,6 @@ const homeServiceManifest: ServiceManifestWithEntryPoint = {
   serverEntryPoint: "services/home-service/src/server.ts",
   orpcContract: noOrpcContract,
 };
-const docsServiceManifest: ServiceManifestWithEntryPoint = {
-  slug: "docs-service",
-  port: 19050,
-  serverEntryPoint: "services/docs-service/src/server.ts",
-  orpcContract: noOrpcContract,
-};
 
 const registryPidnapConfig = serviceManifestToPidnapConfig({
   manifest: registryServiceManifest,
@@ -41,9 +35,6 @@ const eventsPidnapConfig = serviceManifestToPidnapConfig({
 });
 const homePidnapConfig = serviceManifestToPidnapConfig({
   manifest: homeServiceManifest,
-});
-const docsPidnapConfig = serviceManifestToPidnapConfig({
-  manifest: docsServiceManifest,
 });
 
 export default defineConfig({
@@ -67,9 +58,13 @@ export default defineConfig({
         args: ["run", "--config", caddyRootCaddyfile, "--adapter", "caddyfile"],
         env: {
           ITERATE_DEFAULT_INGRESS_SERVICE: "home",
-          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
-          OTEL_PROPAGATORS: "tracecontext,baggage",
         },
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: 500,
       },
     },
     {
@@ -79,12 +74,25 @@ export default defineConfig({
         args: [join(iterateRepo, registryPidnapConfig.definition.args[0]!)],
         env: registryPidnapConfig.definition.env,
       },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        // registry must pick up ITERATE_PUBLIC_BASE_URL(_TYPE) changes from ~/.iterate/.env
+        reloadDelay: 500,
+      },
     },
     {
       name: "frps",
       definition: {
         command: "/usr/local/bin/frps",
         args: ["-c", `${iterateRepo}/jonasland/sandbox/frps.toml`],
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: false,
       },
     },
     {
@@ -95,7 +103,14 @@ export default defineConfig({
         env: eventsPidnapConfig.definition.env,
       },
       dependsOn: ["registry"],
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: false,
+      },
     },
+    // Optional apps (home/docs/outerbase/example) are on-demand and register routes via registry.
     {
       name: "home",
       definition: {
@@ -104,15 +119,12 @@ export default defineConfig({
         env: homePidnapConfig.definition.env,
       },
       dependsOn: ["registry"],
-    },
-    {
-      name: "docs",
-      definition: {
-        command: tsxPath,
-        args: [join(iterateRepo, docsPidnapConfig.definition.args[0]!)],
-        env: docsPidnapConfig.definition.env,
+      options: {
+        restartPolicy: "never",
       },
-      dependsOn: ["registry"],
+      envOptions: {
+        reloadDelay: false,
+      },
     },
     {
       name: "openobserve",
@@ -126,12 +138,24 @@ export default defineConfig({
           ZO_DATA_DIR: "/var/lib/openobserve",
         },
       },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: false,
+      },
     },
     {
       name: "otel-collector",
       definition: {
         command: "/usr/local/bin/otelcol-contrib",
         args: ["--config", otelCollectorConfigPath, "--set=service.telemetry.metrics.level=None"],
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: false,
       },
     },
   ],

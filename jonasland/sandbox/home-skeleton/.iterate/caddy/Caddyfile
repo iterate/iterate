@@ -2,98 +2,66 @@
 # Iterate Sandbox Caddyfile
 # =============================================================================
 #
-# This Caddy config routes traffic to internal sandbox services. It handles
-# three access patterns:
+# Built-in routing source of truth lives in THIS file.
+# These routes must keep working before registry starts or reloads.
 #
-#   1. Direct vhost access:  http(s)://<service>.iterate.localhost
-#   2. Path-based access:    /__iterate/<service>/* on :80/:8080
-#   3. Proxy/ingress access: Host or X-Forwarded-Host headers matching
-#      <service>__<id>.(proxy|ingress).iterate.com or <service>.iterate.localhost
+# Dynamic registry-managed routes are additive fragments loaded from:
+#   /home/iterate/.iterate/caddy/*.caddy
 #
-# The service-to-port mapping is defined once in the (iterate_service_map_entries)
-# snippet and reused everywhere via parameterized snippet imports.
+# Optional apps (for example: home/docs/outerbase/example) are not hard-coded
+# here. They become routable when they start and register routes via registry.
+# See: jonasland/sandbox/pidnap.config.ts
+#
+# NOTE ON TRACING:
+# Caddy tracing is intentionally OFF right now to reduce noise and startup cost.
+# To re-enable later, add tracing blocks in iterate_service_proxy and/or host
+# handlers below.
 #
 # =============================================================================
 
-
-# -----------------------------------------------------------------------------
-# Global options
-# -----------------------------------------------------------------------------
 {
-    # Caddy admin API — used by caddymanager and available at caddy-admin.iterate.localhost
+    # Caddy admin API (local-only inside sandbox container).
     admin 127.0.0.1:2019
 
     servers {
-        # Cloudflare IP ranges — so Caddy trusts X-Forwarded-For from CF edge
+        # Trust CF/Fly proxy hops for client IP derivation.
         trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
-
-        # Headers Caddy should check (in order) to determine the real client IP
         client_ip_headers X-Forwarded-For CF-Connecting-IP Fly-Client-IP
     }
 
-    # Use Caddy's internal CA for TLS certs (no ACME / Let's Encrypt)
     local_certs
-
-    # We manage HTTP/HTTPS listeners explicitly — don't let Caddy auto-redirect
     auto_https off
-
-    # Don't persist the dynamic config to disk (this is a sandbox)
+    # Keep runtime config file-driven (registry fragments + this root file).
     persist_config off
 }
 
-
-# =============================================================================
-# REUSABLE SNIPPETS
-# =============================================================================
-# Snippets are defined with (name) { ... } and imported with `import name`.
-# They support positional args via {args[0]}, {args[1]}, etc.
-
-
 # -----------------------------------------------------------------------------
-# (iterate_service_map_entries) — Single source of truth for service routing
+# Built-in service map
 # -----------------------------------------------------------------------------
-# Maps a service name to its upstream address and internal hostname.
-# Used inside `map` directives via `import iterate_service_map_entries`.
-# To add a new service, add a line here — it propagates everywhere.
-(iterate_service_map_entries) {
-    pidnap       127.0.0.1:17300 pidnap.iterate.localhost
-    registry     127.0.0.1:17310 registry.iterate.localhost
-    caddy        127.0.0.1:2019  caddy.iterate.localhost
-    events       127.0.0.1:17320 events.iterate.localhost
-    orders       127.0.0.1:19020 orders.iterate.localhost
-    home         127.0.0.1:19030 home.iterate.localhost
-    outerbase    127.0.0.1:19040 outerbase.iterate.localhost
-    docs         127.0.0.1:19050 docs.iterate.localhost
-    caddy-admin  127.0.0.1:2019  caddy-admin.iterate.localhost
-    caddymanager 127.0.0.1:8501  caddymanager.iterate.localhost
-    openobserve  127.0.0.1:5080  openobserve.iterate.localhost
-    clickstack   127.0.0.1:8080  clickstack.iterate.localhost
+# This map is consumed by shared routing snippets.
+# If a built-in route changes, update it here first.
+(iterate_builtin_service_map_entries) {
+    pidnap         127.0.0.1:17300 pidnap.iterate.localhost
+    registry       127.0.0.1:17310 registry.iterate.localhost
+    events         127.0.0.1:17320 events.iterate.localhost
+    caddy          127.0.0.1:2019  caddy.iterate.localhost
+    caddy-admin    127.0.0.1:2019  caddy-admin.iterate.localhost
+    openobserve    127.0.0.1:5080  openobserve.iterate.localhost
+    otel-collector 127.0.0.1:15333 otel-collector.iterate.localhost
     default "" ""
 }
 
-
 # -----------------------------------------------------------------------------
-# (iterate_cors_openapi) — CORS headers for all paths
+# Shared CORS helper
 # -----------------------------------------------------------------------------
-# Caddy has no built-in CORS directive; this is the idiomatic pattern.
-# Handles both preflight (OPTIONS → 204) and actual requests.
-# Allows local dev and public playground origins:
-# - *.iterate.localhost
-# - *.(ingress|proxy).iterate.com (including service__id forms)
-# - *.trycloudflare.com
 (iterate_cors_openapi) {
-    # Preflight: browser sends OPTIONS before cross-origin requests
     @iterate_api_preflight {
         method OPTIONS
         header_regexp Origin ^https?://(([a-z0-9-]+\.)?iterate\.localhost|([a-z0-9-]+(__[a-z0-9-]+)?)\.(proxy|ingress)\.iterate\.com|([a-z0-9-]+\.)*trycloudflare\.com)(:[0-9]+)?$
     }
-
-    # All origin-bearing requests that need CORS response headers
     @iterate_api_cors {
         header_regexp Origin ^https?://(([a-z0-9-]+\.)?iterate\.localhost|([a-z0-9-]+(__[a-z0-9-]+)?)\.(proxy|ingress)\.iterate\.com|([a-z0-9-]+\.)*trycloudflare\.com)(:[0-9]+)?$
     }
-
-    # CORS headers — block syntax avoids repeating the matcher on every line
     header @iterate_api_cors {
         Access-Control-Allow-Origin "{http.request.header.Origin}"
         Access-Control-Allow-Methods "GET,POST,PUT,PATCH,DELETE,OPTIONS"
@@ -102,115 +70,73 @@
         Access-Control-Max-Age "600"
         Vary "Origin"
     }
-
-    # Preflight gets a 204 (no content) — the CORS headers above also apply
-    # because @iterate_api_preflight is a subset of @iterate_api_cors
     respond @iterate_api_preflight 204
 }
 
-
 # -----------------------------------------------------------------------------
-# (iterate_service_proxy) — Parameterized map + proxy for dynamic routing
+# Shared service proxy (service key -> upstream)
 # -----------------------------------------------------------------------------
-# Args:
-#   {args[0]} = the value to look up in the service map (e.g. a regex capture)
-#   {args[1]} = error message if service is unknown
-#
-# Resolves a service name to upstream + host, proxies if known, 404 otherwise.
 (iterate_service_proxy) {
     map {args[0]} {iterate_service_upstream} {iterate_service_host} {
-        import iterate_service_map_entries
+        import iterate_builtin_service_map_entries
     }
-
     @known_service expression `{iterate_service_upstream} != ""`
     handle @known_service {
         import iterate_cors_openapi
         reverse_proxy {iterate_service_upstream} {
-            # Rewrite the Host header so the upstream sees its canonical hostname
+            # Everything downstream should reason about canonical Host only.
             header_up Host {iterate_service_host}
         }
     }
-
     respond "{args[1]}" 404
 }
 
-
 # -----------------------------------------------------------------------------
-# (iterate_xfh_and_external_proxy) — Shared routing for Host/XFH-based proxying
+# Shared Host/X-Forwarded-Host ingress routing
 # -----------------------------------------------------------------------------
-# Handles three patterns used by both :80 and :443 blocks:
-#   1. Host: <service>__<id>.(proxy|ingress).iterate.com — external proxy via Host
-#   2. X-Forwarded-Host: <service>__<id>.(proxy|ingress).iterate.com — external via XFH
-#   3. X-Forwarded-Host: <service>.iterate.localhost — internal via XFH
-#   4. Host/XFH: <id>.(proxy|ingress).iterate.com — fallback to home service
+# Caddy matches both Host and X-Forwarded-Host forms. Inbound gateways may set
+# either, but downstream handlers should only care about canonical Host after
+# reverse_proxy header_up rewrite.
 (iterate_xfh_and_external_proxy) {
-    # Pattern 0a: Port-prefixed external host
-    # e.g. Host: 17320__events__abc123.ingress.iterate.com -> route to events
-    @external_proxy_host_port_prefixed header_regexp external_proxy_host_port_prefixed Host ^[0-9]+__([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
-    handle @external_proxy_host_port_prefixed {
-        import iterate_service_proxy {re.external_proxy_host_port_prefixed.1} "unknown service host pattern"
-    }
-
-    # Pattern 0b: Port-prefixed external X-Forwarded-Host
-    # e.g. XFH: 17320__events__abc123.ingress.iterate.com -> route to events
-    @external_proxy_xfh_port_prefixed header_regexp external_proxy_xfh_port_prefixed X-Forwarded-Host ^[0-9]+__([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
-    handle @external_proxy_xfh_port_prefixed {
-        import iterate_service_proxy {re.external_proxy_xfh_port_prefixed.1} "unknown x-forwarded-host external service"
-    }
-
-    # Pattern 1: External proxy identified by Host header
-    # e.g. Host: events__abc123.proxy.iterate.com → route to events service
-    # Also supports optional port-prefix host forms:
-    # 17320__events__abc123.ingress.iterate.com → route to events
+    # Host: [<port>__]<service>__<id>.(proxy|ingress).iterate.com
     @external_proxy_host header_regexp external_proxy_host Host ^(?:[0-9]+__)?([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
     handle @external_proxy_host {
         import iterate_service_proxy {re.external_proxy_host.1} "unknown service host pattern"
     }
 
-    # Pattern 2: External proxy identified by X-Forwarded-Host header
-    # Same format as above but CF/Fly sets XFH instead of Host
+    # X-Forwarded-Host: [<port>__]<service>__<id>.(proxy|ingress).iterate.com
     @external_proxy_xfh header_regexp external_proxy_xfh X-Forwarded-Host ^(?:[0-9]+__)?([a-z0-9-]+)__[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
     handle @external_proxy_xfh {
         import iterate_service_proxy {re.external_proxy_xfh.1} "unknown x-forwarded-host external service"
     }
 
-    # Pattern 3: Internal routing via X-Forwarded-Host
-    # e.g. XFH: events.iterate.localhost → route to events service
+    # X-Forwarded-Host: <service>.iterate.localhost
     @xfh_service header_regexp xfh_service X-Forwarded-Host ^([a-z0-9-]+)\.iterate\.localhost(?::[0-9]+)?$
     handle @xfh_service {
         import iterate_service_proxy {re.xfh_service.1} "unknown x-forwarded-host service"
     }
 
-    # Pattern 4: Root ingress/proxy host fallback
-    # e.g. Host: playground-abc.ingress.iterate.com → home service
+    # Bare ingress root host fallback. Default service token is env-driven.
+    # If unset, we fallback to "home" for backwards compatibility.
     @external_proxy_root_host header_regexp external_proxy_root_host Host ^[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
     handle @external_proxy_root_host {
-        import iterate_service_proxy home "unknown default ingress service"
+        import iterate_service_proxy {$ITERATE_DEFAULT_INGRESS_SERVICE:home} "unknown default ingress service"
     }
-
-    # Same fallback via X-Forwarded-Host.
     @external_proxy_root_xfh header_regexp external_proxy_root_xfh X-Forwarded-Host ^[^.]+\.(proxy|ingress)\.iterate\.com(?::[0-9]+)?$
     handle @external_proxy_root_xfh {
-        import iterate_service_proxy home "unknown default ingress service"
+        import iterate_service_proxy {$ITERATE_DEFAULT_INGRESS_SERVICE:home} "unknown default ingress service"
     }
 }
 
-
 # -----------------------------------------------------------------------------
-# (iterate_frp_control) — FRP (Fast Reverse Proxy) control plane routing
+# Shared FRP control plane routing
 # -----------------------------------------------------------------------------
-# Args:
-#   {args[0]} = extra reverse_proxy config (e.g. "{ stream_close_delay 5m }" for TLS)
-#
-# Routes frp control traffic from three sources to the frp server on :27000.
 (iterate_frp_control) {
-    # Local access: frp.iterate.localhost
     @frp_control_local header_regexp frp_control_local Host ^frp\.iterate\.localhost(?::[0-9]+)?$
     handle @frp_control_local {
         reverse_proxy 127.0.0.1:27000 {args[0]}
     }
 
-    # WebSocket upgrade on localhost/127.0.0.1 — used by frpc clients connecting locally
     @frp_control_localhost_ws {
         header Connection *Upgrade*
         header Upgrade websocket
@@ -220,20 +146,15 @@
         reverse_proxy 127.0.0.1:27000 {args[0]}
     }
 
-    # External access: frp.ingress.iterate.com or frp__<id>.ingress.iterate.com
     @frp_control_external header_regexp frp_control_external Host ^frp(__[a-z0-9-]+)?\.ingress\.iterate\.com(?::[0-9]+)?$
     handle @frp_control_external {
         reverse_proxy 127.0.0.1:27000 {args[0]}
     }
 }
 
-
-# =============================================================================
-# SITE BLOCKS — Direct vhost access (HTTP)
-# =============================================================================
-# These provide convenient http://<service>.iterate.localhost access
-# for local development. Each is a simple reverse proxy to the service port.
-
+# -----------------------------------------------------------------------------
+# Direct local vhosts for built-ins only
+# -----------------------------------------------------------------------------
 http://pidnap.iterate.localhost {
     reverse_proxy 127.0.0.1:17300
 }
@@ -245,228 +166,66 @@ http://registry.iterate.localhost {
 
 http://events.iterate.localhost {
     import iterate_cors_openapi
-    tracing {
-        span "caddy-events-http"
-    }
     reverse_proxy 127.0.0.1:17320
-}
-
-http://orders.iterate.localhost {
-    import iterate_cors_openapi
-    tracing {
-        span "caddy-orders-http"
-    }
-    reverse_proxy 127.0.0.1:19020
-}
-
-http://docs.iterate.localhost {
-    import iterate_cors_openapi
-    reverse_proxy 127.0.0.1:19050
-}
-
-http://home.iterate.localhost {
-    import iterate_cors_openapi
-    reverse_proxy 127.0.0.1:19030
-}
-
-http://outerbase.iterate.localhost {
-    import iterate_cors_openapi
-    reverse_proxy 127.0.0.1:19040
-}
-
-http://caddymanager.iterate.localhost {
-    reverse_proxy 127.0.0.1:8501
-}
-
-http://caddy-admin.iterate.localhost {
-    reverse_proxy 127.0.0.1:2019
 }
 
 http://caddy.iterate.localhost {
     reverse_proxy 127.0.0.1:2019
 }
 
+http://caddy-admin.iterate.localhost {
+    reverse_proxy 127.0.0.1:2019
+}
+
 http://openobserve.iterate.localhost {
     reverse_proxy 127.0.0.1:5080 {
-        # Inject basic auth so the user doesn't need to log in during development
+        # Keep local sandbox login friction-free.
         header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
     }
 }
 
-http://clickstack.iterate.localhost {
-    reverse_proxy 127.0.0.1:8080
+http://otel-collector.iterate.localhost {
+    reverse_proxy 127.0.0.1:15333
 }
 
-
-# =============================================================================
-# :80, :8080 — Main HTTP listener (catch-all)
-# =============================================================================
-# Handles:
-#   - Health checks
-#   - Path-based /__iterate/<service>/* routing (used by the daemon internally)
-#   - Host/XFH-based dynamic service proxy (external ingress)
-#   - FRP control plane
-#   - User service traffic (fallback → port 19000)
+# -----------------------------------------------------------------------------
+# Main HTTP listener
+# -----------------------------------------------------------------------------
 :80, :8080 {
-    # Health check endpoint for load balancers / readiness probes
     @health path /healthz
     respond @health "ok" 200
 
-    # -------------------------------------------------------------------------
-    # Path-based service routing: /__iterate/<service>/*
-    # -------------------------------------------------------------------------
-    # handle_path matches the path prefix AND strips it before proxying,
-    # replacing the old pattern of @matcher + handle + uri strip_prefix.
-
-    handle_path /__iterate/pidnap/* {
-        reverse_proxy 127.0.0.1:17300
-    }
-
-    handle_path /__iterate/registry/* {
-        reverse_proxy 127.0.0.1:17310
-    }
-
-    handle_path /__iterate/events/* {
-        reverse_proxy 127.0.0.1:17320
-    }
-
-    handle_path /__iterate/orders/* {
-        reverse_proxy 127.0.0.1:19020
-    }
-
-    handle_path /__iterate/docs/* {
-        reverse_proxy 127.0.0.1:19050
-    }
-
-    handle_path /__iterate/home/* {
-        reverse_proxy 127.0.0.1:19030
-    }
-
-    handle_path /__iterate/outerbase/* {
-        reverse_proxy 127.0.0.1:19040
-    }
-
-    handle_path /__iterate/caddy-admin/* {
-        reverse_proxy 127.0.0.1:2019
-    }
-
-    handle_path /__iterate/caddymanager/* {
-        reverse_proxy 127.0.0.1:8501
-    }
-
-    handle_path /__iterate/openobserve/* {
-        reverse_proxy 127.0.0.1:5080 {
-            header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
-        }
-    }
-
-    handle_path /__iterate/clickstack/* {
-        reverse_proxy 127.0.0.1:8080
-    }
-
-    # -------------------------------------------------------------------------
-    # Dynamic service routing via Host / X-Forwarded-Host headers
-    # -------------------------------------------------------------------------
     import iterate_xfh_and_external_proxy
-
-    # -------------------------------------------------------------------------
-    # FRP control plane — no stream_close_delay on plain HTTP
-    # -------------------------------------------------------------------------
     import iterate_frp_control ""
 
-    # -------------------------------------------------------------------------
-    # Dynamic service configs (e.g. user-registered services via caddymanager)
-    # -------------------------------------------------------------------------
+    # Registry-managed dynamic routes (additive; built-ins stay in root Caddyfile).
     import /home/iterate/.iterate/caddy/*.caddy
 
-    # Localhost health response (for internal connectivity checks)
     @local host 127.0.0.1 localhost
     handle @local {
         respond "caddy ok" 200
     }
 
-    # -------------------------------------------------------------------------
-    # Default fallback — proxy to the user's primary service on port 19000
-    # -------------------------------------------------------------------------
+    # KEEP THIS FALLBACK:
+    # machine-wide TCP egress is redirected to Caddy; unmatched traffic must
+    # continue to egress proxy on :19000 or outbound networking breaks.
     reverse_proxy 127.0.0.1:19000
 }
 
-
-# =============================================================================
-# :443, :8443 — Main HTTPS listener (catch-all)
-# =============================================================================
-# Mirrors the HTTP block but with TLS. Uses Caddy's internal CA for on-demand
-# certificate generation (any hostname gets a cert automatically).
+# -----------------------------------------------------------------------------
+# Main HTTPS listener
+# -----------------------------------------------------------------------------
 :443, :8443 {
     tls internal {
         on_demand
     }
 
-    # -------------------------------------------------------------------------
-    # Host-based service routing (HTTPS vhosts)
-    # -------------------------------------------------------------------------
-    # Services that need tracing or special config get explicit handle blocks.
-    # Others are routed via the shared XFH/proxy snippet below.
-
-    @events host events.iterate.localhost
-    handle @events {
-        import iterate_cors_openapi
-        tracing {
-            span "caddy-events-https"
-        }
-        reverse_proxy 127.0.0.1:17320
-    }
-
-    @orders host orders.iterate.localhost
-    handle @orders {
-        import iterate_cors_openapi
-        tracing {
-            span "caddy-orders-https"
-        }
-        reverse_proxy 127.0.0.1:19020
-    }
-
-    @docs host docs.iterate.localhost
-    handle @docs {
-        import iterate_cors_openapi
-        reverse_proxy 127.0.0.1:19050
-    }
-
-    @openobserve host openobserve.iterate.localhost
-    handle @openobserve {
-        reverse_proxy 127.0.0.1:5080 {
-            header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
-        }
-    }
-
-    @clickstack host clickstack.iterate.localhost
-    handle @clickstack {
-        reverse_proxy 127.0.0.1:8080
-    }
-
-    @caddymanager host caddymanager.iterate.localhost
-    handle @caddymanager {
-        reverse_proxy 127.0.0.1:8501
-    }
-
-    # -------------------------------------------------------------------------
-    # Dynamic service routing via Host / X-Forwarded-Host headers
-    # -------------------------------------------------------------------------
     import iterate_xfh_and_external_proxy
-
-    # -------------------------------------------------------------------------
-    # FRP control plane — stream_close_delay keeps long-lived TLS connections
-    # alive for up to 5 minutes (needed for frpc tunnel reconnection)
-    # -------------------------------------------------------------------------
     import iterate_frp_control "{ stream_close_delay 5m }"
 
-    # -------------------------------------------------------------------------
-    # Dynamic service configs
-    # -------------------------------------------------------------------------
+    # Registry-managed dynamic routes (additive; built-ins stay in root Caddyfile).
     import /home/iterate/.iterate/caddy/*.caddy
 
-    # -------------------------------------------------------------------------
-    # Default fallback — proxy to the user's primary service on port 19000
-    # -------------------------------------------------------------------------
+    # Same egress fallback behavior as HTTP listener.
     reverse_proxy 127.0.0.1:19000
 }
