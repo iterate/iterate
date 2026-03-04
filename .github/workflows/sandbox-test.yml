@@ -26,6 +26,11 @@ on:
         required: false
         type: string
         default: ""
+      fly_image_tag:
+        description: Fly image tag to test (e.g. registry.fly.io/iterate-sandbox:sha-abc1234). Leave empty to test the image built from the ref.
+        required: false
+        type: string
+        default: ""
       run_docker_tests:
         description: Run Docker provider tests after build
         required: false
@@ -81,9 +86,14 @@ jobs:
         run: |-
           set -euo pipefail
           short_sha="$(git rev-parse --short=7 HEAD)"
-          fly_registry_app="$(doppler secrets get SANDBOX_FLY_REGISTRY_APP --plain)"
           image_tag="iterate-sandbox:sha-${short_sha}"
-          fly_image_tag="registry.fly.io/${fly_registry_app}:sha-${short_sha}"
+          input_fly_image_tag="${{ inputs.fly_image_tag }}"
+          if [ -n "${input_fly_image_tag}" ]; then
+            fly_image_tag="${input_fly_image_tag}"
+          else
+            fly_registry_app="$(doppler secrets get SANDBOX_FLY_REGISTRY_APP --plain)"
+            fly_image_tag="registry.fly.io/${fly_registry_app}:sha-${short_sha}"
+          fi
           echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
           echo "fly_image_tag=${fly_image_tag}" >> "$GITHUB_OUTPUT"
       - name: Run provider tests (Docker + Fly in parallel)
@@ -110,7 +120,7 @@ jobs:
               SANDBOX_TEST_SNAPSHOT_ID="${FLY_IMAGE_TAG}" \
               FLY_DEFAULT_IMAGE="${FLY_IMAGE_TAG}" \
               DOPPLER_TOKEN="${DOPPLER_TOKEN}" \
-              doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1
+              doppler run -- env RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=fly SANDBOX_TEST_SNAPSHOT_ID="$FLY_IMAGE_TAG" FLY_DEFAULT_IMAGE="$FLY_IMAGE_TAG" pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1
             ) >"${fly_log}" 2>&1 &
             fly_pid="$!"
           fi
