@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
@@ -81,8 +82,30 @@ export const ServiceSqlResult = z.object({
   lastInsertRowid: z.number().int().optional(),
 });
 
+export const ServiceDebugOutput = z.object({
+  pid: z.number().int().nonnegative(),
+  ppid: z.number().int().nonnegative(),
+  uptimeSec: z.number().nonnegative(),
+  nodeVersion: z.string(),
+  platform: z.string(),
+  arch: z.string(),
+  hostname: z.string(),
+  cwd: z.string(),
+  execPath: z.string(),
+  argv: z.array(z.string()),
+  env: z.record(z.string(), z.string().nullable()),
+  memoryUsage: z.object({
+    rss: z.number().int().nonnegative(),
+    heapTotal: z.number().int().nonnegative(),
+    heapUsed: z.number().int().nonnegative(),
+    external: z.number().int().nonnegative(),
+    arrayBuffers: z.number().int().nonnegative(),
+  }),
+});
+
 export type ServiceSqlInput = z.infer<typeof ServiceSqlInput>;
 export type ServiceSqlResult = z.infer<typeof ServiceSqlResult>;
+export type ServiceDebugOutput = z.infer<typeof ServiceDebugOutput>;
 
 export interface SqlResultSet {
   columns: string[];
@@ -96,6 +119,7 @@ export function createServiceSubRouterContract(options?: {
   tag?: string;
   healthSummary?: string;
   sqlSummary?: string;
+  debugSummary?: string;
 }) {
   const tag = options?.tag ?? "service";
 
@@ -120,6 +144,16 @@ export function createServiceSubRouterContract(options?: {
         })
         .input(ServiceSqlInput)
         .output(ServiceSqlResult),
+
+      debug: oc
+        .route({
+          method: "GET",
+          path: "/service/debug",
+          summary: options?.debugSummary ?? "Service runtime debug details",
+          tags: [tag],
+        })
+        .input(z.object({}).optional().default({}))
+        .output(ServiceDebugOutput),
     },
   } as const;
 }
@@ -139,6 +173,11 @@ type ServiceSubRouterBuilder = {
           input: ServiceSqlInput;
           context: ServiceContext;
         }) => Promise<ServiceSqlResult>,
+      ) => unknown;
+    };
+    debug: {
+      handler: (
+        handler: (args: { context: ServiceContext }) => Promise<ServiceDebugOutput>,
       ) => unknown;
     };
   };
@@ -185,7 +224,39 @@ export function createServiceSubRouterHandlers<TBuilder extends ServiceSubRouter
     return result;
   });
 
-  return { health, sql };
+  const debug = builder.service.debug.handler(async ({ context }) => {
+    infoFromContext(context, `${logPrefix}.debug`, {
+      service: options.manifest.name,
+      request_id: context.requestId,
+    });
+    const env: Record<string, string | null> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      env[key] = value ?? null;
+    }
+    const memoryUsage = process.memoryUsage();
+    return {
+      pid: process.pid,
+      ppid: process.ppid,
+      uptimeSec: process.uptime(),
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      hostname: hostname(),
+      cwd: process.cwd(),
+      execPath: process.execPath,
+      argv: process.argv,
+      env,
+      memoryUsage: {
+        rss: memoryUsage.rss,
+        heapTotal: memoryUsage.heapTotal,
+        heapUsed: memoryUsage.heapUsed,
+        external: memoryUsage.external,
+        arrayBuffers: memoryUsage.arrayBuffers,
+      },
+    };
+  });
+
+  return { health, sql, debug };
 }
 
 function resolveTraceExporterUrl() {
@@ -808,8 +879,8 @@ export function serviceManifestToPidnapConfig(params: {
   return {
     processSlug: manifest.slug,
     definition: {
-      command: "npx",
-      args: ["tsx", manifest.serverEntryPoint],
+      command: "tsx",
+      args: [manifest.serverEntryPoint],
       env: { PORT: String(manifest.port), ...params.env },
     },
     tags: ["on-demand"],

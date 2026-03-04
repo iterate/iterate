@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { extname } from "node:path";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -298,6 +299,33 @@ export const registryRouter = os.router({
         rows: result.rows.length,
       });
       return result;
+    }),
+    debug: os.service.debug.handler(async () => {
+      const env: Record<string, string | null> = {};
+      for (const [key, value] of Object.entries(process.env)) {
+        env[key] = value ?? null;
+      }
+      const memoryUsage = process.memoryUsage();
+      return {
+        pid: process.pid,
+        ppid: process.ppid,
+        uptimeSec: process.uptime(),
+        nodeVersion: process.version,
+        platform: process.platform,
+        arch: process.arch,
+        hostname: hostname(),
+        cwd: process.cwd(),
+        execPath: process.execPath,
+        argv: process.argv,
+        env,
+        memoryUsage: {
+          rss: memoryUsage.rss,
+          heapTotal: memoryUsage.heapTotal,
+          heapUsed: memoryUsage.heapUsed,
+          external: memoryUsage.external,
+          arrayBuffers: memoryUsage.arrayBuffers,
+        },
+      };
     }),
   },
   routes: {

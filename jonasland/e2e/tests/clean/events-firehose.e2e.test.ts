@@ -3,8 +3,8 @@ import { describe, expect, test } from "vitest";
 import { DockerDeployment } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
 import { FlyDeployment } from "@iterate-com/shared/jonasland/deployment/fly-deployment.ts";
 
-const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "";
-const FLY_IMAGE = process.env.JONASLAND_E2E_FLY_IMAGE ?? "";
+const DOCKER_IMAGE = process.env.E2E_DOCKER_IMAGE_REF ?? process.env.JONASLAND_SANDBOX_IMAGE ?? "";
+const FLY_IMAGE = process.env.E2E_FLY_IMAGE_REF ?? process.env.JONASLAND_SANDBOX_IMAGE ?? "";
 const FLY_API_TOKEN = process.env.FLY_API_TOKEN ?? "";
 const runFly = FLY_IMAGE.length > 0 && FLY_API_TOKEN.length > 0;
 
@@ -17,7 +17,6 @@ const dockerFactory = async (overrides = {}) =>
 const flyFactory = FlyDeployment.makeFactory({
   flyImage: FLY_IMAGE,
   flyApiToken: FLY_API_TOKEN,
-  flyBaseDomain: process.env.FLY_BASE_DOMAIN ?? "fly.dev",
 });
 
 const cases = [

@@ -22,7 +22,6 @@ export interface FlyDeploymentLocator {
 export interface FlyDeploymentOpts extends DeploymentOpts {
   flyImage?: string;
   flyApiToken?: string;
-  flyBaseDomain?: string;
   flyApiBaseUrl?: string;
   flyOrgSlug?: string;
   flyNetwork?: string;
@@ -33,10 +32,11 @@ export interface FlyDeploymentOpts extends DeploymentOpts {
   flyMachineName?: string;
 }
 
+const FLY_BASE_DOMAIN = "fly.dev";
+
 class FlyProvider implements DeploymentProvider<FlyDeploymentOpts, FlyDeploymentLocator> {
   async create(opts: FlyDeploymentOpts): Promise<ProvisionResult<FlyDeploymentLocator>> {
     if (!opts.flyImage) throw new Error("flyImage is required");
-    if (!opts.flyBaseDomain) throw new Error("flyBaseDomain is required");
     const api = createFlyApi(opts);
     const appName = normalizeFlyAppName(opts.name);
     const orgSlug = opts.flyOrgSlug ?? "iterate";
@@ -87,7 +87,7 @@ class FlyProvider implements DeploymentProvider<FlyDeploymentOpts, FlyDeployment
               env: {
                 ...envRecord,
                 ITERATE_PUBLIC_BASE_URL:
-                  envRecord.ITERATE_PUBLIC_BASE_URL ?? `https://${appName}.${opts.flyBaseDomain}`,
+                  envRecord.ITERATE_PUBLIC_BASE_URL ?? `https://${appName}.${FLY_BASE_DOMAIN}`,
                 ITERATE_PUBLIC_BASE_URL_TYPE: envRecord.ITERATE_PUBLIC_BASE_URL_TYPE ?? "prefix",
               },
               guest: {
@@ -155,7 +155,7 @@ class FlyProvider implements DeploymentProvider<FlyDeploymentOpts, FlyDeployment
         appName,
         machineId,
       },
-      baseUrl: `https://${appName}.${opts.flyBaseDomain}`,
+      baseUrl: `https://${appName}.${FLY_BASE_DOMAIN}`,
     };
   }
 

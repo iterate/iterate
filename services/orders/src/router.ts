@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { desc, eq, sql } from "drizzle-orm";
 import { serviceManifest as eventsServiceManifest } from "@iterate-com/events-contract";
 import { orderSchema, ordersContract, ordersServiceManifest } from "@iterate-com/orders-contract";
@@ -141,6 +142,35 @@ const serviceSql = os.service.sql.handler(async ({ input, context }) => {
   });
 
   return result;
+});
+
+const serviceDebug = os.service.debug.handler(async () => {
+  const env: Record<string, string | null> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    env[key] = value ?? null;
+  }
+  const memoryUsage = process.memoryUsage();
+
+  return {
+    pid: process.pid,
+    ppid: process.ppid,
+    uptimeSec: process.uptime(),
+    nodeVersion: process.version,
+    platform: process.platform,
+    arch: process.arch,
+    hostname: hostname(),
+    cwd: process.cwd(),
+    execPath: process.execPath,
+    argv: process.argv,
+    env,
+    memoryUsage: {
+      rss: memoryUsage.rss,
+      heapTotal: memoryUsage.heapTotal,
+      heapUsed: memoryUsage.heapUsed,
+      external: memoryUsage.external,
+      arrayBuffers: memoryUsage.arrayBuffers,
+    },
+  };
 });
 
 const placeOrder = os.orders.place.handler(async ({ context, input }) => {
@@ -401,6 +431,7 @@ export const ordersRouter = os.router({
   service: {
     health: serviceHealth,
     sql: serviceSql,
+    debug: serviceDebug,
   },
   orders: {
     place: placeOrder,
