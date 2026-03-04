@@ -21,6 +21,8 @@ Doppler is used for secrets management. Most commands don't need to worry about 
 
 ## Writing specs
 
+Specs and end-to-end test are critical to us. They should be readable, coherent and meaningful. These are arguably more important than the product code, because they represent the decisions we've made about how the product should work. You should use specs and tests to drive your feature work - when building something complex, you can write a test roughly describing how it should work, then iterate on the product until the test passes.
+
 We use playwright, but there are some conventions you need to follow when you're writing them.
 
 We have a custom playwright plugin system that adds additional waiters and logic to locator-based assertions. The most important one is `spinner-waiter`. This enables us to have a very short default wait timeout, and looks for loading UI in the DOM when the timeout passes without the element appearing. What this means:
@@ -73,23 +75,10 @@ Mobile-first is mandatory. Design for 375px, expand to desktop.
 
 Canonical example: `apps/os/app/routes/org/project/machines.tsx`
 
-## TOC
-
-- Quick reference
-- Environment variables (Doppler)
-- Critical rules
-- Trace debugging (Jaeger)
-- Frontend react guide
-- TypeScript (repo-wide)
-- Task system
-- Debugging machine errors
-- Pointers
-
 ## Meta: writing AGENTS.md
 
-- CLAUDE.md must be a symlink to AGENTS.md
-- Prefer links to real files/examples; no pasted snippets unless v small and unlikely to change
-- Keep short; table of contents + repo-wide rules
+- Keep it brief, sacrifice grammar for the sake of concision.
+- Stick to facts which are likely to remain true, rather than prescriptive recipes ("XYZ can be found in the database" is better than "run this exact query which might be invalid once the schema changes")
 
 ## Quick reference
 
