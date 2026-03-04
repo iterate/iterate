@@ -1,76 +1,50 @@
-Sacrifice grammar for concision. Don't waste tokens. Skip obvious context.
+## Repository structure
 
-## TOC
+Important directories:
 
-- Quick reference
-- Environment variables (Doppler)
-- Critical rules
-- Trace debugging (Jaeger)
-- Frontend react guide
-- TypeScript (repo-wide)
-- Task system
-- Debugging machine errors
-- Pointers
+- `apps/os` - the dashboard for our product. In production, this is served on `os.iterate.com`. In development, it is something like `<usernmame>.iterate-dev.com`
+- `apps/daemon` - the entrypoint for our "agent" which runs on Docker-based sandboxed machines (Fly.io or plain Docker (locally))
+- `packages/iterate` - the iterate CLI, which is globally installed `iterate`. Note that the CLI delegates to the local source code when run inside this repo, so you can use the globally-installed binary without worrying about which version is running
+- `spec` - our Playwright end to end tests. We call them "specs" rather than "e2e" because we use them to declare how our product is supposed to function.
 
-## Meta: writing AGENTS.md
+## Dev environment
 
-- CLAUDE.md must be a symlink to AGENTS.md
-- Prefer links to real files/examples; no pasted snippets unless v small and unlikely to change
-- Keep short; table of contents + repo-wide rules
+Locally, the dev server is run with `pnpm dev`. Sometimes, the user will already be running the dev server. If you need to look at its logs, but can't access them, you should kill the server that's running and run it again yourself with nohup, piping stdout to a log file you can tail. Tell the user when you do this to prevent confusion.
 
-## Quick reference
+The dev server for the OS in general listens on port 5173, but is accessed via a cloudflare tunnel (`<username>.iterate-dev.com`). If you try to access localhost:5173, you will usually get a redirect response.
 
-Run before PRs: `pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test`
+The database for development runs via docker compose. To get its port on the host machine, you can run `tsx ./scripts/docker-compose.ts port postgres 5432`.
 
-For local Docker machines, refresh the sandbox image + default tag with: `pnpm sandbox buildx`
+When making changes to the daemon, or any other services that run in the sandbox, run `pnpm sandbox buildx` to build the sandbox Docker image first. This will automatically set the correct image tag in the user's doppler config. To build for fly.io, it's `pnpm sandbox build`.
 
-## Working with GitHub
+Doppler is used for secrets management. Most commands don't need to worry about doppler, but if secrets or variables stored in doppler are needed, you can run `doppler run -- ./some-script.sh` and the script will automatically receive the correct environment variables. To look at a variable, you can run a command like `doppler run -- env | grep POSTHOG_PUBLIC_KEY`. You don't in general need to use the `--config` option, you can assume the user has set up their doppler config via the CLI already.
 
-- Commit/push frequently (small, scoped commits)
-- Prefer pushing before long local validation so GitHub checks + review agents start early
-- After push, keep validating locally and follow up with more commits
-- Avoid large unpushed change sets
-- PR descriptions: only add `Testing`/`Validation` when non-standard human/manual steps were done/are needed. Skip trivial stuff (e.g. `pnpm test`).
+## Writing specs
 
-## Environment variables (Doppler)
+We use playwright, but there are some conventions you need to follow when you're writing them.
 
-We use [Doppler](https://doppler.com) for secrets management. Configs: `dev`, `stg`, `prd`.
+We have a custom playwright plugin system that adds additional waiters and logic to locator-based assertions. The most important one is `spinner-waiter`. This enables us to have a very short default wait timeout, and looks for loading UI in the DOM when the timeout passes without the element appearing. What this means:
 
-```bash
-# Run any command with env vars injected
-doppler run --config dev -- <command>
+- Timeouts can stay very short. If neither the target UI nor a loading spinner appears within 1s, the test will fail fast.
+- When a test fails for this reason, but it's a legitimately long operation, instead of bumping the timeout, we should update the product code to add a loading spinner. This means the test stays fast and reliable and our product actually improves.
+- In general, don't use `expect` for DOM verification assertions. Use `await page.locator(...).waitFor()`. This will intelligently wait for loading UI, but `await expect(...).toBeVisible()` won't
+- Loading UI gives a 30s grace period. If it's an extremely long operation, it can be extended by importing `spinnerWaiter`:
+- Aim not to look for anything to be hidden/detached. Instead, make positive assertions ("element with XYZ became visible")
+- If the only user-visible content to match on is ambiguous, you can add `data-*` attributes to the product code to make matchers more robust. (e.g. `data-label="machine-detail"` or `data-testid="email-input"`)
 
-# Examples
-doppler run --config dev -- pnpm test
-
-# Check available vars
-doppler run --config dev -- env | grep SOME_VAR
+```ts
+await spinnerWaiter.settings.run({ spinnerTimeout: 120_000 }, async () => {
+  await page.locator(".foo-bar").waitFor(); // assertions in this scope get 120s of "spinner time" granted
+});
 ```
 
-For tests needing credentials (Fly, Stripe, etc.), wrap with `doppler run`.
+Don't write if statements, ternaries, or other conditonals in tests. You should usually duplicated code over complex helper functions with conditionals.
 
-## Building OS features
+You can use the `playwriter-spec` skill to run a spec dynamically when the feature or the spec itself are in flux and not yet validated. Doing this before running via playwright directly can result in a much faster feedback loop, and allow you to adapt the spec/the product as you step through the test.
 
-Follow spec-driven development when building features that touch the OS worker. Look at the `spec/` folder for existing specs and the AGENTS.md file there for spec writing guidelines. You can use the `playwriter-spec` skill to run a spec dynamically when the feature or the spec itself are in flux and not yet validated. Doing this before running via playwright directly can result in a much faster feedback loop, and allow you to adapt the spec/the product as you step through the test.
+## Writing React
 
-## Critical rules
-
-- No `console` in backend — use `apps/os/backend/tag-logger.ts`
-- No `useEffect` for data fetching — use `useSuspenseQuery`
-- No inline error/success messages — use toast notifications
-
-## Trace debugging (Jaeger)
-
-- Local-docker sandbox exposes Jaeger UI on daemon port `16686` (mapped host port varies)
-- OTLP default in sandbox: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces`
-- Agent workflow hints:
-  - first discover ports from container mapping; do not hardcode host ports
-  - check `/api/observability` to confirm OTEL is enabled before debugging traces
-  - fetch `services` -> `operations` -> `traces` from Jaeger API; narrow by lookback + service
-  - rank spans by duration, then compare parent span vs child spans to find bottleneck stage
-  - validate conclusions against process logs (`daemon-backend.log`, `opencode.log`)
-
-## Frontend react guide
+Avoid useEffect and useState wherever possible. Instead, use `@tanstack/react-query` for any asynchronous work or side-effects.
 
 Mobile-first is mandatory. Design for 375px, expand to desktop.
 
@@ -98,6 +72,30 @@ Mobile-first is mandatory. Design for 375px, expand to desktop.
 - Use `Field` components for form accessibility
 
 Canonical example: `apps/os/app/routes/org/project/machines.tsx`
+
+## TOC
+
+- Quick reference
+- Environment variables (Doppler)
+- Critical rules
+- Trace debugging (Jaeger)
+- Frontend react guide
+- TypeScript (repo-wide)
+- Task system
+- Debugging machine errors
+- Pointers
+
+## Meta: writing AGENTS.md
+
+- CLAUDE.md must be a symlink to AGENTS.md
+- Prefer links to real files/examples; no pasted snippets unless v small and unlikely to change
+- Keep short; table of contents + repo-wide rules
+
+## Quick reference
+
+Run before PRs: `pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test`
+
+For local Docker machines, refresh the sandbox image + default tag with: `pnpm sandbox buildx`
 
 ## TypeScript (repo-wide)
 
