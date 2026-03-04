@@ -353,9 +353,8 @@ function createAnthropicProvider(options: LlmRecoverOptions): RequestRecoveryCod
     ];
 
     if (context.html) {
-      textParts.push(
-        `**Page HTML (possibly truncated):**\n\`\`\`html\n${context.html.slice(0, 20_000)}\n\`\`\``,
-      );
+      const suffix = context.html.endsWith("<!-- truncated -->") ? " (truncated)" : "";
+      textParts.push(`**Page HTML${suffix}:**\n\`\`\`html\n${context.html}\n\`\`\``);
     }
 
     if (attemptHistory.length > 0) {
