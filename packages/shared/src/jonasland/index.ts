@@ -29,7 +29,7 @@ import {
   type RequestLogger,
 } from "evlog";
 import { createOTLPDrain } from "evlog/otlp";
-import { type Plugin } from "vite";
+import type { Plugin } from "vite";
 import { z } from "zod/v4";
 
 type RuntimeGlobal = typeof globalThis & {
