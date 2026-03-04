@@ -517,7 +517,7 @@ function MachineDetailPage() {
             size="sm"
             disabled={execCommand.isPending || machine.state !== "active"}
             onClick={() => {
-              const command = prompt("Command to run:");
+              const command = prompt("Command to run:", "pwd");
               if (command) execCommand.mutate(command);
             }}
           >
