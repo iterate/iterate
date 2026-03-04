@@ -29,7 +29,7 @@ No API change for existing plugins; they can ignore `testInfo`.
 
 ### Design: Codemode
 
-Instead of a structured DSL of outcomes (rethrow/retry/recover with Step types), the LLM responds with a **JavaScript function body** that receives `{ page, locator, error, expect }` and runs arbitrary Playwright code. This is simpler, more powerful, and avoids inventing a pseudo-DSL that mimics Playwright's own API.
+The LLM responds with a **JavaScript function body** that receives `{ page, locator, error, expect }` and runs arbitrary Playwright code directly. No structured response schema, no action enum — the LLM writes real code against the real Playwright API, which is then `eval`'d and executed.
 
 The function signature:
 
@@ -118,7 +118,7 @@ Introduce `requestRecoveryCode(context, attemptHistory): Promise<string | null>`
 
 ## Design decisions log
 
-- **Codemode over structured DSL:** Rather than modeling outcomes as a discriminated union (rethrow/retry/recover) with a Step pseudo-DSL, the LLM returns raw JS. This is more expressive, avoids reinventing Playwright's API, and lets the LLM add sleeps, try multiple approaches, handle edge cases. The test sandbox is already isolated, so eval is acceptable.
+- **Codemode (LLM returns JS, not structured data):** The LLM returns a JS function body, not a JSON action descriptor. This lets it use the full Playwright API — sleeps, multiple selectors, conditional logic, page state inspection — without us maintaining a parallel schema of allowed actions. The test sandbox is already isolated, so eval is acceptable.
 - **Soft assertions for false-pass protection:** When recovery succeeds, `expect.soft(...)` marks the test as failed while allowing it to continue. This prevents silent false passes — someone must fix the underlying issue.
 - **`null` = rethrow:** If the LLM returns null/empty, the original error is rethrown as-is. Recovery is explicitly opt-in from the LLM's perspective.
 - **Single API call for v1, agent loop later:** A single LLM call with full context (screenshot, error, test info) is sufficient for classification + simple recovery. The retry loop with attempt history provides multi-turn reasoning. A proper agent loop would help for cases where the LLM needs to explore the DOM interactively, but that's a natural v2 after seeing where v1 falls short.
