@@ -180,7 +180,7 @@ export const toolsRouter = {
         exitCode: result.exitCode ?? 0,
         stdout: result.stdout,
         stderr: result.stderr,
-        greeting: "hello",
+        greeting: "goodbye",
       };
     }),
 
