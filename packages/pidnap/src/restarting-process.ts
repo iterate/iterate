@@ -284,6 +284,9 @@ export class RestartingProcess {
 
   private startProcess(): void {
     this.lastStartTime = Date.now();
+    // Reset _hasStarted so dependents don't see stale "true" from a previous run.
+    // It will be set back to true after lazyProcess.start() actually spawns.
+    this._hasStarted = false;
     this.setState("running");
 
     this.lazyProcess

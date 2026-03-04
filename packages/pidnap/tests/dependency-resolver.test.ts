@@ -598,6 +598,10 @@ describe("Sentinel dependencies", () => {
       ];
       resolver.buildGraph(entries, new Map());
 
+      // Start watchers first - areDependenciesMet is a pure query that only
+      // reads sentinelMet state (set by startSentinelWatchers).
+      resolver.startSentinelWatchers("a", () => {}, () => {});
+
       expect(resolver.areDependenciesMet("a")).toBe(true);
     });
 
@@ -617,6 +621,10 @@ describe("Sentinel dependencies", () => {
       processes.set("db", mockProcess("db", "idle", { hasStarted: false }));
       resolver.buildGraph(entries, processes);
 
+      // Start watchers so sentinel state is tracked
+      resolver.startSentinelWatchers("app", () => {}, () => {});
+
+      // Sentinel met but process dep not met
       expect(resolver.areDependenciesMet("app")).toBe(false);
 
       processes.set("db", mockProcess("db", "running", { hasStarted: true }));

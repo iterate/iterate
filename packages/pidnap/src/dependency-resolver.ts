@@ -343,14 +343,11 @@ export class DependencyResolver {
 
     for (const dep of node.dependsOn) {
       if (dep.type === "sentinel") {
-        // Check sentinel inline
+        // Pure read: only check tracked state, no side effects.
+        // sentinelMet is set by startSentinelWatchers.
         const sentinelKey = `${processName}:${dep.path}`;
-        if (!this.sentinelMet.get(sentinelKey) && !existsSync(dep.path)) {
-          return false;
-        }
-        // Mark as met if file exists
         if (!this.sentinelMet.get(sentinelKey)) {
-          this.sentinelMet.set(sentinelKey, true);
+          return false;
         }
         continue;
       }
