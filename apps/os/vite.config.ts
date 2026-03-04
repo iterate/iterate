@@ -45,7 +45,7 @@ export default defineConfig({
           if (code.match(viteVarExpression)) {
             const command = `doppler secrets get ${dopplerVar} --plain --no-exit-on-missing-secret`;
             const replacement = execSync(command).toString().trim();
-            code = code.replace(viteVarExpression, JSON.stringify(replacement));
+            code = code.replaceAll(viteVarExpression, JSON.stringify(replacement));
           }
         }
         return code;

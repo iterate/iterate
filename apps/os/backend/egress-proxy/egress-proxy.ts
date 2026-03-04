@@ -1014,24 +1014,14 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
     },
   });
 
+  logger.set({ token: { id: tokenId, found: !!accessToken } });
   if (!accessToken) {
-    // Diagnostic: try a simpler query to see if the token exists at all
-    const simpleToken = await db.query.projectAccessToken.findFirst({
-      where: eq(schema.projectAccessToken.id, tokenId),
-    });
-    logger.set({
-      token: { id: tokenId },
-      diag: {
-        simpleQueryFound: !!simpleToken,
-        simpleTokenProjectId: simpleToken?.projectId ?? "N/A",
-      },
-    });
     logger.warn("Access token not found");
     return null;
   }
 
   if (accessToken.revokedAt) {
-    logger.set({ token: { id: tokenId } });
+    logger.set({ token: { revoked: true } });
     logger.warn("Access token revoked");
     return null;
   }
@@ -1039,7 +1029,7 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
   // Decrypt the stored token and compare with the provided API key
   const storedToken = await decrypt(accessToken.encryptedToken);
   if (apiKey !== storedToken) {
-    logger.set({ token: { id: tokenId } });
+    logger.set({ token: { invalid: true } });
     logger.warn("Invalid API key for token");
     return null;
   }
