@@ -50,7 +50,7 @@ When you're writing helpers/utilities/library functions, you have to try to LIMI
 
 ## Writing React
 
-Avoid useEffect and useState wherever possible. Instead, use `@tanstack/react-query` for any asynchronous work or side-effects. Only use `useSuspenseQuery` sparingly - if you are sure that the *whole component* is meaningless without the data. If you can use `useQuery` instead, with an isPending/null-check, that's usually better.
+Avoid useEffect and useState wherever possible. Instead, use `@tanstack/react-query` for any asynchronous work or side-effects. Only use `useSuspenseQuery` sparingly - if you are sure that the _whole component_ is meaningless without the data. If you can use `useQuery` instead, with an isPending/null-check, that's usually better.
 
 Design for columnar 375px for mobile support, implement desktop as a view which happens to fit sidebar(s) + main content at the same time. This way we don't have to design multiple variants.
 
