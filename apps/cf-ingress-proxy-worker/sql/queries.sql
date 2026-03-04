@@ -2,6 +2,10 @@
 DELETE FROM routes
 WHERE id = :routeId
 
+-- @query deleteRouteByExternalId
+DELETE FROM routes
+WHERE external_id = :externalId
+
 -- @query deleteRoutePatternsByRouteId
 DELETE FROM route_patterns
 WHERE route_id = :routeId
@@ -11,8 +15,8 @@ INSERT INTO route_patterns (route_id, pattern, target, headers)
 VALUES (:routeId, :pattern, :target, :headers)
 
 -- @query insertRoute
-INSERT INTO routes (id, metadata)
-VALUES (:routeId, :metadata)
+INSERT INTO routes (id, external_id, metadata)
+VALUES (:routeId, :externalId, :metadata)
 
 -- @query selectResolvedRouteByHost
 SELECT
@@ -31,7 +35,7 @@ ORDER BY
 LIMIT 1
 
 -- @query selectRouteById
-SELECT id, metadata, created_at, updated_at
+SELECT id, external_id, metadata, created_at, updated_at
 FROM routes
 WHERE id = :routeId
 
@@ -47,11 +51,11 @@ FROM route_patterns
 ORDER BY route_id ASC, id ASC
 
 -- @query selectRoutes
-SELECT id, metadata, created_at, updated_at
+SELECT id, external_id, metadata, created_at, updated_at
 FROM routes
 ORDER BY created_at ASC, id ASC
 
--- @query updateRouteMetadata
+-- @query updateRouteById
 UPDATE routes
-SET metadata = :metadata, updated_at = CURRENT_TIMESTAMP
+SET metadata = :metadata, external_id = :externalId, updated_at = CURRENT_TIMESTAMP
 WHERE id = :routeId
