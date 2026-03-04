@@ -112,7 +112,9 @@ const TEST_BASE_SNAPSHOTS = {
   fly: process.env.FLY_DEFAULT_IMAGE ?? "",
 } as const;
 
-export const TEST_BASE_SNAPSHOT_ID = TEST_BASE_SNAPSHOTS[TEST_CONFIG.provider];
+// Prefer explicit override when provided (e.g. CI passing a specific image tag).
+export const TEST_BASE_SNAPSHOT_ID =
+  TEST_CONFIG.snapshotId ?? TEST_BASE_SNAPSHOTS[TEST_CONFIG.provider];
 
 // Log test configuration at startup
 if (TEST_CONFIG.enabled) {
