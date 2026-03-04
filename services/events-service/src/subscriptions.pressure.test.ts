@@ -247,7 +247,7 @@ describe("Subscription pressure", () => {
         await waitUntil(() => ackCount === eventCount + 1, {
           timeoutMs: 5_000,
           intervalMs: POLL_INTERVAL_MS,
-          timeoutMessage: `Expected ackCount to reach ${eventCount + 1}, got ${ackCount}`,
+          timeoutMessage: `ackCount did not reach ${eventCount + 1} within timeout`,
         });
       } finally {
         await disposeWithTimeout(websocketControl);
