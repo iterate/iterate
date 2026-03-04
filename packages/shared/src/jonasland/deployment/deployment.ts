@@ -159,7 +159,22 @@ export abstract class Deployment<
         .join(", ");
       throw new Error(`[deployment] core processes not ready: ${summary}`);
     }
-    console.log(`[deployment] all core processes healthy`);
+    console.log(`[deployment] all core processes healthy, verifying routes...`);
+
+    const routeChecks = [
+      { host: "registry.iterate.localhost", path: "/orpc/service/health" },
+      { host: "events.iterate.localhost", path: "/api/service/health" },
+    ];
+    for (const check of routeChecks) {
+      await pWaitFor(
+        async () => {
+          const resp = await this.fetch(check.host, check.path).catch(() => null);
+          return resp?.ok ?? false;
+        },
+        { interval: 250, signal },
+      );
+    }
+    console.log(`[deployment] all service routes verified`);
   }
 
   async fetch(host: string, path: string, init?: RequestInit): Promise<Response> {
