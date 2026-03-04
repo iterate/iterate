@@ -53,7 +53,7 @@ describe.runIf(cases.length > 0)("on-demand orders oRPC", () => {
           name: `e2e-orders-${randomUUID().slice(0, 8)}`,
           signal: AbortSignal.timeout(45_000 + timeoutOffsetMs),
         });
-        await deployment.waitUntilAlive({ signal: AbortSignal.timeout(120_000) });
+        await deployment.waitUntilAlive({ signal: AbortSignal.timeout(15_000 + timeoutOffsetMs) });
 
         console.log(
           `[test] starting ${ordersServiceManifest.slug} on port ${String(ordersServiceManifest.port)}...`,
@@ -78,7 +78,7 @@ describe.runIf(cases.length > 0)("on-demand orders oRPC", () => {
                 (result) => result.ok,
                 () => false,
               ),
-            { timeout: 30_000, interval: 200 },
+            { timeout: 6_000 + timeoutOffsetMs },
           )
           .toBe(true);
 
@@ -99,7 +99,7 @@ describe.runIf(cases.length > 0)("on-demand orders oRPC", () => {
                     },
                     () => null,
                   ),
-              { timeout: 60_000, interval: 200 },
+              { timeout: 60_000 },
             )
             .toBe("accepted");
           expect(placedId).not.toBeNull();

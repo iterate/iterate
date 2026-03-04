@@ -14,8 +14,9 @@ fi
 # Useful for host-sync and startup readiness checks.
 touch /tmp/reached-entrypoint
 
-# Route DNS lookups through local dnsmasq (managed by pidnap).
+# Route DNS lookups through local dnsmasq.
 # See jonasland/hosts-and-routing.md for details.
+dnsmasq --conf-file=/etc/dnsmasq.d/iterate-localhost.conf
 printf "nameserver 127.0.0.1\n" | sudo tee /etc/resolv.conf >/dev/null
 
 for port in 80 443; do
