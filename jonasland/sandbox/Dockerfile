@@ -13,6 +13,8 @@ FROM node:24-trixie-slim
 ARG CADDY_VERSION=2.11.1
 ARG FRP_VERSION=0.65.0
 ARG PI_CODING_AGENT_VERSION=0.52.8
+ARG SANDBOX_CODEX_VERSION=0.98.0
+ARG SANDBOX_OPENCODE_VERSION=1.2.15
 ARG TARGETARCH
 ARG GIT_SHA=unknown
 
@@ -20,17 +22,33 @@ ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
+    build-essential \
     ca-certificates \
     curl \
+    dnsmasq \
+    fd-find \
     git \
+    gh \
     iptables \
+    jq \
+    less \
     libcap2-bin \
+    openssh-client \
     procps \
+    ripgrep \
     rsync \
+    sqlite3 \
     sudo \
     tini \
+    tmux \
+    unzip \
     util-linux \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s "$(which fdfind)" /usr/local/bin/fd
+
+# Route *.iterate.localhost to loopback for in-container service discovery.
+# See jonasland/hosts-and-routing.md for routing model and rationale.
+RUN printf 'address=/.iterate.localhost/127.0.0.1\n' > /etc/dnsmasq.d/iterate-localhost.conf
 
 RUN curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${TARGETARCH}.tar.gz" \
     | tar -xz -C /usr/local/bin caddy && \
@@ -53,9 +71,11 @@ RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
 
 RUN npm install -g \
     @mariozechner/pi-coding-agent@${PI_CODING_AGENT_VERSION} \
+    @openai/codex@${SANDBOX_CODEX_VERSION} \
     tsx \
     serve \
     && npm cache clean --force
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
 
 COPY --from=openobserve /openobserve /usr/local/bin/openobserve
 COPY --from=otelcol /otelcol-contrib /usr/local/bin/otelcol-contrib
@@ -72,11 +92,28 @@ RUN groupadd -g 1001 iterate && \
       /var/log/pidnap && \
     chown -R iterate:iterate /home/iterate /var/lib/jonasland /var/lib/openobserve /var/log/pidnap
 
+USER iterate
+
+ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:/home/iterate/.opencode/bin:/home/iterate/.npm-global/bin:$PATH"
+
 WORKDIR $ITERATE_REPO
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml $ITERATE_REPO/
-COPY services $ITERATE_REPO/services
-COPY packages $ITERATE_REPO/packages
-COPY jonasland/sandbox $ITERATE_REPO/jonasland/sandbox
+
+# Dependency-manifest layer (source changes should not invalidate this).
+COPY --chown=iterate:iterate package.json pnpm-lock.yaml pnpm-workspace.yaml $ITERATE_REPO/
+COPY --chown=iterate:iterate services/registry-service/package.json $ITERATE_REPO/services/registry-service/package.json
+COPY --chown=iterate:iterate services/events-service/package.json $ITERATE_REPO/services/events-service/package.json
+COPY --chown=iterate:iterate services/orders-service/package.json $ITERATE_REPO/services/orders-service/package.json
+COPY --chown=iterate:iterate services/home-service/package.json $ITERATE_REPO/services/home-service/package.json
+COPY --chown=iterate:iterate services/docs-service/package.json $ITERATE_REPO/services/docs-service/package.json
+COPY --chown=iterate:iterate services/outerbase-service/package.json $ITERATE_REPO/services/outerbase-service/package.json
+COPY --chown=iterate:iterate services/egress-service/package.json $ITERATE_REPO/services/egress-service/package.json
+COPY --chown=iterate:iterate packages/pidnap/package.json $ITERATE_REPO/packages/pidnap/package.json
+COPY --chown=iterate:iterate services/registry-contract/package.json $ITERATE_REPO/services/registry-contract/package.json
+COPY --chown=iterate:iterate services/events-contract/package.json $ITERATE_REPO/services/events-contract/package.json
+COPY --chown=iterate:iterate services/orders-contract/package.json $ITERATE_REPO/services/orders-contract/package.json
+COPY --chown=iterate:iterate packages/shared/package.json $ITERATE_REPO/packages/shared/package.json
+COPY --chown=iterate:iterate packages/ui/package.json $ITERATE_REPO/packages/ui/package.json
+COPY --chown=iterate:iterate jonasland/sandbox/package.json $ITERATE_REPO/jonasland/sandbox/package.json
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
     --filter pidnap \
     --filter @iterate-com/jonasland-sandbox \
@@ -93,15 +130,30 @@ RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
     --filter @iterate-com/shared \
     --filter @iterate-com/ui
 RUN pnpm -r rebuild better-sqlite3 esbuild protobufjs
+
+# Source payload layer.
+COPY --chown=iterate:iterate . $ITERATE_REPO
+RUN if [ -f .git ]; then rm .git && mkdir .git; fi
+
 RUN chmod +x \
     "$ITERATE_REPO/jonasland/sandbox/start.sh" \
     "$ITERATE_REPO/jonasland/sandbox/clickstack-launcher.sh" \
-    "$ITERATE_REPO/jonasland/sandbox/sync-home-skeleton.sh"
+    "$ITERATE_REPO/jonasland/sandbox/sync-home-skeleton.sh" \
+    "$ITERATE_REPO/jonasland/sandbox/providers/docker/sync-repo-from-host.sh"
+
+# Keep a functional git repo inside image.
+RUN git init && \
+    git config user.email "iterate-bot@noreply.iterate.com" && \
+    git config user.name "iterate-bot" && \
+    git add . && \
+    git commit -m "snapshot ${GIT_SHA}" && \
+    git branch -M main
 
 EXPOSE 80
 HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=20 \
   CMD curl -fsS http://127.0.0.1/healthz >/dev/null || exit 1
 
+ENV GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA
 
 ENTRYPOINT ["/usr/bin/tini", "--"]

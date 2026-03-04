@@ -1,6 +1,7 @@
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
+import { CaddyClient } from "@accelerated-software-development/caddy-api-client";
 
 export function networkErrorCode(error: unknown): string | undefined {
   if (!error || typeof error !== "object") return undefined;
@@ -125,4 +126,92 @@ export async function nodeHttpRequest(params: {
     }
     req.end();
   });
+}
+
+async function forwardedRequest(params: {
+  baseUrl: string;
+  host: string;
+  path: string;
+  method: string;
+  headers?: RequestInit["headers"];
+  body?: Buffer;
+  buffered?: boolean;
+  defaultContentType?: string;
+}): Promise<Response> {
+  const url = new URL(
+    params.path.startsWith("/") ? params.path : `/${params.path}`,
+    params.baseUrl,
+  );
+  const headers = new Headers(params.headers);
+  if (params.defaultContentType && !headers.has("content-type")) {
+    headers.set("content-type", params.defaultContentType);
+  }
+  headers.set("x-forwarded-host", params.host);
+  headers.delete("host");
+  headers.delete("content-length");
+  if (params.body !== undefined) {
+    headers.set("content-length", params.body.byteLength.toString());
+  }
+  return await nodeHttpRequest({
+    url,
+    method: params.method.toUpperCase(),
+    headers,
+    body: params.body,
+    buffered: params.buffered,
+  });
+}
+
+export function createHostRoutedFetch(params: {
+  baseUrl: string;
+  host: string;
+}): (request: Request) => Promise<Response> {
+  return async (request: Request): Promise<Response> => {
+    const requestUrl = new URL(request.url);
+    const method = request.method.toUpperCase();
+    const body =
+      method === "GET" || method === "HEAD"
+        ? undefined
+        : Buffer.from(await request.clone().arrayBuffer());
+    return await forwardedRequest({
+      baseUrl: params.baseUrl,
+      host: params.host,
+      path: `${requestUrl.pathname}${requestUrl.search}`,
+      method,
+      headers: request.headers,
+      body,
+    });
+  };
+}
+
+export function createCaddyAdminClient(params: { baseUrl: string; host: string }): CaddyClient {
+  const caddy = new CaddyClient({ adminUrl: params.baseUrl });
+  caddy.request = async (path: string, options: RequestInit = {}): Promise<Response> => {
+    const body =
+      options.body == null
+        ? undefined
+        : Buffer.from(await new Response(options.body).arrayBuffer());
+    return await forwardedRequest({
+      baseUrl: params.baseUrl,
+      host: params.host,
+      path,
+      method: options.method ?? "GET",
+      headers: options.headers,
+      body,
+      buffered: true,
+      defaultContentType: "application/json",
+    });
+  };
+  return caddy;
+}
+
+export function collectTextOutput(stream: NodeJS.ReadableStream): { flush: () => string } {
+  const chunks: Buffer[] = [];
+  stream.on("data", (chunk: Buffer | string) => {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  });
+  return {
+    flush() {
+      return Buffer.concat(chunks).toString("utf-8");
+    },
+  };
 }

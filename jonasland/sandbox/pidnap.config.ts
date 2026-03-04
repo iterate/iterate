@@ -21,6 +21,19 @@ export default defineConfig({
   logDir: "/var/log/pidnap",
   processes: [
     {
+      name: "dnsmasq",
+      definition: {
+        command: "/usr/sbin/dnsmasq",
+        args: ["--keep-in-foreground", "--conf-file=/etc/dnsmasq.d/iterate-localhost.conf"],
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: false,
+      },
+    },
+    {
       name: "caddy",
       definition: {
         command: "/usr/local/bin/caddy",

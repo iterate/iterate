@@ -1,0 +1,9 @@
+[user]
+  name = iterate
+  email = 233973017+iterate[bot]@users.noreply.github.com
+
+[credential]
+  helper = !~/.iterate/bin/iterate-git-credential-helper
+
+[url "https://github.com/"]
+  insteadOf = git@github.com:

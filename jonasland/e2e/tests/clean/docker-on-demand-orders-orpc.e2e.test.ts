@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { ordersServiceManifest } from "@iterate-com/orders-contract";
 import { DockerDeployment } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
-import { localHostForService } from "@iterate-com/shared/jonasland";
 
 const DOCKER_IMAGE = process.env.JONASLAND_E2E_DOCKER_IMAGE ?? "";
 
@@ -39,8 +38,7 @@ describe.runIf(DOCKER_IMAGE.length > 0)("docker on-demand orders oRPC", () => {
     });
     expect(waitResult.allMet).toBe(true);
 
-    const host = localHostForService({ slug });
-    const orders = deployment.createServiceClient({ manifest: ordersServiceManifest, host });
+    const orders = deployment.createServiceClient({ manifest: ordersServiceManifest });
 
     const pingDeadline = Date.now() + 6_000;
     let ping: Awaited<ReturnType<typeof orders.orders.ping>> | null = null;

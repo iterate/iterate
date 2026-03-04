@@ -1,18 +1,17 @@
-import { CaddyClient } from "@accelerated-software-development/caddy-api-client";
 import {
   type EventBusContract,
   serviceManifest as eventsServiceManifest,
 } from "@iterate-com/events-contract";
-import { type RegistryClient } from "@iterate-com/registry-service/client";
+import { createRegistryClient, type RegistryClient } from "@iterate-com/registry-service/client";
 import { type AnyContractRouter, type ContractRouterClient } from "@orpc/contract";
 import pWaitFor from "p-wait-for";
-import { type Client as PidnapClient } from "pidnap/client";
+import { createClient as createPidnapClient, type Client as PidnapClient } from "pidnap/client";
 import {
   createOrpcRpcServiceClient,
   localHostForService,
   type ServiceManifestLike,
 } from "../index.ts";
-import { nodeHttpRequest } from "./deployment-utils.ts";
+import { createCaddyAdminClient, createHostRoutedFetch } from "./deployment-utils.ts";
 
 export type DeploymentCommandResult = {
   exitCode: number;
@@ -24,45 +23,6 @@ export interface DeploymentOpts {
   env?: Record<string, string> | string[];
 }
 
-type EventBusClient = ContractRouterClient<EventBusContract>;
-
-export interface DeploymentEventsClient {
-  service: EventBusClient["service"];
-  append: EventBusClient["append"];
-  registerSubscription: EventBusClient["registerSubscription"];
-  ackOffset: EventBusClient["ackOffset"];
-  stream: EventBusClient["stream"];
-  listStreams: EventBusClient["listStreams"];
-  firehose: EventBusClient["firehose"];
-}
-
-type ProviderCreateResult<TLocator> = {
-  locator: TLocator;
-  baseUrl: string;
-};
-
-function makeFetchForHost(baseUrl: string, host: string): (request: Request) => Promise<Response> {
-  return async (request: Request): Promise<Response> => {
-    const requestUrl = new URL(request.url);
-    const target = new URL(`${requestUrl.pathname}${requestUrl.search}`, baseUrl);
-    const method = request.method.toUpperCase();
-    const headers = new Headers(request.headers);
-    headers.set("x-forwarded-host", host);
-    headers.delete("host");
-    headers.delete("content-length");
-
-    const body =
-      method === "GET" || method === "HEAD"
-        ? undefined
-        : Buffer.from(await request.clone().arrayBuffer());
-    if (body !== undefined) {
-      headers.set("content-length", body.byteLength.toString());
-    }
-
-    return await nodeHttpRequest({ url: target, method, headers, body });
-  };
-}
-
 export abstract class Deployment<
   TOpts extends DeploymentOpts = DeploymentOpts,
   TLocator = unknown,
@@ -71,68 +31,56 @@ export abstract class Deployment<
   protected locator: TLocator | null = null;
 
   public baseUrl = "";
-  public pidnap!: PidnapClient;
-  public caddy!: CaddyClient;
-  public registry!: RegistryClient;
-  public events!: DeploymentEventsClient;
+  private pidnapClient: PidnapClient | null = null;
+  private caddyClient: ReturnType<typeof createCaddyAdminClient> | null = null;
+  private registryClient: RegistryClient | null = null;
+  private eventsClient: ContractRouterClient<EventBusContract> | null = null;
 
-  protected abstract providerCreate(opts: TOpts): Promise<ProviderCreateResult<TLocator>>;
-  protected abstract providerDispose(): Promise<void>;
-  protected abstract providerExec(cmd: string | string[]): Promise<DeploymentCommandResult>;
-  protected abstract providerLogs(): Promise<string>;
+  abstract create(opts: TOpts): Promise<TLocator>;
+  protected abstract dispose(): Promise<void>;
+  abstract exec(cmd: string | string[]): Promise<DeploymentCommandResult>;
+  abstract logs(): Promise<string>;
 
-  protected async initClients(): Promise<void> {
-    const { createClient: createPidnapClient } = await import("pidnap/client");
-    const { createRegistryClient } = await import("@iterate-com/registry-service/client");
-
-    this.pidnap = createPidnapClient({
+  get pidnap(): PidnapClient {
+    this.assertRunning();
+    if (this.pidnapClient) return this.pidnapClient;
+    this.pidnapClient = createPidnapClient({
       url: `${this.baseUrl}/rpc`,
-      fetch: makeFetchForHost(this.baseUrl, "pidnap.iterate.localhost"),
+      fetch: createHostRoutedFetch({ baseUrl: this.baseUrl, host: "pidnap.iterate.localhost" }),
     });
+    return this.pidnapClient;
+  }
 
-    const caddy = new CaddyClient({ adminUrl: this.baseUrl });
-    caddy.request = async (path: string, options: RequestInit = {}): Promise<Response> => {
-      const url = new URL(path.startsWith("/") ? path : `/${path}`, this.baseUrl);
-      const method = options.method ?? "GET";
-      const headers = new Headers(options.headers);
-      if (!headers.has("content-type")) headers.set("content-type", "application/json");
-      headers.set("x-forwarded-host", "caddy.iterate.localhost");
-      headers.delete("host");
-      const body =
-        options.body == null
-          ? undefined
-          : Buffer.from(await new Response(options.body).arrayBuffer());
-      if (body) headers.set("content-length", body.byteLength.toString());
-      return await nodeHttpRequest({ url, method, headers, body, buffered: true });
-    };
-    this.caddy = caddy;
+  get caddy(): ReturnType<typeof createCaddyAdminClient> {
+    this.assertRunning();
+    if (this.caddyClient) return this.caddyClient;
+    this.caddyClient = createCaddyAdminClient({
+      baseUrl: this.baseUrl,
+      host: "caddy.iterate.localhost",
+    });
+    return this.caddyClient;
+  }
 
-    this.registry = createRegistryClient({
+  get registry(): RegistryClient {
+    this.assertRunning();
+    if (this.registryClient) return this.registryClient;
+    this.registryClient = createRegistryClient({
       url: `${this.baseUrl}/orpc`,
-      fetch: makeFetchForHost(this.baseUrl, "registry.iterate.localhost"),
+      fetch: createHostRoutedFetch({ baseUrl: this.baseUrl, host: "registry.iterate.localhost" }),
     });
+    return this.registryClient;
+  }
 
-    this.events = createOrpcRpcServiceClient({
+  get events(): ContractRouterClient<EventBusContract> {
+    this.assertRunning();
+    if (this.eventsClient) return this.eventsClient;
+    this.eventsClient = createOrpcRpcServiceClient({
       env: {},
       manifest: eventsServiceManifest,
       url: `${this.baseUrl}/orpc`,
-      fetch: makeFetchForHost(this.baseUrl, "events.iterate.localhost"),
-    }) as DeploymentEventsClient;
-  }
-
-  async create(opts: TOpts): Promise<TLocator> {
-    if (this.state !== "new") {
-      throw new Error(`${this.constructor.name} is in state "${this.state}", expected "new"`);
-    }
-
-    console.log(`[deployment] creating ${this.constructor.name}...`);
-    const result = await this.providerCreate(opts);
-    this.baseUrl = result.baseUrl;
-    this.locator = result.locator;
-    await this.initClients();
-    this.state = "running";
-    console.log(`[deployment] created, baseUrl=${this.baseUrl}`);
-    return result.locator;
+      fetch: createHostRoutedFetch({ baseUrl: this.baseUrl, host: "events.iterate.localhost" }),
+    });
+    return this.eventsClient;
   }
 
   async waitUntilAlive(params?: { signal?: AbortSignal }): Promise<void> {
@@ -185,22 +133,21 @@ export abstract class Deployment<
     return await fetch(url, { ...init, headers });
   }
 
-  createOrpcClient<TClient>(params: {
+  private createOrpcClient<TClient>(params: {
     host: string;
     path: "/rpc" | "/orpc";
     create: (options: { url: string; fetch: (request: Request) => Promise<Response> }) => TClient;
   }): TClient {
     return params.create({
       url: `http://${params.host}${params.path}`,
-      fetch: makeFetchForHost(this.baseUrl, params.host),
+      fetch: createHostRoutedFetch({ baseUrl: this.baseUrl, host: params.host }),
     });
   }
 
   createServiceClient<TContract extends AnyContractRouter>(params: {
     manifest: ServiceManifestLike<TContract>;
-    host?: string;
   }): ContractRouterClient<TContract> {
-    const host = params.host ?? localHostForService({ slug: params.manifest.slug });
+    const host = localHostForService({ slug: params.manifest.slug });
     return this.createOrpcClient({
       host,
       path: "/orpc",
@@ -216,21 +163,16 @@ export abstract class Deployment<
     return this.locator;
   }
 
-  async exec(cmd: string | string[]): Promise<DeploymentCommandResult> {
-    this.assertRunning();
-    return await this.providerExec(cmd);
-  }
-
-  async logs(): Promise<string> {
-    return await this.providerLogs();
-  }
-
   async destroy(): Promise<void> {
     if (this.state === "destroyed") return;
     console.log(`[deployment] destroying ${this.constructor.name}...`);
     if (this.state === "running") {
-      await this.providerDispose();
+      await this.dispose();
     }
+    this.pidnapClient = null;
+    this.caddyClient = null;
+    this.registryClient = null;
+    this.eventsClient = null;
     this.state = "destroyed";
     console.log(`[deployment] destroyed`);
   }
