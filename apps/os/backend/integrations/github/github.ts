@@ -330,10 +330,24 @@ githubApp.get(
 
     const installationConflict = installationConflictState.value;
     if (installationConflict) {
+      const conflictToken = arctic.generateState();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+      await c.var.db.insert(schema.verification).values({
+        identifier: conflictToken,
+        value: JSON.stringify({
+          kind: "github-installation-conflict",
+          userId,
+          projectId,
+          installationId: installationConflict.installationId,
+          githubUserId: userInfo.id,
+          githubLogin: userInfo.login,
+          encryptedAccessToken,
+        }),
+        expiresAt,
+      });
+
       const params = new URLSearchParams({
-        kind: "github-installation",
-        installationId: installationConflict.installationId.toString(),
-        newProjectId: projectId,
+        conflictToken,
       });
       return c.redirect(`/connection-conflict?${params.toString()}`);
     }

@@ -19,6 +19,7 @@ import { slugify, slugifyWithSuffix } from "../../utils/slug.ts";
 import {
   listInstallationRepositories,
   deleteGitHubInstallation,
+  getGitHubInstallationToken,
 } from "../../integrations/github/github.ts";
 import { revokeSlackToken, SLACK_BOT_SCOPES } from "../../integrations/slack/slack.ts";
 import {
@@ -26,7 +27,7 @@ import {
   createGoogleClient,
   GOOGLE_OAUTH_SCOPES,
 } from "../../integrations/google/google.ts";
-import { decrypt } from "../../utils/encryption.ts";
+import { decrypt, encrypt } from "../../utils/encryption.ts";
 import { callClaudeHaiku } from "../../services/claude-haiku.ts";
 import { validateJsonataExpression } from "../../egress-proxy/egress-rules.ts";
 import { linkExternalIdToGroups } from "../../lib/posthog.ts";
@@ -52,13 +53,50 @@ export const projectRouter = {
     };
   }),
 
-  // Get minimal project info by ID (for conflict resolution, no org access required)
-  // Returns just enough info to display the project/org names and slugs
-  getProjectInfoById: protectedProcedure
-    .input(z.object({ projectId: z.string() }))
+  getConnectionConflictInfo: protectedProcedure
+    .input(z.object({ conflictToken: z.string() }))
     .handler(async ({ context: ctx, input }) => {
+      const verificationRecord = await ctx.db.query.verification.findFirst({
+        where: eq(verification.identifier, input.conflictToken),
+      });
+
+      if (!verificationRecord || verificationRecord.expiresAt < new Date()) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: "Connection conflict expired. Please reconnect and try again.",
+        });
+      }
+
+      const conflictData = z
+        .discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("slack-workspace-conflict"),
+            userId: z.string(),
+            projectId: z.string(),
+            teamId: z.string(),
+            teamName: z.string(),
+            teamDomain: z.string(),
+            encryptedAccessToken: z.string(),
+          }),
+          z.object({
+            kind: z.literal("github-installation-conflict"),
+            userId: z.string(),
+            projectId: z.string(),
+            installationId: z.number(),
+            githubUserId: z.number(),
+            githubLogin: z.string(),
+            encryptedAccessToken: z.string(),
+          }),
+        ])
+        .parse(JSON.parse(verificationRecord.value));
+
+      if (conflictData.userId !== ctx.user.id) {
+        throw new ORPCError("FORBIDDEN", {
+          message: "This conflict belongs to another user",
+        });
+      }
+
       const proj = await ctx.db.query.project.findFirst({
-        where: eq(project.id, input.projectId),
+        where: eq(project.id, conflictData.projectId),
         with: { organization: true },
       });
 
@@ -66,12 +104,28 @@ export const projectRouter = {
         throw new ORPCError("NOT_FOUND", { message: "Project not found" });
       }
 
+      if (conflictData.kind === "slack-workspace-conflict") {
+        return {
+          kind: "slack" as const,
+          teamName: conflictData.teamName,
+          conflictToken: input.conflictToken,
+          newProject: {
+            id: proj.id,
+            slug: proj.slug,
+            organizationName: proj.organization.name,
+          },
+        };
+      }
+
       return {
-        id: proj.id,
-        name: proj.name,
-        slug: proj.slug,
-        organizationName: proj.organization.name,
-        organizationSlug: proj.organization.slug,
+        kind: "github-installation" as const,
+        installationId: conflictData.installationId,
+        conflictToken: input.conflictToken,
+        newProject: {
+          id: proj.id,
+          slug: proj.slug,
+          organizationName: proj.organization.name,
+        },
       };
     }),
 
@@ -370,14 +424,49 @@ export const projectRouter = {
     .input(
       z.object({
         ...ProjectInput.shape,
-        installationId: z.number(),
+        conflictToken: z.string(),
       }),
     )
     .handler(async ({ context: ctx, input }) => {
+      const githubConflictVerification = await ctx.db.query.verification.findFirst({
+        where: eq(schema.verification.identifier, input.conflictToken),
+      });
+
+      await ctx.db
+        .delete(schema.verification)
+        .where(eq(schema.verification.identifier, input.conflictToken));
+
+      if (!githubConflictVerification || githubConflictVerification.expiresAt < new Date()) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: "GitHub conflict verification expired. Please reconnect GitHub and try again.",
+        });
+      }
+
+      const githubConflictData = z
+        .object({
+          kind: z.literal("github-installation-conflict"),
+          userId: z.string(),
+          projectId: z.string(),
+          installationId: z.number(),
+          githubUserId: z.number(),
+          githubLogin: z.string(),
+          encryptedAccessToken: z.string(),
+        })
+        .parse(JSON.parse(githubConflictVerification.value));
+
+      if (
+        githubConflictData.userId !== ctx.user.id ||
+        githubConflictData.projectId !== ctx.project.id
+      ) {
+        throw new ORPCError("FORBIDDEN", {
+          message: "GitHub conflict verification does not match this user or project",
+        });
+      }
+
       const existingConnection = await ctx.db.query.projectConnection.findFirst({
         where: and(
           eq(projectConnection.provider, "github-app"),
-          eq(projectConnection.externalId, input.installationId.toString()),
+          eq(projectConnection.externalId, githubConflictData.installationId.toString()),
         ),
         with: { project: true },
       });
@@ -401,54 +490,60 @@ export const projectRouter = {
       const targetProjectId = ctx.project.id;
       const githubEgressRule =
         "$contains(url.hostname, 'github.com') or $contains(url.hostname, 'githubcopilot.com')";
+      const installationToken = await getGitHubInstallationToken(
+        ctx.env,
+        githubConflictData.installationId,
+      );
+      const encryptedSecretToken = installationToken
+        ? await encrypt(installationToken)
+        : githubConflictData.encryptedAccessToken;
+      const secretMetadata = installationToken
+        ? { githubInstallationId: githubConflictData.installationId }
+        : {};
 
       await ctx.db.transaction(async (tx) => {
         await tx
           .update(schema.projectConnection)
           .set({
             projectId: targetProjectId,
+            providerData: {
+              installationId: githubConflictData.installationId,
+              githubUserId: githubConflictData.githubUserId,
+              githubLogin: githubConflictData.githubLogin,
+              encryptedAccessToken: githubConflictData.encryptedAccessToken,
+            },
           })
           .where(eq(schema.projectConnection.id, existingConnection.id));
 
-        const sourceSecret = await tx.query.secret.findFirst({
+        const targetSecret = await tx.query.secret.findFirst({
           where: and(
-            eq(schema.secret.projectId, sourceProjectId),
+            eq(schema.secret.projectId, targetProjectId),
             eq(schema.secret.key, "github.access_token"),
             isNull(schema.secret.userId),
           ),
         });
 
-        if (sourceSecret) {
-          const targetSecret = await tx.query.secret.findFirst({
-            where: and(
-              eq(schema.secret.projectId, targetProjectId),
-              eq(schema.secret.key, "github.access_token"),
-              isNull(schema.secret.userId),
-            ),
-          });
-
-          if (targetSecret) {
-            await tx
-              .update(schema.secret)
-              .set({
-                encryptedValue: sourceSecret.encryptedValue,
-                organizationId: ctx.organization.id,
-                metadata: sourceSecret.metadata,
-                egressProxyRule: githubEgressRule,
-                lastSuccessAt: new Date(),
-              })
-              .where(eq(schema.secret.id, targetSecret.id));
-          } else {
-            await tx.insert(schema.secret).values({
-              key: "github.access_token",
-              encryptedValue: sourceSecret.encryptedValue,
+        if (targetSecret) {
+          await tx
+            .update(schema.secret)
+            .set({
+              encryptedValue: encryptedSecretToken,
               organizationId: ctx.organization.id,
-              projectId: targetProjectId,
-              metadata: sourceSecret.metadata,
+              metadata: secretMetadata,
               egressProxyRule: githubEgressRule,
               lastSuccessAt: new Date(),
-            });
-          }
+            })
+            .where(eq(schema.secret.id, targetSecret.id));
+        } else {
+          await tx.insert(schema.secret).values({
+            key: "github.access_token",
+            encryptedValue: encryptedSecretToken,
+            organizationId: ctx.organization.id,
+            projectId: targetProjectId,
+            metadata: secretMetadata,
+            egressProxyRule: githubEgressRule,
+            lastSuccessAt: new Date(),
+          });
         }
 
         if (sourceProjectId !== targetProjectId) {
@@ -657,15 +752,50 @@ export const projectRouter = {
     .input(
       z.object({
         ...ProjectInput.shape,
-        slackTeamId: z.string(),
+        conflictToken: z.string(),
       }),
     )
     .handler(async ({ context: ctx, input }) => {
+      const slackConflictVerification = await ctx.db.query.verification.findFirst({
+        where: eq(schema.verification.identifier, input.conflictToken),
+      });
+
+      await ctx.db
+        .delete(schema.verification)
+        .where(eq(schema.verification.identifier, input.conflictToken));
+
+      if (!slackConflictVerification || slackConflictVerification.expiresAt < new Date()) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: "Slack conflict verification expired. Please reconnect Slack and try again.",
+        });
+      }
+
+      const slackConflictData = z
+        .object({
+          kind: z.literal("slack-workspace-conflict"),
+          userId: z.string(),
+          projectId: z.string(),
+          teamId: z.string(),
+          teamName: z.string(),
+          teamDomain: z.string(),
+          encryptedAccessToken: z.string(),
+        })
+        .parse(JSON.parse(slackConflictVerification.value));
+
+      if (
+        slackConflictData.userId !== ctx.user.id ||
+        slackConflictData.projectId !== ctx.project.id
+      ) {
+        throw new ORPCError("FORBIDDEN", {
+          message: "Slack conflict verification does not match this user or project",
+        });
+      }
+
       // Find existing connection by Slack team ID
       const existingConnection = await ctx.db.query.projectConnection.findFirst({
         where: and(
           eq(projectConnection.provider, "slack"),
-          eq(projectConnection.externalId, input.slackTeamId),
+          eq(projectConnection.externalId, slackConflictData.teamId),
         ),
         with: { project: { with: { organization: true } } },
       });
@@ -690,22 +820,20 @@ export const projectRouter = {
 
       const sourceProjectId = existingConnection.projectId;
       const targetProjectId = ctx.project.id;
-      const encryptedAccessToken = (
-        existingConnection.providerData as {
-          encryptedAccessToken?: string;
-        } | null
-      )?.encryptedAccessToken;
-
       // Keep connection and secret in sync when moving Slack workspaces between projects.
       await ctx.db.transaction(async (tx) => {
         await tx
           .update(schema.projectConnection)
           .set({
             projectId: targetProjectId,
+            providerData: {
+              teamId: slackConflictData.teamId,
+              teamName: slackConflictData.teamName,
+              teamDomain: slackConflictData.teamDomain,
+              encryptedAccessToken: slackConflictData.encryptedAccessToken,
+            },
           })
           .where(eq(schema.projectConnection.id, existingConnection.id));
-
-        if (!encryptedAccessToken) return;
 
         const targetSecret = await tx.query.secret.findFirst({
           where: and(
@@ -719,7 +847,7 @@ export const projectRouter = {
           await tx
             .update(schema.secret)
             .set({
-              encryptedValue: encryptedAccessToken,
+              encryptedValue: slackConflictData.encryptedAccessToken,
               organizationId: ctx.organization.id,
               egressProxyRule: `$contains(url.hostname, 'slack.com')`,
               lastSuccessAt: new Date(),
@@ -728,7 +856,7 @@ export const projectRouter = {
         } else {
           await tx.insert(schema.secret).values({
             key: "slack.access_token",
-            encryptedValue: encryptedAccessToken,
+            encryptedValue: slackConflictData.encryptedAccessToken,
             organizationId: ctx.organization.id,
             projectId: targetProjectId,
             egressProxyRule: `$contains(url.hostname, 'slack.com')`,

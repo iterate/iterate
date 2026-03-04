@@ -422,12 +422,21 @@ slackApp.get(
           teamId: string;
           teamName: string;
         };
-        const params = new URLSearchParams({
-          kind: "slack",
-          teamId: conflictData.teamId,
-          teamName: conflictData.teamName,
-          newProjectId: projectId,
+        const conflictToken = crypto.randomUUID();
+        await c.var.db.insert(schema.verification).values({
+          identifier: conflictToken,
+          value: JSON.stringify({
+            kind: "slack-workspace-conflict",
+            userId,
+            projectId,
+            teamId: conflictData.teamId,
+            teamName: conflictData.teamName,
+            teamDomain: teamData.domain,
+            encryptedAccessToken,
+          }),
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
         });
+        const params = new URLSearchParams({ conflictToken });
         return c.redirect(`/connection-conflict?${params.toString()}`);
       }
       throw error;

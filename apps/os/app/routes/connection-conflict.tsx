@@ -1,27 +1,16 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod/v4";
-import { match } from "ts-pattern";
-import { Button } from "../components/ui/button.tsx";
 import { CenteredLayout } from "../components/centered-layout.tsx";
+import { Button } from "../components/ui/button.tsx";
 import { Spinner } from "../components/ui/spinner.tsx";
 import { orpc, orpcClient } from "../lib/orpc.tsx";
 
-const Search = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("slack"),
-    teamId: z.string(),
-    teamName: z.string(),
-    newProjectId: z.string(),
-  }),
-  z.object({
-    kind: z.literal("github-installation"),
-    installationId: z.number(),
-    newProjectId: z.string(),
-  }),
-]);
+const Search = z.object({
+  conflictToken: z.string(),
+});
 
 export const Route = createFileRoute("/_auth/connection-conflict")({
   validateSearch: Search,
@@ -29,33 +18,39 @@ export const Route = createFileRoute("/_auth/connection-conflict")({
 });
 
 function ConnectionConflictPage() {
-  const search = Route.useSearch();
-  const { data: newProject } = useSuspenseQuery(
-    orpc.project.getProjectInfoById.queryOptions({
-      input: { projectId: search.newProjectId },
+  const { conflictToken } = Route.useSearch();
+  const { data } = useSuspenseQuery(
+    orpc.project.getConnectionConflictInfo.queryOptions({
+      input: { conflictToken },
     }),
   );
 
-  return match(search)
-    .with({ kind: "slack" }, (data) => (
-      <SlackConflictPage teamId={data.teamId} teamName={data.teamName} newProject={newProject} />
-    ))
-    .with({ kind: "github-installation" }, (data) => (
-      <GithubInstallationConflictPage
-        installationId={data.installationId}
-        newProject={newProject}
+  if (data.kind === "slack") {
+    return (
+      <SlackConflictPage
+        teamName={data.teamName}
+        conflictToken={data.conflictToken}
+        newProject={data.newProject}
       />
-    ))
-    .otherwise(() => <div>Invalid conflict</div>);
+    );
+  }
+
+  return (
+    <GithubInstallationConflictPage
+      installationId={data.installationId}
+      conflictToken={data.conflictToken}
+      newProject={data.newProject}
+    />
+  );
 }
 
 function SlackConflictPage({
-  teamId,
   teamName,
+  conflictToken,
   newProject,
 }: {
-  teamId: string;
   teamName: string;
+  conflictToken: string;
   newProject: { id: string; slug: string; organizationName: string };
 }) {
   const navigate = useNavigate();
@@ -65,7 +60,7 @@ function SlackConflictPage({
     mutationFn: () =>
       orpcClient.project.transferSlackConnection({
         projectSlug: newProject.slug,
-        slackTeamId: teamId,
+        conflictToken,
       }),
     onSuccess: (result) => {
       toast.success(`Slack workspace connected to ${newProject.slug}`);
@@ -74,7 +69,6 @@ function SlackConflictPage({
           input: { projectSlug: newProject.slug },
         }),
       });
-
       if (result.previousProjectSlug) {
         queryClient.invalidateQueries({
           queryKey: orpc.project.getSlackConnection.key({
@@ -82,11 +76,7 @@ function SlackConflictPage({
           }),
         });
       }
-
-      navigate({
-        to: "/proj/$projectSlug/connectors",
-        params: { projectSlug: newProject.slug },
-      });
+      navigate({ to: "/proj/$projectSlug/connectors", params: { projectSlug: newProject.slug } });
     },
     onError: (error) => {
       toast.error(`Failed to transfer connection: ${error.message}`);
@@ -102,13 +92,11 @@ function SlackConflictPage({
           </div>
           <h1 className="text-2xl font-semibold">Slack workspace already connected</h1>
         </div>
-
         <p className="text-muted-foreground">
           The Slack workspace <span className="font-medium text-foreground">{teamName}</span> is
           already connected to another Iterate project. Do you want to replace that connection with
           this project?
         </p>
-
         <div className="grid grid-cols-2 gap-4">
           <Button
             variant="outline"
@@ -128,7 +116,6 @@ function SlackConflictPage({
               </div>
             </div>
           </Button>
-
           <Button
             className="h-auto flex-col items-start gap-3 p-4 text-left"
             onClick={() => transferConnection.mutate()}
@@ -167,9 +154,11 @@ function SlackConflictPage({
 
 function GithubInstallationConflictPage({
   installationId,
+  conflictToken,
   newProject,
 }: {
   installationId: number;
+  conflictToken: string;
   newProject: { id: string; slug: string; organizationName: string };
 }) {
   const navigate = useNavigate();
@@ -179,26 +168,19 @@ function GithubInstallationConflictPage({
     mutationFn: () =>
       orpcClient.project.transferGithubConnection({
         projectSlug: newProject.slug,
-        installationId,
+        conflictToken,
       }),
     onSuccess: (result) => {
       toast.success(`GitHub connection moved to ${newProject.slug}`);
       queryClient.invalidateQueries({
-        queryKey: orpc.project.bySlug.key({
-          input: { projectSlug: newProject.slug },
-        }),
+        queryKey: orpc.project.bySlug.key({ input: { projectSlug: newProject.slug } }),
       });
       queryClient.invalidateQueries({
-        queryKey: orpc.project.getGithubConnection.key({
-          input: { projectSlug: newProject.slug },
-        }),
+        queryKey: orpc.project.getGithubConnection.key({ input: { projectSlug: newProject.slug } }),
       });
-
       if (result.previousProjectSlug) {
         queryClient.invalidateQueries({
-          queryKey: orpc.project.bySlug.key({
-            input: { projectSlug: result.previousProjectSlug },
-          }),
+          queryKey: orpc.project.bySlug.key({ input: { projectSlug: result.previousProjectSlug } }),
         });
         queryClient.invalidateQueries({
           queryKey: orpc.project.getGithubConnection.key({
@@ -206,11 +188,7 @@ function GithubInstallationConflictPage({
           }),
         });
       }
-
-      navigate({
-        to: "/proj/$projectSlug/connectors",
-        params: { projectSlug: newProject.slug },
-      });
+      navigate({ to: "/proj/$projectSlug/connectors", params: { projectSlug: newProject.slug } });
     },
     onError: (error) => {
       toast.error(`Failed to transfer connection: ${error.message}`);
@@ -226,12 +204,10 @@ function GithubInstallationConflictPage({
           </div>
           <h1 className="text-2xl font-semibold">GitHub connection already in use</h1>
         </div>
-
         <p className="text-muted-foreground">
           This GitHub App installation is already connected to another Iterate project. Do you want
           to replace that connection with this project?
         </p>
-
         <div className="grid grid-cols-2 gap-4">
           <Button
             variant="outline"
@@ -251,7 +227,6 @@ function GithubInstallationConflictPage({
               </div>
             </div>
           </Button>
-
           <Button
             className="h-auto flex-col items-start gap-3 p-4 text-left"
             onClick={() => transferConnection.mutate()}
