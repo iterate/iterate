@@ -34,7 +34,7 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
   orders: {
     definition: {
       command: PIDNAP_TSX_PATH,
-      args: [`${ITERATE_REPO}/services/orders-service/src/server.ts`],
+      args: [`${ITERATE_REPO}/services/orders/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "orders.iterate.localhost", path: "/api/service/health" },

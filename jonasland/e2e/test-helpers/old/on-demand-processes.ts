@@ -50,7 +50,7 @@ export type OnDemandProcessConfig = {
 const sharedOnDemandProcesses = {
   orders: {
     definition: createTsxDefinition({
-      scriptPath: `${CONTAINER_REPO_ROOT}/services/orders-service/src/server.ts`,
+      scriptPath: `${CONTAINER_REPO_ROOT}/services/orders/src/server.ts`,
       env: {
         ...OTEL_SERVICE_ENV,
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",

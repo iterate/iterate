@@ -42,7 +42,7 @@ export const KickoffOrderWorkflowOutput = z.object({
 
 const serviceSubRouter = createServiceSubRouterContract({
   healthSummary: "Orders service health metadata",
-  sqlSummary: "Execute SQL against orders-service sqlite database",
+  sqlSummary: "Execute SQL against orders sqlite database",
 });
 
 export const ordersContract = oc.router({
@@ -181,10 +181,10 @@ export {
 
 export const ordersServiceManifest = {
   name: packageJson.name,
-  slug: "orders-service",
+  slug: "orders",
   version: packageJson.version ?? "0.0.0",
   port: 19020,
-  serverEntryPoint: "services/orders-service/src/server.ts",
+  serverEntryPoint: "services/orders/src/server.ts",
   orpcContract: ordersContract,
   envVars: OrdersServiceEnv,
 } as const;

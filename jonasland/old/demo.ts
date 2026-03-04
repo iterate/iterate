@@ -46,7 +46,7 @@ const processes: ProcessConfig[] = [
     slug: "orders",
     definition: {
       command: PIDNAP_TSX_PATH,
-      args: [`${ITERATE_REPO}/services/orders-service/src/server.ts`],
+      args: [`${ITERATE_REPO}/services/orders/src/server.ts`],
       env: {
         ...OTEL_SERVICE_ENV,
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:17320/orpc",

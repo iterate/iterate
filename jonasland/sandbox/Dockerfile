@@ -102,7 +102,8 @@ WORKDIR $ITERATE_REPO
 COPY --chown=iterate:iterate package.json pnpm-lock.yaml pnpm-workspace.yaml $ITERATE_REPO/
 COPY --chown=iterate:iterate services/registry-service/package.json $ITERATE_REPO/services/registry-service/package.json
 COPY --chown=iterate:iterate services/events-service/package.json $ITERATE_REPO/services/events-service/package.json
-COPY --chown=iterate:iterate services/orders-service/package.json $ITERATE_REPO/services/orders-service/package.json
+COPY --chown=iterate:iterate services/orders/package.json $ITERATE_REPO/services/orders/package.json
+COPY --chown=iterate:iterate services/example/package.json $ITERATE_REPO/services/example/package.json
 COPY --chown=iterate:iterate services/home-service/package.json $ITERATE_REPO/services/home-service/package.json
 COPY --chown=iterate:iterate services/docs-service/package.json $ITERATE_REPO/services/docs-service/package.json
 COPY --chown=iterate:iterate services/outerbase-service/package.json $ITERATE_REPO/services/outerbase-service/package.json
@@ -111,6 +112,7 @@ COPY --chown=iterate:iterate packages/pidnap/package.json $ITERATE_REPO/packages
 COPY --chown=iterate:iterate services/registry-contract/package.json $ITERATE_REPO/services/registry-contract/package.json
 COPY --chown=iterate:iterate services/events-contract/package.json $ITERATE_REPO/services/events-contract/package.json
 COPY --chown=iterate:iterate services/orders-contract/package.json $ITERATE_REPO/services/orders-contract/package.json
+COPY --chown=iterate:iterate services/example-contract/package.json $ITERATE_REPO/services/example-contract/package.json
 COPY --chown=iterate:iterate packages/shared/package.json $ITERATE_REPO/packages/shared/package.json
 COPY --chown=iterate:iterate packages/ui/package.json $ITERATE_REPO/packages/ui/package.json
 COPY --chown=iterate:iterate jonasland/sandbox/package.json $ITERATE_REPO/jonasland/sandbox/package.json
@@ -119,7 +121,8 @@ RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
     --filter @iterate-com/jonasland-sandbox \
     --filter @iterate-com/registry-service \
     --filter @iterate-com/events-service \
-    --filter @iterate-com/orders-service \
+    --filter @iterate-com/orders \
+    --filter @iterate-com/example \
     --filter @iterate-com/home-service \
     --filter @iterate-com/docs-service \
     --filter @iterate-com/outerbase-service \
@@ -127,6 +130,7 @@ RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
     --filter @iterate-com/registry-contract \
     --filter @iterate-com/events-contract \
     --filter @iterate-com/orders-contract \
+    --filter @iterate-com/example-contract \
     --filter @iterate-com/shared \
     --filter @iterate-com/ui
 RUN pnpm -r rebuild better-sqlite3 esbuild protobufjs

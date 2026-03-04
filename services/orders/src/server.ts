@@ -59,7 +59,7 @@ function createBodyParserSafeRequest(
   });
 }
 
-const serviceName = "jonasland-orders-service";
+const serviceName = "jonasland-orders";
 const viteServiceRoot = fileURLToPath(new URL("..", import.meta.url));
 const viteUiRoot = fileURLToPath(new URL("./ui", import.meta.url));
 const viteUiIndexHtmlPath = fileURLToPath(new URL("./ui/index.html", import.meta.url));
@@ -104,7 +104,7 @@ const openAPIHandler = new OpenAPIHandler(ordersRouter, {
       schemaConverters: [new ZodToJsonSchemaConverter()],
       specGenerateOptions: {
         info: {
-          title: "jonasland orders-service API",
+          title: "jonasland orders API",
           version: ordersServiceManifest.version,
         },
         servers: [{ url: "/api" }],
@@ -292,7 +292,7 @@ await initializeOrdersDb();
 const vite: ViteDevServer = await createViteServer({
   configFile: false,
   root: fileURLToPath(new URL("./ui", import.meta.url)),
-  cacheDir: "/tmp/vite-orders-service",
+  cacheDir: "/tmp/vite-orders",
   resolve: {
     alias: [
       { find: "@iterate-com/ui/globals.css", replacement: viteUiGlobalsCss },

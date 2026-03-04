@@ -1,5 +1,5 @@
 {
-  "name": "@iterate-com/orders-service",
+  "name": "@iterate-com/example",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -16,7 +16,7 @@
     "@vitejs/plugin-react": "^5.1.2",
     "@hono/node-server": "^1.19.9",
     "@iterate-com/events-contract": "workspace:*",
-    "@iterate-com/orders-contract": "workspace:*",
+    "@iterate-com/example-contract": "workspace:*",
     "@iterate-com/registry-service": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
@@ -32,14 +32,12 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tailwindcss": "^4.1.17",
-    "vite": "^7.3.1",
-    "ws": "^8.18.3"
+    "vite": "^7.3.1"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
     "@types/react": "^19.2.3",
     "@types/react-dom": "^19.2.2",
-    "@types/ws": "^8.18.1",
     "typescript": "^5.9.3"
   }
 }

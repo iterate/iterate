@@ -24,7 +24,7 @@ interface EventsClientContext {
   requestId: string;
 }
 
-const serviceName = "jonasland-orders-service";
+const serviceName = "jonasland-orders";
 const ORDER_PLACED_EVENT_TYPE = "https://events.iterate.com/orders/order-placed";
 const ORDER_WORKFLOW_STARTED_EVENT_TYPE = "https://events.iterate.com/orders/workflow-started";
 const ORDER_WORKFLOW_COMPLETED_EVENT_TYPE = "https://events.iterate.com/orders/workflow-completed";

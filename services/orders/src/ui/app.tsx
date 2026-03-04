@@ -158,7 +158,7 @@ export function App() {
       <div className="grid gap-4 lg:grid-cols-[1.7fr_1fr]">
         <section className="space-y-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <h1 className="text-xl font-semibold">Orders Service</h1>
+            <h1 className="text-xl font-semibold">Orders</h1>
             <Button
               disabled={busy}
               onClick={() => void refresh()}
