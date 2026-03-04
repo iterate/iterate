@@ -1,19 +1,14 @@
 import { randomUUID } from "node:crypto";
 import createClient, { type Client } from "openapi-fetch";
-import pRetry from "p-retry";
-import { Deployment, type DeploymentCommandResult, type DeploymentOpts } from "./deployment.ts";
-import { isRetriableNetworkError, toEnvRecord } from "./deployment-utils.ts";
+import {
+  Deployment,
+  PIDNAP_LOG_TAIL_CMD,
+  throwIfAborted,
+  type DeploymentCommandResult,
+  type DeploymentOpts,
+} from "./deployment.ts";
+import { toEnvRecord } from "./deployment-utils.ts";
 import type { components, paths } from "./fly-api/generated/openapi.gen.ts";
-
-const NETWORK_RETRY_OPTS = {
-  retries: 9,
-  shouldRetry: isRetriableNetworkError,
-  minTimeout: 200,
-  maxTimeout: 1_500,
-} as const;
-
-const PIDNAP_LOG_TAIL_CMD =
-  'for f in /var/log/pidnap/*.log; do echo "===== $f ====="; tail -n 200 "$f"; done 2>/dev/null || true';
 
 export interface FlyDeploymentLocator {
   provider: "fly";
@@ -56,22 +51,19 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
     method: string,
     path: string,
     call: () => Promise<{ data?: TData; error?: unknown; response: Response }>,
-    retryOpts?: Parameters<typeof pRetry>[1],
   ): Promise<TData> {
-    return await pRetry(async () => {
-      const { data, error, response } = await call();
-      if (error) {
-        const details = (() => {
-          try {
-            return JSON.stringify(error);
-          } catch {
-            return String(error);
-          }
-        })();
-        throw new Error(`Fly API (${response.status}) ${method} ${path}: ${details}`);
-      }
-      return data as TData;
-    }, retryOpts ?? NETWORK_RETRY_OPTS);
+    const { data, error, response } = await call();
+    if (error) {
+      const details = (() => {
+        try {
+          return JSON.stringify(error);
+        } catch {
+          return String(error);
+        }
+      })();
+      throw new Error(`Fly API (${response.status}) ${method} ${path}: ${details}`);
+    }
+    return data as TData;
   }
 
   private async resolveMachineId(): Promise<string> {
@@ -101,6 +93,7 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
       throw new Error(`${this.constructor.name} is in state "${this.state}", expected "new"`);
     }
     console.log(`[deployment] creating ${this.constructor.name}...`);
+    throwIfAborted(opts.signal);
     if (!opts.flyImage) throw new Error("flyImage is required");
     if (!opts.flyApiToken) throw new Error("flyApiToken is required");
     if (!opts.flyBaseDomain) throw new Error("flyBaseDomain is required");
@@ -133,6 +126,7 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
       });
 
       for (const type of ["v6", "shared_v4"] as const) {
+        throwIfAborted(opts.signal);
         await this.flyCall("POST", "/apps/{app_name}/ip_assignments", async () =>
           this.requireApi().POST("/apps/{app_name}/ip_assignments", {
             params: { path: { app_name: appName } },
@@ -148,6 +142,7 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
       }
 
       const envRecord = toEnvRecord(opts.env);
+      throwIfAborted(opts.signal);
       const created = await this.flyCall("POST", "/apps/{app_name}/machines", async () =>
         this.requireApi().POST("/apps/{app_name}/machines", {
           params: { path: { app_name: appName } },
@@ -192,7 +187,7 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
       if (!machineId) throw new Error(`Fly machine creation returned no id for ${appName}`);
       this.machineId = machineId;
 
-      await this.waitForMachineState(appName, machineId, "started");
+      await this.waitForMachineState(appName, machineId, "started", 300, opts.signal);
       console.log(`[fly] machine ${machineId} started`);
     } catch (error) {
       const logs = await this.execOnMachine(PIDNAP_LOG_TAIL_CMD).catch((e) => ({
@@ -255,9 +250,11 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
     machineId: string,
     state: "started" | "stopped" | "suspended" | "destroyed",
     timeoutSeconds = 300,
+    signal?: AbortSignal,
   ): Promise<void> {
     const start = Date.now();
     while (true) {
+      throwIfAborted(signal);
       const remaining = timeoutSeconds - Math.floor((Date.now() - start) / 1000);
       if (remaining <= 0)
         throw new Error(`timed out waiting for machine ${machineId} state=${state}`);
@@ -291,19 +288,10 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
         if (!matchesError(e, "not found", "(404)")) throw e;
       });
     }
-    await this.flyCall(
-      "DELETE",
-      "/apps/{app_name}",
-      async () =>
-        this.requireApi().DELETE("/apps/{app_name}", {
-          params: { path: { app_name: appName } },
-        }),
-      {
-        retries: 8,
-        minTimeout: 500,
-        maxTimeout: 3_000,
-        shouldRetry: (e) => isRetriableNetworkError(e) || matchesError(e, "failed_precondition"),
-      },
+    await this.flyCall("DELETE", "/apps/{app_name}", async () =>
+      this.requireApi().DELETE("/apps/{app_name}", {
+        params: { path: { app_name: appName } },
+      }),
     ).catch((e) => {
       if (!matchesError(e, "not found", "(404)")) throw e;
     });

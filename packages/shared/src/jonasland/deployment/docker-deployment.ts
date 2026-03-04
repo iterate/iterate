@@ -1,7 +1,12 @@
 import { PassThrough } from "node:stream";
 import { DockerClient } from "@docker/node-sdk";
 import pWaitFor from "p-wait-for";
-import { Deployment, type DeploymentCommandResult, type DeploymentOpts } from "./deployment.ts";
+import {
+  Deployment,
+  throwIfAborted,
+  type DeploymentCommandResult,
+  type DeploymentOpts,
+} from "./deployment.ts";
 import { collectTextOutput } from "./deployment-utils.ts";
 
 type DockerSdkClient = Awaited<ReturnType<typeof DockerClient.fromDockerConfig>>;
@@ -49,12 +54,13 @@ export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDep
     return this.containerId;
   }
 
-  private async waitForPublishedPort(containerPort: string): Promise<number> {
+  private async waitForPublishedPort(containerPort: string, signal?: AbortSignal): Promise<number> {
     const docker = await DockerDeployment.dockerClient();
     const containerId = this.requireContainerId();
     let resolved: number | undefined;
     await pWaitFor(
       async () => {
+        throwIfAborted(signal);
         const info = await docker.containerInspect(containerId);
         const hostPort = info.NetworkSettings?.Ports?.[containerPort]?.[0]?.HostPort;
         if (hostPort) {
@@ -66,6 +72,7 @@ export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDep
       {
         interval: 100,
         timeout: { milliseconds: 10_000, message: `No published port for ${containerPort}` },
+        signal,
       },
     );
     return resolved!;
@@ -76,8 +83,10 @@ export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDep
       throw new Error(`${this.constructor.name} is in state "${this.state}", expected "new"`);
     }
     console.log(`[deployment] creating ${this.constructor.name}...`);
+    throwIfAborted(opts.signal);
     if (!opts.dockerImage) throw new Error("dockerImage is required");
     const docker = await DockerDeployment.dockerClient();
+    throwIfAborted(opts.signal);
     const hostSync = resolveDockerHostSync(opts);
     const hostSyncBinds =
       hostSync == null
@@ -136,9 +145,10 @@ export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDep
       throw new Error(`docker container create id missing: ${JSON.stringify(created)}`);
     }
     this.containerId = containerId;
+    throwIfAborted(opts.signal);
     await docker.containerStart(this.containerId);
 
-    const hostPort = await this.waitForPublishedPort("80/tcp");
+    const hostPort = await this.waitForPublishedPort("80/tcp", opts.signal);
     const baseUrl = `http://127.0.0.1:${String(hostPort)}`;
     console.log(`[docker] container=${this.containerId.slice(0, 12)} port=${String(hostPort)}`);
 

@@ -18,15 +18,41 @@ export type DeploymentCommandResult = {
   output: string;
 };
 
+export type DeploymentFactory<TDeployment, TOpts> = (
+  overrides?: Partial<TOpts>,
+) => Promise<TDeployment>;
+
+export const PIDNAP_LOG_TAIL_CMD =
+  'for f in /var/log/pidnap/*.log; do echo "===== $f ====="; tail -n 200 "$f"; done 2>/dev/null || true';
+
 export interface DeploymentOpts {
   name?: string;
   env?: Record<string, string> | string[];
+  signal?: AbortSignal;
+}
+
+export function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error(`Operation aborted${signal.reason ? `: ${String(signal.reason)}` : ""}`);
 }
 
 export abstract class Deployment<
   TOpts extends DeploymentOpts = DeploymentOpts,
   TLocator = unknown,
 > implements AsyncDisposable {
+  static makeFactory<TDeployment, TOpts>(
+    this: { create(opts: TOpts): Promise<TDeployment> },
+    defaults: TOpts,
+  ): DeploymentFactory<TDeployment, TOpts> {
+    return async (overrides = {}) =>
+      await this.create({
+        ...defaults,
+        ...overrides,
+      } as TOpts);
+  }
+
   protected state: "new" | "running" | "destroyed" = "new";
   protected locator: TLocator | null = null;
 
