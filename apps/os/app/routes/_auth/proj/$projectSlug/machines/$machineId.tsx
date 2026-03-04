@@ -1,0 +1,719 @@
+import { useState } from "react";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
+import {
+  AlertTriangle,
+  Copy,
+  ExternalLink,
+  Globe,
+  List,
+  Play,
+  RefreshCw,
+  TerminalSquare,
+  Trash2,
+} from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog.tsx";
+import { DaemonStatus } from "@/components/daemon-status.tsx";
+import { SerializedObjectCodeBlock } from "@/components/serialized-object-code-block.tsx";
+import { Spinner } from "@/components/ui/spinner.tsx";
+import { TypeId } from "@/components/type-id.tsx";
+import { buildProjectIngressLink } from "@/lib/project-ingress-link.ts";
+import { useSessionUser } from "@/hooks/use-session-user.ts";
+import { Button } from "@/components/ui/button.tsx";
+import { orpc, orpcClient } from "@/lib/orpc.tsx";
+
+export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
+  component: MachineDetailPage,
+});
+
+/** Pidnap-managed processes — mirrors sandbox/pidnap.config.ts */
+const PIDNAP_PROCESSES = [
+  "daemon-backend",
+  "daemon-frontend",
+  "events",
+  "opencode",
+  "egress-proxy",
+  "project-ingress-proxy",
+  "trace-viewer",
+] as const;
+
+function parseFlyExternalId(externalId: string): { appName: string } | null {
+  const trimmed = externalId.trim();
+  if (!trimmed) return null;
+  return { appName: trimmed };
+}
+
+type MachineMetadata = {
+  host?: string;
+  port?: number;
+  ports?: Record<string, number>;
+  containerId?: string;
+  containerName?: string;
+  snapshotName?: string;
+  sandboxName?: string;
+  fly?: {
+    machineId?: string;
+  };
+} & Record<string, unknown>;
+
+type ProviderDetailLink = {
+  label: string;
+  url: string;
+};
+
+type ProviderDetailRef = {
+  label: string;
+  value: string;
+};
+
+type ProviderDetails = {
+  title: string;
+  links: ProviderDetailLink[];
+  refs: ProviderDetailRef[];
+  emptyMessage: string;
+};
+
+function ProviderDetailsCard(props: {
+  details: ProviderDetails;
+  onCopy: (value: string) => Promise<void>;
+}) {
+  const { details, onCopy } = props;
+  const { title, links, refs, emptyMessage } = details;
+
+  return (
+    <section className="space-y-3 rounded-lg border p-4">
+      <h2 className="text-sm font-medium">{title}</h2>
+
+      {links.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {links.map((link) => (
+            <Button key={link.url} variant="outline" size="sm" asChild>
+              <a href={link.url} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="h-4 w-4" />
+                {link.label}
+              </a>
+            </Button>
+          ))}
+        </div>
+      )}
+
+      {refs.length > 0 && (
+        <div className="space-y-2">
+          {refs.map((ref) => (
+            <div key={`${ref.label}-${ref.value}`} className="rounded-md border p-2">
+              <div className="text-[11px] text-muted-foreground">{ref.label}</div>
+              <div className="mt-1 flex items-start justify-between gap-2">
+                <code className="min-w-0 flex-1 break-all text-xs">{ref.value}</code>
+                <Button variant="ghost" size="sm" onClick={() => onCopy(ref.value)}>
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {links.length === 0 && refs.length === 0 && (
+        <p className="text-xs text-muted-foreground">{emptyMessage}</p>
+      )}
+    </section>
+  );
+}
+
+function MachineDetailPage() {
+  const params = Route.useParams();
+  const navigate = Route.useNavigate();
+  const queryClient = useQueryClient();
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const { user } = useSessionUser();
+  const isAdmin = user.role === "admin";
+
+  const machineQueryKey = orpc.machine.byId.key({
+    input: {
+      projectSlug: params.projectSlug,
+      machineId: params.machineId,
+    },
+  });
+
+  const machineListQueryKey = orpc.machine.list.key({
+    input: {
+      projectSlug: params.projectSlug,
+      includeArchived: false,
+    },
+  });
+
+  const { data: machine } = useSuspenseQuery({
+    ...orpc.machine.byId.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      },
+    }),
+    refetchInterval: (query) => {
+      const m = query.state.data;
+      return m?.state === "starting" ? 3000 : false;
+    },
+  });
+
+  const metadata = machine.metadata as MachineMetadata;
+  const { services } = machine;
+
+  const restartMachine = useMutation({
+    mutationFn: async () => {
+      return orpcClient.machine.restart({
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Machine restarting");
+      queryClient.invalidateQueries({ queryKey: machineQueryKey });
+    },
+    onError: (error) => {
+      toast.error("Failed to restart: " + error.message);
+    },
+  });
+
+  const restartDaemon = useMutation({
+    mutationFn: async () => {
+      return orpcClient.machine.restartDaemon({
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Daemon restarting");
+      queryClient.invalidateQueries({ queryKey: machineQueryKey });
+    },
+    onError: (error) => {
+      toast.error("Failed to restart daemon: " + error.message);
+    },
+  });
+
+  const deleteMachine = useMutation({
+    mutationFn: async () => {
+      return orpcClient.machine.delete({
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Machine deleted");
+      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
+      navigate({ to: "/proj/$projectSlug/machines", params: { projectSlug: params.projectSlug } });
+    },
+    onError: (error) => {
+      toast.error("Failed to delete: " + error.message);
+    },
+  });
+
+  const execCommand = useMutation({
+    mutationFn: async (command: string) =>
+      orpcClient.machine.execCommand({
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+        command: ["bash", "-lc", command],
+      }),
+    onError: (error) => {
+      toast.error("Command failed: " + error.message);
+    },
+  });
+
+  const copyToClipboard = async (text: string) => {
+    await navigator.clipboard.writeText(text);
+    toast.success(`Copied: ${text}`);
+  };
+
+  const { data: agentsData, isLoading: agentsLoading } = useQuery(
+    orpc.machine.listAgents.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      },
+      // TODO: this breaks after restart — lastEvent becomes machine:restart-requested
+      // or machine:daemon-status-reported, disabling the query permanently.
+      // Fix: fetch all events for the machine (not just lastEvent), then check
+      // events.has("machine:activated"). That way even detached machines still
+      // render their agents list, which is useful.
+      enabled:
+        machine.state === "active" &&
+        (machine.lastEvent?.name === "machine:activated" ||
+          machine.lastEvent?.name === "machine:probe-succeeded"),
+      refetchInterval: 10000,
+    }),
+  );
+
+  const agents = [...(agentsData?.agents ?? [])].sort(
+    (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
+  );
+
+  const iterateDaemonService = services.find((service) => service.id === "iterate-daemon");
+  const daemonBaseUrl = iterateDaemonService?.options[0]?.url;
+  const opencodeService = services.find((service) => service.id === "opencode");
+  const opencodeBaseUrl = opencodeService?.options[0]?.url;
+
+  const flyExternal = machine.type === "fly" ? parseFlyExternalId(machine.externalId) : null;
+  const flyMachineId = metadata.fly?.machineId;
+  const flyAppName = flyExternal?.appName ?? null;
+  const flyMachineUrl =
+    flyAppName && flyMachineId
+      ? `https://fly.io/apps/${flyAppName}/machines/${flyMachineId}`
+      : null;
+  const flyRealtimeLogsUrl =
+    flyAppName && flyMachineId
+      ? `https://fly.io/apps/${flyAppName}/monitoring?${new URLSearchParams({
+          instance: flyMachineId,
+        }).toString()}`
+      : null;
+  const flyGrafanaOrgId = import.meta.env.VITE_FLY_GRAFANA_ORG_ID ?? "1440139";
+  const flyGrafanaMetricsUrl = flyAppName
+    ? `https://fly-metrics.net/d/fly-app/fly-app?${new URLSearchParams({
+        from: "now-1h",
+        to: "now",
+        "var-source": "prometheus_on_fly",
+        "var-app": flyAppName,
+        "var-region": "All",
+        "var-host": "All",
+        orgId: flyGrafanaOrgId,
+      }).toString()}`
+    : null;
+  const flyGrafanaLogsUrl = flyAppName
+    ? `https://fly-metrics.net/d/fly-logs/fly-logs?${new URLSearchParams({
+        from: "now-1h",
+        to: "now",
+        "var-app": flyAppName,
+        orgId: flyGrafanaOrgId,
+      }).toString()}`
+    : null;
+  const flyGrafanaNetworkingUrl = flyAppName
+    ? `https://fly-metrics.net/d/fly-edge/fly-edge?${new URLSearchParams({
+        from: "now-1h",
+        to: "now",
+        "var-app": flyAppName,
+        orgId: flyGrafanaOrgId,
+      }).toString()}`
+    : null;
+
+  const buildTerminalUrl = (command: string) => {
+    if (!daemonBaseUrl) return "#";
+    return buildProjectIngressLink({
+      baseUrl: daemonBaseUrl,
+      path: "/terminal",
+      query: { command, autorun: "true" },
+    });
+  };
+
+  const extractSessionId = (destination?: string | null) => {
+    if (!destination) return null;
+    const match = destination.match(/^\/opencode\/sessions\/(.+)$/);
+    return match?.[1] ?? null;
+  };
+
+  const getAgentAttachCommand = (destination?: string | null, workingDirectory?: string | null) => {
+    const sessionId = extractSessionId(destination);
+    if (!sessionId) return null;
+    const cmd = `opencode attach 'http://localhost:4096' --session ${sessionId}`;
+    return workingDirectory ? `${cmd} --dir ${workingDirectory}` : cmd;
+  };
+
+  /** Build OpenCode web UI deep link: {base}/{base64(dir)}/session/{id} */
+  const buildOpencodeWebUrl = (
+    sessionId: string | null,
+    workingDirectory?: string | null,
+  ): string | null => {
+    if (!sessionId || !opencodeBaseUrl || !workingDirectory) return null;
+    const encodedDir = btoa(workingDirectory).replace(/=+$/, "");
+    return buildProjectIngressLink({
+      baseUrl: opencodeBaseUrl,
+      path: `${encodedDir}/session/${sessionId}`,
+    });
+  };
+
+  const quoteShellArg = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const dockerContainerRef = metadata.containerName ?? metadata.containerId ?? machine.externalId;
+  const dockerTailEntryLogsCommand = dockerContainerRef
+    ? `docker logs -f --tail 200 ${quoteShellArg(dockerContainerRef)}`
+    : null;
+  const dockerInspectCommand = dockerContainerRef
+    ? `docker inspect ${quoteShellArg(dockerContainerRef)}`
+    : null;
+  const providerDetails: ProviderDetails = (() => {
+    if (machine.type === "fly") {
+      return {
+        title: "Fly Machine Details",
+        links: [
+          ...(flyMachineUrl ? [{ label: "Fly Machine", url: flyMachineUrl }] : []),
+          ...(flyGrafanaMetricsUrl
+            ? [{ label: "Grafana (Metrics)", url: flyGrafanaMetricsUrl }]
+            : []),
+          ...(flyRealtimeLogsUrl
+            ? [{ label: "Fly Logs (Realtime)", url: flyRealtimeLogsUrl }]
+            : []),
+          ...(flyGrafanaLogsUrl ? [{ label: "Grafana (Logs)", url: flyGrafanaLogsUrl }] : []),
+          ...(flyGrafanaNetworkingUrl
+            ? [{ label: "Grafana (Networking)", url: flyGrafanaNetworkingUrl }]
+            : []),
+        ],
+        refs: [
+          ...(flyAppName ? [{ label: "Fly App", value: flyAppName }] : []),
+          ...(flyMachineId ? [{ label: "Fly Machine ID", value: flyMachineId }] : []),
+        ],
+        emptyMessage: "No Fly details available yet.",
+      };
+    }
+
+    if (machine.type === "docker") {
+      return {
+        title: "Docker Machine Details",
+        links: [],
+        refs: [
+          ...(metadata.containerName
+            ? [{ label: "Container Name", value: metadata.containerName }]
+            : []),
+          ...(metadata.containerId ? [{ label: "Container ID", value: metadata.containerId }] : []),
+          ...(dockerTailEntryLogsCommand
+            ? [{ label: "Tail entry logs", value: dockerTailEntryLogsCommand }]
+            : []),
+          ...(dockerInspectCommand
+            ? [{ label: "Inspect container", value: dockerInspectCommand }]
+            : []),
+        ],
+        emptyMessage: "No Docker details available yet.",
+      };
+    }
+
+    if (machine.type === "daytona") {
+      const sandboxRef = metadata.sandboxName ?? machine.externalId;
+      return {
+        title: "Daytona Machine Details",
+        links: [],
+        refs: [...(sandboxRef ? [{ label: "Sandbox", value: sandboxRef }] : [])],
+        emptyMessage: "No Daytona details available yet.",
+      };
+    }
+
+    return {
+      title: "Provider Details",
+      links: [],
+      refs: [],
+      emptyMessage: "No provider-specific details available.",
+    };
+  })();
+
+  const failedConsumer = machine.consumers?.find((c) => c.status === "failed");
+  const issueMessage = failedConsumer?.lastResult ?? null;
+
+  const machineJson = JSON.stringify(machine, null, 2);
+
+  return (
+    <div className="space-y-8 p-4">
+      <section className="space-y-3 border-b pb-6">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-medium">Current State</h2>
+          <span className="text-xs text-muted-foreground">{machine.name}</span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
+          <div>
+            <dt className="text-xs text-muted-foreground">Machine ID</dt>
+            <dd className="mt-1">
+              <TypeId id={machine.id} startChars={10} endChars={4} />
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Type</dt>
+            <dd className="mt-1 font-mono text-xs">{machine.type}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">State</dt>
+            <dd className="mt-1 font-mono text-xs">{machine.state}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Daemon</dt>
+            <dd className="mt-1">
+              <DaemonStatus
+                state={machine.state}
+                lastEvent={machine.lastEvent}
+                consumers={machine.consumers}
+              />
+            </dd>
+          </div>
+          {machine.type !== "fly" && (
+            <div>
+              <dt className="text-xs text-muted-foreground">External ID</dt>
+              <dd className="mt-1 truncate font-mono text-xs">
+                {machine.externalId || "(pending)"}
+              </dd>
+            </div>
+          )}
+          <div>
+            <dt className="text-xs text-muted-foreground">Created</dt>
+            <dd className="mt-1 text-xs" title={new Date(machine.createdAt).toLocaleString()}>
+              {formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}
+            </dd>
+          </div>
+        </div>
+
+        {issueMessage && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
+            <div className="flex items-center gap-2 font-medium text-destructive">
+              <AlertTriangle className="h-4 w-4" />
+              Current issue
+            </div>
+            <p className="mt-1 whitespace-pre-wrap wrap-break-word text-destructive/90">
+              {issueMessage}
+            </p>
+          </div>
+        )}
+      </section>
+
+      <ProviderDetailsCard details={providerDetails} onCopy={copyToClipboard} />
+
+      <section className="space-y-4 border-b pb-6">
+        <h2 className="text-sm font-medium">Machine Tools</h2>
+
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => restartDaemon.mutate()}
+            disabled={restartDaemon.isPending || machine.state === "archived"}
+          >
+            <RefreshCw className="h-4 w-4" />
+            Restart daemon
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => restartMachine.mutate()}
+            disabled={restartMachine.isPending || machine.state === "archived"}
+          >
+            <RefreshCw className="h-4 w-4" />
+            Restart machine
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={execCommand.isPending || machine.state !== "active"}
+            onClick={() => {
+              const command = prompt("Command to run:");
+              if (command) execCommand.mutate(command);
+            }}
+          >
+            <Play className="h-4 w-4" />
+            {execCommand.isPending ? "Running..." : "Run command"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setDeleteConfirmOpen(true)}
+            className="text-destructive hover:text-destructive"
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete
+          </Button>
+          {isAdmin && (
+            <Button variant="outline" size="sm" asChild>
+              <Link
+                to="/admin/outbox"
+                search={{ payload: JSON.stringify({ machineId: params.machineId }), sort: "asc" }}
+              >
+                <List className="h-4 w-4" />
+                Outbox Events
+              </Link>
+            </Button>
+          )}
+        </div>
+
+        {execCommand.isSuccess && execCommand.data && (
+          <div data-testid="exec-command-result">
+            <SerializedObjectCodeBlock data={execCommand.data} className="max-h-80" />
+          </div>
+        )}
+
+        <div>
+          <h3 className="mb-2 text-xs font-medium text-muted-foreground">Services</h3>
+          {services.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No services available yet.</p>
+          ) : (
+            <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+              {services.map((service) => {
+                const option = service.options[0];
+                if (!option) return null;
+                return (
+                  <a
+                    key={`${service.id}-${option.url}`}
+                    href={option.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="truncate rounded-md border p-2 text-foreground hover:bg-accent"
+                  >
+                    <span>{service.name}</span>
+                    <span className="text-xs text-muted-foreground"> :{service.port}</span>
+                  </a>
+                );
+              })}
+              {daemonBaseUrl && (
+                <a
+                  href={buildProjectIngressLink({ baseUrl: daemonBaseUrl, path: "/terminal" })}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="truncate rounded-md border p-2 text-foreground hover:bg-accent"
+                >
+                  Shell
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <h3 className="mb-2 text-xs font-medium text-muted-foreground">Pidnap Logs</h3>
+          {daemonBaseUrl ? (
+            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+              {PIDNAP_PROCESSES.map((processName) => (
+                <a
+                  key={processName}
+                  href={buildTerminalUrl(
+                    `tail -n 200 -f /var/log/pidnap/process/${processName}.log`,
+                  )}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="truncate rounded-md border p-2 text-foreground hover:bg-accent"
+                >
+                  {processName}
+                </a>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">Daemon shell URL not available yet.</p>
+          )}
+        </div>
+      </section>
+
+      <section className="space-y-3 border-b pb-6">
+        <h2 className="text-sm font-medium">Agents</h2>
+
+        {agentsLoading && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Spinner />
+            Loading agents...
+          </div>
+        )}
+
+        {!agentsLoading && agents.length === 0 && (
+          <p className="text-xs text-muted-foreground">
+            {machine.state === "active" && machine.lastEvent?.name === "machine:activated"
+              ? "No agents found."
+              : "Agents appear once the machine is active and daemon is ready."}
+          </p>
+        )}
+
+        {agents.length > 0 && (
+          <div className="grid grid-cols-1 gap-2">
+            {agents.map((agent) => {
+              const sessionId = extractSessionId(agent.activeRoute?.destination);
+              const attachCmd = getAgentAttachCommand(
+                agent.activeRoute?.destination,
+                agent.workingDirectory,
+              );
+              const webUrl = buildOpencodeWebUrl(sessionId, agent.workingDirectory);
+
+              return (
+                <div key={agent.path} className="rounded-lg border bg-background p-3">
+                  <div className="min-w-0">
+                    <div
+                      className="truncate text-sm font-medium"
+                      style={{
+                        fontFamily:
+                          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                      }}
+                    >
+                      /agents{agent.path}
+                    </div>
+                    {agent.activeRoute?.destination && (
+                      <div
+                        className="mt-0.5 truncate text-sm text-muted-foreground"
+                        style={{
+                          fontFamily:
+                            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                        }}
+                      >
+                        &rarr; {agent.activeRoute.destination}
+                      </div>
+                    )}
+                    <div className="mt-1 truncate text-xs text-muted-foreground">
+                      Working directory:{" "}
+                      <span
+                        className="text-xs"
+                        style={{
+                          fontFamily:
+                            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                        }}
+                      >
+                        {agent.workingDirectory}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">
+                      Last changed:{" "}
+                      {agent.updatedAt
+                        ? formatDistanceToNow(new Date(agent.updatedAt), { addSuffix: true })
+                        : "—"}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center justify-end gap-1.5">
+                    {webUrl && (
+                      <Button variant="outline" size="sm" asChild>
+                        <a href={webUrl} target="_blank" rel="noopener noreferrer">
+                          <Globe className="h-3.5 w-3.5" />
+                          Web
+                        </a>
+                      </Button>
+                    )}
+                    {attachCmd && daemonBaseUrl && (
+                      <Button variant="outline" size="sm" asChild>
+                        <a
+                          href={buildTerminalUrl(attachCmd)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <TerminalSquare className="h-3.5 w-3.5" />
+                          Attach
+                        </a>
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-medium">Raw Machine Record</h2>
+          <Button variant="outline" size="sm" onClick={() => copyToClipboard(machineJson)}>
+            <Copy className="h-4 w-4" />
+            Copy JSON
+          </Button>
+        </div>
+        <SerializedObjectCodeBlock data={machine} className="max-h-120" />
+      </section>
+
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        onOpenChange={setDeleteConfirmOpen}
+        title="Delete machine?"
+        description={`This will permanently delete ${machine.name}. This action cannot be undone.`}
+        confirmLabel="Delete"
+        onConfirm={() => deleteMachine.mutate()}
+        destructive
+      />
+    </div>
+  );
+}
