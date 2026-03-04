@@ -31,6 +31,7 @@ Two tables:
 - `routes`
   - route group metadata
   - stable external `routeId` (typeid)
+  - optional `externalId` (nullable, unique when non-null)
 - `route_patterns`
   - child rows for each pattern -> target (+ optional headers)
   - `ON DELETE CASCADE`
@@ -105,7 +106,12 @@ All endpoints require `Authorization: Bearer <INGRESS_PROXY_API_TOKEN>`.
 `createRoute`/`updateRoute` accept:
 
 - `metadata?: Record<string, unknown>`
+- `externalId?: string | null`
 - `patterns: Array<{ pattern: string; target: string; headers?: Record<string, string> }>`
+
+`deleteRoute` accepts exactly one identifier:
+
+- `{ routeId: string }` or `{ externalId: string }`
 
 ## Env validation
 

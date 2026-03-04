@@ -31,6 +31,35 @@ export async function deleteRouteById(
     .then((res) => res.meta);
 }
 
+export type DeleteRouteByExternalIdParams = {
+  externalId: string;
+};
+
+export type DeleteRouteByExternalIdResult = {
+  changes: number;
+};
+
+export function deleteRouteByExternalIdStmt(
+  db: D1Database,
+  params: DeleteRouteByExternalIdParams,
+): D1PreparedStatement {
+  const sql = `
+	DELETE FROM routes
+	WHERE external_id = ?
+	
+	`;
+  return db.prepare(sql).bind(params.externalId);
+}
+
+export async function deleteRouteByExternalId(
+  db: D1Database,
+  params: DeleteRouteByExternalIdParams,
+): Promise<DeleteRouteByExternalIdResult> {
+  return deleteRouteByExternalIdStmt(db, params)
+    .run()
+    .then((res) => res.meta);
+}
+
 export type DeleteRoutePatternsByRouteIdParams = {
   routeId: string;
 };
@@ -95,6 +124,7 @@ export async function insertRoutePattern(
 
 export type InsertRouteParams = {
   routeId: string;
+  externalId: string | null;
   metadata: string;
 };
 
@@ -105,11 +135,11 @@ export type InsertRouteResult = {
 
 export function insertRouteStmt(db: D1Database, params: InsertRouteParams): D1PreparedStatement {
   const sql = `
-	INSERT INTO routes (id, metadata)
-	VALUES (?, ?)
+	INSERT INTO routes (id, external_id, metadata)
+	VALUES (?, ?, ?)
 	
 	`;
-  return db.prepare(sql).bind(params.routeId, params.metadata);
+  return db.prepare(sql).bind(params.routeId, params.externalId, params.metadata);
 }
 
 export async function insertRoute(
@@ -183,6 +213,7 @@ export type SelectRouteByIdParams = {
 
 export type SelectRouteByIdResult = {
   id: string;
+  external_id?: string;
   metadata: string;
   created_at: string;
   updated_at: string;
@@ -193,7 +224,7 @@ export function selectRouteByIdStmt(
   params: SelectRouteByIdParams,
 ): D1PreparedStatement {
   const sql = `
-	SELECT id, metadata, created_at, updated_at
+	SELECT id, external_id, metadata, created_at, updated_at
 	FROM routes
 	WHERE id = ?
 	
@@ -204,18 +235,19 @@ export function selectRouteByIdStmt(
 export async function selectRouteById(
   db: D1Database,
   params: SelectRouteByIdParams,
-): Promise<SelectRouteByIdResult | null> {
+): Promise<SelectRouteByIdResult[]> {
   return selectRouteByIdStmt(db, params)
     .raw({ columnNames: false })
-    .then((rows) => (rows.length > 0 ? mapArrayToSelectRouteByIdResult(rows[0]) : null));
+    .then((rows) => rows.map((row) => mapArrayToSelectRouteByIdResult(row)));
 }
 
 function mapArrayToSelectRouteByIdResult(data: any) {
   const result: SelectRouteByIdResult = {
     id: data[0],
-    metadata: data[1],
-    created_at: data[2],
-    updated_at: data[3],
+    external_id: data[1],
+    metadata: data[2],
+    created_at: data[3],
+    updated_at: data[4],
   };
   return result;
 }
@@ -311,6 +343,7 @@ function mapArrayToSelectRoutePatternsResult(data: any) {
 
 export type SelectRoutesResult = {
   id: string;
+  external_id?: string;
   metadata: string;
   created_at: string;
   updated_at: string;
@@ -318,7 +351,7 @@ export type SelectRoutesResult = {
 
 export function selectRoutesStmt(db: D1Database): D1PreparedStatement {
   const sql = `
-	SELECT id, metadata, created_at, updated_at
+	SELECT id, external_id, metadata, created_at, updated_at
 	FROM routes
 	ORDER BY created_at ASC, id ASC
 	
@@ -335,45 +368,47 @@ export async function selectRoutes(db: D1Database): Promise<SelectRoutesResult[]
 function mapArrayToSelectRoutesResult(data: any) {
   const result: SelectRoutesResult = {
     id: data[0],
-    metadata: data[1],
-    created_at: data[2],
-    updated_at: data[3],
+    external_id: data[1],
+    metadata: data[2],
+    created_at: data[3],
+    updated_at: data[4],
   };
   return result;
 }
 
-export type UpdateRouteMetadataData = {
+export type UpdateRouteByIdData = {
   metadata: string;
+  externalId: string | null;
 };
 
-export type UpdateRouteMetadataParams = {
+export type UpdateRouteByIdParams = {
   routeId: string;
 };
 
-export type UpdateRouteMetadataResult = {
+export type UpdateRouteByIdResult = {
   changes: number;
 };
 
-export function updateRouteMetadataStmt(
+export function updateRouteByIdStmt(
   db: D1Database,
-  data: UpdateRouteMetadataData,
-  params: UpdateRouteMetadataParams,
+  data: UpdateRouteByIdData,
+  params: UpdateRouteByIdParams,
 ): D1PreparedStatement {
   const sql = `
 	UPDATE routes
-	SET metadata = ?, updated_at = CURRENT_TIMESTAMP
+	SET metadata = ?, external_id = ?, updated_at = CURRENT_TIMESTAMP
 	WHERE id = ?
 	
 	`;
-  return db.prepare(sql).bind(data.metadata, params.routeId);
+  return db.prepare(sql).bind(data.metadata, data.externalId, params.routeId);
 }
 
-export async function updateRouteMetadata(
+export async function updateRouteById(
   db: D1Database,
-  data: UpdateRouteMetadataData,
-  params: UpdateRouteMetadataParams,
-): Promise<UpdateRouteMetadataResult> {
-  return updateRouteMetadataStmt(db, data, params)
+  data: UpdateRouteByIdData,
+  params: UpdateRouteByIdParams,
+): Promise<UpdateRouteByIdResult> {
+  return updateRouteByIdStmt(db, data, params)
     .run()
     .then((res) => res.meta);
 }

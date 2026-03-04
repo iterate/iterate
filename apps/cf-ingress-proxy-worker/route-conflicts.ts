@@ -37,3 +37,9 @@ export function normalizeRouteId(input: string): string {
   if (!routeId) throw new RouteInputError("routeId is required");
   return routeId;
 }
+
+export function normalizeExternalId(input: string): string {
+  const externalId = input.trim();
+  if (!externalId) throw new RouteInputError("externalId is required");
+  return externalId;
+}
