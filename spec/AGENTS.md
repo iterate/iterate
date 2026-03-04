@@ -49,6 +49,14 @@ test("creates machine", async ({ page }) => {
 - `machine-sync.spec.ts` - Concise test with helpers
 - `spinner-waiter.spec.ts` - Minimal spinner demo
 
+## LLM Recover
+
+Opt-in plugin that uses an LLM to recover from locator failures. When a locator action fails, it captures a screenshot + error context, sends it to Claude, and evals the returned JS recovery code against `{ page, locator, error }`.
+
+Enable: `LLM_RECOVER=1 ANTHROPIC_API_KEY=sk-... pnpm spec`
+
+Recovered actions produce a soft test failure (test continues but is marked failed) plus a JSON artifact in the test output dir. See `llm-recover.ts` and `llm-recover.spec.ts`.
+
 ## Config
 
 120s test timeout, 30s spinner timeout, sequential (workers: 1), Chromium only.

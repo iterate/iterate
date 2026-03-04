@@ -61,6 +61,7 @@ export type ActionContext = {
   method: OverrideableMethod;
   args: unknown[];
   page: Page;
+  testInfo?: TestInfo;
 };
 
 /** Function that calls the next middleware or the original action */
@@ -88,6 +89,7 @@ type PluginState = {
   actionMiddlewares: ActionMiddleware[];
   lifecycleEmitter: Emittery<TestLifecycleEvents>;
   lifecycleCleanups: (() => void)[];
+  testInfo?: TestInfo;
 };
 
 type PageWithPlugins = Page & {
@@ -134,6 +136,7 @@ export const addPlugins = async (params: {
     actionMiddlewares: [],
     lifecycleEmitter: new Emittery(),
     lifecycleCleanups: [],
+    testInfo,
   };
 
   // Register plugins
@@ -198,7 +201,13 @@ const patchLocatorPrototype = (
       const state = getPluginState(this.page());
       const actionMiddlewares = state?.actionMiddlewares ?? [];
 
-      const ctx: ActionContext = { locator: this, method, args, page: this.page() };
+      const ctx: ActionContext = {
+        locator: this,
+        method,
+        args,
+        page: this.page(),
+        testInfo: state?.testInfo,
+      };
 
       // Build middleware chain - each middleware calls next() to continue
       const callOriginal = () => (this[`${method}_original`] as Function)(...args);
