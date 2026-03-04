@@ -83,9 +83,11 @@ function createRoute(params: {
   apiToken: string;
   metadata: Record<string, unknown>;
   patterns: Array<{ pattern: string; target: string; headers?: Record<string, string> }>;
+  externalId?: string | null;
 }) {
   return callProcedure<{
     routeId: string;
+    externalId: string | null;
     metadata: Record<string, unknown>;
     patterns: Array<{ patternId: number; pattern: string; target: string }>;
   }>({
@@ -93,6 +95,7 @@ function createRoute(params: {
     input: {
       metadata: params.metadata,
       patterns: params.patterns,
+      externalId: params.externalId,
     },
     baseUrl: params.baseUrl,
     apiToken: params.apiToken,
@@ -105,9 +108,11 @@ function updateRoute(params: {
   routeId: string;
   metadata: Record<string, unknown>;
   patterns: Array<{ pattern: string; target: string; headers?: Record<string, string> }>;
+  externalId?: string | null;
 }) {
   return callProcedure<{
     routeId: string;
+    externalId: string | null;
     metadata: Record<string, unknown>;
     patterns: Array<{ patternId: number; pattern: string; target: string }>;
   }>({
@@ -116,16 +121,25 @@ function updateRoute(params: {
       routeId: params.routeId,
       metadata: params.metadata,
       patterns: params.patterns,
+      externalId: params.externalId,
     },
     baseUrl: params.baseUrl,
     apiToken: params.apiToken,
   });
 }
 
-function deleteRoute(params: { baseUrl: string; apiToken: string; routeId: string }) {
+function deleteRoute(params: {
+  baseUrl: string;
+  apiToken: string;
+  routeId?: string;
+  externalId?: string;
+}) {
   return callProcedure<{ deleted: boolean }>({
     name: "deleteRoute",
-    input: { routeId: params.routeId },
+    input: {
+      ...(params.routeId ? { routeId: params.routeId } : {}),
+      ...(params.externalId ? { externalId: params.externalId } : {}),
+    },
     baseUrl: params.baseUrl,
     apiToken: params.apiToken,
   });
@@ -311,5 +325,45 @@ describe("live ingress-proxy E2E", () => {
       suiteId,
       host: makeDoubleUnderscoreHost(env.baseUrl),
     });
+  }, 120_000);
+
+  it("supports externalId uniqueness and delete by externalId", async () => {
+    const externalId = `ext-${suiteId}-${Date.now()}`;
+    const routeA = await createRoute({
+      baseUrl: env.baseUrl,
+      apiToken: env.apiToken,
+      metadata: { suiteId, kind: "external-id-route-a" },
+      externalId,
+      patterns: [{ pattern: `ext-a-${suiteId}.workers.dev`, target: "https://example.com" }],
+    });
+    createdRouteIds.add(routeA.routeId);
+    expect(routeA.externalId).toBe(externalId);
+
+    await expect(
+      createRoute({
+        baseUrl: env.baseUrl,
+        apiToken: env.apiToken,
+        metadata: { suiteId, kind: "external-id-route-b" },
+        externalId,
+        patterns: [{ pattern: `ext-b-${suiteId}.workers.dev`, target: "https://example.com" }],
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    await expect(
+      deleteRoute({
+        baseUrl: env.baseUrl,
+        apiToken: env.apiToken,
+        externalId,
+      }),
+    ).resolves.toEqual({ deleted: true });
+    createdRouteIds.delete(routeA.routeId);
+
+    await expect(
+      deleteRoute({
+        baseUrl: env.baseUrl,
+        apiToken: env.apiToken,
+        externalId,
+      }),
+    ).resolves.toEqual({ deleted: false });
   }, 120_000);
 });

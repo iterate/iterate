@@ -7,6 +7,7 @@ import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import { eq } from "drizzle-orm";
 import * as arctic from "arctic";
 import * as jose from "jose";
+import { Octokit } from "octokit";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
@@ -64,6 +65,10 @@ export type GitHubOAuthStateData = {
   userId: string;
   redirectUri: string;
   callbackURL?: string;
+};
+
+type GitHubInstallationConflict = {
+  installationId: number;
 };
 
 export function createGitHubClient(env: CloudflareEnv) {
@@ -185,8 +190,27 @@ githubApp.get(
     };
 
     const encryptedAccessToken = await encrypt(accessToken);
+    const installationConflictState: { value: GitHubInstallationConflict | null } = { value: null };
 
     const project = await c.var.db.transaction(async (tx) => {
+      const existingInstallationConnection = await tx.query.projectConnection.findFirst({
+        where: (pc, { eq, and }) =>
+          and(eq(pc.provider, "github-app"), eq(pc.externalId, installation_id.toString())),
+      });
+
+      if (
+        existingInstallationConnection &&
+        existingInstallationConnection.projectId !== projectId
+      ) {
+        installationConflictState.value = { installationId: installation_id };
+        return tx.query.project.findFirst({
+          where: eq(schema.project.id, projectId),
+          with: {
+            organization: true,
+          },
+        });
+      }
+
       const existingConnection = await tx.query.projectConnection.findFirst({
         where: (pc, { eq, and }) => and(eq(pc.projectId, projectId), eq(pc.provider, "github-app")),
       });
@@ -303,6 +327,30 @@ githubApp.get(
         logger.error("[GitHub OAuth] Failed to poke machines for refresh", err);
       }),
     );
+
+    const installationConflict = installationConflictState.value;
+    if (installationConflict) {
+      const conflictToken = arctic.generateState();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+      await c.var.db.insert(schema.verification).values({
+        identifier: conflictToken,
+        value: JSON.stringify({
+          kind: "github-installation-conflict",
+          userId,
+          projectId,
+          installationId: installationConflict.installationId,
+          githubUserId: userInfo.id,
+          githubLogin: userInfo.login,
+          encryptedAccessToken,
+        }),
+        expiresAt,
+      });
+
+      const params = new URLSearchParams({
+        conflictToken,
+      });
+      return c.redirect(`/connection-conflict?${params.toString()}`);
+    }
 
     const redirectPath = callbackURL || (project ? `/proj/${project.slug}/connectors` : "/");
     return c.redirect(redirectPath);
@@ -502,6 +550,14 @@ export type GitHubRepository = {
   isPrivate: boolean;
 };
 
+export type GitHubInstallationRepositoryPage = {
+  repositories: GitHubRepository[];
+  totalCount: number;
+  page: number;
+  perPage: number;
+  hasNextPage: boolean;
+};
+
 export async function getRepositoryById(
   accessToken: string,
   repoId: string,
@@ -546,41 +602,44 @@ export async function getRepositoryById(
 export async function listInstallationRepositories(
   accessToken: string,
   installationId: number,
-): Promise<GitHubRepository[]> {
-  const response = await fetch(
-    `https://api.github.com/user/installations/${installationId}/repositories`,
-    {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/vnd.github.v3+json",
-        "User-Agent": "Iterate-OS",
-      },
+  options?: { page?: number; perPage?: number },
+): Promise<GitHubInstallationRepositoryPage> {
+  const page = options?.page ?? 1;
+  const perPage = options?.perPage ?? 10;
+  const octokit = new Octokit({ auth: accessToken });
+  const { data } = await octokit.request("GET /user/installations/{installation_id}/repositories", {
+    installation_id: installationId,
+    page,
+    per_page: perPage,
+    headers: {
+      "x-github-api-version": "2022-11-28",
+      "user-agent": "Iterate-OS",
     },
-  );
+  });
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch repositories: ${response.statusText}`);
-  }
-
-  const data = (await response.json()) as {
-    repositories: Array<{
-      id: number;
-      name: string;
-      full_name: string;
-      owner: { login: string };
-      default_branch: string;
-      private: boolean;
-    }>;
+  return {
+    repositories: data.repositories.map(
+      (repo: {
+        id: number;
+        name: string;
+        full_name: string;
+        owner: { login: string };
+        default_branch: string;
+        private: boolean;
+      }) => ({
+        id: repo.id,
+        name: repo.name,
+        fullName: repo.full_name,
+        owner: repo.owner.login,
+        defaultBranch: repo.default_branch,
+        isPrivate: repo.private,
+      }),
+    ),
+    totalCount: data.total_count,
+    page,
+    perPage,
+    hasNextPage: page * perPage < data.total_count,
   };
-
-  return data.repositories.map((repo) => ({
-    id: repo.id,
-    name: repo.name,
-    fullName: repo.full_name,
-    owner: repo.owner.login,
-    defaultBranch: repo.default_branch,
-    isPrivate: repo.private,
-  }));
 }
 
 // ── Webhook Types ──────────────────────────────────────────────────

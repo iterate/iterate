@@ -6,11 +6,13 @@ import { typeid } from "typeid-js";
 import { z } from "zod/v4";
 import {
   MAX_PATTERN_LENGTH,
+  normalizeExternalId,
   normalizePattern,
   normalizeRouteId,
   RouteInputError,
 } from "./route-conflicts.ts";
 import {
+  deleteRouteByExternalId,
   deleteRouteById,
   deleteRoutePatternsByRouteIdStmt,
   insertRoutePatternStmt,
@@ -19,7 +21,7 @@ import {
   selectRoutePatterns,
   selectRoutePatternsByRouteId,
   selectRoutes,
-  updateRouteMetadataStmt,
+  updateRouteByIdStmt,
 } from "./sql/queries.ts";
 import { parseWorkerEnv, type ProxyWorkerEnv, type RawProxyWorkerEnv } from "./env.ts";
 
@@ -37,6 +39,7 @@ export type RoutePatternRecord = {
 
 export type RouteRecord = {
   routeId: string;
+  externalId: string | null;
   metadata: RouteMetadata;
   patterns: RoutePatternRecord[];
   createdAt: string;
@@ -53,6 +56,7 @@ export type ResolvedRoute = {
 
 type RouteRow = {
   id: string;
+  external_id?: string;
   metadata: string;
   created_at: string;
   updated_at: string;
@@ -239,6 +243,11 @@ function normalizeMetadata(metadata: RouteMetadata | undefined): RouteMetadata {
   return metadata ?? {};
 }
 
+function normalizeOptionalExternalId(externalId: string | null | undefined): string | null {
+  if (externalId == null) return null;
+  return normalizeExternalId(externalId);
+}
+
 function normalizePatternInputs(
   patterns: Array<{ pattern: string; target: string; headers?: RouteHeaders }>,
 ): Array<{ pattern: string; target: string; headers: RouteHeaders }> {
@@ -277,6 +286,7 @@ function patternRowToRecord(row: RoutePatternRow): RoutePatternRecord {
 function routeRowToRecord(row: RouteRow, patterns: RoutePatternRow[]): RouteRecord {
   return {
     routeId: row.id,
+    externalId: row.external_id ?? null,
     metadata: parseJsonObject(row.metadata, "metadata"),
     patterns: patterns.map(patternRowToRecord),
     createdAt: row.created_at,
@@ -292,11 +302,11 @@ async function getRouteRowsById(
   patterns: RoutePatternRow[];
 }> {
   const normalizedRouteId = normalizeRouteId(routeId);
-  const route = await selectRouteById(db, { routeId: normalizedRouteId });
+  const routeRows = await selectRouteById(db, { routeId: normalizedRouteId });
   const patterns = await selectRoutePatternsByRouteId(db, { routeId: normalizedRouteId });
 
   return {
-    route,
+    route: routeRows[0] ?? null,
     patterns,
   };
 }
@@ -329,15 +339,17 @@ export async function createRoute(
     typeIdPrefix: string;
     patterns: Array<{ pattern: string; target: string; headers?: RouteHeaders }>;
     metadata?: RouteMetadata;
+    externalId?: string | null;
   },
 ): Promise<RouteRecord> {
   const normalizedPatterns = normalizePatternInputs(params.patterns);
 
   const routeId = typeid(params.typeIdPrefix).toString();
   const metadata = normalizeMetadata(params.metadata);
+  const externalId = normalizeOptionalExternalId(params.externalId);
 
   await db.batch([
-    insertRouteStmt(db, { routeId, metadata: JSON.stringify(metadata) }),
+    insertRouteStmt(db, { routeId, externalId, metadata: JSON.stringify(metadata) }),
     ...normalizedPatterns.map((pattern) => {
       return insertRoutePatternStmt(db, {
         routeId,
@@ -359,6 +371,7 @@ export async function updateRoute(
     routeId: string;
     patterns: Array<{ pattern: string; target: string; headers?: RouteHeaders }>;
     metadata: RouteMetadata;
+    externalId?: string | null;
   },
 ): Promise<RouteRecord> {
   const routeId = normalizeRouteId(params.routeId);
@@ -368,8 +381,12 @@ export async function updateRoute(
   }
 
   const normalizedPatterns = normalizePatternInputs(params.patterns);
+  const externalId =
+    params.externalId === undefined
+      ? existing.externalId
+      : normalizeOptionalExternalId(params.externalId);
   await db.batch([
-    updateRouteMetadataStmt(db, { metadata: JSON.stringify(params.metadata) }, { routeId }),
+    updateRouteByIdStmt(db, { metadata: JSON.stringify(params.metadata), externalId }, { routeId }),
     deleteRoutePatternsByRouteIdStmt(db, { routeId }),
     ...normalizedPatterns.map((pattern) => {
       return insertRoutePatternStmt(db, {
@@ -386,9 +403,19 @@ export async function updateRoute(
   return updated;
 }
 
-export async function deleteRoute(db: D1Database, routeId: string): Promise<boolean> {
-  const normalizedRouteId = normalizeRouteId(routeId);
-  const result = await deleteRouteById(db, { routeId: normalizedRouteId });
+type DeleteRouteParams =
+  | { routeId: string; externalId?: never }
+  | { routeId?: never; externalId: string };
+
+export async function deleteRoute(db: D1Database, params: DeleteRouteParams): Promise<boolean> {
+  if (params.routeId !== undefined) {
+    const normalizedRouteId = normalizeRouteId(params.routeId);
+    const result = await deleteRouteById(db, { routeId: normalizedRouteId });
+    return (result.changes ?? 0) > 0;
+  }
+
+  const normalizedExternalId = normalizeExternalId(params.externalId);
+  const result = await deleteRouteByExternalId(db, { externalId: normalizedExternalId });
   return (result.changes ?? 0) > 0;
 }
 
@@ -412,7 +439,8 @@ export async function resolveRouteByHost(
     .sort(comparePatternSpecificity)[0];
   if (!winnerPattern) return null;
 
-  const route = await selectRouteById(db, { routeId: winnerPattern.route_id });
+  const routeRows = await selectRouteById(db, { routeId: winnerPattern.route_id });
+  const route = routeRows[0];
   if (!route) return null;
 
   return {
@@ -542,20 +570,38 @@ const PatternInput = z.object({
   headers: z.record(z.string(), z.string()).optional(),
 });
 
+const OptionalExternalIdInput = z.string().min(1).nullable().optional();
+
 const CreateRouteInput = z.object({
   patterns: z.array(PatternInput).min(1),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  externalId: OptionalExternalIdInput,
 });
 
 const UpdateRouteInput = z.object({
   routeId: z.string().min(1),
   patterns: z.array(PatternInput).min(1),
   metadata: z.record(z.string(), z.unknown()),
+  externalId: OptionalExternalIdInput,
 });
 
 const RouteIdInput = z.object({
   routeId: z.string().min(1),
 });
+
+const DeleteRouteInput = z
+  .object({
+    routeId: z.string().min(1).optional(),
+    externalId: z.string().min(1).optional(),
+  })
+  .superRefine((input, ctx) => {
+    if (!!input.routeId === !!input.externalId) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Provide exactly one of routeId or externalId",
+      });
+    }
+  });
 
 function isUniqueConstraintError(error: unknown): boolean {
   return error instanceof Error && /UNIQUE constraint failed/i.test(error.message);
@@ -579,6 +625,12 @@ function mapRouteError(error: unknown): never {
   }
 
   if (isUniqueConstraintError(error)) {
+    if (error instanceof Error && /routes\.external_id/i.test(error.message)) {
+      throw new ORPCError("CONFLICT", {
+        message: "externalId conflicts with an existing route.",
+      });
+    }
+
     throw new ORPCError("CONFLICT", {
       message:
         "Pattern conflicts with existing route patterns. A concurrent request may have claimed the pattern.",
@@ -610,6 +662,7 @@ export const createRouteProcedure = authProcedure
         typeIdPrefix: context.env.TYPEID_PREFIX,
         patterns: input.patterns,
         metadata: input.metadata,
+        externalId: input.externalId,
       });
     } catch (error) {
       return mapRouteError(error);
@@ -624,6 +677,7 @@ export const updateRouteProcedure = authProcedure
         routeId: input.routeId,
         patterns: input.patterns,
         metadata: input.metadata,
+        externalId: input.externalId,
       });
     } catch (error) {
       return mapRouteError(error);
@@ -631,10 +685,12 @@ export const updateRouteProcedure = authProcedure
   });
 
 export const deleteRouteProcedure = authProcedure
-  .input(RouteIdInput)
+  .input(DeleteRouteInput)
   .handler(async ({ context, input }) => {
     try {
-      const deleted = await deleteRoute(context.env.DB, input.routeId);
+      const deleted = input.routeId
+        ? await deleteRoute(context.env.DB, { routeId: input.routeId })
+        : await deleteRoute(context.env.DB, { externalId: input.externalId! });
       return { deleted };
     } catch (error) {
       return mapRouteError(error);

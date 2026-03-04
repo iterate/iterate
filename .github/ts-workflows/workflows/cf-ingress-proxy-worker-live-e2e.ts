@@ -46,7 +46,16 @@ export default workflow({
           },
           run: [
             "set -euo pipefail",
-            "doppler run --config stg -- sh -c 'pnpm run deploy:stg'",
+            'deploy_log="$(mktemp)"',
+            `doppler run --config stg --preserve-env="WORKER_NAME,INGRESS_PROXY_API_TOKEN" -- sh -c 'WORKER_NAME="$WORKER_NAME" INGRESS_PROXY_API_TOKEN="$INGRESS_PROXY_API_TOKEN" pnpm exec tsx ./alchemy.run.ts cli deploy --stage ci' | tee "$deploy_log"`,
+            'base_url="$(grep -Eo \'https://[^[:space:]]+\' "$deploy_log" | tail -n 1)"',
+            'base_url="${base_url%/}"',
+            'if [ -z "$base_url" ]; then',
+            '  echo "Failed to parse deployed worker URL from deploy logs"',
+            "  exit 1",
+            "fi",
+            'echo "base_url=$base_url" >> "$GITHUB_OUTPUT"',
+            'echo "Deployed ephemeral worker at: $base_url"',
           ].join("\n"),
         },
         {
@@ -57,7 +66,24 @@ export default workflow({
           },
           run: [
             "set -euo pipefail",
-            `doppler run --config stg -- sh -c 'pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live'`,
+            `doppler run --config stg --preserve-env="INGRESS_PROXY_E2E_BASE_URL,INGRESS_PROXY_E2E_API_TOKEN" -- sh -c 'pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live'`,
+          ].join("\n"),
+        },
+        {
+          name: "Teardown ephemeral worker",
+          if: "always()",
+          "working-directory": "apps/cf-ingress-proxy-worker",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+            INGRESS_PROXY_API_TOKEN: "${{ steps.shared-secret.outputs.shared_secret }}",
+          },
+          run: [
+            "set -euo pipefail",
+            'if [ -z "${WORKER_NAME:-}" ]; then',
+            '  echo "WORKER_NAME not set; skipping teardown"',
+            "  exit 0",
+            "fi",
+            `doppler run --config stg --preserve-env="WORKER_NAME,INGRESS_PROXY_API_TOKEN" -- sh -c 'WORKER_NAME="$WORKER_NAME" INGRESS_PROXY_API_TOKEN="$INGRESS_PROXY_API_TOKEN" pnpm exec tsx ./alchemy.run.ts cli --destroy --stage ci' || echo "Teardown command failed; check Alchemy state manually for $WORKER_NAME"`,
           ].join("\n"),
         },
       ],

@@ -5,6 +5,7 @@ import { CronExpressionParser } from "cron-parser";
 import alchemy, { type Scope } from "alchemy";
 import {
   DurableObjectNamespace,
+  R2Bucket,
   TanStackStart,
   Tunnel,
   WorkerLoader,
@@ -413,6 +414,13 @@ const Env = z.object({
   RESEND_BOT_DOMAIN: Required,
   RESEND_BOT_API_KEY: Required,
   RESEND_BOT_WEBHOOK_SECRET: Optional,
+  // Archil — persistent POSIX volumes backed by R2
+  ARCHIL_API_KEY: Optional,
+  ARCHIL_REGION: NonEmpty.default("us-east-1"),
+  ARCHIL_R2_BUCKET_NAME: Optional,
+  ARCHIL_R2_ENDPOINT: Optional,
+  ARCHIL_R2_ACCESS_KEY_ID: Optional,
+  ARCHIL_R2_SECRET_ACCESS_KEY: Optional,
   POSTHOG_PUBLIC_KEY: Optional,
   SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
@@ -718,6 +726,15 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   //   3. When a project sets a custom domain, call the CF API to create a custom hostname
   //   4. Show the user DNS instructions (CNAME to fallback.iterate.app)
   // The allowedDomains/routeHosts arrays above don't need custom domains — CF for SaaS handles routing.
+
+  // Archil R2 bucket — one bucket per stage, with per-project prefixes inside.
+  // Archil's FUSE client talks to R2 via S3 protocol using the API token credentials from Doppler.
+  const _archilBucket = await R2Bucket("archil-data", {
+    name: `iterate-archil-${app.stage}`,
+    locationHint: "enam", // US East — colocate with worker + PlanetScale
+    adopt: true,
+    dev: { remote: true }, // always create real bucket, even in dev (Archil needs actual R2)
+  });
 
   const worker = await TanStackStart("os", {
     bindings: {

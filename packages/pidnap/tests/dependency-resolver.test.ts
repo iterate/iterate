@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   DependencyResolver,
   inferDefaultConditionFromOptions,
@@ -51,7 +54,9 @@ describe("DependencyResolver", () => {
       resolver.buildGraph(entries, processes);
 
       expect(resolver.getProcessesWithNoDependencies()).toEqual(["a"]);
-      expect(resolver.getDependencyInfo("b")).toEqual([{ process: "a", condition: "started" }]);
+      expect(resolver.getDependencyInfo("b")).toEqual([
+        { type: "process", process: "a", condition: "started" },
+      ]);
     });
 
     it("should build graph with object dependencies", () => {
@@ -67,7 +72,9 @@ describe("DependencyResolver", () => {
 
       resolver.buildGraph(entries, processes);
 
-      expect(resolver.getDependencyInfo("b")).toEqual([{ process: "a", condition: "completed" }]);
+      expect(resolver.getDependencyInfo("b")).toEqual([
+        { type: "process", process: "a", condition: "completed" },
+      ]);
     });
   });
 
@@ -438,7 +445,9 @@ describe("DependencyResolver", () => {
       ];
       resolver.buildGraph(entries, new Map());
 
-      expect(resolver.getDependencyInfo("b")).toEqual([{ process: "a", condition: "healthy" }]);
+      expect(resolver.getDependencyInfo("b")).toEqual([
+        { type: "process", process: "a", condition: "healthy" },
+      ]);
     });
 
     it("should return empty array for unknown process", () => {
@@ -463,5 +472,358 @@ describe("inferDefaultConditionFromOptions", () => {
 
   it("should return 'started' for undefined options", () => {
     expect(inferDefaultConditionFromOptions(undefined)).toBe("started");
+  });
+});
+
+describe("Sentinel dependencies", () => {
+  let resolver: DependencyResolver;
+  let tempDir: string;
+
+  beforeEach(() => {
+    resolver = new DependencyResolver();
+    tempDir = join(tmpdir(), `pidnap-sentinel-test-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    resolver.stopAllSentinelWatchers();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  describe("buildGraph with sentinel deps", () => {
+    it("should build graph with sentinel dependencies", () => {
+      const sentinelPath = join(tempDir, "ready.txt");
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [{ type: "sentinel", path: sentinelPath }],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      expect(resolver.getDependencyInfo("a")).toEqual([]);
+      expect(resolver.getSentinelDependencyInfo("a")).toEqual([
+        { type: "sentinel", path: sentinelPath, timeout: 60000, pollInterval: 1000 },
+      ]);
+    });
+
+    it("should support mixed process and sentinel dependencies", () => {
+      const sentinelPath = join(tempDir, "ready.txt");
+      const entries: RestartingProcessEntry[] = [
+        { name: "db", definition: { command: "echo" } },
+        {
+          name: "app",
+          definition: { command: "echo" },
+          dependsOn: ["db", { type: "sentinel", path: sentinelPath }],
+        },
+      ];
+      const processes = new Map<string, RestartingProcess>();
+      processes.set("db", mockProcess("db", "running", { hasStarted: true }));
+      resolver.buildGraph(entries, processes);
+
+      expect(resolver.getDependencyInfo("app")).toEqual([
+        { type: "process", process: "db", condition: "started" },
+      ]);
+      expect(resolver.getSentinelDependencyInfo("app")).toHaveLength(1);
+    });
+
+    it("should use custom timeout and pollInterval", () => {
+      const sentinelPath = join(tempDir, "ready.txt");
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [{ type: "sentinel", path: sentinelPath, timeout: 5000, pollInterval: 100 }],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      expect(resolver.getSentinelDependencyInfo("a")).toEqual([
+        { type: "sentinel", path: sentinelPath, timeout: 5000, pollInterval: 100 },
+      ]);
+    });
+  });
+
+  describe("hasSentinelDependencies", () => {
+    it("should return false for process without sentinel deps", () => {
+      const entries: RestartingProcessEntry[] = [
+        { name: "a", definition: { command: "echo" }, dependsOn: ["b"] },
+        { name: "b", definition: { command: "echo" } },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      expect(resolver.hasSentinelDependencies("a")).toBe(false);
+    });
+
+    it("should return true for process with sentinel deps", () => {
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [{ type: "sentinel", path: "/tmp/test" }],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      expect(resolver.hasSentinelDependencies("a")).toBe(true);
+    });
+  });
+
+  describe("areDependenciesMet with sentinels", () => {
+    it("should return false when sentinel file does not exist", () => {
+      const sentinelPath = join(tempDir, "nonexistent.txt");
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [{ type: "sentinel", path: sentinelPath }],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      expect(resolver.areDependenciesMet("a")).toBe(false);
+    });
+
+    it("should return true when sentinel file exists", () => {
+      const sentinelPath = join(tempDir, "exists.txt");
+      writeFileSync(sentinelPath, "ready");
+
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [{ type: "sentinel", path: sentinelPath }],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      // Start watchers first - areDependenciesMet is a pure query that only
+      // reads sentinelMet state (set by startSentinelWatchers).
+      resolver.startSentinelWatchers(
+        "a",
+        () => {},
+        () => {},
+      );
+
+      expect(resolver.areDependenciesMet("a")).toBe(true);
+    });
+
+    it("should require both process and sentinel deps to be met", () => {
+      const sentinelPath = join(tempDir, "ready.txt");
+      writeFileSync(sentinelPath, "ready");
+
+      const entries: RestartingProcessEntry[] = [
+        { name: "db", definition: { command: "echo" } },
+        {
+          name: "app",
+          definition: { command: "echo" },
+          dependsOn: ["db", { type: "sentinel", path: sentinelPath }],
+        },
+      ];
+      const processes = new Map<string, RestartingProcess>();
+      processes.set("db", mockProcess("db", "idle", { hasStarted: false }));
+      resolver.buildGraph(entries, processes);
+
+      // Start watchers so sentinel state is tracked
+      resolver.startSentinelWatchers(
+        "app",
+        () => {},
+        () => {},
+      );
+
+      // Sentinel met but process dep not met
+      expect(resolver.areDependenciesMet("app")).toBe(false);
+
+      processes.set("db", mockProcess("db", "running", { hasStarted: true }));
+      expect(resolver.areDependenciesMet("app")).toBe(true);
+    });
+  });
+
+  describe("sentinel watchers", () => {
+    it("should call onMet when file already exists", () => {
+      const sentinelPath = join(tempDir, "exists.txt");
+      writeFileSync(sentinelPath, "ready");
+
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [{ type: "sentinel", path: sentinelPath }],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      const onMet = vi.fn();
+      const onTimeout = vi.fn();
+      resolver.startSentinelWatchers("a", onMet, onTimeout);
+
+      expect(onMet).toHaveBeenCalledTimes(1);
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    it("should call onMet when file appears later", async () => {
+      const sentinelPath = join(tempDir, "appears-later.txt");
+
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [{ type: "sentinel", path: sentinelPath, pollInterval: 50, timeout: 5000 }],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      const onMet = vi.fn();
+      const onTimeout = vi.fn();
+      resolver.startSentinelWatchers("a", onMet, onTimeout);
+
+      expect(onMet).not.toHaveBeenCalled();
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      writeFileSync(sentinelPath, "ready");
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(onMet).toHaveBeenCalledTimes(1);
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    it("should call onTimeout when file never appears", async () => {
+      const sentinelPath = join(tempDir, "never-appears.txt");
+
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [{ type: "sentinel", path: sentinelPath, pollInterval: 20, timeout: 80 }],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      const onMet = vi.fn();
+      const onTimeout = vi.fn();
+      resolver.startSentinelWatchers("a", onMet, onTimeout);
+
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect(onMet).not.toHaveBeenCalled();
+      expect(onTimeout).toHaveBeenCalledWith(sentinelPath);
+    });
+
+    it("should handle multiple sentinel deps for same process", async () => {
+      const sentinel1 = join(tempDir, "sentinel1.txt");
+      const sentinel2 = join(tempDir, "sentinel2.txt");
+
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [
+            { type: "sentinel", path: sentinel1, pollInterval: 50, timeout: 5000 },
+            { type: "sentinel", path: sentinel2, pollInterval: 50, timeout: 5000 },
+          ],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      const onMet = vi.fn();
+      const onTimeout = vi.fn();
+      resolver.startSentinelWatchers("a", onMet, onTimeout);
+
+      writeFileSync(sentinel1, "ready");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(onMet).not.toHaveBeenCalled();
+
+      writeFileSync(sentinel2, "ready");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(onMet).toHaveBeenCalledTimes(1);
+    });
+
+    it("should stop watchers cleanly", () => {
+      const sentinelPath = join(tempDir, "cleanup.txt");
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [{ type: "sentinel", path: sentinelPath, pollInterval: 50, timeout: 60000 }],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      const onMet = vi.fn();
+      const onTimeout = vi.fn();
+      resolver.startSentinelWatchers("a", onMet, onTimeout);
+
+      resolver.stopSentinelWatchers("a");
+      resolver.stopAllSentinelWatchers();
+    });
+  });
+
+  describe("hasFailedDependency with sentinels", () => {
+    it("should detect timed-out sentinel as failed", async () => {
+      const sentinelPath = join(tempDir, "timeout-fail.txt");
+
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [{ type: "sentinel", path: sentinelPath, pollInterval: 20, timeout: 50 }],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      const onMet = vi.fn();
+      const onTimeout = vi.fn();
+      resolver.startSentinelWatchers("a", onMet, onTimeout);
+
+      expect(resolver.hasFailedDependency("a")).toBe(false);
+
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      expect(resolver.hasFailedDependency("a")).toBe(true);
+    });
+  });
+
+  describe("validation with sentinels", () => {
+    it("should not include sentinel deps in cycle detection", () => {
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [{ type: "sentinel", path: "/tmp/test" }],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      expect(() => resolver.validateNoCycles()).not.toThrow();
+    });
+
+    it("should not include sentinel deps in dependency existence validation", () => {
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [{ type: "sentinel", path: "/tmp/test" }],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      expect(() => resolver.validateDependenciesExist()).not.toThrow();
+    });
+
+    it("should not count sentinel deps as process dependencies for getProcessesWithNoDependencies", () => {
+      const entries: RestartingProcessEntry[] = [
+        {
+          name: "a",
+          definition: { command: "echo" },
+          dependsOn: [{ type: "sentinel", path: "/tmp/test" }],
+        },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      // Has a sentinel dep so dependsOn.length > 0
+      expect(resolver.getProcessesWithNoDependencies()).toEqual([]);
+    });
   });
 });

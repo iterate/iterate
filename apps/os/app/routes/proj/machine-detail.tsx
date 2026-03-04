@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Globe,
   List,
+  Play,
   RefreshCw,
   TerminalSquare,
   Trash2,
@@ -144,14 +145,18 @@ function MachineDetailPage() {
     },
   });
 
-  const { data: machine } = useSuspenseQuery(
-    orpc.machine.byId.queryOptions({
+  const { data: machine } = useSuspenseQuery({
+    ...orpc.machine.byId.queryOptions({
       input: {
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       },
     }),
-  );
+    refetchInterval: (query) => {
+      const m = query.state.data;
+      return m?.state === "starting" ? 3000 : false;
+    },
+  });
 
   const metadata = machine.metadata as MachineMetadata;
   const { services } = machine;
@@ -202,6 +207,18 @@ function MachineDetailPage() {
     },
     onError: (error) => {
       toast.error("Failed to delete: " + error.message);
+    },
+  });
+
+  const execCommand = useMutation({
+    mutationFn: async (command: string) =>
+      orpcClient.machine.execCommand({
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+        command: ["bash", "-lc", command],
+      }),
+    onError: (error) => {
+      toast.error("Command failed: " + error.message);
     },
   });
 
@@ -480,6 +497,18 @@ function MachineDetailPage() {
           <Button
             variant="outline"
             size="sm"
+            disabled={execCommand.isPending || machine.state !== "active"}
+            onClick={() => {
+              const command = prompt("Command to run:");
+              if (command) execCommand.mutate(command);
+            }}
+          >
+            <Play className="h-4 w-4" />
+            {execCommand.isPending ? "Running..." : "Run command"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setDeleteConfirmOpen(true)}
             className="text-destructive hover:text-destructive"
           >
@@ -498,6 +527,12 @@ function MachineDetailPage() {
             </Button>
           )}
         </div>
+
+        {execCommand.isSuccess && execCommand.data && (
+          <div data-testid="exec-command-result">
+            <SerializedObjectCodeBlock data={execCommand.data} className="max-h-[20rem]" />
+          </div>
+        )}
 
         <div>
           <h3 className="mb-2 text-xs font-medium text-muted-foreground">Services</h3>

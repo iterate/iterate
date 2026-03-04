@@ -21,17 +21,13 @@ export function normalizePattern(input: string): string {
     throw new RouteInputError(`Invalid pattern: ${input}`);
   }
   const wildcardCount = (normalized.match(/\*/g) ?? []).length;
-  const wildcardTail = normalized.slice(1);
-  if (
-    wildcardCount > 0 &&
-    (wildcardCount !== 1 ||
-      !normalized.startsWith("*") ||
-      normalized.length <= 1 ||
-      /^[a-z0-9]$/.test(normalized[1] ?? "") ||
-      !wildcardTail.includes(".") ||
-      !/[a-z0-9]/.test(wildcardTail))
-  ) {
-    throw new RouteInputError(`Invalid pattern: ${input}`);
+  if (wildcardCount > 0) {
+    if (!normalized.includes(".") || !/[a-z0-9]/.test(normalized)) {
+      throw new RouteInputError(`Invalid pattern: ${input}`);
+    }
+    if (normalized === "*") {
+      throw new RouteInputError(`Invalid pattern: ${input}`);
+    }
   }
   return normalized;
 }
@@ -40,4 +36,10 @@ export function normalizeRouteId(input: string): string {
   const routeId = input.trim();
   if (!routeId) throw new RouteInputError("routeId is required");
   return routeId;
+}
+
+export function normalizeExternalId(input: string): string {
+  const externalId = input.trim();
+  if (!externalId) throw new RouteInputError("externalId is required");
+  return externalId;
 }

@@ -11,8 +11,8 @@ export const routes = rootRoute("root.tsx", [
     // Index - shows invites + create org for new users, redirects to org for existing
     index("index.tsx"),
 
-    // Slack conflict resolution
-    route("/slack-conflict", "slack-conflict.tsx"),
+    // Connection conflict resolution
+    route("/connection-conflict", "connection-conflict.tsx"),
 
     // User settings
     route("/user/settings", "user/settings.tsx"),

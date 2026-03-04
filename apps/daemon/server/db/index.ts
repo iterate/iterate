@@ -1,5 +1,11 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 
 import * as schema from "./schema.ts";
 
-export const db = drizzle(process.env.DATABASE_URL ?? "./db.sqlite", { schema });
+const dbPath = process.env.DATABASE_URL ?? "./db.sqlite";
+mkdirSync(dirname(dbPath), { recursive: true });
+export const db = drizzle(dbPath, { schema });
+migrate(db, { migrationsFolder: new URL("../../drizzle", import.meta.url).pathname });

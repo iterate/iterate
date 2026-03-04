@@ -56,6 +56,7 @@ describe("route groups", () => {
   test("create/get/list/update/delete", async () => {
     const created = await createRoute(testEnv.DB, {
       typeIdPrefix: "tst",
+      externalId: "machine-abc",
       metadata: { project: "abc" },
       patterns: [
         { pattern: "app.project.ingress.iterate.com", target: "https://project.fly.dev" },
@@ -68,6 +69,7 @@ describe("route groups", () => {
 
     const fetched = await getRoute(testEnv.DB, created.routeId);
     expect(fetched?.routeId).toBe(created.routeId);
+    expect(fetched?.externalId).toBe("machine-abc");
     expect(fetched?.metadata).toEqual({ project: "abc" });
 
     const listed = await listRoutes(testEnv.DB);
@@ -75,6 +77,7 @@ describe("route groups", () => {
 
     const updated = await updateRoute(testEnv.DB, {
       routeId: created.routeId,
+      externalId: "machine-def",
       metadata: { project: "def" },
       patterns: [
         {
@@ -86,10 +89,11 @@ describe("route groups", () => {
     });
 
     expect(updated.metadata).toEqual({ project: "def" });
+    expect(updated.externalId).toBe("machine-def");
     expect(updated.patterns).toHaveLength(1);
     expect(updated.patterns[0]?.pattern).toBe("api.project.ingress.iterate.com");
 
-    await expect(deleteRoute(testEnv.DB, created.routeId)).resolves.toBe(true);
+    await expect(deleteRoute(testEnv.DB, { routeId: created.routeId })).resolves.toBe(true);
     await expect(getRoute(testEnv.DB, created.routeId)).resolves.toBeNull();
   });
 
@@ -105,6 +109,61 @@ describe("route groups", () => {
         patterns: [{ pattern: "same.ingress.iterate.com", target: "https://two.fly.dev" }],
       }),
     ).rejects.toThrow("UNIQUE constraint failed");
+  });
+
+  test("externalId uniqueness allows null and rejects duplicate values", async () => {
+    await createRoute(testEnv.DB, {
+      typeIdPrefix: "tst",
+      patterns: [{ pattern: "one-null.ingress.iterate.com", target: "https://one.fly.dev" }],
+    });
+
+    await createRoute(testEnv.DB, {
+      typeIdPrefix: "tst",
+      patterns: [{ pattern: "two-null.ingress.iterate.com", target: "https://two.fly.dev" }],
+    });
+
+    await createRoute(testEnv.DB, {
+      typeIdPrefix: "tst",
+      externalId: "machine-unique",
+      patterns: [{ pattern: "one-ext.ingress.iterate.com", target: "https://one.fly.dev" }],
+    });
+
+    await expect(
+      createRoute(testEnv.DB, {
+        typeIdPrefix: "tst",
+        externalId: "machine-unique",
+        patterns: [{ pattern: "two-ext.ingress.iterate.com", target: "https://two.fly.dev" }],
+      }),
+    ).rejects.toThrow("UNIQUE constraint failed");
+  });
+
+  test("update can clear externalId", async () => {
+    const created = await createRoute(testEnv.DB, {
+      typeIdPrefix: "tst",
+      externalId: "machine-clear",
+      patterns: [{ pattern: "clear.ingress.iterate.com", target: "https://one.fly.dev" }],
+    });
+
+    const updated = await updateRoute(testEnv.DB, {
+      routeId: created.routeId,
+      externalId: null,
+      metadata: {},
+      patterns: [{ pattern: "clear.ingress.iterate.com", target: "https://one.fly.dev" }],
+    });
+
+    expect(updated.externalId).toBeNull();
+  });
+
+  test("delete supports externalId", async () => {
+    const created = await createRoute(testEnv.DB, {
+      typeIdPrefix: "tst",
+      externalId: "machine-delete",
+      patterns: [{ pattern: "delete.ingress.iterate.com", target: "https://one.fly.dev" }],
+    });
+
+    await expect(deleteRoute(testEnv.DB, { externalId: "machine-delete" })).resolves.toBe(true);
+    await expect(deleteRoute(testEnv.DB, { externalId: "machine-delete" })).resolves.toBe(false);
+    await expect(getRoute(testEnv.DB, created.routeId)).resolves.toBeNull();
   });
 
   test("resolve prioritizes exact over wildcard", async () => {
@@ -139,6 +198,51 @@ describe("route groups", () => {
 
     const resolved = await resolveRoute(testEnv.DB, request);
     expect(resolved?.pattern).toBe("*__proj.ingress.iterate.com");
+  });
+
+  test("resolves multi-wildcard pattern (service__slug format)", async () => {
+    await createSinglePatternRoute({
+      pattern: "*__my-slug-abc123.ingress.iterate.com",
+      target: "https://tunnel.trycloudflare.com",
+    });
+
+    const request = buildInboundRequest({
+      host: "events__my-slug-abc123.ingress.iterate.com",
+      path: "/api/health",
+    });
+
+    const resolved = await resolveRoute(testEnv.DB, request);
+    expect(resolved).not.toBeNull();
+    expect(resolved!.pattern).toBe("*__my-slug-abc123.ingress.iterate.com");
+    expect(resolved!.targetUrl.origin).toBe("https://tunnel.trycloudflare.com");
+  });
+
+  test("resolves wildcard pattern with multiple * characters", async () => {
+    await createSinglePatternRoute({
+      pattern: "*__playground-*.ingress.iterate.com",
+      target: "https://tunnel.trycloudflare.com",
+    });
+
+    await createSinglePatternRoute({
+      pattern: "playground-*.ingress.iterate.com",
+      target: "https://tunnel.trycloudflare.com",
+    });
+
+    const wildcardReq = buildInboundRequest({
+      host: "events__playground-abcd1234.ingress.iterate.com",
+      path: "/health",
+    });
+    const wildcardResult = await resolveRoute(testEnv.DB, wildcardReq);
+    expect(wildcardResult).not.toBeNull();
+    expect(wildcardResult!.pattern).toBe("*__playground-*.ingress.iterate.com");
+
+    const rootReq = buildInboundRequest({
+      host: "playground-abcd1234.ingress.iterate.com",
+      path: "/health",
+    });
+    const rootResult = await resolveRoute(testEnv.DB, rootReq);
+    expect(rootResult).not.toBeNull();
+    expect(rootResult!.pattern).toBe("playground-*.ingress.iterate.com");
   });
 
   test("ignores oversized legacy patterns during resolution", async () => {

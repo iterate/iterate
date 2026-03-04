@@ -194,7 +194,10 @@ export const registerConsumers = () => {
         throw new Error(`Could not build fetcher for machine ${machineId}`);
       }
 
-      const sendResult = await sendProbeMessage(fetcher);
+      const sendResult = await sendProbeMessage(fetcher, {
+        machineId,
+        probeId: params.job.id,
+      });
       if (!sendResult.ok) {
         throw new Error(`probe send failed: ${sendResult.detail}`);
       }
