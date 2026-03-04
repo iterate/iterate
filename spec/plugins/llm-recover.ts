@@ -1,9 +1,9 @@
-import dedent from "dedent";
 import * as fs from "node:fs";
+import dedent from "dedent";
 import * as path from "node:path";
+import { expect as playwrightExpect } from "@playwright/test";
 import type { Plugin, ActionContext } from "../playwright-plugin.ts";
 import { adjustError } from "../playwright-plugin.ts";
-import { expect as playwrightExpect } from "@playwright/test";
 
 export type LlmRecoverOptions = {
   /** Max recovery attempts per failing action. Default: 3 */
