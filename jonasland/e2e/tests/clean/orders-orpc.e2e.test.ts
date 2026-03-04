@@ -16,7 +16,6 @@ type DeploymentCase = {
   enabled: boolean;
   create: (overrides?: { name?: string; signal?: AbortSignal }) => Promise<Deployment>;
   timeoutOffsetMs: number;
-  expectPlaceSuccess: boolean;
 };
 
 const cases: DeploymentCase[] = [
@@ -29,7 +28,6 @@ const cases: DeploymentCase[] = [
         ...overrides,
       }),
     timeoutOffsetMs: 0,
-    expectPlaceSuccess: false,
   },
   {
     id: "fly-default",
@@ -40,12 +38,11 @@ const cases: DeploymentCase[] = [
       flyBaseDomain: process.env.FLY_BASE_DOMAIN ?? "fly.dev",
     }),
     timeoutOffsetMs: 570_000,
-    expectPlaceSuccess: true,
   },
 ].filter((entry) => entry.enabled);
 
 describe.runIf(cases.length > 0)("on-demand orders oRPC", () => {
-  describe.each(cases)("$id", ({ create, timeoutOffsetMs, expectPlaceSuccess }) => {
+  describe.each(cases)("$id", ({ create, timeoutOffsetMs }) => {
     test(
       "start orders service via pidnap, exercise typed oRPC client",
       async () => {
@@ -64,50 +61,25 @@ describe.runIf(cases.length > 0)("on-demand orders oRPC", () => {
         );
 
         const waitResult = await deployment.pidnap.processes.waitFor({
-          processes: { [ordersServiceManifest.slug]: "running" },
-          timeoutMs: 3_000,
+          processes: { [ordersServiceManifest.slug]: "healthy" },
+          timeoutMs: 5_000,
         });
         expect(waitResult.allMet).toBe(true);
 
         const orders = deployment.createServiceClient({ manifest: ordersServiceManifest });
 
-        await expect
-          .poll(
-            async () =>
-              await orders.orders.ping({}).then(
-                (result) => result.ok,
-                () => false,
-              ),
-            { timeout: 6_000 + timeoutOffsetMs },
-          )
-          .toBe(true);
+        const ping = await orders.orders.ping({});
+        expect(ping.ok).toBe(true);
 
-        if (expectPlaceSuccess) {
-          let placedId: string | null = null;
-          await expect
-            .poll(
-              async () =>
-                await orders.orders
-                  .place({
-                    sku: `sku-${randomUUID().slice(0, 6)}`,
-                    quantity: 2,
-                  })
-                  .then(
-                    (result) => {
-                      placedId = result.id;
-                      return result.status;
-                    },
-                    () => null,
-                  ),
-              { timeout: 60_000 },
-            )
-            .toBe("accepted");
-          expect(placedId).not.toBeNull();
+        const placed = await orders.orders.place({
+          sku: `sku-${randomUUID().slice(0, 6)}`,
+          quantity: 2,
+        });
+        expect(placed.status).toBe("accepted");
 
-          const listed = await orders.orders.list({ limit: 20 });
-          expect(listed.total).toBeGreaterThanOrEqual(1);
-          expect(listed.orders.some((order) => order.id === placedId)).toBe(true);
-        }
+        const listed = await orders.orders.list({ limit: 20 });
+        expect(listed.total).toBeGreaterThanOrEqual(1);
+        expect(listed.orders.some((order) => order.id === placed.id)).toBe(true);
       },
       120_000 + timeoutOffsetMs,
     );

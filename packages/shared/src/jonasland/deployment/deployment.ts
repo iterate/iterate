@@ -22,6 +22,36 @@ export type DeploymentFactory<TDeployment, TOpts> = (
   overrides?: Partial<TOpts>,
 ) => Promise<TDeployment>;
 
+export type DeploymentProviderState =
+  | "unknown"
+  | "running"
+  | "starting"
+  | "stopped"
+  | "destroyed"
+  | "error";
+
+export interface DeploymentProviderStatus {
+  state: DeploymentProviderState;
+  detail: string;
+}
+
+export interface ProvisionResult<TLocator> {
+  locator: TLocator;
+  baseUrl: string;
+}
+
+export interface DeploymentProvider<TOpts extends DeploymentOpts, TLocator> {
+  create(opts: TOpts): Promise<ProvisionResult<TLocator>>;
+  destroy(params: { locator: TLocator; opts: TOpts }): Promise<void>;
+  exec(params: {
+    locator: TLocator;
+    opts: TOpts;
+    cmd: string | string[];
+  }): Promise<DeploymentCommandResult>;
+  logs(params: { locator: TLocator; opts: TOpts }): Promise<string>;
+  status(params: { locator: TLocator; opts: TOpts }): Promise<DeploymentProviderStatus>;
+}
+
 export const PIDNAP_LOG_TAIL_CMD =
   'for f in /var/log/pidnap/*.log; do echo "===== $f ====="; tail -n 200 "$f"; done 2>/dev/null || true';
 
@@ -38,10 +68,24 @@ export function throwIfAborted(signal?: AbortSignal): void {
     : new Error(`Operation aborted${signal.reason ? `: ${String(signal.reason)}` : ""}`);
 }
 
-export abstract class Deployment<
+/**
+ * Base deployment lifecycle/state-machine around a stateless provider.
+ *
+ * Provider implementations (Docker/Fly/etc.) expose low-level operations
+ * against a locator, while this class owns lifecycle guards, shared clients,
+ * and helper flows used by callers/tests.
+ */
+export class Deployment<
   TOpts extends DeploymentOpts = DeploymentOpts,
   TLocator = unknown,
 > implements AsyncDisposable {
+  /**
+   * Creates a factory that merges default create options with per-call overrides.
+   *
+   * Especially useful in tests, where a suite wants fixed provider config
+   * (for example docker image or fly auth/token settings) but still overrides
+   * per-test values like `name` and `signal`.
+   */
   static makeFactory<TDeployment, TOpts>(
     this: { create(opts: TOpts): Promise<TDeployment> },
     defaults: TOpts,
@@ -53,60 +97,92 @@ export abstract class Deployment<
       } as TOpts);
   }
 
-  protected state: "new" | "running" | "destroyed" = "new";
-  protected locator: TLocator | null = null;
+  private state: "new" | "running" | "destroyed" = "new";
+  private _locator: TLocator | null = null;
+  private _opts: TOpts | null = null;
 
   public baseUrl = "";
-  private pidnapClient: PidnapClient | null = null;
-  private caddyClient: ReturnType<typeof createCaddyAdminClient> | null = null;
-  private registryClient: RegistryClient | null = null;
-  private eventsClient: ContractRouterClient<EventBusContract> | null = null;
+  private _pidnapService: PidnapClient | null = null;
+  private _caddyApi: ReturnType<typeof createCaddyAdminClient> | null = null;
+  private _registryService: RegistryClient | null = null;
+  private _eventsService: ContractRouterClient<EventBusContract> | null = null;
+  private readonly provider: DeploymentProvider<TOpts, TLocator>;
 
-  abstract create(opts: TOpts): Promise<TLocator>;
-  protected abstract dispose(): Promise<void>;
-  abstract exec(cmd: string | string[]): Promise<DeploymentCommandResult>;
-  abstract logs(): Promise<string>;
+  constructor(provider: DeploymentProvider<TOpts, TLocator>) {
+    this.provider = provider;
+  }
 
-  get pidnap(): PidnapClient {
+  async create(opts: TOpts): Promise<TLocator> {
+    if (this.state !== "new") {
+      throw new Error(`${this.constructor.name} is in state "${this.state}", expected "new"`);
+    }
+    console.log(`[deployment] creating ${this.constructor.name}...`);
+    throwIfAborted(opts.signal);
+    const provisioned = await this.provider.create(opts);
+    this.baseUrl = provisioned.baseUrl;
+    this._locator = provisioned.locator;
+    this._opts = opts;
+    this.state = "running";
+    console.log(`[deployment] created, baseUrl=${this.baseUrl}`);
+    return provisioned.locator;
+  }
+
+  get pidnapService(): PidnapClient {
     this.assertRunning();
-    if (this.pidnapClient) return this.pidnapClient;
-    this.pidnapClient = createPidnapClient({
+    if (this._pidnapService) return this._pidnapService;
+    this._pidnapService = createPidnapClient({
       url: `${this.baseUrl}/rpc`,
       fetch: createHostRoutedFetch({ baseUrl: this.baseUrl, host: "pidnap.iterate.localhost" }),
     });
-    return this.pidnapClient;
+    return this._pidnapService;
   }
 
-  get caddy(): ReturnType<typeof createCaddyAdminClient> {
+  get caddyApi(): ReturnType<typeof createCaddyAdminClient> {
     this.assertRunning();
-    if (this.caddyClient) return this.caddyClient;
-    this.caddyClient = createCaddyAdminClient({
+    if (this._caddyApi) return this._caddyApi;
+    this._caddyApi = createCaddyAdminClient({
       baseUrl: this.baseUrl,
       host: "caddy.iterate.localhost",
     });
-    return this.caddyClient;
+    return this._caddyApi;
   }
 
-  get registry(): RegistryClient {
+  get registryService(): RegistryClient {
     this.assertRunning();
-    if (this.registryClient) return this.registryClient;
-    this.registryClient = createRegistryClient({
+    if (this._registryService) return this._registryService;
+    this._registryService = createRegistryClient({
       url: `${this.baseUrl}/orpc`,
       fetch: createHostRoutedFetch({ baseUrl: this.baseUrl, host: "registry.iterate.localhost" }),
     });
-    return this.registryClient;
+    return this._registryService;
   }
 
-  get events(): ContractRouterClient<EventBusContract> {
+  get eventsService(): ContractRouterClient<EventBusContract> {
     this.assertRunning();
-    if (this.eventsClient) return this.eventsClient;
-    this.eventsClient = createOrpcRpcServiceClient({
+    if (this._eventsService) return this._eventsService;
+    this._eventsService = createOrpcRpcServiceClient({
       env: {},
       manifest: eventsServiceManifest,
       url: `${this.baseUrl}/orpc`,
       fetch: createHostRoutedFetch({ baseUrl: this.baseUrl, host: "events.iterate.localhost" }),
     });
-    return this.eventsClient;
+    return this._eventsService;
+  }
+
+  get pidnap(): PidnapClient {
+    return this.pidnapService;
+  }
+
+  get caddy(): ReturnType<typeof createCaddyAdminClient> {
+    return this.caddyApi;
+  }
+
+  get registry(): RegistryClient {
+    return this.registryService;
+  }
+
+  get events(): ContractRouterClient<EventBusContract> {
+    return this.eventsService;
   }
 
   async waitUntilAlive(params?: { signal?: AbortSignal }): Promise<void> {
@@ -123,7 +199,7 @@ export abstract class Deployment<
     );
     console.log(`[deployment] caddy alive, waiting for core processes...`);
 
-    const result = await this.pidnap.processes.waitFor({
+    const result = await this.pidnapService.processes.waitFor({
       processes: { caddy: "healthy", registry: "healthy", events: "healthy" },
       timeoutMs: 120_000,
     });
@@ -182,23 +258,46 @@ export abstract class Deployment<
     });
   }
 
-  getDeploymentLocator(): TLocator {
-    if (this.locator == null) {
-      throw new Error(`${this.constructor.name} has no locator`);
-    }
-    return this.locator;
+  async exec(cmd: string | string[]): Promise<DeploymentCommandResult> {
+    this.assertRunning();
+    return await this.provider.exec({
+      locator: this.locator,
+      opts: this.opts,
+      cmd,
+    });
+  }
+
+  async logs(): Promise<string> {
+    this.assertRunning();
+    return await this.provider.logs({
+      locator: this.locator,
+      opts: this.opts,
+    });
+  }
+
+  async status(): Promise<DeploymentProviderStatus> {
+    this.assertRunning();
+    return await this.provider.status({
+      locator: this.locator,
+      opts: this.opts,
+    });
   }
 
   async destroy(): Promise<void> {
     if (this.state === "destroyed") return;
     console.log(`[deployment] destroying ${this.constructor.name}...`);
     if (this.state === "running") {
-      await this.dispose();
+      await this.provider.destroy({
+        locator: this.locator,
+        opts: this.opts,
+      });
     }
-    this.pidnapClient = null;
-    this.caddyClient = null;
-    this.registryClient = null;
-    this.eventsClient = null;
+    this._pidnapService = null;
+    this._caddyApi = null;
+    this._registryService = null;
+    this._eventsService = null;
+    this._locator = null;
+    this._opts = null;
     this.state = "destroyed";
     console.log(`[deployment] destroyed`);
   }
@@ -218,7 +317,21 @@ export abstract class Deployment<
       kind: this.constructor.name,
       state: this.state,
       baseUrl: this.baseUrl,
-      locator: this.locator,
+      locator: this._locator,
     };
+  }
+
+  protected get locator(): TLocator {
+    if (!this._locator) {
+      throw new Error(`${this.constructor.name} has no locator`);
+    }
+    return this._locator;
+  }
+
+  protected get opts(): TOpts {
+    if (!this._opts) {
+      throw new Error(`${this.constructor.name} has no opts`);
+    }
+    return this._opts;
   }
 }

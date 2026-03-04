@@ -3,6 +3,9 @@ import { DockerClient } from "@docker/node-sdk";
 import pWaitFor from "p-wait-for";
 import {
   Deployment,
+  type DeploymentProvider,
+  type DeploymentProviderStatus,
+  type ProvisionResult,
   throwIfAborted,
   type DeploymentCommandResult,
   type DeploymentOpts,
@@ -33,36 +36,33 @@ export interface DockerDeploymentOpts extends Omit<DeploymentOpts, "env"> {
   };
 }
 
-export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDeploymentLocator> {
-  private static dockerClientPromise: Promise<DockerClient> | undefined;
-  private containerId: string | null = null;
+let dockerClientPromise: Promise<DockerClient> | undefined;
 
-  private static async dockerClient(): Promise<DockerClient> {
-    if (!DockerDeployment.dockerClientPromise) {
-      DockerDeployment.dockerClientPromise = DockerClient.fromDockerConfig();
-    }
-    try {
-      return await DockerDeployment.dockerClientPromise;
-    } catch (error) {
-      DockerDeployment.dockerClientPromise = undefined;
-      throw error;
-    }
+async function dockerClient(): Promise<DockerClient> {
+  if (!dockerClientPromise) {
+    dockerClientPromise = DockerClient.fromDockerConfig();
   }
-
-  private requireContainerId(): string {
-    if (!this.containerId) throw new Error("docker deployment not initialized");
-    return this.containerId;
+  try {
+    return await dockerClientPromise;
+  } catch (error) {
+    dockerClientPromise = undefined;
+    throw error;
   }
+}
 
-  private async waitForPublishedPort(containerPort: string, signal?: AbortSignal): Promise<number> {
-    const docker = await DockerDeployment.dockerClient();
-    const containerId = this.requireContainerId();
+class DockerProvider implements DeploymentProvider<DockerDeploymentOpts, DockerDeploymentLocator> {
+  private async waitForPublishedPort(params: {
+    containerId: string;
+    containerPort: string;
+    signal?: AbortSignal;
+  }): Promise<number> {
+    const docker = await dockerClient();
     let resolved: number | undefined;
     await pWaitFor(
       async () => {
-        throwIfAborted(signal);
-        const info = await docker.containerInspect(containerId);
-        const hostPort = info.NetworkSettings?.Ports?.[containerPort]?.[0]?.HostPort;
+        throwIfAborted(params.signal);
+        const info = await docker.containerInspect(params.containerId);
+        const hostPort = info.NetworkSettings?.Ports?.[params.containerPort]?.[0]?.HostPort;
         if (hostPort) {
           resolved = Number(hostPort);
           return true;
@@ -71,21 +71,19 @@ export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDep
       },
       {
         interval: 100,
-        timeout: { milliseconds: 10_000, message: `No published port for ${containerPort}` },
-        signal,
+        timeout: {
+          milliseconds: 10_000,
+          message: `No published port for ${params.containerPort}`,
+        },
+        signal: params.signal,
       },
     );
     return resolved!;
   }
 
-  override async create(opts: DockerDeploymentOpts): Promise<DockerDeploymentLocator> {
-    if (this.state !== "new") {
-      throw new Error(`${this.constructor.name} is in state "${this.state}", expected "new"`);
-    }
-    console.log(`[deployment] creating ${this.constructor.name}...`);
-    throwIfAborted(opts.signal);
+  async create(opts: DockerDeploymentOpts): Promise<ProvisionResult<DockerDeploymentLocator>> {
     if (!opts.dockerImage) throw new Error("dockerImage is required");
-    const docker = await DockerDeployment.dockerClient();
+    const docker = await dockerClient();
     throwIfAborted(opts.signal);
     const hostSync = resolveDockerHostSync(opts);
     const hostSyncBinds =
@@ -144,32 +142,42 @@ export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDep
     if (!containerId) {
       throw new Error(`docker container create id missing: ${JSON.stringify(created)}`);
     }
-    this.containerId = containerId;
     throwIfAborted(opts.signal);
-    await docker.containerStart(this.containerId);
+    await docker.containerStart(containerId);
 
-    const hostPort = await this.waitForPublishedPort("80/tcp", opts.signal);
+    const hostPort = await this.waitForPublishedPort({
+      containerId,
+      containerPort: "80/tcp",
+      signal: opts.signal,
+    });
     const baseUrl = `http://127.0.0.1:${String(hostPort)}`;
-    console.log(`[docker] container=${this.containerId.slice(0, 12)} port=${String(hostPort)}`);
+    console.log(`[docker] container=${containerId.slice(0, 12)} port=${String(hostPort)}`);
 
-    const locator = {
-      provider: "docker" as const,
-      containerId: this.containerId,
-      name: opts.name,
+    return {
+      baseUrl,
+      locator: {
+        provider: "docker",
+        containerId,
+        name: opts.name,
+      },
     };
-    this.baseUrl = baseUrl;
-    this.locator = locator;
-    this.state = "running";
-    console.log(`[deployment] created, baseUrl=${this.baseUrl}`);
-    return locator;
   }
 
-  override async exec(cmd: string | string[]): Promise<DeploymentCommandResult> {
-    this.assertRunning();
-    const docker = await DockerDeployment.dockerClient();
-    const containerId = this.requireContainerId();
-    const argv = typeof cmd === "string" ? ["sh", "-ec", cmd] : cmd;
-    const exec = await docker.containerExec(containerId, {
+  async destroy(params: { locator: DockerDeploymentLocator }): Promise<void> {
+    const docker = await dockerClient();
+    const containerId = params.locator.containerId;
+    console.log(`[docker] disposing container=${containerId.slice(0, 12)}`);
+    await docker.containerStop(containerId, { timeout: 3 }).catch(() => {});
+    await docker.containerDelete(containerId, { force: true }).catch(() => {});
+  }
+
+  async exec(params: {
+    locator: DockerDeploymentLocator;
+    cmd: string | string[];
+  }): Promise<DeploymentCommandResult> {
+    const docker = await dockerClient();
+    const argv = typeof params.cmd === "string" ? ["sh", "-ec", params.cmd] : params.cmd;
+    const exec = await docker.containerExec(params.locator.containerId, {
       AttachStdout: true,
       AttachStderr: true,
       Tty: false,
@@ -190,15 +198,13 @@ export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDep
     };
   }
 
-  override async logs(): Promise<string> {
-    this.assertRunning();
-    const docker = await DockerDeployment.dockerClient();
-    const containerId = this.requireContainerId();
+  async logs(params: { locator: DockerDeploymentLocator }): Promise<string> {
+    const docker = await dockerClient();
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const stdoutCap = collectTextOutput(stdout);
     const stderrCap = collectTextOutput(stderr);
-    await docker.containerLogs(containerId, stdout, stderr, {
+    await docker.containerLogs(params.locator.containerId, stdout, stderr, {
       stdout: true,
       stderr: true,
       tail: "all",
@@ -206,14 +212,39 @@ export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDep
     return `${stdoutCap.flush()}${stderrCap.flush()}`;
   }
 
-  protected override async dispose(): Promise<void> {
-    if (!this.containerId) return;
-    const docker = await DockerDeployment.dockerClient();
-    const containerId = this.containerId;
-    console.log(`[docker] disposing container=${containerId.slice(0, 12)}`);
-    await docker.containerStop(containerId, { timeout: 3 }).catch(() => {});
-    await docker.containerDelete(containerId, { force: true }).catch(() => {});
-    this.containerId = null;
+  async status(params: { locator: DockerDeploymentLocator }): Promise<DeploymentProviderStatus> {
+    const docker = await dockerClient();
+    const info = await docker.containerInspect(params.locator.containerId);
+    const raw = info.State?.Status ?? "unknown";
+    const state =
+      raw === "running"
+        ? "running"
+        : raw === "created" || raw === "restarting"
+          ? "starting"
+          : raw === "exited"
+            ? "stopped"
+            : raw === "dead" || raw === "removing"
+              ? "destroyed"
+              : "unknown";
+    const detail = [
+      `docker state=${raw}`,
+      info.State?.Health?.Status ? `health=${info.State.Health.Status}` : null,
+      typeof info.State?.ExitCode === "number" ? `exitCode=${String(info.State.ExitCode)}` : null,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return { state, detail: detail || "docker status unavailable" };
+  }
+}
+
+export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDeploymentLocator> {
+  constructor() {
+    super(new DockerProvider());
+  }
+
+  async containerInspect(): Promise<Awaited<ReturnType<DockerSdkClient["containerInspect"]>>> {
+    const docker = await dockerClient();
+    return await docker.containerInspect(this.locator.containerId);
   }
 
   static async create(opts: DockerDeploymentOpts): Promise<DockerDeployment> {
