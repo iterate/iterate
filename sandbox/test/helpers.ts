@@ -94,7 +94,7 @@ export const TEST_CONFIG = {
   provider: (process.env.SANDBOX_TEST_PROVIDER ?? "docker") as TestProviderType,
 
   /** Snapshot/image ID override (provider uses its default if not set) */
-  snapshotId: process.env.SANDBOX_TEST_SNAPSHOT_ID,
+  snapshotId: process.env.SANDBOX_TEST_SNAPSHOT_ID || undefined,
 
   /** Whether sandbox tests should run (they're slow, so opt-in) */
   enabled:
