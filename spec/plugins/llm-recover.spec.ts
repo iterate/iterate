@@ -9,15 +9,16 @@ const describe = process.env.LLM_RECOVER ? base.describe : base.describe.skip;
 const test = base.extend<{ page: Page & { assertions: string[] } }>({
   page: async ({ page }, use, testInfo) => {
     const assertions: string[] = [];
+    const mockExpectSoft = (actual: unknown, message: string) => {
+      return {
+        toBe: (expected: unknown) => {
+          assertions.push(`Soft assertion ${actual}!=${expected}: ${message}`);
+        },
+      };
+    };
     const shimmedExpect = Object.assign((...args: any[]) => expect(...(args as [string])), {
       ...expect,
-      soft: (actual: unknown, message: string) => {
-        return {
-          toBe: (expected: unknown) => {
-            assertions.push(`Soft assertion ${actual}!=${expected}: ${message}`);
-          },
-        };
-      },
+      soft: mockExpectSoft,
     }) as typeof expect;
     await using _page = await addPlugins({
       page,
@@ -51,7 +52,7 @@ describe("llm-recover", () => {
     await page.getByText("Create profile").click();
 
     // Recovery should have found and clicked the real button
-    await expect(page.locator("#result")).toHaveText("profile created");
+    await page.getByText("profile created").waitFor();
 
     expect(page.assertions).toHaveLength(1);
     expect(page.assertions[0]).toMatch(/click failed and was recovered by LLM/);
@@ -100,6 +101,7 @@ describe("llm-recover", () => {
       </body>
     `);
 
+    // oxlint-disable-next-line iterate/spec-restricted-syntax -- ok here
     await expect(async () => {
       await page.getByText("Create profile").click();
     }).rejects.toThrow(/Not recoverable/);

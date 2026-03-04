@@ -73,7 +73,7 @@ export const llmRecover = (options: LlmRecoverOptions = {}): Plugin => {
       } catch (originalError) {
         if (!(originalError instanceof Error)) throw originalError;
 
-        const { page, locator, method, args, testInfo } = ctx;
+        const { page, locator, method, testInfo } = ctx;
         const attemptHistory: AttemptRecord[] = [];
 
         // Gather context once (screenshot + HTML don't change between LLM retries
@@ -107,8 +107,9 @@ export const llmRecover = (options: LlmRecoverOptions = {}): Plugin => {
 
           const start = Date.now();
           try {
-            // eslint-disable-next-line no-eval -- intentional: LLM codemode recovery
+            // eslint-disable-next-line no-unused-vars, no-unassigned-vars -- intentional: LLM codemode recovery
             let recoveryFn!: Function;
+            // eslint-disable-next-line no-eval -- intentional: LLM codemode recovery
             eval(`recoveryFn = ${code.trim()}`);
             if (typeof recoveryFn !== "function") {
               adjustError(
