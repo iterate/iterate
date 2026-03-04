@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { pathToFileURL } from "node:url";
 import httpProxy from "http-proxy";
 import {
@@ -13,19 +18,23 @@ import {
 
 const serviceName = "jonasland-egress-service";
 
-const iterateOriginalHostHeader = "x-iterate-original-host";
-const iterateOriginalProtoHeader = "x-iterate-original-proto";
 const iterateTargetUrlHeader = "x-iterate-target-url";
 const iterateEgressModeHeader = "x-iterate-egress-mode";
 const iterateEgressSeenHeader = "x-iterate-egress-proxy-seen";
 
-// Backward-compatible read aliases while migrating callers.
-const legacyOriginalHostHeader = "x-original-host";
-const legacyOriginalProtoHeader = "x-original-proto";
 const legacyTargetUrlHeader = "x-target-url";
 const legacyEgressModeHeader = "x-egress-mode";
 
+const forwardingContextHeaderPrefixes = ["x-forwarded-"] as const;
+
 type ProtocolKind = "http" | "ws";
+type ForwardedProto = "http" | "https" | "ws" | "wss";
+
+type ForwardingContext = {
+  host: string | null;
+  proto: ForwardedProto;
+  forValue?: string;
+};
 
 type EgressMode = "external-proxy" | "direct" | "transparent";
 
@@ -41,6 +50,9 @@ type ProxyRequestResolution = {
   mode: EgressMode;
   targetOrigin: string;
   pathWithQuery: string;
+  forwardedHost: string;
+  forwardedProto: ForwardedProto;
+  forwardedFor?: string;
 };
 
 function parsePort(value: string, key: string): number {
@@ -89,6 +101,63 @@ function currentEgressMode(req: IncomingMessage): string {
   return String(preferredHeader(req, iterateEgressModeHeader, legacyEgressModeHeader) || "unknown");
 }
 
+function normalizeClientIp(rawAddress: string | undefined): string | undefined {
+  if (!rawAddress) return undefined;
+  const trimmed = rawAddress.trim();
+  if (trimmed.length === 0) return undefined;
+  if (trimmed.startsWith("::ffff:")) return trimmed.slice("::ffff:".length);
+  return trimmed;
+}
+
+function normalizeForwardedProto(
+  proto: string | undefined,
+  protocolKind: ProtocolKind,
+): ForwardedProto {
+  const normalized = proto?.trim().toLowerCase();
+  if (protocolKind === "ws") {
+    if (normalized === "https" || normalized === "wss") return "wss";
+    return "ws";
+  }
+  if (normalized === "https" || normalized === "wss") return "https";
+  return "http";
+}
+
+function resolveForwardingContext(
+  req: IncomingMessage,
+  protocolKind: ProtocolKind,
+): ForwardingContext {
+  const forwardedHost = firstHeaderValue(req.headers["x-forwarded-host"]).trim();
+  const forwardedProto = firstHeaderValue(req.headers["x-forwarded-proto"]).trim();
+  const forwardedFor = firstHeaderValue(req.headers["x-forwarded-for"]).split(",")[0]?.trim();
+  const fallbackHost = firstHeaderValue(req.headers.host).trim();
+
+  return {
+    host: forwardedHost && forwardedHost.length > 0 ? forwardedHost : fallbackHost || null,
+    proto: normalizeForwardedProto(forwardedProto || undefined, protocolKind),
+    forValue:
+      forwardedFor && forwardedFor.length > 0
+        ? forwardedFor
+        : normalizeClientIp(req.socket.remoteAddress),
+  };
+}
+
+function stripForwardingContextHeaders(headers: IncomingHttpHeaders): void {
+  for (const headerName of Object.keys(headers)) {
+    const lowered = headerName.toLowerCase();
+    if (lowered === "forwarded") {
+      delete headers[headerName];
+      continue;
+    }
+    if (forwardingContextHeaderPrefixes.some((prefix) => lowered.startsWith(prefix))) {
+      delete headers[headerName];
+      continue;
+    }
+    if (lowered.startsWith("x-") && lowered.includes("-original-")) {
+      delete headers[headerName];
+    }
+  }
+}
+
 function normalizeProxyProtocol(url: URL, protocolKind: ProtocolKind): URL {
   if (protocolKind === "ws") {
     if (url.protocol === "http:") url.protocol = "ws:";
@@ -101,27 +170,20 @@ function normalizeProxyProtocol(url: URL, protocolKind: ProtocolKind): URL {
   return url;
 }
 
-function buildTransparentTarget(req: IncomingMessage, protocolKind: ProtocolKind): string | null {
+function buildTransparentTarget(
+  req: IncomingMessage,
+  protocolKind: ProtocolKind,
+  forwardingContext: ForwardingContext,
+): string | null {
   const rawUrl = req.url || "/";
   if (/^https?:\/\//i.test(rawUrl) || /^wss?:\/\//i.test(rawUrl)) {
     return normalizeProxyProtocol(new URL(rawUrl), protocolKind).toString();
   }
 
-  const host =
-    preferredHeader(req, iterateOriginalHostHeader, legacyOriginalHostHeader) ||
-    firstHeaderValue(req.headers.host);
+  const host = forwardingContext.host;
   if (!host) return null;
 
-  const proto = String(
-    preferredHeader(req, iterateOriginalProtoHeader, legacyOriginalProtoHeader),
-  ).toLowerCase();
-  let scheme = "http";
-  if (protocolKind === "ws") {
-    scheme = proto === "https" || proto === "wss" ? "wss" : "ws";
-  } else {
-    scheme = proto === "https" || proto === "wss" ? "https" : "http";
-  }
-
+  const scheme = forwardingContext.proto;
   const path = rawUrl.startsWith("/") ? rawUrl : `/${rawUrl}`;
   return `${scheme}://${host}${path}`;
 }
@@ -130,6 +192,7 @@ function resolveTarget(
   req: IncomingMessage,
   protocolKind: ProtocolKind,
   env: EgressEnv,
+  forwardingContext: ForwardingContext,
 ): { mode: EgressMode; url: string } | null {
   if (env.externalProxy) {
     return {
@@ -147,7 +210,7 @@ function resolveTarget(
     return { mode: "direct", url: directUrl };
   }
 
-  const transparentUrl = buildTransparentTarget(req, protocolKind);
+  const transparentUrl = buildTransparentTarget(req, protocolKind, forwardingContext);
   if (!transparentUrl) return null;
   return { mode: "transparent", url: transparentUrl };
 }
@@ -157,14 +220,20 @@ function resolveProxyRequest(
   protocolKind: ProtocolKind,
   env: EgressEnv,
 ): ProxyRequestResolution | null {
-  const target = resolveTarget(req, protocolKind, env);
+  const forwardingContext = resolveForwardingContext(req, protocolKind);
+  const target = resolveTarget(req, protocolKind, env, forwardingContext);
   if (!target) return null;
 
   const targetUrl = new URL(target.url);
+  const forwardedHost = forwardingContext.host ?? targetUrl.host;
+
   return {
     mode: target.mode,
     targetOrigin: `${targetUrl.protocol}//${targetUrl.host}`,
     pathWithQuery: `${targetUrl.pathname}${targetUrl.search}`,
+    forwardedHost,
+    forwardedProto: forwardingContext.proto,
+    forwardedFor: forwardingContext.forValue,
   };
 }
 
@@ -197,7 +266,7 @@ export async function startEgressService(options?: {
 
   const proxy = httpProxy.createProxyServer({
     ws: true,
-    xfwd: true,
+    xfwd: false,
     secure: false,
   });
 
@@ -289,6 +358,12 @@ export async function startEgressService(options?: {
 
     req.url = resolved.pathWithQuery;
     req.headers.host = new URL(resolved.targetOrigin).host;
+    stripForwardingContextHeaders(req.headers);
+    req.headers["x-forwarded-host"] = resolved.forwardedHost;
+    req.headers["x-forwarded-proto"] = resolved.forwardedProto;
+    if (resolved.forwardedFor) {
+      req.headers["x-forwarded-for"] = resolved.forwardedFor;
+    }
     req.headers[iterateEgressSeenHeader] = "1";
     req.headers[iterateEgressModeHeader] = resolved.mode;
 
@@ -312,6 +387,12 @@ export async function startEgressService(options?: {
 
     req.url = resolved.pathWithQuery;
     req.headers.host = new URL(resolved.targetOrigin).host;
+    stripForwardingContextHeaders(req.headers);
+    req.headers["x-forwarded-host"] = resolved.forwardedHost;
+    req.headers["x-forwarded-proto"] = resolved.forwardedProto;
+    if (resolved.forwardedFor) {
+      req.headers["x-forwarded-for"] = resolved.forwardedFor;
+    }
     req.headers[iterateEgressSeenHeader] = "1";
     req.headers[iterateEgressModeHeader] = resolved.mode;
 

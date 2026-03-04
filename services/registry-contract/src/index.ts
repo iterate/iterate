@@ -26,6 +26,14 @@ export const ConfigEntry = z.object({
   updatedAt: z.string(),
 });
 
+export const GetPublicUrlInput = z.object({
+  internalURL: z.string().min(1),
+});
+
+export const GetPublicUrlOutput = z.object({
+  publicURL: z.string(),
+});
+
 const serviceSubRouter = createServiceSubRouterContract({
   healthSummary: "Registry service health metadata",
   sqlSummary: "Execute SQL against registry sqlite database",
@@ -33,6 +41,16 @@ const serviceSubRouter = createServiceSubRouterContract({
 
 export const registryContract = oc.router({
   ...serviceSubRouter,
+  getPublicURL: oc
+    .route({
+      method: "POST",
+      path: "/get-public-url",
+      summary: "Convert internal URL to public URL",
+      tags: ["ingress"],
+    })
+    .input(GetPublicUrlInput)
+    .output(GetPublicUrlOutput),
+
   routes: {
     upsert: oc
       .route({
@@ -188,12 +206,32 @@ const nonEmptyStringWithTrimDefault = (defaultValue: string) =>
     }, z.string().min(1).optional())
     .default(defaultValue);
 
+const optionalNonEmptyStringWithTrim = () =>
+  z.preprocess((value) => {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    return trimmed.length === 0 ? undefined : trimmed;
+  }, z.string().min(1).optional());
+
+const publicBaseUrlType = z
+  .preprocess((value) => {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    return trimmed.length === 0 ? undefined : trimmed;
+  }, z.enum(["prefix", "subdomain"]).optional())
+  .default("prefix");
+
 export const RegistryServiceEnv = z.object({
   REGISTRY_SERVICE_HOST: nonEmptyStringWithTrimDefault("0.0.0.0"),
-  REGISTRY_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(8777),
+  REGISTRY_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(17310),
   REGISTRY_DB_PATH: nonEmptyStringWithTrimDefault("/var/lib/jonasland/registry.sqlite"),
   CADDY_ADMIN_URL: nonEmptyStringWithTrimDefault("http://127.0.0.1:2019"),
   CADDY_LISTEN_ADDRESS: nonEmptyStringWithTrimDefault(":80"),
+  CADDY_CONFIG_DIR: nonEmptyStringWithTrimDefault("/home/iterate/.iterate/caddy"),
+  CADDY_ROOT_CADDYFILE: nonEmptyStringWithTrimDefault("/home/iterate/.iterate/caddy/Caddyfile"),
+  CADDY_BIN_PATH: nonEmptyStringWithTrimDefault("/usr/local/bin/caddy"),
+  ITERATE_PUBLIC_BASE_URL: optionalNonEmptyStringWithTrim(),
+  ITERATE_PUBLIC_BASE_URL_TYPE: publicBaseUrlType,
 });
 
 export type RegistryServiceEnv = z.infer<typeof RegistryServiceEnv>;
@@ -202,6 +240,8 @@ export {
   RouteRecord as routeRecordSchema,
   RouteUpsertInput as routeUpsertInputSchema,
   ConfigEntry as configEntrySchema,
+  GetPublicUrlInput as getPublicUrlInputSchema,
+  GetPublicUrlOutput as getPublicUrlOutputSchema,
   RegistryServiceEnv as registryServiceEnvSchema,
 };
 
@@ -209,7 +249,8 @@ export const registryServiceManifest = {
   name: packageJson.name,
   slug: "registry-service",
   version: packageJson.version ?? "0.0.0",
-  port: 8777,
+  port: 17310,
+  serverEntryPoint: "services/registry-service/src/server.ts",
   orpcContract: registryContract,
   envVars: RegistryServiceEnv,
 } as const;

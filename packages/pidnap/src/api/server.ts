@@ -3,12 +3,17 @@ import { implement, ORPCError } from "@orpc/server";
 import type { Manager } from "../manager.ts";
 import {
   api,
+  type HealthCheckConfig,
   type RestartingProcessInfo,
   type ManagerStatus,
   type WaitForRunningResponse,
+  type WaitForResponse,
+  type WaitCondition,
 } from "./contract.ts";
 
 const os = implement(api).$context<{ manager: Manager }>();
+
+const healthCheckConfigs = new Map<string, HealthCheckConfig>();
 
 // Helper to compute effective env (process.env merged with definition.env)
 function computeEffectiveEnv(definitionEnv?: Record<string, string>): Record<string, string> {
@@ -96,6 +101,9 @@ const listProcesses = os.processes.list.handler(async ({ context }) => {
 });
 
 const updateConfig = os.processes.updateConfig.handler(async ({ input, context }) => {
+  if (input.healthCheck) {
+    healthCheckConfigs.set(input.processSlug, input.healthCheck);
+  }
   await context.manager.updateProcessConfig(input);
   return serializeProcess(context.manager, input.processSlug);
 });
@@ -133,12 +141,27 @@ function tailFile(filePath: string, lines: number): string | undefined {
   }
 }
 
+async function pollHealthCheck(
+  url: string,
+  intervalMs: number,
+  deadlineMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+      if (response.ok) return true;
+    } catch {
+      // not ready yet
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
 /**
- * Wait for a process to reach "running" state.
- *
- * This handler automatically waits for the manager to finish initialization
- * before checking the process state. This avoids "process not found"
- * errors when called during container startup.
+ * Wait for a process to reach "running" state, optionally polling an HTTP
+ * health check URL configured via `updateConfig({ healthCheck })`.
  */
 const waitForRunning = os.processes.waitForRunning.handler(
   async ({ input, context }): Promise<WaitForRunningResponse> => {
@@ -147,28 +170,19 @@ const waitForRunning = os.processes.waitForRunning.handler(
     const includeLogs = input.includeLogs ?? true;
     const logTailLines = input.logTailLines ?? 100;
     const start = Date.now();
-
-    // Resolve target to name for log file lookup
-    const resolveTargetName = (): string | undefined => {
-      if (typeof input.target === "string") return input.target;
-      const proc = context.manager.getProcessByTarget(input.target);
-      return proc?.name;
-    };
+    const processSlug = input.processSlug;
 
     // Phase 1: Wait for manager to reach "running" state
     while (Date.now() - start < timeoutMs) {
       if (context.manager.state === "running") {
         break;
       }
-      // Manager still initializing - keep waiting
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }
 
-    // Check if we timed out waiting for manager
     if (context.manager.state !== "running") {
-      const name = resolveTargetName() ?? String(input.target);
       return {
-        name,
+        name: processSlug,
         state: "idle",
         restarts: 0,
         elapsedMs: Date.now() - start,
@@ -176,23 +190,49 @@ const waitForRunning = os.processes.waitForRunning.handler(
       };
     }
 
-    // Phase 2: Wait for the specific process to reach target state
+    // Phase 2: Wait for the specific process to reach running state
     while (Date.now() - start < timeoutMs) {
-      const proc = context.manager.getProcessByTarget(input.target);
+      const proc = context.manager.getProcessByTarget(processSlug);
 
       if (proc) {
         const state = proc.state;
         const elapsedMs = Date.now() - start;
 
-        // Terminal success states
         if (state === "running") {
+          // Phase 3: If healthCheck configured, poll until healthy
+          const hc = healthCheckConfigs.get(processSlug);
+          if (hc) {
+            const remaining = timeoutMs - elapsedMs;
+            const hcInterval = hc.intervalMs ?? 2_000;
+            const healthy = await pollHealthCheck(hc.url, hcInterval, remaining);
+            if (!healthy) {
+              const logs = includeLogs
+                ? tailFile(context.manager.getProcessLogPath(proc.name), logTailLines)
+                : undefined;
+              return {
+                name: proc.name,
+                state,
+                restarts: proc.restarts,
+                elapsedMs: Date.now() - start,
+                logs: logs
+                  ? `${logs}\n[pidnap] health check timed out: ${hc.url}`
+                  : `[pidnap] health check timed out: ${hc.url}`,
+              };
+            }
+          }
+
           const logs = includeLogs
             ? tailFile(context.manager.getProcessLogPath(proc.name), logTailLines)
             : undefined;
-          return { name: proc.name, state, restarts: proc.restarts, elapsedMs, logs };
+          return {
+            name: proc.name,
+            state,
+            restarts: proc.restarts,
+            elapsedMs: Date.now() - start,
+            logs,
+          };
         }
 
-        // Terminal failure states - return immediately with logs
         if (state === "stopped" || state === "max-restarts-reached") {
           const logs = includeLogs
             ? tailFile(context.manager.getProcessLogPath(proc.name), logTailLines)
@@ -204,16 +244,87 @@ const waitForRunning = os.processes.waitForRunning.handler(
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }
 
-    // Timeout - return current state with logs
-    const proc = context.manager.getProcessByTarget(input.target);
-    const name = proc?.name ?? resolveTargetName() ?? String(input.target);
+    // Timeout
+    const proc = context.manager.getProcessByTarget(processSlug);
     const state = proc?.state ?? "idle";
     const restarts = proc?.restarts ?? 0;
     const logs = includeLogs
-      ? tailFile(context.manager.getProcessLogPath(name), logTailLines)
+      ? tailFile(context.manager.getProcessLogPath(processSlug), logTailLines)
       : undefined;
 
-    return { name, state, restarts, elapsedMs: timeoutMs, logs };
+    return { name: processSlug, state, restarts, elapsedMs: timeoutMs, logs };
+  },
+);
+
+async function checkHealthy(processSlug: string): Promise<boolean> {
+  const hc = healthCheckConfigs.get(processSlug);
+  if (!hc) return true;
+  try {
+    const response = await fetch(hc.url, { signal: AbortSignal.timeout(5_000) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function conditionMet(
+  manager: Manager,
+  slug: string,
+  condition: WaitCondition,
+  healthy: boolean,
+): boolean {
+  const proc = manager.getProcessByTarget(slug);
+  const state = proc?.state ?? "idle";
+  if (condition === "healthy") return state === "running" && healthy;
+  return state === condition;
+}
+
+const waitFor = os.processes.waitFor.handler(
+  async ({ input, context }): Promise<WaitForResponse> => {
+    const timeoutMs = input.timeoutMs ?? 30_000;
+    const start = Date.now();
+    const slugs = Object.keys(input.processes);
+    const POLL_INTERVAL = 500;
+
+    while (Date.now() - start < timeoutMs) {
+      if (context.manager.state === "running") break;
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+    }
+
+    if (context.manager.state !== "running") {
+      const results: WaitForResponse["results"] = {};
+      for (const slug of slugs) {
+        results[slug] = { state: "idle", healthy: false, elapsedMs: Date.now() - start };
+      }
+      return { results, allMet: false };
+    }
+
+    while (Date.now() - start < timeoutMs) {
+      const results: WaitForResponse["results"] = {};
+      let allMet = true;
+
+      for (const slug of slugs) {
+        const condition = input.processes[slug]!;
+        const proc = context.manager.getProcessByTarget(slug);
+        const state = proc?.state ?? "idle";
+        const isRunning = state === "running";
+        const healthy = isRunning ? await checkHealthy(slug) : false;
+        const met = conditionMet(context.manager, slug, condition, healthy);
+        results[slug] = { state, healthy, elapsedMs: Date.now() - start };
+        if (!met) allMet = false;
+      }
+
+      if (allMet) return { results, allMet: true };
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+    }
+
+    const results: WaitForResponse["results"] = {};
+    for (const slug of slugs) {
+      const proc = context.manager.getProcessByTarget(slug);
+      const state = proc?.state ?? "idle";
+      results[slug] = { state, healthy: false, elapsedMs: Date.now() - start };
+    }
+    return { results, allMet: false };
   },
 );
 
@@ -236,5 +347,6 @@ export const router = os.router({
     restart: restartProcess,
     delete: deleteProcess,
     waitForRunning: waitForRunning,
+    waitFor: waitFor,
   },
 });

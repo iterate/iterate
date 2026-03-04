@@ -18,5 +18,6 @@
     "spec/**/*.ts",
     "vitest.config.ts",
     "playwright.config.ts"
-  ]
+  ],
+  "exclude": ["tests/old/**", "test-helpers/old/**", "spec/old/**", "old/**"]
 }

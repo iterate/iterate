@@ -37,12 +37,15 @@ const jonaslandPaths = [
   "jonasland/e2e/**",
   "jonasland/sandbox/**",
   "services/events-service/**",
-  "services/orders-service/**",
+  "services/orders/**",
+  "services/example/**",
   "services/docs-service/**",
   "services/outerbase-service/**",
   "services/home-service/**",
   "services/egress-service/**",
   "services/registry-service/**",
+  "services/orders-contract/**",
+  "services/example-contract/**",
   "packages/pidnap/**",
 ] as const;
 

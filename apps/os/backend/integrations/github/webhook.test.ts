@@ -196,7 +196,7 @@ describe("GitHub Webhook Handler", () => {
         expected: { received: true },
       },
       {
-        name: "acknowledges workflow_run events that don't match lifecycle handlers",
+        name: "acknowledges workflow_run events that don't match handlers",
         appStage: "prd",
         event: "workflow_run",
         payload: { ...validWorkflowRunPayload, action: "requested" },

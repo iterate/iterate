@@ -326,7 +326,7 @@ const nonEmptyStringWithTrimDefault = (defaultValue: string) =>
     .default(defaultValue);
 
 export const EventsServiceEnv = z.object({
-  PORT: z.coerce.number().int().min(1).max(65535).default(17301),
+  PORT: z.coerce.number().int().min(1).max(65535).default(17320),
   DATABASE_URL: nonEmptyStringWithTrimDefault("events.sqlite"),
   ITERATE_EVENTS_WS_IDLE_DISCONNECT_MS: z.coerce.number().int().min(0).default(30_000),
 });
@@ -336,7 +336,8 @@ export const serviceManifest = {
   name: packageJson.name,
   slug: "events",
   version: packageJson.version,
-  port: 17301,
+  port: 17320,
+  serverEntryPoint: "services/events-service/src/server.ts",
   orpcContract: eventBusContract,
   envVars: EventsServiceEnv,
   // Wildcard ownership is intentionally simple for now. We expect a dedicated design

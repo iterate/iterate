@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
@@ -29,7 +30,7 @@ import {
   type RequestLogger,
 } from "evlog";
 import { createOTLPDrain } from "evlog/otlp";
-import { type Plugin } from "vite";
+import type { Plugin } from "vite";
 import { z } from "zod/v4";
 
 type RuntimeGlobal = typeof globalThis & {
@@ -81,8 +82,30 @@ export const ServiceSqlResult = z.object({
   lastInsertRowid: z.number().int().optional(),
 });
 
+export const ServiceDebugOutput = z.object({
+  pid: z.number().int().nonnegative(),
+  ppid: z.number().int().nonnegative(),
+  uptimeSec: z.number().nonnegative(),
+  nodeVersion: z.string(),
+  platform: z.string(),
+  arch: z.string(),
+  hostname: z.string(),
+  cwd: z.string(),
+  execPath: z.string(),
+  argv: z.array(z.string()),
+  env: z.record(z.string(), z.string().nullable()),
+  memoryUsage: z.object({
+    rss: z.number().int().nonnegative(),
+    heapTotal: z.number().int().nonnegative(),
+    heapUsed: z.number().int().nonnegative(),
+    external: z.number().int().nonnegative(),
+    arrayBuffers: z.number().int().nonnegative(),
+  }),
+});
+
 export type ServiceSqlInput = z.infer<typeof ServiceSqlInput>;
 export type ServiceSqlResult = z.infer<typeof ServiceSqlResult>;
+export type ServiceDebugOutput = z.infer<typeof ServiceDebugOutput>;
 
 export interface SqlResultSet {
   columns: string[];
@@ -96,6 +119,7 @@ export function createServiceSubRouterContract(options?: {
   tag?: string;
   healthSummary?: string;
   sqlSummary?: string;
+  debugSummary?: string;
 }) {
   const tag = options?.tag ?? "service";
 
@@ -120,6 +144,16 @@ export function createServiceSubRouterContract(options?: {
         })
         .input(ServiceSqlInput)
         .output(ServiceSqlResult),
+
+      debug: oc
+        .route({
+          method: "GET",
+          path: "/service/debug",
+          summary: options?.debugSummary ?? "Service runtime debug details",
+          tags: [tag],
+        })
+        .input(z.object({}).optional().default({}))
+        .output(ServiceDebugOutput),
     },
   } as const;
 }
@@ -139,6 +173,11 @@ type ServiceSubRouterBuilder = {
           input: ServiceSqlInput;
           context: ServiceContext;
         }) => Promise<ServiceSqlResult>,
+      ) => unknown;
+    };
+    debug: {
+      handler: (
+        handler: (args: { context: ServiceContext }) => Promise<ServiceDebugOutput>,
       ) => unknown;
     };
   };
@@ -185,7 +224,39 @@ export function createServiceSubRouterHandlers<TBuilder extends ServiceSubRouter
     return result;
   });
 
-  return { health, sql };
+  const debug = builder.service.debug.handler(async ({ context }) => {
+    infoFromContext(context, `${logPrefix}.debug`, {
+      service: options.manifest.name,
+      request_id: context.requestId,
+    });
+    const env: Record<string, string | null> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      env[key] = value ?? null;
+    }
+    const memoryUsage = process.memoryUsage();
+    return {
+      pid: process.pid,
+      ppid: process.ppid,
+      uptimeSec: process.uptime(),
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      hostname: hostname(),
+      cwd: process.cwd(),
+      execPath: process.execPath,
+      argv: process.argv,
+      env,
+      memoryUsage: {
+        rss: memoryUsage.rss,
+        heapTotal: memoryUsage.heapTotal,
+        heapUsed: memoryUsage.heapUsed,
+        external: memoryUsage.external,
+        arrayBuffers: memoryUsage.arrayBuffers,
+      },
+    };
+  });
+
+  return { health, sql, debug };
 }
 
 function resolveTraceExporterUrl() {
@@ -629,6 +700,14 @@ export interface ServiceManifestLike<TContract extends AnyContractRouter = AnyCo
   orpcContract: TContract;
 }
 
+export function localHostForService(params: { slug: string }): string {
+  const normalized = params.slug.trim().toLowerCase();
+  const base = normalized.endsWith("-service")
+    ? normalized.slice(0, -"-service".length)
+    : normalized;
+  return `${base}.iterate.localhost`;
+}
+
 export type RpcWebSocket = LinkWebsocketClientOptions["websocket"];
 
 export interface CreateOrpcRpcServiceClientOptions<TContract extends AnyContractRouter> {
@@ -727,4 +806,88 @@ export function createOrpcRpcWebSocketServiceClient<TContract extends AnyContrac
 ): ContractRouterClient<TContract> {
   const link = new WebSocketRPCLink({ websocket: options.websocket });
   return createORPCClient(link);
+}
+
+const REGISTRY_BASE_URL = "http://registry.iterate.localhost";
+
+export async function registerServiceWithRegistry(params: {
+  manifest: ServiceManifestLike & { slug: string };
+  port: number;
+  metadata?: { openapiPath?: string; title?: string };
+  tags?: string[];
+}): Promise<void> {
+  const { createRegistryClient } = await import("@iterate-com/registry-service/client");
+  const registryClient = createRegistryClient({ url: `${REGISTRY_BASE_URL}/orpc` });
+  const host = localHostForService({ slug: params.manifest.slug });
+  const target = `127.0.0.1:${String(params.port)}`;
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      const result = await registryClient.routes.upsert({
+        host,
+        target,
+        ...(params.metadata ? { metadata: params.metadata } : {}),
+        ...(params.tags ? { tags: params.tags } : {}),
+      });
+
+      serviceLog.info({
+        event: "service.registry.registered",
+        host,
+        target,
+        route_count: result.routeCount,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  }
+
+  serviceLog.warn({
+    event: "service.registry.register_failed",
+    host,
+    message: lastError instanceof Error ? lastError.message : String(lastError),
+  });
+}
+
+export function createLocalServiceOrpcClient<TContract extends AnyContractRouter>(params: {
+  manifest: ServiceManifestLike<TContract>;
+  headers?: RPCLinkOptions<any>["headers"];
+}): ContractRouterClient<TContract> {
+  const url = `http://${localHostForService({ slug: params.manifest.slug })}/orpc`;
+  const link = new RPCLink({
+    url,
+    method: inferRPCMethodFromContractRouter(params.manifest.orpcContract),
+    ...(params.headers ? { headers: params.headers } : {}),
+  });
+  return createORPCClient(link);
+}
+
+export interface ServiceManifestWithEntryPoint<
+  TContract extends AnyContractRouter = AnyContractRouter,
+> extends ServiceManifestLike<TContract> {
+  serverEntryPoint: string;
+}
+
+export function serviceManifestToPidnapConfig(params: {
+  manifest: ServiceManifestWithEntryPoint;
+  env?: Record<string, string>;
+}) {
+  const { manifest } = params;
+  const host = localHostForService({ slug: manifest.slug });
+  return {
+    processSlug: manifest.slug,
+    definition: {
+      command: "tsx",
+      args: [manifest.serverEntryPoint],
+      env: { PORT: String(manifest.port), ...params.env },
+    },
+    tags: ["on-demand"],
+    restartImmediately: true,
+    healthCheck: {
+      url: `http://${host}/api/service/health`,
+      intervalMs: 2_000,
+    },
+  };
 }

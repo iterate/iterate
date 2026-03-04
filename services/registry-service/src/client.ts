@@ -13,6 +13,7 @@ export interface ConfigEntry {
 }
 
 export interface RegistryClient {
+  readonly getPublicURL: (input: { internalURL: string }) => Promise<{ publicURL: string }>;
   readonly service: {
     health: (_input: Record<string, never>) => Promise<{
       ok: true;
@@ -112,6 +113,16 @@ export function createRegistryClient(params?: {
   };
 
   return {
+    getPublicURL: async (input) =>
+      await requestJson(
+        "/orpc/getPublicURL",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ json: input }),
+        },
+        { orpc: true },
+      ),
     service: {
       health: async () => await requestJson("/orpc/service/health", undefined, { orpc: true }),
       sql: async (input) =>

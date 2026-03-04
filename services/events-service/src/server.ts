@@ -9,10 +9,8 @@ import { ROOT_CONTEXT, context as otelContext, propagation } from "@opentelemetr
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { serviceManifest } from "@iterate-com/events-contract";
-import { createRegistryClient } from "@iterate-com/registry-service/client";
 import {
   createOrpcErrorInterceptor,
-  createHealthzHandler,
   createServiceObservabilityHandler,
   createServiceRequestLogger,
   extractIncomingTraceContext,
@@ -20,6 +18,7 @@ import {
   getRequestIdHeader,
   initializeServiceEvlog,
   initializeServiceOtel,
+  registerServiceWithRegistry,
   serviceLog,
   type ServiceRequestLogger,
 } from "@iterate-com/shared/jonasland";
@@ -75,11 +74,7 @@ const viteFsAllow = [
   "/opt/packages/ui",
   fileURLToPath(new URL("../../../packages", import.meta.url)),
 ];
-const env = serviceManifest.envVars.parse(process.env);
-const port = env.PORT;
-const servicesOrpcUrl = process.env.SERVICES_ORPC_URL?.trim() || "http://127.0.0.1:8777/orpc";
-const serviceRegistryHost = "events.iterate.localhost";
-const serviceRegistryOpenApiPath = "/api/openapi.json";
+const port = Number(process.env.PORT) || serviceManifest.port;
 const PACKAGE_FS_PREFIX = "/@fs/opt/packages/";
 const PACKAGE_ROOT = "/opt/packages/";
 
@@ -95,49 +90,6 @@ function contentTypeForPath(filePath: string): string {
   if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
   if (ext === ".webp") return "image/webp";
   return "application/octet-stream";
-}
-
-async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function registerOpenApiRoute(): Promise<void> {
-  const servicesClient = createRegistryClient({ url: servicesOrpcUrl });
-  const routeTarget = `127.0.0.1:${String(port)}`;
-
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    try {
-      const result = await servicesClient.routes.upsert({
-        host: serviceRegistryHost,
-        target: routeTarget,
-        metadata: {
-          openapiPath: serviceRegistryOpenApiPath,
-          title: "Events Service",
-        },
-        tags: ["openapi", "events"],
-      });
-
-      serviceLog.info({
-        event: "service.registry.registered",
-        service: serviceName,
-        host: serviceRegistryHost,
-        target: routeTarget,
-        route_count: result.routeCount,
-      });
-      return;
-    } catch (error) {
-      lastError = error;
-      await delay(1_000);
-    }
-  }
-
-  serviceLog.warn({
-    event: "service.registry.register_failed",
-    service: serviceName,
-    host: serviceRegistryHost,
-    message: lastError instanceof Error ? lastError.message : String(lastError),
-  });
 }
 
 initializeServiceOtel(serviceName);
@@ -228,7 +180,6 @@ app.use("*", async (c, next) => {
   }
 });
 
-app.get("/healthz", createHealthzHandler());
 app.get("/api/observability", createServiceObservabilityHandler(getEventsDbRuntimeConfig));
 
 app.get("/", async (c) => {
@@ -384,7 +335,12 @@ server.listen(port, "0.0.0.0", () => {
     otel: getOtelRuntimeConfig(),
   });
 
-  void registerOpenApiRoute();
+  void registerServiceWithRegistry({
+    manifest: serviceManifest,
+    port,
+    metadata: { openapiPath: "/api/openapi.json", title: "Events Service" },
+    tags: ["openapi", "events"],
+  });
 });
 
 const shutdown = async () => {

@@ -7,6 +7,7 @@ import {
   getOtelRuntimeConfig,
   initializeServiceEvlog,
   initializeServiceOtel,
+  registerServiceWithRegistry,
   serviceLog,
 } from "@iterate-com/shared/jonasland";
 import { z } from "zod/v4";
@@ -40,7 +41,6 @@ const nonEmptyStringWithTrimDefault = (defaultValue: string) =>
 const DocsServiceEnv = z.object({
   DOCS_SERVICE_HOST: nonEmptyStringWithTrimDefault("0.0.0.0"),
   DOCS_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(19050),
-  SERVICES_ORPC_URL: nonEmptyStringWithTrimDefault("http://127.0.0.1:8777/orpc"),
 });
 
 type DocsServiceEnv = z.infer<typeof DocsServiceEnv>;
@@ -161,12 +161,13 @@ function renderScalarDocsHtml(sources: OpenApiSource[]): string {
 </html>`;
 }
 
+const REGISTRY_ORPC_URL = "http://registry.iterate.localhost/orpc";
+
 async function listOpenApiSources(params: {
-  servicesOrpcUrl: string;
   protocol: "http" | "https";
   ingressPort?: string;
 }): Promise<OpenApiSource[]> {
-  const servicesClient = createRegistryClient({ url: params.servicesOrpcUrl });
+  const servicesClient = createRegistryClient({ url: REGISTRY_ORPC_URL });
   const routes = await servicesClient.routes.list({});
 
   const docsRoutes = routes.routes
@@ -241,7 +242,6 @@ export async function startDocsService(options?: {
           const protocol = getProtocol(req);
           const ingressPort = getIngressPort(req, protocol);
           const sources = await listOpenApiSources({
-            servicesOrpcUrl: env.SERVICES_ORPC_URL,
             protocol,
             ingressPort,
           });
@@ -271,7 +271,6 @@ export async function startDocsService(options?: {
         const protocol = getProtocol(req);
         const ingressPort = getIngressPort(req, protocol);
         const sources = await listOpenApiSources({
-          servicesOrpcUrl: env.SERVICES_ORPC_URL,
           protocol,
           ingressPort,
         });
@@ -311,6 +310,13 @@ export async function startDocsService(options?: {
     docs_path: "/",
     openapi_sources_path: "/api/openapi-sources",
     otel: getOtelRuntimeConfig(),
+  });
+
+  void registerServiceWithRegistry({
+    manifest: { slug: "docs-service", port, orpcContract: {} as any },
+    port,
+    metadata: { title: "Docs Service" },
+    tags: ["docs"],
   });
 
   return {

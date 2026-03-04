@@ -4,13 +4,17 @@ import { RPCHandler } from "@orpc/server/fetch";
 import { RequestHeadersPlugin, type RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { typeid } from "typeid-js";
 import { z } from "zod/v4";
-import { normalizePattern, normalizeRouteId, RouteInputError } from "./route-conflicts.ts";
+import {
+  MAX_PATTERN_LENGTH,
+  normalizePattern,
+  normalizeRouteId,
+  RouteInputError,
+} from "./route-conflicts.ts";
 import {
   deleteRouteById,
   deleteRoutePatternsByRouteIdStmt,
   insertRoutePatternStmt,
   insertRouteStmt,
-  selectResolvedRouteByHost,
   selectRouteById,
   selectRoutePatterns,
   selectRoutePatternsByRouteId,
@@ -64,6 +68,11 @@ type RoutePatternRow = {
   updated_at: string;
 };
 
+type ForwardedProto = "http" | "https" | "ws" | "wss";
+
+const forwardingContextHeaderPrefixes = ["x-forwarded-"] as const;
+const forwardingContextHeaderNames = new Set(["forwarded"]);
+
 const parsedEnvCache = new WeakMap<RawProxyWorkerEnv, ProxyWorkerEnv>();
 
 function getParsedEnv(env: RawProxyWorkerEnv): ProxyWorkerEnv {
@@ -114,6 +123,88 @@ function normalizeInboundHost(rawHost: string | null): string | null {
     }
   }
   return host.replace(/\.$/, "") || null;
+}
+
+function firstHeaderToken(rawHeader: string | null | undefined): string | null {
+  if (!rawHeader) return null;
+  const token = rawHeader.split(",")[0]?.trim() ?? "";
+  return token.length > 0 ? token : null;
+}
+
+function isForwardingContextHeader(name: string): boolean {
+  const lowered = name.toLowerCase();
+  if (forwardingContextHeaderNames.has(lowered)) return true;
+  if (forwardingContextHeaderPrefixes.some((prefix) => lowered.startsWith(prefix))) return true;
+  return lowered.startsWith("x-") && lowered.includes("-original-");
+}
+
+function stripForwardingContextHeaders(headers: Headers): void {
+  for (const headerName of [...headers.keys()]) {
+    if (isForwardingContextHeader(headerName)) {
+      headers.delete(headerName);
+    }
+  }
+}
+
+function normalizeForwardedProto(proto: string | undefined, request: Request): ForwardedProto {
+  const normalized = proto?.trim().toLowerCase();
+  const isWebsocket = request.headers.get("upgrade")?.toLowerCase() === "websocket";
+  const requestProto = new URL(request.url).protocol === "https:" ? "https" : "http";
+
+  if (isWebsocket) {
+    if (normalized === "wss" || normalized === "https") return "wss";
+    if (normalized === "ws" || normalized === "http") return "ws";
+    return requestProto === "https" ? "wss" : "ws";
+  }
+
+  if (normalized === "https" || normalized === "wss") return "https";
+  if (normalized === "http" || normalized === "ws") return "http";
+  return requestProto;
+}
+
+function resolveForwardingContext(
+  request: Request,
+  targetUrl: URL,
+): {
+  host: string;
+  proto: ForwardedProto;
+  forValue: string | null;
+} {
+  const host =
+    firstHeaderToken(request.headers.get("x-forwarded-host")) ??
+    firstHeaderToken(request.headers.get("host")) ??
+    targetUrl.host;
+  const proto = normalizeForwardedProto(
+    firstHeaderToken(request.headers.get("x-forwarded-proto")) ?? undefined,
+    request,
+  );
+  const forValue =
+    firstHeaderToken(request.headers.get("x-forwarded-for")) ??
+    firstHeaderToken(request.headers.get("cf-connecting-ip"));
+
+  return {
+    host,
+    proto,
+    forValue,
+  };
+}
+
+function hostMatchesPattern(host: string, pattern: string): boolean {
+  if (pattern.length > MAX_PATTERN_LENGTH) return false;
+  const regexPattern = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${regexPattern}$`).test(host);
+}
+
+function comparePatternSpecificity(a: RoutePatternRow, b: RoutePatternRow): number {
+  const aHasWildcard = a.pattern.includes("*");
+  const bHasWildcard = b.pattern.includes("*");
+  if (aHasWildcard !== bHasWildcard) {
+    return aHasWildcard ? 1 : -1;
+  }
+
+  const lengthDelta = b.pattern.length - a.pattern.length;
+  if (lengthDelta !== 0) return lengthDelta;
+  return a.id - b.id;
 }
 
 function parseTargetUrl(target: string): URL {
@@ -315,15 +406,21 @@ export async function resolveRouteByHost(
   const host = normalizeInboundHost(rawHost);
   if (!host) return null;
 
-  const winner = await selectResolvedRouteByHost(db, { host });
-  if (!winner) return null;
+  const patterns = await selectRoutePatterns(db);
+  const winnerPattern = patterns
+    .filter((row) => hostMatchesPattern(host, row.pattern))
+    .sort(comparePatternSpecificity)[0];
+  if (!winnerPattern) return null;
+
+  const route = await selectRouteById(db, { routeId: winnerPattern.route_id });
+  if (!route) return null;
 
   return {
-    routeId: winner.routeId,
-    pattern: winner.pattern,
-    targetUrl: parseTargetUrl(winner.target),
-    headers: parseJsonObject(winner.headers, "headers") as RouteHeaders,
-    metadata: parseJsonObject(winner.metadata, "metadata"),
+    routeId: winnerPattern.route_id,
+    pattern: winnerPattern.pattern,
+    targetUrl: parseTargetUrl(winnerPattern.target),
+    headers: parseJsonObject(winnerPattern.headers, "headers") as RouteHeaders,
+    metadata: parseJsonObject(route.metadata, "metadata"),
   };
 }
 
@@ -349,15 +446,22 @@ export function createUpstreamHeaders(
   targetUrl: URL,
 ): Headers {
   const headers = new Headers(request.headers);
+  const forwardingContext = resolveForwardingContext(request, targetUrl);
+  stripForwardingContextHeaders(headers);
+
   const explicitHostHeader = hasExplicitHostHeader(routeHeaders);
   if (!explicitHostHeader) {
-    const inboundHost = request.headers.get("host")?.toLowerCase();
-    if (inboundHost && inboundHost !== targetUrl.host.toLowerCase()) {
-      headers.delete("host");
-    }
+    headers.delete("host");
   }
   for (const [name, value] of Object.entries(routeHeaders)) {
     headers.set(name, value);
+  }
+
+  stripForwardingContextHeaders(headers);
+  headers.set("x-forwarded-host", forwardingContext.host);
+  headers.set("x-forwarded-proto", forwardingContext.proto);
+  if (forwardingContext.forValue) {
+    headers.set("x-forwarded-for", forwardingContext.forValue);
   }
 
   return headers;
@@ -393,7 +497,24 @@ export async function proxyRequest(request: Request, env: ProxyWorkerEnv): Promi
     return jsonError(502, "proxy_error");
   }
 
-  return upstreamResponse;
+  const responseHeaders = new Headers(upstreamResponse.headers);
+  responseHeaders.set("x-cf-proxy-route", resolved.routeId);
+
+  if (upstreamResponse.status === 101) {
+    const init = {
+      status: upstreamResponse.status,
+      statusText: upstreamResponse.statusText,
+      headers: responseHeaders,
+      webSocket: (upstreamResponse as Response & { webSocket?: WebSocket | null }).webSocket,
+    };
+    return new Response(null, init as ResponseInit);
+  }
+
+  return new Response(upstreamResponse.body, {
+    status: upstreamResponse.status,
+    statusText: upstreamResponse.statusText,
+    headers: responseHeaders,
+  });
 }
 
 type ORPCContext = RequestHeadersPluginContext & {

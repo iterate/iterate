@@ -19,7 +19,7 @@ on:
       - .github/workflows/cf-ingress-proxy-worker-live-e2e.yml
   workflow_dispatch: {}
 jobs:
-  deploy-test-teardown:
+  deploy-test:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -47,61 +47,26 @@ jobs:
         run: doppler setup --config stg --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Set ephemeral worker name
-        run: |-
-          set -euo pipefail
-          echo "WORKER_NAME=ingress-proxy-pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_ENV"
-      - id: shared-secret
-        name: Generate shared secret
-        run: |-
-          set -euo pipefail
-          shared_secret="$(openssl rand -hex 32)"
-          echo "::add-mask::$shared_secret"
-          echo "shared_secret=$shared_secret" >> "$GITHUB_OUTPUT"
-      - id: deploy
-        name: Deploy ephemeral worker with Alchemy
+      - name: Deploy shared ci-ingress worker
         working-directory: apps/cf-ingress-proxy-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          INGRESS_PROXY_API_TOKEN: ${{ steps.shared-secret.outputs.shared_secret }}
+          WORKER_NAME: ci-ingress
+          INGRESS_PROXY_HOSTNAME: ci-ingress.iterate.com
         run: |-
           set -euo pipefail
-          deploy_log="$(mktemp)"
-          doppler run --config stg -- sh -c 'WORKER_NAME="$WORKER_NAME" INGRESS_PROXY_API_TOKEN="$INGRESS_PROXY_API_TOKEN" pnpm exec tsx ./alchemy.run.ts cli deploy --stage ci' | tee "$deploy_log"
-          base_url="$(grep -Eo 'https://[^[:space:]]+' "$deploy_log" | tail -n 1)"
-          base_url="${base_url%/}"
-          if [ -z "$base_url" ]; then
-            echo "Failed to parse deployed worker URL from deploy logs"
-            exit 1
-          fi
-          echo "base_url=$base_url" >> "$GITHUB_OUTPUT"
-          echo "Deployed ephemeral worker at: $base_url"
-      - name: Run live Vitest E2E against ephemeral deployment
+          doppler run --config stg -- sh -c 'pnpm run deploy:stg'
+      - name: Run live Vitest E2E against ci-ingress
         working-directory: apps/cf-ingress-proxy-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          INGRESS_PROXY_E2E_BASE_URL: ${{ steps.deploy.outputs.base_url }}
-          INGRESS_PROXY_E2E_API_TOKEN: ${{ steps.shared-secret.outputs.shared_secret }}
         run: |-
           set -euo pipefail
           doppler run --config stg -- sh -c 'pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live'
-      - name: Teardown ephemeral worker
-        if: always()
-        working-directory: apps/cf-ingress-proxy-worker
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          INGRESS_PROXY_API_TOKEN: ${{ steps.shared-secret.outputs.shared_secret }}
-        run: |-
-          set -euo pipefail
-          if [ -z "${WORKER_NAME:-}" ]; then
-            echo "WORKER_NAME not set; skipping teardown"
-            exit 0
-          fi
-          doppler run --config stg -- sh -c 'WORKER_NAME="$WORKER_NAME" INGRESS_PROXY_API_TOKEN="$INGRESS_PROXY_API_TOKEN" pnpm exec tsx ./alchemy.run.ts cli --destroy --stage ci' || echo "Teardown command failed; check Alchemy state manually for $WORKER_NAME"
   deploy-prd:
     if: github.event_name == 'push'
     needs:
-      - deploy-test-teardown
+      - deploy-test
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
@@ -129,4 +94,6 @@ jobs:
         working-directory: apps/cf-ingress-proxy-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          WORKER_NAME: ingress-proxy
+          INGRESS_PROXY_HOSTNAME: ingress.iterate.com
         run: pnpm run deploy:prd
