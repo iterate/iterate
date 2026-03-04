@@ -25,7 +25,7 @@ const baseProcedures = {
     });
 
     setTimeout(() => {
-      console.log("[restartDaemon] Exiting for s6 restart...");
+      console.log("[restartDaemon] Exiting for pidnap restart...");
       process.exit(0);
     }, 100);
 
