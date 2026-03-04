@@ -118,8 +118,10 @@ export class RestartingProcess {
   }
 
   get isHealthy(): boolean {
-    // For now, healthy means running (no health check implemented yet)
-    return this._state === "running";
+    // Healthy means the process has actually been spawned and is running.
+    // _hasStarted is set after lazyProcess.start() completes (actual OS spawn),
+    // not when startProcess() is called synchronously.
+    return this._hasStarted && this._state === "running";
   }
 
   /**
@@ -134,9 +136,18 @@ export class RestartingProcess {
   private setState(newState: RestartingProcessState): void {
     if (this._state === newState) return;
     this._state = newState;
+    this.notifyStateListeners();
+  }
+
+  /**
+   * Notify all state listeners of the current state.
+   * Called by setState on state transitions, and also after _hasStarted
+   * flips to true so dependents can re-evaluate their conditions.
+   */
+  private notifyStateListeners(): void {
     for (const listener of this.stateChangeListeners) {
       try {
-        listener(newState);
+        listener(this._state);
       } catch (err) {
         this.logger.error(`State change listener error:`, err);
       }
@@ -273,7 +284,6 @@ export class RestartingProcess {
 
   private startProcess(): void {
     this.lastStartTime = Date.now();
-    this._hasStarted = true;
     this.setState("running");
 
     this.lazyProcess
@@ -281,6 +291,11 @@ export class RestartingProcess {
       .then(async () => {
         if (this.stopRequested) return;
         await this.lazyProcess.start();
+        // Mark as started only after the OS process is actually spawned.
+        // This ensures dependents using "started" or "healthy" conditions
+        // don't begin until the dependency is truly running.
+        this._hasStarted = true;
+        this.notifyStateListeners();
         return this.lazyProcess.waitForExit();
       })
       .then((exitState) => {
