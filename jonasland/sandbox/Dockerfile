@@ -51,7 +51,11 @@ RUN case "${TARGETARCH}" in \
 
 RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
 
-RUN npm install -g @mariozechner/pi-coding-agent@${PI_CODING_AGENT_VERSION} && npm cache clean --force
+RUN npm install -g \
+    @mariozechner/pi-coding-agent@${PI_CODING_AGENT_VERSION} \
+    tsx \
+    serve \
+    && npm cache clean --force
 
 COPY --from=openobserve /openobserve /usr/local/bin/openobserve
 COPY --from=otelcol /otelcol-contrib /usr/local/bin/otelcol-contrib
