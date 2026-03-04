@@ -1,9 +1,11 @@
 import { z } from "zod/v4";
 import { publicProcedure } from "../orpc/init.ts";
+import * as path from "node:path";
+import * as fs from "node:fs";
 
 const DAEMON_PORT = process.env.PORT ?? "3001";
 const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
-const AGENT_PATH = "/system/pull-iterate-iterate";
+const getAgentPath = (suffix: string) => "/system/pull-iterate-iterate/" + suffix;
 
 async function sendPromptToAgent(agentPath: string, message: string): Promise<void> {
   const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agentPath}`, {
@@ -29,18 +31,21 @@ export const pullIterateIterateRouter = {
     .handler(async ({ input }) => {
       const ref = input.ref ?? "main";
 
+      let repoRoot = import.meta.dirname;
+      while (repoRoot && !fs.existsSync(path.join(repoRoot, "pnpm-workspace.yaml"))) {
+        repoRoot = path.dirname(repoRoot);
+        if (repoRoot === "/") break;
+      }
+      const skillPath = path.join(repoRoot, ".opencode/skills/pull-iterate-iterate/SKILL.md");
       const prompt = [
-        `Use the skill at .opencode/skills/pull-iterate-iterate/SKILL.md to pull the iterate/iterate repo to ref: ${ref}`,
+        `Use the skill at ${skillPath} to pull the iterate/iterate repo to ref: ${ref}`,
         "",
         "Follow every step in the skill. Do not skip the process restarts at the end.",
       ].join("\n");
 
-      await sendPromptToAgent(AGENT_PATH, prompt);
+      const agentPath = getAgentPath(`${ref}/${Date.now()}`);
+      await sendPromptToAgent(agentPath, prompt);
 
-      return {
-        triggered: true,
-        ref,
-        agentPath: AGENT_PATH,
-      };
+      return { triggered: true, ref, agentPath };
     }),
 };
