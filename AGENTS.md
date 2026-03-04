@@ -44,11 +44,15 @@ Don't write if statements, ternaries, or other conditonals in tests. You should 
 
 You can use the `playwriter-spec` skill to run a spec dynamically when the feature or the spec itself are in flux and not yet validated. Doing this before running via playwright directly can result in a much faster feedback loop, and allow you to adapt the spec/the product as you step through the test.
 
+## Coding style
+
+When you're writing helpers/utilities/library functions, you have to try to LIMIT complexity and optionality. If you have a function that is only called once then DON'T give it any optional properties. Make the ones that are actually used required, and drop all the others. That makes call sites more explicit. If there are multiple parameters of the same type, use "options-bags" rather than long lists of positional parameters which can be accidentally flipped.
+
 ## Writing React
 
-Avoid useEffect and useState wherever possible. Instead, use `@tanstack/react-query` for any asynchronous work or side-effects.
+Avoid useEffect and useState wherever possible. Instead, use `@tanstack/react-query` for any asynchronous work or side-effects. Only use `useSuspenseQuery` sparingly - if you are sure that the *whole component* is meaningless without the data. If you can use `useQuery` instead, with an isPending/null-check, that's usually better.
 
-Mobile-first is mandatory. Design for 375px, expand to desktop.
+Design for columnar 375px for mobile support, implement desktop as a view which happens to fit sidebar(s) + main content at the same time. This way we don't have to design multiple variants.
 
 **Layout:**
 
