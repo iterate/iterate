@@ -133,6 +133,7 @@ async function createArchilDisk(
           bucketEndpoint: env.ARCHIL_R2_ENDPOINT,
           accessKeyId: env.ARCHIL_R2_ACCESS_KEY_ID,
           secretAccessKey: env.ARCHIL_R2_SECRET_ACCESS_KEY,
+          bucketPrefix: `projects/${params.projectSlug}/`,
         },
       ],
       authMethods: [authMethod],
@@ -213,7 +214,8 @@ async function addTokenToExistingDisk(
 }
 
 /**
- * Delete an Archil disk (cleanup when project is deleted).
+ * Create an Archil disk backed by R2.
+ * Each project gets its own prefix in a shared R2 bucket.
  */
 export async function deleteArchilDisk(env: CloudflareEnv, diskId: string): Promise<void> {
   const baseUrl = `https://control.green.${env.ARCHIL_REGION}.aws.prod.archil.com`;
