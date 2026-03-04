@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Plugin, ActionContext } from "../playwright-plugin.ts";
 import { adjustError } from "../playwright-plugin.ts";
+import { expect as playwrightExpect } from "@playwright/test";
 
 export type LlmRecoverOptions = {
   /** Max recovery attempts per failing action. Default: 3 */
@@ -17,6 +18,7 @@ export type LlmRecoverOptions = {
   maxHtmlLength?: number;
   /** Override the LLM call for testing. Return JS function body string, or null to rethrow. */
   requestRecoveryCode?: RequestRecoveryCodeFn;
+  expect?: typeof playwrightExpect;
 };
 
 export type AttemptRecord = {
@@ -41,7 +43,7 @@ export type RecoveryContext = {
 export type RequestRecoveryCodeFn = (
   context: RecoveryContext,
   attemptHistory: AttemptRecord[],
-) => Promise<string | null>;
+) => Promise<{ code: string | null; description: string } | null>;
 
 /**
  * LLM-powered recovery plugin. When a locator action fails, captures context
@@ -55,6 +57,7 @@ export type RequestRecoveryCodeFn = (
 const pagesInRecovery = new WeakSet<object>();
 
 export const llmRecover = (options: LlmRecoverOptions = {}): Plugin => {
+  const expect = options.expect ?? playwrightExpect;
   const maxAttempts = options.maxAttempts ?? 3;
   const requestRecovery = options.requestRecoveryCode ?? createAnthropicProvider(options);
 
@@ -78,63 +81,53 @@ export const llmRecover = (options: LlmRecoverOptions = {}): Plugin => {
         const context = await gatherContext(ctx, originalError, options);
 
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
-          let code: string | null;
+          let recoveryResult: { code: string | null; description: string } | null;
           try {
-            code = await requestRecovery(context, attemptHistory);
+            recoveryResult = await requestRecovery(context, attemptHistory);
           } catch (llmError) {
             // LLM call itself failed — don't retry, just throw original
             adjustError(
               originalError,
-              [
-                `[llm-recover] LLM call failed: ${llmError instanceof Error ? llmError.message : String(llmError)}`,
-              ],
+              [`[llm-recover] LLM call failed: ${String(llmError)}`],
               import.meta.filename,
             );
             throw originalError;
           }
 
+          const code = recoveryResult?.code;
           // null/empty = rethrow as-is
-          if (!code || code.trim() === "") {
+          if (!code?.trim()) {
+            adjustError(
+              originalError,
+              [`[llm-recover] LLM call returned no code: ${recoveryResult?.description}`],
+              import.meta.filename,
+            );
             throw originalError;
           }
 
           const start = Date.now();
           try {
-            // The LLM returns either:
-            // 1. `async function recover({ page, locator, error }) { ... }` (preferred)
-            // 2. A bare function body (legacy)
-            // We wrap it so both forms work: define the function, then call it.
             // eslint-disable-next-line no-eval -- intentional: LLM codemode recovery
-            const recoveryFn = new Function(
-              "page",
-              "locator",
-              "error",
-              `${code}\nreturn recover({ page, locator, error });`,
-            );
+            let recoveryFn!: Function;
+            eval(`recoveryFn = ${code.trim()}`);
+            if (typeof recoveryFn !== "function") {
+              adjustError(
+                originalError,
+                [`[llm-recover] Recovery function is not a function: ${code}`],
+                import.meta.filename,
+              );
+              throw originalError;
+            }
             // Mark page as in-recovery so nested locator failures don't re-trigger LLM
             pagesInRecovery.add(page);
             try {
-              await recoveryFn(page, locator, originalError);
+              await recoveryFn({ page, locator, error: originalError });
             } finally {
               pagesInRecovery.delete(page);
             }
 
-            // Recovery succeeded — record a soft error so the test is marked
-            // failed but continues executing. We push directly to testInfo.errors
-            // because the global `expect.soft` only works inside a test context.
-            if (testInfo) {
-              const description = code.length > 200 ? code.slice(0, 200) + "..." : code;
-              testInfo.errors.push({
-                message: [
-                  `[llm-recover] ${locator}.${method}() failed and was recovered by LLM.`,
-                  `Original error: ${originalError.message.split("\n")[0]}`,
-                  `Recovery code:\n${description}`,
-                ].join("\n"),
-              });
-            }
-
             // Write artifact
-            writeArtifact(testInfo, {
+            const artifact = writeArtifact(testInfo, {
               test: context.testTitle,
               file: context.testFile,
               failingLine: context.failingLine,
@@ -147,6 +140,20 @@ export const llmRecover = (options: LlmRecoverOptions = {}): Plugin => {
               ],
               recovered: true,
             });
+
+            // Recovery succeeded — record a soft error so the test is marked
+            // failed but continues executing. We push directly to testInfo.errors
+            // because the global `expect.soft` only works inside a test context.
+            const description = code.split("\n").slice(1, -1).join("\n");
+            const message = [
+              `[llm-recover] ${method} failed and was recovered by LLM.`,
+              `Original error:\n  ${originalError.message.split("\n")[0]}`,
+              `Original locator:\n  await page.${locator}.${method}()`,
+              `Recovery code:\n${description}`,
+              `Explanation::\n  ${recoveryResult?.description}`,
+              `Artifact: ${artifact}`,
+            ].join("\n");
+            expect.soft("passed–after-llm-recovery", message).toBe("passed-in-the-first-place");
 
             return; // recovery complete
           } catch (recoveryError) {
@@ -252,15 +259,12 @@ function parseFailingLine(stack: string): string {
 }
 
 function writeArtifact(testInfo: ActionContext["testInfo"], data: Record<string, unknown>) {
-  if (!testInfo) return;
-  try {
-    const dir = path.join(testInfo.outputDir, "llm-recover");
-    fs.mkdirSync(dir, { recursive: true });
-    const filename = `attempt-${Date.now()}.json`;
-    fs.writeFileSync(path.join(dir, filename), JSON.stringify(data, null, 2));
-  } catch {
-    // best-effort
-  }
+  const dir = path.join(testInfo.outputDir, "llm-recover");
+  fs.mkdirSync(dir, { recursive: true });
+  const filename = `attempt-${Date.now()}.json`;
+  const filepath = path.join(dir, filename);
+  fs.writeFileSync(filepath, JSON.stringify(data, null, 2));
+  return filepath;
 }
 
 // --- Anthropic provider ---
@@ -277,11 +281,19 @@ const SYSTEM_PROMPT = dedent`
 
   Your job: respond with a JavaScript function body, wrapped by \`<code>...\<\/code>\` tags. It must be an async function named \`recover\` that takes a single context argument:
 
+  After the function definition, write a brief description of why the given recovery code was chosen. Sacrifice grammar for concision. Example:
+
+  ---
+
   <code>
   async function recover({ page, locator, error }){
-    await page.locator(".some-other-selector").click();
+    await page.getByText("Create an account").click();
   }
   </code>
+
+  The original locator looked for the text "Create account", but the DOM shows "Create an account" instead.
+
+  ---
 
   Where the context passed in has the following type:
 
@@ -296,13 +308,13 @@ const SYSTEM_PROMPT = dedent`
   };
   \`\`\`
 
-  If the failure is UNRECOVERABLE (e.g. the test logic is fundamentally wrong, not a locator/timing issue), throw \`error\` or throw a new Error with a helpful message explaining what's wrong:
+  If the failure is UNRECOVERABLE (e.g. the test logic is fundamentally wrong, not a locator/timing issue), simply omit the <code>...</code> tags and return an explanation of why it's unrecoverable:
 
-  <code>
-  async function recover({ error }) {
-    throw error;
-  }
-  </code>
+  ---
+
+  Not recoverable: account creation is explicitly disabled in this UI.
+
+  ---
 
   If the failure is RECOVERABLE, write code that:
   1. Performs any necessary setup (dismiss modals, wait for elements, scroll, etc.)
@@ -401,21 +413,18 @@ function createAnthropicProvider(options: LlmRecoverOptions): RequestRecoveryCod
 }
 
 /** Extract code from LLM response. Handles <code>...</code> tags and markdown fences. */
-function extractCode(text: string): string | null {
-  let code = text.trim();
-
-  // Extract from <code>...</code> tags (preferred format)
-  const codeTagMatch = code.match(/<code>([\s\S]*?)<\/code>/);
-  if (codeTagMatch) {
-    code = codeTagMatch[1].trim();
+function extractCode(text: string): { code: string | null; description: string } {
+  text = text.trim();
+  const codeStart = text.indexOf("<code>");
+  const codeEnd = text.indexOf("</code>");
+  if (codeStart === -1 || codeEnd === -1) {
+    return { code: null, description: text };
   }
-
-  // Strip markdown fences if present
-  if (code.startsWith("```")) {
-    code = code.replace(/^```(?:js|javascript|typescript|ts)?\n?/, "").replace(/\n?```$/, "");
-  }
-
-  return code || null;
+  const code = text.slice(codeStart + 6, codeEnd).trim() || null;
+  const description = [text.slice(0, codeStart).trim(), text.slice(codeEnd + 7).trim()]
+    .filter(Boolean)
+    .join("\n\n");
+  return { code, description };
 }
 
 // Minimal Anthropic API types (avoid importing the SDK)

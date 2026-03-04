@@ -1,4 +1,4 @@
-import { test as base, expect } from "@playwright/test"; // eslint-disable-line no-restricted-imports -- ok here
+import { test as base, expect, type Page } from "@playwright/test"; // eslint-disable-line no-restricted-imports -- ok here
 import { addPlugins } from "../playwright-plugin.ts";
 import { llmRecover } from "./llm-recover.ts";
 
@@ -6,14 +6,29 @@ import { llmRecover } from "./llm-recover.ts";
 // Only run when LLM_RECOVER is set (requires ANTHROPIC_API_KEY).
 const describe = process.env.LLM_RECOVER ? base.describe : base.describe.skip;
 
-const test = base.extend({
+const test = base.extend<{ page: Page & { assertions: string[] } }>({
   page: async ({ page }, use, testInfo) => {
+    const assertions: string[] = [];
+    const shimmedExpect = Object.assign((...args: any[]) => expect(...(args as [string])), {
+      ...expect,
+      soft: (actual: unknown, message: string) => {
+        return {
+          toBe: (expected: unknown) => {
+            assertions.push(`Soft assertion ${actual}!=${expected}: ${message}`);
+          },
+        };
+      },
+    }) as typeof expect;
     await using _page = await addPlugins({
       page,
       testInfo,
-      plugins: [llmRecover()],
+      plugins: [llmRecover({ expect: shimmedExpect })],
+      boxedStackPrefixes: (defaults) => [
+        ...defaults,
+        import.meta.filename.replace(".spec.ts", ".ts"),
+      ],
     });
-    await use(_page);
+    await use(Object.assign(_page, { assertions }));
   },
 });
 
@@ -37,6 +52,12 @@ describe("llm-recover", () => {
 
     // Recovery should have found and clicked the real button
     await expect(page.locator("#result")).toHaveText("profile created");
+
+    expect(page.assertions).toHaveLength(1);
+    expect(page.assertions[0]).toMatch(/click failed and was recovered by LLM/);
+    const flat = page.assertions[0].replace(/\n\s*/g, " ").replaceAll(`"`, `'`);
+    expect(flat).toMatch(/Original locator: await page.getByText\('Create profile'\)\.click\(\)/);
+    expect(flat).toMatch(/Recovery code: await page.getByText\('Create your profile'\)\.click\(\)/);
   });
 
   test("recovers from timing issue by waiting", async ({ page }) => {
@@ -49,7 +70,7 @@ describe("llm-recover", () => {
         <script>
           setTimeout(function() {
             document.getElementById('waiting-area').innerHTML =
-              '<button id="create-btn">Create your profile</button>';
+              '<button id="create-btn">Create profile</button>';
             document.getElementById('create-btn').addEventListener('click', function() {
               document.getElementById('result').textContent = 'profile created';
             });
@@ -63,6 +84,12 @@ describe("llm-recover", () => {
 
     // Recovery should have waited and then clicked
     await page.getByText("profile created").waitFor();
+
+    expect(page.assertions).toHaveLength(1);
+    expect(page.assertions[0]).toMatch(/click failed and was recovered by LLM/);
+    const flat = page.assertions[0].replace(/\n\s*/g, " ").replaceAll(`"`, `'`);
+    expect(flat).toMatch(/Original locator: await page.getByText\('Create profile'\)\.click\(\)/);
+    expect(flat).toMatch(/Recovery code: .*(timeout: \d+)/);
   });
 
   test("rethrows with context for genuine error", async ({ page }) => {
@@ -73,15 +100,9 @@ describe("llm-recover", () => {
       </body>
     `);
 
-    // There is no button at all — the page says it's not allowed
-    const error: unknown = await page
-      .getByText("Create profile")
-      .click()
-      .catch((e: unknown) => e);
-
-    expect(error).toBeInstanceOf(Error);
-    // The error should have been rethrown (recovery can't fix a missing feature).
-    // It may or may not have an LLM-added hint, but it should still be a timeout-style error.
-    expect((error as Error).message).toMatch(/Timeout|recovery attempt/i);
+    await expect(async () => {
+      await page.getByText("Create profile").click();
+    }).rejects.toThrow(/Not recoverable/);
+    // expect(page.assertions).toBeNull();
   });
 });

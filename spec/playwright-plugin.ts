@@ -61,7 +61,7 @@ export type ActionContext = {
   method: OverrideableMethod;
   args: unknown[];
   page: Page;
-  testInfo?: TestInfo;
+  testInfo: TestInfo;
 };
 
 /** Function that calls the next middleware or the original action */
@@ -199,14 +199,16 @@ const patchLocatorPrototype = (
       ...args: unknown[]
     ): Promise<unknown> {
       const state = getPluginState(this.page());
-      const actionMiddlewares = state?.actionMiddlewares ?? [];
+      if (!state) throw new Error("No plugin state found");
+      if (!state.testInfo) throw new Error("No test info found");
+      const actionMiddlewares = state.actionMiddlewares;
 
       const ctx: ActionContext = {
         locator: this,
         method,
         args,
         page: this.page(),
-        testInfo: state?.testInfo,
+        testInfo: state.testInfo,
       };
 
       // Build middleware chain - each middleware calls next() to continue
