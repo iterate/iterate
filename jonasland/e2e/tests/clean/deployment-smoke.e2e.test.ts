@@ -10,7 +10,6 @@ const runFly =
   process.env.JONASLAND_E2E_ENABLE_FLY === "true" &&
   FLY_IMAGE.length > 0 &&
   FLY_API_TOKEN.length > 0;
-
 const dockerFactory = async (overrides = {}) =>
   await DockerDeployment.create({
     dockerImage: DOCKER_IMAGE,
@@ -46,7 +45,9 @@ describe.runIf(cases.length > 0)("deployment smoke", () => {
           name: `e2e-smoke-${randomUUID().slice(0, 8)}`,
         });
 
-        await deployment.waitUntilAlive({ signal: AbortSignal.timeout(30_000 + timeoutOffsetMs) });
+        await deployment.waitUntilAlive({
+          signal: AbortSignal.timeout(30_000 + timeoutOffsetMs),
+        });
 
         const health = await fetch(`${deployment.baseUrl}/healthz`);
         expect(health.ok).toBe(true);

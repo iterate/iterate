@@ -61,10 +61,6 @@ function toMatcherId(value: string): string {
   return value.replaceAll(/[^a-z0-9_]+/g, "_").replaceAll(/^_+|_+$/g, "");
 }
 
-function escapeForRegex(value: string): string {
-  return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function resolvePublicHost(params: {
   internalHost: string;
   iteratePublicBaseUrl?: string;
@@ -85,53 +81,35 @@ function resolvePublicHost(params: {
   return new URL(resolved).hostname;
 }
 
+// Caddy's catch-all blocks already rewrite Host from X-Forwarded-Host
+// (via iterate_rewrite_xfh_to_host), so fragments only need host matchers.
 function renderReverseProxyBlock(params: {
   route: ManagedRoute;
   matcherIdBase: string;
   hostToMatch: string;
 }): string[] {
   const lines: string[] = [];
-  const escapedHost = escapeForRegex(params.hostToMatch.toLowerCase());
+  const matcherId = `${params.matcherIdBase}_host`;
 
-  const renderHandle = (handleParams: { matcherId: string; upstreamHost: string }): string[] => {
-    const block: string[] = [];
-    block.push(`handle @${handleParams.matcherId} {`);
+  lines.push(`@${matcherId} host ${params.hostToMatch}`);
+  lines.push(`handle @${matcherId} {`);
 
-    if (params.route.cors) {
-      block.push("    import iterate_cors_openapi");
-    }
+  if (params.route.cors) {
+    lines.push("    import iterate_cors_openapi");
+  }
 
-    if (params.route.streamCloseDelay) {
-      block.push(`    reverse_proxy ${params.route.target} {`);
-      block.push(`        stream_close_delay ${params.route.streamCloseDelay}`);
-      block.push(`        header_up Host ${handleParams.upstreamHost}`);
-      block.push("    }");
-    } else {
-      block.push(`    reverse_proxy ${params.route.target} {`);
-      block.push(`        header_up Host ${handleParams.upstreamHost}`);
-      block.push("    }");
-    }
+  if (params.route.streamCloseDelay) {
+    lines.push(`    reverse_proxy ${params.route.target} {`);
+    lines.push(`        stream_close_delay ${params.route.streamCloseDelay}`);
+    lines.push(`        header_up Host ${params.route.host}`);
+    lines.push("    }");
+  } else {
+    lines.push(`    reverse_proxy ${params.route.target} {`);
+    lines.push(`        header_up Host ${params.route.host}`);
+    lines.push("    }");
+  }
 
-    block.push("}");
-    return block;
-  };
-
-  lines.push(`@${params.matcherIdBase}_host host ${params.hostToMatch}`);
-  lines.push(
-    `@${params.matcherIdBase}_xfh header_regexp ${params.matcherIdBase}_xfh X-Forwarded-Host (?i)^${escapedHost}(?::[0-9]+)?$`,
-  );
-  lines.push(
-    ...renderHandle({
-      matcherId: `${params.matcherIdBase}_xfh`,
-      upstreamHost: params.route.host,
-    }),
-  );
-  lines.push(
-    ...renderHandle({
-      matcherId: `${params.matcherIdBase}_host`,
-      upstreamHost: params.route.host,
-    }),
-  );
+  lines.push("}");
   return lines;
 }
 

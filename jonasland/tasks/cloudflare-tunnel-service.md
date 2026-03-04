@@ -1,0 +1,5 @@
+- there should be a cloudflare tunnel wrapper service with orpc controls
+- this should then be used by the deployment as "public" URL
+- if CF tunnel token is passed in, that tunnel is used. maybe .cloudflared config file or whatever
+- this service can produce ingress route shape that the os layer around it can stick into ingress proxy
+- BUT: a deployment machine must itself never update our ingress proxy routes UNLESS we can somehow keep a secret in a separate machine in our deployment

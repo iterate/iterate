@@ -28,7 +28,6 @@ export interface FlyDeploymentOpts extends DeploymentOpts {
   flyRegion?: string;
   flyMachineCpus?: number;
   flyMachineMemoryMb?: number;
-  flyInternalPort?: number;
   flyMachineName?: string;
 }
 
@@ -99,7 +98,7 @@ class FlyProvider implements DeploymentProvider<FlyDeploymentOpts, FlyDeployment
               services: [
                 {
                   protocol: "tcp",
-                  internal_port: opts.flyInternalPort ?? 8080,
+                  internal_port: 80,
                   ports: [
                     { port: 80, handlers: ["http"] },
                     { port: 443, handlers: ["tls", "http"] },

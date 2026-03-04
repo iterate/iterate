@@ -32,7 +32,6 @@ const DEFAULT_FLY_ORG_SLUG = "iterate";
 const DEFAULT_FLY_REGION = "lhr";
 const DEFAULT_FLY_MACHINE_CPUS = 4;
 const DEFAULT_FLY_MACHINE_MEMORY_MB = 4096;
-const DEFAULT_FLY_INTERNAL_PORT = 8080;
 const DEFAULT_FLY_MACHINE_NAME = "sandbox";
 const MAX_FLY_APP_NAME_LENGTH = 63;
 const FLY_WAIT_TIMEOUT_SECONDS = 300;
@@ -398,7 +397,6 @@ export interface FlyDeploymentOpts extends DeploymentOpts {
   flyRegion?: string;
   flyMachineCpus?: number;
   flyMachineMemoryMb?: number;
-  flyInternalPort?: number;
   flyMachineName?: string;
   keepFailedAppOnBootstrapFailure?: boolean;
   disposePolicy?: "delete" | "preserve";
@@ -765,7 +763,7 @@ export class FlyDeployment extends Deployment<FlyDeploymentOpts, FlyDeploymentLo
       services: [
         {
           protocol: "tcp",
-          internal_port: params.opts.flyInternalPort ?? DEFAULT_FLY_INTERNAL_PORT,
+          internal_port: 80,
           ports: [
             {
               port: 80,

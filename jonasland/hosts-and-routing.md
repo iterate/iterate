@@ -9,15 +9,20 @@ Single front door is Caddy. All inbound HTTP(S) traffic lands there and is route
 - Built-ins must work before registry starts.
 - Optional apps are expected to register routes with registry when they start.
 
-## Canonical forwarding headers
+## Forwarding headers and Host rewrite
 
-We use Caddy-style `X-Forwarded-*` headers as canonical proxy context:
+Proxies (ingress worker, Fly, Cloudflare Tunnel, e2e test harness) set
+`X-Forwarded-Host` to indicate which service they want. The actual `Host`
+header is whatever the TCP destination is (e.g. `127.0.0.1:{port}`).
 
-- `X-Forwarded-For` is canonical client chain (not RFC `Forwarded`).
-- `X-Forwarded-Host` carries original external host when upstream proxy rewrites `Host`.
-- `X-Forwarded-Proto` carries original scheme.
+Caddy's first directive in each catch-all block rewrites Host from
+X-Forwarded-Host via `request_header`. After that, all downstream matchers
+(built-in vhosts, dynamic .caddy fragments, FRP) just match on Host.
 
-`Forwarded` (RFC 7239) is not canonical in Jonasland.
+- `X-Forwarded-Host` -> rewritten to `Host` by Caddy (our config, not automatic).
+- `X-Forwarded-For` -> client IP (handled natively by Caddy `trusted_proxies` + `client_ip_headers`).
+- `X-Forwarded-Proto` -> scheme (handled natively by Caddy `trusted_proxies`).
+- `Forwarded` (RFC 7239) is not used.
 
 ## Built-in internal hosts
 
@@ -46,15 +51,15 @@ Supported ingress forms:
 
 ## `cf-ingress-worker-proxy` forwarding model
 
-Ingress worker routes wildcard hosts to the sandbox deployment target.
-At Caddy, route selection uses `Host` and `X-Forwarded-Host` patterns:
+Ingress worker routes wildcard hosts to the sandbox. It sets
+`X-Forwarded-Host: events__abc.ingress.iterate.com` (or similar).
 
-1. Match `{service}__{id}.(ingress|proxy).iterate.com` from `Host` or `X-Forwarded-Host`.
-2. Resolve service to upstream target.
-3. Rewrite upstream `Host` to canonical internal host (`<service>.iterate.localhost`).
-4. Forward request to the local service.
+Inside Caddy:
 
-This keeps service handlers host-stable regardless of ingress form.
+1. XFH->Host rewrite runs first (`request_header Host {X-Forwarded-Host}`).
+2. External ingress snippet extracts service token from Host pattern.
+3. `reverse_proxy` rewrites upstream `Host` to canonical `<service>.iterate.localhost`.
+4. Service handler sees stable internal host.
 
 ## Registry dynamic route flow
 
