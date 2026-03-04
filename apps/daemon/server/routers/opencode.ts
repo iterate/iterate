@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { inspect } from "node:util";
 import { readFileSync, statSync } from "node:fs";
 import { Hono } from "hono";
-import { createOpencodeClient, type Event as OpencodeEvent } from "@opencode-ai/sdk/v2";
+import { createOpencodeClient } from "@opencode-ai/sdk/v2";
 import { createRouterClient } from "@orpc/server";
 import { AgentEventsPayload } from "../types/events.ts";
 import { daemonRouter } from "../orpc/router.ts";
