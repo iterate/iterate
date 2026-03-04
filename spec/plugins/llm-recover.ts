@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
-import dedent from "dedent";
 import * as path from "node:path";
+import dedent from "dedent";
 import { expect as playwrightExpect } from "@playwright/test";
 import type { Plugin, ActionContext } from "../playwright-plugin.ts";
 import { adjustError } from "../playwright-plugin.ts";
