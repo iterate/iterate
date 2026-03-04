@@ -282,6 +282,11 @@ export class EnvManager {
     this.logger.debug(`New file detected: ${absolutePath}`);
 
     if (absolutePath === this.globalEnvPath) {
+      // Cancel pending delete timer (atomic replace emits unlink+add)
+      if (this.globalDeleteTimer) {
+        clearTimeout(this.globalDeleteTimer);
+        this.globalDeleteTimer = null;
+      }
       this.logger.debug(`New global env file detected, loading`);
       this.loadGlobalEnv(absolutePath);
       this.notifyCallbacks({ type: "global" });
