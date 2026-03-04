@@ -49,15 +49,34 @@ git checkout -B <ref> origin/<ref>
 
 This creates or resets the local branch to match the remote, just like a normal `git checkout` workflow. The local branch name will reflect the actual remote branch (e.g. `main`, `greetinghello`, etc.).
 
-### 4. Install dependencies AND run post-sync steps (single command)
+### 4. Check if lockfile changed
 
-**Run this as a single bash command** so everything completes before the restart:
+```bash
+cd "$ITERATE_REPO"
+git diff <old-sha>..HEAD --name-only -- pnpm-lock.yaml
+```
+
+If the output is empty, the lockfile hasn't changed — `pnpm install` can be **skipped entirely** (the `node_modules` baked into the image are still valid). Set a variable like `LOCKFILE_CHANGED=true/false` to use in the next step.
+
+### 5. Install dependencies (if needed) and run post-sync steps
+
+**If the lockfile changed**, run install + post-sync as a single command:
 
 ```bash
 cd "$ITERATE_REPO" && pnpm install --prefer-offline && bash "$ITERATE_REPO/sandbox/after-repo-sync-steps.sh"
 ```
 
-The timeout for this command should be at least 300 seconds (5 minutes). Pass `timeout: 300000` if using execCommand.
+**If the lockfile did NOT change**, skip `pnpm install` and just run post-sync:
+
+```bash
+cd "$ITERATE_REPO" && bash "$ITERATE_REPO/sandbox/after-repo-sync-steps.sh"
+```
+
+The timeout for either command should be at least 300 seconds (5 minutes). Pass `timeout: 300000` if using execCommand.
+
+**If `pnpm install` fails but the lockfile didn't change**: this means something is wrong with the npm registry or network, but the existing `node_modules` should be fine. Proceed to post-sync steps and process restarts anyway — the code will still work.
+
+**If `pnpm install` fails AND the lockfile changed**: report the error but still proceed to post-sync + restarts. New code with wrong deps is better than old code — the processes will crash-loop if deps are truly incompatible, but often the lockfile change is minor (patch bumps) and old deps still work.
 
 Post-sync steps handle:
 
@@ -65,7 +84,7 @@ Post-sync steps handle:
 - Rebuilding daemon frontend (`pnpm vite build` in `apps/daemon`)
 - Running database migrations (`pnpm db:migrate` in `apps/daemon`)
 
-### 5. Report result
+### 6. Report result
 
 Print the new HEAD SHA and a summary of what changed:
 
@@ -74,7 +93,7 @@ echo "Updated to: $(git log --oneline -1)"
 echo "Previous: <old sha from step 2>"
 ```
 
-### 6. Restart processes that run iterate/iterate code
+### 7. Restart processes that run iterate/iterate code
 
 Use pidnap's HTTP API to restart only the processes that run our TypeScript code. Other processes (egress-proxy, opencode, jaeger, archil, cloudflare-tunnel) are external binaries and don't need restarting.
 
@@ -91,7 +110,7 @@ for proc in daemon-backend project-ingress-proxy events daemon-frontend; do
 done
 ```
 
-**Note:** `daemon-frontend` serves a static vite build — step 4 already rebuilt it, so restarting the preview server picks up the new build output.
+**Note:** `daemon-frontend` serves a static vite build — step 5 already rebuilt it, so restarting the preview server picks up the new build output.
 
 **Note:** `force: true` skips backoff delay so the process restarts immediately.
 
@@ -101,7 +120,7 @@ After restarting, verify the processes are running:
 curl -fsS "$PIDNAP_URL/processes.list" | jq '.[] | {name, state}'
 ```
 
-### 7. (Rare) If pidnap's own code changed
+### 8. (Rare) If pidnap's own code changed
 
 If the pull included changes to `packages/pidnap/`, pidnap itself needs to restart. This is rare — most pulls only change app code. If needed:
 
@@ -114,6 +133,9 @@ This kills tini → pidnap → all children. The container will stop (there is n
 ## Error handling
 
 - If `git fetch` fails: check network, check if origin remote exists (add it if missing), retry.
-- If `pnpm install` fails: retry with just `pnpm install --prefer-offline` (no frozen-lockfile). If that also fails, report the error.
+- If `pnpm install` fails and lockfile didn't change: **skip it** and proceed to post-sync + restarts. The existing `node_modules` are still valid.
+- If `pnpm install` fails and lockfile changed: report the error but **still proceed** to post-sync + restarts. New code with slightly wrong deps is better than being stuck on old code. Processes will crash-loop if deps are truly incompatible, and the next pull can fix it.
 - If `after-repo-sync-steps.sh` fails: report which step failed (skeleton sync, frontend build, or migrations). Still proceed with the process restarts — the new code is checked out and deps are installed, so processes will at least start. Migrations can be retried on next pull.
 - If a process restart fails: report which process failed. The machine is still functional — the failed process will be on old code but other processes will have restarted.
+
+**Key principle: always get to the restart step.** A failed `pnpm install` should never prevent process restarts. The goal is to get new code running as fast as possible — partial updates beat no updates.
