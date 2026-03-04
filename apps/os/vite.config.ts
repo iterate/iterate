@@ -41,11 +41,11 @@ export default defineConfig({
           VITE_PUBLIC_FLY_DEFAULT_IMAGE: "FLY_DEFAULT_IMAGE",
         } satisfies Record<`VITE_PUBLIC_${string}`, string>;
         for (const [viteVar, dopplerVar] of Object.entries(vitePublicEnvVarsFromDoppler)) {
-          const viteVarExpression = `import.meta.env.${viteVar}`;
-          if (code.includes(viteVarExpression)) {
+          const viteVarExpression = new RegExp(`import\\.meta\\.env\\.${viteVar}\\b`);
+          if (code.match(viteVarExpression)) {
             const command = `doppler secrets get ${dopplerVar} --plain --no-exit-on-missing-secret`;
             const replacement = execSync(command).toString().trim();
-            return code.replace(viteVarExpression, JSON.stringify(replacement));
+            code = code.replace(viteVarExpression, JSON.stringify(replacement));
           }
         }
         return code;
