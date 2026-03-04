@@ -33,6 +33,9 @@ importers:
       '@typescript/native-preview':
         specifier: ^7.0.0-dev.20260203.1
         version: 7.0.0-dev.20260203.1
+      dedent:
+        specifier: ^1.7.0
+        version: 1.7.0
       emittery:
         specifier: 1.2.0
         version: 1.2.0
@@ -1156,7 +1159,7 @@ importers:
         version: 12.6.0
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
       http-proxy:
         specifier: ^1.18.1
         version: 1.18.1
@@ -1636,7 +1639,7 @@ importers:
         version: 12.6.0
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
       effect:
         specifier: ^3.19.15
         version: 3.19.19
@@ -1768,7 +1771,7 @@ importers:
         version: 12.6.0
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
       hono:
         specifier: ^4.11.10
         version: 4.12.2
@@ -1814,7 +1817,7 @@ importers:
         version: 12.6.0
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
     devDependencies:
       '@types/node':
         specifier: ^25.0.10
@@ -1876,7 +1879,7 @@ importers:
         version: 12.6.0
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7)
       react:
         specifier: ^19.2.0
         version: 19.2.3
@@ -22600,7 +22603,7 @@ snapshots:
       pg: 8.17.1
       postgres: 3.4.7
 
-  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7):
+  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(mysql2@3.18.1(@types/node@25.0.10))(pg@8.17.1)(postgres@3.4.7):
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260207.0
       '@libsql/client': 0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)

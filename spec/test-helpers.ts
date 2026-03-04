@@ -1,7 +1,13 @@
 import * as path from "node:path";
 import { type Page, test as base } from "@playwright/test"; // eslint-disable-line no-restricted-imports -- ok here
 import { addPlugins } from "./playwright-plugin.ts";
-import { hydrationWaiter, spinnerWaiter, videoMode, uiErrorReporter } from "./plugins/index.ts";
+import {
+  hydrationWaiter,
+  llmRecover,
+  spinnerWaiter,
+  videoMode,
+  uiErrorReporter,
+} from "./plugins/index.ts";
 
 const TEST_OTP = "424242";
 
@@ -13,6 +19,7 @@ export const test = base.extend({
       page: basePage,
       testInfo,
       plugins: [
+        !!process.env.LLM_RECOVER && llmRecover(),
         hydrationWaiter(),
         uiErrorReporter(),
         spinnerWaiter(),
