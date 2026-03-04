@@ -239,7 +239,16 @@ describe("Subscription pressure", () => {
         expect(websocketReceiver.events.map((event) => event["offset"])).toEqual(
           expectedOffsets(0, eventCount + 1),
         );
-        expect(ackCount).toBe(eventCount + 1);
+        // ackCount is incremented inside the async onEvent callback which fires
+        // after the event is pushed to the events array. waitForEvents resolves
+        // when events.length reaches the target, but the last onEvent may still
+        // be in-flight, so we need to poll for ackCount rather than assert
+        // synchronously.
+        await waitUntil(() => ackCount === eventCount + 1, {
+          timeoutMs: 5_000,
+          intervalMs: POLL_INTERVAL_MS,
+          timeoutMessage: `ackCount did not reach ${eventCount + 1} within timeout`,
+        });
       } finally {
         await disposeWithTimeout(websocketControl);
         await disposeWithTimeout(websocketReceiver);

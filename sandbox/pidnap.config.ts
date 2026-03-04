@@ -7,7 +7,9 @@ const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/itera
 const sandboxDir = join(iterateRepo, "sandbox");
 const envFile = join(home, ".iterate/.env");
 const eventsServicePort = "17301";
-const eventsServiceDatabasePath = join(home, ".iterate/events.sqlite");
+// All DBs under ~/.local/share — persisted across machine replacement.
+const eventsServiceDatabasePath = join(home, ".local/share/events-service/events.sqlite");
+const daemonDatabasePath = join(home, ".local/share/daemon/db.sqlite");
 const mitmproxyDir = join(home, ".mitmproxy");
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
@@ -81,6 +83,46 @@ export default defineConfig({
       },
     },
     {
+      name: "archil-mount",
+      definition: {
+        command: "bash",
+        args: [`${sandboxDir}/archil-mount.sh`],
+      },
+      envOptions: {
+        // inheritGlobalEnv=false: skip ~/.iterate/.env (proxy vars would break archil).
+        // inheritProcessEnv=true (default): ARCHIL_* vars come from Fly process env.
+        inheritGlobalEnv: false,
+        reloadDelay: false,
+      },
+      options: {
+        restartPolicy: "always",
+        backoff: {
+          type: "exponential",
+          initialDelayMs: 2000,
+          maxDelayMs: 60000,
+        },
+      },
+      dependsOn: ["egress-proxy"],
+    },
+    {
+      // Gate process: polls for /tmp/persistence-ready (touched by archil-mount.sh
+      // after mount + symlink setup), then exits 0. Uses restartPolicy "never"
+      // so the default dependsOn condition is "completed" — dependents wait for exit.
+      name: "archil-repo-ready",
+      definition: {
+        command: "bash",
+        args: ["-c", "while [ ! -f /tmp/persistence-ready ]; do sleep 1; done"],
+      },
+      envOptions: {
+        inheritGlobalEnv: false,
+        reloadDelay: false,
+      },
+      options: {
+        restartPolicy: "never",
+      },
+      dependsOn: ["archil-mount"],
+    },
+    {
       name: "project-ingress-proxy",
       definition: {
         command: "tsx",
@@ -97,6 +139,7 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
+      dependsOn: ["archil-repo-ready"],
     },
     {
       name: "events",
@@ -116,6 +159,7 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
+      dependsOn: ["archil-repo-ready"],
     },
     {
       name: "daemon-backend",
@@ -127,6 +171,7 @@ export default defineConfig({
           HOSTNAME: "0.0.0.0",
           PORT: "3001",
           NODE_ENV: "production",
+          DATABASE_URL: daemonDatabasePath,
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:4318/v1/traces",
         },
       },
@@ -138,6 +183,7 @@ export default defineConfig({
         // Safe now that daemon no longer writes to .env (PR #1030 moved to push-based setup).
         reloadDelay: 500,
       },
+      dependsOn: ["archil-repo-ready"],
     },
     {
       name: "daemon-frontend",
@@ -180,6 +226,7 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
+      dependsOn: ["archil-repo-ready"],
     },
     {
       name: "trace-viewer",

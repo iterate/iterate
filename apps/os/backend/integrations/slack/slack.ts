@@ -324,16 +324,10 @@ slackApp.get(
         });
 
         if (existingWorkspaceConnection && existingWorkspaceConnection.projectId !== projectId) {
-          const existingProject = existingWorkspaceConnection.project;
-          const existingOrg = existingProject?.organization;
           throw new Error(
             `workspace_already_connected:${JSON.stringify({
               teamId: teamData.id,
               teamName: teamData.name,
-              existingProjectSlug: existingProject?.slug ?? "",
-              existingProjectName: existingProject?.name ?? "",
-              existingOrgSlug: existingOrg?.slug ?? "",
-              existingOrgName: existingOrg?.name ?? "",
             })}`,
           );
         }
@@ -427,21 +421,23 @@ slackApp.get(
         ) as {
           teamId: string;
           teamName: string;
-          existingProjectSlug: string;
-          existingProjectName: string;
-          existingOrgSlug: string;
-          existingOrgName: string;
         };
-        const params = new URLSearchParams({
-          teamId: conflictData.teamId,
-          teamName: conflictData.teamName,
-          existingProjectSlug: conflictData.existingProjectSlug,
-          existingProjectName: conflictData.existingProjectName,
-          existingOrgSlug: conflictData.existingOrgSlug,
-          existingOrgName: conflictData.existingOrgName,
-          newProjectId: projectId,
+        const conflictToken = crypto.randomUUID();
+        await c.var.db.insert(schema.verification).values({
+          identifier: conflictToken,
+          value: JSON.stringify({
+            kind: "slack-workspace-conflict",
+            userId,
+            projectId,
+            teamId: conflictData.teamId,
+            teamName: conflictData.teamName,
+            teamDomain: teamData.domain,
+            encryptedAccessToken,
+          }),
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
         });
-        return c.redirect(`/slack-conflict?${params.toString()}`);
+        const params = new URLSearchParams({ conflictToken });
+        return c.redirect(`/connection-conflict?${params.toString()}`);
       }
       throw error;
     }

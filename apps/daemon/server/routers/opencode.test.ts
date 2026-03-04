@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Event as OpencodeEvent } from "@opencode-ai/sdk/v2";
-import { agentStatusFromOpencodeEvent } from "./opencode.ts";
+import { agentStatusFromOpencodeEvent } from "./opencode-status.ts";
 
 const SESSION_ID = "test-session";
 const MESSAGE_ID = "test-message";

@@ -1,5 +1,5 @@
 import { existsSync, globSync, readFileSync } from "node:fs";
-import { resolve, basename, isAbsolute } from "node:path";
+import { resolve, basename, isAbsolute, dirname } from "node:path";
 import { parse } from "dotenv";
 import { watch } from "chokidar";
 import { type Logger } from "./logger.ts";
@@ -29,6 +29,8 @@ export class EnvManager {
   private fileToKey: Map<string, string> = new Map();
   private changeCallbacks: Set<EnvChangeCallback> = new Set();
   private cwdWatcher: ReturnType<typeof watch> | null = null;
+  private globalEnvDirWatcher: ReturnType<typeof watch> | null = null;
+  private globalDeleteTimer: ReturnType<typeof setTimeout> | null = null;
   private customKeys: Set<string> = new Set();
   private logger: Logger;
 
@@ -47,6 +49,7 @@ export class EnvManager {
     this.loadCustomEnvFiles();
     this.loadEnvFilesFromCwd();
     this.watchCwdForNewFiles();
+    this.watchGlobalEnvDirectory();
   }
 
   /**
@@ -216,6 +219,10 @@ export class EnvManager {
 
   private handleFileChange(absolutePath: string): void {
     this.logger.debug(`File changed: ${absolutePath}`);
+    if (absolutePath === this.globalEnvPath && this.globalDeleteTimer) {
+      clearTimeout(this.globalDeleteTimer);
+      this.globalDeleteTimer = null;
+    }
     if (absolutePath === this.globalEnvPath) {
       this.logger.debug(`Global env file changed, reloading`);
       this.loadGlobalEnv(absolutePath);
@@ -243,9 +250,21 @@ export class EnvManager {
     }
 
     if (absolutePath === this.globalEnvPath) {
-      this.logger.debug(`Global env file deleted, clearing global env`);
-      this.globalEnv = {};
-      this.notifyCallbacks({ type: "global" });
+      // Atomic replace commonly emits unlink+add; delay clear to avoid transient empty env reloads.
+      if (this.globalDeleteTimer) {
+        clearTimeout(this.globalDeleteTimer);
+      }
+      this.globalDeleteTimer = setTimeout(() => {
+        this.globalDeleteTimer = null;
+        if (existsSync(this.globalEnvPath)) {
+          this.logger.debug(`Global env file recreated, reloading`);
+          this.loadGlobalEnv(this.globalEnvPath);
+        } else {
+          this.logger.debug(`Global env file deleted, clearing global env`);
+          this.globalEnv = {};
+        }
+        this.notifyCallbacks({ type: "global" });
+      }, 200);
       return;
     }
 
@@ -263,6 +282,11 @@ export class EnvManager {
     this.logger.debug(`New file detected: ${absolutePath}`);
 
     if (absolutePath === this.globalEnvPath) {
+      // Cancel pending delete timer (atomic replace emits unlink+add)
+      if (this.globalDeleteTimer) {
+        clearTimeout(this.globalDeleteTimer);
+        this.globalDeleteTimer = null;
+      }
       this.logger.debug(`New global env file detected, loading`);
       this.loadGlobalEnv(absolutePath);
       this.notifyCallbacks({ type: "global" });
@@ -279,6 +303,40 @@ export class EnvManager {
       this.logger.debug(`Ignoring new file "${filePath}" (custom file registered for "${key}")`);
     } else if (key && this.env.has(key)) {
       this.logger.debug(`Ignoring new file "${filePath}" (env for "${key}" already loaded)`);
+    }
+  }
+
+  private watchGlobalEnvDirectory(): void {
+    const globalDir = dirname(this.globalEnvPath);
+    if (globalDir === this.config.cwd) return;
+    try {
+      this.globalEnvDirWatcher = watch(globalDir, {
+        ignoreInitial: true,
+        depth: 0,
+      })
+        .on("add", (filePath) => {
+          const absolutePath = isAbsolute(filePath) ? filePath : resolve(globalDir, filePath);
+          if (absolutePath !== this.globalEnvPath) return;
+          if (this.globalDeleteTimer) {
+            clearTimeout(this.globalDeleteTimer);
+            this.globalDeleteTimer = null;
+          }
+          this.logger.debug(`Global env file added, reloading`);
+          this.loadGlobalEnv(this.globalEnvPath);
+          this.notifyCallbacks({ type: "global" });
+        })
+        .on("change", (filePath) => {
+          const absolutePath = isAbsolute(filePath) ? filePath : resolve(globalDir, filePath);
+          if (absolutePath !== this.globalEnvPath) return;
+          this.handleFileChange(this.globalEnvPath);
+        })
+        .on("unlink", (filePath) => {
+          const absolutePath = isAbsolute(filePath) ? filePath : resolve(globalDir, filePath);
+          if (absolutePath !== this.globalEnvPath) return;
+          this.handleFileDelete(this.globalEnvPath);
+        });
+    } catch (err) {
+      this.logger.warn(`Failed to watch global env directory "${globalDir}":`, err);
     }
   }
 
@@ -302,6 +360,14 @@ export class EnvManager {
     if (this.cwdWatcher) {
       this.cwdWatcher.close();
       this.cwdWatcher = null;
+    }
+    if (this.globalEnvDirWatcher) {
+      this.globalEnvDirWatcher.close();
+      this.globalEnvDirWatcher = null;
+    }
+    if (this.globalDeleteTimer) {
+      clearTimeout(this.globalDeleteTimer);
+      this.globalDeleteTimer = null;
     }
 
     this.changeCallbacks.clear();

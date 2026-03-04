@@ -552,6 +552,8 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
   const originalMethod = c.req.header("X-Iterate-Original-Method") || c.req.method;
   const apiKey = c.req.header("X-Iterate-API-Key");
 
+  logger.set({ egressTarget: { url: originalURL, host: originalHost, method: originalMethod } });
+
   // Validate required headers
   if (!originalURL) {
     logger.warn("Egress proxy request missing X-Iterate-Original-URL");
@@ -579,7 +581,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     originalUrl: originalURL,
   };
 
-  logger.debug("Egress proxy forwarding", { method: originalMethod, url: originalURL });
+  logger.set({ egressTarget: { projectSlug: context.projectSlug } });
 
   // Check for Resend email sending - validate recipients before forwarding
   // This prevents using Iterate's Resend account to send spam to arbitrary addresses
@@ -992,9 +994,13 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
   // Parse the token ID from the API key
   const tokenId = parseTokenIdFromApiKey(apiKey);
   if (!tokenId) {
+    logger.set({ apiKeyPrefix: apiKey.slice(0, 30) });
     logger.warn("Invalid API key format");
     return null;
   }
+
+  logger.set({ egress_diag: { tokenId, apiKeyLen: apiKey.length } });
+  logger.info(`[egress-diag] Looking up token ${tokenId}`);
 
   // Look up the token with project and org relations in a single query
   const accessToken = await db.query.projectAccessToken.findFirst({
@@ -1008,14 +1014,14 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
     },
   });
 
+  logger.set({ token: { id: tokenId, found: !!accessToken } });
   if (!accessToken) {
-    logger.set({ token: { id: tokenId } });
     logger.warn("Access token not found");
     return null;
   }
 
   if (accessToken.revokedAt) {
-    logger.set({ token: { id: tokenId } });
+    logger.set({ token: { revoked: true } });
     logger.warn("Access token revoked");
     return null;
   }
@@ -1023,7 +1029,7 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
   // Decrypt the stored token and compare with the provided API key
   const storedToken = await decrypt(accessToken.encryptedToken);
   if (apiKey !== storedToken) {
-    logger.set({ token: { id: tokenId } });
+    logger.set({ token: { invalid: true } });
     logger.warn("Invalid API key for token");
     return null;
   }
