@@ -23,7 +23,7 @@ REF="<REF>"
 cd "$ITERATE_REPO"
 
 # Ensure origin remote exists (older machines may not have it)
-git remote get-url origin 2>/dev/null || git remote add origin https://github.com/iterate/iterate.git
+git remote get-url origin 2>/dev/null || git remote add origin https://github.com/iterate/iterate
 
 # Record current state
 OLD_SHA=$(git rev-parse --short HEAD)
