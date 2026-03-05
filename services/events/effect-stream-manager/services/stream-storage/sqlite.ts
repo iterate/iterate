@@ -5,7 +5,7 @@ import { mkdir } from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE } from "@iterate-com/events/contract";
+import { PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE } from "@iterate-com/events-contract";
 import { and, asc, desc, eq, gt, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { drizzle as drizzleBetterSqlite } from "drizzle-orm/better-sqlite3";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";

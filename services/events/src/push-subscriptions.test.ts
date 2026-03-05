@@ -1,4 +1,4 @@
-import { PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE } from "@iterate-com/events/contract";
+import { PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE } from "@iterate-com/events-contract";
 import { describe, expect, test } from "vitest";
 
 import { startEventBusTestFixture } from "./testing/orpc-test-server.ts";

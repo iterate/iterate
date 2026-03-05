@@ -113,10 +113,7 @@ async function main(): Promise<void> {
   console.log("[mock-http-proxy-playground] slack stdout:", slackResult.stdout.trim());
   console.log("[mock-http-proxy-playground] curl bytes:", curlResult.stdout.trim().length);
   console.log("[mock-http-proxy-playground] HAR path:", replayHarPath);
-  console.log(
-    "[mock-http-proxy-playground] URLs:",
-    JSON.stringify(urls, null, 2),
-  );
+  console.log("[mock-http-proxy-playground] URLs:", JSON.stringify(urls, null, 2));
   console.log(
     "[mock-http-proxy-playground] websocket summary:",
     JSON.stringify(
@@ -172,7 +169,11 @@ async function main(): Promise<void> {
   console.log("[mock-http-proxy-playground] real HAR path:", realOpenAiHarPath);
   console.log(
     "[mock-http-proxy-playground] real API URLs:",
-    JSON.stringify(realHttpEntries.map((entry) => entry.request.url), null, 2),
+    JSON.stringify(
+      realHttpEntries.map((entry) => entry.request.url),
+      null,
+      2,
+    ),
   );
   console.log(
     "[mock-http-proxy-playground] real websocket entries:",
@@ -192,7 +193,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+  console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
   process.exitCode = 1;
 });
-

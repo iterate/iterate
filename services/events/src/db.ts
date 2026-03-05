@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { serviceManifest } from "@iterate-com/events/contract";
+import { serviceManifest } from "@iterate-com/events-contract";
 import type { SqlResultSet } from "@iterate-com/shared/jonasland";
 import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";

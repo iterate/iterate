@@ -3,7 +3,7 @@ import {
   STREAM_METADATA_UPDATED_TYPE,
   parseStreamMetadataUpdatedPayload as parseStreamMetadataUpdatedPayloadFromContract,
   type StreamMetadataUpdatedPayload,
-} from "@iterate-com/events/contract";
+} from "@iterate-com/events-contract";
 
 import { Event, EventInput, StreamPath } from "./domain.ts";
 

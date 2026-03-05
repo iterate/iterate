@@ -5,7 +5,7 @@ import app, {
   getOtelRuntimeConfig,
   disposeEventsRouterOperations,
 } from "./src/server/app.ts";
-import { serviceManifest } from "@iterate-com/events/contract";
+import { serviceManifest } from "@iterate-com/events-contract";
 import { registerServiceWithRegistry, serviceLog } from "@iterate-com/shared/jonasland";
 
 const isDev = process.env.NODE_ENV !== "production";

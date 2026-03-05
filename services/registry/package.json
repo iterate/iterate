@@ -22,11 +22,11 @@
     "@hono/node-ws": "^1.1.2",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
-    "@orpc/client": "1.13.5",
-    "@orpc/contract": "1.13.5",
-    "@orpc/openapi": "1.13.5",
-    "@orpc/server": "1.13.5",
-    "@orpc/zod": "1.13.5",
+    "@orpc/client": "1.13.6",
+    "@orpc/contract": "1.13.6",
+    "@orpc/openapi": "1.13.6",
+    "@orpc/server": "1.13.6",
+    "@orpc/zod": "1.13.6",
     "@tailwindcss/vite": "^4.1.17",
     "@tanstack/react-query": "^5.80.7",
     "@tanstack/react-router": "^1.121.4",
@@ -41,7 +41,8 @@
     "vite": "^7.3.1",
     "vite-tsconfig-paths": "^4.3.2",
     "ws": "^8.18.3",
-    "zod": "^4.1.11"
+    "zod": "^4.1.11",
+    "@iterate-com/registry-contract": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
@@ -50,6 +51,7 @@
     "@types/ws": "^8.18.1",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.0.18",
+    "vite-tsconfig-paths": "^5.1.4"
   }
 }

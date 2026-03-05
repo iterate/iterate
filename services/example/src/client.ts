@@ -1,5 +1,5 @@
 import type { ContractRouterClient } from "@orpc/contract";
-import { exampleContract, exampleServiceManifest } from "@iterate-com/example/contract";
+import { exampleContract, exampleServiceManifest } from "@iterate-com/example-contract";
 import { createOrpcRpcServiceClient } from "@iterate-com/shared/jonasland";
 
 export type ExampleClient = ContractRouterClient<typeof exampleContract>;

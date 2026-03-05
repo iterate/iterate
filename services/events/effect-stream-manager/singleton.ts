@@ -4,8 +4,8 @@ import {
   type EventStreamEvent,
   type EventStreamSummary,
   type EventsServiceEnv,
-} from "@iterate-com/events/contract";
-import { IterateEventType } from "@iterate-com/events/lib";
+} from "@iterate-com/events-contract";
+import { IterateEventType } from "@iterate-com/events-contract/lib";
 import { Effect, Schema, Stream } from "effect";
 
 import { Event, EventInput, EventType, Offset, StreamPath, Version } from "./domain.ts";

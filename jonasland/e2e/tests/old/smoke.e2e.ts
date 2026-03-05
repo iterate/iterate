@@ -42,7 +42,7 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
   home: {
     definition: {
       command: PIDNAP_TSX_PATH,
-      args: [`${ITERATE_REPO}/services/home-service/src/server.ts`],
+      args: [`${ITERATE_REPO}/services/home/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "home.iterate.localhost", path: "/" },
@@ -50,7 +50,7 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
   outerbase: {
     definition: {
       command: PIDNAP_TSX_PATH,
-      args: [`${ITERATE_REPO}/services/outerbase-service/src/server.ts`],
+      args: [`${ITERATE_REPO}/services/outerbase/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "outerbase.iterate.localhost", path: "/__iterate/health" },
@@ -66,7 +66,7 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
   docs: {
     definition: {
       command: PIDNAP_TSX_PATH,
-      args: [`${ITERATE_REPO}/services/docs-service/src/server.ts`],
+      args: [`${ITERATE_REPO}/services/docs/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "docs.iterate.localhost", path: "/__iterate/health" },

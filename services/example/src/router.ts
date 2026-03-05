@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { desc, eq, sql } from "drizzle-orm";
-import { serviceManifest as eventsServiceManifest } from "@iterate-com/events/contract";
+import { serviceManifest as eventsServiceManifest } from "@iterate-com/events-contract";
 import {
   exampleContract,
   exampleServiceManifest,
   thingSchema,
-} from "@iterate-com/example/contract";
+} from "@iterate-com/example-contract";
 import {
   createLocalServiceOrpcClient,
   infoFromContext,
@@ -37,13 +37,6 @@ const os = implement(exampleContract).$context<ExampleContext>();
 
 const eventsClient = createLocalServiceOrpcClient({
   manifest: eventsServiceManifest,
-  headers: (clientContext: { context?: EventsClientContext }) => {
-    const headers: Record<string, string> = {};
-    if (clientContext.context?.requestId) {
-      headers["x-request-id"] = clientContext.context.requestId;
-    }
-    return headers;
-  },
 });
 
 function normalizeStreamPath(path: string): string {

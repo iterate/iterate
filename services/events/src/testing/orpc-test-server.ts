@@ -19,7 +19,7 @@ import {
   serviceManifest,
   type EventBusContract,
   type EventsServiceEnv,
-} from "@iterate-com/events/contract";
+} from "@iterate-com/events-contract";
 import type { RpcWebSocket } from "@iterate-com/shared/jonasland";
 
 import { eventsService } from "../../fetcher.ts";

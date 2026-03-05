@@ -7,7 +7,7 @@ import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { oc } from "@orpc/contract";
 import { implement, ORPCError } from "@orpc/server";
-import type { AnyRouter } from "@orpc/server";
+import type { AnyRouter, Context as ORPCContext } from "@orpc/server";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import {
   createOrpcErrorInterceptor,
@@ -157,7 +157,7 @@ export function createSimpleServiceRouter(params: {
 
 export function applyOpenAPIRoute(
   app: Hono<ServiceAppEnv>,
-  handler: OpenAPIHandler<AnyRouter>,
+  handler: OpenAPIHandler<ORPCContext>,
   serviceName: string,
   options?: {
     extraContext?: () => Record<string, unknown>;

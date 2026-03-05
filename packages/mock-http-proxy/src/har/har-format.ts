@@ -1,7 +1,7 @@
 import type { HarEntryWithExtensions, HarWebSocketMessage } from "./har-extensions.ts";
 
 export type FormatHarEntryOptions = {
-  headers: boolean;
+  headers: boolean | "sanitized-only";
   body: boolean;
   maxBodyLength: number;
   prettyJsonMaxLength: number;
@@ -10,7 +10,7 @@ export type FormatHarEntryOptions = {
 };
 
 const DEFAULTS: FormatHarEntryOptions = {
-  headers: false,
+  headers: "sanitized-only",
   body: false,
   maxBodyLength: 2000,
   prettyJsonMaxLength: 4000,
@@ -127,7 +127,11 @@ function formatHeaders(
   sanitizedNames: Set<string>,
   opts: FormatHarEntryOptions,
 ): string {
-  return headers
+  const filtered =
+    opts.headers === "sanitized-only"
+      ? headers.filter((h) => sanitizedNames.has(h.name.toLowerCase()))
+      : headers;
+  return filtered
     .map((h) => {
       const name = c(CYAN, h.name, opts.color);
       const redactedTag = sanitizedNames.has(h.name.toLowerCase())
@@ -211,11 +215,17 @@ export function formatHarEntry(
   lines.push(`${prefix}${formatHarEntryOneLine(entry, { color: opts.color })}`);
 
   if (opts.headers) {
-    lines.push(c(DIM, "  -- Request headers --", opts.color));
-    lines.push(formatHeaders(entry.request.headers, sanitizedHeaders, opts));
+    const reqHeaders = formatHeaders(entry.request.headers, sanitizedHeaders, opts);
+    if (reqHeaders) {
+      lines.push(c(DIM, "  -- Request headers --", opts.color));
+      lines.push(reqHeaders);
+    }
 
-    lines.push(c(DIM, "  -- Response headers --", opts.color));
-    lines.push(formatHeaders(entry.response.headers, sanitizedHeaders, opts));
+    const resHeaders = formatHeaders(entry.response.headers, sanitizedHeaders, opts);
+    if (resHeaders) {
+      lines.push(c(DIM, "  -- Response headers --", opts.color));
+      lines.push(resHeaders);
+    }
   }
 
   if (opts.body) {

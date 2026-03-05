@@ -26,7 +26,7 @@ Build: `pnpm --filter @iterate-com/jonasland-sandbox build` (uses depot)
 1. Syncs repo from host (if `DOCKER_HOST_SYNC_ENABLED=true`)
 2. Syncs home skeleton
 3. Entrypoint-args override: positional args (`docker run <image> sleep infinity`) or `SANDBOX_ENTRY_ARGS` env var (tab-delimited)
-4. Starts dnsmasq (*.iterate.localhost → 127.0.0.1)
+4. Starts dnsmasq (\*.iterate.localhost → 127.0.0.1)
 5. Installs iptables NAT rules (port 80/443 → caddy, exempt egress-proxy user)
 6. Starts pidnap (`pidnap.config.ts`)
 
@@ -53,6 +53,7 @@ pnpm --filter @iterate-com/jonasland-sandbox docker:shell -- --env OPENAI_API_KE
 ```
 
 Flags:
+
 - `--image <tag>` — image to use (default: `$JONASLAND_SANDBOX_IMAGE`)
 - `--no-pidnap` — skip full stack, just a bare shell (entry.sh runs sync then `sleep infinity`)
 - `--env <VAR>` — forward host env var; `--env K=V` sets an arbitrary value
@@ -76,6 +77,7 @@ tsx jonasland/scripts/external-egress-proxy.ts --replay traffic.har --unhandled 
 ```
 
 Flags:
+
 - `--port <n>` — bind port (default: random)
 - `--host <addr>` — bind address (default: 0.0.0.0)
 - `--record <path>` — record to HAR file
@@ -111,6 +113,7 @@ pnpm --filter @iterate-com/jonasland-e2e test                # both
 Parameterization pattern: env-based provider enablement → `cases` array → `describe.each(cases)`. Fly adds `timeoutOffsetMs`. See `deployment-smoke.e2e.test.ts` for canonical example.
 
 Key env vars:
+
 - `E2E_DOCKER_IMAGE_REF` / `E2E_FLY_IMAGE_REF` / `JONASLAND_SANDBOX_IMAGE` — image tags
 - `FLY_API_TOKEN` — required for Fly tests
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` — required for agent CLI tests

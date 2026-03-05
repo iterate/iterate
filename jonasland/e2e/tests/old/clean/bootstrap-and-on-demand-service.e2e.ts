@@ -111,7 +111,7 @@ for (const provider of providers) {
           processSlug: "docs",
           definition: {
             command: "npx",
-            args: ["tsx", "services/docs-service/src/server.ts"],
+            args: ["tsx", "services/docs/src/server.ts"],
             env: { PORT: String(docsPort) },
           },
           tags: ["on-demand"],

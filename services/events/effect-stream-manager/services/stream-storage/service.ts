@@ -2,7 +2,7 @@
  * StreamStorage service definition
  */
 import { Context, Effect, Schema, Stream } from "effect";
-import type { PushSubscriptionCallbackAddedPayload } from "@iterate-com/events/contract";
+import type { PushSubscriptionCallbackAddedPayload } from "@iterate-com/events-contract";
 
 import { Event, Offset, StreamPath } from "../../domain.ts";
 

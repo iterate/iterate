@@ -60,14 +60,14 @@ const sharedOnDemandProcesses = {
   },
   outerbase: {
     definition: createTsxDefinition({
-      scriptPath: `${CONTAINER_REPO_ROOT}/services/outerbase-service/src/server.ts`,
+      scriptPath: `${CONTAINER_REPO_ROOT}/services/outerbase/src/server.ts`,
       env: OTEL_SERVICE_ENV,
     }),
     routeCheck: { host: "outerbase.iterate.localhost", path: "/__iterate/health" },
   },
   docs: {
     definition: createTsxDefinition({
-      scriptPath: `${CONTAINER_REPO_ROOT}/services/docs-service/src/server.ts`,
+      scriptPath: `${CONTAINER_REPO_ROOT}/services/docs/src/server.ts`,
       env: OTEL_SERVICE_ENV,
     }),
     routeCheck: { host: "docs.iterate.localhost", path: "/__iterate/health" },
@@ -78,7 +78,7 @@ export const onDemandProcesses = {
   ...sharedOnDemandProcesses,
   home: {
     definition: createTsxDefinition({
-      scriptPath: `${CONTAINER_REPO_ROOT}/services/home-service/src/server.ts`,
+      scriptPath: `${CONTAINER_REPO_ROOT}/services/home/src/server.ts`,
       env: OTEL_SERVICE_ENV,
     }),
     routeCheck: { host: "home.iterate.localhost", path: "/" },

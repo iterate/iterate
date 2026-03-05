@@ -1,7 +1,7 @@
 import {
   type EventBusContract,
   serviceManifest as eventsServiceManifest,
-} from "@iterate-com/events/contract";
+} from "@iterate-com/events-contract";
 import { createRegistryClient, type RegistryClient } from "@iterate-com/registry/client";
 import { type AnyContractRouter, type ContractRouterClient } from "@orpc/contract";
 import pWaitFor from "p-wait-for";

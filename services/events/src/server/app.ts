@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { HttpBindings } from "@hono/node-server";
 import type { ServiceAppEnv } from "@iterate-com/shared/jonasland";
 import { createNodeWebSocket } from "@hono/node-ws";
-import { serviceManifest } from "@iterate-com/events/contract";
+import { serviceManifest } from "@iterate-com/events-contract";
 import {
   applyOpenAPIRoute,
   applyServiceMiddleware,

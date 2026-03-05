@@ -117,7 +117,6 @@ async function main() {
         const formatted = formatHarEntry(entry as HarEntryWithExtensions, {
           color: true,
           body: verbose,
-          headers: verbose,
           maxBodyLength: maxBody,
         });
         process.stdout.write(formatted);

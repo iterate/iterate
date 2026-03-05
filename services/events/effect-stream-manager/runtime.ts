@@ -1,5 +1,5 @@
 import { Layer, ManagedRuntime } from "effect";
-import type { EventsServiceEnv } from "@iterate-com/events/contract";
+import type { EventsServiceEnv } from "@iterate-com/events-contract";
 
 import * as StreamManager from "./services/stream-manager/index.ts";
 import * as StreamStorage from "./services/stream-storage/index.ts";

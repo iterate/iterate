@@ -2,7 +2,7 @@ import {
   eventBusContract,
   serviceManifest,
   type EventsServiceEnv,
-} from "@iterate-com/events/contract";
+} from "@iterate-com/events-contract";
 import {
   createServiceSubRouterHandlers,
   type ServiceRequestLogger,

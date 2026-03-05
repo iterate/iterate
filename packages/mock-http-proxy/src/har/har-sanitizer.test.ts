@@ -41,7 +41,7 @@ function httpEntry(opts: {
       content: opts.responseContent ?? { size: 0, mimeType: "application/octet-stream" },
       redirectURL: "",
       headersSize: -1,
-      bodySize: opts.responseBodySize ?? (opts.responseContent?.size ?? 0),
+      bodySize: opts.responseBodySize ?? opts.responseContent?.size ?? 0,
     },
     cache: {},
     timings: { send: 0, wait: 0, receive: 0 },
@@ -154,9 +154,7 @@ describe("createDefaultHarSanitizer", () => {
     [
       "set-cookie — preserves attributes (Path, HttpOnly)",
       httpEntry({
-        responseHeaders: [
-          { name: "set-cookie", value: "session=secret123; Path=/; HttpOnly" },
-        ],
+        responseHeaders: [{ name: "set-cookie", value: "session=secret123; Path=/; HttpOnly" }],
       }),
       httpEntry({
         responseHeaders: [
@@ -168,13 +166,14 @@ describe("createDefaultHarSanitizer", () => {
     [
       "cookie header — multiple cookies, each value redacted independently",
       httpEntry({
-        requestHeaders: [
-          { name: "cookie", value: "session=abc; tracker=xyz123" },
-        ],
+        requestHeaders: [{ name: "cookie", value: "session=abc; tracker=xyz123" }],
       }),
       httpEntry({
         requestHeaders: [
-          { name: "cookie", value: "session=---sanitised-secret-ba7816bf; tracker=x---sanitised-secret-f0a72890" },
+          {
+            name: "cookie",
+            value: "session=---sanitised-secret-ba7816bf; tracker=x---sanitised-secret-f0a72890",
+          },
         ],
       }),
     ],

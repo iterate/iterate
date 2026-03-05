@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { EventBusContract } from "@iterate-com/events/contract";
+import type { EventBusContract } from "@iterate-com/events-contract";
 
 import {
   startEventBusTestFixture,

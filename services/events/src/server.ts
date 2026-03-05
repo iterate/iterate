@@ -7,7 +7,7 @@ import { createAdaptorServer } from "@hono/node-server";
 import { RESPONSE_ALREADY_SENT } from "@hono/node-server/utils/response";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { serviceManifest } from "@iterate-com/events/contract";
+import { serviceManifest } from "@iterate-com/events-contract";
 import {
   applyOpenAPIRoute,
   applyServiceMiddleware,

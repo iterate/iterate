@@ -4,8 +4,8 @@ import { randomUUID } from "node:crypto";
 import { inspect } from "node:util";
 
 import { Hono } from "hono";
-import { attachDefaultServiceRoutes } from "@iterate-com/events/lib";
-import { serviceManifest, type EventsServiceEnv } from "@iterate-com/events/contract";
+import { attachDefaultServiceRoutes } from "@iterate-com/events-contract/lib";
+import { serviceManifest, type EventsServiceEnv } from "@iterate-com/events-contract";
 import { transformSqlResultSet } from "@iterate-com/shared/jonasland";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";

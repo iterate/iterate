@@ -79,8 +79,6 @@ type OuterbaseEnv = {
   studioName: string;
 };
 
-type AppEnv = { Bindings: HttpBindings };
-
 function parsePort(value: string, key: string): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -394,7 +392,7 @@ async function executeRequest(value: unknown, mainAlias: string): Promise<QueryR
 }
 
 function createAuthorizeMiddleware(env: OuterbaseEnv) {
-  return async (c: Context<AppEnv>, next: () => Promise<void>) => {
+  return async (c: Context<ServiceAppEnv>, next: () => Promise<void>) => {
     const username = env.basicAuthUser;
     const password = env.basicAuthPass;
     if (!username) return next();
@@ -736,7 +734,7 @@ const resolveOuterbaseRuntimeConfig = async () => ({
 
 app.get("/api/observability", createServiceObservabilityHandler(resolveOuterbaseRuntimeConfig));
 
-app.get("/api/runtime", async (c: Context<AppEnv>) => {
+app.get("/api/runtime", async (c: Context<ServiceAppEnv>) => {
   const mainAlias = resolveMainAlias(c.req.query("main"));
   const session = await getSqliteSession(mainAlias);
   return c.json({
@@ -748,7 +746,7 @@ app.get("/api/runtime", async (c: Context<AppEnv>) => {
   });
 });
 
-app.post("/query", async (c: Context<AppEnv>) => {
+app.post("/query", async (c: Context<ServiceAppEnv>) => {
   const mainAlias = resolveMainAlias(c.req.query("main"));
   try {
     const body = await c.req.json();
@@ -766,19 +764,19 @@ app.post("/query", async (c: Context<AppEnv>) => {
   }
 });
 
-app.get("/api/studio", async (c: Context<AppEnv>) => {
+app.get("/api/studio", async (c: Context<ServiceAppEnv>) => {
   const mainAlias = resolveMainAlias(c.req.query("main"));
   return c.html(buildPageHtml(mainAlias));
 });
 
 applyOpenAPIRoute(app, openAPIHandler, serviceName);
 
-app.onError((error: Error, c: Context<AppEnv>) => {
+app.onError((error: Error, c: Context<ServiceAppEnv>) => {
   c.get("requestLog").error(toError(error));
   return c.json({ error: "internal_error" }, 500);
 });
 
-app.notFound((c: Context<AppEnv>) => c.json({ error: "not_found" }, 404));
+app.notFound((c: Context<ServiceAppEnv>) => c.json({ error: "not_found" }, 404));
 
 export default app;
 export { injectWebSocket };

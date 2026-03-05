@@ -8,7 +8,7 @@ import {
   registryContract,
   registryServiceEnvSchema,
   registryServiceManifest,
-} from "@iterate-com/registry/contract";
+} from "@iterate-com/registry-contract";
 import {
   applyOpenAPIRoute,
   applyServiceMiddleware,

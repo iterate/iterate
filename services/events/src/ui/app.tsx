@@ -7,8 +7,8 @@ import {
   serviceManifest,
   type EventStreamEvent,
   type EventStreamSummary,
-} from "@iterate-com/events/contract";
-import { IterateEventType } from "@iterate-com/events/lib";
+} from "@iterate-com/events-contract";
+import { IterateEventType } from "@iterate-com/events-contract/lib";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";

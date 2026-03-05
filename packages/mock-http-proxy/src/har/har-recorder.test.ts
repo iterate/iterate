@@ -124,8 +124,12 @@ describe("HarRecorder", () => {
       throw new Error("missing entry");
     }
 
-    expect(harHeaderValue(entry.request.headers, "authorization")).toBe("Bearer s---sanitised-secret-2bb80d53");
-    expect(harHeaderValue(entry.response.headers, "set-cookie")).toBe("session=---sanitised-secret-ba7816bf");
+    expect(harHeaderValue(entry.request.headers, "authorization")).toBe(
+      "Bearer s---sanitised-secret-2bb80d53",
+    );
+    expect(harHeaderValue(entry.response.headers, "set-cookie")).toBe(
+      "session=---sanitised-secret-ba7816bf",
+    );
     expect(harHeaderValue(entry.response.headers, "content-encoding")).toBeUndefined();
     expect(entry.response.content.text).toBe(payload);
   });
@@ -214,7 +218,9 @@ describe("HarRecorder", () => {
     const entries = recorder.getHar().log.entries;
     expect(entries).toHaveLength(1);
     expect(entries[0]?.request.url).toBe("wss://api.openai.com/v1/responses");
-    expect(harHeaderValue(entries[0]?.request.headers ?? [], "authorization")).toBe("Bearer s---sanitised-secret-2bb80d53");
+    expect(harHeaderValue(entries[0]?.request.headers ?? [], "authorization")).toBe(
+      "Bearer s---sanitised-secret-2bb80d53",
+    );
   });
 
   test("writes to configured harPath", async () => {

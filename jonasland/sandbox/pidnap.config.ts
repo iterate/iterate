@@ -6,8 +6,8 @@ import {
   serviceManifestToPidnapConfig,
   type ServiceManifestWithEntryPoint,
 } from "../../packages/shared/src/jonasland/index.ts";
-import { serviceManifest as eventsServiceManifest } from "../../services/events-contract/src/events/index.ts";
-import { registryServiceManifest } from "../../services/registry-contract/src/index.ts";
+import { serviceManifest as eventsServiceManifest } from "../../services/events/src/contract.ts";
+import { registryServiceManifest } from "../../services/registry/src/contract.ts";
 
 const home = homedir();
 const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
@@ -21,7 +21,7 @@ const noOrpcContract = {} as AnyContractRouter;
 const homeServiceManifest: ServiceManifestWithEntryPoint = {
   slug: "home-service",
   port: 19030,
-  serverEntryPoint: "services/home-service/src/server.ts",
+  serverEntryPoint: "services/home/src/server.ts",
   orpcContract: noOrpcContract,
 };
 
@@ -163,7 +163,7 @@ export default defineConfig({
         },
       },
       options: {
-        restartPolicy: "always",
+        restartPolicy: "never",
       },
       envOptions: {
         reloadDelay: false,
@@ -176,7 +176,7 @@ export default defineConfig({
         args: ["--config", otelCollectorConfigPath, "--set=service.telemetry.metrics.level=None"],
       },
       options: {
-        restartPolicy: "always",
+        restartPolicy: "never",
       },
       envOptions: {
         reloadDelay: false,

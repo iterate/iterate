@@ -9,7 +9,7 @@ import { Data, DateTime, Effect, PubSub, Runtime, Schema, Stream } from "effect"
 import {
   PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE,
   type PushSubscriptionCallbackAddedPayload,
-} from "@iterate-com/events/contract";
+} from "@iterate-com/events-contract";
 import WebSocket from "ws";
 
 import { Event, EventInput, Offset, Payload, StreamPath } from "../../domain.ts";

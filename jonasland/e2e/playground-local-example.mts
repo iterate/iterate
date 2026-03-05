@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { exampleServiceManifest } from "@iterate-com/example/contract";
+import { exampleServiceManifest } from "@iterate-com/example-contract";
 import { serviceManifestToPidnapConfig } from "@iterate-com/shared/jonasland";
 import { DockerDeployment } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
 

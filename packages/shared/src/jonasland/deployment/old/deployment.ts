@@ -2,7 +2,7 @@ import { CaddyClient } from "@accelerated-software-development/caddy-api-client"
 import {
   type EventBusContract,
   serviceManifest as eventsServiceManifest,
-} from "@iterate-com/events/contract";
+} from "@iterate-com/events-contract";
 import { type RegistryClient } from "@iterate-com/registry/client";
 import { type AnyContractRouter, type ContractRouterClient } from "@orpc/contract";
 import pRetry from "p-retry";

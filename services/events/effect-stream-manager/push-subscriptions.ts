@@ -4,7 +4,7 @@ import {
   type PushSubscriptionRetryPolicy,
   type PushSubscriptionRetrySchedule,
   parsePushSubscriptionCallbackAddedPayload,
-} from "@iterate-com/events/contract";
+} from "@iterate-com/events-contract";
 import { Duration, Schedule } from "effect";
 
 import { Event, EventInput } from "./domain.ts";

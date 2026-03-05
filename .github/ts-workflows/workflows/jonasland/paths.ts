@@ -36,14 +36,14 @@ export const setupRepoWithoutPnpmAction = [
 const jonaslandPaths = [
   "jonasland/e2e/**",
   "jonasland/sandbox/**",
-  "services/events-service/**",
+  "services/events/**",
   "services/example/**",
-  "services/docs-service/**",
-  "services/outerbase-service/**",
-  "services/home-service/**",
+  "services/docs/**",
+  "services/outerbase/**",
+  "services/home/**",
   "services/egress-service/**",
-  "services/registry-service/**",
-  "services/example-contract/**",
+  "services/registry/**",
+  "services/example/**",
   "packages/pidnap/**",
 ] as const;
 

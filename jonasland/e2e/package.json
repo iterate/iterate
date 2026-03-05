@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@iterate-com/example": "workspace:*",
-    "@iterate-com/shared": "workspace:*"
+    "@iterate-com/shared": "workspace:*",
+    "@iterate-com/example-contract": "workspace:*"
   },
   "devDependencies": {
     "@iterate-com/mock-http-proxy": "workspace:*",

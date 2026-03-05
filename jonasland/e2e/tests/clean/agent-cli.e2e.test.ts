@@ -149,12 +149,7 @@ describe.runIf(cases.length > 0 && hasApiKeys)("agent cli", () => {
           signal: AbortSignal.timeout(30_000 + timeoutOffsetMs),
         });
 
-        const result = await deployment.exec([
-          "bash",
-          "-l",
-          "-c",
-          "pi -p 'what is 50 minus 8?'",
-        ]);
+        const result = await deployment.exec(["bash", "-l", "-c", "pi -p 'what is 50 minus 8?'"]);
         expect(result.output).toContain("42");
       },
       CLI_TIMEOUT_MS + timeoutOffsetMs,

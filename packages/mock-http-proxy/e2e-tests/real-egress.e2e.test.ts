@@ -5,10 +5,7 @@ import { fileURLToPath } from "node:url";
 import { x } from "tinyexec";
 import { beforeAll, describe, expect, test } from "vitest";
 import { readHarFile } from "../src/har/har-extensions.ts";
-import {
-  useMitmProxy,
-  useMockHttpServer,
-} from "../src/server/mock-http-server-fixture.ts";
+import { useMitmProxy, useMockHttpServer } from "../src/server/mock-http-server-fixture.ts";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(thisDir, "..");

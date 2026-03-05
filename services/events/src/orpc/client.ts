@@ -12,8 +12,8 @@ import {
   resolveServiceOrpcWebSocketUrl,
   type ServiceManifestLike,
   type ServiceClientEnv,
-} from "@iterate-com/events/lib";
-import { type EventBusContract } from "@iterate-com/events/contract";
+} from "@iterate-com/events-contract/lib";
+import { type EventBusContract } from "@iterate-com/events-contract";
 
 type EventBusManifest = ServiceManifestLike<EventBusContract>;
 type RpcWebSocket = LinkWebsocketClientOptions["websocket"];

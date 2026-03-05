@@ -27,7 +27,7 @@ server.listen(port, "0.0.0.0", () => {
   console.log(`example listening on http://localhost:${boundPort}`);
 
   import("@iterate-com/shared/jonasland").then(({ registerServiceWithRegistry }) => {
-    import("@iterate-com/example/contract").then(({ exampleServiceManifest }) => {
+    import("@iterate-com/example-contract").then(({ exampleServiceManifest }) => {
       void registerServiceWithRegistry({
         manifest: exampleServiceManifest,
         port: boundPort,

@@ -58,7 +58,7 @@ const processes: ProcessConfig[] = [
     slug: "docs",
     definition: {
       command: PIDNAP_TSX_PATH,
-      args: [`${ITERATE_REPO}/services/docs-service/src/server.ts`],
+      args: [`${ITERATE_REPO}/services/docs/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "docs.iterate.localhost", path: "/__iterate/health", timeoutMs: 60_000 },
@@ -67,7 +67,7 @@ const processes: ProcessConfig[] = [
     slug: "home",
     definition: {
       command: PIDNAP_TSX_PATH,
-      args: [`${ITERATE_REPO}/services/home-service/src/server.ts`],
+      args: [`${ITERATE_REPO}/services/home/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "home.iterate.localhost", path: "/", timeoutMs: 60_000 },
@@ -76,7 +76,7 @@ const processes: ProcessConfig[] = [
     slug: "outerbase",
     definition: {
       command: PIDNAP_TSX_PATH,
-      args: [`${ITERATE_REPO}/services/outerbase-service/src/server.ts`],
+      args: [`${ITERATE_REPO}/services/outerbase/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: {

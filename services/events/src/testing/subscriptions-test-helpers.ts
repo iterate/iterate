@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE } from "@iterate-com/events/contract";
+import { PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE } from "@iterate-com/events-contract";
 import { type RawData, WebSocketServer } from "ws";
 
 import { type EventBusClient } from "../orpc/client.ts";
