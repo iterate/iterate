@@ -1,4 +1,3 @@
-import { execSync } from "node:child_process";
 import { defineConfig } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import alchemy from "alchemy/cloudflare/tanstack-start";
