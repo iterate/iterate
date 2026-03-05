@@ -16,10 +16,50 @@ import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { createDaemonClient } from "../../utils/daemon-orpc-client.ts";
+import { stripMachineStateMetadata } from "../../utils/machine-metadata.ts";
+import { createMachineForProject } from "../../services/machine-creation.ts";
 import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
 import { trackWebhookEvent } from "../../lib/posthog.ts";
-
+import type { ProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
+
+/**
+ * Derive the correct provider-specific snapshot/image name from a short SHA.
+ *
+ * Naming conventions (must match CI build outputs):
+ *   Daytona: iterate-sandbox-sha-{shortSha}
+ *   Fly:     registry.fly.io/{app}:sha-{shortSha}  (prefix extracted from FLY_DEFAULT_IMAGE)
+ *   Docker:  registry.depot.dev/{id}:sha-{shortSha} (prefix extracted from DOCKER_DEFAULT_IMAGE)
+ *
+ * Returns undefined when the provider's default image env var is missing
+ * (can't derive the registry prefix).
+ */
+function snapshotNameForProvider(
+  provider: ProjectSandboxProvider,
+  shortSha: string,
+  env: CloudflareEnv,
+): string | undefined {
+  switch (provider) {
+    case "daytona":
+      return `iterate-sandbox-sha-${shortSha}`;
+    case "fly": {
+      const flyDefault = env.FLY_DEFAULT_IMAGE;
+      if (!flyDefault) return undefined;
+      const colonIdx = flyDefault.lastIndexOf(":");
+      if (colonIdx === -1) return undefined;
+      return `${flyDefault.slice(0, colonIdx)}:sha-${shortSha}`;
+    }
+    case "docker": {
+      const dockerDefault = env.DOCKER_DEFAULT_IMAGE;
+      if (!dockerDefault) return undefined;
+      const colonIdx = dockerDefault.lastIndexOf(":");
+      if (colonIdx === -1) return undefined;
+      return `${dockerDefault.slice(0, colonIdx)}:sha-${shortSha}`;
+    }
+    default:
+      return undefined;
+  }
+}
 
 export type GitHubOAuthStateData = {
   projectId: string;
@@ -1008,18 +1048,6 @@ async function handlePushEvent({ payload, db, env }: WebhookEventParams<PushEven
     return;
   }
 
-  // Handle iterate/iterate pushes to main — pull code on all active machines
-  if (payload.repository.full_name === "iterate/iterate" && branch === "main") {
-    logger.info("[GitHub Webhook] iterate/iterate push to main — pulling on all machines");
-    await pullIterateIterateOnAllMachines({
-      db,
-      env,
-      ref: "main",
-      logContext: " from push",
-    });
-    return;
-  }
-
   const projects = await db.query.project.findMany({
     where: (project, { and: whereAnd, eq: whereEq }) =>
       whereAnd(
@@ -1078,46 +1106,19 @@ async function handlePushEvent({ payload, db, env }: WebhookEventParams<PushEven
   logger.info("[GitHub Webhook] Config repo push reload complete");
 }
 
-// ── Pull iterate/iterate on running machines ───────────────────────
+// ── Shared Machine Recreation ──────────────────────────────────────
 
-async function pullIterateIterateOnMachine(params: {
-  machine: typeof schema.machine.$inferSelect;
-  env: CloudflareEnv;
-  ref: string;
-}): Promise<void> {
-  const metadata = params.machine.metadata as Record<string, unknown>;
-  const runtime = await createMachineStub({
-    type: params.machine.type,
-    env: params.env,
-    externalId: params.machine.externalId,
-    metadata,
-  });
-
-  let fetcher: SandboxFetcher | undefined;
-  try {
-    fetcher = await runtime.getFetcher(3000);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (!message.includes("No host port mapped for 8080")) {
-      throw err;
-    }
-    logger.set({ machineId: params.machine.id, machineType: params.machine.type });
-    logger.warn("[GitHub Webhook] Falling back to direct daemon base URL for pullIterateIterate");
-  }
-
-  const baseUrl = await runtime.getBaseUrl(3000);
-  const daemonClient = createDaemonClient({ baseUrl, fetcher });
-  await daemonClient.daemon.pullIterateIterate({ ref: params.ref });
-}
-
-async function pullIterateIterateOnAllMachines(params: {
+async function recreateMachinesForAllProjects(params: {
   db: DB;
   env: CloudflareEnv;
-  ref: string;
+  shortSha: string;
+  namePrefix: string;
+  extraMetadata?: Record<string, unknown>;
   logContext: string;
 }): Promise<void> {
   const projectsWithActiveMachines = await params.db.query.project.findMany({
     with: {
+      organization: true,
       machines: {
         where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
         limit: 1,
@@ -1125,44 +1126,56 @@ async function pullIterateIterateOnAllMachines(params: {
     },
   });
 
-  const targets = projectsWithActiveMachines.flatMap((project) =>
-    project.machines.map((machine) => ({ projectId: project.id, machine })),
-  );
+  const projectsToUpdate = projectsWithActiveMachines.filter((p) => p.machines.length > 0);
 
-  if (targets.length === 0) {
-    logger.debug(`[GitHub Webhook] No active machines to pull iterate/iterate${params.logContext}`);
-    return;
-  }
-
-  logger.set({ targetCount: targets.length });
-  logger.info(`[GitHub Webhook] Pulling iterate/iterate on active machines${params.logContext}`);
-
-  const results = await Promise.allSettled(
-    targets.map((target) =>
-      pullIterateIterateOnMachine({ machine: target.machine, env: params.env, ref: params.ref }),
-    ),
-  );
+  logger.set({
+    total: projectsWithActiveMachines.length,
+    withActiveMachines: projectsToUpdate.length,
+  });
+  logger.info(`[GitHub Webhook] Found projects to update${params.logContext}`);
 
   let successCount = 0;
   let errorCount = 0;
 
-  for (const [index, result] of results.entries()) {
-    const target = targets[index];
-    if (result.status === "fulfilled") {
-      successCount++;
-      continue;
-    }
+  for (const project of projectsToUpdate) {
+    try {
+      const activeMachine = project.machines[0];
+      const machineName = `${params.namePrefix}-${params.shortSha}`;
+      const snapshotName = snapshotNameForProvider(
+        project.sandboxProvider,
+        params.shortSha,
+        params.env,
+      );
+      const carriedMetadata = stripMachineStateMetadata(
+        (activeMachine.metadata as Record<string, unknown>) ?? {},
+      );
 
-    errorCount++;
-    logger.error(`[GitHub Webhook] Failed pullIterateIterate on machine${params.logContext}`, {
-      projectId: target.projectId,
-      machineId: target.machine.id,
-      error: result.reason instanceof Error ? result.reason.message : String(result.reason),
-    });
+      await createMachineForProject({
+        db: params.db,
+        env: params.env,
+        projectId: project.id,
+        name: machineName,
+        metadata: {
+          ...carriedMetadata,
+          ...(snapshotName ? { snapshotName } : {}),
+          ...params.extraMetadata,
+        },
+      });
+
+      logger.set({ projectId: project.id, machineName });
+      logger.info(`[GitHub Webhook] Created machine${params.logContext}`);
+      successCount++;
+    } catch (err) {
+      logger.error(`[GitHub Webhook] Failed to create machine${params.logContext}`, {
+        projectId: project.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      errorCount++;
+    }
   }
 
   logger.set({ successCount, errorCount });
-  logger.info(`[GitHub Webhook] Completed pullIterateIterate${params.logContext}`);
+  logger.info(`[GitHub Webhook] Completed machine recreation${params.logContext}`);
 }
 
 // ── Webhook Event Handlers ─────────────────────────────────────────
@@ -1196,15 +1209,14 @@ async function handleWorkflowRun({ payload, db, env }: WebhookEventParams<Workfl
   const shortSha = headSha.slice(0, 7);
 
   logger.set({ workflowRunId: workflow_run.id, headSha, shortSha });
-  logger.info("[GitHub Webhook] Processing CI completion — pulling on all machines");
+  logger.info("[GitHub Webhook] Processing CI completion");
 
-  // Pull iterate/iterate in-place on running machines instead of recreating them.
-  // The push handler also triggers a pull, but this serves as a post-CI safety net.
-  await pullIterateIterateOnAllMachines({
+  await recreateMachinesForAllProjects({
     db,
     env,
-    ref: "main",
-    logContext: " from CI completion",
+    shortSha,
+    namePrefix: "ci",
+    logContext: "",
   });
 }
 
@@ -1305,13 +1317,17 @@ async function handleCommitComment({ payload, db, env }: WebhookEventParams<Comm
     commitSha,
     shortSha,
   });
-  logger.info("[GitHub Webhook] Processing [refresh] comment — pulling on all machines");
+  logger.info("[GitHub Webhook] Processing [refresh] comment");
 
-  // Pull to the specific commit SHA referenced by the comment
-  await pullIterateIterateOnAllMachines({
+  await recreateMachinesForAllProjects({
     db,
     env,
-    ref: commitSha,
-    logContext: " from [refresh] comment",
+    shortSha,
+    namePrefix: "refresh",
+    extraMetadata: {
+      triggeredBy: `commit_comment:${comment.id}`,
+      triggeredByUser: comment.user.login,
+    },
+    logContext: " from comment",
   });
 }
