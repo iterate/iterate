@@ -1,0 +1,12 @@
+{
+  "nm": {
+    "diskId": "dsk-0000000000003f40",
+    "mountToken": "archil-bench-ff6120572110ffdd4ac8cfee9764e8fb886f107bea14eda513cdad54f7f2decf",
+    "region": "aws-us-east-1"
+  },
+  "bundle": {
+    "diskId": "dsk-0000000000003f41",
+    "mountToken": "archil-bench-e35b756dd0eae5e14e57642c88989da0cfec55f4fb4db7b20273bbf583bf1143",
+    "region": "aws-us-east-1"
+  }
+}
