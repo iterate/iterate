@@ -1,6 +1,8 @@
 How do we persist the customer config source?
 
-Options broadly categorised into "git-server" and "archil"
+# Options
+
+Broadly categorised into "git-server" and "archil":
 
 A. github.com/iterate-projects/<project-slug>
 
@@ -38,10 +40,9 @@ D. local folder, not git + archil direct sync
 E. [the above archil options but with periodic `git bundle` and syncing with ~/.local/share/iterate/customer-config-repo]
 
 - pro: archil sync will be fast and work well
-- pro: `git bundle` beats maual `tar`: incremental updates apparently?
-- pro: `git bundle` beats maual `tar`: merge conflicts should be not-too-bad because `git-merge` handles most, well-known merge conflict semantics for the rest
-- not too huge files
-- con: merge conflicts could be messy if we care about syncing both directions
+- pro: `git bundle` beats manual `tar`: incremental updates apparently?
+- pro: `git bundle` beats manual `tar`: merge conflicts should be not-too-bad because `git-merge` handles most, well-known merge conflict semantics for the rest
+- con: merge conflicts could still be tricky, but agents can probably handle sensibly
 
 F. gitea.iterate.com
 
@@ -51,7 +52,7 @@ F. gitea.iterate.com
 - con: probably somewhat more complex to deploy + manage that DO+R2
 - con: maybe we don't want git at all
 
-Questions:
+# Questions
 
 Q: Who is this for?
 A: Anna/Sasha. New customers, possibly not very technical. Don't want to setup a github account for this.
@@ -83,3 +84,9 @@ A: Our default/recommended config. An AGENTS.md, an iterate.config.ts with handy
 
 Q: will we really be tying ourselves in knots that much with a "managed github" repo?
 A: Probably. It felt like a mess last time. But maybe we've learned and grown?
+
+---
+
+# Decision
+
+TBD
