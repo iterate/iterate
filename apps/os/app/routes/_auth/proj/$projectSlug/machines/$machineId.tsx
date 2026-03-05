@@ -23,6 +23,7 @@ import { buildProjectIngressLink } from "@/lib/project-ingress-link.ts";
 import { useSessionUser } from "@/hooks/use-session-user.ts";
 import { Button } from "@/components/ui/button.tsx";
 import { orpc, orpcClient } from "@/lib/orpc.tsx";
+import { createDaemonProxyClient } from "@/lib/daemon-client.ts";
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
   component: MachineDetailPage,
