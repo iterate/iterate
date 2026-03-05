@@ -35,10 +35,13 @@ D. local folder, not git + archil direct sync
 - con: archil sync might go v slowly if there are many small files in node_modules
 - pro: "just a folder" - no assumptions to build hard-to-walk-back dependencies on top of
 
-E. [the above archil options but with periodic tarballification and syncing with ~/.local/share/something]
+E. [the above archil options but with periodic `git bundle` and syncing with ~/.local/share/iterate/customer-config-repo]
 
-- con: merge conflicts could be messy
 - pro: archil sync will be fast and work well
+- pro: `git bundle` beats maual `tar`: incremental updates apparently?
+- pro: `git bundle` beats maual `tar`: merge conflicts should be not-too-bad because `git-merge` handles most, well-known merge conflict semantics for the rest
+- not too huge files
+- con: merge conflicts could be messy if we care about syncing both directions
 
 F. gitea.iterate.com
 
