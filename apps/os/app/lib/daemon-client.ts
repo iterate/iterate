@@ -17,7 +17,8 @@ export function createDaemonProxyClient(params: {
   const base = `/org/${params.orgSlug}/proj/${params.projectSlug}/${params.machineId}/proxy/3000`;
   return createORPCClient(
     new RPCLink({
-      url: `${window.location.origin}${base}/api/orpc`,
+      // Relative URL keeps this SSR-safe (no `window` access).
+      url: `${base}/api/orpc`,
     }),
   );
 }
