@@ -418,7 +418,7 @@ const Env = z.object({
   // Bucket name and endpoint are derived in alchemy.run.ts and passed as computed bindings.
   // Only the API key and R2 credentials need to live in Doppler.
   ARCHIL_API_KEY: Required,
-  ARCHIL_REGION: NonEmpty.default("us-east-1"),
+  ARCHIL_REGION: NonEmpty.default("aws-us-east-1"),
   ARCHIL_R2_ACCESS_KEY_ID: Required,
   ARCHIL_R2_SECRET_ACCESS_KEY: Required,
   POSTHOG_PUBLIC_KEY: Optional,
