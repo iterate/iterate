@@ -1,4 +1,7 @@
 import { execSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { type Page, expect } from "@playwright/test";
 import { spinnerWaiter } from "./plugins/spinner-waiter.ts";
 import { createOrganization, createProject, login, sidebarButton, test } from "./test-helpers.ts";
@@ -121,6 +124,125 @@ test.describe("machine persistence", () => {
     await reply.getByText("banana").waitFor();
   });
 });
+
+// ── Pull iterate/iterate ───────────────────────────────────────────
+
+/** Repo root for git operations. */
+const REPO_ROOT = path.resolve(import.meta.dirname, "..");
+
+/**
+ * Create a temporary git branch with a unique greeting baked into the daemon's
+ * execCommand response. Uses a git worktree so the working directory running
+ * the test is unaffected. The branch is pushed to origin and cleaned up when
+ * disposed.
+ */
+function createTestBranch(branchName: string, greeting: string) {
+  const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pull-iterate-spec-"));
+
+  // Create worktree + branch off HEAD
+  execSync(`git worktree add -b ${branchName} ${worktreeDir} HEAD`, {
+    cwd: REPO_ROOT,
+    stdio: "pipe",
+  });
+
+  // Patch execCommand to include the greeting
+  const toolsFile = path.join(worktreeDir, "apps/daemon/server/orpc/procedures/tools.ts");
+  const original = fs.readFileSync(toolsFile, "utf-8");
+  const patchBefore = "exitCode: result.exitCode";
+  const patchIndex = original.indexOf(patchBefore);
+  if (patchIndex === -1)
+    throw new Error(`Can't patch ${toolsFile}: couldn't  find "${patchBefore}`);
+  if (patchIndex !== original.lastIndexOf(patchBefore))
+    throw new Error(`Can't patch ${toolsFile}: "${patchBefore}" appears multiple times`);
+
+  const beforePatch = original.slice(0, patchIndex);
+  const patched =
+    beforePatch +
+    `greeting: ${JSON.stringify(greeting)},\n` +
+    original.slice(beforePatch.trimEnd().length, beforePatch.length) + // whitespace
+    original.slice(patchIndex + patchBefore.length);
+
+  fs.writeFileSync(toolsFile, patched);
+
+  // Commit and push
+  execSync(`git add -A && git commit --no-verify -m "test: add greeting ${greeting}"`, {
+    cwd: worktreeDir,
+    stdio: "pipe",
+  });
+  execSync(`git push origin ${branchName}`, { cwd: worktreeDir, stdio: "pipe" });
+
+  return {
+    branchName,
+    greeting,
+    [Symbol.asyncDispose]: async () => {
+      try {
+        execSync(`git worktree remove --force ${worktreeDir}`, { cwd: REPO_ROOT, stdio: "pipe" });
+      } catch {
+        /* already removed */
+      }
+      try {
+        execSync(`git branch -D ${branchName}`, { cwd: REPO_ROOT, stdio: "pipe" });
+      } catch {
+        /* already deleted */
+      }
+      try {
+        execSync(`git push origin --delete ${branchName}`, { cwd: REPO_ROOT, stdio: "pipe" });
+      } catch {
+        /* already deleted or push failed */
+      }
+    },
+  };
+}
+
+/**
+ * Click "Pull iterate/iterate" on the machine detail page.
+ * Overrides window.prompt to supply the ref automatically.
+ */
+async function pullIterateIterate(page: Page, ref: string) {
+  await page.evaluate((r) => (window.prompt = () => r), ref);
+  await page.getByRole("button", { name: "Pull iterate/iterate" }).click();
+  await page.getByText("Pull triggered").waitFor();
+}
+
+test.describe("pull iterate/iterate", () => {
+  test("in-place code update via pull button", async ({ page }) => {
+    test.setTimeout(900_000);
+    test.skip(
+      process.env.MACHINE_PERSISTENCE_SPEC !== "1",
+      "Set MACHINE_PERSISTENCE_SPEC=1 to run machine persistence specs",
+    );
+
+    const imageTag = resolveImageTag();
+    const now = Date.now();
+    const testEmail = `pull-iterate-${now}+test@nustom.com`;
+    const machineName = `Pull Test ${now}`;
+    const greeting = `greeting-${now}`;
+    const branchName = `test/pull-iterate-${now}`;
+
+    await using _branch = createTestBranch(branchName, greeting);
+
+    await login(page, testEmail);
+    await createOrganization(page);
+    await createProject(page);
+
+    // Create a machine and wait for it to become active.
+    await createMachineFromUi(page, machineName, imageTag);
+
+    // Trigger the pull.
+    await pullIterateIterate(page, branchName);
+
+    // Poll "Run command" until the greeting appears in the output.
+    // The daemon restarts during the pull, so expect transient errors — just keep retrying.
+    await expect
+      .poll(async () => runCommandOnMachine(page, "git status").catch(String), {
+        timeout: 120_000,
+        intervals: [3_000],
+      })
+      .toContain(greeting);
+  });
+});
+
+// ── Helpers ────────────────────────────────────────────────────────
 
 async function webchatSend(page: Page, text: string) {
   await page.getByTestId("webchat-input").fill(text);
