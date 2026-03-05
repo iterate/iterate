@@ -42,6 +42,8 @@ function parseArgs(argv: string[]) {
   let replayPath: string | undefined;
   let unhandled: UnhandledMode = "bypass";
   let quiet = false;
+  let verbose = true;
+  let maxBody = 2000;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -67,6 +69,12 @@ function parseArgs(argv: string[]) {
       unhandled = arg.slice("--unhandled=".length) as UnhandledMode;
     } else if (arg === "--quiet" || arg === "-q") {
       quiet = true;
+    } else if (arg === "--verbose" || arg === "-v") {
+      verbose = true;
+    } else if (arg === "--max-body" && argv[i + 1]) {
+      maxBody = Number.parseInt(argv[++i]!, 10);
+    } else if (arg.startsWith("--max-body=")) {
+      maxBody = Number.parseInt(arg.slice("--max-body=".length), 10);
     }
   }
 
@@ -75,7 +83,7 @@ function parseArgs(argv: string[]) {
     process.exit(1);
   }
 
-  return { port, host, recordPath, replayPath, unhandled, quiet };
+  return { port, host, recordPath, replayPath, unhandled, quiet, verbose, maxBody };
 }
 
 function ts(): string {
@@ -83,7 +91,9 @@ function ts(): string {
 }
 
 async function main() {
-  const { port, host, recordPath, replayPath, unhandled, quiet } = parseArgs(process.argv.slice(2));
+  const { port, host, recordPath, replayPath, unhandled, quiet, verbose, maxBody } = parseArgs(
+    process.argv.slice(2),
+  );
 
   const serverOpts: UseMockHttpServerOptions = {
     port,
@@ -102,13 +112,53 @@ async function main() {
 
   const server = await useMockHttpServer(serverOpts);
 
+  function truncate(text: string, max: number): string {
+    if (text.length <= max) return text;
+    return `${text.slice(0, max)}… (${text.length} bytes total)`;
+  }
+
+  function formatHeaders(headers: Headers): string {
+    const lines: string[] = [];
+    headers.forEach((value, key) => {
+      lines.push(`    ${key}: ${value}`);
+    });
+    return lines.join("\n");
+  }
+
+  function logVerbose(label: string, request: Request, response: Response): void {
+    console.log(
+      [
+        `${ts()} ${label}  ${request.method} ${request.url} → ${response.status}`,
+        `  ── Request headers ──`,
+        formatHeaders(request.headers),
+        `  ── Response headers ──`,
+        formatHeaders(response.headers),
+        "",
+      ].join("\n"),
+    );
+  }
+
   if (!quiet) {
-    server.events.on("response:mocked", ({ request, response }: { request: Request; response: Response }) => {
-      console.log(`${ts()} REPLAY  ${request.method} ${request.url} → ${response.status}`);
-    });
-    server.events.on("response:bypass", ({ request, response }: { request: Request; response: Response }) => {
-      console.log(`${ts()} BYPASS  ${request.method} ${request.url} → ${response.status}`);
-    });
+    server.events.on(
+      "response:mocked",
+      ({ request, response }: { request: Request; response: Response }) => {
+        if (verbose) {
+          void logVerbose("REPLAY", request, response);
+        } else {
+          console.log(`${ts()} REPLAY  ${request.method} ${request.url} → ${response.status}`);
+        }
+      },
+    );
+    server.events.on(
+      "response:bypass",
+      ({ request, response }: { request: Request; response: Response }) => {
+        if (verbose) {
+          void logVerbose("BYPASS", request, response);
+        } else {
+          console.log(`${ts()} BYPASS  ${request.method} ${request.url} → ${response.status}`);
+        }
+      },
+    );
     server.events.on("request:unhandled", ({ request }: { request: Request }) => {
       if (unhandled === "error") {
         console.log(`${ts()} REJECT  ${request.method} ${request.url}`);
@@ -121,7 +171,9 @@ async function main() {
     const entryCount = har.log?.entries?.length ?? 0;
     const handlers = fromTrafficWithWebSocket(har, { matchWebSocketBy: "path" });
     server.use(...handlers);
-    console.log(`[egress-proxy] replay: ${replayPath} (${entryCount} entries, ${handlers.length} handlers)`);
+    console.log(
+      `[egress-proxy] replay: ${replayPath} (${entryCount} entries, ${handlers.length} handlers)`,
+    );
   }
 
   console.log(`[egress-proxy] listening on ${server.url}`);

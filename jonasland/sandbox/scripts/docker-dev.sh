@@ -1,12 +1,15 @@
 #!/bin/bash
 #
 # Start a tmux session with:
-#   Left pane  — egress proxy (bypass mode, logging + HAR recording)
-#   Right pane — interactive shell inside a jonasland sandbox container
+#   Pane 0 (left)  — egress proxy (bypass mode, logging + HAR recording)
+#   Pane 1 (right) — interactive shell inside a jonasland sandbox container
 #
-# All sandbox HTTPS traffic routes through the host-side proxy, so you can
-# see every outbound request in the left pane. Traffic is recorded to a HAR
-# file under jonasland/e2e/artifacts/docker-dev/.
+# An FRP tunnel connects the host-side egress proxy into the container so all
+# sandbox HTTPS egress routes through the proxy. Traffic appears in pane 0 and
+# is recorded to a HAR file under jonasland/e2e/artifacts/docker-dev/.
+#
+# This uses frpc (websocket over Caddy) instead of host.docker.internal, so
+# the same approach works across the internet — not just local Docker.
 #
 # Usage:
 #   jonasland/sandbox/scripts/docker-dev.sh
@@ -17,12 +20,15 @@
 #
 # Extra flags are forwarded to docker-shell.ts (--image, --no-pidnap, --env, etc.)
 # The egress proxy port can be set with --proxy-port (default: 19555).
+#
+# Requires: frpc (brew install frpc)
 
 set -o pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SESSION="jonasland-dev"
 PROXY_PORT=19555
+FRP_DATA_PORT=27180
 DOCKER_SHELL_ARGS=()
 HAS_IMAGE_FLAG=false
 
@@ -35,45 +41,99 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Default to jonasland-sandbox:latest (locally built) unless the user passed --image.
-# This avoids picking up a stale remote tag from Doppler's JONASLAND_SANDBOX_IMAGE.
 if [[ "$HAS_IMAGE_FLAG" == "false" ]]; then
   DOCKER_SHELL_ARGS+=("--image" "jonasland-sandbox:latest")
 fi
 
-# HAR recording path
-HAR_DIR="$REPO_ROOT/jonasland/e2e/artifacts/docker-dev"
+if ! command -v frpc &>/dev/null; then
+  echo "[docker-dev] frpc not found. Install with: brew install frpc" >&2
+  exit 1
+fi
+
+CONTAINER_NAME="jonasland-dev-$(date +%s | tail -c 5)"
+
+HAR_DIR="/tmp/jonasland-dev"
 mkdir -p "$HAR_DIR"
 HAR_FILE="$HAR_DIR/docker-dev-$(date +%Y%m%d-%H%M%S).har"
 
-# Kill existing session if any
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
-# Proxy — handles SIGHUP (from tmux session kill) to flush HAR before exiting.
+# Pane 0 (left): egress proxy on host
 PROXY_CMD="cd '$REPO_ROOT' && echo '📁 HAR: $HAR_FILE' && echo '' && node_modules/.bin/tsx jonasland/scripts/external-egress-proxy.ts --port $PROXY_PORT --record '$HAR_FILE'"
 
-# Container shell — when this exits, send SIGTERM to the proxy pane and wait
-# for it to flush the HAR, then kill the session.
-SHELL_CMD="cd '$REPO_ROOT/jonasland/sandbox' && doppler run -- tsx scripts/docker-shell.ts --env ITERATE_EXTERNAL_EGRESS_PROXY=http://host.docker.internal:$PROXY_PORT ${DOCKER_SHELL_ARGS[*]:-}; echo '[docker-dev] container exited, flushing HAR...'; tmux send-keys -t $SESSION:main.0 C-c 2>/dev/null; sleep 4; tmux kill-session -t $SESSION 2>/dev/null"
+# Pane 1 (right): container shell with FRP setup
+# After docker-shell.ts prints "ready", a background job connects frpc and
+# writes ITERATE_EXTERNAL_EGRESS_PROXY into the container's env file.
+SHELL_CMD="$(cat <<OUTER_EOF
+cd '$REPO_ROOT/jonasland/sandbox'
 
-# Create session with proxy pane. remain-on-exit keeps panes open after their
-# process exits so we can see the "HAR written" message.
+# Start frpc in background once the container is healthy.
+# docker-shell.ts outputs the container ID on a line matching "container=...".
+# We use --name so we know the OrbStack hostname upfront.
+(
+  # Wait for caddy to be healthy via OrbStack DNS
+  echo '[frp-setup] waiting for caddy on $CONTAINER_NAME...'
+  for i in \$(seq 1 60); do
+    result=\$(curl -sf --max-time 2 http://$CONTAINER_NAME.orb.local/__iterate/caddy-health 2>/dev/null) || true
+    if echo "\$result" | grep -q ok; then
+      echo '[frp-setup] caddy healthy'
+      break
+    fi
+    sleep 2
+  done
+
+  echo '[frp-setup] connecting frpc to frp.$CONTAINER_NAME.orb.local...'
+  frpc tcp \\
+    -s frp.$CONTAINER_NAME.orb.local \\
+    -P 80 \\
+    -p websocket \\
+    -l $PROXY_PORT \\
+    -r $FRP_DATA_PORT \\
+    -n egress-tunnel &
+  FRPC_PID=\$!
+  sleep 3
+
+  # Write external egress proxy env to container
+  docker exec $CONTAINER_NAME bash -c 'echo "ITERATE_EXTERNAL_EGRESS_PROXY=http://127.0.0.1:$FRP_DATA_PORT" >> ~/.iterate/.env'
+  echo '[frp-setup] wrote ITERATE_EXTERNAL_EGRESS_PROXY to container env'
+
+  # Wait for egress proxy to pick up the change
+  for i in \$(seq 1 15); do
+    out=\$(docker exec $CONTAINER_NAME curl -fsS http://127.0.0.1:19001/api/runtime 2>/dev/null || true)
+    if echo "\$out" | grep -q '"externalProxyConfigured":true'; then
+      echo '[frp-setup] egress proxy configured — FRP tunnel active'
+      break
+    fi
+    sleep 1
+  done
+
+  wait \$FRPC_PID 2>/dev/null
+) &
+FRP_SETUP_PID=\$!
+
+doppler run -- tsx scripts/docker-shell.ts \\
+  --name $CONTAINER_NAME \\
+  ${DOCKER_SHELL_ARGS[*]:-}
+
+echo '[docker-dev] container exited, cleaning up...'
+kill \$FRP_SETUP_PID 2>/dev/null
+pkill -f "frpc tcp.*egress-tunnel" 2>/dev/null
+tmux send-keys -t $SESSION:main.0 C-c 2>/dev/null
+sleep 4
+tmux kill-session -t $SESSION 2>/dev/null
+OUTER_EOF
+)"
+
 tmux new-session -d -s "$SESSION" -n main "$PROXY_CMD"
 tmux set-option -t "$SESSION" remain-on-exit on
-
-# Split horizontally, right pane gets the container shell
 tmux split-window -h -t "$SESSION:main" "$SHELL_CMD"
-
-# Give the container pane more space (70%)
 tmux resize-pane -t "$SESSION:main.1" -x '70%'
-
-# Select the container pane so you land in the shell
 tmux select-pane -t "$SESSION:main.1"
 
-# Attach (skip if no TTY — e.g. when run from an IDE or script)
 if [ -t 0 ]; then
   exec tmux attach-session -t "$SESSION"
 else
   echo "[docker-dev] tmux session '$SESSION' created (no TTY — attach manually with: tmux attach -t $SESSION)"
+  echo "[docker-dev] container: $CONTAINER_NAME"
   echo "[docker-dev] HAR recording: $HAR_FILE"
 fi

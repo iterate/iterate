@@ -12,8 +12,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@tailwindcss/vite": "^4.1.17",
-    "@vitejs/plugin-react": "^5.1.2",
     "@hono/node-server": "^1.19.9",
     "@iterate-com/events-contract": "workspace:*",
     "@iterate-com/example-contract": "workspace:*",
@@ -26,9 +24,11 @@
     "@orpc/openapi": "^1.13.5",
     "@orpc/server": "^1.13.5",
     "@orpc/zod": "^1.13.5",
+    "@tailwindcss/vite": "^4.1.17",
+    "@vitejs/plugin-react": "^5.1.2",
     "better-sqlite3": "^12.4.1",
     "drizzle-orm": "^0.45.1",
-    "hono": "^4.11.10",
+    "hono": "^4.12.5",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tailwindcss": "^4.1.17",

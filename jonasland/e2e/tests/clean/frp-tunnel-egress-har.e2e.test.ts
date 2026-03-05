@@ -32,13 +32,12 @@ async function ensureExternalProxyConfigured(params: {
       args: ["/home/iterate/src/github.com/iterate/iterate/services/egress-service/src/server.ts"],
       env: {
         EGRESS_PROXY_PORT: "19000",
-        EGRESS_ADMIN_PORT: "19001",
       },
     },
     options: { restartPolicy: "always" },
     envOptions: { reloadDelay: 500 },
     healthCheck: {
-      url: "http://127.0.0.1:19001/__iterate/health",
+      url: "http://127.0.0.1:19000/__iterate/health",
       intervalMs: 2_000,
     },
   });
@@ -46,7 +45,7 @@ async function ensureExternalProxyConfigured(params: {
   const runtime = await params.deployment.exec([
     "sh",
     "-lc",
-    "for i in $(seq 1 30); do out=$(curl -fsS http://127.0.0.1:19001/api/runtime 2>/dev/null || true); echo \"$out\" | grep -q '\"externalProxyConfigured\":true' && { echo \"$out\"; exit 0; }; sleep 1; done; exit 1",
+    'for i in $(seq 1 30); do out=$(curl -fsS http://127.0.0.1:19000/api/runtime 2>/dev/null || true); echo "$out" | grep -q \'"externalProxyConfigured":true\' && { echo "$out"; exit 0; }; sleep 1; done; exit 1',
   ]);
   expect(runtime.exitCode, runtime.output).toBe(0);
 }
@@ -181,9 +180,9 @@ describe.runIf(cases.length > 0)("egress har recording", () => {
             .filter((value): value is string => Boolean(value))
             .map((value) => new URL(value).host);
           expect(hosts).toContain("example.com");
-          expect(
-            hosts.some((host) => host === "127.0.0.1" || host.startsWith("127.0.0.1:")),
-          ).toBe(false);
+          expect(hosts.some((host) => host === "127.0.0.1" || host.startsWith("127.0.0.1:"))).toBe(
+            false,
+          );
         } finally {
           if (bridge) await bridge.stop();
         }

@@ -7,7 +7,7 @@ import { type AnyContractRouter, type ContractRouterClient } from "@orpc/contrac
 import pWaitFor from "p-wait-for";
 import { createClient as createPidnapClient, type Client as PidnapClient } from "pidnap/client";
 import {
-  createOrpcRpcServiceClient,
+  createOrpcOpenApiServiceClient,
   localHostForService,
   type ServiceManifestLike,
 } from "../index.ts";
@@ -165,7 +165,7 @@ export class Deployment<
     this.assertRunning();
     if (this._registryService) return this._registryService;
     this._registryService = createRegistryClient({
-      url: `${this.baseUrl}/orpc`,
+      url: `${this.baseUrl}/api`,
       fetch: this.routedFetch("registry.iterate.localhost"),
     });
     return this._registryService;
@@ -174,10 +174,10 @@ export class Deployment<
   get eventsService(): ContractRouterClient<EventBusContract> {
     this.assertRunning();
     if (this._eventsService) return this._eventsService;
-    this._eventsService = createOrpcRpcServiceClient({
+    this._eventsService = createOrpcOpenApiServiceClient({
       env: {},
       manifest: eventsServiceManifest,
-      url: `${this.baseUrl}/orpc`,
+      url: `${this.baseUrl}/api`,
       fetch: this.routedFetch("events.iterate.localhost"),
     });
     return this._eventsService;
@@ -232,17 +232,13 @@ export class Deployment<
     );
 
     const routeChecks = [
-      { host: "registry.iterate.localhost", path: "/orpc/service/health", method: "POST" },
-      { host: "events.iterate.localhost", path: "/api/__iterate/health", method: "GET" },
+      { host: "registry.iterate.localhost", path: "/api/__iterate/health" },
+      { host: "events.iterate.localhost", path: "/api/__iterate/health" },
     ];
     for (const check of routeChecks) {
       await pWaitFor(
         async () => {
-          const init: RequestInit | undefined =
-            check.method === "POST"
-              ? { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }
-              : undefined;
-          const resp = await this.fetch(check.host, check.path, init).catch(() => null);
+          const resp = await this.fetch(check.host, check.path).catch(() => null);
           return resp?.ok ?? false;
         },
         { interval: 1_000, signal },
@@ -261,10 +257,10 @@ export class Deployment<
     manifest: ServiceManifestLike<TContract>;
   }): ContractRouterClient<TContract> {
     const host = localHostForService({ slug: params.manifest.slug });
-    return createOrpcRpcServiceClient({
+    return createOrpcOpenApiServiceClient({
       env: {},
       manifest: params.manifest,
-      url: `${this.baseUrl}/orpc`,
+      url: `${this.baseUrl}/api`,
       fetch: this.routedFetch(host),
     });
   }

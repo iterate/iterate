@@ -109,7 +109,6 @@ export default defineConfig({
         ],
         env: {
           EGRESS_PROXY_PORT: "19000",
-          EGRESS_ADMIN_PORT: "19001",
         },
       },
       options: {

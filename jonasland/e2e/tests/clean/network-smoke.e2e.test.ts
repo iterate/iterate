@@ -83,7 +83,7 @@ async function startEgressProcess(deployment: Deployment): Promise<void> {
     options: { restartPolicy: "always" },
     envOptions: { reloadDelay: false },
     healthCheck: {
-      url: "http://127.0.0.1:19001/__iterate/health",
+      url: "http://127.0.0.1:19000/__iterate/health",
       intervalMs: 2_000,
     },
   });

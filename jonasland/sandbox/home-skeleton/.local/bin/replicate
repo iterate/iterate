@@ -1,0 +1,7 @@
+#!/bin/sh
+echo "Error: The replicate CLI is not installed." >&2
+echo "Use iterate tool replicate instead. Example:" >&2
+echo "" >&2
+echo "  iterate tool replicate 'const output = await replicate.run(\"black-forest-labs/flux-schnell\", { input: { prompt: \"a cat\" } }); console.log(output);'" >&2
+echo "" >&2
+exit 1

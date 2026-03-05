@@ -5,7 +5,6 @@ packages:
   - apps/daemon
   - apps/iterate-com
   - apps/os
-  - apps/fake-os
   - sandbox
   - jonasland/sandbox
   - jonasland/e2e

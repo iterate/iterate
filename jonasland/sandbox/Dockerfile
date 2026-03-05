@@ -10,35 +10,71 @@ FROM ${OTELCOL_IMAGE} AS otelcol
 FROM ${CLICKSTACK_IMAGE} AS clickstack
 
 # Base runtime for all sandbox processes and developer tooling.
-FROM node:24-trixie-slim
+FROM node:24
 
 # Tool versions are args so we can bump intentionally and audit diffs.
 ARG CADDY_VERSION=2.11.1
 ARG FRP_VERSION=0.65.0
-ARG PI_CODING_AGENT_VERSION=0.52.8
-ARG SANDBOX_CLAUDE_CODE_VERSION=2.1.50
-ARG SANDBOX_CODEX_VERSION=0.98.0
-ARG SANDBOX_OPENCODE_VERSION=1.2.15
+ARG PI_CODING_AGENT_VERSION=0.56.1
+ARG SANDBOX_AGENT_BROWSER_VERSION=0.16.3
+ARG SANDBOX_BUN_VERSION=1.3.6
+ARG SANDBOX_CLAUDE_CODE_VERSION=2.1.69
+ARG SANDBOX_CODEX_VERSION=0.111.0
+ARG SANDBOX_GO_VERSION=1.23.4
+ARG SANDBOX_GOGCLI_REF=99d957581f61532de08f3847e79f639edad3c68b
+ARG SANDBOX_OPENCODE_VERSION=1.2.18
 ARG TARGETARCH
 ARG GIT_SHA=unknown
 
 # Shared repo location used by entrypoint scripts and pidnap config.
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 
-# Install only required OS packages to keep image slim and deterministic.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install required OS packages.
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
+    curl -sLf --retry 3 --tlsv1.2 --proto "=https" 'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' | gpg --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg && \
+    chmod go+r /usr/share/keyrings/doppler-archive-keyring.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" | tee /etc/apt/sources.list.d/doppler-cli.list > /dev/null && \
+    apt-get update && apt-get install -y --no-install-recommends \
     bash \
+    btop \
     build-essential \
     ca-certificates \
     curl \
     dnsmasq \
+    doppler \
     fd-find \
-    git \
     gh \
+    git \
+    inotify-tools \
     iptables \
     jq \
     less \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libatspi2.0-0 \
     libcap2-bin \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libfuse2 \
+    libgbm1 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxcursor1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxi6 \
+    libxkbcommon0 \
+    libxrandr2 \
+    libxshmfence1 \
+    locales \
+    make \
     openssh-client \
     procps \
     ripgrep \
@@ -49,8 +85,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tmux \
     unzip \
     util-linux \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && ln -s "$(which fdfind)" /usr/local/bin/fd
+    && ln -s $(which fdfind) /usr/local/bin/fd
+
+# Configure UTF-8 locale (required for btop and other CLI tools)
+RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
+
+# Install cloudflared (Cloudflare Tunnel client)
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -fsSL -o /tmp/cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb" && \
+    dpkg -i /tmp/cloudflared.deb && \
+    rm /tmp/cloudflared.deb
 
 # Route *.iterate.localhost to loopback for in-container service discovery.
 # See jonasland/hosts-and-routing.md for routing model and rationale.
@@ -78,13 +126,11 @@ RUN case "${TARGETARCH}" in \
 # Enable pinned pnpm via corepack for workspace installs.
 RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
 
-# Install globally-invoked CLIs that run inside the sandbox.
-RUN npm install -g \
-    @mariozechner/pi-coding-agent@${PI_CODING_AGENT_VERSION} \
-    @openai/codex@${SANDBOX_CODEX_VERSION} \
-    tsx \
-    serve \
-    && npm cache clean --force
+# Global npm tools (as root for system-wide access)
+RUN npm install -g tsx serve
+
+# Install Archil client (persistent POSIX volumes backed by S3/R2)
+RUN curl -s https://s3.amazonaws.com/archil-client/install | sh || true
 
 # Copy observability binaries from their upstream images into one final image.
 COPY --from=openobserve /openobserve /usr/local/bin/openobserve
@@ -108,11 +154,63 @@ RUN groupadd -g 1001 iterate && \
 # Install user-scoped CLIs as the `iterate` user so file ownership is correct.
 USER iterate
 
-# Ensure user-level bin locations are preferred over system defaults.
-ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:/home/iterate/.opencode/bin:/home/iterate/.npm-global/bin:$PATH"
+# PATH setup for iterate tools. These ENV statements set PATH for non-shell contexts
+# (e.g. `docker exec container opencode`). Login shells reset PATH via /etc/profile,
+# so home-skeleton/.profile must ALSO set up these paths for `bash -l` and SSH to work.
+ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
-RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
+# Configure npm for userspace global installs
+RUN mkdir -p ~/.npm-global && \
+    npm config set prefix ~/.npm-global
+ENV PATH="/home/iterate/.npm-global/bin:$PATH"
+
+# Install bun
+RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${SANDBOX_BUN_VERSION}"
+ENV PATH="/home/iterate/.bun/bin:$PATH"
+
+# Install Go
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then GO_ARCH="arm64"; else GO_ARCH="amd64"; fi && \
+    curl -fsSL "https://go.dev/dl/go${SANDBOX_GO_VERSION}.linux-${GO_ARCH}.tar.gz" | sudo tar -C /usr/local -xzf -
+ENV PATH="/usr/local/go/bin:/home/iterate/go/bin:$PATH"
+ENV GOPATH="/home/iterate/go"
+
+# Install flyctl (Fly.io CLI)
+RUN curl -fsSL https://fly.io/install.sh | sh
+ENV PATH="/home/iterate/.fly/bin:$PATH"
+
+# Install gogcli (Google Suite CLI: Gmail, GCal, GDrive, etc.)
+RUN mkdir -p /home/iterate/.local/bin && \
+    git clone https://github.com/mmkal/gogcli.git /tmp/gogcli && \
+    cd /tmp/gogcli && \
+    git checkout ${SANDBOX_GOGCLI_REF} && \
+    go build -o /home/iterate/.local/bin/gog ./cmd/gog && \
+    rm -rf /tmp/gogcli
+
+# Agent packages (npm, userspace)
+RUN npm install -g \
+    agent-browser@${SANDBOX_AGENT_BROWSER_VERSION} \
+    @mariozechner/pi-coding-agent@${PI_CODING_AGENT_VERSION} \
+    @openai/codex@${SANDBOX_CODEX_VERSION} \
+    && npm cache clean --force
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${SANDBOX_CLAUDE_CODE_VERSION}
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
+ENV PATH="/home/iterate/.opencode/bin:$PATH"
+
+# Pre-download Chromium for agent-browser
+RUN agent-browser install
+
+# Ensure wrapper scripts win after all PATH modifications.
+ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
+
+# Warm OpenCode plugin deps by downloading from npm; speeds first session.
+RUN set -e && \
+    opencode --version && \
+    set +e && \
+    echo "--- opencode warm-up (errors below are expected) ---" && \
+    opencode run "Hello" 2>&1; \
+    warmup_exit=$?; \
+    echo "--- opencode warm-up finished (exit=$warmup_exit) ---"
 
 # --- Caddy root CA trust ---
 #

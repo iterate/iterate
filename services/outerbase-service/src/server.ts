@@ -1,19 +1,25 @@
-import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, extname, resolve } from "node:path";
-import { URL, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
+import { createAdaptorServer } from "@hono/node-server";
 import {
-  createServiceRequestLogger,
+  applyOpenAPIRoute,
+  applyServiceMiddleware,
+  createServiceObservabilityHandler,
+  createServiceOpenAPIHandler,
+  createSimpleServiceRouter,
   getOtelRuntimeConfig,
   initializeServiceEvlog,
   initializeServiceOtel,
   serviceLog,
   transformLibsqlResultSet,
+  type ServiceAppEnv,
 } from "@iterate-com/shared/jonasland";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import { Hono, type Context } from "hono";
 
 const serviceName = "jonasland-outerbase-service";
+const serviceVersion = "0.0.1";
 const DEFAULT_SQLITE_PATHS = [
   "/var/lib/jonasland/events-service.sqlite",
   "/var/lib/jonasland/example.sqlite",
@@ -385,43 +391,27 @@ async function executeRequest(value: unknown, mainAlias: string): Promise<QueryR
   return { type: "query", id, error: "unsupported_type" };
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let totalSize = 0;
-  for await (const chunk of req) {
-    const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    chunks.push(part);
-    totalSize += part.length;
-    if (totalSize > 2_000_000) {
-      throw new Error("Request body too large");
+function createAuthorizeMiddleware(env: OuterbaseEnv) {
+  return async (c: Context<ServiceAppEnv>, next: () => Promise<void>) => {
+    const username = env.basicAuthUser;
+    const password = env.basicAuthPass;
+    if (!username) return next();
+
+    const authorization = c.req.header("authorization");
+    if (!authorization?.startsWith("Basic ")) {
+      c.header("WWW-Authenticate", 'Basic realm="outerbase"');
+      return c.text("Unauthorized", 401);
     }
-  }
-  const text = Buffer.concat(chunks).toString("utf8");
-  if (!text.trim()) return {};
-  return JSON.parse(text);
-}
 
-function authorize(req: IncomingMessage, res: ServerResponse, env: OuterbaseEnv): boolean {
-  const username = env.basicAuthUser;
-  const password = env.basicAuthPass;
-  if (!username) return true;
+    const decoded = Buffer.from(authorization.slice(6), "base64").toString("utf8");
+    const expected = `${username}:${password}`;
+    if (decoded !== expected) {
+      c.header("WWW-Authenticate", 'Basic realm="outerbase"');
+      return c.text("Unauthorized", 401);
+    }
 
-  const authorization = req.headers.authorization;
-  if (!authorization?.startsWith("Basic ")) {
-    res.writeHead(401, { "WWW-Authenticate": 'Basic realm="outerbase"' });
-    res.end("Unauthorized");
-    return false;
-  }
-
-  const decoded = Buffer.from(authorization.slice(6), "base64").toString("utf8");
-  const expected = `${username}:${password}`;
-  if (decoded !== expected) {
-    res.writeHead(401, { "WWW-Authenticate": 'Basic realm="outerbase"' });
-    res.end("Unauthorized");
-    return false;
-  }
-
-  return true;
+    return next();
+  };
 }
 
 function buildPageHtml(mainAlias: string): string {
@@ -720,135 +710,79 @@ export async function startOuterbaseService(options?: {
   initializeServiceEvlog(serviceName);
   await initializeRuntime(env);
 
-  const server = createServer(async (req, res) => {
-    const requestId = randomUUID();
-    const requestLog = createServiceRequestLogger({
-      requestId,
-      method: req.method,
-      path: req.url,
+  const executeSql = async (statement: string) => {
+    const session = await getSqliteSession(defaultMainAlias);
+    return executeSqlStatement(session.client, statement);
+  };
+
+  const router = createSimpleServiceRouter({
+    serviceName,
+    version: serviceVersion,
+    executeSql,
+  });
+
+  const openAPIHandler = createServiceOpenAPIHandler({
+    router,
+    title: "jonasland outerbase API",
+    version: serviceVersion,
+  });
+
+  const app = new Hono<ServiceAppEnv>();
+  applyServiceMiddleware(app);
+  app.use("*", createAuthorizeMiddleware(env));
+
+  const resolveOuterbaseRuntimeConfig = async () => ({
+    mainAlias: defaultMainAlias,
+    targets: sqliteTargets,
+  });
+
+  app.get("/api/observability", createServiceObservabilityHandler(resolveOuterbaseRuntimeConfig));
+
+  app.get("/api/runtime", async (c: Context<ServiceAppEnv>) => {
+    const mainAlias = resolveMainAlias(c.req.query("main"));
+    const session = await getSqliteSession(mainAlias);
+    return c.json({
+      studioSrc,
+      selectedMainAlias: mainAlias,
+      databases: sqliteTargets,
+      mainPath: session.main.path,
+      attached: session.attached,
     });
-    const startedAt = Date.now();
-    let status = 500;
+  });
 
+  app.post("/query", async (c: Context<ServiceAppEnv>) => {
+    const mainAlias = resolveMainAlias(c.req.query("main"));
     try {
-      if (!authorize(req, res, env)) {
-        status = res.statusCode > 0 ? res.statusCode : 401;
-        return;
-      }
-
-      const requestUrl = new URL(req.url ?? "/", "http://localhost");
-      const pathname = requestUrl.pathname;
-      const mainAlias = resolveMainAlias(requestUrl.searchParams.get("main") ?? undefined);
-
-      if (req.method === "GET" && pathname === "/__iterate/health") {
-        status = 200;
-        json(res, status, { ok: true, service: serviceName });
-        return;
-      }
-
-      if (req.method === "POST" && pathname === "/__iterate/sql") {
-        const body = await readJsonBody(req);
-        const statement =
-          body && typeof body === "object" && "statement" in body
-            ? (body as { statement?: unknown }).statement
-            : undefined;
-        const maybeMainAlias =
-          body && typeof body === "object" && "main" in body
-            ? (body as { main?: unknown }).main
-            : undefined;
-        if (typeof statement !== "string" || statement.trim().length === 0) {
-          status = 400;
-          json(res, status, { error: "invalid_statement" });
-          return;
-        }
-        const mainAlias = resolveMainAlias(
-          typeof maybeMainAlias === "string" ? maybeMainAlias : undefined,
-        );
-        const session = await getSqliteSession(mainAlias);
-        const result = executeSqlStatement(session.client, statement);
-        status = 200;
-        json(res, status, transformLibsqlResultSet(result));
-        return;
-      }
-
-      if (req.method === "GET" && pathname === "/__iterate/debug") {
-        const session = await getSqliteSession(mainAlias);
-        status = 200;
-        json(res, status, {
-          otel: getOtelRuntimeConfig(),
-          sqlite: {
-            mainAlias: defaultMainAlias,
-            targets: sqliteTargets,
-          },
-          selectedMainAlias: mainAlias,
-          mainPath: session.main.path,
-          attached: session.attached,
-        });
-        return;
-      }
-
-      if (req.method === "GET" && pathname === "/api/observability") {
-        status = 200;
-        json(res, status, {
-          otel: getOtelRuntimeConfig(),
-          sqlite: {
-            mainAlias: defaultMainAlias,
-            targets: sqliteTargets,
-          },
-        });
-        return;
-      }
-
-      if (req.method === "GET" && pathname === "/api/runtime") {
-        const session = await getSqliteSession(mainAlias);
-        status = 200;
-        json(res, status, {
-          studioSrc,
-          selectedMainAlias: mainAlias,
-          databases: sqliteTargets,
-          mainPath: session.main.path,
-          attached: session.attached,
-        });
-        return;
-      }
-
-      if (req.method === "POST" && pathname === "/query") {
-        try {
-          const body = await readJsonBody(req);
-          const response = await executeRequest(body, mainAlias);
-          status = 200;
-          json(res, status, response);
-          return;
-        } catch (error) {
-          status = 400;
-          json(res, status, {
-            type: "query",
-            id: -1,
-            error: String((error as Error).message ?? error),
-          });
-          return;
-        }
-      }
-
-      if (req.method === "GET" && pathname === "/") {
-        status = 200;
-        html(res, status, buildPageHtml(mainAlias));
-        return;
-      }
-
-      status = 404;
-      json(res, status, { error: "not_found" });
+      const body = await c.req.json();
+      const response = await executeRequest(body, mainAlias);
+      return c.json(response);
     } catch (error) {
-      status = 500;
-      requestLog.error(toError(error));
-      json(res, status, { error: "internal_error" });
-    } finally {
-      requestLog.emit({
-        status,
-        durationMs: Date.now() - startedAt,
-      });
+      return c.json(
+        {
+          type: "query",
+          id: -1,
+          error: String((error as Error).message ?? error),
+        },
+        400,
+      );
     }
   });
+
+  app.get("/", async (c: Context<ServiceAppEnv>) => {
+    const mainAlias = resolveMainAlias(c.req.query("main"));
+    return c.html(buildPageHtml(mainAlias));
+  });
+
+  applyOpenAPIRoute(app, openAPIHandler, serviceName);
+
+  app.onError((error: Error, c: Context<ServiceAppEnv>) => {
+    c.get("requestLog").error(toError(error));
+    return c.json({ error: "internal_error" }, 500);
+  });
+
+  app.notFound((c: Context<ServiceAppEnv>) => c.json({ error: "not_found" }, 404));
+
+  const server = createAdaptorServer({ fetch: app.fetch });
 
   await new Promise<void>((resolve) => {
     server.listen(port, host, () => resolve());
@@ -860,9 +794,9 @@ export async function startOuterbaseService(options?: {
     host,
     port,
     ui_path: "/",
-    health_path: "/__iterate/health",
-    sql_path: "/__iterate/sql",
-    debug_path: "/__iterate/debug",
+    health_path: "/api/__iterate/health",
+    sql_path: "/api/__iterate/sql",
+    debug_path: "/api/__iterate/debug",
     runtime_path: "/api/runtime",
     observability_path: "/api/observability",
     otel: getOtelRuntimeConfig(),
@@ -902,14 +836,4 @@ if (isMain) {
     .catch(() => {
       process.exit(1);
     });
-}
-
-function json(res: ServerResponse, statusCode: number, payload: unknown): void {
-  res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(payload));
-}
-
-function html(res: ServerResponse, statusCode: number, value: string): void {
-  res.writeHead(statusCode, { "content-type": "text/html; charset=utf-8" });
-  res.end(value);
 }

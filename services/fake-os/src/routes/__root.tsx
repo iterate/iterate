@@ -2,13 +2,12 @@
 import type { ReactNode } from "react";
 import { Outlet, createRootRouteWithContext, HeadContent, Scripts } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { queryClient } from "../router.tsx";
 import appCss from "../styles.css?url";
 
 export interface RouterContext {
   queryClient: QueryClient;
 }
-
-const queryClient = new QueryClient();
 
 export const Route = createRootRouteWithContext<RouterContext>()({
   head: () => ({
@@ -19,7 +18,6 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     ],
     links: [{ rel: "stylesheet", href: appCss }],
   }),
-  context: () => ({ queryClient }),
   shellComponent: RootDocument,
 });
 
@@ -30,9 +28,7 @@ function RootDocument({ children }: { children: ReactNode }) {
         <HeadContent />
       </head>
       <body className="min-h-screen bg-background font-sans antialiased">
-        <QueryClientProvider client={queryClient}>
-          {children}
-        </QueryClientProvider>
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
         <Scripts />
       </body>
     </html>

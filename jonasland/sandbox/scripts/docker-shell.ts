@@ -8,9 +8,13 @@
  *   pnpm docker:shell -- --no-host-sync
  *   pnpm docker:shell -- --env OPENAI_API_KEY --env ANTHROPIC_API_KEY
  *   pnpm docker:shell -- --env MY_VAR=custom_value
+ *   pnpm docker:shell -- --name my-sandbox
+ *   pnpm docker:shell -- --label dev.orbstack.http-port=80
  *
  * Flags:
  *   --image <tag>      Docker image (default: $JONASLAND_SANDBOX_IMAGE)
+ *   --name <name>      Container name (auto-sets ITERATE_PUBLIC_BASE_HOST)
+ *   --label <K>=<V>    Docker label (repeatable)
  *   --no-host-sync     Disable host repo sync (enabled by default)
  *   --no-pidnap        Skip pidnap/caddy/iptables — just a bare shell
  *   --env <VAR>        Forward host env var into the container (repeatable)
@@ -25,7 +29,9 @@ function parseArgs(argv: string[]) {
   let image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:latest";
   let hostSync = true;
   let pidnap = true;
+  let containerName: string | undefined;
   const envPairs: Array<{ key: string; value: string }> = [];
+  const labels: Array<{ key: string; value: string }> = [];
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -33,6 +39,14 @@ function parseArgs(argv: string[]) {
       image = argv[++i]!;
     } else if (arg.startsWith("--image=")) {
       image = arg.slice("--image=".length);
+    } else if (arg === "--name" && argv[i + 1]) {
+      containerName = argv[++i]!;
+    } else if (arg.startsWith("--name=")) {
+      containerName = arg.slice("--name=".length);
+    } else if (arg === "--label" && argv[i + 1]) {
+      labels.push(parseLabelArg(argv[++i]!));
+    } else if (arg.startsWith("--label=")) {
+      labels.push(parseLabelArg(arg.slice("--label=".length)));
     } else if (arg === "--no-host-sync") {
       hostSync = false;
     } else if (arg === "--host-sync") {
@@ -47,7 +61,15 @@ function parseArgs(argv: string[]) {
       envPairs.push(resolveEnvArg(arg.slice("--env=".length)));
     }
   }
-  return { image, hostSync, pidnap, envPairs };
+  return { image, hostSync, pidnap, containerName, envPairs, labels };
+}
+
+function parseLabelArg(raw: string): { key: string; value: string } {
+  const eqIdx = raw.indexOf("=");
+  if (eqIdx > 0) {
+    return { key: raw.slice(0, eqIdx), value: raw.slice(eqIdx + 1) };
+  }
+  return { key: raw, value: "" };
 }
 
 function resolveEnvArg(raw: string): { key: string; value: string } {
@@ -92,7 +114,9 @@ function waitForHealthy(containerId: string, timeoutMs: number): void {
   throw new Error(`Container did not become healthy within ${timeoutMs}ms`);
 }
 
-const { image, hostSync, pidnap, envPairs } = parseArgs(process.argv.slice(2));
+const { image, hostSync, pidnap, containerName, envPairs, labels } = parseArgs(
+  process.argv.slice(2),
+);
 
 const createArgs: string[] = [
   "run",
@@ -102,6 +126,31 @@ const createArgs: string[] = [
   "--add-host",
   "host.docker.internal:host-gateway",
 ];
+
+if (containerName) {
+  createArgs.push("--name", containerName);
+  const orbHost = containerName
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9-]/g, "-")
+    .replaceAll(/-+/g, "-")
+    .replaceAll(/^-|-$/g, "");
+  const hasPublicBaseHost = envPairs.some((e) => e.key === "ITERATE_PUBLIC_BASE_HOST");
+  if (!hasPublicBaseHost) {
+    envPairs.push(
+      { key: "ITERATE_PUBLIC_BASE_HOST", value: `${orbHost}.orb.local` },
+      { key: "ITERATE_PUBLIC_BASE_HOST_TYPE", value: "subdomain" },
+    );
+  }
+  console.log(`[docker-shell] name=${containerName}`);
+}
+
+if (!labels.some((l) => l.key === "dev.orbstack.http-port")) {
+  labels.push({ key: "dev.orbstack.http-port", value: "80" });
+}
+
+for (const { key, value } of labels) {
+  createArgs.push("--label", `${key}=${value}`);
+}
 
 if (hostSync) {
   const { gitDir, commonDir } = resolveGitDirs();
@@ -177,11 +226,10 @@ try {
 
   const isTTY = Boolean(process.stdin.isTTY);
   try {
-    execFileSync(
-      "docker",
-      ["exec", ...(isTTY ? ["-it"] : ["-i"]), containerId, "bash", "-l"],
-      { cwd: repoRoot, stdio: "inherit" },
-    );
+    execFileSync("docker", ["exec", ...(isTTY ? ["-it"] : ["-i"]), containerId, "bash", "-l"], {
+      cwd: repoRoot,
+      stdio: "inherit",
+    });
   } catch {
     // shell exited non-zero — that's fine
   }

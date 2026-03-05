@@ -106,20 +106,19 @@ describe.runIf(runFly)("frp tunnel", () => {
           ],
           env: {
             EGRESS_PROXY_PORT: "19000",
-            EGRESS_ADMIN_PORT: "19001",
           },
         },
         options: { restartPolicy: "always" },
         envOptions: { reloadDelay: 500 },
         healthCheck: {
-          url: "http://127.0.0.1:19001/__iterate/health",
+          url: "http://127.0.0.1:19000/__iterate/health",
           intervalMs: 2_000,
         },
       });
       const egressRuntime = await deployment.exec([
         "sh",
         "-lc",
-        'for i in $(seq 1 30); do out=$(curl -fsS http://127.0.0.1:19001/api/runtime 2>/dev/null || true); echo "$out" | grep -q \'"externalProxyConfigured":true\' && { echo "$out"; exit 0; }; sleep 1; done; exit 1',
+        'for i in $(seq 1 30); do out=$(curl -fsS http://127.0.0.1:19000/api/runtime 2>/dev/null || true); echo "$out" | grep -q \'"externalProxyConfigured":true\' && { echo "$out"; exit 0; }; sleep 1; done; exit 1',
       ]);
       expect(egressRuntime.exitCode, egressRuntime.output).toBe(0);
 

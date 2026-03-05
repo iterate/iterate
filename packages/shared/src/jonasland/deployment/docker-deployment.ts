@@ -167,6 +167,7 @@ class DockerProvider implements DeploymentProvider<DockerDeploymentOpts, DockerD
         Image: opts.dockerImage,
         Env: Object.entries(env).map(([key, value]) => `${key}=${value}`),
         ExposedPorts: { "80/tcp": {} },
+        Labels: { "dev.orbstack.http-port": "80" },
         HostConfig: hostConfig,
       },
       { name: containerName },

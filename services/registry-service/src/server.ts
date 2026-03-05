@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { extname } from "node:path";
-import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createAdaptorServer, type HttpBindings } from "@hono/node-server";
+import { RESPONSE_ALREADY_SENT } from "@hono/node-server/utils/response";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import {
@@ -13,7 +14,9 @@ import {
   registryServiceManifest,
 } from "@iterate-com/registry-contract";
 import {
-  createOrpcErrorInterceptor,
+  applyOpenAPIRoute,
+  applyServiceMiddleware,
+  createServiceOpenAPIHandler,
   createServiceRequestLogger,
   getOtelRuntimeConfig,
   infoFromContext,
@@ -21,10 +24,11 @@ import {
   initializeServiceOtel,
   serviceLog,
   transformSqlResultSet,
+  type ServiceAppEnv,
   type ServiceRequestLogger,
 } from "@iterate-com/shared/jonasland";
+import { Hono } from "hono";
 import { ORPCError, implement } from "@orpc/server";
-import { RPCHandler } from "@orpc/server/node";
 import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
 import { createServer as createViteServer, searchForWorkspaceRoot, type ViteDevServer } from "vite";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -41,6 +45,10 @@ interface RegistryContext {
   store: ServicesStore;
   env: RegistryEnv;
 }
+
+type RegistryAppEnv = ServiceAppEnv & {
+  Variables: ServiceAppEnv["Variables"] & { store: ServicesStore; env: RegistryEnv };
+};
 
 // These will eventually be run with a service registry wrapper that registers them
 // with the service registry. But in the meantime we have this
@@ -126,17 +134,21 @@ const PACKAGE_FS_PREFIX = "/@fs/opt/packages/";
 const PACKAGE_ROOT = "/opt/packages/";
 
 function contentTypeForPath(filePath: string): string {
-  const ext = extname(filePath).toLowerCase();
-  if (ext === ".css") return "text/css; charset=utf-8";
-  if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx" || ext === ".mjs") {
-    return "text/javascript; charset=utf-8";
-  }
-  if (ext === ".json") return "application/json; charset=utf-8";
-  if (ext === ".svg") return "image/svg+xml";
-  if (ext === ".png") return "image/png";
-  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
-  if (ext === ".webp") return "image/webp";
-  return "application/octet-stream";
+  const contentTypes: Record<string, string> = {
+    ".css": "text/css; charset=utf-8",
+    ".ts": "text/javascript; charset=utf-8",
+    ".tsx": "text/javascript; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".jsx": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+  };
+  return contentTypes[extname(filePath).toLowerCase()] ?? "application/octet-stream";
 }
 
 const os = implement(registryContract).$context<RegistryContext>();
@@ -242,41 +254,6 @@ async function handleCaddyLoadInvocation(params: {
     routeCount: routes.length,
     applied: params.input.apply === true,
   };
-}
-
-function writeJsonResponse(
-  res: import("node:http").ServerResponse,
-  statusCode: number,
-  body: unknown,
-) {
-  res.writeHead(statusCode, { "content-type": "application/json" });
-  res.end(JSON.stringify(body));
-}
-
-async function readJsonBody(
-  req: import("node:http").IncomingMessage,
-): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-
-  for await (const chunk of req) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-
-  if (chunks.length === 0) {
-    return {};
-  }
-
-  const raw = Buffer.concat(chunks).toString("utf8").trim();
-  if (raw.length === 0) {
-    return {};
-  }
-
-  const parsed: unknown = JSON.parse(raw);
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("Expected JSON object body");
-  }
-
-  return parsed as Record<string, unknown>;
 }
 
 async function ensureInitialCaddySynchronization(params: {
@@ -478,8 +455,10 @@ export async function startRegistryService(options?: {
   const port = options?.port ?? env.REGISTRY_SERVICE_PORT;
   const store = await ensureStore();
 
-  const handler = new RPCHandler(registryRouter, {
-    interceptors: [createOrpcErrorInterceptor()],
+  const openAPIHandler = createServiceOpenAPIHandler({
+    router: registryRouter,
+    title: "jonasland registry-service API",
+    version: registryServiceManifest.version,
   });
   const wsHandler = new WebSocketRPCHandler(registryRouter);
   const wss = new WebSocketServer({ noServer: true });
@@ -490,248 +469,178 @@ export async function startRegistryService(options?: {
       context: {
         requestId,
         serviceName,
-        log: createServiceRequestLogger({
-          requestId,
-          method: "WS",
-          path: "/orpc/ws",
-        }),
+        log: createServiceRequestLogger({ requestId, method: "WS", path: "/orpc/ws" }),
         store,
         env,
       },
     });
   });
 
-  let vite: ViteDevServer | null = null;
+  const app = new Hono<ServiceAppEnv>();
+  applyServiceMiddleware(app);
 
-  const server = createServer(async (req, res) => {
-    const requestId = randomUUID();
-    const requestLog = createServiceRequestLogger({
-      requestId,
-      method: req.method,
-      path: req.url,
-    });
+  app.get("/", async (c) => {
+    const html = await readFile(viteUiIndexHtmlPath, "utf8");
+    return c.html(html);
+  });
 
-    const requestUrl = new URL(req.url ?? "/", "http://localhost");
-    const pathname = requestUrl.pathname;
-    const context: RegistryContext = {
-      requestId,
-      serviceName,
-      log: requestLog,
-      store,
-      env,
-    };
-    const isApiRequest = pathname === "/api/routes" || pathname.startsWith("/api/");
-    const isRpcRequest = pathname === "/orpc" || pathname.startsWith("/orpc/");
+  app.get("/@fs/opt/packages/*", async (c) => {
+    const url = new URL(c.req.raw.url, "http://localhost");
+    const relativePath = url.pathname.slice(PACKAGE_FS_PREFIX.length);
+    const normalizedPath = relativePath.replaceAll("..", "");
+    const absolutePath = `${PACKAGE_ROOT}${normalizedPath}`;
 
-    if (pathname.startsWith(PACKAGE_FS_PREFIX)) {
-      const relativePath = pathname.slice(PACKAGE_FS_PREFIX.length);
-      const normalizedPath = relativePath.replaceAll("..", "");
-      const absolutePath = `${PACKAGE_ROOT}${normalizedPath}`;
-
-      try {
-        if (vite) {
-          const transformed = await vite.transformRequest(`${absolutePath}${requestUrl.search}`);
-          if (transformed) {
-            res.writeHead(200, {
+    try {
+      if (vite) {
+        const transformed = await vite.transformRequest(`${absolutePath}${url.search}`);
+        if (transformed) {
+          return c.newResponse(transformed.code, {
+            status: 200,
+            headers: {
               "content-type": "text/javascript; charset=utf-8",
               "cache-control": "no-cache",
               ...(transformed.etag ? { etag: transformed.etag } : {}),
-            });
-            res.end(transformed.code);
-            return;
-          }
+            },
+          });
         }
+      }
 
-        const body = await readFile(absolutePath);
-        res.writeHead(200, {
+      const body = await readFile(absolutePath);
+      return c.newResponse(body, {
+        status: 200,
+        headers: {
           "content-type": contentTypeForPath(absolutePath),
           "cache-control": "no-cache",
-        });
-        res.end(body);
-      } catch {
-        writeJsonResponse(res, 404, { error: "not_found" });
-      }
-      return;
-    }
-
-    if ((req.method === "GET" || req.method === "HEAD") && pathname === "/") {
-      const html = await readFile(viteUiIndexHtmlPath, "utf8");
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(html);
-      return;
-    }
-
-    if (isApiRequest) {
-      try {
-        if (req.method === "GET" && pathname === "/api/ingress-env") {
-          writeJsonResponse(res, 200, {
-            ITERATE_PUBLIC_BASE_HOST: env.ITERATE_PUBLIC_BASE_HOST ?? null,
-            ITERATE_PUBLIC_BASE_HOST_TYPE: env.ITERATE_PUBLIC_BASE_HOST_TYPE,
-          });
-          return;
-        }
-
-        if (req.method === "GET" && pathname === "/api/routes") {
-          const routes = await store.listRoutes();
-          writeJsonResponse(res, 200, { routes, total: routes.length });
-          return;
-        }
-
-        if (req.method === "POST" && pathname === "/api/routes/upsert") {
-          const body = await readJsonBody(req);
-          const input = {
-            host: String(body.host ?? ""),
-            target: String(body.target ?? ""),
-            ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
-              ? { metadata: body.metadata as Record<string, string> }
-              : {}),
-            ...(Array.isArray(body.tags) ? { tags: body.tags.map((tag) => String(tag)) } : {}),
-            ...(Array.isArray(body.caddyDirectives)
-              ? {
-                  caddyDirectives: body.caddyDirectives.map((directive) => String(directive)),
-                }
-              : {}),
-          };
-
-          const { route, routes } = await upsertRouteAndSynchronize({
-            input,
-            context,
-          });
-          writeJsonResponse(res, 200, { route, routeCount: routes.length });
-          return;
-        }
-
-        if (req.method === "POST" && pathname === "/api/routes/remove") {
-          const body = await readJsonBody(req);
-          const host = String(body.host ?? "");
-          const { removed, routes } = await removeRouteAndSynchronize({
-            host,
-            context,
-          });
-          writeJsonResponse(res, 200, { removed, routeCount: routes.length });
-          return;
-        }
-
-        if (req.method === "POST" && pathname === "/api/routes/caddy-load-invocation") {
-          const body = await readJsonBody(req);
-          const result = await handleCaddyLoadInvocation({
-            input: {
-              ...(typeof body.listenAddress === "string"
-                ? { listenAddress: body.listenAddress }
-                : {}),
-              ...(typeof body.adminUrl === "string" ? { adminUrl: body.adminUrl } : {}),
-              ...(typeof body.apply === "boolean" ? { apply: body.apply } : {}),
-            },
-            context,
-          });
-          writeJsonResponse(res, 200, result);
-          return;
-        }
-
-        if (req.method === "GET" && pathname === "/api/config") {
-          const entries = await store.listConfig();
-          writeJsonResponse(res, 200, { entries, total: entries.length });
-          return;
-        }
-
-        if (req.method === "GET" && pathname.startsWith("/api/config/")) {
-          const key = decodeURIComponent(pathname.slice("/api/config/".length));
-          if (key.length === 0) {
-            writeJsonResponse(res, 400, { error: "invalid_config_key" });
-            return;
-          }
-
-          const entry = await store.getConfig(key);
-          writeJsonResponse(res, 200, {
-            found: entry !== null,
-            ...(entry ? { entry } : {}),
-          });
-          return;
-        }
-
-        if (req.method === "POST" && pathname.startsWith("/api/config/")) {
-          const key = decodeURIComponent(pathname.slice("/api/config/".length));
-          if (key.length === 0) {
-            writeJsonResponse(res, 400, { error: "invalid_config_key" });
-            return;
-          }
-
-          const body = await readJsonBody(req);
-          const entry = await store.setConfig({ key, value: body.value });
-          writeJsonResponse(res, 200, { entry });
-          return;
-        }
-
-        writeJsonResponse(res, 404, { error: "not_found" });
-      } catch (error) {
-        writeJsonResponse(res, 400, {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-      return;
-    }
-
-    if (isRpcRequest) {
-      const { matched } = await handler.handle(req, res, {
-        prefix: "/orpc",
-        context,
+        },
       });
-
-      if (!matched) {
-        res.writeHead(404, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: "not_found" }));
-      }
-      return;
+    } catch {
+      return c.json({ error: "not_found" }, 404);
     }
+  });
 
-    if (!vite) {
-      res.writeHead(503, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: "vite_not_ready" }));
-      return;
-    }
+  app.get("/api/ingress-env", async (c) =>
+    c.json({
+      ITERATE_PUBLIC_BASE_HOST: env.ITERATE_PUBLIC_BASE_HOST ?? null,
+      ITERATE_PUBLIC_BASE_HOST_TYPE: env.ITERATE_PUBLIC_BASE_HOST_TYPE,
+    }),
+  );
 
-    const viteServer = vite;
-    await new Promise<void>((resolve, reject) => {
-      viteServer.middlewares(req, res, (error?: Error) => {
-        if (error) {
-          reject(error);
-          return;
+  app.get("/api/routes", async (c) => {
+    const routes = await store.listRoutes();
+    return c.json({ routes, total: routes.length });
+  });
+
+  app.post("/api/routes/upsert", async (c) => {
+    const body = await c.req.json();
+    const context: RegistryContext = {
+      requestId: c.get("requestId"),
+      serviceName,
+      log: c.get("requestLog"),
+      store,
+      env,
+    };
+    const input = {
+      host: String(body.host ?? ""),
+      target: String(body.target ?? ""),
+      ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
+        ? { metadata: body.metadata as Record<string, string> }
+        : {}),
+      ...(Array.isArray(body.tags) ? { tags: body.tags.map((tag: unknown) => String(tag)) } : {}),
+      ...(Array.isArray(body.caddyDirectives)
+        ? { caddyDirectives: body.caddyDirectives.map((d: unknown) => String(d)) }
+        : {}),
+    };
+    const { route, routes } = await upsertRouteAndSynchronize({ input, context });
+    return c.json({ route, routeCount: routes.length });
+  });
+
+  app.post("/api/routes/remove", async (c) => {
+    const body = await c.req.json();
+    const context: RegistryContext = {
+      requestId: c.get("requestId"),
+      serviceName,
+      log: c.get("requestLog"),
+      store,
+      env,
+    };
+    const hostVal = String(body.host ?? "");
+    const { removed, routes } = await removeRouteAndSynchronize({ host: hostVal, context });
+    return c.json({ removed, routeCount: routes.length });
+  });
+
+  app.post("/api/routes/caddy-load-invocation", async (c) => {
+    const body = await c.req.json();
+    const context: RegistryContext = {
+      requestId: c.get("requestId"),
+      serviceName,
+      log: c.get("requestLog"),
+      store,
+      env,
+    };
+    const result = await handleCaddyLoadInvocation({
+      input: {
+        ...(typeof body.listenAddress === "string" ? { listenAddress: body.listenAddress } : {}),
+        ...(typeof body.adminUrl === "string" ? { adminUrl: body.adminUrl } : {}),
+        ...(typeof body.apply === "boolean" ? { apply: body.apply } : {}),
+      },
+      context,
+    });
+    return c.json(result);
+  });
+
+  app.get("/api/config", async (c) => {
+    const entries = await store.listConfig();
+    return c.json({ entries, total: entries.length });
+  });
+
+  app.get("/api/config/:key", async (c) => {
+    const key = decodeURIComponent(c.req.param("key"));
+    if (key.length === 0) return c.json({ error: "invalid_config_key" }, 400);
+    const entry = await store.getConfig(key);
+    return c.json({ found: entry !== null, ...(entry ? { entry } : {}) });
+  });
+
+  app.post("/api/config/:key", async (c) => {
+    const key = decodeURIComponent(c.req.param("key"));
+    if (key.length === 0) return c.json({ error: "invalid_config_key" }, 400);
+    const body = await c.req.json();
+    const entry = await store.setConfig({ key, value: body.value });
+    return c.json({ entry });
+  });
+
+  applyOpenAPIRoute(app, openAPIHandler, serviceName, {
+    extraContext: () => ({ store, env }),
+  });
+
+  app.use("*", async (c) => {
+    if (!vite) return c.json({ error: "vite_not_ready" }, 503);
+
+    await new Promise<void>((resolve) => {
+      vite!.middlewares(c.env.incoming, c.env.outgoing, () => {
+        if (!c.env.outgoing.writableEnded) {
+          c.env.outgoing.writeHead(404, { "content-type": "application/json" });
+          c.env.outgoing.end(JSON.stringify({ error: "not_found" }));
         }
-
-        if (!res.writableEnded) {
-          res.writeHead(404, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: "not_found" }));
-        }
-
         resolve();
       });
     });
+
+    return RESPONSE_ALREADY_SENT;
   });
+
+  const server = createAdaptorServer({ fetch: app.fetch });
 
   server.on("upgrade", (req, socket, head) => {
     const pathname = new URL(req.url || "/", "http://localhost").pathname;
-    const protocolHeader = req.headers["sec-websocket-protocol"];
-    const protocolValue = Array.isArray(protocolHeader)
-      ? protocolHeader.join(",")
-      : (protocolHeader ?? "");
-    const isViteUpgrade = protocolValue
-      .split(",")
-      .map((value) => value.trim())
-      .some((value) => value === "vite-hmr" || value === "vite-ping");
-
     if (pathname === "/orpc/ws" || pathname === "/orpc/ws/") {
       serviceLog.info({ event: "orpc.ws.upgrade", pathname });
       wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
         wss.emit("connection", ws, req);
       });
-      return;
-    }
-
-    if (!isViteUpgrade) {
-      socket.destroy();
     }
   });
 
+  let vite: ViteDevServer | null = null;
   vite = await createViteServer({
     configFile: false,
     root: fileURLToPath(new URL("./ui", import.meta.url)),
@@ -757,7 +666,7 @@ export async function startRegistryService(options?: {
     server: {
       middlewareMode: true,
       hmr: {
-        server,
+        server: server as unknown as import("node:http").Server,
       },
       fs: {
         strict: false,
@@ -772,16 +681,15 @@ export async function startRegistryService(options?: {
 
   await ensureSeededRoutes({ store });
 
-  await ensureInitialCaddySynchronization({
-    store,
-    env,
-  });
+  await ensureInitialCaddySynchronization({ store, env });
 
   serviceLog.info({
     event: "service.started",
     service: serviceName,
     host,
     port,
+    docs_path: "/api/docs",
+    spec_path: "/api/openapi.json",
     orpc_path: "/orpc",
     orpc_ws_path: "/orpc/ws",
     ui_path: "/",
@@ -798,11 +706,8 @@ export async function startRegistryService(options?: {
       ]);
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
+          if (error) reject(error);
+          else resolve();
         });
       });
       await store.close();

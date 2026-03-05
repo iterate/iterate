@@ -173,20 +173,19 @@ async function ensureExternalProxyConfigured(params: {
       args: ["/home/iterate/src/github.com/iterate/iterate/services/egress-service/src/server.ts"],
       env: {
         EGRESS_PROXY_PORT: "19000",
-        EGRESS_ADMIN_PORT: "19001",
       },
     },
     options: { restartPolicy: "always" },
     envOptions: { reloadDelay: 500 },
     healthCheck: {
-      url: "http://127.0.0.1:19001/__iterate/health",
+      url: "http://127.0.0.1:19000/__iterate/health",
       intervalMs: 2_000,
     },
   });
   const runtime = await params.deployment.exec([
     "sh",
     "-lc",
-    "for i in $(seq 1 45); do out=$(curl -fsS http://127.0.0.1:19001/api/runtime 2>/dev/null || true); echo \"$out\" | rg -q '\"externalProxyConfigured\":true' && { echo \"$out\"; exit 0; }; sleep 1; done; exit 1",
+    'for i in $(seq 1 45); do out=$(curl -fsS http://127.0.0.1:19000/api/runtime 2>/dev/null || true); echo "$out" | rg -q \'"externalProxyConfigured":true\' && { echo "$out"; exit 0; }; sleep 1; done; exit 1',
   ]);
   expect(runtime.exitCode, runtime.output).toBe(0);
 }
@@ -202,214 +201,199 @@ async function ensureEgressProxyRunning(deployment: DockerDeployment): Promise<v
       args: ["/home/iterate/src/github.com/iterate/iterate/services/egress-service/src/server.ts"],
       env: {
         EGRESS_PROXY_PORT: "19000",
-        EGRESS_ADMIN_PORT: "19001",
       },
     },
     options: { restartPolicy: "always" },
     envOptions: { reloadDelay: 500 },
     healthCheck: {
-      url: "http://127.0.0.1:19001/__iterate/health",
+      url: "http://127.0.0.1:19000/__iterate/health",
       intervalMs: 2_000,
     },
   });
   const runtime = await deployment.exec([
     "sh",
     "-lc",
-    "for i in $(seq 1 45); do out=$(curl -fsS http://127.0.0.1:19001/api/runtime 2>/dev/null || true); [ -n \"$out\" ] && { echo \"$out\"; exit 0; }; sleep 1; done; exit 1",
+    'for i in $(seq 1 45); do out=$(curl -fsS http://127.0.0.1:19000/api/runtime 2>/dev/null || true); [ -n "$out" ] && { echo "$out"; exit 0; }; sleep 1; done; exit 1',
   ]);
   expect(runtime.exitCode, runtime.output).toBe(0);
 }
 
 describe.runIf(DOCKER_IMAGE.length > 0)("frp egress minimal", () => {
-  test(
-    "records HAR from scripts executed inside deployment via FRP external proxy",
-    async () => {
-      const runId = randomUUID().slice(0, 8);
-      const artifactsDir = join(process.cwd(), "artifacts", "frp-minimal");
-      await mkdir(artifactsDir, { recursive: true });
-      const harPath = join(artifactsDir, `docker-frp-minimal-${runId}.har`);
-      const fixtureHarPath = join(
-        process.cwd(),
-        "..",
-        "..",
-        "packages",
-        "mock-http-proxy",
-        "src",
-        "integration",
-        "fixtures",
-        "parallel-openai-slack-curl.har",
-      );
-      const sourceHar = JSON.parse(await readFile(fixtureHarPath, "utf8")) as {
-        log?: { entries?: unknown[] };
-      };
-      const handlers = fromTrafficWithWebSocket(sourceHar as never);
+  test("records HAR from scripts executed inside deployment via FRP external proxy", async () => {
+    const runId = randomUUID().slice(0, 8);
+    const artifactsDir = join(process.cwd(), "artifacts", "frp-minimal");
+    await mkdir(artifactsDir, { recursive: true });
+    const harPath = join(artifactsDir, `docker-frp-minimal-${runId}.har`);
+    const fixtureHarPath = join(
+      process.cwd(),
+      "..",
+      "..",
+      "packages",
+      "mock-http-proxy",
+      "src",
+      "integration",
+      "fixtures",
+      "parallel-openai-slack-curl.har",
+    );
+    const sourceHar = JSON.parse(await readFile(fixtureHarPath, "utf8")) as {
+      log?: { entries?: unknown[] };
+    };
+    const handlers = fromTrafficWithWebSocket(sourceHar as never);
 
-      {
-        await using mockServer = await useMockHttpServer({
-          recorder: { enabled: true, harPath },
-          onUnhandledRequest: "error",
+    {
+      await using mockServer = await useMockHttpServer({
+        recorder: { enabled: true, harPath },
+        onUnhandledRequest: "error",
+      });
+      mockServer.use(...handlers);
+
+      await using deployment = await DockerDeployment.create({
+        dockerImage: DOCKER_IMAGE,
+        name: `e2e-frp-minimal-${runId}`,
+        dockerHostSync: resolveDockerHostSync(),
+      });
+      await deployment.waitUntilAlive({ signal: AbortSignal.timeout(180_000) });
+
+      const inspect = await deployment.containerInspect();
+      const containerName = normalizeContainerName(inspect.Name);
+      expect(containerName.length).toBeGreaterThan(0);
+
+      const publicBaseHost = `${containerName}.orb.local`;
+      const frpControlHost = `frp.${publicBaseHost}`;
+      await waitForFrpControlRoute(deployment.baseUrl, frpControlHost);
+
+      let frpc:
+        | {
+            logs: () => string;
+            stop: () => Promise<void>;
+            waitUntilConnected: () => Promise<void>;
+          }
+        | undefined;
+      try {
+        frpc = await startFrpc({
+          controlServerHost: frpControlHost,
+          controlServerPort: 80,
+          localTargetPort: mockServer.port,
         });
-        mockServer.use(...handlers);
+        await frpc.waitUntilConnected();
 
-        await using deployment = await DockerDeployment.create({
-          dockerImage: DOCKER_IMAGE,
-          name: `e2e-frp-minimal-${runId}`,
-          dockerHostSync: resolveDockerHostSync(),
+        await ensureExternalProxyConfigured({
+          deployment,
+          proxyUrl: "http://127.0.0.1:27180",
         });
-        await deployment.waitUntilAlive({ signal: AbortSignal.timeout(180_000) });
 
-        const inspect = await deployment.containerInspect();
-        const containerName = normalizeContainerName(inspect.Name);
-        expect(containerName.length).toBeGreaterThan(0);
+        const curl = await deployment.exec(["curl", "-sS", "--fail", "http://example.com/"]);
+        expect(curl.exitCode, curl.output).toBe(0);
 
-        const publicBaseHost = `${containerName}.orb.local`;
-        const frpControlHost = `frp.${publicBaseHost}`;
-        await waitForFrpControlRoute(deployment.baseUrl, frpControlHost);
-
-        let frpc:
-          | {
-              logs: () => string;
-              stop: () => Promise<void>;
-              waitUntilConnected: () => Promise<void>;
-            }
-          | undefined;
-        try {
-          frpc = await startFrpc({
-            controlServerHost: frpControlHost,
-            controlServerPort: 80,
-            localTargetPort: mockServer.port,
-          });
-          await frpc.waitUntilConnected();
-
-          await ensureExternalProxyConfigured({
-            deployment,
-            proxyUrl: "http://127.0.0.1:27180",
-          });
-
-          const curl = await deployment.exec([
-            "curl",
-            "-sS",
-            "--fail",
-            "http://example.com/",
-          ]);
-          expect(curl.exitCode, curl.output).toBe(0);
-
-          const slack = await deployment.exec([
-            "curl",
-            "-k",
-            "-sS",
-            "--fail",
-            "-X",
-            "POST",
-            "-H",
-            "authorization: Bearer xoxb-replay-token",
-            "-H",
-            "content-type: application/x-www-form-urlencoded",
-            "--data",
-            "",
-            "https://slack.com/api/auth.test",
-          ]);
-          expect(slack.exitCode, slack.output).toBe(0);
-        } finally {
-          if (frpc) await frpc.stop().catch(() => {});
-        }
+        const slack = await deployment.exec([
+          "curl",
+          "-k",
+          "-sS",
+          "--fail",
+          "-X",
+          "POST",
+          "-H",
+          "authorization: Bearer xoxb-replay-token",
+          "-H",
+          "content-type: application/x-www-form-urlencoded",
+          "--data",
+          "",
+          "https://slack.com/api/auth.test",
+        ]);
+        expect(slack.exitCode, slack.output).toBe(0);
+      } finally {
+        if (frpc) await frpc.stop().catch(() => {});
       }
-      const har = JSON.parse(await readFile(harPath, "utf8")) as {
-        log?: {
-          entries?: Array<{
-            request?: { url?: string };
-            _webSocketMessages?: Array<{ type: "send" | "receive" }>;
-          }>;
-        };
+    }
+    const har = JSON.parse(await readFile(harPath, "utf8")) as {
+      log?: {
+        entries?: Array<{
+          request?: { url?: string };
+          _webSocketMessages?: Array<{ type: "send" | "receive" }>;
+        }>;
       };
-      const entries = har.log?.entries ?? [];
-      expect(entries.some((entry) => entry.request?.url?.includes("https://slack.com/api/auth.test"))).toBe(
-        true,
-      );
-      expect(entries.some((entry) => entry.request?.url?.includes("http://example.com/"))).toBe(true);
-    },
-    240_000,
-  );
+    };
+    const entries = har.log?.entries ?? [];
+    expect(
+      entries.some((entry) => entry.request?.url?.includes("https://slack.com/api/auth.test")),
+    ).toBe(true);
+    expect(entries.some((entry) => entry.request?.url?.includes("http://example.com/"))).toBe(true);
+  }, 240_000);
 
-  test(
-    "pnpm install works from inside deployment through FRP external proxy",
-    async () => {
-      const runId = randomUUID().slice(0, 8);
-      const artifactsDir = join(process.cwd(), "artifacts", "frp-minimal");
-      await mkdir(artifactsDir, { recursive: true });
-      const harPath = join(artifactsDir, `docker-frp-pnpm-install-${runId}.har`);
+  test("pnpm install works from inside deployment through FRP external proxy", async () => {
+    const runId = randomUUID().slice(0, 8);
+    const artifactsDir = join(process.cwd(), "artifacts", "frp-minimal");
+    await mkdir(artifactsDir, { recursive: true });
+    const harPath = join(artifactsDir, `docker-frp-pnpm-install-${runId}.har`);
 
-      {
-        await using mockServer = await useMockHttpServer({
-          recorder: { enabled: true, harPath },
-          onUnhandledRequest: "bypass",
+    {
+      await using mockServer = await useMockHttpServer({
+        recorder: { enabled: true, harPath },
+        onUnhandledRequest: "bypass",
+      });
+
+      await using deployment = await DockerDeployment.create({
+        dockerImage: DOCKER_IMAGE,
+        name: `e2e-frp-pnpm-install-${runId}`,
+        dockerHostSync: resolveDockerHostSync(),
+      });
+      await deployment.waitUntilAlive({ signal: AbortSignal.timeout(180_000) });
+
+      const inspect = await deployment.containerInspect();
+      const containerName = normalizeContainerName(inspect.Name);
+      expect(containerName.length).toBeGreaterThan(0);
+      const frpControlHost = `frp.${containerName}.orb.local`;
+      await waitForFrpControlRoute(deployment.baseUrl, frpControlHost);
+
+      let frpc:
+        | {
+            logs: () => string;
+            stop: () => Promise<void>;
+            waitUntilConnected: () => Promise<void>;
+          }
+        | undefined;
+      try {
+        frpc = await startFrpc({
+          controlServerHost: frpControlHost,
+          controlServerPort: 80,
+          localTargetPort: mockServer.port,
+        });
+        await frpc.waitUntilConnected();
+
+        await ensureExternalProxyConfigured({
+          deployment,
+          proxyUrl: "http://127.0.0.1:27180",
         });
 
-        await using deployment = await DockerDeployment.create({
-          dockerImage: DOCKER_IMAGE,
-          name: `e2e-frp-pnpm-install-${runId}`,
-          dockerHostSync: resolveDockerHostSync(),
-        });
-        await deployment.waitUntilAlive({ signal: AbortSignal.timeout(180_000) });
+        const install = await deployment.exec([
+          "sh",
+          "-lc",
+          [
+            "rm -rf /tmp/pnpm-frp-install",
+            "mkdir -p /tmp/pnpm-frp-install",
+            'cat > /tmp/pnpm-frp-install/package.json <<\'EOF\'\n{"name":"pnpm-frp-install","private":true,"version":"1.0.0","dependencies":{"is-number":"^7.0.0"}}\nEOF',
+            "CI=true pnpm --dir /tmp/pnpm-frp-install install --registry=https://registry.npmjs.org --ignore-scripts",
+          ].join(" && "),
+        ]);
+        expect(install.exitCode, install.output).toBe(0);
 
-        const inspect = await deployment.containerInspect();
-        const containerName = normalizeContainerName(inspect.Name);
-        expect(containerName.length).toBeGreaterThan(0);
-        const frpControlHost = `frp.${containerName}.orb.local`;
-        await waitForFrpControlRoute(deployment.baseUrl, frpControlHost);
-
-        let frpc:
-          | {
-              logs: () => string;
-              stop: () => Promise<void>;
-              waitUntilConnected: () => Promise<void>;
-            }
-          | undefined;
-        try {
-          frpc = await startFrpc({
-            controlServerHost: frpControlHost,
-            controlServerPort: 80,
-            localTargetPort: mockServer.port,
-          });
-          await frpc.waitUntilConnected();
-
-          await ensureExternalProxyConfigured({
-            deployment,
-            proxyUrl: "http://127.0.0.1:27180",
-          });
-
-          const install = await deployment.exec([
-            "sh",
-            "-lc",
-            [
-              "rm -rf /tmp/pnpm-frp-install",
-              "mkdir -p /tmp/pnpm-frp-install",
-              "cat > /tmp/pnpm-frp-install/package.json <<'EOF'\n{\"name\":\"pnpm-frp-install\",\"private\":true,\"version\":\"1.0.0\",\"dependencies\":{\"is-number\":\"^7.0.0\"}}\nEOF",
-              "CI=true pnpm --dir /tmp/pnpm-frp-install install --registry=https://registry.npmjs.org --ignore-scripts",
-            ].join(" && "),
-          ]);
-          expect(install.exitCode, install.output).toBe(0);
-
-          const registryProbe = await deployment.exec([
-            "curl",
-            "-k",
-            "-sS",
-            "--fail",
-            "https://registry.npmjs.org/is-number",
-          ]);
-          expect(registryProbe.exitCode, registryProbe.output).toBe(0);
-        } finally {
-          if (frpc) await frpc.stop().catch(() => {});
-        }
+        const registryProbe = await deployment.exec([
+          "curl",
+          "-k",
+          "-sS",
+          "--fail",
+          "https://registry.npmjs.org/is-number",
+        ]);
+        expect(registryProbe.exitCode, registryProbe.output).toBe(0);
+      } finally {
+        if (frpc) await frpc.stop().catch(() => {});
       }
-      const har = JSON.parse(await readFile(harPath, "utf8")) as {
-        log?: { entries?: Array<{ request?: { url?: string } }> };
-      };
-      const entries = har.log?.entries ?? [];
-      expect(entries.length).toBeGreaterThan(0);
-      expect(entries.some((entry) => entry.request?.url?.includes("registry.npmjs.org"))).toBe(true);
-    },
-    240_000,
-  );
+    }
+    const har = JSON.parse(await readFile(harPath, "utf8")) as {
+      log?: { entries?: Array<{ request?: { url?: string } }> };
+    };
+    const entries = har.log?.entries ?? [];
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.some((entry) => entry.request?.url?.includes("registry.npmjs.org"))).toBe(true);
+  }, 240_000);
 });
-

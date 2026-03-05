@@ -1,15 +1,20 @@
-import { randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { pathToFileURL } from "node:url";
+import { createAdaptorServer } from "@hono/node-server";
 import { createRegistryClient } from "@iterate-com/registry-service/client";
 import {
-  createServiceRequestLogger,
+  applyOpenAPIRoute,
+  applyServiceMiddleware,
+  createServiceOpenAPIHandler,
+  createSimpleServiceRouter,
   getOtelRuntimeConfig,
   initializeServiceEvlog,
   initializeServiceOtel,
   registerServiceWithRegistry,
   serviceLog,
+  type ServiceAppEnv,
 } from "@iterate-com/shared/jonasland";
+import { Hono } from "hono";
 import { z } from "zod/v4";
 
 interface OpenApiSource {
@@ -27,6 +32,7 @@ interface RegistryRouteRecord {
 }
 
 const serviceName = "jonasland-docs-service";
+const serviceVersion = "0.0.1";
 const scalarScriptUrl = "https://cdn.jsdelivr.net/npm/@scalar/api-reference";
 
 const nonEmptyStringWithTrimDefault = (defaultValue: string) =>
@@ -52,11 +58,6 @@ function getEnv() {
   return envCache;
 }
 
-function writeJsonResponse(res: ServerResponse, statusCode: number, body: unknown) {
-  res.writeHead(statusCode, { "content-type": "application/json" });
-  res.end(JSON.stringify(body));
-}
-
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) {
     return value[0];
@@ -64,8 +65,11 @@ function firstHeaderValue(value: string | string[] | undefined): string | undefi
   return value;
 }
 
-function getProtocol(req: IncomingMessage): "http" | "https" {
-  const forwardedProto = firstHeaderValue(req.headers["x-forwarded-proto"])
+function getProtocol(
+  headers: Record<string, string | string[] | undefined>,
+  encrypted?: unknown,
+): "http" | "https" {
+  const forwardedProto = firstHeaderValue(headers["x-forwarded-proto"])
     ?.split(",")[0]
     ?.trim()
     ?.toLowerCase();
@@ -74,7 +78,7 @@ function getProtocol(req: IncomingMessage): "http" | "https" {
     return forwardedProto;
   }
 
-  if ("encrypted" in req.socket && req.socket.encrypted) {
+  if (encrypted === true) {
     return "https";
   }
 
@@ -88,8 +92,11 @@ function normalizeOpenApiPath(value: string | undefined): string {
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
-function getIngressPort(req: IncomingMessage, protocol: "http" | "https"): string | undefined {
-  const hostHeader = firstHeaderValue(req.headers.host)?.trim();
+function getIngressPort(
+  headers: Record<string, string | string[] | undefined>,
+  protocol: "http" | "https",
+): string | undefined {
+  const hostHeader = firstHeaderValue(headers.host)?.trim();
   if (!hostHeader) return undefined;
   const [, maybePort] = hostHeader.split(":");
   if (!maybePort) return undefined;
@@ -161,7 +168,7 @@ function renderScalarDocsHtml(sources: OpenApiSource[]): string {
 </html>`;
 }
 
-const REGISTRY_ORPC_URL = "http://registry.iterate.localhost/orpc";
+const REGISTRY_ORPC_URL = "http://registry.iterate.localhost/api";
 
 async function listOpenApiSources(params: {
   protocol: "http" | "https";
@@ -200,6 +207,64 @@ async function listOpenApiSources(params: {
 initializeServiceOtel(serviceName);
 initializeServiceEvlog(serviceName);
 
+const docsRouter = createSimpleServiceRouter({
+  serviceName,
+  version: serviceVersion,
+});
+
+const openAPIHandler = createServiceOpenAPIHandler({
+  router: docsRouter,
+  title: "jonasland docs service",
+  version: serviceVersion,
+});
+
+const app = new Hono<ServiceAppEnv>();
+applyServiceMiddleware(app);
+
+app.get("/api/openapi-sources", async (c) => {
+  try {
+    const incoming = c.env.incoming;
+    const headers = incoming.headers as Record<string, string | string[] | undefined>;
+    const encrypted = "encrypted" in incoming.socket && incoming.socket.encrypted;
+    const protocol = getProtocol(headers, encrypted);
+    const ingressPort = getIngressPort(headers, protocol);
+    const sources = await listOpenApiSources({
+      protocol,
+      ingressPort,
+    });
+    return c.json({ sources, total: sources.length });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    serviceLog.warn({
+      event: "docs.openapi_sources.fetch_failed",
+      service: serviceName,
+      request_id: c.get("requestId"),
+      message,
+    });
+    return c.json({ error: "services_registry_unavailable", message }, 503);
+  }
+});
+
+app.get("/api/observability", async (c) => c.json({ otel: getOtelRuntimeConfig() }));
+
+applyOpenAPIRoute(app, openAPIHandler, serviceName);
+
+app.on(["GET", "HEAD"], "/*", async (c) => {
+  const incoming = c.env.incoming;
+  const headers = incoming.headers as Record<string, string | string[] | undefined>;
+  const encrypted = "encrypted" in incoming.socket && incoming.socket.encrypted;
+  const protocol = getProtocol(headers, encrypted);
+  const ingressPort = getIngressPort(headers, protocol);
+  const sources = await listOpenApiSources({
+    protocol,
+    ingressPort,
+  });
+  const html = renderScalarDocsHtml(sources);
+  return c.html(html, 200, {
+    "cache-control": "no-cache",
+  });
+});
+
 export async function startDocsService(options?: {
   host?: string;
   port?: number;
@@ -208,154 +273,37 @@ export async function startDocsService(options?: {
   const host = options?.host ?? env.DOCS_SERVICE_HOST;
   const port = options?.port ?? env.DOCS_SERVICE_PORT;
 
-  const server = createServer(async (req, res) => {
-    const requestId = randomUUID();
-    const requestLog = createServiceRequestLogger({
-      requestId,
-      method: req.method,
-      path: req.url,
-    });
-    const startedAt = Date.now();
-    let status = 500;
-
-    try {
-      const requestUrl = new URL(req.url ?? "/", "http://localhost");
-      const pathname = requestUrl.pathname;
-
-      if (req.method === "GET" && pathname === "/__iterate/health") {
-        status = 200;
-        writeJsonResponse(res, 200, { ok: true, service: serviceName });
-        return;
-      }
-
-      if (req.method === "POST" && pathname === "/__iterate/sql") {
-        status = 501;
-        writeJsonResponse(res, 501, { error: "sql_not_supported" });
-        return;
-      }
-
-      if (req.method === "GET" && pathname === "/__iterate/debug") {
-        status = 200;
-        writeJsonResponse(res, 200, {
-          pid: process.pid,
-          ppid: process.ppid,
-          uptimeSec: process.uptime(),
-          nodeVersion: process.version,
-          platform: process.platform,
-          arch: process.arch,
-          cwd: process.cwd(),
-          execPath: process.execPath,
-          argv: process.argv,
-          otel: getOtelRuntimeConfig(),
-        });
-        return;
-      }
-
-      if (req.method === "GET" && pathname === "/api/observability") {
-        status = 200;
-        writeJsonResponse(res, 200, {
-          otel: getOtelRuntimeConfig(),
-        });
-        return;
-      }
-
-      if (req.method === "GET" && pathname === "/api/openapi-sources") {
-        try {
-          const protocol = getProtocol(req);
-          const ingressPort = getIngressPort(req, protocol);
-          const sources = await listOpenApiSources({
-            protocol,
-            ingressPort,
-          });
-          status = 200;
-          writeJsonResponse(res, 200, { sources, total: sources.length });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          serviceLog.warn({
-            event: "docs.openapi_sources.fetch_failed",
-            service: serviceName,
-            request_id: requestId,
-            message,
-          });
-          status = 503;
-          writeJsonResponse(res, 503, { error: "services_registry_unavailable", message });
-        }
-        return;
-      }
-
-      if (pathname.startsWith("/api/")) {
-        status = 404;
-        writeJsonResponse(res, 404, { error: "not_found" });
-        return;
-      }
-
-      if (req.method === "GET" || req.method === "HEAD") {
-        const protocol = getProtocol(req);
-        const ingressPort = getIngressPort(req, protocol);
-        const sources = await listOpenApiSources({
-          protocol,
-          ingressPort,
-        });
-        const html = renderScalarDocsHtml(sources);
-        status = 200;
-        res.writeHead(200, {
-          "content-type": "text/html; charset=utf-8",
-          "cache-control": "no-cache",
-        });
-        res.end(html);
-        return;
-      }
-
-      status = 404;
-      writeJsonResponse(res, 404, { error: "not_found" });
-    } catch (error) {
-      requestLog.error(error instanceof Error ? error : new Error(String(error)));
-      status = 500;
-      writeJsonResponse(res, 500, { error: "internal_error" });
-    } finally {
-      requestLog.emit({
-        status,
-        durationMs: Date.now() - startedAt,
-      });
-    }
-  });
+  const server = createAdaptorServer({ fetch: app.fetch });
 
   await new Promise<void>((resolve) => {
     server.listen(port, host, () => resolve());
   });
 
+  const address = server.address();
+  const boundPort = address && typeof address === "object" ? (address as AddressInfo).port : port;
+
   serviceLog.info({
     event: "service.started",
     service: serviceName,
     host,
-    port,
+    port: boundPort,
     docs_path: "/",
-    health_path: "/__iterate/health",
-    sql_path: "/__iterate/sql",
-    debug_path: "/__iterate/debug",
     openapi_sources_path: "/api/openapi-sources",
     otel: getOtelRuntimeConfig(),
   });
 
   void registerServiceWithRegistry({
-    manifest: { slug: "docs-service", port, orpcContract: {} as any },
-    port,
+    manifest: { slug: "docs", port: boundPort, orpcContract: {} as never },
+    port: boundPort,
     metadata: { title: "Docs Service" },
     tags: ["docs"],
   });
 
   return {
-    close: async () => {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
-    },
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      }),
   };
 }
 

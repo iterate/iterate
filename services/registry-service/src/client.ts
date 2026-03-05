@@ -73,10 +73,10 @@ function toBasePath(url?: string): string {
 
   if (/^https?:\/\//.test(url)) {
     const parsed = new URL(url);
-    return `${parsed.origin}${parsed.pathname.replace(/\/orpc\/?$/, "")}`;
+    return `${parsed.origin}${parsed.pathname.replace(/\/(?:orpc|api)\/?$/, "")}`;
   }
 
-  return url.replace(/\/orpc\/?$/, "");
+  return url.replace(/\/(?:orpc|api)\/?$/, "");
 }
 
 function joinPath(basePath: string, suffix: string) {
@@ -114,25 +114,16 @@ export function createRegistryClient(params?: {
 
   return {
     getPublicURL: async (input) =>
-      await requestJson(
-        "/orpc/getPublicURL",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ json: input }),
-        },
-        { orpc: true },
-      ),
+      await requestJson("/api/get-public-url", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      }),
     service: {
-      health: async () =>
-        await requestJson(
-          "/orpc/service/health",
-          { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
-          { orpc: true },
-        ),
+      health: async () => await requestJson("/api/__iterate/health"),
       sql: async (input) =>
         await requestJson(
-          "/orpc/service/sql",
+          "/api/__iterate/sql",
           {
             method: "POST",
             headers: { "content-type": "application/json" },

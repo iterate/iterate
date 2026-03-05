@@ -3,61 +3,30 @@ import { readFile } from "node:fs/promises";
 import type { Server as HttpServer } from "node:http";
 import { extname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createAdaptorServer, type HttpBindings } from "@hono/node-server";
+import { createAdaptorServer } from "@hono/node-server";
 import { RESPONSE_ALREADY_SENT } from "@hono/node-server/utils/response";
-import { ROOT_CONTEXT, context as otelContext, propagation } from "@opentelemetry/api";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { serviceManifest } from "@iterate-com/events-contract";
 import {
-  createOrpcErrorInterceptor,
+  applyOpenAPIRoute,
+  applyServiceMiddleware,
   createServiceObservabilityHandler,
+  createServiceOpenAPIHandler,
   createServiceRequestLogger,
-  extractIncomingTraceContext,
   getOtelRuntimeConfig,
-  getRequestIdHeader,
   initializeServiceEvlog,
   initializeServiceOtel,
   registerServiceWithRegistry,
   serviceLog,
-  type ServiceRequestLogger,
+  type ServiceAppEnv,
 } from "@iterate-com/shared/jonasland";
-import { Hono, type Context } from "hono";
-import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
-import { RPCHandler } from "@orpc/server/fetch";
+import { Hono } from "hono";
 import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
-import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { createServer as createViteServer, searchForWorkspaceRoot, type ViteDevServer } from "vite";
 import { WebSocketServer, type WebSocket } from "ws";
 import { getEventsDbRuntimeConfig } from "./db.ts";
 import { disposeEventsRouterOperations, eventsRouter } from "./router.ts";
-
-type AppVariables = {
-  requestId: string;
-  requestLog: ServiceRequestLogger;
-};
-
-const BODY_PARSER_METHODS = new Set(["arrayBuffer", "blob", "formData", "json", "text"] as const);
-type BodyParserMethod = typeof BODY_PARSER_METHODS extends Set<infer T> ? T : never;
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
-function createBodyParserSafeRequest(
-  c: Context<{ Bindings: HttpBindings; Variables: AppVariables }>,
-): Request {
-  return new Proxy(c.req.raw, {
-    get(target, prop) {
-      if (BODY_PARSER_METHODS.has(prop as BodyParserMethod)) {
-        return () => c.req[prop as BodyParserMethod]();
-      }
-
-      return Reflect.get(target, prop, target);
-    },
-  });
-}
 
 const serviceName = "jonasland-events-service";
 const viteServiceRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -95,27 +64,10 @@ function contentTypeForPath(filePath: string): string {
 initializeServiceOtel(serviceName);
 initializeServiceEvlog(serviceName);
 
-const openAPIHandler = new OpenAPIHandler(eventsRouter, {
-  plugins: [
-    new OpenAPIReferencePlugin({
-      docsProvider: "scalar",
-      docsPath: "/docs",
-      specPath: "/openapi.json",
-      schemaConverters: [new ZodToJsonSchemaConverter()],
-      specGenerateOptions: {
-        info: {
-          title: "jonasland events-service API",
-          version: serviceManifest.version,
-        },
-        servers: [{ url: "/api" }],
-      },
-    }),
-  ],
-  interceptors: [createOrpcErrorInterceptor()],
-});
-
-const rpcHandler = new RPCHandler(eventsRouter, {
-  interceptors: [createOrpcErrorInterceptor()],
+const openAPIHandler = createServiceOpenAPIHandler({
+  router: eventsRouter,
+  title: "jonasland events-service API",
+  version: serviceManifest.version,
 });
 
 const wsHandler = new WebSocketRPCHandler(eventsRouter);
@@ -136,49 +88,8 @@ wss.on("connection", (ws: WebSocket) => {
   });
 });
 
-const app = new Hono<{ Bindings: HttpBindings; Variables: AppVariables }>();
-
-app.use("*", async (c, next) => {
-  const incomingContext = extractIncomingTraceContext(c.req.raw.headers, (carrier) =>
-    propagation.extract(ROOT_CONTEXT, carrier),
-  );
-
-  return otelContext.with(incomingContext, next);
-});
-
-app.use("*", async (c, next) => {
-  const requestId = getRequestIdHeader(c.req.header("x-request-id")) ?? randomUUID();
-  const requestLog = createServiceRequestLogger({
-    requestId,
-    method: c.req.method,
-    path: c.req.path,
-  });
-  const startedAt = Date.now();
-
-  c.set("requestId", requestId);
-  c.set("requestLog", requestLog);
-
-  let status = 500;
-
-  try {
-    await next();
-    status = c.res.status;
-  } catch (error) {
-    requestLog.error(toError(error));
-    status = 500;
-    throw error;
-  } finally {
-    const outgoingStatus = c.env.outgoing.statusCode;
-    if (typeof outgoingStatus === "number" && outgoingStatus > 0) {
-      status = outgoingStatus;
-    }
-
-    requestLog.emit({
-      status,
-      durationMs: Date.now() - startedAt,
-    });
-  }
-});
+const app = new Hono<ServiceAppEnv>();
+applyServiceMiddleware(app);
 
 app.get("/api/observability", createServiceObservabilityHandler(getEventsDbRuntimeConfig));
 
@@ -187,33 +98,7 @@ app.get("/", async (c) => {
   return c.html(html);
 });
 
-app.all("/orpc/*", async (c) => {
-  const { matched, response } = await rpcHandler.handle(createBodyParserSafeRequest(c), {
-    prefix: "/orpc",
-    context: {
-      requestId: c.get("requestId"),
-      serviceName,
-      log: c.get("requestLog"),
-    },
-  });
-
-  if (matched) return c.newResponse(response.body, response);
-  return c.json({ error: "not_found" }, 404);
-});
-
-app.all("/api/*", async (c) => {
-  const { matched, response } = await openAPIHandler.handle(c.req.raw, {
-    prefix: "/api",
-    context: {
-      requestId: c.get("requestId"),
-      serviceName,
-      log: c.get("requestLog"),
-    },
-  });
-
-  if (matched) return c.newResponse(response.body, response);
-  return c.json({ error: "not_found" }, 404);
-});
+applyOpenAPIRoute(app, openAPIHandler, serviceName);
 
 app.get("/@fs/opt/packages/*", async (c) => {
   const url = new URL(c.req.raw.url, "http://localhost");

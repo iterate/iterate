@@ -834,7 +834,7 @@ export async function registerServiceWithRegistry(params: {
   tags?: string[];
 }): Promise<void> {
   const { createRegistryClient } = await import("@iterate-com/registry-service/client");
-  const registryClient = createRegistryClient({ url: `${REGISTRY_BASE_URL}/orpc` });
+  const registryClient = createRegistryClient({ url: `${REGISTRY_BASE_URL}/api` });
   const host = localHostForService({ slug: params.manifest.slug });
   const target = `127.0.0.1:${String(params.port)}`;
 
@@ -870,12 +870,11 @@ export async function registerServiceWithRegistry(params: {
 
 export function createLocalServiceOrpcClient<TContract extends AnyContractRouter>(params: {
   manifest: ServiceManifestLike<TContract>;
-  headers?: RPCLinkOptions<any>["headers"];
+  headers?: Record<string, string>;
 }): ContractRouterClient<TContract> {
-  const url = `http://${localHostForService({ slug: params.manifest.slug })}/orpc`;
-  const link = new RPCLink({
+  const url = `http://${localHostForService({ slug: params.manifest.slug })}/api`;
+  const link = new OpenAPILink(params.manifest.orpcContract, {
     url,
-    method: inferRPCMethodFromContractRouter(params.manifest.orpcContract),
     ...(params.headers ? { headers: params.headers } : {}),
   });
   return createORPCClient(link);
@@ -937,3 +936,12 @@ export function serviceManifestToPidnapConfig(params: {
     },
   };
 }
+
+export {
+  createServiceOpenAPIHandler,
+  createSimpleServiceRouter,
+  applyServiceMiddleware,
+  applyOpenAPIRoute,
+  type ServiceAppVariables,
+  type ServiceAppEnv,
+} from "./service-server.ts";

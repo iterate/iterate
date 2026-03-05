@@ -1,14 +1,18 @@
-import { randomUUID } from "node:crypto";
-import { createServer, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
+import { createAdaptorServer } from "@hono/node-server";
 import { createRegistryClient } from "@iterate-com/registry-service";
 import {
-  createServiceRequestLogger,
+  applyOpenAPIRoute,
+  applyServiceMiddleware,
+  createServiceOpenAPIHandler,
+  createSimpleServiceRouter,
   getOtelRuntimeConfig,
   initializeServiceEvlog,
   initializeServiceOtel,
   serviceLog,
+  type ServiceAppEnv,
 } from "@iterate-com/shared/jonasland";
+import { Hono } from "hono";
 
 const serviceName = "jonasland-home-service";
 
@@ -67,13 +71,13 @@ const platformServices: ReadonlyArray<ServiceSeed> = [
     label: "Events Service",
     host: "events.iterate.localhost",
     frontendPath: "/",
-    apiPath: "/orpc/__iterate/health",
+    apiPath: "/api/__iterate/health",
     docsPath: "/api/docs",
   },
   {
     label: "Registry Service",
     host: "registry.iterate.localhost",
-    apiPath: "/orpc/__iterate/health",
+    apiPath: "/api/__iterate/health",
     frontendHint: "has no frontend",
     docsHint: "has no docs",
   },
@@ -81,14 +85,14 @@ const platformServices: ReadonlyArray<ServiceSeed> = [
     label: "Home Service",
     host: "home.iterate.localhost",
     frontendPath: "/",
-    apiPath: "/__iterate/health",
+    apiPath: "/api/__iterate/health",
     docsHint: "has no docs",
   },
   {
     label: "Outerbase Service",
     host: "outerbase.iterate.localhost",
     frontendPath: "/",
-    apiPath: "/__iterate/health",
+    apiPath: "/api/__iterate/health",
     docsHint: "has no docs",
   },
 ] as const;
@@ -98,14 +102,14 @@ const services: ReadonlyArray<ServiceSeed> = [
     label: "Example Service",
     host: "example.iterate.localhost",
     frontendPath: "/",
-    apiPath: "/orpc/__iterate/health",
+    apiPath: "/api/__iterate/health",
     docsPath: "/api/docs",
   },
   {
     label: "Docs Service",
     host: "docs.iterate.localhost",
     frontendPath: "/",
-    apiPath: "/__iterate/health",
+    apiPath: "/api/__iterate/health",
     docsHint: "aggregates openapi specs",
   },
 ] as const;
@@ -126,17 +130,8 @@ function getEnv() {
       process.env.HOME_SERVICE_PORT ?? process.env.PORT ?? "19030",
       "HOME_SERVICE_PORT",
     ),
-    registryOrpcURL: process.env.HOME_REGISTRY_ORPC_URL?.trim() || "http://127.0.0.1:17310/orpc",
+    registryOrpcURL: process.env.HOME_REGISTRY_ORPC_URL?.trim() || "http://127.0.0.1:17310/api",
   };
-}
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
-function writeJson(response: ServerResponse, statusCode: number, body: unknown): void {
-  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(body));
 }
 
 function toInternalURL(host: string, path: string): string {
@@ -428,6 +423,20 @@ function buildHomeHtml(data: {
 </html>`;
 }
 
+initializeServiceOtel(serviceName);
+initializeServiceEvlog(serviceName);
+
+const homeRouter = createSimpleServiceRouter({
+  serviceName,
+  version: "0.0.1",
+});
+
+const openAPIHandler = createServiceOpenAPIHandler({
+  router: homeRouter,
+  title: "jonasland home API",
+  version: "0.0.1",
+});
+
 export async function startHomeService(options?: {
   host?: string;
   port?: number;
@@ -437,119 +446,54 @@ export async function startHomeService(options?: {
   const port = options?.port ?? env.port;
   const registry = createRegistryClient({ url: env.registryOrpcURL });
 
-  initializeServiceOtel(serviceName);
-  initializeServiceEvlog(serviceName);
+  const app = new Hono<ServiceAppEnv>();
+  applyServiceMiddleware(app);
 
-  const server = createServer(async (req, res) => {
-    const requestId = randomUUID();
-    const requestLog = createServiceRequestLogger({
-      requestId,
-      method: req.method,
-      path: req.url,
-    });
-    const startedAt = Date.now();
-    let status = 500;
+  app.get("/api/observability", (c) => c.json({ otel: getOtelRuntimeConfig() }));
 
-    try {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-
-      if (req.method === "GET" && pathname === "/__iterate/health") {
-        status = 200;
-        writeJson(res, status, { ok: true, service: serviceName });
-        return;
-      }
-
-      if (req.method === "POST" && pathname === "/__iterate/sql") {
-        status = 501;
-        writeJson(res, status, { error: "sql_not_supported" });
-        return;
-      }
-
-      if (req.method === "GET" && pathname === "/__iterate/debug") {
-        status = 200;
-        writeJson(res, status, {
-          pid: process.pid,
-          ppid: process.ppid,
-          uptimeSec: process.uptime(),
-          nodeVersion: process.version,
-          platform: process.platform,
-          arch: process.arch,
-          cwd: process.cwd(),
-          execPath: process.execPath,
-          argv: process.argv,
-          otel: getOtelRuntimeConfig(),
-        });
-        return;
-      }
-
-      if (req.method === "GET" && pathname === "/api/observability") {
-        status = 200;
-        writeJson(res, status, {
-          otel: getOtelRuntimeConfig(),
-        });
-        return;
-      }
-
-      if (req.method === "GET") {
-        status = 200;
-        res.writeHead(status, { "content-type": "text/html; charset=utf-8" });
-        const homeData = await resolveHomeData(registry).catch((error) => {
-          serviceLog.warn({
-            event: "home.registry.resolve_failed",
-            message: toError(error).message,
-          });
-          return {
-            platformLinks: platformLinks.map((link) => ({
-              label: link.label,
-              href: toInternalURL(link.host, link.path),
-              ...(link.hint ? { hint: link.hint } : {}),
-            })),
-            platformServices: platformServices.map((service) => ({
-              label: service.label,
-              ...(service.frontendPath
-                ? { frontendURL: toInternalURL(service.host, service.frontendPath) }
-                : {}),
-              ...(service.apiPath ? { apiURL: toInternalURL(service.host, service.apiPath) } : {}),
-              ...(service.docsPath
-                ? { docsURL: toInternalURL(service.host, service.docsPath) }
-                : {}),
-              ...(service.frontendHint ? { frontendHint: service.frontendHint } : {}),
-              ...(service.apiHint ? { apiHint: service.apiHint } : {}),
-              ...(service.docsHint ? { docsHint: service.docsHint } : {}),
-            })),
-            services: services.map((service) => ({
-              label: service.label,
-              ...(service.frontendPath
-                ? { frontendURL: toInternalURL(service.host, service.frontendPath) }
-                : {}),
-              ...(service.apiPath ? { apiURL: toInternalURL(service.host, service.apiPath) } : {}),
-              ...(service.docsPath
-                ? { docsURL: toInternalURL(service.host, service.docsPath) }
-                : {}),
-              ...(service.frontendHint ? { frontendHint: service.frontendHint } : {}),
-              ...(service.apiHint ? { apiHint: service.apiHint } : {}),
-              ...(service.docsHint ? { docsHint: service.docsHint } : {}),
-            })),
-            routes: [],
-          };
-        });
-        res.end(buildHomeHtml(homeData));
-        return;
-      }
-
-      status = 405;
-      writeJson(res, status, { error: "method_not_allowed" });
-    } catch (error) {
-      status = 500;
-      requestLog.error(toError(error));
-      writeJson(res, status, { error: "internal_error" });
-    } finally {
-      requestLog.emit({
-        status,
-        durationMs: Date.now() - startedAt,
+  app.get("/", async (c) => {
+    const homeData = await resolveHomeData(registry).catch((error) => {
+      serviceLog.warn({
+        event: "home.registry.resolve_failed",
+        message: error instanceof Error ? error.message : String(error),
       });
-    }
+      return {
+        platformLinks: platformLinks.map((link) => ({
+          label: link.label,
+          href: toInternalURL(link.host, link.path),
+          ...(link.hint ? { hint: link.hint } : {}),
+        })),
+        platformServices: platformServices.map((service) => ({
+          label: service.label,
+          ...(service.frontendPath
+            ? { frontendURL: toInternalURL(service.host, service.frontendPath) }
+            : {}),
+          ...(service.apiPath ? { apiURL: toInternalURL(service.host, service.apiPath) } : {}),
+          ...(service.docsPath ? { docsURL: toInternalURL(service.host, service.docsPath) } : {}),
+          ...(service.frontendHint ? { frontendHint: service.frontendHint } : {}),
+          ...(service.apiHint ? { apiHint: service.apiHint } : {}),
+          ...(service.docsHint ? { docsHint: service.docsHint } : {}),
+        })),
+        services: services.map((service) => ({
+          label: service.label,
+          ...(service.frontendPath
+            ? { frontendURL: toInternalURL(service.host, service.frontendPath) }
+            : {}),
+          ...(service.apiPath ? { apiURL: toInternalURL(service.host, service.apiPath) } : {}),
+          ...(service.docsPath ? { docsURL: toInternalURL(service.host, service.docsPath) } : {}),
+          ...(service.frontendHint ? { frontendHint: service.frontendHint } : {}),
+          ...(service.apiHint ? { apiHint: service.apiHint } : {}),
+          ...(service.docsHint ? { docsHint: service.docsHint } : {}),
+        })),
+        routes: [],
+      };
+    });
+    return c.html(buildHomeHtml(homeData));
   });
+
+  applyOpenAPIRoute(app, openAPIHandler, serviceName);
+
+  const server = createAdaptorServer({ fetch: app.fetch });
 
   await new Promise<void>((resolve) => {
     server.listen(port, host, () => resolve());
@@ -561,9 +505,9 @@ export async function startHomeService(options?: {
     host,
     port,
     ui_path: "/",
-    health_path: "/__iterate/health",
-    sql_path: "/__iterate/sql",
-    debug_path: "/__iterate/debug",
+    health_path: "/api/__iterate/health",
+    sql_path: "/api/__iterate/sql",
+    debug_path: "/api/__iterate/debug",
     observability_path: "/api/observability",
     otel: getOtelRuntimeConfig(),
   });

@@ -192,13 +192,12 @@ async function ensureExternalProxyConfigured(params: {
       args: ["/home/iterate/src/github.com/iterate/iterate/services/egress-service/src/server.ts"],
       env: {
         EGRESS_PROXY_PORT: "19000",
-        EGRESS_ADMIN_PORT: "19001",
       },
     },
     options: { restartPolicy: "always" },
     envOptions: { reloadDelay: 500 },
     healthCheck: {
-      url: "http://127.0.0.1:19001/__iterate/health",
+      url: "http://127.0.0.1:19000/__iterate/health",
       intervalMs: 2_000,
     },
   });
@@ -206,7 +205,7 @@ async function ensureExternalProxyConfigured(params: {
   const runtime = await params.deployment.exec([
     "sh",
     "-lc",
-    "for i in $(seq 1 45); do out=$(curl -fsS http://127.0.0.1:19001/api/runtime 2>/dev/null || true); echo \"$out\" | rg -q '\"externalProxyConfigured\":true' && { echo \"$out\"; exit 0; }; sleep 1; done; exit 1",
+    'for i in $(seq 1 45); do out=$(curl -fsS http://127.0.0.1:19000/api/runtime 2>/dev/null || true); echo "$out" | rg -q \'"externalProxyConfigured":true\' && { echo "$out"; exit 0; }; sleep 1; done; exit 1',
   ]);
   if (runtime.exitCode !== 0) {
     throw new Error(`egress-proxy did not become externally configured:\n${runtime.output}`);
@@ -321,7 +320,7 @@ async function main(): Promise<void> {
   const processLogs = await deployment.exec([
     "sh",
     "-lc",
-    "for f in /home/iterate/src/github.com/iterate/iterate/logs/process/caddy.log /home/iterate/src/github.com/iterate/iterate/logs/process/frp.log; do echo \"===== $f =====\"; tail -n 120 \"$f\" 2>/dev/null || true; done",
+    'for f in /home/iterate/src/github.com/iterate/iterate/logs/process/caddy.log /home/iterate/src/github.com/iterate/iterate/logs/process/frp.log; do echo "===== $f ====="; tail -n 120 "$f" 2>/dev/null || true; done',
   ]);
   console.log(processLogs.output);
 
@@ -363,7 +362,9 @@ async function main(): Promise<void> {
       "-i",
       `http://127.0.0.1:27180${requestPath}`,
     ]);
-    console.log(`[frp-repro] data port probe exit=${String(dataProbe.exitCode)}\n${dataProbe.output}`);
+    console.log(
+      `[frp-repro] data port probe exit=${String(dataProbe.exitCode)}\n${dataProbe.output}`,
+    );
 
     const egressProbe = await deployment.exec([
       "curl",

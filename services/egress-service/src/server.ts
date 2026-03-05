@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
-  createServer,
+  createServer as createHttpServer,
   type IncomingHttpHeaders,
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
 import { pathToFileURL } from "node:url";
-import httpProxy from "http-proxy";
 import {
   createServiceRequestLogger,
   getOtelRuntimeConfig,
@@ -15,6 +14,7 @@ import {
   serviceLog,
   type ServiceRequestLogger,
 } from "@iterate-com/shared/jonasland";
+import httpProxy from "http-proxy";
 
 const serviceName = "jonasland-egress-service";
 
@@ -39,8 +39,6 @@ type EgressMode = "external-proxy" | "transparent";
 type EgressEnv = {
   proxyHost: string;
   proxyPort: number;
-  adminHost: string;
-  adminPort: number;
   externalProxy: string;
 };
 
@@ -63,7 +61,6 @@ function parsePort(value: string, key: string): number {
 
 function getEnv(): EgressEnv {
   const rawProxyHost = process.env.EGRESS_PROXY_HOST?.trim();
-  const rawAdminHost = process.env.EGRESS_ADMIN_HOST?.trim();
 
   return {
     proxyHost: rawProxyHost && rawProxyHost.length > 0 ? rawProxyHost : "0.0.0.0",
@@ -71,8 +68,6 @@ function getEnv(): EgressEnv {
       process.env.EGRESS_PROXY_PORT ?? process.env.PORT ?? "19000",
       "EGRESS_PROXY_PORT",
     ),
-    adminHost: rawAdminHost && rawAdminHost.length > 0 ? rawAdminHost : "127.0.0.1",
-    adminPort: parsePort(process.env.EGRESS_ADMIN_PORT ?? "19001", "EGRESS_ADMIN_PORT"),
     externalProxy: process.env.ITERATE_EXTERNAL_EGRESS_PROXY ?? "",
   };
 }
@@ -229,14 +224,11 @@ function resolveProxyRequest(
   };
 }
 
-async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
+async function closeServer(server: ReturnType<typeof createHttpServer>): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
+      if (error) reject(error);
+      else resolve();
     });
   });
 }
@@ -244,14 +236,10 @@ async function closeServer(server: ReturnType<typeof createServer>): Promise<voi
 export async function startEgressService(options?: {
   proxyHost?: string;
   proxyPort?: number;
-  adminHost?: string;
-  adminPort?: number;
 }): Promise<{ close: () => Promise<void> }> {
   const env = getEnv();
   const proxyHost = options?.proxyHost ?? env.proxyHost;
   const proxyPort = options?.proxyPort ?? env.proxyPort;
-  const adminHost = options?.adminHost ?? env.adminHost;
-  const adminPort = options?.adminPort ?? env.adminPort;
 
   initializeServiceOtel(serviceName);
   initializeServiceEvlog(serviceName);
@@ -322,7 +310,7 @@ export async function startEgressService(options?: {
     });
   });
 
-  const proxyServer = createServer((req, res) => {
+  const proxyServer = createHttpServer((req, res) => {
     const requestId = randomUUID();
     const requestLog = createServiceRequestLogger({
       requestId,
@@ -351,7 +339,17 @@ export async function startEgressService(options?: {
       writeJson(res, 200, {
         service: serviceName,
         proxy: { host: proxyHost, port: proxyPort },
-        admin: { host: adminHost, port: adminPort },
+        externalProxyConfigured: env.externalProxy.length > 0,
+        otel: getOtelRuntimeConfig(),
+      });
+      requestLog.emit({ status: 200, durationMs: Date.now() - startedAt });
+      return;
+    }
+
+    if (req.method === "GET" && (req.url || "") === "/api/runtime") {
+      writeJson(res, 200, {
+        service: serviceName,
+        proxy: { host: proxyHost, port: proxyPort },
         externalProxyConfigured: env.externalProxy.length > 0,
         otel: getOtelRuntimeConfig(),
       });
@@ -412,100 +410,16 @@ export async function startEgressService(options?: {
     });
   });
 
-  const adminServer = createServer((req, res) => {
-    const requestId = randomUUID();
-    const requestLog = createServiceRequestLogger({
-      requestId,
-      method: req.method,
-      path: req.url,
-    });
-    const startedAt = Date.now();
-    let status = 500;
-
-    try {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-
-      if (req.method === "GET" && pathname === "/__iterate/health") {
-        status = 200;
-        writeJson(res, status, { ok: true, service: serviceName });
-        return;
-      }
-
-      if (req.method === "POST" && pathname === "/__iterate/sql") {
-        status = 501;
-        writeJson(res, status, { error: "sql_not_supported" });
-        return;
-      }
-
-      if (req.method === "GET" && pathname === "/__iterate/debug") {
-        status = 200;
-        writeJson(res, status, {
-          service: serviceName,
-          proxy: {
-            host: proxyHost,
-            port: proxyPort,
-          },
-          admin: {
-            host: adminHost,
-            port: adminPort,
-          },
-          externalProxyConfigured: env.externalProxy.length > 0,
-          otel: getOtelRuntimeConfig(),
-        });
-        return;
-      }
-
-      if (req.method === "GET" && pathname === "/api/runtime") {
-        status = 200;
-        writeJson(res, status, {
-          service: serviceName,
-          proxy: {
-            host: proxyHost,
-            port: proxyPort,
-          },
-          admin: {
-            host: adminHost,
-            port: adminPort,
-          },
-          externalProxyConfigured: env.externalProxy.length > 0,
-          otel: getOtelRuntimeConfig(),
-        });
-        return;
-      }
-
-      status = 404;
-      writeJson(res, status, { error: "not_found" });
-    } catch (error) {
-      status = 500;
-      requestLog.error(toError(error));
-      writeJson(res, status, { error: "internal_error" });
-    } finally {
-      requestLog.emit({
-        status,
-        durationMs: Date.now() - startedAt,
-      });
-    }
-  });
-
   await new Promise<void>((resolve) => {
     proxyServer.listen(proxyPort, proxyHost, () => resolve());
-  });
-
-  await new Promise<void>((resolve) => {
-    adminServer.listen(adminPort, adminHost, () => resolve());
   });
 
   serviceLog.info({
     event: "service.started",
     service: serviceName,
-    proxy_host: proxyHost,
-    proxy_port: proxyPort,
-    admin_host: adminHost,
-    admin_port: adminPort,
-    proxy_health_path: "/__iterate/health",
-    admin_health_path: "/__iterate/health",
-    sql_path: "/__iterate/sql",
-    debug_path: "/__iterate/debug",
+    host: proxyHost,
+    port: proxyPort,
+    health_path: "/__iterate/health",
     runtime_path: "/api/runtime",
     otel: getOtelRuntimeConfig(),
   });
@@ -513,7 +427,7 @@ export async function startEgressService(options?: {
   return {
     close: async () => {
       proxy.close();
-      await Promise.all([closeServer(proxyServer), closeServer(adminServer)]);
+      await closeServer(proxyServer);
     },
   };
 }

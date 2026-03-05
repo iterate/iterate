@@ -1,13 +1,22 @@
+import { resolve } from "node:path";
 import { defineConfig } from "vite";
-import tsconfigPaths from "vite-tsconfig-paths";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
-  server: { port: 3100 },
+  server: {
+    port: 3100,
+    watch: {
+      ignored: ["**/routeTree.gen.ts"],
+    },
+  },
+  resolve: {
+    alias: {
+      "@": resolve(import.meta.dirname, "./src"),
+    },
+  },
   plugins: [
-    tsconfigPaths({ projects: ["./tsconfig.json"] }),
     tailwindcss(),
     tanstackStart({
       spa: { enabled: true },
