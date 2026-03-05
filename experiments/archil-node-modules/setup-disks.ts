@@ -1,15 +1,17 @@
 /**
- * Provisions (or reuses) Archil disks for the benchmark experiment.
- * Creates two disks in the misha-archil-test R2 bucket:
- *   1. archil-bench-nm     — for pnpm install benchmark (node_modules on archil)
- *   2. archil-bench-bundle — for git-bundle sync benchmark
+ * Provisions (or reuses) an Archil disk for the benchmark experiment.
+ * Creates one disk in the misha-archil-test R2 bucket:
+ *   archil-bench-nm — for pnpm install benchmark (node_modules on archil)
  *
- * Outputs a JSON file (disk-config.json) with disk IDs and mount tokens.
+ * Outputs a JSON file (disk-config.json) with disk ID and mount token.
  *
  * Usage: doppler run -- npx tsx setup-disks.ts
  */
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { Archil, ArchilApiError } from "@archildata/client/api";
+
+const SCRIPT_DIR = path.dirname(new URL(import.meta.url).pathname);
 
 // SDK prepends "key-" to the apiKey, so strip it if already present
 const ARCHIL_API_KEY = (process.env.ARCHIL_API_KEY_EU_WEST || process.env.ARCHIL_API_KEY!).replace(
@@ -95,20 +97,15 @@ async function main() {
 
   const archil = new Archil({ apiKey: ARCHIL_API_KEY, region: REGION });
 
-  console.log("Provisioning Archil disks for benchmark...\n");
+  console.log("Provisioning Archil disk for benchmark...\n");
 
-  const [nmDisk, bundleDisk] = await Promise.all([
-    createOrReuseDisk(archil, "archil-bench-nm", "bench/node-modules/"),
-    createOrReuseDisk(archil, "archil-bench-bundle", "bench/git-bundle/"),
-  ]);
+  const nmDisk = await createOrReuseDisk(archil, "archil-bench-nm", "bench/node-modules/");
 
-  const config = {
-    nm: nmDisk,
-    bundle: bundleDisk,
-  };
+  const config = { nm: nmDisk };
 
-  fs.writeFileSync("disk-config.json", JSON.stringify(config, null, 2));
-  console.log("\nWrote disk-config.json:");
+  const outPath = path.join(SCRIPT_DIR, "disk-config.json");
+  fs.writeFileSync(outPath, JSON.stringify(config, null, 2));
+  console.log(`\nWrote ${outPath}:`);
   console.log(JSON.stringify(config, null, 2));
 }
 

@@ -1,19 +1,29 @@
 #!/bin/bash
 # Benchmark: pnpm install on local disk vs Archil mount.
 #
-# Modes:
-#   MODE=baseline  — pnpm install on local disk
-#   MODE=archil    — pnpm install with node_modules on Archil
+# Env vars:
+#   MODE=baseline|archil
+#   WORKLOAD=small|medium
 #
-# Archil mode requires: ARCHIL_MOUNT_TOKEN, ARCHIL_DISK_ID, ARCHIL_REGION
+# Archil mode also requires: ARCHIL_MOUNT_TOKEN, ARCHIL_DISK_ID, ARCHIL_REGION
 set -euo pipefail
 
 MODE="${MODE:-baseline}"
+WORKLOAD="${WORKLOAD:-small}"
 WORKDIR="/home/bench/project"
 MOUNT_DIR="/mnt/archil"
-PACKAGES="@arethetypeswrong/cli@0.17.3 @types/node@22 @typescript/native-preview@7.0.0-dev.20250527.1 @vitest/ui@3 eslint@8.57 eslint-plugin-mmkal@0.9.0 np@10 pkg-pr-new@0.0.39 strip-ansi@7.1.0 ts-morph@23.0.0 typescript@5.9.2 vitest@3"
 
-log() { echo "[bench:$MODE] $*"; }
+# ── Workload definitions ──
+PACKAGES_SMALL="lodash chalk request commander express"
+PACKAGES_MEDIUM="@arethetypeswrong/cli@0.17.3 @types/node@22 @typescript/native-preview@7.0.0-dev.20250527.1 @vitest/ui@3 eslint@8.57 eslint-plugin-mmkal@0.9.0 np@10 pkg-pr-new@0.0.39 strip-ansi@7.1.0 ts-morph@23.0.0 typescript@5.9.2 vitest@3"
+
+case "$WORKLOAD" in
+  small)  PACKAGES="$PACKAGES_SMALL" ;;
+  medium) PACKAGES="$PACKAGES_MEDIUM" ;;
+  *) echo "Unknown WORKLOAD: $WORKLOAD (expected small|medium)"; exit 1 ;;
+esac
+
+log() { echo "[bench:$MODE:$WORKLOAD] $*"; }
 
 # ── Mount Archil ──
 mount_archil() {
