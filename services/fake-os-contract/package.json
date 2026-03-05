@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",
-    "@orpc/contract": "1.13.6",
+    "@orpc/contract": "*",
     "zod": "^4.3.6"
   }
 }

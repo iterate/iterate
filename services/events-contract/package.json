@@ -13,9 +13,9 @@
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",
-    "@orpc/contract": "^1.13.5",
-    "@orpc/zod": "1.13.5",
-    "zod": "^4.1.11"
+    "@orpc/contract": "*",
+    "@orpc/zod": "*",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
