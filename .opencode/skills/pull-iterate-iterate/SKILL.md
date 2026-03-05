@@ -8,6 +8,8 @@ publish: false
 
 Pull the latest iterate/iterate code onto this machine, install dependencies, run post-sync steps, and restart the processes that run iterate/iterate code.
 
+**Efficiency:** This is a mechanical task — do NOT use the todowrite tool. Just execute the steps sequentially without planning overhead. Each step is a single bash command; run them one after another.
+
 ## Context
 
 The iterate/iterate repo lives at `$ITERATE_REPO` (default: `/home/iterate/src/github.com/iterate/iterate`). It was baked into the Docker image at build time with a synthetic git history (single "snapshot" commit). A git remote `origin` points to `https://github.com/iterate/iterate.git`.
@@ -95,29 +97,27 @@ echo "Previous: <old sha from step 2>"
 
 ### 7. Restart processes that run iterate/iterate code
 
-Use pidnap's HTTP API to restart only the processes that run our TypeScript code. Other processes (egress-proxy, opencode, jaeger, archil, cloudflare-tunnel) are external binaries and don't need restarting.
+Use the `pidnap` CLI to restart only the processes that run our TypeScript code. Other processes (egress-proxy, opencode, jaeger, archil, cloudflare-tunnel) are external binaries and don't need restarting.
 
 Restart these 4 processes:
 
 ```bash
-PIDNAP_URL="http://127.0.0.1:9876/rpc"
-
 for proc in daemon-backend project-ingress-proxy events daemon-frontend; do
   echo "Restarting $proc..."
-  curl -fsS -X POST "$PIDNAP_URL/processes.restart" \
-    -H "Content-Type: application/json" \
-    --data "{\"target\": \"$proc\", \"force\": true}" || echo "Warning: failed to restart $proc"
+  pidnap process restart "$proc" --force || echo "Warning: failed to restart $proc"
 done
 ```
 
 **Note:** `daemon-frontend` serves a static vite build — step 5 already rebuilt it, so restarting the preview server picks up the new build output.
 
-**Note:** `force: true` skips backoff delay so the process restarts immediately.
+**Note:** `--force` skips backoff delay so the process restarts immediately.
+
+**Do NOT use curl to call the pidnap HTTP API.** The API uses oRPC, which has a non-obvious wire format (`/rpc/processes/restart` path with `{"json": {...}}` body wrapping). The `pidnap` CLI is simpler and always works.
 
 After restarting, verify the processes are running:
 
 ```bash
-curl -fsS "$PIDNAP_URL/processes.list" | jq '.[] | {name, state}'
+pidnap process list
 ```
 
 ### 8. (Rare) If pidnap's own code changed
