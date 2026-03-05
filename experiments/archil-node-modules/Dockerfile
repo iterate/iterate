@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install essentials (node:22-bookworm already has node, npm, git, curl)
 RUN apt-get update && apt-get install -y \
-    sudo fuse3 libfuse2 bc \
+    sudo fuse3 libfuse2 bc jq \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pnpm

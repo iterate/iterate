@@ -29,6 +29,9 @@ dist
 .cache
 __pycache__/
 
+# Experiment artifacts
+experiments/*/disk-config.json
+
 # ad-hoc ignored files/paths
 *ignoreme*
 evalite-export

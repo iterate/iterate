@@ -8,17 +8,20 @@
  *
  * Usage: doppler run -- npx tsx setup-disks.ts
  */
-import { Archil, ArchilApiError } from "@archildata/client/api";
 import * as fs from "node:fs";
+import { Archil, ArchilApiError } from "@archildata/client/api";
 
 // SDK prepends "key-" to the apiKey, so strip it if already present
-const ARCHIL_API_KEY = process.env.ARCHIL_API_KEY!.replace(/^key-/, "");
+const ARCHIL_API_KEY = (process.env.ARCHIL_API_KEY_EU_WEST || process.env.ARCHIL_API_KEY!).replace(
+  /^key-/,
+  "",
+);
 const ARCHIL_R2_ACCESS_KEY_ID = process.env.ARCHIL_R2_ACCESS_KEY_ID!;
 const ARCHIL_R2_SECRET_ACCESS_KEY = process.env.ARCHIL_R2_SECRET_ACCESS_KEY!;
 const CLOUDFLARE_ACCOUNT_ID =
   process.env.CLOUDFLARE_ACCOUNT_ID || "04b3b57291ef2626c6a8daa9d47065a7";
 
-const REGION = "aws-us-east-1";
+const REGION = "aws-eu-west-1";
 const BUCKET_NAME = "misha-archil-test";
 const BUCKET_ENDPOINT = `https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`;
 
