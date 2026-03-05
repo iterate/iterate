@@ -11,7 +11,7 @@ set -euo pipefail
 MODE="${MODE:-baseline}"
 WORKDIR="/home/bench/project"
 MOUNT_DIR="/mnt/archil"
-PACKAGES="lodash chalk request commander express"
+PACKAGES="@arethetypeswrong/cli@0.17.3 @types/node@22 @typescript/native-preview@7.0.0-dev.20250527.1 @vitest/ui@3 eslint@8.57 eslint-plugin-mmkal@0.9.0 np@10 pkg-pr-new@0.0.39 strip-ansi@7.1.0 ts-morph@23.0.0 typescript@5.9.2 vitest@3"
 
 log() { echo "[bench:$MODE] $*"; }
 

@@ -6,26 +6,24 @@ We're evaluating whether Archil can back `node_modules` for our AI coding agent 
 
 - **Compute:** Fly.io machine in `lhr` (London), 4 shared vCPUs, 4 GB RAM
 - **Archil disk:** `aws-eu-west-1` (Ireland), backed by Cloudflare R2 in Western Europe
-- **Workload:** `pnpm install lodash chalk request commander express`
-  - 114 packages, 2232 files in `node_modules`
 - **Archil config:** Both `node_modules` and the pnpm content-addressable store are on the Archil mount (bind-mounted into the project directory). This is required because pnpm hardlinks files from the store into `node_modules` — both must be on the same filesystem.
 
 ## Results
 
-| Scenario   | pnpm install | Files | Slowdown |
-| ---------- | ------------ | ----- | -------- |
-| Local disk | 1.6s         | 2232  | 1x       |
-| Archil     | 6.5s         | 2232  | **4x**   |
+| Workload                    | Packages | Files  | Local disk | Archil | Slowdown |
+| --------------------------- | -------- | ------ | ---------- | ------ | -------- |
+| Small (5 popular npm libs)  | 114      | 2,232  | 1.6s       | 6.5s   | **4x**   |
+| Medium (typical TS devDeps) | 885      | 32,173 | 27s        | 25 min | **57x**  |
+
+The slowdown scales super-linearly with file count. At 2K files, Archil is a manageable 4x slower. At 32K files, it's 57x slower. Our production monorepo has ~180K files in `node_modules` — extrapolating, that would likely take hours.
 
 Raw output in [results.md](./results.md).
 
-## Observations
+## What's slow
 
-With a small dependency set (114 packages, 2232 files), Archil is ~4x slower than local disk. This is a cold install — no cached data on the Archil disk.
+The bottleneck is the "added" phase of `pnpm install`. pnpm hardlinks thousands of small files from its content-addressable store into `node_modules`. Each file creation is a FUSE operation that round-trips to Archil's storage cluster. Downloads are fast — pnpm fetched 829/885 tarballs in seconds — but writing 32K files one-by-one through FUSE took 25 minutes.
 
-For context, our production monorepo has ~2300 packages and ~180,000 files in `node_modules`. In an earlier test with a repo of that scale (815 packages, 30,906 files), the Archil install timed out at 5 minutes with only 165/815 packages written — the slowdown scaled super-linearly, closer to 100x.
-
-The bottleneck is the "added" phase of `pnpm install`. pnpm hardlinks thousands of small files from its content-addressable store into `node_modules`. Each file creation is a FUSE operation that round-trips to Archil's storage cluster.
+Even a simple `find node_modules -type f | wc -l` took ~5 minutes on the Archil mount after the install completed.
 
 ## Reproducing
 
