@@ -123,6 +123,16 @@ RUN case "${TARGETARCH}" in \
     chmod +x /usr/local/bin/frps && \
     rm -rf /tmp/frp.tar.gz "/tmp/frp_${FRP_VERSION}_linux_${FRP_ARCH}"
 
+# Install websocat for WebSocket debugging from the container.
+RUN case "${TARGETARCH}" in \
+      amd64) WSCAT_ARCH=x86_64 ;; \
+      arm64) WSCAT_ARCH=aarch64 ;; \
+      *) echo "Unsupported TARGETARCH for websocat: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/vi/websocat/releases/latest/download/websocat.${WSCAT_ARCH}-unknown-linux-musl" \
+    -o /usr/local/bin/websocat && \
+    chmod +x /usr/local/bin/websocat
+
 # Enable pinned pnpm via corepack for workspace installs.
 RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
 
