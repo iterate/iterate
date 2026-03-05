@@ -82,7 +82,7 @@ Canonical example: `apps/os/app/routes/org/project/machines.tsx`
 ## Meta: writing AGENTS.md
 
 - Keep it brief, sacrifice grammar for the sake of concision.
-- Stick to facts which are likely to remain true, rather than prescriptive recipes ("XYZ can be found in the database" is better than "run this exact query which might be invalid once the schema changes")
+- Stick to facts which are likely to remain true, rather than prescriptive recipes ("XYZ can be found in the database" is better than "run this exact query" which might be invalid once the schema changes)
 
 ## Quick reference
 

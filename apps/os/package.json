@@ -19,6 +19,7 @@
     "billing:generate": "tsx scripts/generate-billing-meters.ts"
   },
   "dependencies": {
+    "@archildata/client": "^0.8.2",
     "@clack/prompts": "^1.0.0",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-yaml": "^6.1.2",
