@@ -147,7 +147,7 @@ function createTestBranch(branchName: string, greeting: string) {
 
   // Patch execCommand to include the greeting
   const toolsFile = path.join(worktreeDir, "apps/daemon/server/orpc/procedures/tools.ts");
-  const original = fs.readFileSync(toolsFile, "utf-8");
+  const original = fs.readFileSync(toolsFile, "utf8");
   const patchBefore = "exitCode: result.exitCode";
   const patchIndex = original.indexOf(patchBefore);
   if (patchIndex === -1)
@@ -158,9 +158,9 @@ function createTestBranch(branchName: string, greeting: string) {
   const beforePatch = original.slice(0, patchIndex);
   const patched =
     beforePatch +
-    `greeting: ${JSON.stringify(greeting)},\n` +
-    original.slice(beforePatch.trimEnd().length, beforePatch.length) + // whitespace
-    original.slice(patchIndex + patchBefore.length);
+    `greeting: ${JSON.stringify(greeting)},` +
+    beforePatch.slice(beforePatch.trimEnd().length) + // whitespace
+    original.slice(patchIndex);
 
   fs.writeFileSync(toolsFile, patched);
 
