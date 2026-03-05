@@ -216,15 +216,29 @@ export function formatHarEntry(
 
   if (opts.headers) {
     const reqHeaders = formatHeaders(entry.request.headers, sanitizedHeaders, opts);
-    if (reqHeaders) {
-      lines.push(c(DIM, "  -- Request headers --", opts.color));
-      lines.push(reqHeaders);
-    }
-
     const resHeaders = formatHeaders(entry.response.headers, sanitizedHeaders, opts);
-    if (resHeaders) {
-      lines.push(c(DIM, "  -- Response headers --", opts.color));
-      lines.push(resHeaders);
+
+    if (reqHeaders || resHeaders) {
+      if (reqHeaders) {
+        lines.push(c(DIM, "  -- Request headers --", opts.color));
+        lines.push(reqHeaders);
+      }
+      if (resHeaders) {
+        lines.push(c(DIM, "  -- Response headers --", opts.color));
+        lines.push(resHeaders);
+      }
+      if (opts.headers === "sanitized-only") {
+        const omittedReq =
+          entry.request.headers.length - (reqHeaders ? reqHeaders.split("\n").length : 0);
+        const omittedRes =
+          entry.response.headers.length - (resHeaders ? resHeaders.split("\n").length : 0);
+        const parts: string[] = [];
+        if (omittedReq > 0) parts.push(`${String(omittedReq)} request`);
+        if (omittedRes > 0) parts.push(`${String(omittedRes)} response`);
+        if (parts.length > 0) {
+          lines.push(c(DIM, `  [omitting ${parts.join(" + ")} headers for brevity]`, opts.color));
+        }
+      }
     }
   }
 

@@ -18,8 +18,9 @@ function httpEntry(opts: {
   postData?: { mimeType: string; text: string };
   responseContent?: { size: number; mimeType: string; text?: string };
   responseBodySize?: number;
+  _iterateMetadata?: HarEntryWithExtensions["_iterateMetadata"];
 }): HarEntry {
-  return {
+  const entry: HarEntryWithExtensions = {
     startedDateTime: "2026-03-03T10:00:00.000Z",
     time: 50,
     request: {
@@ -46,6 +47,8 @@ function httpEntry(opts: {
     cache: {},
     timings: { send: 0, wait: 0, receive: 0 },
   };
+  if (opts._iterateMetadata) entry._iterateMetadata = opts._iterateMetadata;
+  return entry as HarEntry;
 }
 
 function wsEntry(overrides: {
@@ -132,6 +135,7 @@ describe("createDefaultHarSanitizer", () => {
           { name: "authorization", value: "Bearer sk-pr---sanitised-secret-0f959513" },
           { name: "accept", value: "application/json" },
         ],
+        _iterateMetadata: { sanitizedHeaders: ["authorization"] },
       }),
     ],
 
@@ -148,6 +152,7 @@ describe("createDefaultHarSanitizer", () => {
           { name: "content-type", value: "application/json" },
           { name: "set-cookie", value: "session=se---sanitised-secret-fcf730b6" },
         ],
+        _iterateMetadata: { sanitizedHeaders: ["set-cookie"] },
       }),
     ],
 
@@ -160,6 +165,7 @@ describe("createDefaultHarSanitizer", () => {
         responseHeaders: [
           { name: "set-cookie", value: "session=se---sanitised-secret-fcf730b6; Path=/; HttpOnly" },
         ],
+        _iterateMetadata: { sanitizedHeaders: ["set-cookie"] },
       }),
     ],
 
@@ -175,6 +181,7 @@ describe("createDefaultHarSanitizer", () => {
             value: "session=---sanitised-secret-ba7816bf; tracker=x---sanitised-secret-f0a72890",
           },
         ],
+        _iterateMetadata: { sanitizedHeaders: ["cookie"] },
       }),
     ],
 
@@ -205,6 +212,7 @@ describe("createDefaultHarSanitizer", () => {
       }),
       httpEntry({
         requestHeaders: [{ name: "x-api-key", value: "my-a---sanitised-secret-3eeee459" }],
+        _iterateMetadata: { sanitizedHeaders: ["x-api-key"] },
       }),
     ],
 
@@ -215,6 +223,7 @@ describe("createDefaultHarSanitizer", () => {
       }),
       httpEntry({
         requestHeaders: [{ name: "x-custom-key", value: "cust---sanitised-secret-ea72f247" }],
+        _iterateMetadata: { sanitizedHeaders: ["x-custom-key"] },
       }),
     ],
 
@@ -225,6 +234,7 @@ describe("createDefaultHarSanitizer", () => {
       }),
       httpEntry({
         requestHeaders: [{ name: "x-csrf-token", value: "csrf---sanitised-secret-c352809d" }],
+        _iterateMetadata: { sanitizedHeaders: ["x-csrf-token"] },
       }),
     ],
 
@@ -235,6 +245,7 @@ describe("createDefaultHarSanitizer", () => {
       }),
       httpEntry({
         requestHeaders: [{ name: "api-key", value: "my-a---sanitised-secret-3eeee459" }],
+        _iterateMetadata: { sanitizedHeaders: ["api-key"] },
       }),
     ],
 

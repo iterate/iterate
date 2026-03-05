@@ -6,8 +6,8 @@ import {
   serviceManifestToPidnapConfig,
   type ServiceManifestWithEntryPoint,
 } from "../../packages/shared/src/jonasland/index.ts";
-import { serviceManifest as eventsServiceManifest } from "../../services/events/src/contract.ts";
-import { registryServiceManifest } from "../../services/registry/src/contract.ts";
+import { serviceManifest as eventsServiceManifest } from "@iterate-com/events-contract";
+import { registryServiceManifest } from "@iterate-com/registry-contract";
 
 const home = homedir();
 const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");

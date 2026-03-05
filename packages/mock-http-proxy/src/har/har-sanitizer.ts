@@ -236,10 +236,15 @@ function sanitizeHeaderValue(headerName: string, value: string): string {
 
 function sanitizeHeaderList(
   headers: Array<{ name: string; value: string }>,
+  sanitizedNames: string[],
 ): Array<{ name: string; value: string }> {
   return headers.map((header) => {
     if (isSensitiveHeaderName(header.name)) {
-      return { name: header.name, value: sanitizeHeaderValue(header.name, header.value) };
+      const sanitized = sanitizeHeaderValue(header.name, header.value);
+      if (sanitized !== header.value) {
+        sanitizedNames.push(header.name.toLowerCase());
+      }
+      return { name: header.name, value: sanitized };
     }
     return header;
   });
@@ -366,9 +371,13 @@ export type HarEntrySanitizer = (entry: HarEntry) => HarEntry;
 export function createDefaultHarSanitizer(): HarEntrySanitizer {
   return (entry: HarEntry): HarEntry => {
     const sanitized = structuredClone(entry) as HarEntryWithExtensions;
+    const sanitizedHeaderNames: string[] = [];
 
-    sanitized.request.headers = sanitizeHeaderList(sanitized.request.headers);
-    sanitized.response.headers = sanitizeHeaderList(sanitized.response.headers);
+    sanitized.request.headers = sanitizeHeaderList(sanitized.request.headers, sanitizedHeaderNames);
+    sanitized.response.headers = sanitizeHeaderList(
+      sanitized.response.headers,
+      sanitizedHeaderNames,
+    );
 
     sanitized.request.queryString = sanitizeQueryString(sanitized.request.queryString);
 
@@ -405,6 +414,13 @@ export function createDefaultHarSanitizer(): HarEntrySanitizer {
 
     if (sanitized._webSocketMessages) {
       sanitized._webSocketMessages = sanitized._webSocketMessages.map(sanitizeWebSocketMessage);
+    }
+
+    if (sanitizedHeaderNames.length > 0) {
+      sanitized._iterateMetadata = {
+        ...sanitized._iterateMetadata,
+        sanitizedHeaders: [...new Set(sanitizedHeaderNames)],
+      };
     }
 
     return sanitized as HarEntry;

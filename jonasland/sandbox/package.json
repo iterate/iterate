@@ -26,6 +26,8 @@
     "http-proxy": "^1.18.1",
     "pidnap": "workspace:*",
     "tsx": "^4.20.6",
-    "valibot": "^1.2.0"
+    "valibot": "^1.2.0",
+    "@iterate-com/events-contract": "workspace:*",
+    "@iterate-com/registry-contract": "workspace:*"
   }
 }
