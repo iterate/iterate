@@ -96,6 +96,24 @@ export default defineConfig({
       },
     },
     {
+      name: "egress-proxy",
+      definition: {
+        command: tsxPath,
+        args: [join(iterateRepo, "services/egress-service/src/server.ts")],
+        env: {
+          EGRESS_PROXY_PORT: "19000",
+          EGRESS_ADMIN_PORT: "19001",
+        },
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        // External proxy URL may change via ~/.iterate/.env.
+        reloadDelay: 500,
+      },
+    },
+    {
       name: "events",
       definition: {
         command: tsxPath,

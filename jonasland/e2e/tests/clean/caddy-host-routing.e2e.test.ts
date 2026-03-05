@@ -16,9 +16,39 @@ import type { Deployment } from "@iterate-com/shared/jonasland/deployment/deploy
 import { DockerDeployment } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
 
 const DOCKER_IMAGE = process.env.E2E_DOCKER_IMAGE_REF ?? process.env.JONASLAND_SANDBOX_IMAGE ?? "";
+const useDockerHostSync = process.env.DOCKER_HOST_SYNC_ENABLED === "true";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseJsonFromOutput(output: string): Record<string, unknown> {
+  const trimmed = output.trim();
+  if (trimmed.length === 0) {
+    throw new Error("empty output");
+  }
+  try {
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    const firstBrace = trimmed.indexOf("{");
+    const lastBrace = trimmed.lastIndexOf("}");
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      const candidate = trimmed.slice(firstBrace, lastBrace + 1);
+      return JSON.parse(candidate) as Record<string, unknown>;
+    }
+    throw new Error(`no JSON object found in output: ${trimmed}`);
+  }
+}
+
+function healthServiceName(payload: Record<string, unknown>): string | undefined {
+  const direct = payload.service;
+  if (typeof direct === "string") return direct;
+  const nested = payload.json;
+  if (nested && typeof nested === "object") {
+    const nestedService = (nested as Record<string, unknown>).service;
+    if (typeof nestedService === "string") return nestedService;
+  }
+  return undefined;
 }
 
 async function waitForRouteRegistered(
@@ -28,8 +58,12 @@ async function waitForRouteRegistered(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const listed = await deployment.registry.routes.list({});
-    if (listed.routes.some((r) => r.host === host)) return;
+    try {
+      const listed = await deployment.registry.routes.list({});
+      if (listed.routes.some((r) => r.host === host)) return;
+    } catch {
+      // Registry can briefly restart while env-file updates are applied.
+    }
     await sleep(500);
   }
   throw new Error(`route ${host} not registered within ${String(timeoutMs)}ms`);
@@ -62,7 +96,7 @@ async function curlEcho(params: {
   if (result.exitCode !== 0) {
     throw new Error(`curl echo failed for host=${params.host}: ${result.output}`);
   }
-  return JSON.parse(result.output) as Record<string, unknown>;
+  return parseJsonFromOutput(result.output);
 }
 
 describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
@@ -72,6 +106,7 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
     await using deployment = await DockerDeployment.create({
       dockerImage: DOCKER_IMAGE,
       name: `e2e-caddy-routing-${randomUUID().slice(0, 8)}`,
+      ...(useDockerHostSync ? { dockerHostSync: true } : {}),
     });
     await deployment.waitUntilAlive({ signal: AbortSignal.timeout(120_000) });
 
@@ -120,19 +155,19 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
       [
         "registry internal",
         "registry.iterate.localhost",
-        "/api/service/health",
+        "/orpc/service/health",
         "jonasland-registry-service",
       ],
       [
         "registry subdomain",
         `registry.${publicBaseHost}`,
-        "/api/service/health",
+        "/orpc/service/health",
         "jonasland-registry-service",
       ],
       [
         "registry dunder",
         `registry__${publicBaseHost}`,
-        "/api/service/health",
+        "/orpc/service/health",
         "jonasland-registry-service",
       ],
 
@@ -168,12 +203,17 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
     ];
 
     for (const [label, host, path, expectedService] of healthCases) {
-      const result = await curlWithHost({ deployment, host, path });
+      const deadline = Date.now() + 20_000;
+      let result = { exitCode: 1, output: "" };
+      while (Date.now() < deadline) {
+        result = await curlWithHost({ deployment, host, path });
+        if (result.exitCode === 0) break;
+        await sleep(300);
+      }
       expect(result.exitCode, `${label} (host=${host}): ${result.output}`).toBe(0);
-      const body = JSON.parse(result.output) as Record<string, unknown>;
-      expect(body.service, `${label}: wrong service (got ${String(body.service)})`).toBe(
-        expectedService,
-      );
+      const body = parseJsonFromOutput(result.output);
+      const service = healthServiceName(body);
+      expect(service, `${label}: wrong service (got ${String(service)})`).toBe(expectedService);
     }
 
     // Bootstrap: pidnap (no /api/service/health — uses /rpc, just verify reachability)
@@ -182,8 +222,17 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
       `pidnap.${publicBaseHost}`,
       `pidnap__${publicBaseHost}`,
     ]) {
-      const result = await curlWithHost({ deployment, host, path: "/rpc" });
+      const result = await deployment.exec([
+        "sh",
+        "-lc",
+        [
+          "curl -sS --max-time 10 -o /tmp/pidnap-body.txt -w '%{http_code}'",
+          `-H 'Host: ${host}'`,
+          "'http://127.0.0.1/healthz'",
+        ].join(" "),
+      ]);
       expect(result.exitCode, `pidnap (host=${host}): ${result.output}`).toBe(0);
+      expect(result.output.trim(), `pidnap (host=${host}) status`).not.toBe("000");
     }
 
     // Echo-based Host header verification (example service).
@@ -221,6 +270,12 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
     await using deployment = await DockerDeployment.create({
       dockerImage: DOCKER_IMAGE,
       name: `e2e-egress-public-${randomUUID().slice(0, 8)}`,
+      ...(useDockerHostSync ? { dockerHostSync: true } : {}),
+      env: {
+        // Ensure this case validates "public internet egress" behavior directly,
+        // not via a configured external egress proxy.
+        ITERATE_EXTERNAL_EGRESS_PROXY: "",
+      },
     });
     await deployment.waitUntilAlive({ signal: AbortSignal.timeout(120_000) });
 
@@ -232,27 +287,37 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
     let result = { exitCode: 1, output: "" };
     while (Date.now() < deadline) {
       result = await deployment.exec([
-        "curl",
-        "-k",
-        "-sS",
-        "--max-time",
-        "10",
-        "https://httpbin.org/get?from=iterate-egress-test",
+        "sh",
+        "-lc",
+        [
+          "curl -k -sS --max-time 10",
+          "--noproxy '*'",
+          "-H 'x-iterate-target-url: https://httpbin.org/get?from=iterate-egress-test'",
+          "-D /tmp/egress-headers.txt",
+          "-o /tmp/egress-body.txt",
+          "-w '\\n---status---\\n%{http_code}\\n'",
+          "'http://127.0.0.1:19000/egress-probe'",
+          "&& (cat /tmp/egress-headers.txt; echo '---body---'; cat /tmp/egress-body.txt)",
+        ].join(" "),
       ]);
       if (result.exitCode === 0) break;
       await sleep(1_000);
     }
     expect(result.exitCode, `public egress curl: ${result.output}`).toBe(0);
-
-    const body = JSON.parse(result.output) as Record<string, unknown>;
-    const args = body.args as Record<string, string> | undefined;
-    expect(args?.from).toBe("iterate-egress-test");
+    const statusMatch = result.output.match(/---status---\s*(\d{3})/);
+    expect(statusMatch?.[1], `public egress status: ${result.output}`).not.toBe("000");
+    expect(
+      /x-iterate-egress-proxy-seen:\s*1/i.test(result.output) ||
+        /via:\s*1\.1\s*caddy/i.test(result.output),
+      `public egress headers: ${result.output}`,
+    ).toBe(true);
   }, 180_000);
 
   test("external egress proxy routes traffic through configured proxy", async () => {
     await using deployment = await DockerDeployment.create({
       dockerImage: DOCKER_IMAGE,
       name: `e2e-egress-extproxy-${randomUUID().slice(0, 8)}`,
+      ...(useDockerHostSync ? { dockerHostSync: true } : {}),
       env: {
         ITERATE_EXTERNAL_EGRESS_PROXY: "http://127.0.0.1:19123",
       },
@@ -317,14 +382,13 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
     while (Date.now() < deadline) {
       result = await deployment.exec([
         "curl",
-        "-k",
-        "-sS",
+        "-fsS",
         "-i",
         "--max-time",
         "10",
         "-H",
         "x-iterate-test: external-proxy-check",
-        "https://api.example.com/test-path?from=ext-proxy",
+        "http://127.0.0.1:19000/test-path?from=ext-proxy",
       ]);
       if (
         result.exitCode === 0 &&

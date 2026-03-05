@@ -4,7 +4,7 @@ import { arch, platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
-import type { Deployment } from "@iterate-com/shared/jonasland/deployment";
+import type { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
 
 const FRP_DATA_REMOTE_PORT = 27180;
 const FRP_VERSION = "0.65.0";
@@ -343,7 +343,11 @@ export async function startFrpEgressBridge(params: {
     step = "compute-run-context";
     runId = sanitizeRunId(params.runId);
 
-    const ingressUrl = new URL(await params.deployment.ingressUrl());
+    const ingressUrl = new URL(
+      params.deployment.baseUrl.includes("://")
+        ? params.deployment.baseUrl
+        : `https://${params.deployment.baseUrl}`,
+    );
     const ingressHostname = ingressUrl.hostname.toLowerCase();
 
     if (ingressHostname.endsWith(".fly.dev") || ingressHostname.endsWith(".ingress.iterate.com")) {

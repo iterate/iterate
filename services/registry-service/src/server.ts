@@ -46,6 +46,10 @@ interface RegistryContext {
 // with the service registry. But in the meantime we have this
 const SEEDED_ROUTE_DEFINITIONS = [
   {
+    host: "events.iterate.localhost",
+    target: "127.0.0.1:17320",
+  },
+  {
     host: "openobserve.iterate.localhost",
     target: "127.0.0.1:5080",
     caddyDirectives: [
