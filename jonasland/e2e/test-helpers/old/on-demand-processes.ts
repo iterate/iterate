@@ -56,21 +56,21 @@ const sharedOnDemandProcesses = {
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
       },
     }),
-    routeCheck: { host: "orders.iterate.localhost", path: "/healthz" },
+    routeCheck: { host: "orders.iterate.localhost", path: "/__iterate/health" },
   },
   outerbase: {
     definition: createTsxDefinition({
       scriptPath: `${CONTAINER_REPO_ROOT}/services/outerbase-service/src/server.ts`,
       env: OTEL_SERVICE_ENV,
     }),
-    routeCheck: { host: "outerbase.iterate.localhost", path: "/healthz" },
+    routeCheck: { host: "outerbase.iterate.localhost", path: "/__iterate/health" },
   },
   docs: {
     definition: createTsxDefinition({
       scriptPath: `${CONTAINER_REPO_ROOT}/services/docs-service/src/server.ts`,
       env: OTEL_SERVICE_ENV,
     }),
-    routeCheck: { host: "docs.iterate.localhost", path: "/healthz" },
+    routeCheck: { host: "docs.iterate.localhost", path: "/__iterate/health" },
   },
 } satisfies Record<string, OnDemandProcessConfig>;
 
@@ -88,7 +88,7 @@ export const onDemandProcesses = {
       scriptPath: `${CONTAINER_REPO_ROOT}/services/egress-service/src/server.ts`,
       env: OTEL_SERVICE_ENV,
     }),
-    directHttpCheck: { url: "http://127.0.0.1:19000/healthz" },
+    directHttpCheck: { url: "http://127.0.0.1:19000/__iterate/health" },
   },
   openobserve: {
     definition: {
@@ -115,7 +115,11 @@ export const onDemandProcesses = {
       args: [`${CONTAINER_REPO_ROOT}/jonasland/sandbox/caddymanager/server.mjs`],
       env: {},
     },
-    routeCheck: { host: "caddymanager.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
+    routeCheck: {
+      host: "caddymanager.iterate.localhost",
+      path: "/__iterate/health",
+      timeoutMs: 60_000,
+    },
   },
 } satisfies Record<string, OnDemandProcessConfig>;
 

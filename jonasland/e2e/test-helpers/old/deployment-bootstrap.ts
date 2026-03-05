@@ -60,13 +60,13 @@ export async function waitForBuiltInServicesOnline(params: {
   await waitForHostHealthViaLoopback({
     deployment: params.deployment,
     host: "registry.iterate.localhost",
-    path: "/orpc/service/health",
+    path: "/orpc/__iterate/health",
     timeoutMs,
   });
   await waitForHostHealthViaLoopback({
     deployment: params.deployment,
     host: "events.iterate.localhost",
-    path: "/api/service/health",
+    path: "/api/__iterate/health",
     timeoutMs,
   });
 }

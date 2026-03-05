@@ -8,11 +8,14 @@ export {
   createProxyWebSocketUrlTransform,
   PROXY_HEADERS_TO_STRIP,
 } from "./server/proxy-request-transform.ts";
+export { HarRecorder, type RecorderOpts } from "./har/har-recorder.ts";
 export {
-  HarRecorder,
-  type RecorderOpts,
-  type RecorderSanitizeOptions,
-} from "./har/har-recorder.ts";
+  createDefaultHarSanitizer,
+  formatSanitizedSecret,
+  isIterateSecretPlaceholder,
+  isRedactedSecret,
+  type HarEntrySanitizer,
+} from "./har/har-sanitizer.ts";
 export {
   useMitmProxy,
   useMockHttpServer,

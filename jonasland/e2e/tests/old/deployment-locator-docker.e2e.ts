@@ -31,18 +31,30 @@ describe.runIf(RUN_DOCKER_E2E)("deployment abstraction locator (docker)", () => 
     expect(deploymentLocator.provider).toBe("docker");
     expect(deploymentLocator.containerId.length).toBeGreaterThan(0);
 
-    const ownerHealth = await deployment.exec(["curl", "-fsS", "http://127.0.0.1/healthz"]);
+    const ownerHealth = await deployment.exec([
+      "curl",
+      "-fsS",
+      "http://127.0.0.1/__iterate/caddy-health",
+    ]);
     expect(ownerHealth.exitCode).toBe(0);
     expect(ownerHealth.output.trim()).toBe("caddy ok");
 
     await using attached = new DockerDeployment();
     await attached.attach(deploymentLocator);
 
-    const attachedHealth = await attached.exec(["curl", "-fsS", "http://127.0.0.1/healthz"]);
+    const attachedHealth = await attached.exec([
+      "curl",
+      "-fsS",
+      "http://127.0.0.1/__iterate/caddy-health",
+    ]);
     expect(attachedHealth.exitCode).toBe(0);
     expect(attachedHealth.output.trim()).toBe("caddy ok");
 
-    const ownerStillHealthy = await deployment.exec(["curl", "-fsS", "http://127.0.0.1/healthz"]);
+    const ownerStillHealthy = await deployment.exec([
+      "curl",
+      "-fsS",
+      "http://127.0.0.1/__iterate/caddy-health",
+    ]);
     expect(ownerStillHealthy.exitCode).toBe(0);
 
     await deployment[Symbol.asyncDispose]();

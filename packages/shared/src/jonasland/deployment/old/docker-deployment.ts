@@ -597,7 +597,7 @@ export class DockerDeployment extends Deployment<DockerDeploymentOpts, DockerDep
     await waitForHostRouteViaIngress({
       ingressBaseUrl: this.ingressBaseUrl,
       host: "events.iterate.localhost",
-      path: "/api/service/health",
+      path: "/api/__iterate/health",
       timeoutMs: 60_000,
     });
   }

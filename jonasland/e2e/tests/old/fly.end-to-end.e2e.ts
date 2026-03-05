@@ -41,10 +41,10 @@ describe.runIf(RUN_FLY_E2E)("jonasland fly e2e", () => {
       const ingress = await deployment.ingressUrl();
 
       step = "wait for ingress healthy";
-      await deployment.waitForHealthyWithLogs({ url: `${ingress}/healthz` });
+      await deployment.waitForHealthyWithLogs();
 
       step = "resolve public url";
-      const internalURL = `${ingress}/healthz`;
+      const internalURL = `${ingress}/__iterate/caddy-health`;
       const publicServiceHealth = await deployment.registry.getPublicURL({
         internalURL,
       });

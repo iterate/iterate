@@ -14,9 +14,9 @@ No custom Caddy plugins. No Docker socket mount. No sibling containers.
 
 ## Runtime flow
 
-1. Container starts `start.sh`.
-2. `start.sh` installs `nat OUTPUT` rules redirecting `:80/:443` to local Caddy.
-3. `start.sh` starts pidnap (`pidnap.config.ts`).
+1. Container starts `entry.sh`.
+2. `entry.sh` installs `nat OUTPUT` rules redirecting `:80/:443` to local Caddy.
+3. `entry.sh` starts pidnap (`pidnap.config.ts`).
 4. Pidnap starts `caddy` and `registry`.
 
 ## Service routing

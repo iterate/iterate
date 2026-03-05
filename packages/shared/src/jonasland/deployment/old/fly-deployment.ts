@@ -327,7 +327,7 @@ async function waitForRuntimeReady(params: {
   exec: (cmd: string | string[]) => Promise<DeploymentCommandResult>;
 }): Promise<void> {
   await waitForHttpOk({
-    url: `${params.ingressBaseUrl}/healthz`,
+    url: `${params.ingressBaseUrl}/__iterate/caddy-health`,
     timeoutMs: 180_000,
   });
 
@@ -372,7 +372,7 @@ async function waitForRuntimeReady(params: {
         await waitForHostHealthViaExec({
           exec: params.exec,
           host: `${processName}.iterate.localhost`,
-          path: "/api/service/health",
+          path: "/api/__iterate/health",
           timeoutMs: 120_000,
         });
       }

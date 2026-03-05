@@ -112,7 +112,7 @@ describe.runIf(runFly)("frp tunnel", () => {
         options: { restartPolicy: "always" },
         envOptions: { reloadDelay: 500 },
         healthCheck: {
-          url: "http://127.0.0.1:19001/healthz",
+          url: "http://127.0.0.1:19001/__iterate/health",
           intervalMs: 2_000,
         },
       });

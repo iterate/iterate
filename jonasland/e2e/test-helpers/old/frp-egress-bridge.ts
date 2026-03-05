@@ -311,7 +311,9 @@ function resolveIngressProxyApiToken(): string {
 function resolveDockerFrpControlHost(): string {
   const override = process.env.JONASLAND_E2E_DOCKER_FRP_CONTROL_HOST?.trim();
   if (override && override.length > 0) return override;
-  return "frp.iterate.localhost";
+  // For Docker e2e, the control server is exposed on deployment.baseUrl host:port.
+  // frpc runs on the host test runner, so 127.0.0.1 is the most reliable default.
+  return "127.0.0.1";
 }
 
 export interface FrpEgressBridge extends AsyncDisposable {

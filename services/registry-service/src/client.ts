@@ -124,7 +124,12 @@ export function createRegistryClient(params?: {
         { orpc: true },
       ),
     service: {
-      health: async () => await requestJson("/orpc/service/health", undefined, { orpc: true }),
+      health: async () =>
+        await requestJson(
+          "/orpc/service/health",
+          { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+          { orpc: true },
+        ),
       sql: async (input) =>
         await requestJson(
           "/orpc/service/sql",

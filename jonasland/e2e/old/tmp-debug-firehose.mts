@@ -33,8 +33,8 @@ const dep = await DockerDeployment.createWithOpts({ dockerImage: image }).create
 });
 console.log("ingress", ingressBaseUrl);
 for (const path of [
-  "/healthz",
-  "/__iterate/events/healthz",
+  "/__iterate/health",
+  "/api/__iterate/health",
   "/__iterate/events/orpc",
   "/__iterate/events/orpc/firehose",
 ]) {

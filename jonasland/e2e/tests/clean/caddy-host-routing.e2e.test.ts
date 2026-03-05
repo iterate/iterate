@@ -144,30 +144,30 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
     // -----------------------------------------------------------------
     // Each entry: [label, hostHeader, healthPath, expectedServiceName]
     //
-    // We use /api/service/health (available on every service) and assert
+    // We use /api/__iterate/health (available on every service) and assert
     // the "service" field in the JSON response to prove the request
     // reached the correct upstream — not just that something responded.
     //
     // Bootstrap services: pidnap, registry
     // Registry-managed: events, example
     const healthCases: Array<[string, string, string, string]> = [
-      // Bootstrap: registry (has /api/service/health via oRPC)
+      // Bootstrap: registry (has /api/__iterate/health via oRPC)
       [
         "registry internal",
         "registry.iterate.localhost",
-        "/orpc/service/health",
+        "/orpc/__iterate/health",
         "jonasland-registry-service",
       ],
       [
         "registry subdomain",
         `registry.${publicBaseHost}`,
-        "/orpc/service/health",
+        "/orpc/__iterate/health",
         "jonasland-registry-service",
       ],
       [
         "registry dunder",
         `registry__${publicBaseHost}`,
-        "/orpc/service/health",
+        "/orpc/__iterate/health",
         "jonasland-registry-service",
       ],
 
@@ -175,31 +175,31 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
       [
         "events internal",
         "events.iterate.localhost",
-        "/api/service/health",
+        "/api/__iterate/health",
         "jonasland-events-service",
       ],
       [
         "events subdomain",
         `events.${publicBaseHost}`,
-        "/api/service/health",
+        "/api/__iterate/health",
         "jonasland-events-service",
       ],
       [
         "events dunder",
         `events__${publicBaseHost}`,
-        "/api/service/health",
+        "/api/__iterate/health",
         "jonasland-events-service",
       ],
 
       // Registry-managed (dynamic): example
-      ["example internal", "example.iterate.localhost", "/api/service/health", "jonasland-example"],
+      ["example internal", "example.iterate.localhost", "/api/__iterate/health", "jonasland-example"],
       [
         "example subdomain",
         `example.${publicBaseHost}`,
-        "/api/service/health",
+        "/api/__iterate/health",
         "jonasland-example",
       ],
-      ["example dunder", `example__${publicBaseHost}`, "/api/service/health", "jonasland-example"],
+      ["example dunder", `example__${publicBaseHost}`, "/api/__iterate/health", "jonasland-example"],
     ];
 
     for (const [label, host, path, expectedService] of healthCases) {
@@ -216,7 +216,7 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
       expect(service, `${label}: wrong service (got ${String(service)})`).toBe(expectedService);
     }
 
-    // Bootstrap: pidnap (no /api/service/health — uses /rpc, just verify reachability)
+    // Bootstrap: pidnap (no /api/__iterate/health — uses /rpc, just verify reachability)
     for (const host of [
       "pidnap.iterate.localhost",
       `pidnap.${publicBaseHost}`,
@@ -228,7 +228,7 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
         [
           "curl -sS --max-time 10 -o /tmp/pidnap-body.txt -w '%{http_code}'",
           `-H 'Host: ${host}'`,
-          "'http://127.0.0.1/healthz'",
+          "'http://127.0.0.1/__iterate/caddy-health'",
         ].join(" "),
       ]);
       expect(result.exitCode, `pidnap (host=${host}): ${result.output}`).toBe(0);
@@ -282,7 +282,8 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
     // httpbin.org/get is a well-known public echo service.
     // curl from inside the container goes: process → iptables → Caddy :443
     // (MITM TLS) → egress fallback → egress-service → internet.
-    // The egress proxy is started automatically by pidnap.
+    // We intentionally use a normal outbound URL (not direct egress endpoint)
+    // so this test validates transparent routing end-to-end.
     const deadline = Date.now() + 30_000;
     let result = { exitCode: 1, output: "" };
     while (Date.now() < deadline) {
@@ -290,13 +291,11 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
         "sh",
         "-lc",
         [
-          "curl -k -sS --max-time 10",
-          "--noproxy '*'",
-          "-H 'x-iterate-target-url: https://httpbin.org/get?from=iterate-egress-test'",
+          "curl -k -sS --max-time 20",
           "-D /tmp/egress-headers.txt",
           "-o /tmp/egress-body.txt",
           "-w '\\n---status---\\n%{http_code}\\n'",
-          "'http://127.0.0.1:19000/egress-probe'",
+          "'https://httpbin.org/get?from=iterate-egress-test'",
           "&& (cat /tmp/egress-headers.txt; echo '---body---'; cat /tmp/egress-body.txt)",
         ].join(" "),
       ]);
@@ -360,7 +359,7 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
       options: { restartPolicy: "always" },
       envOptions: { reloadDelay: false },
       healthCheck: {
-        url: "http://127.0.0.1:19123/healthz",
+        url: "http://127.0.0.1:19123/__iterate/health",
         intervalMs: 2_000,
       },
     });
@@ -374,21 +373,22 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
     // ITERATE_EXTERNAL_EGRESS_PROXY from the deployment env, pointing at
     // the inline echo server on :19123.
 
-    // Make an outbound HTTPS request. iptables redirects it to Caddy, Caddy
-    // falls through to egress-service (:19000), egress-service forwards to
-    // the external proxy (:19123), which echoes back our request details.
+    // Make a normal outbound HTTPS request. iptables redirects it to Caddy,
+    // Caddy falls through to egress-service (:19000), and egress-service
+    // forwards to the configured external proxy (:19123).
     const deadline = Date.now() + 30_000;
     let result = { exitCode: 1, output: "" };
     while (Date.now() < deadline) {
       result = await deployment.exec([
         "curl",
+        "-k",
         "-fsS",
         "-i",
         "--max-time",
-        "10",
+        "20",
         "-H",
         "x-iterate-test: external-proxy-check",
-        "http://127.0.0.1:19000/test-path?from=ext-proxy",
+        "https://example.com/test-path?from=ext-proxy",
       ]);
       if (
         result.exitCode === 0 &&

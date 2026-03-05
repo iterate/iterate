@@ -82,9 +82,9 @@ async function runSelfChecks(params: {
 }): Promise<void> {
   const eventsHost = `events__${params.slug}.${params.ingressProxyDomain}`;
   const eventsOrigin = `https://${eventsHost}`;
-  const ingressHealthUrl = `${eventsOrigin}/api/service/health`;
+  const ingressHealthUrl = `${eventsOrigin}/api/__iterate/health`;
   const tunnelListStreamsUrl = `${params.tunnelUrl}/orpc/listStreams`;
-  const tunnelHealthUrl = `${params.tunnelUrl}/api/service/health`;
+  const tunnelHealthUrl = `${params.tunnelUrl}/api/__iterate/health`;
   const forwardedHostHeaders = { "x-forwarded-host": eventsHost };
   const expectedPublicBaseUrl = `https://${params.slug}.${params.ingressProxyDomain}`;
 
@@ -95,7 +95,7 @@ async function runSelfChecks(params: {
     label: "registry.getPublicURL reflects ingress base URL",
     run: async () => {
       const result = await params.deployment.registry.getPublicURL({
-        internalURL: "http://events.iterate.localhost/api/service/health",
+        internalURL: "http://events.iterate.localhost/api/__iterate/health",
       });
       if (!result.publicURL.includes(`events__${params.slug}.${params.ingressProxyDomain}`)) {
         throw new Error(
@@ -335,11 +335,11 @@ async function main(): Promise<void> {
   console.log(`[playground] ingress wildcard pattern: https://${wildcardHost}/`);
   console.log(`[playground] ingress root: https://${rootHost}/`);
   console.log("[playground] likely-working service URLs:");
-  console.log(`[playground] - https://events__${slug}.${ingressProxyDomain}/api/service/health`);
+  console.log(`[playground] - https://events__${slug}.${ingressProxyDomain}/api/__iterate/health`);
   console.log(`[playground] - https://registry__${slug}.${ingressProxyDomain}/api/routes`);
   console.log(`[playground] - https://home__${slug}.${ingressProxyDomain}/`);
   console.log(
-    `[playground] tunnel direct with x-forwarded-host: ${tunnel.tunnelUrl}/api/service/health`,
+    `[playground] tunnel direct with x-forwarded-host: ${tunnel.tunnelUrl}/api/__iterate/health`,
   );
   console.log("[playground] 4/4 press Enter to teardown");
   console.log("");

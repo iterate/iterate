@@ -7,7 +7,7 @@
 # both ingress (external requests reaching sandbox services) and egress
 # (processes inside the sandbox making outbound HTTP/HTTPS calls).
 #
-# This is enforced by iptables NAT rules in start.sh:
+# This is enforced by iptables NAT rules in entry.sh:
 #
 #   iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-ports 80
 #   iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 443
@@ -137,6 +137,14 @@
 	}
 }
 
+(iterate_caddy_health) {
+	# Keep this path global on purpose: it's handy to probe Caddy on any host
+	# from outside (ingress/public/internal) to confirm the proxy is alive.
+	# The namespaced path keeps collision odds with app routes very low.
+	@caddy_health path /__iterate/caddy-health
+	respond @caddy_health "ok" 200
+}
+
 # =============================================================================
 # Main HTTP listener
 # =============================================================================
@@ -145,8 +153,7 @@
 	# downstream matchers only need to match on Host.
 	import iterate_rewrite_xfh_to_host
 
-	@health path /healthz
-	respond @health "ok" 200
+	import iterate_caddy_health
 
 	# Step 2: bootstrap routes that must work before registry starts.
 	import iterate_bootstrap_routes
@@ -181,6 +188,7 @@
 
 	# Step 1: rewrite Host from X-Forwarded-Host (same as HTTP block).
 	import iterate_rewrite_xfh_to_host
+	import iterate_caddy_health
 
 	# Step 2: bootstrap routes that must work before registry starts.
 	import iterate_bootstrap_routes

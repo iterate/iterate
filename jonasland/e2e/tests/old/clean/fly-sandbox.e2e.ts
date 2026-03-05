@@ -35,7 +35,7 @@ describe.runIf(runFly)("clean fly sandbox", () => {
       const ingress = await deployment.ingressUrl();
 
       step = "ingress health";
-      await deployment.waitForHealthyWithLogs({ url: `${ingress}/healthz` });
+      await deployment.waitForHealthyWithLogs();
 
       step = "complete";
     } catch (error) {

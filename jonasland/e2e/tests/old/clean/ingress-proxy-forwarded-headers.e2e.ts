@@ -24,7 +24,7 @@ describe("clean ingress proxy forwarded headers", () => {
     const wildcardHost = `bla__${baseHost}`;
 
     const server = createServer((request, response) => {
-      if (request.url === "/healthz") {
+      if (request.url === "/__iterate/health") {
         response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
         response.end("ok");
         return;

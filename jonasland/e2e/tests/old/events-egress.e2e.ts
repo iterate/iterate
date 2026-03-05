@@ -54,7 +54,7 @@ async function startEgressProxyProcess(deployment: Deployment): Promise<void> {
     timeoutMs: 45_000,
   });
   await waitForDirectHttp(deployment, {
-    url: "http://127.0.0.1:19000/healthz",
+    url: "http://127.0.0.1:19000/__iterate/health",
   });
 }
 
@@ -88,7 +88,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland events egress", () => {
       "-fsS",
       "-H",
       EVENTS_HOST_HEADER,
-      "http://127.0.0.1/api/service/health",
+      "http://127.0.0.1/api/__iterate/health",
     ]);
     expect(health.exitCode).toBe(0);
     const healthPayload = JSON.parse(health.output) as { ok: boolean; service: string };

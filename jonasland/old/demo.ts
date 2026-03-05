@@ -52,7 +52,7 @@ const processes: ProcessConfig[] = [
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:17320/orpc",
       },
     },
-    routeCheck: { host: "orders.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
+    routeCheck: { host: "orders.iterate.localhost", path: "/__iterate/health", timeoutMs: 60_000 },
   },
   {
     slug: "docs",
@@ -61,7 +61,7 @@ const processes: ProcessConfig[] = [
       args: [`${ITERATE_REPO}/services/docs-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
-    routeCheck: { host: "docs.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
+    routeCheck: { host: "docs.iterate.localhost", path: "/__iterate/health", timeoutMs: 60_000 },
   },
   {
     slug: "home",
@@ -79,7 +79,11 @@ const processes: ProcessConfig[] = [
       args: [`${ITERATE_REPO}/services/outerbase-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
-    routeCheck: { host: "outerbase.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
+    routeCheck: {
+      host: "outerbase.iterate.localhost",
+      path: "/__iterate/health",
+      timeoutMs: 60_000,
+    },
   },
   {
     slug: "egress-proxy",
@@ -88,7 +92,7 @@ const processes: ProcessConfig[] = [
       args: [`${ITERATE_REPO}/services/egress-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
-    directHttpCheck: { url: "http://127.0.0.1:19000/healthz", timeoutMs: 60_000 },
+    directHttpCheck: { url: "http://127.0.0.1:19000/__iterate/health", timeoutMs: 60_000 },
   },
   {
     slug: "openobserve",
@@ -128,7 +132,11 @@ const processes: ProcessConfig[] = [
       command: "node",
       args: [`${JONASLAND_SANDBOX_DIR}/caddymanager/server.mjs`],
     },
-    routeCheck: { host: "caddymanager.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
+    routeCheck: {
+      host: "caddymanager.iterate.localhost",
+      path: "/__iterate/health",
+      timeoutMs: 60_000,
+    },
   },
 ];
 

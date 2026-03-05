@@ -450,11 +450,12 @@ export abstract class Deployment<
     return await this.providerLogs();
   }
 
-  async waitForHealthyWithLogs(params: { url: string }): Promise<void> {
+  async waitForHealthyWithLogs(params?: { timeoutMs?: number }): Promise<void> {
     try {
+      const ingress = await this.ingressUrl();
       await waitForHttpOk({
-        url: params.url,
-        timeoutMs: 45_000,
+        url: `${ingress}/__iterate/caddy-health`,
+        timeoutMs: params?.timeoutMs ?? 45_000,
       });
     } catch (error) {
       const logs = await this.logs().catch(() => "(deployment logs unavailable)");
@@ -821,7 +822,7 @@ export abstract class Deployment<
           timeoutMs: 120_000,
         });
         await this.waitForDirectHttp({
-          url: "http://127.0.0.1:19000/healthz",
+          url: "http://127.0.0.1:19000/__iterate/health",
           timeoutMs: 120_000,
         });
       },
@@ -852,7 +853,7 @@ export abstract class Deployment<
             ].join(" "),
           ]).catch(() => {});
           await this.waitForDirectHttp({
-            url: "http://127.0.0.1:19000/healthz",
+            url: "http://127.0.0.1:19000/__iterate/health",
             timeoutMs: 120_000,
           });
         },

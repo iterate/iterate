@@ -159,10 +159,12 @@ async function main(): Promise<void> {
   );
 
   const publicProbe = await waitForReachable({
-    url: `https://${flyPublicBaseHost}/healthz`,
+    url: `https://${flyPublicBaseHost}/__iterate/caddy-health`,
     timeoutMs: 240_000,
   });
-  console.log(`[ready] https://${flyPublicBaseHost}/healthz status=${String(publicProbe.status)}`);
+  console.log(
+    `[ready] https://${flyPublicBaseHost}/__iterate/caddy-health status=${String(publicProbe.status)}`,
+  );
 
   const baseRoute = await createRoute({
     baseUrl: ingressProxyBaseUrl,
@@ -215,12 +217,12 @@ async function main(): Promise<void> {
     );
   }
 
-  await probeUrl(`https://${ingressBaseHost}/healthz`);
-  await probeUrl(`http://${ingressBaseHost}/healthz`);
-  await probeUrl(`https://${ingressBaseHost}/healthz`);
-  await probeUrl(`http://${ingressBaseHost}/healthz`);
-  await probeUrl(`https://${ingressServiceHost}/healthz`);
-  await probeUrl(`http://${ingressServiceHost}/healthz`);
+  await probeUrl(`https://${ingressBaseHost}/__iterate/caddy-health`);
+  await probeUrl(`http://${ingressBaseHost}/__iterate/caddy-health`);
+  await probeUrl(`https://${ingressBaseHost}/__iterate/caddy-health`);
+  await probeUrl(`http://${ingressBaseHost}/__iterate/caddy-health`);
+  await probeUrl(`https://${ingressServiceHost}/__iterate/caddy-health`);
+  await probeUrl(`http://${ingressServiceHost}/__iterate/caddy-health`);
 
   console.log("");
   console.log("Resources intentionally left running.");

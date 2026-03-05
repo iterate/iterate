@@ -222,10 +222,32 @@ export async function startDocsService(options?: {
       const requestUrl = new URL(req.url ?? "/", "http://localhost");
       const pathname = requestUrl.pathname;
 
-      if (req.method === "GET" && pathname === "/healthz") {
+      if (req.method === "GET" && pathname === "/__iterate/health") {
         status = 200;
-        res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-        res.end("ok");
+        writeJsonResponse(res, 200, { ok: true, service: serviceName });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/__iterate/sql") {
+        status = 501;
+        writeJsonResponse(res, 501, { error: "sql_not_supported" });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/__iterate/debug") {
+        status = 200;
+        writeJsonResponse(res, 200, {
+          pid: process.pid,
+          ppid: process.ppid,
+          uptimeSec: process.uptime(),
+          nodeVersion: process.version,
+          platform: process.platform,
+          arch: process.arch,
+          cwd: process.cwd(),
+          execPath: process.execPath,
+          argv: process.argv,
+          otel: getOtelRuntimeConfig(),
+        });
         return;
       }
 
@@ -308,6 +330,9 @@ export async function startDocsService(options?: {
     host,
     port,
     docs_path: "/",
+    health_path: "/__iterate/health",
+    sql_path: "/__iterate/sql",
+    debug_path: "/__iterate/debug",
     openapi_sources_path: "/api/openapi-sources",
     otel: getOtelRuntimeConfig(),
   });

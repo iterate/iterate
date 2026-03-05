@@ -42,4 +42,4 @@ if [[ -f "${ITERATE_REPO}/.git/commondir" || -f "${ITERATE_REPO}/.git/gitdir" ]]
   rm -f "${ITERATE_REPO}/.git/commondir" "${ITERATE_REPO}/.git/gitdir"
 fi
 
-(cd "${ITERATE_REPO}" && pnpm install --prod --frozen-lockfile --prefer-offline --ignore-scripts)
+(cd "${ITERATE_REPO}" && CI=true pnpm install --prod --frozen-lockfile --prefer-offline --ignore-scripts)

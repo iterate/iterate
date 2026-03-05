@@ -1,0 +1,43 @@
+{
+  "name": "@iterate-com/fake-os",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev --port 3100",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "@iterate-com/ui": "workspace:*",
+    "@orpc/client": "^1.13.6",
+    "@orpc/server": "^1.13.6",
+    "@orpc/react-query": "^1.13.6",
+    "@tailwindcss/vite": "^4.2.1",
+    "@tanstack/react-query": "^5.90.21",
+    "@tanstack/react-query-devtools": "^5.90.21",
+    "@tanstack/react-router": "^1.163.3",
+    "@tanstack/react-router-devtools": "^1.163.3",
+    "@tanstack/react-start": "^1.163.3",
+    "better-sqlite3": "^12.6.2",
+    "drizzle-orm": "^0.45.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tailwindcss": "^4.2.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.1.4",
+    "drizzle-kit": "^0.31.9",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "vite-tsconfig-paths": "^6.1.1"
+  }
+}

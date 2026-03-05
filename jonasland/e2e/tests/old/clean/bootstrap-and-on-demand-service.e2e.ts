@@ -117,7 +117,7 @@ for (const provider of providers) {
           tags: ["on-demand"],
           restartImmediately: true,
           healthCheck: {
-            url: "http://docs.iterate.localhost/api/service/health",
+            url: "http://docs.iterate.localhost/api/__iterate/health",
             intervalMs: 2_000,
           },
         });
@@ -127,7 +127,7 @@ for (const provider of providers) {
         });
 
         const { publicURL: publicDocsHealthUrl } = await deployment.registry.getPublicURL({
-          internalURL: "http://docs.iterate.localhost/api/service/health",
+          internalURL: "http://docs.iterate.localhost/api/__iterate/health",
         });
 
         const response = await fetch(publicDocsHealthUrl, {

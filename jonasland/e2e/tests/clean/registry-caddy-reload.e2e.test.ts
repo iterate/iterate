@@ -72,7 +72,7 @@ describe.runIf(DOCKER_IMAGE.length > 0)("registry public URL lifecycle", () => {
       });
       await deployment.waitUntilAlive({ signal: AbortSignal.timeout(120_000 + HOST_SYNC_OFFSET) });
 
-      const eventsInternalURL = "http://events.iterate.localhost/api/service/health";
+      const eventsInternalURL = "http://events.iterate.localhost/api/__iterate/health";
       const defaultEventsPublicURL = await getPublicURL(deployment, eventsInternalURL);
       expect(defaultEventsPublicURL).toContain("iterate.localhost");
 
@@ -160,7 +160,7 @@ describe.runIf(DOCKER_IMAGE.length > 0)("registry public URL lifecycle", () => {
           "10",
           "-H",
           `Host: ${host}`,
-          "http://127.0.0.1/api/service/health",
+          "http://127.0.0.1/api/__iterate/health",
         ]);
         expect(result.exitCode, `curl events for host=${host}: ${result.output}`).toBe(0);
       }

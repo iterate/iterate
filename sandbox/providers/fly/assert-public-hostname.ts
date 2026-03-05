@@ -119,7 +119,7 @@ async function main(): Promise<void> {
     }
 
     const appHost = `${sandbox.providerId}.${baseDomain}`;
-    const healthUrl = `https://${appHost}/healthz`;
+    const healthUrl = `https://${appHost}/__iterate/caddy-health`;
 
     const dns = await waitForDns({
       host: appHost,

@@ -1,23 +1,30 @@
-import {
-  eventBusContract,
-  serviceManifest,
-  type EventsServiceEnv,
-} from "@iterate-com/events-contract";
+import { eventBusContract, serviceManifest, type EventsServiceEnv } from "@iterate-com/events-contract";
+import { createServiceSubRouterHandlers, type ServiceRequestLogger } from "@iterate-com/shared/jonasland";
 import { implement } from "@orpc/server";
 import {
   disposeEventOperations,
   getEventOperations,
   type EventOperations,
 } from "../effect-stream-manager/singleton.ts";
+import { executeEventsSql } from "./db.ts";
 
 export interface EventsContext {
   requestId: string;
   serviceName: string;
-  log?: unknown;
+  log: ServiceRequestLogger;
 }
 
 const os = implement(eventBusContract).$context<EventsContext>();
 const runtimeEnv: EventsServiceEnv = serviceManifest.envVars.parse(process.env);
+const serviceSubRouter = createServiceSubRouterHandlers(os, {
+  manifest: serviceManifest,
+  executeSql: executeEventsSql,
+  logPrefix: "events.service",
+}) as {
+  health: ReturnType<typeof os.service.health.handler>;
+  sql: ReturnType<typeof os.service.sql.handler>;
+  debug: ReturnType<typeof os.service.debug.handler>;
+};
 
 let operationsPromise: Promise<EventOperations> | undefined;
 
@@ -27,13 +34,7 @@ async function getOps(): Promise<EventOperations> {
 }
 
 export const eventsRouter = os.router({
-  service: {
-    health: os.service.health.handler(async ({ context }) => ({
-      ok: true,
-      service: context.serviceName,
-      version: serviceManifest.version,
-    })),
-  },
+  service: serviceSubRouter,
   append: os.append.handler(async ({ input }) => {
     const ops = await getOps();
     await ops.appendEvents(input);

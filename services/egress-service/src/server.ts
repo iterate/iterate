@@ -18,11 +18,9 @@ import {
 
 const serviceName = "jonasland-egress-service";
 
-const iterateTargetUrlHeader = "x-iterate-target-url";
 const iterateEgressModeHeader = "x-iterate-egress-mode";
 const iterateEgressSeenHeader = "x-iterate-egress-proxy-seen";
 
-const legacyTargetUrlHeader = "x-target-url";
 const legacyEgressModeHeader = "x-egress-mode";
 
 const forwardingContextHeaderPrefixes = ["x-forwarded-"] as const;
@@ -36,7 +34,7 @@ type ForwardingContext = {
   forValue?: string;
 };
 
-type EgressMode = "external-proxy" | "direct" | "transparent";
+type EgressMode = "external-proxy" | "transparent";
 
 type EgressEnv = {
   proxyHost: string;
@@ -204,12 +202,6 @@ function resolveTarget(
     };
   }
 
-  const directUrl =
-    preferredHeader(req, iterateTargetUrlHeader, legacyTargetUrlHeader) || undefined;
-  if (directUrl) {
-    return { mode: "direct", url: directUrl };
-  }
-
   const transparentUrl = buildTransparentTarget(req, protocolKind, forwardingContext);
   if (!transparentUrl) return null;
   return { mode: "transparent", url: transparentUrl };
@@ -339,12 +331,30 @@ export async function startEgressService(options?: {
     });
     const startedAt = Date.now();
 
-    if ((req.url || "") === "/healthz") {
+    if ((req.url || "") === "/__iterate/health") {
       res.writeHead(200, {
         "content-type": "text/plain",
         [iterateEgressSeenHeader]: "1",
       });
-      res.end("ok");
+      res.end(JSON.stringify({ ok: true, service: serviceName }));
+      requestLog.emit({ status: 200, durationMs: Date.now() - startedAt });
+      return;
+    }
+
+    if (req.method === "POST" && (req.url || "") === "/__iterate/sql") {
+      writeJson(res, 501, { error: "sql_not_supported" });
+      requestLog.emit({ status: 501, durationMs: Date.now() - startedAt });
+      return;
+    }
+
+    if (req.method === "GET" && (req.url || "") === "/__iterate/debug") {
+      writeJson(res, 200, {
+        service: serviceName,
+        proxy: { host: proxyHost, port: proxyPort },
+        admin: { host: adminHost, port: adminPort },
+        externalProxyConfigured: env.externalProxy.length > 0,
+        otel: getOtelRuntimeConfig(),
+      });
       requestLog.emit({ status: 200, durationMs: Date.now() - startedAt });
       return;
     }
@@ -415,10 +425,33 @@ export async function startEgressService(options?: {
     try {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
 
-      if (req.method === "GET" && pathname === "/healthz") {
+      if (req.method === "GET" && pathname === "/__iterate/health") {
         status = 200;
-        res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
-        res.end("ok");
+        writeJson(res, status, { ok: true, service: serviceName });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/__iterate/sql") {
+        status = 501;
+        writeJson(res, status, { error: "sql_not_supported" });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/__iterate/debug") {
+        status = 200;
+        writeJson(res, status, {
+          service: serviceName,
+          proxy: {
+            host: proxyHost,
+            port: proxyPort,
+          },
+          admin: {
+            host: adminHost,
+            port: adminPort,
+          },
+          externalProxyConfigured: env.externalProxy.length > 0,
+          otel: getOtelRuntimeConfig(),
+        });
         return;
       }
 
@@ -469,8 +502,10 @@ export async function startEgressService(options?: {
     proxy_port: proxyPort,
     admin_host: adminHost,
     admin_port: adminPort,
-    proxy_health_path: "/healthz",
-    admin_health_path: "/healthz",
+    proxy_health_path: "/__iterate/health",
+    admin_health_path: "/__iterate/health",
+    sql_path: "/__iterate/sql",
+    debug_path: "/__iterate/debug",
     runtime_path: "/api/runtime",
     otel: getOtelRuntimeConfig(),
   });

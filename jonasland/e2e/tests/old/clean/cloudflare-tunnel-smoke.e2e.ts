@@ -5,7 +5,7 @@ import { useCloudflareTunnel } from "../../test-helpers/use-cloudflare-tunnel.ts
 describe("clean cloudflare tunnel smoke", () => {
   test("forwards a request into a local echo server", async () => {
     const server = createServer(async (request, response) => {
-      if (request.url === "/healthz") {
+      if (request.url === "/__iterate/health") {
         response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
         response.end("ok");
         return;

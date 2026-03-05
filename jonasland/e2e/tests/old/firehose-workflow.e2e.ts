@@ -59,7 +59,7 @@ async function startOrdersProcess(deployment: Deployment): Promise<void> {
   await deployment.waitForPidnapProcessRunning({ target: "orders", timeoutMs: 45_000 });
   await waitForHostRoute(deployment, {
     host: "orders.iterate.localhost",
-    path: "/api/service/health",
+    path: "/api/__iterate/health",
     timeoutMs: 45_000,
   });
 }

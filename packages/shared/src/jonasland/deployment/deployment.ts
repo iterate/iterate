@@ -204,10 +204,12 @@ export class Deployment<
     const signal = params?.signal;
     const startedAt = Date.now();
 
-    console.log(`[deployment] waiting for caddy at ${this.baseUrl}/healthz...`);
+    console.log(`[deployment] waiting for caddy at ${this.baseUrl}/__iterate/caddy-health...`);
     await pWaitFor(
       async () => {
-        const resp = await fetch(`${this.baseUrl}/healthz`, { signal }).catch(() => null);
+        const resp = await fetch(`${this.baseUrl}/__iterate/caddy-health`, { signal }).catch(
+          () => null,
+        );
         return resp?.ok ?? false;
       },
       { interval: 500, signal },
@@ -230,13 +232,17 @@ export class Deployment<
     );
 
     const routeChecks = [
-      { host: "registry.iterate.localhost", path: "/orpc/service/health" },
-      { host: "events.iterate.localhost", path: "/api/service/health" },
+      { host: "registry.iterate.localhost", path: "/orpc/service/health", method: "POST" },
+      { host: "events.iterate.localhost", path: "/api/__iterate/health", method: "GET" },
     ];
     for (const check of routeChecks) {
       await pWaitFor(
         async () => {
-          const resp = await this.fetch(check.host, check.path).catch(() => null);
+          const init: RequestInit | undefined =
+            check.method === "POST"
+              ? { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }
+              : undefined;
+          const resp = await this.fetch(check.host, check.path, init).catch(() => null);
           return resp?.ok ?? false;
         },
         { interval: 1_000, signal },

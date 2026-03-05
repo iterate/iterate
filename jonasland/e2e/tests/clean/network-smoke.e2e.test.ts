@@ -83,7 +83,7 @@ async function startEgressProcess(deployment: Deployment): Promise<void> {
     options: { restartPolicy: "always" },
     envOptions: { reloadDelay: false },
     healthCheck: {
-      url: "http://127.0.0.1:19001/healthz",
+      url: "http://127.0.0.1:19001/__iterate/health",
       intervalMs: 2_000,
     },
   });
@@ -114,7 +114,7 @@ async function startInlineLoggingProxy(deployment: Deployment): Promise<void> {
     options: { restartPolicy: "always" },
     envOptions: { reloadDelay: false },
     healthCheck: {
-      url: "http://127.0.0.1:19123/healthz",
+      url: "http://127.0.0.1:19123/__iterate/health",
       intervalMs: 2_000,
     },
   });
@@ -126,7 +126,7 @@ async function startInlineLoggingProxy(deployment: Deployment): Promise<void> {
 
   const loggerReady = await waitForCommandOutput({
     deployment,
-    cmd: ["curl", "-sS", "-i", "http://127.0.0.1:19123/healthz"],
+    cmd: ["curl", "-sS", "-i", "http://127.0.0.1:19123/__iterate/health"],
     timeoutMs: 20_000,
     matches: (output) => output.toLowerCase().includes("x-test-egress-hit: 1"),
   });

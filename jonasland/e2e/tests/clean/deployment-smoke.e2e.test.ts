@@ -49,7 +49,7 @@ describe.runIf(cases.length > 0)("deployment smoke", () => {
           signal: AbortSignal.timeout(30_000 + timeoutOffsetMs),
         });
 
-        const health = await fetch(`${deployment.baseUrl}/healthz`);
+        const health = await fetch(`${deployment.baseUrl}/__iterate/caddy-health`);
         expect(health.ok).toBe(true);
 
         const procs = await deployment.pidnap.processes.list();

@@ -1,4 +1,5 @@
 import { PassThrough } from "node:stream";
+import { randomUUID } from "node:crypto";
 import { DockerClient } from "@docker/node-sdk";
 import pWaitFor from "p-wait-for";
 import {
@@ -60,6 +61,23 @@ async function dockerClient(): Promise<DockerClient> {
     dockerClientPromise = undefined;
     throw error;
   }
+}
+
+function normalizeDockerNameForHost(name: string): string {
+  const normalized = name
+    .trim()
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9-]/g, "-")
+    .replaceAll(/-+/g, "-")
+    .replaceAll(/^-|-$/g, "");
+  return normalized.length > 0 ? normalized : "docker-deployment";
+}
+
+function resolveContainerName(explicit?: string): string {
+  if (explicit && explicit.trim().length > 0) {
+    return explicit.trim();
+  }
+  return `docker-deployment-${randomUUID().slice(0, 8)}`;
 }
 
 class DockerProvider implements DeploymentProvider<DockerDeploymentOpts, DockerDeploymentLocator> {
@@ -134,7 +152,14 @@ class DockerProvider implements DeploymentProvider<DockerDeploymentOpts, DockerD
         ...(opts.dockerHostConfig?.PortBindings ?? {}),
       },
     };
-    const env = { ...(opts.env ?? {}), ...(hostSync ? { DOCKER_HOST_SYNC_ENABLED: "true" } : {}) };
+    const containerName = resolveContainerName(opts.name);
+    const publicBaseHost = `${normalizeDockerNameForHost(containerName)}.orb.local`;
+    const env = {
+      ITERATE_PUBLIC_BASE_HOST: publicBaseHost,
+      ITERATE_PUBLIC_BASE_HOST_TYPE: "subdomain",
+      ...(opts.env ?? {}),
+      ...(hostSync ? { DOCKER_HOST_SYNC_ENABLED: "true" } : {}),
+    };
 
     console.log(`[docker] creating container image=${opts.dockerImage}...`);
     const created = await docker.containerCreate(
@@ -144,7 +169,7 @@ class DockerProvider implements DeploymentProvider<DockerDeploymentOpts, DockerD
         ExposedPorts: { "80/tcp": {} },
         HostConfig: hostConfig,
       },
-      { name: opts.name },
+      { name: containerName },
     );
     const containerId =
       (created as { Id?: string }).Id ??
@@ -170,7 +195,7 @@ class DockerProvider implements DeploymentProvider<DockerDeploymentOpts, DockerD
       locator: {
         provider: "docker",
         containerId,
-        name: opts.name,
+        name: containerName,
       },
     };
   }

@@ -37,7 +37,7 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
       args: [`${ITERATE_REPO}/services/orders/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
-    routeCheck: { host: "orders.iterate.localhost", path: "/api/service/health" },
+    routeCheck: { host: "orders.iterate.localhost", path: "/api/__iterate/health" },
   },
   home: {
     definition: {
@@ -53,7 +53,7 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
       args: [`${ITERATE_REPO}/services/outerbase-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
-    routeCheck: { host: "outerbase.iterate.localhost", path: "/healthz" },
+    routeCheck: { host: "outerbase.iterate.localhost", path: "/__iterate/health" },
   },
   "egress-proxy": {
     definition: {
@@ -61,7 +61,7 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
       args: [`${ITERATE_REPO}/services/egress-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
-    directHttpCheck: { url: "http://127.0.0.1:19000/healthz" },
+    directHttpCheck: { url: "http://127.0.0.1:19000/__iterate/health" },
   },
   docs: {
     definition: {
@@ -69,7 +69,7 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
       args: [`${ITERATE_REPO}/services/docs-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
-    routeCheck: { host: "docs.iterate.localhost", path: "/healthz" },
+    routeCheck: { host: "docs.iterate.localhost", path: "/__iterate/health" },
   },
 };
 
@@ -138,7 +138,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
       name: `jonasland-e2e-${randomUUID()}`,
     }).create();
 
-    await deployment.waitForHealthyWithLogs({ url: `${await deployment.ingressUrl()}/` });
+    await deployment.waitForHealthyWithLogs();
 
     const rejectResult = await deployment.exec(
       "code=$(curl -sS -o /tmp/j5-admin-reject.json -w '%{http_code}' -H 'Host: caddy.iterate.localhost' -H 'Sec-Fetch-Mode: navigate' http://127.0.0.1/config/ || true); echo \"$code\"; cat /tmp/j5-admin-reject.json",
@@ -167,7 +167,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
     expect(home.output).toContain("Lightweight local browser index");
 
     const outerbase = await deployment.exec(
-      "curl -fsS -H 'Host: outerbase.iterate.localhost' http://127.0.0.1/healthz",
+      "curl -fsS -H 'Host: outerbase.iterate.localhost' http://127.0.0.1/__iterate/health",
     );
     expect(outerbase.exitCode).toBe(0);
     expect(outerbase.output).toContain('"ok":true');
@@ -217,7 +217,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
       "-fsS",
       "-H",
       "Host: events.iterate.localhost",
-      "http://127.0.0.1/api/service/health",
+      "http://127.0.0.1/api/__iterate/health",
     ]);
     expect(health.exitCode).toBe(0);
     const healthPayload = JSON.parse(health.output) as { ok: boolean; service: string };
@@ -278,7 +278,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
     await startOnDemandProcess(deployment, "orders");
 
     const health = await deployment.exec(
-      "curl -fsS -H 'Host: orders.iterate.localhost' http://127.0.0.1/healthz",
+      "curl -fsS -H 'Host: orders.iterate.localhost' http://127.0.0.1/__iterate/health",
     );
     expect(health.exitCode).toBe(0);
     expect(health.output.trim()).toBe("ok");

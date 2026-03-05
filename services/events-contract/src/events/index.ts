@@ -1,6 +1,7 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { oz } from "@orpc/zod";
 import { JSON_SCHEMA_REGISTRY } from "@orpc/zod/zod4";
+import { createServiceSubRouterContract } from "@iterate-com/shared/jonasland";
 import * as z from "zod/v4";
 import {
   EventVersion,
@@ -211,24 +212,14 @@ export const parseStreamMetadataUpdatedPayload = (
   return result.success ? result.data : undefined;
 };
 
-const ServiceHealthOutput = z.object({
-  ok: z.literal(true),
-  service: z.string(),
-  version: z.string(),
+const serviceSubRouter = createServiceSubRouterContract({
+  healthSummary: "Events service health metadata",
+  sqlSummary: "Execute SQL against events sqlite database",
+  debugSummary: "Events service runtime debug details",
 });
 
 export const eventBusContract = oc.router({
-  service: {
-    health: oc
-      .route({
-        method: "GET",
-        path: "/service/health",
-        summary: "Events service health metadata",
-        tags: ["service"],
-      })
-      .input(z.object({}).optional().default({}))
-      .output(ServiceHealthOutput),
-  },
+  ...serviceSubRouter,
   append: oc
     .route({
       operationId: "appendStreamEvents",

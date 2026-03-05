@@ -740,9 +740,50 @@ export async function startOuterbaseService(options?: {
       const pathname = requestUrl.pathname;
       const mainAlias = resolveMainAlias(requestUrl.searchParams.get("main") ?? undefined);
 
-      if (req.method === "GET" && pathname === "/healthz") {
+      if (req.method === "GET" && pathname === "/__iterate/health") {
         status = 200;
-        json(res, status, { ok: true });
+        json(res, status, { ok: true, service: serviceName });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/__iterate/sql") {
+        const body = await readJsonBody(req);
+        const statement =
+          body && typeof body === "object" && "statement" in body
+            ? (body as { statement?: unknown }).statement
+            : undefined;
+        const maybeMainAlias =
+          body && typeof body === "object" && "main" in body
+            ? (body as { main?: unknown }).main
+            : undefined;
+        if (typeof statement !== "string" || statement.trim().length === 0) {
+          status = 400;
+          json(res, status, { error: "invalid_statement" });
+          return;
+        }
+        const mainAlias = resolveMainAlias(
+          typeof maybeMainAlias === "string" ? maybeMainAlias : undefined,
+        );
+        const session = await getSqliteSession(mainAlias);
+        const result = executeSqlStatement(session.client, statement);
+        status = 200;
+        json(res, status, transformLibsqlResultSet(result));
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/__iterate/debug") {
+        const session = await getSqliteSession(mainAlias);
+        status = 200;
+        json(res, status, {
+          otel: getOtelRuntimeConfig(),
+          sqlite: {
+            mainAlias: defaultMainAlias,
+            targets: sqliteTargets,
+          },
+          selectedMainAlias: mainAlias,
+          mainPath: session.main.path,
+          attached: session.attached,
+        });
         return;
       }
 
@@ -819,7 +860,9 @@ export async function startOuterbaseService(options?: {
     host,
     port,
     ui_path: "/",
-    health_path: "/healthz",
+    health_path: "/__iterate/health",
+    sql_path: "/__iterate/sql",
+    debug_path: "/__iterate/debug",
     runtime_path: "/api/runtime",
     observability_path: "/api/observability",
     otel: getOtelRuntimeConfig(),

@@ -129,7 +129,7 @@ export function createServiceSubRouterContract(options?: {
       health: oc
         .route({
           method: "GET",
-          path: "/service/health",
+          path: "/__iterate/health",
           summary: options?.healthSummary ?? "Service health metadata",
           tags: [tag],
         })
@@ -139,7 +139,7 @@ export function createServiceSubRouterContract(options?: {
       sql: oc
         .route({
           method: "POST",
-          path: "/service/sql",
+          path: "/__iterate/sql",
           summary: options?.sqlSummary ?? "Execute SQL against service database",
           tags: [tag],
         })
@@ -149,7 +149,7 @@ export function createServiceSubRouterContract(options?: {
       debug: oc
         .route({
           method: "GET",
-          path: "/service/debug",
+          path: "/__iterate/debug",
           summary: options?.debugSummary ?? "Service runtime debug details",
           tags: [tag],
         })
@@ -932,7 +932,7 @@ export function serviceManifestToPidnapConfig(params: {
     tags: ["on-demand"],
     restartImmediately: true,
     healthCheck: {
-      url: `http://${host}/api/service/health`,
+      url: `http://${host}/api/__iterate/health`,
       intervalMs: 2_000,
     },
   };

@@ -45,10 +45,12 @@ describe.runIf(cases.length > 0)("on-demand example oRPC", () => {
     test(
       "start example service via pidnap, exercise CRUD + delayed publish",
       async () => {
+
         await using deployment = await create({
           name: `e2e-example-${randomUUID().slice(0, 8)}`,
           signal: AbortSignal.timeout(45_000 + timeoutOffsetMs),
         });
+
         await deployment.waitUntilAlive({
           signal: AbortSignal.timeout(15_000 + timeoutOffsetMs),
         });
@@ -62,14 +64,13 @@ describe.runIf(cases.length > 0)("on-demand example oRPC", () => {
 
         const waitResult = await deployment.pidnap.processes.waitFor({
           processes: { [exampleServiceManifest.slug]: "healthy" },
-          timeoutMs: 120_000 + timeoutOffsetMs,
         });
         expect(waitResult.allMet).toBe(true);
 
         // example service self-registers with registry on listen; wait until the host route exists
         // before exercising the typed client through caddy host routing.
         const expectedExampleHost = "example.iterate.localhost";
-        const routeDeadline = Date.now() + (60_000 + timeoutOffsetMs);
+        const routeDeadline = Date.now() + (60_000);
         let routeReady = false;
         while (Date.now() < routeDeadline) {
           const listedRoutes = await deployment.registry.routes.list({});
@@ -128,6 +129,8 @@ describe.runIf(cases.length > 0)("on-demand example oRPC", () => {
         };
         expect(listed.things.some((thing) => thing.id === created.id)).toBe(true);
 
+
+        
         const updatedResponse = await deployment.fetch(
           expectedExampleHost,
           `/api/things/${created.id}`,

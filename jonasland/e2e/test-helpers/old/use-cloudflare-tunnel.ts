@@ -104,7 +104,7 @@ async function waitForTunnelReady(params: {
 }): Promise<void> {
   const deadline = Date.now() + params.timeoutMs;
   let lastFailure = "unknown failure";
-  const probeUrl = new URL("/healthz", params.tunnelUrl).toString();
+  const probeUrl = new URL("/__iterate/health", params.tunnelUrl).toString();
   const debug = params.onDebug ?? (() => {});
   debug(`[cloudflare-tunnel] probing readiness at ${probeUrl}`);
 

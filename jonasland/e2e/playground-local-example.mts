@@ -115,7 +115,7 @@ async function main(): Promise<void> {
     const probe = await deployment.exec([
       "sh",
       "-lc",
-      "curl -sS -i -H 'Host: example.iterate.localhost' http://127.0.0.1/api/service/health || true",
+      "curl -sS -i -H 'Host: example.iterate.localhost' http://127.0.0.1/api/__iterate/health || true",
     ]);
     if (!sawFirst502 && probe.output.includes("502")) {
       sawFirst502 = true;

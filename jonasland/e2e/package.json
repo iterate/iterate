@@ -16,9 +16,11 @@
     "@iterate-com/shared": "workspace:*"
   },
   "devDependencies": {
+    "@iterate-com/mock-http-proxy": "workspace:*",
     "@types/node": "^25.0.10",
     "emittery": "1.2.0",
     "mockttp": "^4.2.1",
+    "msw": "^2.12.10",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   }

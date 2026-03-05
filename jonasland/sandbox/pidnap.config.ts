@@ -12,6 +12,7 @@ import { registryServiceManifest } from "../../services/registry-contract/src/in
 const home = homedir();
 const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
 const tsxPath = `${iterateRepo}/packages/pidnap/node_modules/.bin/tsx`;
+const egressProxyUser = process.env.EGRESS_PROXY_USER?.trim() || "iterate-egress";
 const caddyConfigDir = process.env.CADDY_CONFIG_DIR ?? join(home, ".iterate/caddy");
 const caddyRootCaddyfile = process.env.CADDY_ROOT_CADDYFILE ?? join(caddyConfigDir, "Caddyfile");
 const otelCollectorConfigPath = `${iterateRepo}/jonasland/sandbox/otel-collector/config.yaml`;
@@ -98,8 +99,14 @@ export default defineConfig({
     {
       name: "egress-proxy",
       definition: {
-        command: tsxPath,
-        args: [join(iterateRepo, "services/egress-service/src/server.ts")],
+        command: "sudo",
+        args: [
+          "-E",
+          "-u",
+          egressProxyUser,
+          tsxPath,
+          join(iterateRepo, "services/egress-service/src/server.ts"),
+        ],
         env: {
           EGRESS_PROXY_PORT: "19000",
           EGRESS_ADMIN_PORT: "19001",

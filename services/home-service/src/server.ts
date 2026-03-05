@@ -67,13 +67,13 @@ const platformServices: ReadonlyArray<ServiceSeed> = [
     label: "Events Service",
     host: "events.iterate.localhost",
     frontendPath: "/",
-    apiPath: "/healthz",
+    apiPath: "/orpc/__iterate/health",
     docsPath: "/api/docs",
   },
   {
     label: "Registry Service",
     host: "registry.iterate.localhost",
-    apiPath: "/orpc/service/health",
+    apiPath: "/orpc/__iterate/health",
     frontendHint: "has no frontend",
     docsHint: "has no docs",
   },
@@ -81,14 +81,14 @@ const platformServices: ReadonlyArray<ServiceSeed> = [
     label: "Home Service",
     host: "home.iterate.localhost",
     frontendPath: "/",
-    apiPath: "/healthz",
+    apiPath: "/__iterate/health",
     docsHint: "has no docs",
   },
   {
     label: "Outerbase Service",
     host: "outerbase.iterate.localhost",
     frontendPath: "/",
-    apiPath: "/healthz",
+    apiPath: "/__iterate/health",
     docsHint: "has no docs",
   },
 ] as const;
@@ -98,14 +98,14 @@ const services: ReadonlyArray<ServiceSeed> = [
     label: "Example Service",
     host: "example.iterate.localhost",
     frontendPath: "/",
-    apiPath: "/orpc/service/health",
+    apiPath: "/orpc/__iterate/health",
     docsPath: "/api/docs",
   },
   {
     label: "Docs Service",
     host: "docs.iterate.localhost",
     frontendPath: "/",
-    apiPath: "/healthz",
+    apiPath: "/__iterate/health",
     docsHint: "aggregates openapi specs",
   },
 ] as const;
@@ -453,10 +453,32 @@ export async function startHomeService(options?: {
     try {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
 
-      if (req.method === "GET" && pathname === "/healthz") {
+      if (req.method === "GET" && pathname === "/__iterate/health") {
         status = 200;
-        res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
-        res.end("ok");
+        writeJson(res, status, { ok: true, service: serviceName });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/__iterate/sql") {
+        status = 501;
+        writeJson(res, status, { error: "sql_not_supported" });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/__iterate/debug") {
+        status = 200;
+        writeJson(res, status, {
+          pid: process.pid,
+          ppid: process.ppid,
+          uptimeSec: process.uptime(),
+          nodeVersion: process.version,
+          platform: process.platform,
+          arch: process.arch,
+          cwd: process.cwd(),
+          execPath: process.execPath,
+          argv: process.argv,
+          otel: getOtelRuntimeConfig(),
+        });
         return;
       }
 
@@ -539,7 +561,9 @@ export async function startHomeService(options?: {
     host,
     port,
     ui_path: "/",
-    health_path: "/healthz",
+    health_path: "/__iterate/health",
+    sql_path: "/__iterate/sql",
+    debug_path: "/__iterate/debug",
     observability_path: "/api/observability",
     otel: getOtelRuntimeConfig(),
   });

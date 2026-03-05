@@ -39,7 +39,7 @@ test.describe("service load checks", () => {
     const ingressUrl = new URL(await deployment.ingressUrl());
 
     const response = await page.goto(
-      `http://outerbase.iterate.localhost:${ingressUrl.port}/healthz`,
+      `http://outerbase.iterate.localhost:${ingressUrl.port}/__iterate/health`,
     );
     expect(response).not.toBeNull();
     expect(response?.status()).toBe(200);
@@ -67,7 +67,7 @@ test.describe("service load checks", () => {
     const ingressUrl = new URL(await deployment.ingressUrl());
 
     const health = await page.goto(
-      `http://caddymanager.iterate.localhost:${ingressUrl.port}/healthz`,
+      `http://caddymanager.iterate.localhost:${ingressUrl.port}/__iterate/health`,
     );
     expect(health).not.toBeNull();
     expect(health?.status()).toBe(200);

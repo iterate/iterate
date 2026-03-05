@@ -6,6 +6,7 @@ import { inspect } from "node:util";
 import { Hono } from "hono";
 import { attachDefaultServiceRoutes } from "@iterate-com/events-contract/lib";
 import { serviceManifest, type EventsServiceEnv } from "@iterate-com/events-contract";
+import { transformSqlResultSet } from "@iterate-com/shared/jonasland";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { implement, onError } from "@orpc/server";
@@ -15,6 +16,7 @@ import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { WebSocketServer } from "ws";
 
 import { disposeEventOperations, getEventOperations } from "./effect-stream-manager/singleton.ts";
+import { executeEventsSql } from "./src/db.ts";
 
 const SHOULD_LOG_ORPC = process.env.NODE_ENV !== "test";
 
@@ -54,6 +56,36 @@ export const eventsService = async (env: EventsServiceEnv) => {
         service: serviceManifest.name,
         version: serviceManifest.version,
       })),
+      sql: eventBus.service.sql.handler(async ({ input }) =>
+        transformSqlResultSet(await executeEventsSql(input.statement)),
+      ),
+      debug: eventBus.service.debug.handler(async () => {
+        const env: Record<string, string | null> = {};
+        for (const [key, value] of Object.entries(process.env)) {
+          env[key] = value ?? null;
+        }
+        const memoryUsage = process.memoryUsage();
+        return {
+          pid: process.pid,
+          ppid: process.ppid,
+          uptimeSec: process.uptime(),
+          nodeVersion: process.version,
+          platform: process.platform,
+          arch: process.arch,
+          hostname: process.env.HOSTNAME ?? "unknown",
+          cwd: process.cwd(),
+          execPath: process.execPath,
+          argv: process.argv,
+          env,
+          memoryUsage: {
+            rss: memoryUsage.rss,
+            heapTotal: memoryUsage.heapTotal,
+            heapUsed: memoryUsage.heapUsed,
+            external: memoryUsage.external,
+            arrayBuffers: memoryUsage.arrayBuffers,
+          },
+        };
+      }),
     },
     append: eventBus.append.handler(async ({ input }) => {
       await ops.appendEvents(input);
