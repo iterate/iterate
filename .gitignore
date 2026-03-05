@@ -1,0 +1,67 @@
+.DS_Store
+node_modules
+.pnpm-store
+*.tsbuildinfo
+
+# React Router
+.react-router
+
+# TanStack
+.tanstack
+build
+dist
+
+# Cloudflare
+.mf
+.wrangler
+.dev.vars*
+.alchemy
+
+!.dev.vars.example
+.env*
+!.env.example
+!apps/os/sandbox/home-skeleton/.iterate/.env
+
+.cursor/rules
+.rules
+.clinerules/
+
+.cache
+__pycache__/
+
+# ad-hoc ignored files/paths
+*ignoreme*
+evalite-export
+
+# Playwright test artifacts
+test-results/
+playwright-report/
+.last-run.json
+
+*.db
+*.sqlite
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+.output
+
+# opensrc - source code for packages
+opensrc/
+
+# opencode sessions
+session-ses*.md
+
+# local lint-staged config
+lint-staged.local.cjs
+
+# local Claude overrides
+.claude/settings.local.json
+
+playwriter-screenshot-*
+
+# PR video recordings
+pr-videos/
+*.log
