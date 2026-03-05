@@ -74,7 +74,7 @@ export async function resolveMachineSetupData(
     parsedRepo && projectData?.configRepoDefaultBranch
       ? [
           {
-            url: `https://github.com/${parsedRepo.owner}/${parsedRepo.name}.git`,
+            url: `https://github.com/${parsedRepo.owner}/${parsedRepo.name}`,
             branch: projectData.configRepoDefaultBranch,
             path: `/home/iterate/src/github.com/${parsedRepo.owner}/${parsedRepo.name}`,
             owner: parsedRepo.owner,
