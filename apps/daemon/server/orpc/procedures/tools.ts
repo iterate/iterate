@@ -14,6 +14,7 @@ import { ORPCError } from "@orpc/server";
 import { logEmitterStorage, publicProcedure } from "../init.ts";
 import type { ExecutionContext, WebchatClient } from "./execution-context.ts";
 import { wrapCodeWithExportDefault } from "./wrap-code.ts";
+import { formatTranscript } from "@server/routers/opencode-export.ts";
 
 function getWebchatClient(): WebchatClient {
   const daemonPort = process.env.PORT || "3001";
@@ -446,5 +447,32 @@ export const toolsRouter = {
         recommendedEnvVars,
         envFilePath,
       };
+    }),
+
+  summariseOpencodeSession: publicProcedure
+    .meta({ description: "Summarise an opencode session by its id" })
+    .input(
+      z.object({
+        sessionId: z.string().describe("The id of the opencode session to summarise"),
+        thinking: z.boolean().optional().describe("Whether to include thinking in the summary"),
+        toolDetails: z
+          .boolean()
+          .optional()
+          .describe("Whether to include tool details in the summary"),
+        assistantMetadata: z
+          .boolean()
+          .optional()
+          .describe("Whether to include assistant metadata in the summary"),
+      }),
+    )
+    .handler(async ({ input }) => {
+      const { sessionId, ...opts } = input;
+      const exported = await exec("opencode", ["export", sessionId]);
+      if (exported.exitCode !== 0)
+        throw new Error(
+          `Failed to export opencode session: ${exported.stdout}\n${exported.stderr}`,
+        );
+      const session = JSON.parse(exported.stdout);
+      return formatTranscript(session.info, session.messages, opts);
     }),
 };
