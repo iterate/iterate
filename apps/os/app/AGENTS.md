@@ -81,5 +81,5 @@ Key points:
 - Components in `components/`
 - UI primitives in `components/ui/`
 - Hooks in `hooks/`
-- Routes follow TanStack Router conventions in `routes/`
+- Routes follow TanStack Router conventions in `routes/AGENTS.md`
 - Colocate tests as `*.test.ts` next to source files

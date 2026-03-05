@@ -40,15 +40,17 @@ export default defineConfig({
           VITE_PUBLIC_DOCKER_DEFAULT_IMAGE: "DOCKER_DEFAULT_IMAGE",
           VITE_PUBLIC_FLY_DEFAULT_IMAGE: "FLY_DEFAULT_IMAGE",
         } satisfies Record<`VITE_PUBLIC_${string}`, string>;
+        let modifiedCode = code;
         for (const [viteVar, dopplerVar] of Object.entries(vitePublicEnvVarsFromDoppler)) {
           const viteVarExpression = new RegExp(`import\\.meta\\.env\\.${viteVar}\\b`, "g");
           if (code.match(viteVarExpression)) {
             const command = `doppler secrets get ${dopplerVar} --plain --no-exit-on-missing-secret`;
             const replacement = execSync(command).toString().trim();
-            code = code.replaceAll(viteVarExpression, JSON.stringify(replacement));
+            modifiedCode = modifiedCode.replaceAll(viteVarExpression, JSON.stringify(replacement));
           }
         }
-        return code;
+        if (modifiedCode === code) return;
+        return { code: modifiedCode };
       },
     },
     {
@@ -78,7 +80,6 @@ export default defineConfig({
       srcDirectory: "./app",
       router: {
         addExtensions: true,
-        virtualRouteConfig: "./app/routes.ts",
       },
     }),
     viteReact(),
