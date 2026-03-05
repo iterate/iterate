@@ -7,20 +7,15 @@
  *
  * @see https://docs.archil.com/api-reference/introduction
  */
+import { Archil, ArchilApiError } from "@archildata/client/api";
 import { and, eq, inArray } from "drizzle-orm";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 
-interface ArchilApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
-}
-
-interface CreateDiskResult {
-  diskId: string;
+function createArchilClient(env: CloudflareEnv): Archil {
+  return new Archil({ apiKey: env.ARCHIL_API_KEY, region: env.ARCHIL_REGION });
 }
 
 /**
@@ -99,8 +94,8 @@ async function createArchilDisk(
   env: CloudflareEnv,
   params: { projectId: string; projectSlug: string },
 ): Promise<{ diskId: string; mountToken: string }> {
+  const archil = createArchilClient(env);
   const diskName = `iterate-${params.projectSlug}-${params.projectId.slice(-8)}`;
-  const baseUrl = `https://control.green.${env.ARCHIL_REGION}.aws.prod.archil.com`;
 
   // Generate a mount token
   const tokenBytes = new Uint8Array(32);
@@ -109,22 +104,16 @@ async function createArchilDisk(
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
   const mountToken = `archil-${tokenHex}`;
-  const tokenSuffix = tokenHex.slice(-4);
 
   const authMethod = {
     type: "token" as const,
     principal: mountToken,
     nickname: `machine-${params.projectSlug}`,
-    tokenSuffix,
+    tokenSuffix: tokenHex.slice(-4),
   };
 
-  const resp = await fetch(`${baseUrl}/api/disks`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: env.ARCHIL_API_KEY,
-    },
-    body: JSON.stringify({
+  try {
+    const disk = await archil.disks.create({
       name: diskName,
       mounts: [
         {
@@ -133,28 +122,21 @@ async function createArchilDisk(
           bucketEndpoint: env.ARCHIL_R2_ENDPOINT,
           accessKeyId: env.ARCHIL_R2_ACCESS_KEY_ID,
           secretAccessKey: env.ARCHIL_R2_SECRET_ACCESS_KEY,
+          bucketPrefix: `projects/${params.projectSlug}/`,
         },
       ],
       authMethods: [authMethod],
-    }),
-  });
+    });
 
-  if (resp.ok) {
-    const result = (await resp.json()) as ArchilApiResponse<CreateDiskResult>;
-    if (!result.success || !result.data) {
-      throw new Error(`Archil disk creation failed: ${result.error ?? "unknown error"}`);
+    return { diskId: disk.id, mountToken };
+  } catch (err) {
+    // Disk name collision — look up existing disk and add our token to it
+    if (err instanceof ArchilApiError && err.status === 409) {
+      logger.info(`[Archil] Disk ${diskName} already exists, adding new auth token`);
+      return addTokenToExistingDisk(env, diskName, mountToken, authMethod);
     }
-    return { diskId: result.data.diskId, mountToken };
+    throw err;
   }
-
-  // Disk name collision — look up existing disk and add our token to it
-  const text = await resp.text();
-  if (resp.status === 409 || text.includes("already exists")) {
-    logger.info(`[Archil] Disk ${diskName} already exists, adding new auth token`);
-    return addTokenToExistingDisk(env, diskName, mountToken, authMethod);
-  }
-
-  throw new Error(`Archil disk creation failed: HTTP ${resp.status} — ${text}`);
 }
 
 /**
@@ -173,63 +155,42 @@ async function addTokenToExistingDisk(
     tokenSuffix: string;
   },
 ): Promise<{ diskId: string; mountToken: string }> {
-  const baseUrl = `https://control.green.${env.ARCHIL_REGION}.aws.prod.archil.com`;
+  const archil = createArchilClient(env);
 
-  // List disks and find the one with our name
-  const listResp = await fetch(`${baseUrl}/api/disks`, {
-    headers: { Authorization: env.ARCHIL_API_KEY },
-  });
-  if (!listResp.ok) {
-    throw new Error(`Archil list disks failed: HTTP ${listResp.status}`);
-  }
-
-  const listResult = (await listResp.json()) as ArchilApiResponse<
-    Array<{ diskId: string; name: string }>
-  >;
-  const disk = listResult.data?.find((d) => d.name === diskName);
+  const disks = await archil.disks.list();
+  const disk = disks.find((d) => d.name === diskName);
   if (!disk) {
     throw new Error(`Archil disk ${diskName} not found despite 409 conflict`);
   }
 
-  // Add new auth token to the existing disk
-  const addResp = await fetch(`${baseUrl}/api/disks/${disk.diskId}/auth-methods`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: env.ARCHIL_API_KEY,
-    },
-    body: JSON.stringify(authMethod),
-  });
-
-  if (!addResp.ok) {
-    const addText = await addResp.text();
-    logger.warn(
-      `[Archil] Failed to add auth token to disk ${disk.diskId}: ${addResp.status} ${addText}`,
-    );
+  try {
+    await disk.addUser(authMethod);
+  } catch (err) {
+    const detail = err instanceof ArchilApiError ? `${err.status} ${err.message}` : String(err);
+    logger.warn(`[Archil] Failed to add auth token to disk ${disk.id}: ${detail}`);
     // Fall through — the disk exists, we'll use it. The token might fail at mount time.
   }
 
-  return { diskId: disk.diskId, mountToken };
+  return { diskId: disk.id, mountToken };
 }
 
 /**
  * Delete an Archil disk (cleanup when project is deleted).
  */
 export async function deleteArchilDisk(env: CloudflareEnv, diskId: string): Promise<void> {
-  const baseUrl = `https://control.green.${env.ARCHIL_REGION}.aws.prod.archil.com`;
+  const archil = createArchilClient(env);
 
-  const resp = await fetch(`${baseUrl}/api/disks/${diskId}`, {
-    method: "DELETE",
-    headers: { Authorization: env.ARCHIL_API_KEY },
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    logger.warn(
-      `[Archil] Failed to delete disk diskId=${diskId} status=${resp.status} body=${text}`,
-    );
-    return;
+  try {
+    const disk = await archil.disks.get(diskId);
+    await disk.delete();
+    logger.info(`[Archil] Disk deleted diskId=${diskId}`);
+  } catch (err) {
+    if (err instanceof ArchilApiError) {
+      logger.warn(
+        `[Archil] Failed to delete disk diskId=${diskId} status=${err.status} ${err.message}`,
+      );
+      return;
+    }
+    throw err;
   }
-
-  logger.info(`[Archil] Disk deleted diskId=${diskId}`);
 }
