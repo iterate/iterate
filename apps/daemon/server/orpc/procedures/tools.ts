@@ -11,7 +11,7 @@ import { Resend } from "resend";
 import { z } from "zod/v4";
 import { tsImport } from "tsx/esm/api";
 import { ORPCError } from "@orpc/server";
-import { formatTranscript } from "@server/routers/opencode-export.ts";
+import { formatTranscript } from "../../routers/opencode-export.ts";
 import { logEmitterStorage, publicProcedure } from "../init.ts";
 import type { ExecutionContext, WebchatClient } from "./execution-context.ts";
 import { wrapCodeWithExportDefault } from "./wrap-code.ts";
@@ -449,6 +449,7 @@ export const toolsRouter = {
       };
     }),
 
+  // todo: make this more generic/take an agent path as input rather than opencode session id
   summariseOpencodeSession: publicProcedure
     .meta({ description: "Summarise an opencode session by its id" })
     .input(
