@@ -8,7 +8,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import { exampleServiceManifest } from "@iterate-com/example-contract";
+import { exampleServiceManifest } from "@iterate-com/example/contract";
 import { serviceManifestToPidnapConfig } from "@iterate-com/shared/jonasland";
 import type { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
 import { DockerDeployment } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";

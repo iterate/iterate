@@ -1,0 +1,62 @@
+{
+  "name": "@iterate-com/events",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts",
+    "./contract": "./src/contract.ts",
+    "./lib": "./src/lib/index.ts"
+  },
+  "scripts": {
+    "dev": "NODE_ENV=development tsx server.ts",
+    "build": "vite build",
+    "start": "NODE_ENV=production tsx server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@effect/platform": "^0.94.2",
+    "@hono/node-server": "^1.19.9",
+    "@hono/node-ws": "^1.1.2",
+    "@iterate-com/registry": "workspace:*",
+    "@iterate-com/shared": "workspace:*",
+    "@iterate-com/ui": "workspace:*",
+    "@opentelemetry/api": "^1.9.0",
+    "@orpc/client": "1.13.5",
+    "@orpc/contract": "1.13.5",
+    "@orpc/openapi": "1.13.5",
+    "@orpc/openapi-client": "1.13.5",
+    "@orpc/server": "1.13.5",
+    "@orpc/zod": "1.13.5",
+    "@tailwindcss/vite": "^4.1.17",
+    "@tanstack/react-query": "^5.80.7",
+    "@tanstack/react-router": "^1.121.4",
+    "@tanstack/react-start": "^1.121.4",
+    "@vitejs/plugin-react": "^5.1.2",
+    "better-sqlite3": "^12.4.1",
+    "drizzle-orm": "^0.45.1",
+    "effect": "^3.19.15",
+    "hono": "^4.11.10",
+    "jsonata": "^2.1.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwindcss": "^4.1.17",
+    "vite": "^7.3.1",
+    "vite-tsconfig-paths": "^4.3.2",
+    "ws": "^8.18.3",
+    "yaml": "^2.8.2",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/react": "^19.2.3",
+    "@types/react-dom": "^19.2.2",
+    "@types/ws": "^8.18.1",
+    "@types/node": "^25.0.10",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "name": "@iterate-com/outerbase",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "dev": "NODE_ENV=development tsx server.ts",
+    "build": "vite build",
+    "start": "NODE_ENV=production tsx server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.10",
+    "@hono/node-ws": "^1.1.1",
+    "@iterate-com/shared": "workspace:*",
+    "@iterate-com/ui": "workspace:*",
+    "@tanstack/react-query": "^5.80.6",
+    "@tanstack/react-router": "^1.121.3",
+    "@tanstack/react-start": "^1.121.3",
+    "better-sqlite3": "^12.4.1",
+    "drizzle-orm": "^0.45.1",
+    "hono": "^4.12.5",
+    "lucide-react": "^0.513.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tailwindcss": "^4.1.10"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.10",
+    "@types/node": "^25.0.10",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.5.2",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "vite-tsconfig-paths": "^4.3.2",
+    "tsx": "^4.19.4"
+  }
+}

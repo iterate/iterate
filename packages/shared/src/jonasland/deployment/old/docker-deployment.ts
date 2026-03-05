@@ -1,7 +1,7 @@
 import { PassThrough } from "node:stream";
 import { CaddyClient } from "@accelerated-software-development/caddy-api-client";
 import { DockerClient } from "@docker/node-sdk";
-import { createRegistryClient, type RegistryClient } from "@iterate-com/registry-service/client";
+import { createRegistryClient, type RegistryClient } from "@iterate-com/registry/client";
 import pWaitFor from "p-wait-for";
 import { createClient as createPidnapClient } from "pidnap/client";
 import {

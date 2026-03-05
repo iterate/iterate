@@ -56,29 +56,41 @@ export type AppendWebSocketExchangeInput = {
 export type HarJournalOptions = {
   initialHar?: Har;
   sanitizer?: HarEntrySanitizer;
+  onEntry?: (entry: HarEntry) => void;
 };
 
 export class HarJournal {
   private readonly har: Har;
   private readonly sanitizer: HarEntrySanitizer | undefined;
+  private readonly onEntry: ((entry: HarEntry) => void) | undefined;
 
   constructor(options?: HarJournalOptions) {
     this.har = options?.initialHar ? deepClone(options.initialHar) : createEmptyHar();
     this.sanitizer = options?.sanitizer;
+    this.onEntry = options?.onEntry;
   }
 
   static async fromSource(
     source: Har | string | undefined,
-    options?: { sanitizer?: HarEntrySanitizer },
+    options?: { sanitizer?: HarEntrySanitizer; onEntry?: (entry: HarEntry) => void },
   ): Promise<HarJournal> {
-    if (!source) return new HarJournal({ sanitizer: options?.sanitizer });
+    if (!source)
+      return new HarJournal({ sanitizer: options?.sanitizer, onEntry: options?.onEntry });
 
     if (typeof source === "string") {
       const parsed = JSON.parse(await readFile(source, "utf8")) as Har;
-      return new HarJournal({ initialHar: parsed, sanitizer: options?.sanitizer });
+      return new HarJournal({
+        initialHar: parsed,
+        sanitizer: options?.sanitizer,
+        onEntry: options?.onEntry,
+      });
     }
 
-    return new HarJournal({ initialHar: source, sanitizer: options?.sanitizer });
+    return new HarJournal({
+      initialHar: source,
+      sanitizer: options?.sanitizer,
+      onEntry: options?.onEntry,
+    });
   }
 
   entries(): ReadonlyArray<HarEntry> {
@@ -145,7 +157,9 @@ export class HarJournal {
       },
     };
 
-    this.har.log.entries.push(this.sanitizer ? this.sanitizer(entry) : entry);
+    const final = this.sanitizer ? this.sanitizer(entry) : entry;
+    this.har.log.entries.push(final);
+    this.onEntry?.(final);
   }
 
   appendWebSocketExchange(input: AppendWebSocketExchangeInput): void {
@@ -189,7 +203,9 @@ export class HarJournal {
       _webSocketMessages: input.messages,
     };
 
-    this.har.log.entries.push(this.sanitizer ? this.sanitizer(entry) : entry);
+    const final = this.sanitizer ? this.sanitizer(entry) : entry;
+    this.har.log.entries.push(final);
+    this.onEntry?.(final);
   }
 
   getHar(): Har {

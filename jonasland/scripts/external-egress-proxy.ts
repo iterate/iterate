@@ -29,9 +29,11 @@ import { writeFileSync } from "node:fs";
 import {
   fromTrafficWithWebSocket,
   useMockHttpServer,
+  formatHarEntry,
   type HarWithExtensions,
   type UseMockHttpServerOptions,
 } from "../../packages/mock-http-proxy/src/index.ts";
+import type { HarEntryWithExtensions } from "../../packages/mock-http-proxy/src/har/har-extensions.ts";
 
 type UnhandledMode = "bypass" | "warn" | "error";
 
@@ -101,64 +103,33 @@ async function main() {
     onUnhandledRequest: unhandled,
   };
 
-  if (recordPath) {
+  const recorderBase = {
+    enabled: true,
+    includeHandledRequests: true,
+    decodeContentEncodings: ["br", "gzip", "deflate"] as ("br" | "gzip" | "deflate")[],
+    ...(recordPath ? { harPath: recordPath } : {}),
+  };
+
+  if (!quiet) {
     serverOpts.recorder = {
-      enabled: true,
-      harPath: recordPath,
-      includeHandledRequests: true,
-      decodeContentEncodings: ["br", "gzip", "deflate"],
+      ...recorderBase,
+      onEntry: (entry) => {
+        const formatted = formatHarEntry(entry as HarEntryWithExtensions, {
+          color: true,
+          body: verbose,
+          headers: verbose,
+          maxBodyLength: maxBody,
+        });
+        process.stdout.write(formatted);
+      },
     };
+  } else {
+    serverOpts.recorder = recorderBase;
   }
 
   const server = await useMockHttpServer(serverOpts);
 
-  function truncate(text: string, max: number): string {
-    if (text.length <= max) return text;
-    return `${text.slice(0, max)}… (${text.length} bytes total)`;
-  }
-
-  function formatHeaders(headers: Headers): string {
-    const lines: string[] = [];
-    headers.forEach((value, key) => {
-      lines.push(`    ${key}: ${value}`);
-    });
-    return lines.join("\n");
-  }
-
-  function logVerbose(label: string, request: Request, response: Response): void {
-    console.log(
-      [
-        `${ts()} ${label}  ${request.method} ${request.url} → ${response.status}`,
-        `  ── Request headers ──`,
-        formatHeaders(request.headers),
-        `  ── Response headers ──`,
-        formatHeaders(response.headers),
-        "",
-      ].join("\n"),
-    );
-  }
-
   if (!quiet) {
-    server.events.on(
-      "response:mocked",
-      ({ request, response }: { request: Request; response: Response }) => {
-        if (verbose) {
-          void logVerbose("REPLAY", request, response);
-        } else {
-          console.log(`${ts()} REPLAY  ${request.method} ${request.url} → ${response.status}`);
-        }
-      },
-    );
-    server.events.on(
-      "response:bypass",
-      ({ request, response }: { request: Request; response: Response }) => {
-        if (verbose) {
-          void logVerbose("BYPASS", request, response);
-        } else {
-          console.log(`${ts()} BYPASS  ${request.method} ${request.url} → ${response.status}`);
-        }
-      },
-    );
     server.events.on("request:unhandled", ({ request }: { request: Request }) => {
       if (unhandled === "error") {
         console.log(`${ts()} REJECT  ${request.method} ${request.url}`);

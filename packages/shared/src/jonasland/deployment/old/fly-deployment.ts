@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { CaddyClient } from "@accelerated-software-development/caddy-api-client";
-import { createRegistryClient } from "@iterate-com/registry-service/client";
+import { createRegistryClient } from "@iterate-com/registry/client";
 import createClient, {
   type Client,
   type ClientPathsWithMethod,

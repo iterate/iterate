@@ -56,6 +56,8 @@ export type RecorderOpts = {
    */
   sanitizer?: HarEntrySanitizer | null;
   filter?: (entry: RecorderFilterContext) => boolean;
+  /** Fired with each HAR entry after it is sanitized and appended. */
+  onEntry?: (entry: HarEntry) => void;
 };
 
 type NormalizedRecorderOpts = {
@@ -65,6 +67,7 @@ type NormalizedRecorderOpts = {
   decodeContentEncodings: Set<RecorderContentEncoding>;
   sanitizer: HarEntrySanitizer | null;
   filter?: (entry: RecorderFilterContext) => boolean;
+  onEntry?: (entry: HarEntry) => void;
 };
 
 function normalizeRecorderOpts(input: RecorderOpts | undefined): NormalizedRecorderOpts {
@@ -74,8 +77,10 @@ function normalizeRecorderOpts(input: RecorderOpts | undefined): NormalizedRecor
     harPath: input?.harPath,
     includeHandledRequests: input?.includeHandledRequests ?? true,
     decodeContentEncodings: new Set(input?.decodeContentEncodings ?? []),
-    sanitizer: explicitSanitizer === null ? null : (explicitSanitizer ?? createDefaultHarSanitizer()),
+    sanitizer:
+      explicitSanitizer === null ? null : (explicitSanitizer ?? createDefaultHarSanitizer()),
     filter: input?.filter,
+    onEntry: input?.onEntry,
   };
 }
 
@@ -113,11 +118,12 @@ export class HarRecorder {
   static async create(opts: RecorderOpts | undefined): Promise<HarRecorder> {
     const normalized = normalizeRecorderOpts(opts);
     const sanitizer = normalized.sanitizer ?? undefined;
+    const onEntry = normalized.onEntry;
     const journal = normalized.harPath
-      ? await HarJournal.fromSource(normalized.harPath, { sanitizer }).catch(
-          () => new HarJournal({ sanitizer }),
+      ? await HarJournal.fromSource(normalized.harPath, { sanitizer, onEntry }).catch(
+          () => new HarJournal({ sanitizer, onEntry }),
         )
-      : new HarJournal({ sanitizer });
+      : new HarJournal({ sanitizer, onEntry });
     return new HarRecorder(normalized, journal);
   }
 

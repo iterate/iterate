@@ -13,9 +13,8 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.19.9",
-    "@iterate-com/events-contract": "workspace:*",
-    "@iterate-com/example-contract": "workspace:*",
-    "@iterate-com/registry-service": "workspace:*",
+    "@iterate-com/events": "workspace:*",
+    "@iterate-com/registry": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@opentelemetry/api": "^1.9.0",

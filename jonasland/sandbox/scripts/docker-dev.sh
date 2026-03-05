@@ -124,10 +124,15 @@ tmux kill-session -t $SESSION 2>/dev/null
 OUTER_EOF
 )"
 
+LOGS_CMD="echo '[logs] waiting for container $CONTAINER_NAME...'; while ! docker inspect $CONTAINER_NAME >/dev/null 2>&1; do sleep 0.5; done; echo '[logs] streaming docker logs...'; docker logs -f $CONTAINER_NAME 2>&1"
+
 tmux new-session -d -s "$SESSION" -n main "$PROXY_CMD"
 tmux set-option -t "$SESSION" remain-on-exit on
+tmux set -g mouse on
 tmux split-window -h -t "$SESSION:main" "$SHELL_CMD"
 tmux resize-pane -t "$SESSION:main.1" -x '70%'
+tmux split-window -v -t "$SESSION:main.1" "$LOGS_CMD"
+tmux resize-pane -t "$SESSION:main.2" -y '30%'
 tmux select-pane -t "$SESSION:main.1"
 
 if [ -t 0 ]; then

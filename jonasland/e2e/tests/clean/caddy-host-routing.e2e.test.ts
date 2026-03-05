@@ -10,7 +10,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import { exampleServiceManifest } from "@iterate-com/example-contract";
+import { exampleServiceManifest } from "@iterate-com/example/contract";
 import { serviceManifestToPidnapConfig } from "@iterate-com/shared/jonasland";
 import type { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
 import { DockerDeployment } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
@@ -192,14 +192,24 @@ describe.runIf(DOCKER_IMAGE.length > 0)("caddy host routing", () => {
       ],
 
       // Registry-managed (dynamic): example
-      ["example internal", "example.iterate.localhost", "/api/__iterate/health", "jonasland-example"],
+      [
+        "example internal",
+        "example.iterate.localhost",
+        "/api/__iterate/health",
+        "jonasland-example",
+      ],
       [
         "example subdomain",
         `example.${publicBaseHost}`,
         "/api/__iterate/health",
         "jonasland-example",
       ],
-      ["example dunder", `example__${publicBaseHost}`, "/api/__iterate/health", "jonasland-example"],
+      [
+        "example dunder",
+        `example__${publicBaseHost}`,
+        "/api/__iterate/health",
+        "jonasland-example",
+      ],
     ];
 
     for (const [label, host, path, expectedService] of healthCases) {

@@ -833,7 +833,7 @@ export async function registerServiceWithRegistry(params: {
   metadata?: { openapiPath?: string; title?: string };
   tags?: string[];
 }): Promise<void> {
-  const { createRegistryClient } = await import("@iterate-com/registry-service/client");
+  const { createRegistryClient } = await import("@iterate-com/registry/client");
   const registryClient = createRegistryClient({ url: `${REGISTRY_BASE_URL}/api` });
   const host = localHostForService({ slug: params.manifest.slug });
   const target = `127.0.0.1:${String(params.port)}`;

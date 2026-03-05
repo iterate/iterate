@@ -1,8 +1,8 @@
 import {
   type EventBusContract,
   serviceManifest as eventsServiceManifest,
-} from "@iterate-com/events-contract";
-import { createRegistryClient, type RegistryClient } from "@iterate-com/registry-service/client";
+} from "@iterate-com/events/contract";
+import { createRegistryClient, type RegistryClient } from "@iterate-com/registry/client";
 import { type AnyContractRouter, type ContractRouterClient } from "@orpc/contract";
 import pWaitFor from "p-wait-for";
 import { createClient as createPidnapClient, type Client as PidnapClient } from "pidnap/client";

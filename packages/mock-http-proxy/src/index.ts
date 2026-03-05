@@ -29,3 +29,8 @@ export type {
   HarWebSocketMessage,
   HarWithExtensions,
 } from "./har/har-extensions.ts";
+export {
+  formatHarEntry,
+  formatHarEntryOneLine,
+  type FormatHarEntryOptions,
+} from "./har/har-format.ts";
