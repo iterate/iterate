@@ -11,10 +11,10 @@ import { Resend } from "resend";
 import { z } from "zod/v4";
 import { tsImport } from "tsx/esm/api";
 import { ORPCError } from "@orpc/server";
+import { formatTranscript } from "@server/routers/opencode-export.ts";
 import { logEmitterStorage, publicProcedure } from "../init.ts";
 import type { ExecutionContext, WebchatClient } from "./execution-context.ts";
 import { wrapCodeWithExportDefault } from "./wrap-code.ts";
-import { formatTranscript } from "@server/routers/opencode-export.ts";
 
 function getWebchatClient(): WebchatClient {
   const daemonPort = process.env.PORT || "3001";
