@@ -23,14 +23,14 @@ Archil disk is in `aws-eu-west-1` (Ireland), backed by Cloudflare R2 (Western Eu
 | Small    | 2,232  | 1.6s       | 6.5s            | **4x**   |
 | Medium   | 32,173 | 27s        | 1,530s (25 min) | **56x**  |
 
-### MacBook (Docker) — baseline only
+### MacBook (Docker via OrbStack) — `--privileged`
 
-| Workload | Files  | Local disk |
-| -------- | ------ | ---------- |
-| Small    | 2,232  | 1.5s       |
-| Medium   | 32,173 | 20.7s      |
+| Workload | Files  | Local disk | Archil | Slowdown |
+| -------- | ------ | ---------- | ------ | -------- |
+| Small    | 2,232  | 1.5s       | 6.0s   | **3x**   |
+| Medium   | 32,173 | 20.7s      | —      | —        |
 
-Archil scenarios can't run in Docker Desktop (no `/dev/fuse` in the VM). These baselines confirm the Fly local-disk numbers are comparable.
+Medium+Archil from MacBook skipped (expected to take hours over the internet). Requires OrbStack (or a Linux VM with FUSE support) and `--privileged` for `/dev/fuse` access.
 
 Slowdown scales super-linearly with file count. At 2K files, Archil adds a manageable 5s. At 32K files, it's 56x slower. Our production monorepo has ~180K files in `node_modules` — extrapolating, that would likely take hours.
 

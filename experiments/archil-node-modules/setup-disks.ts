@@ -79,8 +79,9 @@ async function createOrReuseDisk(
 
       try {
         await disk.addUser(authMethod);
+        console.log(`Added auth token to disk ${disk.id}`);
       } catch (addErr) {
-        console.warn(`Warning: failed to add token, will try anyway`);
+        console.warn(`Warning: failed to add token:`, addErr);
       }
 
       return { diskId: disk.id, mountToken, region: REGION };

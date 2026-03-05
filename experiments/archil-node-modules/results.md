@@ -1,6 +1,6 @@
 # Archil node_modules benchmark
 
-Generated: 2026-03-05T22:30:27Z
+Generated: 2026-03-05T22:44:57Z
 
 ## Fly.io `lhr` (London) — 4 shared vCPUs, 4 GB RAM
 
@@ -13,12 +13,23 @@ Generated: 2026-03-05T22:30:27Z
 
 | Workload | Files  | Local disk | Archil | Slowdown |
 | -------- | ------ | ---------- | ------ | -------- |
-| Small    | 2,232  | 1.497s     | —      | —        |
+| Small    | 2,232  | 1.497s     | 5.950s | **3x**   |
 | Medium   | 32,173 | 20.687s    | —      | —        |
 
 ---
 
 ## Raw logs
+
+### docker-archil-disk-small-workload
+
+```
+[bench:archil:small] Started at 2026-03-05T22:43:48Z
+[bench:archil:small] Mounted dsk-0000000000005d30 at /mnt/archil
+[bench:archil:small] Running: pnpm install lodash chalk request commander express (node_modules + store on Archil)
+[bench:archil:small] RESULT pnpm_install=5.950s
+[bench:archil:small] RESULT nm_files=2232
+[bench:archil:small] Completed at 2026-03-05T22:44:13Z
+```
 
 ### docker-local-disk-medium-workload
 
