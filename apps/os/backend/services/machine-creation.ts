@@ -174,7 +174,7 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
     throw new Error(`Project not found: ${projectId}`);
   }
 
-  // Ensure the project has an Archil persistent disk (idempotent, non-fatal).
+  // Ensure the project has an Archil persistent disk (idempotent).
   await ensureProjectArchilDisk(db, env, {
     projectId,
     projectSlug: projectRecord.slug,
