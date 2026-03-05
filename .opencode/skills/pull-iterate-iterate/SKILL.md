@@ -8,119 +8,71 @@ publish: false
 
 Pull the latest iterate/iterate code onto this machine, install dependencies, run post-sync steps, and restart the processes that run iterate/iterate code.
 
-**Efficiency:** This is a mechanical task — do NOT use the todowrite tool. Just execute the steps sequentially without planning overhead. Each step is a single bash command; run them one after another.
+## How to execute
 
-## Context
+**One-shot it.** Run the entire script below as a single bash command (with `timeout: 300000`). Replace `<REF>` with the target ref from the prompt (defaults to `main`). Do NOT use the todowrite tool, do NOT break this into multiple calls, do NOT read files to "understand" the steps — just run the script.
 
-The iterate/iterate repo lives at `$ITERATE_REPO` (default: `/home/iterate/src/github.com/iterate/iterate`). It was baked into the Docker image at build time with a synthetic git history (single "snapshot" commit). A git remote `origin` points to `https://github.com/iterate/iterate.git`.
-
-**On older machines** the remote may not exist yet. If so, add it:
+Only fall back to interactive debugging if the one-shot script fails.
 
 ```bash
-git -C "$ITERATE_REPO" remote add origin https://github.com/iterate/iterate.git
-```
+set -euo pipefail
 
-## Steps
+ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
+REF="<REF>"
 
-### 1. Fetch the target ref
-
-The ref to pull is provided in the prompt (defaults to `main`).
-
-```bash
 cd "$ITERATE_REPO"
-git fetch origin <ref>
-```
 
-### 2. Check current state
+# Ensure origin remote exists (older machines may not have it)
+git remote get-url origin 2>/dev/null || git remote add origin https://github.com/iterate/iterate.git
 
-```bash
-git status
-git log --oneline -1
-```
+# Record current state
+OLD_SHA=$(git rev-parse --short HEAD)
+echo "Current: $OLD_SHA ($(git branch --show-current))"
 
-If there are local uncommitted changes:
+# Stash any local changes (shouldn't exist on prod, but be safe)
+git diff --quiet || git stash
 
-- These shouldn't exist on production machines. Run `git stash` to save them, then proceed.
-- After reset, the stash is available if needed but don't pop it automatically.
+# Fetch and checkout
+git fetch origin "$REF"
+git checkout -B "$REF" "origin/$REF"
 
-### 3. Switch to the branch and reset to the fetched ref
+NEW_SHA=$(git rev-parse --short HEAD)
+echo "Updated: $OLD_SHA -> $NEW_SHA (branch: $REF)"
 
-```bash
-git checkout -B <ref> origin/<ref>
-```
+# Install deps only if lockfile changed
+if git diff "$OLD_SHA..HEAD" --name-only -- pnpm-lock.yaml | grep -q .; then
+  echo "Lockfile changed — running pnpm install"
+  pnpm install --prefer-offline || echo "WARNING: pnpm install failed, proceeding anyway"
+else
+  echo "Lockfile unchanged — skipping pnpm install"
+fi
 
-This creates or resets the local branch to match the remote, just like a normal `git checkout` workflow. The local branch name will reflect the actual remote branch (e.g. `main`, `greetinghello`, etc.).
+# Post-sync: skeleton sync, frontend rebuild, db migrations
+bash "$ITERATE_REPO/sandbox/after-repo-sync-steps.sh"
 
-### 4. Check if lockfile changed
-
-```bash
-cd "$ITERATE_REPO"
-git diff <old-sha>..HEAD --name-only -- pnpm-lock.yaml
-```
-
-If the output is empty, the lockfile hasn't changed — `pnpm install` can be **skipped entirely** (the `node_modules` baked into the image are still valid). Set a variable like `LOCKFILE_CHANGED=true/false` to use in the next step.
-
-### 5. Install dependencies (if needed) and run post-sync steps
-
-**If the lockfile changed**, run install + post-sync as a single command:
-
-```bash
-cd "$ITERATE_REPO" && pnpm install --prefer-offline && bash "$ITERATE_REPO/sandbox/after-repo-sync-steps.sh"
-```
-
-**If the lockfile did NOT change**, skip `pnpm install` and just run post-sync:
-
-```bash
-cd "$ITERATE_REPO" && bash "$ITERATE_REPO/sandbox/after-repo-sync-steps.sh"
-```
-
-The timeout for either command should be at least 300 seconds (5 minutes). Pass `timeout: 300000` if using execCommand.
-
-**If `pnpm install` fails but the lockfile didn't change**: this means something is wrong with the npm registry or network, but the existing `node_modules` should be fine. Proceed to post-sync steps and process restarts anyway — the code will still work.
-
-**If `pnpm install` fails AND the lockfile changed**: report the error but still proceed to post-sync + restarts. New code with wrong deps is better than old code — the processes will crash-loop if deps are truly incompatible, but often the lockfile change is minor (patch bumps) and old deps still work.
-
-Post-sync steps handle:
-
-- Syncing home skeleton files
-- Rebuilding daemon frontend (`pnpm vite build` in `apps/daemon`)
-- Running database migrations (`pnpm db:migrate` in `apps/daemon`)
-
-### 6. Report result
-
-Print the new HEAD SHA and a summary of what changed:
-
-```bash
-echo "Updated to: $(git log --oneline -1)"
-echo "Previous: <old sha from step 2>"
-```
-
-### 7. Restart processes that run iterate/iterate code
-
-Use the `pidnap` CLI to restart only the processes that run our TypeScript code. Other processes (egress-proxy, opencode, jaeger, archil, cloudflare-tunnel) are external binaries and don't need restarting.
-
-Restart these 4 processes:
-
-```bash
+# Restart the 4 processes that run iterate/iterate TypeScript code.
+# Do NOT use curl — pidnap's HTTP API uses oRPC with a non-obvious wire format.
 for proc in daemon-backend project-ingress-proxy events daemon-frontend; do
   echo "Restarting $proc..."
-  pidnap process restart "$proc" --force || echo "Warning: failed to restart $proc"
+  pidnap process restart "$proc" --force || echo "WARNING: failed to restart $proc"
 done
-```
 
-**Note:** `daemon-frontend` serves a static vite build — step 5 already rebuilt it, so restarting the preview server picks up the new build output.
-
-**Note:** `--force` skips backoff delay so the process restarts immediately.
-
-**Do NOT use curl to call the pidnap HTTP API.** The API uses oRPC, which has a non-obvious wire format (`/rpc/processes/restart` path with `{"json": {...}}` body wrapping). The `pidnap` CLI is simpler and always works.
-
-After restarting, verify the processes are running:
-
-```bash
+# Verify
 pidnap process list
+
+echo "Done. $OLD_SHA -> $NEW_SHA on branch $REF"
 ```
 
-### 8. (Rare) If pidnap's own code changed
+## If the one-shot fails
+
+Read the error output and fix the specific issue:
+
+- **`git fetch` fails**: check network, check if origin remote exists (the script handles this, but if the URL is wrong, fix it).
+- **`pnpm install` fails**: the script already continues past this. If deps are truly broken, the processes will crash-loop — the next pull can fix it.
+- **`after-repo-sync-steps.sh` fails**: check which sub-step failed (skeleton sync, vite build, or db:migrate). Fix and re-run just that step.
+- **`pidnap process restart` fails**: try `pidnap process list` to see process states. A process might already be stopped or in an error state.
+
+## Rare: if pidnap's own code changed
 
 If the pull included changes to `packages/pidnap/`, pidnap itself needs to restart. This is rare — most pulls only change app code. If needed:
 
@@ -128,14 +80,4 @@ If the pull included changes to `packages/pidnap/`, pidnap itself needs to resta
 kill 1
 ```
 
-This kills tini → pidnap → all children. The container will stop (there is no restart loop). The platform will need to start a new container or the machine will need manual intervention. Only do this if the pull specifically changed pidnap code.
-
-## Error handling
-
-- If `git fetch` fails: check network, check if origin remote exists (add it if missing), retry.
-- If `pnpm install` fails and lockfile didn't change: **skip it** and proceed to post-sync + restarts. The existing `node_modules` are still valid.
-- If `pnpm install` fails and lockfile changed: report the error but **still proceed** to post-sync + restarts. New code with slightly wrong deps is better than being stuck on old code. Processes will crash-loop if deps are truly incompatible, and the next pull can fix it.
-- If `after-repo-sync-steps.sh` fails: report which step failed (skeleton sync, frontend build, or migrations). Still proceed with the process restarts — the new code is checked out and deps are installed, so processes will at least start. Migrations can be retried on next pull.
-- If a process restart fails: report which process failed. The machine is still functional — the failed process will be on old code but other processes will have restarted.
-
-**Key principle: always get to the restart step.** A failed `pnpm install` should never prevent process restarts. The goal is to get new code running as fast as possible — partial updates beat no updates.
+This kills tini -> pidnap -> all children. The container will stop. The platform will need to start a new container.
