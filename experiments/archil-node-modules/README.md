@@ -69,7 +69,7 @@ This penalty applies to any operation that creates new files on the mount — no
 ## Reproducing
 
 ```bash
-# 1. Provision Archil disk (one-time, needs ARCHIL_API_KEY_EU_WEST in Doppler)
+# 1. Provision Archil disk (one-time, needs ARCHIL_API_KEYS in Doppler)
 doppler run -- npx tsx setup-disks.ts
 
 # 2. Run individual scenarios

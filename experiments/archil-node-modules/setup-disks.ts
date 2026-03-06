@@ -13,11 +13,19 @@ import { Archil, ArchilApiError } from "@archildata/client/api";
 
 const SCRIPT_DIR = path.dirname(new URL(import.meta.url).pathname);
 
-// SDK prepends "key-" to the apiKey, so strip it if already present
-const ARCHIL_API_KEY = (process.env.ARCHIL_API_KEY_EU_WEST || process.env.ARCHIL_API_KEY!).replace(
-  /^key-/,
-  "",
-);
+// ARCHIL_API_KEYS is a JSON object mapping region to API key (e.g. {"aws-eu-west-1": "key-..."})
+// Falls back to legacy ARCHIL_API_KEY_EU_WEST / ARCHIL_API_KEY for backwards compat.
+const ARCHIL_API_KEY = (() => {
+  if (process.env.ARCHIL_API_KEYS) {
+    const keys = JSON.parse(process.env.ARCHIL_API_KEYS) as Record<string, string>;
+    const key = keys["aws-eu-west-1"];
+    if (key) return key.replace(/^key-/, "");
+  }
+  return (process.env.ARCHIL_API_KEY_EU_WEST || process.env.ARCHIL_API_KEY || "").replace(
+    /^key-/,
+    "",
+  );
+})();
 const ARCHIL_R2_ACCESS_KEY_ID = process.env.ARCHIL_R2_ACCESS_KEY_ID!;
 const ARCHIL_R2_SECRET_ACCESS_KEY = process.env.ARCHIL_R2_SECRET_ACCESS_KEY!;
 const CLOUDFLARE_ACCOUNT_ID =
