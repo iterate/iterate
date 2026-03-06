@@ -34,18 +34,18 @@ Requires OrbStack (or a Linux VM with FUSE support) and `--privileged` for `/dev
 
 Slowdown scales super-linearly with file count. At 2K files, Archil adds a manageable 5s. At 32K files, it's 56x slower (Fly). Our production monorepo has ~180K files in `node_modules` — extrapolating, that would likely take hours.
 
-### Tuning options — Fly.io `lhr`, Small workload (2K files), Archil
+### Tuning options — Fly.io `lhr`, Archil
 
 We tested three mount/runtime tuning options to see if they improve Archil write performance:
 
-| Tuning option       | pnpm install | vs Control | Notes                                    |
-| ------------------- | ------------ | ---------- | ---------------------------------------- |
-| Control (none)      | 6.4s         | —          | Baseline Archil, no tuning               |
-| `eatmydata`         | 5.5s         | -14%       | No-ops `fsync()` calls                   |
-| `--writeback-cache` | 7.3s         | +13%       | FUSE writeback caching (preview flag)    |
-| `--nconnect 4`      | 6.5s         | +2%        | Multiple parallel connections to storage |
+| Tuning option       | Small (2K files) | vs Control | Medium (32K files) | vs Baseline |
+| ------------------- | ---------------- | ---------- | ------------------ | ----------- |
+| Control (none)      | 6.4s             | —          | 1,530s (25 min)    | —           |
+| `eatmydata`         | 5.5s             | -14%       | 1,433s (24 min)    | -6%         |
+| `--writeback-cache` | 7.3s             | +13%       | —                  | —           |
+| `--nconnect 4`      | 6.5s             | +2%        | —                  | —           |
 
-**Conclusion:** None of these options produce a meaningful improvement. `eatmydata` showed a marginal ~1s reduction, but this is within noise for a 6s test and aligns with the hypothesis that the bottleneck is `create()` (new inode allocation), not `fsync()`. `--writeback-cache` actually added overhead, possibly due to cache management on a write-heavy workload. `--nconnect` had no effect — pnpm's parallelism likely already saturates the FUSE daemon's internal concurrency.
+**Conclusion:** None of these options produce a meaningful improvement. `eatmydata` showed a marginal ~1s reduction on the small test (within noise) and shaved ~100s off a 25-minute medium test (6%, also within noise). This confirms the bottleneck is `create()` (new inode allocation), not `fsync()`. `--writeback-cache` actually added overhead. `--nconnect` had no effect.
 
 The fundamental issue is that each file creation requires a round-trip to Archil's storage cluster (~10-15ms for uncached ops to R2). No client-side tuning can eliminate that; it would require server-side batching of metadata operations.
 

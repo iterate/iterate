@@ -1,6 +1,6 @@
 # Archil node_modules benchmark
 
-Generated: 2026-03-06T10:15:54Z
+Generated: 2026-03-06T11:45:17Z
 
 ## Fly.io `lhr` (London) — 4 shared vCPUs, 4 GB RAM
 
@@ -69,6 +69,20 @@ Generated: 2026-03-06T10:15:54Z
 [bench:baseline:small] RESULT pnpm_install=1.497s
 [bench:baseline:small] RESULT nm_files=2232
 [bench:baseline:small] Completed at 2026-03-05T22:27:11Z
+```
+
+### fly-archil-disk-medium-workload-eatmydata
+
+```
+[2m2026-03-06T11:21:37Z[0m app[56836ddef16138] [32mlhr[0m [[34minfo[0m][bench:archil:medium] RESULT pnpm_install=1433.330s
+[2m2026-03-06T11:21:37Z[0m app[56836ddef16138] [32mlhr[0m [[34minfo[0m][bench:archil:medium] RESULT cpu_peak=66.0%
+[2m2026-03-06T11:21:37Z[0m app[56836ddef16138] [32mlhr[0m [[34minfo[0m][bench:archil:medium] RESULT cpu_avg=4.1%
+[2m2026-03-06T11:21:37Z[0m app[56836ddef16138] [32mlhr[0m [[34minfo[0m][bench:archil:medium] RESULT mem_peak=1971MB
+[2m2026-03-06T11:21:37Z[0m app[56836ddef16138] [32mlhr[0m [[34minfo[0m][bench:archil:medium] RESULT mem_avg=1620MB
+[2m2026-03-06T11:21:37Z[0m app[56836ddef16138] [32mlhr[0m [[34minfo[0m][bench:archil:medium] RESULT mem_total=3916MB
+[2m2026-03-06T11:21:37Z[0m app[56836ddef16138] [32mlhr[0m [[34minfo[0m][bench:archil:medium] RESULT resource_samples=707
+[2m2026-03-06T11:26:42Z[0m app[56836ddef16138] [32mlhr[0m [[34minfo[0m][bench:archil:medium] RESULT nm_files=32174
+[2m2026-03-06T11:26:42Z[0m app[56836ddef16138] [32mlhr[0m [[34minfo[0m][bench:archil:medium] Completed at 2026-03-06T11:26:42Z
 ```
 
 ### fly-archil-disk-medium-workload
