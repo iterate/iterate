@@ -129,7 +129,7 @@ export async function getLatestMachineEvents(
     ORDER BY payload->>'machineId', id DESC
   `);
 
-  // drizzle execute returns array (postgres.js) or { rows } (neon)
+  // drizzle execute returns array (postgres.js) or { rows } (node-postgres)
   const rows = (Array.isArray(raw) ? raw : ((raw as { rows: unknown[] }).rows ?? [])) as Array<{
     machine_id: string;
     name: string;
