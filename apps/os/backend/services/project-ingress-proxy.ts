@@ -109,7 +109,7 @@ export async function shouldHandleProjectIngressHostname(
 async function findProjectByCustomDomainHostname(
   hostname: string,
 ): Promise<typeof schema.project.$inferSelect | null> {
-  const db = getDb();
+  const db = await getDb();
   const normalizedHostname = hostname.toLowerCase();
 
   // hostname = custom_domain (exact) OR hostname LIKE '%.' || custom_domain (subdomain)
@@ -211,7 +211,7 @@ async function resolveMachineForIngress(
   userId: string,
   isSystemAdmin: boolean,
 ): Promise<ResolveMachineForIngressResult> {
-  const db = getDb();
+  const db = await getDb();
 
   if (target.kind === "project") {
     const rows = await db
@@ -663,7 +663,7 @@ async function handleCustomDomainRequest(
 
   if (target.kind === "project") {
     // Find the active machine for this project
-    const db = getDb();
+    const db = await getDb();
     // Verify access
     const membershipRows = await db
       .select({ membershipId: schema.organizationUserMembership.id })

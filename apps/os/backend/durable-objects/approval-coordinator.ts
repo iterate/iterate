@@ -6,7 +6,10 @@ import { logger } from "../tag-logger.ts";
 import type { ApprovalStatus, DecisionStatus } from "../egress-proxy/types.ts";
 
 /** Minimal env interface to avoid circular dependency with CloudflareEnv */
-type DurableObjectEnv = { DATABASE_URL: string };
+type DurableObjectEnv = {
+  DATABASE_URL: string;
+  HYPERDRIVE?: { connectionString: string };
+};
 
 type Resolver = (decision: DecisionStatus) => void;
 
@@ -129,7 +132,7 @@ export class ApprovalCoordinator extends DurableObject<DurableObjectEnv> {
 
   private async updateTimeoutStatus(approvalId: string) {
     try {
-      const db = getDbWithEnv(this.env);
+      const db = await getDbWithEnv(this.env);
       await db
         .update(schema.egressApproval)
         .set({
