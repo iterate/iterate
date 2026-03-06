@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod/v4";
+import { toPathSegment } from "@iterate-com/shared/github-agent-path";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 
@@ -185,14 +186,4 @@ function compactText(value: string, maxLength: number): string {
   if (collapsed.length <= maxLength) return collapsed;
   if (maxLength <= 3) return collapsed.slice(0, maxLength);
   return `${collapsed.slice(0, maxLength - 3)}...`;
-}
-
-function toPathSegment(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "x"
-  );
 }

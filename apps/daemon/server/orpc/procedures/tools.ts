@@ -130,10 +130,6 @@ async function resolveAgentPathForSubscription(params: {
       )
       .limit(1);
 
-    if (activeRecentRoute?.destination === destination) {
-      return recentRoute.agentPath;
-    }
-
     if (!activeRecentRoute) {
       await db
         .insert(schema.agentRoutes)
