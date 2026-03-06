@@ -673,8 +673,8 @@ const securitySignalCollectors: Record<
     const ghsaNum = advisory.ghsa_id.replace(/\D/g, "").slice(-6);
     const alertNumber =
       Number.parseInt(ghsaNum, 10) ||
-      (parseInt(createHash("sha256").update(advisory.ghsa_id).digest("hex").slice(0, 6), 16) %
-        1_000_000);
+      parseInt(createHash("sha256").update(advisory.ghsa_id).digest("hex").slice(0, 6), 16) %
+        1_000_000;
 
     return [
       {
