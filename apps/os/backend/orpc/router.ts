@@ -206,7 +206,7 @@ export const getConfigRepo = os.machines.getConfigRepo
         owner: parsedFullName.owner,
         name: parsedFullName.name,
         branch: configRepoBranch,
-        cloneUrl: `https://github.com/${parsedFullName.owner}/${parsedFullName.name}.git`,
+        cloneUrl: `https://github.com/${parsedFullName.owner}/${parsedFullName.name}`,
       },
     };
   });

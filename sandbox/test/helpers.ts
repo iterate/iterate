@@ -342,6 +342,13 @@ export function createTestProvider(envOverrides?: Record<string, string>): Sandb
       return new DaytonaProvider(env);
     case "fly":
       env.SANDBOX_NAME_PREFIX ??= "dev";
+      env.REGION_CONFIG ??= JSON.stringify({
+        r2BucketHint: "weur",
+        workerPlacementRegion: "aws:eu-west-2",
+        archilRegion: "aws-eu-west-1",
+        flyIoRegion: "lhr",
+        planetscaleRegion: "aws-eu-west-2",
+      });
       return new FlyProvider(env);
     default:
       throw new Error(`Unknown provider: ${TEST_CONFIG.provider}`);

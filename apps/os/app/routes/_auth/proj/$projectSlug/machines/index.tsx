@@ -77,13 +77,11 @@ function ProjectMachinesPage() {
   );
   const sandboxProvider = project.sandboxProvider;
 
-  const getDefaultSnapshotsQueryOptions = orpc.machine.getDefaultSnapshots.queryOptions({
-    staleTime: 0,
-  });
-  const { data: defaultSnapshots } = useSuspenseQuery({
-    ...getDefaultSnapshotsQueryOptions,
-    queryKey: [...getDefaultSnapshotsQueryOptions.queryKey, createSheetOpen], // refetch when create sheet is opened/closed
-  });
+  const { data: defaultSnapshots } = useSuspenseQuery(
+    orpc.machine.getDefaultSnapshots.queryOptions({
+      staleTime: 0,
+    }),
+  );
   const defaultSnapshotForProvider =
     sandboxProvider === "daytona"
       ? (defaultSnapshots.daytona ?? "")

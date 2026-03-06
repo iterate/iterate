@@ -415,6 +415,12 @@ export const projectRouter = {
 
       const fullName = `${input.repo.owner}/${input.repo.name}`;
 
+      if (fullName.toLowerCase() === "iterate/iterate") {
+        throw new ORPCError("BAD_REQUEST", {
+          message: "Don't use iterate/iterate as a config repo.",
+        });
+      }
+
       await ctx.db
         .update(project)
         .set({

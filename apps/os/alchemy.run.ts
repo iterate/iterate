@@ -22,7 +22,7 @@ import {
   getDockerEnvVars,
 } from "../../sandbox/providers/docker/utils.ts";
 import { normalizeProjectIngressCanonicalHost } from "./backend/utils/project-ingress-url.ts";
-import { workerCrons } from "./backend/worker-config.ts";
+import { ArchilApiKeys, jsonEnvVar, RegionConfig, workerCrons } from "./backend/worker-config.ts";
 import {
   GLOBAL_SECRETS_CONFIG,
   type GlobalSecretEnvVarName,
@@ -388,7 +388,6 @@ const Env = z.object({
   SANDBOX_PROVIDER_PREFERENCE: Optional, // comma-separated list of providers in order of preference
   FLY_API_TOKEN: Optional,
   FLY_ORG: Optional,
-  FLY_DEFAULT_REGION: Optional,
   FLY_DEFAULT_IMAGE: Optional,
   FLY_DEFAULT_CPUS: Optional,
   FLY_DEFAULT_MEMORY_MB: Optional,
@@ -417,11 +416,11 @@ const Env = z.object({
   // Archil — persistent POSIX volumes backed by R2
   // Bucket name and endpoint are derived in alchemy.run.ts and passed as computed bindings.
   // Only the API key and R2 credentials need to live in Doppler.
-  ARCHIL_API_KEY: Optional,
-  ARCHIL_REGION: NonEmpty.default("us-east-1"),
-  ARCHIL_R2_ACCESS_KEY_ID: Optional,
-  ARCHIL_R2_SECRET_ACCESS_KEY: Optional,
+  ARCHIL_API_KEYS: jsonEnvVar.wrap(ArchilApiKeys),
+  ARCHIL_R2_ACCESS_KEY_ID: Required,
+  ARCHIL_R2_SECRET_ACCESS_KEY: Required,
   POSTHOG_PUBLIC_KEY: Optional,
+  POSTHOG_WEBHOOK_SECRET: Optional,
   SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
   PROJECT_INGRESS_DOMAIN: Optional, // optional here; validated after fallback from old var name
@@ -438,14 +437,16 @@ const Env = z.object({
   // This bypasses the egress proxy and exposes secrets directly in env vars.
   // Only enable this for local development or trusted environments.
   DANGEROUS_RAW_SECRETS_ENABLED: BoolyString,
+
+  REGION_CONFIG: jsonEnvVar.wrap(RegionConfig),
 } satisfies Record<string, z.ZodType<unknown, string | undefined>> & {
   [K in GlobalSecretEnvVarName]: typeof Required;
 });
 
 // Type for env vars wrapped as alchemy secrets
 type EnvSecrets = {
-  [K in keyof z.output<typeof Env>]-?: z.output<typeof Env>[K] extends string | undefined
-    ? ReturnType<typeof alchemy.secret<string>>
+  [K in keyof z.input<typeof Env>]-?: z.output<typeof Env>[K] extends string | undefined
+    ? ReturnType<typeof alchemy.secret<NonNullable<z.output<typeof Env>[K]>>>
     : never;
 };
 
@@ -462,10 +463,14 @@ async function setupEnvironmentVariables(): Promise<EnvSecrets> {
   }
   // Filter out undefined values before wrapping in alchemy.secret
   const defined = R.pickBy(parsed.data, (v) => v !== undefined) as Record<string, string>;
-  return R.mapValues(defined, alchemy.secret) as unknown as EnvSecrets;
+  return R.mapValues(defined, (v) =>
+    typeof v === "string" ? alchemy.secret(v) : v,
+  ) as unknown as EnvSecrets;
 }
 
 async function setupDatabase() {
+  const env = Env.pick({ REGION_CONFIG: true }).parse(process.env);
+  const regionConfig = jsonEnvVar.parse(RegionConfig, env.REGION_CONFIG);
   const migrate = async (origin: string) => {
     if (!origin) throw new Error("Database connection string is not set");
     const res = await Exec("db-migrate", {
@@ -538,6 +543,7 @@ async function setupDatabase() {
       kind: "postgresql",
       allowDataBranching: true,
       delete: false,
+      region: { slug: regionConfig.planetscaleRegion },
     });
 
     const branch = await Branch("db-preview-branch", {
@@ -620,6 +626,7 @@ const domains = isDevelopment
   : [`os.iterate.com`, `*.iterate.app`];
 
 async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvSecrets) {
+  const regionConfig = jsonEnvVar.parse(RegionConfig, envSecrets.REGION_CONFIG.unencrypted);
   const dockerEnvVars = isDevelopment ? getDockerEnvVars(repoRoot) : {};
 
   // Docker provider env vars — git info is resolved here (where execSync works)
@@ -729,12 +736,11 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
 
   // Archil R2 bucket — one bucket per stage, with per-project prefixes inside.
   // Archil's FUSE client talks to R2 via S3 protocol using the API token credentials from Doppler.
-  const archilBucketName = `iterate-archil-${app.stage}`;
-  const _archilBucket = await R2Bucket("archil-data", {
-    name: archilBucketName,
-    locationHint: "enam", // US East — colocate with worker + PlanetScale
-    adopt: true,
+  // todo: generate a bucket dynamically for each project
+  const archilBucket = await R2Bucket("archil-data", {
+    locationHint: regionConfig.r2BucketHint,
     dev: { remote: true }, // always create real bucket, even in dev (Archil needs actual R2)
+    adopt: isDevelopment, // because we use dev: {remote: true}, all the dev-nobody CI runs will need to adopt this bucket
   });
 
   // Derive R2 endpoint so it doesn't need to be in Doppler per-stack.
@@ -747,6 +753,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     bindings: {
       ...dbConfig,
       ...envSecrets,
+      // TanstackStart construct doesn't like structured objects in bindings
       SELF: Self,
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: allowedDomains.join(","),
@@ -754,16 +761,16 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       APPROVAL_COORDINATOR,
       PROJECT_INGRESS_DOMAIN: projectIngressDomain,
       // Archil R2: derived from alchemy state, not Doppler
-      ARCHIL_R2_BUCKET_NAME: archilBucketName,
+      ARCHIL_R2_BUCKET_NAME: archilBucket.name,
       ARCHIL_R2_ENDPOINT: archilR2Endpoint,
       // Workerd can't exec in dev, so git/compose info must be injected via env vars here.
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
-    // Place the worker near the PlanetScale Postgres primary (aws:us-east-1)
+    // Place the worker near the PlanetScale Postgres primary
     // to minimise round-trip latency on DB-heavy pages.
-    placement: { region: "aws:us-east-1" },
+    placement: { region: regionConfig.workerPlacementRegion },
     assets: {
       _headers: dedent`
         /assets/*

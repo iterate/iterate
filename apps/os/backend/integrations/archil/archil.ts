@@ -13,9 +13,22 @@ import type { CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
+import { ArchilApiKeys, jsonEnvVar, RegionConfig } from "../../worker-config.ts";
+
+function getArchilRegion(env: CloudflareEnv) {
+  const config = jsonEnvVar.parse(RegionConfig, env.REGION_CONFIG);
+  return config.archilRegion;
+}
 
 function createArchilClient(env: CloudflareEnv): Archil {
-  return new Archil({ apiKey: env.ARCHIL_API_KEY, region: env.ARCHIL_REGION });
+  const region = getArchilRegion(env);
+  const apiKeys = jsonEnvVar.parse(ArchilApiKeys, env.ARCHIL_API_KEYS);
+  const apiKey = apiKeys[region];
+  if (!apiKey) {
+    const message = `No Archil API key found for region ${region}. Available regions: ${Object.keys(apiKeys).join(", ")}`;
+    throw new Error(message);
+  }
+  return new Archil({ apiKey, region });
 }
 
 /**
@@ -23,65 +36,52 @@ function createArchilClient(env: CloudflareEnv): Archil {
  * and stores the disk config as project env vars so every machine picks it up.
  *
  * Idempotent: if the project already has ARCHIL_DISK_NAME set, returns early.
- * Non-fatal: if Archil is not configured (missing env vars) or creation fails,
- * logs a warning and returns false — the machine works fine without persistence.
  */
 export async function ensureProjectArchilDisk(
   db: DB,
   env: CloudflareEnv,
   params: { projectId: string; projectSlug: string },
-): Promise<boolean> {
-  // Skip if Archil is not configured
-  if (!env.ARCHIL_API_KEY || !env.ARCHIL_R2_BUCKET_NAME) {
-    return false;
-  }
-
+): Promise<void> {
   // Idempotent: check if already provisioned
   const existingDisk = await db.query.projectEnvVar.findFirst({
     where: (e, { eq: whereEq, and: whereAnd }) =>
       whereAnd(whereEq(e.projectId, params.projectId), whereEq(e.key, "ARCHIL_DISK_NAME")),
   });
   if (existingDisk) {
-    return true;
+    return;
   }
 
-  try {
-    const { diskId, mountToken } = await createArchilDisk(env, params);
+  const { diskId, mountToken } = await createArchilDisk(env, params);
 
-    // Store as project env vars — these flow to every machine via buildMachineEnvVars.
-    // Delete any stale archil env vars first (from previous broken provisioning attempts).
-    await db
-      .delete(schema.projectEnvVar)
-      .where(
-        and(
-          eq(schema.projectEnvVar.projectId, params.projectId),
-          inArray(schema.projectEnvVar.key, [
-            "ARCHIL_DISK_NAME",
-            "ARCHIL_MOUNT_TOKEN",
-            "ARCHIL_REGION",
-          ]),
-        ),
-      );
+  // Store as project env vars — these flow to every machine via buildMachineEnvVars.
+  // Delete any stale archil env vars first (from previous broken provisioning attempts).
+  await db
+    .delete(schema.projectEnvVar)
+    .where(
+      and(
+        eq(schema.projectEnvVar.projectId, params.projectId),
+        inArray(schema.projectEnvVar.key, [
+          "ARCHIL_DISK_NAME",
+          "ARCHIL_MOUNT_TOKEN",
+          "ARCHIL_REGION",
+        ]),
+      ),
+    );
 
-    const archilVars = [
-      { key: "ARCHIL_DISK_NAME", value: diskId },
-      { key: "ARCHIL_MOUNT_TOKEN", value: mountToken },
-      { key: "ARCHIL_REGION", value: env.ARCHIL_REGION },
-    ];
-    for (const { key, value } of archilVars) {
-      await db.insert(schema.projectEnvVar).values({
-        projectId: params.projectId,
-        key,
-        value,
-      });
-    }
-
-    logger.info(`[Archil] Disk provisioned for project=${params.projectId} diskId=${diskId}`);
-    return true;
-  } catch (err) {
-    logger.error("[Archil] Disk creation failed, machine will run without persistence", err);
-    return false;
+  const archilVars = [
+    { key: "ARCHIL_DISK_NAME", value: diskId },
+    { key: "ARCHIL_MOUNT_TOKEN", value: mountToken },
+    { key: "ARCHIL_REGION", value: getArchilRegion(env) },
+  ];
+  for (const { key, value } of archilVars) {
+    await db.insert(schema.projectEnvVar).values({
+      projectId: params.projectId,
+      key,
+      value,
+    });
   }
+
+  logger.info(`[Archil] Disk provisioned for project=${params.projectId} diskId=${diskId}`);
 }
 
 /**

@@ -331,22 +331,8 @@ export class DockerProvider extends SandboxProvider {
       binds.push(`${this.gitInfo.commonDir}:/host/commondir:ro`);
     }
 
-    const projectId = opts.envVars.ITERATE_PROJECT_ID;
-    if (projectId) {
-      const persistVolume = `iterate-persist-${projectId}`;
-      await dockerApi({
-        method: "POST",
-        endpoint: "/volumes/create",
-        body: {
-          Name: persistVolume,
-          Labels: {
-            "com.iterate.persist": "true",
-            "com.iterate.project_id": projectId,
-          },
-        },
-      });
-      binds.push(`${persistVolume}:/mnt/persist`);
-    }
+    // No Docker persist volume — archil FUSE mount handles /mnt/persist,
+    // same as production. The container needs /dev/fuse + SYS_ADMIN for this.
 
     const shouldResolveLocalOsPort = Object.values(opts.envVars).some((value) =>
       DEV_ITERATE_HOST_PATTERN.test(String(value)),
@@ -373,7 +359,6 @@ export class DockerProvider extends SandboxProvider {
     const dockerEnv: Record<string, string> = {
       ...rewrittenEnvVars,
       ITERATE_DEV: "true",
-      ITERATE_PERSISTENCE_MODE: "local",
       DOCKER_DEFAULT_SERVICE_TRANSPORT: this.env.DOCKER_DEFAULT_SERVICE_TRANSPORT,
       ...(this.env.DOCKER_TUNNEL_PORTS
         ? { DOCKER_TUNNEL_PORTS: this.env.DOCKER_TUNNEL_PORTS }
@@ -399,6 +384,11 @@ export class DockerProvider extends SandboxProvider {
       PortBindings: portBindings,
       Binds: binds,
       ExtraHosts: ["host.docker.internal:host-gateway"],
+      // FUSE device + SYS_ADMIN needed for archil persistent volume mount
+      Devices: [
+        { PathOnHost: "/dev/fuse", PathInContainer: "/dev/fuse", CgroupPermissions: "rwm" },
+      ],
+      CapAdd: ["SYS_ADMIN"],
     };
 
     const createResponse = await dockerApi<{ Id: string }>({

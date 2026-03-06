@@ -14,6 +14,7 @@ vi.mock("../../tag-logger.ts", () => ({
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
+    set: vi.fn(),
   },
 }));
 

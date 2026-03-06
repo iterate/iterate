@@ -68,3 +68,4 @@ playwriter-screenshot-*
 # PR video recordings
 pr-videos/
 *.log
+experiments/archil-node-modules/disk-config.json

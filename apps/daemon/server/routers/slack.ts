@@ -47,7 +47,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod/v4";
 import { WebClient } from "@slack/web-api";
 import type {
@@ -313,7 +313,7 @@ slackRouter.post("/webhook", async (c) => {
       });
     }
 
-    const agentPath = getAgentPath(threadTs);
+    const agentPath = await resolveAgentPathForThread(parsed.channel, threadTs);
     const agent = await caller.getAgent({ path: agentPath });
     if (!agent) {
       return c.json({
@@ -349,7 +349,7 @@ slackRouter.post("/webhook", async (c) => {
   // Create the agent so the user's first actual message can be forwarded.
   // No prompt is sent — there's no user message yet.
   if (isParsedAssistantThread(parsed)) {
-    const agentPath = getAgentPath(parsed.threadTs);
+    const agentPath = await resolveAgentPathForThread(parsed.channel, parsed.threadTs);
     const result = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
 
     if (result.wasNewlyCreated) {
@@ -372,7 +372,8 @@ slackRouter.post("/webhook", async (c) => {
   // ── Message events (mentions & FYI) ──
 
   const { event, threadTs } = parsed;
-  const agentPath = getAgentPath(threadTs);
+  const channel = event.channel || "";
+  const agentPath = await resolveAgentPathForThread(channel, threadTs);
   const isMention = parsed.case === "new_thread_mention" || parsed.case === "mid_thread_mention";
   const messageTs = event.ts || threadTs;
 
@@ -380,7 +381,7 @@ slackRouter.post("/webhook", async (c) => {
   if (isMention) {
     ensureSlackThreadContext({
       agentPath,
-      channel: event.channel || "",
+      channel,
       threadTs,
       emojiTimestamp: messageTs,
       emoji: "eyes",
@@ -411,7 +412,7 @@ slackRouter.post("/webhook", async (c) => {
     // FYI messages start a fresh status cycle but do not add deterministic emoji.
     ensureSlackThreadContext({
       agentPath,
-      channel: event.channel || "",
+      channel,
       threadTs,
       requestId,
     });
@@ -490,12 +491,12 @@ slackRouter.post("/webhook", async (c) => {
   // Build the formatted prompt for the agent.
   let message: string;
   if (parsed.case === "new_thread_mention" && wasNewlyCreated) {
-    message = formatNewThreadMentionMessage(event, threadTs, eventId);
+    message = formatNewThreadMentionMessage(event, threadTs, eventId, agentPath);
   } else if (parsed.case === "fyi_message") {
     message = formatFyiMessage(event, threadTs, eventId);
   } else {
     // mid_thread_mention, or new_thread_mention that hit an existing agent
-    message = formatMidThreadMentionMessage(event, threadTs, eventId);
+    message = formatMidThreadMentionMessage(event, threadTs, eventId, agentPath);
   }
 
   const responseCase =
@@ -937,8 +938,25 @@ function sanitizeThreadId(ts: string): string {
   return ts.replace(/\./g, "-");
 }
 
-function getAgentPath(threadTs: string): string {
+function getDefaultAgentPath(threadTs: string): string {
   return `/slack/ts-${sanitizeThreadId(threadTs)}`;
+}
+
+async function resolveAgentPathForThread(channel: string, threadTs: string): Promise<string> {
+  if (!channel) return getDefaultAgentPath(threadTs);
+
+  const [subscription] = await db
+    .select({ agentPath: schema.slackThreadSubscriptions.agentPath })
+    .from(schema.slackThreadSubscriptions)
+    .where(
+      and(
+        eq(schema.slackThreadSubscriptions.channel, channel),
+        eq(schema.slackThreadSubscriptions.threadTs, threadTs),
+      ),
+    )
+    .limit(1);
+
+  return subscription?.agentPath ?? getDefaultAgentPath(threadTs);
 }
 
 function parseUpdatedAtMs(updatedAt: string | undefined): number | null {
@@ -1001,12 +1019,11 @@ function formatNewThreadMentionMessage(
   event: AppMentionEvent | GenericMessageEvent,
   threadTs: string,
   eventId: string,
+  agentPath: string,
 ): string {
   const user = event.user ? `<@${event.user}>` : "unknown";
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
-  const agentPath = getAgentPath(threadTs);
-
   return [
     `[Agent Path: ${agentPath}] New Slack thread started.`,
     "Refer to SLACK.md for how to respond via `iterate tool exec-ts`.",
@@ -1023,13 +1040,12 @@ function formatMidThreadMentionMessage(
   event: AppMentionEvent | GenericMessageEvent,
   threadTs: string,
   eventId: string,
+  agentPath: string,
 ): string {
   const user = event.user ? `<@${event.user}>` : "unknown";
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
   const messageTs = event.ts || threadTs;
-  const agentPath = getAgentPath(threadTs);
-
   const lines = [
     `[Agent Path: ${agentPath}] You've been @mentioned in thread ${threadTs}.`,
     "Refer to SLACK.md for how to respond via `iterate tool exec-ts`.",
