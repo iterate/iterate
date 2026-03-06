@@ -127,7 +127,7 @@ async function handleSubscriptionCreated(
   env: CloudflareEnv,
   subscription: Stripe.Subscription,
 ): Promise<void> {
-  const db = getDb();
+  const db = await getDb();
   const customerId =
     typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
 
@@ -162,7 +162,7 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription): Prom
 }
 
 async function updateBillingAccount(subscription: Stripe.Subscription): Promise<void> {
-  const db = getDb();
+  const db = await getDb();
   const customerId =
     typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
 
@@ -185,7 +185,7 @@ async function updateBillingAccount(subscription: Stripe.Subscription): Promise<
 }
 
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription): Promise<void> {
-  const db = getDb();
+  const db = await getDb();
   const customerId =
     typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
 
@@ -202,7 +202,7 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription): Pro
 }
 
 async function handleInvoicePaid(env: CloudflareEnv, invoice: Stripe.Invoice): Promise<void> {
-  const db = getDb();
+  const db = await getDb();
   const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
 
   if (!customerId) return;
@@ -234,7 +234,7 @@ async function handleInvoicePaid(env: CloudflareEnv, invoice: Stripe.Invoice): P
 }
 
 async function handlePaymentFailed(env: CloudflareEnv, invoice: Stripe.Invoice): Promise<void> {
-  const db = getDb();
+  const db = await getDb();
   const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
 
   if (!customerId) return;

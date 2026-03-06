@@ -5,6 +5,7 @@ import { CronExpressionParser } from "cron-parser";
 import alchemy, { type Scope } from "alchemy";
 import {
   DurableObjectNamespace,
+  Hyperdrive,
   R2Bucket,
   TanStackStart,
   Tunnel,
@@ -213,10 +214,8 @@ async function getComposePublishedPort(
 
 async function resolveLocalDockerRuntimePorts() {
   const postgresPort = await getComposePublishedPort("postgres", 5432);
-  const neonProxyPort = await getComposePublishedPort("neon-proxy", 4444);
   process.env.LOCAL_DOCKER_POSTGRES_PORT = postgresPort;
-  process.env.LOCAL_DOCKER_NEON_PROXY_PORT = neonProxyPort;
-  return { postgresPort, neonProxyPort };
+  return { postgresPort };
 }
 
 /**
@@ -634,7 +633,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     DOCKER_HOST_GIT_COMMON_DIR: "",
     DOCKER_HOST_GIT_COMMIT: "",
     DOCKER_HOST_GIT_BRANCH: "",
-    LOCAL_DOCKER_NEON_PROXY_PORT: "",
+
     DOCKER_HOST_OS_PORT: "",
     /** @deprecated use DOCKER_DEFAULT_IMAGE */
     LOCAL_DOCKER_IMAGE_NAME: "",
@@ -653,7 +652,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       process.env.DOCKER_HOST_GIT_COMMIT ?? dockerEnvVars.DOCKER_HOST_GIT_COMMIT ?? "";
     const gitBranch =
       process.env.DOCKER_HOST_GIT_BRANCH ?? dockerEnvVars.DOCKER_HOST_GIT_BRANCH ?? "";
-    const localDockerNeonProxyPort = process.env.LOCAL_DOCKER_NEON_PROXY_PORT ?? "";
+
     // No implicit fallback here: if DOCKER_DEFAULT_IMAGE isn't set, we want it to be obvious
     // (the Docker provider is strict and will throw when attempting to create a machine).
     const imageName = process.env.DOCKER_DEFAULT_IMAGE ?? "";
@@ -668,7 +667,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       DOCKER_HOST_GIT_COMMON_DIR: commonDir,
       DOCKER_HOST_GIT_COMMIT: gitCommit,
       DOCKER_HOST_GIT_BRANCH: gitBranch,
-      LOCAL_DOCKER_NEON_PROXY_PORT: localDockerNeonProxyPort,
+
       DOCKER_HOST_OS_PORT: process.env.DOCKER_HOST_OS_PORT ?? "",
       LOCAL_DOCKER_IMAGE_NAME: imageName,
       LOCAL_DOCKER_COMPOSE_PROJECT_NAME:
@@ -728,6 +727,13 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   //   4. Show the user DNS instructions (CNAME to fallback.iterate.app)
   // The allowedDomains/routeHosts arrays above don't need custom domains — CF for SaaS handles routing.
 
+  // Hyperdrive accelerates DB connections via Cloudflare's connection pooling.
+  const hyperdriveBinding = await Hyperdrive("os-db", {
+    origin: dbConfig.DATABASE_URL,
+    caching: { disabled: true },
+    adopt: true,
+  });
+
   // Archil R2 bucket — one bucket per stage, with per-project prefixes inside.
   // Archil's FUSE client talks to R2 via S3 protocol using the API token credentials from Doppler.
   const archilBucketName = `iterate-archil-${app.stage}`;
@@ -748,6 +754,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     bindings: {
       ...dbConfig,
       ...envSecrets,
+      HYPERDRIVE: hyperdriveBinding,
       SELF: Self,
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: allowedDomains.join(","),
@@ -808,7 +815,7 @@ if (isDevelopment) {
   // Set VITE_PUBLIC_URL before vite starts
   setupDevTunnelEnv();
 
-  // Start Docker containers (postgres, neon-proxy) before migrations
+  // Start Docker containers (postgres) before migrations
   // docker-compose.ts handles DOCKER_COMPOSE_PROJECT_NAME and SANDBOX_DOCKER_HOST_GIT_* env vars
   // --wait flag ensures postgres healthcheck passes before returning
   console.log("Starting Docker containers...");
@@ -817,9 +824,7 @@ if (isDevelopment) {
     stdio: "inherit",
   });
   const ports = await resolveLocalDockerRuntimePorts();
-  console.log(
-    `Resolved local Docker ports: postgres=${ports.postgresPort}, neon-proxy=${ports.neonProxyPort}`,
-  );
+  console.log(`Resolved local Docker ports: postgres=${ports.postgresPort}`);
 
   ensureIteratePnpmStoreVolume(repoRoot);
 }
