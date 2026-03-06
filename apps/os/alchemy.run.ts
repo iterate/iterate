@@ -468,6 +468,8 @@ async function setupEnvironmentVariables(): Promise<EnvSecrets> {
 }
 
 async function setupDatabase() {
+  const env = Env.pick({ REGION_CONFIG: true }).parse(process.env);
+  const regionConfig = jsonEnvVar.parse(RegionConfig, env.REGION_CONFIG);
   const migrate = async (origin: string) => {
     if (!origin) throw new Error("Database connection string is not set");
     const res = await Exec("db-migrate", {
@@ -830,7 +832,6 @@ if (isDevelopment) {
 // Setup database and env first
 const dbConfig = await setupDatabase();
 const envSecrets = await setupEnvironmentVariables();
-const regionConfig = jsonEnvVar.parse(RegionConfig, envSecrets.REGION_CONFIG.unencrypted);
 
 // Deploy main worker (includes egress proxy on /api/egress-proxy)
 export const { worker } = await deployWorker(dbConfig, envSecrets);
