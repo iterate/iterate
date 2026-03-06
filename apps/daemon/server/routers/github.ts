@@ -671,11 +671,11 @@ const securitySignalCollectors: Record<
     // Use GHSA ID numeric suffix as the alert number for dedup/path.
     // Fallback: deterministic hash of the full GHSA ID (some IDs have no digits).
     const ghsaNum = advisory.ghsa_id.replace(/\D/g, "").slice(-6);
-    const parsed = Number.parseInt(ghsaNum, 10);
-    const alertNumber = Number.isNaN(parsed)
+    const parsedNum = Number.parseInt(ghsaNum, 10);
+    const alertNumber = Number.isNaN(parsedNum)
       ? parseInt(createHash("sha256").update(advisory.ghsa_id).digest("hex").slice(0, 6), 16) %
           1_000_000
-      : parsed;
+      : parsedNum;
 
     return [
       {
