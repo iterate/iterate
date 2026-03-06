@@ -46,10 +46,16 @@ iterate tool subscribe-slack-thread --channel C09K1CTN4M7 --thread-ts <thread_ts
 
 Use `get-current-session-id` tool to get `<session_id>`.
 
+## Slack thread behavior
+
+When you are subscribed to a thread, reply to questions and direct asks even if you are not @mentioned. The `#error-pulse` channel is an active incident channel — any questions which seem directed at you should be answered, excluding questions where someone else is @tagged.
+
 ## Slack message requirements
 
-When posting findings to `#error-pulse`, always include deep-links so humans can jump straight to the evidence:
+**CRITICAL: Every initial post to `#error-pulse` MUST include deep-links inline.** Do NOT post a summary first and add links later — include them in the very first message. This is non-negotiable.
 
-- **PostHog**: link to the error tracking issue or event (e.g. `https://us.posthog.com/project/<id>/error_tracking/<fingerprint>`)
-- **Cloudflare Worker logs**: link to the filtered CF dashboard logs (e.g. `https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers/services/view/os/production/observability/events`)
-- **Source code**: reference file paths with line numbers (e.g. `apps/os/backend/orpc/router.ts:62`)
+Required deep-links:
+
+- **PostHog**: link to the error tracking issue or event. The alert payload contains `posthogProjectId` and `$exception_issue_id` — use them to build `https://<host>/project/<id>/error_tracking/<issue_id>`.
+- **Cloudflare Worker logs**: `https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers/services/view/os/production/observability/events`
+- **Source code**: GitHub permalink with line numbers (e.g. `https://github.com/iterate/iterate/blob/main/apps/os/backend/orpc/router.ts#L62`)
