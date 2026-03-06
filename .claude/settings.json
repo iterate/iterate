@@ -1,0 +1,13 @@
+{
+  "SessionStart": [
+    {
+      "matcher": "*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "DOPPLER_CONFIG=dev_claude \"${CLAUDE_PROJECT_DIR:-$PWD}\"/scripts/async-coding-agent-setup.sh"
+        }
+      ]
+    }
+  ]
+}

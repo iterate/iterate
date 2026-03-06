@@ -1,0 +1,48 @@
+packages:
+  - apps/cf-ingress-proxy-worker
+  - apps/project-ingress-proxy
+  - apps/cli
+  - apps/daemon
+  - apps/iterate-com
+  - apps/os
+  - sandbox
+  - jonasland/sandbox
+  - jonasland/e2e
+  - services/*
+  - packages/*
+  - packages/pidnap/docker
+  - repo-templates/**/*
+  - .github/ts-workflows
+
+minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - drizzle-kit
+  - miniflare
+  - wrangler
+  - "@cloudflare/unenv-preset"
+  - alchemy
+  - "@cloudflare/sandbox"
+  - workerd
+  - "@mmkal/jsonata"
+  - "@mmkal/json-schema-to-typescript"
+  - "@mariozechner/pi-ai"
+  - "@mariozechner/pi-coding-agent"
+  - "@mariozechner/pi-agent-core"
+  - "@mariozechner/pi-tui"
+  - pidnap
+  - schematch
+  - trpc-cli
+
+onlyBuiltDependencies:
+  - "@tailwindcss/oxide"
+  - better-sqlite3
+  - esbuild
+  - sharp
+  - workerd
+
+overrides:
+  # x402,viem are optional peer dependencies of agents sdk, which is source of lot of unnecessary/deprecated packages, removing them is fine
+  "agents>x402": "-"
+  "agents>viem": "-"
+  "quicktype-core>readable-stream": "npm:vite-compatible-readable-stream@3.6.1"
+  "better-sqlite3": "npm:libsql@0.5.22"

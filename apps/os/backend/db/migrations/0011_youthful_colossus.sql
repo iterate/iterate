@@ -1,0 +1,1 @@
+ALTER TABLE "project_env_var" ADD COLUMN "description" text;

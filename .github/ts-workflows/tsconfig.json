@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "module": "esnext",
+    "target": "esnext",
+    "sourceMap": false,
+    "lib": ["ESNext", "DOM"],
+    "declaration": true,
+    "declarationMap": false,
+    "exactOptionalPropertyTypes": false,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": false, // this makes defining workers a bit of a PITA
+    "noImplicitReturns": true,
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": false,
+    "noUnusedLocals": false, // ESLint handles this
+    "noUnusedParameters": false,
+    "useUnknownInCatchVariables": true,
+    "strict": true,
+    "jsx": "react-jsx",
+    "rootDirs": ["."],
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": true,
+    "moduleDetection": "auto",
+    "moduleResolution": "bundler",
+    "skipDefaultLibCheck": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  }
+}
