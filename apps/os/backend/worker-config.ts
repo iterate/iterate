@@ -60,7 +60,7 @@ export const RegionConfig = z.object({
   /** https://docs.archil.com/reference/regions#aws-regions */
   archilRegion: z.enum([
     "aws-us-east-1", // N. Virginia
-    "aws-eu-west-2", // Oregon
+    "aws-us-west-2", // Oregon
     "aws-eu-west-1", // Dublin
     // todo: check for London soon!
     "gcp-us-central1", // Iowa
