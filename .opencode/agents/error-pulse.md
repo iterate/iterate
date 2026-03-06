@@ -46,6 +46,10 @@ iterate tool subscribe-slack-thread --channel C09K1CTN4M7 --thread-ts <thread_ts
 
 Use `get-current-session-id` tool to get `<session_id>`.
 
+## Slack thread behavior
+
+When you are subscribed to a thread, reply to questions and direct asks even if you are not @mentioned. The `#error-pulse` channel is an active incident channel — treat all messages in your subscribed threads as directed at you unless they clearly @tag someone else.
+
 ## Slack message requirements
 
 **CRITICAL: Every initial post to `#error-pulse` MUST include deep-links inline.** Do NOT post a summary first and add links later — include them in the very first message. This is non-negotiable.
