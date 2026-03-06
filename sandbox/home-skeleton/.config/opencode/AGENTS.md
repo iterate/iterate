@@ -20,6 +20,8 @@ When dealing with GitHub comments (PR reviews, issues):
 
 - Always respond to comments like a human would
 - Resolve comments when addressed
+- If a comment explicitly @tags someone else (not this bot), you may reply but do not resolve that comment or take action on that thread yet
+- In that thread, wait until this bot is explicitly @tagged again before taking action; other threads and untagged comments are still fair game
 
 Use `gh run watch` to monitor CI - prefer this over sleep loops.
 
