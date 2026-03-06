@@ -18,11 +18,7 @@ import { logger } from "../tag-logger.ts";
  */
 
 type AnalyticsEngineBinding = {
-  writeDataPoint(event: {
-    indexes?: string[];
-    blobs?: string[];
-    doubles?: number[];
-  }): void;
+  writeDataPoint(event: { indexes?: string[]; blobs?: string[]; doubles?: number[] }): void;
 };
 
 /** Extract the first SQL keyword + table for grouping (e.g. "SELECT FROM user"). */
@@ -49,9 +45,7 @@ function getRequestPath(): string {
  * add latency to the query path.
  */
 export function instrumentClient(client: Client, source: "hyperdrive" | "pool"): Client {
-  const ae = (env as Record<string, unknown>).DB_QUERY_TIMING as
-    | AnalyticsEngineBinding
-    | undefined;
+  const ae = (env as Record<string, unknown>).DB_QUERY_TIMING as AnalyticsEngineBinding | undefined;
 
   if (!ae) return client;
 
