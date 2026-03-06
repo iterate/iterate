@@ -22,7 +22,7 @@ import {
   getDockerEnvVars,
 } from "../../sandbox/providers/docker/utils.ts";
 import { normalizeProjectIngressCanonicalHost } from "./backend/utils/project-ingress-url.ts";
-import { jsonEnvVar, RegionConfig, workerCrons } from "./backend/worker-config.ts";
+import { ArchilApiKeys, jsonEnvVar, RegionConfig, workerCrons } from "./backend/worker-config.ts";
 import {
   GLOBAL_SECRETS_CONFIG,
   type GlobalSecretEnvVarName,
@@ -416,7 +416,7 @@ const Env = z.object({
   // Archil — persistent POSIX volumes backed by R2
   // Bucket name and endpoint are derived in alchemy.run.ts and passed as computed bindings.
   // Only the API key and R2 credentials need to live in Doppler.
-  ARCHIL_API_KEY_EU_WEST: Required,
+  ARCHIL_API_KEYS: jsonEnvVar.wrap(ArchilApiKeys),
   ARCHIL_R2_ACCESS_KEY_ID: Required,
   ARCHIL_R2_SECRET_ACCESS_KEY: Required,
   POSTHOG_PUBLIC_KEY: Optional,

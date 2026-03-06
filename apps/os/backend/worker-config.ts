@@ -111,6 +111,12 @@ export const RegionConfig = z.object({
   ]),
 });
 
+/** Archil API keys are region-specific, so have a single env var mapping from region to API */
+export const ArchilApiKeys = z.record(
+  z.enum(RegionConfig.shape.archilRegion.options),
+  z.string().brand("ArchilApiKey"),
+);
+
 const wrapJsonEnvVar = <Z extends z.ZodType>(schema: Z) =>
   z
     .string()

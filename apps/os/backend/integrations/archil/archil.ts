@@ -13,16 +13,22 @@ import type { CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
-import { jsonEnvVar, RegionConfig } from "../../worker-config.ts";
+import { ArchilApiKeys, jsonEnvVar, RegionConfig } from "../../worker-config.ts";
 
-function getArchilRegion(env: CloudflareEnv): string {
+function getArchilRegion(env: CloudflareEnv) {
   const config = jsonEnvVar.parse(RegionConfig, env.REGION_CONFIG);
   return config.archilRegion;
 }
 
 function createArchilClient(env: CloudflareEnv): Archil {
-  // todo: switch to an env var like ARCHIL_API_KEYS (object mapping region to API key) maybe
-  return new Archil({ apiKey: env.ARCHIL_API_KEY_EU_WEST, region: getArchilRegion(env) });
+  const region = getArchilRegion(env);
+  const apiKeys = jsonEnvVar.parse(ArchilApiKeys, env.ARCHIL_API_KEYS);
+  const apiKey = apiKeys[region];
+  if (!apiKey) {
+    const message = `No Archil API key found for region ${region}. Available regions: ${Object.keys(apiKeys).join(", ")}`;
+    throw new Error(message);
+  }
+  return new Archil({ apiKey, region });
 }
 
 /**

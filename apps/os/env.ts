@@ -1,7 +1,7 @@
 import type { worker } from "./alchemy.run.ts";
 import { wrapWaitUntilWithEvlog } from "./backend/evlog.ts";
 import { logger } from "./backend/tag-logger.ts";
-import type { RegionConfig, jsonEnvVar } from "./backend/worker-config.ts";
+import type { RegionConfig, jsonEnvVar, ArchilApiKeys } from "./backend/worker-config.ts";
 
 // Conditionally import cloudflare:workers - it's not available in test environment
 let _env: any;
@@ -23,6 +23,7 @@ export type CloudflareEnv = Omit<typeof worker.Env, "REGION_CONFIG"> & {
   // todo: avoid needing this cast. might require a change in cloudflare types. Right now they throw out any "branding"-type props.
   // use the & to make sure we get a type error here if/when someone removes/renames the REGION_CONFIG prop.
   REGION_CONFIG: typeof worker.Env.REGION_CONFIG & jsonEnvVar.Wrapped<typeof RegionConfig>;
+  ARCHIL_API_KEYS: typeof worker.Env.ARCHIL_API_KEYS & jsonEnvVar.Wrapped<typeof ArchilApiKeys>;
 };
 export const env = _env as CloudflareEnv;
 
