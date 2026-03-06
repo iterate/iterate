@@ -738,9 +738,9 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   // Archil's FUSE client talks to R2 via S3 protocol using the API token credentials from Doppler.
   // todo: generate a bucket dynamically for each project
   const archilBucket = await R2Bucket("archil-data", {
-    // name: archilBucketName,
     locationHint: regionConfig.r2BucketHint,
     dev: { remote: true }, // always create real bucket, even in dev (Archil needs actual R2)
+    adopt: isDevelopment, // because we use dev: {remote: true}, all the dev-nobody CI runs will need to adopt this bucket
   });
 
   // Derive R2 endpoint so it doesn't need to be in Doppler per-stack.
