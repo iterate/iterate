@@ -4,6 +4,7 @@ import { and, desc, eq, lt } from "drizzle-orm";
 import { z } from "zod/v4";
 import {
   buildDefaultGitHubPrAgentPath,
+  buildDefaultGitHubSecurityAgentPath,
   normalizeAgentPath,
   toPathSegment,
 } from "@iterate-com/shared/github-agent-path";
@@ -127,6 +128,73 @@ const WorkflowRunEvent = z.object({
   }),
 });
 
+const SecretScanningAlertEvent = z.object({
+  action: z.string(),
+  alert: z.object({
+    number: z.number(),
+    secret_type: z.string().optional(),
+    secret_type_display_name: z.string().optional(),
+    state: z.string().optional(),
+    resolution: z.string().nullable().optional(),
+    html_url: z.string().optional(),
+    created_at: z.string().optional(),
+    push_protection_bypassed: z.boolean().nullable().optional(),
+  }),
+  repository: RepositoryPayload,
+  sender: z.object({ login: z.string() }).optional(),
+});
+
+const SecretScanningAlertLocationEvent = z.object({
+  action: z.string(),
+  alert: z.object({
+    number: z.number(),
+    secret_type: z.string().optional(),
+    secret_type_display_name: z.string().optional(),
+    html_url: z.string().optional(),
+  }),
+  location: z.object({
+    type: z.string().optional(),
+    details: z
+      .object({
+        path: z.string().optional(),
+        start_line: z.number().optional(),
+        end_line: z.number().optional(),
+        start_column: z.number().optional(),
+        end_column: z.number().optional(),
+        blob_sha: z.string().optional(),
+        commit_sha: z.string().optional(),
+      })
+      .optional(),
+  }),
+  repository: RepositoryPayload,
+  sender: z.object({ login: z.string() }).optional(),
+});
+
+const SecurityAdvisoryEvent = z.object({
+  action: z.string(),
+  security_advisory: z.object({
+    ghsa_id: z.string(),
+    summary: z.string().optional(),
+    description: z.string().optional(),
+    severity: z.string().optional(),
+    cve_id: z.string().nullable().optional(),
+    html_url: z.string().optional(),
+    vulnerabilities: z
+      .array(
+        z.object({
+          package: z.object({ ecosystem: z.string().optional(), name: z.string().optional() }).optional(),
+          severity: z.string().optional(),
+          vulnerable_version_range: z.string().optional(),
+          first_patched_version: z.object({ identifier: z.string().optional() }).nullable().optional(),
+        }),
+      )
+      .optional()
+      .default([]),
+  }),
+  repository: RepositoryPayload.optional(),
+  sender: z.object({ login: z.string() }).optional(),
+});
+
 type RepoCoords = { owner: string; name: string; fullName: string };
 
 type ResolvedPrSignal = {
@@ -140,6 +208,18 @@ type ResolvedPrSignal = {
   bucketKey: string;
   immediate: boolean;
   markerBody: string | null;
+};
+
+type ResolvedSecuritySignal = {
+  repo: RepoCoords;
+  alertNumber: number;
+  alertType: "secret_scanning" | "secret_scanning_location" | "security_advisory";
+  eventKind: string;
+  action: string;
+  actorLogin: string;
+  eventBody: string;
+  eventUrl: string;
+  agentPath: string;
 };
 
 type PrMapping = { agentPath: string };
@@ -198,8 +278,11 @@ githubRouter.post("/webhook", async (c) => {
 
     await pruneExpiredState();
 
-    const signals = collectSignals(input);
-    if (signals.length === 0) {
+    // Try PR signals first, then security signals
+    const prSignals = collectSignals(input);
+    const securitySignals = collectSecuritySignals(input);
+
+    if (prSignals.length === 0 && securitySignals.length === 0) {
       logger.debug("[daemon/github] Ignored webhook: no routable signals", {
         eventType: input.eventType,
         deliveryId: input.deliveryId,
@@ -207,7 +290,8 @@ githubRouter.post("/webhook", async (c) => {
       return c.json({ success: true, handled: false, reason: "ignored" });
     }
 
-    for (const signal of signals) {
+    // Process PR signals (existing logic)
+    for (const signal of prSignals) {
       const existingMapping = await getExistingPrMapping(signal.repo, signal.prNumber);
       const authSource = getAuthorizationSource(signal, Boolean(existingMapping));
       if (!authSource) {
@@ -289,7 +373,47 @@ githubRouter.post("/webhook", async (c) => {
       });
     }
 
-    return c.json({ success: true, handled: true, count: signals.length });
+    // Process security signals — no PR mapping / auth checks needed;
+    // these are trusted events from GitHub about repo security state.
+    for (const signal of securitySignals) {
+      const eventHash = hashSecuritySignal(signal, input.deliveryId);
+      const { duplicate } = await upsertWebhookState({
+        agentPath: signal.agentPath,
+        eventHash,
+      });
+
+      if (duplicate) {
+        logger.debug("[daemon/github] Duplicate security signal skipped", {
+          deliveryId: input.deliveryId,
+          eventKind: signal.eventKind,
+          alertNumber: signal.alertNumber,
+          agentPath: signal.agentPath,
+        });
+        continue;
+      }
+
+      logger.info("[daemon/github] Routed security signal", {
+        deliveryId: input.deliveryId,
+        eventKind: signal.eventKind,
+        action: signal.action,
+        alertNumber: signal.alertNumber,
+        repo: signal.repo.fullName,
+        agentPath: signal.agentPath,
+      });
+
+      const prompt = buildSecurityPrompt(signal);
+      await postPromptToAgent(signal.agentPath, prompt);
+
+      logger.info("[daemon/github] Forwarded security signal to agent", {
+        deliveryId: input.deliveryId,
+        eventKind: signal.eventKind,
+        alertNumber: signal.alertNumber,
+        agentPath: signal.agentPath,
+      });
+    }
+
+    const totalCount = prSignals.length + securitySignals.length;
+    return c.json({ success: true, handled: true, count: totalCount });
   } catch (error) {
     logger.error("[daemon/github] Failed to handle webhook", error);
     return c.json({ error: "Internal server error" }, 500);
@@ -438,6 +562,127 @@ const signalCollectors: Record<string, (input: ForwardedWebhookInput) => Resolve
 
 function collectSignals(input: ForwardedWebhookInput): ResolvedPrSignal[] {
   const collect = signalCollectors[input.eventType];
+  return collect ? collect(input) : [];
+}
+
+// ── Security signal collectors ──────────────────────────────────────
+
+const securitySignalCollectors: Record<
+  string,
+  (input: ForwardedWebhookInput) => ResolvedSecuritySignal[]
+> = {
+  secret_scanning_alert: (input) => {
+    const parsed = SecretScanningAlertEvent.safeParse(input.payload);
+    if (!parsed.success) return [];
+    // Handle created, reopened — ignore resolved/revoked (those are resolutions)
+    if (parsed.data.action !== "created" && parsed.data.action !== "reopened") return [];
+    const repo = resolveRepoCoordinates(parsed.data.repository);
+    if (!repo) return [];
+    const alert = parsed.data.alert;
+    const body = [
+      `Secret type: ${alert.secret_type_display_name ?? alert.secret_type ?? "unknown"}`,
+      `State: ${alert.state ?? "unknown"}`,
+      alert.push_protection_bypassed ? "Push protection was BYPASSED" : null,
+      alert.resolution ? `Resolution: ${alert.resolution}` : null,
+      alert.created_at ? `Created: ${alert.created_at}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    return [
+      {
+        repo,
+        alertNumber: alert.number,
+        alertType: "secret_scanning",
+        eventKind: "secret_scanning_alert",
+        action: parsed.data.action,
+        actorLogin: parsed.data.sender?.login ?? "github",
+        eventBody: body,
+        eventUrl: alert.html_url ?? "",
+        agentPath: buildDefaultGitHubSecurityAgentPath(repo, "secret-scanning", alert.number),
+      },
+    ];
+  },
+
+  secret_scanning_alert_location: (input) => {
+    const parsed = SecretScanningAlertLocationEvent.safeParse(input.payload);
+    if (!parsed.success) return [];
+    const repo = resolveRepoCoordinates(parsed.data.repository);
+    if (!repo) return [];
+    const alert = parsed.data.alert;
+    const loc = parsed.data.location;
+    const details = loc.details;
+    const body = [
+      `Secret type: ${alert.secret_type_display_name ?? alert.secret_type ?? "unknown"}`,
+      `Location type: ${loc.type ?? "unknown"}`,
+      details?.path ? `File: ${details.path}` : null,
+      details?.start_line ? `Lines: ${details.start_line}-${details.end_line ?? details.start_line}` : null,
+      details?.commit_sha ? `Commit: ${details.commit_sha}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    // Route to the same agent as the parent alert
+    return [
+      {
+        repo,
+        alertNumber: alert.number,
+        alertType: "secret_scanning_location",
+        eventKind: "secret_scanning_alert_location",
+        action: parsed.data.action,
+        actorLogin: parsed.data.sender?.login ?? "github",
+        eventBody: body,
+        eventUrl: alert.html_url ?? "",
+        agentPath: buildDefaultGitHubSecurityAgentPath(repo, "secret-scanning", alert.number),
+      },
+    ];
+  },
+
+  security_advisory: (input) => {
+    const parsed = SecurityAdvisoryEvent.safeParse(input.payload);
+    if (!parsed.success) return [];
+    if (parsed.data.action !== "published" && parsed.data.action !== "updated") return [];
+    const repo = parsed.data.repository ? resolveRepoCoordinates(parsed.data.repository) : null;
+    if (!repo) return [];
+    const advisory = parsed.data.security_advisory;
+    const vulnLines = advisory.vulnerabilities.map((v) => {
+      const pkg = v.package;
+      const patched = v.first_patched_version?.identifier;
+      return `- ${pkg?.ecosystem ?? "?"}/${pkg?.name ?? "?"} ${v.vulnerable_version_range ?? ""} (severity: ${v.severity ?? "unknown"})${patched ? ` → fix: ${patched}` : ""}`;
+    });
+    const body = [
+      `GHSA: ${advisory.ghsa_id}`,
+      advisory.cve_id ? `CVE: ${advisory.cve_id}` : null,
+      `Severity: ${advisory.severity ?? "unknown"}`,
+      advisory.summary ? `Summary: ${advisory.summary}` : null,
+      vulnLines.length > 0 ? `\nAffected packages:\n${vulnLines.join("\n")}` : null,
+      advisory.description ? `\nDescription: ${compactText(advisory.description, 500)}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    // Use GHSA ID numeric suffix as the alert number for dedup/path
+    const ghsaNum = advisory.ghsa_id.replace(/\D/g, "").slice(-6);
+    const alertNumber = Number.parseInt(ghsaNum, 10) || Date.now() % 1_000_000;
+
+    return [
+      {
+        repo,
+        alertNumber,
+        alertType: "security_advisory",
+        eventKind: "security_advisory",
+        action: parsed.data.action,
+        actorLogin: parsed.data.sender?.login ?? "github",
+        eventBody: body,
+        eventUrl: advisory.html_url ?? "",
+        agentPath: buildDefaultGitHubSecurityAgentPath(repo, "advisory", alertNumber),
+      },
+    ];
+  },
+};
+
+function collectSecuritySignals(input: ForwardedWebhookInput): ResolvedSecuritySignal[] {
+  const collect = securitySignalCollectors[input.eventType];
   return collect ? collect(input) : [];
 }
 
@@ -646,6 +891,20 @@ function hashSignal(signal: ResolvedPrSignal, deliveryId: string): string {
     .digest("hex");
 }
 
+function hashSecuritySignal(signal: ResolvedSecuritySignal, deliveryId: string): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        deliveryId,
+        alertNumber: signal.alertNumber,
+        alertType: signal.alertType,
+        eventKind: signal.eventKind,
+        action: signal.action,
+      }),
+    )
+    .digest("hex");
+}
+
 async function upsertWebhookState(params: {
   agentPath: string;
   eventHash: string;
@@ -683,6 +942,47 @@ async function buildPrompt(params: { signal: ResolvedPrSignal }): Promise<string
   return body ? `${summary}\n\n${body}` : summary;
 }
 
+function buildSecurityPrompt(signal: ResolvedSecuritySignal): string {
+  const lines = [
+    "[GitHub Security Alert]",
+    `Repo: ${signal.repo.fullName}`,
+    `Alert type: ${signal.eventKind}`,
+    `Action: ${signal.action}`,
+    `Alert #${signal.alertNumber}`,
+    signal.eventUrl ? `URL: ${signal.eventUrl}` : null,
+    "",
+    signal.eventBody,
+    "",
+    "## Instructions",
+    "",
+    "You are a security triage agent. Follow these steps:",
+    "",
+    "### 1. Triage",
+    "- Investigate the alert. Check if it is a false positive.",
+    "- Determine if the secret/vulnerability is only used in development/test or if it is in production.",
+    "- Check git history to see if the secret was already rotated or the dependency already updated.",
+    "",
+    "### 2. Remediate (if possible)",
+    "- For secret scanning alerts: check if the secret is hardcoded. If so, remove it and open a PR.",
+    "- For dependency vulnerabilities: check if there is a patched version. If so, bump the dependency and open a PR.",
+    "- For any fix, create a branch and PR with a clear description of what was found and what was fixed.",
+    "",
+    "### 3. Notify the team",
+    "- If this is a real alert (not a false positive), start a new thread in the #security-alerts Slack channel (C09K1CTN4M7).",
+    "- Use `@channel` if the alert is urgent (e.g., production secret leaked, critical severity CVE).",
+    "- Use `@here` if the alert is not time-sensitive (e.g., low/medium severity, development-only).",
+    "- Subscribe to the thread using `iterate tool subscribe-slack-thread` so you can answer follow-up questions.",
+    "- Include: what the alert is, your triage assessment, what actions you took, and any remaining items for humans.",
+    "",
+    "### 4. If unsure",
+    "- If you cannot determine whether the alert is real or a false positive, post in #security-alerts asking for human input.",
+    "- Provide all relevant context so the team can make a decision quickly.",
+  ]
+    .filter((l) => l !== null)
+    .join("\n");
+  return lines;
+}
+
 function compactText(value: string | null | undefined, maxLength: number): string {
   if (!value) return "";
   const normalized = value.replace(/\s+/g, " ").trim();
@@ -699,9 +999,68 @@ async function postPromptToAgent(agentPath: string, prompt: string): Promise<voi
     signal: AbortSignal.timeout(15_000),
   });
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "<no body>");
-    throw new Error(`Agent forward failed (${response.status}): ${body.slice(0, 500)}`);
+  if (response.ok) return;
+
+  // If the agent's upstream session is dead/unreachable (502/503/504 or session-not-found 404/500),
+  // archive the stale agent + route so the next attempt creates a fresh session.
+  const isDeadSession = response.status >= 500 || response.status === 404;
+  if (isDeadSession) {
+    logger.warn(
+      `[daemon/github] Agent forward failed (${response.status}) for ${agentPath}; clearing stale route for retry`,
+    );
+    await clearStaleAgentRoute(agentPath);
+
+    // Retry once — getOrCreateAgent will create a fresh session
+    const retryResponse = await fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        events: [{ type: "iterate:agent:prompt-added", message: prompt }],
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (retryResponse.ok) {
+      logger.info(
+        `[daemon/github] Retry succeeded for ${agentPath} after clearing stale route`,
+      );
+      return;
+    }
+
+    const retryBody = await retryResponse.text().catch(() => "<no body>");
+    throw new Error(
+      `Agent forward retry failed (${retryResponse.status}) for ${agentPath}: ${retryBody.slice(0, 500)}`,
+    );
+  }
+
+  const body = await response.text().catch(() => "<no body>");
+  throw new Error(`Agent forward failed (${response.status}): ${body.slice(0, 500)}`);
+}
+
+/**
+ * Clear a stale agent route so the next getOrCreateAgent call creates a fresh session.
+ * Archives the agent and deactivates its route.
+ */
+async function clearStaleAgentRoute(agentPath: string): Promise<void> {
+  try {
+    // Deactivate the route so getOrCreateAgent creates a new one
+    db.update(schema.agentRoutes)
+      .set({ active: false, updatedAt: new Date() })
+      .where(and(eq(schema.agentRoutes.agentPath, agentPath), eq(schema.agentRoutes.active, true)))
+      .run();
+
+    // Archive the agent so it gets re-created
+    db.update(schema.agents)
+      .set({ archivedAt: new Date(), updatedAt: new Date() })
+      .where(eq(schema.agents.path, agentPath))
+      .run();
+
+    logger.info(`[daemon/github] Cleared stale agent route for ${agentPath}`);
+  } catch (err) {
+    logger.error("[daemon/github] Failed to clear stale agent route", {
+      agentPath,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
