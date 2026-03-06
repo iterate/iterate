@@ -25,20 +25,31 @@ Archil disk is in `aws-eu-west-1` (Ireland), backed by Cloudflare R2 (Western Eu
 
 ### MacBook (Docker via OrbStack) — `--privileged`
 
-| Workload | Files  | Local disk | Archil | Slowdown |
-| -------- | ------ | ---------- | ------ | -------- |
-| Small    | 2,232  | 1.5s       | 6.0s   | **3x**   |
-| Medium   | 32,173 | 20.7s      | —      | —        |
+| Workload | Files  | Local disk | Archil          | Slowdown |
+| -------- | ------ | ---------- | --------------- | -------- |
+| Small    | 2,232  | 1.5s       | 6.0s            | **3x**   |
+| Medium   | 32,173 | 20.7s      | 5,382s (90 min) | **260x** |
 
-Medium+Archil from MacBook skipped (expected to take hours over the internet). Requires OrbStack (or a Linux VM with FUSE support) and `--privileged` for `/dev/fuse` access.
+Requires OrbStack (or a Linux VM with FUSE support) and `--privileged` for `/dev/fuse` access. The MacBook medium result (90 min vs Fly's 25 min) is inflated by home internet latency to Archil's eu-west-1 cluster — the Fly `lhr` numbers are the production-representative ones.
 
-Slowdown scales super-linearly with file count. At 2K files, Archil adds a manageable 5s. At 32K files, it's 56x slower. Our production monorepo has ~180K files in `node_modules` — extrapolating, that would likely take hours.
+Slowdown scales super-linearly with file count. At 2K files, Archil adds a manageable 5s. At 32K files, it's 56x slower (Fly). Our production monorepo has ~180K files in `node_modules` — extrapolating, that would likely take hours.
 
 ## What's slow
 
 The bottleneck is the "added" phase of `pnpm install`. pnpm hardlinks thousands of small files from its content-addressable store into `node_modules`. Each file creation is a FUSE operation that round-trips to Archil's storage cluster. Package downloads are fast — pnpm fetched 829/885 tarballs in seconds — but writing 32K files one-by-one through FUSE took 25 minutes.
 
 Even `find node_modules -type f | wc -l` took ~5 minutes on the Archil mount after install.
+
+### Back-of-envelope vs Archil's claims
+
+Archil [documents](https://docs.archil.com/details/performance) "sub-millisecond" latency for cached read/write operations, with uncached reads at 10-30ms (S3/R2 round-trip). At 0.5ms per FUSE op:
+
+- **Small (2K files):** ~6K ops × 0.5ms = ~3s overhead. We measured ~5s overhead. Roughly matches.
+- **Medium (32K files):** ~96K ops × 0.5ms = ~48s overhead. We measured ~1,500s. **31x higher** than the naive estimate.
+
+The gap is explained by what "cached" means here. Archil's sub-millisecond latency applies to operations on data already warm in its SSD cache layer — reads of existing files, writes to known paths. Our benchmark is the worst case: `pnpm install` creating 32K brand-new files in a fresh directory. Every `mkdir`, `link`, and `create` is a new inode Archil has never seen, hitting the uncached write path. At 10-15ms per op (R2 round-trip), 96K ops × ~15ms ≈ 1,440s — close to what we measured.
+
+This penalty applies to any operation that creates new files on the mount — not just a fresh install. Adding a new dependency with many files (e.g. `pnpm install typescript`) would hit the same uncached write path for every new file it links into `node_modules`.
 
 ## Reproducing
 

@@ -1,6 +1,6 @@
 # Archil node_modules benchmark
 
-Generated: 2026-03-05T22:44:57Z
+Generated: 2026-03-06T00:41:34Z
 
 ## Fly.io `lhr` (London) — 4 shared vCPUs, 4 GB RAM
 
@@ -11,14 +11,25 @@ Generated: 2026-03-05T22:44:57Z
 
 ## MacBook (Docker)
 
-| Workload | Files  | Local disk | Archil | Slowdown |
-| -------- | ------ | ---------- | ------ | -------- |
-| Small    | 2,232  | 1.497s     | 5.950s | **3x**   |
-| Medium   | 32,173 | 20.687s    | —      | —        |
+| Workload | Files  | Local disk | Archil             | Slowdown |
+| -------- | ------ | ---------- | ------------------ | -------- |
+| Small    | 2,232  | 1.497s     | 5.950s             | **3x**   |
+| Medium   | 32,173 | 20.687s    | 5381.539s (89m41s) | **260x** |
 
 ---
 
 ## Raw logs
+
+### docker-archil-disk-medium-workload
+
+```
+[bench:archil:medium] Started at 2026-03-05T22:55:19Z
+[bench:archil:medium] Mounted dsk-0000000000005d30 at /mnt/archil
+[bench:archil:medium] Running: pnpm install @arethetypeswrong/cli@0.17.3 @types/node@22 @typescript/native-preview@7.0.0-dev.20250527.1 @vitest/ui@3 eslint@8.57 eslint-plugin-mmkal@0.9.0 np@10 pkg-pr-new@0.0.39 strip-ansi@7.1.0 ts-morph@23.0.0 typescript@5.9.2 vitest@3 (node_modules + store on Archil)
+[bench:archil:medium] RESULT pnpm_install=5381.539s
+[bench:archil:medium] RESULT nm_files=32173
+[bench:archil:medium] Completed at 2026-03-06T00:40:44Z
+```
 
 ### docker-archil-disk-small-workload
 
