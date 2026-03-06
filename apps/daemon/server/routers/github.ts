@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { and, desc, eq, lt } from "drizzle-orm";
 import { z } from "zod/v4";
+import { nanoid } from "nanoid";
+import { createRouterClient } from "@orpc/server";
 import {
   buildDefaultGitHubPrAgentPath,
   normalizeAgentPath,
@@ -9,12 +11,14 @@ import {
 } from "@iterate-com/shared/github-agent-path";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
+import { daemonRouter } from "../orpc/router.ts";
 
 const logger = console;
 
 const DAEMON_PORT = process.env.PORT || "3001";
 const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 const AGENT_ROUTER_BASE_URL = `${DAEMON_BASE_URL}/api/agents`;
+const GITHUB_AGENT_CHANGE_CALLBACK_URL = `${DAEMON_BASE_URL}/api/integrations/github/agent-change-callback`;
 
 const DEBOUNCE_MS = 30_000;
 const PR_MAPPING_TTL_MS = 60 * 24 * 60 * 60 * 1000;
@@ -76,6 +80,7 @@ const IssueCommentEvent = z.object({
     pull_request: z.unknown().optional(),
   }),
   comment: z.object({
+    id: z.number(),
     body: z.string(),
     html_url: z.string().optional(),
     user: z.object({ login: z.string() }),
@@ -91,6 +96,7 @@ const PullRequestReviewEvent = z.object({
     draft: z.boolean().optional(),
   }),
   review: z.object({
+    id: z.number(),
     body: z.string().nullable().optional(),
     html_url: z.string().optional(),
     user: z.object({ login: z.string() }),
@@ -106,6 +112,7 @@ const PullRequestReviewCommentEvent = z.object({
     draft: z.boolean().optional(),
   }),
   comment: z.object({
+    id: z.number(),
     body: z.string(),
     html_url: z.string().optional(),
     user: z.object({ login: z.string() }),
@@ -129,6 +136,12 @@ const WorkflowRunEvent = z.object({
 
 type RepoCoords = { owner: string; name: string; fullName: string };
 
+type CommentRef = {
+  commentId: number;
+  /** Which GitHub API to use for reactions. */
+  commentType: "issue_comment" | "pull_review_comment";
+};
+
 type ResolvedPrSignal = {
   repo: RepoCoords;
   prNumber: number;
@@ -140,6 +153,8 @@ type ResolvedPrSignal = {
   bucketKey: string;
   immediate: boolean;
   markerBody: string | null;
+  /** Present when the signal originates from a comment we can react to. */
+  commentRef: CommentRef | null;
 };
 
 type PrMapping = { agentPath: string };
@@ -257,13 +272,40 @@ githubRouter.post("/webhook", async (c) => {
       });
 
       if (signal.immediate) {
+        // Add deterministic eyes reaction and subscribe to agent-change
+        // callbacks *before* posting the prompt, matching the Slack router
+        // pattern. This ensures cleanup is wired up even if postPromptToAgent
+        // throws (avoiding orphaned reactions).
+        if (signal.commentRef) {
+          ensureGitHubReactionContext({
+            agentPath,
+            repo: signal.repo,
+            commentRef: signal.commentRef,
+          });
+
+          const caller = createRouterClient(daemonRouter, { context: {} });
+          void caller
+            .subscribeToAgentChanges({
+              agentPath,
+              callbackUrl: GITHUB_AGENT_CHANGE_CALLBACK_URL,
+            })
+            .catch((error) => {
+              logger.error("[daemon/github] Failed to subscribe to agent changes", {
+                agentPath,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+        }
+
         const prompt = await buildPrompt({ signal });
         await postPromptToAgent(agentPath, prompt);
+
         logger.debug("[daemon/github] Forwarded immediate signal to agent", {
           deliveryId: input.deliveryId,
           eventKind: signal.eventKind,
           prNumber: signal.prNumber,
           agentPath,
+          hasReaction: Boolean(signal.commentRef),
         });
         continue;
       }
@@ -324,6 +366,7 @@ function buildImmediateSignal(params: {
   eventBody: string;
   eventUrl: string;
   markerBody: string | null;
+  commentRef: CommentRef | null;
 }): ResolvedPrSignal {
   return {
     repo: params.repo,
@@ -336,6 +379,7 @@ function buildImmediateSignal(params: {
     bucketKey: `pr-${params.prNumber}`,
     immediate: true,
     markerBody: params.markerBody,
+    commentRef: params.commentRef,
   };
 }
 
@@ -356,6 +400,7 @@ const signalCollectors: Record<string, (input: ForwardedWebhookInput) => Resolve
         eventBody: parsed.data.comment.body,
         eventUrl: parsed.data.comment.html_url ?? parsed.data.issue.html_url ?? "",
         markerBody: parsed.data.issue.body ?? null,
+        commentRef: { commentId: parsed.data.comment.id, commentType: "issue_comment" },
       }),
     ];
   },
@@ -374,6 +419,7 @@ const signalCollectors: Record<string, (input: ForwardedWebhookInput) => Resolve
         eventBody: parsed.data.comment.body,
         eventUrl: parsed.data.comment.html_url ?? parsed.data.pull_request.html_url ?? "",
         markerBody: parsed.data.pull_request.body ?? null,
+        commentRef: { commentId: parsed.data.comment.id, commentType: "pull_review_comment" },
       }),
     ];
   },
@@ -392,6 +438,7 @@ const signalCollectors: Record<string, (input: ForwardedWebhookInput) => Resolve
         eventBody: parsed.data.review.body?.trim() ?? "",
         eventUrl: parsed.data.review.html_url ?? parsed.data.pull_request.html_url ?? "",
         markerBody: parsed.data.pull_request.body ?? null,
+        commentRef: null,
       }),
     ];
   },
@@ -411,6 +458,7 @@ const signalCollectors: Record<string, (input: ForwardedWebhookInput) => Resolve
         eventBody: "PR merged",
         eventUrl: parsed.data.pull_request.html_url ?? "",
         markerBody: parsed.data.pull_request.body ?? null,
+        commentRef: null,
       }),
     ];
   },
@@ -432,6 +480,7 @@ const signalCollectors: Record<string, (input: ForwardedWebhookInput) => Resolve
       bucketKey: `pr-${pr.number}`,
       immediate: false,
       markerBody: null,
+      commentRef: null,
     }));
   },
 };
@@ -792,6 +841,226 @@ async function flushBufferedRows(
 
   return flushedRows;
 }
+
+// ──────────────────────── GitHub reaction lifecycle ─────────────────────────
+//
+// Mirrors the Slack :eyes: pattern. When an immediate signal (comment-based)
+// is routed to an agent, we add an "eyes" reaction to the originating GitHub
+// comment. When the agent goes idle we remove it.
+//
+// The GitHub token comes from the GITHUB_TOKEN env var which is a magic string
+// resolved by the egress proxy on outbound requests.
+
+type GitHubReactionContext = {
+  repo: RepoCoords;
+  commentRef: CommentRef;
+  /** Reaction ID returned by the create-reaction API, needed for deletion. */
+  reactionId: number | null;
+  createdAtMs: number;
+  cycleId: string;
+  closing: boolean;
+  /** Tracks the in-flight create call so remove waits and avoids races. */
+  addReactionPromise: Promise<void>;
+};
+
+const githubReactionContextByAgentPath = new Map<string, GitHubReactionContext>();
+
+const AgentUpdatedEvent = z.object({
+  type: z.literal("iterate:agent-updated"),
+  payload: z
+    .object({
+      path: z.string(),
+      shortStatus: z.string(),
+      isWorking: z.boolean(),
+      updatedAt: z.string().optional(),
+    })
+    .passthrough(),
+});
+
+function getGitHubToken(): string | null {
+  return process.env.GITHUB_TOKEN || process.env.GH_TOKEN || null;
+}
+
+function buildReactionEndpoint(repo: RepoCoords, ref: CommentRef): string {
+  const base = `https://api.github.com/repos/${repo.owner}/${repo.name}`;
+  if (ref.commentType === "issue_comment") {
+    return `${base}/issues/comments/${ref.commentId}/reactions`;
+  }
+  return `${base}/pulls/comments/${ref.commentId}/reactions`;
+}
+
+async function createGitHubReaction(
+  repo: RepoCoords,
+  ref: CommentRef,
+  content: string,
+): Promise<number | null> {
+  const token = getGitHubToken();
+  if (!token) {
+    logger.warn("[daemon/github] No GITHUB_TOKEN; skipping reaction");
+    return null;
+  }
+
+  const url = buildReactionEndpoint(repo, ref);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body: JSON.stringify({ content }),
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "<no body>");
+      logger.error("[daemon/github] createReaction failed", {
+        status: response.status,
+        body: body.slice(0, 300),
+        url,
+      });
+      return null;
+    }
+
+    const data = (await response.json()) as { id?: number };
+    logger.log("[daemon/github] createReaction ok", {
+      reactionId: data.id,
+      commentId: ref.commentId,
+      commentType: ref.commentType,
+    });
+    return data.id ?? null;
+  } catch (error) {
+    logger.error("[daemon/github] createReaction error", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+async function deleteGitHubReaction(
+  repo: RepoCoords,
+  ref: CommentRef,
+  reactionId: number,
+): Promise<void> {
+  const token = getGitHubToken();
+  if (!token) return;
+
+  const url = `${buildReactionEndpoint(repo, ref)}/${reactionId}`;
+  try {
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!response.ok && response.status !== 404) {
+      const body = await response.text().catch(() => "<no body>");
+      logger.error("[daemon/github] deleteReaction failed", {
+        status: response.status,
+        body: body.slice(0, 300),
+        url,
+      });
+      return;
+    }
+
+    logger.log("[daemon/github] deleteReaction ok", {
+      reactionId,
+      commentId: ref.commentId,
+    });
+  } catch (error) {
+    logger.error("[daemon/github] deleteReaction error", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function ensureGitHubReactionContext(params: {
+  agentPath: string;
+  repo: RepoCoords;
+  commentRef: CommentRef;
+}): void {
+  const existing = githubReactionContextByAgentPath.get(params.agentPath);
+  if (existing && !existing.closing) return;
+
+  const context: GitHubReactionContext = {
+    repo: params.repo,
+    commentRef: params.commentRef,
+    reactionId: null,
+    createdAtMs: Date.now(),
+    cycleId: `gh-${nanoid(8)}`,
+    closing: false,
+    addReactionPromise: Promise.resolve(),
+  };
+
+  githubReactionContextByAgentPath.set(params.agentPath, context);
+
+  const addPromise = (async () => {
+    const reactionId = await createGitHubReaction(params.repo, params.commentRef, "eyes");
+    context.reactionId = reactionId;
+  })();
+
+  context.addReactionPromise = addPromise;
+  void addPromise;
+}
+
+async function cleanupGitHubReactionContext(
+  agentPath: string,
+  context: GitHubReactionContext,
+): Promise<void> {
+  if (context.closing) return;
+  context.closing = true;
+
+  await context.addReactionPromise;
+
+  if (context.reactionId !== null) {
+    await deleteGitHubReaction(context.repo, context.commentRef, context.reactionId);
+  }
+
+  if (githubReactionContextByAgentPath.get(agentPath)?.cycleId === context.cycleId) {
+    githubReactionContextByAgentPath.delete(agentPath);
+  }
+}
+
+function parseUpdatedAtMs(updatedAt: string | undefined): number | null {
+  if (!updatedAt) return null;
+  const ms = Date.parse(updatedAt);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * Agent-change callback for GitHub agents. Mirrors the Slack pattern:
+ *   - isWorking=false → remove eyes reaction, clean up context
+ */
+githubRouter.post("/agent-change-callback", async (c) => {
+  const parsed = AgentUpdatedEvent.safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
+  }
+
+  const { payload } = parsed.data;
+  const context = githubReactionContextByAgentPath.get(payload.path);
+  if (!context) {
+    return c.json({ success: true, ignored: true });
+  }
+
+  const eventUpdatedAtMs = parseUpdatedAtMs(payload.updatedAt);
+  if (eventUpdatedAtMs !== null && eventUpdatedAtMs < context.createdAtMs) {
+    return c.json({ success: true, ignored: true, stale: true });
+  }
+
+  if (payload.isWorking) {
+    return c.json({ success: true });
+  }
+
+  await cleanupGitHubReactionContext(payload.path, context);
+  return c.json({ success: true });
+});
 
 async function pruneExpiredState(): Promise<void> {
   const now = Date.now();

@@ -64,6 +64,17 @@ iterate tool exec-ts 'await slack.conversations.replies({
 })'
 ```
 
+Subscribe a Slack thread to your current agent path (explicit routing):
+
+```bash
+iterate tool subscribe-slack-thread \
+  --channel "CHANNEL_ID" \
+  --thread-ts "THREAD_TS" \
+  --session-id "ses_xxxxx"
+```
+
+This pins future messages in that Slack thread to your current agent session.
+
 ## Types and Docs
 
 WebClient TypeScript source: https://github.com/slackapi/node-slack-sdk/blob/main/packages/web-api/src/WebClient.ts

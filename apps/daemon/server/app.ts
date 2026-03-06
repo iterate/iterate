@@ -20,6 +20,7 @@ import { codexRouter } from "./routers/codex.ts";
 import { webchatRouter } from "./routers/webchat.ts";
 import { filesRouter } from "./routers/files.ts";
 import { githubRouter } from "./routers/github.ts";
+import { posthogRouter } from "./routers/posthog.ts";
 
 const app = baseApp.use(
   logger(),
@@ -196,6 +197,7 @@ app.route("/api/integrations/slack", slackRouter);
 app.route("/api/integrations/email", emailRouter);
 app.route("/api/integrations/webchat", webchatRouter);
 app.route("/api/integrations/github", githubRouter);
+app.route("/api/integrations/posthog", posthogRouter);
 app.route("/api/files", filesRouter);
 
 export default app;

@@ -420,6 +420,7 @@ const Env = z.object({
   ARCHIL_R2_ACCESS_KEY_ID: Required,
   ARCHIL_R2_SECRET_ACCESS_KEY: Required,
   POSTHOG_PUBLIC_KEY: Optional,
+  POSTHOG_WEBHOOK_SECRET: Optional,
   SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
   PROJECT_INGRESS_DOMAIN: Optional, // optional here; validated after fallback from old var name
