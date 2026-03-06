@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { agentOrpcRouter } from "../routers/agents.ts";
 import { configRepoOrpcRouter } from "../routers/config-repo.ts";
+import { pullIterateIterateRouter } from "../routers/pull-iterate-iterate.ts";
 import type { SerializedAgent, SerializedAgentRoute } from "../routers/agents.ts";
 import { publicProcedure } from "./init.ts";
 import { getCustomerRepoPathOrNull } from "./platform.ts";
@@ -24,7 +25,7 @@ const baseProcedures = {
     });
 
     setTimeout(() => {
-      console.log("[restartDaemon] Exiting for s6 restart...");
+      console.log("[restartDaemon] Exiting for pidnap restart...");
       process.exit(0);
     }, 100);
 
@@ -36,6 +37,7 @@ export const daemonRouter = {
   ...baseProcedures,
   ...agentOrpcRouter,
   configRepo: configRepoOrpcRouter,
+  ...pullIterateIterateRouter,
 };
 
 export type { SerializedAgent, SerializedAgentRoute };

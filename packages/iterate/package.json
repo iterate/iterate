@@ -6,7 +6,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/iterate/iterate.git",
+    "url": "git+https://github.com/iterate/iterate",
     "directory": "packages/iterate"
   },
   "homepage": "https://github.com/iterate/iterate#readme",

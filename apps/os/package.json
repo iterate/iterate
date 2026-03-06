@@ -123,6 +123,7 @@
     "@effect/vitest": "^0.22.0",
     "@opencode-ai/plugin": "^1.1.36",
     "@playwright/test": "^1.57.0",
+    "@posthog/rollup-plugin": "^1.2.14",
     "@tailwindcss/vite": "^4.1.17",
     "@tanstack/devtools-vite": "^0.4.1",
     "@tanstack/react-devtools": "^0.9.2",
