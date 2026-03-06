@@ -27,6 +27,7 @@ import {
   GLOBAL_SECRETS_CONFIG,
   type GlobalSecretEnvVarName,
 } from "./scripts/seed-global-secrets.ts";
+import { ZodJson } from "./utils/zod.ts";
 
 const repoRoot = join(import.meta.dirname, "..", "..");
 
@@ -417,7 +418,7 @@ const Env = z.object({
   // Archil — persistent POSIX volumes backed by R2
   // Bucket name and endpoint are derived in alchemy.run.ts and passed as computed bindings.
   // Only the API key and R2 credentials need to live in Doppler.
-  ARCHIL_API_KEY: Required,
+  ARCHIL_API_KEY_EU_WEST: Required,
   ARCHIL_REGION: NonEmpty.default("aws-us-east-1"),
   ARCHIL_R2_ACCESS_KEY_ID: Required,
   ARCHIL_R2_SECRET_ACCESS_KEY: Required,
@@ -438,15 +439,109 @@ const Env = z.object({
   // This bypasses the egress proxy and exposes secrets directly in env vars.
   // Only enable this for local development or trusted environments.
   DANGEROUS_RAW_SECRETS_ENABLED: BoolyString,
+
+  REGION_CONFIG: ZodJson(
+    z.object({
+      /** https://developers.cloudflare.com/r2/reference/data-location/#available-hints */
+      r2BucketHint: z.enum([
+        "wnam", // Western North America
+        "enam", // Eastern North America
+        "weur", // Western Europe
+        "eeur", // Eastern Europe
+        "apac", // Asia Pacific
+        "oc", // Oceania
+      ]),
+      /**
+       * Cloud provider region to place your Worker closest to.
+       *
+       * Format: `{provider}:{region}`
+       *
+       * Supported providers:
+       * - AWS: `aws:us-east-1`, `aws:us-west-2`, `aws:eu-central-1`, etc.
+       * - GCP: `gcp:us-east4`, `gcp:europe-west1`, `gcp:asia-east1`, etc.
+       * - Azure: `azure:westeurope`, `azure:eastus`, `azure:southeastasia`, etc.
+       *
+       * @see https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html
+       * @see https://cloud.google.com/compute/docs/regions-zones
+       * @see https://learn.microsoft.com/en-us/azure/reliability/regions-list
+       * @see https://github.com/alchemy-run/alchemy/blob/main/alchemy/src/cloudflare/worker.ts
+       *
+       * @example "aws:us-east-1"
+       * @example "gcp:us-east4"
+       * @example "azure:westeurope"
+       */
+      workerPlacementRegion: z.enum([
+        "aws:us-east-1", // N. Virginia
+        "aws:us-west-2", // Oregon
+        "aws:eu-west-1", // Dublin
+        "aws:eu-west-2", // London
+        // other ones not used yet omitted for now
+      ]),
+      /** https://docs.archil.com/reference/regions#aws-regions */
+      archilRegion: z.enum([
+        "aws-us-east-1", // N. Virginia
+        "aws-eu-west-2", // Oregon
+        "aws-eu-west-1", // Dublin
+        // todo: check for London soon!
+        "gcp-us-central1", // Iowa
+      ]),
+      /** https://fly.io/docs/reference/regions/#fly-io-regions */
+      flyIoRegion: z.enum([
+        "ams", // Amsterdam, Netherlands
+        "arn", // Stockholm, Sweden
+        "bom", // Mumbai, India
+        "cdg", // Paris, France
+        "dfw", // Dallas, Texas (US)
+        "ewr", // Secaucus, NJ (US)
+        "fra", // Frankfurt, Germany
+        "gru", // Sao Paulo, Brazil
+        "iad", // Ashburn, Virginia (US)
+        "jnb", // Johannesburg, South Africa
+        "lax", // Los Angeles, California (US)
+        "lhr", // London, United Kingdom
+        "nrt", // Tokyo, Japan
+        "ord", // Chicago, Illinois (US)
+        "sin", // Singapore, Singapore
+        "sjc", // San Jose, California (US)
+        "syd", // Sydney, Australia
+        "yyz", // Toronto, Canada
+      ]),
+      /** https://planetscale.com/docs/vitess/regions#aws-regions */
+      planetscaleRegion: z.enum([
+        // AWS regions
+        "ap-northeast", // AWS ap-northeast-1 (Tokyo)
+        "ap-south", // AWS ap-south-1 (Mumbai)
+        "ap-southeast", // AWS ap-southeast-1 (Singapore)
+        "aws-ap-southeast-2", // AWS ap-southeast-2 (Sydney)
+        "aws-ca-central-1", // AWS ca-central-1 (Montreal)
+        "eu-central", // AWS eu-central-1 (Frankfurt)
+        "eu-west", // AWS eu-west-1 (Dublin)
+        "aws-eu-west-2", // AWS eu-west-2 (London)
+        "aws-sa-east-1", // AWS sa-east-1 (Sao Paulo)
+        "us-east", // AWS us-east-1 (Northern Virginia)
+        "aws-us-east-2", // AWS us-east-2 (Ohio)
+        "us-west", // AWS us-west-2 (Oregon)
+        // GCP regions
+        "gcp-us-central1", // GCP us-central1 (Council Bluffs, Iowa)
+        "gcp-us-east4", // GCP us-east4 (Ashburn, Virginia)
+        "gcp-northamerica-northeast1", // GCP northamerica-northeast1 (Montreal)
+        "gcp-asia-northeast3", // GCP asia-northeast3 (Seoul)
+        "gcp-us-east1", // GCP us-east1 (Moncks Corner, South Carolina)
+        "gcp-europe-west1", // GCP europe-west1 (St Ghislain, Belgium)
+      ]),
+    }),
+  ),
 } satisfies Record<string, z.ZodType<unknown, string | undefined>> & {
   [K in GlobalSecretEnvVarName]: typeof Required;
 });
 
 // Type for env vars wrapped as alchemy secrets
 type EnvSecrets = {
-  [K in keyof z.output<typeof Env>]-?: z.output<typeof Env>[K] extends string | undefined
+  [K in keyof z.input<typeof Env>]-?: z.output<typeof Env>[K] extends string | undefined
     ? ReturnType<typeof alchemy.secret<string>>
-    : never;
+    : z.input<typeof Env>[K] extends string
+      ? z.output<typeof Env>[K]
+      : never;
 };
 
 async function setupEnvironmentVariables(): Promise<EnvSecrets> {
@@ -462,7 +557,9 @@ async function setupEnvironmentVariables(): Promise<EnvSecrets> {
   }
   // Filter out undefined values before wrapping in alchemy.secret
   const defined = R.pickBy(parsed.data, (v) => v !== undefined) as Record<string, string>;
-  return R.mapValues(defined, alchemy.secret) as unknown as EnvSecrets;
+  return R.mapValues(defined, (v) =>
+    typeof v === "string" ? alchemy.secret(v) : v,
+  ) as unknown as EnvSecrets;
 }
 
 async function setupDatabase() {
@@ -538,6 +635,7 @@ async function setupDatabase() {
       kind: "postgresql",
       allowDataBranching: true,
       delete: false,
+      region: { slug: envSecrets.REGION_CONFIG.planetscaleRegion },
     });
 
     const branch = await Branch("db-preview-branch", {
@@ -729,11 +827,10 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
 
   // Archil R2 bucket — one bucket per stage, with per-project prefixes inside.
   // Archil's FUSE client talks to R2 via S3 protocol using the API token credentials from Doppler.
-  const archilBucketName = `iterate-archil-${app.stage}`;
-  const _archilBucket = await R2Bucket("archil-data", {
-    name: archilBucketName,
-    locationHint: "enam", // US East — colocate with worker + PlanetScale
-    adopt: true,
+  // todo: generate a bucket dynamically for each project
+  const archilBucket = await R2Bucket("archil-data", {
+    // name: archilBucketName,
+    locationHint: envSecrets.REGION_CONFIG.r2BucketHint,
     dev: { remote: true }, // always create real bucket, even in dev (Archil needs actual R2)
   });
 
@@ -747,6 +844,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     bindings: {
       ...dbConfig,
       ...envSecrets,
+      // TanstackStart construct doesn't like structured objects in bindings
+      REGION_CONFIG: JSON.stringify(envSecrets.REGION_CONFIG),
       SELF: Self,
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: allowedDomains.join(","),
@@ -754,16 +853,16 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       APPROVAL_COORDINATOR,
       PROJECT_INGRESS_DOMAIN: projectIngressDomain,
       // Archil R2: derived from alchemy state, not Doppler
-      ARCHIL_R2_BUCKET_NAME: archilBucketName,
+      ARCHIL_R2_BUCKET_NAME: archilBucket.name,
       ARCHIL_R2_ENDPOINT: archilR2Endpoint,
       // Workerd can't exec in dev, so git/compose info must be injected via env vars here.
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
-    // Place the worker near the PlanetScale Postgres primary (aws:us-east-1)
+    // Place the worker near the PlanetScale Postgres primary
     // to minimise round-trip latency on DB-heavy pages.
-    placement: { region: "aws:us-east-1" },
+    placement: { region: envSecrets.REGION_CONFIG.planetscaleRegion },
     assets: {
       _headers: dedent`
         /assets/*
