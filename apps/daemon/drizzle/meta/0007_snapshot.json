@@ -63,9 +63,7 @@
       "indexes": {
         "agent_routes_active_unique": {
           "name": "agent_routes_active_unique",
-          "columns": [
-            "agent_path"
-          ],
+          "columns": ["agent_path"],
           "isUnique": true,
           "where": "\"agent_routes\".\"active\" = 1"
         }
@@ -75,12 +73,8 @@
           "name": "agent_routes_agent_path_agents_path_fk",
           "tableFrom": "agent_routes",
           "tableTo": "agents",
-          "columnsFrom": [
-            "agent_path"
-          ],
-          "columnsTo": [
-            "path"
-          ],
+          "columnsFrom": ["agent_path"],
+          "columnsTo": ["path"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -133,10 +127,7 @@
       "indexes": {
         "agent_subscriptions_agent_path_callback_url_unique": {
           "name": "agent_subscriptions_agent_path_callback_url_unique",
-          "columns": [
-            "agent_path",
-            "callback_url"
-          ],
+          "columns": ["agent_path", "callback_url"],
           "isUnique": true
         }
       },
@@ -145,12 +136,8 @@
           "name": "agent_subscriptions_agent_path_agents_path_fk",
           "tableFrom": "agent_subscriptions",
           "tableTo": "agents",
-          "columnsFrom": [
-            "agent_path"
-          ],
-          "columnsTo": [
-            "path"
-          ],
+          "columnsFrom": ["agent_path"],
+          "columnsTo": ["path"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -340,11 +327,7 @@
       "indexes": {
         "github_pr_agent_path_owner_repo_pr_number_unique": {
           "name": "github_pr_agent_path_owner_repo_pr_number_unique",
-          "columns": [
-            "owner",
-            "repo",
-            "pr_number"
-          ],
+          "columns": ["owner", "repo", "pr_number"],
           "isUnique": true
         }
       },
@@ -412,10 +395,7 @@
       "indexes": {
         "slack_thread_subscription_channel_thread_unique": {
           "name": "slack_thread_subscription_channel_thread_unique",
-          "columns": [
-            "channel",
-            "thread_ts"
-          ],
+          "columns": ["channel", "thread_ts"],
           "isUnique": true
         }
       },

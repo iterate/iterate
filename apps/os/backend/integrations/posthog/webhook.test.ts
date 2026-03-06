@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { posthogProxyApp } from "./proxy.ts";
 import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
+import { posthogProxyApp } from "./proxy.ts";
 
 vi.mock("../../../env.ts", () => ({
   waitUntil: vi.fn((promise: Promise<unknown>) => promise),
