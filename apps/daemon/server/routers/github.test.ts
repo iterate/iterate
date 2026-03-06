@@ -504,6 +504,47 @@ describe("github router", () => {
     );
   });
 
+  it("routes pull_request_review via stored mapping even without marker or mention", async () => {
+    sqlite
+      .prepare(
+        "INSERT INTO github_pr_agent_path (owner, repo, pr_number, agent_path, source) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("iterate", "iterate", 1400, "/github/iterate/iterate/pr-1400", "marker");
+
+    const response = await githubRouter.request("/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventType: "pull_request_review",
+        deliveryId: "d-mapping-review",
+        payload: {
+          action: "submitted",
+          repository: {
+            full_name: "iterate/iterate",
+            owner: { login: "iterate" },
+            name: "iterate",
+          },
+          pull_request: {
+            number: 1400,
+            html_url: "https://github.com/iterate/iterate/pull/1400",
+            body: "plain body without marker",
+          },
+          review: {
+            body: "looks good overall",
+            html_url: "https://github.com/iterate/iterate/pull/1400#pullrequestreview-1",
+            user: { login: "NickBlow" },
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "http://localhost:3001/api/agents/github/iterate/iterate/pr-1400",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("accepts marker comments with trailing annotation text", async () => {
     const response = await githubRouter.request("/webhook", {
       method: "POST",
