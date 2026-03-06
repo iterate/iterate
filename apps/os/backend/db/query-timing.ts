@@ -57,41 +57,63 @@ export function instrumentClient(client: Client, source: "hyperdrive" | "pool"):
 
   const originalQuery = client.query.bind(client);
 
-  // pg.Client.query has multiple overloads — we patch the top-level entry
-  // point which all overloads funnel through.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (client as Record<string, unknown>).query = async (...args: unknown[]) => {
-    const start = performance.now();
-    let status: "ok" | "error" = "ok";
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return await (originalQuery as (...a: unknown[]) => Promise<unknown>)(...args);
-    } catch (err) {
-      status = "error";
-      throw err;
-    } finally {
-      const durationMs = performance.now() - start;
-
-      // Extract SQL text from the various argument shapes pg.Client.query accepts
-      let sql = "";
-      const first = args[0];
-      if (typeof first === "string") {
-        sql = first;
-      } else if (first && typeof first === "object" && "text" in first) {
-        sql = String((first as { text: unknown }).text);
-      }
-
-      try {
-        ae.writeDataPoint({
-          indexes: [getRequestPath()],
-          blobs: [queryPrefix(sql), status, source],
-          doubles: [durationMs],
-        });
-      } catch (writeErr) {
-        // Never let analytics failures affect query results
-        logger.warn("Failed to write query timing data point", writeErr);
-      }
+  /** Extract SQL text from the various argument shapes pg.Client.query accepts. */
+  function extractSql(args: unknown[]): string {
+    const first = args[0];
+    if (typeof first === "string") return first;
+    if (first && typeof first === "object" && "text" in first) {
+      return String((first as { text: unknown }).text);
     }
+    return "";
+  }
+
+  function writePoint(sql: string, status: "ok" | "error", durationMs: number) {
+    try {
+      ae.writeDataPoint({
+        indexes: [getRequestPath()],
+        blobs: [queryPrefix(sql), status, source],
+        doubles: [durationMs],
+      });
+    } catch (writeErr) {
+      // Never let analytics failures affect query results
+      logger.warn("Failed to write query timing data point", writeErr);
+    }
+  }
+
+  // pg.Client.query supports both promise and callback overloads.
+  // Drizzle only uses the promise path, but we handle both defensively
+  // to avoid changing the return-type contract for callback callers.
+  (client as Record<string, unknown>).query = (...args: unknown[]) => {
+    const sql = extractSql(args);
+    const lastArg = args[args.length - 1];
+    const hasCallback = typeof lastArg === "function";
+
+    const start = performance.now();
+
+    if (hasCallback) {
+      // Callback overload: wrap the callback to measure duration
+      const cb = lastArg as (...cbArgs: unknown[]) => void;
+      args[args.length - 1] = (...cbArgs: unknown[]) => {
+        const durationMs = performance.now() - start;
+        const status = cbArgs[0] ? "error" : "ok"; // first arg is error per Node convention
+        writePoint(sql, status, durationMs);
+        return cb(...cbArgs);
+      };
+      return (originalQuery as (...a: unknown[]) => unknown)(...args);
+    }
+
+    // Promise overload
+    const result = (originalQuery as (...a: unknown[]) => Promise<unknown>)(...args);
+    return result.then(
+      (val) => {
+        writePoint(sql, "ok", performance.now() - start);
+        return val;
+      },
+      (err) => {
+        writePoint(sql, "error", performance.now() - start);
+        throw err;
+      },
+    );
   };
 
   return client;
