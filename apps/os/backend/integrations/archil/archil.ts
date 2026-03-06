@@ -13,9 +13,16 @@ import type { CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
+import { jsonEnvVar, RegionConfig } from "../../worker-config.ts";
+
+function getArchilRegion(env: CloudflareEnv): string {
+  const config = jsonEnvVar.parse(RegionConfig, env.REGION_CONFIG);
+  return config.archilRegion;
+}
 
 function createArchilClient(env: CloudflareEnv): Archil {
-  return new Archil({ apiKey: env.ARCHIL_API_KEY, region: env.ARCHIL_REGION });
+  // todo: switch to an env var like ARCHIL_API_KEYS (object mapping region to API key) maybe
+  return new Archil({ apiKey: env.ARCHIL_API_KEY_EU_WEST, region: getArchilRegion(env) });
 }
 
 /**
@@ -58,7 +65,7 @@ export async function ensureProjectArchilDisk(
   const archilVars = [
     { key: "ARCHIL_DISK_NAME", value: diskId },
     { key: "ARCHIL_MOUNT_TOKEN", value: mountToken },
-    { key: "ARCHIL_REGION", value: env.ARCHIL_REGION },
+    { key: "ARCHIL_REGION", value: getArchilRegion(env) },
   ];
   for (const { key, value } of archilVars) {
     await db.insert(schema.projectEnvVar).values({

@@ -9,6 +9,7 @@ import {
 } from "../types.ts";
 import { MAX_CANONICAL_MACHINE_NAME_LENGTH, sanitizeNamePart } from "../naming.ts";
 import { asRecord } from "../utils.ts";
+import { jsonEnvVar, RegionConfig } from "../../../apps/os/backend/worker-config.ts";
 
 const FLY_API_BASE = "https://api.machines.dev";
 const FLY_GRAPHQL_BASE = "https://api.fly.io/graphql";
@@ -17,7 +18,6 @@ const MAX_WAIT_TIMEOUT_SECONDS = 60;
 const DEFAULT_WEB_INTERNAL_PORT = 8080;
 const DEFAULT_SERVICE_PORTS: number[] = [];
 const DEFAULT_FLY_ORG = "iterate";
-const DEFAULT_FLY_REGION = "lhr";
 const DEFAULT_FLY_MACHINE_CPUS = 4;
 const DEFAULT_FLY_MACHINE_MEMORY_MB = 4096;
 const EXEC_RETRY_LIMIT = 3;
@@ -27,7 +27,7 @@ const FLY_MACHINE_NAME = "sandbox";
 const FlyEnv = z.object({
   FLY_API_TOKEN: z.string(),
   FLY_ORG: z.string().default(DEFAULT_FLY_ORG),
-  FLY_DEFAULT_REGION: z.string().default(DEFAULT_FLY_REGION),
+  REGION_CONFIG: jsonEnvVar.wrap(RegionConfig),
   FLY_DEFAULT_IMAGE: z
     .string()
     .describe(
@@ -631,7 +631,7 @@ export class FlyProvider extends SandboxProvider {
       path: `/v1/apps/${encodeURIComponent(appName)}/machines`,
       body: {
         name: FLY_MACHINE_NAME,
-        region: this.env.FLY_DEFAULT_REGION,
+        region: jsonEnvVar.parse(RegionConfig, this.env.REGION_CONFIG).flyIoRegion,
         skip_launch: false,
         config: {
           image: snapshotId,
