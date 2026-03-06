@@ -97,3 +97,22 @@ export const githubPrAgentPaths = sqliteTable(
     ),
   }),
 );
+
+export const slackThreadSubscriptions = sqliteTable(
+  "slack_thread_subscription",
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    channel: text().notNull(),
+    threadTs: text("thread_ts").notNull(),
+    agentPath: text("agent_path").notNull(),
+    source: text().notNull().default("manual-tool"),
+    createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
+  },
+  (table) => ({
+    channelThreadUnique: uniqueIndex("slack_thread_subscription_channel_thread_unique").on(
+      table.channel,
+      table.threadTs,
+    ),
+  }),
+);
