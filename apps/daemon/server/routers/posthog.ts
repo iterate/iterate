@@ -147,12 +147,10 @@ function buildPrompt(params: {
     stringifyScalar(readRecord(params.payload.alert)?.url) ||
     stringifyScalar(params.payload.url) ||
     "";
-  const detail = compactText(
+  const detail =
     stringifyScalar(params.payload.body) ||
-      stringifyScalar(params.payload.message) ||
-      JSON.stringify(params.payload),
-    1200,
-  );
+    stringifyScalar(params.payload.message) ||
+    JSON.stringify(params.payload);
 
   const lines = [
     "@error-pulse",
@@ -181,9 +179,3 @@ function stringifyScalar(value: unknown): string {
   return "";
 }
 
-function compactText(value: string, maxLength: number): string {
-  const collapsed = value.replace(/\s+/g, " ").trim();
-  if (collapsed.length <= maxLength) return collapsed;
-  if (maxLength <= 3) return collapsed.slice(0, maxLength);
-  return `${collapsed.slice(0, maxLength - 3)}...`;
-}
