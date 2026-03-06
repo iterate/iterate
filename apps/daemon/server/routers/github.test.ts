@@ -501,6 +501,7 @@ describe("github router", () => {
             pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/1300" },
           },
           comment: {
+            id: 1,
             body: "can you rebase this?",
             html_url: "https://github.com/iterate/iterate/pull/1300#issuecomment-1",
             user: { login: "alice" },
@@ -542,6 +543,7 @@ describe("github router", () => {
             body: "plain body without marker",
           },
           review: {
+            id: 1,
             body: "looks good overall",
             html_url: "https://github.com/iterate/iterate/pull/1400#pullrequestreview-1",
             user: { login: "NickBlow" },
