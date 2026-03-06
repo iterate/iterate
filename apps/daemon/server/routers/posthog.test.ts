@@ -59,8 +59,15 @@ describe("posthog router", () => {
     const requestBody = JSON.parse(fetchSpy.mock.calls[0][1].body as string) as {
       events: Array<{ message: string }>;
     };
-    expect(requestBody.events[0]?.message).toContain("@error-pulse");
-    expect(requestBody.events[0]?.message).toContain("subscribe-slack-thread");
+    const message = requestBody.events[0]?.message;
+    expect(message).toContain("@error-pulse");
+    expect(message).toContain("subscribe-slack-thread");
+    expect(message).toContain(
+      "severity: critical\nurl: https://eu.posthog.com/project/1/alerts/abc\n\nException rate exceeded threshold",
+    );
+    expect(message).toContain(
+      "Exception rate exceeded threshold\n\nIf you post in #error-pulse, subscribe that Slack thread so replies route back here:",
+    );
   });
 
   it("deduplicates repeated delivery ids", async () => {
@@ -84,5 +91,41 @@ describe("posthog router", () => {
     expect(second.status).toBe(200);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     await expect(second.json()).resolves.toMatchObject({ duplicate: true });
+  });
+
+  it("cleans inflight reservation when dedupe query fails", async () => {
+    sqlite.exec("DROP TABLE events;");
+
+    try {
+      const payload = {
+        deliveryId: "ph-db-failure-1",
+        payload: { alert: { id: "alert_db_failure" } },
+      };
+
+      const first = await posthogRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const second = await posthogRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(first.status).toBe(500);
+      expect(second.status).toBe(500);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      sqlite.exec(`
+        CREATE TABLE events (
+          id text PRIMARY KEY NOT NULL,
+          type text NOT NULL,
+          external_id text,
+          payload text,
+          created_at integer DEFAULT (unixepoch())
+        );
+      `);
+    }
   });
 });

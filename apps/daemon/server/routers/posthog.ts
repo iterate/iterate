@@ -73,11 +73,19 @@ async function reserveDelivery(deliveryId: string): Promise<{ duplicate: boolean
   if (inflightDeliveryIds.has(deliveryId)) return { duplicate: true };
   inflightDeliveryIds.add(deliveryId);
 
-  const [existing] = await db
-    .select({ id: schema.events.id })
-    .from(schema.events)
-    .where(and(eq(schema.events.type, "posthog:webhook"), eq(schema.events.externalId, deliveryId)))
-    .limit(1);
+  let existing: { id: string } | undefined;
+  try {
+    [existing] = await db
+      .select({ id: schema.events.id })
+      .from(schema.events)
+      .where(
+        and(eq(schema.events.type, "posthog:webhook"), eq(schema.events.externalId, deliveryId)),
+      )
+      .limit(1);
+  } catch (error) {
+    inflightDeliveryIds.delete(deliveryId);
+    throw error;
+  }
 
   if (existing) {
     inflightDeliveryIds.delete(deliveryId);
@@ -150,7 +158,7 @@ function buildPrompt(params: {
     `[posthog] delivery=${params.deliveryId} key=${params.alertKey}`,
     `title: ${title}`,
     `severity: ${severity}`,
-    url ? `url: ${url}` : "",
+    url ? `url: ${url}` : undefined,
     "",
     detail,
     "",
@@ -158,7 +166,7 @@ function buildPrompt(params: {
     `iterate tool subscribe-slack-thread --channel ${ERROR_PULSE_CHANNEL_ID} --thread-ts <thread_ts> --session-id <session_id>`,
   ];
 
-  return lines.filter(Boolean).join("\n");
+  return lines.filter((line): line is string => line !== undefined).join("\n");
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
