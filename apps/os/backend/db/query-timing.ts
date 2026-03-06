@@ -49,6 +49,8 @@ export function instrumentClient(client: Client, source: "hyperdrive" | "pool"):
 
   if (!ae) return client;
 
+  // Capture as non-null so TS narrowing works inside nested functions
+  const dataset = ae;
   const originalQuery = client.query.bind(client);
 
   /** Extract SQL text from the various argument shapes pg.Client.query accepts. */
@@ -63,21 +65,21 @@ export function instrumentClient(client: Client, source: "hyperdrive" | "pool"):
 
   function writePoint(sql: string, status: "ok" | "error", durationMs: number) {
     try {
-      ae.writeDataPoint({
+      dataset.writeDataPoint({
         indexes: [getRequestPath()],
         blobs: [queryPrefix(sql), status, source],
         doubles: [durationMs],
       });
     } catch (writeErr) {
       // Never let analytics failures affect query results
-      logger.warn("Failed to write query timing data point", writeErr);
+      logger.warn(`Failed to write query timing data point: ${writeErr}`);
     }
   }
 
   // pg.Client.query supports both promise and callback overloads.
   // Drizzle only uses the promise path, but we handle both defensively
   // to avoid changing the return-type contract for callback callers.
-  (client as Record<string, unknown>).query = (...args: unknown[]) => {
+  (client as unknown as Record<string, unknown>).query = (...args: unknown[]) => {
     const sql = extractSql(args);
     const lastArg = args[args.length - 1];
     const hasCallback = typeof lastArg === "function";
