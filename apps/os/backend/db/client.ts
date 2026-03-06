@@ -2,6 +2,7 @@ import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Client, Pool } from "pg";
 import { env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
+import { instrumentClient } from "./query-timing.ts";
 import * as schema from "./schema.ts";
 
 // ---------------------------------------------------------------------------
@@ -109,6 +110,7 @@ export async function getDb() {
     return withRetry(async () => {
       const client = new Client({ connectionString: hyperdrive.connectionString });
       await client.connect();
+      instrumentClient(client, "hyperdrive");
       return drizzle({ client, schema, casing: "snake_case" });
     });
   }
@@ -133,6 +135,7 @@ export async function getDbWithEnv(envParam: {
     return withRetry(async () => {
       const client = new Client({ connectionString });
       await client.connect();
+      instrumentClient(client, "hyperdrive");
       return drizzle({ client, schema, casing: "snake_case" });
     });
   }
