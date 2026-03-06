@@ -1,6 +1,6 @@
 FROM node:22-bookworm
 
-RUN apt-get update && apt-get install -y sudo fuse3 libfuse2 bc \
+RUN apt-get update && apt-get install -y sudo fuse3 libfuse2 bc eatmydata \
     && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
 RUN curl -s https://s3.amazonaws.com/archil-client/install | sh || true

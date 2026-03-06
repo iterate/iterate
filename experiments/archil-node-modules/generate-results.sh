@@ -107,6 +107,58 @@ build_table() {
   echo ""
 }
 
+# ── Tuning comparison table ──
+build_tuning_table() {
+  # Look for tuning variant logs: fly-archil-disk-small-workload-<suffix>.log
+  local variants=()
+  for logfile in "$RAW_LOGS_DIR"/fly-archil-disk-small-workload-*.log; do
+    [ -f "$logfile" ] || continue
+    local name
+    name=$(basename "$logfile" .log)
+    local suffix="${name#fly-archil-disk-small-workload-}"
+    [ -n "$suffix" ] && variants+=("$suffix")
+  done
+
+  if [ ${#variants[@]} -eq 0 ]; then return; fi
+
+  echo "## Tuning options — Fly.io \`lhr\`, Small workload, Archil"
+  echo ""
+  echo "| Variant | pnpm install | vs Control |"
+  echo "| ------- | ------------ | ---------- |"
+
+  local control_time=""
+  # Get control time first
+  local control_log="$RAW_LOGS_DIR/fly-archil-disk-small-workload-control.log"
+  if [ -f "$control_log" ]; then
+    control_time=$(extract_result "$control_log" "pnpm_install")
+  fi
+
+  for suffix in "${variants[@]}"; do
+    local logfile="$RAW_LOGS_DIR/fly-archil-disk-small-workload-${suffix}.log"
+    local time
+    time=$(extract_result "$logfile" "pnpm_install")
+    local display
+    display=$(format_time "$time")
+
+    local delta="—"
+    if [ -n "$control_time" ] && [ -n "$time" ] && [ "$suffix" != "control" ]; then
+      local pct
+      pct=$(echo "scale=0; 100 * ($time - $control_time) / $control_time" | bc 2>/dev/null)
+      if [ "$pct" -gt 0 ] 2>/dev/null; then
+        delta="+${pct}%"
+      elif [ "$pct" -lt 0 ] 2>/dev/null; then
+        delta="${pct}%"
+      else
+        delta="0%"
+      fi
+    fi
+
+    echo "| $suffix | $display | $delta |"
+  done
+
+  echo ""
+}
+
 # ── Raw logs section ──
 build_raw_logs() {
   echo "---"
@@ -143,6 +195,7 @@ fi
   echo ""
   build_table "fly" "Fly.io \`lhr\` (London) — 4 shared vCPUs, 4 GB RAM"
   build_table "docker" "MacBook (Docker)"
+  build_tuning_table
   build_raw_logs
 } > "$RESULTS_FILE"
 

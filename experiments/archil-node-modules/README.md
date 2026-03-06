@@ -34,6 +34,21 @@ Requires OrbStack (or a Linux VM with FUSE support) and `--privileged` for `/dev
 
 Slowdown scales super-linearly with file count. At 2K files, Archil adds a manageable 5s. At 32K files, it's 56x slower (Fly). Our production monorepo has ~180K files in `node_modules` — extrapolating, that would likely take hours.
 
+### Tuning options — Fly.io `lhr`, Small workload (2K files), Archil
+
+We tested three mount/runtime tuning options to see if they improve Archil write performance:
+
+| Tuning option       | pnpm install | vs Control | Notes                                    |
+| ------------------- | ------------ | ---------- | ---------------------------------------- |
+| Control (none)      | 6.4s         | —          | Baseline Archil, no tuning               |
+| `eatmydata`         | 5.5s         | -14%       | No-ops `fsync()` calls                   |
+| `--writeback-cache` | 7.3s         | +13%       | FUSE writeback caching (preview flag)    |
+| `--nconnect 4`      | 6.5s         | +2%        | Multiple parallel connections to storage |
+
+**Conclusion:** None of these options produce a meaningful improvement. `eatmydata` showed a marginal ~1s reduction, but this is within noise for a 6s test and aligns with the hypothesis that the bottleneck is `create()` (new inode allocation), not `fsync()`. `--writeback-cache` actually added overhead, possibly due to cache management on a write-heavy workload. `--nconnect` had no effect — pnpm's parallelism likely already saturates the FUSE daemon's internal concurrency.
+
+The fundamental issue is that each file creation requires a round-trip to Archil's storage cluster (~10-15ms for uncached ops to R2). No client-side tuning can eliminate that; it would require server-side batching of metadata operations.
+
 ## What's slow
 
 The bottleneck is the "added" phase of `pnpm install`. pnpm hardlinks thousands of small files from its content-addressable store into `node_modules`. Each file creation is a FUSE operation that round-trips to Archil's storage cluster. Package downloads are fast — pnpm fetched 829/885 tarballs in seconds — but writing 32K files one-by-one through FUSE took 25 minutes.
@@ -68,6 +83,14 @@ doppler run -- ./run.sh docker local-disk  small-workload
 ```
 
 Each `run.sh` invocation saves a log file to `raw-logs/`. Results are never overwritten — re-run a scenario to replace its log, then re-generate.
+
+Tuning variants use `LOG_SUFFIX` to avoid overwriting baseline logs:
+
+```bash
+LOG_SUFFIX=eatmydata USE_EATMYDATA=1 doppler run -- ./run.sh fly archil-disk small-workload
+LOG_SUFFIX=writeback-cache ARCHIL_MOUNT_OPTS="--writeback-cache" doppler run -- ./run.sh fly archil-disk small-workload
+LOG_SUFFIX=nconnect4 ARCHIL_MOUNT_OPTS="--nconnect 4" doppler run -- ./run.sh fly archil-disk small-workload
+```
 
 ## Files
 

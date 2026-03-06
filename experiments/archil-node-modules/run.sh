@@ -16,13 +16,19 @@
 #   doppler run -- ./run.sh docker local-disk  medium-workload
 #   doppler run -- ./run.sh docker archil-disk small-workload
 #
+# Tuning variants (set LOG_SUFFIX to avoid overwriting baseline logs):
+#   LOG_SUFFIX=eatmydata       USE_EATMYDATA=1                  doppler run -- ./run.sh fly archil-disk small-workload
+#   LOG_SUFFIX=writeback-cache  ARCHIL_MOUNT_OPTS="--writeback-cache" doppler run -- ./run.sh fly archil-disk small-workload
+#   LOG_SUFFIX=nconnect4        ARCHIL_MOUNT_OPTS="--nconnect 4" doppler run -- ./run.sh fly archil-disk small-workload
+#
 # Then generate results.md:
 #   ./generate-results.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RAW_LOGS_DIR="$SCRIPT_DIR/raw-logs"
-IMAGE="registry.fly.io/iterate-sandbox:archil-bench"
+IMAGE_TAG="archil-bench-$(date +%s)"
+IMAGE="registry.fly.io/iterate-sandbox:${IMAGE_TAG}"
 FLY_APP="archil-bench-exp"
 FLY_REGION="lhr"
 
@@ -31,6 +37,10 @@ DISK="${2:?Usage: ./run.sh <fly|docker> <local-disk|archil-disk> <small-workload
 WORKLOAD="${3:?Usage: ./run.sh <fly|docker> <local-disk|archil-disk> <small-workload|medium-workload>}"
 
 SCENARIO="${MACHINE}-${DISK}-${WORKLOAD}"
+# Optional suffix to distinguish tuning variants (e.g. LOG_SUFFIX=eatmydata)
+if [ -n "${LOG_SUFFIX:-}" ]; then
+  SCENARIO="${SCENARIO}-${LOG_SUFFIX}"
+fi
 LOG_FILE="$RAW_LOGS_DIR/${SCENARIO}.log"
 
 log() { echo "==> $*"; }
@@ -85,6 +95,8 @@ run_fly() {
       -e "ARCHIL_MOUNT_TOKEN=$ARCHIL_MOUNT_TOKEN"
       -e "ARCHIL_REGION=$ARCHIL_REGION"
     )
+    [ -n "${ARCHIL_MOUNT_OPTS:-}" ] && args+=(-e "ARCHIL_MOUNT_OPTS=$ARCHIL_MOUNT_OPTS")
+    [ -n "${USE_EATMYDATA:-}" ] && args+=(-e "USE_EATMYDATA=$USE_EATMYDATA")
   fi
 
   local machine_output machine_id
@@ -92,7 +104,22 @@ run_fly() {
   machine_id=$(echo "$machine_output" | grep "Machine ID:" | awk '{print $NF}')
   log "[$SCENARIO] Machine $machine_id started"
 
-  fly machine wait "$machine_id" --app "$FLY_APP" --state stopped --timeout 1800 2>&1 || true
+  # Poll for machine to stop (fly machine wait removed in newer fly CLI)
+  log "[$SCENARIO] Waiting for machine $machine_id to stop..."
+  local waited=0
+  while true; do
+    local state
+    state=$(fly machine status "$machine_id" -a "$FLY_APP" 2>/dev/null | awk '/State/ {print $NF; exit}')
+    if [ "$state" = "stopped" ] || [ "$state" = "destroyed" ]; then
+      break
+    fi
+    sleep 10
+    waited=$((waited + 10))
+    if [ $waited -ge 1800 ]; then
+      log "[$SCENARIO] Timed out waiting for machine"
+      break
+    fi
+  done
 
   fly logs --app "$FLY_APP" --no-tail 2>&1 \
     | grep "$machine_id" \
@@ -126,6 +153,8 @@ run_docker() {
       -e "ARCHIL_MOUNT_TOKEN=$ARCHIL_MOUNT_TOKEN"
       -e "ARCHIL_REGION=$ARCHIL_REGION"
     )
+    [ -n "${ARCHIL_MOUNT_OPTS:-}" ] && docker_args+=(-e "ARCHIL_MOUNT_OPTS=$ARCHIL_MOUNT_OPTS")
+    [ -n "${USE_EATMYDATA:-}" ] && docker_args+=(-e "USE_EATMYDATA=$USE_EATMYDATA")
   fi
 
   docker run "${docker_args[@]}" archil-bench-local 2>&1 \

@@ -4,15 +4,25 @@
 # Env vars:
 #   MODE=baseline|archil
 #   WORKLOAD=small|medium
+#   ARCHIL_MOUNT_OPTS — extra flags for archil mount (e.g. "--writeback-cache --nconnect 4")
+#   USE_EATMYDATA=1 — prefix pnpm install with eatmydata (no-ops fsync)
 #
 # Archil mode also requires: ARCHIL_MOUNT_TOKEN, ARCHIL_DISK_ID, ARCHIL_REGION
 set -euo pipefail
 
 MODE="${MODE:-baseline}"
 WORKLOAD="${WORKLOAD:-small}"
+ARCHIL_MOUNT_OPTS="${ARCHIL_MOUNT_OPTS:-}"
+USE_EATMYDATA="${USE_EATMYDATA:-}"
 WORKDIR="/home/bench/project"
 MOUNT_DIR="/mnt/archil"
 STATS_FILE="/tmp/resource-stats.log"
+
+# Build pnpm command prefix
+PNPM_PREFIX=""
+if [ -n "$USE_EATMYDATA" ]; then
+  PNPM_PREFIX="eatmydata"
+fi
 
 # ── Workload definitions ──
 PACKAGES_SMALL="lodash chalk request commander express"
@@ -88,8 +98,9 @@ mount_archil() {
 
   sudo mkdir -p "$MOUNT_DIR"
   export ARCHIL_MOUNT_TOKEN="${ARCHIL_MOUNT_TOKEN}"
+  # shellcheck disable=SC2086
   sudo --preserve-env=ARCHIL_MOUNT_TOKEN archil mount "$ARCHIL_DISK_ID" "$MOUNT_DIR" \
-    --region "$region" --force --log-dir /tmp/archil-logs &
+    --region "$region" --force --log-dir /tmp/archil-logs $ARCHIL_MOUNT_OPTS &
 
   local waited=0
   while ! grep -q "$MOUNT_DIR" /proc/mounts 2>/dev/null; do
@@ -117,9 +128,10 @@ time_cmd() {
 run_baseline() {
   mkdir -p "$WORKDIR" && cd "$WORKDIR"
   pnpm init > /dev/null 2>&1
-  log "Running: pnpm install $PACKAGES"
+  log "Running: ${PNPM_PREFIX:+$PNPM_PREFIX }pnpm install $PACKAGES"
   start_resource_monitor
-  time_cmd "pnpm_install" pnpm install $PACKAGES
+  # shellcheck disable=SC2086
+  time_cmd "pnpm_install" $PNPM_PREFIX pnpm install $PACKAGES
   stop_resource_monitor
   log "RESULT nm_files=$(find node_modules -type f | wc -l | tr -d ' ')"
 }
@@ -140,9 +152,12 @@ run_archil() {
   mkdir -p "$archil_store"
   export npm_config_store_dir="$archil_store"
 
-  log "Running: pnpm install $PACKAGES (node_modules + store on Archil)"
+  log "Running: ${PNPM_PREFIX:+$PNPM_PREFIX }pnpm install $PACKAGES (node_modules + store on Archil)"
+  [ -n "$ARCHIL_MOUNT_OPTS" ] && log "Mount opts: $ARCHIL_MOUNT_OPTS"
+  [ -n "$USE_EATMYDATA" ] && log "Using eatmydata (fsync no-op)"
   start_resource_monitor
-  time_cmd "pnpm_install" pnpm install $PACKAGES
+  # shellcheck disable=SC2086
+  time_cmd "pnpm_install" $PNPM_PREFIX pnpm install $PACKAGES
   stop_resource_monitor
   log "RESULT nm_files=$(find node_modules -type f | wc -l | tr -d ' ')"
 }
