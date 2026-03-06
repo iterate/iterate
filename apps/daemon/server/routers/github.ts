@@ -182,10 +182,15 @@ const SecurityAdvisoryEvent = z.object({
     vulnerabilities: z
       .array(
         z.object({
-          package: z.object({ ecosystem: z.string().optional(), name: z.string().optional() }).optional(),
+          package: z
+            .object({ ecosystem: z.string().optional(), name: z.string().optional() })
+            .optional(),
           severity: z.string().optional(),
           vulnerable_version_range: z.string().optional(),
-          first_patched_version: z.object({ identifier: z.string().optional() }).nullable().optional(),
+          first_patched_version: z
+            .object({ identifier: z.string().optional() })
+            .nullable()
+            .optional(),
         }),
       )
       .optional()
@@ -616,7 +621,9 @@ const securitySignalCollectors: Record<
       `Secret type: ${alert.secret_type_display_name ?? alert.secret_type ?? "unknown"}`,
       `Location type: ${loc.type ?? "unknown"}`,
       details?.path ? `File: ${details.path}` : null,
-      details?.start_line ? `Lines: ${details.start_line}-${details.end_line ?? details.start_line}` : null,
+      details?.start_line
+        ? `Lines: ${details.start_line}-${details.end_line ?? details.start_line}`
+        : null,
       details?.commit_sha ? `Commit: ${details.commit_sha}` : null,
     ]
       .filter(Boolean)
@@ -1021,9 +1028,7 @@ async function postPromptToAgent(agentPath: string, prompt: string): Promise<voi
     });
 
     if (retryResponse.ok) {
-      logger.info(
-        `[daemon/github] Retry succeeded for ${agentPath} after clearing stale route`,
-      );
+      logger.info(`[daemon/github] Retry succeeded for ${agentPath} after clearing stale route`);
       return;
     }
 
