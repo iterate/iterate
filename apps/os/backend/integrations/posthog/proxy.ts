@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
@@ -130,8 +130,11 @@ function verifySharedSecret(
   actual: string | null | undefined,
 ): boolean {
   if (!expected || !actual) return false;
-  if (expected.length !== actual.length) return false;
-  return timingSafeEqual(Buffer.from(expected), Buffer.from(actual));
+
+  const expectedDigest = createHash("sha256").update(expected).digest();
+  const actualDigest = createHash("sha256").update(actual).digest();
+
+  return timingSafeEqual(expectedDigest, actualDigest);
 }
 
 async function forwardPosthogWebhookToMachine(params: {

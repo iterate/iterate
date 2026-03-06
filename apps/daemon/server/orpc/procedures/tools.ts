@@ -13,6 +13,7 @@ import { Resend } from "resend";
 import { z } from "zod/v4";
 import { tsImport } from "tsx/esm/api";
 import { ORPCError } from "@orpc/server";
+import { normalizeAgentPath } from "@iterate-com/shared/github-agent-path";
 import { db } from "../../db/index.ts";
 import * as schema from "../../db/schema.ts";
 import { getAgentWorkingDirectory } from "../../utils/agent-working-directory.ts";
@@ -76,19 +77,6 @@ function getContextTypeSource(generatedDir: string): string {
   let rel = path.relative(generatedDir, executionContextSourcePath);
   if (!rel.startsWith(".")) rel = `./${rel}`;
   return `export type { ExecutionContext } from ${JSON.stringify(rel)};`;
-}
-
-function normalizeAgentPath(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("/")) return null;
-  if (/\s/.test(trimmed)) return null;
-  if (!/^\/[a-zA-Z0-9._~/-]+$/.test(trimmed)) return null;
-  const segments = trimmed.split("/").slice(1);
-  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
-    return null;
-  }
-  return trimmed;
 }
 
 async function resolveAgentPathForSubscription(params: {
