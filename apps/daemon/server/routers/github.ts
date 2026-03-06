@@ -128,74 +128,24 @@ const WorkflowRunEvent = z.object({
   }),
 });
 
+// Minimal schemas — just enough to route. Full payload is forwarded as raw JSON.
 const SecretScanningAlertEvent = z.object({
   action: z.string(),
-  alert: z.object({
-    number: z.number(),
-    secret_type: z.string().optional(),
-    secret_type_display_name: z.string().optional(),
-    state: z.string().optional(),
-    resolution: z.string().nullable().optional(),
-    html_url: z.string().optional(),
-    created_at: z.string().optional(),
-    push_protection_bypassed: z.boolean().nullable().optional(),
-  }),
+  alert: z.object({ number: z.number(), html_url: z.string().optional() }),
   repository: RepositoryPayload,
   sender: z.object({ login: z.string() }).optional(),
 });
 
 const SecretScanningAlertLocationEvent = z.object({
   action: z.string(),
-  alert: z.object({
-    number: z.number(),
-    secret_type: z.string().optional(),
-    secret_type_display_name: z.string().optional(),
-    html_url: z.string().optional(),
-  }),
-  location: z.object({
-    type: z.string().optional(),
-    details: z
-      .object({
-        path: z.string().optional(),
-        start_line: z.number().optional(),
-        end_line: z.number().optional(),
-        start_column: z.number().optional(),
-        end_column: z.number().optional(),
-        blob_sha: z.string().optional(),
-        commit_sha: z.string().optional(),
-      })
-      .optional(),
-  }),
+  alert: z.object({ number: z.number(), html_url: z.string().optional() }),
   repository: RepositoryPayload,
   sender: z.object({ login: z.string() }).optional(),
 });
 
 const SecurityAdvisoryEvent = z.object({
   action: z.string(),
-  security_advisory: z.object({
-    ghsa_id: z.string(),
-    summary: z.string().optional(),
-    description: z.string().optional(),
-    severity: z.string().optional(),
-    cve_id: z.string().nullable().optional(),
-    html_url: z.string().optional(),
-    vulnerabilities: z
-      .array(
-        z.object({
-          package: z
-            .object({ ecosystem: z.string().optional(), name: z.string().optional() })
-            .optional(),
-          severity: z.string().optional(),
-          vulnerable_version_range: z.string().optional(),
-          first_patched_version: z
-            .object({ identifier: z.string().optional() })
-            .nullable()
-            .optional(),
-        }),
-      )
-      .optional()
-      .default([]),
-  }),
+  security_advisory: z.object({ ghsa_id: z.string(), html_url: z.string().optional() }),
   repository: RepositoryPayload.optional(),
   sender: z.object({ login: z.string() }).optional(),
 });
@@ -914,44 +864,8 @@ async function buildPrompt(params: { signal: ResolvedPrSignal }): Promise<string
 }
 
 function buildSecurityPrompt(signal: ResolvedSecuritySignal): string {
-  const lines = [
-    "[GitHub Security Alert]",
-    `Repo: ${signal.repo.fullName}`,
-    `Alert type: ${signal.eventKind}`,
-    `Action: ${signal.action}`,
-    `Alert #${signal.alertNumber}`,
-    signal.eventUrl ? `URL: ${signal.eventUrl}` : null,
-    "",
-    signal.eventBody,
-    "",
-    "## Instructions",
-    "",
-    "You are a security triage agent. Follow these steps:",
-    "",
-    "### 1. Triage",
-    "- Investigate the alert. Check if it is a false positive.",
-    "- Determine if the secret/vulnerability is only used in development/test or if it is in production.",
-    "- Check git history to see if the secret was already rotated or the dependency already updated.",
-    "",
-    "### 2. Remediate (if possible)",
-    "- For secret scanning alerts: check if the secret is hardcoded. If so, remove it and open a PR.",
-    "- For dependency vulnerabilities: check if there is a patched version. If so, bump the dependency and open a PR.",
-    "- For any fix, create a branch and PR with a clear description of what was found and what was fixed.",
-    "",
-    "### 3. Notify the team",
-    "- If this is a real alert (not a false positive), start a new thread in the #security-alerts Slack channel (C09K1CTN4M7).",
-    "- Use `@channel` if the alert is urgent (e.g., production secret leaked, critical severity CVE).",
-    "- Use `@here` if the alert is not time-sensitive (e.g., low/medium severity, development-only).",
-    "- Subscribe to the thread using `iterate tool subscribe-slack-thread` so you can answer follow-up questions.",
-    "- Include: what the alert is, your triage assessment, what actions you took, and any remaining items for humans.",
-    "",
-    "### 4. If unsure",
-    "- If you cannot determine whether the alert is real or a false positive, post in #security-alerts asking for human input.",
-    "- Provide all relevant context so the team can make a decision quickly.",
-  ]
-    .filter((l) => l !== null)
-    .join("\n");
-  return lines;
+  const summary = `[github] ${signal.repo.fullName} ${signal.eventKind}/${signal.action}${signal.eventUrl ? ` ${signal.eventUrl}` : ""}`;
+  return `${summary}\n\n${signal.eventBody}`;
 }
 
 function compactText(value: string | null | undefined, maxLength: number): string {
