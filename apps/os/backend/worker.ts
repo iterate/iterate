@@ -234,7 +234,7 @@ app.use(
 );
 
 app.use("*", async (c, next) => {
-  const db = getDb();
+  const db = await getDb();
   const auth = getAuth(db);
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   c.set("db", db);
@@ -567,7 +567,7 @@ export default class extends WorkerEntrypoint {
   }
 
   async scheduled(controller: ScheduledController) {
-    const db = getDb();
+    const db = await getDb();
     const cron = controller.cron as workerConfig.WorkerCronExpression;
     switch (cron) {
       case workerConfig.workerCrons.processOutboxQueue: {

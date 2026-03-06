@@ -1,5 +1,5 @@
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import { Client, Pool } from "pg";
 import { env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import * as schema from "./schema.ts";
@@ -24,7 +24,7 @@ const TRANSIENT_PG_CODES = new Set([
  * Covers connection drops, TCP resets, and Postgres transient SQLSTATE codes.
  * Also walks the `cause` chain (e.g. DrizzleQueryError wrapping a DatabaseError).
  */
-export function isTransientError(err: unknown): boolean {
+function isTransientError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
 
   for (
@@ -74,68 +74,72 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Retry Pool wrapper — intercepts queries to add transient error retries
-// ---------------------------------------------------------------------------
-
-/**
- * pg Pool with automatic retry on transient failures.
- */
-class RetryPool extends Pool {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pool.query has many overloads
-  override async query(...args: any[]): Promise<any> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- super.query typing mismatch
-    return withRetry(() => (super.query as any)(...args));
-  }
-}
-
-// ---------------------------------------------------------------------------
 // DB client factories
 // ---------------------------------------------------------------------------
 
 /**
- * Cached drizzle instance — reused across requests to avoid leaking memory
- * in long-lived processes (local dev via miniflare/workerd).
+ * Cached drizzle instance for local dev — reused across requests to avoid
+ * leaking Pool connections in long-lived miniflare/workerd processes.
  *
- * In production Cloudflare Workers, the isolate gets cleaned up between
- * requests so caching is just an optimization.
+ * NOT used in production with Hyperdrive — Hyperdrive's connectionString
+ * points to a per-request local proxy socket that is garbage-collected after
+ * the request completes, so we must create a fresh Client per invocation.
  */
-let cachedDb: NodePgDatabase<typeof schema> | undefined;
+let cachedDevDb: NodePgDatabase<typeof schema> | undefined;
 
 /**
- * Returns a drizzle DB instance backed by a pg.Pool.
+ * Returns a drizzle DB instance.
  *
- * Uses Hyperdrive's connectionString in deployed environments (Hyperdrive
- * provides connection pooling + caching server-side). Falls back to
- * DATABASE_URL in local dev.
+ * - **Production (Hyperdrive):** Creates a new pg.Client per call. Cloudflare
+ *   Hyperdrive manages connection pooling server-side; client creation is fast
+ *   because it connects to a local proxy socket. Caching the client/pool would
+ *   cause stale connections since the proxy socket is per-request.
+ *   @see https://developers.cloudflare.com/workers/best-practices/workers-best-practices/
  *
- * We use pg.Pool (max: 3) rather than per-request Client because:
- * 1. In local dev (miniflare/workerd), Client-per-request leaks and OOMs.
- * 2. In production, Hyperdrive manages the upstream pool — a small client-side
- *    pool with max:3 per worker isolate is within CF's recommendations.
- *
- * @see https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/
+ * - **Local dev:** Uses a cached pg.Pool to avoid leaking connections. The Pool
+ *   is safe to reuse because DATABASE_URL is stable across requests.
  */
-export function getDb() {
-  if (!cachedDb) {
-    const hyperdrive = (env as Record<string, unknown>).HYPERDRIVE as
-      | { connectionString: string }
-      | undefined;
-    const connectionString = hyperdrive?.connectionString ?? env.DATABASE_URL;
+export async function getDb() {
+  const hyperdrive = (env as Record<string, unknown>).HYPERDRIVE as
+    | { connectionString: string }
+    | undefined;
 
-    const pool = new RetryPool({ connectionString, max: 3 });
-    cachedDb = drizzle({ client: pool, schema, casing: "snake_case" });
+  if (hyperdrive) {
+    // Production: per-request Client, Hyperdrive pools server-side
+    return withRetry(async () => {
+      const client = new Client({ connectionString: hyperdrive.connectionString });
+      await client.connect();
+      return drizzle({ client, schema, casing: "snake_case" });
+    });
   }
-  return cachedDb;
+
+  // Local dev: cached Pool
+  if (!cachedDevDb) {
+    const pool = new Pool({ connectionString: env.DATABASE_URL, max: 3 });
+    cachedDevDb = drizzle({ client: pool, schema, casing: "snake_case" });
+  }
+  return cachedDevDb;
 }
 
 /** Accepts any env-like object with DATABASE_URL (used by DurableObjects). */
-export function getDbWithEnv(envParam: {
+export async function getDbWithEnv(envParam: {
   DATABASE_URL: string;
   HYPERDRIVE?: { connectionString: string };
 }) {
   const connectionString = envParam.HYPERDRIVE?.connectionString ?? envParam.DATABASE_URL;
-  const pool = new RetryPool({ connectionString, max: 3 });
+
+  if (envParam.HYPERDRIVE) {
+    // Per-request Client for Hyperdrive
+    return withRetry(async () => {
+      const client = new Client({ connectionString });
+      await client.connect();
+      return drizzle({ client, schema, casing: "snake_case" });
+    });
+  }
+
+  // No Hyperdrive — Pool for stability
+  const pool = new Pool({ connectionString, max: 3 });
   return drizzle({ client: pool, schema, casing: "snake_case" });
 }
 
-export type DB = ReturnType<typeof getDb>;
+export type DB = Awaited<ReturnType<typeof getDb>>;
