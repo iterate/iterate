@@ -36,6 +36,14 @@ sqlite.exec(`
     expires_at integer
   );
   CREATE UNIQUE INDEX github_pr_agent_path_owner_repo_pr_number_unique ON github_pr_agent_path (owner, repo, pr_number);
+  CREATE TABLE agent_subscriptions (
+    id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+    agent_path text NOT NULL,
+    callback_url text NOT NULL,
+    created_at integer DEFAULT (unixepoch()),
+    updated_at integer DEFAULT (unixepoch())
+  );
+  CREATE UNIQUE INDEX agent_subscriptions_agent_path_callback_url_unique ON agent_subscriptions (agent_path, callback_url);
   CREATE TABLE github_webhook_state (
     agent_path text PRIMARY KEY NOT NULL,
     instructions_sent_at integer,
@@ -67,7 +75,7 @@ describe("github router", () => {
 
   beforeEach(() => {
     sqlite.exec(
-      "DELETE FROM github_webhook_buffer; DELETE FROM github_webhook_state; DELETE FROM github_pr_agent_path; DELETE FROM agent_routes; DELETE FROM agents;",
+      "DELETE FROM github_webhook_buffer; DELETE FROM github_webhook_state; DELETE FROM github_pr_agent_path; DELETE FROM agent_subscriptions; DELETE FROM agent_routes; DELETE FROM agents;",
     );
     fetchSpy.mockReset().mockResolvedValue(new Response("{}", { status: 200 }));
     vi.stubGlobal("fetch", fetchSpy);
@@ -100,6 +108,7 @@ describe("github router", () => {
             pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/1095" },
           },
           comment: {
+            id: 100001,
             body: "@iterate please fix",
             html_url: "https://github.com/iterate/iterate/pull/1095#issuecomment-1",
             user: { login: "alice" },
@@ -110,7 +119,6 @@ describe("github router", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledWith(
       "http://localhost:3001/api/agents/github/iterate/iterate/pr-1095",
       expect.objectContaining({ method: "POST" }),
@@ -143,6 +151,7 @@ describe("github router", () => {
             body: "<!-- iterate:agent-pr -->",
           },
           comment: {
+            id: 100002,
             body: "nit",
             html_url: "https://github.com/iterate/iterate/pull/1095#discussion_r1",
             user: { login: "bob" },
@@ -179,6 +188,7 @@ describe("github router", () => {
             pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/1105" },
           },
           comment: {
+            id: 100003,
             body: "please fix this",
             html_url: "https://github.com/iterate/iterate/pull/1105#issuecomment-1",
             user: { login: "alice" },
@@ -414,6 +424,7 @@ describe("github router", () => {
             pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/1105" },
           },
           comment: {
+            id: 100004,
             body: "route to session",
             html_url: "https://github.com/iterate/iterate/pull/1105#issuecomment-2",
             user: { login: "alice" },
@@ -450,6 +461,7 @@ describe("github router", () => {
             pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/1200" },
           },
           comment: {
+            id: 100005,
             body: "looks good",
             html_url: "https://github.com/iterate/iterate/pull/1200#issuecomment-1",
             user: { login: "alice" },
@@ -483,6 +495,7 @@ describe("github router", () => {
             pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/1201" },
           },
           comment: {
+            id: 100006,
             body: "looks good",
             html_url: "https://github.com/iterate/iterate/pull/1201#issuecomment-1",
             user: { login: "alice" },
@@ -526,6 +539,7 @@ describe("github router", () => {
             pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/1108" },
           },
           comment: {
+            id: 100007,
             body: "reuse original session route",
             html_url: "https://github.com/iterate/iterate/pull/1108#issuecomment-3",
             user: { login: "alice" },
@@ -562,6 +576,7 @@ describe("github router", () => {
             pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/1106" },
           },
           comment: {
+            id: 100008,
             body: "new routing please",
             html_url: "https://github.com/iterate/iterate/pull/1106#issuecomment-2",
             user: { login: "alice" },
@@ -574,6 +589,176 @@ describe("github router", () => {
     expect(fetchSpy).toHaveBeenCalledWith(
       "http://localhost:3001/api/agents/github/iterate/iterate/pr-1106",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("adds eyes reaction to comment when routing immediate signal", async () => {
+    vi.stubEnv("GITHUB_TOKEN", "test-token");
+
+    fetchSpy.mockImplementation((url: string) => {
+      if (typeof url === "string" && url.includes("api.github.com")) {
+        return Promise.resolve(new Response(JSON.stringify({ id: 42 }), { status: 201 }));
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+
+    const response = await githubRouter.request("/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventType: "issue_comment",
+        deliveryId: "d-reaction-1",
+        payload: {
+          action: "created",
+          repository: {
+            full_name: "iterate/iterate",
+            owner: { login: "iterate" },
+            name: "iterate",
+          },
+          issue: {
+            number: 2000,
+            html_url: "https://github.com/iterate/iterate/pull/2000",
+            body: "<!-- iterate:agent-pr -->",
+            pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/2000" },
+          },
+          comment: {
+            id: 200001,
+            body: "@iterate please fix this",
+            html_url: "https://github.com/iterate/iterate/pull/2000#issuecomment-200001",
+            user: { login: "alice" },
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    // Wait for the fire-and-forget reaction API call to settle
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://api.github.com/repos/iterate/iterate/issues/comments/200001/reactions",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ content: "eyes" }),
+      }),
+    );
+  });
+
+  it("removes eyes reaction via agent-change callback when agent goes idle", async () => {
+    vi.stubEnv("GITHUB_TOKEN", "test-token");
+
+    fetchSpy.mockImplementation((url: string) => {
+      if (typeof url === "string" && url.includes("api.github.com")) {
+        return Promise.resolve(new Response(JSON.stringify({ id: 99 }), { status: 201 }));
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+
+    // First, trigger the webhook to create a reaction context
+    await githubRouter.request("/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventType: "issue_comment",
+        deliveryId: "d-reaction-2",
+        payload: {
+          action: "created",
+          repository: {
+            full_name: "iterate/iterate",
+            owner: { login: "iterate" },
+            name: "iterate",
+          },
+          issue: {
+            number: 2001,
+            html_url: "https://github.com/iterate/iterate/pull/2001",
+            body: "<!-- iterate:agent-pr -->",
+            pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/2001" },
+          },
+          comment: {
+            id: 200002,
+            body: "@iterate fix this please",
+            html_url: "https://github.com/iterate/iterate/pull/2001#issuecomment-200002",
+            user: { login: "bob" },
+          },
+        },
+      }),
+    });
+
+    // Wait for the reaction creation to settle
+    await vi.advanceTimersByTimeAsync(0);
+
+    fetchSpy.mockClear();
+    fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
+
+    // Now simulate agent going idle via the callback
+    const callbackResponse = await githubRouter.request("/agent-change-callback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "iterate:agent-updated",
+        payload: {
+          path: "/github/iterate/iterate/pr-2001",
+          shortStatus: "idle",
+          isWorking: false,
+        },
+      }),
+    });
+
+    expect(callbackResponse.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://api.github.com/repos/iterate/iterate/issues/comments/200002/reactions/99",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("uses correct endpoint for pull_request_review_comment reactions", async () => {
+    vi.stubEnv("GITHUB_TOKEN", "test-token");
+
+    fetchSpy.mockImplementation((url: string) => {
+      if (typeof url === "string" && url.includes("api.github.com")) {
+        return Promise.resolve(new Response(JSON.stringify({ id: 55 }), { status: 201 }));
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+
+    const response = await githubRouter.request("/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventType: "pull_request_review_comment",
+        deliveryId: "d-reaction-3",
+        payload: {
+          action: "created",
+          repository: {
+            full_name: "iterate/iterate",
+            owner: { login: "iterate" },
+            name: "iterate",
+          },
+          pull_request: {
+            number: 2002,
+            html_url: "https://github.com/iterate/iterate/pull/2002",
+            body: "<!-- iterate:agent-pr -->",
+          },
+          comment: {
+            id: 200003,
+            body: "@iterate nit: fix this",
+            html_url: "https://github.com/iterate/iterate/pull/2002#discussion_r200003",
+            user: { login: "carol" },
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://api.github.com/repos/iterate/iterate/pulls/comments/200003/reactions",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ content: "eyes" }),
+      }),
     );
   });
 });
