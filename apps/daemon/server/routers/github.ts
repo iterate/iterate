@@ -674,7 +674,7 @@ const securitySignalCollectors: Record<
     const parsedNum = Number.parseInt(ghsaNum, 10);
     const alertNumber = Number.isNaN(parsedNum)
       ? parseInt(createHash("sha256").update(advisory.ghsa_id).digest("hex").slice(0, 6), 16) %
-          1_000_000
+        1_000_000
       : parsedNum;
 
     return [
