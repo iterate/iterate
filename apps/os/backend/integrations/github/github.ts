@@ -728,8 +728,11 @@ githubApp.post("/webhook", async (c) => {
   const xGithubEvent = c.req.header("x-github-event");
   const deliveryId = c.req.header("x-github-delivery");
 
+  logger.set({ githubWebhook: { deliveryId, event: xGithubEvent } });
+
   // Verify signature
   const isValid = await verifyGitHubSignature(c.env.GITHUB_WEBHOOK_SECRET, signature ?? null, body);
+  logger.set({ githubWebhook: { isValid } });
   if (!isValid) {
     logger.warn("[GitHub Webhook] Invalid signature");
     return c.json({ error: "Invalid signature" }, 401);
@@ -742,6 +745,7 @@ githubApp.post("/webhook", async (c) => {
   const repoFullName = repo?.full_name ?? "unknown";
   const repoOwner = repo?.owner?.login;
   const repoName = repo?.name;
+  logger.set({ githubWebhook: { repoFullName, repoOwner, repoName } });
 
   // Track webhook in PostHog with group association (non-blocking).
   // TODO: move enrichment out of webhook path (tasks/machine-metrics-pipeline.md).
@@ -977,14 +981,17 @@ async function forwardWebhookToRepoMachine(params: {
     }
   }
 
+  logger.set({ githubWebhook: { contexts: contexts.length, source } });
+
   if (contexts.length === 0) {
-    logger.warn(
-      `[GitHub Webhook] No active machine targets for repo=${repo.fullName} eventType=${params.eventType} deliveryId=${params.deliveryId}`,
-    );
+    logger.debug(`[GitHub Webhook] No active machine targets`);
     return;
   }
 
   const target = contexts[0];
+  logger.set({
+    githubWebhook: { targetProjectId: target.projectId, targetMachineId: target.machine.id },
+  });
   try {
     await forwardGithubWebhookToMachine({
       machine: target.machine,
@@ -993,20 +1000,10 @@ async function forwardWebhookToRepoMachine(params: {
       deliveryId: params.deliveryId,
       payload: params.payload,
     });
-    logger.debug("[GitHub Webhook] Forwarded webhook to machine", {
-      repo: repo.fullName,
-      eventType: params.eventType,
-      deliveryId: params.deliveryId,
-      selectedProjectId: target.projectId,
-      selectedMachineId: target.machine.id,
-      candidateCount: contexts.length,
-      source,
-    });
+    logger.debug("[GitHub Webhook] Forwarded webhook to machine");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logger.warn(
-      `[GitHub Webhook] Failed to forward to machine projectId=${target.projectId} machineId=${target.machine.id} eventType=${params.eventType} error=${message}`,
-    );
+    logger.warn(`[GitHub Webhook] Failed to forward to machine: ${message}`);
   }
 }
 
