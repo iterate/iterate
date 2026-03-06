@@ -981,17 +981,19 @@ async function forwardWebhookToRepoMachine(params: {
     }
   }
 
-  logger.set({ githubWebhook: { contexts: contexts.length, source } });
+  const webhookContext = { contexts: contexts.length, source };
 
   if (contexts.length === 0) {
-    logger.debug(`[GitHub Webhook] No active machine targets`);
+    logger.debug(`[GitHub Webhook] No active machine targets`, { githubWebhook: webhookContext });
     return;
   }
 
   const target = contexts[0];
-  logger.set({
-    githubWebhook: { targetProjectId: target.projectId, targetMachineId: target.machine.id },
-  });
+  const targetContext = {
+    ...webhookContext,
+    targetProjectId: target.projectId,
+    targetMachineId: target.machine.id,
+  };
   try {
     await forwardGithubWebhookToMachine({
       machine: target.machine,
@@ -1000,10 +1002,12 @@ async function forwardWebhookToRepoMachine(params: {
       deliveryId: params.deliveryId,
       payload: params.payload,
     });
-    logger.debug("[GitHub Webhook] Forwarded webhook to machine");
+    logger.debug("[GitHub Webhook] Forwarded webhook to machine", { githubWebhook: targetContext });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logger.warn(`[GitHub Webhook] Failed to forward to machine: ${message}`);
+    logger.warn(
+      `[GitHub Webhook] Failed to forward to machine: ${message} target=${JSON.stringify(targetContext)}`,
+    );
   }
 }
 
