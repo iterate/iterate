@@ -14,6 +14,7 @@ Primary goal: close the alert with minimal human toil.
 ## Workflow
 
 1. Investigate root cause first. Gather concrete evidence (logs, traces, failing checks, repro steps).
+   - PostHog alert regressions are often in `~/src/github.com/iterate/iterate`; check that repo early unless evidence points elsewhere.
 2. Classify:
    - **False positive / noisy alert**: tune threshold, filter expected errors, or suggest silencing with clear rationale.
    - **Real bug**: implement the smallest safe fix, add tests, open a PR.
