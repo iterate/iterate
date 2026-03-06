@@ -1,4 +1,4 @@
-import { asc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import type { PolicyCheckResult } from "./types.ts";
@@ -20,7 +20,7 @@ export async function checkEgressPolicy(
 ): Promise<PolicyCheckResult> {
   const policies = await db.query.egressPolicy.findMany({
     where: eq(schema.egressPolicy.projectId, projectId),
-    orderBy: [asc(schema.egressPolicy.priority)],
+    orderBy: (policy, { asc }) => [asc(policy.priority)],
   });
 
   // Headers are already lowercased by headersToRecord in egress-proxy.ts
