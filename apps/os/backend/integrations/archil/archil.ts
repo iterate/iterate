@@ -13,9 +13,22 @@ import type { CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
+import { ArchilApiKeys, jsonEnvVar, RegionConfig } from "../../worker-config.ts";
+
+function getArchilRegion(env: CloudflareEnv) {
+  const config = jsonEnvVar.parse(RegionConfig, env.REGION_CONFIG);
+  return config.archilRegion;
+}
 
 function createArchilClient(env: CloudflareEnv): Archil {
-  return new Archil({ apiKey: env.ARCHIL_API_KEY, region: env.ARCHIL_REGION });
+  const region = getArchilRegion(env);
+  const apiKeys = jsonEnvVar.parse(ArchilApiKeys, env.ARCHIL_API_KEYS);
+  const apiKey = apiKeys[region];
+  if (!apiKey) {
+    const message = `No Archil API key found for region ${region}. Available regions: ${Object.keys(apiKeys).join(", ")}`;
+    throw new Error(message);
+  }
+  return new Archil({ apiKey, region });
 }
 
 /**
@@ -58,7 +71,7 @@ export async function ensureProjectArchilDisk(
   const archilVars = [
     { key: "ARCHIL_DISK_NAME", value: diskId },
     { key: "ARCHIL_MOUNT_TOKEN", value: mountToken },
-    { key: "ARCHIL_REGION", value: env.ARCHIL_REGION },
+    { key: "ARCHIL_REGION", value: getArchilRegion(env) },
   ];
   for (const { key, value } of archilVars) {
     await db.insert(schema.projectEnvVar).values({
