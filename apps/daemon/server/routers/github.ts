@@ -579,21 +579,10 @@ const securitySignalCollectors: Record<
   secret_scanning_alert: (input) => {
     const parsed = SecretScanningAlertEvent.safeParse(input.payload);
     if (!parsed.success) return [];
-    // Handle created, reopened — ignore resolved/revoked (those are resolutions)
     if (parsed.data.action !== "created" && parsed.data.action !== "reopened") return [];
     const repo = resolveRepoCoordinates(parsed.data.repository);
     if (!repo) return [];
     const alert = parsed.data.alert;
-    const body = [
-      `Secret type: ${alert.secret_type_display_name ?? alert.secret_type ?? "unknown"}`,
-      `State: ${alert.state ?? "unknown"}`,
-      alert.push_protection_bypassed ? "Push protection was BYPASSED" : null,
-      alert.resolution ? `Resolution: ${alert.resolution}` : null,
-      alert.created_at ? `Created: ${alert.created_at}` : null,
-    ]
-      .filter(Boolean)
-      .join("\n");
-
     return [
       {
         repo,
@@ -602,7 +591,7 @@ const securitySignalCollectors: Record<
         eventKind: "secret_scanning_alert",
         action: parsed.data.action,
         actorLogin: parsed.data.sender?.login ?? "github",
-        eventBody: body,
+        eventBody: JSON.stringify(input.payload, null, 2),
         eventUrl: alert.html_url ?? "",
         agentPath: buildDefaultGitHubSecurityAgentPath(repo, "secret-scanning", alert.number),
       },
@@ -615,21 +604,6 @@ const securitySignalCollectors: Record<
     const repo = resolveRepoCoordinates(parsed.data.repository);
     if (!repo) return [];
     const alert = parsed.data.alert;
-    const loc = parsed.data.location;
-    const details = loc.details;
-    const body = [
-      `Secret type: ${alert.secret_type_display_name ?? alert.secret_type ?? "unknown"}`,
-      `Location type: ${loc.type ?? "unknown"}`,
-      details?.path ? `File: ${details.path}` : null,
-      details?.start_line
-        ? `Lines: ${details.start_line}-${details.end_line ?? details.start_line}`
-        : null,
-      details?.commit_sha ? `Commit: ${details.commit_sha}` : null,
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-    // Route to the same agent as the parent alert
     return [
       {
         repo,
@@ -638,7 +612,7 @@ const securitySignalCollectors: Record<
         eventKind: "secret_scanning_alert_location",
         action: parsed.data.action,
         actorLogin: parsed.data.sender?.login ?? "github",
-        eventBody: body,
+        eventBody: JSON.stringify(input.payload, null, 2),
         eventUrl: alert.html_url ?? "",
         agentPath: buildDefaultGitHubSecurityAgentPath(repo, "secret-scanning", alert.number),
       },
@@ -652,24 +626,8 @@ const securitySignalCollectors: Record<
     const repo = parsed.data.repository ? resolveRepoCoordinates(parsed.data.repository) : null;
     if (!repo) return [];
     const advisory = parsed.data.security_advisory;
-    const vulnLines = advisory.vulnerabilities.map((v) => {
-      const pkg = v.package;
-      const patched = v.first_patched_version?.identifier;
-      return `- ${pkg?.ecosystem ?? "?"}/${pkg?.name ?? "?"} ${v.vulnerable_version_range ?? ""} (severity: ${v.severity ?? "unknown"})${patched ? ` → fix: ${patched}` : ""}`;
-    });
-    const body = [
-      `GHSA: ${advisory.ghsa_id}`,
-      advisory.cve_id ? `CVE: ${advisory.cve_id}` : null,
-      `Severity: ${advisory.severity ?? "unknown"}`,
-      advisory.summary ? `Summary: ${advisory.summary}` : null,
-      vulnLines.length > 0 ? `\nAffected packages:\n${vulnLines.join("\n")}` : null,
-      advisory.description ? `\nDescription: ${compactText(advisory.description, 500)}` : null,
-    ]
-      .filter(Boolean)
-      .join("\n");
 
     // Deterministic alert number from the full GHSA ID via hash.
-    // Avoids digit-extraction collisions (GHSA IDs have few digits, ~1K-10K distinct values).
     const alertNumber =
       parseInt(createHash("sha256").update(advisory.ghsa_id).digest("hex").slice(0, 6), 16) %
       1_000_000;
@@ -682,7 +640,7 @@ const securitySignalCollectors: Record<
         eventKind: "security_advisory",
         action: parsed.data.action,
         actorLogin: parsed.data.sender?.login ?? "github",
-        eventBody: body,
+        eventBody: JSON.stringify(input.payload, null, 2),
         eventUrl: advisory.html_url ?? "",
         agentPath: buildDefaultGitHubSecurityAgentPath(repo, "advisory", alertNumber),
       },
