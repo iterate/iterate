@@ -71,12 +71,12 @@ Each `run.sh` invocation saves a log file to `raw-logs/`. Results are never over
 
 ## Files
 
-| File                  | Purpose                                           |
-| --------------------- | ------------------------------------------------- |
-| `benchmark.sh`        | Container entrypoint — accepts MODE and WORKLOAD  |
-| `run.sh`              | Runs one scenario, saves raw log to `raw-logs/`   |
-| `generate-results.sh` | Reads `raw-logs/`, produces `results.md`          |
-| `setup-disks.ts`      | Provisions Archil disk via SDK                    |
-| `Dockerfile`          | Benchmark container (node 22 + pnpm + archil CLI) |
-| `raw-logs/`           | One `.log` file per scenario                      |
-| `results.md`          | Generated — two tables + raw logs                 |
+| File                  | Purpose                                                                |
+| --------------------- | ---------------------------------------------------------------------- |
+| `benchmark.sh`        | Container entrypoint — accepts MODE and WORKLOAD                       |
+| `run.sh`              | Runs one scenario, saves raw log to `raw-logs/`                        |
+| `generate-results.sh` | Reads `raw-logs/`, produces `results.md`                               |
+| `setup-disks.ts`      | Provisions Archil disk via SDK, writes `disk-config.json` (gitignored) |
+| `Dockerfile`          | Benchmark container (node 22 + pnpm + archil CLI)                      |
+| `raw-logs/`           | One `.log` file per scenario                                           |
+| `results.md`          | Generated — two tables + raw logs                                      |
