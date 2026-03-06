@@ -12,6 +12,7 @@ MODE="${MODE:-baseline}"
 WORKLOAD="${WORKLOAD:-small}"
 WORKDIR="/home/bench/project"
 MOUNT_DIR="/mnt/archil"
+STATS_FILE="/tmp/resource-stats.log"
 
 # ── Workload definitions ──
 PACKAGES_SMALL="lodash chalk request commander express"
@@ -24,6 +25,61 @@ case "$WORKLOAD" in
 esac
 
 log() { echo "[bench:$MODE:$WORKLOAD] $*"; }
+
+# ── Resource monitoring ──
+start_resource_monitor() {
+  (
+    while true; do
+      local ts cpu_line mem_total mem_avail mem_used_pct
+      ts=$(date +%s)
+      # CPU: grab idle% from /proc/stat, compute usage
+      read -r _ user nice system idle rest < /proc/stat
+      local total=$((user + nice + system + idle))
+      sleep 2
+      read -r _ user2 nice2 system2 idle2 rest2 < /proc/stat
+      local total2=$((user2 + nice2 + system2 + idle2))
+      local dtotal=$((total2 - total))
+      local didle=$((idle2 - idle))
+      if [ "$dtotal" -gt 0 ]; then
+        cpu_line=$(echo "scale=1; 100 * ($dtotal - $didle) / $dtotal" | bc)
+      else
+        cpu_line="0.0"
+      fi
+      # Memory from /proc/meminfo
+      mem_total=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+      mem_avail=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+      local mem_used=$((mem_total - mem_avail))
+      mem_used_pct=$(echo "scale=1; 100 * $mem_used / $mem_total" | bc)
+      local mem_used_mb=$((mem_used / 1024))
+      local mem_total_mb=$((mem_total / 1024))
+      echo "$ts cpu=${cpu_line}% mem=${mem_used_mb}/${mem_total_mb}MB (${mem_used_pct}%)" >> "$STATS_FILE"
+    done
+  ) &
+  MONITOR_PID=$!
+}
+
+stop_resource_monitor() {
+  if [ -n "${MONITOR_PID:-}" ]; then
+    kill "$MONITOR_PID" 2>/dev/null || true
+    wait "$MONITOR_PID" 2>/dev/null || true
+  fi
+  if [ -f "$STATS_FILE" ]; then
+    # Compute peak and average CPU/memory
+    local peak_cpu avg_cpu peak_mem avg_mem samples
+    samples=$(wc -l < "$STATS_FILE")
+    peak_cpu=$(awk '{gsub(/cpu=|%/,"",$2); print $2}' "$STATS_FILE" | sort -n | tail -1)
+    avg_cpu=$(awk '{gsub(/cpu=|%/,"",$2); sum+=$2; n++} END{if(n>0) printf "%.1f", sum/n; else print "0"}' "$STATS_FILE")
+    peak_mem=$(awk '{split($3,a,"/"); gsub(/mem=|MB/,"",a[1]); print a[1]}' "$STATS_FILE" | sort -n | tail -1)
+    avg_mem=$(awk '{split($3,a,"/"); gsub(/mem=|MB/,"",a[1]); sum+=a[1]; n++} END{if(n>0) printf "%.0f", sum/n; else print "0"}' "$STATS_FILE")
+    local total_mem_mb=$(awk '{split($3,a,"/"); gsub(/MB.*/,"",a[2]); print a[2]}' "$STATS_FILE" | tail -1)
+    log "RESULT cpu_peak=${peak_cpu}%"
+    log "RESULT cpu_avg=${avg_cpu}%"
+    log "RESULT mem_peak=${peak_mem}MB"
+    log "RESULT mem_avg=${avg_mem}MB"
+    log "RESULT mem_total=${total_mem_mb}MB"
+    log "RESULT resource_samples=${samples}"
+  fi
+}
 
 # ── Mount Archil ──
 mount_archil() {
@@ -62,7 +118,9 @@ run_baseline() {
   mkdir -p "$WORKDIR" && cd "$WORKDIR"
   pnpm init > /dev/null 2>&1
   log "Running: pnpm install $PACKAGES"
+  start_resource_monitor
   time_cmd "pnpm_install" pnpm install $PACKAGES
+  stop_resource_monitor
   log "RESULT nm_files=$(find node_modules -type f | wc -l | tr -d ' ')"
 }
 
@@ -83,7 +141,9 @@ run_archil() {
   export npm_config_store_dir="$archil_store"
 
   log "Running: pnpm install $PACKAGES (node_modules + store on Archil)"
+  start_resource_monitor
   time_cmd "pnpm_install" pnpm install $PACKAGES
+  stop_resource_monitor
   log "RESULT nm_files=$(find node_modules -type f | wc -l | tr -d ' ')"
 }
 
