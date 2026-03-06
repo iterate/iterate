@@ -272,22 +272,17 @@ githubRouter.post("/webhook", async (c) => {
       });
 
       if (signal.immediate) {
-        // Add deterministic eyes reaction before forwarding to agent, just
-        // like the Slack router does with its ensureSlackThreadContext call.
+        // Add deterministic eyes reaction and subscribe to agent-change
+        // callbacks *before* posting the prompt, matching the Slack router
+        // pattern. This ensures cleanup is wired up even if postPromptToAgent
+        // throws (avoiding orphaned reactions).
         if (signal.commentRef) {
           ensureGitHubReactionContext({
             agentPath,
             repo: signal.repo,
             commentRef: signal.commentRef,
           });
-        }
 
-        const prompt = await buildPrompt({ signal });
-        await postPromptToAgent(agentPath, prompt);
-
-        // Subscribe to agent-change callbacks so we can remove the reaction
-        // when the agent goes idle.
-        if (signal.commentRef) {
           const caller = createRouterClient(daemonRouter, { context: {} });
           void caller
             .subscribeToAgentChanges({
@@ -301,6 +296,9 @@ githubRouter.post("/webhook", async (c) => {
               });
             });
         }
+
+        const prompt = await buildPrompt({ signal });
+        await postPromptToAgent(agentPath, prompt);
 
         logger.debug("[daemon/github] Forwarded immediate signal to agent", {
           deliveryId: input.deliveryId,
