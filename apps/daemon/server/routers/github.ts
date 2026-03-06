@@ -736,7 +736,10 @@ function getAuthorizationSource(
   if (hasAppSlugMention(signal.eventBody)) return "mention";
   if (
     hasStoredMapping &&
-    (signal.eventKind === "workflow_run" || signal.eventKind === "pull_request")
+    (signal.eventKind === "workflow_run" ||
+      signal.eventKind === "pull_request" ||
+      signal.eventKind === "issue_comment" ||
+      signal.eventKind === "pull_request_review_comment")
   ) {
     return "mapping";
   }
