@@ -6,6 +6,7 @@ import { nanoid } from "nanoid";
 import { createRouterClient } from "@orpc/server";
 import {
   buildDefaultGitHubPrAgentPath,
+  buildDefaultGitHubSecurityAgentPath,
   normalizeAgentPath,
   toPathSegment,
 } from "@iterate-com/shared/github-agent-path";
@@ -134,6 +135,28 @@ const WorkflowRunEvent = z.object({
   }),
 });
 
+// Minimal schemas — just enough to route. Full payload is forwarded as raw JSON.
+const SecretScanningAlertEvent = z.object({
+  action: z.string(),
+  alert: z.object({ number: z.number(), html_url: z.string().optional() }),
+  repository: RepositoryPayload,
+  sender: z.object({ login: z.string() }).optional(),
+});
+
+const SecretScanningAlertLocationEvent = z.object({
+  action: z.string(),
+  alert: z.object({ number: z.number(), html_url: z.string().optional() }),
+  repository: RepositoryPayload,
+  sender: z.object({ login: z.string() }).optional(),
+});
+
+const SecurityAdvisoryEvent = z.object({
+  action: z.string(),
+  security_advisory: z.object({ ghsa_id: z.string(), html_url: z.string().optional() }),
+  repository: RepositoryPayload.optional(),
+  sender: z.object({ login: z.string() }).optional(),
+});
+
 type RepoCoords = { owner: string; name: string; fullName: string };
 
 type CommentRef = {
@@ -155,6 +178,18 @@ type ResolvedPrSignal = {
   markerBody: string | null;
   /** Present when the signal originates from a comment we can react to. */
   commentRef: CommentRef | null;
+};
+
+type ResolvedSecuritySignal = {
+  repo: RepoCoords;
+  alertNumber: number;
+  alertType: "secret_scanning" | "secret_scanning_location" | "security_advisory";
+  eventKind: string;
+  action: string;
+  actorLogin: string;
+  eventBody: string;
+  eventUrl: string;
+  agentPath: string;
 };
 
 type PrMapping = { agentPath: string };
@@ -213,8 +248,11 @@ githubRouter.post("/webhook", async (c) => {
 
     await pruneExpiredState();
 
-    const signals = collectSignals(input);
-    if (signals.length === 0) {
+    // Try PR signals first, then security signals
+    const prSignals = collectSignals(input);
+    const securitySignals = collectSecuritySignals(input);
+
+    if (prSignals.length === 0 && securitySignals.length === 0) {
       logger.debug("[daemon/github] Ignored webhook: no routable signals", {
         eventType: input.eventType,
         deliveryId: input.deliveryId,
@@ -222,7 +260,8 @@ githubRouter.post("/webhook", async (c) => {
       return c.json({ success: true, handled: false, reason: "ignored" });
     }
 
-    for (const signal of signals) {
+    // Process PR signals (existing logic)
+    for (const signal of prSignals) {
       const existingMapping = await getExistingPrMapping(signal.repo, signal.prNumber);
       const authSource = getAuthorizationSource(signal, Boolean(existingMapping));
       if (!authSource) {
@@ -331,7 +370,47 @@ githubRouter.post("/webhook", async (c) => {
       });
     }
 
-    return c.json({ success: true, handled: true, count: signals.length });
+    // Process security signals — no PR mapping / auth checks needed;
+    // these are trusted events from GitHub about repo security state.
+    for (const signal of securitySignals) {
+      const eventHash = hashSecuritySignal(signal, input.deliveryId);
+      const { duplicate } = await upsertWebhookState({
+        agentPath: signal.agentPath,
+        eventHash,
+      });
+
+      if (duplicate) {
+        logger.debug("[daemon/github] Duplicate security signal skipped", {
+          deliveryId: input.deliveryId,
+          eventKind: signal.eventKind,
+          alertNumber: signal.alertNumber,
+          agentPath: signal.agentPath,
+        });
+        continue;
+      }
+
+      logger.info("[daemon/github] Routed security signal", {
+        deliveryId: input.deliveryId,
+        eventKind: signal.eventKind,
+        action: signal.action,
+        alertNumber: signal.alertNumber,
+        repo: signal.repo.fullName,
+        agentPath: signal.agentPath,
+      });
+
+      const prompt = buildSecurityPrompt(signal);
+      await postPromptToAgent(signal.agentPath, prompt);
+
+      logger.info("[daemon/github] Forwarded security signal to agent", {
+        deliveryId: input.deliveryId,
+        eventKind: signal.eventKind,
+        alertNumber: signal.alertNumber,
+        agentPath: signal.agentPath,
+      });
+    }
+
+    const totalCount = prSignals.length + securitySignals.length;
+    return c.json({ success: true, handled: true, count: totalCount });
   } catch (error) {
     logger.error("[daemon/github] Failed to handle webhook", error);
     return c.json({ error: "Internal server error" }, 500);
@@ -490,6 +569,89 @@ function collectSignals(input: ForwardedWebhookInput): ResolvedPrSignal[] {
   return collect ? collect(input) : [];
 }
 
+// ── Security signal collectors ──────────────────────────────────────
+
+const securitySignalCollectors: Record<
+  string,
+  (input: ForwardedWebhookInput) => ResolvedSecuritySignal[]
+> = {
+  secret_scanning_alert: (input) => {
+    const parsed = SecretScanningAlertEvent.safeParse(input.payload);
+    if (!parsed.success) return [];
+    if (parsed.data.action !== "created" && parsed.data.action !== "reopened") return [];
+    const repo = resolveRepoCoordinates(parsed.data.repository);
+    if (!repo) return [];
+    const alert = parsed.data.alert;
+    return [
+      {
+        repo,
+        alertNumber: alert.number,
+        alertType: "secret_scanning",
+        eventKind: "secret_scanning_alert",
+        action: parsed.data.action,
+        actorLogin: parsed.data.sender?.login ?? "github",
+        eventBody: JSON.stringify(input.payload, null, 2),
+        eventUrl: alert.html_url ?? "",
+        agentPath: buildDefaultGitHubSecurityAgentPath(repo, "secret-scanning", alert.number),
+      },
+    ];
+  },
+
+  secret_scanning_alert_location: (input) => {
+    const parsed = SecretScanningAlertLocationEvent.safeParse(input.payload);
+    if (!parsed.success) return [];
+    const repo = resolveRepoCoordinates(parsed.data.repository);
+    if (!repo) return [];
+    const alert = parsed.data.alert;
+    return [
+      {
+        repo,
+        alertNumber: alert.number,
+        alertType: "secret_scanning_location",
+        eventKind: "secret_scanning_alert_location",
+        action: parsed.data.action,
+        actorLogin: parsed.data.sender?.login ?? "github",
+        eventBody: JSON.stringify(input.payload, null, 2),
+        eventUrl: alert.html_url ?? "",
+        agentPath: buildDefaultGitHubSecurityAgentPath(repo, "secret-scanning", alert.number),
+      },
+    ];
+  },
+
+  security_advisory: (input) => {
+    const parsed = SecurityAdvisoryEvent.safeParse(input.payload);
+    if (!parsed.success) return [];
+    if (parsed.data.action !== "published" && parsed.data.action !== "updated") return [];
+    const repo = parsed.data.repository ? resolveRepoCoordinates(parsed.data.repository) : null;
+    if (!repo) return [];
+    const advisory = parsed.data.security_advisory;
+
+    // Deterministic alert number from the full GHSA ID via hash.
+    const alertNumber =
+      parseInt(createHash("sha256").update(advisory.ghsa_id).digest("hex").slice(0, 6), 16) %
+      1_000_000;
+
+    return [
+      {
+        repo,
+        alertNumber,
+        alertType: "security_advisory",
+        eventKind: "security_advisory",
+        action: parsed.data.action,
+        actorLogin: parsed.data.sender?.login ?? "github",
+        eventBody: JSON.stringify(input.payload, null, 2),
+        eventUrl: advisory.html_url ?? "",
+        agentPath: buildDefaultGitHubSecurityAgentPath(repo, "advisory", alertNumber),
+      },
+    ];
+  },
+};
+
+function collectSecuritySignals(input: ForwardedWebhookInput): ResolvedSecuritySignal[] {
+  const collect = securitySignalCollectors[input.eventType];
+  return collect ? collect(input) : [];
+}
+
 function parseAgentPathFromBody(body: string | null | undefined): string | null {
   return normalizeAgentPath(parseContextValue(body, "agent_path"));
 }
@@ -529,7 +691,11 @@ function getAuthorizationSource(
   if (hasAppSlugMention(signal.eventBody)) return "mention";
   if (
     hasStoredMapping &&
-    (signal.eventKind === "workflow_run" || signal.eventKind === "pull_request")
+    (signal.eventKind === "workflow_run" ||
+      signal.eventKind === "pull_request" ||
+      signal.eventKind === "issue_comment" ||
+      signal.eventKind === "pull_request_review_comment" ||
+      signal.eventKind === "pull_request_review")
   ) {
     return "mapping";
   }
@@ -695,6 +861,20 @@ function hashSignal(signal: ResolvedPrSignal, deliveryId: string): string {
     .digest("hex");
 }
 
+function hashSecuritySignal(signal: ResolvedSecuritySignal, deliveryId: string): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        deliveryId,
+        alertNumber: signal.alertNumber,
+        alertType: signal.alertType,
+        eventKind: signal.eventKind,
+        action: signal.action,
+      }),
+    )
+    .digest("hex");
+}
+
 async function upsertWebhookState(params: {
   agentPath: string;
   eventHash: string;
@@ -732,6 +912,11 @@ async function buildPrompt(params: { signal: ResolvedPrSignal }): Promise<string
   return body ? `${summary}\n\n${body}` : summary;
 }
 
+function buildSecurityPrompt(signal: ResolvedSecuritySignal): string {
+  const summary = `[github] ${signal.repo.fullName} ${signal.eventKind}/${signal.action}${signal.eventUrl ? ` ${signal.eventUrl}` : ""}`;
+  return `${summary}\n\n${signal.eventBody}`;
+}
+
 function compactText(value: string | null | undefined, maxLength: number): string {
   if (!value) return "";
   const normalized = value.replace(/\s+/g, " ").trim();
@@ -748,9 +933,66 @@ async function postPromptToAgent(agentPath: string, prompt: string): Promise<voi
     signal: AbortSignal.timeout(15_000),
   });
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "<no body>");
-    throw new Error(`Agent forward failed (${response.status}): ${body.slice(0, 500)}`);
+  if (response.ok) return;
+
+  // If the agent's upstream session is dead/unreachable (502/503/504 or session-not-found 404/500),
+  // archive the stale agent + route so the next attempt creates a fresh session.
+  const isDeadSession = response.status >= 500 || response.status === 404;
+  if (isDeadSession) {
+    logger.warn(
+      `[daemon/github] Agent forward failed (${response.status}) for ${agentPath}; clearing stale route for retry`,
+    );
+    await clearStaleAgentRoute(agentPath);
+
+    // Retry once — getOrCreateAgent will create a fresh session
+    const retryResponse = await fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        events: [{ type: "iterate:agent:prompt-added", message: prompt }],
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (retryResponse.ok) {
+      logger.info(`[daemon/github] Retry succeeded for ${agentPath} after clearing stale route`);
+      return;
+    }
+
+    const retryBody = await retryResponse.text().catch(() => "<no body>");
+    throw new Error(
+      `Agent forward retry failed (${retryResponse.status}) for ${agentPath}: ${retryBody.slice(0, 500)}`,
+    );
+  }
+
+  const body = await response.text().catch(() => "<no body>");
+  throw new Error(`Agent forward failed (${response.status}): ${body.slice(0, 500)}`);
+}
+
+/**
+ * Clear a stale agent route so the next getOrCreateAgent call creates a fresh session.
+ * Archives the agent and deactivates its route.
+ */
+async function clearStaleAgentRoute(agentPath: string): Promise<void> {
+  try {
+    // Deactivate the route so getOrCreateAgent creates a new one
+    db.update(schema.agentRoutes)
+      .set({ active: false, updatedAt: new Date() })
+      .where(and(eq(schema.agentRoutes.agentPath, agentPath), eq(schema.agentRoutes.active, true)))
+      .run();
+
+    // Archive the agent so it gets re-created
+    db.update(schema.agents)
+      .set({ archivedAt: new Date(), updatedAt: new Date() })
+      .where(eq(schema.agents.path, agentPath))
+      .run();
+
+    logger.info(`[daemon/github] Cleared stale agent route for ${agentPath}`);
+  } catch (err) {
+    logger.error("[daemon/github] Failed to clear stale agent route", {
+      agentPath,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
