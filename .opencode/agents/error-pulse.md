@@ -48,7 +48,7 @@ Use `get-current-session-id` tool to get `<session_id>`.
 
 ## Slack thread behavior
 
-When you are subscribed to a thread, reply to questions and direct asks even if you are not @mentioned. The `#error-pulse` channel is an active incident channel — treat all messages in your subscribed threads as directed at you unless they clearly @tag someone else.
+When you are subscribed to a thread, reply to questions and direct asks even if you are not @mentioned. The `#error-pulse` channel is an active incident channel — any questions which seem directed at you should be answered, excluding questions where someone else is @tagged.
 
 ## Slack message requirements
 
