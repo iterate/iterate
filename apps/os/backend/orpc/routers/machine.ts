@@ -254,6 +254,7 @@ export const machineRouter = {
       } catch (err) {
         throw new ORPCError("INTERNAL_SERVER_ERROR", {
           message: `Failed to create machine: ${err instanceof Error ? err.message : String(err)}`,
+          cause: err,
         });
       }
     }),

@@ -7,7 +7,7 @@
  *
  * @see https://docs.archil.com/api-reference/introduction
  */
-import { Archil, ArchilApiError } from "@archildata/client/api";
+import { Archil, ArchilApiError, type ArchilOptions } from "@archildata/client/api";
 import { and, eq, inArray } from "drizzle-orm";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
@@ -15,20 +15,20 @@ import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { ArchilApiKeys, jsonEnvVar, RegionConfig } from "../../worker-config.ts";
 
-function getArchilRegion(env: CloudflareEnv) {
-  const config = jsonEnvVar.parse(RegionConfig, env.REGION_CONFIG);
-  return config.archilRegion;
-}
-
-function createArchilClient(env: CloudflareEnv): Archil {
-  const region = getArchilRegion(env);
+function getArchilOptions(env: CloudflareEnv): ArchilOptions {
+  const regionConfig = jsonEnvVar.parse(RegionConfig, env.REGION_CONFIG);
+  const region = regionConfig.archilRegion;
   const apiKeys = jsonEnvVar.parse(ArchilApiKeys, env.ARCHIL_API_KEYS);
-  const apiKey = apiKeys[region];
+  const apiKey = apiKeys[region]?.replace(/^key-/, "");
   if (!apiKey) {
     const message = `No Archil API key found for region ${region}. Available regions: ${Object.keys(apiKeys).join(", ")}`;
     throw new Error(message);
   }
-  return new Archil({ apiKey, region });
+  return { apiKey, region };
+}
+
+function createArchilClient(env: CloudflareEnv): Archil {
+  return new Archil(getArchilOptions(env));
 }
 
 /**
@@ -51,6 +51,7 @@ export async function ensureProjectArchilDisk(
     return;
   }
 
+  const { region } = getArchilOptions(env);
   const { diskId, mountToken } = await createArchilDisk(env, params);
 
   // Store as project env vars — these flow to every machine via buildMachineEnvVars.
@@ -71,7 +72,7 @@ export async function ensureProjectArchilDisk(
   const archilVars = [
     { key: "ARCHIL_DISK_NAME", value: diskId },
     { key: "ARCHIL_MOUNT_TOKEN", value: mountToken },
-    { key: "ARCHIL_REGION", value: getArchilRegion(env) },
+    { key: "ARCHIL_REGION", value: region },
   ];
   for (const { key, value } of archilVars) {
     await db.insert(schema.projectEnvVar).values({
@@ -94,6 +95,7 @@ async function createArchilDisk(
   env: CloudflareEnv,
   params: { projectId: string; projectSlug: string },
 ): Promise<{ diskId: string; mountToken: string }> {
+  const { region } = getArchilOptions(env);
   const archil = createArchilClient(env);
   const diskName = `iterate-${params.projectSlug}-${params.projectId.slice(-8)}`;
 
@@ -135,6 +137,11 @@ async function createArchilDisk(
       logger.info(`[Archil] Disk ${diskName} already exists, adding new auth token`);
       return addTokenToExistingDisk(env, diskName, mountToken, authMethod);
     }
+    const detail =
+      err instanceof ArchilApiError ? `status=${err.status} ${err.message}` : String(err);
+    logger.error(
+      `[Archil] Failed to create disk=${diskName} region=${region} project=${params.projectId}: ${detail}`,
+    );
     throw err;
   }
 }
@@ -157,7 +164,15 @@ async function addTokenToExistingDisk(
 ): Promise<{ diskId: string; mountToken: string }> {
   const archil = createArchilClient(env);
 
-  const disks = await archil.disks.list();
+  let disks;
+  try {
+    disks = await archil.disks.list();
+  } catch (err) {
+    const detail =
+      err instanceof ArchilApiError ? `status=${err.status} ${err.message}` : String(err);
+    logger.error(`[Archil] Failed to list disks while resolving ${diskName}: ${detail}`);
+    throw err;
+  }
   const disk = disks.find((d) => d.name === diskName);
   if (!disk) {
     throw new Error(`Archil disk ${diskName} not found despite 409 conflict`);
