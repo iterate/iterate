@@ -877,7 +877,14 @@ function getFetch(targetUrl: string, { headers }: { headers: HeadersInit }): typ
     return fetch;
   }
 
-  if (new URL(targetUrl).hostname !== requestHostname) {
+  let targetHostname: string;
+  try {
+    targetHostname = new URL(targetUrl).hostname;
+  } catch {
+    return fetch;
+  }
+
+  if (targetHostname !== requestHostname) {
     return fetch;
   }
 
