@@ -1107,6 +1107,12 @@ importers:
         specifier: ^8.19.0
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
 
+  experiments/archil-node-modules:
+    dependencies:
+      '@archildata/client':
+        specifier: ^0.8.2
+        version: 0.8.2
+
   jonasland/e2e:
     devDependencies:
       '@accelerated-software-development/caddy-api-client':
