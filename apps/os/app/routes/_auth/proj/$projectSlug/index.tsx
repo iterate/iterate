@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -240,7 +241,7 @@ function ProjectHomePage() {
     ? undefined
     : (search.thread ?? threadsData.threads[0]?.threadId);
 
-  const { data: messagesData } = useQuery({
+  const { data: messagesData, dataUpdatedAt } = useQuery({
     ...orpc.webchat.getThreadMessages.queryOptions({
       input: {
         projectSlug: params.projectSlug,
@@ -251,7 +252,21 @@ function ProjectHomePage() {
   });
 
   const messages = selectedThreadId ? (messagesData?.messages ?? []) : [];
-  const threadStatus = messagesData?.status;
+  const threadStatus = useMemo(() => {
+    // Fudge the status a little so we show we're working on it right away.
+    // Right after a user message, show "Thinking..." for 1.5 seconds.
+    // Right after an assistant message, don't show the status (we take a bit of time to clear it too).
+    const lastMessage = messagesData?.messages.at(-1);
+    const status = messagesData?.status;
+    const ageMs = Date.now() - (lastMessage?.createdAt ?? dataUpdatedAt);
+    if (status && lastMessage?.role === "assistant" && ageMs < 3000) {
+      return undefined;
+    }
+    if (!status && lastMessage?.role === "user" && ageMs < 1500) {
+      return "Thinking...";
+    }
+    return status;
+  }, [messagesData, dataUpdatedAt]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
