@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Hono } from "hono";
 import { createMachineForProject } from "../../services/machine-creation.ts";
+import { outboxClient } from "../../outbox/client.ts";
 import { githubApp } from "./github.ts";
 
 // Mock the dependencies
@@ -26,6 +27,12 @@ vi.mock("../../services/machine-creation.ts", () => ({
 
 vi.mock("../../lib/posthog.ts", () => ({
   trackWebhookEvent: vi.fn(),
+}));
+
+vi.mock("../../outbox/client.ts", () => ({
+  outboxClient: {
+    send: vi.fn().mockResolvedValue({ eventId: "1", matchedConsumers: 1, delays: ["0s"] }),
+  },
 }));
 
 // Helper to generate valid signature
@@ -69,9 +76,11 @@ const validWorkflowRunPayload = {
 describe("GitHub Webhook Handler", () => {
   const WEBHOOK_SECRET = "test-webhook-secret";
   const createMachineForProjectMock = vi.mocked(createMachineForProject);
+  const outboxClientSendMock = vi.mocked(outboxClient.send);
 
   beforeEach(() => {
     createMachineForProjectMock.mockClear();
+    outboxClientSendMock.mockClear();
   });
 
   function createMockDb() {
@@ -507,6 +516,87 @@ describe("GitHub Webhook Handler", () => {
       await expectWebhookMatch(res, { received: true });
       await flushBackgroundTasks();
       expect(createMachineForProjectMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("iterate/iterate push to main", () => {
+    const iteratePushPayload = {
+      ref: "refs/heads/main",
+      repository: {
+        full_name: "iterate/iterate",
+        owner: { login: "iterate" },
+        name: "iterate",
+      },
+    };
+
+    it("enqueues a raw webhook event when iterate/iterate is pushed to main", async () => {
+      const { app, mockDb } = createTestApp();
+
+      const res = await makeWebhookRequest({
+        app,
+        payload: iteratePushPayload,
+        event: "push",
+      });
+
+      await expectWebhookMatch(res, { received: true });
+      await flushBackgroundTasks();
+      expect(outboxClientSendMock).toHaveBeenCalledWith(
+        { transaction: mockDb, parent: mockDb },
+        "github:webhook-received",
+        expect.objectContaining({
+          sourceEventId: "evt_test123",
+          deliveryId: expect.any(String),
+          event: "push",
+          action: null,
+          payload: iteratePushPayload,
+        }),
+      );
+    });
+
+    it("still enqueues raw webhook events for non-main branch pushes", async () => {
+      const { app, mockDb } = createTestApp();
+
+      const res = await makeWebhookRequest({
+        app,
+        payload: {
+          ...iteratePushPayload,
+          ref: "refs/heads/feature-branch",
+        },
+        event: "push",
+      });
+
+      await expectWebhookMatch(res, { received: true });
+      await flushBackgroundTasks();
+      expect(outboxClientSendMock).toHaveBeenCalledWith(
+        { transaction: mockDb, parent: mockDb },
+        "github:webhook-received",
+        expect.objectContaining({ event: "push" }),
+      );
+    });
+
+    it("still enqueues raw webhook events for other repos", async () => {
+      const { app, mockDb } = createTestApp();
+
+      const res = await makeWebhookRequest({
+        app,
+        payload: {
+          ref: "refs/heads/main",
+          repository: {
+            full_name: "other/repo",
+            owner: { login: "other" },
+            name: "repo",
+          },
+        },
+        event: "push",
+      });
+
+      await expectWebhookMatch(res, { received: true });
+      await flushBackgroundTasks();
+      expect(outboxClientSendMock).toHaveBeenCalledWith(
+        { transaction: mockDb, parent: mockDb },
+        "github:webhook-received",
+        expect.objectContaining({ event: "push" }),
+      );
     });
   });
 });

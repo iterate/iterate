@@ -22,6 +22,7 @@ import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
 import { trackWebhookEvent } from "../../lib/posthog.ts";
 import type { ProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
+import { outboxClient } from "../../outbox/client.ts";
 
 /**
  * Derive the correct provider-specific snapshot/image name from a short SHA.
@@ -812,6 +813,14 @@ githubApp.post("/webhook", async (c) => {
     });
     return c.json({ received: true, duplicate: true });
   }
+
+  await outboxClient.send({ transaction: db, parent: db }, "github:webhook-received", {
+    sourceEventId: inserted.id,
+    deliveryId,
+    event: eventType,
+    action: typeof payload.action === "string" ? payload.action : null,
+    payload,
+  });
 
   waitUntil(
     processGitHubWebhookEvent({ eventType, payload, deliveryId, db, env }).catch((err) => {

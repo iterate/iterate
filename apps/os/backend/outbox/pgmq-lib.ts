@@ -333,6 +333,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     );
 
     const delays: TimePeriod[] = [];
+    // TODO: batch the `pgmq.send` calls below when we add a bulk enqueue path.
     for (const consumer of filteredConsumers) {
       const delay = consumer.delay({ payload: params.payload });
       delays.push(delay);
@@ -517,6 +518,8 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     eventName: Name,
     payload: EventTypes[Name],
   ) => {
+    // TODO: add a batch send API here, and batch pgmq job enqueueing in `enqueue`,
+    // so fanout consumers don't need to insert one event/job at a time.
     const addResult = await queuer.enqueue(connections.transaction as DBConnection, {
       name: eventName,
       payload: payload as never,
