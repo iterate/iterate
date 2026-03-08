@@ -114,6 +114,10 @@ export type ConsumersRecord = Record<`eventName:${string}`, ConsumersForEvent>;
 
 export type QueuePeekOptions = { limit?: number; offset?: number; minReadCount?: number };
 
+export type EnqueueParams = { name: string; payload: { input: unknown; output: unknown } };
+
+export type EnqueueResult = { eventId: string; matchedConsumers: number; delays: TimePeriod[] };
+
 export type QueuerEvent = {
   job: ConsumerJobQueueMessage;
   error?: string;
@@ -127,10 +131,8 @@ export interface Queuer<DBConnection> {
   $types: {
     db: DBConnection;
   };
-  enqueue: (
-    db: DBConnection,
-    params: { name: string; payload: { input: unknown; output: unknown } },
-  ) => Promise<{ eventId: string; matchedConsumers: number; delays: TimePeriod[] }>;
+  enqueue: (db: DBConnection, params: EnqueueParams) => Promise<EnqueueResult>;
+  enqueueBatch: (db: DBConnection, params: EnqueueParams[]) => Promise<EnqueueResult[]>;
 
   consumers: ConsumersRecord;
 
@@ -313,18 +315,52 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
 
   const consumers: Queuer<DBLike>["consumers"] = {};
 
-  const enqueue: Queuer<DBLike>["enqueue"] = async (db, params) => {
-    logger.info(`[outbox] adding to pgmq:${params.name}`);
-    const causation = outboxALS.getStore();
-    const context = causation ? { causedBy: causation } : {};
-    const exec = getExec(db);
-    const insertResult = await exec(sql<typeof InsertedEvent>`
-      insert into outbox_event (name, payload, context)
-      values (${params.name}, ${JSON.stringify(params.payload)}, ${JSON.stringify(context)}::jsonb)
-      returning id
-    `);
-    const eventInsertion = InsertedEvent.parse(insertResult.rows[0]);
+  const sendConsumerMessages = async (
+    db: DBLike,
+    messages: Array<{ message: ConsumerEvent; delay: TimePeriod }>,
+  ) => {
+    if (messages.length === 0) return;
 
+    const exec = getExec(db);
+    const messagesByDelay = new Map<TimePeriod, ConsumerEvent[]>();
+    for (const entry of messages) {
+      const group = messagesByDelay.get(entry.delay) ?? [];
+      group.push(entry.message);
+      messagesByDelay.set(entry.delay, group);
+    }
+
+    for (const [delay, batchedMessages] of messagesByDelay) {
+      if (batchedMessages.length === 1) {
+        await exec(sql`
+          select from pgmq.send(
+            queue_name  => ${queueName}::text,
+            msg         => ${JSON.stringify(batchedMessages[0])}::jsonb,
+            delay => ${periodSeconds(delay)}::integer
+          )
+        `);
+        continue;
+      }
+
+      const pgMessages = sql.join(
+        batchedMessages.map((message) => sql`${JSON.stringify(message)}::jsonb`),
+        sql`, `,
+      );
+
+      await exec(sql`
+        select * from pgmq.send_batch(
+          queue_name => ${queueName}::text,
+          msgs => array[${pgMessages}]::jsonb[],
+          delay => ${periodSeconds(delay)}::integer
+        )
+      `);
+    }
+  };
+
+  const buildConsumerMessages = (
+    params: EnqueueParams,
+    eventId: number,
+    context: Record<string, unknown>,
+  ) => {
     const consumersForPath = Object.values(consumers[`eventName:${params.name}`] || {});
     const filteredConsumers = consumersForPath.filter((c) => c.when({ payload: params.payload }));
 
@@ -333,34 +369,68 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     );
 
     const delays: TimePeriod[] = [];
-    // TODO: batch the `pgmq.send` calls below when we add a bulk enqueue path.
-    for (const consumer of filteredConsumers) {
+    const messages = filteredConsumers.map((consumer) => {
       const delay = consumer.delay({ payload: params.payload });
       delays.push(delay);
-      await exec(sql`
-        select from pgmq.send(
-          queue_name  => ${queueName}::text,
-          msg         => ${JSON.stringify({
-            consumer_name: consumer.name,
-            status: "pending",
-            event_name: params.name,
-            event_id: Number(eventInsertion.id satisfies string),
-            event_payload: params.payload,
-            event_context: context,
-            processing_results: [],
-            environment: process.env.APP_STAGE || process.env.NODE_ENV || "unknown",
-          } satisfies ConsumerEvent)}::jsonb,
-          delay => ${periodSeconds(delay)}::integer
-        )
+      return {
+        delay,
+        message: {
+          consumer_name: consumer.name,
+          status: "pending",
+          event_name: params.name,
+          event_id: eventId,
+          event_payload: params.payload,
+          event_context: context,
+          processing_results: [],
+          environment: process.env.APP_STAGE || process.env.NODE_ENV || "unknown",
+        } satisfies ConsumerEvent,
+      };
+    });
+
+    return { delays, matchedConsumers: filteredConsumers.length, messages };
+  };
+
+  const enqueue: Queuer<DBLike>["enqueue"] = async (db, params) => {
+    return (await enqueueBatch(db, [params]))[0];
+  };
+
+  const enqueueBatch: Queuer<DBLike>["enqueueBatch"] = async (db, paramsList) => {
+    if (paramsList.length === 0) return [];
+
+    const causation = outboxALS.getStore();
+    const context = causation ? { causedBy: causation } : {};
+    const exec = getExec(db);
+    const results: EnqueueResult[] = [];
+    const allMessages: Array<{ message: ConsumerEvent; delay: TimePeriod }> = [];
+
+    for (const params of paramsList) {
+      logger.info(`[outbox] adding to pgmq:${params.name}`);
+      const insertResult = await exec(sql<typeof InsertedEvent>`
+        insert into outbox_event (name, payload, context)
+        values (${params.name}, ${JSON.stringify(params.payload)}, ${JSON.stringify(context)}::jsonb)
+        returning id
       `);
+      const eventInsertion = InsertedEvent.parse(insertResult.rows[0]);
+      const eventId = Number(eventInsertion.id satisfies string);
+      const { delays, matchedConsumers, messages } = buildConsumerMessages(
+        params,
+        eventId,
+        context,
+      );
+      allMessages.push(...messages);
+      results.push({ eventId: eventInsertion.id, matchedConsumers, delays });
     }
-    return { eventId: eventInsertion.id, matchedConsumers: filteredConsumers.length, delays };
+
+    await sendConsumerMessages(db, allMessages);
+
+    return results;
   };
 
   return {
     $types: { db: {} as DBLike },
     consumers,
     enqueue,
+    enqueueBatch,
     processQueue: (db) => processQueue(db),
     peekQueue: async (db, options = {}) => {
       const exec = getExec(db);
@@ -473,6 +543,22 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
   { waitUntil = ((promise) => void promise) as WaitUntilFn } = {},
 ) => {
   type EventName = Extract<keyof EventTypes, string>;
+  type SendBatchItem = { [K in EventName]: { eventName: K; payload: EventTypes[K] } }[EventName];
+  const scheduleQueueProcessing = (db: DBConnection, delays: TimePeriod[]) => {
+    for (const delay of new Set(delays)) {
+      // as a convenience, we'll process the queue automatically after the delay + a 10% buffer
+      let delayMs = periodSeconds(delay) * 1000;
+      delayMs = Math.max(20, delayMs * 1.1); // add 10% buffer to avoid race conditions, add 20ms minimum to let transactions complete
+      if (delayMs > 120_000) continue; // don't bother with super long delays
+      waitUntil(
+        (async () => {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          return queuer.processQueue(db);
+        })(),
+      );
+    }
+  };
+
   const registerConsumer = <P extends EventName>(options: {
     name: string;
     on: P;
@@ -518,25 +604,35 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     eventName: Name,
     payload: EventTypes[Name],
   ) => {
-    // TODO: add a batch send API here, and batch pgmq job enqueueing in `enqueue`,
-    // so fanout consumers don't need to insert one event/job at a time.
     const addResult = await queuer.enqueue(connections.transaction as DBConnection, {
       name: eventName,
       payload: payload as never,
     });
-    for (const delay of new Set(addResult.delays)) {
-      // as a convenience, we'll process the queue automatically after the delay + a 10% buffer
-      let delayMs = periodSeconds(delay) * 1000;
-      delayMs = Math.max(20, delayMs * 1.1); // add 10% buffer to avoid race conditions, add 20ms minimum to let transactions complete
-      if (delayMs > 120_000) continue; // don't bother with super long delays
-      waitUntil(
-        (async () => {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-          return queuer.processQueue(connections.parent as DBConnection);
-        })(),
-      );
-    }
+    scheduleQueueProcessing(connections.parent as DBConnection, addResult.delays);
     return addResult;
+  };
+
+  const sendBatch = async (
+    connections: {
+      transaction: DBLike;
+      parent: DBLike;
+    },
+    events: SendBatchItem[],
+  ) => {
+    if (events.length === 0) return [];
+
+    const addResults = await queuer.enqueueBatch(
+      connections.transaction as DBConnection,
+      events.map((event) => ({
+        name: event.eventName,
+        payload: event.payload as never,
+      })),
+    );
+    scheduleQueueProcessing(
+      connections.parent as DBConnection,
+      addResults.flatMap((result) => result.delays),
+    );
+    return addResults;
   };
 
   /** Send an event in a db transaction. The outbox event is inserted in the same transaction as the callback. */
@@ -554,17 +650,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
       return { addResult, result };
     });
 
-    for (const delay of new Set(addResult.delays)) {
-      let delayMs = periodSeconds(delay) * 1000;
-      delayMs = Math.max(20, delayMs * 1.1); // add 10% buffer to avoid race conditions, add 20ms minimum to let transactions complete
-      if (delayMs > 120_000) continue; // don't bother with super long delays
-      waitUntil(
-        (async () => {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-          return queuer.processQueue(parent as DBConnection);
-        })(),
-      );
-    }
+    scheduleQueueProcessing(parent as DBConnection, addResult.delays);
 
     return result;
   }
@@ -572,6 +658,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
   return {
     registerConsumer,
     send,
+    sendBatch,
     sendTx,
   };
 };

@@ -37,6 +37,28 @@ test("internal event types are type-safe", () => {
     )
     .resolves.toEqualTypeOf<{ eventId: string; matchedConsumers: number; delays: TimePeriod[] }>();
 
+  expectTypeOf(outboxClient)
+    .map((client) =>
+      client.sendBatch({ transaction: db, parent: db }, [
+        {
+          eventName: "testing:poke",
+          payload: { dbtime: "2000-01-01T00:00:00.000Z", message: "hello" },
+        },
+        {
+          eventName: "machine:delete-requested",
+          payload: {
+            machineId: "mach_123",
+            type: "daytona" as const,
+            externalId: "ext_123",
+            metadata: {},
+          },
+        },
+      ]),
+    )
+    .resolves.toEqualTypeOf<
+      Array<{ eventId: string; matchedConsumers: number; delays: TimePeriod[] }>
+    >();
+
   expectTypeOf(outboxClient.send).toBeCallableWith(
     { transaction: db, parent: db },
     // @ts-expect-error - typo in event name

@@ -28,6 +28,7 @@ describe("outbox integration", () => {
     "test:basic": { message: string };
     "test:unstable": { message: string };
     "test:fail": { message: string };
+    "test:fanout": { message: string };
   };
 
   beforeAll(() => {
@@ -71,6 +72,22 @@ describe("outbox integration", () => {
       },
       handler: () => {
         throw new Error("[test] always fails");
+      },
+    });
+
+    outboxClient.registerConsumer({
+      name: "fanoutA",
+      on: "test:fanout",
+      handler: (params) => {
+        return `fanout-a: ${params.payload.message}`;
+      },
+    });
+
+    outboxClient.registerConsumer({
+      name: "fanoutB",
+      on: "test:fanout",
+      handler: (params) => {
+        return `fanout-b: ${params.payload.message}`;
       },
     });
   });
@@ -170,5 +187,69 @@ describe("outbox integration", () => {
     expect(archived!.read_ct).toBe(4); // 3 retries + 1 final attempt
     expect(archived!.message.status).toBe("failed");
     expect(archived!.message.processing_results).toHaveLength(4);
+  });
+
+  test("fanout: single event archives one job per consumer", { timeout: 30_000 }, async () => {
+    if (!db) return;
+
+    const secret = `fanout_${Date.now()}_${Math.random()}`;
+    const result = await outboxClient.send({ transaction: db, parent: db }, "test:fanout", {
+      message: secret,
+    });
+
+    expect(result.matchedConsumers).toBe(2);
+
+    const archived = await vi.waitUntil(
+      async () => {
+        await queuer.processQueue(db);
+        const arch = await queuer.peekArchive(db, { limit: 20 });
+        return arch.filter((m) => m.message.event_id === Number(result.eventId));
+      },
+      {
+        timeout: 30_000,
+        interval: 1000,
+      },
+    );
+
+    expect(archived).toHaveLength(2);
+    expect(archived.map((message) => message.message.consumer_name).sort()).toEqual([
+      "fanoutA",
+      "fanoutB",
+    ]);
+  });
+
+  test("sendBatch: enqueues and processes multiple events", { timeout: 30_000 }, async () => {
+    if (!db) return;
+
+    const basicSecret = `batch_basic_${Date.now()}_${Math.random()}`;
+    const fanoutSecret = `batch_fanout_${Date.now()}_${Math.random()}`;
+    const results = await outboxClient.sendBatch({ transaction: db, parent: db }, [
+      { eventName: "test:basic", payload: { message: basicSecret } },
+      { eventName: "test:fanout", payload: { message: fanoutSecret } },
+    ]);
+
+    expect(results).toHaveLength(2);
+    expect(results[0]?.matchedConsumers).toBe(1);
+    expect(results[1]?.matchedConsumers).toBe(2);
+
+    const eventIds = results.map((result) => Number(result.eventId));
+    const archived = await vi.waitUntil(
+      async () => {
+        await queuer.processQueue(db);
+        const arch = await queuer.peekArchive(db, { limit: 30 });
+        return arch.filter((message) => eventIds.includes(message.message.event_id));
+      },
+      {
+        timeout: 30_000,
+        interval: 1000,
+      },
+    );
+
+    expect(archived).toHaveLength(3);
+    expect(archived.map((message) => message.message.event_id).sort()).toEqual([
+      eventIds[0],
+      eventIds[1],
+      eventIds[1],
+    ]);
   });
 });
