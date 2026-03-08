@@ -89,7 +89,10 @@ export const registerConsumers = () => {
       });
 
       if (!machine) {
-        logger.set({ machineId: params.payload.machineId, sourceEventId: params.payload.sourceEventId });
+        logger.set({
+          machineId: params.payload.machineId,
+          sourceEventId: params.payload.sourceEventId,
+        });
         logger.warn("[GitHub Webhook] Skipping iterate pull for missing machine");
         return `skipped: machine ${params.payload.machineId} not found`;
       }
