@@ -8,7 +8,19 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { sql, SQL } from "drizzle-orm";
 import { os, type Procedure, type InferSchemaInput, type InferSchemaOutput } from "@orpc/server";
 import { z } from "zod/v4";
+import * as _drizzleUtils from "drizzle-orm/utils";
 import { logger } from "../tag-logger.ts";
+
+const drizzleUtils = _drizzleUtils as typeof import("drizzle-orm/utils") & {
+  orderSelectedFields?: (fields: Record<string, unknown>) => string[];
+  mapResultRow?: (columns: string[], row: unknown[]) => Record<string, unknown>;
+};
+
+if (!drizzleUtils.orderSelectedFields || !drizzleUtils.mapResultRow) {
+  throw new Error(
+    "drizzle-orm/utils is not compatible with this version of pgmq-lib. We need orderSelectedFields and mapResultRow.",
+  );
+}
 
 // Tracks the current consumer execution context so that events emitted
 // inside a consumer handler automatically get `context.causedBy` populated.
@@ -127,10 +139,24 @@ export type QueuerEventMap = {
   statusChange: QueuerEvent;
 };
 
+export type DrizzleInsertOrUpdateQuery<T> = PromiseLike<T[]> & {
+  getSQL: () => SQL;
+  returning?: "If the returning prop is present, the query you are trying to use is not valid. You can only use this method with an insert or update query with a returning clause";
+};
+
 export interface Queuer<DBConnection> {
   $types: {
     db: DBConnection;
   };
+  enqueueCTE: <D extends DBLike, Q extends DrizzleInsertOrUpdateQuery<unknown>>(
+    db: D,
+    query: Q,
+    params: {
+      name: string;
+      payload: unknown;
+      context?: Record<string, unknown>;
+    },
+  ) => Promise<Awaited<Q>>;
   enqueue: (db: DBConnection, params: EnqueueParams) => Promise<EnqueueResult>;
   enqueueBatch: (db: DBConnection, params: EnqueueParams[]) => Promise<EnqueueResult[]>;
 
@@ -394,23 +420,55 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     return (await enqueueBatch(db, [params]))[0];
   };
 
+  const enqueueCTE: Queuer<DBLike>["enqueueCTE"] = async (
+    db,
+    query,
+    params,
+  ): Promise<Awaited<typeof query>> => {
+    const { name, payload, context = {} } = params;
+    const exec = getExec(db);
+    const cteSql = sql`with query as (`.append(query.getSQL()).append(sql`)`).append(sql`
+      insert into outbox_event (name, payload, context)
+      select ${name}, ${JSON.stringify(payload)}::jsonb, ${JSON.stringify(context)}::jsonb
+      from query
+      returning query.*
+    `);
+    const result = await exec(cteSql);
+    const config = (query as { config?: { returningFields: Record<string, unknown> } }).config;
+    const columns = drizzleUtils.orderSelectedFields!(config!.returningFields);
+    const mapped = result.rows.map((row) =>
+      drizzleUtils.mapResultRow!(columns, Object.values(row as {})),
+    );
+    return mapped as Awaited<typeof query>;
+  };
+
   const enqueueBatch: Queuer<DBLike>["enqueueBatch"] = async (db, paramsList) => {
     if (paramsList.length === 0) return [];
 
     const causation = outboxALS.getStore();
     const context = causation ? { causedBy: causation } : {};
     const exec = getExec(db);
-    const results: EnqueueResult[] = [];
     const allMessages: Array<{ message: ConsumerEvent; delay: TimePeriod }> = [];
 
-    for (const params of paramsList) {
-      logger.info(`[outbox] adding to pgmq:${params.name}`);
-      const insertResult = await exec(sql<typeof InsertedEvent>`
-        insert into outbox_event (name, payload, context)
-        values (${params.name}, ${JSON.stringify(params.payload)}, ${JSON.stringify(context)}::jsonb)
-        returning id
-      `);
-      const eventInsertion = InsertedEvent.parse(insertResult.rows[0]);
+    logger.info(`[outbox] adding ${paramsList.length} events to pgmq:${queueName}`);
+    const insertValues = sql.join(
+      paramsList.map(
+        (params) =>
+          sql`(${params.name}, ${JSON.stringify(params.payload)}, ${JSON.stringify(context)}::jsonb)`,
+      ),
+      sql`, `,
+    );
+    const insertResult = await exec(sql<typeof InsertedEvent>`
+      insert into outbox_event (name, payload, context)
+      values ${insertValues}
+      returning id
+    `);
+    const insertedEvents = z.array(InsertedEvent).parse(insertResult.rows);
+    const results = paramsList.map((params, index) => {
+      const eventInsertion = insertedEvents[index];
+      if (!eventInsertion) {
+        throw new Error(`Expected inserted event at index ${index}`);
+      }
       const eventId = Number(eventInsertion.id satisfies string);
       const { delays, matchedConsumers, messages } = buildConsumerMessages(
         params,
@@ -418,8 +476,8 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         context,
       );
       allMessages.push(...messages);
-      results.push({ eventId: eventInsertion.id, matchedConsumers, delays });
-    }
+      return { eventId: eventInsertion.id, matchedConsumers, delays };
+    });
 
     await sendConsumerMessages(db, allMessages);
 
@@ -431,6 +489,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     consumers,
     enqueue,
     enqueueBatch,
+    enqueueCTE,
     processQueue: (db) => processQueue(db),
     peekQueue: async (db, options = {}) => {
       const exec = getExec(db);
@@ -535,12 +594,14 @@ type ProcUnion<P, Prefix extends string = ""> = {
     : ProcUnion<P[K], `${Prefix}${Extract<K, string>}.`>;
 }[Exclude<keyof P, "~orpc">];
 
+const defaultWaitUntil: WaitUntilFn = (promise) => void promise;
+
 /**
  * Create a typed consumer client for registering consumers and sending events.
  */
 export const createConsumerClient = <EventTypes extends Record<string, {}>, DBConnection>(
   queuer: Queuer<DBConnection>,
-  { waitUntil = ((promise) => void promise) as WaitUntilFn } = {},
+  { waitUntil = defaultWaitUntil, getDb }: { waitUntil?: WaitUntilFn; getDb: () => DBLike },
 ) => {
   type EventName = Extract<keyof EventTypes, string>;
   type SendBatchItem = { [K in EventName]: { eventName: K; payload: EventTypes[K] } }[EventName];
@@ -612,6 +673,18 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     return addResult;
   };
 
+  const sendCTE = async <Name extends EventName, T>(
+    query: DrizzleInsertOrUpdateQuery<T>,
+    params: { name: Name; payload: EventTypes[Name] },
+  ) => {
+    const addResult = await queuer.enqueueCTE(getDb(), query, {
+      name: params.name,
+      payload: params.payload as never,
+    });
+    // scheduleQueueProcessing(db, addResult);
+    return addResult;
+  };
+
   const sendBatch = async (
     connections: {
       transaction: DBLike;
@@ -660,6 +733,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     send,
     sendBatch,
     sendTx,
+    sendCTE,
   };
 };
 

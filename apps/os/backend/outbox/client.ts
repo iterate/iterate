@@ -1,6 +1,7 @@
 import type { appRouter } from "../orpc/root.ts";
 import type { MachineType } from "../db/schema.ts";
 import { waitUntil } from "../../env.ts";
+import { getDb } from "../db/client.ts";
 import { type RouterEventTypes, createConsumerClient } from "./pgmq-lib.ts";
 import { queuer } from "./outbox-queuer.ts";
 
@@ -74,4 +75,4 @@ type AppRouterEventTypes = RouterEventTypes<typeof appRouter>;
 export const outboxClient = createConsumerClient<
   InternalEventTypes & AppRouterEventTypes,
   typeof queuer.$types.db
->(queuer, { waitUntil });
+>(queuer, { waitUntil, getDb });
