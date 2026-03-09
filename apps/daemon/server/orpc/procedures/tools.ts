@@ -288,7 +288,7 @@ export const toolsRouter = {
         },
       });
       return {
-        exitCode: result.exitCode ?? null,
+        exitCode: result.exitCode ?? 0,
         stdout: result.stdout,
         stderr: result.stderr,
         abc: 123,
