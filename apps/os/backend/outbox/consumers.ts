@@ -1,5 +1,7 @@
 import { eq, and, inArray } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
+import { match } from "schematch";
+import { z } from "zod/v4";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
@@ -11,7 +13,25 @@ import {
 } from "../services/machine-readiness-probe.ts";
 import { buildMachineEnvVars } from "../services/machine-creation.ts";
 import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
+import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
 import { outboxClient as cc } from "./client.ts";
+
+const IterateMainPushWebhookPayload = z.object({
+  sourceEventId: z.string(),
+  event: z.literal("push"),
+  payload: z.object({
+    ref: z.string(),
+    repository: z.object({
+      full_name: z.literal("iterate/iterate"),
+    }),
+  }),
+});
+
+function parseGitRefBranch(ref: string): string | null {
+  const prefix = "refs/heads/";
+  if (!ref.startsWith(prefix)) return null;
+  return ref.slice(prefix.length);
+}
 
 export const registerConsumers = () => {
   registerTestConsumers();
@@ -20,6 +40,93 @@ export const registerConsumers = () => {
   //
   // machine:created → provisionMachine
   // (daemon reports status via reportStatus → machine:daemon-status-reported → setup + probe pipeline)
+
+  cc.registerConsumer({
+    name: "requestIterateMachinePulls",
+    on: "github:webhook-received",
+    async handler(params) {
+      const db = getDb();
+
+      return match(params.payload)
+        .case(IterateMainPushWebhookPayload, async (payload) => {
+          const branch = parseGitRefBranch(payload.payload.ref);
+          if (branch !== "main") {
+            return `skipped: ref ${payload.payload.ref}`;
+          }
+
+          const machines = await db.query.machine.findMany({
+            where: eq(schema.machine.state, "active"),
+            columns: { id: true },
+          });
+
+          for (const machine of machines) {
+            await cc.send(
+              { transaction: db, parent: db },
+              "machine:pull-iterate-iterate-requested",
+              {
+                machineId: machine.id,
+                ref: branch,
+                sourceEventId: payload.sourceEventId,
+              },
+            );
+          }
+
+          logger.set({ sourceEventId: payload.sourceEventId, targetCount: machines.length });
+          logger.info("[GitHub Webhook] Enqueued iterate machine pulls");
+          return `enqueued ${machines.length} iterate machine pull requests`;
+        })
+        .default(() => `skipped: unsupported github webhook ${params.payload.event}`);
+    },
+  });
+
+  cc.registerConsumer({
+    name: "triggerMachinePullIterateIterate",
+    on: "machine:pull-iterate-iterate-requested",
+    async handler(params) {
+      const db = getDb();
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, params.payload.machineId),
+      });
+
+      if (!machine) {
+        logger.set({
+          machineId: params.payload.machineId,
+          sourceEventId: params.payload.sourceEventId,
+        });
+        logger.warn("[GitHub Webhook] Skipping iterate pull for missing machine");
+        return `skipped: machine ${params.payload.machineId} not found`;
+      }
+
+      if (machine.state !== "active") {
+        logger.set({
+          machineId: machine.id,
+          state: machine.state,
+          sourceEventId: params.payload.sourceEventId,
+        });
+        logger.info("[GitHub Webhook] Skipping iterate pull for non-active machine");
+        return `skipped: machine ${machine.id} state is ${machine.state}`;
+      }
+
+      const runtime = await createMachineStub({
+        type: machine.type,
+        env,
+        externalId: machine.externalId,
+        metadata: (machine.metadata as Record<string, unknown>) ?? {},
+      });
+      const fetcher = await runtime.getFetcher(3000);
+      const baseUrl = await runtime.getBaseUrl(3000);
+      const daemonClient = createDaemonClient({ baseUrl, fetcher });
+      await daemonClient.daemon.pullIterateIterate({ ref: params.payload.ref });
+
+      logger.set({
+        machineId: machine.id,
+        ref: params.payload.ref,
+        sourceEventId: params.payload.sourceEventId,
+      });
+      logger.info("[GitHub Webhook] Triggered iterate pull on machine");
+      return `triggered iterate pull on ${machine.id}`;
+    },
+  });
 
   cc.registerConsumer({
     name: "provisionMachine",

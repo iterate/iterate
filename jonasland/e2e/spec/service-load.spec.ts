@@ -15,7 +15,7 @@ test.describe("service load checks", () => {
     const docsHomeResponse = await page.goto(`${docsBaseUrl}/`);
     expect(docsHomeResponse).not.toBeNull();
     expect(docsHomeResponse?.status()).toBe(200);
-    await expect(page).toHaveTitle("jonasland API Docs");
+    await expect(page.title()).resolves.toBe("jonasland API Docs");
 
     await expect
       .poll(async () => {
@@ -43,7 +43,7 @@ test.describe("service load checks", () => {
     );
     expect(response).not.toBeNull();
     expect(response?.status()).toBe(200);
-    await expect(page.locator("body")).toContainText('"ok":true');
+    await expect(page.locator("body").textContent()).resolves.toContain('"ok":true');
   });
 
   test("openobserve route loads", async ({ page }) => {
@@ -71,6 +71,6 @@ test.describe("service load checks", () => {
     );
     expect(health).not.toBeNull();
     expect(health?.status()).toBe(200);
-    await expect(page.locator("body")).toContainText('"ok":true');
+    await expect(page.locator("body").textContent()).resolves.toContain('"ok":true');
   });
 });

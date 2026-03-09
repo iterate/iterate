@@ -5,6 +5,7 @@ import { type RouterEventTypes, createConsumerClient } from "./pgmq-lib.ts";
 import { queuer } from "./outbox-queuer.ts";
 
 export type InternalEventTypes = {
+  // TODO: migrate these hand-written payload types to zod-based event schemas.
   "testing:poke": { dbtime: string; message: string };
   /** Machine DB record created — provision it via the sandbox provider. */
   "machine:created": {
@@ -53,6 +54,18 @@ export type InternalEventTypes = {
     type: MachineType;
     externalId: string;
     metadata: Record<string, unknown>;
+  };
+  "github:webhook-received": {
+    sourceEventId: string;
+    deliveryId: string;
+    event: string;
+    action: string | null;
+    payload: Record<string, unknown>;
+  };
+  "machine:pull-iterate-iterate-requested": {
+    machineId: string;
+    ref: string;
+    sourceEventId: string;
   };
 };
 
