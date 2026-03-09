@@ -89,4 +89,8 @@ A: Probably. It felt like a mess last time. But maybe we've learned and grown?
 
 # Decision
 
-TBD
+No git remote, but yes git. No github.com/gitea.iterate.com/git.iterate.com - too complicated.
+
+Sync the local git repo with archil either directly or via git bundle (periodically? post-commit? both?) depending on results of archil+node_modules experimentation and asking.
+
+Not having a git repo goes too far even though simple is good - it'd be an own goal. We'd end up with more complexity, having to invent our own version control and gitignore implementations. Basic versions of each not _too_ hard but doesn't seem worth it.
