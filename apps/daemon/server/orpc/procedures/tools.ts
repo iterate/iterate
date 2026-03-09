@@ -291,7 +291,6 @@ export const toolsRouter = {
         exitCode: result.exitCode ?? 0,
         stdout: result.stdout,
         stderr: result.stderr,
-        abc: 123,
       };
     }),
 
