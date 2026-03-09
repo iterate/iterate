@@ -134,7 +134,7 @@ console.log(`Depot registry: ${depotImageTag}`);
 if (pushTags.length > 0) console.log(`Push tags: ${pushTags.join(", ")}`);
 if (wantsLoad) console.log("Loading into local Docker daemon");
 
-const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
+const BUILD_TIMEOUT_MS = 30 * 60 * 1000;
 execFileSync(buildArgs[0], buildArgs.slice(1), {
   cwd: repoRoot,
   stdio: "inherit",
