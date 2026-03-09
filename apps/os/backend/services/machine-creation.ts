@@ -179,6 +179,7 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
     where: and(
       eq(schema.projectEnvVar.projectId, projectId),
       eq(schema.projectEnvVar.key, "ITERATE_PERSISTENCE_MODE"),
+      isNull(schema.projectEnvVar.machineId),
     ),
   });
   if (persistenceMode?.value !== "local") {
