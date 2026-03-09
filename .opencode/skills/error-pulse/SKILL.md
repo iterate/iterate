@@ -56,5 +56,7 @@ When you are subscribed to a thread, reply to questions and direct asks even if 
 Required deep-links:
 
 - **PostHog**: link to the error tracking issue or event. The alert payload contains `posthogProjectId` and `$exception_issue_id` - use them to build `https://<host>/project/<id>/error_tracking/<issue_id>`.
-- **Cloudflare Worker logs**: `https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers/services/view/os/production/observability/events`
+- **Cloudflare Worker logs**: link to the Worker logs page with a pre-filled query for the error message when possible. Use a regex filter on `message`, URL-encode it, and include it in the very first Slack message. Example shape: `https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers/services/view/os/production/observability/events?...&filters=%5B%7B%22key%22%3A%22message%22%2C%22operation%22%3A%22regex%22%2C%22type%22%3A%22string%22%2C%22value%22%3A%22<url-encoded-regex-error-message>%22%7D%5D`
 - **Source code**: GitHub permalink with line numbers (e.g. `https://github.com/iterate/iterate/blob/main/apps/os/backend/orpc/router.ts#L62`)
+
+For the Cloudflare link, prefer the most specific stable regex you can derive from the alert text. Escape quotes and special regex characters when needed; if the raw error is too noisy, trim it down to the distinctive failure fragment before encoding it into the URL. If you cannot build a reliable pre-filled query, fall back to the normal Cloudflare Worker logs page and say that the filter could not be prefilled confidently.
