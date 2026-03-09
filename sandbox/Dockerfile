@@ -97,7 +97,7 @@ ENV LC_ALL=en_US.UTF-8
 
 # Install Archil client (persistent POSIX volumes backed by S3/R2)
 # Installs to /usr/bin/archil by default (system path)
-ARG SANDBOX_ARCHIL_CLIENT_VERSION=0.7.2
+ARG SANDBOX_ARCHIL_CLIENT_VERSION=0.7.3
 RUN curl -fsSL https://s3.amazonaws.com/archil-client/install | \
     ARCHIL_CLIENT_VERSION="${SANDBOX_ARCHIL_CLIENT_VERSION}" sh || true
 
