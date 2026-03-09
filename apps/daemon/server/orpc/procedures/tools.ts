@@ -288,9 +288,10 @@ export const toolsRouter = {
         },
       });
       return {
-        exitCode: result.exitCode ?? 0,
+        exitCode: result.exitCode ?? null,
         stdout: result.stdout,
         stderr: result.stderr,
+        abc: 123,
       };
     }),
 
