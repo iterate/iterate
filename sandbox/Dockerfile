@@ -2,6 +2,7 @@
 FROM node:24
 
 # === Versions ===
+# Hey everyone stop putting your ARGs up here, put them where you use them so bumping a library doesn't bust the whole cache
 ARG SANDBOX_AGENT_BROWSER_VERSION=0.13.0
 ARG SANDBOX_CODEX_VERSION=0.98.0
 ARG SANDBOX_OPENCODE_VERSION=1.2.15
@@ -96,7 +97,9 @@ ENV LC_ALL=en_US.UTF-8
 
 # Install Archil client (persistent POSIX volumes backed by S3/R2)
 # Installs to /usr/bin/archil by default (system path)
-RUN curl -s https://s3.amazonaws.com/archil-client/install | sh || true
+ARG SANDBOX_ARCHIL_CLIENT_VERSION=0.7.2
+RUN curl -fsSL https://s3.amazonaws.com/archil-client/install | \
+    ARCHIL_CLIENT_VERSION="${SANDBOX_ARCHIL_CLIENT_VERSION}" sh || true
 
 # Create non-root user with passwordless sudo
 RUN useradd -m -s /bin/bash iterate && \
