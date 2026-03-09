@@ -339,6 +339,9 @@ export const adminRouter = {
                   return z.NEVER;
                 }
               })
+              .describe(
+                `JSON-encoded payload filter. Uses @> operator to match against the payload. (e.g. '${JSON.stringify({ thingId: "thing_abc1234567890" })}')`,
+              )
               .optional(),
           })
           .optional(),

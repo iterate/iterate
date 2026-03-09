@@ -196,6 +196,8 @@ Key project IDs: Iterate = `prj_01kh7ct9jke49vjq43j4wy3vyw`, team = `T0675PSN873
 
 Admin UI: `https://os.iterate.com/admin/outbox` — shows all events, filters by status/event/consumer, has "Process Queue" button.
 
+- CLI debugging: `iterate os admin outbox list-events --limit 50 --sort-direction desc` shows recent outbox history from prod. Use `--payload-contains '{"machineId": "mach_..."}'` or `--consumer-name myConsumer` to narrow down setup/probe issues without going straight to SQL. You can also look at the implemenation of the listEvents procedure powering this command for inspiration on how you can query the DB directly to dig even deeper.
+
 To archive (soft-delete) stale messages directly:
 
 ```sql
