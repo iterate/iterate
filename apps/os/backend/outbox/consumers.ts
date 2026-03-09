@@ -130,14 +130,6 @@ export const registerConsumers = () => {
       });
       if (!machine) throw new Error(`Machine ${machineId} not found`);
 
-      if (machine.state !== "starting") {
-        logger.set({ machine: { id: machineId } });
-        logger.info(
-          `[pushMachineSetup] Skipping, machine no longer starting state=${machine.state}`,
-        );
-        return `skipped: machine state is ${machine.state}`;
-      }
-
       const { getPushMachineSetupInput, pushSetupToMachine } =
         await import("../services/machine-setup.ts");
 
