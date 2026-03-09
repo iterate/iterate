@@ -61,6 +61,7 @@ describe("posthog router", () => {
     };
     const message = requestBody.events[0]?.message;
     expect(message).toContain("@error-pulse");
+    expect(message).toContain(".opencode/skills/error-pulse/SKILL.md");
     expect(message).toContain("subscribe-slack-thread");
     expect(message).toContain(
       "severity: critical\nurl: https://eu.posthog.com/project/1/alerts/abc\n\nException rate exceeded threshold",

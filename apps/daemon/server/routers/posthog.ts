@@ -12,6 +12,7 @@ const DAEMON_PORT = process.env.PORT || "3001";
 const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 const AGENT_ROUTER_BASE_URL = `${DAEMON_BASE_URL}/api/agents`;
 const ERROR_PULSE_CHANNEL_ID = "C09K1CTN4M7";
+const ERROR_PULSE_SKILL_PATH = ".opencode/skills/error-pulse/SKILL.md";
 
 const ForwardedPostHogInput = z.object({
   deliveryId: z.string(),
@@ -154,6 +155,7 @@ function buildPrompt(params: {
 
   const lines = [
     "@error-pulse",
+    `Use the error-pulse skill (${ERROR_PULSE_SKILL_PATH}) for this alert.`,
     `[posthog] delivery=${params.deliveryId} key=${params.alertKey}`,
     `title: ${title}`,
     `severity: ${severity}`,
