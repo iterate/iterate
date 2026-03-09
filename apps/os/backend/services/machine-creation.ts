@@ -174,11 +174,20 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
     throw new Error(`Project not found: ${projectId}`);
   }
 
-  // Ensure the project has an Archil persistent disk (idempotent).
-  await ensureProjectArchilDisk(db, env, {
-    projectId,
-    projectSlug: projectRecord.slug,
+  // Provision persistent storage unless explicitly set to local-only.
+  const persistenceMode = await db.query.projectEnvVar.findFirst({
+    where: and(
+      eq(schema.projectEnvVar.projectId, projectId),
+      eq(schema.projectEnvVar.key, "ITERATE_PERSISTENCE_MODE"),
+      isNull(schema.projectEnvVar.machineId),
+    ),
   });
+  if (persistenceMode?.value !== "local") {
+    await ensureProjectArchilDisk(db, env, {
+      projectId,
+      projectSlug: projectRecord.slug,
+    });
+  }
 
   const type = projectRecord.sandboxProvider;
   const initialMachineMetadata = stripMachineStateMetadata(metadata ?? {});
