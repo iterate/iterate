@@ -662,27 +662,6 @@ const RepositoryPayload = z.object({
 
 type RepositoryPayload = z.infer<typeof RepositoryPayload>;
 
-const WorkflowRunEvent = z.object({
-  action: z.string(),
-  workflow_run: z.object({
-    id: z.number(),
-    name: z.string(),
-    head_branch: z.string(),
-    head_sha: z.string(),
-    path: z.string(),
-    conclusion: z.string().nullable(),
-    html_url: z.string().optional(),
-    pull_requests: z
-      .array(z.object({ number: z.number() }))
-      .optional()
-      .default([]),
-    repository: z.object({ full_name: z.string() }),
-  }),
-  repository: RepositoryPayload,
-});
-
-type WorkflowRunEvent = z.infer<typeof WorkflowRunEvent>;
-
 const CommitCommentEvent = z.object({
   action: z.literal("created"),
   comment: z.object({
@@ -708,18 +687,6 @@ const PushEvent = z.object({
 });
 
 type PushEvent = z.infer<typeof PushEvent>;
-
-const IterateCICompletion = z.object({
-  action: z.literal("completed"),
-  workflow_run: z.object({
-    head_branch: z.literal("main"),
-    path: z.string().endsWith("ci.yml"),
-    conclusion: z.literal("success"),
-    repository: z.object({
-      full_name: z.literal("iterate/iterate"),
-    }),
-  }),
-});
 
 // ── Webhook App ────────────────────────────────────────────────────
 
@@ -1190,46 +1157,6 @@ async function recreateMachinesForAllProjects(params: {
 
 // ── Webhook Event Handlers ─────────────────────────────────────────
 
-async function handleWorkflowRun({ payload, db, env }: WebhookEventParams<WorkflowRunEvent>) {
-  const { workflow_run } = payload;
-
-  if (env.APP_STAGE !== "prd") {
-    logger.debug("[GitHub Webhook] Ignoring workflow_run outside prd", {
-      appStage: env.APP_STAGE,
-      action: payload.action,
-      branch: workflow_run.head_branch,
-      repo: workflow_run.repository.full_name,
-    });
-    return;
-  }
-
-  // Check if this is an iterate/iterate CI completion on main
-  if (!IterateCICompletion.safeParse(payload).success) {
-    logger.debug("[GitHub Webhook] Ignoring workflow_run event", {
-      action: payload.action,
-      conclusion: workflow_run.conclusion,
-      branch: workflow_run.head_branch,
-      path: workflow_run.path,
-      repo: workflow_run.repository.full_name,
-    });
-    return;
-  }
-
-  const headSha = workflow_run.head_sha;
-  const shortSha = headSha.slice(0, 7);
-
-  logger.set({ workflowRunId: workflow_run.id, headSha, shortSha });
-  logger.info("[GitHub Webhook] Processing CI completion");
-
-  await recreateMachinesForAllProjects({
-    db,
-    env,
-    shortSha,
-    namePrefix: "ci",
-    logContext: "",
-  });
-}
-
 const lifecycleEventHandlers: Record<
   string,
   {
@@ -1240,11 +1167,6 @@ const lifecycleEventHandlers: Record<
   push: {
     schema: PushEvent,
     handle: (payload, db, env) => handlePushEvent({ payload: payload as PushEvent, db, env }),
-  },
-  workflow_run: {
-    schema: WorkflowRunEvent,
-    handle: (payload, db, env) =>
-      handleWorkflowRun({ payload: payload as WorkflowRunEvent, db, env }),
   },
   commit_comment: {
     schema: CommitCommentEvent,

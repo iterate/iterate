@@ -55,21 +55,12 @@ async function generateSignature(secret: string, body: string): Promise<string> 
 }
 
 // Test payloads
-const validWorkflowRunPayload = {
-  action: "completed",
-  workflow_run: {
-    id: 12345,
-    name: "CI",
-    head_branch: "main",
-    head_sha: "abc123def456",
-    path: ".github/workflows/ci.yml",
-    conclusion: "success",
-    repository: {
-      full_name: "iterate/iterate",
-    },
-  },
+const validPushPayload = {
+  ref: "refs/heads/main",
   repository: {
     full_name: "iterate/iterate",
+    owner: { login: "iterate" },
+    name: "iterate",
   },
 };
 
@@ -162,8 +153,8 @@ describe("GitHub Webhook Handler", () => {
       const { app } = createTestApp();
       const res = await makeWebhookRequest({
         app,
-        payload: validWorkflowRunPayload,
-        event: "workflow_run",
+        payload: validPushPayload,
+        event: "push",
         signature: null,
       });
 
@@ -175,8 +166,8 @@ describe("GitHub Webhook Handler", () => {
       const { app } = createTestApp();
       const res = await makeWebhookRequest({
         app,
-        payload: validWorkflowRunPayload,
-        event: "workflow_run",
+        payload: validPushPayload,
+        event: "push",
         signature: "sha256=invalid",
       });
 
@@ -187,8 +178,8 @@ describe("GitHub Webhook Handler", () => {
       const { app } = createTestApp();
       const res = await makeWebhookRequest({
         app,
-        payload: validWorkflowRunPayload,
-        event: "workflow_run",
+        payload: validPushPayload,
+        event: "push",
         deliveryId: "delivery-123",
       });
 
@@ -206,88 +197,13 @@ describe("GitHub Webhook Handler", () => {
         expected: { received: true },
       },
       {
-        name: "acknowledges workflow_run events that don't match lifecycle handlers",
-        appStage: "prd",
-        event: "workflow_run",
-        payload: { ...validWorkflowRunPayload, action: "requested" },
-        expected: { received: true },
-      },
-      {
-        name: "acknowledges non-success conclusions",
+        name: "acknowledges workflow_run events (no handler registered)",
         appStage: "prd",
         event: "workflow_run",
         payload: {
-          ...validWorkflowRunPayload,
-          workflow_run: {
-            ...validWorkflowRunPayload.workflow_run,
-            conclusion: "failure",
-          },
-        },
-        expected: { received: true },
-      },
-      {
-        name: "acknowledges non-main branches",
-        appStage: "prd",
-        event: "workflow_run",
-        payload: {
-          ...validWorkflowRunPayload,
-          workflow_run: {
-            ...validWorkflowRunPayload.workflow_run,
-            head_branch: "feature-branch",
-          },
-        },
-        expected: { received: true },
-      },
-      {
-        name: "acknowledges non-ci.yml workflows",
-        appStage: "prd",
-        event: "workflow_run",
-        payload: {
-          ...validWorkflowRunPayload,
-          workflow_run: {
-            ...validWorkflowRunPayload.workflow_run,
-            path: ".github/workflows/deploy.yml",
-          },
-        },
-        expected: { received: true },
-      },
-      {
-        name: "acknowledges non-iterate/iterate repos",
-        appStage: "prd",
-        event: "workflow_run",
-        payload: {
-          ...validWorkflowRunPayload,
-          workflow_run: {
-            ...validWorkflowRunPayload.workflow_run,
-            repository: { full_name: "other/repo" },
-          },
-        },
-        expected: { received: true },
-      },
-      {
-        name: "accepts valid CI completion events in prd",
-        appStage: "prd",
-        event: "workflow_run",
-        payload: validWorkflowRunPayload,
-        expected: { received: true },
-      },
-      {
-        name: "acknowledges workflow_run in non-prd environments",
-        appStage: "dev",
-        event: "workflow_run",
-        payload: validWorkflowRunPayload,
-        expected: { received: true },
-      },
-      {
-        name: "accepts PR-linked workflow_run in non-prd environments",
-        appStage: "dev",
-        event: "workflow_run",
-        payload: {
-          ...validWorkflowRunPayload,
-          workflow_run: {
-            ...validWorkflowRunPayload.workflow_run,
-            pull_requests: [{ number: 123 }],
-          },
+          action: "completed",
+          workflow_run: { id: 1 },
+          repository: { full_name: "iterate/iterate" },
         },
         expected: { received: true },
       },
@@ -467,27 +383,6 @@ describe("GitHub Webhook Handler", () => {
   });
 
   describe("recreation gating", () => {
-    it("does not recreate machines for workflow_run outside prd", async () => {
-      const { app, mockDb } = createTestApp("dev");
-      mockDb.query.project.findMany.mockResolvedValue([
-        {
-          id: "prj_123",
-          sandboxProvider: "daytona",
-          machines: [{ id: "mach_123", metadata: {} }],
-        },
-      ]);
-
-      const res = await makeWebhookRequest({
-        app,
-        payload: validWorkflowRunPayload,
-        event: "workflow_run",
-      });
-
-      await expectWebhookMatch(res, { received: true });
-      await flushBackgroundTasks();
-      expect(createMachineForProjectMock).not.toHaveBeenCalled();
-    });
-
     it("does not recreate machines when APP_STAGE tag does not match", async () => {
       const { app, mockDb } = createTestApp("dev");
       mockDb.query.project.findMany.mockResolvedValue([
