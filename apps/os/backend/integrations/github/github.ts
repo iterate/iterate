@@ -761,8 +761,8 @@ githubApp.post("/webhook", async (c) => {
   }
   const eventType = xGithubEvent;
 
-  const [inserted] = await outboxClient.sendCTE(
-    db
+  const [inserted] = await outboxClient.sendCTE({
+    query: db
       .insert(schema.event)
       .values({
         type: `github:${eventType}`,
@@ -773,8 +773,9 @@ githubApp.post("/webhook", async (c) => {
         target: [schema.event.type, schema.event.externalId],
       })
       .returning({ id: schema.event.id }),
-    { name: "github:webhook-received", payload: { ...payload, _delivery_id: deliveryId } },
-  );
+    name: "github:webhook-received",
+    payload: { ...payload, _delivery_id: deliveryId },
+  });
   if (!inserted) {
     // Duplicate delivery - already processed
     logger.debug("[GitHub Webhook] Duplicate delivery, skipping", {

@@ -180,8 +180,8 @@ describe("outbox integration", () => {
     const secret = `cte_${Date.now()}_${Math.random()}`;
     const externalId = `test-delivery-${secret}`;
 
-    const result = await outboxClient.sendCTE(
-      db
+    const result = await outboxClient.sendCTE({
+      query: db
         .insert(schema.event)
         .values({
           type: "test:basic",
@@ -192,8 +192,9 @@ describe("outbox integration", () => {
           target: [schema.event.type, schema.event.externalId],
         })
         .returning({ id: schema.event.id }),
-      { name: "test:basic", payload: { message: secret } },
-    );
+      name: "test:basic",
+      payload: { message: secret },
+    });
 
     // The insert should have returned one row
     expect(result).toHaveLength(1);
@@ -227,8 +228,8 @@ describe("outbox integration", () => {
     const externalId = `test-delivery-${secret}`;
 
     // First insert succeeds
-    await outboxClient.sendCTE(
-      db
+    await outboxClient.sendCTE({
+      query: db
         .insert(schema.event)
         .values({
           type: "test:basic",
@@ -239,8 +240,9 @@ describe("outbox integration", () => {
           target: [schema.event.type, schema.event.externalId],
         })
         .returning({ id: schema.event.id }),
-      { name: "test:basic", payload: { message: secret } },
-    );
+      name: "test:basic",
+      payload: { message: secret },
+    });
 
     // Count outbox events with this secret before the duplicate attempt
     const beforeEvents = await db.query.outboxEvent.findMany({
@@ -251,8 +253,8 @@ describe("outbox integration", () => {
     });
 
     // Second insert with same externalId — onConflictDoNothing means 0 rows from CTE
-    const dupeResult = await outboxClient.sendCTE(
-      db
+    const dupeResult = await outboxClient.sendCTE({
+      query: db
         .insert(schema.event)
         .values({
           type: "test:basic",
@@ -263,8 +265,9 @@ describe("outbox integration", () => {
           target: [schema.event.type, schema.event.externalId],
         })
         .returning({ id: schema.event.id }),
-      { name: "test:basic", payload: { message: secret } },
-    );
+      name: "test:basic",
+      payload: { message: secret },
+    });
 
     // No rows returned — the insert was a no-op
     expect(dupeResult).toHaveLength(0);
@@ -282,16 +285,14 @@ describe("outbox integration", () => {
   test("sendCTE select", async () => {
     const db = getTestDb();
 
-    const result = await outboxClient.sendCTE(
-      db.select().from(schema.event).limit(1), //
-      {
-        name: "test:basic",
-        payload: {
-          message: sql`'the event id was ' || query.id`,
-          ...({ hello: sql`(select 1 as one)` } as {}),
-        },
+    const result = await outboxClient.sendCTE({
+      query: db.select().from(schema.event).limit(1),
+      name: "test:basic",
+      payload: {
+        message: sql`'the event id was ' || query.id`,
+        ...({ hello: sql`(select 1 as one)` } as {}),
       },
-    );
+    });
 
     expect(result[0]).toMatchObject({
       id: expect.any(String),
@@ -311,16 +312,14 @@ describe("outbox integration", () => {
   test("sendCTE select multiple", async () => {
     const db = getTestDb();
 
-    const result = await outboxClient.sendCTE(
-      db.select().from(schema.event).limit(2), //
-      {
-        name: "test:basic",
-        payload: {
-          message: sql`'the event id was ' || query.id`,
-          ...({ hello: sql`(select 1 as one)` } as {}),
-        },
+    const result = await outboxClient.sendCTE({
+      query: db.select().from(schema.event).limit(2),
+      name: "test:basic",
+      payload: {
+        message: sql`'the event id was ' || query.id`,
+        ...({ hello: sql`(select 1 as one)` } as {}),
       },
-    );
+    });
 
     expect(result[0]).toMatchObject({
       id: expect.any(String),
@@ -342,16 +341,14 @@ describe("outbox integration", () => {
   test("sendCTE values", async () => {
     const secret = `cte_select_${Date.now()}_${Math.random()}`;
 
-    const result = await outboxClient.sendCTE(
-      [
+    const result = await outboxClient.sendCTE({
+      query: [
         { abc: 123, xyz: 987 },
         { abc: 456, xyz: 654 },
       ],
-      {
-        name: "test:basic",
-        payload: { message: secret },
-      },
-    );
+      name: "test:basic",
+      payload: { message: secret },
+    });
 
     expect(result[0]).toMatchObject({
       abc: 123,

@@ -160,20 +160,22 @@ export type SQLEquivalent<T> =
       }
     : T;
 
+export type CTEParams<T, Name extends string, Payload> = {
+  query: CTEableQuery<T>;
+  name: Name;
+  payload: Payload;
+  context?: Record<string, unknown>;
+};
+
 export interface Queuer<DBConnection> {
   $types: {
     db: DBConnection;
   };
   /** Enqueue an event using a CTE query. */
-  enqueueCTE: <D extends DBLike, Q extends CTEableQuery<unknown>>(
+  enqueueCTE: <D extends DBLike, T>(
     db: D,
-    query: Q,
-    params: {
-      name: string;
-      payload: unknown;
-      context?: Record<string, unknown>;
-    },
-  ) => Promise<Awaited<Q> & { delays: TimePeriod[] }>;
+    params: CTEParams<T, string, unknown>,
+  ) => Promise<T[] & { delays: TimePeriod[] }>;
   enqueue: (
     db: DBConnection,
     params: { name: string; payload: { input: unknown; output: unknown } },
@@ -406,9 +408,9 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
 
   const enqueueCTE: Queuer<DBLike>["enqueueCTE"] = async (
     db,
-    query,
     params,
-  ): Promise<Awaited<typeof query> & { delays: TimePeriod[] }> => {
+  ): Promise<Awaited<(typeof params)["query"]> & { delays: TimePeriod[] }> => {
+    const { query } = params;
     const getSetsRequired = (value: unknown) => {
       const isSqlish = (value: any): value is SQL<unknown> => {
         return typeof value?.getSQL === "function";
@@ -801,11 +803,11 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
    * - if your query returns multiple rows, you'll get one outbox event for each row
    */
   const sendCTE = async <Name extends EventName, T>(
-    query: CTEableQuery<T>,
-    params: { name: Name; payload: SQLEquivalent<EventTypes[Name]> },
+    params: CTEParams<T, Name, SQLEquivalent<EventTypes[Name]>>,
   ) => {
     const db = getDb();
-    const addResult = await queuer.enqueueCTE(db, query, {
+    const addResult = await queuer.enqueueCTE(db, {
+      query: params.query,
       name: params.name,
       payload: params.payload as never,
     });
