@@ -202,27 +202,32 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
   const { apiKey } = await getOrCreateProjectMachineToken(db, projectId);
 
   // Detach older starting machines, insert new one, and emit machine:created — all in one tx.
-  const { newMachine } = await outboxClient.sendTx(db, "machine:created", async (tx) => {
+  const newMachine = await db.transaction(async (tx) => {
     await tx
       .update(schema.machine)
       .set({ state: "detached" })
       .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "starting")));
 
-    const [inserted] = await tx
-      .insert(schema.machine)
-      .values({
-        id: machineId,
-        name,
-        type,
-        projectId,
-        state: "starting",
-        metadata: initialMachineMetadata,
-        externalId: machineExternalId,
-      })
-      .returning();
+    const [inserted] = await outboxClient.sendCTE({
+      connection: tx,
+      query: tx
+        .insert(schema.machine)
+        .values({
+          id: machineId,
+          name,
+          type,
+          projectId,
+          state: "starting",
+          metadata: initialMachineMetadata,
+          externalId: machineExternalId,
+        })
+        .returning(),
+      name: "machine:created",
+      payload: { machineId },
+    });
 
     if (!inserted) throw new Error("Failed to create machine");
-    return { payload: { machineId }, newMachine: inserted };
+    return inserted;
   });
 
   logger.set({ machine: { id: machineId }, project: { id: projectId } });

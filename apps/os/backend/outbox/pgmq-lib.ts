@@ -165,6 +165,8 @@ export type CTEParams<T, Name extends string, Payload> = {
   name: Name;
   payload: Payload;
   context?: Record<string, unknown>;
+  /** Optional db/transaction to use instead of the default connection. */
+  connection?: DBLike;
 };
 
 export interface Queuer<DBConnection> {
@@ -805,7 +807,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
   const sendCTE = async <Name extends EventName, T>(
     params: CTEParams<T, Name, SQLEquivalent<EventTypes[Name]>>,
   ) => {
-    const db = getDb();
+    const db = params.connection || getDb();
     const addResult = await queuer.enqueueCTE(db, {
       query: params.query,
       name: params.name,
