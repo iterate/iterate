@@ -45,7 +45,7 @@ export const registerConsumers = () => {
     name: "requestIterateMachinePulls",
     on: "github:webhook-received",
     async handler(params) {
-      const db = getDb();
+      const db = await getDb();
 
       return match(params.payload)
         .case(IterateMainPushWebhookPayload, async (payload) => {
@@ -83,7 +83,7 @@ export const registerConsumers = () => {
     name: "triggerMachinePullIterateIterate",
     on: "machine:pull-iterate-iterate-requested",
     async handler(params) {
-      const db = getDb();
+      const db = await getDb();
       const machine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, params.payload.machineId),
       });
