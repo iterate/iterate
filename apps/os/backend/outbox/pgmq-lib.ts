@@ -8,7 +8,30 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { sql, SQL } from "drizzle-orm";
 import { os, type Procedure, type InferSchemaInput, type InferSchemaOutput } from "@orpc/server";
 import { z } from "zod/v4";
+import * as _drizzleUtils from "drizzle-orm/utils";
 import { logger } from "../tag-logger.ts";
+
+const drizzleUtils = _drizzleUtils as typeof import("drizzle-orm/utils") & {
+  orderSelectedFields?: (fields: Record<string, unknown>) => string[];
+  mapResultRow?: (columns: string[], row: unknown[]) => Record<string, unknown>;
+};
+
+if (!drizzleUtils.orderSelectedFields || !drizzleUtils.mapResultRow) {
+  throw new Error(
+    "drizzle-orm/utils is not compatible with this version of pgmq-lib. We need orderSelectedFields and mapResultRow.",
+  );
+}
+
+const groupBy = <T, K>(items: T[], key: (item: T) => K): Map<K, T[]> => {
+  const map = new Map<K, T[]>();
+  for (const item of items) {
+    const k = key(item);
+    const group = map.get(k) ?? [];
+    group.push(item);
+    map.set(k, group);
+  }
+  return map;
+};
 
 // Tracks the current consumer execution context so that events emitted
 // inside a consumer handler automatically get `context.causedBy` populated.
@@ -123,10 +146,34 @@ export type QueuerEventMap = {
   statusChange: QueuerEvent;
 };
 
+export type DrizzleInsertOrUpdateQuery<T> = PromiseLike<T[]> & {
+  getSQL: () => SQL;
+  returning?: "If the returning prop is present, the query you are trying to use is not valid. You can only use this method with an insert or update query with a returning clause";
+};
+
+export type CTEableQuery<T> = DrizzleInsertOrUpdateQuery<T> | Array<T>;
+
+export type SQLEquivalent<T> =
+  T extends Record<string, unknown>
+    ? {
+        [K in keyof T]: SQL<T[K]> | T[K];
+      }
+    : T;
+
 export interface Queuer<DBConnection> {
   $types: {
     db: DBConnection;
   };
+  /** Enqueue an event using a CTE query. */
+  enqueueCTE: <D extends DBLike, Q extends CTEableQuery<unknown>>(
+    db: D,
+    query: Q,
+    params: {
+      name: string;
+      payload: unknown;
+      context?: Record<string, unknown>;
+    },
+  ) => Promise<Awaited<Q> & { delays: TimePeriod[] }>;
   enqueue: (
     db: DBConnection,
     params: { name: string; payload: { input: unknown; output: unknown } },
@@ -357,10 +404,180 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     return { eventId: eventInsertion.id, matchedConsumers: filteredConsumers.length, delays };
   };
 
+  const enqueueCTE: Queuer<DBLike>["enqueueCTE"] = async (
+    db,
+    query,
+    params,
+  ): Promise<Awaited<typeof query> & { delays: TimePeriod[] }> => {
+    const getSetsRequired = (value: unknown) => {
+      const isSqlish = (value: any): value is SQL<unknown> => {
+        return typeof value?.getSQL === "function";
+      };
+      const sets: Array<{ path: string[]; value: unknown }> = [];
+
+      const s = Symbol("path");
+      const jsonString = JSON.stringify(value, function (key, value) {
+        const parentOverrides = this[s];
+        if (value && typeof value === "object" && key) {
+          Object.defineProperty(value, s, {
+            value: [...(parentOverrides || []), String(key)],
+            enumerable: false,
+            writable: true,
+          });
+        }
+        if (isSqlish(value)) {
+          sets.push({
+            path: [...(parentOverrides || []), String(key)],
+            value,
+          });
+          return undefined;
+        }
+        return value;
+      });
+
+      return { jsonString, sets };
+    };
+    const { name, payload, context = {} } = params;
+    const payloadSets = getSetsRequired(payload);
+    const exec = getExec(db);
+    const getSQL = () => {
+      if (Array.isArray(query)) {
+        return sql`select x.* from jsonb_array_elements(${JSON.stringify(query)}) as x`;
+      }
+      return query.getSQL();
+    };
+    let payloadJson = sql`${JSON.stringify(payload)}::jsonb`;
+    if (payloadSets.sets.length > 0) {
+      payloadJson = sql`${payloadSets.jsonString}::jsonb`;
+
+      const merges = sql.fromList(
+        payloadSets.sets.map((s) => {
+          const path = s.path.map((p) => sql`${p}`);
+          return sql
+            .raw("\n" + " ".repeat(12))
+            .append(sql`|| jsonb_set('{}'::jsonb, `)
+            .append(sql`array[${sql.join(path, sql`,`)}]::text[], `)
+            .append(sql`to_jsonb(`.append(s.value as SQL).append(sql`)`))
+            .append(sql`)::jsonb`);
+        }),
+      );
+      payloadJson = payloadJson.append(merges);
+    }
+    const cteSql = sql`with query as (`.append(getSQL()).append(sql`
+      ),
+      insertion as (
+        insert into outbox_event (name, payload, context)
+        select
+          ${name},
+          ${payloadJson},
+          ${JSON.stringify(context)}::jsonb
+        from query
+        returning *
+      )
+    `).append(sql`
+      select
+        q.*,
+        i.id as outbox_event_id,
+        i.name as outbox_event_name,
+        i.payload as outbox_event_payload,
+        i.context as outbox_event_context
+      from (select *, row_number() over () as _rn from query) q
+      join (select *, row_number() over () as _rn from insertion) i on q._rn = i._rn
+    `);
+    const result = await exec(cteSql);
+    const camelCaseOutboxFields = (row: Record<string, unknown>) => {
+      const {
+        outbox_event_id,
+        outbox_event_name,
+        outbox_event_payload,
+        outbox_event_context,
+        _rn,
+        ...rest
+      } = row;
+      return {
+        ...rest,
+        outboxEventId: outbox_event_id,
+        outboxEventName: outbox_event_name,
+        outboxEventPayload: outbox_event_payload,
+        outboxEventContext: outbox_event_context,
+      };
+    };
+
+    // Build all consumer messages
+    const allMessages = result.rows.flatMap((row) => {
+      const r = row as Record<string, unknown>;
+      const eventId = Number(r.outbox_event_id);
+      const eventPayload = r.outbox_event_payload as Record<string, unknown>;
+      const eventContext = (r.outbox_event_context ?? {}) as Record<string, unknown>;
+
+      const consumersForPath = Object.values(consumers[`eventName:${name}`] || {});
+      const filteredConsumers = consumersForPath.filter((c) => c.when({ payload: eventPayload }));
+
+      logger.info(
+        `[outbox] CTE Path: ${name}. Consumers: ${consumersForPath.length}. Filtered: ${filteredConsumers.map((c) => c.name).join(",")}`,
+      );
+
+      return filteredConsumers.map((consumer) => {
+        const delay = consumer.delay({ payload: eventPayload });
+        return {
+          delay,
+          msg: {
+            consumer_name: consumer.name,
+            status: "pending",
+            event_name: name,
+            event_id: eventId,
+            event_payload: eventPayload,
+            event_context: eventContext,
+            processing_results: [],
+            environment: process.env.APP_STAGE || process.env.NODE_ENV || "unknown",
+          } satisfies ConsumerEvent,
+        };
+      });
+    });
+
+    const allDelays = allMessages.map((m) => m.delay);
+
+    // Send all messages using pgmq.send_batch, one call per delay group
+    await Promise.all(
+      [...groupBy(allMessages, (m) => m.delay)].map(([delay, messages]) => {
+        const pgMessages = sql.join(
+          messages.map((m) => sql`${JSON.stringify(m.msg)}::jsonb`),
+          sql`, `,
+        );
+        return exec(sql`
+          select * from pgmq.send_batch(
+            queue_name => ${queueName}::text,
+            msgs => array[${pgMessages}]::jsonb[],
+            delay => ${periodSeconds(delay)}::integer
+          )
+        `);
+      }),
+    );
+
+    let mapped: unknown[];
+    if (Array.isArray(query)) {
+      mapped = result.rows.map((row) => {
+        const r = row as Record<string, unknown>;
+        const { value, ...rest } = r;
+        return { ...(value as {}), ...camelCaseOutboxFields(rest) };
+      });
+    } else {
+      const config = (query as { config?: { returningFields?: {}; fields: {} } }).config;
+      const columns = drizzleUtils.orderSelectedFields!(config!.returningFields || config!.fields);
+      mapped = result.rows.map((row: any) => ({
+        ...drizzleUtils.mapResultRow!(columns, Object.values(row)),
+        ...camelCaseOutboxFields(row),
+      }));
+    }
+
+    return Object.assign(mapped, { delays: allDelays }) as never;
+  };
+
   return {
     $types: { db: {} as DBLike },
     consumers,
     enqueue,
+    enqueueCTE,
     processQueue: (db) => processQueue(db),
     peekQueue: async (db, options = {}) => {
       const exec = getExec(db);
@@ -465,12 +682,14 @@ type ProcUnion<P, Prefix extends string = ""> = {
     : ProcUnion<P[K], `${Prefix}${Extract<K, string>}.`>;
 }[Exclude<keyof P, "~orpc">];
 
+const defaultWaitUntil: WaitUntilFn = (promise) => void promise;
+
 /**
  * Create a typed consumer client for registering consumers and sending events.
  */
 export const createConsumerClient = <EventTypes extends Record<string, {}>, DBConnection>(
   queuer: Queuer<DBConnection>,
-  { waitUntil = ((promise) => void promise) as WaitUntilFn } = {},
+  { waitUntil = defaultWaitUntil, getDb }: { waitUntil?: WaitUntilFn; getDb: () => DBLike },
 ) => {
   type EventName = Extract<keyof EventTypes, string>;
   const registerConsumer = <P extends EventName>(options: {
@@ -569,10 +788,48 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     return result;
   }
 
+  /**
+   * Send an event using a CTE query. The outbox event is inserted in a single query with the passed-in query.
+   * Valid queries you can use are:
+   * - insert with returning e.g. `db.insert(schema.myTable).values({...}).returning()`
+   * - update with returning e.g. `db.update(schema.myTable).set({...}).where(eq(schema.myTable.id, 1)).returning()`
+   * - simple select queries e.g. `db.select().from(schema.myTable).limit(1)`
+   *
+   * NOTE: one outbox event is created for each row in the result set. This means:
+   * - if you return a single row, you'll get one outbox event
+   * - if your query returns zero rows (e.g. you use on conflict do nothing, or your where clause excludes all rows), you'll get no outbox events
+   * - if your query returns multiple rows, you'll get one outbox event for each row
+   */
+  const sendCTE = async <Name extends EventName, T>(
+    query: CTEableQuery<T>,
+    params: { name: Name; payload: SQLEquivalent<EventTypes[Name]> },
+  ) => {
+    const db = getDb();
+    const addResult = await queuer.enqueueCTE(db, query, {
+      name: params.name,
+      payload: params.payload as never,
+    });
+
+    for (const delay of new Set(addResult.delays)) {
+      let delayMs = periodSeconds(delay) * 1000;
+      delayMs = Math.max(20, delayMs * 1.1);
+      if (delayMs > 120_000) continue;
+      waitUntil(
+        (async () => {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          return queuer.processQueue(db as DBConnection);
+        })(),
+      );
+    }
+
+    return addResult;
+  };
+
   return {
     registerConsumer,
     send,
     sendTx,
+    sendCTE,
   };
 };
 

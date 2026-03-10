@@ -9,6 +9,7 @@ import { captureServerEvent } from "../lib/posthog.ts";
 import { waitUntil } from "../../env.ts";
 import { createPostProcedureConsumerPlugin } from "../outbox/pgmq-lib.ts";
 import { queuer } from "../outbox/outbox-queuer.ts";
+import { getDb } from "../db/client.ts";
 import { getTrackingConfig } from "./middleware/posthog.ts";
 import type { Context } from "./context.ts";
 
@@ -20,6 +21,7 @@ const base = os.$context<Context>();
 /** Outbox plugin - injects `ctx.sendEvent(tx, output)` into every procedure */
 const outboxMiddleware = createPostProcedureConsumerPlugin(queuer, {
   waitUntil,
+  getDb,
 });
 export const publicProcedure = base.use(outboxMiddleware);
 
