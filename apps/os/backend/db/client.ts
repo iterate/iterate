@@ -104,9 +104,11 @@ export async function getDb() {
     });
   }
 
-  // Local dev / miniflare: per-request Pool, just like the original Neon driver on main.
+  // Local dev / miniflare: per-request Pool. Prefer Hyperdrive's local connection string
+  // (miniflare passes it through to the origin DB) and fall back to DATABASE_URL.
   // idleTimeoutMillis explicit for clarity (10s is the pg default; 0 = disabled, not zero-delay).
-  const pool = new Pool({ connectionString: env.DATABASE_URL, max: 3, idleTimeoutMillis: 10_000 });
+  const connectionString = hyperdrive?.connectionString ?? env.DATABASE_URL;
+  const pool = new Pool({ connectionString, max: 3, idleTimeoutMillis: 10_000 });
   return drizzle({ client: pool, schema, casing: "snake_case" });
 }
 
@@ -124,11 +126,8 @@ export async function getDbWithEnv(envParam: {
     });
   }
 
-  const pool = new Pool({
-    connectionString: envParam.DATABASE_URL,
-    max: 3,
-    idleTimeoutMillis: 10_000,
-  });
+  const connectionString = envParam.HYPERDRIVE?.connectionString ?? envParam.DATABASE_URL;
+  const pool = new Pool({ connectionString, max: 3, idleTimeoutMillis: 10_000 });
   return drizzle({ client: pool, schema, casing: "snake_case" });
 }
 
