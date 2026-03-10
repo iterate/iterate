@@ -108,7 +108,7 @@ export async function getDb() {
   const pool = new Pool({
     connectionString: env.DATABASE_URL,
     max: 3,
-    idleTimeoutMillis: 1,
+    idleTimeoutMillis: 10_000,
     allowExitOnIdle: true,
   });
   return drizzle({ client: pool, schema, casing: "snake_case" });
@@ -131,7 +131,7 @@ export async function getDbWithEnv(envParam: {
   const pool = new Pool({
     connectionString: envParam.DATABASE_URL,
     max: 3,
-    idleTimeoutMillis: 1,
+    idleTimeoutMillis: 10_000,
     allowExitOnIdle: true,
   });
   return drizzle({ client: pool, schema, casing: "snake_case" });
