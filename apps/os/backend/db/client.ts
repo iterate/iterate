@@ -105,7 +105,8 @@ export async function getDb() {
   }
 
   // Local dev / miniflare: per-request Pool, just like the original Neon driver on main.
-  const pool = new Pool({ connectionString: env.DATABASE_URL, max: 3 });
+  // idleTimeoutMillis explicit for clarity (10s is the pg default; 0 = disabled, not zero-delay).
+  const pool = new Pool({ connectionString: env.DATABASE_URL, max: 3, idleTimeoutMillis: 10_000 });
   return drizzle({ client: pool, schema, casing: "snake_case" });
 }
 
@@ -123,7 +124,7 @@ export async function getDbWithEnv(envParam: {
     });
   }
 
-  const pool = new Pool({ connectionString: envParam.DATABASE_URL, max: 3 });
+  const pool = new Pool({ connectionString: envParam.DATABASE_URL, max: 3, idleTimeoutMillis: 10_000 });
   return drizzle({ client: pool, schema, casing: "snake_case" });
 }
 
