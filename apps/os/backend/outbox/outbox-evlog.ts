@@ -85,34 +85,40 @@ export const createOutboxJobLifecycleHook = (): JobLifecycleHook => {
           method: "OUTBOX",
           path: jobPath,
         },
+        env: {
+          POSTHOG_PUBLIC_KEY: process.env.POSTHOG_PUBLIC_KEY ?? process.env.VITE_POSTHOG_PUBLIC_KEY,
+          VITE_APP_STAGE: appStage,
+        },
       },
       async () => {
         const outcome = await run();
 
-        const duration = Date.now() - startedAt;
-        const status = outcome.ok ? 200 : 500;
+        try {
+          const duration = Date.now() - startedAt;
+          const status = outcome.ok ? 200 : 500;
 
-        evlog.set({
-          request: { status, duration },
-          outbox: {
-            status: outcome.ok ? "success" : "error",
-            ...(outcome.ok ? { result: String(outcome.result) } : {}),
-          },
-        });
-
-        if (!outcome.ok) {
-          recordRequestEvlogError(outcome.error, {
+          evlog.set({
+            request: { status, duration },
             outbox: {
-              consumer: ctx.consumerName,
-              jobId: ctx.jobId,
-              attempt: ctx.attempt,
-              eventName: ctx.eventName,
-              eventId: ctx.eventId,
+              status: outcome.ok ? "success" : "error",
+              ...(outcome.ok ? { result: String(outcome.result) } : {}),
             },
           });
-        }
 
-        flushRequestEvlog();
+          if (!outcome.ok) {
+            recordRequestEvlogError(outcome.error, {
+              outbox: {
+                consumer: ctx.consumerName,
+                jobId: ctx.jobId,
+                attempt: ctx.attempt,
+                eventName: ctx.eventName,
+                eventId: ctx.eventId,
+              },
+            });
+          }
+        } finally {
+          flushRequestEvlog();
+        }
 
         return outcome;
       },
