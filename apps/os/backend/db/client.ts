@@ -78,33 +78,35 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
 // ---------------------------------------------------------------------------
 
 /**
- * Cached drizzle instance for local dev — reused across requests to avoid
- * leaking Pool connections in long-lived miniflare/workerd processes.
- *
- * NOT used in production with Hyperdrive — Hyperdrive's connectionString
- * points to a per-request local proxy socket that is garbage-collected after
- * the request completes, so we must create a fresh Client per invocation.
+ * Cached drizzle instance for local dev / miniflare — reused across requests
+ * to avoid leaking connections in long-lived processes.
  */
 let cachedDevDb: NodePgDatabase<typeof schema> | undefined;
 
 /**
  * Returns a drizzle DB instance.
  *
- * - **Production (Hyperdrive):** Creates a new pg.Client per call. Cloudflare
- *   Hyperdrive manages connection pooling server-side; client creation is fast
- *   because it connects to a local proxy socket. Caching the client/pool would
- *   cause stale connections since the proxy socket is per-request.
+ * - **Production (real Hyperdrive):** Creates a new pg.Client per call.
+ *   Cloudflare does NOT support reusing DB drivers across requests — each
+ *   Hyperdrive proxy socket is per-request. Caching would use stale sockets.
  *   @see https://developers.cloudflare.com/workers/best-practices/workers-best-practices/
  *
- * - **Local dev:** Uses a cached pg.Pool to avoid leaking connections. The Pool
- *   is safe to reuse because DATABASE_URL is stable across requests.
+ * - **Local dev / miniflare:** Uses a cached pg.Pool to avoid leaking
+ *   connections. Miniflare simulates Hyperdrive by passing DATABASE_URL
+ *   through as connectionString, so we detect this by comparing the two.
  */
 export async function getDb() {
   const hyperdrive = (env as Record<string, unknown>).HYPERDRIVE as
     | { connectionString: string }
     | undefined;
 
-  if (hyperdrive) {
+  // Real Hyperdrive rewrites connectionString to a per-request proxy socket,
+  // so it will differ from the origin DATABASE_URL. In miniflare the simulated
+  // Hyperdrive just passes DATABASE_URL through unchanged.
+  const isRealHyperdrive =
+    hyperdrive && hyperdrive.connectionString !== env.DATABASE_URL;
+
+  if (isRealHyperdrive) {
     // Production: per-request Client, Hyperdrive pools server-side
     return withRetry(async () => {
       const client = new Client({ connectionString: hyperdrive.connectionString });
@@ -113,9 +115,10 @@ export async function getDb() {
     });
   }
 
-  // Local dev: cached Pool
+  // Local dev / miniflare: cached Pool
   if (!cachedDevDb) {
-    const pool = new Pool({ connectionString: env.DATABASE_URL, max: 3 });
+    const connectionString = hyperdrive?.connectionString ?? env.DATABASE_URL;
+    const pool = new Pool({ connectionString, max: 3 });
     cachedDevDb = drizzle({ client: pool, schema, casing: "snake_case" });
   }
   return cachedDevDb;
@@ -126,18 +129,21 @@ export async function getDbWithEnv(envParam: {
   DATABASE_URL: string;
   HYPERDRIVE?: { connectionString: string };
 }) {
-  const connectionString = envParam.HYPERDRIVE?.connectionString ?? envParam.DATABASE_URL;
+  const isRealHyperdrive =
+    envParam.HYPERDRIVE &&
+    envParam.HYPERDRIVE.connectionString !== envParam.DATABASE_URL;
 
-  if (envParam.HYPERDRIVE) {
-    // Per-request Client for Hyperdrive
+  if (isRealHyperdrive) {
+    // Per-request Client for real Hyperdrive
     return withRetry(async () => {
-      const client = new Client({ connectionString });
+      const client = new Client({ connectionString: envParam.HYPERDRIVE!.connectionString });
       await client.connect();
       return drizzle({ client, schema, casing: "snake_case" });
     });
   }
 
-  // No Hyperdrive — Pool for stability
+  // No real Hyperdrive (miniflare or no binding) — Pool for stability
+  const connectionString = envParam.HYPERDRIVE?.connectionString ?? envParam.DATABASE_URL;
   const pool = new Pool({ connectionString, max: 3 });
   return drizzle({ client: pool, schema, casing: "snake_case" });
 }
