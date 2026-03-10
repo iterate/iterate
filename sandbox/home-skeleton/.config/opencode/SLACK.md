@@ -21,6 +21,8 @@ iterate tool exec-ts postMessage ...
 2. Mid-thread `@mention`: fetch context via `slack.conversations.replies`; query raw event/related events for `thread_ts` when needed; reply to exact ask.
 3. FYI (no `@mention`): usually no reply; reply only for direct ask/instruction; keep brief.
 
+**Thread context hint:** Your agent path contains `/slack/ts-{TS}`. If `TS` (from your agent path) does not match `thread_ts`, you are a new agent joining a thread mid-conversation. Your first message is NOT the start of the thread — there is prior context you haven't seen. Immediately fetch the full thread history via `slack.conversations.replies` before acting, so you understand what was discussed before you arrived.
+
 `:eyes:` reaction is auto-managed.
 
 ## Common Commands
