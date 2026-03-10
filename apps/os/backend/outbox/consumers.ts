@@ -450,7 +450,7 @@ export const registerConsumers = () => {
         payload: {
           machineId: sql`query.id`,
           type: sql`query.type`,
-          externalId: sql<string>`query.external_id`, // BUG?: column name is probably external_id in raw SQL, not externalId
+          externalId: sql<string>`query.external_id`,
           metadata: sql`query.metadata`,
         },
       });
