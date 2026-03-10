@@ -117,6 +117,8 @@ export type QueuePeekOptions = { limit?: number; offset?: number; minReadCount?:
 export type QueuerEvent = {
   job: ConsumerJobQueueMessage;
   error?: string;
+  /** True when the job has exhausted retries and is being archived (DLQ). */
+  isDLQ?: boolean;
 };
 
 export type QueuerEventMap = {
@@ -165,8 +167,32 @@ const getExec = <D extends DBLike>(db: D) => {
   return Object.assign(exec, { rows });
 };
 
-export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DBLike> => {
-  const { queueName } = queueOptions;
+/** Context passed to the job lifecycle hook for each consumer job execution. */
+export type ConsumerJobContext = {
+  consumerName: string;
+  jobId: number | string;
+  attempt: number;
+  eventName: string;
+  eventId: number;
+  eventContext: unknown;
+};
+
+/**
+ * Lifecycle hook called around each consumer job execution.
+ * The implementation should call `run()` to execute the handler and return its result.
+ * This allows wrapping job execution with logging context, error tracking, etc.
+ */
+export type JobLifecycleHook = (
+  ctx: ConsumerJobContext,
+  run: () => Promise<{ ok: true; result: string | void } | { ok: false; error: unknown }>,
+) => Promise<{ ok: true; result: string | void } | { ok: false; error: unknown }>;
+
+export const createPgmqQueuer = (queueOptions: {
+  queueName: string;
+  /** Optional lifecycle hook called around each consumer job execution. */
+  onJob?: JobLifecycleHook;
+}): Queuer<DBLike> => {
+  const { queueName, onJob } = queueOptions;
   const pgmqQueueTableName = `q_${queueName}`;
   const pgmqArchiveTableName = `a_${queueName}`;
 
@@ -231,14 +257,36 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         // Bind to const so TS narrows inside the closure
         const _consumer = consumer;
         const _job = job;
-        const result = await outboxALS.run(causation, () =>
-          _consumer.handler({
-            eventId: _job.message.event_id,
-            eventName: _job.message.event_name,
-            payload: _job.message.event_payload as { input: unknown; output: unknown },
-            job: { id: _job.msg_id, attempt: _job.read_ct },
-          }),
-        );
+
+        const runHandler = () =>
+          outboxALS
+            .run(causation, () =>
+              _consumer.handler({
+                eventId: _job.message.event_id,
+                eventName: _job.message.event_name,
+                payload: _job.message.event_payload as { input: unknown; output: unknown },
+                job: { id: _job.msg_id, attempt: _job.read_ct },
+              }),
+            )
+            .then(
+              (result): { ok: true; result: string | void } => ({ ok: true, result }),
+              (error): { ok: false; error: unknown } => ({ ok: false, error }),
+            );
+
+        const jobCtx: ConsumerJobContext = {
+          consumerName: consumer.name,
+          jobId: job.msg_id,
+          attempt: job.read_ct,
+          eventName: job.message.event_name,
+          eventId: job.message.event_id,
+          eventContext: job.message.event_context,
+        };
+
+        const outcome = onJob ? await onJob(jobCtx, runHandler) : await runHandler();
+
+        if (!outcome.ok) throw outcome.error;
+        const result = outcome.result;
+
         results.push(result);
         const [updated] = await exec.rows(sql<typeof job>`
           update pgmq.${sql.identifier(pgmqQueueTableName)}
@@ -268,6 +316,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         const retryMessage = Object.entries(retry)
           .map(([k, v]) => `${k}: ${v}`)
           .join(". ");
+        const isDLQ = !retry.retry;
         logger.error(`[outbox] FAILED msg_id=${job.msg_id}. ${retryMessage}`, e);
 
         const statusObj = JSON.stringify({ status: retry.retry ? "retrying" : "failed" });
@@ -282,8 +331,8 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           where msg_id = ${job.msg_id}::bigint
           returning *
         `);
-        const eventData: QueuerEvent = { job: updated, error: String(e) };
-        if (!retry.retry) {
+        const eventData: QueuerEvent = { job: updated, error: String(e), isDLQ };
+        if (isDLQ) {
           logger.warn(
             `[outbox] giving up on ${job.msg_id} after ${job.read_ct} attempts. Archiving (DLQ = archive + status=failed)`,
           );
