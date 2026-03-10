@@ -409,9 +409,7 @@ export const registerConsumers = () => {
           const detached = await tx
             .update(schema.machine)
             .set({ state: "detached" })
-            .where(
-              and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")),
-            )
+            .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")))
             .returning({ id: schema.machine.id });
 
           // Promote this machine to active

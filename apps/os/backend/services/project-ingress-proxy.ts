@@ -217,14 +217,47 @@ async function resolveMachineForIngress(
 ): Promise<ResolveMachineForIngressResult> {
   const db = await getDb();
   try {
-  if (target.kind === "project") {
+    if (target.kind === "project") {
+      const rows = await db
+        .select({
+          projectId: schema.project.id,
+          defaultPort: schema.project.defaultPort,
+          membershipId: schema.organizationUserMembership.id,
+        })
+        .from(schema.project)
+        .innerJoin(schema.organization, eq(schema.project.organizationId, schema.organization.id))
+        .leftJoin(
+          schema.organizationUserMembership,
+          and(
+            eq(schema.organizationUserMembership.organizationId, schema.organization.id),
+            eq(schema.organizationUserMembership.userId, userId),
+          ),
+        )
+        .where(eq(schema.project.slug, target.projectSlug))
+        .limit(1);
+
+      const row = rows[0];
+      if (!row) {
+        return { machine: null, projectFound: false };
+      }
+      if (!row.membershipId && !isSystemAdmin) {
+        return { machine: null, projectFound: true, accessDenied: true };
+      }
+
+      const machine = await db.query.machine.findFirst({
+        where: and(eq(schema.machine.projectId, row.projectId), eq(schema.machine.state, "active")),
+      });
+      return { machine: machine ?? null, projectFound: true, defaultPort: row.defaultPort };
+    }
+
     const rows = await db
       .select({
-        projectId: schema.project.id,
+        machine: schema.machine,
         defaultPort: schema.project.defaultPort,
         membershipId: schema.organizationUserMembership.id,
       })
-      .from(schema.project)
+      .from(schema.machine)
+      .innerJoin(schema.project, eq(schema.machine.projectId, schema.project.id))
       .innerJoin(schema.organization, eq(schema.project.organizationId, schema.organization.id))
       .leftJoin(
         schema.organizationUserMembership,
@@ -233,71 +266,38 @@ async function resolveMachineForIngress(
           eq(schema.organizationUserMembership.userId, userId),
         ),
       )
-      .where(eq(schema.project.slug, target.projectSlug))
+      .where(eq(schema.machine.id, target.machineId))
       .limit(1);
 
     const row = rows[0];
-    if (!row) {
-      return { machine: null, projectFound: false };
-    }
+    if (!row) return { machine: null, machineExists: false };
     if (!row.membershipId && !isSystemAdmin) {
-      return { machine: null, projectFound: true, accessDenied: true };
+      return {
+        machine: null,
+        accessDenied: true,
+        machineExists: true,
+        machineState: row.machine.state,
+      };
     }
 
-    const machine = await db.query.machine.findFirst({
-      where: and(eq(schema.machine.projectId, row.projectId), eq(schema.machine.state, "active")),
-    });
-    return { machine: machine ?? null, projectFound: true, defaultPort: row.defaultPort };
-  }
+    if (
+      row.machine.state !== "active" &&
+      row.machine.state !== "detached" &&
+      row.machine.state !== "starting"
+    ) {
+      return {
+        machine: null,
+        machineExists: true,
+        machineState: row.machine.state,
+      };
+    }
 
-  const rows = await db
-    .select({
-      machine: schema.machine,
-      defaultPort: schema.project.defaultPort,
-      membershipId: schema.organizationUserMembership.id,
-    })
-    .from(schema.machine)
-    .innerJoin(schema.project, eq(schema.machine.projectId, schema.project.id))
-    .innerJoin(schema.organization, eq(schema.project.organizationId, schema.organization.id))
-    .leftJoin(
-      schema.organizationUserMembership,
-      and(
-        eq(schema.organizationUserMembership.organizationId, schema.organization.id),
-        eq(schema.organizationUserMembership.userId, userId),
-      ),
-    )
-    .where(eq(schema.machine.id, target.machineId))
-    .limit(1);
-
-  const row = rows[0];
-  if (!row) return { machine: null, machineExists: false };
-  if (!row.membershipId && !isSystemAdmin) {
     return {
-      machine: null,
-      accessDenied: true,
+      machine: row.machine,
       machineExists: true,
       machineState: row.machine.state,
+      defaultPort: row.defaultPort,
     };
-  }
-
-  if (
-    row.machine.state !== "active" &&
-    row.machine.state !== "detached" &&
-    row.machine.state !== "starting"
-  ) {
-    return {
-      machine: null,
-      machineExists: true,
-      machineState: row.machine.state,
-    };
-  }
-
-  return {
-    machine: row.machine,
-    machineExists: true,
-    machineState: row.machine.state,
-    defaultPort: row.defaultPort,
-  };
   } finally {
     await cleanupDb(db);
   }
@@ -690,10 +690,7 @@ async function handleCustomDomainRequest(
 
       machine =
         (await db.query.machine.findFirst({
-          where: and(
-            eq(schema.machine.projectId, project.id),
-            eq(schema.machine.state, "active"),
-          ),
+          where: and(eq(schema.machine.projectId, project.id), eq(schema.machine.state, "active")),
         })) ?? null;
     } finally {
       await cleanupDb(db);
