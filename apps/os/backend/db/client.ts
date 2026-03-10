@@ -1,4 +1,4 @@
-import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Client } from "pg";
 import { env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
