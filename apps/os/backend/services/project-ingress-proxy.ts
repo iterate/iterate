@@ -11,7 +11,7 @@ import {
 } from "@iterate-com/shared/project-ingress";
 import type { CloudflareEnv } from "../../env.ts";
 import type { AuthSession } from "../auth/auth.ts";
-import { getDb } from "../db/client.ts";
+import { cleanupDb, getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 
@@ -110,24 +110,28 @@ async function findProjectByCustomDomainHostname(
   hostname: string,
 ): Promise<typeof schema.project.$inferSelect | null> {
   const db = await getDb();
-  const normalizedHostname = hostname.toLowerCase();
+  try {
+    const normalizedHostname = hostname.toLowerCase();
 
-  // hostname = custom_domain (exact) OR hostname LIKE '%.' || custom_domain (subdomain)
-  // Order by domain length DESC so the longest (most specific) match wins.
-  // e.g. `a.example.com` matches before `example.com` for hostname `4096.a.example.com`.
-  const results = await db
-    .select()
-    .from(schema.project)
-    .where(
-      or(
-        eq(schema.project.customDomain, normalizedHostname),
-        sql`${normalizedHostname} LIKE '%.' || ${schema.project.customDomain}`,
-      ),
-    )
-    .orderBy(sql`length(${schema.project.customDomain}) DESC`)
-    .limit(1);
+    // hostname = custom_domain (exact) OR hostname LIKE '%.' || custom_domain (subdomain)
+    // Order by domain length DESC so the longest (most specific) match wins.
+    // e.g. `a.example.com` matches before `example.com` for hostname `4096.a.example.com`.
+    const results = await db
+      .select()
+      .from(schema.project)
+      .where(
+        or(
+          eq(schema.project.customDomain, normalizedHostname),
+          sql`${normalizedHostname} LIKE '%.' || ${schema.project.customDomain}`,
+        ),
+      )
+      .orderBy(sql`length(${schema.project.customDomain}) DESC`)
+      .limit(1);
 
-  return results[0] ?? null;
+    return results[0] ?? null;
+  } finally {
+    await cleanupDb(db);
+  }
 }
 
 /**
@@ -212,7 +216,7 @@ async function resolveMachineForIngress(
   isSystemAdmin: boolean,
 ): Promise<ResolveMachineForIngressResult> {
   const db = await getDb();
-
+  try {
   if (target.kind === "project") {
     const rows = await db
       .select({
@@ -294,6 +298,9 @@ async function resolveMachineForIngress(
     machineState: row.machine.state,
     defaultPort: row.defaultPort,
   };
+  } finally {
+    await cleanupDb(db);
+  }
 }
 
 function filterProxyRequestHeaders(request: Request, targetHost: string): Headers {
@@ -664,26 +671,33 @@ async function handleCustomDomainRequest(
   if (target.kind === "project") {
     // Find the active machine for this project
     const db = await getDb();
-    // Verify access
-    const membershipRows = await db
-      .select({ membershipId: schema.organizationUserMembership.id })
-      .from(schema.organizationUserMembership)
-      .where(
-        and(
-          eq(schema.organizationUserMembership.organizationId, project.organizationId),
-          eq(schema.organizationUserMembership.userId, session.user.id),
-        ),
-      )
-      .limit(1);
+    try {
+      // Verify access
+      const membershipRows = await db
+        .select({ membershipId: schema.organizationUserMembership.id })
+        .from(schema.organizationUserMembership)
+        .where(
+          and(
+            eq(schema.organizationUserMembership.organizationId, project.organizationId),
+            eq(schema.organizationUserMembership.userId, session.user.id),
+          ),
+        )
+        .limit(1);
 
-    if (membershipRows.length === 0 && session.user.role !== "admin") {
-      return jsonError(403, "forbidden", { hostname: requestHostname });
+      if (membershipRows.length === 0 && session.user.role !== "admin") {
+        return jsonError(403, "forbidden", { hostname: requestHostname });
+      }
+
+      machine =
+        (await db.query.machine.findFirst({
+          where: and(
+            eq(schema.machine.projectId, project.id),
+            eq(schema.machine.state, "active"),
+          ),
+        })) ?? null;
+    } finally {
+      await cleanupDb(db);
     }
-
-    machine =
-      (await db.query.machine.findFirst({
-        where: and(eq(schema.machine.projectId, project.id), eq(schema.machine.state, "active")),
-      })) ?? null;
   } else {
     // Machine target — resolve directly
     const resolved = await resolveMachineForIngress(

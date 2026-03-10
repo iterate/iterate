@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type Stripe from "stripe";
 import { eq } from "drizzle-orm";
-import { getDb } from "../../db/client.ts";
+import { cleanupDb, getDb } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import type { SubscriptionStatus } from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
@@ -128,27 +128,31 @@ async function handleSubscriptionCreated(
   subscription: Stripe.Subscription,
 ): Promise<void> {
   const db = await getDb();
-  const customerId =
-    typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
+  try {
+    const customerId =
+      typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
 
-  // Update billing account
-  await updateBillingAccount(subscription);
+    // Update billing account
+    await updateBillingAccount(subscription);
 
-  // Track subscription_started event in PostHog
-  const billingAccount = await db.query.billingAccount.findFirst({
-    where: eq(schema.billingAccount.stripeCustomerId, customerId),
-  });
-
-  if (billingAccount) {
-    trackBillingEvent(env, billingAccount.organizationId, "subscription_started", {
-      subscription_id: subscription.id,
-      status: subscription.status,
-      customer_id: customerId,
+    // Track subscription_started event in PostHog
+    const billingAccount = await db.query.billingAccount.findFirst({
+      where: eq(schema.billingAccount.stripeCustomerId, customerId),
     });
-  }
 
-  logger.set({ subscriptionStatus: subscription.status });
-  logger.info(`Subscription created customerId=${customerId} subscriptionId=${subscription.id}`);
+    if (billingAccount) {
+      trackBillingEvent(env, billingAccount.organizationId, "subscription_started", {
+        subscription_id: subscription.id,
+        status: subscription.status,
+        customer_id: customerId,
+      });
+    }
+
+    logger.set({ subscriptionStatus: subscription.status });
+    logger.info(`Subscription created customerId=${customerId} subscriptionId=${subscription.id}`);
+  } finally {
+    await cleanupDb(db);
+  }
 }
 
 async function handleSubscriptionUpdate(subscription: Stripe.Subscription): Promise<void> {
@@ -163,101 +167,119 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription): Prom
 
 async function updateBillingAccount(subscription: Stripe.Subscription): Promise<void> {
   const db = await getDb();
-  const customerId =
-    typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
+  try {
+    const customerId =
+      typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
 
-  const subscriptionItem = subscription.items.data[0];
-  const subscriptionItemId = subscriptionItem?.id;
-  const currentPeriodStart = subscriptionItem?.current_period_start;
-  const currentPeriodEnd = subscriptionItem?.current_period_end;
+    const subscriptionItem = subscription.items.data[0];
+    const subscriptionItemId = subscriptionItem?.id;
+    const currentPeriodStart = subscriptionItem?.current_period_start;
+    const currentPeriodEnd = subscriptionItem?.current_period_end;
 
-  await db
-    .update(schema.billingAccount)
-    .set({
-      stripeSubscriptionId: subscription.id,
-      stripeSubscriptionItemId: subscriptionItemId,
-      subscriptionStatus: subscription.status as SubscriptionStatus,
-      currentPeriodStart: currentPeriodStart ? new Date(currentPeriodStart * 1000) : null,
-      currentPeriodEnd: currentPeriodEnd ? new Date(currentPeriodEnd * 1000) : null,
-      cancelAtPeriodEnd: subscription.cancel_at_period_end,
-    })
-    .where(eq(schema.billingAccount.stripeCustomerId, customerId));
+    await db
+      .update(schema.billingAccount)
+      .set({
+        stripeSubscriptionId: subscription.id,
+        stripeSubscriptionItemId: subscriptionItemId,
+        subscriptionStatus: subscription.status as SubscriptionStatus,
+        currentPeriodStart: currentPeriodStart ? new Date(currentPeriodStart * 1000) : null,
+        currentPeriodEnd: currentPeriodEnd ? new Date(currentPeriodEnd * 1000) : null,
+        cancelAtPeriodEnd: subscription.cancel_at_period_end,
+      })
+      .where(eq(schema.billingAccount.stripeCustomerId, customerId));
+  } finally {
+    await cleanupDb(db);
+  }
 }
 
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription): Promise<void> {
   const db = await getDb();
-  const customerId =
-    typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
+  try {
+    const customerId =
+      typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
 
-  await db
-    .update(schema.billingAccount)
-    .set({
-      subscriptionStatus: "canceled",
-      stripeSubscriptionId: null,
-      stripeSubscriptionItemId: null,
-    })
-    .where(eq(schema.billingAccount.stripeCustomerId, customerId));
+    await db
+      .update(schema.billingAccount)
+      .set({
+        subscriptionStatus: "canceled",
+        stripeSubscriptionId: null,
+        stripeSubscriptionItemId: null,
+      })
+      .where(eq(schema.billingAccount.stripeCustomerId, customerId));
 
-  logger.info(`Subscription deleted customerId=${customerId} subscriptionId=${subscription.id}`);
+    logger.info(`Subscription deleted customerId=${customerId} subscriptionId=${subscription.id}`);
+  } finally {
+    await cleanupDb(db);
+  }
 }
 
 async function handleInvoicePaid(env: CloudflareEnv, invoice: Stripe.Invoice): Promise<void> {
   const db = await getDb();
-  const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
+  try {
+    const customerId =
+      typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
 
-  if (!customerId) return;
+    if (!customerId) return;
 
-  const subscriptionDetails = invoice.parent?.subscription_details;
-  if (subscriptionDetails) {
-    await db
-      .update(schema.billingAccount)
-      .set({
-        subscriptionStatus: "active",
-      })
-      .where(eq(schema.billingAccount.stripeCustomerId, customerId));
-  }
+    const subscriptionDetails = invoice.parent?.subscription_details;
+    if (subscriptionDetails) {
+      await db
+        .update(schema.billingAccount)
+        .set({
+          subscriptionStatus: "active",
+        })
+        .where(eq(schema.billingAccount.stripeCustomerId, customerId));
+    }
 
-  // Track invoice_paid event in PostHog
-  const billingAccount = await db.query.billingAccount.findFirst({
-    where: eq(schema.billingAccount.stripeCustomerId, customerId),
-  });
-
-  if (billingAccount) {
-    trackBillingEvent(env, billingAccount.organizationId, "invoice_paid", {
-      invoice_id: invoice.id,
-      amount: invoice.amount_paid,
-      currency: invoice.currency,
+    // Track invoice_paid event in PostHog
+    const billingAccount = await db.query.billingAccount.findFirst({
+      where: eq(schema.billingAccount.stripeCustomerId, customerId),
     });
-  }
 
-  logger.info(`Invoice paid customerId=${customerId} invoiceId=${invoice.id}`);
+    if (billingAccount) {
+      trackBillingEvent(env, billingAccount.organizationId, "invoice_paid", {
+        invoice_id: invoice.id,
+        amount: invoice.amount_paid,
+        currency: invoice.currency,
+      });
+    }
+
+    logger.info(`Invoice paid customerId=${customerId} invoiceId=${invoice.id}`);
+  } finally {
+    await cleanupDb(db);
+  }
 }
 
 async function handlePaymentFailed(env: CloudflareEnv, invoice: Stripe.Invoice): Promise<void> {
   const db = await getDb();
-  const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
+  try {
+    const customerId =
+      typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
 
-  if (!customerId) return;
+    if (!customerId) return;
 
-  await db
-    .update(schema.billingAccount)
-    .set({
-      subscriptionStatus: "past_due",
-    })
-    .where(eq(schema.billingAccount.stripeCustomerId, customerId));
+    await db
+      .update(schema.billingAccount)
+      .set({
+        subscriptionStatus: "past_due",
+      })
+      .where(eq(schema.billingAccount.stripeCustomerId, customerId));
 
-  // Track payment_failed event in PostHog
-  const billingAccount = await db.query.billingAccount.findFirst({
-    where: eq(schema.billingAccount.stripeCustomerId, customerId),
-  });
-
-  if (billingAccount) {
-    trackBillingEvent(env, billingAccount.organizationId, "payment_failed", {
-      invoice_id: invoice.id,
-      amount: invoice.amount_due,
-      currency: invoice.currency,
+    // Track payment_failed event in PostHog
+    const billingAccount = await db.query.billingAccount.findFirst({
+      where: eq(schema.billingAccount.stripeCustomerId, customerId),
     });
-  }
 
-  logger.info(`Payment failed customerId=${customerId} invoiceId=${invoice.id}`);
+    if (billingAccount) {
+      trackBillingEvent(env, billingAccount.organizationId, "payment_failed", {
+        invoice_id: invoice.id,
+        amount: invoice.amount_due,
+        currency: invoice.currency,
+      });
+    }
+
+    logger.info(`Payment failed customerId=${customerId} invoiceId=${invoice.id}`);
+  } finally {
+    await cleanupDb(db);
+  }
 }
