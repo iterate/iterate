@@ -124,7 +124,11 @@ export async function getDbWithEnv(envParam: {
     });
   }
 
-  const pool = new Pool({ connectionString: envParam.DATABASE_URL, max: 3, idleTimeoutMillis: 10_000 });
+  const pool = new Pool({
+    connectionString: envParam.DATABASE_URL,
+    max: 3,
+    idleTimeoutMillis: 10_000,
+  });
   return drizzle({ client: pool, schema, casing: "snake_case" });
 }
 
