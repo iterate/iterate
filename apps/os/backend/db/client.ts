@@ -103,8 +103,7 @@ export async function getDb() {
   // Real Hyperdrive rewrites connectionString to a per-request proxy socket,
   // so it will differ from the origin DATABASE_URL. In miniflare the simulated
   // Hyperdrive just passes DATABASE_URL through unchanged.
-  const isRealHyperdrive =
-    hyperdrive && hyperdrive.connectionString !== env.DATABASE_URL;
+  const isRealHyperdrive = hyperdrive && hyperdrive.connectionString !== env.DATABASE_URL;
 
   if (isRealHyperdrive) {
     // Production: per-request Client, Hyperdrive pools server-side
@@ -130,8 +129,7 @@ export async function getDbWithEnv(envParam: {
   HYPERDRIVE?: { connectionString: string };
 }) {
   const isRealHyperdrive =
-    envParam.HYPERDRIVE &&
-    envParam.HYPERDRIVE.connectionString !== envParam.DATABASE_URL;
+    envParam.HYPERDRIVE && envParam.HYPERDRIVE.connectionString !== envParam.DATABASE_URL;
 
   if (isRealHyperdrive) {
     // Per-request Client for real Hyperdrive
