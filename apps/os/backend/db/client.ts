@@ -1,5 +1,5 @@
-import { drizzle } from "drizzle-orm/node-postgres";
-import { Client } from "pg";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
+import { Client, Pool } from "pg";
 import { env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import * as schema from "./schema.ts";
@@ -77,66 +77,54 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
 // DB client factories
 // ---------------------------------------------------------------------------
 
-/** Hidden key used to stash the underlying pg.Client on drizzle instances. */
-const kPgClient = Symbol.for("pgClient");
+/** Cached drizzle instance for local dev (reused across requests). */
+let cachedDb: NodePgDatabase<typeof schema> | undefined;
 
 /**
- * Returns a drizzle DB instance backed by a per-request pg.Client.
+ * Returns a drizzle DB instance.
  *
- * Cloudflare does NOT support reusing DB drivers across requests — Hyperdrive
- * proxy sockets are per-request. We use the same per-request Client strategy
- * in local dev / miniflare for dev-prod parity.
+ * - **Hyperdrive (deployed workers):** Creates a per-request pg.Client.
+ *   Cloudflare requires a fresh client per request — Hyperdrive manages
+ *   connection pooling server-side via a local proxy socket.
  *
- * The underlying Client is stashed on the drizzle instance via a Symbol so
- * that `cleanupDb()` can close it without callers needing to manage it.
- *
- * @see https://developers.cloudflare.com/workers/best-practices/workers-best-practices/
+ * - **Local dev / miniflare:** Uses a cached pg.Pool. The IS_HYPERDRIVE
+ *   env var is only set for deployed workers in alchemy.run.ts.
  */
 export async function getDb() {
-  const hyperdrive = (env as Record<string, unknown>).HYPERDRIVE as
-    | { connectionString: string }
-    | undefined;
-  const connectionString = hyperdrive?.connectionString ?? env.DATABASE_URL;
+  if (env.IS_HYPERDRIVE) {
+    const hyperdrive = (env as Record<string, unknown>).HYPERDRIVE as {
+      connectionString: string;
+    };
+    return withRetry(async () => {
+      const client = new Client({ connectionString: hyperdrive.connectionString });
+      await client.connect();
+      return drizzle({ client, schema, casing: "snake_case" });
+    });
+  }
 
-  return withRetry(async () => {
-    const client = new Client({ connectionString });
-    await client.connect();
-    const db = drizzle({ client, schema, casing: "snake_case" });
-    (db as any)[kPgClient] = client;
-    return db;
-  });
+  if (!cachedDb) {
+    const pool = new Pool({ connectionString: env.DATABASE_URL, max: 3 });
+    cachedDb = drizzle({ client: pool, schema, casing: "snake_case" });
+  }
+  return cachedDb;
 }
 
 /** Accepts any env-like object with DATABASE_URL (used by DurableObjects). */
 export async function getDbWithEnv(envParam: {
   DATABASE_URL: string;
+  IS_HYPERDRIVE?: string;
   HYPERDRIVE?: { connectionString: string };
 }) {
-  const connectionString = envParam.HYPERDRIVE?.connectionString ?? envParam.DATABASE_URL;
-
-  return withRetry(async () => {
-    const client = new Client({ connectionString });
-    await client.connect();
-    const db = drizzle({ client, schema, casing: "snake_case" });
-    (db as any)[kPgClient] = client;
-    return db;
-  });
-}
-
-/**
- * Closes the underlying pg.Client for a drizzle instance created by
- * `getDb()` / `getDbWithEnv()`. Safe to call on any DB — no-ops if there
- * is no stashed client (e.g. if backed by a Pool).
- */
-export async function cleanupDb(db: DB): Promise<void> {
-  const client = (db as any)[kPgClient] as Client | undefined;
-  if (client) {
-    try {
-      await client.end();
-    } catch {
-      // Ignore errors during cleanup — connection may already be closed.
-    }
+  if (envParam.IS_HYPERDRIVE && envParam.HYPERDRIVE) {
+    return withRetry(async () => {
+      const client = new Client({ connectionString: envParam.HYPERDRIVE!.connectionString });
+      await client.connect();
+      return drizzle({ client, schema, casing: "snake_case" });
+    });
   }
+
+  const pool = new Pool({ connectionString: envParam.DATABASE_URL, max: 3 });
+  return drizzle({ client: pool, schema, casing: "snake_case" });
 }
 
 export type DB = Awaited<ReturnType<typeof getDb>>;

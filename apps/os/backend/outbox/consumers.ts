@@ -2,7 +2,7 @@ import { eq, and, inArray } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { match } from "schematch";
 import { z } from "zod/v4";
-import { cleanupDb, getDb, type DB } from "../db/client.ts";
+import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { env } from "../../env.ts";
@@ -27,16 +27,6 @@ const IterateMainPushWebhookPayload = z.object({
   }),
 });
 
-/** Creates a per-request DB, runs `fn`, and closes the connection. */
-async function withDb<T>(fn: (db: DB) => Promise<T>): Promise<T> {
-  const db = await getDb();
-  try {
-    return await fn(db);
-  } finally {
-    await cleanupDb(db);
-  }
-}
-
 function parseGitRefBranch(ref: string): string | null {
   const prefix = "refs/heads/";
   if (!ref.startsWith(prefix)) return null;
@@ -54,87 +44,88 @@ export const registerConsumers = () => {
   cc.registerConsumer({
     name: "requestIterateMachinePulls",
     on: "github:webhook-received",
-    handler: (params) =>
-      withDb(async (db) =>
-        match(params.payload)
-          .case(IterateMainPushWebhookPayload, async (payload) => {
-            const branch = parseGitRefBranch(payload.payload.ref);
-            if (branch !== "main") {
-              return `skipped: ref ${payload.payload.ref}`;
-            }
+    async handler(params) {
+      const db = await getDb();
 
-            const machines = await db.query.machine.findMany({
-              where: eq(schema.machine.state, "active"),
-              columns: { id: true },
-            });
+      return match(params.payload)
+        .case(IterateMainPushWebhookPayload, async (payload) => {
+          const branch = parseGitRefBranch(payload.payload.ref);
+          if (branch !== "main") {
+            return `skipped: ref ${payload.payload.ref}`;
+          }
 
-            for (const machine of machines) {
-              await cc.send(
-                { transaction: db, parent: db },
-                "machine:pull-iterate-iterate-requested",
-                {
-                  machineId: machine.id,
-                  ref: branch,
-                  sourceEventId: payload.sourceEventId,
-                },
-              );
-            }
+          const machines = await db.query.machine.findMany({
+            where: eq(schema.machine.state, "active"),
+            columns: { id: true },
+          });
 
-            logger.set({ sourceEventId: payload.sourceEventId, targetCount: machines.length });
-            logger.info("[GitHub Webhook] Enqueued iterate machine pulls");
-            return `enqueued ${machines.length} iterate machine pull requests`;
-          })
-          .default(() => `skipped: unsupported github webhook ${params.payload.event}`),
-      ),
+          for (const machine of machines) {
+            await cc.send(
+              { transaction: db, parent: db },
+              "machine:pull-iterate-iterate-requested",
+              {
+                machineId: machine.id,
+                ref: branch,
+                sourceEventId: payload.sourceEventId,
+              },
+            );
+          }
+
+          logger.set({ sourceEventId: payload.sourceEventId, targetCount: machines.length });
+          logger.info("[GitHub Webhook] Enqueued iterate machine pulls");
+          return `enqueued ${machines.length} iterate machine pull requests`;
+        })
+        .default(() => `skipped: unsupported github webhook ${params.payload.event}`);
+    },
   });
 
   cc.registerConsumer({
     name: "triggerMachinePullIterateIterate",
     on: "machine:pull-iterate-iterate-requested",
-    handler: (params) =>
-      withDb(async (db) => {
-        const machine = await db.query.machine.findFirst({
-          where: eq(schema.machine.id, params.payload.machineId),
-        });
+    async handler(params) {
+      const db = await getDb();
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, params.payload.machineId),
+      });
 
-        if (!machine) {
-          logger.set({
-            machineId: params.payload.machineId,
-            sourceEventId: params.payload.sourceEventId,
-          });
-          logger.warn("[GitHub Webhook] Skipping iterate pull for missing machine");
-          return `skipped: machine ${params.payload.machineId} not found`;
-        }
-
-        if (machine.state !== "active") {
-          logger.set({
-            machineId: machine.id,
-            state: machine.state,
-            sourceEventId: params.payload.sourceEventId,
-          });
-          logger.info("[GitHub Webhook] Skipping iterate pull for non-active machine");
-          return `skipped: machine ${machine.id} state is ${machine.state}`;
-        }
-
-        const runtime = await createMachineStub({
-          type: machine.type,
-          env,
-          externalId: machine.externalId,
-          metadata: (machine.metadata as Record<string, unknown>) ?? {},
-        });
-        const fetcher = await runtime.getFetcher(3000);
-        const baseUrl = await runtime.getBaseUrl(3000);
-        const daemonClient = createDaemonClient({ baseUrl, fetcher });
-        await daemonClient.daemon.pullIterateIterate({ ref: params.payload.ref });
-
+      if (!machine) {
         logger.set({
-          machineId: machine.id,
-          ref: params.payload.ref,
+          machineId: params.payload.machineId,
           sourceEventId: params.payload.sourceEventId,
         });
-        logger.info("[GitHub Webhook] Triggered iterate pull on machine");
-        return `triggered iterate pull on ${machine.id}`;
-      }),
+        logger.warn("[GitHub Webhook] Skipping iterate pull for missing machine");
+        return `skipped: machine ${params.payload.machineId} not found`;
+      }
+
+      if (machine.state !== "active") {
+        logger.set({
+          machineId: machine.id,
+          state: machine.state,
+          sourceEventId: params.payload.sourceEventId,
+        });
+        logger.info("[GitHub Webhook] Skipping iterate pull for non-active machine");
+        return `skipped: machine ${machine.id} state is ${machine.state}`;
+      }
+
+      const runtime = await createMachineStub({
+        type: machine.type,
+        env,
+        externalId: machine.externalId,
+        metadata: (machine.metadata as Record<string, unknown>) ?? {},
+      });
+      const fetcher = await runtime.getFetcher(3000);
+      const baseUrl = await runtime.getBaseUrl(3000);
+      const daemonClient = createDaemonClient({ baseUrl, fetcher });
+      await daemonClient.daemon.pullIterateIterate({ ref: params.payload.ref });
+
+      logger.set({
+        machineId: machine.id,
+        ref: params.payload.ref,
+        sourceEventId: params.payload.sourceEventId,
+      });
+      logger.info("[GitHub Webhook] Triggered iterate pull on machine");
+      return `triggered iterate pull on ${machine.id}`;
+    },
   });
 
   cc.registerConsumer({
@@ -145,78 +136,78 @@ export const registerConsumers = () => {
       if (job.read_ct <= 2) return { retry: true, reason: "retrying provisioning", delay: "10s" };
       return { retry: false, reason: "provisioning failed after retries" };
     },
-    handler: (params) =>
-      withDb(async (db) => {
-        const { machineId } = params.payload;
+    async handler(params) {
+      const { machineId } = params.payload;
+      const db = await getDb();
 
-        const machine = await db.query.machine.findFirst({
-          where: eq(schema.machine.id, machineId),
-          with: { project: { with: { organization: true } } },
-        });
-        if (!machine) throw new Error(`Machine ${machineId} not found`);
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+        with: { project: { with: { organization: true } } },
+      });
+      if (!machine) throw new Error(`Machine ${machineId} not found`);
 
-        if (machine.state !== "starting") {
-          logger.set({ machine: { id: machineId } });
-          logger.info(
-            `[provisionMachine] Skipping, machine no longer starting state=${machine.state}`,
-          );
-          return `skipped: machine state is ${machine.state}`;
-        }
-
-        if (!machine.externalId) throw new Error(`Machine ${machineId} has no externalId`);
-
-        const { apiKey } = await import("../services/machine-creation.ts").then((mod) =>
-          mod.getOrCreateProjectMachineToken(db, machine.projectId),
-        );
-        const fullEnvVars = await buildMachineEnvVars({
-          db,
-          env,
-          projectId: machine.projectId,
-          organizationId: machine.project.organizationId,
-          organizationSlug: machine.project.organization.slug,
-          projectSlug: machine.project.slug,
-          machineId,
-          name: machine.name,
-          apiKey,
-          customDomain: machine.project.customDomain,
-        });
-
-        const initialMetadata = stripMachineStateMetadata(
-          (machine.metadata as Record<string, unknown>) ?? {},
-        );
-
-        const runtime = await createMachineStub({
-          type: machine.type,
-          env,
-          externalId: machine.externalId,
-          metadata: initialMetadata,
-        });
-        const runtimeResult = await runtime.create({
-          machineId,
-          externalId: machine.externalId,
-          name: machine.name,
-          envVars: fullEnvVars,
-        });
-
-        // Merge provider metadata with any metadata written while provisioning ran
-        const latestMachine = await db.query.machine.findFirst({
-          where: eq(schema.machine.id, machineId),
-        });
-        const latestMetadata = (latestMachine?.metadata as Record<string, unknown>) ?? {};
-        const mergedMetadata = {
-          ...stripMachineStateMetadata(latestMetadata),
-          ...(runtimeResult.metadata ?? {}),
-        };
-
-        await db
-          .update(schema.machine)
-          .set({ metadata: mergedMetadata })
-          .where(eq(schema.machine.id, machineId));
-
+      if (machine.state !== "starting") {
         logger.set({ machine: { id: machineId } });
-        logger.info(`[provisionMachine] Machine provisioned type=${machine.type}`);
-        return `provisioned machine ${machineId}`;
-      }),
+        logger.info(
+          `[provisionMachine] Skipping, machine no longer starting state=${machine.state}`,
+        );
+        return `skipped: machine state is ${machine.state}`;
+      }
+
+      if (!machine.externalId) throw new Error(`Machine ${machineId} has no externalId`);
+
+      const { apiKey } = await import("../services/machine-creation.ts").then((mod) =>
+        mod.getOrCreateProjectMachineToken(db, machine.projectId),
+      );
+      const fullEnvVars = await buildMachineEnvVars({
+        db,
+        env,
+        projectId: machine.projectId,
+        organizationId: machine.project.organizationId,
+        organizationSlug: machine.project.organization.slug,
+        projectSlug: machine.project.slug,
+        machineId,
+        name: machine.name,
+        apiKey,
+        customDomain: machine.project.customDomain,
+      });
+
+      const initialMetadata = stripMachineStateMetadata(
+        (machine.metadata as Record<string, unknown>) ?? {},
+      );
+
+      const runtime = await createMachineStub({
+        type: machine.type,
+        env,
+        externalId: machine.externalId,
+        metadata: initialMetadata,
+      });
+      const runtimeResult = await runtime.create({
+        machineId,
+        externalId: machine.externalId,
+        name: machine.name,
+        envVars: fullEnvVars,
+      });
+
+      // Merge provider metadata with any metadata written while provisioning ran
+      const latestMachine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      const latestMetadata = (latestMachine?.metadata as Record<string, unknown>) ?? {};
+      const mergedMetadata = {
+        ...stripMachineStateMetadata(latestMetadata),
+        ...(runtimeResult.metadata ?? {}),
+      };
+
+      await db
+        .update(schema.machine)
+        .set({ metadata: mergedMetadata })
+        .where(eq(schema.machine.id, machineId));
+
+      logger.set({ machine: { id: machineId } });
+      logger.info(`[provisionMachine] Machine provisioned type=${machine.type}`);
+      return `provisioned machine ${machineId}`;
+    },
   });
 
   // ── Setup + readiness probe pipeline ────────────────────────────────
@@ -236,38 +227,38 @@ export const registerConsumers = () => {
       if (job.read_ct <= 2) return { retry: true, reason: "retrying setup push", delay: "10s" };
       return { retry: false, reason: "setup push failed after retries" };
     },
-    handler: (params) =>
-      withDb(async (db) => {
-        const { machineId, projectId } = params.payload;
-        logger.set({ machine: { id: machineId } });
+    async handler(params) {
+      const { machineId, projectId } = params.payload;
+      logger.set({ machine: { id: machineId } });
+      const db = await getDb();
 
-        const machine = await db.query.machine.findFirst({
-          where: eq(schema.machine.id, machineId),
-        });
-        if (!machine) throw new Error(`Machine ${machineId} not found`);
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      if (!machine) throw new Error(`Machine ${machineId} not found`);
 
-        const { getPushMachineSetupInput, pushSetupToMachine } =
-          await import("../services/machine-setup.ts");
+      const { getPushMachineSetupInput, pushSetupToMachine } =
+        await import("../services/machine-setup.ts");
 
-        const input = await getPushMachineSetupInput(db, env, machine);
-        if (!input) {
-          logger.info("[pushMachineSetup] Sentinel matches, skipping setup + probe");
-          return `skipped: setup already done for ${machineId}`;
-        }
+      const input = await getPushMachineSetupInput(db, env, machine);
+      if (!input) {
+        logger.info("[pushMachineSetup] Sentinel matches, skipping setup + probe");
+        return `skipped: setup already done for ${machineId}`;
+      }
 
-        const writeSentinel = await pushSetupToMachine(machine, input);
+      const writeSentinel = await pushSetupToMachine(machine, input);
 
-        // Emit setup-pushed so the readiness probe can begin
-        await cc.send({ transaction: db, parent: db }, "machine:setup-pushed", {
-          machineId,
-          projectId,
-        });
+      // Emit setup-pushed so the readiness probe can begin
+      await cc.send({ transaction: db, parent: db }, "machine:setup-pushed", {
+        machineId,
+        projectId,
+      });
 
-        await writeSentinel();
+      await writeSentinel();
 
-        logger.info("[pushMachineSetup] Setup pushed to machine");
-        return `setup pushed to ${machineId}`;
-      }),
+      logger.info("[pushMachineSetup] Setup pushed to machine");
+      return `setup pushed to ${machineId}`;
+    },
   });
 
   // Stage 1: Setup pushed — wait for services to restart, then send readiness probe.
@@ -280,48 +271,48 @@ export const registerConsumers = () => {
       if (job.read_ct <= 2) return { retry: true, reason: "retrying probe send", delay: "5s" };
       return { retry: false, reason: "probe send failed after retries" };
     },
-    handler: (params) =>
-      withDb(async (db) => {
-        const { machineId, projectId } = params.payload;
+    async handler(params) {
+      const { machineId, projectId } = params.payload;
+      const db = await getDb();
 
-        const machine = await db.query.machine.findFirst({
-          where: eq(schema.machine.id, machineId),
-        });
-        if (!machine) throw new Error(`Machine ${machineId} not found`);
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      if (!machine) throw new Error(`Machine ${machineId} not found`);
 
-        if (machine.state !== "starting") {
-          logger.set({ machine: { id: machineId } });
-          logger.info(
-            `[sendReadinessProbe] Skipping, machine no longer starting state=${machine.state}`,
-          );
-          return `skipped: machine state is ${machine.state}`;
-        }
+      if (machine.state !== "starting") {
+        logger.set({ machine: { id: machineId } });
+        logger.info(
+          `[sendReadinessProbe] Skipping, machine no longer starting state=${machine.state}`,
+        );
+        return `skipped: machine state is ${machine.state}`;
+      }
 
-        const fetcher = await buildMachineFetcher(machine, env);
-        if (!fetcher) {
-          throw new Error(`Could not build fetcher for machine ${machineId}`);
-        }
+      const fetcher = await buildMachineFetcher(machine, env);
+      if (!fetcher) {
+        throw new Error(`Could not build fetcher for machine ${machineId}`);
+      }
 
-        const sendResult = await sendProbeMessage(fetcher, {
-          machineId,
-          probeId: params.job.id,
-        });
-        if (!sendResult.ok) {
-          throw new Error(`probe send failed: ${sendResult.detail}`);
-        }
+      const sendResult = await sendProbeMessage(fetcher, {
+        machineId,
+        probeId: params.job.id,
+      });
+      if (!sendResult.ok) {
+        throw new Error(`probe send failed: ${sendResult.detail}`);
+      }
 
-        // Probe message sent successfully — emit probe-sent so polling begins
-        await cc.send({ transaction: db, parent: db }, "machine:probe-sent", {
-          machineId,
-          projectId,
-          threadId: sendResult.threadId,
-          messageId: sendResult.messageId,
-        });
+      // Probe message sent successfully — emit probe-sent so polling begins
+      await cc.send({ transaction: db, parent: db }, "machine:probe-sent", {
+        machineId,
+        projectId,
+        threadId: sendResult.threadId,
+        messageId: sendResult.messageId,
+      });
 
-        logger.set({ machine: { id: machineId }, threadId: sendResult.threadId });
-        logger.info(`[sendReadinessProbe] Probe message sent messageId=${sendResult.messageId}`);
-        return `probe sent, messageId=${sendResult.messageId}`;
-      }),
+      logger.set({ machine: { id: machineId }, threadId: sendResult.threadId });
+      logger.info(`[sendReadinessProbe] Probe message sent messageId=${sendResult.messageId}`);
+      return `probe sent, messageId=${sendResult.messageId}`;
+    },
   });
 
   // Stage 2: Probe message was sent — poll for a valid response.
@@ -335,103 +326,103 @@ export const registerConsumers = () => {
       if (job.read_ct <= 1) return { retry: true, reason: "retrying poll", delay: "5s" };
       return { retry: false, reason: "poll failed after retry" };
     },
-    handler: (params) =>
-      withDb(async (db) => {
-        const { machineId, projectId, threadId } = params.payload;
+    async handler(params) {
+      const { machineId, projectId, threadId } = params.payload;
+      const db = await getDb();
 
-        const machine = await db.query.machine.findFirst({
-          where: eq(schema.machine.id, machineId),
-        });
-        if (!machine) throw new Error(`Machine ${machineId} not found`);
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      if (!machine) throw new Error(`Machine ${machineId} not found`);
 
-        if (machine.state !== "starting") {
-          logger.set({ machine: { id: machineId } });
-          logger.info(
-            `[pollProbeResponse] Skipping, machine no longer starting state=${machine.state}`,
-          );
-          return `skipped: machine state is ${machine.state}`;
-        }
-
-        const fetcher = await buildMachineFetcher(machine, env);
-        if (!fetcher) {
-          throw new Error(`Could not build fetcher for machine ${machineId}`);
-        }
-
-        const responseText = await pollForProbeAnswer(fetcher, threadId);
-
-        await cc.send({ transaction: db, parent: db }, "machine:probe-succeeded", {
-          machineId,
-          projectId,
-          responseText,
-        });
-
+      if (machine.state !== "starting") {
         logger.set({ machine: { id: machineId } });
-        logger.info(`[pollProbeResponse] Probe succeeded responseText=${responseText}`);
-        return `probe succeeded: "${responseText}"`;
-      }),
+        logger.info(
+          `[pollProbeResponse] Skipping, machine no longer starting state=${machine.state}`,
+        );
+        return `skipped: machine state is ${machine.state}`;
+      }
+
+      const fetcher = await buildMachineFetcher(machine, env);
+      if (!fetcher) {
+        throw new Error(`Could not build fetcher for machine ${machineId}`);
+      }
+
+      const responseText = await pollForProbeAnswer(fetcher, threadId);
+
+      await cc.send({ transaction: db, parent: db }, "machine:probe-succeeded", {
+        machineId,
+        projectId,
+        responseText,
+      });
+
+      logger.set({ machine: { id: machineId } });
+      logger.info(`[pollProbeResponse] Probe succeeded responseText=${responseText}`);
+      return `probe succeeded: "${responseText}"`;
+    },
   });
 
   // Stage 3a: Probe succeeded — activate the machine.
   cc.registerConsumer({
     name: "activateMachine",
     on: "machine:probe-succeeded",
-    handler: (params) =>
-      withDb(async (db) => {
-        const { machineId, projectId } = params.payload;
+    async handler(params) {
+      const { machineId, projectId } = params.payload;
+      const db = await getDb();
 
-        const machine = await db.query.machine.findFirst({
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      if (!machine) throw new Error(`Machine ${machineId} not found`);
+
+      if (machine.state !== "starting") {
+        logger.set({ machine: { id: machineId } });
+        logger.info(
+          `[activateMachine] Skipping, machine no longer starting state=${machine.state}`,
+        );
+        return `skipped: machine state is ${machine.state}`;
+      }
+
+      const activated = await db.transaction(async (tx) => {
+        // Re-check state inside the transaction (TOCTOU protection)
+        const current = await tx.query.machine.findFirst({
           where: eq(schema.machine.id, machineId),
         });
-        if (!machine) throw new Error(`Machine ${machineId} not found`);
-
-        if (machine.state !== "starting") {
+        if (current?.state !== "starting") {
           logger.set({ machine: { id: machineId } });
           logger.info(
-            `[activateMachine] Skipping, machine no longer starting state=${machine.state}`,
+            `[activateMachine] Skipping inside tx, state changed state=${current?.state}`,
           );
-          return `skipped: machine state is ${machine.state}`;
+          return false;
         }
 
-        const activated = await db.transaction(async (tx) => {
-          // Re-check state inside the transaction (TOCTOU protection)
-          const current = await tx.query.machine.findFirst({
-            where: eq(schema.machine.id, machineId),
-          });
-          if (current?.state !== "starting") {
-            logger.set({ machine: { id: machineId } });
-            logger.info(
-              `[activateMachine] Skipping inside tx, state changed state=${current?.state}`,
-            );
-            return false;
-          }
+        // Bulk-detach all active machines for this project
+        const detached = await tx
+          .update(schema.machine)
+          .set({ state: "detached" })
+          .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")))
+          .returning({ id: schema.machine.id });
 
-          // Bulk-detach all active machines for this project
-          const detached = await tx
-            .update(schema.machine)
-            .set({ state: "detached" })
-            .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")))
-            .returning({ id: schema.machine.id });
+        // Promote this machine to active
+        await tx
+          .update(schema.machine)
+          .set({ state: "active" })
+          .where(eq(schema.machine.id, machineId));
 
-          // Promote this machine to active
-          await tx
-            .update(schema.machine)
-            .set({ state: "active" })
-            .where(eq(schema.machine.id, machineId));
-
-          // Emit activated event inside the transaction for atomicity
-          await cc.send({ transaction: tx, parent: db }, "machine:activated", {
-            machineId,
-            projectId,
-            detachedMachineIds: detached.map((m) => m.id),
-          });
-
-          return true;
+        // Emit activated event inside the transaction for atomicity
+        await cc.send({ transaction: tx, parent: db }, "machine:activated", {
+          machineId,
+          projectId,
+          detachedMachineIds: detached.map((m) => m.id),
         });
 
-        logger.set({ machine: { id: machineId } });
-        logger.info(`[activateMachine] Machine activated:${activated}`);
-        return `machine activated:${activated}`;
-      }),
+        return true;
+      });
+
+      logger.set({ machine: { id: machineId } });
+      logger.info(`[activateMachine] Machine activated:${activated}`);
+      return `machine activated:${activated}`;
+    },
   });
 
   // ── Post-activation pipeline ──────────────────────────────────────────
@@ -441,58 +432,58 @@ export const registerConsumers = () => {
     name: "deleteDetachedMachines",
     on: "machine:activated",
     delay: () => "4h",
-    handler: (params) =>
-      withDb(async (db) => {
-        const { projectId, machineId, detachedMachineIds } = params.payload;
+    async handler(params) {
+      const { projectId, machineId, detachedMachineIds } = params.payload;
+      const db = await getDb();
 
-        if (detachedMachineIds.length === 0) {
-          return "no detached machines to delete";
-        }
+      if (detachedMachineIds.length === 0) {
+        return "no detached machines to delete";
+      }
 
-        const detached = await db.query.machine.findMany({
-          where: inArray(schema.machine.id, detachedMachineIds),
+      const detached = await db.query.machine.findMany({
+        where: inArray(schema.machine.id, detachedMachineIds),
+      });
+
+      for (const m of detached) {
+        await cc.send({ transaction: db, parent: db }, "machine:delete-requested", {
+          machineId: m.id,
+          type: m.type,
+          externalId: m.externalId,
+          metadata: m.metadata ?? {},
         });
+      }
 
-        for (const m of detached) {
-          await cc.send({ transaction: db, parent: db }, "machine:delete-requested", {
-            machineId: m.id,
-            type: m.type,
-            externalId: m.externalId,
-            metadata: m.metadata ?? {},
-          });
-        }
-
-        logger.set({ machine: { id: machineId }, project: { id: projectId } });
-        logger.info(`[deleteDetachedMachines] Fan-out delete enqueuedCount=${detached.length}`);
-        return `enqueued ${detached.length} delete-requested events`;
-      }),
+      logger.set({ machine: { id: machineId }, project: { id: projectId } });
+      logger.info(`[deleteDetachedMachines] Fan-out delete enqueuedCount=${detached.length}`);
+      return `enqueued ${detached.length} delete-requested events`;
+    },
   });
 
   // Delete a single machine via the provider SDK
   cc.registerConsumer({
     name: "deleteMachineViaProvider",
     on: "machine:delete-requested",
-    handler: (params) =>
-      withDb(async (db) => {
-        const { machineId, type, externalId, metadata } = params.payload;
+    async handler(params) {
+      const { machineId, type, externalId, metadata } = params.payload;
+      const db = await getDb();
 
-        const runtime = await createMachineStub({
-          type,
-          env,
-          externalId,
-          metadata,
-        });
-        await runtime.delete();
+      const runtime = await createMachineStub({
+        type,
+        env,
+        externalId,
+        metadata,
+      });
+      await runtime.delete();
 
-        await db
-          .update(schema.machine)
-          .set({ state: "archived" })
-          .where(eq(schema.machine.id, machineId));
+      await db
+        .update(schema.machine)
+        .set({ state: "archived" })
+        .where(eq(schema.machine.id, machineId));
 
-        logger.set({ machine: { id: machineId } });
-        logger.info("[deleteMachineViaProvider] Deleted machine");
-        return `deleted machine ${machineId}`;
-      }),
+      logger.set({ machine: { id: machineId } });
+      logger.info("[deleteMachineViaProvider] Deleted machine");
+      return `deleted machine ${machineId}`;
+    },
   });
 };
 

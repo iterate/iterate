@@ -17,7 +17,7 @@ import {
   parseProjectIngressHostname,
 } from "@iterate-com/shared/project-ingress";
 import type { CloudflareEnv } from "../env.ts";
-import { cleanupDb, getDb } from "./db/client.ts";
+import { getDb } from "./db/client.ts";
 import { getAuth } from "./auth/auth.ts";
 import { appRouter } from "./orpc/root.ts";
 import { createContext } from "./orpc/context.ts";
@@ -244,11 +244,7 @@ app.use("*", async (c, next) => {
     context: createContext(c),
   });
   c.set("orpcCaller", orpcCaller);
-  try {
-    return await next();
-  } finally {
-    c.executionCtx.waitUntil(cleanupDb(db));
-  }
+  return next();
 });
 
 app.get("/api/trpc-cli-procedures", (c) => {
@@ -572,27 +568,23 @@ export default class extends WorkerEntrypoint {
 
   async scheduled(controller: ScheduledController) {
     const db = await getDb();
-    try {
-      const cron = controller.cron as workerConfig.WorkerCronExpression;
-      switch (cron) {
-        case workerConfig.workerCrons.processOutboxQueue: {
-          try {
-            const result = await queuer.processQueue(db);
-            if (result !== "0 messages processed") {
-              logger.info("Scheduled outbox queue processing completed");
-            }
-          } catch (error) {
-            logger.error("Scheduled outbox queue processing failed:", error);
+    const cron = controller.cron as workerConfig.WorkerCronExpression;
+    switch (cron) {
+      case workerConfig.workerCrons.processOutboxQueue: {
+        try {
+          const result = await queuer.processQueue(db);
+          if (result !== "0 messages processed") {
+            logger.info("Scheduled outbox queue processing completed");
           }
-          break;
+        } catch (error) {
+          logger.error("Scheduled outbox queue processing failed:", error);
         }
-        default: {
-          cron satisfies never;
-          logger.error("Unknown cron pattern:", controller);
-        }
+        break;
       }
-    } finally {
-      await cleanupDb(db);
+      default: {
+        cron satisfies never;
+        logger.error("Unknown cron pattern:", controller);
+      }
     }
   }
 }

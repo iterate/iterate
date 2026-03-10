@@ -760,6 +760,9 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       ...dbConfig,
       ...envSecrets,
       HYPERDRIVE: hyperdriveBinding,
+      // Only set for deployed workers — tells getDb() to use per-request Client.
+      // In local dev / miniflare, this is absent and getDb() uses a cached Pool.
+      ...(!isDevelopment && { IS_HYPERDRIVE: "true" }),
       SELF: Self,
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: allowedDomains.join(","),

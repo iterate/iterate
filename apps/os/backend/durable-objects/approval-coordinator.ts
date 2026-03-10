@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { and, eq } from "drizzle-orm";
-import { cleanupDb, getDbWithEnv } from "../db/client.ts";
+import { getDbWithEnv } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import type { ApprovalStatus, DecisionStatus } from "../egress-proxy/types.ts";
@@ -131,8 +131,8 @@ export class ApprovalCoordinator extends DurableObject<DurableObjectEnv> {
   }
 
   private async updateTimeoutStatus(approvalId: string) {
-    const db = await getDbWithEnv(this.env);
     try {
+      const db = await getDbWithEnv(this.env);
       await db
         .update(schema.egressApproval)
         .set({
@@ -147,8 +147,6 @@ export class ApprovalCoordinator extends DurableObject<DurableObjectEnv> {
         );
     } catch (error) {
       logger.error("Failed to update timeout status", error, { approvalId });
-    } finally {
-      await cleanupDb(db);
     }
   }
 }
