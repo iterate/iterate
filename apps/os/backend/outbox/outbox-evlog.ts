@@ -21,7 +21,7 @@ import {
   type PostHogRequestContext,
   type PostHogUserContext,
 } from "../lib/posthog.ts";
-import type { ConsumerJobContext, JobLifecycleHook, QueuerEvent } from "./pgmq-lib.ts";
+import type { JobLifecycleHook, QueuerEvent } from "./pgmq-lib.ts";
 
 const appStage =
   process.env.VITE_APP_STAGE ?? process.env.APP_STAGE ?? process.env.NODE_ENV ?? "development";
