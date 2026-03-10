@@ -1,4 +1,4 @@
-import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Client, Pool } from "pg";
 import { env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
@@ -77,18 +77,19 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
 // DB client factories
 // ---------------------------------------------------------------------------
 
-/** Cached drizzle instance for local dev (reused across requests). */
-let cachedDb: NodePgDatabase<typeof schema> | undefined;
-
 /**
  * Returns a drizzle DB instance.
  *
  * - **Hyperdrive (deployed workers):** Creates a per-request pg.Client.
  *   Cloudflare requires a fresh client per request — Hyperdrive manages
- *   connection pooling server-side via a local proxy socket.
+ *   connection pooling server-side. No client.end() needed; Hyperdrive
+ *   auto-cleans when the request ends.
+ *   @see https://developers.cloudflare.com/hyperdrive/concepts/connection-lifecycle/
  *
- * - **Local dev / miniflare:** Uses a cached pg.Pool. The IS_HYPERDRIVE
- *   env var is only set for deployed workers in alchemy.run.ts.
+ * - **Local dev / miniflare:** Creates a per-request pg.Pool (not cached).
+ *   Matches the original Neon driver behavior on main. Pool manages its own
+ *   connections and is GC'd when the request ends. Must NOT be cached in
+ *   module scope — workerd does not allow I/O across request contexts.
  */
 export async function getDb() {
   if (env.IS_HYPERDRIVE) {
@@ -102,11 +103,9 @@ export async function getDb() {
     });
   }
 
-  if (!cachedDb) {
-    const pool = new Pool({ connectionString: env.DATABASE_URL, max: 3 });
-    cachedDb = drizzle({ client: pool, schema, casing: "snake_case" });
-  }
-  return cachedDb;
+  // Local dev / miniflare: per-request Pool, just like the original Neon driver on main.
+  const pool = new Pool({ connectionString: env.DATABASE_URL, max: 3 });
+  return drizzle({ client: pool, schema, casing: "snake_case" });
 }
 
 /** Accepts any env-like object with DATABASE_URL (used by DurableObjects). */
