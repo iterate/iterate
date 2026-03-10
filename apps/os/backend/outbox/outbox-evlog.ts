@@ -16,7 +16,11 @@ import {
   log as evlog,
   type RequestEvlogEvent,
 } from "../evlog.ts";
-import { sendPostHogException, type PostHogRequestContext, type PostHogUserContext } from "../lib/posthog.ts";
+import {
+  sendPostHogException,
+  type PostHogRequestContext,
+  type PostHogUserContext,
+} from "../lib/posthog.ts";
 import type { ConsumerJobContext, JobLifecycleHook, QueuerEvent } from "./pgmq-lib.ts";
 
 const appStage =
@@ -42,7 +46,9 @@ export const createOutboxJobLifecycleHook = (): JobLifecycleHook => {
     });
 
     // Parse causation from event context
-    const eventContext = ctx.eventContext as { causedBy?: { eventId: number; consumerName: string; jobId: number | string } } | null;
+    const eventContext = ctx.eventContext as {
+      causedBy?: { eventId: number; consumerName: string; jobId: number | string };
+    } | null;
     const causation = eventContext?.causedBy ?? null;
 
     jobLogger.set({
@@ -125,7 +131,9 @@ export function sendDLQToPostHog(event: QueuerEvent): void {
   if (!apiKey) return;
 
   const msg = event.job.message;
-  const eventContext = msg.event_context as { causedBy?: { eventId: number; consumerName: string; jobId: number | string } } | null;
+  const eventContext = msg.event_context as {
+    causedBy?: { eventId: number; consumerName: string; jobId: number | string };
+  } | null;
 
   const request: PostHogRequestContext = {
     id: `outbox:${msg.consumer_name}:${event.job.msg_id}`,

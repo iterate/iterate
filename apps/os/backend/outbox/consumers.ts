@@ -305,7 +305,11 @@ export const registerConsumers = () => {
         messageId: sendResult.messageId,
       });
 
-      logger.set({ machine: { id: machineId }, threadId: sendResult.threadId, messageId: sendResult.messageId });
+      logger.set({
+        machine: { id: machineId },
+        threadId: sendResult.threadId,
+        messageId: sendResult.messageId,
+      });
       logger.info("Probe message sent");
       return `probe sent, messageId=${sendResult.messageId}`;
     },
@@ -443,7 +447,11 @@ export const registerConsumers = () => {
         });
       }
 
-      logger.set({ machine: { id: machineId }, project: { id: projectId }, enqueuedCount: detached.length });
+      logger.set({
+        machine: { id: machineId },
+        project: { id: projectId },
+        enqueuedCount: detached.length,
+      });
       logger.info("Fan-out delete enqueued");
       return `enqueued ${detached.length} delete-requested events`;
     },
