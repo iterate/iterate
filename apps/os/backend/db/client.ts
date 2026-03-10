@@ -92,10 +92,11 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
  *   module scope — workerd does not allow I/O across request contexts.
  */
 export async function getDb() {
-  if (env.IS_HYPERDRIVE) {
-    const hyperdrive = (env as Record<string, unknown>).HYPERDRIVE as {
-      connectionString: string;
-    };
+  const hyperdrive = (env as Record<string, unknown>).HYPERDRIVE as
+    | { connectionString: string }
+    | undefined;
+
+  if (env.IS_HYPERDRIVE && hyperdrive) {
     return withRetry(async () => {
       const client = new Client({ connectionString: hyperdrive.connectionString });
       await client.connect();
