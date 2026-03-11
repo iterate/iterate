@@ -1,4 +1,4 @@
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { match } from "schematch";
 import { z } from "zod/v4";
@@ -474,7 +474,7 @@ export const registerConsumers = () => {
             id: schema.machine.id,
             type: schema.machine.type,
             externalId: schema.machine.externalId,
-            metadata: schema.machine.metadata,
+            metadata: sql<Record<string, unknown>>`coalesce(${schema.machine.metadata}, '{}'::jsonb)`,
           })
           .from(schema.machine)
           .where(inArray(schema.machine.id, detachedMachineIds)),
