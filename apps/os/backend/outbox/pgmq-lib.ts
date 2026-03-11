@@ -466,7 +466,9 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
       return text.append(sql`::jsonb`);
     };
 
-    const cteSql = sql`with query as (`.append(getSQL()).append(sql`
+    const cteSql = sql`
+      with query as (
+        ${getSQL()}
       ),
       insertion as (
         insert into outbox_event (name, payload, context)
@@ -477,7 +479,6 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         from query
         returning *
       )
-    `).append(sql`
       select
         q.*,
         i.id as outbox_event_id,
@@ -486,7 +487,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         i.context as outbox_event_context
       from (select *, row_number() over () as _rn from query) q
       join (select *, row_number() over () as _rn from insertion) i on q._rn = i._rn
-    `);
+    `;
     const result = await exec(cteSql);
     const camelCaseOutboxFields = (row: Record<string, unknown>) => {
       const {

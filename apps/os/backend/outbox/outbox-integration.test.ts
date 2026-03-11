@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { sql, eq, and, ilike } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -16,57 +16,73 @@ const getTestDb = () => {
   return drizzle(client, { schema, casing: "snake_case" });
 };
 
-describe.skipIf(process.env.CI)("outbox integration", () => {
-  let db: ReturnType<typeof getTestDb>;
-  let queuer: ReturnType<typeof createPgmqQueuer>;
-  let outboxClient: ReturnType<typeof createConsumerClient<TestEventTypes, DBLike>>;
+type TestEventTypes = {
+  "test:basic": { message: string };
+  "test:unstable": { message: string };
+  "test:fail": { message: string };
+};
 
-  type TestEventTypes = {
-    "test:basic": { message: string };
-    "test:unstable": { message: string };
-    "test:fail": { message: string };
-  };
+const createOutboxFixture = async () => {
+  const db = getTestDb();
+  const queueName = `cq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  await db.execute(sql`select pgmq.create(${queueName}::text)`);
 
-  beforeAll(() => {
-    db = getTestDb();
-    queuer = createPgmqQueuer({ queueName: "consumer_job_queue" });
-
-    // Register test consumers
-    outboxClient = createConsumerClient<TestEventTypes, DBLike>(queuer, { getDb: () => db });
-
-    outboxClient.registerConsumer({
-      name: "logBasic",
-      on: "test:basic",
-      handler: (params) => {
-        return "received: " + params.payload.message;
-      },
-    });
-
-    outboxClient.registerConsumer({
-      name: "unstableHandler",
-      on: "test:unstable",
-      handler: (params) => {
-        if (params.job.attempt <= 2) {
-          throw new Error(`[test] Attempt ${params.job.attempt} failed`);
-        }
-        return "third time lucky";
-      },
-    });
-
-    outboxClient.registerConsumer({
-      name: "alwaysFails",
-      on: "test:fail",
-      retry: (job) => {
-        if (job.read_ct <= 3) return { retry: true, reason: "keep trying", delay: "0s" };
-        return { retry: false, reason: "giving up" };
-      },
-      handler: () => {
-        throw new Error("[test] always fails");
-      },
-    });
+  const queuer = createPgmqQueuer({ queueName });
+  const waitUntilPromises: Array<Promise<unknown>> = [];
+  const outboxClient = createConsumerClient<TestEventTypes, DBLike>(queuer, {
+    getDb: async () => db,
+    waitUntil: (promise) => {
+      waitUntilPromises.push(promise);
+    },
   });
 
+  outboxClient.registerConsumer({
+    name: "logBasic",
+    on: "test:basic",
+    handler: (params) => {
+      return "received: " + params.payload.message;
+    },
+  });
+
+  outboxClient.registerConsumer({
+    name: "unstableHandler",
+    on: "test:unstable",
+    handler: (params) => {
+      if (params.job.attempt <= 2) {
+        throw new Error(`[test] Attempt ${params.job.attempt} failed`);
+      }
+      return "third time lucky";
+    },
+  });
+
+  outboxClient.registerConsumer({
+    name: "alwaysFails",
+    on: "test:fail",
+    retry: (job) => {
+      if (job.read_ct <= 3) return { retry: true, reason: "keep trying", delay: "0s" };
+      return { retry: false, reason: "giving up" };
+    },
+    handler: () => {
+      throw new Error("[test] always fails");
+    },
+  });
+
+  return {
+    db,
+    queuer,
+    outboxClient,
+    async [Symbol.asyncDispose]() {
+      await Promise.allSettled(waitUntilPromises);
+      await db.execute(sql`select pgmq.drop_queue(${queueName}::text)`);
+      await db.$client.end({ timeout: 0 });
+    },
+  };
+};
+
+describe.skipIf(process.env.CI)("outbox integration", () => {
   test("basic: enqueue, process, and archive", { timeout: 30_000 }, async () => {
+    await using fixture = await createOutboxFixture();
+    const { db, queuer, outboxClient } = fixture;
     const secret = `basic_${Date.now()}_${Math.random()}`;
     await outboxClient.send({ transaction: db, parent: db }, "test:basic", { message: secret });
 
@@ -95,6 +111,8 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
   });
 
   test("retries: consumer fails then succeeds", { timeout: 60_000 }, async () => {
+    await using fixture = await createOutboxFixture();
+    const { db, queuer, outboxClient } = fixture;
     const secret = `unstable_${Date.now()}_${Math.random()}`;
     await outboxClient.send({ transaction: db, parent: db }, "test:unstable", { message: secret });
 
@@ -128,6 +146,8 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
   });
 
   test("DLQ: consumer always fails, eventually gives up", { timeout: 60_000 }, async () => {
+    await using fixture = await createOutboxFixture();
+    const { db, queuer, outboxClient } = fixture;
     const secret = `fail_${Date.now()}_${Math.random()}`;
     await outboxClient.send({ transaction: db, parent: db }, "test:fail", { message: secret });
 
@@ -158,7 +178,8 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
   });
 
   test("sendCTE: atomically inserts row and outbox event", { timeout: 30_000 }, async () => {
-    if (!db) return;
+    await using fixture = await createOutboxFixture();
+    const { db, queuer, outboxClient } = fixture;
 
     const secret = `cte_${Date.now()}_${Math.random()}`;
     const externalId = `test-delivery-${secret}`;
@@ -205,7 +226,8 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
   });
 
   test("sendCTE: no-op insert creates no outbox event", { timeout: 30_000 }, async () => {
-    if (!db) return;
+    await using fixture = await createOutboxFixture();
+    const { db, outboxClient } = fixture;
 
     const secret = `cte_noop_${Date.now()}_${Math.random()}`;
     const externalId = `test-delivery-${secret}`;
@@ -266,7 +288,8 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
   });
 
   test("sendCTE select", async () => {
-    const db = getTestDb();
+    await using fixture = await createOutboxFixture();
+    const { db, outboxClient } = fixture;
 
     const result = await outboxClient.sendCTE({
       query: db.select().from(schema.event).limit(1),
@@ -293,7 +316,8 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
   });
 
   test("sendCTE select multiple", async () => {
-    const db = getTestDb();
+    await using fixture = await createOutboxFixture();
+    const { db, outboxClient } = fixture;
 
     const result = await outboxClient.sendCTE({
       query: db.select().from(schema.event).limit(2),
@@ -322,7 +346,8 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
   });
 
   test("sendCTE payload callback: derives payload from query result in SQL", async () => {
-    const db = getTestDb();
+    await using fixture = await createOutboxFixture();
+    const { db, outboxClient } = fixture;
 
     const secret = `cb_${Date.now()}_${Math.random()}`;
     const externalIds = [`${secret}-a`, `${secret}-b`];
@@ -349,7 +374,8 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
   });
 
   test("sendCTE payload callback: camelCase props become snake_case SQL columns", async () => {
-    const db = getTestDb();
+    await using fixture = await createOutboxFixture();
+    const { db, outboxClient } = fixture;
 
     const secret = `camel_${Date.now()}_${Math.random()}`;
     await db.insert(schema.event).values({ type: "test:basic", payload: {}, externalId: secret });
@@ -368,6 +394,8 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
   });
 
   test("sendCTE values", async () => {
+    await using fixture = await createOutboxFixture();
+    const { outboxClient } = fixture;
     const secret = `cte_select_${Date.now()}_${Math.random()}`;
 
     const result = await outboxClient.sendCTE({
