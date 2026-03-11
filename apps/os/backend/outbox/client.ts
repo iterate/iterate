@@ -56,6 +56,17 @@ export type InternalEventTypes = {
     externalId: string;
     metadata: Record<string, unknown>;
   };
+  "slack:webhook-received": {
+    sourceEventId: string;
+    projectId: string;
+    machineId: string | null;
+    payload: Record<string, unknown>;
+    correlation: {
+      requestId: string;
+      traceparent: string;
+      slackEventId?: string;
+    };
+  };
   "github:webhook-received": {
     sourceEventId: string;
     deliveryId: string;

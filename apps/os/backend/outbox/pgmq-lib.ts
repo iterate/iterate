@@ -163,7 +163,7 @@ export type SQLEquivalent<T> =
 export type CTEParams<T, Name extends string, Payload> = {
   query: CTEableQuery<T>;
   name: Name;
-  payload: Payload;
+  payload: Payload | ((queryResult: T) => Payload);
   context?: Record<string, unknown>;
   /** Optional db/transaction to use instead of the default connection. */
   connection?: DBLike;
@@ -441,7 +441,27 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
 
       return { jsonString, sets };
     };
-    const { name, payload, context = {} } = params;
+    const { name, payload: payloadOrFn, context = {} } = params;
+
+    let payload = payloadOrFn;
+    if (typeof payloadOrFn === "function") {
+      // if a function is passed, replace usage like `result => ({ foo: result.bar })` with `{ foo: sql`query.bar` }`
+      const proxy = new Proxy(
+        {},
+        {
+          get: (_target, prop) => {
+            if (typeof prop !== "string")
+              throw new Error(`Property name must be a string, got ${String(prop)}`);
+            if (!prop.match(/^\w+$/))
+              throw new Error(`Property name must be a valid SQL identifier, got ${prop}`);
+            prop = prop.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+            return sql.raw(`query.${prop}`);
+          },
+        },
+      );
+      payload = payloadOrFn(proxy);
+    }
+
     const payloadSets = getSetsRequired(payload);
     const exec = getExec(db);
     const getSQL = () => {

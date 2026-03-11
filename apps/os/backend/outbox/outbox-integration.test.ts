@@ -338,6 +338,52 @@ describe("outbox integration", () => {
     expect(result).toHaveLength(2);
   });
 
+  test("sendCTE payload callback: derives payload from query result in SQL", async () => {
+    const db = getTestDb();
+
+    const secret = `cb_${Date.now()}_${Math.random()}`;
+    const externalIds = [`${secret}-a`, `${secret}-b`];
+    await db
+      .insert(schema.event)
+      .values(externalIds.map((externalId) => ({ type: "test:basic", payload: {}, externalId })));
+
+    const result = await outboxClient.sendCTE({
+      query: db
+        .select()
+        .from(schema.event)
+        .where(ilike(schema.event.externalId, `${secret}%`)),
+      name: "test:basic",
+      payload: (row) => ({
+        message: row.id,
+      }),
+    });
+
+    expect([...result]).toMatchObject([
+      { id: expect.any(String), outboxEventPayload: { message: result[0].id } },
+      { id: expect.any(String), outboxEventPayload: { message: result[1].id } },
+    ]);
+    expect(result[0].id).not.toBe(result[1].id);
+  });
+
+  test("sendCTE payload callback: camelCase props become snake_case SQL columns", async () => {
+    const db = getTestDb();
+
+    const secret = `camel_${Date.now()}_${Math.random()}`;
+    await db.insert(schema.event).values({ type: "test:basic", payload: {}, externalId: secret });
+
+    const result = await outboxClient.sendCTE({
+      query: db.select().from(schema.event).where(eq(schema.event.externalId, secret)),
+      name: "test:basic",
+      payload: (row) => ({
+        message: row.externalId,
+      }),
+    });
+
+    expect([...result]).toMatchObject([
+      { externalId: secret, outboxEventPayload: { message: secret } },
+    ]);
+  });
+
   test("sendCTE values", async () => {
     const secret = `cte_select_${Date.now()}_${Math.random()}`;
 

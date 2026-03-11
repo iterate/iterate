@@ -41,6 +41,38 @@ export const registerConsumers = () => {
   // machine:created → provisionMachine
   // (daemon reports status via reportStatus → machine:daemon-status-reported → setup + probe pipeline)
 
+  // ── Slack webhook forwarding ─────────────────────────────────────────
+  //
+  // slack:webhook-received → forwardSlackWebhook
+
+  cc.registerConsumer({
+    name: "forwardSlackWebhook",
+    on: "slack:webhook-received",
+    when: (params) => !!params.payload.machineId,
+    async handler(params) {
+      const { machineId, payload, correlation } = params.payload;
+      if (!machineId) throw new Error(`Machine id expected`);
+
+      const db = getDb();
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      if (!machine) return `skipped: machine ${machineId} not found`;
+      if (machine.state !== "active")
+        return `skipped: machine ${machineId} state is ${machine.state}`;
+
+      const { forwardSlackWebhookToMachine } = await import("../integrations/slack/slack.ts");
+      const result = await forwardSlackWebhookToMachine(machine, payload, env, correlation);
+      if (!result.success) {
+        throw new Error(`Slack forward failed: ${result.error}`);
+      }
+
+      logger.set({ machine: { id: machineId } });
+      logger.info("[forwardSlackWebhook] Forwarded to machine");
+      return `forwarded to ${machineId}`;
+    },
+  });
+
   cc.registerConsumer({
     name: "requestIterateMachinePulls",
     on: "github:webhook-received",
@@ -60,11 +92,11 @@ export const registerConsumers = () => {
               .from(schema.machine)
               .where(eq(schema.machine.state, "active")),
             name: "machine:pull-iterate-iterate-requested",
-            payload: {
-              machineId: sql`query.id`,
+            payload: (result) => ({
+              machineId: result.id,
               ref: branch,
               sourceEventId: payload.sourceEventId,
-            },
+            }),
           });
 
           logger.set({ sourceEventId: payload.sourceEventId, targetCount: result.length });
@@ -447,12 +479,12 @@ export const registerConsumers = () => {
           .from(schema.machine)
           .where(inArray(schema.machine.id, detachedMachineIds)),
         name: "machine:delete-requested",
-        payload: {
-          machineId: sql`query.id`,
-          type: sql`query.type`,
-          externalId: sql<string>`query.external_id`,
-          metadata: sql`query.metadata`,
-        },
+        payload: (result) => ({
+          machineId: result.id,
+          type: result.type,
+          externalId: result.externalId,
+          metadata: result.metadata,
+        }),
       });
 
       logger.set({ machine: { id: machineId }, project: { id: projectId } });
