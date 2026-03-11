@@ -439,6 +439,11 @@ const Env = z.object({
   DANGEROUS_RAW_SECRETS_ENABLED: BoolyString,
 
   REGION_CONFIG: jsonEnvVar.wrap(RegionConfig),
+
+  // Cloudflare API credentials for cache purge (Workers Cache API).
+  // Optional: when absent, only local cache.delete() is used (fine for dev).
+  CLOUDFLARE_API_TOKEN: Optional,
+  CLOUDFLARE_ZONE_ID: Optional,
 } satisfies Record<string, z.ZodType<unknown, string | undefined>> & {
   [K in GlobalSecretEnvVarName]: typeof Required;
 });

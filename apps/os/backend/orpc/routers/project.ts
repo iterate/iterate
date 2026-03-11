@@ -40,6 +40,10 @@ import {
 } from "../../utils/sandbox-providers.ts";
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
+import {
+  purgeRepoLookupCache,
+  purgeInstallationLookupCache,
+} from "../../integrations/github/github-repo-cache.ts";
 
 export const projectRouter = {
   getAvailableSandboxProviders: publicProcedure.handler(({ context: ctx }) => {
@@ -400,6 +404,9 @@ export const projectRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
+      // Capture old repo name for cache purge
+      const oldRepoFullName = ctx.project.configRepoFullName;
+
       if (input.repo === null) {
         await ctx.db
           .update(project)
@@ -409,6 +416,11 @@ export const projectRouter = {
             configRepoDefaultBranch: null,
           })
           .where(eq(project.id, ctx.project.id));
+
+        // Purge cached lookup for the old repo
+        if (oldRepoFullName) {
+          waitUntil(purgeRepoLookupCache(oldRepoFullName, ctx.env));
+        }
 
         return { success: true };
       }
@@ -429,6 +441,12 @@ export const projectRouter = {
           configRepoDefaultBranch: input.repo.defaultBranch,
         })
         .where(eq(project.id, ctx.project.id));
+
+      // Purge cached lookups for both old and new repo names
+      if (oldRepoFullName) {
+        waitUntil(purgeRepoLookupCache(oldRepoFullName, ctx.env));
+      }
+      waitUntil(purgeRepoLookupCache(fullName, ctx.env));
 
       // Link GitHub repo to org/project in PostHog
       linkExternalIdToGroups(ctx.env, {
@@ -588,6 +606,19 @@ export const projectRouter = {
         }
       });
 
+      // Purge cached repo lookups for both source and target projects + installation
+      const sourceRepoFullName = existingConnection.project?.configRepoFullName;
+      const targetRepoFullName = ctx.project.configRepoFullName;
+      if (sourceRepoFullName) {
+        waitUntil(purgeRepoLookupCache(sourceRepoFullName, ctx.env));
+      }
+      if (targetRepoFullName && targetRepoFullName !== sourceRepoFullName) {
+        waitUntil(purgeRepoLookupCache(targetRepoFullName, ctx.env));
+      }
+      waitUntil(
+        purgeInstallationLookupCache(String(githubConflictData.installationId), ctx.env),
+      );
+
       const projectIdsToRefresh =
         sourceProjectId === targetProjectId
           ? [targetProjectId]
@@ -669,6 +700,15 @@ export const projectRouter = {
             ),
           );
       });
+
+      // Purge cached repo/installation lookups
+      const repoFullName = ctx.project.configRepoFullName;
+      if (repoFullName) {
+        waitUntil(purgeRepoLookupCache(repoFullName, ctx.env));
+      }
+      if (installationId) {
+        waitUntil(purgeInstallationLookupCache(String(installationId), ctx.env));
+      }
 
       return { success: true };
     }),

@@ -23,6 +23,15 @@ import { trackWebhookEvent } from "../../lib/posthog.ts";
 import type { ProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { outboxClient } from "../../outbox/client.ts";
+import {
+  getCachedRepoLookup,
+  setCachedRepoLookup,
+  getCachedInstallationLookup,
+  setCachedInstallationLookup,
+  purgeRepoLookupCache,
+  purgeInstallationLookupCache,
+  type CachedRepoLookup,
+} from "./github-repo-cache.ts";
 
 /**
  * Derive the correct provider-specific snapshot/image name from a short SHA.
@@ -927,6 +936,24 @@ async function forwardGithubWebhookToMachine(params: {
   }
 }
 
+/**
+ * Reconstruct a machine-row-shaped object from a cached lookup entry.
+ * The cache stores only the fields needed by `buildMachineFetcher`.
+ */
+function machineFromCached(cached: CachedRepoLookup): typeof schema.machine.$inferSelect {
+  return {
+    id: cached.machineId,
+    projectId: cached.projectId,
+    name: "",
+    type: cached.machineType,
+    state: cached.machineState,
+    externalId: cached.machineExternalId,
+    metadata: cached.machineMetadata,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  } as typeof schema.machine.$inferSelect;
+}
+
 async function forwardWebhookToRepoMachine(params: {
   db: DB;
   env: CloudflareEnv;
@@ -941,9 +968,62 @@ async function forwardWebhookToRepoMachine(params: {
   const repo = resolveRepoCoordinates(rawRepository as Record<string, unknown>);
   if (!repo) return;
 
-  let contexts = await listRepoMachineContexts(params.db, repo);
+  // ── Try cache first (repo full name) ──────────────────────────
+  let cacheHit = false;
   let source: "repo" | "installation" = "repo";
 
+  const cachedRepo = await getCachedRepoLookup(repo.fullName);
+  if (cachedRepo && cachedRepo.length > 0) {
+    cacheHit = true;
+    const target = cachedRepo[0];
+    const machine = machineFromCached(target);
+    const targetContext = {
+      contexts: cachedRepo.length,
+      source,
+      cacheHit: true,
+      targetProjectId: target.projectId,
+      targetMachineId: target.machineId,
+    };
+    try {
+      await forwardGithubWebhookToMachine({
+        machine,
+        env: params.env,
+        eventType: params.eventType,
+        deliveryId: params.deliveryId,
+        payload: params.payload,
+      });
+      logger.debug("[GitHub Webhook] Forwarded webhook to machine (cached)", {
+        githubWebhook: targetContext,
+      });
+      return;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn(
+        `[GitHub Webhook] Failed to forward to machine (cached): ${message} target=${JSON.stringify(targetContext)}`,
+      );
+      // Cache entry might be stale (machine no longer active) – fall through to DB lookup
+    }
+  }
+
+  // ── DB lookup (repo full name) ────────────────────────────────
+  let contexts = await listRepoMachineContexts(params.db, repo);
+
+  if (contexts.length > 0) {
+    // Populate cache for next time
+    setCachedRepoLookup(
+      repo.fullName,
+      contexts.map((c) => ({
+        projectId: c.projectId,
+        machineId: c.machine.id,
+        machineType: c.machine.type,
+        machineExternalId: c.machine.externalId,
+        machineMetadata: (c.machine.metadata as Record<string, unknown>) ?? {},
+        machineState: c.machine.state,
+      })),
+    ).catch((err) => logger.warn("[GitHub Repo Cache] Failed to set cache", { error: String(err) }));
+  }
+
+  // ── Fallback: installation ID lookup ──────────────────────────
   if (contexts.length === 0) {
     const installation = (params.payload as Record<string, unknown>).installation;
     const installationId =
@@ -952,12 +1032,63 @@ async function forwardWebhookToRepoMachine(params: {
         : undefined;
 
     if (installationId !== undefined && installationId !== null) {
-      contexts = await listMachineContextsByInstallationId(params.db, String(installationId));
+      const instId = String(installationId);
+
+      // Try installation cache
+      const cachedInst = await getCachedInstallationLookup(instId);
+      if (cachedInst && cachedInst.length > 0) {
+        cacheHit = true;
+        source = "installation";
+        const target = cachedInst[0];
+        const machine = machineFromCached(target);
+        const targetContext = {
+          contexts: cachedInst.length,
+          source,
+          cacheHit: true,
+          targetProjectId: target.projectId,
+          targetMachineId: target.machineId,
+        };
+        try {
+          await forwardGithubWebhookToMachine({
+            machine,
+            env: params.env,
+            eventType: params.eventType,
+            deliveryId: params.deliveryId,
+            payload: params.payload,
+          });
+          logger.debug("[GitHub Webhook] Forwarded webhook to machine (cached, installation)", {
+            githubWebhook: targetContext,
+          });
+          return;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logger.warn(
+            `[GitHub Webhook] Failed to forward to machine (cached, installation): ${message} target=${JSON.stringify(targetContext)}`,
+          );
+          // Fall through to DB
+        }
+      }
+
+      contexts = await listMachineContextsByInstallationId(params.db, instId);
       source = "installation";
+
+      if (contexts.length > 0) {
+        setCachedInstallationLookup(
+          instId,
+          contexts.map((c) => ({
+            projectId: c.projectId,
+            machineId: c.machine.id,
+            machineType: c.machine.type,
+            machineExternalId: c.machine.externalId,
+            machineMetadata: (c.machine.metadata as Record<string, unknown>) ?? {},
+            machineState: c.machine.state,
+          })),
+        ).catch((err) => logger.warn("[GitHub Repo Cache] Failed to set installation cache", { error: String(err) }));
+      }
     }
   }
 
-  const webhookContext = { contexts: contexts.length, source };
+  const webhookContext = { contexts: contexts.length, source, cacheHit };
 
   if (contexts.length === 0) {
     logger.debug(`[GitHub Webhook] No active machine targets`, { githubWebhook: webhookContext });
