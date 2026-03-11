@@ -88,51 +88,6 @@ describe("slack router", () => {
     vi.unstubAllEnvs();
   });
 
-  it("routes subscribed thread events to mapped agent path", async () => {
-    const ts = "1234567890.123456";
-    const botUserId = "U_BOT";
-
-    selectLimitQueue.push([]); // storeEvent dedup check
-    selectLimitQueue.push([{ agentPath: "/github/iterate/iterate/pr-1114" }]); // subscription lookup
-    fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
-
-    getOrCreateAgentMock.mockResolvedValue({
-      wasNewlyCreated: false,
-      route: null,
-      agent: buildAgent({ path: "/github/iterate/iterate/pr-1114" }),
-    });
-
-    const payload = {
-      type: "event_callback",
-      event_id: "evt_subscribed_1",
-      event: {
-        type: "app_mention",
-        ts,
-        text: `<@${botUserId}> check this thread`,
-        user: "U_USER",
-        channel: "C_TEST",
-        event_ts: ts,
-      },
-      authorizations: [{ user_id: botUserId, is_bot: true }],
-    };
-
-    const response = await slackRouter.request("/webhook", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    expect(response.status).toBe(200);
-    expect(getOrCreateAgentMock).toHaveBeenCalledWith({
-      agentPath: "/github/iterate/iterate/pr-1114",
-      createWithEvents: [],
-    });
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "http://localhost:3001/api/agents/github/iterate/iterate/pr-1114",
-      expect.objectContaining({ method: "POST" }),
-    );
-  });
-
   describe("new thread @mention (case 1)", () => {
     it("creates agent and sends new thread message when no agent exists", async () => {
       const ts = "1234567890.123456";

@@ -43,7 +43,7 @@ export const EnvOptions = v.object({
    * - number: delay in ms
    * - true or "immediately": reload immediately
    * - false: don't reload on env changes
-   * Default: 5000ms
+   * Default: "immediately"
    */
   reloadDelay: v.optional(EnvReloadDelay),
 });
@@ -148,6 +148,7 @@ const DEFAULT_RESTART_OPTIONS = {
   restartPolicy: "always" as const,
 };
 const SHUTDOWN_TIMEOUT_MS = 15000;
+const DEFAULT_ENV_RELOAD_DELAY: EnvReloadDelay = "immediately";
 
 // Manager state
 export type ManagerState =
@@ -472,7 +473,7 @@ export class Manager {
     } else if (typeof reloadDelay === "number") {
       delayMs = reloadDelay;
     } else {
-      delayMs = 5000;
+      delayMs = 0;
     }
 
     this.logger.info(`Scheduling reload for process "${name}" in ${delayMs}ms`);
@@ -794,7 +795,8 @@ export class Manager {
     };
     this.upsertProcessEntry(nextEntry);
 
-    const defaultDelay = nextEntry.envOptions?.inheritGlobalEnv === false ? false : 5000;
+    const defaultDelay =
+      nextEntry.envOptions?.inheritGlobalEnv === false ? false : DEFAULT_ENV_RELOAD_DELAY;
     this.envReloadConfig.set(processSlug, nextEntry.envOptions?.reloadDelay ?? defaultDelay);
     this.envManager.unregisterCustomFile(processSlug);
     if (nextEntry.envOptions?.envFile) {
@@ -913,7 +915,8 @@ export class Manager {
       );
       this.restartingProcesses.set(entry.name, restartingProcess);
       this.lastKnownProcessStates.set(entry.name, restartingProcess.state);
-      const defaultDelay = entry.envOptions?.inheritGlobalEnv === false ? false : 5000;
+      const defaultDelay =
+        entry.envOptions?.inheritGlobalEnv === false ? false : DEFAULT_ENV_RELOAD_DELAY;
       this.envReloadConfig.set(entry.name, entry.envOptions?.reloadDelay ?? defaultDelay);
     }
 

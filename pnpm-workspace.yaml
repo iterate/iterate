@@ -13,7 +13,6 @@ packages:
   - packages/pidnap/docker
   - repo-templates/**/*
   - .github/ts-workflows
-  - experiments/*
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
@@ -33,6 +32,9 @@ minimumReleaseAgeExclude:
   - pidnap
   - schematch
   - trpc-cli
+  - hono
+  - "@hono/node-server"
+  - "@hono/node-ws"
 
 onlyBuiltDependencies:
   - "@tailwindcss/oxide"
@@ -47,3 +49,15 @@ overrides:
   "agents>viem": "-"
   "quicktype-core>readable-stream": "npm:vite-compatible-readable-stream@3.6.1"
   "better-sqlite3": "npm:libsql@0.5.22"
+  "@orpc/server": "1.13.6"
+  "@orpc/client": "1.13.6"
+  "@orpc/contract": "1.13.6"
+  "@orpc/openapi": "1.13.6"
+  "@orpc/zod": "1.13.6"
+  "@orpc/otel": "1.13.6"
+  "@orpc/openapi-client": "1.13.6"
+  "@orpc/json-schema": "1.13.6"
+  "@orpc/react-query": "1.13.6"
+  "@orpc/tanstack-query": "1.13.6"
+  "@tanstack/query-core": "5.90.21"
+  "@tanstack/react-query": "5.90.21"

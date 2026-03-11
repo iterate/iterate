@@ -26,7 +26,7 @@ export default workflow({
     workflow_dispatch: {},
   },
   jobs: {
-    "deploy-test-teardown": {
+    "deploy-test": {
       if: "github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.pull_request.head.repo.fork == false",
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       "timeout-minutes": 20,
@@ -37,29 +37,12 @@ export default workflow({
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "stg" }),
         {
-          name: "Set ephemeral worker name",
-          run: [
-            "set -euo pipefail",
-            'echo "WORKER_NAME=ingress-proxy-pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_ENV"',
-          ].join("\n"),
-        },
-        {
-          id: "shared-secret",
-          name: "Generate shared secret",
-          run: [
-            "set -euo pipefail",
-            'shared_secret="$(openssl rand -hex 32)"',
-            'echo "::add-mask::$shared_secret"',
-            'echo "shared_secret=$shared_secret" >> "$GITHUB_OUTPUT"',
-          ].join("\n"),
-        },
-        {
-          id: "deploy",
-          name: "Deploy ephemeral worker with Alchemy",
+          name: "Deploy shared ci-ingress worker",
           "working-directory": "apps/cf-ingress-proxy-worker",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            INGRESS_PROXY_API_TOKEN: "${{ steps.shared-secret.outputs.shared_secret }}",
+            WORKER_NAME: "ci-ingress",
+            INGRESS_PROXY_HOSTNAME: "ci-ingress.iterate.com",
           },
           run: [
             "set -euo pipefail",
@@ -76,12 +59,10 @@ export default workflow({
           ].join("\n"),
         },
         {
-          name: "Run live Vitest E2E against ephemeral deployment",
+          name: "Run live Vitest E2E against ci-ingress",
           "working-directory": "apps/cf-ingress-proxy-worker",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            INGRESS_PROXY_E2E_BASE_URL: "${{ steps.deploy.outputs.base_url }}",
-            INGRESS_PROXY_E2E_API_TOKEN: "${{ steps.shared-secret.outputs.shared_secret }}",
           },
           run: [
             "set -euo pipefail",
@@ -109,7 +90,7 @@ export default workflow({
     },
     "deploy-prd": {
       if: "github.event_name == 'push'",
-      needs: ["deploy-test-teardown"],
+      needs: ["deploy-test"],
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         ...utils.setupRepo,
@@ -119,6 +100,8 @@ export default workflow({
           "working-directory": "apps/cf-ingress-proxy-worker",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+            WORKER_NAME: "ingress-proxy",
+            INGRESS_PROXY_HOSTNAME: "ingress.iterate.com",
           },
           run: "pnpm run deploy:prd",
         },

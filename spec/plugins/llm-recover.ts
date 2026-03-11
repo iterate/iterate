@@ -1,6 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
 import dedent from "dedent";
 import { expect as playwrightExpect } from "@playwright/test";
 import type { Plugin, ActionContext } from "../playwright-plugin.ts";
@@ -331,10 +330,7 @@ const SYSTEM_PROMPT = dedent`
 `;
 
 function createAnthropicProvider(options: LlmRecoverOptions): RequestRecoveryCodeFn {
-  let apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    apiKey = execSync("doppler secrets get --plain ANTHROPIC_API_KEY").toString().trim();
-  }
+  const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error(
       "[llm-recover] ANTHROPIC_API_KEY environment variable is required when LLM_RECOVER is enabled",

@@ -17,14 +17,6 @@ export function buildDefaultGitHubPrAgentPath(repo: RepoLike, prNumber: number):
   return `/github/${toPathSegment(repo.owner)}/${toPathSegment(repo.name)}/pr-${prNumber}`;
 }
 
-export function buildDefaultGitHubSecurityAgentPath(
-  repo: RepoLike,
-  alertType: string,
-  alertNumber: number,
-): string {
-  return `/github/${toPathSegment(repo.owner)}/${toPathSegment(repo.name)}/security-${toPathSegment(alertType)}-${alertNumber}`;
-}
-
 export function normalizeAgentPath(value: string | null | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim();

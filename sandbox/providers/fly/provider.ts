@@ -9,7 +9,6 @@ import {
 } from "../types.ts";
 import { MAX_CANONICAL_MACHINE_NAME_LENGTH, sanitizeNamePart } from "../naming.ts";
 import { asRecord } from "../utils.ts";
-import { jsonEnvVar, RegionConfig } from "../../../apps/os/backend/worker-config.ts";
 
 const FLY_API_BASE = "https://api.machines.dev";
 const FLY_GRAPHQL_BASE = "https://api.fly.io/graphql";
@@ -18,6 +17,7 @@ const MAX_WAIT_TIMEOUT_SECONDS = 60;
 const DEFAULT_WEB_INTERNAL_PORT = 8080;
 const DEFAULT_SERVICE_PORTS: number[] = [];
 const DEFAULT_FLY_ORG = "iterate";
+const DEFAULT_FLY_REGION = "lhr";
 const DEFAULT_FLY_MACHINE_CPUS = 4;
 const DEFAULT_FLY_MACHINE_MEMORY_MB = 4096;
 const EXEC_RETRY_LIMIT = 3;
@@ -27,7 +27,7 @@ const FLY_MACHINE_NAME = "sandbox";
 const FlyEnv = z.object({
   FLY_API_TOKEN: z.string(),
   FLY_ORG: z.string().default(DEFAULT_FLY_ORG),
-  REGION_CONFIG: jsonEnvVar.wrap(RegionConfig),
+  FLY_DEFAULT_REGION: z.string().default(DEFAULT_FLY_REGION),
   FLY_DEFAULT_IMAGE: z
     .string()
     .describe(
@@ -86,6 +86,18 @@ const FLY_APP_NETWORK_QUERY = `
 const FLY_ALLOCATE_SHARED_V4_MUTATION = `
   mutation FlyAllocateSharedV4($appId: ID!) {
     allocateIpAddress(input: { appId: $appId, type: shared_v4 }) {
+      ipAddress {
+        address
+        type
+        region
+      }
+    }
+  }
+`;
+
+const FLY_ALLOCATE_V6_MUTATION = `
+  mutation FlyAllocateV6($appId: ID!) {
+    allocateIpAddress(input: { appId: $appId, type: v6 }) {
       ipAddress {
         address
         type
@@ -273,7 +285,19 @@ function isTransientFlyError(error: unknown): boolean {
 
 function isAlreadyExistsError(error: unknown): boolean {
   const message = String(error).toLowerCase();
-  return message.includes("already exists") || message.includes("has already been taken");
+  return (
+    message.includes("already exists") ||
+    message.includes("has already been taken") ||
+    message.includes("uniqueness constraint violated")
+  );
+}
+
+function isIpAlreadyAllocatedError(error: unknown): boolean {
+  const message = String(error).toLowerCase();
+  return (
+    message.includes("already has") &&
+    (message.includes("ip") || message.includes("ipv4") || message.includes("ipv6"))
+  );
 }
 
 function isNotFoundError(error: unknown): boolean {
@@ -317,6 +341,20 @@ async function ensureFlyAppExists(params: { env: FlyEnv; appName: string }): Pro
 async function ensureFlyIngress(params: { env: FlyEnv; appName: string }): Promise<void> {
   const { env, appName } = params;
 
+  // Required for public routing of <app>.fly.dev when apps are created via Machines API.
+  // This call is idempotent; if IPv6 already exists, Fly returns an "already has" style error.
+  try {
+    await flyGraphQL<FlyAllocateIp>({
+      env,
+      query: FLY_ALLOCATE_V6_MUTATION,
+      variables: { appId: appName },
+    });
+  } catch (error) {
+    if (!isAlreadyExistsError(error) && !isIpAlreadyAllocatedError(error)) {
+      throw error;
+    }
+  }
+
   const appNetwork = await flyGraphQL<FlyAppNetwork>({
     env,
     query: FLY_APP_NETWORK_QUERY,
@@ -326,23 +364,21 @@ async function ensureFlyIngress(params: { env: FlyEnv; appName: string }): Promi
     throw new Error(`Fly app ${appName} not found after creation`);
   }
 
-  if (appNetwork.app.sharedIpAddress) {
-    return;
-  }
+  if (!appNetwork.app.sharedIpAddress) {
+    await flyGraphQL<FlyAllocateIp>({
+      env,
+      query: FLY_ALLOCATE_SHARED_V4_MUTATION,
+      variables: { appId: appName },
+    });
 
-  await flyGraphQL<FlyAllocateIp>({
-    env,
-    query: FLY_ALLOCATE_SHARED_V4_MUTATION,
-    variables: { appId: appName },
-  });
-
-  const verify = await flyGraphQL<FlyAppNetwork>({
-    env,
-    query: FLY_APP_NETWORK_QUERY,
-    variables: { appName },
-  });
-  if (!verify.app?.sharedIpAddress) {
-    throw new Error(`Failed to allocate shared IPv4 for Fly app ${appName}`);
+    const verify = await flyGraphQL<FlyAppNetwork>({
+      env,
+      query: FLY_APP_NETWORK_QUERY,
+      variables: { appName },
+    });
+    if (!verify.app?.sharedIpAddress) {
+      throw new Error(`Failed to allocate shared IPv4 for Fly app ${appName}`);
+    }
   }
 }
 
@@ -631,7 +667,7 @@ export class FlyProvider extends SandboxProvider {
       path: `/v1/apps/${encodeURIComponent(appName)}/machines`,
       body: {
         name: FLY_MACHINE_NAME,
-        region: jsonEnvVar.parse(RegionConfig, this.env.REGION_CONFIG).flyIoRegion,
+        region: this.env.FLY_DEFAULT_REGION,
         skip_launch: false,
         config: {
           image: snapshotId,

@@ -1,0 +1,14 @@
+{
+  "name": "@iterate-com/fake-os-contract",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@iterate-com/shared": "workspace:*",
+    "@orpc/contract": "*",
+    "zod": "^4.3.6"
+  }
+}

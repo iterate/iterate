@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer as createHttpServer,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { pathToFileURL } from "node:url";
-import httpProxy from "http-proxy";
 import {
   createServiceRequestLogger,
   getOtelRuntimeConfig,
@@ -10,30 +14,31 @@ import {
   serviceLog,
   type ServiceRequestLogger,
 } from "@iterate-com/shared/jonasland";
+import httpProxy from "http-proxy";
 
 const serviceName = "jonasland-egress-service";
 
-const iterateOriginalHostHeader = "x-iterate-original-host";
-const iterateOriginalProtoHeader = "x-iterate-original-proto";
-const iterateTargetUrlHeader = "x-iterate-target-url";
 const iterateEgressModeHeader = "x-iterate-egress-mode";
 const iterateEgressSeenHeader = "x-iterate-egress-proxy-seen";
 
-// Backward-compatible read aliases while migrating callers.
-const legacyOriginalHostHeader = "x-original-host";
-const legacyOriginalProtoHeader = "x-original-proto";
-const legacyTargetUrlHeader = "x-target-url";
 const legacyEgressModeHeader = "x-egress-mode";
 
-type ProtocolKind = "http" | "ws";
+const forwardingContextHeaderPrefixes = ["x-forwarded-"] as const;
 
-type EgressMode = "external-proxy" | "direct" | "transparent";
+type ProtocolKind = "http" | "ws";
+type ForwardedProto = "http" | "https" | "ws" | "wss";
+
+type ForwardingContext = {
+  host: string | null;
+  proto: ForwardedProto;
+  forValue?: string;
+};
+
+type EgressMode = "external-proxy" | "transparent";
 
 type EgressEnv = {
   proxyHost: string;
   proxyPort: number;
-  adminHost: string;
-  adminPort: number;
   externalProxy: string;
 };
 
@@ -41,6 +46,9 @@ type ProxyRequestResolution = {
   mode: EgressMode;
   targetOrigin: string;
   pathWithQuery: string;
+  forwardedHost: string;
+  forwardedProto: ForwardedProto;
+  forwardedFor?: string;
 };
 
 function parsePort(value: string, key: string): number {
@@ -53,7 +61,6 @@ function parsePort(value: string, key: string): number {
 
 function getEnv(): EgressEnv {
   const rawProxyHost = process.env.EGRESS_PROXY_HOST?.trim();
-  const rawAdminHost = process.env.EGRESS_ADMIN_HOST?.trim();
 
   return {
     proxyHost: rawProxyHost && rawProxyHost.length > 0 ? rawProxyHost : "0.0.0.0",
@@ -61,9 +68,7 @@ function getEnv(): EgressEnv {
       process.env.EGRESS_PROXY_PORT ?? process.env.PORT ?? "19000",
       "EGRESS_PROXY_PORT",
     ),
-    adminHost: rawAdminHost && rawAdminHost.length > 0 ? rawAdminHost : "127.0.0.1",
-    adminPort: parsePort(process.env.EGRESS_ADMIN_PORT ?? "19001", "EGRESS_ADMIN_PORT"),
-    externalProxy: process.env.ITERATE_EXTERNAL_EGRESS_PROXY ?? "",
+    externalProxy: process.env.ITERATE_EGRESS_PROXY ?? "",
   };
 }
 
@@ -89,6 +94,63 @@ function currentEgressMode(req: IncomingMessage): string {
   return String(preferredHeader(req, iterateEgressModeHeader, legacyEgressModeHeader) || "unknown");
 }
 
+function normalizeClientIp(rawAddress: string | undefined): string | undefined {
+  if (!rawAddress) return undefined;
+  const trimmed = rawAddress.trim();
+  if (trimmed.length === 0) return undefined;
+  if (trimmed.startsWith("::ffff:")) return trimmed.slice("::ffff:".length);
+  return trimmed;
+}
+
+function normalizeForwardedProto(
+  proto: string | undefined,
+  protocolKind: ProtocolKind,
+): ForwardedProto {
+  const normalized = proto?.trim().toLowerCase();
+  if (protocolKind === "ws") {
+    if (normalized === "https" || normalized === "wss") return "wss";
+    return "ws";
+  }
+  if (normalized === "https" || normalized === "wss") return "https";
+  return "http";
+}
+
+function resolveForwardingContext(
+  req: IncomingMessage,
+  protocolKind: ProtocolKind,
+): ForwardingContext {
+  const forwardedHost = firstHeaderValue(req.headers["x-forwarded-host"]).trim();
+  const forwardedProto = firstHeaderValue(req.headers["x-forwarded-proto"]).trim();
+  const forwardedFor = firstHeaderValue(req.headers["x-forwarded-for"]).split(",")[0]?.trim();
+  const fallbackHost = firstHeaderValue(req.headers.host).trim();
+
+  return {
+    host: forwardedHost && forwardedHost.length > 0 ? forwardedHost : fallbackHost || null,
+    proto: normalizeForwardedProto(forwardedProto || undefined, protocolKind),
+    forValue:
+      forwardedFor && forwardedFor.length > 0
+        ? forwardedFor
+        : normalizeClientIp(req.socket.remoteAddress),
+  };
+}
+
+function stripForwardingContextHeaders(headers: IncomingHttpHeaders): void {
+  for (const headerName of Object.keys(headers)) {
+    const lowered = headerName.toLowerCase();
+    if (lowered === "forwarded") {
+      delete headers[headerName];
+      continue;
+    }
+    if (forwardingContextHeaderPrefixes.some((prefix) => lowered.startsWith(prefix))) {
+      delete headers[headerName];
+      continue;
+    }
+    if (lowered.startsWith("x-") && lowered.includes("-original-")) {
+      delete headers[headerName];
+    }
+  }
+}
+
 function normalizeProxyProtocol(url: URL, protocolKind: ProtocolKind): URL {
   if (protocolKind === "ws") {
     if (url.protocol === "http:") url.protocol = "ws:";
@@ -101,27 +163,20 @@ function normalizeProxyProtocol(url: URL, protocolKind: ProtocolKind): URL {
   return url;
 }
 
-function buildTransparentTarget(req: IncomingMessage, protocolKind: ProtocolKind): string | null {
+function buildTransparentTarget(
+  req: IncomingMessage,
+  protocolKind: ProtocolKind,
+  forwardingContext: ForwardingContext,
+): string | null {
   const rawUrl = req.url || "/";
   if (/^https?:\/\//i.test(rawUrl) || /^wss?:\/\//i.test(rawUrl)) {
     return normalizeProxyProtocol(new URL(rawUrl), protocolKind).toString();
   }
 
-  const host =
-    preferredHeader(req, iterateOriginalHostHeader, legacyOriginalHostHeader) ||
-    firstHeaderValue(req.headers.host);
+  const host = forwardingContext.host;
   if (!host) return null;
 
-  const proto = String(
-    preferredHeader(req, iterateOriginalProtoHeader, legacyOriginalProtoHeader),
-  ).toLowerCase();
-  let scheme = "http";
-  if (protocolKind === "ws") {
-    scheme = proto === "https" || proto === "wss" ? "wss" : "ws";
-  } else {
-    scheme = proto === "https" || proto === "wss" ? "https" : "http";
-  }
-
+  const scheme = forwardingContext.proto;
   const path = rawUrl.startsWith("/") ? rawUrl : `/${rawUrl}`;
   return `${scheme}://${host}${path}`;
 }
@@ -130,6 +185,7 @@ function resolveTarget(
   req: IncomingMessage,
   protocolKind: ProtocolKind,
   env: EgressEnv,
+  forwardingContext: ForwardingContext,
 ): { mode: EgressMode; url: string } | null {
   if (env.externalProxy) {
     return {
@@ -141,13 +197,7 @@ function resolveTarget(
     };
   }
 
-  const directUrl =
-    preferredHeader(req, iterateTargetUrlHeader, legacyTargetUrlHeader) || undefined;
-  if (directUrl) {
-    return { mode: "direct", url: directUrl };
-  }
-
-  const transparentUrl = buildTransparentTarget(req, protocolKind);
+  const transparentUrl = buildTransparentTarget(req, protocolKind, forwardingContext);
   if (!transparentUrl) return null;
   return { mode: "transparent", url: transparentUrl };
 }
@@ -157,25 +207,28 @@ function resolveProxyRequest(
   protocolKind: ProtocolKind,
   env: EgressEnv,
 ): ProxyRequestResolution | null {
-  const target = resolveTarget(req, protocolKind, env);
+  const forwardingContext = resolveForwardingContext(req, protocolKind);
+  const target = resolveTarget(req, protocolKind, env, forwardingContext);
   if (!target) return null;
 
   const targetUrl = new URL(target.url);
+  const forwardedHost = forwardingContext.host ?? targetUrl.host;
+
   return {
     mode: target.mode,
     targetOrigin: `${targetUrl.protocol}//${targetUrl.host}`,
     pathWithQuery: `${targetUrl.pathname}${targetUrl.search}`,
+    forwardedHost,
+    forwardedProto: forwardingContext.proto,
+    forwardedFor: forwardingContext.forValue,
   };
 }
 
-async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
+async function closeServer(server: ReturnType<typeof createHttpServer>): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
+      if (error) reject(error);
+      else resolve();
     });
   });
 }
@@ -183,21 +236,17 @@ async function closeServer(server: ReturnType<typeof createServer>): Promise<voi
 export async function startEgressService(options?: {
   proxyHost?: string;
   proxyPort?: number;
-  adminHost?: string;
-  adminPort?: number;
 }): Promise<{ close: () => Promise<void> }> {
   const env = getEnv();
   const proxyHost = options?.proxyHost ?? env.proxyHost;
   const proxyPort = options?.proxyPort ?? env.proxyPort;
-  const adminHost = options?.adminHost ?? env.adminHost;
-  const adminPort = options?.adminPort ?? env.adminPort;
 
   initializeServiceOtel(serviceName);
   initializeServiceEvlog(serviceName);
 
   const proxy = httpProxy.createProxyServer({
     ws: true,
-    xfwd: true,
+    xfwd: false,
     secure: false,
   });
 
@@ -261,7 +310,7 @@ export async function startEgressService(options?: {
     });
   });
 
-  const proxyServer = createServer((req, res) => {
+  const proxyServer = createHttpServer((req, res) => {
     const requestId = randomUUID();
     const requestLog = createServiceRequestLogger({
       requestId,
@@ -270,12 +319,40 @@ export async function startEgressService(options?: {
     });
     const startedAt = Date.now();
 
-    if ((req.url || "") === "/healthz") {
+    if ((req.url || "") === "/__iterate/health") {
       res.writeHead(200, {
         "content-type": "text/plain",
         [iterateEgressSeenHeader]: "1",
       });
-      res.end("ok");
+      res.end(JSON.stringify({ ok: true, service: serviceName }));
+      requestLog.emit({ status: 200, durationMs: Date.now() - startedAt });
+      return;
+    }
+
+    if (req.method === "POST" && (req.url || "") === "/__iterate/sql") {
+      writeJson(res, 501, { error: "sql_not_supported" });
+      requestLog.emit({ status: 501, durationMs: Date.now() - startedAt });
+      return;
+    }
+
+    if (req.method === "GET" && (req.url || "") === "/__iterate/debug") {
+      writeJson(res, 200, {
+        service: serviceName,
+        proxy: { host: proxyHost, port: proxyPort },
+        externalProxyConfigured: env.externalProxy.length > 0,
+        otel: getOtelRuntimeConfig(),
+      });
+      requestLog.emit({ status: 200, durationMs: Date.now() - startedAt });
+      return;
+    }
+
+    if (req.method === "GET" && (req.url || "") === "/api/runtime") {
+      writeJson(res, 200, {
+        service: serviceName,
+        proxy: { host: proxyHost, port: proxyPort },
+        externalProxyConfigured: env.externalProxy.length > 0,
+        otel: getOtelRuntimeConfig(),
+      });
       requestLog.emit({ status: 200, durationMs: Date.now() - startedAt });
       return;
     }
@@ -289,6 +366,12 @@ export async function startEgressService(options?: {
 
     req.url = resolved.pathWithQuery;
     req.headers.host = new URL(resolved.targetOrigin).host;
+    stripForwardingContextHeaders(req.headers);
+    req.headers["x-forwarded-host"] = resolved.forwardedHost;
+    req.headers["x-forwarded-proto"] = resolved.forwardedProto;
+    if (resolved.forwardedFor) {
+      req.headers["x-forwarded-for"] = resolved.forwardedFor;
+    }
     req.headers[iterateEgressSeenHeader] = "1";
     req.headers[iterateEgressModeHeader] = resolved.mode;
 
@@ -312,6 +395,12 @@ export async function startEgressService(options?: {
 
     req.url = resolved.pathWithQuery;
     req.headers.host = new URL(resolved.targetOrigin).host;
+    stripForwardingContextHeaders(req.headers);
+    req.headers["x-forwarded-host"] = resolved.forwardedHost;
+    req.headers["x-forwarded-proto"] = resolved.forwardedProto;
+    if (resolved.forwardedFor) {
+      req.headers["x-forwarded-for"] = resolved.forwardedFor;
+    }
     req.headers[iterateEgressSeenHeader] = "1";
     req.headers[iterateEgressModeHeader] = resolved.mode;
 
@@ -321,75 +410,16 @@ export async function startEgressService(options?: {
     });
   });
 
-  const adminServer = createServer((req, res) => {
-    const requestId = randomUUID();
-    const requestLog = createServiceRequestLogger({
-      requestId,
-      method: req.method,
-      path: req.url,
-    });
-    const startedAt = Date.now();
-    let status = 500;
-
-    try {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-
-      if (req.method === "GET" && pathname === "/healthz") {
-        status = 200;
-        res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
-        res.end("ok");
-        return;
-      }
-
-      if (req.method === "GET" && pathname === "/api/runtime") {
-        status = 200;
-        writeJson(res, status, {
-          service: serviceName,
-          proxy: {
-            host: proxyHost,
-            port: proxyPort,
-          },
-          admin: {
-            host: adminHost,
-            port: adminPort,
-          },
-          externalProxyConfigured: env.externalProxy.length > 0,
-          otel: getOtelRuntimeConfig(),
-        });
-        return;
-      }
-
-      status = 404;
-      writeJson(res, status, { error: "not_found" });
-    } catch (error) {
-      status = 500;
-      requestLog.error(toError(error));
-      writeJson(res, status, { error: "internal_error" });
-    } finally {
-      requestLog.emit({
-        status,
-        durationMs: Date.now() - startedAt,
-      });
-    }
-  });
-
   await new Promise<void>((resolve) => {
     proxyServer.listen(proxyPort, proxyHost, () => resolve());
-  });
-
-  await new Promise<void>((resolve) => {
-    adminServer.listen(adminPort, adminHost, () => resolve());
   });
 
   serviceLog.info({
     event: "service.started",
     service: serviceName,
-    proxy_host: proxyHost,
-    proxy_port: proxyPort,
-    admin_host: adminHost,
-    admin_port: adminPort,
-    proxy_health_path: "/healthz",
-    admin_health_path: "/healthz",
+    host: proxyHost,
+    port: proxyPort,
+    health_path: "/__iterate/health",
     runtime_path: "/api/runtime",
     otel: getOtelRuntimeConfig(),
   });
@@ -397,7 +427,7 @@ export async function startEgressService(options?: {
   return {
     close: async () => {
       proxy.close();
-      await Promise.all([closeServer(proxyServer), closeServer(adminServer)]);
+      await closeServer(proxyServer);
     },
   };
 }

@@ -76,13 +76,14 @@ Design for columnar 375px for mobile support, implement desktop as a view which 
 - Use `toast` from sonner, not inline messages
 - Use `EmptyState` for empty states
 - Use `Field` components for form accessibility
+- Render IDs and slugs with `packages/ui/src/components/identifier.tsx` so they stay monospaced and copyable
 
 Canonical example: `apps/os/app/routes/org/project/machines.tsx`
 
 ## Meta: writing AGENTS.md
 
 - Keep it brief, sacrifice grammar for the sake of concision.
-- Stick to facts which are likely to remain true, rather than prescriptive recipes ("XYZ can be found in the database" is better than "run this exact query" which might be invalid once the schema changes)
+- Stick to facts which are likely to remain true, rather than prescriptive recipes ("XYZ can be found in the database" is better than "run this exact query which might be invalid once the schema changes")
 
 ## Quick reference
 
@@ -94,7 +95,6 @@ For local Docker machines, refresh the sandbox image + default tag with: `pnpm s
 
 - Strict TS; infer types where possible
 - No `as any` — fix types or ask for help
-- No `import { z } from "zod"` — use `"zod/v4"`
 - File/folder names: kebab-case
 - Include `.ts`/`.js` in relative imports (not package imports)
 - Use `node:` prefix for Node imports
@@ -195,8 +195,6 @@ Key project IDs: Iterate = `prj_01kh7ct9jke49vjq43j4wy3vyw`, team = `T0675PSN873
 ### Outbox queue operations
 
 Admin UI: `https://os.iterate.com/admin/outbox` — shows all events, filters by status/event/consumer, has "Process Queue" button.
-
-- CLI debugging: `iterate os admin outbox list-events --limit 50 --sort-direction desc` shows recent outbox history from prod. Use `--payload-contains '{"machineId": "mach_..."}'` or `--consumer-name myConsumer` to narrow down setup/probe issues without going straight to SQL. You can also look at the implemenation of the listEvents procedure powering this command for inspiration on how you can query the DB directly to dig even deeper.
 
 To archive (soft-delete) stale messages directly:
 

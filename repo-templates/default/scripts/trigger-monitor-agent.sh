@@ -9,7 +9,7 @@ read -r -d '' payload <<'JSON' || true
   "events": [
     {
       "type": "iterate:agent:prompt-added",
-      "message": "Use the architect skill (.opencode/skills/architect/SKILL.md) for this run.\nRun monitoring mode.\nAlso use .opencode/skills/architect-monitoring/SKILL.md and .opencode/skills/monitor-fly-io-usage/SKILL.md.\nMonitor Fly + Cloudflare + PostHog when available; continue if one is unavailable and note gaps.\nIf anything is P1/P2, always start a Slack thread in #monitoring."
+      "message": "@architect\nRun monitoring mode.\nUse skills/architect-monitoring/SKILL.md and skills/monitor-fly-io-usage/SKILL.md.\nMonitor Fly + Cloudflare + PostHog when available; continue if one is unavailable and note gaps.\nIf anything is P1/P2, always start a Slack thread in #monitoring."
     }
   ]
 }

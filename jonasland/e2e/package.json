@@ -3,24 +3,34 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "doppler run -- vitest run",
-    "test:e2e": "RUN_JONASLAND_E2E=true doppler run -- vitest run",
-    "spec": "playwright test -c playwright.config.ts",
-    "spec:e2e": "RUN_JONASLAND_E2E=true playwright test -c playwright.config.ts",
+    "e2e": "doppler run -- sh -lc 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run \"$@\"' --",
+    "e2e:docker": "doppler run -- sh -lc 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run --tags-filter=\"providers/docker\" \"$@\"' --",
+    "e2e:fly": "doppler run -- sh -lc 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run --tags-filter=\"providers/fly\" \"$@\"' --",
+    "e2e:playwright": "doppler run -- sh -lc 'if [ \"$1\" = \"--\" ]; then shift; fi; playwright test \"$@\"' --",
+    "test": "doppler run -- sh -lc 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run \"$@\"' --",
+    "test:e2e": "doppler run -- sh -lc 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run \"$@\"' --",
+    "test:vitest": "doppler run -- sh -lc 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run \"$@\"' --",
+    "test:e2e:docker": "doppler run -- sh -lc 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run --tags-filter=\"providers/docker\" \"$@\"' --",
+    "test:e2e:fly": "doppler run -- sh -lc 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run --tags-filter=\"providers/fly\" \"$@\"' --",
+    "test:vitest:docker": "doppler run -- sh -lc 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run --tags-filter=\"providers/docker\" \"$@\"' --",
+    "test:vitest:fly": "doppler run -- sh -lc 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run --tags-filter=\"providers/fly\" \"$@\"' --",
+    "test:playwright": "doppler run -- sh -lc 'if [ \"$1\" = \"--\" ]; then shift; fi; playwright test \"$@\"' --",
+    "test:frp": "doppler run -- sh -lc 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run -t frp \"$@\"' --",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@iterate-com/example": "workspace:*",
+    "@iterate-com/example-contract": "workspace:*",
+    "@iterate-com/shared": "workspace:*"
+  },
   "devDependencies": {
-    "@accelerated-software-development/caddy-api-client": "^0.4.3",
-    "@docker/node-sdk": "^0.0.17",
-    "@iterate-com/events-contract": "workspace:*",
-    "@iterate-com/orders-contract": "workspace:*",
-    "@iterate-com/shared": "workspace:*",
-    "@orpc/contract": "^1.13.5",
-    "@playwright/test": "^1.58.2",
+    "@iterate-com/mock-http-proxy": "workspace:*",
     "@types/node": "^25.0.10",
     "emittery": "1.2.0",
     "mockttp": "^4.2.1",
+    "msw": "^2.12.10",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "4.1.0-beta.6",
+    "zod": "^4.3.6"
   }
 }

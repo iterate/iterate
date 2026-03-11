@@ -176,7 +176,8 @@ export function selectResolvedRouteByHostStmt(
 	  r.metadata AS metadata
 	FROM route_patterns rp
 	INNER JOIN routes r ON r.id = rp.route_id
-	WHERE ? GLOB rp.pattern
+	WHERE length(rp.pattern) <= 253
+	  AND ? GLOB rp.pattern
 	ORDER BY
 	  CASE WHEN rp.pattern NOT LIKE '%*%' THEN 1 ELSE 0 END DESC,
 	  length(rp.pattern) DESC,

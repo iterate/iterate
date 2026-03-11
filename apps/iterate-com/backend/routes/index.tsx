@@ -1,16 +1,36 @@
+import { useRef } from "react";
+import { usePostHog } from "posthog-js/react";
 import SiteHeader from "../components/site-header.tsx";
 import SiteFooter from "../components/site-footer.tsx";
 import Member from "../components/member.tsx";
 import Investors from "../components/investors.tsx";
+import { Button } from "../components/button.tsx";
 import DisplayCards from "../components/ui/display-cards.tsx";
 import jonasImg from "../assets/jonas.jpg?url";
 import zakImg from "../assets/zak.png?url";
 import nickImg from "../assets/nick.png?url";
 import rahulImg from "../assets/rahul.png?url";
 import mishaImg from "../assets/misha.png?url";
+import slackIcon from "../assets/slack.svg?url";
 //
 
 export default function Home() {
+  const addToSlackRef = useRef<HTMLButtonElement>(null);
+  const posthog = usePostHog();
+
+  const handleAddToSlack = () => {
+    const url = new URL("https://os.iterate.com/login");
+    url.searchParams.set("autoSignin", "slack");
+
+    // Pass PostHog IDs for cross-domain tracking
+    const distinctId = posthog?.get_distinct_id();
+    const sessionId = posthog?.get_session_id();
+    if (distinctId) url.searchParams.set("ph_distinct_id", distinctId);
+    if (sessionId) url.searchParams.set("ph_session_id", sessionId);
+
+    window.location.href = url.toString();
+  };
+
   return (
     <div className="min-h-screen bg-white">
       <SiteHeader />
@@ -23,12 +43,24 @@ export default function Home() {
             <h1 className="text-4xl sm:text-5xl mb-6 sm:mb-8 tracking-tight leading-tight font-bold headline-mark">
               The world's most hackable AI agent
             </h1>
-            <ul className="text-lg sm:text-xl text-gray-600 mb-6 sm:mb-24 leading-relaxed space-y-2 list-disc pl-6">
+            <ul className="text-lg sm:text-xl text-gray-600 mb-6 sm:mb-8 leading-relaxed space-y-2 list-disc pl-6">
               <li>multiplayer slack agent</li>
               <li>can use remote MCP servers</li>
               <li>customisable via rules in a git repo</li>
               <li>open source</li>
             </ul>
+            <div className="mb-6 sm:mb-24 sm:flex sm:flex-col sm:items-end">
+              <Button
+                ref={addToSlackRef}
+                className="w-full text-lg"
+                size="lg"
+                variant="secondary"
+                onClick={handleAddToSlack}
+              >
+                <img src={slackIcon} alt="Slack" className="w-6 h-6 mr-2" />
+                <span>Add to Slack</span>
+              </Button>
+            </div>
           </div>
           <div className="block lg:hidden mt-4 mb-8">
             <DisplayCards />

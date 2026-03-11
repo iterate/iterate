@@ -38,7 +38,7 @@ async function runGit(args: string[], options?: { cwd?: string }): Promise<void>
 }
 
 async function installConfigRepoDependencies(repoPath: string): Promise<void> {
-  await exec("pnpm", ["install", "--config.confirmModulesPurge=false"], {
+  await exec("pnpm", ["install"], {
     throwOnError: true,
     nodeOptions: {
       cwd: repoPath,

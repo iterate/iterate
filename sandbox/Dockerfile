@@ -2,7 +2,6 @@
 FROM node:24
 
 # === Versions ===
-# Hey everyone stop putting your ARGs up here, put them where you use them so bumping a library doesn't bust the whole cache
 ARG SANDBOX_AGENT_BROWSER_VERSION=0.13.0
 ARG SANDBOX_CODEX_VERSION=0.98.0
 ARG SANDBOX_OPENCODE_VERSION=1.2.15
@@ -95,6 +94,10 @@ RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
+# Install Archil client (persistent POSIX volumes backed by S3/R2)
+# Installs to /usr/bin/archil by default (system path)
+RUN curl -s https://s3.amazonaws.com/archil-client/install | sh || true
+
 # Create non-root user with passwordless sudo
 RUN useradd -m -s /bin/bash iterate && \
     echo 'iterate ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/iterate && \
@@ -177,13 +180,6 @@ RUN mkdir -p /home/iterate/.local/bin && \
     go build -o /home/iterate/.local/bin/gog ./cmd/gog && \
     rm -rf /tmp/gogcli
 
-# Install Archil client (persistent POSIX volumes backed by S3/R2)
-# Installs to /usr/bin/archil by default (system path)
-# ARG placed here (not at top) to avoid busting cache for layers above (Go, gogcli, etc.)
-ARG SANDBOX_ARCHIL_CLIENT_VERSION=0.7.3
-RUN curl -fsSL https://s3.amazonaws.com/archil-client/install | \
-    sudo ARCHIL_CLIENT_VERSION="${SANDBOX_ARCHIL_CLIENT_VERSION}" sh || true
-
 # === Agent packages (npm, userspace) ===
 RUN npm install -g \
     agent-browser@${SANDBOX_AGENT_BROWSER_VERSION} \
@@ -248,8 +244,7 @@ RUN git init && \
     git config user.name "iterate-bot" && \
     git add . && \
     git commit -m "snapshot ${GIT_SHA}" && \
-    git branch -M main && \
-    git remote add origin https://github.com/iterate/iterate
+    git branch -M main
 
 ENV GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA

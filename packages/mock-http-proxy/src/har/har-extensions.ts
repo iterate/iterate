@@ -17,6 +17,13 @@ export type HarWebSocketMessage = {
 export type HarEntryWithExtensions = HarEntry & {
   _resourceType?: string;
   _webSocketMessages?: HarWebSocketMessage[];
+  _iterateMetadata?: {
+    sanitizedHeaders?: string[];
+    requestBodyTruncated?: boolean;
+    requestBodyOriginalSize?: number;
+    responseBodyTruncated?: boolean;
+    responseBodyOriginalSize?: number;
+  };
 };
 
 export type HarWithExtensions = Omit<Har, "log"> & {

@@ -1,7 +1,9 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { oz } from "@orpc/zod";
 import { JSON_SCHEMA_REGISTRY } from "@orpc/zod/zod4";
-import * as z from "zod/v4";
+import { createServiceSubRouterContract } from "@iterate-com/shared/jonasland/service-contract";
+import type { ServiceManifestWithEntryPoint } from "@iterate-com/shared/jonasland/service-contract";
+import * as z from "zod";
 import {
   EventVersion,
   ITERATE_EVENT_TYPE_PREFIX,
@@ -211,24 +213,14 @@ export const parseStreamMetadataUpdatedPayload = (
   return result.success ? result.data : undefined;
 };
 
-const ServiceHealthOutput = z.object({
-  ok: z.literal(true),
-  service: z.string(),
-  version: z.string(),
+const serviceSubRouter = createServiceSubRouterContract({
+  healthSummary: "Events service health metadata",
+  sqlSummary: "Execute SQL against events sqlite database",
+  debugSummary: "Events service runtime debug details",
 });
 
 export const eventBusContract = oc.router({
-  service: {
-    health: oc
-      .route({
-        method: "GET",
-        path: "/service/health",
-        summary: "Events service health metadata",
-        tags: ["service"],
-      })
-      .input(z.object({}).optional().default({}))
-      .output(ServiceHealthOutput),
-  },
+  ...serviceSubRouter,
   append: oc
     .route({
       operationId: "appendStreamEvents",
@@ -326,7 +318,7 @@ const nonEmptyStringWithTrimDefault = (defaultValue: string) =>
     .default(defaultValue);
 
 export const EventsServiceEnv = z.object({
-  PORT: z.coerce.number().int().min(1).max(65535).default(17301),
+  PORT: z.coerce.number().int().min(1).max(65535).default(17320),
   DATABASE_URL: nonEmptyStringWithTrimDefault("events.sqlite"),
   ITERATE_EVENTS_WS_IDLE_DISCONNECT_MS: z.coerce.number().int().min(0).default(30_000),
 });
@@ -336,17 +328,16 @@ export const serviceManifest = {
   name: packageJson.name,
   slug: "events",
   version: packageJson.version,
-  port: 17301,
+  port: 17320,
+  serverEntryPoint: "services/events/src/server.ts",
   orpcContract: eventBusContract,
   envVars: EventsServiceEnv,
-  // Wildcard ownership is intentionally simple for now. We expect a dedicated design
-  // for ownership expressions once multiple services start declaring broader patterns.
   ownedEventStreamPaths: ["events/_meta"] as const,
   ownedEventSchemas: [
     PushSubscriptionCallbackAddedEvent,
     StreamCreatedEvent,
     StreamMetadataUpdatedEvent,
   ] as const,
-} as const;
+} as const satisfies ServiceManifestWithEntryPoint;
 
 export type EventBusContract = typeof eventBusContract;

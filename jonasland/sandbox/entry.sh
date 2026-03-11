@@ -1,0 +1,85 @@
+#!/bin/bash
+set -euo pipefail
+
+# Canonical repo root inside the sandbox image; override only for local debugging.
+ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
+
+# Optional Docker host-sync keeps container source aligned to host checkout.
+if [[ -n "${DOCKER_HOST_SYNC_ENABLED:-}" ]]; then
+  bash "${ITERATE_REPO}/jonasland/sandbox/providers/docker/sync-repo-from-host.sh"
+fi
+
+# Refresh home skeleton so shell/tooling config changes are applied on boot.
+if [[ -f "${ITERATE_REPO}/jonasland/sandbox/sync-home-skeleton.sh" ]]; then
+  bash "${ITERATE_REPO}/jonasland/sandbox/sync-home-skeleton.sh"
+fi
+
+# Startup marker consumed by host-sync tooling and readiness/debug checks.
+touch /tmp/reached-entrypoint
+
+# Allow overriding the default sandbox process:
+#   docker run --rm -it <image> sleep infinity
+#   SANDBOX_ENTRY_ARGS="sleep\tinfinity" (tab-delimited, for providers without CMD support)
+if [[ $# -gt 0 ]]; then
+  exec "$@"
+fi
+
+if [[ -n "${SANDBOX_ENTRY_ARGS:-}" ]]; then
+  IFS=$'\t' read -r -a env_entry_args <<< "${SANDBOX_ENTRY_ARGS}"
+  if [[ ${#env_entry_args[@]} -gt 0 ]]; then
+    exec "${env_entry_args[@]}"
+  fi
+fi
+
+# Start dnsmasq and force local resolver so *.iterate.localhost routes to loopback.
+# This must happen at runtime because container runtimes rewrite /etc/resolv.conf.
+# See jonasland/hosts-and-routing.md for the full routing model.
+sudo dnsmasq --conf-file=/etc/dnsmasq.d/iterate-localhost.conf
+printf "nameserver 127.0.0.1\n" | sudo tee /etc/resolv.conf >/dev/null
+
+# `iterate-caddy` is created in the Docker image; we rely on that invariant here.
+# Caddy itself must be exempt from the redirect rules so direct egress from Caddy
+# does not loop back into the interception path.
+CADDY_UID="$(id -u iterate-caddy)"
+
+# Redirect outbound :80/:443 through local Caddy for HTTP(S) interception.
+# The owner-match rules (-m owner) prevent loops by exempting the Caddy runtime
+# user itself, allowing Caddy to speak directly to upstream internet hosts.
+# These require the xt_owner kernel module which is available in Docker but NOT
+# in Fly's Firecracker kernel. When unavailable, fall back to plain redirect
+# rules and rely on Fly's non-redirected direct routing for Caddy itself.
+IPTABLES_HAS_OWNER=true
+sudo iptables -t nat -C OUTPUT -p tcp -m owner --uid-owner "${CADDY_UID}" --dport 80 -j RETURN 2>/dev/null || \
+  sudo iptables -t nat -I OUTPUT 1 -p tcp -m owner --uid-owner "${CADDY_UID}" --dport 80 -j RETURN 2>/dev/null || \
+  IPTABLES_HAS_OWNER=false
+
+if [[ "${IPTABLES_HAS_OWNER}" == "false" ]]; then
+  echo "[entry] iptables -m owner not available (Fly kernel); skipping owner-match rules"
+fi
+
+for port in 80 443; do
+  if [[ "${IPTABLES_HAS_OWNER}" == "true" && "$port" != "80" ]]; then
+    sudo iptables -t nat -C OUTPUT -p tcp -m owner --uid-owner "${CADDY_UID}" --dport "$port" -j RETURN 2>/dev/null || \
+      sudo iptables -t nat -I OUTPUT 1 -p tcp -m owner --uid-owner "${CADDY_UID}" --dport "$port" -j RETURN
+  fi
+  sudo iptables -t nat -C OUTPUT -p tcp --dport "$port" -j REDIRECT --to-ports "$port" 2>/dev/null || \
+    sudo iptables -t nat -A OUTPUT -p tcp --dport "$port" -j REDIRECT --to-ports "$port"
+done
+
+# Setup console logging via named pipe (FIFO)
+# Using a FIFO keeps pidnap as direct child of tini for proper signal handling
+CONSOLE_LOG="/var/log/pidnap/console"
+CONSOLE_FIFO="/tmp/pidnap-console-fifo"
+mkdir -p "$(dirname "$CONSOLE_LOG")"
+rm -f "$CONSOLE_FIFO"
+mkfifo "$CONSOLE_FIFO"
+
+# Background process reads from FIFO and writes to both file and stdout
+tee -a "$CONSOLE_LOG" < "$CONSOLE_FIFO" &
+
+# pidnap watches /home/iterate/.iterate/.env itself, so avoid tsx --env-file-if-exists
+# Pidnap take the wheel - redirect stdout/stderr to FIFO
+exec tini -sg -- \
+  tsx --watch \
+  "$ITERATE_REPO/packages/pidnap/src/cli.ts" \
+  init -c "$ITERATE_REPO/jonasland/sandbox/pidnap.config.ts" > "$CONSOLE_FIFO" 2>&1

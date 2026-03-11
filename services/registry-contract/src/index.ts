@@ -1,15 +1,18 @@
 import { oc } from "@orpc/contract";
-import { createServiceSubRouterContract } from "@iterate-com/shared/jonasland";
+import { createServiceSubRouterContract } from "@iterate-com/shared/jonasland/service-contract";
+import type { ServiceManifestWithEntryPoint } from "@iterate-com/shared/jonasland/service-contract";
 import { z } from "zod/v4";
 import packageJson from "../package.json" with { type: "json" };
 
 const RouteMetadata = z.record(z.string(), z.string());
+const RouteCaddyDirectives = z.array(z.string()).default([]);
 
 export const RouteRecord = z.object({
   host: z.string(),
   target: z.string(),
   metadata: RouteMetadata.default({}),
   tags: z.array(z.string()).default([]),
+  caddyDirectives: RouteCaddyDirectives,
   updatedAt: z.string(),
 });
 
@@ -18,12 +21,21 @@ export const RouteUpsertInput = z.object({
   target: z.string(),
   metadata: RouteMetadata.optional(),
   tags: z.array(z.string()).optional(),
+  caddyDirectives: z.array(z.string()).optional(),
 });
 
 export const ConfigEntry = z.object({
   key: z.string(),
   value: z.unknown(),
   updatedAt: z.string(),
+});
+
+export const GetPublicUrlInput = z.object({
+  internalURL: z.string().min(1),
+});
+
+export const GetPublicUrlOutput = z.object({
+  publicURL: z.string(),
 });
 
 const serviceSubRouter = createServiceSubRouterContract({
@@ -33,6 +45,16 @@ const serviceSubRouter = createServiceSubRouterContract({
 
 export const registryContract = oc.router({
   ...serviceSubRouter,
+  getPublicURL: oc
+    .route({
+      method: "POST",
+      path: "/get-public-url",
+      summary: "Convert internal URL to public URL",
+      tags: ["ingress"],
+    })
+    .input(GetPublicUrlInput)
+    .output(GetPublicUrlOutput),
+
   routes: {
     upsert: oc
       .route({
@@ -188,12 +210,28 @@ const nonEmptyStringWithTrimDefault = (defaultValue: string) =>
     }, z.string().min(1).optional())
     .default(defaultValue);
 
+const _optionalNonEmptyStringWithTrim = () =>
+  z.preprocess((value) => {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    return trimmed.length === 0 ? undefined : trimmed;
+  }, z.string().min(1).optional());
+
+const ingressRoutingType = z
+  .preprocess((value) => {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    return trimmed.length === 0 ? undefined : trimmed;
+  }, z.enum(["dunder-prefix", "subdomain-host"]).optional())
+  .default("subdomain-host");
+
 export const RegistryServiceEnv = z.object({
   REGISTRY_SERVICE_HOST: nonEmptyStringWithTrimDefault("0.0.0.0"),
-  REGISTRY_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(8777),
+  REGISTRY_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(17310),
   REGISTRY_DB_PATH: nonEmptyStringWithTrimDefault("/var/lib/jonasland/registry.sqlite"),
-  CADDY_ADMIN_URL: nonEmptyStringWithTrimDefault("http://127.0.0.1:2019"),
-  CADDY_LISTEN_ADDRESS: nonEmptyStringWithTrimDefault(":80"),
+  ITERATE_INGRESS_HOST: nonEmptyStringWithTrimDefault("iterate.localhost"),
+  ITERATE_INGRESS_ROUTING_TYPE: ingressRoutingType,
+  ITERATE_INGRESS_DEFAULT_SERVICE: nonEmptyStringWithTrimDefault("home"),
 });
 
 export type RegistryServiceEnv = z.infer<typeof RegistryServiceEnv>;
@@ -202,14 +240,17 @@ export {
   RouteRecord as routeRecordSchema,
   RouteUpsertInput as routeUpsertInputSchema,
   ConfigEntry as configEntrySchema,
+  GetPublicUrlInput as getPublicUrlInputSchema,
+  GetPublicUrlOutput as getPublicUrlOutputSchema,
   RegistryServiceEnv as registryServiceEnvSchema,
 };
 
 export const registryServiceManifest = {
   name: packageJson.name,
-  slug: "registry-service",
+  slug: "registry",
   version: packageJson.version ?? "0.0.0",
-  port: 8777,
+  port: 17310,
+  serverEntryPoint: "services/registry/src/server.ts",
   orpcContract: registryContract,
   envVars: RegistryServiceEnv,
-} as const;
+} as const satisfies ServiceManifestWithEntryPoint;

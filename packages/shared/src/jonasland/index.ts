@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
@@ -17,7 +18,6 @@ import {
   type AnyContractRouter,
   type ContractRouterClient,
 } from "@orpc/contract";
-import { oc } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { ORPCInstrumentation } from "@orpc/otel";
 import { onError } from "@orpc/server";
@@ -28,9 +28,24 @@ import {
   type Log,
   type RequestLogger,
 } from "evlog";
-import { createOTLPDrain } from "evlog/otlp";
-import { type Plugin } from "vite";
+import { sendBatchToOTLP } from "evlog/otlp";
+import type { DrainContext } from "evlog";
+import type { Plugin } from "vite";
 import { z } from "zod/v4";
+import { createSlug } from "./create-slug.ts";
+import {
+  ServiceDebugOutput,
+  ServiceHealthOutput,
+  ServiceSqlInput,
+  ServiceSqlResult,
+  ServiceSqlResultHeader,
+  createServiceSubRouterContract,
+  type ServiceManifestLike,
+  type ServiceManifestWithEntryPoint,
+  type SqlResultSet,
+} from "./service-contract.ts";
+import { useDeployment, useTmpDir } from "./test-helpers/index.ts";
+import type { UseDeploymentFixture, UseTmpDirFixture } from "./test-helpers/index.ts";
 
 type RuntimeGlobal = typeof globalThis & {
   __jonaslandOtelInitialized?: boolean;
@@ -38,90 +53,18 @@ type RuntimeGlobal = typeof globalThis & {
 
 const runtimeGlobal = globalThis as RuntimeGlobal;
 
-export type ServiceRequestLogFields = Record<string, unknown>;
-export type ServiceRequestLogger = RequestLogger<ServiceRequestLogFields>;
+type ServiceRequestLogFields = Record<string, unknown>;
+type ServiceRequestLogger = RequestLogger<ServiceRequestLogFields>;
 
-export interface ServiceContext {
+interface ServiceContext {
   requestId: string;
   serviceName: string;
   log: ServiceRequestLogger;
 }
 
-export interface ServiceInitialContext {
+interface ServiceInitialContext {
   requestId?: string;
   log?: ServiceRequestLogger;
-}
-
-export const ServiceHealthOutput = z.object({
-  ok: z.literal(true),
-  service: z.string(),
-  version: z.string(),
-});
-
-export const ServiceSqlInput = z.object({
-  statement: z.string().min(1),
-});
-
-export const ServiceSqlResultHeader = z.object({
-  name: z.string(),
-  displayName: z.string(),
-  originalType: z.string().nullable(),
-  type: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
-});
-
-export const ServiceSqlResult = z.object({
-  rows: z.array(z.record(z.string(), z.unknown())),
-  headers: z.array(ServiceSqlResultHeader),
-  stat: z.object({
-    rowsAffected: z.number().int(),
-    rowsRead: z.number().int().nullable(),
-    rowsWritten: z.number().int().nullable(),
-    queryDurationMs: z.number().int().nullable(),
-  }),
-  lastInsertRowid: z.number().int().optional(),
-});
-
-export type ServiceSqlInput = z.infer<typeof ServiceSqlInput>;
-export type ServiceSqlResult = z.infer<typeof ServiceSqlResult>;
-
-export interface SqlResultSet {
-  columns: string[];
-  columnTypes: Array<string | null>;
-  rows: unknown[][];
-  rowsAffected?: number;
-  lastInsertRowid?: number | bigint | null;
-}
-
-export function createServiceSubRouterContract(options?: {
-  tag?: string;
-  healthSummary?: string;
-  sqlSummary?: string;
-}) {
-  const tag = options?.tag ?? "service";
-
-  return {
-    service: {
-      health: oc
-        .route({
-          method: "GET",
-          path: "/service/health",
-          summary: options?.healthSummary ?? "Service health metadata",
-          tags: [tag],
-        })
-        .input(z.object({}).optional().default({}))
-        .output(ServiceHealthOutput),
-
-      sql: oc
-        .route({
-          method: "POST",
-          path: "/service/sql",
-          summary: options?.sqlSummary ?? "Execute SQL against service database",
-          tags: [tag],
-        })
-        .input(ServiceSqlInput)
-        .output(ServiceSqlResult),
-    },
-  } as const;
 }
 
 type ServiceSubRouterBuilder = {
@@ -139,6 +82,11 @@ type ServiceSubRouterBuilder = {
           input: ServiceSqlInput;
           context: ServiceContext;
         }) => Promise<ServiceSqlResult>,
+      ) => unknown;
+    };
+    debug: {
+      handler: (
+        handler: (args: { context: ServiceContext }) => Promise<ServiceDebugOutput>,
       ) => unknown;
     };
   };
@@ -185,7 +133,39 @@ export function createServiceSubRouterHandlers<TBuilder extends ServiceSubRouter
     return result;
   });
 
-  return { health, sql };
+  const debug = builder.service.debug.handler(async ({ context }) => {
+    infoFromContext(context, `${logPrefix}.debug`, {
+      service: options.manifest.name,
+      request_id: context.requestId,
+    });
+    const env: Record<string, string | null> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      env[key] = value ?? null;
+    }
+    const memoryUsage = process.memoryUsage();
+    return {
+      pid: process.pid,
+      ppid: process.ppid,
+      uptimeSec: process.uptime(),
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      hostname: hostname(),
+      cwd: process.cwd(),
+      execPath: process.execPath,
+      argv: process.argv,
+      env,
+      memoryUsage: {
+        rss: memoryUsage.rss,
+        heapTotal: memoryUsage.heapTotal,
+        heapUsed: memoryUsage.heapUsed,
+        external: memoryUsage.external,
+        arrayBuffers: memoryUsage.arrayBuffers,
+      },
+    };
+  });
+
+  return { health, sql, debug };
 }
 
 function resolveTraceExporterUrl() {
@@ -264,6 +244,22 @@ export function initializeServiceOtel(serviceName: string): void {
   process.once("SIGINT", shutdown);
 }
 
+function createSilentOTLPDrain(endpoint: string): (ctx: DrainContext) => Promise<void> {
+  let logged = false;
+  return async (ctx: DrainContext) => {
+    try {
+      await sendBatchToOTLP([ctx.event], { endpoint });
+    } catch {
+      if (!logged) {
+        logged = true;
+        console.warn(
+          `[evlog/otlp] OTLP endpoint ${endpoint} unreachable, suppressing further errors`,
+        );
+      }
+    }
+  };
+}
+
 export function initializeServiceEvlog(serviceName: string): void {
   const drainEndpoint = resolveEvlogDrainEndpoint();
 
@@ -276,7 +272,7 @@ export function initializeServiceEvlog(serviceName: string): void {
     pretty: process.env.NODE_ENV !== "production",
     ...(drainEndpoint
       ? {
-          drain: createOTLPDrain({ endpoint: drainEndpoint }),
+          drain: createSilentOTLPDrain(drainEndpoint),
         }
       : {}),
   });
@@ -623,10 +619,12 @@ export interface ServiceClientEnv {
   ITERATE_PROJECT_BASE_URL?: string;
 }
 
-export interface ServiceManifestLike<TContract extends AnyContractRouter = AnyContractRouter> {
-  slug: string;
-  port: number;
-  orpcContract: TContract;
+export function localHostForService(params: { slug: string }): string {
+  const normalized = params.slug.trim().toLowerCase();
+  const base = normalized.endsWith("-service")
+    ? normalized.slice(0, -"-service".length)
+    : normalized;
+  return `${base}.iterate.localhost`;
 }
 
 export type RpcWebSocket = LinkWebsocketClientOptions["websocket"];
@@ -634,6 +632,7 @@ export type RpcWebSocket = LinkWebsocketClientOptions["websocket"];
 export interface CreateOrpcRpcServiceClientOptions<TContract extends AnyContractRouter> {
   env: ServiceClientEnv;
   manifest: ServiceManifestLike<TContract>;
+  preferSameOrigin?: boolean;
   url?: string;
   headers?: RPCLinkOptions<any>["headers"];
   fetch?: RPCLinkOptions<any>["fetch"];
@@ -642,6 +641,7 @@ export interface CreateOrpcRpcServiceClientOptions<TContract extends AnyContract
 export interface CreateOrpcOpenApiServiceClientOptions<TContract extends AnyContractRouter> {
   env: ServiceClientEnv;
   manifest: ServiceManifestLike<TContract>;
+  preferSameOrigin?: boolean;
   url?: string;
   headers?: Record<string, string>;
   fetch?: (request: Request, init?: RequestInit) => Promise<Response>;
@@ -655,8 +655,17 @@ export interface CreateOrpcRpcWebSocketServiceClientOptions<TContract extends An
 export function resolveServiceBaseUrl(params: {
   env: ServiceClientEnv;
   manifest: ServiceManifestLike;
+  preferSameOrigin?: boolean;
 }) {
   const candidate = params.env.ITERATE_PROJECT_BASE_URL?.trim();
+
+  if (params.preferSameOrigin && candidate) {
+    const parsed = new URL(candidate);
+    parsed.pathname = "/";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  }
 
   if (!candidate) {
     return `http://127.0.0.1:${params.manifest.port}/`;
@@ -674,6 +683,7 @@ export function resolveServiceBaseUrl(params: {
 export function resolveServiceOrpcUrl(params: {
   env: ServiceClientEnv;
   manifest: ServiceManifestLike;
+  preferSameOrigin?: boolean;
 }) {
   return new URL("/orpc", resolveServiceBaseUrl(params)).toString();
 }
@@ -681,6 +691,7 @@ export function resolveServiceOrpcUrl(params: {
 export function resolveServiceOpenApiBaseUrl(params: {
   env: ServiceClientEnv;
   manifest: ServiceManifestLike;
+  preferSameOrigin?: boolean;
 }) {
   return new URL("/api", resolveServiceBaseUrl(params)).toString();
 }
@@ -688,6 +699,7 @@ export function resolveServiceOpenApiBaseUrl(params: {
 export function resolveServiceOrpcWebSocketUrl(params: {
   env: ServiceClientEnv;
   manifest: ServiceManifestLike;
+  preferSameOrigin?: boolean;
 }) {
   const url = new URL(resolveServiceBaseUrl(params));
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -728,3 +740,148 @@ export function createOrpcRpcWebSocketServiceClient<TContract extends AnyContrac
   const link = new WebSocketRPCLink({ websocket: options.websocket });
   return createORPCClient(link);
 }
+
+export async function registerServiceWithRegistry(params: {
+  manifest: ServiceManifestLike & { slug: string };
+  port: number;
+  metadata?: { openapiPath?: string; title?: string };
+  tags?: string[];
+}): Promise<void> {
+  const registryUrl = process.env.ITERATE_REGISTRY_URL?.trim();
+  if (!registryUrl) {
+    serviceLog.info({
+      event: "service.registry.register_skipped",
+      reason: "ITERATE_REGISTRY_URL not set",
+      host: localHostForService({ slug: params.manifest.slug }),
+    });
+    return;
+  }
+
+  const { createRegistryClient } = await import("@iterate-com/registry/client");
+  const registryClient = createRegistryClient({ url: registryUrl });
+  const host = localHostForService({ slug: params.manifest.slug });
+  const target = `127.0.0.1:${String(params.port)}`;
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      const result = await registryClient.routes.upsert({
+        host,
+        target,
+        ...(params.metadata ? { metadata: params.metadata } : {}),
+        ...(params.tags ? { tags: params.tags } : {}),
+      });
+
+      serviceLog.info({
+        event: "service.registry.registered",
+        host,
+        target,
+        route_count: result.routeCount,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  }
+
+  serviceLog.warn({
+    event: "service.registry.register_failed",
+    host,
+    message: lastError instanceof Error ? lastError.message : String(lastError),
+  });
+}
+
+export function createLocalServiceOrpcClient<TContract extends AnyContractRouter>(params: {
+  manifest: ServiceManifestLike<TContract>;
+  headers?: Record<string, string>;
+}): ContractRouterClient<TContract> {
+  const url = `http://${localHostForService({ slug: params.manifest.slug })}/api`;
+  const link = new OpenAPILink(params.manifest.orpcContract, {
+    url,
+    ...(params.headers ? { headers: params.headers } : {}),
+  });
+  return createORPCClient(link);
+}
+
+export interface PidnapServiceConfig {
+  processSlug: string;
+  definition: {
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+  };
+  tags: string[];
+  restartImmediately: boolean;
+  healthCheck: {
+    url: string;
+    intervalMs: number;
+  };
+}
+
+export function serviceManifestToPidnapConfig(params: {
+  manifest: ServiceManifestWithEntryPoint;
+  env?: Record<string, string>;
+}): PidnapServiceConfig;
+export function serviceManifestToPidnapConfig(params: {
+  manifests: ServiceManifestWithEntryPoint[];
+  env?: Record<string, string>;
+}): PidnapServiceConfig[];
+export function serviceManifestToPidnapConfig(params: {
+  manifest?: ServiceManifestWithEntryPoint;
+  manifests?: ServiceManifestWithEntryPoint[];
+  env?: Record<string, string>;
+}): PidnapServiceConfig | PidnapServiceConfig[] {
+  if (params.manifests) {
+    return params.manifests.map((manifest) =>
+      serviceManifestToPidnapConfig({ manifest, env: params.env }),
+    );
+  }
+  const manifest = params.manifest!;
+  const host = localHostForService({ slug: manifest.slug });
+  return {
+    processSlug: manifest.slug,
+    definition: {
+      command: "tsx",
+      args: [manifest.serverEntryPoint],
+      env: { PORT: String(manifest.port), ...params.env },
+    },
+    tags: ["on-demand"],
+    restartImmediately: true,
+    healthCheck: {
+      url: `http://${host}/api/__iterate/health`,
+      intervalMs: 2_000,
+    },
+  };
+}
+
+export { createSlug };
+export {
+  ServiceDebugOutput,
+  ServiceHealthOutput,
+  ServiceSqlInput,
+  ServiceSqlResult,
+  ServiceSqlResultHeader,
+  createServiceSubRouterContract,
+};
+export { useDeployment, useTmpDir };
+export type {
+  ServiceContext,
+  ServiceInitialContext,
+  ServiceManifestLike,
+  ServiceManifestWithEntryPoint,
+  ServiceRequestLogFields,
+  ServiceRequestLogger,
+  SqlResultSet,
+  UseDeploymentFixture,
+  UseTmpDirFixture,
+};
+
+export {
+  createServiceOpenAPIHandler,
+  createSimpleServiceRouter,
+  applyServiceMiddleware,
+  applyOpenAPIRoute,
+  type ServiceAppVariables,
+  type ServiceAppEnv,
+} from "./service-server.ts";
