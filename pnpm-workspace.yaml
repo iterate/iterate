@@ -13,6 +13,7 @@ packages:
   - packages/pidnap/docker
   - repo-templates/**/*
   - .github/ts-workflows
+  - experiments/*
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
