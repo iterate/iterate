@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod/v4";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
