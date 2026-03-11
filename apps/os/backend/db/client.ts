@@ -13,8 +13,8 @@ neonConfig.wsProxy = (host, port) =>
 
 const createPool = (databaseUrl: string) => new Pool({ connectionString: databaseUrl, max: 3 });
 
-// Explicit return type annotation: tsgo in CI mis-infers drizzle()'s overloaded
-// return as a Promise (a known tsgo bug with complex overloads), causing type
+// Explicit return type annotation needed because tsgo in CI mis-infers drizzle()'s
+// overloaded return as Promise (tsgo bug with complex overloads), causing type
 // errors at callsites that pass getDb to functions expecting () => DBLike.
 export type DB = NeonDatabase<typeof schema> & { $client: Pool };
 
