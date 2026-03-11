@@ -692,7 +692,10 @@ const defaultWaitUntil: WaitUntilFn = (promise) => void promise;
  */
 export const createConsumerClient = <EventTypes extends Record<string, {}>, DBConnection>(
   queuer: Queuer<DBConnection>,
-  { waitUntil = defaultWaitUntil, getDb }: { waitUntil?: WaitUntilFn; getDb: () => DBLike },
+  {
+    waitUntil = defaultWaitUntil,
+    getDb,
+  }: { waitUntil?: WaitUntilFn; getDb: () => Promise<DBLike> },
 ) => {
   type EventName = Extract<keyof EventTypes, string>;
   const registerConsumer = <P extends EventName>(options: {
@@ -806,7 +809,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
   const sendCTE = async <Name extends EventName, T>(
     params: CTEParams<T, Name, SQLEquivalent<EventTypes[Name]>>,
   ) => {
-    const connection = params.connection || getDb();
+    const connection = params.connection || (await getDb());
     const addResult = await queuer.enqueueCTE(connection, {
       query: params.query,
       name: params.name,
@@ -820,7 +823,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
       waitUntil(
         (async () => {
           await new Promise((resolve) => setTimeout(resolve, delayMs));
-          return queuer.processQueue(getDb() as DBConnection);
+          return queuer.processQueue((await getDb()) as DBConnection);
         })(),
       );
     }
