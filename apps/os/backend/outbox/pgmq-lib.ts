@@ -490,16 +490,9 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     `;
     const result = await exec(cteSql);
     const camelCaseOutboxFields = (row: Record<string, unknown>) => {
-      const {
-        outbox_event_id,
-        outbox_event_name,
-        outbox_event_payload,
-        outbox_event_context,
-        _rn,
-        ...rest
-      } = row;
+      const { outbox_event_id, outbox_event_name, outbox_event_payload, outbox_event_context } =
+        row;
       return {
-        ...rest,
         outboxEventId: outbox_event_id,
         outboxEventName: outbox_event_name,
         outboxEventPayload: outbox_event_payload,
