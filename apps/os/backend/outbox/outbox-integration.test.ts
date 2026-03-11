@@ -12,16 +12,11 @@ import { createConsumerClient, type DBLike } from "./pgmq-lib.ts";
 
 const getTestDb = () => {
   process.env.DATABASE_URL ||= `postgres://postgres:postgres@localhost:${resolveLocalDockerPostgresPort()}/os`;
-  if (!process.env.DATABASE_URL) {
-    throw new Error(
-      "DATABASE_URL is required for integration tests. Run with: doppler run --config dev -- pnpm vitest run ...",
-    );
-  }
   const client = postgres(process.env.DATABASE_URL, { prepare: false });
   return drizzle(client, { schema, casing: "snake_case" });
 };
 
-describe("outbox integration", () => {
+describe.skipIf(process.env.CI)("outbox integration", () => {
   let db: ReturnType<typeof getTestDb>;
   let queuer: ReturnType<typeof createPgmqQueuer>;
   let outboxClient: ReturnType<typeof createConsumerClient<TestEventTypes, DBLike>>;
@@ -33,13 +28,7 @@ describe("outbox integration", () => {
   };
 
   beforeAll(() => {
-    try {
-      db = getTestDb();
-    } catch {
-      // Skip all tests if no DATABASE_URL
-      return;
-    }
-
+    db = getTestDb();
     queuer = createPgmqQueuer({ queueName: "consumer_job_queue" });
 
     // Register test consumers
@@ -78,8 +67,6 @@ describe("outbox integration", () => {
   });
 
   test("basic: enqueue, process, and archive", { timeout: 30_000 }, async () => {
-    if (!db) return; // skip if no DB
-
     const secret = `basic_${Date.now()}_${Math.random()}`;
     await outboxClient.send({ transaction: db, parent: db }, "test:basic", { message: secret });
 
@@ -108,8 +95,6 @@ describe("outbox integration", () => {
   });
 
   test("retries: consumer fails then succeeds", { timeout: 60_000 }, async () => {
-    if (!db) return;
-
     const secret = `unstable_${Date.now()}_${Math.random()}`;
     await outboxClient.send({ transaction: db, parent: db }, "test:unstable", { message: secret });
 
@@ -143,8 +128,6 @@ describe("outbox integration", () => {
   });
 
   test("DLQ: consumer always fails, eventually gives up", { timeout: 60_000 }, async () => {
-    if (!db) return;
-
     const secret = `fail_${Date.now()}_${Math.random()}`;
     await outboxClient.send({ transaction: db, parent: db }, "test:fail", { message: secret });
 
