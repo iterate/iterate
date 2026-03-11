@@ -426,7 +426,7 @@ describe("GitHub Webhook Handler", () => {
     };
 
     it("enqueues a raw webhook event when iterate/iterate is pushed to main", async () => {
-      const { app, mockDb } = createTestApp();
+      const { app } = createTestApp();
 
       const res = await makeWebhookRequest({
         app,
