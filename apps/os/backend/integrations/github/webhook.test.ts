@@ -439,12 +439,19 @@ describe("GitHub Webhook Handler", () => {
       expect(outboxClientSendCTEMock).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "github:webhook-received",
-          payload: expect.objectContaining({
-            _delivery_id: expect.any(String),
-            ...iteratePushPayload,
-          }),
+          payload: expect.any(Function),
         }),
       );
+      // The payload is a callback — verify it produces the expected shape
+      const call = outboxClientSendCTEMock.mock.calls[0][0];
+      const payloadFn = call.payload as (row: { id: string }) => unknown;
+      expect(payloadFn({ id: "evt_test123" })).toMatchObject({
+        sourceEventId: "evt_test123",
+        deliveryId: expect.any(String),
+        event: "push",
+        action: null,
+        payload: iteratePushPayload,
+      });
     });
 
     it("still enqueues raw webhook events for non-main branch pushes", async () => {

@@ -413,9 +413,12 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     db,
     params,
   ): Promise<Awaited<(typeof params)["query"]> & { delays: TimePeriod[] }> => {
+    const causation = outboxALS.getStore();
     const { query } = params;
 
-    const { name, payload: payloadOrFn, context = {} } = params;
+    const { name, payload: payloadOrFn } = params;
+    let context = params.context || {};
+    if (causation) context = { ...context, causedBy: causation };
 
     let payload = payloadOrFn;
     if (typeof payloadOrFn === "function") {
@@ -803,8 +806,8 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
   const sendCTE = async <Name extends EventName, T>(
     params: CTEParams<T, Name, SQLEquivalent<EventTypes[Name]>>,
   ) => {
-    const db = params.connection || getDb();
-    const addResult = await queuer.enqueueCTE(db, {
+    const connection = params.connection || getDb();
+    const addResult = await queuer.enqueueCTE(connection, {
       query: params.query,
       name: params.name,
       payload: params.payload as never,
@@ -817,7 +820,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
       waitUntil(
         (async () => {
           await new Promise((resolve) => setTimeout(resolve, delayMs));
-          return queuer.processQueue(db as DBConnection);
+          return queuer.processQueue(getDb() as DBConnection);
         })(),
       );
     }
