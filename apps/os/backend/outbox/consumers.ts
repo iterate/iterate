@@ -53,7 +53,7 @@ export const registerConsumers = () => {
       const { machineId, payload, correlation } = params.payload;
       if (!machineId) throw new Error(`Machine id expected`);
 
-      const db = getDb();
+      const db = await getDb();
       const machine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, machineId),
       });
