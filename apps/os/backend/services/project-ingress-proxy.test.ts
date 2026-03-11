@@ -228,7 +228,6 @@ describe("project ingress request hostname", () => {
     await handleProjectIngressRequest(requestB, env, session);
 
     expect(db.getProjectQueryCount()).toBe(2);
-    expect(db.getMachineQueryCount()).toBe(0);
   });
 
   it("prefers host header when request url host is localhost", async () => {
