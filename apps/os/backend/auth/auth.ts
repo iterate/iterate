@@ -244,6 +244,8 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
       },
     },
     session: {
+      strategy: "compact",
+      refreshCache: true,
       cookieCache: {
         enabled: true,
         maxAge: 10 * 60, // 10 minutes

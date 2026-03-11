@@ -14,10 +14,12 @@ import type { AuthSession } from "../auth/auth.ts";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
+import { createSimpleKv } from "../utils/simple-kv.ts";
 
 const SANDBOX_INGRESS_PORT = 8080;
 const DEFAULT_TARGET_PORT = 3000;
 const TARGET_HOST_HEADER = "x-iterate-proxy-target-host";
+const RESOLVE_MACHINE_FOR_INGRESS_CACHE_TTL_MS = 10_000;
 export const PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH =
   "/api/project-ingress-proxy-auth/bridge-start";
 export const PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH = "/_/exchange-token";
@@ -213,7 +215,58 @@ type ResolveMachineForIngressResult = {
   defaultPort?: number | null;
 };
 
+const resolveMachineForIngressCache = createSimpleKv<ResolveMachineForIngressResult>(
+  "project-ingress-proxy:resolve-machine-for-ingress",
+);
+const resolveMachineForIngressInflight = new Map<string, Promise<ResolveMachineForIngressResult>>();
+
+function getResolveMachineForIngressCacheKey(params: {
+  target: IngressTarget;
+  userId: string;
+  isSystemAdmin: boolean;
+}): string {
+  const targetKey =
+    params.target.kind === "project"
+      ? `project:${params.target.projectSlug}:${params.target.targetPort}:${params.target.isPortExplicit}`
+      : `machine:${params.target.machineId}:${params.target.targetPort}:${params.target.isPortExplicit}`;
+  return `${params.userId}:${params.isSystemAdmin}:${targetKey}`;
+}
+
+function shouldCacheResolveMachineForIngressResult(
+  result: ResolveMachineForIngressResult,
+): boolean {
+  return result.machine?.state === "active" || result.machine?.state === "detached";
+}
+
 async function resolveMachineForIngress(
+  target: IngressTarget,
+  userId: string,
+  isSystemAdmin: boolean,
+): Promise<ResolveMachineForIngressResult> {
+  const cacheKey = getResolveMachineForIngressCacheKey({ target, userId, isSystemAdmin });
+  const cached = resolveMachineForIngressCache.get(cacheKey);
+  if (cached) return cached;
+
+  const inflight = resolveMachineForIngressInflight.get(cacheKey);
+  if (inflight) return inflight;
+
+  const resolutionPromise = resolveMachineForIngressUncached(target, userId, isSystemAdmin);
+  resolveMachineForIngressInflight.set(cacheKey, resolutionPromise);
+
+  try {
+    const result = await resolutionPromise;
+    if (shouldCacheResolveMachineForIngressResult(result)) {
+      resolveMachineForIngressCache.set(cacheKey, result, RESOLVE_MACHINE_FOR_INGRESS_CACHE_TTL_MS);
+    } else {
+      resolveMachineForIngressCache.delete(cacheKey);
+    }
+    return result;
+  } finally {
+    resolveMachineForIngressInflight.delete(cacheKey);
+  }
+}
+
+async function resolveMachineForIngressUncached(
   target: IngressTarget,
   userId: string,
   isSystemAdmin: boolean,
