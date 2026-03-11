@@ -598,13 +598,13 @@ slackApp.post("/webhook", async (c) => {
               })
               .returning({ id: schema.event.id }),
             name: "slack:webhook-received",
-            payload: {
-              sourceEventId: sql<string>`query.id`,
+            payload: (result) => ({
+              sourceEventId: result.id,
               projectId,
               machineId: targetMachine?.id ?? null,
               payload,
               correlation,
-            },
+            }),
           });
 
           if (!inserted) {
