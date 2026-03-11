@@ -474,7 +474,9 @@ export const registerConsumers = () => {
             id: schema.machine.id,
             type: schema.machine.type,
             externalId: schema.machine.externalId,
-            metadata: sql<Record<string, unknown>>`coalesce(${schema.machine.metadata}, '{}'::jsonb)`,
+            metadata: sql<
+              Record<string, unknown>
+            >`coalesce(${schema.machine.metadata}, '{}'::jsonb)`,
           })
           .from(schema.machine)
           .where(inArray(schema.machine.id, detachedMachineIds)),
