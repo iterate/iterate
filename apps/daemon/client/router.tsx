@@ -1,16 +1,23 @@
 import type { ReactNode } from "react";
 import { createRouter } from "@tanstack/react-router";
 import { QueryClient } from "@tanstack/react-query";
+import { createTRPCOptionsProxy, type TRPCOptionsProxy } from "@trpc/tanstack-react-query";
+import type { TRPCRouter } from "@server/trpc/router.ts";
 import { routeTree } from "./routeTree.gen.ts";
-import { orpc } from "./integrations/tanstack-query/orpc-client.tsx";
+import { trpcClient } from "./integrations/tanstack-query/trpc-client.tsx";
 import { Provider } from "./integrations/tanstack-query/root-provider.tsx";
 
 export interface RouterContext {
   queryClient: QueryClient;
-  orpc: typeof orpc;
+  trpc: TRPCOptionsProxy<TRPCRouter>;
 }
 
 const queryClient = new QueryClient();
+
+const trpc = createTRPCOptionsProxy({
+  client: trpcClient,
+  queryClient,
+});
 
 // Detect basepath from <base href> tag (injected by proxy) or default to "/"
 const getBasepath = (): string => {
@@ -30,7 +37,7 @@ export const router = createRouter({
   routeTree,
   context: {
     queryClient,
-    orpc,
+    trpc,
   },
   basepath: getBasepath(),
   defaultPreload: "intent",

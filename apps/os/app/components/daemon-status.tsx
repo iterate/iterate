@@ -1,26 +1,83 @@
-import { Spinner } from "./ui/spinner.tsx";
-import { getMachineStatus, type ConsumerInfo } from "./machine-status.ts";
+import { Circle, CheckCircle2, XCircle, RefreshCw, SearchCheck } from "lucide-react";
+
+type DaemonStatusValue = "ready" | "error" | "restarting" | "stopping" | "verifying" | undefined;
 
 interface DaemonStatusProps {
   state: "starting" | "active" | "detached" | "archived";
-  lastEvent?: {
-    name: string;
-    payload: Record<string, unknown>;
-    createdAt: Date;
-  } | null;
-  consumers?: ConsumerInfo[];
+  daemonStatus?: DaemonStatusValue;
+  daemonReadyAt?: string;
+  daemonStatusMessage?: string;
 }
 
-export function DaemonStatus({ state, lastEvent, consumers = [] }: DaemonStatusProps) {
-  const { label, loading, errored } = getMachineStatus(state, lastEvent, consumers);
+export function DaemonStatus({
+  state,
+  daemonStatus,
+  daemonReadyAt,
+  daemonStatusMessage,
+}: DaemonStatusProps) {
+  if (state === "archived") {
+    return <span className="text-muted-foreground text-sm">-</span>;
+  }
+
+  if (state === "detached") {
+    return <span className="text-muted-foreground text-sm">Detached</span>;
+  }
+
+  if (!daemonStatus) {
+    return (
+      <span className="flex items-center gap-1.5 text-muted-foreground text-sm">
+        <Circle className="h-3 w-3 animate-pulse" />
+        Starting...
+      </span>
+    );
+  }
+
+  if (daemonStatus === "error") {
+    return (
+      <span
+        className="flex items-center gap-1.5 text-destructive text-sm"
+        title={daemonStatusMessage}
+      >
+        <XCircle className="h-3 w-3" />
+        Error
+      </span>
+    );
+  }
+
+  if (daemonStatus === "restarting") {
+    return (
+      <span className="flex items-center gap-1.5 text-orange-600 text-sm">
+        <RefreshCw className="h-3 w-3 animate-spin" />
+        Restarting...
+      </span>
+    );
+  }
+
+  if (daemonStatus === "stopping") {
+    return (
+      <span className="flex items-center gap-1.5 text-orange-600 text-sm">
+        <Circle className="h-3 w-3 animate-pulse" />
+        Stopping...
+      </span>
+    );
+  }
+
+  if (daemonStatus === "verifying") {
+    return (
+      <span className="flex items-center gap-1.5 text-blue-600 text-sm" title={daemonStatusMessage}>
+        <SearchCheck className="h-3 w-3 animate-pulse" />
+        Verifying...
+      </span>
+    );
+  }
 
   return (
     <span
-      className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
-      {...(errored && { "data-type": "error" })}
+      className="flex items-center gap-1.5 text-green-600 text-sm"
+      title={daemonReadyAt ? `Ready since ${new Date(daemonReadyAt).toLocaleString()}` : undefined}
     >
-      {loading && <Spinner className="size-3" />}
-      {label}
+      <CheckCircle2 className="h-3 w-3" />
+      Ready
     </span>
   );
 }

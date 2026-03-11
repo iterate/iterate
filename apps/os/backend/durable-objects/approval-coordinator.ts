@@ -143,7 +143,10 @@ export class ApprovalCoordinator extends DurableObject<DurableObjectEnv> {
           ),
         );
     } catch (error) {
-      logger.error("Failed to update timeout status", error, { approvalId });
+      logger.error("Failed to update timeout status", {
+        approvalId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }

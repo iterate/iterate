@@ -8,279 +8,255 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from './routes/__root.tsx'
-import { Route as LogoutRouteImport } from './routes/logout.tsx'
-import { Route as LoginRouteImport } from './routes/login.tsx'
-import { Route as DeviceRouteImport } from './routes/device.tsx'
-import { Route as AuthRouteImport } from './routes/_auth.tsx'
-import { Route as AuthIndexRouteImport } from './routes/_auth/index.tsx'
-import { Route as AuthConnectionConflictRouteImport } from './routes/_auth/connection-conflict.tsx'
-import { Route as AuthAdminRouteImport } from './routes/_auth/admin.tsx'
-import { Route as AuthAdminIndexRouteImport } from './routes/_auth/admin/index.tsx'
-import { Route as AuthUserSettingsRouteImport } from './routes/_auth/user/settings.tsx'
-import { Route as AuthProjProjectSlugRouteImport } from './routes/_auth/proj/$projectSlug.tsx'
-import { Route as AuthOrgsOrganizationSlugRouteImport } from './routes/_auth/orgs/$organizationSlug.tsx'
-import { Route as AuthAdminSessionInfoRouteImport } from './routes/_auth/admin/session-info.tsx'
-import { Route as AuthAdminOutboxRouteImport } from './routes/_auth/admin/outbox.tsx'
-import { Route as AuthAdminApiToolsRouteImport } from './routes/_auth/admin/api-tools.tsx'
-import { Route as AuthProjProjectSlugIndexRouteImport } from './routes/_auth/proj/$projectSlug/index.tsx'
-import { Route as AuthOrgsOrganizationSlugIndexRouteImport } from './routes/_auth/orgs/$organizationSlug/index.tsx'
-import { Route as AuthProjProjectSlugSettingsRouteImport } from './routes/_auth/proj/$projectSlug/settings.tsx'
-import { Route as AuthProjProjectSlugEnvVarsRouteImport } from './routes/_auth/proj/$projectSlug/env-vars.tsx'
-import { Route as AuthProjProjectSlugConnectorsRouteImport } from './routes/_auth/proj/$projectSlug/connectors.tsx'
-import { Route as AuthProjProjectSlugApprovalsRouteImport } from './routes/_auth/proj/$projectSlug/approvals.tsx'
-import { Route as AuthProjProjectSlugAccessTokensRouteImport } from './routes/_auth/proj/$projectSlug/access-tokens.tsx'
-import { Route as AuthOrgsOrganizationSlugTeamRouteImport } from './routes/_auth/orgs/$organizationSlug/team.tsx'
-import { Route as AuthOrgsOrganizationSlugSettingsRouteImport } from './routes/_auth/orgs/$organizationSlug/settings.tsx'
-import { Route as AuthOrgsOrganizationSlugNewProjectRouteImport } from './routes/_auth/orgs/$organizationSlug/new-project.tsx'
-import { Route as AuthOrgsOrganizationSlugBillingRouteImport } from './routes/_auth/orgs/$organizationSlug/billing.tsx'
-import { Route as AuthProjProjectSlugMachinesIndexRouteImport } from './routes/_auth/proj/$projectSlug/machines/index.tsx'
-import { Route as AuthProjProjectSlugMachinesMachineIdRouteImport } from './routes/_auth/proj/$projectSlug/machines/$machineId.tsx'
+import { Route as rootRouteImport } from './routes/root.tsx'
+import { Route as logoutRouteImport } from './routes/logout.tsx'
+import { Route as loginRouteImport } from './routes/login.tsx'
+import { Route as authRequiredDotlayoutRouteImport } from './routes/auth-required.layout.tsx'
+import { Route as slackConflictRouteImport } from './routes/slack-conflict.tsx'
+import { Route as adminLayoutRouteImport } from './routes/admin/layout.tsx'
+import { Route as indexRouteImport } from './routes/index.tsx'
+import { Route as adminIndexRouteImport } from './routes/admin/index.tsx'
+import { Route as userSettingsRouteImport } from './routes/user/settings.tsx'
+import { Route as projLayoutRouteImport } from './routes/proj/layout.tsx'
+import { Route as orgLayoutRouteImport } from './routes/org/layout.tsx'
+import { Route as adminTrpcToolsRouteImport } from './routes/admin/trpc-tools.tsx'
+import { Route as adminSessionInfoRouteImport } from './routes/admin/session-info.tsx'
+import { Route as adminOutboxRouteImport } from './routes/admin/outbox.tsx'
+import { Route as projIndexRouteImport } from './routes/proj/index.tsx'
+import { Route as orgIndexRouteImport } from './routes/org/index.tsx'
+import { Route as projSettingsRouteImport } from './routes/proj/settings.tsx'
+import { Route as projMachinesRouteImport } from './routes/proj/machines.tsx'
+import { Route as projEnvVarsRouteImport } from './routes/proj/env-vars.tsx'
+import { Route as projConnectorsRouteImport } from './routes/proj/connectors.tsx'
+import { Route as projApprovalsRouteImport } from './routes/proj/approvals.tsx'
+import { Route as projAccessTokensRouteImport } from './routes/proj/access-tokens.tsx'
+import { Route as orgTeamRouteImport } from './routes/org/team.tsx'
+import { Route as orgSettingsRouteImport } from './routes/org/settings.tsx'
+import { Route as orgNewProjectRouteImport } from './routes/org/new-project.tsx'
+import { Route as orgBillingRouteImport } from './routes/org/billing.tsx'
+import { Route as projMachineDetailRouteImport } from './routes/proj/machine-detail.tsx'
 
-const LogoutRoute = LogoutRouteImport.update({
+const logoutRoute = logoutRouteImport.update({
   id: '/logout',
   path: '/logout',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LoginRoute = LoginRouteImport.update({
+const loginRoute = loginRouteImport.update({
   id: '/login',
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const DeviceRoute = DeviceRouteImport.update({
-  id: '/device',
-  path: '/device',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthRoute = AuthRouteImport.update({
+const authRequiredDotlayoutRoute = authRequiredDotlayoutRouteImport.update({
   id: '/_auth',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthIndexRoute = AuthIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AuthRoute,
+const slackConflictRoute = slackConflictRouteImport.update({
+  id: '/slack-conflict',
+  path: '/slack-conflict',
+  getParentRoute: () => authRequiredDotlayoutRoute,
 } as any)
-const AuthConnectionConflictRoute = AuthConnectionConflictRouteImport.update({
-  id: '/connection-conflict',
-  path: '/connection-conflict',
-  getParentRoute: () => AuthRoute,
-} as any)
-const AuthAdminRoute = AuthAdminRouteImport.update({
+const adminLayoutRoute = adminLayoutRouteImport.update({
   id: '/admin',
   path: '/admin',
-  getParentRoute: () => AuthRoute,
+  getParentRoute: () => authRequiredDotlayoutRoute,
 } as any)
-const AuthAdminIndexRoute = AuthAdminIndexRouteImport.update({
+const indexRoute = indexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => AuthAdminRoute,
+  getParentRoute: () => authRequiredDotlayoutRoute,
 } as any)
-const AuthUserSettingsRoute = AuthUserSettingsRouteImport.update({
+const adminIndexRoute = adminIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => adminLayoutRoute,
+} as any)
+const userSettingsRoute = userSettingsRouteImport.update({
   id: '/user/settings',
   path: '/user/settings',
-  getParentRoute: () => AuthRoute,
+  getParentRoute: () => authRequiredDotlayoutRoute,
 } as any)
-const AuthProjProjectSlugRoute = AuthProjProjectSlugRouteImport.update({
+const projLayoutRoute = projLayoutRouteImport.update({
   id: '/proj/$projectSlug',
   path: '/proj/$projectSlug',
-  getParentRoute: () => AuthRoute,
+  getParentRoute: () => authRequiredDotlayoutRoute,
 } as any)
-const AuthOrgsOrganizationSlugRoute =
-  AuthOrgsOrganizationSlugRouteImport.update({
-    id: '/orgs/$organizationSlug',
-    path: '/orgs/$organizationSlug',
-    getParentRoute: () => AuthRoute,
-  } as any)
-const AuthAdminSessionInfoRoute = AuthAdminSessionInfoRouteImport.update({
+const orgLayoutRoute = orgLayoutRouteImport.update({
+  id: '/orgs/$organizationSlug',
+  path: '/orgs/$organizationSlug',
+  getParentRoute: () => authRequiredDotlayoutRoute,
+} as any)
+const adminTrpcToolsRoute = adminTrpcToolsRouteImport.update({
+  id: '/trpc-tools',
+  path: '/trpc-tools',
+  getParentRoute: () => adminLayoutRoute,
+} as any)
+const adminSessionInfoRoute = adminSessionInfoRouteImport.update({
   id: '/session-info',
   path: '/session-info',
-  getParentRoute: () => AuthAdminRoute,
+  getParentRoute: () => adminLayoutRoute,
 } as any)
-const AuthAdminOutboxRoute = AuthAdminOutboxRouteImport.update({
+const adminOutboxRoute = adminOutboxRouteImport.update({
   id: '/outbox',
   path: '/outbox',
-  getParentRoute: () => AuthAdminRoute,
+  getParentRoute: () => adminLayoutRoute,
 } as any)
-const AuthAdminApiToolsRoute = AuthAdminApiToolsRouteImport.update({
-  id: '/api-tools',
-  path: '/api-tools',
-  getParentRoute: () => AuthAdminRoute,
+const projIndexRoute = projIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => projLayoutRoute,
 } as any)
-const AuthProjProjectSlugIndexRoute =
-  AuthProjProjectSlugIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => AuthProjProjectSlugRoute,
-  } as any)
-const AuthOrgsOrganizationSlugIndexRoute =
-  AuthOrgsOrganizationSlugIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => AuthOrgsOrganizationSlugRoute,
-  } as any)
-const AuthProjProjectSlugSettingsRoute =
-  AuthProjProjectSlugSettingsRouteImport.update({
-    id: '/settings',
-    path: '/settings',
-    getParentRoute: () => AuthProjProjectSlugRoute,
-  } as any)
-const AuthProjProjectSlugEnvVarsRoute =
-  AuthProjProjectSlugEnvVarsRouteImport.update({
-    id: '/env-vars',
-    path: '/env-vars',
-    getParentRoute: () => AuthProjProjectSlugRoute,
-  } as any)
-const AuthProjProjectSlugConnectorsRoute =
-  AuthProjProjectSlugConnectorsRouteImport.update({
-    id: '/connectors',
-    path: '/connectors',
-    getParentRoute: () => AuthProjProjectSlugRoute,
-  } as any)
-const AuthProjProjectSlugApprovalsRoute =
-  AuthProjProjectSlugApprovalsRouteImport.update({
-    id: '/approvals',
-    path: '/approvals',
-    getParentRoute: () => AuthProjProjectSlugRoute,
-  } as any)
-const AuthProjProjectSlugAccessTokensRoute =
-  AuthProjProjectSlugAccessTokensRouteImport.update({
-    id: '/access-tokens',
-    path: '/access-tokens',
-    getParentRoute: () => AuthProjProjectSlugRoute,
-  } as any)
-const AuthOrgsOrganizationSlugTeamRoute =
-  AuthOrgsOrganizationSlugTeamRouteImport.update({
-    id: '/team',
-    path: '/team',
-    getParentRoute: () => AuthOrgsOrganizationSlugRoute,
-  } as any)
-const AuthOrgsOrganizationSlugSettingsRoute =
-  AuthOrgsOrganizationSlugSettingsRouteImport.update({
-    id: '/settings',
-    path: '/settings',
-    getParentRoute: () => AuthOrgsOrganizationSlugRoute,
-  } as any)
-const AuthOrgsOrganizationSlugNewProjectRoute =
-  AuthOrgsOrganizationSlugNewProjectRouteImport.update({
-    id: '/new-project',
-    path: '/new-project',
-    getParentRoute: () => AuthOrgsOrganizationSlugRoute,
-  } as any)
-const AuthOrgsOrganizationSlugBillingRoute =
-  AuthOrgsOrganizationSlugBillingRouteImport.update({
-    id: '/billing',
-    path: '/billing',
-    getParentRoute: () => AuthOrgsOrganizationSlugRoute,
-  } as any)
-const AuthProjProjectSlugMachinesIndexRoute =
-  AuthProjProjectSlugMachinesIndexRouteImport.update({
-    id: '/machines/',
-    path: '/machines/',
-    getParentRoute: () => AuthProjProjectSlugRoute,
-  } as any)
-const AuthProjProjectSlugMachinesMachineIdRoute =
-  AuthProjProjectSlugMachinesMachineIdRouteImport.update({
-    id: '/machines/$machineId',
-    path: '/machines/$machineId',
-    getParentRoute: () => AuthProjProjectSlugRoute,
-  } as any)
+const orgIndexRoute = orgIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => orgLayoutRoute,
+} as any)
+const projSettingsRoute = projSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => projLayoutRoute,
+} as any)
+const projMachinesRoute = projMachinesRouteImport.update({
+  id: '/machines',
+  path: '/machines',
+  getParentRoute: () => projLayoutRoute,
+} as any)
+const projEnvVarsRoute = projEnvVarsRouteImport.update({
+  id: '/env-vars',
+  path: '/env-vars',
+  getParentRoute: () => projLayoutRoute,
+} as any)
+const projConnectorsRoute = projConnectorsRouteImport.update({
+  id: '/connectors',
+  path: '/connectors',
+  getParentRoute: () => projLayoutRoute,
+} as any)
+const projApprovalsRoute = projApprovalsRouteImport.update({
+  id: '/approvals',
+  path: '/approvals',
+  getParentRoute: () => projLayoutRoute,
+} as any)
+const projAccessTokensRoute = projAccessTokensRouteImport.update({
+  id: '/access-tokens',
+  path: '/access-tokens',
+  getParentRoute: () => projLayoutRoute,
+} as any)
+const orgTeamRoute = orgTeamRouteImport.update({
+  id: '/team',
+  path: '/team',
+  getParentRoute: () => orgLayoutRoute,
+} as any)
+const orgSettingsRoute = orgSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => orgLayoutRoute,
+} as any)
+const orgNewProjectRoute = orgNewProjectRouteImport.update({
+  id: '/new-project',
+  path: '/new-project',
+  getParentRoute: () => orgLayoutRoute,
+} as any)
+const orgBillingRoute = orgBillingRouteImport.update({
+  id: '/billing',
+  path: '/billing',
+  getParentRoute: () => orgLayoutRoute,
+} as any)
+const projMachineDetailRoute = projMachineDetailRouteImport.update({
+  id: '/$machineId',
+  path: '/$machineId',
+  getParentRoute: () => projMachinesRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
-  '/device': typeof DeviceRoute
-  '/login': typeof LoginRoute
-  '/logout': typeof LogoutRoute
-  '/admin': typeof AuthAdminRouteWithChildren
-  '/connection-conflict': typeof AuthConnectionConflictRoute
-  '/': typeof AuthIndexRoute
-  '/admin/api-tools': typeof AuthAdminApiToolsRoute
-  '/admin/outbox': typeof AuthAdminOutboxRoute
-  '/admin/session-info': typeof AuthAdminSessionInfoRoute
-  '/orgs/$organizationSlug': typeof AuthOrgsOrganizationSlugRouteWithChildren
-  '/proj/$projectSlug': typeof AuthProjProjectSlugRouteWithChildren
-  '/user/settings': typeof AuthUserSettingsRoute
-  '/admin/': typeof AuthAdminIndexRoute
-  '/orgs/$organizationSlug/billing': typeof AuthOrgsOrganizationSlugBillingRoute
-  '/orgs/$organizationSlug/new-project': typeof AuthOrgsOrganizationSlugNewProjectRoute
-  '/orgs/$organizationSlug/settings': typeof AuthOrgsOrganizationSlugSettingsRoute
-  '/orgs/$organizationSlug/team': typeof AuthOrgsOrganizationSlugTeamRoute
-  '/proj/$projectSlug/access-tokens': typeof AuthProjProjectSlugAccessTokensRoute
-  '/proj/$projectSlug/approvals': typeof AuthProjProjectSlugApprovalsRoute
-  '/proj/$projectSlug/connectors': typeof AuthProjProjectSlugConnectorsRoute
-  '/proj/$projectSlug/env-vars': typeof AuthProjProjectSlugEnvVarsRoute
-  '/proj/$projectSlug/settings': typeof AuthProjProjectSlugSettingsRoute
-  '/orgs/$organizationSlug/': typeof AuthOrgsOrganizationSlugIndexRoute
-  '/proj/$projectSlug/': typeof AuthProjProjectSlugIndexRoute
-  '/proj/$projectSlug/machines/$machineId': typeof AuthProjProjectSlugMachinesMachineIdRoute
-  '/proj/$projectSlug/machines': typeof AuthProjProjectSlugMachinesIndexRoute
+  '/login': typeof loginRoute
+  '/logout': typeof logoutRoute
+  '/': typeof indexRoute
+  '/admin': typeof adminLayoutRouteWithChildren
+  '/slack-conflict': typeof slackConflictRoute
+  '/admin/outbox': typeof adminOutboxRoute
+  '/admin/session-info': typeof adminSessionInfoRoute
+  '/admin/trpc-tools': typeof adminTrpcToolsRoute
+  '/orgs/$organizationSlug': typeof orgLayoutRouteWithChildren
+  '/proj/$projectSlug': typeof projLayoutRouteWithChildren
+  '/user/settings': typeof userSettingsRoute
+  '/admin/': typeof adminIndexRoute
+  '/orgs/$organizationSlug/billing': typeof orgBillingRoute
+  '/orgs/$organizationSlug/new-project': typeof orgNewProjectRoute
+  '/orgs/$organizationSlug/settings': typeof orgSettingsRoute
+  '/orgs/$organizationSlug/team': typeof orgTeamRoute
+  '/proj/$projectSlug/access-tokens': typeof projAccessTokensRoute
+  '/proj/$projectSlug/approvals': typeof projApprovalsRoute
+  '/proj/$projectSlug/connectors': typeof projConnectorsRoute
+  '/proj/$projectSlug/env-vars': typeof projEnvVarsRoute
+  '/proj/$projectSlug/machines': typeof projMachinesRouteWithChildren
+  '/proj/$projectSlug/settings': typeof projSettingsRoute
+  '/orgs/$organizationSlug/': typeof orgIndexRoute
+  '/proj/$projectSlug/': typeof projIndexRoute
+  '/proj/$projectSlug/machines/$machineId': typeof projMachineDetailRoute
 }
 export interface FileRoutesByTo {
-  '/device': typeof DeviceRoute
-  '/login': typeof LoginRoute
-  '/logout': typeof LogoutRoute
-  '/connection-conflict': typeof AuthConnectionConflictRoute
-  '/': typeof AuthIndexRoute
-  '/admin/api-tools': typeof AuthAdminApiToolsRoute
-  '/admin/outbox': typeof AuthAdminOutboxRoute
-  '/admin/session-info': typeof AuthAdminSessionInfoRoute
-  '/user/settings': typeof AuthUserSettingsRoute
-  '/admin': typeof AuthAdminIndexRoute
-  '/orgs/$organizationSlug/billing': typeof AuthOrgsOrganizationSlugBillingRoute
-  '/orgs/$organizationSlug/new-project': typeof AuthOrgsOrganizationSlugNewProjectRoute
-  '/orgs/$organizationSlug/settings': typeof AuthOrgsOrganizationSlugSettingsRoute
-  '/orgs/$organizationSlug/team': typeof AuthOrgsOrganizationSlugTeamRoute
-  '/proj/$projectSlug/access-tokens': typeof AuthProjProjectSlugAccessTokensRoute
-  '/proj/$projectSlug/approvals': typeof AuthProjProjectSlugApprovalsRoute
-  '/proj/$projectSlug/connectors': typeof AuthProjProjectSlugConnectorsRoute
-  '/proj/$projectSlug/env-vars': typeof AuthProjProjectSlugEnvVarsRoute
-  '/proj/$projectSlug/settings': typeof AuthProjProjectSlugSettingsRoute
-  '/orgs/$organizationSlug': typeof AuthOrgsOrganizationSlugIndexRoute
-  '/proj/$projectSlug': typeof AuthProjProjectSlugIndexRoute
-  '/proj/$projectSlug/machines/$machineId': typeof AuthProjProjectSlugMachinesMachineIdRoute
-  '/proj/$projectSlug/machines': typeof AuthProjProjectSlugMachinesIndexRoute
+  '/login': typeof loginRoute
+  '/logout': typeof logoutRoute
+  '/': typeof indexRoute
+  '/slack-conflict': typeof slackConflictRoute
+  '/admin/outbox': typeof adminOutboxRoute
+  '/admin/session-info': typeof adminSessionInfoRoute
+  '/admin/trpc-tools': typeof adminTrpcToolsRoute
+  '/user/settings': typeof userSettingsRoute
+  '/admin': typeof adminIndexRoute
+  '/orgs/$organizationSlug/billing': typeof orgBillingRoute
+  '/orgs/$organizationSlug/new-project': typeof orgNewProjectRoute
+  '/orgs/$organizationSlug/settings': typeof orgSettingsRoute
+  '/orgs/$organizationSlug/team': typeof orgTeamRoute
+  '/proj/$projectSlug/access-tokens': typeof projAccessTokensRoute
+  '/proj/$projectSlug/approvals': typeof projApprovalsRoute
+  '/proj/$projectSlug/connectors': typeof projConnectorsRoute
+  '/proj/$projectSlug/env-vars': typeof projEnvVarsRoute
+  '/proj/$projectSlug/machines': typeof projMachinesRouteWithChildren
+  '/proj/$projectSlug/settings': typeof projSettingsRoute
+  '/orgs/$organizationSlug': typeof orgIndexRoute
+  '/proj/$projectSlug': typeof projIndexRoute
+  '/proj/$projectSlug/machines/$machineId': typeof projMachineDetailRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/_auth': typeof AuthRouteWithChildren
-  '/device': typeof DeviceRoute
-  '/login': typeof LoginRoute
-  '/logout': typeof LogoutRoute
-  '/_auth/admin': typeof AuthAdminRouteWithChildren
-  '/_auth/connection-conflict': typeof AuthConnectionConflictRoute
-  '/_auth/': typeof AuthIndexRoute
-  '/_auth/admin/api-tools': typeof AuthAdminApiToolsRoute
-  '/_auth/admin/outbox': typeof AuthAdminOutboxRoute
-  '/_auth/admin/session-info': typeof AuthAdminSessionInfoRoute
-  '/_auth/orgs/$organizationSlug': typeof AuthOrgsOrganizationSlugRouteWithChildren
-  '/_auth/proj/$projectSlug': typeof AuthProjProjectSlugRouteWithChildren
-  '/_auth/user/settings': typeof AuthUserSettingsRoute
-  '/_auth/admin/': typeof AuthAdminIndexRoute
-  '/_auth/orgs/$organizationSlug/billing': typeof AuthOrgsOrganizationSlugBillingRoute
-  '/_auth/orgs/$organizationSlug/new-project': typeof AuthOrgsOrganizationSlugNewProjectRoute
-  '/_auth/orgs/$organizationSlug/settings': typeof AuthOrgsOrganizationSlugSettingsRoute
-  '/_auth/orgs/$organizationSlug/team': typeof AuthOrgsOrganizationSlugTeamRoute
-  '/_auth/proj/$projectSlug/access-tokens': typeof AuthProjProjectSlugAccessTokensRoute
-  '/_auth/proj/$projectSlug/approvals': typeof AuthProjProjectSlugApprovalsRoute
-  '/_auth/proj/$projectSlug/connectors': typeof AuthProjProjectSlugConnectorsRoute
-  '/_auth/proj/$projectSlug/env-vars': typeof AuthProjProjectSlugEnvVarsRoute
-  '/_auth/proj/$projectSlug/settings': typeof AuthProjProjectSlugSettingsRoute
-  '/_auth/orgs/$organizationSlug/': typeof AuthOrgsOrganizationSlugIndexRoute
-  '/_auth/proj/$projectSlug/': typeof AuthProjProjectSlugIndexRoute
-  '/_auth/proj/$projectSlug/machines/$machineId': typeof AuthProjProjectSlugMachinesMachineIdRoute
-  '/_auth/proj/$projectSlug/machines/': typeof AuthProjProjectSlugMachinesIndexRoute
+  '/_auth': typeof authRequiredDotlayoutRouteWithChildren
+  '/login': typeof loginRoute
+  '/logout': typeof logoutRoute
+  '/_auth/': typeof indexRoute
+  '/_auth/admin': typeof adminLayoutRouteWithChildren
+  '/_auth/slack-conflict': typeof slackConflictRoute
+  '/_auth/admin/outbox': typeof adminOutboxRoute
+  '/_auth/admin/session-info': typeof adminSessionInfoRoute
+  '/_auth/admin/trpc-tools': typeof adminTrpcToolsRoute
+  '/_auth/orgs/$organizationSlug': typeof orgLayoutRouteWithChildren
+  '/_auth/proj/$projectSlug': typeof projLayoutRouteWithChildren
+  '/_auth/user/settings': typeof userSettingsRoute
+  '/_auth/admin/': typeof adminIndexRoute
+  '/_auth/orgs/$organizationSlug/billing': typeof orgBillingRoute
+  '/_auth/orgs/$organizationSlug/new-project': typeof orgNewProjectRoute
+  '/_auth/orgs/$organizationSlug/settings': typeof orgSettingsRoute
+  '/_auth/orgs/$organizationSlug/team': typeof orgTeamRoute
+  '/_auth/proj/$projectSlug/access-tokens': typeof projAccessTokensRoute
+  '/_auth/proj/$projectSlug/approvals': typeof projApprovalsRoute
+  '/_auth/proj/$projectSlug/connectors': typeof projConnectorsRoute
+  '/_auth/proj/$projectSlug/env-vars': typeof projEnvVarsRoute
+  '/_auth/proj/$projectSlug/machines': typeof projMachinesRouteWithChildren
+  '/_auth/proj/$projectSlug/settings': typeof projSettingsRoute
+  '/_auth/orgs/$organizationSlug/': typeof orgIndexRoute
+  '/_auth/proj/$projectSlug/': typeof projIndexRoute
+  '/_auth/proj/$projectSlug/machines/$machineId': typeof projMachineDetailRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    | '/device'
     | '/login'
     | '/logout'
-    | '/admin'
-    | '/connection-conflict'
     | '/'
-    | '/admin/api-tools'
+    | '/admin'
+    | '/slack-conflict'
     | '/admin/outbox'
     | '/admin/session-info'
+    | '/admin/trpc-tools'
     | '/orgs/$organizationSlug'
     | '/proj/$projectSlug'
     | '/user/settings'
@@ -293,21 +269,20 @@ export interface FileRouteTypes {
     | '/proj/$projectSlug/approvals'
     | '/proj/$projectSlug/connectors'
     | '/proj/$projectSlug/env-vars'
+    | '/proj/$projectSlug/machines'
     | '/proj/$projectSlug/settings'
     | '/orgs/$organizationSlug/'
     | '/proj/$projectSlug/'
     | '/proj/$projectSlug/machines/$machineId'
-    | '/proj/$projectSlug/machines'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/device'
     | '/login'
     | '/logout'
-    | '/connection-conflict'
     | '/'
-    | '/admin/api-tools'
+    | '/slack-conflict'
     | '/admin/outbox'
     | '/admin/session-info'
+    | '/admin/trpc-tools'
     | '/user/settings'
     | '/admin'
     | '/orgs/$organizationSlug/billing'
@@ -318,23 +293,22 @@ export interface FileRouteTypes {
     | '/proj/$projectSlug/approvals'
     | '/proj/$projectSlug/connectors'
     | '/proj/$projectSlug/env-vars'
+    | '/proj/$projectSlug/machines'
     | '/proj/$projectSlug/settings'
     | '/orgs/$organizationSlug'
     | '/proj/$projectSlug'
     | '/proj/$projectSlug/machines/$machineId'
-    | '/proj/$projectSlug/machines'
   id:
     | '__root__'
     | '/_auth'
-    | '/device'
     | '/login'
     | '/logout'
-    | '/_auth/admin'
-    | '/_auth/connection-conflict'
     | '/_auth/'
-    | '/_auth/admin/api-tools'
+    | '/_auth/admin'
+    | '/_auth/slack-conflict'
     | '/_auth/admin/outbox'
     | '/_auth/admin/session-info'
+    | '/_auth/admin/trpc-tools'
     | '/_auth/orgs/$organizationSlug'
     | '/_auth/proj/$projectSlug'
     | '/_auth/user/settings'
@@ -347,18 +321,17 @@ export interface FileRouteTypes {
     | '/_auth/proj/$projectSlug/approvals'
     | '/_auth/proj/$projectSlug/connectors'
     | '/_auth/proj/$projectSlug/env-vars'
+    | '/_auth/proj/$projectSlug/machines'
     | '/_auth/proj/$projectSlug/settings'
     | '/_auth/orgs/$organizationSlug/'
     | '/_auth/proj/$projectSlug/'
     | '/_auth/proj/$projectSlug/machines/$machineId'
-    | '/_auth/proj/$projectSlug/machines/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  AuthRoute: typeof AuthRouteWithChildren
-  DeviceRoute: typeof DeviceRoute
-  LoginRoute: typeof LoginRoute
-  LogoutRoute: typeof LogoutRoute
+  authRequiredDotlayoutRoute: typeof authRequiredDotlayoutRouteWithChildren
+  loginRoute: typeof loginRoute
+  logoutRoute: typeof logoutRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -367,287 +340,288 @@ declare module '@tanstack/react-router' {
       id: '/logout'
       path: '/logout'
       fullPath: '/logout'
-      preLoaderRoute: typeof LogoutRouteImport
+      preLoaderRoute: typeof logoutRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
       id: '/login'
       path: '/login'
       fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/device': {
-      id: '/device'
-      path: '/device'
-      fullPath: '/device'
-      preLoaderRoute: typeof DeviceRouteImport
+      preLoaderRoute: typeof loginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_auth': {
       id: '/_auth'
       path: ''
       fullPath: ''
-      preLoaderRoute: typeof AuthRouteImport
+      preLoaderRoute: typeof authRequiredDotlayoutRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_auth/': {
-      id: '/_auth/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof AuthIndexRouteImport
-      parentRoute: typeof AuthRoute
-    }
-    '/_auth/connection-conflict': {
-      id: '/_auth/connection-conflict'
-      path: '/connection-conflict'
-      fullPath: '/connection-conflict'
-      preLoaderRoute: typeof AuthConnectionConflictRouteImport
-      parentRoute: typeof AuthRoute
+    '/_auth/slack-conflict': {
+      id: '/_auth/slack-conflict'
+      path: '/slack-conflict'
+      fullPath: '/slack-conflict'
+      preLoaderRoute: typeof slackConflictRouteImport
+      parentRoute: typeof authRequiredDotlayoutRoute
     }
     '/_auth/admin': {
       id: '/_auth/admin'
       path: '/admin'
       fullPath: '/admin'
-      preLoaderRoute: typeof AuthAdminRouteImport
-      parentRoute: typeof AuthRoute
+      preLoaderRoute: typeof adminLayoutRouteImport
+      parentRoute: typeof authRequiredDotlayoutRoute
+    }
+    '/_auth/': {
+      id: '/_auth/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof indexRouteImport
+      parentRoute: typeof authRequiredDotlayoutRoute
     }
     '/_auth/admin/': {
       id: '/_auth/admin/'
       path: '/'
       fullPath: '/admin/'
-      preLoaderRoute: typeof AuthAdminIndexRouteImport
-      parentRoute: typeof AuthAdminRoute
+      preLoaderRoute: typeof adminIndexRouteImport
+      parentRoute: typeof adminLayoutRoute
     }
     '/_auth/user/settings': {
       id: '/_auth/user/settings'
       path: '/user/settings'
       fullPath: '/user/settings'
-      preLoaderRoute: typeof AuthUserSettingsRouteImport
-      parentRoute: typeof AuthRoute
+      preLoaderRoute: typeof userSettingsRouteImport
+      parentRoute: typeof authRequiredDotlayoutRoute
     }
     '/_auth/proj/$projectSlug': {
       id: '/_auth/proj/$projectSlug'
       path: '/proj/$projectSlug'
       fullPath: '/proj/$projectSlug'
-      preLoaderRoute: typeof AuthProjProjectSlugRouteImport
-      parentRoute: typeof AuthRoute
+      preLoaderRoute: typeof projLayoutRouteImport
+      parentRoute: typeof authRequiredDotlayoutRoute
     }
     '/_auth/orgs/$organizationSlug': {
       id: '/_auth/orgs/$organizationSlug'
       path: '/orgs/$organizationSlug'
       fullPath: '/orgs/$organizationSlug'
-      preLoaderRoute: typeof AuthOrgsOrganizationSlugRouteImport
-      parentRoute: typeof AuthRoute
+      preLoaderRoute: typeof orgLayoutRouteImport
+      parentRoute: typeof authRequiredDotlayoutRoute
+    }
+    '/_auth/admin/trpc-tools': {
+      id: '/_auth/admin/trpc-tools'
+      path: '/trpc-tools'
+      fullPath: '/admin/trpc-tools'
+      preLoaderRoute: typeof adminTrpcToolsRouteImport
+      parentRoute: typeof adminLayoutRoute
     }
     '/_auth/admin/session-info': {
       id: '/_auth/admin/session-info'
       path: '/session-info'
       fullPath: '/admin/session-info'
-      preLoaderRoute: typeof AuthAdminSessionInfoRouteImport
-      parentRoute: typeof AuthAdminRoute
+      preLoaderRoute: typeof adminSessionInfoRouteImport
+      parentRoute: typeof adminLayoutRoute
     }
     '/_auth/admin/outbox': {
       id: '/_auth/admin/outbox'
       path: '/outbox'
       fullPath: '/admin/outbox'
-      preLoaderRoute: typeof AuthAdminOutboxRouteImport
-      parentRoute: typeof AuthAdminRoute
-    }
-    '/_auth/admin/api-tools': {
-      id: '/_auth/admin/api-tools'
-      path: '/api-tools'
-      fullPath: '/admin/api-tools'
-      preLoaderRoute: typeof AuthAdminApiToolsRouteImport
-      parentRoute: typeof AuthAdminRoute
+      preLoaderRoute: typeof adminOutboxRouteImport
+      parentRoute: typeof adminLayoutRoute
     }
     '/_auth/proj/$projectSlug/': {
       id: '/_auth/proj/$projectSlug/'
       path: '/'
       fullPath: '/proj/$projectSlug/'
-      preLoaderRoute: typeof AuthProjProjectSlugIndexRouteImport
-      parentRoute: typeof AuthProjProjectSlugRoute
+      preLoaderRoute: typeof projIndexRouteImport
+      parentRoute: typeof projLayoutRoute
     }
     '/_auth/orgs/$organizationSlug/': {
       id: '/_auth/orgs/$organizationSlug/'
       path: '/'
       fullPath: '/orgs/$organizationSlug/'
-      preLoaderRoute: typeof AuthOrgsOrganizationSlugIndexRouteImport
-      parentRoute: typeof AuthOrgsOrganizationSlugRoute
+      preLoaderRoute: typeof orgIndexRouteImport
+      parentRoute: typeof orgLayoutRoute
     }
     '/_auth/proj/$projectSlug/settings': {
       id: '/_auth/proj/$projectSlug/settings'
       path: '/settings'
       fullPath: '/proj/$projectSlug/settings'
-      preLoaderRoute: typeof AuthProjProjectSlugSettingsRouteImport
-      parentRoute: typeof AuthProjProjectSlugRoute
+      preLoaderRoute: typeof projSettingsRouteImport
+      parentRoute: typeof projLayoutRoute
+    }
+    '/_auth/proj/$projectSlug/machines': {
+      id: '/_auth/proj/$projectSlug/machines'
+      path: '/machines'
+      fullPath: '/proj/$projectSlug/machines'
+      preLoaderRoute: typeof projMachinesRouteImport
+      parentRoute: typeof projLayoutRoute
     }
     '/_auth/proj/$projectSlug/env-vars': {
       id: '/_auth/proj/$projectSlug/env-vars'
       path: '/env-vars'
       fullPath: '/proj/$projectSlug/env-vars'
-      preLoaderRoute: typeof AuthProjProjectSlugEnvVarsRouteImport
-      parentRoute: typeof AuthProjProjectSlugRoute
+      preLoaderRoute: typeof projEnvVarsRouteImport
+      parentRoute: typeof projLayoutRoute
     }
     '/_auth/proj/$projectSlug/connectors': {
       id: '/_auth/proj/$projectSlug/connectors'
       path: '/connectors'
       fullPath: '/proj/$projectSlug/connectors'
-      preLoaderRoute: typeof AuthProjProjectSlugConnectorsRouteImport
-      parentRoute: typeof AuthProjProjectSlugRoute
+      preLoaderRoute: typeof projConnectorsRouteImport
+      parentRoute: typeof projLayoutRoute
     }
     '/_auth/proj/$projectSlug/approvals': {
       id: '/_auth/proj/$projectSlug/approvals'
       path: '/approvals'
       fullPath: '/proj/$projectSlug/approvals'
-      preLoaderRoute: typeof AuthProjProjectSlugApprovalsRouteImport
-      parentRoute: typeof AuthProjProjectSlugRoute
+      preLoaderRoute: typeof projApprovalsRouteImport
+      parentRoute: typeof projLayoutRoute
     }
     '/_auth/proj/$projectSlug/access-tokens': {
       id: '/_auth/proj/$projectSlug/access-tokens'
       path: '/access-tokens'
       fullPath: '/proj/$projectSlug/access-tokens'
-      preLoaderRoute: typeof AuthProjProjectSlugAccessTokensRouteImport
-      parentRoute: typeof AuthProjProjectSlugRoute
+      preLoaderRoute: typeof projAccessTokensRouteImport
+      parentRoute: typeof projLayoutRoute
     }
     '/_auth/orgs/$organizationSlug/team': {
       id: '/_auth/orgs/$organizationSlug/team'
       path: '/team'
       fullPath: '/orgs/$organizationSlug/team'
-      preLoaderRoute: typeof AuthOrgsOrganizationSlugTeamRouteImport
-      parentRoute: typeof AuthOrgsOrganizationSlugRoute
+      preLoaderRoute: typeof orgTeamRouteImport
+      parentRoute: typeof orgLayoutRoute
     }
     '/_auth/orgs/$organizationSlug/settings': {
       id: '/_auth/orgs/$organizationSlug/settings'
       path: '/settings'
       fullPath: '/orgs/$organizationSlug/settings'
-      preLoaderRoute: typeof AuthOrgsOrganizationSlugSettingsRouteImport
-      parentRoute: typeof AuthOrgsOrganizationSlugRoute
+      preLoaderRoute: typeof orgSettingsRouteImport
+      parentRoute: typeof orgLayoutRoute
     }
     '/_auth/orgs/$organizationSlug/new-project': {
       id: '/_auth/orgs/$organizationSlug/new-project'
       path: '/new-project'
       fullPath: '/orgs/$organizationSlug/new-project'
-      preLoaderRoute: typeof AuthOrgsOrganizationSlugNewProjectRouteImport
-      parentRoute: typeof AuthOrgsOrganizationSlugRoute
+      preLoaderRoute: typeof orgNewProjectRouteImport
+      parentRoute: typeof orgLayoutRoute
     }
     '/_auth/orgs/$organizationSlug/billing': {
       id: '/_auth/orgs/$organizationSlug/billing'
       path: '/billing'
       fullPath: '/orgs/$organizationSlug/billing'
-      preLoaderRoute: typeof AuthOrgsOrganizationSlugBillingRouteImport
-      parentRoute: typeof AuthOrgsOrganizationSlugRoute
-    }
-    '/_auth/proj/$projectSlug/machines/': {
-      id: '/_auth/proj/$projectSlug/machines/'
-      path: '/machines'
-      fullPath: '/proj/$projectSlug/machines'
-      preLoaderRoute: typeof AuthProjProjectSlugMachinesIndexRouteImport
-      parentRoute: typeof AuthProjProjectSlugRoute
+      preLoaderRoute: typeof orgBillingRouteImport
+      parentRoute: typeof orgLayoutRoute
     }
     '/_auth/proj/$projectSlug/machines/$machineId': {
       id: '/_auth/proj/$projectSlug/machines/$machineId'
-      path: '/machines/$machineId'
+      path: '/$machineId'
       fullPath: '/proj/$projectSlug/machines/$machineId'
-      preLoaderRoute: typeof AuthProjProjectSlugMachinesMachineIdRouteImport
-      parentRoute: typeof AuthProjProjectSlugRoute
+      preLoaderRoute: typeof projMachineDetailRouteImport
+      parentRoute: typeof projMachinesRoute
     }
   }
 }
 
-interface AuthAdminRouteChildren {
-  AuthAdminApiToolsRoute: typeof AuthAdminApiToolsRoute
-  AuthAdminOutboxRoute: typeof AuthAdminOutboxRoute
-  AuthAdminSessionInfoRoute: typeof AuthAdminSessionInfoRoute
-  AuthAdminIndexRoute: typeof AuthAdminIndexRoute
+interface adminLayoutRouteChildren {
+  adminOutboxRoute: typeof adminOutboxRoute
+  adminSessionInfoRoute: typeof adminSessionInfoRoute
+  adminTrpcToolsRoute: typeof adminTrpcToolsRoute
+  adminIndexRoute: typeof adminIndexRoute
 }
 
-const AuthAdminRouteChildren: AuthAdminRouteChildren = {
-  AuthAdminApiToolsRoute: AuthAdminApiToolsRoute,
-  AuthAdminOutboxRoute: AuthAdminOutboxRoute,
-  AuthAdminSessionInfoRoute: AuthAdminSessionInfoRoute,
-  AuthAdminIndexRoute: AuthAdminIndexRoute,
+const adminLayoutRouteChildren: adminLayoutRouteChildren = {
+  adminOutboxRoute: adminOutboxRoute,
+  adminSessionInfoRoute: adminSessionInfoRoute,
+  adminTrpcToolsRoute: adminTrpcToolsRoute,
+  adminIndexRoute: adminIndexRoute,
 }
 
-const AuthAdminRouteWithChildren = AuthAdminRoute._addFileChildren(
-  AuthAdminRouteChildren,
+const adminLayoutRouteWithChildren = adminLayoutRoute._addFileChildren(
+  adminLayoutRouteChildren,
 )
 
-interface AuthOrgsOrganizationSlugRouteChildren {
-  AuthOrgsOrganizationSlugBillingRoute: typeof AuthOrgsOrganizationSlugBillingRoute
-  AuthOrgsOrganizationSlugNewProjectRoute: typeof AuthOrgsOrganizationSlugNewProjectRoute
-  AuthOrgsOrganizationSlugSettingsRoute: typeof AuthOrgsOrganizationSlugSettingsRoute
-  AuthOrgsOrganizationSlugTeamRoute: typeof AuthOrgsOrganizationSlugTeamRoute
-  AuthOrgsOrganizationSlugIndexRoute: typeof AuthOrgsOrganizationSlugIndexRoute
+interface orgLayoutRouteChildren {
+  orgBillingRoute: typeof orgBillingRoute
+  orgNewProjectRoute: typeof orgNewProjectRoute
+  orgSettingsRoute: typeof orgSettingsRoute
+  orgTeamRoute: typeof orgTeamRoute
+  orgIndexRoute: typeof orgIndexRoute
 }
 
-const AuthOrgsOrganizationSlugRouteChildren: AuthOrgsOrganizationSlugRouteChildren =
-  {
-    AuthOrgsOrganizationSlugBillingRoute: AuthOrgsOrganizationSlugBillingRoute,
-    AuthOrgsOrganizationSlugNewProjectRoute:
-      AuthOrgsOrganizationSlugNewProjectRoute,
-    AuthOrgsOrganizationSlugSettingsRoute:
-      AuthOrgsOrganizationSlugSettingsRoute,
-    AuthOrgsOrganizationSlugTeamRoute: AuthOrgsOrganizationSlugTeamRoute,
-    AuthOrgsOrganizationSlugIndexRoute: AuthOrgsOrganizationSlugIndexRoute,
-  }
+const orgLayoutRouteChildren: orgLayoutRouteChildren = {
+  orgBillingRoute: orgBillingRoute,
+  orgNewProjectRoute: orgNewProjectRoute,
+  orgSettingsRoute: orgSettingsRoute,
+  orgTeamRoute: orgTeamRoute,
+  orgIndexRoute: orgIndexRoute,
+}
 
-const AuthOrgsOrganizationSlugRouteWithChildren =
-  AuthOrgsOrganizationSlugRoute._addFileChildren(
-    AuthOrgsOrganizationSlugRouteChildren,
+const orgLayoutRouteWithChildren = orgLayoutRoute._addFileChildren(
+  orgLayoutRouteChildren,
+)
+
+interface projMachinesRouteChildren {
+  projMachineDetailRoute: typeof projMachineDetailRoute
+}
+
+const projMachinesRouteChildren: projMachinesRouteChildren = {
+  projMachineDetailRoute: projMachineDetailRoute,
+}
+
+const projMachinesRouteWithChildren = projMachinesRoute._addFileChildren(
+  projMachinesRouteChildren,
+)
+
+interface projLayoutRouteChildren {
+  projAccessTokensRoute: typeof projAccessTokensRoute
+  projApprovalsRoute: typeof projApprovalsRoute
+  projConnectorsRoute: typeof projConnectorsRoute
+  projEnvVarsRoute: typeof projEnvVarsRoute
+  projMachinesRoute: typeof projMachinesRouteWithChildren
+  projSettingsRoute: typeof projSettingsRoute
+  projIndexRoute: typeof projIndexRoute
+}
+
+const projLayoutRouteChildren: projLayoutRouteChildren = {
+  projAccessTokensRoute: projAccessTokensRoute,
+  projApprovalsRoute: projApprovalsRoute,
+  projConnectorsRoute: projConnectorsRoute,
+  projEnvVarsRoute: projEnvVarsRoute,
+  projMachinesRoute: projMachinesRouteWithChildren,
+  projSettingsRoute: projSettingsRoute,
+  projIndexRoute: projIndexRoute,
+}
+
+const projLayoutRouteWithChildren = projLayoutRoute._addFileChildren(
+  projLayoutRouteChildren,
+)
+
+interface authRequiredDotlayoutRouteChildren {
+  indexRoute: typeof indexRoute
+  adminLayoutRoute: typeof adminLayoutRouteWithChildren
+  slackConflictRoute: typeof slackConflictRoute
+  orgLayoutRoute: typeof orgLayoutRouteWithChildren
+  projLayoutRoute: typeof projLayoutRouteWithChildren
+  userSettingsRoute: typeof userSettingsRoute
+}
+
+const authRequiredDotlayoutRouteChildren: authRequiredDotlayoutRouteChildren = {
+  indexRoute: indexRoute,
+  adminLayoutRoute: adminLayoutRouteWithChildren,
+  slackConflictRoute: slackConflictRoute,
+  orgLayoutRoute: orgLayoutRouteWithChildren,
+  projLayoutRoute: projLayoutRouteWithChildren,
+  userSettingsRoute: userSettingsRoute,
+}
+
+const authRequiredDotlayoutRouteWithChildren =
+  authRequiredDotlayoutRoute._addFileChildren(
+    authRequiredDotlayoutRouteChildren,
   )
 
-interface AuthProjProjectSlugRouteChildren {
-  AuthProjProjectSlugAccessTokensRoute: typeof AuthProjProjectSlugAccessTokensRoute
-  AuthProjProjectSlugApprovalsRoute: typeof AuthProjProjectSlugApprovalsRoute
-  AuthProjProjectSlugConnectorsRoute: typeof AuthProjProjectSlugConnectorsRoute
-  AuthProjProjectSlugEnvVarsRoute: typeof AuthProjProjectSlugEnvVarsRoute
-  AuthProjProjectSlugSettingsRoute: typeof AuthProjProjectSlugSettingsRoute
-  AuthProjProjectSlugIndexRoute: typeof AuthProjProjectSlugIndexRoute
-  AuthProjProjectSlugMachinesMachineIdRoute: typeof AuthProjProjectSlugMachinesMachineIdRoute
-  AuthProjProjectSlugMachinesIndexRoute: typeof AuthProjProjectSlugMachinesIndexRoute
-}
-
-const AuthProjProjectSlugRouteChildren: AuthProjProjectSlugRouteChildren = {
-  AuthProjProjectSlugAccessTokensRoute: AuthProjProjectSlugAccessTokensRoute,
-  AuthProjProjectSlugApprovalsRoute: AuthProjProjectSlugApprovalsRoute,
-  AuthProjProjectSlugConnectorsRoute: AuthProjProjectSlugConnectorsRoute,
-  AuthProjProjectSlugEnvVarsRoute: AuthProjProjectSlugEnvVarsRoute,
-  AuthProjProjectSlugSettingsRoute: AuthProjProjectSlugSettingsRoute,
-  AuthProjProjectSlugIndexRoute: AuthProjProjectSlugIndexRoute,
-  AuthProjProjectSlugMachinesMachineIdRoute:
-    AuthProjProjectSlugMachinesMachineIdRoute,
-  AuthProjProjectSlugMachinesIndexRoute: AuthProjProjectSlugMachinesIndexRoute,
-}
-
-const AuthProjProjectSlugRouteWithChildren =
-  AuthProjProjectSlugRoute._addFileChildren(AuthProjProjectSlugRouteChildren)
-
-interface AuthRouteChildren {
-  AuthAdminRoute: typeof AuthAdminRouteWithChildren
-  AuthConnectionConflictRoute: typeof AuthConnectionConflictRoute
-  AuthIndexRoute: typeof AuthIndexRoute
-  AuthOrgsOrganizationSlugRoute: typeof AuthOrgsOrganizationSlugRouteWithChildren
-  AuthProjProjectSlugRoute: typeof AuthProjProjectSlugRouteWithChildren
-  AuthUserSettingsRoute: typeof AuthUserSettingsRoute
-}
-
-const AuthRouteChildren: AuthRouteChildren = {
-  AuthAdminRoute: AuthAdminRouteWithChildren,
-  AuthConnectionConflictRoute: AuthConnectionConflictRoute,
-  AuthIndexRoute: AuthIndexRoute,
-  AuthOrgsOrganizationSlugRoute: AuthOrgsOrganizationSlugRouteWithChildren,
-  AuthProjProjectSlugRoute: AuthProjProjectSlugRouteWithChildren,
-  AuthUserSettingsRoute: AuthUserSettingsRoute,
-}
-
-const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
-
 const rootRouteChildren: RootRouteChildren = {
-  AuthRoute: AuthRouteWithChildren,
-  DeviceRoute: DeviceRoute,
-  LoginRoute: LoginRoute,
-  LogoutRoute: LogoutRoute,
+  authRequiredDotlayoutRoute: authRequiredDotlayoutRouteWithChildren,
+  loginRoute: loginRoute,
+  logoutRoute: logoutRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

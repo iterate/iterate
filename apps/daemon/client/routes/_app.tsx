@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar.tsx";
 import { AppSidebar } from "@/components/app-sidebar.tsx";
 import { AppHeader } from "@/components/app-header.tsx";
-import { orpc } from "@/integrations/tanstack-query/orpc-client.tsx";
+import { useTRPC } from "@/integrations/tanstack-query/trpc-client.tsx";
 
 export const Route = createFileRoute("/_app")({
   component: AppLayout,
@@ -14,7 +14,8 @@ function AppLayout() {
   const encodedAgentPath = "slug" in params ? (params.slug as string) : undefined;
   const agentPath = encodedAgentPath ? decodeURIComponent(encodedAgentPath) : undefined;
 
-  const { data: agents = [] } = useQuery(orpc.daemon.listAgents.queryOptions());
+  const trpc = useTRPC();
+  const { data: agents = [] } = useQuery(trpc.listAgents.queryOptions());
 
   const currentAgent = agents.find((a) => a.path === agentPath);
 

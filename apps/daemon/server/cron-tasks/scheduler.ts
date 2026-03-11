@@ -9,9 +9,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CronTime } from "cron";
 import dedent from "dedent";
-import { createRouterClient } from "@orpc/server";
-import { getCustomerRepoPath } from "../orpc/platform.ts";
-import { daemonRouter } from "../orpc/router.ts";
+import { getCustomerRepoPath } from "../trpc/platform.ts";
+import { trpcRouter } from "../trpc/router.ts";
 import {
   type ParsedTask,
   parseTaskFile,
@@ -53,11 +52,9 @@ function getCronAgentPath(agentPathSegment: string): string {
   return `/cron/${agentPathSegment}`;
 }
 
-/** Check whether an active agent exists via oRPC. */
+/** Check whether an active agent exists via tRPC. */
 async function agentExists(agentPath: string): Promise<boolean> {
-  const agent = await createRouterClient(daemonRouter, { context: {} }).getAgent({
-    path: agentPath,
-  });
+  const agent = await trpcRouter.createCaller({}).getAgent({ path: agentPath });
   return agent !== null;
 }
 
@@ -70,7 +67,7 @@ async function sendPromptToAgent(agentPath: string, message: string): Promise<vo
   const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agentPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ events: [{ type: "iterate:agent:prompt-added", message }] }),
+    body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
   });
   if (!response.ok) {
     const errorBody = await response.text().catch(() => "");
@@ -80,15 +77,8 @@ async function sendPromptToAgent(agentPath: string, message: string): Promise<vo
   }
 }
 
-export const getTasksDir = async (): Promise<string> => {
+export const getTasksDir = async () => {
   const customerRepoPath = await getCustomerRepoPath();
-  return path.join(customerRepoPath, "iterate/tasks");
-};
-
-/** Like getTasksDir but returns null if ITERATE_CUSTOMER_REPO_PATH isn't set yet. */
-const tryGetTasksDir = (): string | null => {
-  const customerRepoPath = process.env.ITERATE_CUSTOMER_REPO_PATH;
-  if (!customerRepoPath) return null;
   return path.join(customerRepoPath, "iterate/tasks");
 };
 
@@ -99,11 +89,10 @@ export async function getArchivedDir(): Promise<string> {
 
 /**
  * Initialize and start the cron task scheduler.
- * Note: ITERATE_CUSTOMER_REPO_PATH may not be set on first boot (before the OS pushes .env).
- * The scheduler starts unconditionally and gracefully skips processing until the env var is available.
  */
 export async function startCronTaskScheduler() {
   const intervalMs = parseInt(process.env.CRON_TASK_INTERVAL_MS || "", 10) || DEFAULT_INTERVAL_MS;
+  const tasksDir = await getTasksDir();
 
   if (schedulerRunning) {
     console.log("[cron-tasks] Scheduler already running");
@@ -112,6 +101,7 @@ export async function startCronTaskScheduler() {
 
   schedulerRunning = true;
   console.log(`[cron-tasks] Starting scheduler, interval: ${intervalMs / 1000}s`);
+  console.log(`[cron-tasks] Tasks directory: ${tasksDir}`);
 
   const scheduleNext = () => {
     setTimeout(async () => {
@@ -146,8 +136,7 @@ function isDue(task: ParsedTask): boolean {
  * Scan tasks folder and process due tasks.
  */
 export async function processPendingTasks(): Promise<void> {
-  const tasksDir = tryGetTasksDir();
-  if (!tasksDir) return; // env not pushed yet, skip silently
+  const tasksDir = await getTasksDir();
 
   // Ensure directories exist
   await fs.mkdir(tasksDir, { recursive: true });
@@ -220,8 +209,7 @@ function startStaleTaskWatchdog() {
  * Find in_progress tasks that have been locked longer than threshold and nudge their agents.
  */
 async function nudgeStaleTasks(thresholdMs: number): Promise<void> {
-  const tasksDir = tryGetTasksDir();
-  if (!tasksDir) return; // env not pushed yet, skip silently
+  const tasksDir = await getTasksDir();
 
   if (!existsSync(tasksDir)) return;
 

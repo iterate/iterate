@@ -343,7 +343,10 @@ async function resolveSecret(
           },
         };
       } catch (err) {
-        logger.error(`Failed to build connect URL for ${connector.name}`, err);
+        logger.error("Failed to build connect URL", {
+          connector: connector.name,
+          error: err instanceof Error ? err.message : String(err),
+        });
         return {
           ok: false,
           error: {
@@ -367,8 +370,11 @@ async function resolveSecret(
   if (secret.egressProxyRule) {
     const allowed = await matchesEgressRule(context.originalUrl, secret.egressProxyRule);
     if (!allowed) {
-      logger.set({ url: context.originalUrl });
-      logger.warn(`Egress rule rejected request for secret ${secretKey}`);
+      logger.warn("Egress rule rejected request", {
+        secretKey,
+        rule: secret.egressProxyRule,
+        url: context.originalUrl,
+      });
       return {
         ok: false,
         error: {
@@ -427,7 +433,7 @@ async function replaceMagicStrings(
     const parsed = parseMagicString(fullMatch);
 
     if (!parsed) {
-      logger.warn("Invalid magic string format");
+      logger.warn("Invalid magic string format", { match: fullMatch });
       continue;
     }
 
@@ -552,8 +558,6 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
   const originalMethod = c.req.header("X-Iterate-Original-Method") || c.req.method;
   const apiKey = c.req.header("X-Iterate-API-Key");
 
-  logger.set({ egressTarget: { url: originalURL, host: originalHost, method: originalMethod } });
-
   // Validate required headers
   if (!originalURL) {
     logger.warn("Egress proxy request missing X-Iterate-Original-URL");
@@ -564,8 +568,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
   const db = c.get("db");
   const apiKeyContext = apiKey ? await validateAndGetContext(db, apiKey) : null;
   if (!apiKeyContext) {
-    logger.set({ url: originalURL });
-    logger.warn("Egress proxy request with invalid API key");
+    logger.warn("Egress proxy request with invalid API key", { originalURL });
     return c.json({ error: "Invalid or missing API key" }, 401);
   }
 
@@ -581,7 +584,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     originalUrl: originalURL,
   };
 
-  logger.set({ egressTarget: { projectSlug: context.projectSlug } });
+  logger.debug("Egress proxy forwarding", { method: originalMethod, url: originalURL });
 
   // Check for Resend email sending - validate recipients before forwarding
   // This prevents using Iterate's Resend account to send spam to arbitrary addresses
@@ -601,11 +604,11 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     );
 
     if (validationError) {
-      logger.set({
+      logger.warn("Resend email blocked", {
         url: originalURL,
-        organization: { id: apiKeyContext.organizationId },
+        organizationId: apiKeyContext.organizationId,
+        error: validationError.error,
       });
-      logger.error("Resend email blocked", new Error(validationError.error));
       return c.json({ error: validationError.error }, 403);
     }
   }
@@ -851,7 +854,10 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
       headers: responseHeaders,
     });
   } catch (err) {
-    logger.error("Egress proxy error", err, { url: originalURL });
+    logger.error("Egress proxy error", {
+      url: originalURL,
+      error: err instanceof Error ? err.message : String(err),
+    });
 
     return c.json(
       {
@@ -994,13 +1000,9 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
   // Parse the token ID from the API key
   const tokenId = parseTokenIdFromApiKey(apiKey);
   if (!tokenId) {
-    logger.set({ apiKeyPrefix: apiKey.slice(0, 30) });
-    logger.warn("Invalid API key format");
+    logger.warn("Invalid API key format", { apiKey: apiKey.slice(0, 20) + "..." });
     return null;
   }
-
-  logger.set({ egress_diag: { tokenId, apiKeyLen: apiKey.length } });
-  logger.info(`[egress-diag] Looking up token ${tokenId}`);
 
   // Look up the token with project and org relations in a single query
   const accessToken = await db.query.projectAccessToken.findFirst({
@@ -1014,23 +1016,20 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
     },
   });
 
-  logger.set({ token: { id: tokenId, found: !!accessToken } });
   if (!accessToken) {
-    logger.warn("Access token not found");
+    logger.warn("Access token not found", { tokenId });
     return null;
   }
 
   if (accessToken.revokedAt) {
-    logger.set({ token: { revoked: true } });
-    logger.warn("Access token revoked");
+    logger.warn("Access token revoked", { tokenId });
     return null;
   }
 
   // Decrypt the stored token and compare with the provided API key
   const storedToken = await decrypt(accessToken.encryptedToken);
   if (apiKey !== storedToken) {
-    logger.set({ token: { invalid: true } });
-    logger.warn("Invalid API key for token");
+    logger.warn("Invalid API key for token", { tokenId });
     return null;
   }
 

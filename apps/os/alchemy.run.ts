@@ -1,14 +1,14 @@
 import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
-import { join } from "node:path";
-import { CronExpressionParser } from "cron-parser";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import alchemy, { type Scope } from "alchemy";
 import {
   DurableObjectNamespace,
-  R2Bucket,
   TanStackStart,
   Tunnel,
   WorkerLoader,
+  Worker,
   Self,
 } from "alchemy/cloudflare";
 import { Database, Branch, Role } from "alchemy/planetscale";
@@ -21,14 +21,15 @@ import {
   ensurePnpmStoreVolume as ensureIteratePnpmStoreVolume,
   getDockerEnvVars,
 } from "../../sandbox/providers/docker/utils.ts";
-import { normalizeProjectIngressCanonicalHost } from "./backend/utils/project-ingress-url.ts";
-import { ArchilApiKeys, jsonEnvVar, RegionConfig, workerCrons } from "./backend/worker-config.ts";
+import type { ProjectIngressProxy } from "./proxy/worker.ts";
+import { workerCrons } from "./backend/worker-config.ts";
 import {
   GLOBAL_SECRETS_CONFIG,
   type GlobalSecretEnvVarName,
 } from "./scripts/seed-global-secrets.ts";
 
-const repoRoot = join(import.meta.dirname, "..", "..");
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(__dirname, "..", "..");
 
 const stateStore = (scope: Scope) =>
   scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
@@ -51,118 +52,22 @@ const isProduction = app.stage === "prd";
 const isStaging = app.stage === "stg";
 const isDevelopment = app.local;
 const isPreview =
-  app.stage === "dev" ||
   app.stage.startsWith("pr-") ||
+  app.stage === "dev" ||
   app.stage.startsWith("dev-") ||
   app.stage.startsWith("local-");
 
-const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4";
+/**
+ * DEV_TUNNEL: "0"/"false"/empty = disabled, "1"/"true" = auto, other = custom subdomain
+ * Auto mode uses stage (e.g., dev-jonas-os.dev.iterate.com)
+ */
+function getDevTunnelConfig() {
+  const devTunnel = process.env.DEV_TUNNEL;
+  if (!devTunnel || devTunnel === "0" || devTunnel === "false") return null;
 
-const explicitDevTunnel = process.env.DEV_TUNNEL?.trim();
-const DEV_TUNNEL_DISABLED =
-  explicitDevTunnel === "0" || explicitDevTunnel?.toLowerCase() === "false";
-const DEV_TUNNEL = DEV_TUNNEL_DISABLED
-  ? ""
-  : (explicitDevTunnel ?? process.env.ITERATE_USER?.trim());
-const DEV_OS_DOMAIN = "iterate-dev.com";
-const DEV_MACHINE_DOMAIN = "iterate-dev.app";
+  const subdomain = devTunnel === "1" || devTunnel === "true" ? `${app.stage}-os` : devTunnel;
 
-async function ensureDevTunnelWildcardDns(tunnelId: string) {
-  if (!DEV_TUNNEL) return;
-
-  const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
-  if (!token)
-    throw new Error("CLOUDFLARE_API_TOKEN is required to manage dev tunnel wildcard DNS records");
-
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
-
-  const resolveZoneId = async (zoneName: string) => {
-    const zoneResponse = await fetch(
-      `${CLOUDFLARE_API_BASE}/zones?name=${encodeURIComponent(zoneName)}&status=active&per_page=1`,
-      { headers },
-    );
-    const zonePayload = (await zoneResponse.json()) as {
-      result?: Array<{ id?: string }>;
-      errors?: unknown;
-    };
-    if (!zoneResponse.ok) {
-      throw new Error(
-        `Cloudflare zone lookup failed for '${zoneName}': ${JSON.stringify(zonePayload?.errors ?? zonePayload)}`,
-      );
-    }
-    const zoneId = zonePayload?.result?.[0]?.id;
-    if (!zoneId) {
-      throw new Error(`Cloudflare zone lookup failed for '${zoneName}': no zone ID found`);
-    }
-    return zoneId;
-  };
-
-  const zoneId = await resolveZoneId(DEV_MACHINE_DOMAIN);
-  const target = `${tunnelId}.cfargotunnel.com`;
-  const edgeCertificatesUrl = `https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/${DEV_MACHINE_DOMAIN}/ssl-tls/edge-certificates`;
-  const comment = `Managed by apps/os/alchemy.run.ts for DEV_TUNNEL=${DEV_TUNNEL}`;
-
-  async function upsertWildcardTunnelDnsRecord(name: string) {
-    const findResponse = await fetch(
-      `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(name)}&per_page=1`,
-      { headers },
-    );
-    const findPayload = (await findResponse.json()) as {
-      result?: Array<{ id?: string }>;
-      errors?: unknown;
-    };
-    if (!findResponse.ok) {
-      throw new Error(
-        `Cloudflare wildcard lookup failed: ${JSON.stringify(findPayload?.errors ?? findPayload)}`,
-      );
-    }
-    const existing = findPayload?.result?.[0];
-    const body = JSON.stringify({
-      type: "CNAME",
-      name,
-      content: target,
-      proxied: true,
-      ttl: 1,
-      comment,
-    });
-
-    if (existing) {
-      const updateResponse = await fetch(
-        `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records/${existing.id}`,
-        {
-          method: "PUT",
-          headers,
-          body,
-        },
-      );
-      if (!updateResponse.ok) {
-        throw new Error(`Cloudflare wildcard update failed: ${await updateResponse.text()}`);
-      }
-      console.log(`Updated wildcard dev tunnel DNS: ${name} -> ${target}`);
-      return;
-    }
-    const createResponse = await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records`, {
-      method: "POST",
-      headers,
-      body,
-    });
-    if (!createResponse.ok) {
-      throw new Error(`Cloudflare wildcard create failed: ${await createResponse.text()}`);
-    }
-    console.log(`Created wildcard dev tunnel DNS: ${name} -> ${target}`);
-  }
-
-  // Alchemy Tunnel auto-manages non-wildcard ingress hostnames.
-  // It intentionally skips wildcard hostnames, so we upsert that record here.
-  await upsertWildcardTunnelDnsRecord(`*.${DEV_TUNNEL}.${DEV_MACHINE_DOMAIN}`);
-  console.log(
-    `Cloudflare Total SSL should generate a Let's Encrypt wildcard cert for *.${DEV_TUNNEL}.${DEV_MACHINE_DOMAIN} shortly. If it does not appear, check: ${edgeCertificatesUrl}`,
-  );
-  // Total TLS note: once zone-level Total TLS is enabled (`PATCH /zones/{zone_id}/acm/total_tls`),
-  // creating this proxied wildcard DNS record triggers wildcard edge cert issuance automatically.
+  return { hostname: `${subdomain}.dev.iterate.com`, subdomain };
 }
 
 function parseComposePublishedPort(
@@ -242,36 +147,21 @@ async function waitForVite(port: number, maxWaitMs = 60_000): Promise<void> {
  * MUST be called before app.finalize() so the resource is tracked.
  */
 async function createDevTunnel(vitePort: number) {
-  if (!DEV_TUNNEL) return null;
+  const config = getDevTunnelConfig();
+  if (!config) return null;
 
-  console.log(
-    `Creating dev tunnel (${DEV_TUNNEL}): ${DEV_TUNNEL}.${DEV_OS_DOMAIN}, *.${DEV_TUNNEL}.${DEV_MACHINE_DOMAIN} -> localhost:${vitePort}`,
-  );
+  console.log(`Creating dev tunnel: ${config.hostname} -> localhost:${vitePort}`);
 
-  const tunnel = await Tunnel(`dev-tunnel-${DEV_TUNNEL}`, {
-    name: `dev-${DEV_TUNNEL}-os`,
+  const tunnel = await Tunnel(`dev-tunnel-${config.subdomain}`, {
+    name: config.subdomain,
     adopt: true, // Don't fail if tunnel already exists from previous session
-    delete: false, // Never auto-delete dev tunnels; cleanup should be explicit/manual.
     ingress: [
-      { hostname: `${DEV_TUNNEL}.${DEV_OS_DOMAIN}`, service: `http://localhost:${vitePort}` },
-      {
-        hostname: `*.${DEV_TUNNEL}.${DEV_MACHINE_DOMAIN}`,
-        service: `http://localhost:${vitePort}`,
-      },
+      { hostname: config.hostname, service: `http://localhost:${vitePort}` },
       { service: "http_status:404" },
     ],
   });
 
-  try {
-    await ensureDevTunnelWildcardDns(tunnel.tunnelId);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(
-      `Could not configure wildcard dev tunnel DNS for ${DEV_TUNNEL}.${DEV_OS_DOMAIN}: ${message}`,
-    );
-  }
-
-  return { tunnel, vitePort };
+  return { tunnel, config, vitePort };
 }
 
 /**
@@ -280,9 +170,9 @@ async function createDevTunnel(vitePort: number) {
 function startCloudflared(tunnel: Awaited<ReturnType<typeof createDevTunnel>>) {
   if (!tunnel) return;
 
-  const { tunnel: tunnelResource } = tunnel;
+  const { tunnel: tunnelResource, config } = tunnel;
 
-  console.log(`Starting cloudflared tunnel: https://${DEV_TUNNEL}.${DEV_OS_DOMAIN}`);
+  console.log(`Starting cloudflared tunnel: https://${config.hostname}`);
 
   const cloudflared = spawn(
     "cloudflared",
@@ -329,8 +219,9 @@ function startCloudflared(tunnel: Awaited<ReturnType<typeof createDevTunnel>>) {
  * Set VITE_PUBLIC_URL before vite starts (if tunnel enabled)
  */
 function setupDevTunnelEnv() {
-  if (!DEV_TUNNEL) return;
-  process.env.VITE_PUBLIC_URL = `https://${DEV_TUNNEL}.${DEV_OS_DOMAIN}`;
+  const config = getDevTunnelConfig();
+  if (!config) return;
+  process.env.VITE_PUBLIC_URL = `https://${config.hostname}`;
 }
 
 async function verifyDopplerEnvironment() {
@@ -374,20 +265,20 @@ const Env = z.object({
   // you'll need CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN and ALCHEMY_STATE_TOKEN for the deployment to work, but not at runtime
 
   BETTER_AUTH_SECRET: Required,
-  DAYTONA_API_KEY: Optional,
+  DAYTONA_API_KEY: Required,
   DAYTONA_DEFAULT_SNAPSHOT: Optional, // iterate-sandbox-{commitSha} - required at runtime for Daytona
   DAYTONA_ORG_ID: Optional,
 
-  // Optional unless the Daytona provider is explicitly enabled.
-  DAYTONA_DEFAULT_AUTO_STOP_MINUTES: Optional, // minutes, 0 = disabled
-  DAYTONA_DEFAULT_AUTO_DELETE_MINUTES: Optional, // minutes, -1 = disabled, 0 = delete on stop
+  // Policy knobs: require explicit values in Doppler (no hidden defaults in code).
+  DAYTONA_DEFAULT_AUTO_STOP_MINUTES: Required, // minutes, 0 = disabled
+  DAYTONA_DEFAULT_AUTO_DELETE_MINUTES: Required, // minutes, -1 = disabled, 0 = delete on stop
   SANDBOX_DAYTONA_ENABLED: BoolyString,
   SANDBOX_DOCKER_ENABLED: BoolyString,
   SANDBOX_FLY_ENABLED: BoolyString,
   SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd"]),
-  SANDBOX_PROVIDER_PREFERENCE: Optional, // comma-separated list of providers in order of preference
   FLY_API_TOKEN: Optional,
   FLY_ORG: Optional,
+  FLY_DEFAULT_REGION: Optional,
   FLY_DEFAULT_IMAGE: Optional,
   FLY_DEFAULT_CPUS: Optional,
   FLY_DEFAULT_MEMORY_MB: Optional,
@@ -413,18 +304,9 @@ const Env = z.object({
   RESEND_BOT_DOMAIN: Required,
   RESEND_BOT_API_KEY: Required,
   RESEND_BOT_WEBHOOK_SECRET: Optional,
-  // Archil — persistent POSIX volumes backed by R2
-  // Bucket name and endpoint are derived in alchemy.run.ts and passed as computed bindings.
-  // Only the API key and R2 credentials need to live in Doppler.
-  ARCHIL_API_KEYS: jsonEnvVar.wrap(ArchilApiKeys),
-  ARCHIL_R2_ACCESS_KEY_ID: Required,
-  ARCHIL_R2_SECRET_ACCESS_KEY: Required,
   POSTHOG_PUBLIC_KEY: Optional,
-  POSTHOG_WEBHOOK_SECRET: Optional,
-  SERVICE_AUTH_TOKEN: Required,
+  // SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
-  PROJECT_INGRESS_DOMAIN: Optional, // optional here; validated after fallback from old var name
-  PROJECT_INGRESS_PROXY_CANONICAL_HOST: Optional, // legacy fallback, remove after Doppler update
   VITE_APP_STAGE: Required,
   APP_STAGE: Required,
   ENCRYPTION_SECRET: Required,
@@ -437,16 +319,14 @@ const Env = z.object({
   // This bypasses the egress proxy and exposes secrets directly in env vars.
   // Only enable this for local development or trusted environments.
   DANGEROUS_RAW_SECRETS_ENABLED: BoolyString,
-
-  REGION_CONFIG: jsonEnvVar.wrap(RegionConfig),
 } satisfies Record<string, z.ZodType<unknown, string | undefined>> & {
   [K in GlobalSecretEnvVarName]: typeof Required;
 });
 
 // Type for env vars wrapped as alchemy secrets
 type EnvSecrets = {
-  [K in keyof z.input<typeof Env>]-?: z.output<typeof Env>[K] extends string | undefined
-    ? ReturnType<typeof alchemy.secret<NonNullable<z.output<typeof Env>[K]>>>
+  [K in keyof z.output<typeof Env>]-?: z.output<typeof Env>[K] extends string | undefined
+    ? ReturnType<typeof alchemy.secret<string>>
     : never;
 };
 
@@ -463,14 +343,10 @@ async function setupEnvironmentVariables(): Promise<EnvSecrets> {
   }
   // Filter out undefined values before wrapping in alchemy.secret
   const defined = R.pickBy(parsed.data, (v) => v !== undefined) as Record<string, string>;
-  return R.mapValues(defined, (v) =>
-    typeof v === "string" ? alchemy.secret(v) : v,
-  ) as unknown as EnvSecrets;
+  return R.mapValues(defined, alchemy.secret) as unknown as EnvSecrets;
 }
 
 async function setupDatabase() {
-  const env = Env.pick({ REGION_CONFIG: true }).parse(process.env);
-  const regionConfig = jsonEnvVar.parse(RegionConfig, env.REGION_CONFIG);
   const migrate = async (origin: string) => {
     if (!origin) throw new Error("Database connection string is not set");
     const res = await Exec("db-migrate", {
@@ -485,7 +361,7 @@ async function setupDatabase() {
     }
   };
 
-  const seedGlobalStuff = async (origin: string) => {
+  const seedGlobalSecrets = async (origin: string) => {
     // Seed global secrets (OpenAI, Anthropic keys) into the database
     // These are the lowest priority secrets, overridable at org/project/user level
 
@@ -500,21 +376,8 @@ async function setupDatabase() {
     });
 
     if (res.exitCode !== 0) {
-      throw new Error(`Warning: Failed to seed global secrets: ${res.stderr}`);
-    }
-
-    const res2 = await Exec("db-seed-superadmin", {
-      env: {
-        PSCALE_DATABASE_URL: origin,
-        DATABASE_URL: origin,
-        ENCRYPTION_SECRET: process.env.ENCRYPTION_SECRET,
-        ...Object.fromEntries(GLOBAL_SECRETS_CONFIG.map((c) => [c.envVar, process.env[c.envVar]])),
-      },
-      command: "tsx ./scripts/seed-superadmin.ts --run",
-    });
-
-    if (res2.exitCode !== 0) {
-      throw new Error(`Warning: Failed to seed global secrets: ${res2.stderr}`);
+      console.warn(`Warning: Failed to seed global secrets: ${res.stderr}`);
+      // Don't fail deployment if seeding fails - secrets can be added manually
     }
   };
 
@@ -528,7 +391,7 @@ async function setupDatabase() {
     }
     const origin = `postgres://postgres:postgres@localhost:${localDockerPostgresPort}/os`;
     await migrate(origin);
-    await seedGlobalStuff(origin);
+    await seedGlobalSecrets(origin);
     return {
       DATABASE_URL: origin,
     };
@@ -543,7 +406,6 @@ async function setupDatabase() {
       kind: "postgresql",
       allowDataBranching: true,
       delete: false,
-      region: { slug: regionConfig.planetscaleRegion },
     });
 
     const branch = await Branch("db-preview-branch", {
@@ -561,7 +423,7 @@ async function setupDatabase() {
       delete: true,
     });
     await migrate(role.connectionUrlPooled.unencrypted);
-    await seedGlobalStuff(role.connectionUrlPooled.unencrypted);
+    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -585,7 +447,7 @@ async function setupDatabase() {
     });
 
     await migrate(role.connectionUrlPooled.unencrypted);
-    await seedGlobalStuff(role.connectionUrlPooled.unencrypted);
+    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -609,7 +471,7 @@ async function setupDatabase() {
     });
 
     await migrate(role.connectionUrlPooled.unencrypted);
-    await seedGlobalStuff(role.connectionUrlPooled.unencrypted);
+    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -619,14 +481,11 @@ async function setupDatabase() {
   throw new Error(`Unsupported environment: ${app.stage}`);
 }
 
-const domains = isDevelopment
-  ? DEV_TUNNEL
-    ? [`${DEV_TUNNEL}.${DEV_OS_DOMAIN}`, `*.${DEV_TUNNEL}.${DEV_MACHINE_DOMAIN}`]
-    : []
-  : [`os.iterate.com`, `*.iterate.app`];
+const subdomain = `os-${app.stage}`.replace(/^os-prd$/, "os").replace(/^os-stg$/, "os-staging");
+
+const domains = [`${subdomain}.iterate.com`];
 
 async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvSecrets) {
-  const regionConfig = jsonEnvVar.parse(RegionConfig, envSecrets.REGION_CONFIG.unencrypted);
   const dockerEnvVars = isDevelopment ? getDockerEnvVars(repoRoot) : {};
 
   // Docker provider env vars — git info is resolved here (where execSync works)
@@ -640,7 +499,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     DOCKER_HOST_GIT_COMMON_DIR: "",
     DOCKER_HOST_GIT_COMMIT: "",
     DOCKER_HOST_GIT_BRANCH: "",
-    LOCAL_DOCKER_NEON_PROXY_PORT: "",
     DOCKER_HOST_OS_PORT: "",
     /** @deprecated use DOCKER_DEFAULT_IMAGE */
     LOCAL_DOCKER_IMAGE_NAME: "",
@@ -659,7 +517,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       process.env.DOCKER_HOST_GIT_COMMIT ?? dockerEnvVars.DOCKER_HOST_GIT_COMMIT ?? "";
     const gitBranch =
       process.env.DOCKER_HOST_GIT_BRANCH ?? dockerEnvVars.DOCKER_HOST_GIT_BRANCH ?? "";
-    const localDockerNeonProxyPort = process.env.LOCAL_DOCKER_NEON_PROXY_PORT ?? "";
     // No implicit fallback here: if DOCKER_DEFAULT_IMAGE isn't set, we want it to be obvious
     // (the Docker provider is strict and will throw when attempting to create a machine).
     const imageName = process.env.DOCKER_DEFAULT_IMAGE ?? "";
@@ -674,7 +531,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       DOCKER_HOST_GIT_COMMON_DIR: commonDir,
       DOCKER_HOST_GIT_COMMIT: gitCommit,
       DOCKER_HOST_GIT_BRANCH: gitBranch,
-      LOCAL_DOCKER_NEON_PROXY_PORT: localDockerNeonProxyPort,
       DOCKER_HOST_OS_PORT: process.env.DOCKER_HOST_OS_PORT ?? "",
       LOCAL_DOCKER_IMAGE_NAME: imageName,
       LOCAL_DOCKER_COMPOSE_PROJECT_NAME:
@@ -697,80 +553,46 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     sqlite: true,
   });
 
-  const parseCsv = (value: string | undefined): string[] =>
-    (value ?? "")
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+  const PROXY_ROOT_DOMAIN = isDevelopment ? "local.iterate.town" : "iterate.town";
 
-  // PROJECT_INGRESS_DOMAIN is the base domain for project ingress hostnames.
-  // prod: iterate.app, dev w/ tunnel: $DEV_TUNNEL.dev.iterate.app, dev w/o tunnel: iterate.app.localhost
-  // Fallback: accept old PROJECT_INGRESS_PROXY_CANONICAL_HOST until Doppler configs are updated.
-  const projectIngressDomain = normalizeProjectIngressCanonicalHost(
-    process.env.PROJECT_INGRESS_DOMAIN ?? process.env.PROJECT_INGRESS_PROXY_CANONICAL_HOST ?? "",
+  const PROJECT_INGRESS_PROXY = DurableObjectNamespace<ProjectIngressProxy>(
+    "project-ingress-proxy",
+    {
+      className: "ProjectIngressProxy",
+      sqlite: true,
+    },
   );
-  if (!projectIngressDomain) {
-    throw new Error(
-      "PROJECT_INGRESS_DOMAIN is required and must be a hostname (no wildcard, scheme, port, or path).",
-    );
-  }
 
-  const osWorkerRoutes = parseCsv(process.env.OS_WORKER_ROUTES);
-  if (osWorkerRoutes.length === 0) {
-    throw new Error("OS_WORKER_ROUTES is required. Set it in Doppler for dev/stg/prd.");
-  }
-  const routeHosts = [...new Set([...osWorkerRoutes, ...domains, `*.${projectIngressDomain}`])];
-  const allowedDomains = [
-    ...new Set([...domains, `*.${projectIngressDomain}`, projectIngressDomain]),
-  ];
-  // TODO(custom-domain): Custom domains don't need explicit worker routes here.
-  // Use Cloudflare for SaaS (https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/)
-  // to register custom hostnames. CF for SaaS routes traffic through a "fallback origin"
-  // which should point to this worker. SSL certs are auto-provisioned.
-  // Setup steps:
-  //   1. Enable CF for SaaS on the iterate.app zone
-  //   2. Create a fallback origin (e.g. fallback.iterate.app → this worker)
-  //   3. When a project sets a custom domain, call the CF API to create a custom hostname
-  //   4. Show the user DNS instructions (CNAME to fallback.iterate.app)
-  // The allowedDomains/routeHosts arrays above don't need custom domains — CF for SaaS handles routing.
-
-  // Archil R2 bucket — one bucket per stage, with per-project prefixes inside.
-  // Archil's FUSE client talks to R2 via S3 protocol using the API token credentials from Doppler.
-  // todo: generate a bucket dynamically for each project
-  const archilBucket = await R2Bucket("archil-data", {
-    locationHint: regionConfig.r2BucketHint,
-    dev: { remote: true }, // always create real bucket, even in dev (Archil needs actual R2)
-    adopt: isDevelopment, // because we use dev: {remote: true}, all the dev-nobody CI runs will need to adopt this bucket
+  const proxyWorker = await Worker("proxy", {
+    name: isProduction ? "os-proxy" : isStaging ? "os-proxy-staging" : undefined,
+    entrypoint: "./proxy/worker.ts",
+    bindings: {
+      PROJECT_INGRESS_PROXY,
+      PROXY_ROOT_DOMAIN,
+    },
+    adopt: true,
   });
-
-  // Derive R2 endpoint so it doesn't need to be in Doppler per-stack.
-  const cloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  if (!cloudflareAccountId) throw new Error("CLOUDFLARE_ACCOUNT_ID is required");
-
-  const archilR2Endpoint = `https://${cloudflareAccountId}.r2.cloudflarestorage.com`;
 
   const worker = await TanStackStart("os", {
     bindings: {
       ...dbConfig,
       ...envSecrets,
-      // TanstackStart construct doesn't like structured objects in bindings
       SELF: Self,
       WORKER_LOADER: WorkerLoader(),
-      ALLOWED_DOMAINS: allowedDomains.join(","),
+      ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
-      PROJECT_INGRESS_DOMAIN: projectIngressDomain,
-      // Archil R2: derived from alchemy state, not Doppler
-      ARCHIL_R2_BUCKET_NAME: archilBucket.name,
-      ARCHIL_R2_ENDPOINT: archilR2Endpoint,
+      PROXY_ROOT_DOMAIN,
+      PROXY_WORKER: proxyWorker,
+      LOCAL_DOCKER_NEON_PROXY_PORT: process.env.LOCAL_DOCKER_NEON_PROXY_PORT || "",
       // Workerd can't exec in dev, so git/compose info must be injected via env vars here.
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
-    // Place the worker near the PlanetScale Postgres primary
+    // Place the worker near the PlanetScale Postgres primary (aws:us-east-1)
     // to minimise round-trip latency on DB-heavy pages.
-    placement: { region: regionConfig.workerPlacementRegion },
+    placement: { region: "aws:us-east-1" },
     assets: {
       _headers: dedent`
         /assets/*
@@ -779,10 +601,18 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       `,
     },
     routes: [
-      ...routeHosts.map((hostPattern) => ({
-        pattern: `${hostPattern}/*`,
+      ...domains.map((domain) => ({
+        pattern: `${domain}/*`,
         adopt: true,
       })),
+      {
+        pattern: `${PROXY_ROOT_DOMAIN}/*`,
+        adopt: true,
+      },
+      {
+        pattern: `*.${PROXY_ROOT_DOMAIN}/*`,
+        adopt: true,
+      },
     ],
     crons: Object.values(workerCrons),
     wrangler: {
@@ -797,15 +627,13 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     },
   });
 
-  return { worker };
+  return { worker, proxyWorker };
 }
 
 if (process.env.GITHUB_OUTPUT) {
-  if (domains[0]) {
-    const workerUrl = `https://${domains[0]}`;
-    console.log(`Writing worker URL to GitHub output: ${workerUrl}`);
-    fs.appendFileSync(process.env.GITHUB_OUTPUT, `worker_url=${workerUrl}\n`);
-  }
+  const workerUrl = `https://${domains[0]}`;
+  console.log(`Writing worker URL to GitHub output: ${workerUrl}`);
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `worker_url=${workerUrl}\n`);
 }
 
 await verifyDopplerEnvironment();
@@ -835,12 +663,12 @@ const dbConfig = await setupDatabase();
 const envSecrets = await setupEnvironmentVariables();
 
 // Deploy main worker (includes egress proxy on /api/egress-proxy)
-export const { worker } = await deployWorker(dbConfig, envSecrets);
+export const { worker, proxyWorker } = await deployWorker(dbConfig, envSecrets);
 
 // Create tunnel resource BEFORE finalize so it's properly tracked
 // (fixes bug where tunnel was created after finalize, causing orphan deletion)
 let devTunnel: Awaited<ReturnType<typeof createDevTunnel>> = null;
-if (isDevelopment && DEV_TUNNEL && worker.url) {
+if (isDevelopment && getDevTunnelConfig() && worker.url) {
   const vitePort = Number(new URL(worker.url).port || "5173");
   devTunnel = await createDevTunnel(vitePort);
 }
@@ -856,49 +684,3 @@ if (devTunnel && worker.url) {
 }
 
 if (!app.local) process.exit(0);
-
-// Simulate Cloudflare's cron trigger for the outbox queue in local dev.
-// workerd doesn't fire `scheduled()` locally, so we hit the endpoint via HTTP
-// (same approach as v2025 SDK CLI). Without this, delayed consumer messages
-// (e.g. sendReadinessProbe's 60s delay) sit in the queue until manually processed.
-if (isDevelopment && worker.url) {
-  const loops = Object.entries(workerCrons).map(([name, cron]) => {
-    let runs = 0;
-    const expression = CronExpressionParser.parse(cron, { tz: "UTC" });
-    const fn = async () => {
-      while (expression.hasNext()) {
-        let next: ReturnType<typeof expression.next> | null = expression.next();
-        while (next && next.getTime() < Date.now()) {
-          console.warn(
-            `Cron ${name} is overdue ("next" at ${next}, now is ${new Date()}). Skipping.`,
-          );
-          next = expression.hasNext() ? expression.next() : (null as never);
-          continue;
-        }
-        if (!next) {
-          console.error(`Cron ${name} has no next run. Stopping loop.`);
-          break;
-        }
-        const waitMs = next.getTime() - Date.now();
-        if (runs++ <= 10) console.log(`Cron ${name} next up in ${waitMs}ms (at ${next})`);
-        if (runs === 10) console.log(`(Future runs only logged on failure)`);
-
-        await new Promise((resolve) => setTimeout(resolve, waitMs));
-        const url = new URL("/cdn-cgi/handler/scheduled", worker.url);
-        url.searchParams.set("cron", cron);
-        await fetch(url.toString(), { redirect: "manual" })
-          .then(async (res) => {
-            if (!res.ok) throw new Error(`${res.url} ${res.status} ${await res.clone().text()}`);
-          })
-          .catch((e) => {
-            console.error(`Failed to fetch scheduled URL for cron ${name}:`, e);
-          });
-      }
-    };
-    return { name, cron, expression, fn };
-  });
-  for (const loop of loops) {
-    console.log(`Starting cron loop for ${loop.name}: ${loop.cron}`);
-    loop.fn().catch(() => {});
-  }
-}

@@ -1,0 +1,141 @@
+import { createFileRoute, Outlet, redirect, useParams } from "@tanstack/react-router";
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { Suspense, useMemo } from "react";
+import { Spinner } from "../../components/ui/spinner.tsx";
+import { trpc } from "../../lib/trpc.tsx";
+import { useSessionUser } from "../../hooks/use-session-user.ts";
+import { usePostHogIdentity } from "../../hooks/use-posthog-identity.tsx";
+import { SidebarShell } from "../../components/sidebar-shell.tsx";
+import { OrgSwitcher } from "../../components/org-project-switcher.tsx";
+import { OrgSidebarNav } from "../../components/org-sidebar-nav.tsx";
+import { SidebarInset, SidebarProvider } from "../../components/ui/sidebar.tsx";
+import { AppHeader } from "../../components/app-header.tsx";
+import { HeaderActionsProvider } from "../../components/header-actions.tsx";
+import { useHeaderActions } from "../../hooks/use-header-actions.ts";
+
+export const Route = createFileRoute("/_auth/orgs/$organizationSlug")({
+  // beforeLoad: ONLY for validation and redirects (runs serially)
+  beforeLoad: async ({ context, params }) => {
+    const currentOrg = await context.queryClient.ensureQueryData(
+      trpc.organization.withProjects.queryOptions({
+        organizationSlug: params.organizationSlug,
+      }),
+    );
+
+    if (!currentOrg) {
+      throw redirect({ to: "/" });
+    }
+  },
+
+  // loader: Prefetch data (non-blocking, shows spinner if not ready)
+  loader: ({ context }) => {
+    context.queryClient.prefetchQuery(trpc.user.myOrganizations.queryOptions());
+  },
+
+  component: OrgLayout,
+});
+
+function OrgLayout() {
+  const params = useParams({ from: "/_auth/orgs/$organizationSlug" });
+  const { user } = useSessionUser();
+  const [headerActions, setHeaderActions] = useHeaderActions();
+
+  const { data: organizations } = useSuspenseQuery(trpc.user.myOrganizations.queryOptions());
+
+  const { data: currentOrg } = useSuspenseQuery(
+    trpc.organization.withProjects.queryOptions({
+      organizationSlug: params.organizationSlug,
+    }),
+  );
+
+  // Memoize user props to avoid creating new objects on each render
+  const userProps = useMemo(
+    () =>
+      user
+        ? {
+            name: user.name,
+            email: user.email,
+            image: user.image,
+            role: user.role ?? undefined,
+          }
+        : null,
+    [user],
+  );
+
+  // Identify user and organization in PostHog
+  usePostHogIdentity({
+    user: user ?? null,
+    organization:
+      currentOrg?.id && currentOrg?.name && currentOrg?.slug
+        ? {
+            id: currentOrg.id,
+            name: currentOrg.name,
+            slug: currentOrg.slug,
+          }
+        : null,
+  });
+
+  if (!user || !userProps) {
+    throw new Error("User not found - should not happen in auth-required layout");
+  }
+
+  // currentOrg is guaranteed by beforeLoad, but TypeScript needs the check
+  if (!currentOrg || !currentOrg.id || !currentOrg.name || !currentOrg.slug) {
+    throw redirect({ to: "/" });
+  }
+
+  const orgsList = organizations.map((organization) => ({
+    id: organization.id,
+    name: organization.name,
+    slug: organization.slug,
+    role: organization.role,
+  }));
+
+  const currentOrgData = {
+    id: currentOrg.id,
+    name: currentOrg.name,
+    slug: currentOrg.slug,
+  };
+
+  const projects = (currentOrg.projects ?? []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    slug: p.slug,
+  }));
+
+  return (
+    <SidebarProvider defaultOpen={true}>
+      <SidebarShell
+        header={<OrgSwitcher organizations={orgsList} currentOrg={currentOrgData} />}
+        user={userProps}
+      >
+        <OrgSidebarNav orgSlug={currentOrg.slug} projects={projects} />
+      </SidebarShell>
+      <SidebarInset>
+        <AppHeader
+          orgName={currentOrg.name}
+          organizationSlug={params.organizationSlug}
+          organizations={orgsList}
+          projects={projects}
+          actions={headerActions}
+        />
+        <main className="w-full max-w-3xl flex-1 overflow-auto">
+          <HeaderActionsProvider onActionsChange={setHeaderActions}>
+            <Suspense fallback={<ContentSpinner />}>
+              <Outlet />
+            </Suspense>
+          </HeaderActionsProvider>
+        </main>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+
+/** Content area loading spinner for child routes */
+function ContentSpinner() {
+  return (
+    <div className="flex h-full min-h-[200px] items-center justify-center p-4">
+      <Spinner className="size-6" />
+    </div>
+  );
+}

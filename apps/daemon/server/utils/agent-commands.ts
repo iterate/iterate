@@ -1,5 +1,5 @@
 import { stringify as stringifyYaml } from "yaml";
-import type { SerializedAgent } from "../routers/agents.ts";
+import type { SerializedAgent } from "../trpc/router.ts";
 import { resolveAgentSession } from "./agent-debug-links.ts";
 
 export type AgentCommandEnvironment = {
@@ -30,12 +30,9 @@ const AGENT_COMMANDS = [
     async run(env: AgentCommandEnvironment) {
       const session = resolveAgentSession(env.agent);
       const result = {
-        agentPath: env.agentPath,
-        agentHarness: session.agentHarness ?? null,
-        sessionSource: session.source ?? null,
+        agent: env.agent,
         terminalUrl: session.terminalUrl ?? null,
         webUrl: session.webUrl ?? null,
-        agent: env.agent,
       } as const;
 
       const lines = [
@@ -95,16 +92,13 @@ async function runMatchedAgentCommand<C extends AgentCommand>(
   return payload;
 }
 
-/**
- * Sanitize raw Slack text (strip @mentions) and match the first token against
- * known command aliases. Shared by both `runAgentCommand` and
- * `looksLikeAgentCommand` to avoid duplicated matching logic.
- */
-function findMatchingCommand(rawText: string) {
-  const sanitized = rawText.replace(/<@[^>]+>/g, " ").trim();
-  if (!sanitized) return null;
+export async function runAgentCommand(
+  environment: AgentCommandEnvironment,
+): Promise<AgentCommandMatch | null> {
+  const sanitizedMessage = environment.message.replace(/<@[^>]+>/g, " ").trim();
+  if (!sanitizedMessage) return null;
 
-  const [firstToken] = sanitized.split(/\s+/);
+  const [firstToken] = sanitizedMessage.split(/\s+/);
   if (!firstToken) return null;
 
   const command = AGENT_COMMANDS.find((entry) =>
@@ -112,28 +106,7 @@ function findMatchingCommand(rawText: string) {
   );
   if (!command) return null;
 
-  return { command, sanitized };
-}
-
-export async function runAgentCommand(
-  environment: AgentCommandEnvironment,
-): Promise<AgentCommandMatch | null> {
-  const match = findMatchingCommand(environment.message);
-  if (!match) return null;
-
-  return runMatchedAgentCommand(match.command, {
-    ...environment,
-    message: match.sanitized,
-  });
-}
-
-/**
- * Lightweight check whether raw message text looks like an agent command.
- * Used by the Slack router to let command-like self-messages through the
- * feedback-loop guard so the command handler can process them.
- */
-export function looksLikeAgentCommand(rawText: string): boolean {
-  return findMatchingCommand(rawText) !== null;
+  return runMatchedAgentCommand(command, { ...environment, message: sanitizedMessage });
 }
 
 function renderResultAsYamlMarkdown(result: unknown): string {

@@ -1,11 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { stringify } from "yaml";
-import type {
-  Deployment,
-  DeploymentEvent,
-  DeploymentExecResult,
-} from "../deployment/deployment.ts";
+import type { StoredEvent, TraceContext } from "@iterate-com/events-contract";
+import type { Deployment, DeploymentEvent } from "../deployment/deployment.ts";
 
 type DeploymentLoggedEvent = Extract<
   DeploymentEvent,
@@ -17,11 +14,6 @@ export interface UseDeploymentFixture extends AsyncDisposable {
   artifactDir?: string;
   artifactPath?: string;
   getEvents(): readonly DeploymentEvent[];
-  waitForShellSuccess(params: {
-    cmd: string;
-    timeoutMs: number;
-    deployment?: Deployment;
-  }): Promise<DeploymentExecResult>;
   waitUntilExecAvailable(params: { timeoutMs: number; deployment?: Deployment }): Promise<void>;
   waitForLogLine(params: {
     lineIncludes: string;
@@ -37,6 +29,18 @@ type EventWaiter = {
   predicate: (event: DeploymentEvent) => boolean;
   resolve: (event: DeploymentEvent) => void;
   reject: (error: Error) => void;
+};
+
+type RecordedDeploymentEvent = {
+  sequence: number;
+  observedAt: string;
+  event: DeploymentEvent;
+};
+
+const SYNTHETIC_TRACE: TraceContext = {
+  traceId: "00000000000000000000000000000000",
+  spanId: "0000000000000000",
+  parentSpanId: null,
 };
 
 export async function useDeployment(params: {
@@ -63,7 +67,7 @@ export async function useDeployment(params: {
    * });
    * ```
    */
-  const history: DeploymentEvent[] = [];
+  const history: RecordedDeploymentEvent[] = [];
   const waiters: EventWaiter[] = [];
   let terminalError: Error | null = null;
   let disposed = false;
@@ -89,6 +93,7 @@ export async function useDeployment(params: {
           artifactPath,
           deployment: params.deployment,
           history,
+          logTail: params.logTail,
         });
       }
       artifactWrite = null;
@@ -102,7 +107,11 @@ export async function useDeployment(params: {
   }
 
   const onEvent = (event: DeploymentEvent) => {
-    history.push(event);
+    history.push({
+      sequence: history.length + 1,
+      observedAt: new Date().toISOString(),
+      event,
+    });
     if (artifactPath) {
       void scheduleArtifactWrite();
     }
@@ -138,7 +147,7 @@ export async function useDeployment(params: {
     predicate: (event: DeploymentEvent) => boolean;
     timeoutMs: number;
   }) => {
-    const existing = history.find(waitParams.predicate);
+    const existing = history.find(({ event }) => waitParams.predicate(event))?.event;
     if (existing) return existing;
     if (terminalError) throw terminalError;
     if (disposed) throw new Error("useDeployment fixture already disposed");
@@ -173,45 +182,16 @@ export async function useDeployment(params: {
     artifactDir: params.artifactDir,
     artifactPath,
     getEvents() {
-      return history;
-    },
-    async waitForShellSuccess(waitParams) {
-      const targetDeployment = waitParams.deployment ?? params.deployment;
-      const deadline = Date.now() + waitParams.timeoutMs;
-      let lastResult: DeploymentExecResult | null = null;
-
-      while (Date.now() < deadline) {
-        const result = await targetDeployment.shell({ cmd: waitParams.cmd }).catch(() => null);
-        if (result?.exitCode === 0) return result;
-        lastResult = result ?? lastResult;
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-
-      throw new Error(
-        `Timed out waiting for shell command to succeed${
-          lastResult?.output ? `: ${lastResult.output}` : ""
-        }`,
-      );
+      return history.map(({ event }) => event);
     },
     async waitUntilExecAvailable(waitParams) {
       const targetDeployment = waitParams.deployment ?? params.deployment;
-      const deadline = Date.now() + waitParams.timeoutMs;
-      let lastOutput = "";
-
-      while (Date.now() < deadline) {
-        const result = await targetDeployment
-          .shell({ cmd: "echo provider-exec-ready" })
-          .catch(() => null);
-        if (result?.exitCode === 0 && result.output.includes("provider-exec-ready")) {
-          return;
-        }
-        lastOutput = result?.output ?? lastOutput;
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-
-      throw new Error(
-        `Timed out waiting for exec availability${lastOutput ? `: ${lastOutput}` : ""}`,
-      );
+      await targetDeployment.shellWithRetry({
+        cmd: "echo provider-exec-ready",
+        timeoutMs: waitParams.timeoutMs,
+        retryIf: (result) =>
+          result.exitCode !== 0 || !result.output.includes("provider-exec-ready"),
+      });
     },
     async waitForLogLine(waitParams) {
       return (await waitForEvent({
@@ -226,21 +206,22 @@ export async function useDeployment(params: {
     },
     async [Symbol.asyncDispose]() {
       disposed = true;
-      controller.abort();
-      if (params.destroyOnDispose ?? true) {
-        await params.deployment.destroy();
+      let disposeError: unknown;
+      try {
+        if (params.destroyOnDispose ?? true) {
+          await params.deployment.destroy();
+        }
+      } catch (error) {
+        disposeError = error;
       }
+      controller.abort();
       await reader;
       for (const waiter of waiters.splice(0)) {
         waiter.reject(new Error("useDeployment fixture disposed before matching event arrived"));
       }
-      void scheduleArtifactWrite().catch(() => {});
-      if (artifactPath) {
-        void writeArtifact({
-          artifactPath,
-          deployment: params.deployment,
-          history,
-        }).catch(() => {});
+      await scheduleArtifactWrite();
+      if (disposeError) {
+        throw disposeError;
       }
     },
   };
@@ -249,12 +230,43 @@ export async function useDeployment(params: {
 async function writeArtifact(params: {
   artifactPath: string;
   deployment: Deployment;
-  history: DeploymentEvent[];
+  history: RecordedDeploymentEvent[];
+  logTail?: number;
 }) {
+  const deployment = params.deployment.snapshot();
+  const slug = deployment.slug;
+  const path = slug ? `/deployment/${slug}` : "/deployment/unknown";
   const payload = {
-    deployment: params.deployment.snapshot(),
-    writtenAt: new Date().toISOString(),
-    events: params.history,
+    deployment,
+    path,
+    events: params.history.map(({ sequence, observedAt, event }) =>
+      toStoredEvent({
+        path,
+        offset: formatOffset(sequence),
+        createdAt: observedAt,
+        event,
+      }),
+    ),
   };
   await writeFile(params.artifactPath, stringify(payload));
+}
+
+function toStoredEvent(params: {
+  path: string;
+  offset: string;
+  createdAt: string;
+  event: DeploymentEvent;
+}): StoredEvent {
+  return {
+    path: params.path,
+    offset: params.offset,
+    createdAt: params.createdAt,
+    trace: { ...SYNTHETIC_TRACE },
+    type: params.event.type,
+    payload: params.event.payload,
+  };
+}
+
+function formatOffset(value: number) {
+  return String(value).padStart(16, "0");
 }

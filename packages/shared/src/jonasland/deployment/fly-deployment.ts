@@ -33,10 +33,15 @@ export function createFlyProvider(
   return {
     ...flyProviderManifest,
     async create(params) {
-      const opts = withDefaultFlyOpts(params.opts);
-      if (!opts.image) throw new Error("image is required");
+      const baseOpts = withDefaultFlyOpts(params.opts);
+      if (!baseOpts.image) throw new Error("image is required");
       const api = createFlyApi(providerOpts);
-      const appName = opts.slug;
+      const appName = baseOpts.slug;
+      const opts = withDefaultFlyOpts({
+        ...baseOpts,
+        ingressHost: baseOpts.ingressHost ?? `${appName}.${FLY_BASE_DOMAIN}`,
+        ingressHostType: baseOpts.ingressHostType ?? "subdomain-host",
+      });
       const orgSlug = opts.flyOrgSlug ?? "iterate";
       const sandboxMachineName = opts.flyMachineName ?? "sandbox";
       let machineId: string | undefined;
@@ -88,10 +93,12 @@ export function createFlyProvider(
                 ...(machineInit ? { init: machineInit } : {}),
                 env: {
                   ...envRecord,
-                  ITERATE_INGRESS_HOST:
-                    envRecord.ITERATE_INGRESS_HOST ?? `${appName}.${FLY_BASE_DOMAIN}`,
-                  ITERATE_INGRESS_ROUTING_TYPE:
-                    envRecord.ITERATE_INGRESS_ROUTING_TYPE ?? "subdomain-host",
+                  ITERATE_INGRESS_HOST: opts.ingressHost ?? "",
+                  ITERATE_INGRESS_ROUTING_TYPE: opts.ingressHostType ?? "",
+                  ...(opts.ingressDefaultService
+                    ? { ITERATE_INGRESS_DEFAULT_SERVICE: opts.ingressDefaultService }
+                    : {}),
+                  ...(opts.egressProxyURL ? { ITERATE_EGRESS_PROXY: opts.egressProxyURL } : {}),
                 },
                 guest: {
                   cpu_kind: "shared",
@@ -751,6 +758,39 @@ async function deleteFlyResources(params: {
   ).catch((e) => {
     if (!matchesError(e, "not found", "(404)")) throw e;
   });
+  await waitForAppDeletion({
+    api,
+    appName: params.appName,
+  });
+}
+
+async function waitForAppDeletion(params: {
+  api: Client<paths>;
+  appName: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const timeoutMs = params.timeoutMs ?? 30_000;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    throwIfAborted(params.signal);
+    const result = await params.api
+      .GET("/apps/{app_name}", {
+        params: { path: { app_name: params.appName } },
+        signal: params.signal,
+      })
+      .catch((error) => ({ error, response: null as Response | null }));
+    if (result.response?.status === 404 || matchesError(result.error, "not found", "(404)")) {
+      return;
+    }
+    if (result.error) {
+      throw new Error(
+        `Failed polling Fly app deletion for ${params.appName}: ${JSON.stringify(result.error)}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  throw new Error(`Timed out waiting for Fly app deletion: ${params.appName}`);
 }
 
 function mapFlyMachineState(raw: string): DeploymentProviderState {
@@ -789,6 +829,14 @@ function parseFlyRuntimeMetadata(raw: string | undefined): FlyDeploymentOpts {
 
 function withDefaultFlyOpts(value: FlyDeploymentOpts): FlyDeploymentOpts {
   return {
+    ingressHost: value.ingressHost ?? value.env?.ITERATE_INGRESS_HOST,
+    ingressHostType:
+      value.ingressHostType ??
+      (value.env?.ITERATE_INGRESS_ROUTING_TYPE as FlyDeploymentOpts["ingressHostType"]) ??
+      undefined,
+    ingressDefaultService:
+      value.ingressDefaultService ?? value.env?.ITERATE_INGRESS_DEFAULT_SERVICE,
+    egressProxyURL: value.egressProxyURL ?? value.env?.ITERATE_EGRESS_PROXY,
     rootfsSurvivesRestart: value.rootfsSurvivesRestart ?? true,
     ...value,
   };

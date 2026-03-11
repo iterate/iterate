@@ -110,10 +110,7 @@ egressApprovalsApp.post("/projects/:projectId/approvals/:id/approve", async (c) 
   if (!updated) {
     // DO was notified but DB update failed - the waiting request will still succeed
     // Log this for monitoring but don't fail the user action
-    logger.error("DB update failed after DO notification", {
-      project: { id: projectId },
-      approvalId: id,
-    });
+    logger.error("DB update failed after DO notification", { projectId, approvalId: id });
   }
 
   waitUntil(broadcastInvalidation(c.env));
@@ -153,10 +150,7 @@ egressApprovalsApp.post("/projects/:projectId/approvals/:id/reject", async (c) =
   if (!updated) {
     // DO was notified but DB update failed - the waiting request will still get rejected
     // Log this for monitoring but don't fail the user action
-    logger.error("DB update failed after DO notification", {
-      project: { id: projectId },
-      approvalId: id,
-    });
+    logger.error("DB update failed after DO notification", { projectId, approvalId: id });
   }
 
   waitUntil(broadcastInvalidation(c.env));

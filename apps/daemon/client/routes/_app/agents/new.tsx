@@ -5,7 +5,7 @@ import { Loader2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
-import { orpc, orpcClient } from "@/integrations/tanstack-query/orpc-client.tsx";
+import { useTRPC, trpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
 
 export const Route = createFileRoute("/_app/agents/new")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -52,6 +52,7 @@ function normalizeAgentPath(text: string): string {
 function NewAgentForm() {
   const navigate = useNavigate();
   const { path: initialPath } = Route.useSearch();
+  const trpc = useTRPC();
   const queryClient = useQueryClient();
 
   const [path, setPath] = useState(initialPath ?? "");
@@ -59,12 +60,12 @@ function NewAgentForm() {
 
   const createAgent = useMutation({
     mutationFn: () =>
-      orpcClient.daemon.getOrCreateAgent({
+      trpcClient.getOrCreateAgent.mutate({
         agentPath: normalizedPath,
         createWithEvents: [],
       }),
     onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: orpc.daemon.listAgents.key() });
+      queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
       navigate({
         to: "/agents/$slug",
         params: { slug: encodeURIComponent(result.agent.path) },

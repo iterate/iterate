@@ -1,6 +1,6 @@
 import type { CloudflareEnv } from "../../env.ts";
 
-export const PROJECT_SANDBOX_PROVIDER = ["fly", "docker", "daytona"] as const;
+export const PROJECT_SANDBOX_PROVIDER = ["daytona", "docker", "fly"] as const;
 export type ProjectSandboxProvider = (typeof PROJECT_SANDBOX_PROVIDER)[number];
 
 export type SandboxProviderOption = {
@@ -18,16 +18,30 @@ export function getProjectSandboxProviderOptions(
   env: CloudflareEnv,
   isDev: boolean,
 ): SandboxProviderOption[] {
-  const preference = env.SANDBOX_PROVIDER_PREFERENCE ?? "fly,docker,daytona";
-  const ordering = Object.fromEntries(
-    preference.split(",").map((provider, index) => [provider.trim(), index]),
-  );
   const options: SandboxProviderOption[] = [];
-  const daytonaEnabled = isEnabled(env.SANDBOX_DAYTONA_ENABLED, false);
+  const daytonaEnabled = isEnabled(env.SANDBOX_DAYTONA_ENABLED, true);
   const dockerEnabled = isEnabled(env.SANDBOX_DOCKER_ENABLED, false);
-  const flyEnabled = isEnabled(env.SANDBOX_FLY_ENABLED, true);
+  const flyEnabled = isEnabled(env.SANDBOX_FLY_ENABLED, false);
   const hasSandboxNamePrefix = Boolean(env.SANDBOX_NAME_PREFIX);
   const namingDisabledReason = hasSandboxNamePrefix ? undefined : "SANDBOX_NAME_PREFIX not set";
+
+  if (daytonaEnabled) {
+    options.push({
+      type: "daytona",
+      label: "Daytona (Cloud)",
+      disabledReason: namingDisabledReason,
+    });
+  }
+
+  if (dockerEnabled) {
+    options.push({
+      type: "docker",
+      label: "Docker",
+      disabledReason: !isDev
+        ? "Docker provider only available in development"
+        : namingDisabledReason,
+    });
+  }
 
   if (flyEnabled) {
     const hasFlyToken = Boolean(env.FLY_API_TOKEN);
@@ -43,25 +57,7 @@ export function getProjectSandboxProviderOptions(
     });
   }
 
-  if (dockerEnabled) {
-    options.push({
-      type: "docker",
-      label: "Docker",
-      disabledReason: !isDev
-        ? "Docker provider only available in development"
-        : namingDisabledReason,
-    });
-  }
-
-  if (daytonaEnabled) {
-    options.push({
-      type: "daytona",
-      label: "Daytona (Cloud)",
-      disabledReason: namingDisabledReason,
-    });
-  }
-
-  return options.sort((a, b) => (ordering[a.type] ?? 1000) - (ordering[b.type] ?? 1000));
+  return options;
 }
 
 export function getAvailableProjectSandboxProviders(
@@ -78,5 +74,10 @@ export function getDefaultProjectSandboxProvider(
   isDev: boolean,
 ): ProjectSandboxProvider {
   const availableProviders = getAvailableProjectSandboxProviders(env, isDev);
-  return availableProviders[0] ?? "fly";
+
+  if (availableProviders.includes("daytona")) {
+    return "daytona";
+  }
+
+  return availableProviders[0] ?? "daytona";
 }

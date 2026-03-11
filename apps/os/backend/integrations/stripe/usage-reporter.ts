@@ -18,7 +18,7 @@ export async function reportUsage(report: UsageReport): Promise<void> {
     throw new Error(`Unknown meter key: ${report.meterKey}`);
   }
 
-  await stripe.v2.billing.meterEvents.create({
+  const meterEvent = await stripe.v2.billing.meterEvents.create({
     event_name: meter.key,
     payload: {
       stripe_customer_id: report.stripeCustomerId,
@@ -28,7 +28,12 @@ export async function reportUsage(report: UsageReport): Promise<void> {
     timestamp: report.timestamp ?? new Date().toISOString(),
   });
 
-  logger.info(`Reported usage meterKey=${report.meterKey} quantity=${report.quantity}`);
+  logger.info("Reported usage", {
+    meterKey: report.meterKey,
+    quantity: report.quantity,
+    customerId: report.stripeCustomerId,
+    eventId: meterEvent.identifier,
+  });
 }
 
 export async function reportLLMUsage(params: {

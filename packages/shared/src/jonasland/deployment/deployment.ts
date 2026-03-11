@@ -8,19 +8,25 @@ import { createORPCClient } from "@orpc/client";
 import { type AnyContractRouter, type ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import Emittery from "emittery";
+import pRetry from "p-retry";
 import pWaitFor from "p-wait-for";
 import { createClient as createPidnapClient, type Client as PidnapClient } from "pidnap/client";
 import { createSlug } from "../create-slug.ts";
 import { localHostForService } from "../index.ts";
 import { createHostRoutedFetch, shQuote, throwIfAborted } from "./deployment-utils.ts";
 import type {
+  DeploymentExecResult,
+  DeploymentEgressOpts,
+  DeploymentIngressOpts,
   DeploymentOpts,
   DeploymentProvider,
   DeploymentProviderState,
   DeploymentProviderStatus,
 } from "./deployment-provider-manifest.ts";
 export type {
+  DeploymentEgressOpts,
   DeploymentExecResult,
+  DeploymentIngressOpts,
   DeploymentOpts,
   DeploymentProvider,
   DeploymentProviderLogEvent,
@@ -148,8 +154,13 @@ export type DeploymentEvent =
       payload: {};
     };
 
+type DeploymentEmitterEvent<TEvent extends DeploymentEvent = DeploymentEvent> = {
+  sequence: number;
+  event: TEvent;
+};
+
 type DeploymentEmitterEvents = {
-  [K in DeploymentEvent["type"]]: Extract<DeploymentEvent, { type: K }>;
+  [K in DeploymentEvent["type"]]: DeploymentEmitterEvent<Extract<DeploymentEvent, { type: K }>>;
 };
 
 function assertValidEnvVarKey(key: string) {
@@ -185,6 +196,8 @@ export class Deployment {
   private _registryService: RegistryClient | null = null;
   private _eventsService: ContractRouterClient<EventBusContract> | null = null;
   private readonly emitter = new Emittery<DeploymentEmitterEvents>();
+  private readonly eventHistory: DeploymentEmitterEvent[] = [];
+  private nextEventSequence = 1;
 
   static async create<TOpts extends DeploymentOpts = DeploymentOpts, TLocator = unknown>(params: {
     provider: DeploymentProvider<TOpts, TLocator>;
@@ -272,6 +285,8 @@ export class Deployment {
 
   async *events(params: { signal?: AbortSignal; logTail?: number } = {}) {
     await using iterator = this.emitter.anyEvent({ signal: params.signal });
+    const replayThroughSequence = this.nextEventSequence - 1;
+    const replay = this.eventHistory.filter((entry) => entry.sequence <= replayThroughSequence);
     const logAbortController = params.signal ? null : new AbortController();
     const logSignal = params.signal ?? logAbortController!.signal;
     const backgroundTasks =
@@ -288,8 +303,12 @@ export class Deployment {
         : [];
 
     try {
+      for (const entry of replay) {
+        yield entry.event;
+      }
       for await (const { data } of iterator) {
-        yield data;
+        if (data.sequence <= replayThroughSequence) continue;
+        yield data.event;
       }
     } catch (error) {
       if (!isAbortError(error)) throw error;
@@ -434,6 +453,13 @@ export class Deployment {
     return await this.routedFetch(host)(req);
   }
 
+  async resolvePublicURL(params: { internalURL: string }) {
+    this.assertConnected();
+    return await this.registryService.getPublicURL({
+      internalURL: params.internalURL,
+    });
+  }
+
   createServiceClient<TContract extends AnyContractRouter>(params: {
     slug: string;
     orpcContract: TContract;
@@ -457,13 +483,63 @@ export class Deployment {
     });
   }
 
-  async shell(params: { cmd: string; signal?: AbortSignal }) {
+  async shell(params: { cmd: string; signal?: AbortSignal; timeoutMs?: number }) {
     this.assertConnected();
+    const signal =
+      params.signal && params.timeoutMs
+        ? AbortSignal.any([params.signal, AbortSignal.timeout(params.timeoutMs)])
+        : (params.signal ?? (params.timeoutMs ? AbortSignal.timeout(params.timeoutMs) : undefined));
     return await this.provider.exec({
       locator: this.locator,
-      signal: params.signal,
+      signal,
       cmd: ["sh", "-ec", params.cmd],
     });
+  }
+
+  async shellWithRetry(params: {
+    cmd: string;
+    timeoutMs: number;
+    retryIf: (result: DeploymentExecResult) => boolean;
+    signal?: AbortSignal;
+    intervalMs?: number;
+  }) {
+    this.assertConnected();
+    const signal = params.signal
+      ? AbortSignal.any([params.signal, AbortSignal.timeout(params.timeoutMs)])
+      : AbortSignal.timeout(params.timeoutMs);
+    const intervalMs = params.intervalMs ?? 500;
+    const retries = Math.max(0, Math.ceil(params.timeoutMs / intervalMs));
+    let lastResult: DeploymentExecResult | null = null;
+
+    try {
+      return await pRetry(
+        async () => {
+          const result = await this.shell({
+            cmd: params.cmd,
+            signal,
+          });
+          lastResult = result;
+          if (!params.retryIf(result)) return result;
+          throw new Error(result.output || `shell command exited ${String(result.exitCode)}`);
+        },
+        {
+          retries,
+          signal,
+          minTimeout: intervalMs,
+          maxTimeout: intervalMs,
+          factor: 1,
+        },
+      );
+    } catch (error) {
+      if (lastResult != null) {
+        const last: DeploymentExecResult = lastResult;
+        throw new Error(
+          `Timed out waiting for shell command to satisfy retry predicate: ${last.output || String(last.exitCode)}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
   }
 
   async start() {
@@ -489,16 +565,127 @@ export class Deployment {
       assertValidEnvVarKey(key);
     }
 
-    const lines = entries.map(
-      ([key, value]) => `echo ${shQuote(`${key}=${value}`)} >> ~/.iterate/.env`,
-    );
-
     const result = await this.shell({
-      cmd: ["mkdir -p ~/.iterate", ...lines].join("\n"),
+      cmd: [
+        "mkdir -p ~/.iterate",
+        `ITERATE_ENV_UPDATES=${shQuote(JSON.stringify(Object.fromEntries(entries)))}`,
+        "export ITERATE_ENV_UPDATES",
+        "node <<'EOF'",
+        "const fs = require('node:fs');",
+        "const path = require('node:path');",
+        "const envPath = path.join(process.env.HOME, '.iterate', '.env');",
+        "const updates = JSON.parse(process.env.ITERATE_ENV_UPDATES || '{}');",
+        "const current = new Map();",
+        "if (fs.existsSync(envPath)) {",
+        "  for (const line of fs.readFileSync(envPath, 'utf8').split(/\\r?\\n/)) {",
+        "    if (!line || line.trimStart().startsWith('#')) continue;",
+        "    const idx = line.indexOf('=');",
+        "    if (idx === -1) continue;",
+        "    current.set(line.slice(0, idx), line.slice(idx + 1));",
+        "  }",
+        "}",
+        "for (const [key, value] of Object.entries(updates)) {",
+        "  current.set(key, String(value));",
+        "}",
+        "const lines = [...current.entries()].map(([key, value]) => `${key}=${value}`);",
+        "fs.writeFileSync(envPath, `${lines.join('\\n')}\\n`, 'utf8');",
+        "EOF",
+      ].join("\n"),
     });
     if (result.exitCode !== 0) {
       throw new Error(`Failed writing env vars to ~/.iterate/.env: ${result.output}`);
     }
+  }
+
+  /**
+   * Update the deployment's typed ingress env and wait for core networking
+   * services to settle.
+   *
+   * Env mapping:
+   * - `ingressHost` -> `ITERATE_INGRESS_HOST`
+   * - `ingressHostType` -> `ITERATE_INGRESS_ROUTING_TYPE`
+   * - `ingressDefaultService` -> `ITERATE_INGRESS_DEFAULT_SERVICE`
+   */
+  async updateIngressConfig(next: Partial<DeploymentIngressOpts>) {
+    this.assertConnected();
+    const current = this.opts;
+    const resolved = {
+      ingressHost: next.ingressHost ?? current.ingressHost,
+      ingressHostType: next.ingressHostType ?? current.ingressHostType,
+      ingressDefaultService: next.ingressDefaultService ?? current.ingressDefaultService,
+    } satisfies DeploymentIngressOpts;
+
+    await this.setEnvVars({
+      ITERATE_INGRESS_HOST: resolved.ingressHost ?? "",
+      ITERATE_INGRESS_ROUTING_TYPE: resolved.ingressHostType ?? "",
+      ITERATE_INGRESS_DEFAULT_SERVICE: resolved.ingressDefaultService ?? "",
+    });
+    this._opts = {
+      ...current,
+      ...resolved,
+    };
+
+    await this.waitUntilAlive({
+      signal: AbortSignal.timeout(60_000),
+    });
+    await this.pidnap.processes.waitFor({
+      processes: {
+        caddy: "running",
+        registry: "running",
+        events: "running",
+      },
+      timeoutMs: 30_000,
+    });
+    await this.shellWithRetry({
+      cmd: "curl -fsS --max-time 5 -H 'Host: registry.iterate.localhost' http://127.0.0.1/api/__iterate/health >/dev/null",
+      timeoutMs: 60_000,
+      retryIf: (result) => result.exitCode !== 0,
+    });
+  }
+
+  /**
+   * Update the deployment's typed egress env and wait for the configured proxy
+   * path to become usable again.
+   *
+   * Env mapping:
+   * - `egressProxyURL` -> `ITERATE_EGRESS_PROXY`
+   */
+  async updateEgressConfig(next: Partial<DeploymentEgressOpts>) {
+    this.assertConnected();
+    const current = this.opts;
+    const resolved = {
+      egressProxyURL:
+        next.egressProxyURL === undefined ? current.egressProxyURL : next.egressProxyURL,
+    } satisfies DeploymentEgressOpts;
+
+    await this.setEnvVars({
+      ITERATE_EGRESS_PROXY: resolved.egressProxyURL ?? "",
+    });
+    this._opts = {
+      ...current,
+      ...resolved,
+    };
+
+    await this.waitUntilAlive({
+      signal: AbortSignal.timeout(60_000),
+    });
+    await this.pidnap.processes
+      .waitFor({
+        processes: {
+          caddy: "running",
+          registry: "running",
+          events: "running",
+        },
+        timeoutMs: 30_000,
+      })
+      .catch(() => {});
+
+    if (!resolved.egressProxyURL) return;
+    await this.shellWithRetry({
+      cmd: `curl -sS --max-time 2 -o /dev/null -w '%{http_code}' ${shQuote(`${resolved.egressProxyURL}/__iterate/health`)} | grep -vq '^000$'`,
+      timeoutMs: 30_000,
+      retryIf: (result) => result.exitCode !== 0,
+    });
   }
 
   async status() {
@@ -536,8 +723,16 @@ export class Deployment {
     });
   }
 
-  private publish(event: DeploymentEvent) {
-    void this.emitter.emit(event.type, event);
+  private publish<TEvent extends DeploymentEvent>(event: TEvent) {
+    const publishedEvent: DeploymentEmitterEvent<TEvent> = {
+      sequence: this.nextEventSequence++,
+      event,
+    };
+    this.eventHistory.push(publishedEvent);
+    void this.emitter.emit(
+      event.type,
+      publishedEvent as unknown as DeploymentEmitterEvents[TEvent["type"]],
+    );
   }
 
   private assertConnected() {

@@ -6,52 +6,12 @@ Sandbox docs are centralized in [`sandbox/README.md`](../../sandbox/README.md).
 
 Use that doc for:
 
-- Docker/Fly provider behavior (Daytona is optional/manual-only)
+- Docker/Daytona/Fly provider behavior
 - Image + snapshot tag formats
-- Doppler defaults (`DOCKER_DEFAULT_IMAGE`, `FLY_DEFAULT_IMAGE`)
+- Doppler defaults (`DOCKER_DEFAULT_IMAGE`, `DAYTONA_DEFAULT_SNAPSHOT`, `FLY_DEFAULT_IMAGE`)
 - Build/push/bootstrap/test commands
 
 Keep sandbox details out of this file to avoid drift.
-
----
-
-## Project ingress env vars
-
-Two domains configure the system:
-
-1. **OS worker host** — where the control plane lives (`VITE_PUBLIC_URL`).
-   - prod: `https://os.iterate.com`
-   - dev w/ tunnel: `https://$DEV_TUNNEL.dev.iterate.com`
-   - dev w/o tunnel: `http://os.iterate.com.localhost`
-
-2. **Project ingress domain** (`PROJECT_INGRESS_DOMAIN`) — base domain for machine ingress.
-   - prod: `iterate.app`
-   - dev w/ tunnel: `$DEV_TUNNEL.dev.iterate.app`
-   - dev w/o tunnel: `iterate.app.localhost`
-
-Ingress hostnames follow the pattern `<port>__<identifier>.<PROJECT_INGRESS_DOMAIN>`.
-
-| Variable                 | Purpose                                                                          |
-| ------------------------ | -------------------------------------------------------------------------------- |
-| `PROJECT_INGRESS_DOMAIN` | Base domain for project ingress hostnames (e.g. `iterate.app`)                   |
-| `OS_WORKER_ROUTES`       | Comma-separated Cloudflare route host patterns mounted to the `os` worker        |
-| `DEV_TUNNEL`             | Local tunnel subdomain; sets up both `*.dev.iterate.com` and `*.dev.iterate.app` |
-
-### Env vars injected into machines
-
-| Variable                         | Example                       |
-| -------------------------------- | ----------------------------- |
-| `ITERATE_OS_BASE_URL`            | `https://os.iterate.com`      |
-| `ITERATE_PROJECT_BASE_URL`       | `https://my-proj.iterate.app` |
-| `ITERATE_PROJECT_INGRESS_DOMAIN` | `iterate.app`                 |
-
-Shared helpers in `@iterate-com/shared/project-ingress` provide:
-
-- `parseProjectIngressHostname()` — extract project/machine + port from hostname
-- `buildMachineIngressEnvVars()` — produce the env vars above
-- `buildProjectPortUrl()` — given `ITERATE_PROJECT_BASE_URL` + port → publicly routable URL
-- `buildMachinePortUrl()` — given domain + machineId + port → publicly routable URL
-- `isProjectIngressHostname()` — check if hostname is a subdomain of the ingress domain
 
 ---
 
@@ -72,7 +32,7 @@ PostHog is configured via environment variables (managed by Doppler). All are op
 ### Architecture
 
 - **Client-side**: PostHog JS SDK with session replay enabled
-- **Server-side**: posthog-node for oRPC mutation tracking
+- **Server-side**: posthog-node for tRPC mutation tracking
 - **Proxy**: `/ingest/*` routes proxy to PostHog EU (`eu.i.posthog.com`) for ad-blocker bypass
 
 ### Environments
@@ -99,7 +59,7 @@ Users are identified in the auth-required layout (covering all authenticated rou
 
 ### Adding New Tracked Mutations
 
-To track a new oRPC mutation, add it to `backend/orpc/tracked-mutations.ts`:
+To track a new tRPC mutation, add it to `backend/trpc/tracked-mutations.ts`:
 
 ```typescript
 registerTrackedMutation("router.mutationName", {

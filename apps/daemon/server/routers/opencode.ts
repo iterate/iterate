@@ -1,31 +1,19 @@
 import { homedir } from "node:os";
-import { inspect } from "node:util";
-import { readFileSync, statSync } from "node:fs";
 import { Hono } from "hono";
-import { createOpencodeClient } from "@opencode-ai/sdk/v2";
-import { createRouterClient } from "@orpc/server";
-import { AgentEventsPayload } from "../types/events.ts";
-import { daemonRouter } from "../orpc/router.ts";
-import { getCustomerRepoPathOrNull } from "../orpc/platform.ts";
+import { createOpencodeClient, type Event as OpencodeEvent } from "@opencode-ai/sdk";
+import { PromptAddedEvent } from "../types/events.ts";
+import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
+import { trpcRouter } from "../trpc/router.ts";
 import { withSpan } from "../utils/otel.ts";
-import { agentStatusFromOpencodeEvent, extractOpencodeSessionId } from "./opencode-status.ts";
 
 // Opencode sessions are project-bound - use homedir as neutral location for global sessions
 function getOpencodeWorkingDirectory(): string {
-  const customerRepoPath = getCustomerRepoPathOrNull();
-  if (!customerRepoPath) {
+  const dir = getAgentWorkingDirectory();
+  // If it's the default fallback (cwd), use homedir instead for global accessibility
+  if (dir === process.cwd()) {
     return homedir();
   }
-
-  try {
-    if (statSync(customerRepoPath).isDirectory()) {
-      return customerRepoPath;
-    }
-  } catch {
-    // Fall through to homedir when customer repo path is stale/missing.
-  }
-
-  return homedir();
+  return dir;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,10 +34,10 @@ function getOpencodeWorkingDirectory(): string {
 // Outbound (opencode → agents):
 //   A single global SSE subscription listens to all OpenCode session events.
 //   When a tracked session goes idle/error or updates tool status, we call
-//   orpc.updateAgent so the agents table reflects the current state.
+//   trpc.updateAgent so the agents table reflects the current state.
 
 const OPENCODE_BASE_URL = process.env.OPENCODE_BASE_URL ?? "http://localhost:4096";
-const orpc = createRouterClient(daemonRouter, { context: {} });
+const trpc = trpcRouter.createCaller({});
 const opencodeClient = createOpencodeClient({ baseUrl: OPENCODE_BASE_URL });
 
 export const opencodeRouter = new Hono();
@@ -62,8 +50,8 @@ opencodeRouter.post("/new", async (c) => {
 
   const workingDirectory = getOpencodeWorkingDirectory();
   const response = await opencodeClient.session.create({
-    directory: workingDirectory,
-    title: `Agent: ${agentPath}`,
+    query: { directory: workingDirectory },
+    body: { title: `Agent: ${agentPath}` },
   });
 
   if (!response.data) {
@@ -86,76 +74,34 @@ opencodeRouter.post("/new", async (c) => {
   });
 });
 
-/**
- * Extract prompt messages from the request payload.
- * Expects { events: IterateEvent[] }, returns messages from all prompt-added events.
- * Returns null if the payload doesn't match or has no prompt-added events.
- */
-function extractPromptMessages(payload: unknown): string[] | null {
-  const parsed = AgentEventsPayload.safeParse(payload);
-  if (!parsed.success) return null;
-
-  const messages = parsed.data.events
-    .filter(
-      (e): e is { type: "iterate:agent:prompt-added"; message: string } =>
-        e.type === "iterate:agent:prompt-added",
-    )
-    .map((e) => e.message);
-
-  return messages.length > 0 ? messages : null;
-}
-
 opencodeRouter.post("/sessions/:opencodeSessionId", async (c) => {
   const opencodeSessionId = c.req.param("opencodeSessionId");
   const agentPath = c.req.header("x-iterate-agent-path") ?? undefined;
   const payload = await c.req.json();
 
-  const messages = extractPromptMessages(payload);
-  if (!messages || messages.length === 0) {
-    return c.json(
-      { error: "Expected { events: [...] } with at least one prompt-added event" },
-      400,
-    );
+  const parsed = PromptAddedEvent.safeParse(payload);
+  if (!parsed.success) {
+    return c.json({ error: "Expected an iterate:agent:prompt-added event" }, 400);
   }
 
-  const health = await opencodeClient.global.health();
-
-  if (!health.data?.healthy) {
-    return c.json({ error: "OpenCode is not healthy: " + inspect(health?.error) }, 503);
-  }
-
-  let envFileContent: string;
-  try {
-    envFileContent = readFileSync(homedir() + "/.iterate/.env", "utf8");
-  } catch {
-    return c.json({ error: "~/.iterate/.env not found (bootstrap may not have run yet)" }, 503);
-  }
-  if (!envFileContent.includes("ANTHROPIC_API_KEY")) {
-    console.log("ANTHROPIC_API_KEY is not set yet!");
-    return c.json({ error: "ANTHROPIC_API_KEY is not set" }, 503);
-  }
-
-  // Flatten all prompt messages into a single promptAsync call with multiple text parts.
-  const parts = messages.map((text) => ({ type: "text" as const, text }));
-  const totalLength = messages.reduce((sum, m) => sum + m.length, 0);
+  const { message } = parsed.data;
 
   // Fire-and-forget: background the prompt so the caller returns immediately
   void withSpan(
-    "daemon.opencode.append-async",
+    "daemon.opencode.append",
     {
       attributes: {
         "opencode.session_id": opencodeSessionId,
         ...(agentPath ? { "agent.path": agentPath } : {}),
-        "prompt.length": totalLength,
-        "prompt.parts_count": parts.length,
+        "prompt.length": message.length,
       },
     },
     async () => {
       if (agentPath) agentPathByOpencodeSessionId.set(opencodeSessionId, agentPath);
-      await opencodeClient.session.promptAsync({
-        sessionID: opencodeSessionId,
-        directory: getOpencodeWorkingDirectory(),
-        parts,
+      await opencodeClient.session.prompt({
+        path: { id: opencodeSessionId },
+        query: { directory: getOpencodeWorkingDirectory() },
+        body: { parts: [{ type: "text", text: message }] },
       });
     },
   ).catch((error) => {
@@ -195,13 +141,10 @@ void (async () => {
       }
 
       const status = agentStatusFromOpencodeEvent(event);
-
       if (!status) continue;
 
-      if (!status.isWorking) {
-        agentPathByOpencodeSessionId.delete(opencodeSessionId);
-      }
-      await orpc.updateAgent({ path: agentPath, ...status });
+      if (!status.isWorking) agentPathByOpencodeSessionId.delete(opencodeSessionId);
+      await trpc.updateAgent({ path: agentPath, ...status });
     }
 
     console.warn("[opencode] lifecycle subscription stream ended unexpectedly");
@@ -212,4 +155,61 @@ void (async () => {
   }
 })();
 
-export { agentStatusFromOpencodeEvent, extractOpencodeSessionId } from "./opencode-status.ts";
+/**
+ * Derive agent status from an OpenCode event. Returns null if the event is
+ * irrelevant to agent lifecycle (e.g. message.updated, file.edited, etc.).
+ */
+export function agentStatusFromOpencodeEvent(
+  event: OpencodeEvent,
+): { isWorking: boolean; shortStatus: string } | null {
+  // Idle / error -> not working
+  if (
+    event.type === "session.idle" ||
+    event.type === "session.error" ||
+    (event.type === "session.status" && event.properties.status.type === "idle")
+  ) {
+    return { isWorking: false, shortStatus: "" };
+  }
+
+  // Busy session -> thinking (LLM is reasoning, no tool call or text yet)
+  if (event.type === "session.status" && event.properties.status.type === "busy") {
+    return { isWorking: true, shortStatus: "🤔 Thinking" };
+  }
+
+  if (event.type === "message.part.updated") {
+    // Text part -> the LLM is generating a response
+    if (event.properties.part.type === "text") {
+      return { isWorking: true, shortStatus: "✏️ Writing response" };
+    }
+
+    // Tool status -> working with a short description
+    if (event.properties.part.type === "tool") {
+      const { state } = event.properties.part;
+      if (state.status !== "running" && state.status !== "completed") return null;
+
+      const title = "title" in state && typeof state.title === "string" ? state.title : "";
+      const description =
+        state.input && typeof state.input.description === "string" ? state.input.description : "";
+      const shortStatus = `🔧 ${(title || description || event.properties.part.tool || "Working").slice(0, 27)}`;
+      return { isWorking: true, shortStatus };
+    }
+  }
+
+  return null;
+}
+
+function extractOpencodeSessionId(event: OpencodeEvent): string | null {
+  switch (event.type) {
+    case "session.status":
+    case "session.idle":
+      return event.properties.sessionID;
+    case "session.error":
+      return event.properties.sessionID ?? null;
+    case "message.updated":
+      return event.properties.info.sessionID;
+    case "message.part.updated":
+      return event.properties.part.sessionID;
+    default:
+      return null;
+  }
+}

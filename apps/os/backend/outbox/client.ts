@@ -1,77 +1,30 @@
-import type { appRouter } from "../orpc/root.ts";
+import type { appRouter } from "../trpc/root.ts";
 import type { MachineType } from "../db/schema.ts";
 import { waitUntil } from "../../env.ts";
-import { type RouterEventTypes, createConsumerClient } from "./pgmq-lib.ts";
+import { type TrpcEventTypes, createConsumerClient } from "./pgmq-lib.ts";
 import { queuer } from "./outbox-queuer.ts";
 
 export type InternalEventTypes = {
-  // TODO: migrate these hand-written payload types to zod-based event schemas.
   "testing:poke": { dbtime: string; message: string };
-  /** Machine DB record created — provision it via the sandbox provider. */
-  "machine:created": {
-    machineId: string;
-  };
-  /** The daemon called reportStatus (fired on every call, not just "ready"). */
-  "machine:daemon-status-reported": {
-    machineId: string;
-    projectId: string;
-    status: string;
-    message: string;
-    externalId: string | null;
-  };
-  /** A readiness probe webchat message was successfully sent to the machine. */
-  "machine:probe-sent": {
-    machineId: string;
-    projectId: string;
-    threadId: string;
-    messageId: string;
-  };
-  /** The readiness probe received a valid response. */
-  "machine:probe-succeeded": {
-    machineId: string;
-    projectId: string;
-    responseText: string;
-  };
-  /** A user or system requested a machine/daemon restart. */
-  "machine:restart-requested": {
+  "machine:verify-readiness": {
     machineId: string;
     projectId: string;
   };
-  /** Machine was promoted to active state. */
   "machine:activated": {
     machineId: string;
     projectId: string;
-    detachedMachineIds: string[];
   };
-  /** OS pushed setup data (env vars, repos) to the daemon via tool.writeFile/execCommand. */
-  "machine:setup-pushed": {
-    machineId: string;
-    projectId: string;
-  };
-  /** A request to delete a machine via the provider SDK. */
-  "machine:delete-requested": {
+  "machine:archive": {
     machineId: string;
     type: MachineType;
     externalId: string;
     metadata: Record<string, unknown>;
   };
-  "github:webhook-received": {
-    sourceEventId: string;
-    deliveryId: string;
-    event: string;
-    action: string | null;
-    payload: Record<string, unknown>;
-  };
-  "machine:pull-iterate-iterate-requested": {
-    machineId: string;
-    ref: string;
-    sourceEventId: string;
-  };
 };
 
-type AppRouterEventTypes = RouterEventTypes<typeof appRouter>;
+type AppTrpcEventTypes = TrpcEventTypes<typeof appRouter>;
 
 export const outboxClient = createConsumerClient<
-  InternalEventTypes & AppRouterEventTypes,
+  InternalEventTypes & AppTrpcEventTypes,
   typeof queuer.$types.db
 >(queuer, { waitUntil });

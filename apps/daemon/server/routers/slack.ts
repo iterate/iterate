@@ -9,68 +9,47 @@
  *   2. We parse & classify (mention / FYI / reaction / ignored)
  *   2.5. We intercept agent commands (primary: !debug) before agent forwarding
  *   3. For mentions: immediately fire-and-forget eyes emoji, then getOrCreateAgent
- *      For FYI/reactions: getAgent (skip if none), then forward to existing agent
+ *      For FYI: getAgent (skip if none), then fire-and-forget thinking_face emoji
+ *      For reactions: getAgent (skip if none), then fire-and-forget eyes emoji
  *   4. If agent is newly created, subscribe to agent-change callbacks
  *   5. Fire-and-forget prompt to the agent via /api/agents/:path
  *   6. Agent-change callback fires as agent works:
- *      - isWorking=true  → set thread status (debounced + deduped)
+ *      - isWorking=true  → ensure emoji is on, set thread status
  *      - isWorking=false → remove emoji, clear thread status
  *
  * Emoji lifecycle:
- *   The "deterministic" emoji (eyes) is sent as early as possible in mention
- *   webhooks. For FYI/reaction events we forward to the agent but do not add
- *   deterministic emoji.
- *
- *   For mentions,
+ *   The "deterministic" emoji (eyes for mentions/reactions, thinking_face for
+ *   FYI) is sent as early as possible in the webhook handler — for mentions
  *   this happens *before* getOrCreateAgent, which can be slow (it may block
  *   creating an OpenCode session). The context (channel, timestamp, emoji name)
  *   is stored in `slackThreadContextByAgentPath` so the agent-change callback
  *   can remove the reaction when the agent goes idle.
  *
- *   Only one deterministic emoji is tracked per agentPath at a time. If another
- *   mention arrives before idle, we keep existing context and skip adding a
- *   second deterministic eyes emoji.
- *
- * Staleness handling:
- *   Slack Web API calls can be slow. Multiple agent-change callbacks run
- *   concurrently, each awaiting Slack API responses.
- *   When isWorking=false arrives, it deletes the context from the map
- *   BEFORE running cleanup. In-flight isWorking=true callbacks detect this
- *   via a reference check after each await and bail if the context changed.
- *   A delayed retry (5s) catches any stragglers that re-set status during
- *   the cleanup window.
+ *   Only one emoji is tracked per agentPath at a time. If a second webhook
+ *   arrives for the same thread while an emoji is still pending, the new
+ *   webhook skips emoji tracking (prompt still goes through). This prevents
+ *   the map from being clobbered and ensures the original reaction is
+ *   properly cleaned up.
  *
  * Structurally symmetric with webchat.ts and email.ts — if you change the
  * pattern in one, update the others to match.
  */
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
 import { z } from "zod/v4";
-import { WebClient } from "@slack/web-api";
+import { x } from "tinyexec";
 import type {
   AppMentionEvent,
   GenericMessageEvent,
   BotMessageEvent,
   ReactionAddedEvent,
   ReactionRemovedEvent,
-  KnownBlock,
-  SectionBlock,
-  ActionsBlock,
-  Button,
-  RichTextBlock,
 } from "@slack/types";
-import { createRouterClient } from "@orpc/server";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { daemonRouter } from "../orpc/router.ts";
-import {
-  runAgentCommand,
-  looksLikeAgentCommand,
-  type AgentCommandMatch,
-} from "../utils/agent-commands.ts";
+import { trpcRouter } from "../trpc/router.ts";
+import { runAgentCommand } from "../utils/agent-commands.ts";
 
 const logger = console;
 
@@ -79,33 +58,24 @@ export const slackRouter = new Hono();
 /**
  * Per-agent Slack thread context stored in memory, keyed by agent path.
  *
- * Set: message webhooks establish a context cycle for status updates.
- *      Mentions additionally add deterministic eyes emoji.
- *      If an active entry already exists, we keep it and avoid re-adding emoji.
- * Cleared: agent-change callback with `isWorking: false` marks closing, clears
- *          emoji + status, then removes the entry from the map if it is still
- *          the same cycle.
+ * Set: webhook handler adds the deterministic emoji (eyes / thinking_face)
+ *       and stores channel + timestamp here so we know what to clean up.
+ * Cleared: agent-change callback with `isWorking: false` removes the emoji
+ *          reaction, clears the thread status, and deletes the entry.
+ *
+ * Only one context per agentPath — concurrent webhooks for the same thread
+ * skip emoji tracking if an entry already exists (guard prevents clobbering).
  */
 type SlackThreadContext = {
   channel: string;
   threadTs: string;
-  /** The `ts` of the Slack message we reacted to (if deterministic emoji was added). */
-  emojiTimestamp?: string;
-  /** The emoji name we added (e.g. "eyes"), if any. */
-  emoji?: string;
-  /** Local creation timestamp used to ignore stale agent callbacks. */
-  createdAtMs: number;
+  /** The `ts` of the Slack message we reacted to (so we can remove the reaction later). */
+  emojiTimestamp: string;
+  /** The emoji name we added (e.g. "eyes", "thinking_face"). */
+  emoji: string;
   requestId?: string;
   /** Tracks the in-flight reactions.add call so remove waits and avoids no_reaction races. */
-  addEmojiPromise: Promise<void>;
-  /** Cycle guard to avoid stale async callbacks mutating a newer context. */
-  cycleId: string;
-  /** True while idle cleanup is running. */
-  closing: boolean;
-  /** Fingerprint of last status payload sent to Slack. */
-  lastStatusKey: string;
-  /** Debounced timer for status updates while agent is working. */
-  statusTimer?: ReturnType<typeof setTimeout>;
+  acknowledgePromise?: Promise<void>;
 };
 
 const slackThreadContextByAgentPath = new Map<string, SlackThreadContext>();
@@ -116,61 +86,10 @@ const slackThreadContextByAgentPath = new Map<string, SlackThreadContext>();
  */
 const inflightEventIds = new Set<string>();
 
-const STATUS_DEBOUNCE_MS = 200;
-
 const DAEMON_PORT = process.env.PORT || "3001";
 const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 const AGENT_ROUTER_BASE_URL = `${DAEMON_BASE_URL}/api/agents`;
 const SLACK_AGENT_CHANGE_CALLBACK_URL = `${DAEMON_BASE_URL}/api/integrations/slack/agent-change-callback`;
-
-// ──────────────────────── System prompt helpers ─────────────────────────────
-
-/**
- * Read SLACK.md from the repo at sandbox/home-skeleton/.config/opencode/SLACK.md.
- * Cached after first read. Returns empty string if the file doesn't exist.
- */
-let cachedSlackMd: string | null = null;
-
-function readSlackMd(): string {
-  if (cachedSlackMd !== null) return cachedSlackMd;
-  const repoPath = process.env.ITERATE_CUSTOMER_REPO_PATH;
-  if (!repoPath) {
-    cachedSlackMd = "";
-    return cachedSlackMd;
-  }
-  try {
-    cachedSlackMd = readFileSync(
-      join(repoPath, "sandbox", "home-skeleton", ".config", "opencode", "SLACK.md"),
-      "utf8",
-    );
-  } catch {
-    cachedSlackMd = "";
-  }
-  return cachedSlackMd;
-}
-
-type PromptEvent = { type: "iterate:agent:prompt-added"; message: string };
-
-/**
- * Build the { events: [...] } payload for the agent router.
- * On first message (wasNewlyCreated), prepends a system prompt event with SLACK.md.
- */
-function buildAgentEventsPayload(
-  message: string,
-  wasNewlyCreated: boolean,
-): { events: PromptEvent[] } {
-  const events: PromptEvent[] = [];
-
-  if (wasNewlyCreated) {
-    const slackMd = readSlackMd();
-    if (slackMd) {
-      events.push({ type: "iterate:agent:prompt-added", message: slackMd });
-    }
-  }
-
-  events.push({ type: "iterate:agent:prompt-added", message });
-  return { events };
-}
 
 /**
  * We consume `iterate:agent-updated` events delivered to the callback URL.
@@ -184,21 +103,9 @@ const AgentUpdatedEvent = z.object({
       path: z.string(),
       shortStatus: z.string(),
       isWorking: z.boolean(),
-      updatedAt: z.string().optional(),
     })
     .passthrough(),
 });
-
-interface AssistantThreadStartedEvent {
-  type: "assistant_thread_started";
-  assistant_thread: {
-    user_id: string;
-    channel_id: string;
-    thread_ts: string;
-    context?: Record<string, unknown>;
-  };
-  event_ts: string;
-}
 
 interface SlackWebhookPayload {
   token?: string;
@@ -212,8 +119,7 @@ interface SlackWebhookPayload {
     | GenericMessageEvent
     | BotMessageEvent
     | ReactionAddedEvent
-    | ReactionRemovedEvent
-    | AssistantThreadStartedEvent;
+    | ReactionRemovedEvent;
   authorizations?: Array<{
     enterprise_id: string | null;
     team_id: string;
@@ -223,16 +129,17 @@ interface SlackWebhookPayload {
   }>;
 }
 
-interface ParsedMessage {
-  case: "new_thread_mention" | "mid_thread_mention" | "fyi_message";
-  event: AppMentionEvent | GenericMessageEvent;
-  threadTs: string;
-}
+type MessageCase =
+  | "new_thread_mention"
+  | "mid_thread_mention"
+  | "fyi_message"
+  | "reaction_added"
+  | "reaction_removed"
+  | "ignored";
 
-interface ParsedAssistantThread {
-  case: "assistant_thread_started";
-  userId: string;
-  channel: string;
+interface ParsedMessage {
+  case: Exclude<MessageCase, "ignored" | "reaction_added" | "reaction_removed">;
+  event: AppMentionEvent | GenericMessageEvent;
   threadTs: string;
 }
 
@@ -243,22 +150,8 @@ interface ParsedReaction {
   channel: string;
 }
 
-type ParsedEvent =
-  | ParsedMessage
-  | ParsedAssistantThread
-  | ParsedReaction
-  | { case: "ignored"; reason: string };
-
-function isParsedReaction(
-  parsed: ParsedMessage | ParsedAssistantThread | ParsedReaction,
-): parsed is ParsedReaction {
+function isParsedReaction(parsed: ParsedMessage | ParsedReaction): parsed is ParsedReaction {
   return parsed.case === "reaction_added" || parsed.case === "reaction_removed";
-}
-
-function isParsedAssistantThread(
-  parsed: ParsedMessage | ParsedAssistantThread | ParsedReaction,
-): parsed is ParsedAssistantThread {
-  return parsed.case === "assistant_thread_started";
 }
 
 slackRouter.use("*", async (c, next) => {
@@ -279,7 +172,7 @@ slackRouter.use("*", async (c, next) => {
  *   3. For @mentions: getOrCreateAgent  ->  wasNewlyCreated
  *      For FYI / reactions: getAgent    ->  skip if no agent exists
  *   4. If wasNewlyCreated, subscribe to agent-change callbacks (once per agent).
- *   5. For @mentions, ensure one active deterministic emoji context.
+ *   5. Update slackThreadContextByAgentPath with emoji info.
  *   6. Fire-and-forget fetch to AGENT_ROUTER_BASE_URL + agentPath.
  */
 slackRouter.post("/webhook", async (c) => {
@@ -298,7 +191,7 @@ slackRouter.post("/webhook", async (c) => {
     return c.json({ success: true, message: parsed.reason, eventId, requestId });
   }
 
-  const caller = createRouterClient(daemonRouter, { context: {} });
+  const caller = trpcRouter.createCaller({});
 
   // ── Reaction events ──
   // Reactions never create agents; they only forward to an existing one.
@@ -326,11 +219,25 @@ slackRouter.post("/webhook", async (c) => {
 
     const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
 
-    // Fire-and-forget prompt to the agent. Reactions never create agents, so wasNewlyCreated=false.
+    // Send eyes emoji immediately and track context for cleanup when agent goes idle.
+    // Skip if an emoji is already pending — avoid clobbering the tracked context.
+    if (!slackThreadContextByAgentPath.has(agentPath)) {
+      const ctx: SlackThreadContext = {
+        channel: parsed.channel,
+        threadTs,
+        emojiTimestamp: threadTs,
+        emoji: "eyes",
+        requestId,
+      };
+      slackThreadContextByAgentPath.set(agentPath, ctx);
+      ctx.acknowledgePromise = acknowledge(ctx);
+    }
+
+    // Fire-and-forget prompt to the agent.
     void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildAgentEventsPayload(message, false)),
+      body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
     }).catch((error) => {
       logger.error(`[slack] failed to post reaction prompt for thread_ts=${threadTs}`, error);
     });
@@ -345,53 +252,32 @@ slackRouter.post("/webhook", async (c) => {
     });
   }
 
-  // ── assistant_thread_started (DM opened) ──
-  // Create the agent so the user's first actual message can be forwarded.
-  // No prompt is sent — there's no user message yet.
-  if (isParsedAssistantThread(parsed)) {
-    const agentPath = getAgentPath(parsed.threadTs);
-    const result = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
-
-    if (result.wasNewlyCreated) {
-      void caller.subscribeToAgentChanges({
-        agentPath,
-        callbackUrl: SLACK_AGENT_CHANGE_CALLBACK_URL,
-      });
-    }
-
-    return c.json({
-      success: true,
-      queued: false,
-      created: result.wasNewlyCreated,
-      case: "assistant_thread_started",
-      eventId,
-      requestId,
-    });
-  }
-
   // ── Message events (mentions & FYI) ──
 
   const { event, threadTs } = parsed;
   const agentPath = getAgentPath(threadTs);
   const isMention = parsed.case === "new_thread_mention" || parsed.case === "mid_thread_mention";
   const messageTs = event.ts || threadTs;
-
-  // For @mentions, start a context cycle and add eyes immediately.
-  if (isMention) {
-    ensureSlackThreadContext({
-      agentPath,
-      channel: event.channel || "",
-      threadTs,
-      emojiTimestamp: messageTs,
-      emoji: "eyes",
-      requestId,
-    });
-  }
-
   let wasNewlyCreated = false;
   let agent: Awaited<ReturnType<typeof caller.getAgent>> = null;
 
   if (isMention) {
+    // For @mentions, send the eyes emoji reaction immediately — before getOrCreateAgent
+    // which can be slow (it blocks waiting for an OpenCode session to be created).
+    // The user should see the reaction ~instantly as confirmation we received their message.
+    // Skip if an emoji is already pending — avoid clobbering the tracked context.
+    if (!slackThreadContextByAgentPath.has(agentPath)) {
+      const ctx: SlackThreadContext = {
+        channel: event.channel || "",
+        threadTs,
+        emojiTimestamp: messageTs,
+        emoji: "eyes",
+        requestId,
+      };
+      slackThreadContextByAgentPath.set(agentPath, ctx);
+      ctx.acknowledgePromise = acknowledge(ctx);
+    }
+
     // Mentions always get-or-create an agent, matching the webchat pattern.
     const result = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
     wasNewlyCreated = result.wasNewlyCreated;
@@ -408,13 +294,18 @@ slackRouter.post("/webhook", async (c) => {
       });
     }
 
-    // FYI messages start a fresh status cycle but do not add deterministic emoji.
-    ensureSlackThreadContext({
-      agentPath,
-      channel: event.channel || "",
-      threadTs,
-      requestId,
-    });
+    // FYI in a thread with an existing agent — send thinking_face immediately.
+    if (!slackThreadContextByAgentPath.has(agentPath)) {
+      const ctx: SlackThreadContext = {
+        channel: event.channel || "",
+        threadTs,
+        emojiTimestamp: messageTs,
+        emoji: "thinking_face",
+        requestId,
+      };
+      slackThreadContextByAgentPath.set(agentPath, ctx);
+      ctx.acknowledgePromise = acknowledge(ctx);
+    }
   }
 
   if (!agent) {
@@ -445,7 +336,8 @@ slackRouter.post("/webhook", async (c) => {
     // agent lifecycle callback to clean up any tracked deterministic emoji.
     const slackContext = slackThreadContextByAgentPath.get(agentPath);
     if (slackContext) {
-      await cleanupSlackThreadContext(agentPath, slackContext);
+      await unacknowledge(slackContext);
+      slackThreadContextByAgentPath.delete(agentPath);
     }
 
     const channel = event.channel || "";
@@ -459,14 +351,11 @@ slackRouter.post("/webhook", async (c) => {
       });
     }
 
-    const blocks =
-      commandResult.command === "debug" ? buildDebugCommandBlocks(commandResult) : undefined;
-
-    await getSlackClient().chat.postMessage({
+    await postSlackThreadMessage({
       channel,
-      thread_ts: threadTs,
+      threadTs,
       text: commandResult.resultMarkdown,
-      ...(blocks ? { blocks } : {}),
+      requestId,
     });
 
     return c.json({
@@ -502,11 +391,10 @@ slackRouter.post("/webhook", async (c) => {
     parsed.case === "new_thread_mention" && !wasNewlyCreated ? "mid_thread_mention" : parsed.case;
 
   // Fire-and-forget prompt to the agent, just like webchat.ts.
-  // On first message (wasNewlyCreated), prepends SLACK.md as a system prompt event.
   void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildAgentEventsPayload(message, wasNewlyCreated)),
+    body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
   }).catch((error) => {
     logger.error(`[slack] failed to post prompt for thread_ts=${threadTs}`, error);
   });
@@ -524,10 +412,11 @@ slackRouter.post("/webhook", async (c) => {
 /**
  * Receives `iterate:agent-updated` events from the agent change callback system.
  *
- * This callback manages the thread status while the agent works and
+ * The deterministic emoji (eyes/thinking_face) was already added by the webhook
+ * handler. This callback manages the thread status while the agent works and
  * cleans up when it goes idle:
- *   - isWorking=true  → debounce + dedupe thread status updates
- *   - isWorking=false → remove tracked emoji, clear thread status, delete context from map
+ *   - isWorking=true  → re-affirm emoji (no-op if already_reacted), set thread status
+ *   - isWorking=false → remove emoji, clear thread status, delete context from map
  */
 slackRouter.post("/agent-change-callback", async (c) => {
   const parsed = AgentUpdatedEvent.safeParse(await c.req.json());
@@ -541,168 +430,67 @@ slackRouter.post("/agent-change-callback", async (c) => {
     return c.json({ success: true, ignored: true });
   }
 
-  const eventUpdatedAtMs = parseUpdatedAtMs(payload.updatedAt);
-  if (eventUpdatedAtMs !== null && eventUpdatedAtMs < slackContext.createdAtMs) {
-    return c.json({ success: true, ignored: true, stale: true });
-  }
-
   if (payload.isWorking) {
-    scheduleThreadStatusUpdate(payload.path, slackContext, payload.shortStatus || "Working");
-    return c.json({ success: true, scheduled: true, debounceMs: STATUS_DEBOUNCE_MS });
+    await acknowledge(slackContext);
+    await setThreadStatus(slackContext, payload.shortStatus || "Working");
+    return c.json({ success: true });
   }
 
-  await cleanupSlackThreadContext(payload.path, slackContext);
+  // Agent went idle — remove emoji and clear status.
+  await unacknowledge(slackContext);
+  slackThreadContextByAgentPath.delete(payload.path);
   return c.json({ success: true });
 });
 
-function ensureSlackThreadContext(params: {
-  agentPath: string;
-  channel: string;
-  threadTs: string;
-  emojiTimestamp?: string;
-  emoji?: string;
-  requestId?: string;
-}): void {
-  const existing = slackThreadContextByAgentPath.get(params.agentPath);
-  if (existing && !existing.closing) {
-    return;
-  }
-
-  const context: SlackThreadContext = {
-    channel: params.channel,
-    threadTs: params.threadTs,
-    emojiTimestamp: params.emojiTimestamp,
-    emoji: params.emoji,
-    createdAtMs: Date.now(),
-    requestId: params.requestId,
-    addEmojiPromise: Promise.resolve(),
-    cycleId: `slk-${nanoid(8)}`,
-    closing: false,
-    lastStatusKey: "",
-  };
-
-  slackThreadContextByAgentPath.set(params.agentPath, context);
-  if (context.emoji && context.emojiTimestamp) {
-    const addEmojiPromise = addReaction(context);
-    context.addEmojiPromise = addEmojiPromise;
-    void addEmojiPromise;
-  }
-}
-
-function scheduleThreadStatusUpdate(
-  agentPath: string,
-  context: SlackThreadContext,
-  rawStatus: string,
-): void {
-  if (context.closing) return;
-
-  const statusPayload = toSlackStatus(rawStatus);
-  const statusKey = JSON.stringify(statusPayload);
-  if (statusKey === context.lastStatusKey) return;
-
-  if (context.statusTimer) clearTimeout(context.statusTimer);
-  const cycleId = context.cycleId;
-
-  context.statusTimer = setTimeout(() => {
-    void flushThreadStatusUpdate(agentPath, context, cycleId, rawStatus, statusKey);
-  }, STATUS_DEBOUNCE_MS);
-}
-
-async function flushThreadStatusUpdate(
-  agentPath: string,
-  context: SlackThreadContext,
-  cycleId: string,
-  rawStatus: string,
-  statusKey: string,
-): Promise<void> {
-  if (context.closing) return;
-  if (slackThreadContextByAgentPath.get(agentPath)?.cycleId !== cycleId) return;
-
-  await context.addEmojiPromise;
-  if (context.closing) return;
-  if (slackThreadContextByAgentPath.get(agentPath)?.cycleId !== cycleId) return;
-
-  await setThreadStatus(context, rawStatus);
-  context.lastStatusKey = statusKey;
-}
-
-async function cleanupSlackThreadContext(
-  agentPath: string,
-  context: SlackThreadContext,
-): Promise<void> {
-  if (context.closing) return;
-  context.closing = true;
-  if (context.statusTimer) clearTimeout(context.statusTimer);
-  context.statusTimer = undefined;
-
-  await context.addEmojiPromise;
-  await Promise.allSettled([removeReaction(context), setThreadStatus(context, "")]);
-
-  if (slackThreadContextByAgentPath.get(agentPath)?.cycleId === context.cycleId) {
-    slackThreadContextByAgentPath.delete(agentPath);
-  }
-}
-
-// ─────────────────────────── Slack API helpers (SDK) ────────────────────────
+// ──────────────────── Slack API helpers (shelling out) ──────────────────────
 //
-// We call Slack directly via the Web API client.
-//
-// Token: use SLACK_BOT_TOKEN (same as CLI tooling).
-let slackClient: WebClient | null = null;
+// We call the Slack API by shelling out to `iterate tool slack` rather than
+// using the Slack SDK directly. This is a workaround for an env-var / NFAR
+// issue on the daemon: the Slack SDK requires credentials that are available
+// to the `iterate` CLI but not easily injected into the daemon process.
 
-function getSlackClient(): WebClient {
-  if (slackClient) return slackClient;
-  const token = process.env.SLACK_BOT_TOKEN;
-  if (!token) throw new Error("SLACK_BOT_TOKEN environment variable is required");
-  slackClient = new WebClient(token);
-  return slackClient;
-}
-
-async function addReaction(context: SlackThreadContext): Promise<void> {
-  if (!context.emoji || !context.emojiTimestamp) return;
-
+async function acknowledge(context: SlackThreadContext): Promise<void> {
   try {
-    await getSlackClient().reactions.add({
-      channel: context.channel,
-      timestamp: context.emojiTimestamp,
-      name: context.emoji,
-    });
-    logger.log("[slack] addReaction ok", {
-      requestId: context.requestId,
-      channel: context.channel,
-      timestamp: context.emojiTimestamp,
-      name: context.emoji,
-    });
+    await runSlackCommand(
+      `await slack.reactions.add(${JSON.stringify({
+        channel: context.channel,
+        timestamp: context.emojiTimestamp,
+        name: context.emoji,
+      })})`,
+      context.requestId,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!message.includes("already_reacted")) {
-      logger.error("[slack] addReaction failed", { context, error: message });
+      logger.error("[slack-callback] acknowledge failed", { context, error: message });
     }
   }
 }
 
-async function removeReaction(context: SlackThreadContext): Promise<void> {
-  if (!context.emoji || !context.emojiTimestamp) return;
+/**
+ * Remove the emoji reaction and clear the thread status.
+ * Shells out to `iterate tool slack` — see comment above for why.
+ */
+async function unacknowledge(context: SlackThreadContext): Promise<void> {
+  await context.acknowledgePromise;
 
-  await context.addEmojiPromise;
   try {
-    await getSlackClient().reactions.remove({
-      channel: context.channel,
-      timestamp: context.emojiTimestamp,
-      name: context.emoji,
-    });
-    logger.log("[slack] removeReaction ok", {
-      requestId: context.requestId,
-      channel: context.channel,
-      timestamp: context.emojiTimestamp,
-      name: context.emoji,
-    });
+    await runSlackCommand(
+      `await slack.reactions.remove(${JSON.stringify({
+        channel: context.channel,
+        timestamp: context.emojiTimestamp,
+        name: context.emoji,
+      })})`,
+      context.requestId,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!message.includes("no_reaction")) {
-      logger.error("[slack] removeReaction failed", { context, error: message });
+      logger.error("[slack-callback] unacknowledge failed", { context, error: message });
     }
   }
+
+  await setThreadStatus(context, "");
 }
 
 /**
@@ -724,24 +512,22 @@ function toSlackStatus(rawStatus: string): { status: string; loading_messages?: 
   return { status: "is working...", loading_messages: [`${rawStatus}...`] };
 }
 
+/** Set the Slack assistant thread status. Calls straight through to the Slack API. */
 async function setThreadStatus(context: SlackThreadContext, rawStatus: string): Promise<void> {
   const { status, loading_messages } = toSlackStatus(rawStatus);
 
   try {
-    await getSlackClient().apiCall("assistant.threads.setStatus", {
-      channel_id: context.channel,
-      thread_ts: context.threadTs,
-      status,
-      ...(loading_messages ? { loading_messages } : {}),
-    });
-    logger.log("[slack] setThreadStatus ok", {
-      requestId: context.requestId,
-      channel: context.channel,
-      threadTs: context.threadTs,
-      status,
-    });
+    await runSlackCommand(
+      `await slack.assistant.threads.setStatus(${JSON.stringify({
+        channel_id: context.channel,
+        thread_ts: context.threadTs,
+        status,
+        ...(loading_messages ? { loading_messages } : {}),
+      })})`,
+      context.requestId,
+    );
   } catch (error) {
-    logger.error("[slack] setThreadStatus failed", {
+    logger.error("[slack-callback] setStatus failed", {
       context,
       status,
       error: error instanceof Error ? error.message : String(error),
@@ -749,106 +535,49 @@ async function setThreadStatus(context: SlackThreadContext, rawStatus: string): 
   }
 }
 
-// ──────────────────────── Slack block builders ──────────────────────────────
-
-function buildDebugCommandBlocks(commandResult: AgentCommandMatch): KnownBlock[] {
-  const r = commandResult.result as {
-    agentPath: string;
-    agentHarness: string | null;
-    sessionSource: string | null;
-    terminalUrl: string;
-    webUrl: string;
-  };
-
-  const fields = [
-    `*Agent path*\n\`${r.agentPath}\``,
-    ...(r.agentHarness ? [`*Harness*\n${r.agentHarness}`] : []),
-    ...(r.sessionSource ? [`*Session source*\n${r.sessionSource}`] : []),
-  ];
-
-  const blocks: KnownBlock[] = [
-    {
-      type: "section",
-      fields: fields.map((text) => ({ type: "mrkdwn" as const, text })),
-    } satisfies SectionBlock,
-  ];
-
-  const buttons: Button[] = [];
-
-  if (r.webUrl) {
-    buttons.push({
-      type: "button",
-      text: { type: "plain_text", text: "Open Web UI" },
-      url: r.webUrl,
-      style: "primary",
-    });
+/**
+ * Execute a Slack API call by shelling out to the `iterate` CLI.
+ *
+ * We shell out rather than using the Slack SDK directly because of a known
+ * env-var / NFAR issue on the daemon that prevents initializing the SDK.
+ * The `iterate` CLI has access to the required Slack credentials.
+ */
+async function runSlackCommand(code: string, requestId?: string): Promise<void> {
+  const result = await x("iterate", ["tool", "slack", code], { throwOnError: false });
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || `Exit code ${result.exitCode}`);
   }
 
-  if (r.terminalUrl) {
-    buttons.push({
-      type: "button",
-      text: { type: "plain_text", text: "Open Terminal" },
-      url: r.terminalUrl,
-    });
-  }
-
-  if (buttons.length > 0) {
-    blocks.push({
-      type: "actions",
-      elements: buttons,
-    } satisfies ActionsBlock);
-  }
-
-  // Full agent metadata as a collapsible-style code block
-  const agentJson = JSON.stringify(commandResult.result, null, 2);
-  blocks.push({
-    type: "rich_text",
-    elements: [
-      {
-        type: "rich_text_section",
-        elements: [{ type: "text", text: "Full agent metadata", style: { bold: true } }],
-      },
-      {
-        type: "rich_text_preformatted",
-        elements: [{ type: "text", text: agentJson }],
-      },
-    ],
-  } satisfies RichTextBlock);
-
-  return blocks;
+  logger.log("[slack-callback] ran slack command", {
+    requestId,
+    preview: code.slice(0, 80),
+  });
 }
+
+async function postSlackThreadMessage(params: {
+  channel: string;
+  threadTs: string;
+  text: string;
+  requestId?: string;
+}): Promise<void> {
+  await runSlackCommand(
+    `await slack.chat.postMessage(${JSON.stringify({
+      channel: params.channel,
+      thread_ts: params.threadTs,
+      text: params.text,
+    })})`,
+    params.requestId,
+  );
+}
+
 // ──────────────────────────── Parsing / routing ─────────────────────────────
 
-/**
- * Check if message text contains a mention of the given user ID.
- * Slack mentions can appear as `<@UID>` or `<@UID|displayname>`.
- */
-function textMentionsUser(text: string | undefined, userId: string): boolean {
-  if (!text) return false;
-  return new RegExp(`<@${userId}(?:\\|[^>]*)?>`).test(text);
-}
-
-function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
+function parseWebhookPayload(
+  payload: SlackWebhookPayload,
+): ParsedMessage | ParsedReaction | { case: "ignored"; reason: string } {
   const event = payload.event;
   const botUserId = payload.authorizations?.find((a) => a.is_bot)?.user_id;
 
-  // ── assistant_thread_started (DMs via Slack's assistant UI) ──
-  // Slack sends this instead of a regular message when a user opens a DM
-  // thread with a bot that has the assistant:write scope.
-  if (event.type === "assistant_thread_started") {
-    if (!botUserId) {
-      return { case: "ignored", reason: "Ignored: no bot user recipient" };
-    }
-    const thread = (event as AssistantThreadStartedEvent).assistant_thread;
-    return {
-      case: "assistant_thread_started",
-      userId: thread.user_id,
-      channel: thread.channel_id,
-      threadTs: thread.thread_ts,
-    };
-  }
-
-  // ── Reactions ──
   if (event.type === "reaction_added" || event.type === "reaction_removed") {
     if (event.item.type !== "message") {
       return { case: "ignored", reason: "Ignored: reaction not on message" };
@@ -864,42 +593,15 @@ function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
     };
   }
 
-  if (!botUserId) {
-    return { case: "ignored", reason: "Ignored: no bot user recipient" };
+  if ("bot_profile" in event && event.bot_profile) {
+    return { case: "ignored", reason: "Ignored: bot message" };
   }
-
-  // ── Self-message guard ──
-  // Ignore our own bot's messages to prevent feedback loops, UNLESS the
-  // message looks like an agent command (e.g. "!debug"). Commands from the
-  // bot itself are useful when another agent sends them on its behalf.
-  const isSelfMessage = "user" in event && event.user === botUserId;
-  const selfMessageText =
-    isSelfMessage && "text" in event ? (event.text as string | undefined) : undefined;
-  const isSelfCommand =
-    isSelfMessage && !!selfMessageText && looksLikeAgentCommand(selfMessageText);
-
-  if (isSelfMessage && !isSelfCommand) {
-    return { case: "ignored", reason: "Ignored: bot's own message" };
-  }
-
-  // ── Bot messages ──
-  // Ignore bot messages UNLESS they @mention our bot (another bot asking
-  // us to do something) or it's our own command message (already checked above).
-  const isBotMessage =
-    ("bot_profile" in event && event.bot_profile) ||
-    ("subtype" in event && event.subtype === "bot_message");
-
-  if (isBotMessage && !isSelfCommand && !textMentionsUser(event.text, botUserId)) {
+  if ("subtype" in event && event.subtype === "bot_message") {
     return { case: "ignored", reason: "Ignored: bot message" };
   }
 
-  // ── Hidden / message_changed events ──
-  // Slack sends hidden message_changed events when it updates internal metadata
-  // (e.g. adding assistant_app_thread to the thread root). These have no user
-  // field on the outer event, a unique ts, and no thread_ts — so they'd be
-  // incorrectly classified as new_thread_mention and create duplicate agents.
-  if ("hidden" in event && event.hidden) {
-    return { case: "ignored", reason: "Ignored: hidden event" };
+  if (!botUserId) {
+    return { case: "ignored", reason: "Ignored: no bot user recipient" };
   }
 
   const threadTs = event.thread_ts || event.ts;
@@ -908,21 +610,14 @@ function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
   }
 
   const isNewThread = !event.thread_ts;
-  // In DMs (channel_type "im"), the first message is implicitly directed at the
-  // bot (treated as a mention). Follow-up messages in the same DM thread are
-  // treated as FYI to avoid adding eyes emoji on every reply.
-  const isDM = "channel_type" in event && event.channel_type === "im";
-  const isExplicitMention = event.type === "app_mention" || textMentionsUser(event.text, botUserId);
-  const isMention = isExplicitMention || (isDM && isNewThread);
+  const isMention = event.type === "app_mention" || event.text?.includes(`<@${botUserId}>`);
 
-  let messageCase: ParsedMessage["case"];
+  let messageCase: Exclude<MessageCase, "reaction_added" | "reaction_removed">;
   if (isMention && isNewThread) {
     messageCase = "new_thread_mention";
   } else if (isMention && !isNewThread) {
     messageCase = "mid_thread_mention";
   } else {
-    // Covers: DM follow-ups (isDM && !isNewThread && !isExplicitMention),
-    // and channel messages without @mention.
     messageCase = "fyi_message";
   }
 
@@ -939,12 +634,6 @@ function sanitizeThreadId(ts: string): string {
 
 function getAgentPath(threadTs: string): string {
   return `/slack/ts-${sanitizeThreadId(threadTs)}`;
-}
-
-function parseUpdatedAtMs(updatedAt: string | undefined): number | null {
-  if (!updatedAt) return null;
-  const ms = Date.parse(updatedAt);
-  return Number.isNaN(ms) ? null : ms;
 }
 
 // ────────────────────────── Event storage ────────────────────────────────────
@@ -1009,7 +698,7 @@ function formatNewThreadMentionMessage(
 
   return [
     `[Agent Path: ${agentPath}] New Slack thread started.`,
-    "Refer to SLACK.md for how to respond via `iterate tool exec-ts`.",
+    "Refer to SLACK.md for how to respond via `iterate tool slack`.",
     "",
     `From: ${user}`,
     `Message: ${text}`,
@@ -1032,7 +721,7 @@ function formatMidThreadMentionMessage(
 
   const lines = [
     `[Agent Path: ${agentPath}] You've been @mentioned in thread ${threadTs}.`,
-    "Refer to SLACK.md for how to respond via `iterate tool exec-ts`.",
+    "Refer to SLACK.md for how to respond via `iterate tool slack`.",
     "",
     `From: ${user}`,
     `Message: ${text}`,

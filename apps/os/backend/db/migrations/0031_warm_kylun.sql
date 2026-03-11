@@ -1,2 +1,0 @@
-DROP INDEX "project_connection_provider_external_id_index";--> statement-breakpoint
-CREATE UNIQUE INDEX "project_connection_provider_external_id_index" ON "project_connection" USING btree ("provider","external_id");

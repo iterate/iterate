@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Suspense } from "react";
 import { PlusIcon, Loader2Icon, TrashIcon, BotIcon } from "lucide-react";
-import { orpc } from "@/integrations/tanstack-query/orpc-client.tsx";
+import { useTRPC } from "@/integrations/tanstack-query/trpc-client.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import {
   Table,
@@ -36,16 +36,17 @@ function AgentsLoading() {
 
 function AgentsContent() {
   const navigate = useNavigate();
+  const trpc = useTRPC();
   const queryClient = useQueryClient();
   const { data: agents } = useSuspenseQuery({
-    ...orpc.daemon.listAgents.queryOptions(),
+    ...trpc.listAgents.queryOptions(),
     refetchInterval: false,
     refetchOnWindowFocus: false,
   });
   const archiveAgentMutation = useMutation(
-    orpc.daemon.archiveAgent.mutationOptions({
+    trpc.archiveAgent.mutationOptions({
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: orpc.daemon.listAgents.key() });
+        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
       },
     }),
   );

@@ -43,13 +43,6 @@
       "when": 1770748270177,
       "tag": "0005_broken_mephisto",
       "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "6",
-      "when": 1772196677541,
-      "tag": "0006_broken_manta",
-      "breakpoints": true
     }
   ]
 }

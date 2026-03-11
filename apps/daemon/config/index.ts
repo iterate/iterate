@@ -1,19 +1,24 @@
-import type { RestartingProcessEntry } from "pidnap";
-export interface IteratePidnapConfig {
-  processes?: RestartingProcessEntry[];
-}
-
 /**
  * Iterate Config
  *
  * Configuration for the iterate daemon, loaded from iterate.config.ts
  */
+
+/**
+ * Model reference matching OpenCode's internal format.
+ * See https://models.dev for available provider and model IDs.
+ */
+export interface ModelRef {
+  providerID: string;
+  modelID: string;
+}
+
 export interface IterateConfig {
   /**
-   * User-defined pidnap process definitions.
-   * These are intended to be reconciled by the daemon into pidnap runtime processes.
+   * Default model to use for OpenCode sessions.
+   * @example { providerID: "anthropic", modelID: "claude-sonnet-4-5" }
    */
-  pidnap?: IteratePidnapConfig;
+  defaultModel?: () => ModelRef;
 }
 
 /**
@@ -25,7 +30,10 @@ export interface IterateConfig {
  * import { iterateConfig } from "@iterate-com/daemon/config/index.ts";
  *
  * export default iterateConfig({
- *   something: "foo",
+ *   defaultModel: {
+ *     providerID: "anthropic",
+ *     modelID: "claude-sonnet-4-5",
+ *   },
  * });
  * ```
  */

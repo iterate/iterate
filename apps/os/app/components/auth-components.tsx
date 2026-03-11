@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, type FormEvent } from "react";
+import { useState, useRef, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { authClient, signIn } from "../lib/auth-client.ts";
@@ -8,7 +8,7 @@ import { InputOTP } from "./ui/input-otp.tsx";
 
 const EMAIL_OTP_ENABLED = import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true";
 
-function GoogleSignInButton({ redirectUrl }: { redirectUrl: string }) {
+function GoogleSignInButton() {
   const [isLoading, setIsLoading] = useState(false);
 
   const handleClick = async () => {
@@ -16,7 +16,7 @@ function GoogleSignInButton({ redirectUrl }: { redirectUrl: string }) {
     try {
       await signIn.social({
         provider: "google",
-        callbackURL: redirectUrl,
+        callbackURL: "/",
       });
     } catch (err) {
       console.error("Google sign in failed:", err);
@@ -63,40 +63,14 @@ function OrDivider() {
   );
 }
 
-function EmailOtpSignIn({
-  redirectUrl,
-  initialEmail,
-  initialStep,
-}: {
-  redirectUrl: string;
-  initialEmail?: string;
-  initialStep?: "email" | "otp";
-}) {
-  const navigate = useNavigate({ from: "/login" });
+function EmailOtpSignIn() {
+  const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
-  const [step, setStepState] = useState<"email" | "otp">(
-    initialStep === "otp" && initialEmail ? "otp" : "email",
-  );
-  const [email, setEmail] = useState(initialEmail ?? "");
+  const [step, setStep] = useState<"email" | "otp">("email");
+  const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
   const emailInputRef = useRef<HTMLInputElement>(null);
-
-  const setStep = useCallback(
-    (newStep: "email" | "otp", newEmail?: string) => {
-      const emailValue = newEmail ?? email;
-      setStepState(newStep);
-      void navigate({
-        search: (prev) => ({
-          ...prev,
-          step: newStep === "otp" ? ("otp" as const) : undefined,
-          email: newStep === "otp" ? emailValue : undefined,
-        }),
-        replace: true,
-      });
-    },
-    [email, navigate],
-  );
 
   const handleEmailSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -108,7 +82,7 @@ function EmailOtpSignIn({
     setError(null);
     try {
       await authClient.emailOtp.sendVerificationOtp({ email: emailValue, type: "sign-in" });
-      setStep("otp", emailValue);
+      setStep("otp");
       toast.success("Code sent to your email");
     } catch (err) {
       console.error("Failed to send OTP:", err);
@@ -131,7 +105,7 @@ function EmailOtpSignIn({
         return;
       }
       toast.success("Signed in successfully");
-      window.location.assign(redirectUrl);
+      navigate({ to: "/" });
     } catch (err) {
       console.error("Failed to verify OTP:", err);
       setError("Invalid verification code");
@@ -172,13 +146,6 @@ function EmailOtpSignIn({
     setOtp("");
     setError(null);
   };
-
-  // We intentionally do NOT auto-send an OTP when restoring step=otp from
-  // the URL (e.g. after page reload or crafted link). The user can click
-  // "Resend code" manually. This prevents abuse via URLs like
-  // /login?step=otp&email=victim@example.com triggering unsolicited emails,
-  // and also prevents duplicate sends during the normal login flow (where
-  // handleEmailSubmit already sent the OTP before updating the URL).
 
   if (step === "otp") {
     return (
@@ -249,28 +216,16 @@ function EmailOtpSignIn({
   );
 }
 
-export function LoginCard({
-  redirectUrl,
-  initialEmail,
-  initialStep,
-}: {
-  redirectUrl: string;
-  initialEmail?: string;
-  initialStep?: "email" | "otp";
-}) {
+export function LoginCard() {
   return (
     <div className="w-full max-w-md space-y-6">
       {EMAIL_OTP_ENABLED && (
         <>
-          <EmailOtpSignIn
-            redirectUrl={redirectUrl}
-            initialEmail={initialEmail}
-            initialStep={initialStep}
-          />
+          <EmailOtpSignIn />
           <OrDivider />
         </>
       )}
-      <GoogleSignInButton redirectUrl={redirectUrl} />
+      <GoogleSignInButton />
     </div>
   );
 }

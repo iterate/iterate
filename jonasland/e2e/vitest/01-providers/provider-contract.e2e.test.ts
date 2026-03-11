@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe } from "vitest";
 import { createDockerProvider } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
 import { createFlyProvider } from "@iterate-com/shared/jonasland/deployment/fly-deployment.ts";
@@ -6,6 +7,7 @@ import {
   type DeploymentProvider,
   type DeploymentOpts,
 } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
+import { parse as parseYaml } from "yaml";
 import { FlyDeploymentTestEnv } from "../../test-helpers/deployment-test-env.ts";
 import { test } from "../../test-support/e2e-test.ts";
 
@@ -20,6 +22,14 @@ type ProviderContractCase = {
   extraTimeoutMs?: number;
   createProvider(): DeploymentProvider;
 };
+
+type ProviderLocator =
+  ReturnType<ProviderContractCase["createProvider"]> extends DeploymentProvider<
+    DeploymentOpts,
+    infer TLocator
+  >
+    ? TLocator
+    : never;
 
 const baseAssertionTimeoutMs = 30_000;
 
@@ -48,7 +58,11 @@ describe("deployment provider contract", () => {
       },
       async ({ expect, e2e }) => {
         const provider = tc.createProvider();
-        const locator = await (async () => {
+        let locator!: ProviderLocator;
+        let eventsPath!: string;
+        {
+          // Keep the owning deployment + fixture in a dedicated block so they are
+          // disposed before we assert that reconnecting by locator now fails.
           const deployment = await Deployment.create({
             provider,
             opts: {
@@ -66,9 +80,11 @@ describe("deployment provider contract", () => {
             } satisfies DeploymentOpts,
           });
           await using deploymentFixture = await e2e.useDeployment({ deployment });
+          eventsPath = deploymentFixture.artifacts.eventsPath!;
           console.log(
             `[provider-contract] debug artifacts for ${e2e.deploymentSlug}: ${deploymentFixture.artifacts.dir} (test slug: ${e2e.testSlug}, console: ${deploymentFixture.artifacts.consoleLogPath}, raw events: ${deploymentFixture.artifacts.eventsPath})`,
           );
+
           await deploymentFixture.waitUntilExecAvailable({
             timeoutMs: baseAssertionTimeoutMs + (tc.extraTimeoutMs ?? 0),
           });
@@ -102,6 +118,7 @@ describe("deployment provider contract", () => {
             lineIncludes: "provider-contract-writing-startup-log",
             timeoutMs: baseAssertionTimeoutMs,
           });
+
           expect(observedLogEvent.type).toBe("https://events.iterate.com/deployment/logged");
           expect(observedLogEvent.payload.line).toContain("provider-contract-writing-startup-log");
           // The mirrored artifact file is what we inspect after failures, so
@@ -164,8 +181,8 @@ describe("deployment provider contract", () => {
           });
           expect(afterRestart.exitCode, afterRestart.output).toBe(0);
           expect(afterRestart.output).toBe(`rootfs-persist-${e2e.testId}`);
-          return deployment.locator;
-        })();
+          locator = deployment.locator as ProviderLocator;
+        }
 
         // 8) once the owning test fixture scope is gone, the runtime is destroyed
         // and a fresh connect attempt should fail.
@@ -175,7 +192,144 @@ describe("deployment provider contract", () => {
             locator,
           }),
         ).rejects.toThrow();
+
+        const eventsArtifact = await readFile(eventsPath, "utf8");
+        const artifactPath = `/deployment/${e2e.deploymentSlug}`;
+        const artifact = parseYaml(eventsArtifact) as DeploymentEventsArtifact;
+
+        expect(artifact).toMatchObject({
+          deployment: {
+            slug: e2e.deploymentSlug,
+            state: "destroyed",
+            opts: null,
+          },
+          path: artifactPath,
+        });
+
+        expect(artifact.events.length).toBeGreaterThanOrEqual(1);
+        for (const event of artifact.events) {
+          expect(event.path).toBe(artifactPath);
+          expect(event.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+          expect(event.trace).toMatchObject({
+            traceId: expect.any(String),
+            spanId: expect.any(String),
+            parentSpanId: null,
+          });
+        }
+
+        expect(artifact.events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              path: artifactPath,
+              type: "https://events.iterate.com/deployment/created",
+              payload: expect.objectContaining({
+                baseUrl: expect.stringContaining("http://"),
+                locator: expect.anything(),
+              }),
+            }),
+            expect.objectContaining({
+              path: artifactPath,
+              type: "https://events.iterate.com/deployment/started",
+              payload: expect.objectContaining({
+                detail: expect.any(String),
+              }),
+            }),
+            expect.objectContaining({
+              path: artifactPath,
+              type: "https://events.iterate.com/deployment/destroyed",
+              payload: {},
+            }),
+            expect.objectContaining({
+              path: artifactPath,
+              type: "https://events.iterate.com/deployment/logged",
+              payload: expect.objectContaining({
+                line: "provider-contract-startup-begin",
+              }),
+            }),
+            expect.objectContaining({
+              path: artifactPath,
+              type: "https://events.iterate.com/deployment/logged",
+              payload: expect.objectContaining({
+                line: "provider-contract-writing-startup-log",
+              }),
+            }),
+            expect.objectContaining({
+              path: artifactPath,
+              type: "https://events.iterate.com/deployment/logged",
+              payload: expect.objectContaining({
+                line: "provider-contract-entering-sleep",
+              }),
+            }),
+          ]),
+        );
       },
     );
   });
 });
+
+type DeploymentArtifactEvent =
+  | {
+      path: string;
+      offset: string;
+      createdAt: string;
+      trace: {
+        traceId: string;
+        spanId: string;
+        parentSpanId: string | null;
+      };
+      type: "https://events.iterate.com/deployment/created";
+      payload: {
+        baseUrl: string;
+        locator: unknown;
+      };
+    }
+  | {
+      path: string;
+      offset: string;
+      createdAt: string;
+      trace: {
+        traceId: string;
+        spanId: string;
+        parentSpanId: string | null;
+      };
+      type: "https://events.iterate.com/deployment/started";
+      payload: {
+        detail: string;
+      };
+    }
+  | {
+      path: string;
+      offset: string;
+      createdAt: string;
+      trace: {
+        traceId: string;
+        spanId: string;
+        parentSpanId: string | null;
+      };
+      type: "https://events.iterate.com/deployment/destroyed";
+      payload: Record<string, never>;
+    }
+  | {
+      path: string;
+      offset: string;
+      createdAt: string;
+      trace: {
+        traceId: string;
+        spanId: string;
+        parentSpanId: string | null;
+      };
+      type: "https://events.iterate.com/deployment/logged";
+      payload: {
+        line: string;
+      };
+    };
+
+type DeploymentEventsArtifact = {
+  deployment: {
+    slug: string | null;
+    state: string;
+    opts: DeploymentOpts | null;
+  };
+  path: string;
+  events: DeploymentArtifactEvent[];
+};

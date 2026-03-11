@@ -24,6 +24,10 @@ class FakeProvider implements DeploymentProvider<TestInstanceSpecificOpts, TestL
   readonly providerOptsSchema = z.object({});
   readonly optsSchema = z.object({
     slug: z.string().min(1),
+    ingressHost: z.string().min(1).optional(),
+    ingressHostType: z.enum(["subdomain-host", "dunder-prefix"]).optional(),
+    ingressDefaultService: z.string().min(1).optional(),
+    egressProxyURL: z.string().min(1).optional(),
     rootfsSurvivesRestart: z.boolean().optional(),
     env: z.record(z.string(), z.string()).optional(),
     image: z.string().min(1).optional(),
@@ -210,16 +214,24 @@ describe("Deployment", () => {
     const first = await iterator.next();
     const second = await iterator.next();
     const third = await iterator.next();
+    const fourth = await iterator.next();
 
     expect(first.value).toMatchObject({
+      type: "https://events.iterate.com/deployment/created",
+      payload: {
+        baseUrl: "http://created.test",
+        locator: { provider: "test", id: "created" },
+      },
+    });
+    expect(second.value).toMatchObject({
       type: "https://events.iterate.com/deployment/started",
       payload: { detail: "ok" },
     });
-    expect(second.value).toMatchObject({
+    expect(third.value).toMatchObject({
       type: "https://events.iterate.com/deployment/logged",
       payload: { line: "hello" },
     });
-    expect(third.value).toMatchObject({
+    expect(fourth.value).toMatchObject({
       type: "https://events.iterate.com/deployment/logged",
       payload: { line: "world" },
     });

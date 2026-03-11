@@ -1,11 +1,11 @@
 import { Hono, type Context } from "hono";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod/v4";
+import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
-import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
 
 const WebchatAttachment = z.object({
   fileName: z.string(),
@@ -80,8 +80,25 @@ export const webchatApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variabl
 async function buildMachineForwardFetcher(
   machine: typeof schema.machine.$inferSelect,
   env: CloudflareEnv,
-) {
-  return buildMachineFetcher(machine, env, "webchat");
+): Promise<((input: string | Request | URL, init?: RequestInit) => Promise<Response>) | null> {
+  const metadata = machine.metadata as Record<string, unknown> | null;
+
+  try {
+    const runtime = await createMachineStub({
+      type: machine.type,
+      env,
+      externalId: machine.externalId,
+      metadata: metadata ?? {},
+    });
+    return await runtime.getFetcher(3000);
+  } catch (error) {
+    logger.warn("[webchat] Failed to build machine forward fetcher", {
+      machineId: machine.id,
+      type: machine.type,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 async function resolveProjectAndMachine(
@@ -147,10 +164,10 @@ export async function forwardWebchatWebhookToMachine(
 
     if (!response.ok) {
       const body = await response.text().catch(() => "<no body>");
-      logger.set({ responseStatus: response.status });
-      logger.warn(
-        `[webchat] Webhook forward failed status=${response.status} body=${body.slice(0, 120)}`,
-      );
+      logger.warn("[webchat] Webhook forward failed", {
+        status: response.status,
+        body: body.slice(0, 500),
+      });
       return { success: false, error: `HTTP ${response.status}: ${body.slice(0, 200)}` };
     }
 
@@ -268,9 +285,10 @@ webchatApp.post("/webhook", async (c) => {
 
     const forwarded = await forwardWebchatWebhookToMachine(machine, payload, c.env);
     if (!forwarded.success) {
-      logger.error("[webchat] Failed to forward webhook to machine", new Error(forwarded.error), {
-        machine: { id: machine.id },
-        project: { id: project.id },
+      logger.error("[webchat] Failed to forward webhook to machine", {
+        projectId: project.id,
+        machineId: machine.id,
+        error: forwarded.error,
       });
       return c.json({ error: forwarded.error }, 502);
     }

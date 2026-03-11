@@ -9,7 +9,7 @@ import type { WorkerContract } from "./contract.ts";
  */
 export function createWorkerClient(): ContractRouterClient<WorkerContract> {
   const link = new RPCLink({
-    url: `${process.env.ITERATE_OS_BASE_URL}/api/orpc-daemon`,
+    url: `${process.env.ITERATE_OS_BASE_URL}/api/orpc`,
     headers: {
       Authorization: `Bearer ${process.env.ITERATE_OS_API_KEY}`,
     },

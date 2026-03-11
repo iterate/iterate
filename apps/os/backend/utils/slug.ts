@@ -33,3 +33,15 @@ function generateRandomSuffix(length: number): string {
   }
   return result;
 }
+
+/**
+ * Validate that a slug is URL-safe (alphanumeric and hyphens, contains at least one letter, not reserved)
+ */
+export function isValidSlug(slug: string): boolean {
+  return (
+    /^[a-z0-9-]+$/.test(slug) &&
+    /[a-z]/.test(slug) &&
+    slug.length <= 50 &&
+    !RESERVED_SLUGS.includes(slug)
+  );
+}

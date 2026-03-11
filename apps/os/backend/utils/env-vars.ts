@@ -52,13 +52,12 @@ function secretKeyToEnvVarNames(secretKey: string): string[] {
     return [secretKey.replace("iterate.", "").toUpperCase()];
   }
   if (secretKey.startsWith("github.")) {
-    // GitHub: github.access_token -> GITHUB_ACCESS_TOKEN, GH_TOKEN, GITHUB_TOKEN
-    // GH_TOKEN and GITHUB_TOKEN are commonly used by CLIs/tooling.
+    // GitHub: github.access_token -> GITHUB_ACCESS_TOKEN, GH_TOKEN
+    // GH_TOKEN is required by GitHub CLI and many tools
     const base = secretKey.replace(".", "_").toUpperCase();
     const names = [base];
     if (secretKey === "github.access_token") {
       names.push("GH_TOKEN");
-      names.push("GITHUB_TOKEN");
     }
     return [...new Set(names)];
   }
@@ -195,7 +194,7 @@ export async function getUnifiedEnvVars(
       try {
         return await decryptWithSecret(encryptedValue, encryptionSecret);
       } catch (err) {
-        logger.error("Failed to decrypt secret in raw mode", err, { secretKey });
+        logger.error("Failed to decrypt secret in raw mode", { secretKey, err });
         throw new Error(
           `Failed to decrypt secret '${secretKey}' in raw mode: ${err instanceof Error ? err.message : String(err)}`,
         );

@@ -1,12 +1,9 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { inspect } from "node:util";
 import { Hono, type Context } from "hono";
 import { stream } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { propagation, context } from "@opentelemetry/api";
 import { z } from "zod/v4";
-import { ORPCError, createRouterClient } from "@orpc/server";
+import { TRPCError } from "@trpc/server";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
@@ -14,7 +11,7 @@ import type { Agent, AgentRoute } from "../db/schema.ts";
 import { IterateEvent } from "../types/events.ts";
 import { validateAgentPath, extractAgentPathFromUrl } from "../utils/agent-path.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
-import { publicProcedure } from "../orpc/init.ts";
+import { createTRPCRouter, publicProcedure } from "../trpc/init.ts";
 import { withSpan } from "../utils/otel.ts";
 
 // ────────────────────────────── Serialization ──────────────────────────────
@@ -68,7 +65,7 @@ async function notifyAgentChange(agentPath: string, agent: SerializedAgent): Pro
       console.error("[agent-change] callback failed", {
         agentPath,
         callbackUrl: subscription.callbackUrl,
-        error: inspect(error, { depth: null }),
+        error: error instanceof Error ? error.message : String(error),
       });
     });
   }
@@ -83,35 +80,10 @@ async function notifyAgentChange(agentPath: string, agent: SerializedAgent): Pro
  */
 const inflightCreates = new Map<string, Promise<AgentRoute>>();
 
-// ──────────────────────────── oRPC sub-router ──────────────────────────────
+// ──────────────────────────── tRPC sub-router ──────────────────────────────
 
-export const agentOrpcRouter = {
-  getCustomerRepoContext: publicProcedure.handler(async () => {
-    const repoPath = process.env.ITERATE_CUSTOMER_REPO_PATH;
-    if (!repoPath) {
-      return { context: "", files: [] };
-    }
-
-    const agentsPath = join(repoPath, "AGENTS.md");
-
-    try {
-      const agentsMd = await readFile(agentsPath, "utf8");
-      const trimmed = agentsMd.trim();
-
-      if (!trimmed) {
-        return { context: "", files: [] };
-      }
-
-      return {
-        context: `<system-reminder>\nInstructions from: ${agentsPath}\n${trimmed}\n</system-reminder>`,
-        files: [agentsPath],
-      };
-    } catch {
-      return { context: "", files: [] };
-    }
-  }),
-
-  listAgents: publicProcedure.handler(async (): Promise<SerializedAgent[]> => {
+export const agentTrpcRouter = createTRPCRouter({
+  listAgents: publicProcedure.query(async (): Promise<SerializedAgent[]> => {
     const rows = await db
       .select({ agent: schema.agents, route: schema.agentRoutes })
       .from(schema.agents)
@@ -130,7 +102,7 @@ export const agentOrpcRouter = {
 
   getAgent: publicProcedure
     .input(z.object({ path: z.string() }))
-    .handler(async ({ input }): Promise<SerializedAgent | null> => {
+    .query(async ({ input }): Promise<SerializedAgent | null> => {
       const rows = await db
         .select({ agent: schema.agents, route: schema.agentRoutes })
         .from(schema.agents)
@@ -150,7 +122,7 @@ export const agentOrpcRouter = {
 
   archiveAgent: publicProcedure
     .input(z.object({ path: z.string() }))
-    .handler(async ({ input }): Promise<{ success: boolean }> => {
+    .mutation(async ({ input }): Promise<{ success: boolean }> => {
       const [agent] = await db
         .select()
         .from(schema.agents)
@@ -184,7 +156,7 @@ export const agentOrpcRouter = {
         archivedAt: z.coerce.date().nullable().optional(),
       }),
     )
-    .handler(async ({ input }): Promise<SerializedAgent | null> => {
+    .mutation(async ({ input }): Promise<SerializedAgent | null> => {
       const setValues: Partial<typeof schema.agents.$inferInsert> = {
         updatedAt: new Date(),
       };
@@ -219,7 +191,7 @@ export const agentOrpcRouter = {
 
   subscribeToAgentChanges: publicProcedure
     .input(z.object({ agentPath: z.string(), callbackUrl: z.string().url() }))
-    .handler(async ({ input }): Promise<{ success: boolean }> => {
+    .mutation(async ({ input }): Promise<{ success: boolean }> => {
       const existing = await db
         .select()
         .from(schema.agentSubscriptions)
@@ -254,11 +226,11 @@ export const agentOrpcRouter = {
         newAgentPath: z.string().default("/opencode/new"),
       }),
     )
-    .handler(async ({ input }) => {
+    .mutation(async ({ input }) => {
       const { agentPath, createWithEvents, newAgentPath } = input;
       const validation = validateAgentPath(agentPath);
       if (!validation.valid) {
-        throw new ORPCError("BAD_REQUEST", { message: validation.error });
+        throw new TRPCError({ code: "BAD_REQUEST", message: validation.error });
       }
 
       const result = db.transaction((tx) => {
@@ -281,7 +253,8 @@ export const agentOrpcRouter = {
             .get();
 
           if (!unarchived) {
-            throw new ORPCError("INTERNAL_SERVER_ERROR", {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
               message: `Failed to reactivate archived agent for ${agentPath}`,
             });
           }
@@ -318,7 +291,8 @@ export const agentOrpcRouter = {
               .get();
 
             if (!existingByPath) {
-              throw new ORPCError("INTERNAL_SERVER_ERROR", {
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
                 message: `Failed to load agent after creation conflict for ${agentPath}`,
               });
             }
@@ -350,7 +324,8 @@ export const agentOrpcRouter = {
 
         const routeAfterInsert = pendingRoute ?? getActiveRoute();
         if (!routeAfterInsert) {
-          throw new ORPCError("INTERNAL_SERVER_ERROR", {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
             message: `Failed to create or load pending route for ${agentPath}`,
           });
         }
@@ -394,7 +369,8 @@ export const agentOrpcRouter = {
 
       // ── We are the creator: run the create and resolve waiters ──
       if (!result.pendingRoute) {
-        throw new ORPCError("INTERNAL_SERVER_ERROR", {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
           message: `Missing pending route for ${agentPath}`,
         });
       }
@@ -421,7 +397,8 @@ export const agentOrpcRouter = {
         });
 
         if (!createResponse.ok) {
-          throw new ORPCError("INTERNAL_SERVER_ERROR", {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
             message: `Failed to create session: ${await createResponse.text()}`,
           });
         }
@@ -446,11 +423,7 @@ export const agentOrpcRouter = {
 
         const newRoute = db
           .update(schema.agentRoutes)
-          .set({
-            destination: routePath,
-            metadata: routeMetadata,
-            updatedAt: new Date(),
-          })
+          .set({ destination: routePath, metadata: routeMetadata, updatedAt: new Date() })
           .where(eq(schema.agentRoutes.id, result.pendingRoute!.id))
           .returning()
           .get();
@@ -480,7 +453,7 @@ export const agentOrpcRouter = {
         inflightCreates.delete(agentPath);
       }
     }),
-};
+});
 
 // ─────────────────────────── Hono HTTP router ──────────────────────────────
 
@@ -521,19 +494,10 @@ async function forwardAgentRequest(c: Context): Promise<Response> {
     "daemon.agent.forward",
     { attributes: { "agent.path": agentPath, "http.method": method } },
     async (span) => {
-      const caller = createRouterClient(agentOrpcRouter, { context: {} });
-      const customerRepoContext = await caller.getCustomerRepoContext();
-
+      const caller = agentTrpcRouter.createCaller({});
       const { route } = await caller.getOrCreateAgent({
         agentPath,
-        createWithEvents: customerRepoContext.context
-          ? [
-              {
-                type: "iterate:agent:prompt-added",
-                message: customerRepoContext.context,
-              },
-            ]
-          : [],
+        createWithEvents: [],
         newAgentPath: getNewAgentPath(agentPath),
       });
 

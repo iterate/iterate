@@ -2,7 +2,7 @@
  * Machine proxy route.
  *
  * Provides authenticated proxy access to services running inside machines
- * (Daytona, Docker, Fly, etc).
+ * (Daytona sandboxes, local Docker containers, etc).
  *
  * Route: /org/:org/proj/:project/:machine/proxy/:port/*
  */
@@ -124,10 +124,7 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
   // For Daytona, we need special auth handling
   if (machineRecord.type === "daytona") {
     if (!externalId.trim()) {
-      logger.error("Invalid sandbox identifier", {
-        externalId,
-        machine: { id: machineRecord.id },
-      });
+      logger.error("Invalid sandbox identifier", { externalId, machineId: machineRecord.id });
       return c.json({ error: "Invalid sandbox configuration" }, 500);
     }
 
@@ -146,9 +143,10 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
 
     // Handle 401 - lazy refresh
     if (response.status === 401) {
-      logger.info(
-        `Received 401 from Daytona, refreshing token sandbox=${externalId} port=${portNum}`,
-      );
+      logger.info("Received 401 from Daytona, refreshing token", {
+        sandboxIdentifier: externalId,
+        port: portNum,
+      });
       try {
         token = await refreshPreviewToken(deps, machineRecord.id, externalId, portNum);
         response = await proxyDaytona(c.req.raw, fullTargetUrl, token);
@@ -161,7 +159,7 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     return rewriteHTMLUrls(response, proxyBasePath);
   }
 
-  // For non-Daytona machines (docker/fly), simple proxy without auth
+  // For non-Daytona machines (docker, fly, local), simple proxy without auth
   const fetcher = await runtime.getFetcher(portNum);
   const response = await proxyWithFetcher(c.req.raw, pathWithQuery, fetcher);
   return rewriteHTMLUrls(response, proxyBasePath);
@@ -218,7 +216,7 @@ async function proxyDaytona(request: Request, targetUrl: string, token: string):
   const responseHeaders = new Headers();
   response.headers.forEach((value, key) => {
     if (!EXCLUDE_RESPONSE_HEADERS.includes(key.toLowerCase())) {
-      responseHeaders.append(key, value);
+      responseHeaders.set(key, value);
     }
   });
 
@@ -256,6 +254,7 @@ async function proxyDaytonaWebSocket(
   return fetch(targetUrl, {
     method: request.method,
     headers,
+    body: request.body,
   });
 }
 
@@ -289,7 +288,7 @@ async function proxyWithFetcher(
   const responseHeaders = new Headers();
   response.headers.forEach((value, key) => {
     if (!EXCLUDE_RESPONSE_HEADERS.includes(key.toLowerCase())) {
-      responseHeaders.append(key, value);
+      responseHeaders.set(key, value);
     }
   });
 
@@ -319,10 +318,9 @@ async function proxyWebSocketWithFetcher(
     }
   });
 
-  const proxyRequest = new Request(new URL(targetPath, request.url), {
+  return fetcher(targetPath, {
     method: request.method,
     headers,
+    body: request.body,
   });
-
-  return fetcher(proxyRequest);
 }

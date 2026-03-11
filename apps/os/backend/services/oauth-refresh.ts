@@ -96,7 +96,7 @@ export async function attemptSecretRefresh(
       );
 
       if (!newTokenData) {
-        logger.warn(`attemptSecretRefresh: GitHub refresh returned no data secretId=${secretId}`);
+        logger.warn("attemptSecretRefresh: GitHub refresh returned no data", { secretId });
         await updateSecretFailure(db, secretId);
         return { ok: false, code: "REFRESH_FAILED", reauthUrl };
       }
@@ -118,7 +118,10 @@ export async function attemptSecretRefresh(
       logger.debug("GitHub token refresh success", { secretId });
       return { ok: true, newValue: newTokenData.accessToken };
     } catch (error) {
-      logger.error("attemptSecretRefresh: GitHub error", error, { secretId });
+      logger.error("attemptSecretRefresh: GitHub error", {
+        secretId,
+        error: error instanceof Error ? error.message : String(error),
+      });
       await updateSecretFailure(db, secretId);
       return { ok: false, code: "REFRESH_FAILED", reauthUrl };
     }
@@ -126,7 +129,7 @@ export async function attemptSecretRefresh(
 
   // Standard OAuth refresh flow for other connectors
   if (!metadata?.encryptedRefreshToken) {
-    logger.warn(`attemptSecretRefresh: no refresh token secretId=${secretId}`);
+    logger.warn("attemptSecretRefresh: no refresh token", { secretId });
     return { ok: false, code: "NO_REFRESH_TOKEN", reauthUrl };
   }
 
@@ -141,9 +144,7 @@ export async function attemptSecretRefresh(
     const newTokenData = await refreshOAuthToken(connector.name, refreshToken, context);
 
     if (!newTokenData) {
-      logger.warn(
-        `attemptSecretRefresh: refresh returned no data secretId=${secretId} connector=${connector.name}`,
-      );
+      logger.warn("attemptSecretRefresh: refresh returned no data", { secretId });
       await updateSecretFailure(db, secretId);
       return { ok: false, code: "REFRESH_FAILED", reauthUrl };
     }
@@ -179,7 +180,10 @@ export async function attemptSecretRefresh(
     logger.debug("Token refresh success", { connector: connector.name });
     return { ok: true, newValue: newTokenData.accessToken };
   } catch (error) {
-    logger.error("attemptSecretRefresh: error", error, { secretId });
+    logger.error("attemptSecretRefresh: error", {
+      secretId,
+      error: error instanceof Error ? error.message : String(error),
+    });
     await updateSecretFailure(db, secretId);
     return { ok: false, code: "REFRESH_FAILED", reauthUrl };
   }
@@ -213,7 +217,7 @@ async function refreshOAuthToken(
       // GitHub is handled separately via installation tokens
       return null;
     default:
-      logger.warn(`refreshOAuthToken: unknown connector ${connectorName}`);
+      logger.warn("refreshOAuthToken: unknown connector", { connectorName });
       return null;
   }
 }
@@ -282,10 +286,10 @@ async function refreshGitHubInstallationToken(
       expiresAt: data.expires_at,
     };
   } catch (error) {
-    logger.error(
-      `Failed to refresh GitHub installation token installationId=${installationId}`,
-      error,
-    );
+    logger.error("Failed to refresh GitHub installation token", {
+      installationId,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
 }
@@ -327,7 +331,7 @@ async function refreshSlackToken(
   const data = (await response.json()) as SlackTokenResponse;
 
   if (!data.ok || !data.access_token) {
-    logger.warn(`Slack token refresh failed error=${data.error ?? "unknown"}`);
+    logger.warn("Slack token refresh failed", { error: data.error });
     return null;
   }
 
@@ -375,7 +379,7 @@ async function refreshGoogleToken(
   const data = (await response.json()) as GoogleTokenResponse;
 
   if (data.error || !data.access_token) {
-    logger.warn(`Google token refresh failed error=${data.error ?? "unknown"}`);
+    logger.warn("Google token refresh failed", { error: data.error });
     return null;
   }
 

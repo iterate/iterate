@@ -3,6 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
+import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
@@ -11,7 +12,6 @@ import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { trackWebhookEvent, linkExternalIdToGroups } from "../../lib/posthog.ts";
 import { withSpan } from "../../utils/otel.ts";
-import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
 
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
@@ -61,8 +61,25 @@ function createCorrelationContext(params: {
 async function buildMachineForwardFetcher(
   machine: typeof schema.machine.$inferSelect,
   env: CloudflareEnv,
-) {
-  return buildMachineFetcher(machine, env, "Slack Webhook");
+): Promise<((input: string | Request | URL, init?: RequestInit) => Promise<Response>) | null> {
+  const metadata = machine.metadata as Record<string, unknown> | null;
+
+  try {
+    const runtime = await createMachineStub({
+      type: machine.type,
+      env,
+      externalId: machine.externalId,
+      metadata: metadata ?? {},
+    });
+    return await runtime.getFetcher(3000);
+  } catch (err) {
+    logger.warn("[Slack Webhook] Failed to build forward fetcher", {
+      machineId: machine.id,
+      type: machine.type,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
 
 /**
@@ -116,10 +133,8 @@ export async function forwardSlackWebhookToMachine(
           span.setAttribute("forward.error", `http_${resp.status}`);
           logger.error("[Slack Webhook] Forward failed", {
             machine,
-            request: {
-              status: resp.status,
-              path: targetPath,
-            },
+            targetPath,
+            status: resp.status,
             text: await resp.text(),
             correlation,
           });
@@ -127,19 +142,19 @@ export async function forwardSlackWebhookToMachine(
         }
 
         span.setAttribute("forward.success", true);
-        logger.set({
-          path: targetPath,
+        logger.info("[Slack Webhook] Forwarded to machine", {
+          machineId: machine.id,
+          targetPath,
           correlation,
-          machine: { id: machine.id },
         });
-        logger.info("[Slack Webhook] Forwarded to machine");
         return { success: true };
       } catch (err) {
         span.setAttribute("forward.success", false);
         span.setAttribute("forward.error", err instanceof Error ? err.message : String(err));
-        logger.error("[Slack Webhook] Forward error", err, {
-          machine: { id: machine.id },
-          path: targetPath,
+        logger.error("[Slack Webhook] Forward error", {
+          err,
+          machineId: machine.id,
+          targetPath,
           correlation,
         });
         return { success: false, error: err instanceof Error ? err.message : String(err) };
@@ -194,10 +209,7 @@ export async function revokeSlackToken(accessToken: string): Promise<boolean> {
     });
 
     if (!response.ok) {
-      const responseBody = (await response.text().catch(() => "<no body>")).slice(0, 300);
-      logger.warn(
-        `Slack auth.revoke HTTP error: status=${response.status} body=${responseBody || "<empty>"}`,
-      );
+      logger.warn("Slack auth.revoke HTTP error", { status: response.status });
       return false;
     }
 
@@ -208,7 +220,7 @@ export async function revokeSlackToken(accessToken: string): Promise<boolean> {
       if (data.error === "invalid_auth" || data.error === "token_revoked") {
         return true;
       }
-      logger.warn("Slack auth.revoke API error");
+      logger.warn("Slack auth.revoke API error", { error: data.error });
       return false;
     }
 
@@ -242,7 +254,7 @@ slackApp.get(
 
     // Handle OAuth denial/error from Slack
     if (error) {
-      logger.warn(`Slack OAuth error: ${error}`);
+      logger.warn("Slack OAuth error", { error });
       return c.redirect("/?error=slack_oauth_denied");
     }
 
@@ -272,8 +284,10 @@ slackApp.get(
     const { projectId, userId, callbackURL } = stateData;
 
     if (c.var.session.user.id !== userId) {
-      logger.set({ user: { id: c.var.session.user.id }, stateUserId: userId });
-      logger.warn("Slack callback user mismatch");
+      logger.warn("Slack callback user mismatch", {
+        sessionUserId: c.var.session.user.id,
+        stateUserId: userId,
+      });
       return c.json({ error: "User mismatch - please restart the Slack connection flow" }, 403);
     }
 
@@ -324,10 +338,16 @@ slackApp.get(
         });
 
         if (existingWorkspaceConnection && existingWorkspaceConnection.projectId !== projectId) {
+          const existingProject = existingWorkspaceConnection.project;
+          const existingOrg = existingProject?.organization;
           throw new Error(
             `workspace_already_connected:${JSON.stringify({
               teamId: teamData.id,
               teamName: teamData.name,
+              existingProjectSlug: existingProject?.slug ?? "",
+              existingProjectName: existingProject?.name ?? "",
+              existingOrgSlug: existingOrg?.slug ?? "",
+              existingOrgName: existingOrg?.name ?? "",
             })}`,
           );
         }
@@ -421,23 +441,21 @@ slackApp.get(
         ) as {
           teamId: string;
           teamName: string;
+          existingProjectSlug: string;
+          existingProjectName: string;
+          existingOrgSlug: string;
+          existingOrgName: string;
         };
-        const conflictToken = crypto.randomUUID();
-        await c.var.db.insert(schema.verification).values({
-          identifier: conflictToken,
-          value: JSON.stringify({
-            kind: "slack-workspace-conflict",
-            userId,
-            projectId,
-            teamId: conflictData.teamId,
-            teamName: conflictData.teamName,
-            teamDomain: teamData.domain,
-            encryptedAccessToken,
-          }),
-          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        const params = new URLSearchParams({
+          teamId: conflictData.teamId,
+          teamName: conflictData.teamName,
+          existingProjectSlug: conflictData.existingProjectSlug,
+          existingProjectName: conflictData.existingProjectName,
+          existingOrgSlug: conflictData.existingOrgSlug,
+          existingOrgName: conflictData.existingOrgName,
+          newProjectId: projectId,
         });
-        const params = new URLSearchParams({ conflictToken });
-        return c.redirect(`/connection-conflict?${params.toString()}`);
+        return c.redirect(`/slack-conflict?${params.toString()}`);
       }
       throw error;
     }
@@ -528,8 +546,7 @@ slackApp.post("/webhook", async (c) => {
       async (span) => {
         try {
           if (!teamId) {
-            logger.set({ correlation });
-            logger.warn("[Slack Webhook] No team_id in payload");
+            logger.warn("[Slack Webhook] No team_id in payload", { correlation });
             span.setAttribute("process.result", "missing_team_id");
             // Still track the event, just without groups
             trackWebhookEvent(env, {
@@ -584,8 +601,7 @@ slackApp.post("/webhook", async (c) => {
 
           const projectId = connection?.projectId;
           if (!projectId) {
-            logger.set({ correlation });
-            logger.warn(`[Slack Webhook] No project for team teamId=${teamId}`);
+            logger.warn("[Slack Webhook] No project for team", { teamId, correlation });
             span.setAttribute("process.result", "missing_project_connection");
             return;
           }
@@ -612,7 +628,7 @@ slackApp.post("/webhook", async (c) => {
           });
           span.setAttribute("process.result", "ok");
         } catch (err) {
-          logger.error("[Slack Webhook] Background error", err, { correlation });
+          logger.error("[Slack Webhook] Background error", { err, correlation });
           span.setAttribute("process.result", "error");
           throw err;
         }
