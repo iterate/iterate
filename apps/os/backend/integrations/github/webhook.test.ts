@@ -32,6 +32,7 @@ vi.mock("../../lib/posthog.ts", () => ({
 vi.mock("../../outbox/client.ts", () => ({
   outboxClient: {
     send: vi.fn().mockResolvedValue({ eventId: "1", matchedConsumers: 1, delays: ["0s"] }),
+    sendCTE: vi.fn().mockResolvedValue([{ id: "evt_test123" }]),
   },
 }));
 
@@ -67,11 +68,11 @@ const validPushPayload = {
 describe("GitHub Webhook Handler", () => {
   const WEBHOOK_SECRET = "test-webhook-secret";
   const createMachineForProjectMock = vi.mocked(createMachineForProject);
-  const outboxClientSendMock = vi.mocked(outboxClient.send);
+  const outboxClientSendCTEMock = vi.mocked(outboxClient.sendCTE);
 
   beforeEach(() => {
     createMachineForProjectMock.mockClear();
-    outboxClientSendMock.mockClear();
+    outboxClientSendCTEMock.mockClear();
   });
 
   function createMockDb() {
@@ -435,21 +436,19 @@ describe("GitHub Webhook Handler", () => {
 
       await expectWebhookMatch(res, { received: true });
       await flushBackgroundTasks();
-      expect(outboxClientSendMock).toHaveBeenCalledWith(
-        { transaction: mockDb, parent: mockDb },
-        "github:webhook-received",
+      expect(outboxClientSendCTEMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          sourceEventId: "evt_test123",
-          deliveryId: expect.any(String),
-          event: "push",
-          action: null,
-          payload: iteratePushPayload,
+          name: "github:webhook-received",
+          payload: expect.objectContaining({
+            _delivery_id: expect.any(String),
+            ...iteratePushPayload,
+          }),
         }),
       );
     });
 
     it("still enqueues raw webhook events for non-main branch pushes", async () => {
-      const { app, mockDb } = createTestApp();
+      const { app } = createTestApp();
 
       const res = await makeWebhookRequest({
         app,
@@ -462,15 +461,15 @@ describe("GitHub Webhook Handler", () => {
 
       await expectWebhookMatch(res, { received: true });
       await flushBackgroundTasks();
-      expect(outboxClientSendMock).toHaveBeenCalledWith(
-        { transaction: mockDb, parent: mockDb },
-        "github:webhook-received",
-        expect.objectContaining({ event: "push" }),
+      expect(outboxClientSendCTEMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "github:webhook-received",
+        }),
       );
     });
 
     it("still enqueues raw webhook events for other repos", async () => {
-      const { app, mockDb } = createTestApp();
+      const { app } = createTestApp();
 
       const res = await makeWebhookRequest({
         app,
@@ -487,10 +486,10 @@ describe("GitHub Webhook Handler", () => {
 
       await expectWebhookMatch(res, { received: true });
       await flushBackgroundTasks();
-      expect(outboxClientSendMock).toHaveBeenCalledWith(
-        { transaction: mockDb, parent: mockDb },
-        "github:webhook-received",
-        expect.objectContaining({ event: "push" }),
+      expect(outboxClientSendCTEMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "github:webhook-received",
+        }),
       );
     });
   });
