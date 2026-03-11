@@ -9,6 +9,7 @@ import { RPCHandler } from "@orpc/server/fetch";
 import { onError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { createRouterClient } from "@orpc/server";
+import { sql } from "drizzle-orm";
 import { initLogger } from "evlog";
 import { createWorkersLogger, initWorkersLogger } from "evlog/workers";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
@@ -58,6 +59,7 @@ import {
   shouldHandleProjectIngressHostname,
 } from "./services/project-ingress-proxy.ts";
 import { getIngressSchemeFromPublicUrl } from "./utils/project-ingress-url.ts";
+import { isNonProd } from "../env.ts";
 
 export type { Variables };
 
@@ -245,6 +247,23 @@ app.use("*", async (c, next) => {
   });
   c.set("orpcCaller", orpcCaller);
   return next();
+});
+
+app.get("/api/testing/db-connection-probe", async (c) => {
+  if (!isNonProd) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const rawHoldMs = Number(c.req.query("holdMs") ?? "0");
+  const holdMs = Number.isFinite(rawHoldMs) ? Math.min(Math.max(rawHoldMs, 0), 5_000) : 0;
+
+  if (holdMs > 0) {
+    await c.var.db.execute(sql`select pg_sleep(${holdMs / 1000})`);
+  }
+
+  await c.var.db.execute(sql`select 1`);
+
+  return c.json({ ok: true, holdMs });
 });
 
 app.get("/api/trpc-cli-procedures", (c) => {
