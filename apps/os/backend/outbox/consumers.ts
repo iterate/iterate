@@ -45,7 +45,7 @@ export const registerConsumers = () => {
     name: "requestIterateMachinePulls",
     on: "github:webhook-received",
     async handler(params) {
-      const db = getDb();
+      const db = await getDb();
 
       return match(params.payload)
         .case(IterateMainPushWebhookPayload, async (payload) => {
@@ -83,7 +83,7 @@ export const registerConsumers = () => {
     name: "triggerMachinePullIterateIterate",
     on: "machine:pull-iterate-iterate-requested",
     async handler(params) {
-      const db = getDb();
+      const db = await getDb();
       const machine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, params.payload.machineId),
       });
@@ -138,7 +138,7 @@ export const registerConsumers = () => {
     },
     async handler(params) {
       const { machineId } = params.payload;
-      const db = getDb();
+      const db = await getDb();
 
       const machine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, machineId),
@@ -230,7 +230,7 @@ export const registerConsumers = () => {
     async handler(params) {
       const { machineId, projectId } = params.payload;
       logger.set({ machine: { id: machineId } });
-      const db = getDb();
+      const db = await getDb();
 
       const machine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, machineId),
@@ -273,7 +273,7 @@ export const registerConsumers = () => {
     },
     async handler(params) {
       const { machineId, projectId } = params.payload;
-      const db = getDb();
+      const db = await getDb();
 
       const machine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, machineId),
@@ -328,7 +328,7 @@ export const registerConsumers = () => {
     },
     async handler(params) {
       const { machineId, projectId, threadId } = params.payload;
-      const db = getDb();
+      const db = await getDb();
 
       const machine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, machineId),
@@ -368,7 +368,7 @@ export const registerConsumers = () => {
     on: "machine:probe-succeeded",
     async handler(params) {
       const { machineId, projectId } = params.payload;
-      const db = getDb();
+      const db = await getDb();
 
       const machine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, machineId),
@@ -434,7 +434,7 @@ export const registerConsumers = () => {
     delay: () => "4h",
     async handler(params) {
       const { projectId, machineId, detachedMachineIds } = params.payload;
-      const db = getDb();
+      const db = await getDb();
 
       if (detachedMachineIds.length === 0) {
         return "no detached machines to delete";
@@ -465,7 +465,7 @@ export const registerConsumers = () => {
     on: "machine:delete-requested",
     async handler(params) {
       const { machineId, type, externalId, metadata } = params.payload;
-      const db = getDb();
+      const db = await getDb();
 
       const runtime = await createMachineStub({
         type,

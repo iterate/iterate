@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type Stripe from "stripe";
 import { eq } from "drizzle-orm";
-import { getDb } from "../../db/client.ts";
+import { getDb, type DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import type { SubscriptionStatus } from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
@@ -127,12 +127,12 @@ async function handleSubscriptionCreated(
   env: CloudflareEnv,
   subscription: Stripe.Subscription,
 ): Promise<void> {
-  const db = getDb();
+  const db = await getDb();
   const customerId =
     typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
 
-  // Update billing account
-  await updateBillingAccount(subscription);
+  // Update billing account — reuse existing db to avoid opening a second connection
+  await updateBillingAccount(db, subscription);
 
   // Track subscription_started event in PostHog
   const billingAccount = await db.query.billingAccount.findFirst({
@@ -152,7 +152,8 @@ async function handleSubscriptionCreated(
 }
 
 async function handleSubscriptionUpdate(subscription: Stripe.Subscription): Promise<void> {
-  await updateBillingAccount(subscription);
+  const db = await getDb();
+  await updateBillingAccount(db, subscription);
 
   const customerId =
     typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
@@ -161,8 +162,7 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription): Prom
   logger.info(`Updated billing account customerId=${customerId} subscriptionId=${subscription.id}`);
 }
 
-async function updateBillingAccount(subscription: Stripe.Subscription): Promise<void> {
-  const db = getDb();
+async function updateBillingAccount(db: DB, subscription: Stripe.Subscription): Promise<void> {
   const customerId =
     typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
 
@@ -185,7 +185,7 @@ async function updateBillingAccount(subscription: Stripe.Subscription): Promise<
 }
 
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription): Promise<void> {
-  const db = getDb();
+  const db = await getDb();
   const customerId =
     typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
 
@@ -202,7 +202,7 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription): Pro
 }
 
 async function handleInvoicePaid(env: CloudflareEnv, invoice: Stripe.Invoice): Promise<void> {
-  const db = getDb();
+  const db = await getDb();
   const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
 
   if (!customerId) return;
@@ -234,7 +234,7 @@ async function handleInvoicePaid(env: CloudflareEnv, invoice: Stripe.Invoice): P
 }
 
 async function handlePaymentFailed(env: CloudflareEnv, invoice: Stripe.Invoice): Promise<void> {
-  const db = getDb();
+  const db = await getDb();
   const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
 
   if (!customerId) return;

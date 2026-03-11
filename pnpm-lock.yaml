@@ -759,9 +759,6 @@ importers:
       '@mmkal/jsonata':
         specifier: ^2.2.0
         version: 2.2.0
-      '@neondatabase/serverless':
-        specifier: ^1.0.2
-        version: 1.0.2
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -915,6 +912,9 @@ importers:
       partysocket:
         specifier: ^1.1.6
         version: 1.1.6
+      pg:
+        specifier: ^8.17.1
+        version: 8.17.1
       postgres:
         specifier: ^3.4.7
         version: 3.4.7
@@ -1048,9 +1048,6 @@ importers:
       drizzle-kit:
         specifier: ^0.31.7
         version: 0.31.8
-      pg:
-        specifier: ^8.17.1
-        version: 8.17.1
       tailwindcss:
         specifier: ^4.1.17
         version: 4.1.17
@@ -13109,7 +13106,7 @@ packages:
   tar@6.2.1:
     resolution: {integrity: sha512-DZ4yORTwrbTj/7MZYq2w+/ZFdI6OZ/f9SFHR+71gIVUZhOQPHzVCLpvRnPgyaMpfWxxk/4ONva3GQSyNIKRv6A==}
     engines: {node: '>=10'}
-    deprecated: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exhorbitant rates) by contacting i@izs.me
+    deprecated: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   terser@5.44.1:
     resolution: {integrity: sha512-t/R3R/n0MSwnnazuPpPNVO60LX0SKL45pyl9YlvxIdkH0Of7D5qM2EVe+yASRIlY5pZ73nclYJfNANGWPwFDZw==}
@@ -17348,6 +17345,7 @@ snapshots:
     dependencies:
       '@types/node': 22.18.13
       '@types/pg': 8.16.0
+    optional: true
 
   '@noble/ciphers@2.0.1': {}
 
