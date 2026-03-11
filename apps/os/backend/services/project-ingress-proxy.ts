@@ -115,19 +115,26 @@ async function findProjectByCustomDomainHostname(
   // hostname = custom_domain (exact) OR hostname LIKE '%.' || custom_domain (subdomain)
   // Order by domain length DESC so the longest (most specific) match wins.
   // e.g. `a.example.com` matches before `example.com` for hostname `4096.a.example.com`.
-  const results = await db
-    .select()
-    .from(schema.project)
-    .where(
-      or(
-        eq(schema.project.customDomain, normalizedHostname),
-        sql`${normalizedHostname} LIKE '%.' || ${schema.project.customDomain}`,
-      ),
-    )
-    .orderBy(sql`length(${schema.project.customDomain}) DESC`)
-    .limit(1);
+  try {
+    const results = await db
+      .select()
+      .from(schema.project)
+      .where(
+        or(
+          eq(schema.project.customDomain, normalizedHostname),
+          sql`${normalizedHostname} LIKE '%.' || ${schema.project.customDomain}`,
+        ),
+      )
+      .orderBy(sql`length(${schema.project.customDomain}) DESC`)
+      .limit(1);
 
-  return results[0] ?? null;
+    return results[0] ?? null;
+  } catch (err) {
+    logger.error("[project-ingress] findProjectByCustomDomainHostname failed", err, {
+      hostname: normalizedHostname,
+    });
+    return null;
+  }
 }
 
 /**
