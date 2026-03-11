@@ -1020,7 +1020,9 @@ async function forwardWebhookToRepoMachine(params: {
         machineMetadata: (c.machine.metadata as Record<string, unknown>) ?? {},
         machineState: c.machine.state,
       })),
-    ).catch((err) => logger.warn("[GitHub Repo Cache] Failed to set cache", { error: String(err) }));
+    ).catch((err) =>
+      logger.warn("[GitHub Repo Cache] Failed to set cache", { error: String(err) }),
+    );
   }
 
   // ── Fallback: installation ID lookup ──────────────────────────
@@ -1083,7 +1085,11 @@ async function forwardWebhookToRepoMachine(params: {
             machineMetadata: (c.machine.metadata as Record<string, unknown>) ?? {},
             machineState: c.machine.state,
           })),
-        ).catch((err) => logger.warn("[GitHub Repo Cache] Failed to set installation cache", { error: String(err) }));
+        ).catch((err) =>
+          logger.warn("[GitHub Repo Cache] Failed to set installation cache", {
+            error: String(err),
+          }),
+        );
       }
     }
   }

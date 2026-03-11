@@ -165,18 +165,23 @@ async function purgeUrl(url: string, env: CloudflareEnv): Promise<void> {
   }
 
   try {
-    const response = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-        "Content-Type": "application/json",
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ files: [url] }),
       },
-      body: JSON.stringify({ files: [url] }),
-    });
+    );
 
     if (!response.ok) {
       const body = await response.text().catch(() => "<no body>");
-      logger.warn(`[GitHub Repo Cache] Purge API failed (${response.status}): ${body.slice(0, 500)}`);
+      logger.warn(
+        `[GitHub Repo Cache] Purge API failed (${response.status}): ${body.slice(0, 500)}`,
+      );
     } else {
       logger.debug("[GitHub Repo Cache] Global purge succeeded", { url });
     }

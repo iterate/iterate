@@ -615,9 +615,7 @@ export const projectRouter = {
       if (targetRepoFullName && targetRepoFullName !== sourceRepoFullName) {
         waitUntil(purgeRepoLookupCache(targetRepoFullName, ctx.env));
       }
-      waitUntil(
-        purgeInstallationLookupCache(String(githubConflictData.installationId), ctx.env),
-      );
+      waitUntil(purgeInstallationLookupCache(String(githubConflictData.installationId), ctx.env));
 
       const projectIdsToRefresh =
         sourceProjectId === targetProjectId
