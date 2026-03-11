@@ -15,10 +15,23 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: os
       PGDATA: /var/lib/postgresql/data/pgdata
+    command:
+      - postgres
+      - -c
+      - max_connections=1000
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - effective_cache_size=1536MB
     ports:
       - "5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    shm_size: 512mb
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d os"]
