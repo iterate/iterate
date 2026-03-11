@@ -774,7 +774,13 @@ githubApp.post("/webhook", async (c) => {
       })
       .returning({ id: schema.event.id }),
     name: "github:webhook-received",
-    payload: { ...payload, _delivery_id: deliveryId },
+    payload: (inserted) => ({
+      sourceEventId: inserted.id,
+      deliveryId,
+      event: eventType,
+      action: typeof payload.action === "string" ? payload.action : null,
+      payload,
+    }),
   });
   if (!inserted) {
     // Duplicate delivery - already processed
