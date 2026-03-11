@@ -5,6 +5,7 @@
 // before using, you should create a table using pgmq, e.g. `select pgmq.create('my_consumer_job_queue')`
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomInt } from "node:crypto";
 import { sql, SQL } from "drizzle-orm";
 import { os, type Procedure, type InferSchemaInput, type InferSchemaOutput } from "@orpc/server";
 import { z } from "zod/v4";
@@ -413,34 +414,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     params,
   ): Promise<Awaited<(typeof params)["query"]> & { delays: TimePeriod[] }> => {
     const { query } = params;
-    const getSetsRequired = (value: unknown) => {
-      const isSqlish = (value: any): value is SQL<unknown> => {
-        return typeof value?.getSQL === "function";
-      };
-      const sets: Array<{ path: string[]; value: unknown }> = [];
 
-      const s = Symbol("path");
-      const jsonString = JSON.stringify(value, function (key, value) {
-        const parentOverrides = this[s];
-        if (value && typeof value === "object" && key) {
-          Object.defineProperty(value, s, {
-            value: [...(parentOverrides || []), String(key)],
-            enumerable: false,
-            writable: true,
-          });
-        }
-        if (isSqlish(value)) {
-          sets.push({
-            path: [...(parentOverrides || []), String(key)],
-            value,
-          });
-          return undefined;
-        }
-        return value;
-      });
-
-      return { jsonString, sets };
-    };
     const { name, payload: payloadOrFn, context = {} } = params;
 
     let payload = payloadOrFn;
@@ -461,8 +435,6 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
       );
       payload = payloadOrFn(proxy);
     }
-
-    const payloadSets = getSetsRequired(payload);
     const exec = getExec(db);
     const getSQL = () => {
       if (Array.isArray(query)) {
@@ -470,31 +442,35 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
       }
       return query.getSQL();
     };
-    let payloadJson = sql`${JSON.stringify(payload)}::jsonb`;
-    if (payloadSets.sets.length > 0) {
-      payloadJson = sql`${payloadSets.jsonString}::jsonb`;
 
-      const merges = sql.fromList(
-        payloadSets.sets.map((s) => {
-          const path = s.path.map((p) => sql`${p}`);
-          return sql
-            .raw("\n" + " ".repeat(12))
-            .append(sql`|| jsonb_set('{}'::jsonb, `)
-            .append(sql`array[${sql.join(path, sql`,`)}]::text[], `)
-            .append(sql`to_jsonb(`.append(s.value as SQL).append(sql`)`))
-            .append(sql`)::jsonb`);
-        }),
+    /** take an object value that has some sql`...` values in it, possibly deeply-nested, and gives you a valid jsonb object for it with the evaluated values */
+    const jsonbify = (val: unknown) => {
+      const placeholders: Array<[string, SQL]> = [];
+      const random = randomInt(1_000_000_000);
+      const json = JSON.stringify(val, (_key, value) => {
+        if (typeof (value as any)?.getSQL === "function") {
+          const placeholder = `____PGMQ_LIB_SQL_PLACEHOLDER_${random}_${placeholders.length}____`;
+          placeholders.push([placeholder, value]);
+          return placeholder;
+        }
+        return value;
+      });
+      const text = placeholders.reduce(
+        (acc, [placeholder, value]) =>
+          sql`replace(${acc}, ${JSON.stringify(placeholder)}, to_jsonb(${value})::text)`,
+        sql`${json}`,
       );
-      payloadJson = payloadJson.append(merges);
-    }
+      return text.append(sql`::jsonb`);
+    };
+
     const cteSql = sql`with query as (`.append(getSQL()).append(sql`
       ),
       insertion as (
         insert into outbox_event (name, payload, context)
         select
           ${name},
-          ${payloadJson},
-          ${JSON.stringify(context)}::jsonb
+          ${jsonbify(payload)},
+          ${jsonbify(context)}
         from query
         returning *
       )
