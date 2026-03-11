@@ -165,12 +165,12 @@ describe("project ingress hostname resolution", () => {
 });
 
 describe("project ingress request hostname", () => {
-  it("avoids repeated DB lookups across a burst of authenticated ingress requests", async () => {
+  it("avoids repeated DB lookups across a warm burst of authenticated ingress requests", async () => {
     const { createMachineStub } = await import("@iterate-com/sandbox/providers/machine-stub");
     const { getDb } = await import("../db/client.ts");
     const { handleProjectIngressRequest } = await loadProjectIngressProxyModule();
 
-    const db = createProjectIngressDb({ maxProjectQueriesBeforeFailure: 20 });
+    const db = createProjectIngressDb({ maxProjectQueriesBeforeFailure: 1 });
     vi.mocked(getDb).mockReturnValue(db.db as never);
     vi.mocked(createMachineStub).mockResolvedValue({
       getFetcher: vi.fn().mockResolvedValue(vi.fn().mockResolvedValue(createResponse())),
@@ -186,6 +186,8 @@ describe("project ingress request hostname", () => {
     const session = {
       user: { id: "usr_123", role: "user" },
     } as never;
+
+    await handleProjectIngressRequest(request, env, session);
 
     const responses = await Promise.all(
       Array.from({ length: 100 }, () => handleProjectIngressRequest(request, env, session)),

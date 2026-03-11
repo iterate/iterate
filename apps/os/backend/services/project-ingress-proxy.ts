@@ -20,7 +20,6 @@ const SANDBOX_INGRESS_PORT = 8080;
 const DEFAULT_TARGET_PORT = 3000;
 const TARGET_HOST_HEADER = "x-iterate-proxy-target-host";
 const RESOLVE_MACHINE_FOR_INGRESS_CACHE_TTL_MS = 10_000;
-const RESOLVE_MACHINE_FOR_INGRESS_PENDING_TTL_MS = 1_000;
 export const PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH =
   "/api/project-ingress-proxy-auth/bridge-start";
 export const PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH = "/_/exchange-token";
@@ -217,11 +216,6 @@ type ResolveMachineForIngressResult = {
 };
 
 const resolveMachineForIngressCache = new SimpleKv<ResolveMachineForIngressResult>();
-const resolveMachineForIngressPending = new Map<string, number>();
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function getResolveMachineForIngressCacheKey(params: {
   target: IngressTarget;
@@ -250,49 +244,13 @@ async function resolveMachineForIngress(
   const cached = resolveMachineForIngressCache.get(cacheKey);
   if (cached) return cached;
 
-  const pendingStartedAt = resolveMachineForIngressPending.get(cacheKey);
-  if (
-    pendingStartedAt &&
-    pendingStartedAt + RESOLVE_MACHINE_FOR_INGRESS_PENDING_TTL_MS > Date.now()
-  ) {
-    return waitForResolvedMachineForIngress(cacheKey, target, userId, isSystemAdmin);
+  const result = await resolveMachineForIngressUncached(target, userId, isSystemAdmin);
+  if (shouldCacheResolveMachineForIngressResult(result)) {
+    resolveMachineForIngressCache.set(cacheKey, result, RESOLVE_MACHINE_FOR_INGRESS_CACHE_TTL_MS);
+  } else {
+    resolveMachineForIngressCache.delete(cacheKey);
   }
-
-  resolveMachineForIngressPending.set(cacheKey, Date.now());
-
-  try {
-    const result = await resolveMachineForIngressUncached(target, userId, isSystemAdmin);
-    if (shouldCacheResolveMachineForIngressResult(result)) {
-      resolveMachineForIngressCache.set(cacheKey, result, RESOLVE_MACHINE_FOR_INGRESS_CACHE_TTL_MS);
-    } else {
-      resolveMachineForIngressCache.delete(cacheKey);
-    }
-    return result;
-  } finally {
-    resolveMachineForIngressPending.delete(cacheKey);
-  }
-}
-
-async function waitForResolvedMachineForIngress(
-  cacheKey: string,
-  target: IngressTarget,
-  userId: string,
-  isSystemAdmin: boolean,
-): Promise<ResolveMachineForIngressResult> {
-  const deadline = Date.now() + RESOLVE_MACHINE_FOR_INGRESS_PENDING_TTL_MS;
-
-  while (Date.now() < deadline) {
-    const cached = resolveMachineForIngressCache.get(cacheKey);
-    if (cached) return cached;
-
-    if (!resolveMachineForIngressPending.has(cacheKey)) {
-      return resolveMachineForIngress(target, userId, isSystemAdmin);
-    }
-
-    await sleep(10);
-  }
-
-  return resolveMachineForIngressUncached(target, userId, isSystemAdmin);
+  return result;
 }
 
 async function resolveMachineForIngressUncached(
