@@ -1,5 +1,8 @@
-import { eq, and } from "drizzle-orm";
-import { drizzle as drizzlePostgresJs } from "drizzle-orm/postgres-js";
+import http from "node:http";
+import https from "node:https";
+import { eq } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { hashPassword } from "better-auth/crypto";
 import postgres from "postgres";
 import * as schema from "../backend/db/schema.ts";
 import { resolveLocalDockerPostgresPort } from "./local-docker-postgres-port.ts";
@@ -7,130 +10,226 @@ import { resolveLocalDockerPostgresPort } from "./local-docker-postgres-port.ts"
 const databaseUrl =
   process.env.DATABASE_URL ??
   `postgres://postgres:postgres@127.0.0.1:${resolveLocalDockerPostgresPort()}/os`;
-
-if (!databaseUrl) {
-  throw new Error(
-    "DATABASE_URL is required. Run with: doppler run -- pnpm tsx scripts/repro-project-ingress-db-burst.ts",
-  );
-}
+const workerUrl = process.env.WORKER_URL ?? "http://127.0.0.1:5173";
+const projectIngressDomain =
+  process.env.PROJECT_INGRESS_DOMAIN ??
+  (process.env.ITERATE_USER ? `${process.env.ITERATE_USER}.iterate-dev.app` : "iterate.app");
+const controlPlaneHost =
+  process.env.CONTROL_PLANE_HOST ??
+  (process.env.ITERATE_USER
+    ? `${process.env.ITERATE_USER}.iterate-dev.com`
+    : process.env.VITE_PUBLIC_URL
+      ? new URL(process.env.VITE_PUBLIC_URL).host
+      : "localhost:5173");
 
 const requestCount = Number(process.env.REQUEST_COUNT ?? "100");
+const warmCache = process.env.WARM_CACHE === "true";
 const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const userId = `usr_real_db_${suffix}`;
 const organizationId = `org_real_db_${suffix}`;
 const membershipId = `member_real_db_${suffix}`;
 const projectId = `prj_real_db_${suffix}`;
-const slug = `realdb-${suffix}`;
 const machineId = `mach_real_db_${suffix}`;
+const slug = `realdb-${suffix}`;
+const ingressHost = `${slug}.${projectIngressDomain}`;
+const email = `${suffix}@iterate.test`;
+const password = `Password-${suffix}`;
 
-const setupClient = postgres(databaseUrl, { prepare: false });
-const setupDb = drizzlePostgresJs(setupClient, { schema, casing: "snake_case" });
-const clients: ReturnType<typeof postgres>[] = [];
+const client = postgres(databaseUrl, { prepare: false });
+const db = drizzle(client, { schema, casing: "snake_case" });
 
-function createPerRequestDb() {
-  const client = postgres(databaseUrl, { prepare: false, max: 3 });
-  clients.push(client);
-  return drizzlePostgresJs(client, { schema, casing: "snake_case" });
-}
+type HttpResult = {
+  status: number;
+  body: string;
+  headers: http.IncomingHttpHeaders;
+};
 
-async function resolveMachineForIngressUncachedLikeIngress(userId: string, projectSlug: string) {
-  const db = createPerRequestDb();
+function requestWorker(params: {
+  path: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+}): Promise<HttpResult> {
+  const target = new URL(params.path, workerUrl);
+  const transport = target.protocol === "https:" ? https : http;
 
-  const rows = await db
-    .select({
-      projectId: schema.project.id,
-      defaultPort: schema.project.defaultPort,
-      membershipId: schema.organizationUserMembership.id,
-    })
-    .from(schema.project)
-    .innerJoin(schema.organization, eq(schema.project.organizationId, schema.organization.id))
-    .leftJoin(
-      schema.organizationUserMembership,
-      and(
-        eq(schema.organizationUserMembership.organizationId, schema.organization.id),
-        eq(schema.organizationUserMembership.userId, userId),
-      ),
-    )
-    .where(eq(schema.project.slug, projectSlug))
-    .limit(1);
+  return new Promise((resolve, reject) => {
+    const request = transport.request(
+      target,
+      {
+        method: params.method ?? "GET",
+        headers: params.headers,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("end", () => {
+          resolve({
+            status: response.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+            headers: response.headers,
+          });
+        });
+      },
+    );
 
-  const row = rows[0];
-  if (!row?.membershipId) {
-    throw new Error("Failed to seed ingress repro data");
-  }
-
-  await db.query.machine.findFirst({
-    where: and(eq(schema.machine.projectId, row.projectId), eq(schema.machine.state, "active")),
+    request.on("error", reject);
+    if (params.body) request.write(params.body);
+    request.end();
   });
 }
 
-async function main() {
-  console.log(`Seeding repro data for project slug ${slug}`);
+async function makeIngressRequest(cookieHeader: string) {
+  return requestWorker({
+    path: "/api/health",
+    headers: {
+      cookie: cookieHeader,
+      host: ingressHost,
+    },
+  });
+}
 
-  await setupDb.insert(schema.user).values({
+async function seedData() {
+  await db.insert(schema.user).values({
     id: userId,
-    name: "Real DB Repro",
-    email: `${suffix}@iterate.test`,
+    name: "Real Worker Repro",
+    email,
     role: "user",
   });
 
-  await setupDb.insert(schema.organization).values({
-    id: organizationId,
-    name: `Real DB Org ${suffix}`,
-    slug: `real-db-org-${suffix}`,
+  await db.insert(schema.account).values({
+    accountId: email,
+    providerId: "credential",
+    userId,
+    password: await hashPassword(password),
   });
 
-  await setupDb.insert(schema.organizationUserMembership).values({
+  await db.insert(schema.organization).values({
+    id: organizationId,
+    name: `Real Worker Org ${suffix}`,
+    slug: `real-worker-org-${suffix}`,
+  });
+
+  await db.insert(schema.organizationUserMembership).values({
     id: membershipId,
     organizationId,
     userId,
     role: "member",
   });
 
-  await setupDb.insert(schema.project).values({
+  await db.insert(schema.project).values({
     id: projectId,
-    name: `Real DB Project ${suffix}`,
+    name: `Real Worker Project ${suffix}`,
     slug,
     organizationId,
     sandboxProvider: "docker",
   });
 
-  await setupDb.insert(schema.machine).values({
+  await db.insert(schema.machine).values({
     id: machineId,
     projectId,
-    name: `Real DB Machine ${suffix}`,
+    name: `Real Worker Machine ${suffix}`,
     type: "docker",
     state: "active",
     externalId: `ext-${suffix}`,
     metadata: {},
   });
+}
 
-  console.log(`Running ${requestCount} concurrent uncached ingress resolution requests`);
+function summarizeStatuses(responses: HttpResult[]) {
+  const counts = new Map<number, number>();
+  for (const response of responses) {
+    counts.set(response.status, (counts.get(response.status) ?? 0) + 1);
+  }
+  return Object.fromEntries([...counts.entries()].sort(([a], [b]) => a - b));
+}
+
+async function main() {
+  console.log(`Target worker: ${workerUrl}`);
+  console.log(`Control plane host: ${controlPlaneHost}`);
+  console.log(`Seeding repro data for ingress host ${ingressHost}`);
+
+  await seedData();
+
+  try {
+    await requestWorker({
+      path: "/api/observability",
+      headers: { host: controlPlaneHost },
+    });
+  } catch (error) {
+    throw new Error(
+      `Could not reach local OS worker at ${workerUrl}. Start it with pnpm dev in apps/os.`,
+      { cause: error },
+    );
+  }
+
+  const signInResponse = await requestWorker({
+    path: "/api/auth/sign-in/email",
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      host: controlPlaneHost,
+    },
+    body: JSON.stringify({ email, password }),
+  });
+
+  if (signInResponse.status < 200 || signInResponse.status >= 300) {
+    throw new Error(`Sign-in failed with status ${signInResponse.status}: ${signInResponse.body}`);
+  }
+
+  const setCookies = Array.isArray(signInResponse.headers["set-cookie"])
+    ? signInResponse.headers["set-cookie"]
+    : signInResponse.headers["set-cookie"]
+      ? [signInResponse.headers["set-cookie"]]
+      : [];
+
+  const cookieHeader = setCookies.map((cookie) => cookie.split(";", 1)[0]).join("; ");
+
+  if (!cookieHeader) {
+    throw new Error("Sign-in did not return a session cookie");
+  }
+
+  if (warmCache) {
+    console.log("Warming ingress cache with one request");
+    const warmResponse = await makeIngressRequest(cookieHeader);
+    console.log(`Warm request status: ${warmResponse.status}`);
+  }
+
+  console.log(`Sending ${requestCount} concurrent requests through the real OS worker`);
 
   const startedAt = Date.now();
   const results = await Promise.allSettled(
-    Array.from({ length: requestCount }, () =>
-      resolveMachineForIngressUncachedLikeIngress(userId, slug),
-    ),
+    Array.from({ length: requestCount }, () => makeIngressRequest(cookieHeader)),
   );
 
-  const rejected = results.filter((result) => result.status === "rejected");
-  const fulfilled = results.length - rejected.length;
+  const responses = results
+    .filter((result): result is PromiseFulfilledResult<HttpResult> => result.status === "fulfilled")
+    .map((result) => result.value);
+  const rejections = results.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
 
   console.log(`Completed in ${Date.now() - startedAt}ms`);
-  console.log(`Fulfilled: ${fulfilled}`);
-  console.log(`Rejected: ${rejected.length}`);
+  console.log(`HTTP status counts: ${JSON.stringify(summarizeStatuses(responses))}`);
+  console.log(`Transport rejections: ${rejections.length}`);
 
-  if (rejected.length > 0) {
-    console.log("First rejection:");
-    console.dir((rejected[0] as PromiseRejectedResult).reason, { depth: 5 });
+  const firstErrorResponse = responses.find(
+    (response) => response.status >= 500 && response.status !== 502,
+  );
+  if (firstErrorResponse) {
+    console.log(`First non-proxy 5xx status: ${firstErrorResponse.status}`);
+    console.log(firstErrorResponse.body);
+  }
+
+  if (rejections.length > 0) {
+    console.log("First transport rejection:");
+    console.dir(rejections[0].reason, { depth: 5 });
   }
 }
 
 try {
   await main();
 } finally {
-  await Promise.allSettled(clients.map((client) => client.end()));
-  await setupDb.delete(schema.user).where(eq(schema.user.id, userId));
-  await setupClient.end();
+  await db.delete(schema.user).where(eq(schema.user.id, userId));
+  await client.end();
 }
