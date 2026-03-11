@@ -460,7 +460,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
       });
       const text = placeholders.reduce(
         (acc, [placeholder, value]) =>
-          sql`replace(${acc}, ${JSON.stringify(placeholder)}, to_jsonb(${value})::text)`,
+          sql`replace(${acc}, ${JSON.stringify(placeholder)}, coalesce(to_jsonb(${value})::text, 'null'))`,
         sql`${json}`,
       );
       return text.append(sql`::jsonb`);
