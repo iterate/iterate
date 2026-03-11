@@ -7,6 +7,7 @@ const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/itera
 const sandboxDir = join(iterateRepo, "sandbox");
 const envFile = join(home, ".iterate/.env");
 const eventsServicePort = "17301";
+const metaMcpServicePort = "19070";
 // All DBs under ~/.local/share — persisted across machine replacement.
 const eventsServiceDatabasePath = join(home, ".local/share/events-service/events.sqlite");
 const daemonDatabasePath = join(home, ".local/share/daemon/db.sqlite");
@@ -82,28 +83,28 @@ export default defineConfig({
         restartPolicy: "always",
       },
     },
-    {
-      name: "archil-mount",
-      definition: {
-        command: "bash",
-        args: [`${sandboxDir}/archil-mount.sh`],
-      },
-      envOptions: {
-        // inheritGlobalEnv=false: skip ~/.iterate/.env (proxy vars would break archil).
-        // inheritProcessEnv=true (default): ARCHIL_* vars come from Fly process env.
-        inheritGlobalEnv: false,
-        reloadDelay: false,
-      },
-      options: {
-        restartPolicy: "always",
-        backoff: {
-          type: "exponential",
-          initialDelayMs: 2000,
-          maxDelayMs: 60000,
-        },
-      },
-      dependsOn: ["egress-proxy"],
-    },
+    // {
+    //   name: "archil-mount",
+    //   definition: {
+    //     command: "bash",
+    //     args: [`${sandboxDir}/archil-mount.sh`],
+    //   },
+    //   envOptions: {
+    //     // inheritGlobalEnv=false: skip ~/.iterate/.env (proxy vars would break archil).
+    //     // inheritProcessEnv=true (default): ARCHIL_* vars come from Fly process env.
+    //     inheritGlobalEnv: false,
+    //     reloadDelay: false,
+    //   },
+    //   options: {
+    //     restartPolicy: "always",
+    //     backoff: {
+    //       type: "exponential",
+    //       initialDelayMs: 2000,
+    //       maxDelayMs: 60000,
+    //     },
+    //   },
+    //   dependsOn: ["egress-proxy"],
+    // },
     {
       // Gate process: polls for /tmp/persistence-ready (touched by archil-mount.sh
       // after mount + symlink setup), then exits 0. Uses restartPolicy "never"
@@ -111,7 +112,7 @@ export default defineConfig({
       name: "archil-repo-ready",
       definition: {
         command: "bash",
-        args: ["-c", "while [ ! -f /tmp/persistence-ready ]; do sleep 1; done"],
+        args: ["-c", "exit 0;"],
       },
       envOptions: {
         inheritGlobalEnv: false,
@@ -120,7 +121,7 @@ export default defineConfig({
       options: {
         restartPolicy: "never",
       },
-      dependsOn: ["archil-mount"],
+      // dependsOn: ["archil-mount"],
     },
     {
       name: "project-ingress-proxy",
@@ -205,6 +206,24 @@ export default defineConfig({
       dependsOn: ["daemon-backend"],
     },
     {
+      name: "meta-mcp-service",
+      definition: {
+        command: "tsx",
+        args: ["src/server.ts"],
+        cwd: `${iterateRepo}/services/meta-mcp-service`,
+        env: {
+          META_MCP_SERVICE_PORT: metaMcpServicePort,
+        },
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: 500,
+      },
+      dependsOn: ["archil-repo-ready"],
+    },
+    {
       name: "opencode",
       definition: {
         command: "opencode",
@@ -226,7 +245,7 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
-      dependsOn: ["archil-repo-ready"],
+      dependsOn: ["archil-repo-ready", "meta-mcp-service"],
     },
     {
       name: "trace-viewer",

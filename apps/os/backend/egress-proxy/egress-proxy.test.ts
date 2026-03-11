@@ -14,7 +14,12 @@ import {
   getFullReauthUrl,
   CONNECTORS,
 } from "../services/connectors.ts";
-import { hasMagicString, parseMagicString, MAGIC_STRING_PATTERN } from "./egress-proxy.ts";
+import {
+  hasMagicString,
+  parseMagicString,
+  MAGIC_STRING_PATTERN,
+  forwardProxyResponse,
+} from "./egress-proxy.ts";
 import { matchesEgressRule } from "./egress-rules.ts";
 
 // Test the magic string parsing and secret lookup logic
@@ -410,5 +415,28 @@ describe("Egress Proxy - Error Response Types", () => {
 
     expect(error.code).toBe("REFRESH_FAILED");
     expect(error.reauthUrl).toContain("/connectors");
+  });
+});
+
+describe("Egress Proxy - Response Forwarding", () => {
+  test("preserves status and strips hop-by-hop response headers", async () => {
+    const response = new Response("bad request", {
+      status: 400,
+      statusText: "Bad Request",
+      headers: {
+        "content-type": "text/plain",
+        connection: "keep-alive",
+        "transfer-encoding": "chunked",
+      },
+    });
+
+    const forwarded = forwardProxyResponse(response);
+
+    expect(forwarded.status).toBe(400);
+    expect(forwarded.statusText).toBe("Bad Request");
+    expect(forwarded.headers.get("content-type")).toBe("text/plain");
+    expect(forwarded.headers.has("connection")).toBe(false);
+    expect(forwarded.headers.has("transfer-encoding")).toBe(false);
+    expect(await forwarded.text()).toBe("bad request");
   });
 });

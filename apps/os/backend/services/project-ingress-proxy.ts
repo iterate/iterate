@@ -390,10 +390,15 @@ async function proxyWithFetcher(
     method: request.method,
     headers: filterProxyRequestHeaders(request, targetHost),
     body: request.body,
+    redirect: "manual",
     // @ts-expect-error - Cloudflare Workers support duplex streaming
     duplex: "half",
   });
 
+  return forwardProjectIngressProxyResponse(response);
+}
+
+function forwardProjectIngressProxyResponse(response: Response): Response {
   const responseHeaders = new Headers();
   response.headers.forEach((value, key) => {
     if (!EXCLUDE_RESPONSE_HEADERS.includes(key.toLowerCase())) {
@@ -646,6 +651,17 @@ export async function handleProjectIngressRequest(
     const pathWithQuery = `${url.pathname}${url.search}`;
     return await proxyWithFetcher(request, pathWithQuery, fetcher, effectiveTargetHost);
   } catch (error) {
+    if (error instanceof Response) {
+      logger.error("[project-ingress] Proxy threw a response", new Error(`HTTP ${error.status}`), {
+        host: requestHostname,
+        rootDomain: resolvedHost.rootDomain,
+        machine: { id: machine.id },
+        machineType: machine.type,
+        status: error.status,
+      });
+      return forwardProjectIngressProxyResponse(error);
+    }
+
     logger.error("[project-ingress] Failed to proxy request", error, {
       host: requestHostname,
       rootDomain: resolvedHost.rootDomain,
@@ -766,6 +782,21 @@ async function handleCustomDomainRequest(
     const pathWithQuery = `${url.pathname}${url.search}`;
     return await proxyWithFetcher(request, pathWithQuery, fetcher, effectiveTargetHost);
   } catch (error) {
+    if (error instanceof Response) {
+      logger.error(
+        "[project-ingress] Proxy custom domain request threw a response",
+        new Error(`HTTP ${error.status}`),
+        {
+          host: requestHostname,
+          customDomain: project.customDomain,
+          machine: { id: machine.id },
+          machineType: machine.type,
+          status: error.status,
+        },
+      );
+      return forwardProjectIngressProxyResponse(error);
+    }
+
     logger.error("[project-ingress] Failed to proxy custom domain request", error, {
       host: requestHostname,
       customDomain: project.customDomain,

@@ -1,5 +1,6 @@
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
+import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import type { RouterClient } from "@orpc/server";
 import type { AppRouter } from "../../../daemon/server/orpc/app-router.ts";
 
@@ -20,4 +21,12 @@ export function createDaemonProxyClient(params: {
       url: `${import.meta.env.VITE_PUBLIC_URL}${base}/api/orpc`,
     }),
   );
+}
+
+/**
+ * Create a TanStack Query-integrated oRPC client for a daemon, providing
+ * `.queryOptions()` on every procedure for use with useQuery/useSuspenseQuery.
+ */
+export function createDaemonQueryUtils(client: RouterClient<AppRouter>) {
+  return createTanstackQueryUtils(client);
 }

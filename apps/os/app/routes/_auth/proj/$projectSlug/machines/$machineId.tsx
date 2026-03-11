@@ -24,7 +24,7 @@ import { buildProjectIngressLink } from "@/lib/project-ingress-link.ts";
 import { useSessionUser } from "@/hooks/use-session-user.ts";
 import { Button } from "@/components/ui/button.tsx";
 import { orpc, orpcClient } from "@/lib/orpc.tsx";
-import { createDaemonProxyClient } from "@/lib/daemon-client.ts";
+import { createDaemonProxyClient, createDaemonQueryUtils } from "@/lib/daemon-client.ts";
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
   component: MachineDetailPage,
@@ -35,6 +35,7 @@ const PIDNAP_PROCESSES = [
   "daemon-backend",
   "daemon-frontend",
   "events",
+  "meta-mcp-service",
   "opencode",
   "egress-proxy",
   "project-ingress-proxy",
@@ -176,6 +177,8 @@ function MachineDetailPage() {
     [orgSlug, params.projectSlug, params.machineId],
   );
 
+  const daemon = useMemo(() => createDaemonQueryUtils(daemonClient), [daemonClient]);
+
   const metadata = machine.metadata as MachineMetadata;
   const { services } = machine;
 
@@ -253,20 +256,48 @@ function MachineDetailPage() {
     toast.success(`Copied: ${text}`);
   };
 
-  const { data: agentsData, isLoading: agentsLoading } = useQuery({
-    queryKey: ["daemon", params.machineId, "listAgents"],
-    queryFn: () => daemonClient.daemon.listAgents(),
-    // TODO: this breaks after restart — lastEvent becomes machine:restart-requested
-    // or machine:daemon-status-reported, disabling the query permanently.
-    // Fix: fetch all events for the machine (not just lastEvent), then check
-    // events.has("machine:activated"). That way even detached machines still
-    // render their agents list, which is useful.
-    enabled:
-      typeof window !== "undefined" &&
-      machine.state === "active" &&
-      (machine.lastEvent?.name === "machine:activated" ||
-        machine.lastEvent?.name === "machine:probe-succeeded"),
-    refetchInterval: 10000,
+  const { data: agentsData, isLoading: agentsLoading } = useQuery(
+    daemon.daemon.listAgents.queryOptions({
+      // TODO: this breaks after restart — lastEvent becomes machine:restart-requested
+      // or machine:daemon-status-reported, disabling the query permanently.
+      // Fix: fetch all events for the machine (not just lastEvent), then check
+      // events.has("machine:activated"). That way even detached machines still
+      // render their agents list, which is useful.
+      enabled:
+        typeof window !== "undefined" &&
+        machine.state === "active" &&
+        (machine.lastEvent?.name === "machine:activated" ||
+          machine.lastEvent?.name === "machine:probe-succeeded"),
+      refetchInterval: 10000,
+    }),
+  );
+
+  const metaMcpStatusQueryKey = daemon.daemon.metaMcp.getStatus.key();
+  const metaMcpStatus = useQuery(
+    daemon.daemon.metaMcp.getStatus.queryOptions({
+      enabled: typeof window !== "undefined" && machine.state === "active",
+      refetchInterval: 10000,
+    }),
+  );
+
+  const startMetaMcpOAuth = useMutation({
+    mutationFn: async (serverId: string) => daemonClient.daemon.metaMcp.startOAuth({ serverId }),
+    onSuccess: async (result) => {
+      window.open(result.authUrl, "_blank", "noopener,noreferrer");
+      const copied = await navigator.clipboard.writeText(result.callbackUrl).then(
+        () => true,
+        () => false,
+      );
+      toast.success(
+        copied
+          ? `Opened OAuth for ${result.serverId}. Callback URL copied.`
+          : `Opened OAuth for ${result.serverId}.`,
+      );
+      queryClient.invalidateQueries({ queryKey: metaMcpStatusQueryKey });
+    },
+    onError: (error) => {
+      toast.error("Failed to start OAuth: " + error.message);
+    },
   });
 
   const agents = [...(agentsData ?? [])].sort(
@@ -635,6 +666,110 @@ function MachineDetailPage() {
         </div>
       </section>
 
+      <section className="space-y-4 border-b pb-6">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-medium">Meta MCP</h2>
+          {metaMcpStatus.data?.ok && (
+            <span className="text-xs text-muted-foreground">
+              {metaMcpStatus.data.publicBaseUrl}
+            </span>
+          )}
+        </div>
+
+        {metaMcpStatus.isLoading && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Spinner />
+            Loading Meta MCP status...
+          </div>
+        )}
+
+        {metaMcpStatus.error && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            Failed to load Meta MCP status: {metaMcpStatus.error.message}
+          </div>
+        )}
+
+        {metaMcpStatus.data?.ok === false && (
+          <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            <div className="font-medium">Meta MCP configuration error</div>
+            <div>{metaMcpStatus.data.error.message}</div>
+            <div className="text-xs text-destructive/80">
+              Config: {metaMcpStatus.data.configPath}
+              <br />
+              Auth: {metaMcpStatus.data.authPath}
+            </div>
+          </div>
+        )}
+
+        {metaMcpStatus.data?.ok && (
+          <>
+            {metaMcpStatus.data.publicBaseUrlIsPlaceholder && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-300">
+                OAuth callback URLs are using a placeholder public URL right now, so connect flows
+                will not complete until ingress for port <code className="text-xs">19070</code> is
+                wired.
+              </div>
+            )}
+
+            {metaMcpStatus.data.servers.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No Meta MCP upstream servers configured.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {metaMcpStatus.data.servers.map((server) => {
+                  const isPending =
+                    startMetaMcpOAuth.isPending && startMetaMcpOAuth.variables === server.id;
+
+                  return (
+                    <div key={server.id} className="rounded-lg border bg-background p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium">{server.id}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {server.namespace ?? server.id} · {server.transport} ·{" "}
+                            {server.toolCount} tools
+                          </div>
+                        </div>
+                        <div className="text-xs text-muted-foreground">{server.auth.type}</div>
+                      </div>
+
+                      <div className="mt-3 space-y-2 text-xs text-muted-foreground">
+                        <div className="break-all">{server.url}</div>
+
+                        {server.auth.type === "bearer" && (
+                          <div>
+                            {server.auth.configured
+                              ? `Bearer token found in ${server.auth.env}`
+                              : `Missing bearer token env: ${server.auth.env}`}
+                          </div>
+                        )}
+
+                        {(server.auth.type === "oauth" || server.auth.type === "auto") && (
+                          <ServerOAuthStatus
+                            server={server}
+                            isPending={isPending}
+                            onConnect={() => startMetaMcpOAuth.mutate(server.id)}
+                          />
+                        )}
+
+                        {server.auth.type === "none" && <div>No authentication required.</div>}
+
+                        {server.error && (
+                          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-destructive">
+                            {server.error}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+      </section>
+
       <section className="space-y-3 border-b pb-6">
         <h2 className="text-sm font-medium">Agents</h2>
 
@@ -755,6 +890,39 @@ function MachineDetailPage() {
         onConfirm={() => deleteMachine.mutate()}
         destructive
       />
+    </div>
+  );
+}
+
+function ServerOAuthStatus(props: {
+  server: {
+    auth:
+      | { type: "oauth"; connected: boolean; callbackUrl: string }
+      | { type: "auto"; oauthConnected: boolean; callbackUrl: string };
+  };
+  isPending: boolean;
+  onConnect: () => void;
+}) {
+  const { server, isPending, onConnect } = props;
+  const connected =
+    server.auth.type === "oauth" ? server.auth.connected : server.auth.oauthConnected;
+  const statusText =
+    server.auth.type === "oauth"
+      ? connected
+        ? "OAuth connected"
+        : "OAuth required"
+      : connected
+        ? "Auto auth active. OAuth is already available if the server needs it."
+        : "Auto auth active. Meta MCP will try no auth first, then OAuth if needed.";
+
+  return (
+    <div className="space-y-2">
+      <div>{statusText}</div>
+      <div className="break-all">Callback: {server.auth.callbackUrl}</div>
+      <Button variant="outline" size="sm" onClick={onConnect} disabled={isPending}>
+        <ExternalLink className="h-3.5 w-3.5" />
+        {isPending ? "Starting..." : connected ? "Reconnect OAuth" : "Connect OAuth"}
+      </Button>
     </div>
   );
 }

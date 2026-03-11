@@ -56,5 +56,6 @@
   },
   "git.autorefresh": true,
   "git.autoRepositoryDetection": true,
-  "vitest.disableWorkspaceWarning": true
+  "vitest.disableWorkspaceWarning": true,
+  "js/ts.tsdk.path": "node_modules/typescript/lib"
 }

@@ -23,8 +23,8 @@ warn_if_newer() {
   rel="${src#${HOME_SKELETON}/}"
   dest="$HOME/$rel"
 
-  # Skip .iterate/.env - managed by daemon
-  if [ "$rel" = ".iterate/.env" ]; then
+  # Skip files that are managed at runtime and should not be overwritten.
+  if [ "$rel" = ".iterate/.env" ] || [ "$rel" = ".config/meta-mcp-service/config.json" ] || [ "$rel" = ".config/meta-mcp-service/auth.json" ]; then
     return
   fi
 
@@ -41,10 +41,23 @@ while IFS= read -r -d '' src; do
   warn_if_newer "$src"
 done < <(find "$HOME_SKELETON" \( -type f -o -type l \) -print0)
 
-# Exclude .iterate/.env only if it already exists (daemon injects env vars into it)
-# On first sync we need to copy it so DUMMY_ENV_VAR etc are present
+# Exclude runtime-managed files only if they already exist.
 if [ -f "$HOME/.iterate/.env" ]; then
-  rsync -a --exclude='.iterate/.env' "$HOME_SKELETON/" "$HOME/"
+  EXCLUDES=(--exclude='.iterate/.env')
+else
+  EXCLUDES=()
+fi
+
+if [ -f "$HOME/.config/meta-mcp-service/config.json" ]; then
+  EXCLUDES+=(--exclude='.config/meta-mcp-service/config.json')
+fi
+
+if [ -f "$HOME/.config/meta-mcp-service/auth.json" ]; then
+  EXCLUDES+=(--exclude='.config/meta-mcp-service/auth.json')
+fi
+
+if [ ${#EXCLUDES[@]} -gt 0 ]; then
+  rsync -a "${EXCLUDES[@]}" "$HOME_SKELETON/" "$HOME/"
 else
   rsync -a "$HOME_SKELETON/" "$HOME/"
 fi

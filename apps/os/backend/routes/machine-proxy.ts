@@ -282,6 +282,7 @@ async function proxyWithFetcher(
     method: request.method,
     headers,
     body: request.body,
+    redirect: "manual",
     // @ts-expect-error - Cloudflare Workers support duplex streaming
     duplex: "half",
   });

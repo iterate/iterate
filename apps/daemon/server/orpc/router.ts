@@ -3,6 +3,7 @@ import { agentOrpcRouter } from "../routers/agents.ts";
 import { configRepoOrpcRouter } from "../routers/config-repo.ts";
 import { pullIterateIterateRouter } from "../routers/pull-iterate-iterate.ts";
 import type { SerializedAgent, SerializedAgentRoute } from "../routers/agents.ts";
+import { metaMcpOrpcRouter } from "./meta-mcp.ts";
 import { publicProcedure } from "./init.ts";
 import { getCustomerRepoPathOrNull } from "./platform.ts";
 
@@ -36,8 +37,9 @@ const baseProcedures = {
 export const daemonRouter = {
   ...baseProcedures,
   ...agentOrpcRouter,
-  configRepo: configRepoOrpcRouter,
   ...pullIterateIterateRouter,
+  configRepo: configRepoOrpcRouter,
+  metaMcp: metaMcpOrpcRouter,
 };
 
 export type { SerializedAgent, SerializedAgentRoute };

@@ -38,6 +38,7 @@ const DAEMON_PORTS = [
   { id: "project-ingress-proxy", internalPort: 8080 },
   { id: "iterate-daemon", internalPort: 3000 },
   { id: "iterate-daemon-server", internalPort: 3001 },
+  { id: "meta-mcp-service", internalPort: 19070 },
   { id: "opencode", internalPort: 4096 },
   { id: "jaeger-ui", internalPort: 16686 },
   { id: "jaeger-otlp-http", internalPort: 4318 },
