@@ -13,6 +13,10 @@ function authHeaders(token = "test-token") {
   };
 }
 
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function resetDb(db: D1Database) {
   await db.prepare("DROP TABLE IF EXISTS resources").run();
 
@@ -225,7 +229,7 @@ describe("resources API", () => {
       input: { type, leaseMs: 60_000, waitMs: 500 },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await sleep(25);
 
     await callProcedure({
       env: testEnv,
@@ -268,7 +272,7 @@ describe("resources API", () => {
       name: "resources/acquire",
       input: { type, leaseMs: 60_000, waitMs: 2_000 },
     });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await sleep(100);
     const waiterTwo = callProcedure<{
       slug: string;
       leaseId: string;
@@ -278,7 +282,7 @@ describe("resources API", () => {
       input: { type, leaseMs: 60_000, waitMs: 2_000 },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await sleep(100);
 
     await callProcedure({
       env: testEnv,
@@ -324,7 +328,7 @@ describe("resources API", () => {
 
     expect(first.response.ok).toBe(true);
 
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await sleep(40);
 
     const second = await callProcedure<{
       slug: string;

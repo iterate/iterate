@@ -10,7 +10,6 @@ import {
   releaseResourceInputSchema,
   semaphoreContract,
   semaphoreDataSchema,
-  semaphoreSlugSchema,
   semaphoreTypeSchema,
   type SemaphoreJsonObject,
   type SemaphoreLeaseRecord,
@@ -30,6 +29,7 @@ type Waiter = {
   type: string;
   leaseMs: number;
   timeoutHandle: ReturnType<typeof setTimeout>;
+  settled: boolean;
   resolve: (value: SemaphoreLeaseRecord | null) => void;
 };
 
@@ -74,10 +74,6 @@ function readBearerToken(headerValue: string | null): string | null {
 
 function parseType(input: string): string {
   return semaphoreTypeSchema.parse(input);
-}
-
-function parseSlug(input: string): string {
-  return semaphoreSlugSchema.parse(input);
 }
 
 function parseData(value: string): SemaphoreJsonObject {
@@ -166,13 +162,7 @@ async function selectInventoryByType(
   db: D1Database,
   type: string,
 ): Promise<SemaphoreResourceRecord[]> {
-  const result = await db
-    .prepare(
-      "SELECT type, slug, data, created_at, updated_at FROM resources WHERE type = ? ORDER BY created_at ASC, slug ASC",
-    )
-    .bind(type)
-    .all<ResourceRow>();
-  return (result.results ?? []).map(rowToResourceRecord);
+  return listResourcesFromDb(db, { type });
 }
 
 async function hasInventoryForType(db: D1Database, type: string): Promise<boolean> {
@@ -211,18 +201,24 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
 
     return new Promise<SemaphoreLeaseRecord | null>((resolve) => {
       const waiterId = ++this.nextWaiterId;
-      const timeoutHandle = setTimeout(() => {
-        this.waiters = this.waiters.filter((waiter) => waiter.id !== waiterId);
-        resolve(null);
-      }, waitMs);
-
-      this.waiters.push({
+      const waiter: Waiter = {
         id: waiterId,
         type,
         leaseMs,
-        timeoutHandle,
+        timeoutHandle: setTimeout(() => {
+          if (waiter.settled) {
+            return;
+          }
+
+          waiter.settled = true;
+          this.waiters = this.waiters.filter((candidate) => candidate.id !== waiterId);
+          resolve(null);
+        }, waitMs),
+        settled: false,
         resolve,
-      });
+      };
+
+      this.waiters.push(waiter);
     });
   }
 
@@ -352,20 +348,38 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
 
   private async dispatchWaiters(): Promise<void> {
     while (this.waiters.length > 0) {
-      const waiter = this.waiters[0];
+      const waiter = this.waiters.shift();
       if (!waiter) {
         return;
       }
 
+      if (waiter.settled) {
+        continue;
+      }
+
       const lease = await this.tryAcquire(waiter.type, waiter.leaseMs);
       if (!lease) {
+        if (!waiter.settled) {
+          this.waiters.unshift(waiter);
+        }
         return;
       }
 
-      this.waiters.shift();
+      if (waiter.settled) {
+        await this.releaseLease(lease.slug, lease.leaseId, "timed-out-before-delivery");
+        continue;
+      }
+
+      waiter.settled = true;
       clearTimeout(waiter.timeoutHandle);
       waiter.resolve(lease);
     }
+  }
+
+  private async releaseLease(slug: string, leaseId: string, event: string): Promise<void> {
+    this.ctx.storage.sql.exec("DELETE FROM leases WHERE slug = ? AND lease_id = ?", slug, leaseId);
+    this.logEvent(event, slug, { leaseId });
+    await this.scheduleNextAlarm();
   }
 
   private async scheduleNextAlarm(): Promise<void> {
