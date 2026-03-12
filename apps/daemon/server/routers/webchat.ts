@@ -157,8 +157,10 @@ webchatRouter.post("/webhook", async (c) => {
 
   webchatThreadIdByAgentPath.set(agentPath, webchatThreadId);
 
+  // Await to avoid a race where the prompt fires before the subscription is
+  // registered, causing the initial "Thinking" status to be silently dropped.
   if (wasNewlyCreated) {
-    void caller.subscribeToAgentChanges({
+    await caller.subscribeToAgentChanges({
       agentPath,
       callbackUrl: WEBCHAT_AGENT_CHANGE_CALLBACK_URL,
     });
