@@ -7,6 +7,34 @@ test("FUNNY_SLUG_WORDS contains exactly 200 unique words", () => {
   assert.equal(new Set(FUNNY_SLUG_WORDS).size, 200);
 });
 
+test("FUNNY_SLUG_WORDS excludes obvious technology terms", () => {
+  for (const forbiddenWord of [
+    "api",
+    "app",
+    "bash",
+    "git",
+    "java",
+    "json",
+    "linux",
+    "node",
+    "python",
+    "redis",
+    "script",
+    "server",
+    "socket",
+    "sql",
+    "tcp",
+    "udp",
+    "yaml",
+  ]) {
+    assert.equal(
+      FUNNY_SLUG_WORDS.includes(forbiddenWord),
+      false,
+      `${forbiddenWord} should be excluded`,
+    );
+  }
+});
+
 test("makeFunnySlug returns three lowercase hyphenated words from the inventory", () => {
   const slug = makeFunnySlug();
   const parts = slug.split("-");
