@@ -59,13 +59,13 @@ export const semaphoreWaitMsSchema = z
   .int()
   .nonnegative()
   .max(MAX_WAIT_MS, `waitMs must be <= ${MAX_WAIT_MS}`);
-export const semaphoreLeaseStateSchema = z.enum(["available", "leased"]);
+export const SemaphoreLeaseState = z.enum(["available", "leased"]);
 
 export const SemaphoreResourceRecord = z.object({
   type: semaphoreTypeSchema,
   slug: semaphoreSlugSchema,
   data: semaphoreDataSchema,
-  leaseState: semaphoreLeaseStateSchema,
+  leaseState: SemaphoreLeaseState,
   leasedUntil: z.number().int().positive().nullable(),
   lastAcquiredAt: z.number().int().positive().nullable(),
   lastReleasedAt: z.number().int().positive().nullable(),
