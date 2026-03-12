@@ -1,7 +1,6 @@
 import { createNodeWebSocket } from "@hono/node-ws";
 import { exampleServiceManifest } from "@iterate-com/example-contract";
 import {
-  applyOpenAPIRoute,
   applyServiceMiddleware,
   createServiceObservabilityHandler,
   createServiceOpenAPIHandler,
@@ -26,25 +25,26 @@ applyServiceMiddleware(app);
 
 app.get("/api/observability", createServiceObservabilityHandler(getExampleDbRuntimeConfig));
 
-app.all("/api/echo", async (c) => {
-  const request = c.req.raw;
-  const bodyText = await request.clone().text();
-  return c.json({
-    method: request.method,
-    url: request.url,
-    host: request.headers.get("host") ?? "",
-    headers: Object.fromEntries(request.headers.entries()),
-    body: bodyText,
-  });
-});
-
 const openAPIHandler = createServiceOpenAPIHandler({
   router: exampleRouter,
   title: "jonasland example API",
   version: exampleServiceManifest.version,
 });
 
-applyOpenAPIRoute(app, openAPIHandler, serviceName);
+app.all("/api/*", async (c) => {
+  const context = {
+    requestId: c.get("requestId"),
+    serviceName,
+    log: c.get("requestLog"),
+    request: c.req.raw,
+  };
+  const { matched, response } = await openAPIHandler.handle(c.req.raw, {
+    prefix: "/api",
+    context,
+  });
+  if (matched) return c.newResponse(response.body, response);
+  return c.json({ error: "not_found" }, 404);
+});
 
 await initializeExampleDb();
 

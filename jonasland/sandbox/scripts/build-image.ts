@@ -8,8 +8,6 @@
  *   JONASLAND_SANDBOX_BUILD_PLATFORM    Target platform(s) (default: linux/amd64,linux/arm64)
  *   JONASLAND_SANDBOX_SKIP_LOAD         Skip --load into local Docker (default: false)
  *   JONASLAND_SANDBOX_PUSH_FLY_REGISTRY Push to Fly registry (default: auto based on FLY_API_TOKEN)
- *   JONASLAND_SANDBOX_UPDATE_DOPPLER    Update Doppler defaults after build (default: true)
- *   JONASLAND_SANDBOX_DOPPLER_CONFIGS   Comma-separated Doppler configs to update (default: current)
  *   JONASLAND_SANDBOX_IMAGE             Override local image tag
  */
 import { execFileSync, execSync } from "node:child_process";
@@ -35,9 +33,6 @@ const tagSuffix = `jonasland-sha-${gitShaShort}${isDirty ? "-dirty" : ""}`;
 // --- Config ---
 const buildPlatform = process.env.JONASLAND_SANDBOX_BUILD_PLATFORM || "linux/amd64,linux/arm64";
 const skipLoad = process.env.JONASLAND_SANDBOX_SKIP_LOAD === "true";
-const shouldUpdateDoppler = process.env.JONASLAND_SANDBOX_UPDATE_DOPPLER !== "false";
-const dopplerConfigsToUpdate =
-  process.env.JONASLAND_SANDBOX_DOPPLER_CONFIGS?.split(",").filter(Boolean);
 const builtBy = process.env.ITERATE_USER ?? "unknown";
 
 // --- Fly registry ---
@@ -147,35 +142,6 @@ if (wantsLoad && wantsPush) {
   const loadedTag = pushTags[0];
   console.log(`Re-tagging ${loadedTag} → ${localImageTag}`);
   execFileSync("docker", ["tag", loadedTag, localImageTag], { cwd: repoRoot, stdio: "inherit" });
-}
-
-// --- Update Doppler ---
-function getCurrentDopplerConfig(): string | undefined {
-  try {
-    const info = JSON.parse(
-      execSync("doppler configs get --json", { cwd: repoRoot, encoding: "utf-8" }),
-    ) as { name?: string };
-    return info.name ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-if (shouldUpdateDoppler) {
-  const configs = dopplerConfigsToUpdate ?? [getCurrentDopplerConfig()].filter(Boolean);
-  const dopplerProject = process.env.DOPPLER_PROJECT ?? "os";
-  for (const config of configs) {
-    if (!config) continue;
-    if (pushTags.includes(flyImageTag)) {
-      console.log(
-        `Updating Doppler (${dopplerProject}/${config}): JONASLAND_SANDBOX_IMAGE=${flyImageTag}`,
-      );
-      execSync(
-        `doppler secrets set JONASLAND_SANDBOX_IMAGE=${flyImageTag} --project ${dopplerProject} --config ${config}`,
-        { cwd: repoRoot, stdio: "inherit" },
-      );
-    }
-  }
 }
 
 // --- Outputs ---

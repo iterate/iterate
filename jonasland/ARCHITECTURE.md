@@ -76,4 +76,4 @@ No custom Caddy plugins. No Docker socket mount. No sibling containers.
 ## Commands
 
 - Build image: `pnpm --filter ./jonasland/sandbox build`
-- Run e2e: `pnpm --filter ./jonasland/e2e test:e2e`
+- Run e2e: `pnpm jonasland e2e vitest`

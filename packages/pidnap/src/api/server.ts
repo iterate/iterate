@@ -1,10 +1,11 @@
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { implement, ORPCError } from "@orpc/server";
 import type { Manager } from "../manager.ts";
 import {
   api,
   type HealthCheckConfig,
   type RestartingProcessInfo,
+  type ProcessLogEntry,
   type ManagerStatus,
   type WaitForRunningResponse,
   type WaitForResponse,
@@ -14,6 +15,16 @@ import {
 const os = implement(api).$context<{ manager: Manager }>();
 
 const healthCheckConfigs = new Map<string, HealthCheckConfig>();
+
+function syncHealthCheckConfigs(manager: Manager) {
+  for (const entry of manager.listManagedProcessEntries()) {
+    if (entry.healthCheck) {
+      healthCheckConfigs.set(entry.name, entry.healthCheck);
+      continue;
+    }
+    healthCheckConfigs.delete(entry.name);
+  }
+}
 
 // Helper to compute effective env (process.env merged with definition.env)
 function computeEffectiveEnv(definitionEnv?: Record<string, string>): Record<string, string> {
@@ -101,10 +112,12 @@ const listProcesses = os.processes.list.handler(async ({ context }) => {
 });
 
 const updateConfig = os.processes.updateConfig.handler(async ({ input, context }) => {
+  syncHealthCheckConfigs(context.manager);
   if (input.healthCheck) {
     healthCheckConfigs.set(input.processSlug, input.healthCheck);
   }
   await context.manager.updateProcessConfig(input);
+  syncHealthCheckConfigs(context.manager);
   return serializeProcess(context.manager, input.processSlug);
 });
 
@@ -141,6 +154,86 @@ function tailFile(filePath: string, lines: number): string | undefined {
   }
 }
 
+function tailFileLines(filePath: string, lines: number): string[] {
+  const tail = tailFile(filePath, lines);
+  if (!tail) return [];
+  return tail
+    .split("\n")
+    .filter((line, index, allLines) => !(index === allLines.length - 1 && line.length === 0));
+}
+
+async function waitForPoll(signal: AbortSignal, pollIntervalMs: number): Promise<void> {
+  if (signal.aborted) return;
+
+  await new Promise<void>((resolve) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, pollIntervalMs);
+
+    function onAbort() {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }
+
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function* streamProcessLogs(params: {
+  filePath: string;
+  tailLines: number;
+  pollIntervalMs: number;
+  signal: AbortSignal;
+}): AsyncGenerator<ProcessLogEntry> {
+  const { filePath, tailLines, pollIntervalMs, signal } = params;
+  let offset = 0;
+  let trailingBuffer = "";
+
+  for (const text of tailFileLines(filePath, tailLines)) {
+    yield { text };
+  }
+
+  if (existsSync(filePath)) {
+    offset = statSync(filePath).size;
+  }
+
+  while (!signal.aborted) {
+    if (!existsSync(filePath)) {
+      offset = 0;
+      trailingBuffer = "";
+      await waitForPoll(signal, pollIntervalMs);
+      continue;
+    }
+
+    const size = statSync(filePath).size;
+    if (size < offset) {
+      offset = 0;
+      trailingBuffer = "";
+    }
+
+    if (size > offset) {
+      const chunk = readFileSync(filePath, "utf-8").slice(offset);
+      offset = size;
+
+      const combined = trailingBuffer + chunk;
+      const parts = combined.split("\n");
+      trailingBuffer = parts.pop() ?? "";
+
+      for (const text of parts) {
+        yield { text };
+      }
+    }
+
+    await waitForPoll(signal, pollIntervalMs);
+  }
+
+  if (trailingBuffer.length > 0) {
+    yield { text: trailingBuffer };
+  }
+}
+
 async function pollHealthCheck(
   url: string,
   intervalMs: number,
@@ -165,6 +258,7 @@ async function pollHealthCheck(
  */
 const waitForRunning = os.processes.waitForRunning.handler(
   async ({ input, context }): Promise<WaitForRunningResponse> => {
+    syncHealthCheckConfigs(context.manager);
     const timeoutMs = input.timeoutMs ?? 60_000;
     const pollIntervalMs = input.pollIntervalMs ?? 500;
     const includeLogs = input.includeLogs ?? true;
@@ -281,6 +375,7 @@ function conditionMet(
 
 const waitFor = os.processes.waitFor.handler(
   async ({ input, context }): Promise<WaitForResponse> => {
+    syncHealthCheckConfigs(context.manager);
     const timeoutMs = input.timeoutMs ?? 30_000;
     const start = Date.now();
     const slugs = Object.keys(input.processes);
@@ -339,6 +434,27 @@ const waitFor = os.processes.waitFor.handler(
   },
 );
 
+const streamLogs = os.processes.logs.handler(async function* ({ input, context, signal }) {
+  await waitForManagerReady(context.manager);
+
+  const proc = context.manager.getProcessByTarget(input.processSlug);
+  if (!proc) {
+    throw new ORPCError("NOT_FOUND", { message: `Process not found: ${input.processSlug}` });
+  }
+
+  const tailLines = Math.max(0, input.tailLines ?? 200);
+  const pollIntervalMs = Math.max(100, input.pollIntervalMs ?? 500);
+  const filePath = context.manager.getProcessLogPath(proc.name);
+  const abortSignal = signal ?? new AbortController().signal;
+
+  yield* streamProcessLogs({
+    filePath,
+    tailLines,
+    pollIntervalMs,
+    signal: abortSignal,
+  });
+});
+
 // Simple health check endpoint
 const health = os.health.handler(async () => {
   return { status: "ok" as const };
@@ -359,5 +475,6 @@ export const router = os.router({
     delete: deleteProcess,
     waitForRunning: waitForRunning,
     waitFor: waitFor,
+    logs: streamLogs,
   },
 });

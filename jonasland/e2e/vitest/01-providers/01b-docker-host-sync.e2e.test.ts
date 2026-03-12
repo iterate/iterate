@@ -110,6 +110,11 @@ describe("docker host sync", () => {
       expect(resolvedStorePath.exitCode, resolvedStorePath.output).toBe(0);
       expect(resolvedStorePath.stdout.trim()).toContain("/home/iterate/.pnpm-store");
 
+      const writableStorePath = await deployment.shell({
+        cmd: 'store_path="$(cd /home/iterate/src/github.com/iterate/iterate && pnpm store path)" && mkdir -p "$store_path" && test -w "$store_path"',
+      });
+      expect(writableStorePath.exitCode, writableStorePath.output).toBe(0);
+
       const runtimeEnvFile = await deployment.shell({
         cmd: 'cat "$HOME/.iterate/.env"',
       });

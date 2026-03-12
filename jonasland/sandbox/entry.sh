@@ -3,6 +3,12 @@ set -euo pipefail
 
 # Canonical repo root inside the sandbox image; override only for local debugging.
 ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
+PNPM_STORE_DIR="${npm_config_store_dir:-/home/iterate/.pnpm-store}"
+
+# The shared pnpm store lives on a Docker volume in local runs. Ensure the mount
+# point exists and is writable before any host-sync install tries to use it.
+sudo mkdir -p "${PNPM_STORE_DIR}"
+sudo chown iterate:iterate "${PNPM_STORE_DIR}"
 
 # Optional Docker host-sync keeps container source aligned to host checkout.
 if [[ -n "${DOCKER_HOST_SYNC_ENABLED:-}" ]]; then

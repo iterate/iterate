@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   type EventBusContract,
@@ -7,174 +8,26 @@ import { createRegistryClient, type RegistryClient } from "@iterate-com/registry
 import { createORPCClient } from "@orpc/client";
 import { type AnyContractRouter, type ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import Emittery from "emittery";
 import pRetry from "p-retry";
 import pWaitFor from "p-wait-for";
 import { createClient as createPidnapClient, type Client as PidnapClient } from "pidnap/client";
 import { createSlug } from "../create-slug.ts";
 import { localHostForService } from "../index.ts";
-import { createHostRoutedFetch, shQuote, throwIfAborted } from "./deployment-utils.ts";
+import {
+  composeAbortSignal,
+  createAbortScope,
+  createHostRoutedFetch,
+  createTimeoutSignal,
+  isAbortError,
+  shQuote,
+  throwIfAborted,
+} from "./deployment-utils.ts";
 import type {
   DeploymentExecResult,
-  DeploymentEgressOpts,
-  DeploymentIngressOpts,
+  DeploymentLogEntry,
   DeploymentOpts,
   DeploymentProvider,
-  DeploymentProviderState,
-  DeploymentProviderStatus,
 } from "./deployment-provider-manifest.ts";
-export type {
-  DeploymentEgressOpts,
-  DeploymentExecResult,
-  DeploymentIngressOpts,
-  DeploymentOpts,
-  DeploymentProvider,
-  DeploymentProviderLogEvent,
-  DeploymentProviderManifest,
-  DeploymentProviderOpts,
-  DeploymentProviderState,
-  DeploymentProviderStatus,
-} from "./deployment-provider-manifest.ts";
-
-export const DEPLOYMENT_SLUG_MAX_LENGTH = 43;
-
-export function isValidDeploymentSlug(slug: string) {
-  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) && slug.length <= DEPLOYMENT_SLUG_MAX_LENGTH;
-}
-
-function normalizeDeploymentSlugCandidate(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-}
-
-function formatDeploymentSlugDatePrefix(date: Date) {
-  const yyyy = String(date.getFullYear());
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  return `${yyyy}${mm}${dd}`;
-}
-
-function formatDeploymentSlugTimePrefix(date: Date) {
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mm = String(date.getMinutes()).padStart(2, "0");
-  const ss = String(date.getSeconds()).padStart(2, "0");
-  return `${hh}${mm}${ss}`;
-}
-
-export function createDeploymentSlug(params: {
-  input: string;
-  includeDate?: boolean;
-  includeTime?: boolean;
-  now?: Date;
-}) {
-  const includeDate = params.includeDate ?? false;
-  const includeTime = params.includeTime ?? false;
-  const now = params.now ?? new Date();
-  if (!includeDate) {
-    return normalizeDeploymentSlugCandidate(
-      createSlug({
-        input: params.input,
-        maxLength: DEPLOYMENT_SLUG_MAX_LENGTH,
-      }),
-    );
-  }
-
-  const prefix = includeTime
-    ? `${formatDeploymentSlugDatePrefix(now)}-${formatDeploymentSlugTimePrefix(now)}-`
-    : `${formatDeploymentSlugDatePrefix(now)}-`;
-  const remaining = Math.max(1, DEPLOYMENT_SLUG_MAX_LENGTH - prefix.length);
-  const normalizedBody = normalizeDeploymentSlugCandidate(
-    createSlug({
-      input: params.input,
-      maxLength: remaining,
-    }),
-  );
-  return `${prefix}${normalizedBody}`.replace(/-+$/g, "");
-}
-
-export type DeploymentRuntimeState =
-  | "new"
-  | "connecting"
-  | "connected"
-  | "destroying"
-  | "destroyed"
-  | "disconnected";
-
-export interface DeploymentSnapshot {
-  slug: string | null;
-  state: DeploymentRuntimeState;
-  baseUrl: string | null;
-  locator: unknown | null;
-  providerStatus: {
-    state: DeploymentProviderState;
-    detail: string;
-  } | null;
-  opts: DeploymentOpts | null;
-}
-
-export type DeploymentEvent =
-  | {
-      type: "https://events.iterate.com/deployment/created";
-      payload: {
-        baseUrl: string;
-        locator: unknown;
-      };
-    }
-  | {
-      type: "https://events.iterate.com/deployment/started";
-      payload: {
-        detail: string;
-      };
-    }
-  | {
-      type: "https://events.iterate.com/deployment/stopped";
-      payload: {
-        detail: string;
-      };
-    }
-  | {
-      type: "https://events.iterate.com/deployment/logged";
-      payload: {
-        line: string;
-        providerData?: Record<string, unknown>;
-      };
-    }
-  | {
-      type: "https://events.iterate.com/deployment/errored";
-      payload: {
-        message: string;
-      };
-    }
-  | {
-      type: "https://events.iterate.com/deployment/destroyed";
-      payload: {};
-    };
-
-type DeploymentEmitterEvent<TEvent extends DeploymentEvent = DeploymentEvent> = {
-  sequence: number;
-  event: TEvent;
-};
-
-type DeploymentEmitterEvents = {
-  [K in DeploymentEvent["type"]]: DeploymentEmitterEvent<Extract<DeploymentEvent, { type: K }>>;
-};
-
-function assertValidEnvVarKey(key: string) {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-    throw new Error(`Invalid environment variable key: ${key}`);
-  }
-}
-
-export function assertValidDeploymentSlug(slug: string) {
-  if (isValidDeploymentSlug(slug)) return;
-  throw new Error(
-    `Invalid deployment slug: ${JSON.stringify(slug)}. Deployment slugs must match /^[a-z0-9]+(?:-[a-z0-9]+)*$/ and be <= ${String(DEPLOYMENT_SLUG_MAX_LENGTH)} characters.`,
-  );
-}
 
 /**
  * Stateful live deployment object.
@@ -184,7 +37,8 @@ export function assertValidDeploymentSlug(slug: string) {
  * then treat the returned object as a ready runtime handle.
  */
 export class Deployment {
-  private state: DeploymentRuntimeState = "new";
+  private state: "new" | "connecting" | "connected" | "destroying" | "destroyed" | "disconnected" =
+    "new";
   private _slug: string | null = null;
   private _locator: unknown | null = null;
   private _opts: DeploymentOpts | null = null;
@@ -195,9 +49,6 @@ export class Deployment {
   private _pidnap: PidnapClient | null = null;
   private _registryService: RegistryClient | null = null;
   private _eventsService: ContractRouterClient<EventBusContract> | null = null;
-  private readonly emitter = new Emittery<DeploymentEmitterEvents>();
-  private readonly eventHistory: DeploymentEmitterEvent[] = [];
-  private nextEventSequence = 1;
 
   static async create<TOpts extends DeploymentOpts = DeploymentOpts, TLocator = unknown>(params: {
     provider: DeploymentProvider<TOpts, TLocator>;
@@ -214,34 +65,21 @@ export class Deployment {
     deployment.transition("connecting");
     throwIfAborted(params.signal);
 
-    try {
-      const provisioned = await params.provider.create({
-        signal: params.signal,
-        opts,
-      });
-      const recoveredOpts = await params.provider.recoverOpts({
-        locator: provisioned.locator,
-        signal: params.signal,
-      });
-      assertValidDeploymentSlug(recoveredOpts.slug);
-      deployment.baseUrl = provisioned.baseUrl;
-      deployment._slug = recoveredOpts.slug;
-      deployment._locator = provisioned.locator;
-      deployment._opts = recoveredOpts;
-      deployment._providerStatus = null;
-      deployment.transition("connected");
-      deployment.publish({
-        type: "https://events.iterate.com/deployment/created",
-        payload: {
-          baseUrl: provisioned.baseUrl,
-          locator: provisioned.locator,
-        },
-      });
-    } catch (error) {
-      deployment.publishError(error);
-      throw error;
-    }
-
+    const provisioned = await params.provider.create({
+      signal: params.signal,
+      opts,
+    });
+    const recoveredOpts = await params.provider.recoverOpts({
+      locator: provisioned.locator,
+      signal: params.signal,
+    });
+    assertValidDeploymentSlug(recoveredOpts.slug);
+    await deployment.attachRuntime({
+      locator: provisioned.locator,
+      baseUrl: provisioned.baseUrl,
+      recoveredOpts,
+      bootstrapEnv: recoveredOpts.env ?? {},
+    });
     return deployment;
   }
 
@@ -259,61 +97,46 @@ export class Deployment {
     deployment.transition("connecting");
     throwIfAborted(params.signal);
 
-    try {
-      const attached = await params.provider.connect({
-        signal: params.signal,
-        locator,
-      });
-      const recoveredOpts = await params.provider.recoverOpts({
-        locator: attached.locator,
-        signal: params.signal,
-      });
-      assertValidDeploymentSlug(recoveredOpts.slug);
-      deployment.baseUrl = attached.baseUrl;
-      deployment._slug = recoveredOpts.slug;
-      deployment._locator = attached.locator;
-      deployment._opts = recoveredOpts;
-      deployment._providerStatus = null;
-      deployment.transition("connected");
-    } catch (error) {
-      deployment.publishError(error);
-      throw error;
-    }
-
+    const attached = await params.provider.connect({
+      signal: params.signal,
+      locator,
+    });
+    const recoveredOpts = await params.provider.recoverOpts({
+      locator: attached.locator,
+      signal: params.signal,
+    });
+    assertValidDeploymentSlug(recoveredOpts.slug);
+    await deployment.attachRuntime({
+      locator: attached.locator,
+      baseUrl: attached.baseUrl,
+      recoveredOpts,
+    });
     return deployment;
   }
 
-  async *events(params: { signal?: AbortSignal; logTail?: number } = {}) {
-    await using iterator = this.emitter.anyEvent({ signal: params.signal });
-    const replayThroughSequence = this.nextEventSequence - 1;
-    const replay = this.eventHistory.filter((entry) => entry.sequence <= replayThroughSequence);
-    const logAbortController = params.signal ? null : new AbortController();
-    const logSignal = params.signal ?? logAbortController!.signal;
-    const backgroundTasks =
-      this.state === "connected"
-        ? [
-            this.runEventTask(() =>
-              this.streamProviderLogs({
-                signal: logSignal,
-                tail: params.logTail ?? 200,
-              }),
-            ),
-            this.runEventTask(() => this.pollProviderStatus({ signal: logSignal })),
-          ]
-        : [];
+  async *logs(params: { signal?: AbortSignal; tail?: number } = {}) {
+    this.assertConnected();
+    // `timeoutMs` stays a caller-facing convenience in this module, but the
+    // runtime itself runs on `AbortSignal`. `logs()` owns an extra abort scope
+    // because it spawns status polling that must stop both on caller abort and
+    // when the async iterator is closed early by the consumer.
+    const logScope = createAbortScope({ signal: params.signal });
+    const backgroundTasks = [
+      this.runBackgroundTask(() => this.pollProviderStatus({ signal: logScope.signal })),
+    ];
 
     try {
-      for (const entry of replay) {
-        yield entry.event;
-      }
-      for await (const { data } of iterator) {
-        if (data.sequence <= replayThroughSequence) continue;
-        yield data.event;
+      for await (const entry of this.provider.logs({
+        locator: this.locator,
+        signal: logScope.signal,
+        tail: params.tail ?? 200,
+      })) {
+        yield normalizeDeploymentLogEntry(entry);
       }
     } catch (error) {
       if (!isAbortError(error)) throw error;
     } finally {
-      logAbortController?.abort();
+      logScope.abort();
       await Promise.allSettled(backgroundTasks);
     }
   }
@@ -358,6 +181,27 @@ export class Deployment {
     return this._opts;
   }
 
+  get env() {
+    return this.opts.env ?? {};
+  }
+
+  /**
+   * Reload the canonical runtime env snapshot from `~/.iterate/.env`.
+   *
+   * `deployment.env` is intentionally just the last known in-memory view. This
+   * method does the explicit runtime I/O to re-read the deployment's shared env
+   * file, updates the cached snapshot, and returns the fresh env record.
+   *
+   * That makes it the "trust live runtime state over recovered provider
+   * metadata" escape hatch after reconnect or after out-of-band changes inside
+   * the sandbox.
+   */
+  async reloadEnv() {
+    const liveEnv = await this.readRuntimeEnvFile();
+    this.updateRuntimeEnvSnapshot(liveEnv ?? {});
+    return this.env;
+  }
+
   get pidnap() {
     this.assertConnected();
     if (this._pidnap) return this._pidnap;
@@ -388,9 +232,9 @@ export class Deployment {
     return this._eventsService;
   }
 
-  async waitUntilAlive(params?: { signal?: AbortSignal }) {
+  async waitUntilHealthy(params?: { signal?: AbortSignal; timeoutMs?: number }) {
     this.assertConnected();
-    const signal = params?.signal;
+    const signal = composeAbortSignal(params ?? {});
     const startedAt = Date.now();
 
     console.log(`[deployment] waiting for caddy at ${this.baseUrl}/__iterate/caddy-health...`);
@@ -447,6 +291,10 @@ export class Deployment {
     console.log(`[deployment] alive in ${String(Date.now() - startedAt)}ms`);
   }
 
+  async waitUntilAlive(params?: { signal?: AbortSignal; timeoutMs?: number }) {
+    await this.waitUntilHealthy(params);
+  }
+
   async fetch(host: string, path: string, init?: RequestInit) {
     this.assertConnected();
     const req = new Request(new URL(path.startsWith("/") ? path : `/${path}`, this.baseUrl), init);
@@ -485,10 +333,7 @@ export class Deployment {
 
   async shell(params: { cmd: string; signal?: AbortSignal; timeoutMs?: number }) {
     this.assertConnected();
-    const signal =
-      params.signal && params.timeoutMs
-        ? AbortSignal.any([params.signal, AbortSignal.timeout(params.timeoutMs)])
-        : (params.signal ?? (params.timeoutMs ? AbortSignal.timeout(params.timeoutMs) : undefined));
+    const signal = composeAbortSignal(params);
     return await this.provider.exec({
       locator: this.locator,
       signal,
@@ -504,9 +349,7 @@ export class Deployment {
     intervalMs?: number;
   }) {
     this.assertConnected();
-    const signal = params.signal
-      ? AbortSignal.any([params.signal, AbortSignal.timeout(params.timeoutMs)])
-      : AbortSignal.timeout(params.timeoutMs);
+    const signal = composeAbortSignal(params);
     const intervalMs = params.intervalMs ?? 500;
     const retries = Math.max(0, Math.ceil(params.timeoutMs / intervalMs));
     let lastResult: DeploymentExecResult | null = null;
@@ -556,141 +399,201 @@ export class Deployment {
     });
   }
 
-  async setEnvVars(env: Record<string, string>) {
-    this.assertConnected();
+  /**
+   * Merge env vars into the deployment's canonical `~/.iterate/.env` file.
+   *
+   * This is intentionally patch-style rather than replace-style: callers pass
+   * only the keys they want to change, and the existing runtime env snapshot is
+   * preserved for all other keys.
+   *
+   * The file is rendered in TypeScript and then written as a whole so pidnap
+   * and shell startup see one consistent format. Because that same file is both
+   * sourced by shell startup and parsed by pidnap, keys must remain
+   * shell-compatible variable names.
+   *
+   * By default this waits for the deployment to become healthy again after the
+   * write. Callers can opt out when they are doing lower-level bootstrap or
+   * when a different readiness sequence is more appropriate.
+   */
+  async setEnvVars(
+    env: Record<string, string>,
+    options: {
+      waitForHealthy?: boolean;
+    } = {},
+  ) {
     const entries = Object.entries(env);
     if (entries.length === 0) return;
-
-    for (const [key] of entries) {
-      assertValidEnvVarKey(key);
-    }
-
-    const result = await this.shell({
-      cmd: [
-        "mkdir -p ~/.iterate",
-        `ITERATE_ENV_UPDATES=${shQuote(JSON.stringify(Object.fromEntries(entries)))}`,
-        "export ITERATE_ENV_UPDATES",
-        "node <<'EOF'",
-        "const fs = require('node:fs');",
-        "const path = require('node:path');",
-        "const envPath = path.join(process.env.HOME, '.iterate', '.env');",
-        "const updates = JSON.parse(process.env.ITERATE_ENV_UPDATES || '{}');",
-        "const current = new Map();",
-        "if (fs.existsSync(envPath)) {",
-        "  for (const line of fs.readFileSync(envPath, 'utf8').split(/\\r?\\n/)) {",
-        "    if (!line || line.trimStart().startsWith('#')) continue;",
-        "    const idx = line.indexOf('=');",
-        "    if (idx === -1) continue;",
-        "    current.set(line.slice(0, idx), line.slice(idx + 1));",
-        "  }",
-        "}",
-        "for (const [key, value] of Object.entries(updates)) {",
-        "  current.set(key, String(value));",
-        "}",
-        "const lines = [...current.entries()].map(([key, value]) => `${key}=${value}`);",
-        "fs.writeFileSync(envPath, `${lines.join('\\n')}\\n`, 'utf8');",
-        "EOF",
-      ].join("\n"),
-    });
-    if (result.exitCode !== 0) {
-      throw new Error(`Failed writing env vars to ~/.iterate/.env: ${result.output}`);
+    const nextEnv = {
+      ...this.env,
+      ...normalizeRuntimeEnvRecord(Object.fromEntries(entries)),
+    };
+    await this.writeRuntimeEnvFile(nextEnv);
+    if (options.waitForHealthy ?? true) {
+      await this.waitUntilHealthy({
+        // [[ feels bad to have this constant here?! ]]
+        timeoutMs: 30_000,
+      });
+      // TODO this can probably deleted / is crap
+      // await this.waitForConfiguredNetworkTargets({
+      //   env: nextEnv,
+      //   timeoutMs: 30_000,
+      // });
     }
   }
 
-  /**
-   * Update the deployment's typed ingress env and wait for core networking
-   * services to settle.
-   *
-   * Env mapping:
-   * - `ingressHost` -> `ITERATE_INGRESS_HOST`
-   * - `ingressHostType` -> `ITERATE_INGRESS_ROUTING_TYPE`
-   * - `ingressDefaultService` -> `ITERATE_INGRESS_DEFAULT_SERVICE`
-   */
-  async updateIngressConfig(next: Partial<DeploymentIngressOpts>) {
-    this.assertConnected();
-    const current = this.opts;
-    const resolved = {
-      ingressHost: next.ingressHost ?? current.ingressHost,
-      ingressHostType: next.ingressHostType ?? current.ingressHostType,
-      ingressDefaultService: next.ingressDefaultService ?? current.ingressDefaultService,
-    } satisfies DeploymentIngressOpts;
-
-    await this.setEnvVars({
-      ITERATE_INGRESS_HOST: resolved.ingressHost ?? "",
-      ITERATE_INGRESS_ROUTING_TYPE: resolved.ingressHostType ?? "",
-      ITERATE_INGRESS_DEFAULT_SERVICE: resolved.ingressDefaultService ?? "",
+  async getCloudflareTunnelUrl(params: { timeoutMs: number }) {
+    const result = await this.shellWithRetry({
+      cmd: 'url=$(cat ~/.iterate/cloudflare-tunnel.url 2>/dev/null || true); if [ -n "$url" ]; then printf \'%s\' "$url"; fi',
+      timeoutMs: params.timeoutMs,
+      retryIf: (shellResult) =>
+        shellResult.exitCode !== 0 || !shellResult.stdout.trim().startsWith("https://"),
     });
-    this._opts = {
-      ...current,
-      ...resolved,
+    return result.stdout.trim();
+  }
+
+  async useIngressProxyRoutes(params: {
+    ingressProxyApiKey: string;
+    ingressProxyBaseUrl: string;
+    targetURL: string;
+    publicBaseHost?: string;
+    routingType?: "subdomain-host" | "dunder-prefix";
+    ingressDefaultService?: string;
+    metadata?: Record<string, unknown>;
+    timeoutMs?: number;
+  }) {
+    this.assertConnected();
+    const publicBaseHost =
+      params.publicBaseHost ??
+      createPublicBaseHost({
+        slug: this.slug,
+        domain: resolveIngressProxyDomainFromBaseUrl(params.ingressProxyBaseUrl),
+      });
+    const routingType = params.routingType ?? "dunder-prefix";
+    const patterns = createIngressPatterns({
+      publicBaseHost,
+      targetURL: params.targetURL,
+      routingType,
+    });
+    const route = await callIngressProxyProcedure<{
+      routeId: string;
+      metadata: Record<string, unknown>;
+      patterns: Array<{
+        patternId: number;
+        pattern: string;
+        target: string;
+        headers: Record<string, string>;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+      createdAt: string;
+      updatedAt: string;
+    }>({
+      baseUrl: normalizeIngressProxyBaseUrl(params.ingressProxyBaseUrl),
+      apiKey: params.ingressProxyApiKey.trim(),
+      name: "createRoute",
+      input: {
+        metadata: {
+          source: "deployment.useIngressProxyRoutes",
+          publicBaseHost,
+          deployment: this.snapshot(),
+          ...(params.metadata ?? {}),
+        },
+        patterns,
+      },
+    });
+    let deleted = false;
+    const deleteAll = async () => {
+      if (deleted) return;
+      deleted = true;
+      await callIngressProxyProcedure<{ deleted: boolean }>({
+        baseUrl: normalizeIngressProxyBaseUrl(params.ingressProxyBaseUrl),
+        apiKey: params.ingressProxyApiKey.trim(),
+        name: "deleteRoute",
+        input: {
+          routeId: route.routeId,
+        },
+      });
     };
 
-    await this.waitUntilAlive({
-      signal: AbortSignal.timeout(60_000),
+    try {
+      await this.setEnvVars(
+        {
+          ITERATE_INGRESS_HOST: publicBaseHost,
+          ITERATE_INGRESS_ROUTING_TYPE: routingType,
+          ...(params.ingressDefaultService
+            ? { ITERATE_INGRESS_DEFAULT_SERVICE: params.ingressDefaultService }
+            : {}),
+        },
+        { waitForHealthy: true },
+      );
+      await waitForPublicText({
+        url: `https://${publicBaseHost}/__iterate/caddy-health`,
+        timeoutMs: params.timeoutMs ?? 60_000,
+        matches: (body) => body.includes("ok"),
+      });
+    } catch (error) {
+      await deleteAll().catch(() => {});
+      throw error;
+    }
+
+    return {
+      publicBaseHost,
+      publicBaseUrl: `https://${publicBaseHost}`,
+      createdRoutes: [route],
+      routeIds: [route.routeId],
+      deleteAll,
+      async [Symbol.asyncDispose]() {
+        if (process.env.E2E_NO_DISPOSE) return;
+        await deleteAll();
+      },
+    };
+  }
+
+  private async readCloudflareTunnelLogs() {
+    const result = await this.shell({
+      cmd: "tail -n 120 /var/log/pidnap/process/cloudflare-tunnel.log 2>/dev/null || true",
     });
+    return result.output;
+  }
+
+  private async waitForConfiguredNetworkTargets(params: {
+    env: Record<string, string>;
+    timeoutMs: number;
+  }) {
     await this.pidnap.processes.waitFor({
       processes: {
         caddy: "running",
         registry: "running",
         events: "running",
       },
-      timeoutMs: 30_000,
+      timeoutMs: params.timeoutMs,
     });
-    await this.shellWithRetry({
-      cmd: "curl -fsS --max-time 5 -H 'Host: registry.iterate.localhost' http://127.0.0.1/api/__iterate/health >/dev/null",
-      timeoutMs: 60_000,
-      retryIf: (result) => result.exitCode !== 0,
-    });
+
+    if (
+      params.env.CLOUDFLARE_TUNNEL_ENABLED === "true" &&
+      !params.env.CLOUDFLARE_TUNNEL_PUBLIC_URL?.trim()
+    ) {
+      await this.shellWithRetry({
+        cmd: 'url=$(cat ~/.iterate/cloudflare-tunnel.url 2>/dev/null || true); if [ -n "$url" ]; then printf \'%s\' "$url"; fi',
+        timeoutMs: params.timeoutMs,
+        retryIf: (result) => result.exitCode !== 0 || !result.stdout.trim().startsWith("https://"),
+      });
+    }
+
+    const egressProxyUrl = params.env.ITERATE_EGRESS_PROXY?.trim();
+    if (egressProxyUrl) {
+      await this.shellWithRetry({
+        cmd: `curl -sS --max-time 2 -o /dev/null -w '%{http_code}' ${shQuote(`${egressProxyUrl}/__iterate/health`)} | grep -vq '^000$'`,
+        timeoutMs: params.timeoutMs,
+        retryIf: (result) => result.exitCode !== 0,
+      });
+    }
   }
 
-  /**
-   * Update the deployment's typed egress env and wait for the configured proxy
-   * path to become usable again.
-   *
-   * Env mapping:
-   * - `egressProxyURL` -> `ITERATE_EGRESS_PROXY`
-   */
-  async updateEgressConfig(next: Partial<DeploymentEgressOpts>) {
-    this.assertConnected();
-    const current = this.opts;
-    const resolved = {
-      egressProxyURL:
-        next.egressProxyURL === undefined ? current.egressProxyURL : next.egressProxyURL,
-    } satisfies DeploymentEgressOpts;
-
-    await this.setEnvVars({
-      ITERATE_EGRESS_PROXY: resolved.egressProxyURL ?? "",
-    });
-    this._opts = {
-      ...current,
-      ...resolved,
-    };
-
-    await this.waitUntilAlive({
-      signal: AbortSignal.timeout(60_000),
-    });
-    await this.pidnap.processes
-      .waitFor({
-        processes: {
-          caddy: "running",
-          registry: "running",
-          events: "running",
-        },
-        timeoutMs: 30_000,
-      })
-      .catch(() => {});
-
-    if (!resolved.egressProxyURL) return;
-    await this.shellWithRetry({
-      cmd: `curl -sS --max-time 2 -o /dev/null -w '%{http_code}' ${shQuote(`${resolved.egressProxyURL}/__iterate/health`)} | grep -vq '^000$'`,
-      timeoutMs: 30_000,
-      retryIf: (result) => result.exitCode !== 0,
-    });
-  }
-
-  async status() {
+  async status(params: { signal?: AbortSignal } = {}) {
     this.assertConnected();
     const status = await this.provider.status({
+      signal: params.signal,
       locator: this.locator,
     });
     this._providerStatus = status;
@@ -717,26 +620,117 @@ export class Deployment {
     this._providerStatus = null;
     this._opts = null;
     this.transition("destroyed");
-    this.publish({
-      type: "https://events.iterate.com/deployment/destroyed",
-      payload: {},
-    });
   }
 
-  private publish<TEvent extends DeploymentEvent>(event: TEvent) {
-    const publishedEvent: DeploymentEmitterEvent<TEvent> = {
-      sequence: this.nextEventSequence++,
-      event,
-    };
-    this.eventHistory.push(publishedEvent);
-    void this.emitter.emit(
-      event.type,
-      publishedEvent as unknown as DeploymentEmitterEvents[TEvent["type"]],
-    );
+  /**
+   * Provider metadata is the source of truth for provider-owned runtime shape
+   * such as image, entrypoint, cmd, and machine/container details.
+   *
+   * Runtime env vars are different: once the deployment is attached, the live env
+   * should come from `~/.iterate/.env`, because that is what pidnap and shell
+   * consumers actually read. `create()` bootstraps that file from recovered env
+   * once, and `connect()` rehydrates from the existing file when present.
+   */
+  /**
+   * Finalize a provider create/connect result into a live `Deployment`.
+   *
+   * Provider metadata is still the source of truth for provider-owned runtime
+   * shape such as image, entrypoint, cmd, and machine/container details.
+   * Runtime env is different: once the deployment is attached, the live env
+   * should come from `~/.iterate/.env`, because that is what pidnap and shell
+   * consumers actually read.
+   *
+   * `create()` bootstraps that file from recovered env once, and `connect()`
+   * rehydrates from the existing file when present.
+   */
+  private async attachRuntime(params: {
+    locator: unknown;
+    baseUrl: string;
+    recoveredOpts: DeploymentOpts;
+    bootstrapEnv?: Record<string, string>;
+  }) {
+    this.baseUrl = params.baseUrl;
+    this._slug = params.recoveredOpts.slug;
+    this._locator = params.locator;
+    this._opts = params.recoveredOpts;
+    this._providerStatus = null;
+    this.transition("connected");
+
+    if (params.bootstrapEnv) {
+      await this.writeRuntimeEnvFile(params.bootstrapEnv);
+      return;
+    }
+
+    const liveEnv = await this.readRuntimeEnvFile();
+    this.updateRuntimeEnvSnapshot(liveEnv ?? params.recoveredOpts.env ?? {});
   }
 
   private assertConnected() {
     this.assertState("connected");
+  }
+
+  /**
+   * Read the shared runtime env file if it exists.
+   *
+   * The env file is shared by pidnap and shell startup, so we keep the format
+   * intentionally small: shell-compatible keys plus a conservative dotenv
+   * quoting style that this file knows how to round-trip.
+   */
+  private async readRuntimeEnvFile() {
+    const result = await this.shell({
+      cmd: [
+        'env_path="$HOME/.iterate/.env"',
+        'if [ -f "$env_path" ]; then',
+        `  printf '%s\\n' '${DEPLOYMENT_ENV_FILE_PRESENT_MARKER}'`,
+        '  sed -n "p" "$env_path"',
+        "else",
+        `  printf '%s' '${DEPLOYMENT_ENV_FILE_MISSING_MARKER}'`,
+        "fi",
+      ].join("\n"),
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed reading runtime env file: ${result.output}`);
+    }
+    if (result.stdout.startsWith(DEPLOYMENT_ENV_FILE_MISSING_MARKER)) {
+      return null;
+    }
+    if (!result.stdout.startsWith(`${DEPLOYMENT_ENV_FILE_PRESENT_MARKER}\n`)) {
+      throw new Error(`Unexpected runtime env file read response: ${result.stdout}`);
+    }
+    return parseRuntimeEnvFile(
+      result.stdout.slice(`${DEPLOYMENT_ENV_FILE_PRESENT_MARKER}\n`.length),
+    );
+  }
+
+  /**
+   * Rewrite the shared runtime env file and immediately update the in-memory
+   * `deployment.env` snapshot to match what was written.
+   */
+  private async writeRuntimeEnvFile(env: Record<string, string>) {
+    const normalizedEnv = normalizeRuntimeEnvRecord(env);
+    const envFileContent = serializeRuntimeEnvFile(normalizedEnv);
+    const result = await this.shell({
+      cmd: [
+        "mkdir -p ~/.iterate",
+        'env_path="$HOME/.iterate/.env"',
+        `tee "$env_path" >/dev/null <<'${DEPLOYMENT_ENV_FILE_HEREDOC_MARKER}'`,
+        envFileContent,
+        DEPLOYMENT_ENV_FILE_HEREDOC_MARKER,
+        'chmod 600 "$env_path"',
+      ].join("\n"),
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed writing env vars to ~/.iterate/.env: ${result.output}`);
+    }
+    this.updateRuntimeEnvSnapshot(normalizedEnv);
+  }
+
+  private updateRuntimeEnvSnapshot(env: Record<string, string>) {
+    if (!this._opts) return;
+    this._opts = {
+      ...this._opts,
+      env: toOptionalRuntimeEnv(env),
+    };
   }
 
   private routedFetch(host: string) {
@@ -746,92 +740,39 @@ export class Deployment {
     return createHostRoutedFetch({ baseUrl: this.baseUrl, host });
   }
 
-  private transition(next: DeploymentRuntimeState) {
+  private transition(
+    next: "new" | "connecting" | "connected" | "destroying" | "destroyed" | "disconnected",
+  ) {
     if (this.state === next) return;
     this.state = next;
   }
 
-  private publishError(error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    this.publish({
-      type: "https://events.iterate.com/deployment/errored",
-      payload: { message },
-    });
-  }
-
-  private async runEventTask(task: () => Promise<void>) {
+  private async runBackgroundTask(task: () => Promise<void>) {
     try {
       await task();
     } catch (error) {
       if (!isAbortError(error)) {
-        this.publishError(error);
+        console.warn(
+          `[deployment] background task failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
-    }
-  }
-
-  private async streamProviderLogs(params: { signal: AbortSignal; tail: number }) {
-    const provider = this.provider;
-    const locator = this.locator;
-    for await (const logEvent of provider.logs({
-      locator,
-      signal: params.signal,
-      tail: params.tail,
-    })) {
-      this.publish({
-        type: "https://events.iterate.com/deployment/logged",
-        payload: {
-          line: logEvent.line,
-          ...(logEvent.providerData ? { providerData: logEvent.providerData } : {}),
-        },
-      });
     }
   }
 
   private async pollProviderStatus(params: { signal: AbortSignal }) {
     const provider = this.provider;
     const locator = this.locator;
-    let previousLifecycle: "started" | "stopped" | "error" | null = null;
-
-    // Keep translating provider-specific status into the normalized event stream
-    // until the caller aborts the subscription.
     while (!params.signal.aborted) {
-      const status = await provider.status({ locator });
+      const status = await provider.status({ locator, signal: params.signal });
       this._providerStatus = status;
-
-      const lifecycle =
-        status.state === "running" || status.state === "starting"
-          ? "started"
-          : status.state === "stopped" || status.state === "destroyed"
-            ? "stopped"
-            : status.state === "error"
-              ? "error"
-              : null;
-
-      if (lifecycle && lifecycle !== previousLifecycle) {
-        previousLifecycle = lifecycle;
-        if (lifecycle === "started") {
-          this.publish({
-            type: "https://events.iterate.com/deployment/started",
-            payload: { detail: status.detail },
-          });
-        } else if (lifecycle === "stopped") {
-          this.publish({
-            type: "https://events.iterate.com/deployment/stopped",
-            payload: { detail: status.detail },
-          });
-        } else {
-          this.publish({
-            type: "https://events.iterate.com/deployment/errored",
-            payload: { message: status.detail },
-          });
-        }
-      }
 
       await sleep(2_000, undefined, { signal: params.signal });
     }
   }
 
-  private assertState(expected: DeploymentRuntimeState) {
+  private assertState(
+    expected: "new" | "connecting" | "connected" | "destroying" | "destroyed" | "disconnected",
+  ) {
     if (this.state !== expected) {
       throw new Error(
         `${this.constructor.name} is in state "${this.state}", expected "${expected}"`,
@@ -844,6 +785,251 @@ export class Deployment {
   }
 }
 
-function isAbortError(error: unknown) {
-  return error instanceof Error && error.message.includes("aborted");
+export const DEPLOYMENT_SLUG_MAX_LENGTH = 43;
+
+export function isValidDeploymentSlug(slug: string) {
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) && slug.length <= DEPLOYMENT_SLUG_MAX_LENGTH;
+}
+
+export function createDeploymentSlug(params: {
+  input: string;
+  includeDate?: boolean;
+  includeTime?: boolean;
+  now?: Date;
+}) {
+  const includeDate = params.includeDate ?? false;
+  const includeTime = params.includeTime ?? false;
+  const now = params.now ?? new Date();
+  if (!includeDate) {
+    return normalizeDeploymentSlugCandidate(
+      createSlug({
+        input: params.input,
+        maxLength: DEPLOYMENT_SLUG_MAX_LENGTH,
+      }),
+    );
+  }
+
+  const prefix = includeTime
+    ? `${formatDeploymentSlugDatePrefix(now)}-${formatDeploymentSlugTimePrefix(now)}-`
+    : `${formatDeploymentSlugDatePrefix(now)}-`;
+  const remaining = Math.max(1, DEPLOYMENT_SLUG_MAX_LENGTH - prefix.length);
+  const normalizedBody = normalizeDeploymentSlugCandidate(
+    createSlug({
+      input: params.input,
+      maxLength: remaining,
+    }),
+  );
+  return `${prefix}${normalizedBody}`.replace(/-+$/g, "");
+}
+
+export function assertValidDeploymentSlug(slug: string) {
+  if (isValidDeploymentSlug(slug)) return;
+  throw new Error(
+    `Invalid deployment slug: ${JSON.stringify(slug)}. Deployment slugs must match /^[a-z0-9]+(?:-[a-z0-9]+)*$/ and be <= ${String(DEPLOYMENT_SLUG_MAX_LENGTH)} characters.`,
+  );
+}
+
+function normalizeIngressProxyBaseUrl(value: string | undefined) {
+  return (value ?? DEFAULT_INGRESS_PROXY_BASE_URL).trim().replace(/\/+$/, "");
+}
+
+const DEFAULT_INGRESS_PROXY_BASE_URL = "https://ingress.iterate.com";
+const DEFAULT_INGRESS_PROXY_DOMAIN = "ingress.iterate.com";
+const DEPLOYMENT_ENV_FILE_PRESENT_MARKER = "__DEPLOYMENT_ENV_PRESENT__";
+const DEPLOYMENT_ENV_FILE_MISSING_MARKER = "__DEPLOYMENT_ENV_MISSING__";
+const DEPLOYMENT_ENV_FILE_HEREDOC_MARKER = "__DEPLOYMENT_ENV_FILE__";
+
+function normalizeDeploymentSlugCandidate(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function formatDeploymentSlugDatePrefix(date: Date) {
+  const yyyy = String(date.getFullYear());
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}`;
+}
+
+function formatDeploymentSlugTimePrefix(date: Date) {
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  const ss = String(date.getSeconds()).padStart(2, "0");
+  return `${hh}${mm}${ss}`;
+}
+
+function assertShellCompatibleEnvVarKey(key: string) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    throw new Error(`Invalid environment variable key: ${key}`);
+  }
+}
+
+function normalizeRuntimeEnvRecord(env: Record<string, string>) {
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    assertShellCompatibleEnvVarKey(key);
+    normalized[key] = value;
+  }
+  return normalized;
+}
+
+function toOptionalRuntimeEnv(env: Record<string, string>) {
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
+function serializeRuntimeEnvFile(env: Record<string, string>) {
+  return Object.entries(normalizeRuntimeEnvRecord(env))
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${quoteRuntimeEnvValue(value)}`)
+    .join("\n");
+}
+
+function quoteRuntimeEnvValue(value: string) {
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+function parseRuntimeEnvFile(content: string) {
+  const env: Record<string, string> = {};
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const separatorIndex = line.indexOf("=");
+    if (separatorIndex <= 0) continue;
+    const key = line.slice(0, separatorIndex);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    const rawValue = line.slice(separatorIndex + 1);
+    env[key] = parseRuntimeEnvValue(rawValue);
+  }
+  return env;
+}
+
+function parseRuntimeEnvValue(rawValue: string) {
+  if (rawValue.startsWith('"') && rawValue.endsWith('"')) {
+    let decoded = "";
+    for (let index = 1; index < rawValue.length - 1; index += 1) {
+      const current = rawValue[index];
+      if (current === "\\" && index + 1 < rawValue.length - 1) {
+        decoded += rawValue[index + 1];
+        index += 1;
+        continue;
+      }
+      decoded += current;
+    }
+    return decoded;
+  }
+  if (rawValue.startsWith("'") && rawValue.endsWith("'")) {
+    return rawValue.slice(1, -1);
+  }
+  return rawValue;
+}
+
+function resolveIngressProxyDomainFromBaseUrl(baseUrl: string): string {
+  try {
+    return new URL(normalizeIngressProxyBaseUrl(baseUrl)).hostname;
+  } catch {
+    return DEFAULT_INGRESS_PROXY_DOMAIN;
+  }
+}
+
+function sanitizeIngressSlug(input: string): string {
+  return input
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9-]+/g, "-")
+    .replaceAll(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 32);
+}
+
+function createPublicBaseHost(params: { slug: string; domain: string }) {
+  return `${sanitizeIngressSlug(params.slug)}-${randomUUID().slice(0, 6)}.${params.domain}`;
+}
+
+function createIngressPatterns(params: {
+  publicBaseHost: string;
+  targetURL: string;
+  routingType: "subdomain-host" | "dunder-prefix";
+}): Array<{ pattern: string; target: string; headers?: Record<string, string> }> {
+  if (params.routingType === "subdomain-host") {
+    return [
+      {
+        pattern: params.publicBaseHost,
+        target: params.targetURL,
+      },
+      {
+        pattern: `*.${params.publicBaseHost}`,
+        target: params.targetURL,
+      },
+    ];
+  }
+
+  return [
+    {
+      pattern: params.publicBaseHost,
+      target: params.targetURL,
+    },
+    {
+      pattern: `*__${params.publicBaseHost}`,
+      target: params.targetURL,
+    },
+  ];
+}
+
+async function callIngressProxyProcedure<TResponse>(params: {
+  baseUrl: string;
+  apiKey: string;
+  name: string;
+  input: unknown;
+}): Promise<TResponse> {
+  const response = await fetch(`${params.baseUrl}/api/orpc/${params.name}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${params.apiKey}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ json: params.input }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    json?: TResponse;
+    error?: unknown;
+  };
+  if (!response.ok) {
+    throw new Error(
+      `ingress proxy ${params.name} failed (${response.status}): ${JSON.stringify(payload.json ?? payload.error ?? payload)}`,
+    );
+  }
+  if (payload.json === undefined) {
+    throw new Error(`ingress proxy ${params.name} returned no json payload`);
+  }
+  return payload.json;
+}
+
+async function waitForPublicText(params: {
+  url: string;
+  timeoutMs: number;
+  matches: (body: string) => boolean;
+}) {
+  const deadline = Date.now() + params.timeoutMs;
+  let lastBody = "";
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(params.url, {
+        signal: createTimeoutSignal(10_000),
+      });
+      lastBody = await response.text();
+      if (response.ok && params.matches(lastBody)) return lastBody;
+    } catch {}
+    await sleep(500);
+  }
+  throw new Error(`Timed out waiting for public response ${params.url}; last body=${lastBody}`);
+}
+
+function normalizeDeploymentLogEntry(entry: DeploymentLogEntry): DeploymentLogEntry {
+  return {
+    ...entry,
+    observedAt: entry.observedAt ?? new Date().toISOString(),
+  };
 }

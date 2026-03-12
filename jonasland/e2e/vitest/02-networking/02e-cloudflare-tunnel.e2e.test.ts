@@ -52,28 +52,25 @@ async function waitForPublicText(params: {
   throw new Error(`Timed out waiting for ${params.url}; last body=${lastBody}`);
 }
 
-async function useFrpTunnel(params: {
-  controlServerHost: string;
-  controlServerPort: number;
-  controlTransportProtocol: "websocket" | "wss";
-  localTargetHost?: string;
+async function connectFrpToPublicDeployment(params: {
+  publicBaseHost: string;
   localTargetPort: number;
-  frpcBin?: string;
 }) {
   const tmpDir = await mkdtemp(join(tmpdir(), "jonasland-e2e-frpc-"));
   const configPath = join(tmpDir, "frpc.toml");
+  const controlHost = `frp__${params.publicBaseHost}`;
   await writeFile(
     configPath,
     [
-      `serverAddr = ${tomlString(params.controlServerHost)}`,
-      `serverPort = ${String(params.controlServerPort)}`,
-      `transport.protocol = ${tomlString(params.controlTransportProtocol)}`,
+      `serverAddr = ${tomlString(controlHost)}`,
+      "serverPort = 443",
+      `transport.protocol = ${tomlString("wss")}`,
       "loginFailExit = false",
       "",
       "[[proxies]]",
       `name = ${tomlString("vitest-cloudflare-tunnel")}`,
       `type = ${tomlString("tcp")}`,
-      `localIP = ${tomlString(params.localTargetHost ?? "127.0.0.1")}`,
+      `localIP = ${tomlString("127.0.0.1")}`,
       `localPort = ${String(params.localTargetPort)}`,
       `remotePort = ${String(FRP_DATA_REMOTE_PORT)}`,
       "",
@@ -82,13 +79,9 @@ async function useFrpTunnel(params: {
   );
 
   const logs: string[] = [];
-  const frpc = spawn(
-    params.frpcBin?.trim() || process.env.JONASLAND_E2E_FRPC_BIN || "frpc",
-    ["-c", configPath],
-    {
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+  const frpc = spawn("frpc", ["-c", configPath], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   frpc.stdout.on("data", (chunk) => {
     logs.push(String(chunk));
   });
@@ -112,14 +105,23 @@ async function useFrpTunnel(params: {
 
   const waitUntilConnected = async () => {
     const deadline = Date.now() + 45_000;
+    let lastLoggedSnapshot = "";
     while (Date.now() < deadline) {
       if (frpc.exitCode !== null) {
         throw new Error(`frpc exited early with code ${String(frpc.exitCode)}:\n${logs.join("")}`);
       }
-      if (FRP_READY_REGEX.test(logs.join(""))) return;
+      const snapshot = logs.join("");
+      if (snapshot !== lastLoggedSnapshot && snapshot.trim().length > 0) {
+        lastLoggedSnapshot = snapshot;
+        console.log("[cloudflare-tunnel.e2e] frpc progress", snapshot.trim());
+      }
+      if (/bad status/i.test(snapshot)) {
+        throw new Error(`frpc rejected by public control host ${controlHost}:\n${snapshot}`);
+      }
+      if (FRP_READY_REGEX.test(snapshot)) return;
       await sleep(100);
     }
-    throw new Error(`timed out waiting for frpc to connect:\n${logs.join("")}`);
+    throw new Error(`timed out waiting for frpc to connect to ${controlHost}:\n${logs.join("")}`);
   };
 
   return {
@@ -141,8 +143,13 @@ describe("cloudflare tunnel", () => {
       timeout: 240_000,
     },
     async ({ expect, e2e }) => {
+      console.log("[cloudflare-tunnel.e2e] test start", {
+        testSlug: e2e.testSlug,
+        deploymentSlug: e2e.deploymentSlug,
+      });
       const tokenEnv = TokenBackedTunnelEnv.parse(process.env);
       const { image } = DockerDeploymentTestEnv.parse(process.env);
+      console.log("[cloudflare-tunnel.e2e] creating deployment", { image });
       const deployment = await Deployment.create({
         provider: createDockerProvider({}),
         opts: {
@@ -179,6 +186,7 @@ describe("cloudflare tunnel", () => {
         },
         timeoutMs: 90_000,
       });
+      console.log("[cloudflare-tunnel.e2e] cloudflare tunnel reported healthy");
 
       const tunnelUrl = tokenEnv.CLOUDFLARE_TUNNEL_PUBLIC_URL;
       console.log("[cloudflare-tunnel.e2e] tunnel url", tunnelUrl);
@@ -202,6 +210,10 @@ describe("cloudflare tunnel", () => {
         },
       });
       expect(routes.routeIds.length).toBe(1);
+      console.log("[cloudflare-tunnel.e2e] created ingress proxy routes", {
+        publicBaseHost: routes.publicBaseHost,
+        routeIds: routes.routeIds,
+      });
 
       await f.deployment.pidnap.processes.waitFor({
         processes: {
@@ -209,6 +221,7 @@ describe("cloudflare tunnel", () => {
         },
         timeoutMs: 30_000,
       });
+      console.log("[cloudflare-tunnel.e2e] frps process is running");
 
       const expectedFrpPublicUrl = `https://frp__${routes.publicBaseHost}/`;
       const registryDeadline = Date.now() + 60_000;
@@ -221,6 +234,9 @@ describe("cloudflare tunnel", () => {
         } catch {}
         await sleep(500);
       }
+      console.log("[cloudflare-tunnel.e2e] registry resolved frp public url", {
+        expectedFrpPublicUrl,
+      });
 
       expect(
         (
@@ -238,18 +254,27 @@ describe("cloudflare tunnel", () => {
           harPath,
         },
       });
+      console.log("[cloudflare-tunnel.e2e] mock http server ready", {
+        harPath,
+        port: recordingProxy.port,
+      });
 
-      await using frpTunnel = await useFrpTunnel({
-        controlServerHost: `frp__${routes.publicBaseHost}`,
-        controlServerPort: 443,
-        controlTransportProtocol: "wss",
+      await using frpTunnel = await connectFrpToPublicDeployment({
+        publicBaseHost: routes.publicBaseHost,
         localTargetPort: recordingProxy.port,
-        frpcBin: process.env.JONASLAND_E2E_FRPC_BIN,
+      });
+      console.log("[cloudflare-tunnel.e2e] starting frpc", {
+        controlServerHost: `frp__${routes.publicBaseHost}`,
+        localTargetPort: recordingProxy.port,
       });
       await frpTunnel.waitUntilConnected();
+      console.log("[cloudflare-tunnel.e2e] frpc connected");
 
       await deployment.setEnvVars({
         ITERATE_EGRESS_PROXY: frpTunnel.proxyUrl,
+      });
+      console.log("[cloudflare-tunnel.e2e] configured iterate egress proxy", {
+        proxyUrl: frpTunnel.proxyUrl,
       });
 
       await deployment.shellWithRetry({
@@ -257,9 +282,17 @@ describe("cloudflare tunnel", () => {
         timeoutMs: 30_000,
         retryIf: (result) => result.output.trim() === "000" || result.exitCode !== 0,
       });
+      console.log("[cloudflare-tunnel.e2e] frp data proxy health check passed");
 
+      console.log("[cloudflare-tunnel.e2e] running deployment curl", {
+        url: "https://example.com/",
+      });
       const curlResult = await deployment.shell({
         cmd: "curl -fsSL https://example.com/",
+      });
+      console.log("[cloudflare-tunnel.e2e] deployment curl completed", {
+        exitCode: curlResult.exitCode,
+        outputPreview: curlResult.output.slice(0, 200),
       });
       expect(curlResult).toMatchObject({
         exitCode: 0,
@@ -267,6 +300,7 @@ describe("cloudflare tunnel", () => {
       });
 
       await recordingProxy.writeHar(harPath);
+      console.log("[cloudflare-tunnel.e2e] wrote har file", { harPath });
       const har = JSON.parse(await readFile(harPath, "utf8")) as {
         log?: {
           entries?: Array<{
@@ -279,6 +313,7 @@ describe("cloudflare tunnel", () => {
       const recordedUrls = (har.log?.entries ?? [])
         .map((entry) => entry.request?.url)
         .filter((value): value is string => Boolean(value));
+      console.log("[cloudflare-tunnel.e2e] har urls", recordedUrls);
       expect(recordedUrls).toContain("https://example.com/");
 
       console.log("[cloudflare-tunnel.e2e] deployment env", f.deployment.env);

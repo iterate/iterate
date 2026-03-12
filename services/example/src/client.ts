@@ -1,6 +1,6 @@
 import type { ContractRouterClient } from "@orpc/contract";
 import { exampleContract, exampleServiceManifest } from "@iterate-com/example-contract";
-import { createOrpcRpcServiceClient } from "@iterate-com/shared/jonasland";
+import { createOrpcOpenApiServiceClient } from "@iterate-com/shared/jonasland";
 
 export type ExampleClient = ContractRouterClient<typeof exampleContract>;
 
@@ -9,7 +9,7 @@ export function createExampleClient(params?: {
   baseUrl?: string;
   fetch?: (request: Request) => Promise<Response>;
 }): ExampleClient {
-  return createOrpcRpcServiceClient({
+  return createOrpcOpenApiServiceClient({
     env: {
       ...(params?.baseUrl ? { ITERATE_PROJECT_BASE_URL: params.baseUrl } : {}),
     },

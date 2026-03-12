@@ -8,6 +8,7 @@
     "./jonasland/service-contract": "./src/jonasland/service-contract.ts",
     "./jonasland/ingress-url": "./src/jonasland/ingress-url.ts",
     "./jonasland/test-helpers": "./src/jonasland/test-helpers/index.ts",
+    "./jonasland/strip-ansi.ts": "./src/jonasland/strip-ansi.ts",
     "./jonasland/deployment/deployment.ts": "./src/jonasland/deployment/deployment.ts",
     "./jonasland/deployment/deployment-provider-manifest.ts": "./src/jonasland/deployment/deployment-provider-manifest.ts",
     "./jonasland/deployment/docker-deployment.ts": "./src/jonasland/deployment/docker-deployment.ts",

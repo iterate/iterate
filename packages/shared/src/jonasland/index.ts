@@ -45,7 +45,11 @@ import {
   type SqlResultSet,
 } from "./service-contract.ts";
 import { useDeployment, useTmpDir } from "./test-helpers/index.ts";
-import type { UseDeploymentFixture, UseTmpDirFixture } from "./test-helpers/index.ts";
+import type {
+  DeploymentLogsArtifact,
+  UseDeploymentFixture,
+  UseTmpDirFixture,
+} from "./test-helpers/index.ts";
 
 type RuntimeGlobal = typeof globalThis & {
   __jonaslandOtelInitialized?: boolean;
@@ -856,6 +860,7 @@ export function serviceManifestToPidnapConfig(params: {
 }
 
 export { createSlug };
+export { stripAnsi } from "./strip-ansi.ts";
 export {
   ServiceDebugOutput,
   ServiceHealthOutput,
@@ -866,6 +871,7 @@ export {
 };
 export { useDeployment, useTmpDir };
 export type {
+  DeploymentLogsArtifact,
   ServiceContext,
   ServiceInitialContext,
   ServiceManifestLike,

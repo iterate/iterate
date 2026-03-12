@@ -4,6 +4,7 @@ import type {
   DeploymentProviderManifest,
   DeploymentProviderOpts,
 } from "./deployment-provider-manifest.ts";
+import { BaseDeploymentOpts } from "./deployment-provider-manifest.ts";
 import type { components } from "./fly-api/generated/openapi.gen.ts";
 
 export interface FlyDeploymentLocator {
@@ -36,13 +37,7 @@ export const FlyDeploymentLocator = z.object({
   appName: z.string().min(1),
   machineId: z.string().min(1).optional(),
 });
-export const FlyDeploymentOpts = z.object({
-  slug: z.string().min(1),
-  rootfsSurvivesRestart: z.boolean().optional(),
-  env: z.record(z.string(), z.string()).optional(),
-  image: z.string().min(1).optional(),
-  entrypoint: z.array(z.string()).optional(),
-  cmd: z.array(z.string()).optional(),
+export const FlyDeploymentOpts = BaseDeploymentOpts.extend({
   flyMachineInit: z.custom<components["schemas"]["fly.MachineInit"]>().optional(),
   flyOrgSlug: z.string().min(1).optional(),
   flyNetwork: z.string().min(1).optional(),

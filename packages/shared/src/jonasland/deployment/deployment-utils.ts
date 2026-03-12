@@ -38,11 +38,64 @@ export function shQuote(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
+/**
+ * Public APIs may accept `timeoutMs`, but internal async plumbing should run
+ * on `AbortSignal`. Keep timeout-to-signal conversion and signal composition in
+ * this module so the runtime uses one cancellation model everywhere else.
+ */
+export function createTimeoutSignal(timeoutMs: number): AbortSignal {
+  return AbortSignal.timeout(timeoutMs);
+}
+
+export function composeAbortSignal(params: {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  parentSignals?: AbortSignal[];
+}): AbortSignal | undefined {
+  const signals = [
+    params.signal,
+    ...(params.parentSignals ?? []),
+    params.timeoutMs == null ? undefined : createTimeoutSignal(params.timeoutMs),
+  ].filter((signal): signal is AbortSignal => signal != null);
+  if (signals.length === 0) return undefined;
+  if (signals.length === 1) return signals[0];
+  return AbortSignal.any(signals);
+}
+
+export function createAbortScope(
+  params: {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    parentSignals?: AbortSignal[];
+  } = {},
+) {
+  const controller = new AbortController();
+  return {
+    controller,
+    signal: composeAbortSignal({
+      signal: params.signal,
+      timeoutMs: params.timeoutMs,
+      parentSignals: [...(params.parentSignals ?? []), controller.signal],
+    })!,
+    abort(reason?: unknown) {
+      controller.abort(reason);
+    },
+  };
+}
+
+export function isAbortError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "AbortError" || error.name === "TimeoutError") return true;
+  if (error.cause && isAbortError(error.cause)) return true;
+  return /aborted/i.test(error.message);
+}
+
 export function throwIfAborted(signal?: AbortSignal) {
   if (!signal?.aborted) return;
-  throw signal.reason instanceof Error
-    ? signal.reason
-    : new Error(`Operation aborted${signal.reason ? `: ${String(signal.reason)}` : ""}`);
+  if (signal.reason instanceof Error) throw signal.reason;
+  const error = new Error(`Operation aborted${signal.reason ? `: ${String(signal.reason)}` : ""}`);
+  error.name = "AbortError";
+  throw error;
 }
 
 export function toEnvRecord(env?: Record<string, string> | string[]): Record<string, string> {

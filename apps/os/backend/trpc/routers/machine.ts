@@ -472,7 +472,7 @@ export const machineRouter = router({
   // Get available machine types (checks which providers are configured)
   getAvailableMachineTypes: publicProcedure.query(({ ctx }) => {
     const types: Array<{
-      type: (typeof schema.MachineType)[number];
+      type: (typeof schema.MachineType)[number] | "local";
       label: string;
       disabledReason?: string;
     }> = [];

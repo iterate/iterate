@@ -7,7 +7,6 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { exampleServiceManifest } from "@iterate-com/example-contract";
 import {
-  applyOpenAPIRoute,
   applyServiceMiddleware,
   createServiceObservabilityHandler,
   createServiceOpenAPIHandler,
@@ -48,19 +47,20 @@ app.get("/", async (c) => {
   return c.html(html);
 });
 
-app.all("/api/echo", async (c) => {
-  const request = c.req.raw;
-  const bodyText = await request.clone().text();
-  return c.json({
-    method: request.method,
-    url: request.url,
-    host: request.headers.get("host") ?? "",
-    headers: Object.fromEntries(request.headers.entries()),
-    body: bodyText,
+app.all("/api/*", async (c) => {
+  const context = {
+    requestId: c.get("requestId"),
+    serviceName,
+    log: c.get("requestLog"),
+    request: c.req.raw,
+  };
+  const { matched, response } = await openAPIHandler.handle(c.req.raw, {
+    prefix: "/api",
+    context,
   });
+  if (matched) return c.newResponse(response.body, response);
+  return c.json({ error: "not_found" }, 404);
 });
-
-applyOpenAPIRoute(app, openAPIHandler, serviceName);
 
 await initializeExampleDb();
 

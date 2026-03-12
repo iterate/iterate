@@ -1,20 +1,20 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import type { DeploymentEvent } from "@iterate-com/fake-os-contract";
+import type { DeploymentLogEntry } from "@iterate-com/fake-os-contract";
 import { LogViewer } from "../-log-viewer.tsx";
 import { orpcClient } from "@/lib/orpc.ts";
 
 export const Route = createFileRoute("/_app/deployments/$slug/events")({
-  component: DeploymentEvents,
+  component: DeploymentLogs,
 });
 
-function DeploymentEvents() {
+function DeploymentLogs() {
   const { slug } = Route.useParams();
   const [lines, setLines] = useState<string[]>([]);
   const [status, setStatus] = useState<"connecting" | "streaming" | "error" | "closed">(
     "connecting",
   );
-  const iteratorRef = useRef<AsyncIterator<DeploymentEvent> | undefined>(undefined);
+  const iteratorRef = useRef<AsyncIterator<DeploymentLogEntry> | undefined>(undefined);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -23,7 +23,7 @@ function DeploymentEvents() {
 
     void (async () => {
       try {
-        const stream = await orpcClient.deployments.events({ slug });
+        const stream = await orpcClient.deployments.logs({ slug });
         iteratorRef.current = stream[Symbol.asyncIterator]();
         setStatus("streaming");
 
@@ -31,13 +31,10 @@ function DeploymentEvents() {
           const next = await iteratorRef.current.next();
           if (next.done) break;
           if (controller.signal.aborted) break;
-          const line = eventToLine(next.value);
-          if (line !== null) {
-            setLines((prev) => {
-              const updated = [...prev, line];
-              return updated.length > 5000 ? updated.slice(-5000) : updated;
-            });
-          }
+          setLines((prev) => {
+            const updated = [...prev, logEntryToLine(next.value)];
+            return updated.length > 5000 ? updated.slice(-5000) : updated;
+          });
         }
         setStatus("closed");
       } catch (error) {
@@ -84,24 +81,6 @@ function StatusDot({ status }: { status: string }) {
   return <div className={`size-2 rounded-full ${color}`} />;
 }
 
-function eventToLine(event: DeploymentEvent): string | null {
-  if (event.type === "https://events.iterate.com/deployment/logged") {
-    return event.payload.line;
-  }
-  if (event.type === "https://events.iterate.com/deployment/started") {
-    return `\x1b[32m[started]\x1b[0m ${event.payload.detail}`;
-  }
-  if (event.type === "https://events.iterate.com/deployment/stopped") {
-    return `\x1b[33m[stopped]\x1b[0m ${event.payload.detail}`;
-  }
-  if (event.type === "https://events.iterate.com/deployment/created") {
-    return `\x1b[36m[created]\x1b[0m ${event.payload.baseUrl}`;
-  }
-  if (event.type === "https://events.iterate.com/deployment/destroyed") {
-    return `\x1b[31m[destroyed]\x1b[0m`;
-  }
-  if (event.type === "https://events.iterate.com/deployment/errored") {
-    return `\x1b[31m[error]\x1b[0m ${event.payload.message}`;
-  }
-  return null;
+function logEntryToLine(entry: DeploymentLogEntry): string {
+  return entry.timestamp ? `${entry.timestamp} ${entry.text}` : entry.text;
 }

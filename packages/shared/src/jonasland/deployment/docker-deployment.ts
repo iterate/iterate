@@ -1,7 +1,11 @@
+import { execSync } from "node:child_process";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { randomUUID } from "node:crypto";
 import { DockerClient } from "@docker/node-sdk";
 import pWaitFor from "p-wait-for";
+import { stripAnsi } from "../strip-ansi.ts";
 import {
   type DeploymentProviderState,
   type DeploymentProvider,
@@ -9,10 +13,10 @@ import {
 import { collectTextOutput, throwIfAborted } from "./deployment-utils.ts";
 import {
   dockerProviderManifest,
+  type DockerDeploymentRuntimeEnv,
   type DockerDeploymentLocator,
   type DockerDeploymentOpts,
   type DockerHostConfig,
-  type DockerHostSyncConfig,
   type DockerProviderOpts,
 } from "./docker-deployment-manifest.ts";
 export {
@@ -22,18 +26,27 @@ export {
   dockerProviderOptsSchema,
 } from "./docker-deployment-manifest.ts";
 export type {
+  DockerDeploymentRuntimeEnv,
   DockerDeploymentLocator,
   DockerDeploymentOpts,
   DockerHostConfig,
-  DockerHostSyncConfig,
   DockerProviderOpts,
 } from "./docker-deployment-manifest.ts";
 
 type DockerSdkClient = Awaited<ReturnType<typeof DockerClient.fromDockerConfig>>;
+type DockerMount = NonNullable<NonNullable<DockerHostConfig["Mounts"]>[number]>;
 
 // We persist effective deployment opts on the container so reconnect can
-// recover them from Docker alone, without an external opts store.
+// recover provider-owned runtime shape from Docker alone, without an external
+// opts store. `deployment.ts` later rehydrates live runtime env from
+// `~/.iterate/.env`, so this metadata is best thought of as the config-side
+// snapshot rather than the long-term env source of truth.
 const DOCKER_RUNTIME_METADATA_LABEL = "com.iterate.instance-specific-opts";
+const DOCKER_PNPM_STORE_VOLUME_NAME = "iterate-pnpm-store";
+const DOCKER_PNPM_STORE_MOUNT_PATH = "/home/iterate/.pnpm-store";
+const DOCKER_HOST_REPO_CHECKOUT_MOUNT_PATH = "/host/repo-checkout";
+const DOCKER_HOST_GIT_DIR_MOUNT_PATH = "/host/gitdir";
+const DOCKER_HOST_GIT_COMMON_DIR_MOUNT_PATH = "/host/commondir";
 
 let dockerClientPromise: Promise<DockerClient> | undefined;
 
@@ -109,23 +122,17 @@ export function createDockerProvider(
       const docker = await dockerClient();
       throwIfAborted(params.signal);
 
-      const hostSync = resolveDockerHostSync(opts);
-      const hostSyncBinds =
-        hostSync == null
-          ? []
-          : [
-              `${hostSync.repoRoot}:${hostSync.repoCheckoutMountPath}:ro`,
-              ...(hostSync.gitDir ? [`${hostSync.gitDir}:${hostSync.gitDirMountPath}:ro`] : []),
-              ...(hostSync.commonDir
-                ? [`${hostSync.commonDir}:${hostSync.commonDirMountPath}:ro`]
-                : []),
-            ];
+      const hostSyncEnabled = opts.env?.DOCKER_HOST_SYNC_ENABLED === "true";
+      const defaultMounts = mergeDockerMounts([
+        createDockerPnpmStoreMount(),
+        ...(hostSyncEnabled ? createDockerHostSyncMounts() : []),
+      ]);
 
       const defaultHostConfig: DockerHostConfig = {
         PortBindings: { "80/tcp": [{ HostPort: "" }] },
         ExtraHosts: ["host.docker.internal:host-gateway"],
         CapAdd: ["NET_ADMIN"],
-        ...(hostSyncBinds.length > 0 ? { Binds: hostSyncBinds } : {}),
+        ...(defaultMounts ? { Mounts: defaultMounts } : {}),
       };
       // Caller overrides merge into the default host config so provider
       // requirements stay in place unless explicitly replaced.
@@ -144,6 +151,10 @@ export function createDockerProvider(
           ...(defaultHostConfig.Binds ?? []),
           ...(opts.dockerHostConfig?.Binds ?? []),
         ]),
+        Mounts: mergeDockerMounts([
+          ...(defaultHostConfig.Mounts ?? []),
+          ...(opts.dockerHostConfig?.Mounts ?? []),
+        ]),
         PortBindings: {
           ...(defaultHostConfig.PortBindings ?? {}),
           ...(opts.dockerHostConfig?.PortBindings ?? {}),
@@ -156,11 +167,19 @@ export function createDockerProvider(
 
       const containerName = resolveContainerName(opts.slug);
       const publicBaseHost = `${normalizeDockerNameForHost(containerName)}.orb.local`;
-      const env = {
-        ITERATE_INGRESS_HOST: publicBaseHost,
-        ITERATE_INGRESS_ROUTING_TYPE: "subdomain-host",
-        ...(opts.env ?? {}),
-        ...(hostSync ? { DOCKER_HOST_SYNC_ENABLED: "true" } : {}),
+      const effectiveOpts = withDefaultDockerOpts({
+        ...opts,
+        env: {
+          ...(opts.env ?? {}),
+          ITERATE_INGRESS_HOST: opts.env?.ITERATE_INGRESS_HOST ?? publicBaseHost,
+          ITERATE_INGRESS_ROUTING_TYPE: opts.env?.ITERATE_INGRESS_ROUTING_TYPE ?? "subdomain-host",
+        },
+      });
+      // Docker needs the full launch env up front, but `deployment.ts` treats
+      // the runtime env file as canonical once the deployment is attached.
+      const runtimeEnv = {
+        ...(effectiveOpts.env ?? {}),
+        ...(hostSyncEnabled ? { DOCKER_HOST_SYNC_ENABLED: "true" } : {}),
       };
 
       console.log(`[docker] creating container image=${opts.image}...`);
@@ -169,11 +188,11 @@ export function createDockerProvider(
           Image: opts.image,
           ...(opts.entrypoint ? { Entrypoint: opts.entrypoint } : {}),
           ...(opts.cmd ? { Cmd: opts.cmd } : {}),
-          Env: Object.entries(env).map(([key, value]) => `${key}=${value}`),
+          Env: Object.entries(runtimeEnv).map(([key, value]) => `${key}=${value}`),
           ExposedPorts: { "80/tcp": {} },
           Labels: {
             "dev.orbstack.http-port": "80",
-            [DOCKER_RUNTIME_METADATA_LABEL]: serializeDockerRuntimeMetadata(opts),
+            [DOCKER_RUNTIME_METADATA_LABEL]: serializeDockerRuntimeMetadata(effectiveOpts),
           },
           HostConfig: hostConfig,
         },
@@ -328,16 +347,20 @@ export function createDockerProvider(
           });
 
         for await (const line of queue) {
-          yield { line };
+          yield { text: stripAnsi(line) };
         }
       } finally {
         params.signal.removeEventListener("abort", onAbort);
       }
     },
     async status(params) {
+      // Docker inspect is not cancelable once issued, so treat abort as a
+      // best-effort boundary around the client call.
+      throwIfAborted(params.signal);
       const docker = await dockerClient();
       const locator = toDockerLocator(params.locator);
       const info = await docker.containerInspect(locator.containerId);
+      throwIfAborted(params.signal);
       const raw = info.State?.Status ?? "unknown";
       const state: DeploymentProviderState =
         raw === "running"
@@ -387,33 +410,63 @@ function toDockerLocator(value: unknown): DockerDeploymentLocator {
   return locator as DockerDeploymentLocator;
 }
 
-function resolveDockerHostSync(opts: DockerDeploymentOpts): DockerHostSyncConfig | null {
-  if (opts.dockerHostSync && opts.dockerHostSync !== true) {
-    return {
-      repoCheckoutMountPath: "/host/repo-checkout",
-      gitDirMountPath: "/host/gitdir",
-      commonDirMountPath: "/host/commondir",
-      ...opts.dockerHostSync,
-    };
-  }
+function createDockerHostSyncMounts(): DockerMount[] {
+  const runGit = (command: string) =>
+    execSync(command, { cwd: process.cwd(), encoding: "utf-8" }).trim();
+  const resolvePath = (value: string, baseDir: string) =>
+    realpathSync(isAbsolute(value) ? value : join(baseDir, value));
 
-  if (opts.dockerHostSync !== true && process.env.DOCKER_HOST_SYNC_ENABLED !== "true") {
-    return null;
-  }
+  const repoRoot = realpathSync(runGit("git rev-parse --show-toplevel"));
+  const gitDirRaw = runGit("git rev-parse --git-dir");
+  const commonDirRaw = runGit("git rev-parse --git-common-dir");
 
-  const repoRoot = process.env.DOCKER_HOST_GIT_REPO_ROOT;
-  if (!repoRoot) {
-    throw new Error("DOCKER_HOST_SYNC_ENABLED=true requires DOCKER_HOST_GIT_REPO_ROOT");
-  }
+  const gitDirResolved = resolvePath(gitDirRaw, repoRoot);
+  const gitDir = statSync(gitDirResolved).isFile()
+    ? (() => {
+        const gitFile = readFileSync(gitDirResolved, "utf-8").trim();
+        const match = gitFile.match(/^gitdir:\s*(.+)$/);
+        return match ? resolvePath(match[1], repoRoot) : gitDirResolved;
+      })()
+    : gitDirResolved;
 
+  return [
+    {
+      Type: "bind",
+      Source: repoRoot,
+      Target: DOCKER_HOST_REPO_CHECKOUT_MOUNT_PATH,
+      ReadOnly: true,
+    },
+    {
+      Type: "bind",
+      Source: gitDir,
+      Target: DOCKER_HOST_GIT_DIR_MOUNT_PATH,
+      ReadOnly: true,
+    },
+    {
+      Type: "bind",
+      Source: resolvePath(commonDirRaw, repoRoot),
+      Target: DOCKER_HOST_GIT_COMMON_DIR_MOUNT_PATH,
+      ReadOnly: true,
+    },
+  ];
+}
+
+function createDockerPnpmStoreMount(): DockerMount {
   return {
-    repoRoot,
-    gitDir: process.env.DOCKER_HOST_GIT_DIR,
-    commonDir: process.env.DOCKER_HOST_GIT_COMMON_DIR,
-    repoCheckoutMountPath: "/host/repo-checkout",
-    gitDirMountPath: "/host/gitdir",
-    commonDirMountPath: "/host/commondir",
+    Type: "volume",
+    Source: DOCKER_PNPM_STORE_VOLUME_NAME,
+    Target: DOCKER_PNPM_STORE_MOUNT_PATH,
   };
+}
+
+function mergeDockerMounts(mounts: Array<DockerMount | undefined>): DockerMount[] | undefined {
+  const merged = new Map<string, DockerMount>();
+  for (const mount of mounts) {
+    if (!mount) continue;
+    const key = `${mount.Target ?? ""}:${mount.Type ?? ""}`;
+    merged.set(key, mount);
+  }
+  return merged.size > 0 ? [...merged.values()] : undefined;
 }
 
 function normalizeInspectName(value: string | undefined): string | undefined {
@@ -439,6 +492,7 @@ function parseDockerRuntimeMetadata(raw: string | undefined): DockerDeploymentOp
 function withDefaultDockerOpts(value: DockerDeploymentOpts): DockerDeploymentOpts {
   return {
     rootfsSurvivesRestart: value.rootfsSurvivesRestart ?? true,
+    env: value.env ? { ...value.env } : undefined,
     ...value,
   };
 }

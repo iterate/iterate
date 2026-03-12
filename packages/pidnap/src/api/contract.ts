@@ -1,8 +1,8 @@
-import { oc as ocBase } from "@orpc/contract";
+import { eventIterator, oc as ocBase } from "@orpc/contract";
 import * as v from "valibot";
 import { ProcessDefinition } from "../lazy-process.ts";
 import { RestartingProcessOptions, RestartingProcessState } from "../restarting-process.ts";
-import { EnvOptions } from "../manager.ts";
+import { EnvOptions, ProcessHealthCheck } from "../manager.ts";
 
 const oc = ocBase.$input(v.void());
 
@@ -81,17 +81,17 @@ export const WaitForResponseSchema = v.object({
 });
 export type WaitForResponse = v.InferOutput<typeof WaitForResponseSchema>;
 
+export const ProcessLogEntrySchema = v.object({
+  text: v.string(),
+});
+export type ProcessLogEntry = v.InferOutput<typeof ProcessLogEntrySchema>;
+
 // API contract
 export const manager = {
   status: oc.output(ManagerStatusSchema),
 };
 
-export const HealthCheckConfig = v.object({
-  url: v.string(),
-  intervalMs: v.optional(v.number()),
-  timeoutMs: v.optional(v.number()),
-});
-
+export const HealthCheckConfig = ProcessHealthCheck;
 export type HealthCheckConfig = v.InferOutput<typeof HealthCheckConfig>;
 
 export const processes = {
@@ -139,6 +139,15 @@ export const processes = {
       }),
     )
     .output(WaitForResponseSchema),
+  logs: oc
+    .input(
+      v.object({
+        processSlug: v.string(),
+        tailLines: v.optional(v.number()),
+        pollIntervalMs: v.optional(v.number()),
+      }),
+    )
+    .output(eventIterator(ProcessLogEntrySchema)),
 };
 
 // Simple health check response

@@ -1,5 +1,7 @@
 import createClient, { type Client } from "openapi-fetch";
+import { stripAnsi } from "../strip-ansi.ts";
 import {
+  type DeploymentLogEntry,
   type DeploymentProviderState,
   type DeploymentProvider,
 } from "./deployment-provider-manifest.ts";
@@ -25,7 +27,10 @@ export type {
 
 const FLY_BASE_DOMAIN = "fly.dev";
 // We persist effective deployment opts on the Fly machine metadata so reconnect
-// can recover them from Fly alone, without an external opts store.
+// can recover provider-owned runtime shape from Fly alone, without an external
+// opts store. `deployment.ts` later rehydrates live runtime env from
+// `~/.iterate/.env`, so this metadata is the config-side snapshot, not the
+// long-term runtime env source of truth.
 const FLY_RUNTIME_METADATA_KEY = "com.iterate.instance-specific-opts";
 export function createFlyProvider(
   providerOpts: FlyProviderOpts,
@@ -39,8 +44,13 @@ export function createFlyProvider(
       const appName = baseOpts.slug;
       const opts = withDefaultFlyOpts({
         ...baseOpts,
-        ingressHost: baseOpts.ingressHost ?? `${appName}.${FLY_BASE_DOMAIN}`,
-        ingressHostType: baseOpts.ingressHostType ?? "subdomain-host",
+        env: {
+          ...(baseOpts.env ?? {}),
+          ITERATE_INGRESS_HOST:
+            baseOpts.env?.ITERATE_INGRESS_HOST ?? `${appName}.${FLY_BASE_DOMAIN}`,
+          ITERATE_INGRESS_ROUTING_TYPE:
+            baseOpts.env?.ITERATE_INGRESS_ROUTING_TYPE ?? "subdomain-host",
+        },
       });
       const orgSlug = opts.flyOrgSlug ?? "iterate";
       const sandboxMachineName = opts.flyMachineName ?? "sandbox";
@@ -78,6 +88,9 @@ export function createFlyProvider(
           });
         }
 
+        // Fly launch env still comes from the recovered opts snapshot; once the
+        // deployment is attached, `deployment.ts` owns keeping the runtime env
+        // file and the in-memory `deployment.env` snapshot aligned.
         const envRecord = toEnvRecord(opts.env);
         const machineInit = resolveFlyMachineInit(opts);
         throwIfAborted(params.signal);
@@ -93,12 +106,6 @@ export function createFlyProvider(
                 ...(machineInit ? { init: machineInit } : {}),
                 env: {
                   ...envRecord,
-                  ITERATE_INGRESS_HOST: opts.ingressHost ?? "",
-                  ITERATE_INGRESS_ROUTING_TYPE: opts.ingressHostType ?? "",
-                  ...(opts.ingressDefaultService
-                    ? { ITERATE_INGRESS_DEFAULT_SERVICE: opts.ingressDefaultService }
-                    : {}),
-                  ...(opts.egressProxyURL ? { ITERATE_EGRESS_PROXY: opts.egressProxyURL } : {}),
                 },
                 guest: {
                   cpu_kind: "shared",
@@ -328,13 +335,16 @@ export function createFlyProvider(
     async status(params) {
       const locator = toFlyLocator(params.locator);
       const api = createFlyApi(providerOpts);
+      throwIfAborted(params.signal);
       const machineId =
         locator.machineId ??
         (await resolveMachineId({
           api,
           appName: locator.appName,
           machineName: "sandbox",
+          signal: params.signal,
         }));
+      throwIfAborted(params.signal);
       const machine = await flyCall(
         api,
         "GET",
@@ -342,6 +352,7 @@ export function createFlyProvider(
         async () =>
           api.GET("/apps/{app_name}/machines/{machine_id}", {
             params: { path: { app_name: locator.appName, machine_id: machineId } },
+            signal: params.signal,
           }),
       );
       const raw = ((machine as { state?: string }).state ?? "unknown").toLowerCase();
@@ -439,7 +450,7 @@ async function* streamFlyAppLogs(params: {
   machineId?: string;
   tailLines: number;
   signal: AbortSignal;
-}): AsyncIterable<{ line: string; providerData?: Record<string, unknown> }> {
+}): AsyncIterable<DeploymentLogEntry> {
   if (!params.providerOpts.flyApiToken) throw new Error("flyApiToken is required for logs");
   // Fly's HTTP logs API is best suited to quick fetches and simple polling
   // scripts. Poll it with a short overlap window rather than assuming one
@@ -484,15 +495,13 @@ function extractFlyLogLines(text: string) {
   const lines: string[] = [];
   for (const rawLine of text.split(/\r?\n/)) {
     for (const event of parseFlyLogEvents(rawLine.trim())) {
-      lines.push(event.line);
+      lines.push(event.text);
     }
   }
   return lines;
 }
 
-function parseFlyLogEvents(
-  rawLine: string,
-): Array<{ line: string; providerData?: Record<string, unknown> }> {
+function parseFlyLogEvents(rawLine: string): DeploymentLogEntry[] {
   if (!rawLine) return [];
   try {
     const parsed = JSON.parse(rawLine) as {
@@ -513,31 +522,30 @@ function parseFlyLogEvents(
       event?: { message?: string };
     };
     if (Array.isArray(parsed.data)) {
-      return parsed.data.reduce<Array<{ line: string; providerData?: Record<string, unknown> }>>(
-        (acc, entry) => {
-          const line = entry.attributes?.message;
-          if (!line) return acc;
-          acc.push({
-            line,
-            providerData: {
-              ...(entry.id ? { id: entry.id } : {}),
-              ...(entry.type ? { type: entry.type } : {}),
-              ...(entry.attributes?.timestamp ? { timestamp: entry.attributes.timestamp } : {}),
-              ...(entry.attributes?.level ? { level: entry.attributes.level } : {}),
-              ...(entry.attributes?.instance ? { instance: entry.attributes.instance } : {}),
-              ...(entry.attributes?.region ? { region: entry.attributes.region } : {}),
-              ...(entry.attributes?.meta ? { meta: entry.attributes.meta } : {}),
-            },
-          });
-          return acc;
-        },
-        [],
-      );
+      return parsed.data.reduce<DeploymentLogEntry[]>((acc, entry) => {
+        const text = entry.attributes?.message;
+        if (!text) return acc;
+        acc.push({
+          text: stripAnsi(text),
+          timestamp: entry.attributes?.timestamp,
+          raw: {
+            ...(entry.id ? { id: entry.id } : {}),
+            ...(entry.type ? { type: entry.type } : {}),
+            ...(entry.attributes?.level ? { level: entry.attributes.level } : {}),
+            ...(entry.attributes?.instance ? { instance: entry.attributes.instance } : {}),
+            ...(entry.attributes?.region ? { region: entry.attributes.region } : {}),
+            ...(entry.attributes?.meta ? { meta: entry.attributes.meta } : {}),
+          },
+        });
+        return acc;
+      }, []);
     }
     const single = parsed.message ?? parsed.msg ?? parsed.event?.message;
-    return single ? [{ line: single }] : [{ line: rawLine }];
+    return single
+      ? [{ text: stripAnsi(single) }]
+      : [{ text: stripAnsi(rawLine), raw: parsed as Record<string, unknown> }];
   } catch {
-    return [{ line: rawLine }];
+    return [{ text: stripAnsi(rawLine) }];
   }
 }
 
@@ -584,10 +592,13 @@ async function resolveMachineId(params: {
   api: Client<paths>;
   appName: string;
   machineName: string;
+  signal?: AbortSignal;
 }): Promise<string> {
+  throwIfAborted(params.signal);
   const machines = await flyCall(params.api, "GET", "/apps/{app_name}/machines", async () =>
     params.api.GET("/apps/{app_name}/machines", {
       params: { path: { app_name: params.appName } },
+      signal: params.signal,
     }),
   );
   if (!Array.isArray(machines)) throw new Error(`Could not list machines for ${params.appName}`);
@@ -829,15 +840,8 @@ function parseFlyRuntimeMetadata(raw: string | undefined): FlyDeploymentOpts {
 
 function withDefaultFlyOpts(value: FlyDeploymentOpts): FlyDeploymentOpts {
   return {
-    ingressHost: value.ingressHost ?? value.env?.ITERATE_INGRESS_HOST,
-    ingressHostType:
-      value.ingressHostType ??
-      (value.env?.ITERATE_INGRESS_ROUTING_TYPE as FlyDeploymentOpts["ingressHostType"]) ??
-      undefined,
-    ingressDefaultService:
-      value.ingressDefaultService ?? value.env?.ITERATE_INGRESS_DEFAULT_SERVICE,
-    egressProxyURL: value.egressProxyURL ?? value.env?.ITERATE_EGRESS_PROXY,
     rootfsSurvivesRestart: value.rootfsSurvivesRestart ?? true,
+    env: value.env ? { ...value.env } : undefined,
     ...value,
   };
 }

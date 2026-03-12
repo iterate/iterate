@@ -16,6 +16,8 @@ import { Route as ApiRpcSplatRouteImport } from './routes/api/rpc/$'
 import { Route as AppDeploymentsNewRouteImport } from './routes/_app/deployments/new'
 import { Route as AppDeploymentsSlugRouteImport } from './routes/_app/deployments/$slug'
 import { Route as AppDeploymentsSlugIndexRouteImport } from './routes/_app/deployments/$slug/index'
+import { Route as AppDeploymentsSlugServicesRouteImport } from './routes/_app/deployments/$slug/services'
+import { Route as AppDeploymentsSlugPidnapRouteImport } from './routes/_app/deployments/$slug/pidnap'
 import { Route as AppDeploymentsSlugEventsRouteImport } from './routes/_app/deployments/$slug/events'
 
 const AppRoute = AppRouteImport.update({
@@ -52,6 +54,18 @@ const AppDeploymentsSlugIndexRoute = AppDeploymentsSlugIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppDeploymentsSlugRoute,
 } as any)
+const AppDeploymentsSlugServicesRoute =
+  AppDeploymentsSlugServicesRouteImport.update({
+    id: '/services',
+    path: '/services',
+    getParentRoute: () => AppDeploymentsSlugRoute,
+  } as any)
+const AppDeploymentsSlugPidnapRoute =
+  AppDeploymentsSlugPidnapRouteImport.update({
+    id: '/pidnap',
+    path: '/pidnap',
+    getParentRoute: () => AppDeploymentsSlugRoute,
+  } as any)
 const AppDeploymentsSlugEventsRoute =
   AppDeploymentsSlugEventsRouteImport.update({
     id: '/events',
@@ -66,6 +80,8 @@ export interface FileRoutesByFullPath {
   '/api/rpc/$': typeof ApiRpcSplatRoute
   '/deployments/': typeof AppDeploymentsIndexRoute
   '/deployments/$slug/events': typeof AppDeploymentsSlugEventsRoute
+  '/deployments/$slug/pidnap': typeof AppDeploymentsSlugPidnapRoute
+  '/deployments/$slug/services': typeof AppDeploymentsSlugServicesRoute
   '/deployments/$slug/': typeof AppDeploymentsSlugIndexRoute
 }
 export interface FileRoutesByTo {
@@ -74,6 +90,8 @@ export interface FileRoutesByTo {
   '/api/rpc/$': typeof ApiRpcSplatRoute
   '/deployments': typeof AppDeploymentsIndexRoute
   '/deployments/$slug/events': typeof AppDeploymentsSlugEventsRoute
+  '/deployments/$slug/pidnap': typeof AppDeploymentsSlugPidnapRoute
+  '/deployments/$slug/services': typeof AppDeploymentsSlugServicesRoute
   '/deployments/$slug': typeof AppDeploymentsSlugIndexRoute
 }
 export interface FileRoutesById {
@@ -85,6 +103,8 @@ export interface FileRoutesById {
   '/api/rpc/$': typeof ApiRpcSplatRoute
   '/_app/deployments/': typeof AppDeploymentsIndexRoute
   '/_app/deployments/$slug/events': typeof AppDeploymentsSlugEventsRoute
+  '/_app/deployments/$slug/pidnap': typeof AppDeploymentsSlugPidnapRoute
+  '/_app/deployments/$slug/services': typeof AppDeploymentsSlugServicesRoute
   '/_app/deployments/$slug/': typeof AppDeploymentsSlugIndexRoute
 }
 export interface FileRouteTypes {
@@ -96,6 +116,8 @@ export interface FileRouteTypes {
     | '/api/rpc/$'
     | '/deployments/'
     | '/deployments/$slug/events'
+    | '/deployments/$slug/pidnap'
+    | '/deployments/$slug/services'
     | '/deployments/$slug/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -104,6 +126,8 @@ export interface FileRouteTypes {
     | '/api/rpc/$'
     | '/deployments'
     | '/deployments/$slug/events'
+    | '/deployments/$slug/pidnap'
+    | '/deployments/$slug/services'
     | '/deployments/$slug'
   id:
     | '__root__'
@@ -114,6 +138,8 @@ export interface FileRouteTypes {
     | '/api/rpc/$'
     | '/_app/deployments/'
     | '/_app/deployments/$slug/events'
+    | '/_app/deployments/$slug/pidnap'
+    | '/_app/deployments/$slug/services'
     | '/_app/deployments/$slug/'
   fileRoutesById: FileRoutesById
 }
@@ -173,6 +199,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDeploymentsSlugIndexRouteImport
       parentRoute: typeof AppDeploymentsSlugRoute
     }
+    '/_app/deployments/$slug/services': {
+      id: '/_app/deployments/$slug/services'
+      path: '/services'
+      fullPath: '/deployments/$slug/services'
+      preLoaderRoute: typeof AppDeploymentsSlugServicesRouteImport
+      parentRoute: typeof AppDeploymentsSlugRoute
+    }
+    '/_app/deployments/$slug/pidnap': {
+      id: '/_app/deployments/$slug/pidnap'
+      path: '/pidnap'
+      fullPath: '/deployments/$slug/pidnap'
+      preLoaderRoute: typeof AppDeploymentsSlugPidnapRouteImport
+      parentRoute: typeof AppDeploymentsSlugRoute
+    }
     '/_app/deployments/$slug/events': {
       id: '/_app/deployments/$slug/events'
       path: '/events'
@@ -185,11 +225,15 @@ declare module '@tanstack/react-router' {
 
 interface AppDeploymentsSlugRouteChildren {
   AppDeploymentsSlugEventsRoute: typeof AppDeploymentsSlugEventsRoute
+  AppDeploymentsSlugPidnapRoute: typeof AppDeploymentsSlugPidnapRoute
+  AppDeploymentsSlugServicesRoute: typeof AppDeploymentsSlugServicesRoute
   AppDeploymentsSlugIndexRoute: typeof AppDeploymentsSlugIndexRoute
 }
 
 const AppDeploymentsSlugRouteChildren: AppDeploymentsSlugRouteChildren = {
   AppDeploymentsSlugEventsRoute: AppDeploymentsSlugEventsRoute,
+  AppDeploymentsSlugPidnapRoute: AppDeploymentsSlugPidnapRoute,
+  AppDeploymentsSlugServicesRoute: AppDeploymentsSlugServicesRoute,
   AppDeploymentsSlugIndexRoute: AppDeploymentsSlugIndexRoute,
 }
 

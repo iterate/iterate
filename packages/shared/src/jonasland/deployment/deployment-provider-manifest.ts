@@ -1,4 +1,4 @@
-import type { ZodType } from "zod/v4";
+import { z, type ZodType } from "zod/v4";
 
 /**
  * Provider opts configure one provider binding, such as API tokens or
@@ -6,6 +6,20 @@ import type { ZodType } from "zod/v4";
  * deployment runtime.
  */
 export interface DeploymentProviderOpts {}
+
+export const DeploymentRuntimeEnv = z
+  .object({
+    ITERATE_INGRESS_HOST: z.string().min(1).optional(),
+    ITERATE_INGRESS_ROUTING_TYPE: z.enum(["subdomain-host", "dunder-prefix"]).optional(),
+    ITERATE_INGRESS_DEFAULT_SERVICE: z.string().min(1).optional(),
+    ITERATE_EGRESS_PROXY: z.string().min(1).optional(),
+    CLOUDFLARE_TUNNEL_ENABLED: z.string().min(1).optional(),
+    CLOUDFLARE_TUNNEL_TOKEN: z.string().min(1).optional(),
+    CLOUDFLARE_TUNNEL_PUBLIC_URL: z.string().min(1).optional(),
+  })
+  .catchall(z.string());
+
+export type DeploymentRuntimeEnv = z.infer<typeof DeploymentRuntimeEnv>;
 
 /**
  * Deployment opts describe one deployment runtime.
@@ -28,7 +42,7 @@ export interface DeploymentOpts {
   /**
    * Environment variables for the main runtime.
    */
-  env?: Record<string, string>;
+  env?: DeploymentRuntimeEnv;
   /**
    * Image or image reference to boot.
    */
@@ -42,6 +56,15 @@ export interface DeploymentOpts {
    */
   cmd?: string[];
 }
+
+export const BaseDeploymentOpts = z.object({
+  slug: z.string().min(1),
+  rootfsSurvivesRestart: z.boolean().optional(),
+  env: DeploymentRuntimeEnv.optional(),
+  image: z.string().min(1).optional(),
+  entrypoint: z.array(z.string()).optional(),
+  cmd: z.array(z.string()).optional(),
+});
 
 export interface DeploymentProviderStatus {
   state: DeploymentProviderState;
@@ -58,13 +81,23 @@ export interface DeploymentExecResult {
   output: string;
 }
 
-export interface DeploymentProviderLogEvent {
-  line: string;
+export interface DeploymentLogEntry {
+  text: string;
   /**
-   * Optional provider-specific structured log fields. Consumers should treat
-   * this as best-effort metadata.
+   * Provider timestamp when available. If omitted, consumers should treat the
+   * log line as undated rather than guessing at provider time.
    */
-  providerData?: Record<string, unknown>;
+  timestamp?: string;
+  /**
+   * Local observation time added when the deployment runtime receives the log
+   * line. This is distinct from `timestamp`, which is provider-originated time.
+   */
+  observedAt?: string;
+  /**
+   * Optional provider-specific structured fields. Consumers should treat this
+   * as best-effort metadata and not rely on a stable schema.
+   */
+  raw?: Record<string, unknown>;
 }
 
 export interface DeploymentProviderManifest<
@@ -135,7 +168,7 @@ export interface DeploymentProvider<
     locator: TLocator;
     signal: AbortSignal;
     tail?: number;
-  }): AsyncIterable<DeploymentProviderLogEvent>;
+  }): AsyncIterable<DeploymentLogEntry>;
   status(params: { signal?: AbortSignal; locator: TLocator }): Promise<DeploymentProviderStatus>;
 }
 

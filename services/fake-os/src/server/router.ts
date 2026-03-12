@@ -6,7 +6,6 @@ import * as schema from "./db/schema.ts";
 import { db } from "./db/index.ts";
 import { deploymentRuntimeRegistry } from "./deployments/deployment-runtime-registry.ts";
 import { parseDeploymentConfig } from "./deployments/deployment-provider-factory.ts";
-import { fakeEventsService } from "./fake-events-service.ts";
 
 const os = implement(fakeOsContract).$context<{}>();
 
@@ -88,33 +87,49 @@ export const router = os.router({
       }
     }),
 
-    events: os.deployments.events.handler(async function* ({ input, signal }) {
-      const row = db
-        .select()
-        .from(schema.deploymentsTable)
-        .where(eq(schema.deploymentsTable.slug, input.slug))
-        .get();
-      if (!row) {
-        throw new ORPCError("NOT_FOUND", { message: "Deployment not found" });
-      }
-
-      // The browser consumes this stream directly. The deployment object is the
-      // only runtime source of truth; sqlite only tells us which provider/config
-      // to reconnect with if the process has restarted.
-      const deployment = await deploymentRuntimeRegistry.hydrateFromRow(row);
-      if (!deployment) {
-        throw new ORPCError("FAILED_PRECONDITION", {
-          message: "Deployment runtime is not connected",
-        });
-      }
-      await fakeEventsService.ensureSubscribed({ slug: row.slug, deployment });
-      for await (const event of fakeEventsService.streamDeployment({
-        slug: row.slug,
-        signal,
-      })) {
-        yield toContractDeploymentEvent(event);
+    logs: os.deployments.logs.handler(async function* ({ input, signal }) {
+      const deployment = await requireDeploymentRuntime(input.slug);
+      for await (const entry of deployment.logs({ signal })) {
+        yield entry;
       }
     }),
+
+    pidnap: {
+      status: os.deployments.pidnap.status.handler(async ({ input }) => {
+        const deployment = await requireDeploymentRuntime(input.slug);
+        return await deployment.pidnap.manager.status();
+      }),
+
+      processes: os.deployments.pidnap.processes.handler(async ({ input }) => {
+        const deployment = await requireDeploymentRuntime(input.slug);
+        return await deployment.pidnap.processes.list();
+      }),
+
+      restart: os.deployments.pidnap.restart.handler(async ({ input }) => {
+        const deployment = await requireDeploymentRuntime(input.slug);
+        return await deployment.pidnap.processes.restart({ target: input.processSlug });
+      }),
+
+      logs: os.deployments.pidnap.logs.handler(async function* ({ input, signal }) {
+        const deployment = await requireDeploymentRuntime(input.slug);
+        const stream = await deployment.pidnap.processes.logs(
+          { processSlug: input.processSlug },
+          { signal },
+        );
+
+        for await (const entry of stream) {
+          yield entry;
+        }
+      }),
+    },
+
+    services: {
+      list: os.deployments.services.list.handler(async ({ input }) => {
+        const deployment = await requireDeploymentRuntime(input.slug);
+        const { routes } = await deployment.registryService.routes.list({});
+        return routes.map(serializeServiceRegistration);
+      }),
+    },
 
     delete: os.deployments.delete.handler(async ({ input }) => {
       const deployment = db
@@ -133,7 +148,6 @@ export const router = os.router({
         });
       }
       await runtime.destroy();
-      fakeEventsService.stopSubscription(deployment.slug);
       deploymentRuntimeRegistry.delete(deployment.slug);
       db.delete(schema.deploymentsTable).where(eq(schema.deploymentsTable.slug, input.slug)).run();
       return { ok: true as const };
@@ -165,7 +179,6 @@ async function createRuntimeForRow(row: typeof schema.deploymentsTable.$inferSel
     deploymentRuntimeRegistry.set({ slug: row.slug, deployment });
     const locator = deployment.locator;
     updateDeploymentLocator(row.slug, locator);
-    await fakeEventsService.ensureSubscribed({ slug: row.slug, deployment });
     return;
   }
 
@@ -180,7 +193,6 @@ async function createRuntimeForRow(row: typeof schema.deploymentsTable.$inferSel
   deploymentRuntimeRegistry.set({ slug: row.slug, deployment });
   const locator = deployment.locator;
   updateDeploymentLocator(row.slug, locator);
-  await fakeEventsService.ensureSubscribed({ slug: row.slug, deployment });
 }
 
 function serializeDeployment(row: typeof schema.deploymentsTable.$inferSelect) {
@@ -197,41 +209,54 @@ function serializeDeployment(row: typeof schema.deploymentsTable.$inferSelect) {
   };
 }
 
+function serializeServiceRegistration(route: {
+  host: string;
+  target: string;
+  metadata: Record<string, string>;
+  tags: string[];
+  updatedAt: string;
+}) {
+  const [targetHost, targetPortRaw] = route.target.split(":");
+  const parsedTargetPort = targetPortRaw ? Number(targetPortRaw) : Number.NaN;
+
+  return {
+    host: route.host,
+    target: route.target,
+    targetHost: targetHost ?? route.target,
+    targetPort: Number.isFinite(parsedTargetPort) ? parsedTargetPort : null,
+    metadata: route.metadata,
+    tags: route.tags,
+    updatedAt: route.updatedAt,
+  };
+}
+
+async function requireDeploymentRuntime(slug: string) {
+  const row = db
+    .select()
+    .from(schema.deploymentsTable)
+    .where(eq(schema.deploymentsTable.slug, slug))
+    .get();
+  if (!row) {
+    throw new ORPCError("NOT_FOUND", { message: "Deployment not found" });
+  }
+
+  // The deployment object is the runtime source of truth; sqlite only tells us
+  // how to reconnect if the process restarts.
+  const deployment = await deploymentRuntimeRegistry.hydrateFromRow(row);
+  if (!deployment) {
+    throw new ORPCError("FAILED_PRECONDITION", {
+      message: "Deployment runtime is not connected",
+    });
+  }
+
+  return deployment;
+}
+
 export function toContractRuntimeState(
   state: "new" | "connecting" | "connected" | "destroying" | "destroyed" | "disconnected",
 ) {
   if (state === "new") return "pending" as const;
   return state;
-}
-
-export function toContractDeploymentEvent(
-  event:
-    | {
-        type: "https://events.iterate.com/deployment/created";
-        payload: { baseUrl: string; locator: unknown };
-      }
-    | {
-        type: "https://events.iterate.com/deployment/started";
-        payload: { detail: string };
-      }
-    | {
-        type: "https://events.iterate.com/deployment/stopped";
-        payload: { detail: string };
-      }
-    | {
-        type: "https://events.iterate.com/deployment/logged";
-        payload: { line: string; providerData?: Record<string, unknown> };
-      }
-    | {
-        type: "https://events.iterate.com/deployment/errored";
-        payload: { message: string };
-      }
-    | {
-        type: "https://events.iterate.com/deployment/destroyed";
-        payload: {};
-      },
-) {
-  return event;
 }
 
 function toOrpcBadRequest(error: unknown) {

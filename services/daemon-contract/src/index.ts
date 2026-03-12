@@ -56,7 +56,7 @@ export const daemonServiceManifest = {
   slug: "daemon",
   version: packageJson.version ?? "0.0.0",
   port: 17330,
-  serverEntryPoint: "services/daemon/server.ts",
+  serverEntryPoint: "services/daemon/src/server.ts",
   orpcContract: daemonContract,
   envVars: DaemonServiceEnv,
 } as const satisfies ServiceManifestWithEntryPoint;

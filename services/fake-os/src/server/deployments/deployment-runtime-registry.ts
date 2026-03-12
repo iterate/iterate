@@ -1,7 +1,6 @@
 import { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { fakeEventsService } from "../fake-events-service.ts";
 import {
   type AnyDeployment,
   parseDeploymentConfig,
@@ -55,7 +54,6 @@ export class DeploymentRuntimeRegistry {
   ): Promise<AnyDeployment | null> {
     const existing = this.get(row.slug);
     if (existing) {
-      await fakeEventsService.ensureSubscribed({ slug: row.slug, deployment: existing });
       return existing;
     }
 
@@ -107,7 +105,6 @@ export class DeploymentRuntimeRegistry {
         return null;
       }
       this.set({ slug: row.slug, deployment });
-      await fakeEventsService.ensureSubscribed({ slug: row.slug, deployment });
       return deployment;
     }
 
@@ -132,7 +129,6 @@ export class DeploymentRuntimeRegistry {
       return null;
     }
     this.set({ slug: row.slug, deployment });
-    await fakeEventsService.ensureSubscribed({ slug: row.slug, deployment });
     return deployment;
   }
 }

@@ -1,5 +1,6 @@
 import { Field, FieldLabel, FieldDescription } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
+import { Switch } from "@iterate-com/ui/components/switch";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 
 export interface ProviderOptsFormProps {
@@ -24,6 +25,8 @@ function num(value: unknown): string {
 }
 
 export function DockerDeploymentOptsForm({ value, onChange }: ProviderOptsFormProps) {
+  const hostSyncEnabled = readHostSyncEnabled(value);
+
   return (
     <div className="space-y-4">
       <Field>
@@ -35,6 +38,23 @@ export function DockerDeploymentOptsForm({ value, onChange }: ProviderOptsFormPr
           autoComplete="off"
         />
         <FieldDescription>Required. e.g. jonasland-sandbox:local, nginx:latest</FieldDescription>
+      </Field>
+
+      <Field>
+        <div className="flex items-center justify-between gap-4 rounded-lg border bg-card px-3 py-2">
+          <div className="space-y-1">
+            <FieldLabel>Host Sync</FieldLabel>
+            <FieldDescription>
+              When on, the container mounts your host checkout so sandbox code changes are visible
+              immediately. When off, it uses only the baked image contents.
+            </FieldDescription>
+          </div>
+          <Switch
+            checked={hostSyncEnabled}
+            onCheckedChange={(checked) => onChange(setDockerHostSyncEnabled(value, checked))}
+            aria-label="Toggle Docker host sync"
+          />
+        </div>
       </Field>
 
       <JsonOverrideTextarea value={value} onChange={onChange} />
@@ -159,4 +179,31 @@ function JsonOverrideTextarea({
       </FieldDescription>
     </Field>
   );
+}
+
+function readHostSyncEnabled(value: Record<string, unknown>): boolean {
+  const env = value.env;
+  if (!env || typeof env !== "object" || Array.isArray(env)) {
+    return true;
+  }
+
+  return (env as Record<string, unknown>).DOCKER_HOST_SYNC_ENABLED !== "false";
+}
+
+function setDockerHostSyncEnabled(
+  value: Record<string, unknown>,
+  checked: boolean,
+): Record<string, unknown> {
+  const env =
+    value.env && typeof value.env === "object" && !Array.isArray(value.env)
+      ? (value.env as Record<string, unknown>)
+      : {};
+
+  return {
+    ...value,
+    env: {
+      ...env,
+      DOCKER_HOST_SYNC_ENABLED: checked ? "true" : "false",
+    },
+  };
 }

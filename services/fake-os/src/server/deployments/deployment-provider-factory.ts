@@ -1,7 +1,5 @@
-import type {
-  Deployment,
-  DeploymentProvider,
-} from "@iterate-com/shared/jonasland/deployment/deployment.ts";
+import type { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
+import type { DeploymentProvider } from "@iterate-com/shared/jonasland/deployment/deployment-provider-manifest.ts";
 import { createDockerProvider } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
 import { createFlyProvider } from "@iterate-com/shared/jonasland/deployment/fly-deployment.ts";
 import {
@@ -14,17 +12,10 @@ import {
   type FlyDeploymentLocator,
   type FlyDeploymentOpts,
 } from "@iterate-com/shared/jonasland/deployment/fly-deployment-manifest.ts";
-import { z } from "zod/v4";
-
-export const DockerConfig = z.object({
-  providerOpts: dockerProviderManifest.providerOptsSchema.default({}),
-  opts: dockerProviderManifest.optsSchema.omit({ slug: true }),
-});
-
-export const FlyConfig = z.object({
-  providerOpts: flyProviderManifest.providerOptsSchema,
-  opts: flyProviderManifest.optsSchema.omit({ slug: true }),
-});
+import {
+  dockerDeploymentConfigSchema as DockerConfig,
+  flyDeploymentConfigSchema as FlyConfig,
+} from "@/deployment-config.ts";
 
 export type DeploymentProviderName = "docker" | "fly";
 export type DeploymentConfigByProvider = {

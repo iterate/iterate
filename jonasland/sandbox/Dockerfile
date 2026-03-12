@@ -263,6 +263,10 @@ ENV NODE_EXTRA_CA_CERTS=/home/iterate-caddy/.local/share/caddy/pki/authorities/l
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 # Set workspace root for dependency install and later runtime commands.
+# pnpm reads npm-style config env vars, so `npm_config_store_dir` is the
+# runtime-safe way to point both build-time pnpm and host-sync pnpm installs at
+# the shared Docker volume without affecting earlier `npm install -g` steps.
+ENV npm_config_store_dir=/home/iterate/.pnpm-store
 WORKDIR $ITERATE_REPO
 
 # Dependency-manifest layer (source changes should not invalidate this).

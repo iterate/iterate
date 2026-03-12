@@ -5,6 +5,7 @@ ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
 HOST_REPO_CHECKOUT="${DOCKER_HOST_REPO_CHECKOUT:-/host/repo-checkout}"
 HOST_GITDIR="${DOCKER_HOST_GIT_DIR:-/host/gitdir}"
 HOST_COMMONDIR="${DOCKER_HOST_GIT_COMMON_DIR:-/host/commondir}"
+PNPM_STORE_DIR="${npm_config_store_dir:-/home/iterate/.pnpm-store}"
 
 if [[ ! -d "${HOST_REPO_CHECKOUT}" ]]; then
   echo "[entry] ${HOST_REPO_CHECKOUT} not found. Ensure host repo mount is configured."
@@ -42,4 +43,4 @@ if [[ -f "${ITERATE_REPO}/.git/commondir" || -f "${ITERATE_REPO}/.git/gitdir" ]]
   rm -f "${ITERATE_REPO}/.git/commondir" "${ITERATE_REPO}/.git/gitdir"
 fi
 
-(cd "${ITERATE_REPO}" && CI=true pnpm install --prod --frozen-lockfile --prefer-offline --ignore-scripts)
+(cd "${ITERATE_REPO}" && CI=true npm_config_store_dir="${PNPM_STORE_DIR}" pnpm install --prod --frozen-lockfile --prefer-offline --ignore-scripts)

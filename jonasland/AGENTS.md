@@ -115,15 +115,40 @@ pnpm --filter @iterate-com/jonasland-sandbox docker:shell -- \
 
 ## E2E tests
 
-Tests live in `e2e/tests/clean/`. Run with vitest via doppler:
+The main inner loop is now namespace-based and file-prefix-based.
+
+Prefer these command shapes:
 
 ```bash
-pnpm --filter @iterate-com/jonasland-e2e test:e2e:docker   # Docker only
-pnpm --filter @iterate-com/jonasland-e2e test:e2e:fly       # Fly only
-pnpm --filter @iterate-com/jonasland-e2e test                # both
+# From repo root
+pnpm jonasland e2e vitest 02a
+pnpm jonasland e2e vitest 02b -t docker
+pnpm jonasland e2e vitest:fly 02b
+pnpm jonasland e2e vitest:all 02b -t fly
+
+# From jonasland/e2e
+pnpm vitest 02a
+pnpm vitest 02b -t no-internet
+pnpm vitest:fly 02c
 ```
 
-Parameterization pattern: env-based provider enablement → `cases` array → `describe.each(cases)`. Fly adds `timeoutOffsetMs`. See `deployment-smoke.e2e.test.ts` for canonical example.
+Important conventions:
+
+- plain `pnpm vitest ...` excludes `fly` by default
+- use `pnpm vitest:fly ...` or `pnpm vitest:all ...` when you explicitly want Fly coverage
+- raw short tags are mirrored into test titles by the local `test` wrapper in `e2e/test-support/e2e-test.ts`
+- that means `-t docker`, `-t fly`, `-t no-internet`, `-t slow`, and `-t third-party` are supported, reliable inclusive filters
+- use `--tags-filter` for exact tag slicing
+
+Vitest files use numeric prefixes so plain Vitest file filtering stays ergonomic:
+
+- `01a-provider-contract.e2e.test.ts`
+- `02a-ingress.e2e.test.ts`
+- `02b-egress.e2e.test.ts`
+- `02c-public-ingress.e2e.test.ts`
+- `02d-internal-ingress.e2e.test.ts`
+
+Parameterization pattern: env-based provider cases → `describe.each(cases)` → local wrapped `test(...)`.
 
 Key env vars:
 

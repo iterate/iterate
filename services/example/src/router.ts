@@ -23,6 +23,7 @@ interface ExampleContext {
   requestId: string;
   serviceName: string;
   log: ServiceRequestLogger;
+  request: Request;
 }
 
 const serviceName = "jonasland-example";
@@ -314,6 +315,18 @@ export const exampleRouter = os.router({
     sql: serviceSql,
     debug: serviceDebug,
   },
+  echo: os.echo.handler(async ({ context }) => {
+    const request = context.request;
+    const bodyText = await request.clone().text();
+
+    return {
+      method: request.method,
+      url: request.url,
+      host: request.headers.get("host") ?? "",
+      headers: Object.fromEntries(request.headers.entries()),
+      body: bodyText,
+    };
+  }),
   things: {
     create: createThing,
     list: listThings,

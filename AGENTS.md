@@ -48,6 +48,14 @@ You can use the `playwriter-spec` skill to run a spec dynamically when the featu
 
 When you're writing helpers/utilities/library functions, you have to try to LIMIT complexity and optionality. If you have a function that is only called once then DON'T give it any optional properties. Make the ones that are actually used required, and drop all the others. That makes call sites more explicit. If there are multiple parameters of the same type, use "options-bags" rather than long lists of positional parameters which can be accidentally flipped.
 
+- DO NOT guess at which of several env vars you've found in the codebase is correct. DO NOT write stuff like this. Instead, ask the human which they want!
+
+```ts
+process.env.JONASLAND_E2E_INGRESS_PROXY_DOMAIN ??
+  process.env.INGRESS_PROXY_DOMAIN ??
+  DEFAULT_INGRESS_PROXY_DOMAIN;
+```
+
 ## Writing React
 
 Avoid useEffect and useState wherever possible. Instead, use `@tanstack/react-query` for any asynchronous work or side-effects. Only use `useSuspenseQuery` sparingly - if you are sure that the _whole component_ is meaningless without the data. If you can use `useQuery` instead, with an isPending/null-check, that's usually better.

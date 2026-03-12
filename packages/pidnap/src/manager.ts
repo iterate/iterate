@@ -46,6 +46,11 @@ export const EnvOptions = v.object({
    * Default: "immediately"
    */
   reloadDelay: v.optional(EnvReloadDelay),
+  /**
+   * When set, env-triggered reloads only restart the process if at least one
+   * listed key changed in the process's effective merged env.
+   */
+  onlyRestartIfChanged: v.optional(v.array(v.string())),
 });
 export type EnvOptions = v.InferOutput<typeof EnvOptions>;
 
@@ -86,6 +91,13 @@ export const ScheduleConfig = v.object({
 });
 export type ScheduleConfig = v.InferOutput<typeof ScheduleConfig>;
 
+export const ProcessHealthCheck = v.object({
+  url: v.string(),
+  intervalMs: v.optional(v.number()),
+  timeoutMs: v.optional(v.number()),
+});
+export type ProcessHealthCheck = v.InferOutput<typeof ProcessHealthCheck>;
+
 export const ProcessPersistence = v.picklist(["durable", "ephemeral"]);
 export type ProcessPersistence = v.InferOutput<typeof ProcessPersistence>;
 
@@ -98,6 +110,7 @@ export const RestartingProcessEntry = v.object({
   definition: ProcessDefinition,
   options: v.optional(RestartingProcessOptions),
   envOptions: v.optional(EnvOptions),
+  healthCheck: v.optional(ProcessHealthCheck),
   dependsOn: v.optional(v.array(ProcessDependency)),
   /** Schedule for cron-like execution. When triggered: starts if stopped, restarts if running. */
   schedule: v.optional(ScheduleConfig),
@@ -130,6 +143,7 @@ const AutosaveProcessEntry = v.object({
   definition: ProcessDefinition,
   options: v.optional(RestartingProcessOptions),
   envOptions: v.optional(EnvOptions),
+  healthCheck: v.optional(ProcessHealthCheck),
   tags: v.optional(v.array(v.string())),
   persistence: ProcessPersistence,
   desiredState: DesiredProcessState,
@@ -302,6 +316,7 @@ export class Manager {
         definition: entry.definition,
         options: entry.options ?? baseEntry?.options,
         envOptions: entry.envOptions ?? baseEntry?.envOptions,
+        healthCheck: entry.healthCheck ?? baseEntry?.healthCheck,
         tags: entry.tags ?? baseEntry?.tags,
         dependsOn: baseEntry?.dependsOn,
         schedule: baseEntry?.schedule,
@@ -326,6 +341,7 @@ export class Manager {
         definition: entry.definition,
         options: entry.options,
         envOptions: entry.envOptions,
+        healthCheck: entry.healthCheck,
         tags: entry.tags,
         persistence: normalized.persistence,
         desiredState: normalized.desiredState,
@@ -509,7 +525,46 @@ export class Manager {
       processConfig.definition,
       processConfig.envOptions,
     );
+
+    if (
+      !this.shouldRestartForEnvChange(
+        processName,
+        proc.lazyProcess.definition,
+        updatedDefinition,
+        processConfig.envOptions,
+      )
+    ) {
+      return;
+    }
+
     await proc.reload(updatedDefinition, true);
+  }
+
+  private shouldRestartForEnvChange(
+    processName: string,
+    currentDefinition: ProcessDefinition,
+    nextDefinition: ProcessDefinition,
+    envOptions?: EnvOptions,
+  ): boolean {
+    const watchedKeys = envOptions?.onlyRestartIfChanged;
+    if (!watchedKeys || watchedKeys.length === 0) {
+      return true;
+    }
+
+    const currentEnv = currentDefinition.env ?? {};
+    const nextEnv = nextDefinition.env ?? {};
+    const changedWatchedKeys = watchedKeys.filter((key) => currentEnv[key] !== nextEnv[key]);
+    if (changedWatchedKeys.length > 0) {
+      this.logger.info(
+        `Reloading process "${processName}" because gated env keys changed: ${changedWatchedKeys.join(", ")}`,
+      );
+      return true;
+    }
+
+    this.logger.info(
+      `Skipping env-triggered restart for process "${processName}" because none of the gated env keys changed`,
+    );
+    return false;
   }
 
   get state(): ManagerState {
@@ -772,6 +827,7 @@ export class Manager {
     definition: ProcessDefinition;
     options?: RestartingProcessOptions;
     envOptions?: EnvOptions;
+    healthCheck?: ProcessHealthCheck;
     tags?: string[];
     persistence?: ProcessPersistence;
     desiredState?: DesiredProcessState;
@@ -787,6 +843,7 @@ export class Manager {
       definition: input.definition,
       options: input.options ?? currentEntry?.options,
       envOptions: input.envOptions ?? currentEntry?.envOptions,
+      healthCheck: input.healthCheck ?? currentEntry?.healthCheck,
       tags: input.tags ?? currentEntry?.tags,
       dependsOn: currentEntry?.dependsOn,
       schedule: currentEntry?.schedule,

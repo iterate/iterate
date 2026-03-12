@@ -1,6 +1,12 @@
 import { Link, useLocation } from "@tanstack/react-router";
-import { Plus, ServerIcon, InfoIcon, RadioIcon } from "lucide-react";
-import { Identifier } from "@iterate-com/ui/components/identifier";
+import {
+  Plus,
+  ServerIcon,
+  InfoIcon,
+  RadioIcon,
+  TerminalSquareIcon,
+  WaypointsIcon,
+} from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -58,7 +64,9 @@ export function AppSidebar({
         {selected && (
           <SidebarGroup>
             <SidebarGroupLabel>
-              <Identifier value={selected.slug} textClassName="text-xs" className="max-w-full" />
+              <span className="block max-w-full truncate font-mono text-xs" title={selected.slug}>
+                {selected.slug}
+              </span>
             </SidebarGroupLabel>
             <SidebarMenu>
               <SidebarMenuItem>
@@ -81,7 +89,29 @@ export function AppSidebar({
                     >
                       <Link to="/deployments/$slug/events" params={{ slug: selected.slug }}>
                         <RadioIcon className="size-3.5" />
-                        Event stream
+                        Logs
+                      </Link>
+                    </SidebarMenuSubButton>
+                  </SidebarMenuSubItem>
+                  <SidebarMenuSubItem>
+                    <SidebarMenuSubButton
+                      asChild
+                      isActive={pathname === `/deployments/${selected.slug}/pidnap`}
+                    >
+                      <Link to="/deployments/$slug/pidnap" params={{ slug: selected.slug }}>
+                        <TerminalSquareIcon className="size-3.5" />
+                        Pidnap
+                      </Link>
+                    </SidebarMenuSubButton>
+                  </SidebarMenuSubItem>
+                  <SidebarMenuSubItem>
+                    <SidebarMenuSubButton
+                      asChild
+                      isActive={pathname === `/deployments/${selected.slug}/services`}
+                    >
+                      <Link to="/deployments/$slug/services" params={{ slug: selected.slug }}>
+                        <WaypointsIcon className="size-3.5" />
+                        Services
                       </Link>
                     </SidebarMenuSubButton>
                   </SidebarMenuSubItem>
@@ -105,11 +135,12 @@ export function AppSidebar({
                 <SidebarMenuButton asChild isActive={selectedSlug === deployment.slug}>
                   <Link to="/deployments/$slug" params={{ slug: deployment.slug }}>
                     <ServerIcon className="size-4 shrink-0" />
-                    <Identifier
-                      value={deployment.slug}
-                      className="max-w-full flex-1"
-                      textClassName="text-xs"
-                    />
+                    <span
+                      className="min-w-0 flex-1 truncate font-mono text-xs"
+                      title={deployment.slug}
+                    >
+                      {deployment.slug}
+                    </span>
                     <span className="text-xs text-muted-foreground">{deployment.provider}</span>
                   </Link>
                 </SidebarMenuButton>

@@ -1,8 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AnyContractRouter } from "@orpc/contract";
 import { defineConfig } from "pidnap";
-import { serviceManifestToPidnapConfig } from "../../packages/shared/src/jonasland/index.ts";
 import { daemonServiceManifest } from "../../services/daemon-contract/src/index.ts";
 
 const home = homedir();
@@ -13,40 +11,7 @@ const caddyConfigDir = join(home, ".iterate/caddy");
 const caddyRootCaddyfile = join(caddyConfigDir, "Caddyfile");
 const otelCollectorConfigPath = `${iterateRepo}/jonasland/sandbox/otel-collector/config.yaml`;
 const caddyDataHome = "/home/iterate-caddy";
-
-const noContract = {} as AnyContractRouter;
-
-const registryPidnapConfig = serviceManifestToPidnapConfig({
-  manifest: {
-    slug: "registry",
-    port: 17310,
-    serverEntryPoint: "services/registry/src/server.ts",
-    orpcContract: noContract,
-  },
-  env: {
-    REGISTRY_SERVICE_PORT: "17310",
-    ITERATE_INGRESS_DEFAULT_SERVICE: "home",
-  },
-});
-const eventsPidnapConfig = serviceManifestToPidnapConfig({
-  manifest: {
-    slug: "events",
-    port: 17320,
-    serverEntryPoint: "services/events/src/server.ts",
-    orpcContract: noContract,
-  },
-});
-const daemonPidnapConfig = serviceManifestToPidnapConfig({
-  manifest: daemonServiceManifest,
-});
-const homePidnapConfig = serviceManifestToPidnapConfig({
-  manifest: {
-    slug: "home",
-    port: 19030,
-    serverEntryPoint: "services/home/src/server.ts",
-    orpcContract: noContract,
-  },
-});
+const cloudflareTunnelMetricsAddress = "127.0.0.1:20241";
 
 export default defineConfig({
   // pidnap's api server is always on localhost:17300
@@ -88,22 +53,26 @@ export default defineConfig({
         restartPolicy: "always",
       },
       envOptions: {
-        reloadDelay: 500,
+        reloadDelay: "immediately",
       },
     },
     {
       name: "registry",
       definition: {
         command: tsxPath,
-        args: [join(iterateRepo, registryPidnapConfig.definition.args[0]!)],
-        env: registryPidnapConfig.definition.env,
+        args: [join(iterateRepo, "services/registry/src/server.ts")],
+        env: {
+          PORT: "17310",
+          REGISTRY_SERVICE_PORT: "17310",
+          ITERATE_INGRESS_DEFAULT_SERVICE: "home",
+        },
       },
       options: {
         restartPolicy: "always",
       },
       envOptions: {
         // registry must pick up ingress env changes from ~/.iterate/.env
-        reloadDelay: 500,
+        reloadDelay: "immediately",
       },
     },
     {
@@ -116,30 +85,64 @@ export default defineConfig({
         restartPolicy: "always",
       },
       envOptions: {
-        reloadDelay: false,
+        reloadDelay: "immediately",
+      },
+    },
+    {
+      name: "cloudflare-tunnel",
+      // cloudflared exposes /ready on its metrics listener once it has at least
+      // one live edge connection, so pidnap can wait on real tunnel readiness
+      // instead of just "process started".
+      definition: {
+        command: "sh",
+        args: [
+          "-lc",
+          [
+            'if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then',
+            `  exec cloudflared tunnel --metrics ${cloudflareTunnelMetricsAddress} run --token "$CLOUDFLARE_TUNNEL_TOKEN"`,
+            "fi",
+            "exec sleep infinity",
+          ].join("\n"),
+        ],
+      },
+      healthCheck: {
+        url: `http://${cloudflareTunnelMetricsAddress}/ready`,
+        intervalMs: 2_000,
+      },
+      dependsOn: ["caddy"],
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: "immediately",
+        onlyRestartIfChanged: ["CLOUDFLARE_TUNNEL_TOKEN"],
       },
     },
     {
       name: "events",
       definition: {
         command: tsxPath,
-        args: [join(iterateRepo, eventsPidnapConfig.definition.args[0]!)],
-        env: eventsPidnapConfig.definition.env,
+        args: [join(iterateRepo, "services/events/src/server.ts")],
+        env: {
+          PORT: "17320",
+        },
       },
       dependsOn: ["registry"],
       options: {
         restartPolicy: "always",
       },
       envOptions: {
-        reloadDelay: false,
+        reloadDelay: "immediately",
       },
     },
     {
       name: "daemon",
       definition: {
         command: tsxPath,
-        args: [join(iterateRepo, daemonPidnapConfig.definition.args[0]!)],
-        env: daemonPidnapConfig.definition.env,
+        args: [join(iterateRepo, daemonServiceManifest.serverEntryPoint)],
+        env: {
+          PORT: String(daemonServiceManifest.port),
+        },
       },
       dependsOn: ["registry"],
       options: {
@@ -154,15 +157,17 @@ export default defineConfig({
       name: "home",
       definition: {
         command: tsxPath,
-        args: [join(iterateRepo, homePidnapConfig.definition.args[0]!)],
-        env: homePidnapConfig.definition.env,
+        args: [join(iterateRepo, "services/home/src/server.ts")],
+        env: {
+          PORT: "19030",
+        },
       },
       dependsOn: ["registry"],
       options: {
         restartPolicy: "never",
       },
       envOptions: {
-        reloadDelay: false,
+        reloadDelay: "immediately",
       },
     },
     {
@@ -181,7 +186,7 @@ export default defineConfig({
         restartPolicy: "always",
       },
       envOptions: {
-        reloadDelay: false,
+        reloadDelay: "immediately",
       },
     },
     {
@@ -195,7 +200,7 @@ export default defineConfig({
         restartPolicy: "always",
       },
       envOptions: {
-        reloadDelay: false,
+        reloadDelay: "immediately",
       },
     },
   ],

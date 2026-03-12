@@ -49,6 +49,14 @@ export const DelayedPublishOutput = z.object({
   delayMs: z.number().int().min(1),
 });
 
+export const EchoOutput = z.object({
+  method: z.string(),
+  url: z.string(),
+  host: z.string(),
+  headers: z.record(z.string(), z.string()),
+  body: z.string(),
+});
+
 const serviceSubRouter = createServiceSubRouterContract({
   healthSummary: "Example service health metadata",
   sqlSummary: "Execute SQL against example sqlite database",
@@ -56,6 +64,15 @@ const serviceSubRouter = createServiceSubRouterContract({
 
 export const exampleContract = oc.router({
   ...serviceSubRouter,
+  echo: oc
+    .route({
+      method: "GET",
+      path: "/echo",
+      summary: "Echo request metadata",
+      tags: ["debug"],
+    })
+    .input(z.object({}).optional().default({}))
+    .output(EchoOutput),
   things: {
     create: oc
       .route({
@@ -168,6 +185,7 @@ export {
   UpdateThingInput as updateThingInputSchema,
   DelayedPublishInput as delayedPublishInputSchema,
   DelayedPublishOutput as delayedPublishOutputSchema,
+  EchoOutput as echoOutputSchema,
   ExampleServiceEnv as exampleServiceEnvSchema,
 };
 

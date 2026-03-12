@@ -15,44 +15,55 @@ export const DeploymentRuntime = z.object({
     .nullable(),
 });
 
-export const DeploymentEvent = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("https://events.iterate.com/deployment/created"),
-    payload: z.object({
-      baseUrl: z.string(),
-      locator: z.unknown(),
-    }),
-  }),
-  z.object({
-    type: z.literal("https://events.iterate.com/deployment/started"),
-    payload: z.object({
-      detail: z.string(),
-    }),
-  }),
-  z.object({
-    type: z.literal("https://events.iterate.com/deployment/stopped"),
-    payload: z.object({
-      detail: z.string(),
-    }),
-  }),
-  z.object({
-    type: z.literal("https://events.iterate.com/deployment/logged"),
-    payload: z.object({
-      line: z.string(),
-      providerData: z.record(z.string(), z.unknown()).optional(),
-    }),
-  }),
-  z.object({
-    type: z.literal("https://events.iterate.com/deployment/errored"),
-    payload: z.object({
-      message: z.string(),
-    }),
-  }),
-  z.object({
-    type: z.literal("https://events.iterate.com/deployment/destroyed"),
-    payload: z.object({}),
-  }),
-]);
+export const DeploymentLogEntry = z.object({
+  text: z.string(),
+  timestamp: z.string().optional(),
+  raw: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const PidnapManagerStatus = z.object({
+  state: z.enum(["idle", "running", "stopping", "stopped"]),
+  processCount: z.number(),
+});
+
+export const PidnapProcessDefinition = z.object({
+  command: z.string(),
+  args: z.array(z.string()).optional(),
+  cwd: z.string().optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  inheritProcessEnv: z.boolean().optional(),
+});
+
+export const PidnapProcess = z.object({
+  name: z.string(),
+  tags: z.array(z.string()),
+  state: z.enum([
+    "idle",
+    "running",
+    "restarting",
+    "stopping",
+    "stopped",
+    "crash-loop-backoff",
+    "max-restarts-reached",
+  ]),
+  restarts: z.number(),
+  definition: PidnapProcessDefinition,
+  effectiveEnv: z.record(z.string(), z.string()).optional(),
+});
+
+export const PidnapLogEntry = z.object({
+  text: z.string(),
+});
+
+export const DeploymentServiceRegistration = z.object({
+  host: z.string(),
+  target: z.string(),
+  targetHost: z.string(),
+  targetPort: z.number().int().nonnegative().nullable(),
+  metadata: z.record(z.string(), z.string()),
+  tags: z.array(z.string()),
+  updatedAt: z.string(),
+});
 
 export const Deployment = z.object({
   id: z.string(),
@@ -81,6 +92,10 @@ export const CreateDeploymentInput = z.object({
 });
 
 export const SlugInput = z.object({ slug: z.string() });
+export const DeploymentPidnapProcessInput = z.object({
+  slug: z.string(),
+  processSlug: z.string(),
+});
 
 const serviceSubRouter = createServiceSubRouterContract({
   healthSummary: "fake-os service health metadata",
@@ -101,14 +116,58 @@ export const fakeOsContract = oc.router({
       .route({ method: "POST", path: "/deployments", summary: "Create deployment" })
       .input(CreateDeploymentInput)
       .output(Deployment),
-    events: oc
+    logs: oc
       .route({
         method: "GET",
-        path: "/deployments/{slug}/events",
-        summary: "Stream deployment runtime events",
+        path: "/deployments/{slug}/logs",
+        summary: "Stream deployment runtime logs",
       })
       .input(SlugInput)
-      .output(eventIterator(DeploymentEvent)),
+      .output(eventIterator(DeploymentLogEntry)),
+    pidnap: {
+      status: oc
+        .route({
+          method: "GET",
+          path: "/deployments/{slug}/pidnap/status",
+          summary: "Get pidnap manager status for a deployment",
+        })
+        .input(SlugInput)
+        .output(PidnapManagerStatus),
+      processes: oc
+        .route({
+          method: "GET",
+          path: "/deployments/{slug}/pidnap/processes",
+          summary: "List pidnap processes for a deployment",
+        })
+        .input(SlugInput)
+        .output(z.array(PidnapProcess)),
+      restart: oc
+        .route({
+          method: "POST",
+          path: "/deployments/{slug}/pidnap/processes/{processSlug}/restart",
+          summary: "Restart a pidnap process for a deployment",
+        })
+        .input(DeploymentPidnapProcessInput)
+        .output(PidnapProcess),
+      logs: oc
+        .route({
+          method: "GET",
+          path: "/deployments/{slug}/pidnap/processes/{processSlug}/logs",
+          summary: "Stream pidnap process logs for a deployment",
+        })
+        .input(DeploymentPidnapProcessInput)
+        .output(eventIterator(PidnapLogEntry)),
+    },
+    services: {
+      list: oc
+        .route({
+          method: "GET",
+          path: "/deployments/{slug}/services",
+          summary: "List registry service registrations for a deployment",
+        })
+        .input(SlugInput)
+        .output(z.array(DeploymentServiceRegistration)),
+    },
     delete: oc
       .route({ method: "DELETE", path: "/deployments/{slug}", summary: "Delete deployment" })
       .input(SlugInput)
@@ -139,4 +198,8 @@ export {
 
 export type DeploymentRuntime = z.infer<typeof DeploymentRuntime>;
 export type Deployment = z.infer<typeof Deployment>;
-export type DeploymentEvent = z.infer<typeof DeploymentEvent>;
+export type DeploymentLogEntry = z.infer<typeof DeploymentLogEntry>;
+export type PidnapManagerStatus = z.infer<typeof PidnapManagerStatus>;
+export type PidnapProcess = z.infer<typeof PidnapProcess>;
+export type PidnapLogEntry = z.infer<typeof PidnapLogEntry>;
+export type DeploymentServiceRegistration = z.infer<typeof DeploymentServiceRegistration>;
