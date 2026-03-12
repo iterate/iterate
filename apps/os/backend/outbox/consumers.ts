@@ -17,7 +17,6 @@ import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
 import { outboxClient as cc } from "./client.ts";
 
 const IterateMainPushWebhookPayload = z.object({
-  sourceEventId: z.string(),
   event: z.literal("push"),
   payload: z.object({
     ref: z.string(),
@@ -95,11 +94,10 @@ export const registerConsumers = () => {
             payload: (result) => ({
               machineId: result.id,
               ref: branch,
-              sourceEventId: payload.sourceEventId,
             }),
           });
 
-          logger.set({ sourceEventId: payload.sourceEventId, targetCount: result.length });
+          logger.set({ eventId: params.eventId, targetCount: result.length });
           logger.info("[GitHub Webhook] Enqueued iterate machine pulls");
           return `enqueued ${result.length} iterate machine pull requests`;
         })
@@ -119,7 +117,7 @@ export const registerConsumers = () => {
       if (!machine) {
         logger.set({
           machineId: params.payload.machineId,
-          sourceEventId: params.payload.sourceEventId,
+          eventId: params.eventId,
         });
         logger.warn("[GitHub Webhook] Skipping iterate pull for missing machine");
         return `skipped: machine ${params.payload.machineId} not found`;
@@ -129,7 +127,7 @@ export const registerConsumers = () => {
         logger.set({
           machineId: machine.id,
           state: machine.state,
-          sourceEventId: params.payload.sourceEventId,
+          eventId: params.eventId,
         });
         logger.info("[GitHub Webhook] Skipping iterate pull for non-active machine");
         return `skipped: machine ${machine.id} state is ${machine.state}`;
@@ -149,7 +147,7 @@ export const registerConsumers = () => {
       logger.set({
         machineId: machine.id,
         ref: params.payload.ref,
-        sourceEventId: params.payload.sourceEventId,
+        eventId: params.eventId,
       });
       logger.info("[GitHub Webhook] Triggered iterate pull on machine");
       return `triggered iterate pull on ${machine.id}`;

@@ -57,7 +57,6 @@ export type InternalEventTypes = {
     metadata: Record<string, unknown>;
   };
   "slack:webhook-received": {
-    sourceEventId: string;
     projectId: string;
     machineId: string | null;
     payload: Record<string, unknown>;
@@ -68,7 +67,6 @@ export type InternalEventTypes = {
     };
   };
   "github:webhook-received": {
-    sourceEventId: string;
     deliveryId: string;
     event: string;
     action: string | null;
@@ -77,7 +75,6 @@ export type InternalEventTypes = {
   "machine:pull-iterate-iterate-requested": {
     machineId: string;
     ref: string;
-    sourceEventId: string;
   };
 };
 

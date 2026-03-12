@@ -287,6 +287,44 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     expect(afterEvents).toHaveLength(beforeEvents.length);
   });
 
+  test(
+    "sendCTE deduplicationKey prevents duplicate outbox events",
+    { timeout: 30_000 },
+    async () => {
+      await using fixture = await createOutboxFixture();
+      const { outboxClient } = fixture;
+
+      const dedupKey = `dedup_${Date.now()}_${Math.random()}`;
+
+      // First send succeeds
+      const first = await outboxClient.sendCTE({
+        query: [{}],
+        name: "test:basic",
+        deduplicationKey: dedupKey,
+        payload: { message: "first" },
+      });
+      expect(first).toHaveLength(1);
+
+      // Second send with same name + deduplicationKey returns empty (deduped)
+      const second = await outboxClient.sendCTE({
+        query: [{}],
+        name: "test:basic",
+        deduplicationKey: dedupKey,
+        payload: { message: "second" },
+      });
+      expect(second).toHaveLength(0);
+
+      // Different deduplicationKey still works
+      const third = await outboxClient.sendCTE({
+        query: [{}],
+        name: "test:basic",
+        deduplicationKey: `${dedupKey}_other`,
+        payload: { message: "third" },
+      });
+      expect(third).toHaveLength(1);
+    },
+  );
+
   test("sendCTE select", async () => {
     await using fixture = await createOutboxFixture();
     const { db, outboxClient } = fixture;

@@ -12,7 +12,7 @@ import {
   check,
 } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
-import { relations, sql } from "drizzle-orm";
+import { isNotNull, relations, sql } from "drizzle-orm";
 import { MachineType as SandboxMachineType } from "@iterate-com/sandbox/providers/types";
 import type { SlackEvent } from "@slack/web-api";
 import { PROJECT_SANDBOX_PROVIDER } from "../utils/sandbox-providers.ts";
@@ -633,6 +633,7 @@ export const outboxEvent = pgTable(
     name: t.text().notNull(),
     payload: jsonb().$type<Record<string, unknown>>().notNull(),
     context: jsonb().$type<OutboxEventContext>().notNull().default({}),
+    deduplicationKey: t.text(),
     ...withTimestamps,
   }),
   (t) => [
@@ -642,6 +643,9 @@ export const outboxEvent = pgTable(
       t.name,
       t.id,
     ),
+    uniqueIndex("outbox_event_name_dedup_key_unique")
+      .on(t.name, t.deduplicationKey)
+      .where(isNotNull(t.deduplicationKey)),
   ],
 );
 

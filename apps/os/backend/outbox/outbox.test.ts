@@ -24,7 +24,12 @@ test("internal event types are type-safe", () => {
         message: "hello",
       }),
     )
-    .resolves.toEqualTypeOf<{ eventId: string; matchedConsumers: number; delays: TimePeriod[] }>();
+    .resolves.toEqualTypeOf<{
+      eventId: string;
+      matchedConsumers: number;
+      delays: TimePeriod[];
+      duplicate: boolean;
+    }>();
 
   expectTypeOf(outboxClient)
     .map((client) =>
@@ -35,7 +40,12 @@ test("internal event types are type-safe", () => {
         { dbtime: "2000-01-01T00:00:00.000Z", messageTYPO: "hello" },
       ),
     )
-    .resolves.toEqualTypeOf<{ eventId: string; matchedConsumers: number; delays: TimePeriod[] }>();
+    .resolves.toEqualTypeOf<{
+      eventId: string;
+      matchedConsumers: number;
+      delays: TimePeriod[];
+      duplicate: boolean;
+    }>();
 
   expectTypeOf(outboxClient.send).toBeCallableWith(
     { transaction: db, parent: db },

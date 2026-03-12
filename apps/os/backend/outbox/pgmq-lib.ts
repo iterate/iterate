@@ -161,13 +161,61 @@ export type SQLEquivalent<T> =
       }
     : T;
 
+type FromQueryResult<T, V> = V | ((queryResult: T) => V);
+
+const resolveFromQueryResult = <T, V>(value: FromQueryResult<T, V>): V => {
+  if (typeof value === "function") {
+    const proxy = new Proxy(
+      {},
+      {
+        get: (_target, prop) => {
+          if (typeof prop !== "string")
+            throw new Error(`Property name must be a string, got ${String(prop)}`);
+          if (!prop.match(/^\w+$/))
+            throw new Error(`Property name must be a valid SQL identifier, got ${prop}`);
+          prop = prop.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+          return sql.raw(`query.${prop}`);
+        },
+      },
+    );
+    return (value as Function)(proxy);
+  }
+  return value;
+};
+
+/** take an object value that has some sql`...` values in it, possibly deeply-nested, and gives you a valid jsonb object for it with the evaluated values */
+const jsonbify = (val: unknown) => {
+  const placeholders: Array<[string, SQL]> = [];
+  const random = randomInt(1_000_000_000);
+  const json = JSON.stringify(val, (_key, value) => {
+    if (typeof (value as any)?.getSQL === "function") {
+      const placeholder = `____PGMQ_LIB_SQL_PLACEHOLDER_${random}_${placeholders.length}____`;
+      placeholders.push([placeholder, value]);
+      return placeholder;
+    }
+    return value;
+  });
+  const text = placeholders.reduce(
+    (acc, [placeholder, value]) =>
+      sql`replace(${acc}, ${JSON.stringify(placeholder)}, coalesce(to_jsonb(${value})::text, 'null'))`,
+    sql`${json}`,
+  );
+  return text.append(sql`::jsonb`);
+};
+
 export type CTEParams<T, Name extends string, Payload> = {
   query: CTEableQuery<T>;
   name: Name;
-  payload: Payload | ((queryResult: T) => Payload);
+  payload: FromQueryResult<T, Payload>;
   context?: Record<string, unknown>;
   /** Optional db/transaction to use instead of the default connection. */
   connection?: DBLike;
+  /**
+   * When set, the outbox_event row is inserted with this key and a partial unique index on
+   * `(name, deduplication_key)` prevents duplicates. If a conflict is detected the insert
+   * is silently skipped (ON CONFLICT DO NOTHING) and `sendCTE` returns an empty result set.
+   */
+  deduplicationKey?: FromQueryResult<T, string>;
 };
 
 export interface Queuer<DBConnection> {
@@ -181,8 +229,17 @@ export interface Queuer<DBConnection> {
   ) => Promise<T[] & { delays: TimePeriod[] }>;
   enqueue: (
     db: DBConnection,
-    params: { name: string; payload: { input: unknown; output: unknown } },
-  ) => Promise<{ eventId: string; matchedConsumers: number; delays: TimePeriod[] }>;
+    params: {
+      name: string;
+      payload: { input: unknown; output: unknown };
+      deduplicationKey?: string;
+    },
+  ) => Promise<{
+    eventId: string;
+    matchedConsumers: number;
+    delays: TimePeriod[];
+    duplicate: boolean;
+  }>;
 
   consumers: ConsumersRecord;
 
@@ -370,11 +427,21 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     const causation = outboxALS.getStore();
     const context = causation ? { causedBy: causation } : {};
     const exec = getExec(db);
+
+    const deduplicationKey = params.deduplicationKey ?? null;
+
     const insertResult = await exec(sql<typeof InsertedEvent>`
-      insert into outbox_event (name, payload, context)
-      values (${params.name}, ${JSON.stringify(params.payload)}, ${JSON.stringify(context)}::jsonb)
+      insert into outbox_event (name, payload, context, deduplication_key)
+      values (${params.name}, ${JSON.stringify(params.payload)}, ${JSON.stringify(context)}::jsonb, ${deduplicationKey})
+      on conflict (name, deduplication_key) where deduplication_key is not null do nothing
       returning id
     `);
+
+    if (insertResult.rowCount === 0) {
+      logger.debug(`[outbox] duplicate deduplicationKey=${deduplicationKey}, skipping`);
+      return { eventId: null, matchedConsumers: 0, delays: [], duplicate: true as const };
+    }
+
     const eventInsertion = InsertedEvent.parse(insertResult.rows[0]);
 
     const consumersForPath = Object.values(consumers[`eventName:${params.name}`] || {});
@@ -406,7 +473,12 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         )
       `);
     }
-    return { eventId: eventInsertion.id, matchedConsumers: filteredConsumers.length, delays };
+    return {
+      eventId: eventInsertion.id,
+      matchedConsumers: filteredConsumers.length,
+      delays,
+      duplicate: false as const,
+    };
   };
 
   const enqueueCTE: Queuer<DBLike>["enqueueCTE"] = async (
@@ -416,28 +488,11 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     const causation = outboxALS.getStore();
     const { query } = params;
 
-    const { name, payload: payloadOrFn } = params;
-    let context = params.context || {};
+    const { name } = params;
+    const payload = resolveFromQueryResult(params.payload);
+    let context = resolveFromQueryResult(params.context || {});
     if (causation) context = { ...context, causedBy: causation };
 
-    let payload = payloadOrFn;
-    if (typeof payloadOrFn === "function") {
-      // if a function is passed, replace usage like `result => ({ foo: result.bar })` with `{ foo: sql`query.bar` }`
-      const proxy = new Proxy(
-        {},
-        {
-          get: (_target, prop) => {
-            if (typeof prop !== "string")
-              throw new Error(`Property name must be a string, got ${String(prop)}`);
-            if (!prop.match(/^\w+$/))
-              throw new Error(`Property name must be a valid SQL identifier, got ${prop}`);
-            prop = prop.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-            return sql.raw(`query.${prop}`);
-          },
-        },
-      );
-      payload = payloadOrFn(proxy);
-    }
     const exec = getExec(db);
     const getSQL = () => {
       if (Array.isArray(query)) {
@@ -446,37 +501,21 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
       return query.getSQL();
     };
 
-    /** take an object value that has some sql`...` values in it, possibly deeply-nested, and gives you a valid jsonb object for it with the evaluated values */
-    const jsonbify = (val: unknown) => {
-      const placeholders: Array<[string, SQL]> = [];
-      const random = randomInt(1_000_000_000);
-      const json = JSON.stringify(val, (_key, value) => {
-        if (typeof (value as any)?.getSQL === "function") {
-          const placeholder = `____PGMQ_LIB_SQL_PLACEHOLDER_${random}_${placeholders.length}____`;
-          placeholders.push([placeholder, value]);
-          return placeholder;
-        }
-        return value;
-      });
-      const text = placeholders.reduce(
-        (acc, [placeholder, value]) =>
-          sql`replace(${acc}, ${JSON.stringify(placeholder)}, coalesce(to_jsonb(${value})::text, 'null'))`,
-        sql`${json}`,
-      );
-      return text.append(sql`::jsonb`);
-    };
+    const deduplicationKey = resolveFromQueryResult(params.deduplicationKey) || null;
 
     const cteSql = sql`
       with query as (
         ${getSQL()}
       ),
       insertion as (
-        insert into outbox_event (name, payload, context)
+        insert into outbox_event (name, payload, context, deduplication_key)
         select
           ${name},
           ${jsonbify(payload)},
-          ${jsonbify(context)}
+          ${jsonbify(context)},
+          ${deduplicationKey}
         from query
+        on conflict (name, deduplication_key) where deduplication_key is not null do nothing
         returning *
       )
       select
@@ -736,12 +775,14 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     },
     eventName: Name,
     payload: EventTypes[Name],
+    options?: { deduplicationKey?: string },
   ) => {
     // TODO: add a batch send API here, and batch pgmq job enqueueing in `enqueue`,
     // so fanout consumers don't need to insert one event/job at a time.
     const addResult = await queuer.enqueue(connections.transaction as DBConnection, {
       name: eventName,
       payload: payload as never,
+      deduplicationKey: options?.deduplicationKey,
     });
     for (const delay of new Set(addResult.delays)) {
       // as a convenience, we'll process the queue automatically after the delay + a 10% buffer
@@ -808,6 +849,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
       query: params.query,
       name: params.name,
       payload: params.payload as never,
+      deduplicationKey: params.deduplicationKey,
     });
 
     for (const delay of new Set(addResult.delays)) {
