@@ -131,7 +131,7 @@ async function waitForTunnelReady(params: {
   );
 }
 
-export async function useCloudflareTunnel(
+export async function useCloudflareTunnelToLocalhost(
   options: UseCloudflareTunnelOptions,
 ): Promise<CloudflareTunnelHandle> {
   const debug = options.onDebug ?? (() => {});
@@ -203,6 +203,7 @@ export async function useCloudflareTunnel(
       logs: () => logs.join(""),
       stop,
       async [Symbol.asyncDispose]() {
+        if (process.env.E2E_SKIP_DISPOSE) return;
         await stop();
       },
     };
@@ -211,3 +212,5 @@ export async function useCloudflareTunnel(
     throw error;
   }
 }
+
+export const useCloudflareTunnel = useCloudflareTunnelToLocalhost;

@@ -373,8 +373,9 @@ async function resolveDockerFrpControl(params: { deployment: Deployment }): Prom
   };
 }
 
-export interface FrpEgressBridge extends AsyncDisposable {
+export interface FrpTunnelToDeploymentHandle extends AsyncDisposable {
   runId: string;
+  egressProxyURL: string;
   dataProxyUrl: string;
   controlServerHost: string;
   controlServerPort: number;
@@ -383,13 +384,13 @@ export interface FrpEgressBridge extends AsyncDisposable {
   stop(): Promise<void>;
 }
 
-export async function startFrpEgressBridge(params: {
+export async function useFrpTunnelToDeployment(params: {
   deployment: Deployment;
   localTargetHost?: string;
   localTargetPort: number;
   frpcBin?: string;
   runId?: string;
-}): Promise<FrpEgressBridge> {
+}): Promise<FrpTunnelToDeploymentHandle> {
   let step = "init";
   let runId = "";
   let controlServerHost = "";
@@ -483,6 +484,7 @@ export async function startFrpEgressBridge(params: {
 
     return {
       runId,
+      egressProxyURL: dataProxyUrl,
       dataProxyUrl,
       controlServerHost,
       controlServerPort,
@@ -506,6 +508,7 @@ export async function startFrpEgressBridge(params: {
   }
 }
 
-// Backward-compatible alias for existing tests.
-export const startFlyFrpEgressBridge = startFrpEgressBridge;
-export type FlyFrpEgressBridge = FrpEgressBridge;
+export const startFrpEgressBridge = useFrpTunnelToDeployment;
+export type FrpEgressBridge = FrpTunnelToDeploymentHandle;
+export const startFlyFrpEgressBridge = useFrpTunnelToDeployment;
+export type FlyFrpEgressBridge = FrpTunnelToDeploymentHandle;

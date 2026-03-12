@@ -17,6 +17,7 @@ export const DockerDeploymentTestEnv = z
 // provider-specific image input needed to create or reconnect a Fly machine.
 export const FlyDeploymentTestEnv = z
   .object({
+    // TODO fix this - these are not all valid inputs
     E2E_DOCKER_IMAGE_REF: nonEmptyString.optional(),
     E2E_FLY_IMAGE_REF: nonEmptyString.optional(),
     JONASLAND_SANDBOX_IMAGE: nonEmptyString.optional(),

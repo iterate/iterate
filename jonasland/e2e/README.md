@@ -38,8 +38,8 @@ These env vars provide concrete inputs to the suite. They do not decide which pr
 - `E2E_RUN_INTERNET_REQUIRED`: optional policy env for broader workflows that want to decide whether internet-requiring slices should be attempted.
 - `E2E_RUN_SLOW`: optional policy env for broader workflows that want to decide whether slower slices should be attempted.
 - `E2E_RUN_NON_DETERMINISTIC`: optional policy env for broader workflows that want to decide whether intentionally non-deterministic slices should be attempted.
-
-Shared provider env schemas live in `test-helpers/deployment-test-env.ts`:
+- `E2E_SKIP_DISPOSE`: optional policy env for broader workflows that want to decide whether to skip the disposal of the deployment on dispose. Defaults to `false`.
+  Shared provider env schemas live in `test-helpers/deployment-test-env.ts`:
 
 - `DockerDeploymentTestEnv`
 - `FlyDeploymentTestEnv`

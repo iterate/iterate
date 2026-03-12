@@ -162,6 +162,7 @@ export async function useIngressProxyRoutes(
     routeIds: createdRoutes.map((route) => route.routeId),
     deleteAll,
     async [Symbol.asyncDispose]() {
+      if (process.env.E2E_SKIP_DISPOSE) return;
       await deleteAll();
     },
   };

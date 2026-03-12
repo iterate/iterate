@@ -1,5 +1,5 @@
 import { describe } from "vitest";
-import { exampleServiceManifest } from "@iterate-com/example-contract";
+import { exampleContract, exampleServiceManifest } from "@iterate-com/example-contract";
 import { serviceManifestToPidnapConfig } from "@iterate-com/shared/jonasland";
 import { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
 import { createDockerProvider } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
@@ -8,7 +8,7 @@ import {
   DockerDeploymentTestEnv,
   FlyDeploymentTestEnv,
 } from "../../test-helpers/deployment-test-env.ts";
-import { useCloudflareTunnel } from "../../test-helpers/old/use-cloudflare-tunnel.ts";
+import { useCloudflareTunnelToLocalhost } from "../../test-helpers/old/use-cloudflare-tunnel.ts";
 import { useIngressProxyRoutes } from "../../test-helpers/old/use-ingress-proxy-routes.ts";
 import { test } from "../../test-support/e2e-test.ts";
 import {
@@ -16,6 +16,21 @@ import {
   resolveIngressProxyConfig,
 } from "../../test-helpers/old/public-ingress-config.ts";
 
+/**
+ * Legacy migration notes from deleted `jonasland/e2e/tests/clean/playground.e2e.test.ts`.
+ *
+ * That file was a manual operator workflow rather than a CI assertion:
+ *
+ * - create a Docker deployment
+ * - expose it through a Cloudflare tunnel
+ * - create root and wildcard ingress proxy routes that forward with a fixed
+ *   `Host` header
+ * - print the resulting URLs
+ * - wait for `SIGINT` so a human could manually poke at the setup
+ *
+ * If we revive that behavior, keep it as an explicit manual harness or a
+ * skipped/debug-only test rather than something the normal suite runs in CI.
+ */
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -28,76 +43,48 @@ function parseJsonFromResponse(text: string): Record<string, unknown> {
   return JSON.parse(trimmed) as Record<string, unknown>;
 }
 
-async function waitForRouteRegistered(params: {
-  deployment: Deployment;
-  host: string;
-  timeoutMs: number;
-}) {
-  const deadline = Date.now() + params.timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const listed = await params.deployment.registryService.routes.list({});
-      if (listed.routes.some((route) => route.host === params.host)) return;
-    } catch {
-      // Registry can briefly restart while process definitions are applied.
-    }
-    await sleep(500);
-  }
-  throw new Error(`route ${params.host} not registered within ${String(params.timeoutMs)}ms`);
-}
-
-async function curlWithHost(params: { deployment: Deployment; host: string; path: string }) {
-  return await params.deployment.exec([
-    "curl",
-    "-fsS",
-    "--max-time",
-    "10",
-    "-H",
-    `Host: ${params.host}`,
-    `http://127.0.0.1${params.path}`,
-  ]);
-}
-
-async function waitForInternalRoute(params: {
-  deployment: Deployment;
-  host: string;
-  path: string;
-  timeoutMs: number;
-}) {
-  const deadline = Date.now() + params.timeoutMs;
-  let lastOutput = "";
-  while (Date.now() < deadline) {
-    const result = await curlWithHost({
-      deployment: params.deployment,
-      host: params.host,
-      path: params.path,
-    }).catch(() => null);
-    if (result?.exitCode === 0) return result.output;
-    lastOutput = result?.output ?? lastOutput;
-    await sleep(500);
-  }
-  throw new Error(
-    `internal route ${params.host}${params.path} did not become reachable${lastOutput ? `: ${lastOutput}` : ""}`,
-  );
-}
-
 async function waitForPublicText(params: {
   url: string;
   timeoutMs: number;
   matches: (body: string) => boolean;
 }) {
+  console.log("[public-ingress] waiting for public URL", {
+    url: params.url,
+    timeoutMs: params.timeoutMs,
+  });
   const deadline = Date.now() + params.timeoutMs;
   let lastFailure = "no response";
+  let attempt = 0;
   while (Date.now() < deadline) {
+    attempt += 1;
     try {
       const response = await fetch(params.url, {
         signal: AbortSignal.timeout(10_000),
       });
       const body = await response.text();
-      if (response.ok && params.matches(body)) return body;
+      if (response.ok && params.matches(body)) {
+        console.log("[public-ingress] public URL ready", {
+          url: params.url,
+          attempt,
+          status: response.status,
+          bodyPreview: body.slice(0, 200),
+        });
+        return body;
+      }
       lastFailure = `status=${String(response.status)} body=${body.slice(0, 200)}`;
+      console.log("[public-ingress] public URL not ready", {
+        url: params.url,
+        attempt,
+        status: response.status,
+        bodyPreview: body.slice(0, 200),
+      });
     } catch (error) {
       lastFailure = error instanceof Error ? error.message : String(error);
+      console.log("[public-ingress] public URL fetch failed", {
+        url: params.url,
+        attempt,
+        error: lastFailure,
+      });
     }
     await sleep(500);
   }
@@ -135,7 +122,7 @@ const cases = [
       if (!Number.isFinite(port) || port <= 0) {
         throw new Error(`docker deployment baseUrl has no local port: ${deployment.baseUrl}`);
       }
-      const tunnel = await useCloudflareTunnel({
+      const tunnel = await useCloudflareTunnelToLocalhost({
         localPort: port,
         cloudflaredBin: process.env.JONASLAND_E2E_CLOUDFLARED_BIN,
         timeoutMs,
@@ -166,6 +153,7 @@ const cases = [
         },
       });
     },
+
     exposePublicTarget: async ({ deployment }: { deployment: Deployment; timeoutMs: number }) => ({
       targetUrl: deployment.baseUrl,
       targetHost: new URL(deployment.baseUrl).host,
@@ -181,55 +169,117 @@ describe("public ingress", () => {
       { tags: [...tags], timeout: timeoutMs + 120_000 },
       async ({ expect, e2e }) => {
         const ingress = resolveIngressProxyConfig();
-        const deployment = await createDeployment({
-          slug: e2e.deploymentSlug,
+        console.log("[public-ingress] starting test", {
+          testId: e2e.testId,
+          testSlug: e2e.testSlug,
+          deploymentSlug: e2e.deploymentSlug,
+          timeoutMs,
+          ingressProxyBaseUrl: ingress.ingressProxyBaseUrl,
+          ingressProxyDomain: ingress.ingressProxyDomain,
         });
-        await using _deployment = await e2e.useDeployment({ deployment });
-        await deployment.waitUntilAlive({
+
+        await using f = await e2e.useDeployment({
+          deployment: await createDeployment({ slug: e2e.deploymentSlug }),
+        });
+
+        console.log("[public-ingress] deployment created", {
+          baseUrl: f.deployment.baseUrl,
+          deploymentSlug: f.deployment.opts.slug,
+        });
+
+        await f.deployment.waitUntilAlive({
           signal: AbortSignal.timeout(timeoutMs),
         });
+        console.log("[public-ingress] deployment reported alive", {
+          baseUrl: f.deployment.baseUrl,
+        });
+
         const pidnapConfigs = serviceManifestToPidnapConfig({
           manifests: [exampleServiceManifest],
         });
-        for (const config of pidnapConfigs) {
-          await deployment.pidnap.processes.updateConfig(config);
-        }
-        await waitForRouteRegistered({
-          deployment,
-          host: "example.iterate.localhost",
-          timeoutMs,
-        });
-        await waitForInternalRoute({
-          deployment,
-          host: "example.iterate.localhost",
-          path: "/api/echo?from=internal-public-ingress-readiness",
-          timeoutMs,
+        console.log("[public-ingress] derived pidnap configs", {
+          count: pidnapConfigs.length,
+          processSlugs: pidnapConfigs.map((config) => config.processSlug),
         });
 
-        await using exposure = await exposePublicTarget({ deployment, timeoutMs });
+        for (const config of pidnapConfigs) {
+          console.log("[public-ingress] applying pidnap config", {
+            processSlug: config.processSlug,
+          });
+          await f.deployment.pidnap.processes.updateConfig(config);
+        }
+        await f.deployment.pidnap.processes.waitFor({
+          processes: {
+            [exampleServiceManifest.slug]: "healthy",
+          },
+          timeoutMs: 10_000,
+        });
+        console.log("[public-ingress] example service is healthy", {
+          slug: exampleServiceManifest.slug,
+        });
+
+        await using exposure = await exposePublicTarget({ deployment: f.deployment, timeoutMs });
+        console.log("[public-ingress] public target exposed", {
+          targetUrl: exposure.targetUrl,
+          targetHost: exposure.targetHost,
+        });
+        // [[ Not sure buildIngressPublicBaseUrl is needed - can we just take deployment slug or does it not have a timestamp or similar. If we did have this, then it should probably just be on the fixture file, like all the other helpers.  ]]
         const publicBaseUrl = buildIngressPublicBaseUrl({
           testSlug: e2e.testSlug,
           ingressProxyDomain: ingress.ingressProxyDomain,
         });
         const publicBaseHost = new URL(publicBaseUrl).host;
-        const wildcardPattern = `*__${publicBaseHost}`;
-        await deployment.setEnvVars({
-          ITERATE_INGRESS_HOST: publicBaseHost,
-          ITERATE_INGRESS_ROUTING_TYPE: "dunder-prefix",
+        console.log("[public-ingress] resolved public base URL", {
+          publicBaseUrl,
+          publicBaseHost,
         });
 
+        // Sets ITERATE_INGRESS_HOST and ITERATE_INGRESS_ROUTING_TYPE env vars in deployment and waits for "healthy"
+        await f.deployment.updateIngressConfig({
+          ingressHost: publicBaseHost,
+          ingressHostType: "dunder-prefix",
+        });
+        console.log("[public-ingress] ingress config updated", {
+          ingressHost: publicBaseHost,
+          ingressHostType: "dunder-prefix",
+        });
+
+        // [[ This is gross - I think we're just fine? updateIngressConfig shouldn't return until all processes are back up ]]
+        // [[ This code can prob ably be improved and move ino deployment.ts ]]
+
         const registryDeadline = Date.now() + timeoutMs;
+        let registryAttempt = 0;
         while (Date.now() < registryDeadline) {
+          registryAttempt += 1;
           try {
-            const result = await deployment.registryService.getPublicURL({
+            const result = await f.deployment.registryService.getPublicURL({
               internalURL: "http://example.iterate.localhost",
             });
+            console.log("[public-ingress] registry public URL lookup", {
+              attempt: registryAttempt,
+              publicURL: result.publicURL,
+              expectedHost: publicBaseHost,
+            });
             if (result.publicURL.includes(publicBaseHost)) break;
-          } catch {
+          } catch (error) {
             // Registry may be mid-restart while env-file updates are applied.
+            console.log("[public-ingress] registry public URL lookup failed", {
+              attempt: registryAttempt,
+              error: error instanceof Error ? error.message : String(error),
+            });
           }
           await sleep(500);
         }
+
+        const resolvedPublicURL = await f.deployment.registryService.getPublicURL({
+          internalURL: "http://example.iterate.localhost",
+        });
+        console.log("[public-ingress] registry public URL stabilized", resolvedPublicURL);
+        expect(
+          await f.deployment.registryService.getPublicURL({
+            internalURL: "http://example.iterate.localhost",
+          }),
+        ).toEqual({ publicURL: `https://example__${publicBaseHost}/` });
 
         await using routes = await useIngressProxyRoutes({
           ingressProxyApiKey: ingress.ingressProxyApiKey,
@@ -238,43 +288,56 @@ describe("public ingress", () => {
             {
               metadata: {
                 source: "jonasland-vitest-public-ingress",
+                testId: e2e.testId,
                 publicBaseHost,
               },
               patterns: [
                 {
                   pattern: publicBaseHost,
                   target: exposure.targetUrl,
-                  headers: { Host: exposure.targetHost },
                 },
                 {
-                  pattern: wildcardPattern,
+                  pattern: `*__${publicBaseHost}`,
                   target: exposure.targetUrl,
-                  headers: { Host: exposure.targetHost },
                 },
               ],
             },
           ],
         });
-        expect(routes.routeIds.length).toBe(1);
+
+        console.log("[public-ingress] ingress proxy routes created", {
+          routes,
+          publicBaseHost,
+          ingressHost: f.deployment.opts.ingressHost,
+        });
 
         const caddyHealth = await waitForPublicText({
           url: `${publicBaseUrl}/__iterate/caddy-health`,
           timeoutMs,
           matches: (body) => body.includes("ok"),
         });
+        console.log("[public-ingress] caddy health response", caddyHealth);
         expect(caddyHealth).toContain("ok");
 
+        // [[ Make an example service orpc client using deployment.createServiceClient and test that ]]
         const echoBody = await waitForPublicText({
           url: `https://example__${publicBaseHost}/api/echo?from=public-ingress-test`,
           timeoutMs,
           matches: (body) => body.includes("public-ingress-test"),
         });
+        console.log("[public-ingress] public example echo response", echoBody);
         const payload = parseJsonFromResponse(echoBody);
+        console.log("[public-ingress] parsed public example echo payload", payload);
         expect(String(payload.url)).toContain("/api/echo?from=public-ingress-test");
         expect(String(payload.host)).toBe(`example__${publicBaseHost}`);
         const headers = payload.headers as Record<string, string>;
+        console.log("[public-ingress] public example echo headers", headers);
         expect(String(headers["x-forwarded-host"] ?? "")).toBe(`example__${publicBaseHost}`);
         expect(String(headers["x-iterate-resolved-service"] ?? "")).toBe("example");
+        console.log("[public-ingress] test completed successfully", {
+          publicBaseHost,
+          resolvedService: headers["x-iterate-resolved-service"] ?? null,
+        });
       },
     );
   });

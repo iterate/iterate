@@ -14,7 +14,7 @@ describe("artifact harness", () => {
   });
 
   test("records a failing test result", async ({ expect, e2e }) => {
-    console.log(`[artifact-harness] failing test dir: ${e2e.outputDir}`);
+    console.log(`[artifact-harness] fai ling test dir: ${e2e.outputDir}`);
     expect(e2e.outputDir).toContain("e2e-vitest-");
     expect("intentional failure").toBe("different");
   });

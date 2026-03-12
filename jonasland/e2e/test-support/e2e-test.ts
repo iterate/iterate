@@ -2,13 +2,12 @@ import { readFile } from "node:fs/promises";
 import { inject, test as baseTest } from "vitest";
 import { createDeploymentSlug } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
 import {
+  type DeploymentEventsArtifact,
   type UseDeploymentFixture,
   useDeployment as createUseDeployment,
 } from "@iterate-com/shared/jonasland";
-import type {
-  Deployment,
-  DeploymentExecResult,
-} from "@iterate-com/shared/jonasland/deployment/deployment.ts";
+import type { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
+import { z } from "zod";
 import {
   appendVitestResultFooter,
   E2E_VITEST_RUN_ROOT_KEY,
@@ -24,11 +23,6 @@ export interface E2EAttachedDeploymentFixture extends UseDeploymentFixture {
     eventsPath?: string;
   };
   snapshot(): ReturnType<Deployment["snapshot"]>;
-  waitForShellSuccess(params: {
-    cmd: string;
-    timeoutMs: number;
-    deployment?: Deployment;
-  }): Promise<DeploymentExecResult>;
   waitForArtifactText(params: { needle: string; timeoutMs: number }): Promise<void>;
 }
 
@@ -42,7 +36,6 @@ export interface E2EFixtures {
     useDeployment(params: {
       deployment: Deployment;
       logTail?: number;
-      destroyOnDispose?: boolean;
     }): Promise<E2EAttachedDeploymentFixture>;
     fileSlug: string;
     testSlug: string;
@@ -50,6 +43,8 @@ export interface E2EFixtures {
     testId: string;
   };
 }
+
+export type { DeploymentEventsArtifact };
 
 // Docs: https://vitest.dev/guide/test-context.html#test-extend
 // Docs: https://vitest.dev/api/hooks#ontestfinished
@@ -131,7 +126,6 @@ export const test = baseTest.extend<E2EFixtures>({
           const attached = await createUseDeployment({
             deployment: params.deployment,
             logTail: params.logTail,
-            destroyOnDispose: params.destroyOnDispose,
             artifactDir: paths.artifactDir,
           });
           return Object.assign(attached, {

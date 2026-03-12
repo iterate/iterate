@@ -20,15 +20,10 @@ export function sanitizeIngressSlug(input: string): string {
 }
 
 export function resolveIngressProxyConfig(overrideApiKey?: string): IngressProxyConfig {
-  const ingressProxyApiKey =
-    overrideApiKey?.trim() ||
-    process.env.INGRESS_PROXY_API_TOKEN?.trim() ||
-    process.env.INGRESS_PROXY_E2E_API_TOKEN?.trim() ||
-    "";
+  const ingressProxyApiKey = overrideApiKey?.trim() || process.env.INGRESS_PROXY_API_TOKEN?.trim();
+  ("");
   if (!ingressProxyApiKey) {
-    throw new Error(
-      "Missing ingress proxy API key (set INGRESS_PROXY_API_TOKEN or INGRESS_PROXY_E2E_API_TOKEN)",
-    );
+    throw new Error("Missing ingress proxy API key (set INGRESS_PROXY_API_TOKEN)");
   }
 
   const ingressProxyBaseUrl = (
