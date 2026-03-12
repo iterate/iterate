@@ -83,10 +83,10 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
   test("basic: enqueue, process, and archive", { timeout: 30_000 }, async () => {
     await using fixture = await createOutboxFixture();
     const { db, queuer, outboxClient } = fixture;
-    const secret = `basic_${Date.now()}_${Math.random()}`;
+    const slug = `basic_${Date.now()}_${Math.random()}`;
     await outboxClient.send(db, {
       name: "test:basic",
-      payload: { message: secret },
+      payload: { message: slug },
     });
 
     // Verify event was inserted
@@ -94,7 +94,7 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
       return db.query.outboxEvent.findFirst({
         where: and(
           eq(schema.outboxEvent.name, "test:basic"),
-          ilike(sql`${schema.outboxEvent.payload}::text`, `%${secret}%`),
+          ilike(sql`${schema.outboxEvent.payload}::text`, `%${slug}%`),
         ),
       });
     });
@@ -109,24 +109,24 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     expect(archived).toBeTruthy();
     expect(archived!.message.consumer_name).toBe("logBasic");
     expect(archived!.message.processing_results).toEqual(
-      expect.arrayContaining([expect.stringContaining(`received: ${secret}`)]),
+      expect.arrayContaining([expect.stringContaining(`received: ${slug}`)]),
     );
   });
 
   test("retries: consumer fails then succeeds", { timeout: 60_000 }, async () => {
     await using fixture = await createOutboxFixture();
     const { db, queuer, outboxClient } = fixture;
-    const secret = `unstable_${Date.now()}_${Math.random()}`;
+    const slug = `unstable_${Date.now()}_${Math.random()}`;
     await outboxClient.send(db, {
       name: "test:unstable",
-      payload: { message: secret },
+      payload: { message: slug },
     });
 
     const event = await vi.waitUntil(async () => {
       return db.query.outboxEvent.findFirst({
         where: and(
           eq(schema.outboxEvent.name, "test:unstable"),
-          ilike(sql`${schema.outboxEvent.payload}::text`, `%${secret}%`),
+          ilike(sql`${schema.outboxEvent.payload}::text`, `%${slug}%`),
         ),
       });
     });
@@ -154,17 +154,17 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
   test("DLQ: consumer always fails, eventually gives up", { timeout: 60_000 }, async () => {
     await using fixture = await createOutboxFixture();
     const { db, queuer, outboxClient } = fixture;
-    const secret = `fail_${Date.now()}_${Math.random()}`;
+    const slug = `fail_${Date.now()}_${Math.random()}`;
     await outboxClient.send(db, {
       name: "test:fail",
-      payload: { message: secret },
+      payload: { message: slug },
     });
 
     const event = await vi.waitUntil(async () => {
       return db.query.outboxEvent.findFirst({
         where: and(
           eq(schema.outboxEvent.name, "test:fail"),
-          ilike(sql`${schema.outboxEvent.payload}::text`, `%${secret}%`),
+          ilike(sql`${schema.outboxEvent.payload}::text`, `%${slug}%`),
         ),
       });
     });
@@ -190,34 +190,27 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     await using fixture = await createOutboxFixture();
     const { db, queuer, outboxClient } = fixture;
 
-    const secret = `cte_${Date.now()}_${Math.random()}`;
-    const externalId = `test-delivery-${secret}`;
+    const slug = `cte-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 
     const result = await outboxClient.sendCTE({
       query: db
-        .insert(schema.event)
-        .values({
-          type: "test:basic",
-          payload: { message: secret },
-          externalId,
-        })
-        .onConflictDoNothing({
-          target: [schema.event.type, schema.event.externalId],
-        })
-        .returning({ id: schema.event.id }),
+        .insert(schema.organization)
+        .values({ name: slug, slug })
+        .onConflictDoNothing()
+        .returning({ id: schema.organization.id }),
       name: "test:basic",
-      payload: { message: secret },
+      payload: { message: slug },
     });
 
     // The insert should have returned one row
     expect(result).toHaveLength(1);
-    expect(result[0].id).toMatch(/^evt_/);
+    expect(result[0].id).toMatch(/^org_/);
 
     // An outbox event should have been created
     const outboxEvent = await db.query.outboxEvent.findFirst({
       where: and(
         eq(schema.outboxEvent.name, "test:basic"),
-        ilike(sql`${schema.outboxEvent.payload}::text`, `%${secret}%`),
+        ilike(sql`${schema.outboxEvent.payload}::text`, `%${slug}%`),
       ),
     });
     expect(outboxEvent).toBeTruthy();
@@ -230,7 +223,7 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     expect(match).toBeTruthy();
     expect(match!.message.consumer_name).toBe("logBasic");
     expect(match!.message.processing_results).toEqual(
-      expect.arrayContaining([expect.stringContaining(`received: ${secret}`)]),
+      expect.arrayContaining([expect.stringContaining(`received: ${slug}`)]),
     );
   });
 
@@ -238,49 +231,36 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     await using fixture = await createOutboxFixture();
     const { db, outboxClient } = fixture;
 
-    const secret = `cte_noop_${Date.now()}_${Math.random()}`;
-    const externalId = `test-delivery-${secret}`;
+    const slug = `cte-noop-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 
     // First insert succeeds
     await outboxClient.sendCTE({
       query: db
-        .insert(schema.event)
-        .values({
-          type: "test:basic",
-          payload: { message: secret },
-          externalId,
-        })
-        .onConflictDoNothing({
-          target: [schema.event.type, schema.event.externalId],
-        })
-        .returning({ id: schema.event.id }),
+        .insert(schema.organization)
+        .values({ name: slug, slug })
+        .onConflictDoNothing()
+        .returning({ id: schema.organization.id }),
       name: "test:basic",
-      payload: { message: secret },
+      payload: { message: slug },
     });
 
-    // Count outbox events with this secret before the duplicate attempt
+    // Count outbox events with this slug before the duplicate attempt
     const beforeEvents = await db.query.outboxEvent.findMany({
       where: and(
         eq(schema.outboxEvent.name, "test:basic"),
-        ilike(sql`${schema.outboxEvent.payload}::text`, `%${secret}%`),
+        ilike(sql`${schema.outboxEvent.payload}::text`, `%${slug}%`),
       ),
     });
 
-    // Second insert with same externalId — onConflictDoNothing means 0 rows from CTE
+    // Second insert with same slug — onConflictDoNothing means 0 rows from CTE
     const dupeResult = await outboxClient.sendCTE({
       query: db
-        .insert(schema.event)
-        .values({
-          type: "test:basic",
-          payload: { message: secret },
-          externalId,
-        })
-        .onConflictDoNothing({
-          target: [schema.event.type, schema.event.externalId],
-        })
-        .returning({ id: schema.event.id }),
+        .insert(schema.organization)
+        .values({ name: slug, slug })
+        .onConflictDoNothing()
+        .returning({ id: schema.organization.id }),
       name: "test:basic",
-      payload: { message: secret },
+      payload: { message: slug },
     });
 
     // No rows returned — the insert was a no-op
@@ -290,7 +270,7 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     const afterEvents = await db.query.outboxEvent.findMany({
       where: and(
         eq(schema.outboxEvent.name, "test:basic"),
-        ilike(sql`${schema.outboxEvent.payload}::text`, `%${secret}%`),
+        ilike(sql`${schema.outboxEvent.payload}::text`, `%${slug}%`),
       ),
     });
     expect(afterEvents).toHaveLength(beforeEvents.length);
@@ -338,8 +318,17 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     await using fixture = await createOutboxFixture();
     const { db, outboxClient } = fixture;
 
+    const orgs = [
+      `select-a-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      `select-b-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+    ];
+    await db
+      .insert(schema.organization)
+      .values(orgs.map((value) => ({ name: value, slug: value })))
+      .onConflictDoNothing();
+
     const result = await outboxClient.sendCTE({
-      query: db.select().from(schema.event).limit(1),
+      query: db.select().from(schema.organization).limit(1),
       name: "test:basic",
       payload: {
         message: sql`'the event id was ' || query.id`,
@@ -349,7 +338,6 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
 
     expect(result[0]).toMatchObject({
       id: expect.any(String),
-      payload: expect.any(Object),
       createdAt: expect.any(Date),
 
       outboxEventId: expect.any(String),
@@ -366,8 +354,17 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     await using fixture = await createOutboxFixture();
     const { db, outboxClient } = fixture;
 
+    const orgs = [
+      `selectm-a-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      `selectm-b-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+    ];
+    await db
+      .insert(schema.organization)
+      .values(orgs.map((value) => ({ name: value, slug: value })))
+      .onConflictDoNothing();
+
     const result = await outboxClient.sendCTE({
-      query: db.select().from(schema.event).limit(2),
+      query: db.select().from(schema.organization).limit(2),
       name: "test:basic",
       payload: {
         message: sql`'the event id was ' || query.id`,
@@ -377,7 +374,6 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
 
     expect(result[0]).toMatchObject({
       id: expect.any(String),
-      payload: expect.any(Object),
       createdAt: expect.any(Date),
 
       outboxEventId: expect.any(String),
@@ -396,17 +392,15 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     await using fixture = await createOutboxFixture();
     const { db, outboxClient } = fixture;
 
-    const secret = `cb_${Date.now()}_${Math.random()}`;
-    const externalIds = [`${secret}-a`, `${secret}-b`];
-    await db
-      .insert(schema.event)
-      .values(externalIds.map((externalId) => ({ type: "test:basic", payload: {}, externalId })));
+    const slug = `cb-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const slugs = [`${slug}-a`, `${slug}-b`];
+    await db.insert(schema.organization).values(slugs.map((slug) => ({ name: slug, slug })));
 
     const result = await outboxClient.sendCTE({
       query: db
         .select()
-        .from(schema.event)
-        .where(ilike(schema.event.externalId, `${secret}%`)),
+        .from(schema.organization)
+        .where(ilike(schema.organization.slug, `${slug}%`)),
       name: "test:basic",
       payload: (row) => ({
         message: row.id,
@@ -424,26 +418,24 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     await using fixture = await createOutboxFixture();
     const { db, outboxClient } = fixture;
 
-    const secret = `camel_${Date.now()}_${Math.random()}`;
-    await db.insert(schema.event).values({ type: "test:basic", payload: {}, externalId: secret });
+    const slug = `camel-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    await db.insert(schema.organization).values({ name: slug, slug });
 
     const result = await outboxClient.sendCTE({
-      query: db.select().from(schema.event).where(eq(schema.event.externalId, secret)),
+      query: db.select().from(schema.organization).where(eq(schema.organization.slug, slug)),
       name: "test:basic",
       payload: (row) => ({
-        message: row.externalId,
+        message: row.slug,
       }),
     });
 
-    expect([...result]).toMatchObject([
-      { externalId: secret, outboxEventPayload: { message: secret } },
-    ]);
+    expect([...result]).toMatchObject([{ slug, outboxEventPayload: { message: slug } }]);
   });
 
   test("sendCTE values", async () => {
     await using fixture = await createOutboxFixture();
     const { outboxClient } = fixture;
-    const secret = `cte_select_${Date.now()}_${Math.random()}`;
+    const slug = `cte-select-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 
     const result = await outboxClient.sendCTE({
       query: [
@@ -451,7 +443,7 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
         { abc: 456, xyz: 654 },
       ],
       name: "test:basic",
-      payload: { message: secret },
+      payload: { message: slug },
     });
 
     expect(result[0]).toMatchObject({
@@ -461,7 +453,7 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
       outboxEventId: expect.any(String),
       outboxEventName: "test:basic",
       outboxEventPayload: {
-        message: expect.stringContaining(secret),
+        message: expect.stringContaining(slug),
       },
       outboxEventContext: expect.any(Object),
     });

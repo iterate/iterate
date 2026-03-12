@@ -237,7 +237,11 @@ resendApp.post("/webhook", async (c) => {
   try {
     payload = ResendWebhookReceivedEventPayload.parse(JSON.parse(body));
   } catch (error) {
-    logger.warn("[Resend Webhook] Invalid JSON: " + z.prettifyError(error as z.FailureResult));
+    logger.warn(
+      error instanceof z.ZodError
+        ? `[Resend Webhook] Invalid JSON: ${z.prettifyError(error)}`
+        : `[Resend Webhook] Invalid JSON: ${String(error)}`,
+    );
     return c.text("Invalid JSON", 400);
   }
 

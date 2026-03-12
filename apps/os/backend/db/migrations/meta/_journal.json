@@ -232,6 +232,13 @@
       "when": 1773308886240,
       "tag": "0032_outbox_deduplication_key",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1773320939218,
+      "tag": "0033_drop_event_table",
+      "breakpoints": true
     }
   ]
 }

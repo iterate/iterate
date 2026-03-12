@@ -1,5 +1,6 @@
 import type { appRouter } from "../orpc/root.ts";
 import type { MachineType } from "../db/schema.ts";
+import type { PosthogWebhookReceivedEventPayload } from "../events.ts";
 import type { ResendWebhookReceivedEventPayload } from "../events.ts";
 import { waitUntil } from "../../env.ts";
 import { getDb } from "../db/client.ts";
@@ -74,6 +75,7 @@ export type InternalEventTypes = {
     payload: Record<string, unknown>;
   };
   "resend:webhook-received": ResendWebhookReceivedEventPayload;
+  "posthog:webhook-received": PosthogWebhookReceivedEventPayload;
   "machine:pull-iterate-iterate-requested": {
     machineId: string;
     ref: string;

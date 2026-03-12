@@ -1,14 +1,13 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import type { CloudflareEnv } from "../../../env.ts";
-import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
+import { outboxClient } from "../../outbox/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
 
 const POSTHOG_HOST = "eu.i.posthog.com";
-const ITERATE_SLACK_TEAM_ID = "T0675PSN873";
 const POSTHOG_SECRET_HEADER = "x-iterate-webhook-secret";
 
 export const posthogProxyApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
@@ -34,68 +33,19 @@ posthogProxyApp.post("/api/integrations/posthog/webhook", async (c) => {
     c.req.header("x-posthog-event-id") ??
     `ph-${randomUUID()}`;
 
-  waitUntil(
-    (async () => {
-      const db = c.var.db;
-      try {
-        const connection = await db.query.projectConnection.findFirst({
-          where: (pc, { and, eq }) =>
-            and(eq(pc.provider, "slack"), eq(pc.externalId, ITERATE_SLACK_TEAM_ID)),
-          with: {
-            project: {
-              with: {
-                machines: {
-                  where: (m, { eq }) => eq(m.state, "active"),
-                  limit: 1,
-                },
-              },
-            },
-          },
-        });
+  const result = await outboxClient.send(c.var.db, {
+    name: "posthog:webhook-received",
+    payload: {
+      deliveryId,
+      payload,
+    },
+    deduplicationKey: deliveryId,
+  });
 
-        const projectId = connection?.projectId ?? null;
-        const machine = connection?.project?.machines[0] ?? null;
-
-        if (!machine) {
-          logger.set({
-            deliveryId,
-            projectId,
-          });
-          logger.warn("[PostHog Webhook] No active machine for Iterate Slack team");
-        } else {
-          try {
-            await forwardPosthogWebhookToMachine({
-              machine,
-              env: c.env,
-              deliveryId,
-              payload,
-            });
-          } catch (error) {
-            logger.set({
-              deliveryId,
-              machineId: machine.id,
-              projectId,
-            });
-            logger.warn(
-              `[PostHog Webhook] Failed to forward to machine: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        }
-
-        await db
-          .insert(schema.event)
-          .values({
-            type: "posthog:webhook-received",
-            payload,
-            projectId,
-            externalId: deliveryId,
-          })
-          .onConflictDoNothing();
-      } catch (error) {
-        logger.error("[PostHog Webhook] Failed in background handler", error, { deliveryId });
-      }
-    })(),
-  );
+  if (result.duplicate) {
+    logger.debug("[PostHog Webhook] Duplicate, skipping", { deliveryId });
+    return c.json({ received: true, duplicate: true });
+  }
 
   return c.json({ received: true });
 });
@@ -137,7 +87,7 @@ function verifySharedSecret(
   return timingSafeEqual(expectedDigest, actualDigest);
 }
 
-async function forwardPosthogWebhookToMachine(params: {
+export async function forwardPosthogWebhookToMachine(params: {
   machine: typeof schema.machine.$inferSelect;
   env: CloudflareEnv;
   deliveryId: string;

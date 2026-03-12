@@ -4,7 +4,10 @@ import { match } from "schematch";
 import { z } from "zod/v4";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
-import { ResendWebhookReceivedEventPayload } from "../events.ts";
+import {
+  PosthogWebhookReceivedEventPayload,
+  ResendWebhookReceivedEventPayload,
+} from "../events.ts";
 import { logger } from "../tag-logger.ts";
 import { env } from "../../env.ts";
 import {
@@ -192,6 +195,56 @@ export const registerConsumers = () => {
       logger.set({ machine: { id: targetMachine.id }, user: { id: user.id } });
       logger.info("[Resend Webhook] Forwarded to machine");
       return `forwarded to ${targetMachine.id}`;
+    },
+  });
+
+  cc.registerConsumer({
+    name: "forwardPosthogWebhook",
+    on: "posthog:webhook-received",
+    async handler(params) {
+      const { deliveryId, payload } = PosthogWebhookReceivedEventPayload.parse(params.payload);
+      const db = await getDb();
+      const connection = await db.query.projectConnection.findFirst({
+        where: (pc, { and, eq: whereEq }) =>
+          and(whereEq(pc.provider, "slack"), whereEq(pc.externalId, "T0675PSN873")),
+        with: {
+          project: {
+            with: {
+              machines: {
+                where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
+                limit: 1,
+              },
+            },
+          },
+        },
+      });
+
+      const projectId = connection?.projectId ?? null;
+      const machine = connection?.project?.machines[0] ?? null;
+      if (!machine) {
+        logger.set({ deliveryId, projectId });
+        logger.warn("[PostHog Webhook] No active machine for Iterate Slack team");
+        return "skipped: no active machine for Iterate Slack team";
+      }
+
+      const { forwardPosthogWebhookToMachine } = await import("../integrations/posthog/proxy.ts");
+      try {
+        await forwardPosthogWebhookToMachine({
+          machine,
+          env,
+          deliveryId,
+          payload,
+        });
+      } catch (error) {
+        logger.set({ deliveryId, machineId: machine.id, projectId });
+        throw new Error(
+          `[PostHog Webhook] Failed to forward to machine: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+
+      logger.set({ deliveryId, machineId: machine.id, projectId });
+      logger.info("[PostHog Webhook] Forwarded to machine");
+      return `forwarded to ${machine.id}`;
     },
   });
 

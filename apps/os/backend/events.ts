@@ -25,3 +25,10 @@ export const ResendWebhookReceivedEventPayload = z.object({
 });
 
 export type ResendWebhookReceivedEventPayload = z.infer<typeof ResendWebhookReceivedEventPayload>;
+
+export const PosthogWebhookReceivedEventPayload = z.object({
+  deliveryId: z.string(),
+  payload: z.record(z.string(), z.unknown()),
+});
+
+export type PosthogWebhookReceivedEventPayload = z.infer<typeof PosthogWebhookReceivedEventPayload>;
