@@ -94,16 +94,15 @@ For local Docker machines, refresh the sandbox image + default tag with: `pnpm s
 
 - Strict TS; infer types where possible
 - No `as any` — fix types or ask for help
-- No `import { z } from "zod"` — use `"zod/v4"`
 - File/folder names: kebab-case
-- Include `.ts`/`.js` in relative imports (not package imports)
+- Include file extensions (`.ts` or whatever) for relative imports
 - Use `node:` prefix for Node imports
 - Prefer named exports
 - Acronyms: all caps except `Id` (e.g., `callbackURL`, `userId`)
-- Use pnpm
-- Use remeda for utilities, dedent for template strings
+- Use pnpm for packages
+- Use dedent for template strings
 - Unit tests: `*.test.ts` next to source
-- Spec tests: `spec/*.spec.ts`
+- Spec tests: `spec/*.spec.ts` (see [Writing Specs](#writing-specs))
 
 ## Task system
 

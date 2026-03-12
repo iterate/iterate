@@ -1,4 +1,4 @@
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { match } from "schematch";
 import { z } from "zod/v4";
@@ -41,6 +41,38 @@ export const registerConsumers = () => {
   // machine:created → provisionMachine
   // (daemon reports status via reportStatus → machine:daemon-status-reported → setup + probe pipeline)
 
+  // ── Slack webhook forwarding ─────────────────────────────────────────
+  //
+  // slack:webhook-received → forwardSlackWebhook
+
+  cc.registerConsumer({
+    name: "forwardSlackWebhook",
+    on: "slack:webhook-received",
+    when: (params) => !!params.payload.machineId,
+    async handler(params) {
+      const { machineId, payload, correlation } = params.payload;
+      if (!machineId) throw new Error(`Machine id expected`);
+
+      const db = await getDb();
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      if (!machine) return `skipped: machine ${machineId} not found`;
+      if (machine.state !== "active")
+        return `skipped: machine ${machineId} state is ${machine.state}`;
+
+      const { forwardSlackWebhookToMachine } = await import("../integrations/slack/slack.ts");
+      const result = await forwardSlackWebhookToMachine(machine, payload, env, correlation);
+      if (!result.success) {
+        throw new Error(`Slack forward failed: ${result.error}`);
+      }
+
+      logger.set({ machine: { id: machineId } });
+      logger.info("[forwardSlackWebhook] Forwarded to machine");
+      return `forwarded to ${machineId}`;
+    },
+  });
+
   cc.registerConsumer({
     name: "requestIterateMachinePulls",
     on: "github:webhook-received",
@@ -54,26 +86,22 @@ export const registerConsumers = () => {
             return `skipped: ref ${payload.payload.ref}`;
           }
 
-          const machines = await db.query.machine.findMany({
-            where: eq(schema.machine.state, "active"),
-            columns: { id: true },
+          const result = await cc.sendCTE({
+            query: db
+              .select({ id: schema.machine.id })
+              .from(schema.machine)
+              .where(eq(schema.machine.state, "active")),
+            name: "machine:pull-iterate-iterate-requested",
+            payload: (result) => ({
+              machineId: result.id,
+              ref: branch,
+              sourceEventId: payload.sourceEventId,
+            }),
           });
 
-          for (const machine of machines) {
-            await cc.send(
-              { transaction: db, parent: db },
-              "machine:pull-iterate-iterate-requested",
-              {
-                machineId: machine.id,
-                ref: branch,
-                sourceEventId: payload.sourceEventId,
-              },
-            );
-          }
-
-          logger.set({ sourceEventId: payload.sourceEventId, targetCount: machines.length });
+          logger.set({ sourceEventId: payload.sourceEventId, targetCount: result.length });
           logger.info("[GitHub Webhook] Enqueued iterate machine pulls");
-          return `enqueued ${machines.length} iterate machine pull requests`;
+          return `enqueued ${result.length} iterate machine pull requests`;
         })
         .default(() => `skipped: unsupported github webhook ${params.payload.event}`);
     },
@@ -440,22 +468,30 @@ export const registerConsumers = () => {
         return "no detached machines to delete";
       }
 
-      const detached = await db.query.machine.findMany({
-        where: inArray(schema.machine.id, detachedMachineIds),
+      const result = await cc.sendCTE({
+        query: db
+          .select({
+            id: schema.machine.id,
+            type: schema.machine.type,
+            externalId: schema.machine.externalId,
+            metadata: sql<
+              Record<string, unknown>
+            >`coalesce(${schema.machine.metadata}, '{}'::jsonb)`,
+          })
+          .from(schema.machine)
+          .where(inArray(schema.machine.id, detachedMachineIds)),
+        name: "machine:delete-requested",
+        payload: (result) => ({
+          machineId: result.id,
+          type: result.type,
+          externalId: result.externalId,
+          metadata: result.metadata,
+        }),
       });
 
-      for (const m of detached) {
-        await cc.send({ transaction: db, parent: db }, "machine:delete-requested", {
-          machineId: m.id,
-          type: m.type,
-          externalId: m.externalId,
-          metadata: m.metadata ?? {},
-        });
-      }
-
       logger.set({ machine: { id: machineId }, project: { id: projectId } });
-      logger.info(`[deleteDetachedMachines] Fan-out delete enqueuedCount=${detached.length}`);
-      return `enqueued ${detached.length} delete-requested events`;
+      logger.info(`[deleteDetachedMachines] Fan-out delete enqueuedCount=${result.length}`);
+      return `enqueued ${result.length} delete-requested events`;
     },
   });
 
