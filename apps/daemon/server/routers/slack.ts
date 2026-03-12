@@ -253,6 +253,7 @@ type ParsedEvent =
   | ParsedMessage
   | ParsedAssistantThread
   | ParsedReaction
+  | { case: "self_reply"; channel: string; threadTs: string }
   | { case: "ignored"; reason: string };
 
 function isParsedReaction(
@@ -300,29 +301,30 @@ slackRouter.post("/webhook", async (c) => {
 
   const parsed = parseWebhookPayload(payload);
 
-  if (parsed.case === "ignored") {
-    // When we detect our own reply in a thread, suppress any pending status
-    // updates so "Thinking..." doesn't flash after the reply is already visible.
-    // The agent posts via slack.chat.postMessage (fast path) while status updates
-    // travel through a much longer pipeline (SSE → DB → callback → debounce),
-    // so without this the debounced status fires after the reply.
-    if (parsed.reason === "Ignored: bot's own message") {
-      const event = payload.event;
-      const threadTs = "thread_ts" in event ? (event.thread_ts as string | undefined) : undefined;
-      const channel = "channel" in event ? (event.channel as string | undefined) : undefined;
-      if (threadTs && channel) {
-        for (const context of slackThreadContextByAgentPath.values()) {
-          if (context.channel === channel && context.threadTs === threadTs && !context.closing) {
-            context.replied = true;
-            if (context.statusTimer) {
-              clearTimeout(context.statusTimer);
-              context.statusTimer = undefined;
-            }
-            break;
-          }
+  // When we detect our own reply in a thread, suppress any pending status
+  // updates so "Thinking..." doesn't flash after the reply is already visible.
+  // The agent posts via slack.chat.postMessage (fast path) while status updates
+  // travel through a much longer pipeline (SSE → DB → callback → debounce),
+  // so without this the debounced status fires after the reply.
+  if (parsed.case === "self_reply") {
+    for (const context of slackThreadContextByAgentPath.values()) {
+      if (
+        context.channel === parsed.channel &&
+        context.threadTs === parsed.threadTs &&
+        !context.closing
+      ) {
+        context.replied = true;
+        if (context.statusTimer) {
+          clearTimeout(context.statusTimer);
+          context.statusTimer = undefined;
         }
+        break;
       }
     }
+    return c.json({ success: true, message: "Self-reply: suppressed status", eventId, requestId });
+  }
+
+  if (parsed.case === "ignored") {
     return c.json({ success: true, message: parsed.reason, eventId, requestId });
   }
 
@@ -910,6 +912,14 @@ function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
     isSelfMessage && !!selfMessageText && looksLikeAgentCommand(selfMessageText);
 
   if (isSelfMessage && !isSelfCommand) {
+    // Return a typed self_reply when we can extract thread context so the
+    // webhook handler can suppress stale status updates. Falls back to
+    // generic "ignored" for non-thread self-messages (e.g. DM root).
+    const selfChannel = "channel" in event ? (event.channel as string | undefined) : undefined;
+    const selfThreadTs = "thread_ts" in event ? (event.thread_ts as string | undefined) : undefined;
+    if (selfChannel && selfThreadTs) {
+      return { case: "self_reply", channel: selfChannel, threadTs: selfThreadTs };
+    }
     return { case: "ignored", reason: "Ignored: bot's own message" };
   }
 
