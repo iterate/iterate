@@ -2,7 +2,7 @@
 
 Important directories:
 
-- `apps/os` - the dashboard for our product. In production, this is served on `os.iterate.com`. In development, it is something like `<usernmame>.iterate-dev.com`
+- `apps/os` - the dashboard for our product. In production, this is served on `os.iterate.com`. In development, it is something like `<username>.iterate-dev.com`
 - `apps/daemon` - the entrypoint for our "agent" which runs on Docker-based sandboxed machines (Fly.io or plain Docker (locally))
 - `packages/iterate` - the iterate CLI, which is globally installed `iterate`. Note that the CLI delegates to the local source code when run inside this repo, so you can use the globally-installed binary without worrying about which version is running
 - `spec` - our Playwright end to end tests. We call them "specs" rather than "e2e" because we use them to declare how our product is supposed to function.
@@ -40,7 +40,7 @@ await spinnerWaiter.settings.run({ spinnerTimeout: 120_000 }, async () => {
 });
 ```
 
-Don't write if statements, ternaries, or other conditonals in tests. You should usually duplicated code over complex helper functions with conditionals.
+Don't write if statements, ternaries, or other conditionals in tests. You should usually duplicated code over complex helper functions with conditionals.
 
 You can use the `playwriter-spec` skill to run a spec dynamically when the feature or the spec itself are in flux and not yet validated. Doing this before running via playwright directly can result in a much faster feedback loop, and allow you to adapt the spec/the product as you step through the test.
 
@@ -195,7 +195,7 @@ Key project IDs: Iterate = `prj_01kh7ct9jke49vjq43j4wy3vyw`, team = `T0675PSN873
 
 Admin UI: `https://os.iterate.com/admin/outbox` — shows all events, filters by status/event/consumer, has "Process Queue" button.
 
-- CLI debugging: `iterate os admin outbox list-events --limit 50 --sort-direction desc` shows recent outbox history from prod. Use `--payload-contains '{"machineId": "mach_..."}'` or `--consumer-name myConsumer` to narrow down setup/probe issues without going straight to SQL. You can also look at the implemenation of the listEvents procedure powering this command for inspiration on how you can query the DB directly to dig even deeper.
+- CLI debugging: `iterate os admin outbox list-events --limit 50 --sort-direction desc` shows recent outbox history from prod. Use `--payload-contains '{"machineId": "mach_..."}'` or `--consumer-name myConsumer` to narrow down setup/probe issues without going straight to SQL. You can also look at the implementation of the listEvents procedure powering this command for inspiration on how you can query the DB directly to dig even deeper.
 
 To archive (soft-delete) stale messages directly:
 
