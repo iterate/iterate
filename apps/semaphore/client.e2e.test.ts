@@ -1,0 +1,176 @@
+import { randomUUID } from "node:crypto";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
+import type { Readable } from "node:stream";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { createSemaphoreClient } from "@iterate-com/semaphore-contract";
+
+function uniqueType() {
+  return `e2e-type-${randomUUID().slice(0, 8)}`;
+}
+
+function onceLineMatches(
+  child: ChildProcessByStdio<null, Readable, Readable>,
+  pattern: RegExp,
+  timeoutMs: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    let stdout = "";
+    let stderr = "";
+
+    const onStdout = (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+      const match = stdout.match(pattern);
+      if (match?.[0]) {
+        cleanup();
+        resolve(match[0]);
+      }
+    };
+
+    const onStderr = (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    };
+
+    const onExit = (code: number | null) => {
+      cleanup();
+      reject(
+        new Error(
+          `Alchemy dev exited before becoming ready (code=${code ?? "null"})\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+        ),
+      );
+    };
+
+    const interval = setInterval(() => {
+      if (Date.now() - startedAt > timeoutMs) {
+        cleanup();
+        reject(
+          new Error(
+            `Timed out waiting for Alchemy dev URL\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+          ),
+        );
+      }
+    }, 200);
+
+    const cleanup = () => {
+      clearInterval(interval);
+      child.stdout.off("data", onStdout);
+      child.stderr.off("data", onStderr);
+      child.off("exit", onExit);
+    };
+
+    child.stdout.on("data", onStdout);
+    child.stderr.on("data", onStderr);
+    child.on("exit", onExit);
+  });
+}
+
+async function waitForHealth(baseUrl: string, timeoutMs: number) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch(new URL("/health", baseUrl));
+      if (response.ok && (await response.text()) === "OK") {
+        return;
+      }
+    } catch {
+      // Keep polling until timeout.
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error(`Timed out waiting for health at ${baseUrl}`);
+}
+
+async function stopAlchemyDev(child: ChildProcessByStdio<null, Readable, Readable>): Promise<void> {
+  if (child.exitCode !== null) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    child.once("exit", () => resolve());
+    child.kill("SIGTERM");
+    setTimeout(() => {
+      if (child.exitCode === null) {
+        child.kill("SIGKILL");
+      }
+    }, 5_000);
+  });
+}
+
+describe("semaphore worker e2e", () => {
+  let child: ChildProcessByStdio<null, Readable, Readable>;
+  let baseUrl = "";
+
+  beforeAll(async () => {
+    const stage = `test-e2e-${randomUUID().slice(0, 8)}`;
+    const workerName = `semaphore-${stage}`;
+
+    child = spawn(
+      "doppler",
+      [
+        "run",
+        "--config",
+        "dev",
+        "--",
+        "sh",
+        "-c",
+        `WORKER_NAME=${workerName} SEMAPHORE_API_TOKEN=test-token tsx ./alchemy.run.ts cli --dev --stage ${stage}`,
+      ],
+      {
+        cwd: new URL(".", import.meta.url).pathname,
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    const rawUrl = await onceLineMatches(child, /http:\/\/localhost:\d+\/?/m, 120_000);
+    baseUrl = rawUrl.endsWith("/") ? rawUrl : `${rawUrl}/`;
+    await waitForHealth(baseUrl, 30_000);
+  }, 120_000);
+
+  afterAll(async () => {
+    await stopAlchemyDev(child);
+  });
+
+  test("baseUrl client can add, list, acquire, and release resources against the live worker", async () => {
+    const client = createSemaphoreClient({
+      apiKey: "test-token",
+      baseUrl,
+    });
+    const type = uniqueType();
+
+    const created = await client.resources.add({
+      type,
+      slug: "alpha",
+      data: { token: "secret-alpha" },
+    });
+    expect(created.slug).toBe("alpha");
+
+    const listed = await client.resources.list({ type });
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.slug).toBe("alpha");
+
+    const lease = await client.resources.acquire({
+      type,
+      leaseMs: 60_000,
+    });
+    expect(lease.slug).toBe("alpha");
+
+    const released = await client.resources.release({
+      type,
+      slug: lease.slug,
+      leaseId: lease.leaseId,
+    });
+    expect(released).toEqual({ released: true });
+  });
+
+  test("client injects the bearer token and rejects invalid credentials", async () => {
+    const badClient = createSemaphoreClient({
+      apiKey: "wrong-token",
+      baseUrl,
+    });
+
+    await expect(badClient.resources.list({})).rejects.toBeTruthy();
+  });
+});
