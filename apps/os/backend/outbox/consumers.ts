@@ -4,6 +4,10 @@ import { match } from "schematch";
 import { z } from "zod/v4";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
+import {
+  PosthogWebhookReceivedEventPayload,
+  ResendWebhookReceivedEventPayload,
+} from "../events.ts";
 import { logger } from "../tag-logger.ts";
 import { env } from "../../env.ts";
 import {
@@ -17,7 +21,6 @@ import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
 import { outboxClient as cc } from "./client.ts";
 
 const IterateMainPushWebhookPayload = z.object({
-  sourceEventId: z.string(),
   event: z.literal("push"),
   payload: z.object({
     ref: z.string(),
@@ -31,6 +34,16 @@ function parseGitRefBranch(ref: string): string | null {
   const prefix = "refs/heads/";
   if (!ref.startsWith(prefix)) return null;
   return ref.slice(prefix.length);
+}
+
+function parseSenderEmail(from: string): string {
+  const match = from.match(/<([^>]+)>/);
+  return match ? match[1] : from;
+}
+
+function parseRecipientLocal(to: string): string {
+  const email = to.includes("<") ? parseSenderEmail(to) : to;
+  return email.split("@")[0];
 }
 
 export const registerConsumers = () => {
@@ -74,6 +87,168 @@ export const registerConsumers = () => {
   });
 
   cc.registerConsumer({
+    name: "forwardResendWebhook",
+    on: "resend:webhook-received",
+    async handler(params) {
+      const payload = ResendWebhookReceivedEventPayload.parse(params.payload);
+      const resendEmailId = payload.data.email_id;
+      const senderEmail = parseSenderEmail(payload.data.from).toLowerCase();
+      const db = await getDb();
+
+      const user = await db.query.user.findFirst({
+        where: (u, { eq: whereEq }) => whereEq(u.email, senderEmail),
+      });
+      if (!user) {
+        logger.warn(`[Resend Webhook] No user found for sender ${senderEmail}`);
+        return `skipped: no user found for ${senderEmail}`;
+      }
+
+      const memberships = await db.query.organizationUserMembership.findMany({
+        where: (m, { eq: whereEq }) => whereEq(m.userId, user.id),
+        with: {
+          organization: {
+            with: {
+              projects: {
+                with: {
+                  machines: {
+                    where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
+                    limit: 1,
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+      if (memberships.length === 0) {
+        logger.set({ user: { id: user.id } });
+        logger.warn("[Resend Webhook] No org memberships for user");
+        return `skipped: user ${user.id} has no org memberships`;
+      }
+
+      const recipientLocal = payload.data.to[0] ? parseRecipientLocal(payload.data.to[0]) : "";
+      const projectSlugMatch = recipientLocal.match(/\+([^@]+)$/);
+      const targetProjectSlug = projectSlugMatch ? projectSlugMatch[1] : null;
+
+      let targetProject:
+        | (typeof schema.project.$inferSelect & {
+            machines: (typeof schema.machine.$inferSelect)[];
+          })
+        | null = null;
+
+      for (const membership of memberships) {
+        const org = membership.organization;
+        for (const project of org.projects) {
+          if (targetProjectSlug && project.slug === targetProjectSlug) {
+            targetProject = project;
+            break;
+          }
+          if (!targetProjectSlug && project.machines.length > 0 && !targetProject) {
+            targetProject = project;
+          }
+        }
+        if (targetProject) break;
+      }
+
+      if (!targetProject) {
+        logger.set({ user: { id: user.id } });
+        logger.warn(
+          `[Resend Webhook] No project found for email targetProjectSlug=${targetProjectSlug ?? "none"}`,
+        );
+        return `skipped: no project found for ${targetProjectSlug ?? "default route"}`;
+      }
+
+      const targetMachine = targetProject.machines[0];
+      if (!targetMachine) {
+        logger.set({ project: { id: targetProject.id }, user: { id: user.id } });
+        logger.info("[Resend Webhook] No active machine for target project");
+        return `skipped: project ${targetProject.id} has no active machine`;
+      }
+
+      const { createResendClient, fetchEmailContent, forwardEmailWebhookToMachine } =
+        await import("../integrations/resend/resend.ts");
+      const resendClient = createResendClient(env.RESEND_BOT_API_KEY);
+      const emailContent = await fetchEmailContent(resendClient, resendEmailId);
+
+      logger.debug("[Resend Webhook] Forwarding to machine", { machineId: targetMachine.id });
+      const forwardResult = await forwardEmailWebhookToMachine(
+        targetMachine,
+        {
+          ...payload,
+          _iterate: {
+            userId: user.id,
+            projectId: targetProject.id,
+            emailBody: emailContent
+              ? {
+                  text: emailContent.text,
+                  html: emailContent.html,
+                }
+              : null,
+          },
+        },
+        env,
+      );
+      if (!forwardResult.success) {
+        throw new Error(`Resend forward failed: ${forwardResult.error}`);
+      }
+
+      logger.set({ machine: { id: targetMachine.id }, user: { id: user.id } });
+      logger.info("[Resend Webhook] Forwarded to machine");
+      return `forwarded to ${targetMachine.id}`;
+    },
+  });
+
+  cc.registerConsumer({
+    name: "forwardPosthogWebhook",
+    on: "posthog:webhook-received",
+    async handler(params) {
+      const { deliveryId, payload } = PosthogWebhookReceivedEventPayload.parse(params.payload);
+      const db = await getDb();
+      const connection = await db.query.projectConnection.findFirst({
+        where: (pc, { and, eq: whereEq }) =>
+          and(whereEq(pc.provider, "slack"), whereEq(pc.externalId, "T0675PSN873")),
+        with: {
+          project: {
+            with: {
+              machines: {
+                where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
+                limit: 1,
+              },
+            },
+          },
+        },
+      });
+
+      const projectId = connection?.projectId ?? null;
+      const machine = connection?.project?.machines[0] ?? null;
+      if (!machine) {
+        logger.set({ deliveryId, projectId });
+        logger.warn("[PostHog Webhook] No active machine for Iterate Slack team");
+        return "skipped: no active machine for Iterate Slack team";
+      }
+
+      const { forwardPosthogWebhookToMachine } = await import("../integrations/posthog/proxy.ts");
+      try {
+        await forwardPosthogWebhookToMachine({
+          machine,
+          env,
+          deliveryId,
+          payload,
+        });
+      } catch (error) {
+        logger.set({ deliveryId, machineId: machine.id, projectId });
+        throw new Error(
+          `[PostHog Webhook] Failed to forward to machine: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+
+      logger.set({ deliveryId, machineId: machine.id, projectId });
+      logger.info("[PostHog Webhook] Forwarded to machine");
+      return `forwarded to ${machine.id}`;
+    },
+  });
+
+  cc.registerConsumer({
     name: "requestIterateMachinePulls",
     on: "github:webhook-received",
     async handler(params) {
@@ -95,11 +270,10 @@ export const registerConsumers = () => {
             payload: (result) => ({
               machineId: result.id,
               ref: branch,
-              sourceEventId: payload.sourceEventId,
             }),
           });
 
-          logger.set({ sourceEventId: payload.sourceEventId, targetCount: result.length });
+          logger.set({ eventId: params.eventId, targetCount: result.length });
           logger.info("[GitHub Webhook] Enqueued iterate machine pulls");
           return `enqueued ${result.length} iterate machine pull requests`;
         })
@@ -119,7 +293,7 @@ export const registerConsumers = () => {
       if (!machine) {
         logger.set({
           machineId: params.payload.machineId,
-          sourceEventId: params.payload.sourceEventId,
+          eventId: params.eventId,
         });
         logger.warn("[GitHub Webhook] Skipping iterate pull for missing machine");
         return `skipped: machine ${params.payload.machineId} not found`;
@@ -129,7 +303,7 @@ export const registerConsumers = () => {
         logger.set({
           machineId: machine.id,
           state: machine.state,
-          sourceEventId: params.payload.sourceEventId,
+          eventId: params.eventId,
         });
         logger.info("[GitHub Webhook] Skipping iterate pull for non-active machine");
         return `skipped: machine ${machine.id} state is ${machine.state}`;
@@ -149,7 +323,7 @@ export const registerConsumers = () => {
       logger.set({
         machineId: machine.id,
         ref: params.payload.ref,
-        sourceEventId: params.payload.sourceEventId,
+        eventId: params.eventId,
       });
       logger.info("[GitHub Webhook] Triggered iterate pull on machine");
       return `triggered iterate pull on ${machine.id}`;
@@ -277,9 +451,9 @@ export const registerConsumers = () => {
       const writeSentinel = await pushSetupToMachine(machine, input);
 
       // Emit setup-pushed so the readiness probe can begin
-      await cc.send({ transaction: db, parent: db }, "machine:setup-pushed", {
-        machineId,
-        projectId,
+      await cc.send(db, {
+        name: "machine:setup-pushed",
+        payload: { machineId, projectId },
       });
 
       await writeSentinel();
@@ -330,11 +504,14 @@ export const registerConsumers = () => {
       }
 
       // Probe message sent successfully — emit probe-sent so polling begins
-      await cc.send({ transaction: db, parent: db }, "machine:probe-sent", {
-        machineId,
-        projectId,
-        threadId: sendResult.threadId,
-        messageId: sendResult.messageId,
+      await cc.send(db, {
+        name: "machine:probe-sent",
+        payload: {
+          machineId,
+          projectId,
+          threadId: sendResult.threadId,
+          messageId: sendResult.messageId,
+        },
       });
 
       logger.set({ machine: { id: machineId }, threadId: sendResult.threadId });
@@ -378,10 +555,13 @@ export const registerConsumers = () => {
 
       const responseText = await pollForProbeAnswer(fetcher, threadId);
 
-      await cc.send({ transaction: db, parent: db }, "machine:probe-succeeded", {
-        machineId,
-        projectId,
-        responseText,
+      await cc.send(db, {
+        name: "machine:probe-succeeded",
+        payload: {
+          machineId,
+          projectId,
+          responseText,
+        },
       });
 
       logger.set({ machine: { id: machineId } });
@@ -438,10 +618,13 @@ export const registerConsumers = () => {
           .where(eq(schema.machine.id, machineId));
 
         // Emit activated event inside the transaction for atomicity
-        await cc.send({ transaction: tx, parent: db }, "machine:activated", {
-          machineId,
-          projectId,
-          detachedMachineIds: detached.map((m) => m.id),
+        await cc.send(tx, {
+          name: "machine:activated",
+          payload: {
+            machineId,
+            projectId,
+            detachedMachineIds: detached.map((m) => m.id),
+          },
         });
 
         return true;

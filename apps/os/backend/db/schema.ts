@@ -12,9 +12,8 @@ import {
   check,
 } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
-import { relations, sql } from "drizzle-orm";
+import { isNotNull, relations, sql } from "drizzle-orm";
 import { MachineType as SandboxMachineType } from "@iterate-com/sandbox/providers/types";
-import type { SlackEvent } from "@slack/web-api";
 import { PROJECT_SANDBOX_PROVIDER } from "../utils/sandbox-providers.ts";
 
 // Slug constraint: alphanumeric and hyphens only, must contain at least one letter, max 50 chars, not reserved
@@ -276,7 +275,6 @@ export const projectRelations = relations(project, ({ one, many }) => ({
     fields: [project.organizationId],
     references: [organization.id],
   }),
-  events: many(event),
   machines: many(machine),
   envVars: many(projectEnvVar),
   accessTokens: many(projectAccessToken),
@@ -548,32 +546,6 @@ export const daytonaPreviewTokenRelations = relations(daytonaPreviewToken, ({ on
 }));
 // #endregion ========== Daytona Preview Tokens ==========
 
-// #region ========== Events (unified) ==========
-export const event = pgTable(
-  "event",
-  (t) => ({
-    id: iterateId("evt"),
-    type: t.text().notNull(), // e.g., "slack:webhook-received"
-    payload: t.jsonb().$type<SlackEvent | Record<string, unknown>>().notNull(),
-    projectId: t.text().references(() => project.id, { onDelete: "cascade" }),
-    externalId: t.text().notNull(), // Provider event ID for deduplication (e.g., Slack event_id, GitHub delivery_id)
-    ...withTimestamps,
-  }),
-  (t) => [
-    index().on(t.projectId),
-    index().on(t.type),
-    uniqueIndex("event_type_external_id_unique").on(t.type, t.externalId),
-  ],
-);
-
-export const eventRelations = relations(event, ({ one }) => ({
-  project: one(project, {
-    fields: [event.projectId],
-    references: [project.id],
-  }),
-}));
-// #endregion ========== Events ==========
-
 // #region ========== Billing ==========
 export const SubscriptionStatus = [
   "active",
@@ -633,6 +605,7 @@ export const outboxEvent = pgTable(
     name: t.text().notNull(),
     payload: jsonb().$type<Record<string, unknown>>().notNull(),
     context: jsonb().$type<OutboxEventContext>().notNull().default({}),
+    deduplicationKey: t.text(),
     ...withTimestamps,
   }),
   (t) => [
@@ -642,6 +615,9 @@ export const outboxEvent = pgTable(
       t.name,
       t.id,
     ),
+    uniqueIndex("outbox_event_name_dedup_key_unique")
+      .on(t.name, t.deduplicationKey)
+      .where(isNotNull(t.deduplicationKey)),
   ],
 );
 

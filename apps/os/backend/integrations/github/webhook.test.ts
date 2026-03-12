@@ -31,7 +31,9 @@ vi.mock("../../lib/posthog.ts", () => ({
 
 vi.mock("../../outbox/client.ts", () => ({
   outboxClient: {
-    send: vi.fn().mockResolvedValue({ eventId: "1", matchedConsumers: 1, delays: ["0s"] }),
+    send: vi
+      .fn()
+      .mockResolvedValue({ eventId: "1", matchedConsumers: 1, delays: ["0s"], duplicate: false }),
     sendCTE: vi.fn().mockResolvedValue([{ id: "evt_test123" }]),
   },
 }));
@@ -68,11 +70,11 @@ const validPushPayload = {
 describe("GitHub Webhook Handler", () => {
   const WEBHOOK_SECRET = "test-webhook-secret";
   const createMachineForProjectMock = vi.mocked(createMachineForProject);
-  const outboxClientSendCTEMock = vi.mocked(outboxClient.sendCTE);
+  const outboxClientSendMock = vi.mocked(outboxClient.send);
 
   beforeEach(() => {
     createMachineForProjectMock.mockClear();
-    outboxClientSendCTEMock.mockClear();
+    outboxClientSendMock.mockClear();
   });
 
   function createMockDb() {
@@ -436,21 +438,15 @@ describe("GitHub Webhook Handler", () => {
 
       await expectWebhookMatch(res, { received: true });
       await flushBackgroundTasks();
-      expect(outboxClientSendCTEMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: "github:webhook-received",
-          payload: expect.any(Function),
-        }),
-      );
-      // The payload is a callback — verify it produces the expected shape
-      const call = outboxClientSendCTEMock.mock.calls[0][0];
-      const payloadFn = call.payload as (row: { id: string }) => unknown;
-      expect(payloadFn({ id: "evt_test123" })).toMatchObject({
-        sourceEventId: "evt_test123",
-        deliveryId: expect.any(String),
-        event: "push",
-        action: null,
-        payload: iteratePushPayload,
+      expect(outboxClientSendMock).toHaveBeenCalledWith(expect.any(Object), {
+        name: "github:webhook-received",
+        payload: {
+          deliveryId: expect.any(String),
+          event: "push",
+          action: null,
+          payload: iteratePushPayload,
+        },
+        deduplicationKey: expect.stringContaining("github:push:"),
       });
     });
 
@@ -468,9 +464,11 @@ describe("GitHub Webhook Handler", () => {
 
       await expectWebhookMatch(res, { received: true });
       await flushBackgroundTasks();
-      expect(outboxClientSendCTEMock).toHaveBeenCalledWith(
+      expect(outboxClientSendMock).toHaveBeenCalledWith(
+        expect.any(Object),
         expect.objectContaining({
           name: "github:webhook-received",
+          deduplicationKey: expect.any(String),
         }),
       );
     });
@@ -493,9 +491,11 @@ describe("GitHub Webhook Handler", () => {
 
       await expectWebhookMatch(res, { received: true });
       await flushBackgroundTasks();
-      expect(outboxClientSendCTEMock).toHaveBeenCalledWith(
+      expect(outboxClientSendMock).toHaveBeenCalledWith(
+        expect.any(Object),
         expect.objectContaining({
           name: "github:webhook-received",
+          deduplicationKey: expect.any(String),
         }),
       );
     });

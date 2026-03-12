@@ -582,32 +582,21 @@ slackApp.post("/webhook", async (c) => {
           // Get the single active machine for this project
           const targetMachine = connection.project?.machines[0] ?? null;
 
-          // Atomically insert event + enqueue outbox consumer for forwarding to machine.
+          // Enqueue outbox event for forwarding to machine.
           // The outbox consumer handles retries (e.g. machine rebooting).
-          const [inserted] = await outboxClient.sendCTE({
-            query: db
-              .insert(schema.event)
-              .values({
-                type: "slack:webhook-received",
-                payload: payload,
-                projectId,
-                externalId: slackEventId,
-              })
-              .onConflictDoNothing({
-                target: [schema.event.type, schema.event.externalId],
-              })
-              .returning({ id: schema.event.id }),
+          // Deduplication is handled by the outbox's unique index on (name, deduplication_key).
+          const result = await outboxClient.send(db, {
             name: "slack:webhook-received",
-            payload: (result) => ({
-              sourceEventId: result.id,
+            payload: {
               projectId,
               machineId: targetMachine?.id ?? null,
               payload,
               correlation,
-            }),
+            },
+            deduplicationKey: slackEventId,
           });
 
-          if (!inserted) {
+          if (result.duplicate) {
             logger.debug("[Slack Webhook] Duplicate event, skipping", {
               slackEventId,
               correlation,
