@@ -94,7 +94,7 @@ async function waitForInternalHealth(params: {
 const cases = [
   {
     id: "docker",
-    tags: ["providers/docker", "no-internet"] as const,
+    tags: ["docker", "no-internet"] as const,
     timeoutMs: 30_000,
     create: async ({ slug }: { slug: string }) => {
       const env = DockerDeploymentTestEnv.parse(process.env);
@@ -109,7 +109,7 @@ const cases = [
   },
   {
     id: "fly",
-    tags: ["providers/fly", "slow"] as const,
+    tags: ["fly", "slow"] as const,
     timeoutMs: 240_000,
     create: async ({ slug }: { slug: string }) => {
       const env = FlyDeploymentTestEnv.parse(process.env);
@@ -135,10 +135,7 @@ describe("internal ingress", () => {
         const deployment = await create({
           slug: e2e.deploymentSlug,
         });
-        await using deploymentFixture = await e2e.useDeployment({ deployment });
-        await deploymentFixture.waitUntilExecAvailable({
-          timeoutMs,
-        });
+        await using _deploymentFixture = await e2e.useDeployment({ deployment });
 
         await waitForInternalHealth({
           deployment,

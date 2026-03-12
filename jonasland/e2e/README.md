@@ -10,35 +10,52 @@ Do not change these tests casually. Do not simplify them to fit the implementati
 
 Prefer one-file or one-test runs.
 
-The short `pnpm e2e:*` commands below assume you are running them from `jonasland/e2e/`.
+Important:
 
-Common one-liners:
+- raw Vitest tags are intentionally mirrored into test titles by the local `test` wrapper in `test-support/e2e-test.ts`
+- use `-t docker`, `-t fly`, `-t no-internet`, `-t slow`, and `-t third-party` as fast inclusive filters
+- use `--tags-filter` for exact tag slicing
+- default `pnpm vitest` excludes `fly`
+- use `pnpm vitest:fly` or `pnpm vitest:all` when you explicitly want Fly cases
+- this package intentionally uses `vitest@4.1.0-beta.6`, which is the beta line where native test tags are available
+
+From repo root:
 
 ```bash
-pnpm e2e:docker -- vitest/01-providers/provider-contract.e2e.test.ts
-pnpm e2e:docker -- vitest/01-providers/provider-contract.e2e.test.ts -t "creates a clean debian runtime"
-pnpm test:vitest -- --tags-filter="no-internet"
-pnpm e2e:docker -- vitest/02-networking/egress.e2e.test.ts --tags-filter="providers/docker and no-internet"
-pnpm e2e:fly -- vitest/01-providers/provider-contract.e2e.test.ts
-pnpm test:vitest -- vitest/03-platform/events-service.e2e.test.ts -t "firehose"
-pnpm test:vitest -- --tags-filter="slow"
-pnpm test:playwright -- playwright/01-providers/static-page.spec.ts
-pnpm test:playwright -- -g "public ingress"
+pnpm jonasland e2e vitest 02a
+pnpm jonasland e2e vitest 02b -t docker
+pnpm jonasland e2e vitest 02b -t no-internet
+pnpm jonasland e2e vitest:fly 02b
+pnpm jonasland e2e vitest:all 02b -t fly
+pnpm jonasland e2e vitest:all -- --tags-filter="fly and slow"
+pnpm jonasland e2e playwright -g "public ingress"
 ```
 
-If you are developing a single behavior, default to a single file path and then narrow further with `-t`.
+From `jonasland/e2e`:
+
+```bash
+pnpm vitest 02a
+pnpm vitest 02b -t docker
+pnpm vitest 02b -t no-internet
+pnpm vitest:fly 02b
+pnpm vitest:all 02b -t fly
+pnpm tags
+```
+
+If you are developing a single behavior, default to one numbered file filter and then narrow further with `-t`.
 
 ## Environment Variables
 
 These env vars provide concrete inputs to the suite. They do not decide which provider cases exist in a file, and they do not replace tags.
 
-- `E2E_DOCKER_IMAGE_REF`: image reference for Docker-backed cases. Defaults to `debian:trixie-slim` in `DockerDeploymentTestEnv`.
-- `E2E_FLY_IMAGE_REF`: explicit image reference for Fly-backed cases. If omitted, `FlyDeploymentTestEnv` falls back to `E2E_DOCKER_IMAGE_REF`.
+- `JONASLAND_SANDBOX_IMAGE`: required baseline image for the suite. We expect this to come from Doppler in normal dev/CI runs, but package scripts preserve a locally-set value so you can override it.
+- `E2E_DOCKER_IMAGE_REF`: optional explicit Docker test image override. If omitted, Docker-backed cases use `JONASLAND_SANDBOX_IMAGE`.
+- `E2E_FLY_IMAGE_REF`: optional explicit Fly test image override. If omitted, Fly-backed cases fall back to `E2E_DOCKER_IMAGE_REF`, then `JONASLAND_SANDBOX_IMAGE`.
 - `FLY_API_TOKEN`: required for Fly-backed cases.
 - `E2E_RUN_INTERNET_REQUIRED`: optional policy env for broader workflows that want to decide whether internet-requiring slices should be attempted.
 - `E2E_RUN_SLOW`: optional policy env for broader workflows that want to decide whether slower slices should be attempted.
 - `E2E_RUN_NON_DETERMINISTIC`: optional policy env for broader workflows that want to decide whether intentionally non-deterministic slices should be attempted.
-- `E2E_SKIP_DISPOSE`: optional policy env for broader workflows that want to decide whether to skip the disposal of the deployment on dispose. Defaults to `false`.
+- `E2E_NO_DISPOSE`: optional policy env for broader workflows that want to decide whether to skip the disposal of the deployment on dispose. Defaults to `false`.
   Shared provider env schemas live in `test-helpers/deployment-test-env.ts`:
 
 - `DockerDeploymentTestEnv`
@@ -50,23 +67,23 @@ Provider cases should reference one of those schemas and parse it only when that
 
 The package scripts are intentionally small wrappers around Vitest and Playwright.
 
-- `pnpm e2e -- ...`: unfiltered Vitest entrypoint.
-- `pnpm e2e:docker -- ...`: Vitest with `--tags-filter="providers/docker"`.
-- `pnpm e2e:fly -- ...`: Vitest with `--tags-filter="providers/fly"`.
-- `pnpm e2e:playwright -- ...`: Playwright specs.
-- `pnpm test:vitest -- ...`: direct Vitest entrypoint.
-- `pnpm test:vitest:docker -- ...`: direct Vitest entrypoint with `--tags-filter="providers/docker"`.
-- `pnpm test:vitest:fly -- ...`: direct Vitest entrypoint with `--tags-filter="providers/fly"`.
-- `pnpm test:playwright -- ...`: direct Playwright entrypoint.
+- `pnpm vitest ...`: default Vitest entrypoint, excludes `fly`
+- `pnpm vitest:all ...`: Vitest with no default provider exclusion
+- `pnpm vitest:docker ...`: Vitest with `--tags-filter="docker"`
+- `pnpm vitest:fly ...`: Vitest with `--tags-filter="fly"`
+- `pnpm playwright ...`: Playwright specs
+- `pnpm tags`: print configured Vitest tags
+- `pnpm test`: alias for `pnpm vitest`
 
 Typical examples:
 
 ```bash
-pnpm e2e:docker -- vitest/01-providers/provider-contract.e2e.test.ts
-pnpm e2e:docker -- vitest/02-networking/internal-ingress.e2e.test.ts -t "host header"
-pnpm e2e:fly -- vitest/02-networking/public-ingress.e2e.test.ts -t "public ingress"
-pnpm test:vitest -- --tags-filter="third-party-dependency"
-pnpm e2e:playwright -- playwright/03-platform/docs.spec.ts
+pnpm vitest 01a
+pnpm vitest 02a -t "default-service change"
+pnpm vitest 02b -t docker
+pnpm vitest:fly 02c
+pnpm vitest:all -- --tags-filter="third-party"
+pnpm playwright playwright/03-platform/docs.spec.ts
 ```
 
 ## Vitest Artifacts
@@ -146,7 +163,7 @@ finishes:
 - failing tests end with a `state: failed` footer plus failure details
 
 Tests can place additional artifacts in the same directory. For example,
-`useDeployment({ artifactDir: e2e.outputDir })` writes `deployment-events.yaml`
+`useDeployment({ artifactDir: e2e.outputDir })` writes `deployment-logs.yaml`
 next to the Vitest log and result files.
 
 When a test needs a deployment name, prefer `e2e.deploymentSlug` over rebuilding
@@ -194,30 +211,30 @@ What should stay as env vars instead:
 
 Use this smaller stable vocabulary for now:
 
-- `providers/docker`
-- `providers/fly`
+- `docker`
+- `fly`
 - `slow`
 - `no-internet`
-- `third-party-dependency`
+- `third-party`
 
 Meaning:
 
-- `providers/docker`: the test belongs to the Docker provider slice
-- `providers/fly`: the test belongs to the Fly provider slice
+- `docker`: the test belongs to the Docker provider slice
+- `fly`: the test belongs to the Fly provider slice
 - `slow`: the test takes materially longer than the normal inner loop
 - `no-internet`: the test should work without internet access
-- `third-party-dependency`: the test depends on a third party outside our control, excluding the machine provider itself
+- `third-party`: the test depends on a third party outside our control, excluding the machine provider itself
 
-The machine provider itself does not count as `third-party-dependency`. A Fly-backed test is not automatically tagged `third-party-dependency` just because it uses Fly.
+The machine provider itself does not count as `third-party`. A Fly-backed test is not automatically tagged `third-party` just because it uses Fly.
 
 ### Tagging Rules
 
 - use only the tags above unless we explicitly expand the vocabulary
-- a Docker-specific test should carry `providers/docker`
-- a Fly-specific test should carry `providers/fly`
+- a Docker-specific test should carry `docker`
+- a Fly-specific test should carry `fly`
 - a Fly case is often also `slow`, but spell both tags out explicitly
 - a test that is intended to work fully offline should carry `no-internet`
-- a test that hits an external dependency outside our control should carry `third-party-dependency`
+- a test that hits an external dependency outside our control should carry `third-party`
 - a test that is notably slower than the normal inner loop should carry `slow`
 
 ### How We Use Tags In Code
@@ -231,11 +248,11 @@ destructuring in several places.
 const cases = [
   {
     id: "docker",
-    tags: ["providers/docker", "no-internet"] as const,
+    tags: ["docker", "no-internet"] as const,
   },
   {
     id: "fly",
-    tags: ["providers/fly", "slow"] as const,
+    tags: ["fly", "slow"] as const,
   },
 ];
 
@@ -249,9 +266,9 @@ describe.each(cases)("$id", (tc) => {
 Selection happens at the CLI:
 
 ```bash
-pnpm e2e:docker -- vitest/01-providers/provider-contract.e2e.test.ts
-pnpm test:vitest -- --tags-filter="providers/fly and slow"
-pnpm test:vitest -- --tags-filter="providers/docker and no-internet" -t "provider contract"
+pnpm vitest 01a
+pnpm vitest:all -- --tags-filter="fly and slow"
+pnpm vitest 01a -t docker
 ```
 
 ## Parameterising Tests
@@ -280,7 +297,7 @@ Avoid this pattern:
 
 Canonical example:
 
-- `jonasland/e2e/vitest/01-providers/provider-contract.e2e.test.ts`
+- `jonasland/e2e/vitest/01-providers/01a-provider-contract.e2e.test.ts`
 
 That file is the reference for:
 
@@ -391,21 +408,28 @@ We aspire to remove third-party dependency wherever possible, but that is not th
 jonasland/e2e/
   README.md
   AGENTS.md -> README.md
+  test-support/
+    e2e-test.ts
+    e2e-test.test.ts
   vitest/
     01-providers/
-      provider-contract.e2e.test.ts
+      01a-provider-contract.e2e.test.ts
     02-networking/
-      internal-ingress.e2e.test.ts
-      public-ingress.e2e.test.ts
-      egress.e2e.test.ts
+      02a-ingress.e2e.test.ts
+      02b-egress.e2e.test.ts
+      02c-public-ingress.e2e.test.ts
+      02d-internal-ingress.e2e.test.ts
+      02e-cloudflare-tunnel.e2e.test.ts
+      02f-egress-docker-only-manual.e2e.test.ts
     03-platform/
-      pidnap.e2e.test.ts
-      events-service.e2e.test.ts
-      registry-service.e2e.test.ts
-      otel-tracing.e2e.test.ts
-      docs.e2e.test.ts
-      open-observe.e2e.test.ts
-      agents.e2e.test.ts
+      03a-pidnap.e2e.test.ts
+      03b-events-service.e2e.test.ts
+      03c-registry-service.e2e.test.ts
+      03d-otel-tracing.e2e.test.ts
+      03e-docs.e2e.test.ts
+      03f-open-observe.e2e.test.ts
+      03g-example-service.e2e.test.ts
+      03h-agents.e2e.test.ts
   playwright/
     01-providers/
       static-page.spec.ts
@@ -426,17 +450,21 @@ HAR recordings should be colocated with the tests that use them.
 
 Vitest:
 
-- `provider-contract.e2e.test.ts`: the innermost provider abstraction
-- `internal-ingress.e2e.test.ts`: deployment-local ingress checks using curl or fetch
-- `public-ingress.e2e.test.ts`: public ingress through ingress proxy and related edge infrastructure
-- `egress.e2e.test.ts`: transparent egress, mocked edge, and HAR-backed egress
-- `pidnap.e2e.test.ts`: process management and restart persistence
-- `events-service.e2e.test.ts`: event append, firehose, and workflow behavior
-- `registry-service.e2e.test.ts`: route publication and public URL resolution
-- `otel-tracing.e2e.test.ts`: tracing and service-call observability
-- `docs.e2e.test.ts`: docs service as a platform workload
-- `open-observe.e2e.test.ts`: open-observe as a platform workload
-- `agents.e2e.test.ts`: `claude`, `pi`, `opencode`, and `codex`, with live and replayed edge coverage where possible
+- `01a-provider-contract.e2e.test.ts`: the innermost provider abstraction
+- `02a-ingress.e2e.test.ts`: local ingress and default-service behavior inside the sandbox
+- `02b-egress.e2e.test.ts`: transparent egress, mocked edge, and HAR-backed egress
+- `02c-public-ingress.e2e.test.ts`: public ingress through ingress proxy and related edge infrastructure
+- `02d-internal-ingress.e2e.test.ts`: deployment-local ingress checks using curl or fetch
+- `02e-cloudflare-tunnel.e2e.test.ts`: Cloudflare tunnel coverage for sandbox services
+- `02f-egress-docker-only-manual.e2e.test.ts`: explicit Docker-only/manual egress harness
+- `03a-pidnap.e2e.test.ts`: process management and restart persistence
+- `03b-events-service.e2e.test.ts`: event append, firehose, and workflow behavior
+- `03c-registry-service.e2e.test.ts`: route publication and public URL resolution
+- `03d-otel-tracing.e2e.test.ts`: tracing and service-call observability
+- `03e-docs.e2e.test.ts`: docs service as a platform workload
+- `03f-open-observe.e2e.test.ts`: open-observe as a platform workload
+- `03g-example-service.e2e.test.ts`: example-service as a platform workload
+- `03h-agents.e2e.test.ts`: `claude`, `pi`, `opencode`, and `codex`, with live and replayed edge coverage where possible
 
 Playwright:
 
@@ -506,16 +534,16 @@ Run the smallest thing that can answer your question.
 Vitest:
 
 ```bash
-pnpm --filter @iterate-com/jonasland-e2e test:vitest -- jonasland/e2e/vitest/01-providers/provider-contract.e2e.test.ts
-pnpm --filter @iterate-com/jonasland-e2e test:vitest:docker -- jonasland/e2e/vitest/02-networking/egress.e2e.test.ts
-pnpm --filter @iterate-com/jonasland-e2e test:vitest -- -t "restart persistence"
+pnpm vitest 01a
+pnpm vitest 02b -t docker
+pnpm vitest:all -t "restart persistence"
 ```
 
 Playwright:
 
 ```bash
-pnpm --filter @iterate-com/jonasland-e2e test:playwright -- jonasland/e2e/playwright/01-providers/static-page.spec.ts
-pnpm --filter @iterate-com/jonasland-e2e test:playwright -- -g "public ingress"
+pnpm playwright playwright/01-providers/static-page.spec.ts
+pnpm playwright -g "public ingress"
 ```
 
 Start with Docker. Only move to Fly after Docker is working, unless the requirement is specifically about Fly.

@@ -2,14 +2,14 @@ import { readFile } from "node:fs/promises";
 import { describe } from "vitest";
 import { createDockerProvider } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
 import { createFlyProvider } from "@iterate-com/shared/jonasland/deployment/fly-deployment.ts";
-import {
-  Deployment,
-  type DeploymentProvider,
-  type DeploymentOpts,
-} from "@iterate-com/shared/jonasland/deployment/deployment.ts";
+import { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
+import type {
+  DeploymentOpts,
+  DeploymentProvider,
+} from "@iterate-com/shared/jonasland/deployment/deployment-provider-manifest.ts";
 import { parse as parseYaml } from "yaml";
 import { FlyDeploymentTestEnv } from "../../test-helpers/deployment-test-env.ts";
-import { test, type DeploymentEventsArtifact } from "../../test-support/e2e-test.ts";
+import { test, type DeploymentLogsArtifact } from "../../test-support/e2e-test.ts";
 
 // This file intentionally tests the deployment provider abstraction itself, not
 // our sandbox image. It stays pinned to a minimal neutral Debian image on
@@ -28,12 +28,12 @@ const baseAssertionTimeoutMs = 30_000;
 const cases: readonly ProviderContractCase[] = [
   {
     id: "docker",
-    tags: ["providers/docker", "no-internet"] as const,
+    tags: ["docker", "no-internet"] as const,
     createProvider: () => createDockerProvider({}),
   },
   {
     id: "fly",
-    tags: ["providers/fly", "slow"] as const,
+    tags: ["fly", "slow"] as const,
     // creating fly machines can be sloooooow
     extraTimeoutMs: 150_000,
     createProvider: () => createFlyProvider(FlyDeploymentTestEnv.parse(process.env)),
@@ -51,7 +51,7 @@ describe("deployment provider contract", () => {
       async ({ expect, e2e }) => {
         const provider = tc.createProvider();
         let locator!: unknown;
-        let eventsPath!: string;
+        let logsPath!: string;
         {
           // Keep the owning deployment + fixture in a dedicated block so they are
           // disposed before we assert that reconnecting by locator now fails.
@@ -73,10 +73,11 @@ describe("deployment provider contract", () => {
           });
           await using deploymentFixture = await e2e.useDeployment({
             deployment,
+            waitUntilHealthyTimeoutMs: false,
           });
-          eventsPath = deploymentFixture.artifacts.eventsPath!;
+          logsPath = deploymentFixture.artifacts.logsPath!;
           console.log(
-            `[provider-contract] debug artifacts for ${e2e.deploymentSlug}: ${deploymentFixture.artifacts.dir} (test slug: ${e2e.testSlug}, console: ${deploymentFixture.artifacts.consoleLogPath}, raw events: ${deploymentFixture.artifacts.eventsPath})`,
+            `[provider-contract] debug artifacts for ${e2e.deploymentSlug}: ${deploymentFixture.artifacts.dir} (test slug: ${e2e.testSlug}, console: ${deploymentFixture.artifacts.consoleLogPath}, raw logs: ${deploymentFixture.artifacts.logsPath})`,
           );
 
           await deploymentFixture.waitUntilExecAvailable({
@@ -101,26 +102,24 @@ describe("deployment provider contract", () => {
             state: "running",
           });
 
-          // 2) provider logs are available through the normalized deployment
-          // event stream. The fixture keeps history in memory for assertions and
-          // mirrors the raw stream to the temp artifact directory for debugging.
+          // 2) provider logs are available through the deployment log stream.
+          // The fixture keeps history in memory for assertions and mirrors it to
+          // the temp artifact directory for debugging.
           // The startup command emits this marker, but providers may wrap it in
-          // their own process-launch logging. Assert that the normalized log
-          // stream surfaces a line containing the marker rather than requiring
-          // an exact provider-specific log format.
-          const observedLogEvent = await deploymentFixture.waitForLogLine({
+          // their own process-launch logging. Assert that the log stream
+          // surfaces a line containing the marker rather than requiring an
+          // exact provider-specific log format.
+          const observedLogEntry = await deploymentFixture.waitForLogLine({
             lineIncludes: "provider-contract-writing-startup-log",
             timeoutMs: baseAssertionTimeoutMs,
           });
 
-          expect(observedLogEvent.type).toBe("https://events.iterate.com/deployment/logged");
-          expect(observedLogEvent).toMatchObject({
-            payload: expect.objectContaining({
-              line: expect.stringContaining("provider-contract-writing-startup-log"),
-            }),
+          expect(observedLogEntry).toMatchObject({
+            text: expect.stringContaining("provider-contract-writing-startup-log"),
+            observedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
           });
-          // The mirrored artifact file is what we inspect after failures, so
-          // assert that the fixture persists the normalized event stream there too.
+          // The mirrored artifact file is what we inspect after failures, so the
+          // fixture should persist log history there too.
           await deploymentFixture.waitForArtifactText({
             needle: "provider-contract-writing-startup-log",
             timeoutMs: baseAssertionTimeoutMs,
@@ -191,9 +190,8 @@ describe("deployment provider contract", () => {
           }),
         ).rejects.toThrow();
 
-        const eventsArtifact = await readFile(eventsPath, "utf8");
-        const streamPath = `/deployment/${e2e.deploymentSlug}`;
-        const artifact = parseYaml(eventsArtifact) as DeploymentEventsArtifact;
+        const logsArtifact = await readFile(logsPath, "utf8");
+        const artifact = parseYaml(logsArtifact) as DeploymentLogsArtifact;
 
         expect(artifact).toMatchObject({
           deployment: {
@@ -201,62 +199,22 @@ describe("deployment provider contract", () => {
             state: "destroyed",
             opts: null,
           },
-          path: streamPath,
         });
 
-        expect(artifact.events.length).toBeGreaterThanOrEqual(1);
-        for (const event of artifact.events) {
-          expect(event.path).toBe(streamPath);
-          expect(event.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-          expect(event.trace).toMatchObject({
-            traceId: expect.any(String),
-            spanId: expect.any(String),
-            parentSpanId: null,
-          });
-        }
-
-        expect(artifact.events).toEqual(
+        expect(artifact.logs.length).toBeGreaterThanOrEqual(1);
+        expect(artifact.logs).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
-              path: streamPath,
-              type: "https://events.iterate.com/deployment/created",
-              payload: expect.objectContaining({
-                baseUrl: expect.stringContaining("http://"),
-                locator: expect.anything(),
-              }),
+              text: "provider-contract-startup-begin",
+              observedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
             }),
             expect.objectContaining({
-              path: streamPath,
-              type: "https://events.iterate.com/deployment/started",
-              payload: expect.objectContaining({
-                detail: expect.any(String),
-              }),
+              text: "provider-contract-writing-startup-log",
+              observedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
             }),
             expect.objectContaining({
-              path: streamPath,
-              type: "https://events.iterate.com/deployment/destroyed",
-              payload: {},
-            }),
-            expect.objectContaining({
-              path: streamPath,
-              type: "https://events.iterate.com/deployment/logged",
-              payload: expect.objectContaining({
-                line: "provider-contract-startup-begin",
-              }),
-            }),
-            expect.objectContaining({
-              path: streamPath,
-              type: "https://events.iterate.com/deployment/logged",
-              payload: expect.objectContaining({
-                line: "provider-contract-writing-startup-log",
-              }),
-            }),
-            expect.objectContaining({
-              path: streamPath,
-              type: "https://events.iterate.com/deployment/logged",
-              payload: expect.objectContaining({
-                line: "provider-contract-entering-sleep",
-              }),
+              text: "provider-contract-entering-sleep",
+              observedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
             }),
           ]),
         );

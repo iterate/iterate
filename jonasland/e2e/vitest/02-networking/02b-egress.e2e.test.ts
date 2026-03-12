@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe } from "vitest";
@@ -37,7 +36,7 @@ import { test } from "../../test-support/e2e-test.ts";
 const cases = [
   {
     id: "docker" as const,
-    tags: ["providers/docker", "third-party-dependency"] as const,
+    tags: ["docker", "third-party"] as const,
     timeoutMs: 240_000,
     createDeployment: async ({
       slug,
@@ -59,7 +58,7 @@ const cases = [
   },
   {
     id: "fly" as const,
-    tags: ["providers/fly", "slow", "third-party-dependency"] as const,
+    tags: ["fly", "slow", "third-party"] as const,
     timeoutMs: 420_000,
     createDeployment: async ({
       slug,
@@ -96,8 +95,6 @@ const replayFixtureHarPath = join(
   "docker-pi-conversation.har",
 );
 
-// [[ Something that the AI should discover later on. This should be on the deployment fixture that you get from `use deployment`, so that we can use it in other files as well and make it better over time.  ]]
-
 async function runPiConversation(params: { deployment: Deployment; sessionDir: string }) {
   const baseArgs = [
     "--provider",
@@ -131,6 +128,12 @@ async function runPiConversation(params: { deployment: Deployment; sessionDir: s
     "Now add a minimal Vitest test below it. Return only code.",
   ]);
   return { turn1, turn2, turn3 };
+}
+
+async function configureFrpEgressProxy(params: { deployment: Deployment; egressProxyURL: string }) {
+  await params.deployment.setEnvVars({
+    ITERATE_EGRESS_PROXY: params.egressProxyURL,
+  });
 }
 
 function harRequestUrls(har: HarWithExtensions): string[] {
@@ -168,7 +171,7 @@ describe("egress", () => {
           slug: e2e.deploymentSlug,
           env: { OPENAI_API_KEY, ANTHROPIC_API_KEY },
         });
-        await using deploymentFixture = await e2e.useDeployment({
+        await using _deploymentFixture = await e2e.useDeployment({
           deployment,
         });
         await deployment.waitUntilAlive({
@@ -193,13 +196,9 @@ describe("egress", () => {
               localTargetPort: proxyPort,
               frpcBin: process.env.JONASLAND_E2E_FRPC_BIN,
             });
-            await deployment.updateEgressConfig({
+            await configureFrpEgressProxy({
+              deployment,
               egressProxyURL: bridge.egressProxyURL,
-            });
-            await deployment.shellWithRetry({
-              cmd: "curl -sS --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:27180/__iterate/health",
-              timeoutMs: 30_000,
-              retryIf: (result) => result.output.trim() === "000" || result.exitCode !== 0,
             });
 
             const recordedConversation = await runPiConversation({
@@ -244,7 +243,6 @@ describe("egress", () => {
             });
             replayProxy.use(...fromTrafficWithWebSocket(recordedHar));
 
-            // [[ Okay, so this here needs to be replaced with retry, somewhere we're waiting for a pnpm health check or something more coherent.  ]]
             await deployment.shellWithRetry({
               cmd: "curl -sS --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:27180/__iterate/health",
               timeoutMs: 30_000,
@@ -304,7 +302,7 @@ describe("egress", () => {
               OPENAI_API_KEY: replayFixtureOpenAiKey,
             },
           });
-          await using deploymentFixture = await e2e.useDeployment({
+          await using _deploymentFixture = await e2e.useDeployment({
             deployment,
           });
           await deployment.waitUntilAlive({
@@ -328,13 +326,9 @@ describe("egress", () => {
               localTargetPort: replayProxy.port,
               frpcBin: process.env.JONASLAND_E2E_FRPC_BIN,
             });
-            await deployment.updateEgressConfig({
+            await configureFrpEgressProxy({
+              deployment,
               egressProxyURL: bridge.egressProxyURL,
-            });
-            await deployment.shellWithRetry({
-              cmd: "curl -sS --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:27180/__iterate/health",
-              timeoutMs: 30_000,
-              retryIf: (result) => result.output.trim() === "000" || result.exitCode !== 0,
             });
 
             const replayedConversation = await runPiConversation({
@@ -372,16 +366,16 @@ describe("egress", () => {
 
   describe("legacy migration notes", () => {
     test.todo("docker host.docker.internal proxy path supports pnpm install and HAR capture", {
-      tags: ["providers/docker", "third-party-dependency"],
+      tags: ["docker", "third-party"],
     });
     describe.each([
       {
         id: "docker" as const,
-        tags: ["providers/docker", "no-internet"] as const,
+        tags: ["docker", "no-internet"] as const,
       },
       {
         id: "fly" as const,
-        tags: ["providers/fly", "slow", "no-internet"] as const,
+        tags: ["fly", "slow", "no-internet"] as const,
       },
     ])("$id", ({ tags }) => {
       test.todo("transparent egress tagging can be proven with an inline deployment-local proxy", {

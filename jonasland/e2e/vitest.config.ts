@@ -26,11 +26,11 @@ export default defineConfig({
     },
     tags: [
       {
-        name: "providers/docker",
+        name: "docker",
         description: "Tests that are specifically part of the Docker provider slice.",
       },
       {
-        name: "providers/fly",
+        name: "fly",
         description: "Tests that are specifically part of the Fly provider slice.",
       },
       {
@@ -43,12 +43,13 @@ export default defineConfig({
         description: "Tests that should work without internet access.",
       },
       {
-        name: "third-party-dependency",
+        name: "third-party",
         description:
           "Tests that depend on a third party outside our control, excluding the machine provider itself.",
       },
     ],
     include: [
+      "test-support/**/*.test.ts",
       "vitest/**/*.e2e.ts",
       "vitest/**/*.e2e.test.ts",
       "vitest/**/*.test.ts",

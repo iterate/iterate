@@ -203,7 +203,7 @@ export async function useCloudflareTunnelToLocalhost(
       logs: () => logs.join(""),
       stop,
       async [Symbol.asyncDispose]() {
-        if (process.env.E2E_SKIP_DISPOSE) return;
+        if (process.env.E2E_NO_DISPOSE) return;
         await stop();
       },
     };

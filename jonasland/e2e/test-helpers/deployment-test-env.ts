@@ -7,10 +7,10 @@ const nonEmptyString = z.string().trim().min(1);
 export const DockerDeploymentTestEnv = z
   .object({
     E2E_DOCKER_IMAGE_REF: nonEmptyString.optional(),
-    JONASLAND_SANDBOX_IMAGE: nonEmptyString.optional(),
+    JONASLAND_SANDBOX_IMAGE: nonEmptyString,
   })
   .transform(({ E2E_DOCKER_IMAGE_REF, JONASLAND_SANDBOX_IMAGE }) => ({
-    image: E2E_DOCKER_IMAGE_REF ?? JONASLAND_SANDBOX_IMAGE ?? "debian:trixie-slim",
+    image: E2E_DOCKER_IMAGE_REF ?? JONASLAND_SANDBOX_IMAGE,
   }));
 
 // The Fly schema mirrors the Docker shape, but adds the credentials and
@@ -20,16 +20,12 @@ export const FlyDeploymentTestEnv = z
     // TODO fix this - these are not all valid inputs
     E2E_DOCKER_IMAGE_REF: nonEmptyString.optional(),
     E2E_FLY_IMAGE_REF: nonEmptyString.optional(),
-    JONASLAND_SANDBOX_IMAGE: nonEmptyString.optional(),
+    JONASLAND_SANDBOX_IMAGE: nonEmptyString,
     FLY_API_TOKEN: nonEmptyString,
   })
   .transform(
     ({ E2E_DOCKER_IMAGE_REF, E2E_FLY_IMAGE_REF, JONASLAND_SANDBOX_IMAGE, FLY_API_TOKEN }) => ({
       flyApiToken: FLY_API_TOKEN,
-      image:
-        E2E_FLY_IMAGE_REF ??
-        E2E_DOCKER_IMAGE_REF ??
-        JONASLAND_SANDBOX_IMAGE ??
-        "debian:trixie-slim",
+      image: E2E_FLY_IMAGE_REF ?? E2E_DOCKER_IMAGE_REF ?? JONASLAND_SANDBOX_IMAGE,
     }),
   );

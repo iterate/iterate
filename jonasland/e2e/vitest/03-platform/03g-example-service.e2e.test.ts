@@ -21,11 +21,11 @@ import { test } from "../../test-support/e2e-test.ts";
 const cases = [
   {
     id: "docker" as const,
-    tags: ["providers/docker"] as const,
+    tags: ["docker"] as const,
   },
   {
     id: "fly" as const,
-    tags: ["providers/fly", "slow"] as const,
+    tags: ["fly", "slow"] as const,
   },
 ];
 

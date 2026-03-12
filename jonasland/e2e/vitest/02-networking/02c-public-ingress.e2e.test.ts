@@ -1,5 +1,5 @@
 import { describe } from "vitest";
-import { exampleContract, exampleServiceManifest } from "@iterate-com/example-contract";
+import { exampleServiceManifest } from "@iterate-com/example-contract";
 import { serviceManifestToPidnapConfig } from "@iterate-com/shared/jonasland";
 import { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
 import { createDockerProvider } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
@@ -9,12 +9,7 @@ import {
   FlyDeploymentTestEnv,
 } from "../../test-helpers/deployment-test-env.ts";
 import { useCloudflareTunnelToLocalhost } from "../../test-helpers/old/use-cloudflare-tunnel.ts";
-import { useIngressProxyRoutes } from "../../test-helpers/old/use-ingress-proxy-routes.ts";
 import { test } from "../../test-support/e2e-test.ts";
-import {
-  buildIngressPublicBaseUrl,
-  resolveIngressProxyConfig,
-} from "../../test-helpers/old/public-ingress-config.ts";
 
 /**
  * Legacy migration notes from deleted `jonasland/e2e/tests/clean/playground.e2e.test.ts`.
@@ -91,6 +86,29 @@ async function waitForPublicText(params: {
   throw new Error(`timed out waiting for ${params.url}: ${lastFailure}`);
 }
 
+async function waitForRegistryPublicUrl(params: {
+  deployment: Deployment;
+  internalURL: string;
+  expectedPublicURL: string;
+  timeoutMs: number;
+}) {
+  const deadline = Date.now() + params.timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const result = await params.deployment.registryService.getPublicURL({
+        internalURL: params.internalURL,
+      });
+      if (result.publicURL === params.expectedPublicURL) return result;
+    } catch {
+      // Registry can briefly restart while ingress env changes are applied.
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    `registry public URL for ${params.internalURL} did not stabilize to ${params.expectedPublicURL}`,
+  );
+}
+
 type PublicExposure = AsyncDisposable & {
   targetUrl: string;
   targetHost: string;
@@ -99,7 +117,7 @@ type PublicExposure = AsyncDisposable & {
 const cases = [
   {
     id: "docker" as const,
-    tags: ["providers/docker", "third-party-dependency"] as const,
+    tags: ["docker", "third-party"] as const,
     timeoutMs: 60_000,
     createDeployment: async ({ slug }: { slug: string }) => {
       const env = DockerDeploymentTestEnv.parse(process.env);
@@ -139,7 +157,7 @@ const cases = [
   },
   {
     id: "fly" as const,
-    tags: ["providers/fly", "slow", "third-party-dependency"] as const,
+    tags: ["fly", "slow", "third-party"] as const,
     timeoutMs: 180_000,
     createDeployment: async ({ slug }: { slug: string }) => {
       const env = FlyDeploymentTestEnv.parse(process.env);
@@ -168,14 +186,11 @@ describe("public ingress", () => {
       "public ingress reaches intended services through root and wildcard ingress proxy route patterns",
       { tags: [...tags], timeout: timeoutMs + 120_000 },
       async ({ expect, e2e }) => {
-        const ingress = resolveIngressProxyConfig();
         console.log("[public-ingress] starting test", {
           testId: e2e.testId,
           testSlug: e2e.testSlug,
           deploymentSlug: e2e.deploymentSlug,
           timeoutMs,
-          ingressProxyBaseUrl: ingress.ingressProxyBaseUrl,
-          ingressProxyDomain: ingress.ingressProxyDomain,
         });
 
         await using f = await e2e.useDeployment({
@@ -223,93 +238,30 @@ describe("public ingress", () => {
           targetUrl: exposure.targetUrl,
           targetHost: exposure.targetHost,
         });
-        // [[ Not sure buildIngressPublicBaseUrl is needed - can we just take deployment slug or does it not have a timestamp or similar. If we did have this, then it should probably just be on the fixture file, like all the other helpers.  ]]
-        const publicBaseUrl = buildIngressPublicBaseUrl({
-          testSlug: e2e.testSlug,
-          ingressProxyDomain: ingress.ingressProxyDomain,
+        await using routes = await f.useIngressProxyRoutes({
+          targetURL: exposure.targetUrl,
+          routingType: "dunder-prefix",
+          timeoutMs,
+          metadata: {
+            source: "jonasland-vitest-public-ingress",
+            publicTargetHost: exposure.targetHost,
+          },
         });
-        const publicBaseHost = new URL(publicBaseUrl).host;
-        console.log("[public-ingress] resolved public base URL", {
-          publicBaseUrl,
+        const { publicBaseHost, publicBaseUrl } = routes;
+        console.log("[public-ingress] ingress proxy routes created", {
+          routeIds: routes.routeIds,
           publicBaseHost,
+          publicBaseUrl,
+          ingressHost: f.deployment.env.ITERATE_INGRESS_HOST,
         });
 
-        // Sets ITERATE_INGRESS_HOST and ITERATE_INGRESS_ROUTING_TYPE env vars in deployment and waits for "healthy"
-        await f.deployment.updateIngressConfig({
-          ingressHost: publicBaseHost,
-          ingressHostType: "dunder-prefix",
-        });
-        console.log("[public-ingress] ingress config updated", {
-          ingressHost: publicBaseHost,
-          ingressHostType: "dunder-prefix",
-        });
-
-        // [[ This is gross - I think we're just fine? updateIngressConfig shouldn't return until all processes are back up ]]
-        // [[ This code can prob ably be improved and move ino deployment.ts ]]
-
-        const registryDeadline = Date.now() + timeoutMs;
-        let registryAttempt = 0;
-        while (Date.now() < registryDeadline) {
-          registryAttempt += 1;
-          try {
-            const result = await f.deployment.registryService.getPublicURL({
-              internalURL: "http://example.iterate.localhost",
-            });
-            console.log("[public-ingress] registry public URL lookup", {
-              attempt: registryAttempt,
-              publicURL: result.publicURL,
-              expectedHost: publicBaseHost,
-            });
-            if (result.publicURL.includes(publicBaseHost)) break;
-          } catch (error) {
-            // Registry may be mid-restart while env-file updates are applied.
-            console.log("[public-ingress] registry public URL lookup failed", {
-              attempt: registryAttempt,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-          await sleep(500);
-        }
-
-        const resolvedPublicURL = await f.deployment.registryService.getPublicURL({
+        const resolvedPublicURL = await waitForRegistryPublicUrl({
+          deployment: f.deployment,
           internalURL: "http://example.iterate.localhost",
+          expectedPublicURL: `https://example__${publicBaseHost}/`,
+          timeoutMs,
         });
         console.log("[public-ingress] registry public URL stabilized", resolvedPublicURL);
-        expect(
-          await f.deployment.registryService.getPublicURL({
-            internalURL: "http://example.iterate.localhost",
-          }),
-        ).toEqual({ publicURL: `https://example__${publicBaseHost}/` });
-
-        await using routes = await useIngressProxyRoutes({
-          ingressProxyApiKey: ingress.ingressProxyApiKey,
-          ingressProxyBaseUrl: ingress.ingressProxyBaseUrl,
-          routes: [
-            {
-              metadata: {
-                source: "jonasland-vitest-public-ingress",
-                testId: e2e.testId,
-                publicBaseHost,
-              },
-              patterns: [
-                {
-                  pattern: publicBaseHost,
-                  target: exposure.targetUrl,
-                },
-                {
-                  pattern: `*__${publicBaseHost}`,
-                  target: exposure.targetUrl,
-                },
-              ],
-            },
-          ],
-        });
-
-        console.log("[public-ingress] ingress proxy routes created", {
-          routes,
-          publicBaseHost,
-          ingressHost: f.deployment.opts.ingressHost,
-        });
 
         const caddyHealth = await waitForPublicText({
           url: `${publicBaseUrl}/__iterate/caddy-health`,
@@ -319,7 +271,6 @@ describe("public ingress", () => {
         console.log("[public-ingress] caddy health response", caddyHealth);
         expect(caddyHealth).toContain("ok");
 
-        // [[ Make an example service orpc client using deployment.createServiceClient and test that ]]
         const echoBody = await waitForPublicText({
           url: `https://example__${publicBaseHost}/api/echo?from=public-ingress-test`,
           timeoutMs,

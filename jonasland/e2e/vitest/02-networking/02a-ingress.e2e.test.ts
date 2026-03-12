@@ -35,7 +35,7 @@ async function waitForRouteRegistered(params: {
 const cases = [
   {
     id: "docker" as const,
-    tags: ["providers/docker", "no-internet"] as const,
+    tags: ["docker", "no-internet"] as const,
     timeoutMs: 30_000,
     create: async ({ slug }: { slug: string }) => {
       const env = DockerDeploymentTestEnv.parse(process.env);
@@ -50,7 +50,7 @@ const cases = [
   },
   {
     id: "fly" as const,
-    tags: ["providers/fly", "slow"] as const,
+    tags: ["fly", "slow"] as const,
     timeoutMs: 180_000,
     create: async ({ slug }: { slug: string }) => {
       const env = FlyDeploymentTestEnv.parse(process.env);
@@ -75,22 +75,7 @@ describe("ingress", () => {
         { tags: [...tags], timeout: timeoutMs + 120_000 },
         async ({ e2e }) => {
           const deployment = await create({ slug: e2e.deploymentSlug });
-          await using deploymentFixture = await e2e.useDeployment({ deployment });
-          await deploymentFixture.waitUntilExecAvailable({
-            timeoutMs,
-          });
-          const builtinsDeadline = Date.now() + timeoutMs;
-          while (Date.now() < builtinsDeadline) {
-            try {
-              const result = await deployment.pidnap.processes.waitFor({
-                processes: { caddy: "running", registry: "running", events: "running" },
-                timeoutMs: 5_000,
-              });
-              if (result.allMet) break;
-            } catch {
-              await sleep(500);
-            }
-          }
+          await using _deploymentFixture = await e2e.useDeployment({ deployment });
 
           const assertHealth = async ({
             host,
@@ -245,22 +230,9 @@ describe("ingress", () => {
           console.log("[ingress] restarting deployment");
           await deployment.stop();
           await deployment.start();
-          await deploymentFixture.waitUntilExecAvailable({
-            deployment,
+          await deployment.waitUntilHealthy({
             timeoutMs: timeoutMs + 60_000,
           });
-          const restartedBuiltinsDeadline = Date.now() + timeoutMs + 60_000;
-          while (Date.now() < restartedBuiltinsDeadline) {
-            try {
-              const result = await deployment.pidnap.processes.waitFor({
-                processes: { caddy: "running", registry: "running", events: "running" },
-                timeoutMs: 5_000,
-              });
-              if (result.allMet) break;
-            } catch {
-              await sleep(500);
-            }
-          }
           await assertHealth({
             host: "events.iterate.localhost",
             expectedService: "@iterate-com/events-contract",

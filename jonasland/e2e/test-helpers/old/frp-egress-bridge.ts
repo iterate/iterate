@@ -327,6 +327,21 @@ async function resolveDockerFrpControl(params: { deployment: Deployment }): Prom
   if (override && override.length > 0) {
     return { host: override, port: 80, transport: "websocket" };
   }
+  try {
+    const publicFrp = await params.deployment.registryService.getPublicURL({
+      internalURL: "http://frp.iterate.localhost",
+    });
+    const url = new URL(publicFrp.publicURL);
+    const port =
+      url.port.length > 0 ? Number.parseInt(url.port, 10) : url.protocol === "https:" ? 443 : 80;
+    return {
+      host: url.hostname,
+      port,
+      transport: url.protocol === "https:" ? "wss" : "websocket",
+    };
+  } catch {
+    // fall through to docker/baseUrl based resolution
+  }
   const locator = params.deployment.locator as Partial<DockerDeploymentLocator>;
   if (locator.provider === "docker" && typeof locator.containerId === "string") {
     try {
@@ -342,23 +357,8 @@ async function resolveDockerFrpControl(params: { deployment: Deployment }): Prom
         };
       }
     } catch {
-      // fall through to registry/baseUrl based resolution
+      // fall through to baseUrl based resolution
     }
-  }
-  try {
-    const publicFrp = await params.deployment.registryService.getPublicURL({
-      internalURL: "http://frp.iterate.localhost",
-    });
-    const url = new URL(publicFrp.publicURL);
-    const port =
-      url.port.length > 0 ? Number.parseInt(url.port, 10) : url.protocol === "https:" ? 443 : 80;
-    return {
-      host: url.hostname,
-      port,
-      transport: url.protocol === "https:" ? "wss" : "websocket",
-    };
-  } catch {
-    // fall back to host loopback route for older setups
   }
   // For older Docker e2e setups, control server is exposed on deployment.baseUrl host:port.
   const ingressUrl = new URL(

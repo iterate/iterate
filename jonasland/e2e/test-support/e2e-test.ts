@@ -2,12 +2,12 @@ import { readFile } from "node:fs/promises";
 import { inject, test as baseTest } from "vitest";
 import { createDeploymentSlug } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
 import {
-  type DeploymentEventsArtifact,
+  type DeploymentLogsArtifact,
   type UseDeploymentFixture,
   useDeployment as createUseDeployment,
 } from "@iterate-com/shared/jonasland";
 import type { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
-import { z } from "zod";
+import { resolveIngressProxyConfig } from "../test-helpers/old/public-ingress-config.ts";
 import {
   appendVitestResultFooter,
   E2E_VITEST_RUN_ROOT_KEY,
@@ -20,10 +20,18 @@ export interface E2EAttachedDeploymentFixture extends UseDeploymentFixture {
     dir: string;
     consoleLogPath: string;
     resultPath: string;
-    eventsPath?: string;
+    logsPath?: string;
   };
   snapshot(): ReturnType<Deployment["snapshot"]>;
   waitForArtifactText(params: { needle: string; timeoutMs: number }): Promise<void>;
+  useIngressProxyRoutes(params: {
+    targetURL: string;
+    publicBaseHost?: string;
+    routingType?: "subdomain-host" | "dunder-prefix";
+    ingressDefaultService?: string;
+    metadata?: Record<string, unknown>;
+    timeoutMs?: number;
+  }): ReturnType<Deployment["useIngressProxyRoutes"]>;
 }
 
 export interface E2EFixtures {
@@ -36,6 +44,7 @@ export interface E2EFixtures {
     useDeployment(params: {
       deployment: Deployment;
       logTail?: number;
+      waitUntilHealthyTimeoutMs?: number | false;
     }): Promise<E2EAttachedDeploymentFixture>;
     fileSlug: string;
     testSlug: string;
@@ -44,7 +53,10 @@ export interface E2EFixtures {
   };
 }
 
-export type { DeploymentEventsArtifact };
+export type { DeploymentLogsArtifact };
+type TestOptionsWithTags = {
+  tags?: string | readonly string[];
+};
 
 // Docs: https://vitest.dev/guide/test-context.html#test-extend
 // Docs: https://vitest.dev/api/hooks#ontestfinished
@@ -52,7 +64,7 @@ export type { DeploymentEventsArtifact };
 // `test`. It creates one directory per test, keeps event logs next to
 // `vitest-output.log`, records the final result in `result.json`, and exposes the
 // whole artifact namespace as a single `{ e2e }` fixture.
-export const test = baseTest.extend<E2EFixtures>({
+const rawTest = baseTest.extend<E2EFixtures>({
   e2e: [
     async ({ task, onTestFailed, onTestFinished }, use) => {
       const runRoot = inject(E2E_VITEST_RUN_ROOT_KEY);
@@ -128,19 +140,24 @@ export const test = baseTest.extend<E2EFixtures>({
             logTail: params.logTail,
             artifactDir: paths.artifactDir,
           });
+          if (params.waitUntilHealthyTimeoutMs !== false) {
+            await params.deployment.waitUntilHealthy({
+              timeoutMs: params.waitUntilHealthyTimeoutMs ?? 60_000,
+            });
+          }
           return Object.assign(attached, {
             artifacts: {
               dir: paths.artifactDir,
               consoleLogPath: paths.outputLogPath,
               resultPath: paths.resultPath,
-              eventsPath: attached.artifactPath,
+              logsPath: attached.artifactPath,
             },
             snapshot() {
               return params.deployment.snapshot();
             },
             async waitForArtifactText(waitParams: { needle: string; timeoutMs: number }) {
-              const eventsPath = attached.artifactPath;
-              if (!eventsPath) {
+              const logsPath = attached.artifactPath;
+              if (!logsPath) {
                 throw new Error("useDeployment fixture has no artifact path");
               }
 
@@ -149,17 +166,32 @@ export const test = baseTest.extend<E2EFixtures>({
 
               while (Date.now() < deadline) {
                 try {
-                  lastBody = await readFile(eventsPath, "utf8");
+                  lastBody = await readFile(logsPath, "utf8");
                   if (lastBody.includes(waitParams.needle)) return;
                 } catch {}
                 await new Promise((resolve) => setTimeout(resolve, 200));
               }
 
               throw new Error(
-                `Timed out waiting for artifact ${eventsPath} to contain ${JSON.stringify(waitParams.needle)}${
+                `Timed out waiting for artifact ${logsPath} to contain ${JSON.stringify(waitParams.needle)}${
                   lastBody ? `; last body: ${lastBody}` : ""
                 }`,
               );
+            },
+            async useIngressProxyRoutes(
+              routeParams: Parameters<E2EAttachedDeploymentFixture["useIngressProxyRoutes"]>[0],
+            ) {
+              const ingress = resolveIngressProxyConfig();
+              return await params.deployment.useIngressProxyRoutes({
+                ...routeParams,
+                ingressProxyApiKey: ingress.ingressProxyApiKey,
+                ingressProxyBaseUrl: ingress.ingressProxyBaseUrl,
+                metadata: {
+                  testId: task.id,
+                  testName: task.fullName,
+                  ...(routeParams.metadata ?? {}),
+                },
+              });
             },
           });
         },
@@ -172,3 +204,29 @@ export const test = baseTest.extend<E2EFixtures>({
     { auto: true },
   ],
 });
+
+export function prefixTitleWithRawTags(title: string, options?: TestOptionsWithTags) {
+  const tags =
+    typeof options?.tags === "string"
+      ? [options.tags]
+      : Array.isArray(options?.tags)
+        ? [...options.tags]
+        : [];
+  if (tags.length === 0) return title;
+  return `[${tags.join(" ")}] ${title}`;
+}
+
+const wrappedTest = (title: string, optionsOrFn: unknown, maybeFn?: unknown) => {
+  if (typeof optionsOrFn === "function") {
+    return rawTest(title, optionsOrFn as never);
+  }
+  return rawTest(
+    prefixTitleWithRawTags(title, optionsOrFn as TestOptionsWithTags | undefined),
+    optionsOrFn as never,
+    maybeFn as never,
+  );
+};
+
+Object.defineProperties(wrappedTest, Object.getOwnPropertyDescriptors(rawTest));
+
+export const test = wrappedTest as typeof rawTest;
