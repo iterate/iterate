@@ -18,6 +18,7 @@ import {
   parseProjectIngressHostname,
 } from "@iterate-com/shared/project-ingress";
 import type { CloudflareEnv } from "../env.ts";
+import { isNonProd } from "../env.ts";
 import { getDb } from "./db/client.ts";
 import { getAuth } from "./auth/auth.ts";
 import { appRouter } from "./orpc/root.ts";
@@ -59,7 +60,6 @@ import {
   shouldHandleProjectIngressHostname,
 } from "./services/project-ingress-proxy.ts";
 import { getIngressSchemeFromPublicUrl } from "./utils/project-ingress-url.ts";
-import { isNonProd } from "../env.ts";
 
 export type { Variables };
 
