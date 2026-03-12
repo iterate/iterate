@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, test } from "vitest";
-import migration0001Sql from "./migrations/0001_init.sql?raw";
 import { createSemaphoreClient } from "@iterate-com/semaphore-contract";
+import migration0001Sql from "./migrations/0001_init.sql?raw";
 import type { RawSemaphoreEnv } from "./server.ts";
 
 function uniqueType() {
