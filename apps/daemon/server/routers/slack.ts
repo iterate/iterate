@@ -106,6 +106,12 @@ type SlackThreadContext = {
   lastStatusKey: string;
   /** Debounced timer for status updates while agent is working. */
   statusTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * True once the bot has posted a reply in this thread during the current
+   * cycle. Suppresses further debounced status updates so "Thinking..." /
+   * "Working..." doesn't flash after the reply is already visible.
+   */
+  replied: boolean;
 };
 
 const slackThreadContextByAgentPath = new Map<string, SlackThreadContext>();
@@ -295,6 +301,28 @@ slackRouter.post("/webhook", async (c) => {
   const parsed = parseWebhookPayload(payload);
 
   if (parsed.case === "ignored") {
+    // When we detect our own reply in a thread, suppress any pending status
+    // updates so "Thinking..." doesn't flash after the reply is already visible.
+    // The agent posts via slack.chat.postMessage (fast path) while status updates
+    // travel through a much longer pipeline (SSE → DB → callback → debounce),
+    // so without this the debounced status fires after the reply.
+    if (parsed.reason === "Ignored: bot's own message") {
+      const event = payload.event;
+      const threadTs = "thread_ts" in event ? (event.thread_ts as string | undefined) : undefined;
+      const channel = "channel" in event ? (event.channel as string | undefined) : undefined;
+      if (threadTs && channel) {
+        for (const context of slackThreadContextByAgentPath.values()) {
+          if (context.channel === channel && context.threadTs === threadTs && !context.closing) {
+            context.replied = true;
+            if (context.statusTimer) {
+              clearTimeout(context.statusTimer);
+              context.statusTimer = undefined;
+            }
+            break;
+          }
+        }
+      }
+    }
     return c.json({ success: true, message: parsed.reason, eventId, requestId });
   }
 
@@ -580,6 +608,7 @@ function ensureSlackThreadContext(params: {
     cycleId: `slk-${nanoid(8)}`,
     closing: false,
     lastStatusKey: "",
+    replied: false,
   };
 
   slackThreadContextByAgentPath.set(params.agentPath, context);
@@ -596,6 +625,7 @@ function scheduleThreadStatusUpdate(
   rawStatus: string,
 ): void {
   if (context.closing) return;
+  if (context.replied) return;
 
   const statusPayload = toSlackStatus(rawStatus);
   const statusKey = JSON.stringify(statusPayload);
@@ -616,11 +646,11 @@ async function flushThreadStatusUpdate(
   rawStatus: string,
   statusKey: string,
 ): Promise<void> {
-  if (context.closing) return;
+  if (context.closing || context.replied) return;
   if (slackThreadContextByAgentPath.get(agentPath)?.cycleId !== cycleId) return;
 
   await context.addEmojiPromise;
-  if (context.closing) return;
+  if (context.closing || context.replied) return;
   if (slackThreadContextByAgentPath.get(agentPath)?.cycleId !== cycleId) return;
 
   await setThreadStatus(context, rawStatus);
