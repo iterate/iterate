@@ -1071,6 +1071,8 @@ async function waitForHumanApproval({
   policyResult: PolicyCheckResult;
   context: EgressContext;
 }): Promise<{ decision: ApprovalStatus; approvalId: string }> {
+  // TODO: Schema defaults now generate IDs in SQL. This probably does not need to be app-side
+  // unless callers truly need the approval id before the insert returns.
   const approvalId = typeid("ega").toString();
   const bodyText = decodeBodyText(body);
   const contextPayload = JSON.stringify({

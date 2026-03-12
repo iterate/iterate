@@ -91,6 +91,8 @@ export const secretRouter = {
       const [created] = await ctx.db
         .insert(secret)
         .values({
+          // TODO: Schema defaults now generate IDs in SQL. This explicit id looks unnecessary;
+          // remove it once callers stop depending on app-side generation.
           id: typeid("sec").toString() as `sec_${string}`,
           projectId: ctx.project.id,
           organizationId: null,

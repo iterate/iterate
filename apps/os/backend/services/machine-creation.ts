@@ -48,6 +48,8 @@ export async function getOrCreateProjectMachineToken(
   }
 
   // No existing token - create a new one
+  // TODO: Schema defaults now generate IDs in SQL. This is still app-side because the API key
+  // format embeds the token id; revisit whether that coupling is actually necessary.
   const tokenId = typeid("pat").toString();
   const apiKey = generateProjectAccessKey(tokenId);
   const encryptedToken = await encrypt(apiKey);
@@ -164,6 +166,8 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
 }> {
   const { db, env, projectId, name, metadata } = params;
 
+  // TODO: Schema defaults now generate IDs in SQL. This stays app-side only because this flow
+  // threads machineId through related values before the insert; simplify if we can.
   const machineId = typeid("mach").toString();
 
   const projectRecord = await db.query.project.findFirst({

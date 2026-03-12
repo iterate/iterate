@@ -11,7 +11,6 @@ import {
   bigserial,
   check,
 } from "drizzle-orm/pg-core";
-import { typeid } from "typeid-js";
 import { isNotNull, relations, sql } from "drizzle-orm";
 import { MachineType as SandboxMachineType } from "@iterate-com/sandbox/providers/types";
 import { PROJECT_SANDBOX_PROVIDER } from "../utils/sandbox-providers.ts";
@@ -64,7 +63,7 @@ export const withTimestamps = {
 export const iterateId = <P extends string>(prefix: P) =>
   text()
     .primaryKey()
-    .$defaultFn(() => typeid(prefix).toString() as `${P}_${string}`);
+    .default(sql.raw(`iterate_typeid('${prefix}')`));
 
 // #region ========== Better Auth Schema ==========
 export const user = pgTable("user", (t) => ({

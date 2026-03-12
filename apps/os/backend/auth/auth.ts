@@ -254,6 +254,8 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
     advanced: {
       database: {
         generateId: (opts) => {
+          // TODO: Our Drizzle schema IDs are SQL-generated now. Re-check whether Better Auth
+          // still needs app-side IDs here or whether we can rely on DB defaults.
           const map = {
             account: "acc",
             session: "ses",

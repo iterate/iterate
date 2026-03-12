@@ -35,6 +35,8 @@ export const accessTokenRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
+      // TODO: Schema defaults now generate IDs in SQL. This is still app-side because the token
+      // value currently embeds the DB id; revisit whether that format really needs to.
       const tokenId = typeid("pat").toString();
       const rawToken = generateProjectAccessKey(tokenId);
       const encryptedToken = await encrypt(rawToken);
