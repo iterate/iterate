@@ -101,6 +101,8 @@ describe("live semaphore E2E", () => {
 
     const listed = await client.resources.list({ type });
     expect(listed.map((resource) => resource.slug)).toEqual(["alpha", "beta"]);
+    expect(listed[0]?.leaseState).toBe("available");
+    expect(listed[0]?.leasedUntil).toBeNull();
 
     const lease = await client.resources.acquire({
       type,
@@ -108,6 +110,10 @@ describe("live semaphore E2E", () => {
     });
     leasedResources.push({ type, slug: lease.slug, leaseId: lease.leaseId });
     expect(lease.slug).toBe("alpha");
+
+    const leasedList = await client.resources.list({ type });
+    expect(leasedList[0]?.leaseState).toBe("leased");
+    expect(leasedList[0]?.leasedUntil).toEqual(expect.any(Number));
 
     const released = await client.resources.release({
       type,

@@ -103,6 +103,10 @@ describe("resources API", () => {
         type,
         slug: "alpha",
         data: { token: "secret-a" },
+        leaseState: "available",
+        leasedUntil: null,
+        lastAcquiredAt: null,
+        lastReleasedAt: null,
         createdAt: expect.any(String),
         updatedAt: expect.any(String),
       },
@@ -150,6 +154,26 @@ describe("resources API", () => {
     expect(acquire.response.ok).toBe(true);
     expect(acquire.payload.json?.slug).toBe("first");
 
+    const leasedList = await callProcedure<
+      Array<{
+        slug: string;
+        leaseState: string;
+        leasedUntil: number | null;
+        lastAcquiredAt: number | null;
+      }>
+    >({
+      env: testEnv,
+      name: "resources/list",
+      input: { type },
+    });
+
+    expect(leasedList.payload.json?.[0]).toMatchObject({
+      slug: "first",
+      leaseState: "leased",
+      leasedUntil: expect.any(Number),
+      lastAcquiredAt: expect.any(Number),
+    });
+
     const badRelease = await callProcedure<{ released: boolean }>({
       env: testEnv,
       name: "resources/release",
@@ -173,6 +197,26 @@ describe("resources API", () => {
     });
 
     expect(release.payload.json).toEqual({ released: true });
+
+    const releasedList = await callProcedure<
+      Array<{
+        slug: string;
+        leaseState: string;
+        leasedUntil: number | null;
+        lastReleasedAt: number | null;
+      }>
+    >({
+      env: testEnv,
+      name: "resources/list",
+      input: { type },
+    });
+
+    expect(releasedList.payload.json?.[0]).toMatchObject({
+      slug: "first",
+      leaseState: "available",
+      leasedUntil: null,
+      lastReleasedAt: expect.any(Number),
+    });
   });
 
   test("fails fast when a pool is exhausted", async () => {
@@ -339,6 +383,20 @@ describe("resources API", () => {
 
     expect(second.response.ok).toBe(true);
     expect(second.payload.json?.slug).toBe("only");
+
+    const listed = await callProcedure<
+      Array<{ slug: string; leaseState: string; leasedUntil: number | null }>
+    >({
+      env: testEnv,
+      name: "resources/list",
+      input: { type },
+    });
+
+    expect(listed.payload.json?.[0]).toMatchObject({
+      slug: "only",
+      leaseState: "leased",
+      leasedUntil: expect.any(Number),
+    });
   });
 
   test("delete removes inventory but lets the active lease finish", async () => {

@@ -154,6 +154,8 @@ describe("semaphore worker e2e", () => {
     const listed = await client.resources.list({ type });
     expect(listed).toHaveLength(1);
     expect(listed[0]?.slug).toBe("alpha");
+    expect(listed[0]?.leaseState).toBe("available");
+    expect(listed[0]?.leasedUntil).toBeNull();
 
     const lease = await client.resources.acquire({
       type,
@@ -161,12 +163,20 @@ describe("semaphore worker e2e", () => {
     });
     expect(lease.slug).toBe("alpha");
 
+    const leasedList = await client.resources.list({ type });
+    expect(leasedList[0]?.leaseState).toBe("leased");
+    expect(leasedList[0]?.leasedUntil).toEqual(expect.any(Number));
+
     const released = await client.resources.release({
       type,
       slug: lease.slug,
       leaseId: lease.leaseId,
     });
     expect(released).toEqual({ released: true });
+
+    const releasedList = await client.resources.list({ type });
+    expect(releasedList[0]?.leaseState).toBe("available");
+    expect(releasedList[0]?.leasedUntil).toBeNull();
   });
 
   test("baseURL client can wait for a lease and receive it after release", async () => {

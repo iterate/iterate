@@ -20,6 +20,10 @@ type ResourceRow = {
   type: string;
   slug: string;
   data: string;
+  lease_state: "available" | "leased";
+  leased_until: number | null;
+  last_acquired_at: number | null;
+  last_released_at: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -93,6 +97,10 @@ function rowToResourceRecord(row: ResourceRow): SemaphoreResourceRecord {
     type: row.type,
     slug: row.slug,
     data: parseData(row.data),
+    leaseState: row.lease_state,
+    leasedUntil: row.leased_until,
+    lastAcquiredAt: row.last_acquired_at,
+    lastReleasedAt: row.last_released_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -107,11 +115,11 @@ async function listResourcesFromDb(
   const statement = params.type
     ? db
         .prepare(
-          "SELECT type, slug, data, created_at, updated_at FROM resources WHERE type = ? ORDER BY created_at ASC, slug ASC",
+          "SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at FROM resources WHERE type = ? ORDER BY created_at ASC, slug ASC",
         )
         .bind(params.type)
     : db.prepare(
-        "SELECT type, slug, data, created_at, updated_at FROM resources ORDER BY type ASC, created_at ASC, slug ASC",
+        "SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at FROM resources ORDER BY type ASC, created_at ASC, slug ASC",
       );
   const result = await statement.all<ResourceRow>();
   return (result.results ?? []).map(rowToResourceRecord);
@@ -132,7 +140,7 @@ async function insertResource(
 
   const row = await db
     .prepare(
-      "SELECT type, slug, data, created_at, updated_at FROM resources WHERE type = ? AND slug = ?",
+      "SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at FROM resources WHERE type = ? AND slug = ?",
     )
     .bind(resource.type, resource.slug)
     .first<ResourceRow>();
@@ -173,9 +181,44 @@ async function hasInventoryForType(db: D1Database, type: string): Promise<boolea
   return Boolean(result?.present);
 }
 
+async function markResourceLeasedInDb(
+  db: D1Database,
+  params: {
+    type: string;
+    slug: string;
+    leasedUntil: number;
+    lastAcquiredAt: number;
+  },
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      "UPDATE resources SET lease_state = 'leased', leased_until = ?, last_acquired_at = ?, updated_at = CURRENT_TIMESTAMP WHERE type = ? AND slug = ?",
+    )
+    .bind(params.leasedUntil, params.lastAcquiredAt, params.type, params.slug)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+async function markResourceAvailableInDb(
+  db: D1Database,
+  params: {
+    type: string;
+    slug: string;
+    lastReleasedAt: number | null;
+  },
+): Promise<void> {
+  await db
+    .prepare(
+      "UPDATE resources SET lease_state = 'available', leased_until = NULL, last_released_at = COALESCE(?, last_released_at), updated_at = CURRENT_TIMESTAMP WHERE type = ? AND slug = ?",
+    )
+    .bind(params.lastReleasedAt, params.type, params.slug)
+    .run();
+}
+
 export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
   private waiters: Waiter[] = [];
   private nextWaiterId = 0;
+  private coordinatorType: string | null = null;
 
   constructor(ctx: DurableObjectState, env: RawSemaphoreEnv) {
     super(ctx, env);
@@ -191,6 +234,7 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
     waitMs?: number;
   }): Promise<SemaphoreLeaseRecord | null> {
     const { type, leaseMs, waitMs = 0 } = AcquireResourceInput.parse(params);
+    this.rememberCoordinatorType(type);
     const immediate = await this.tryAcquire(type, leaseMs);
     if (immediate) {
       return immediate;
@@ -223,7 +267,8 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
   }
 
   async release(params: { type: string; slug: string; leaseId: string }): Promise<boolean> {
-    const { slug, leaseId } = ReleaseResourceInput.parse(params);
+    const { type, slug, leaseId } = ReleaseResourceInput.parse(params);
+    this.rememberCoordinatorType(type);
     const existing = this.ctx.storage.sql
       .exec<{ lease_id: string }>("SELECT lease_id FROM leases WHERE slug = ?", slug)
       .toArray()[0];
@@ -234,14 +279,20 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
 
     this.ctx.storage.sql.exec("DELETE FROM leases WHERE slug = ?", slug);
     this.logEvent("released", slug, { leaseId });
+    await markResourceAvailableInDb(this.env.DB, {
+      type,
+      slug,
+      lastReleasedAt: Date.now(),
+    });
     await this.scheduleNextAlarm();
     await this.dispatchWaiters();
     return true;
   }
 
   async hasActiveLease(params: { type: string; slug: string }): Promise<boolean> {
-    const { slug } = DeleteResourceInput.parse(params);
-    await this.reapExpiredLeases();
+    const { type, slug } = DeleteResourceInput.parse(params);
+    this.rememberCoordinatorType(type);
+    await this.reapExpiredLeases(type);
     const row = this.ctx.storage.sql
       .exec<{ count: number }>("SELECT COUNT(*) AS count FROM leases WHERE slug = ?", slug)
       .one();
@@ -249,7 +300,7 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
   }
 
   async inventoryChanged(params: { type: string }): Promise<void> {
-    parseType(params.type);
+    this.rememberCoordinatorType(params.type);
     await this.dispatchWaiters();
   }
 
@@ -277,9 +328,51 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
         payload TEXT NOT NULL
       )
     `);
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
     this.ctx.storage.sql.exec(
       "CREATE INDEX IF NOT EXISTS idx_leases_expires_at ON leases(expires_at)",
     );
+  }
+
+  private rememberCoordinatorType(type: string): void {
+    const parsedType = parseType(type);
+    const storedType = this.loadCoordinatorType();
+    if (storedType && storedType !== parsedType) {
+      throw new Error(
+        `Coordinator type mismatch: expected ${storedType} but received ${parsedType}`,
+      );
+    }
+
+    if (storedType === parsedType) {
+      this.coordinatorType = parsedType;
+      return;
+    }
+
+    // Alarms run without request parameters, so the coordinator persists its type once and
+    // then reuses it for D1 mirror updates triggered by lease expiry.
+    this.ctx.storage.sql.exec(
+      "INSERT OR REPLACE INTO metadata (key, value) VALUES ('type', ?)",
+      parsedType,
+    );
+    this.coordinatorType = parsedType;
+  }
+
+  private loadCoordinatorType(): string | null {
+    if (this.coordinatorType) {
+      return this.coordinatorType;
+    }
+
+    const row = this.ctx.storage.sql
+      .exec<{ value: string }>("SELECT value FROM metadata WHERE key = 'type'")
+      .toArray()[0];
+    const storedType = row?.value ? parseType(row.value) : null;
+    this.coordinatorType = storedType;
+    return storedType;
   }
 
   private async tryAcquire(type: string, leaseMs: number): Promise<SemaphoreLeaseRecord | null> {
@@ -297,34 +390,54 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
         .map((row) => row.slug),
     );
 
-    const candidate = inventory.find((resource) => !activeLeases.has(resource.slug));
-    if (!candidate) {
+    const candidates = inventory.filter((resource) => !activeLeases.has(resource.slug));
+    if (candidates.length === 0) {
       return null;
     }
 
-    const now = Date.now();
-    const expiresAt = now + leaseMs;
-    const leaseId = crypto.randomUUID();
-    this.ctx.storage.sql.exec(
-      "INSERT INTO leases (slug, lease_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
-      candidate.slug,
-      leaseId,
-      expiresAt,
-      now,
-    );
-    this.logEvent("acquired", candidate.slug, { leaseId, expiresAt });
-    await this.scheduleNextAlarm();
+    for (const candidate of candidates) {
+      const now = Date.now();
+      const expiresAt = now + leaseMs;
+      const leaseId = crypto.randomUUID();
+      this.ctx.storage.sql.exec(
+        "INSERT INTO leases (slug, lease_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+        candidate.slug,
+        leaseId,
+        expiresAt,
+        now,
+      );
 
-    return {
-      type: candidate.type,
-      slug: candidate.slug,
-      data: candidate.data,
-      leaseId,
-      expiresAt,
-    };
+      // Durable Objects stay authoritative. D1 mirrors the visible lease state so inventory
+      // queries can show who is likely busy and until when without consulting every coordinator.
+      const mirrored = await markResourceLeasedInDb(this.env.DB, {
+        type: candidate.type,
+        slug: candidate.slug,
+        leasedUntil: expiresAt,
+        lastAcquiredAt: now,
+      });
+      if (!mirrored) {
+        await this.releaseLease(type, candidate.slug, leaseId, "inventory-missing-after-acquire", {
+          releasedAt: null,
+        });
+        continue;
+      }
+
+      this.logEvent("acquired", candidate.slug, { leaseId, expiresAt });
+      await this.scheduleNextAlarm();
+
+      return {
+        type: candidate.type,
+        slug: candidate.slug,
+        data: candidate.data,
+        leaseId,
+        expiresAt,
+      };
+    }
+
+    return null;
   }
 
-  private async reapExpiredLeases(): Promise<void> {
+  private async reapExpiredLeases(type?: string): Promise<void> {
     const now = Date.now();
     const expired = this.ctx.storage.sql
       .exec<{ slug: string; lease_id: string; expires_at: number }>(
@@ -337,11 +450,15 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
       return;
     }
 
-    this.ctx.storage.sql.exec("DELETE FROM leases WHERE expires_at <= ?", now);
+    const coordinatorType = type ? parseType(type) : this.loadCoordinatorType();
+    if (!coordinatorType) {
+      throw new Error("Coordinator type is required to reap expired leases");
+    }
+
     for (const lease of expired) {
-      this.logEvent("expired", lease.slug, {
-        leaseId: lease.lease_id,
+      await this.releaseLease(coordinatorType, lease.slug, lease.lease_id, "expired", {
         expiresAt: lease.expires_at,
+        releasedAt: now,
       });
     }
   }
@@ -366,7 +483,15 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
       }
 
       if (waiter.settled) {
-        await this.releaseLease(lease.slug, lease.leaseId, "timed-out-before-delivery");
+        await this.releaseLease(
+          waiter.type,
+          lease.slug,
+          lease.leaseId,
+          "timed-out-before-delivery",
+          {
+            releasedAt: null,
+          },
+        );
         continue;
       }
 
@@ -376,9 +501,20 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
     }
   }
 
-  private async releaseLease(slug: string, leaseId: string, event: string): Promise<void> {
+  private async releaseLease(
+    type: string,
+    slug: string,
+    leaseId: string,
+    event: string,
+    payload: SemaphoreJsonObject & { releasedAt: number | null },
+  ): Promise<void> {
     this.ctx.storage.sql.exec("DELETE FROM leases WHERE slug = ? AND lease_id = ?", slug, leaseId);
-    this.logEvent(event, slug, { leaseId });
+    await markResourceAvailableInDb(this.env.DB, {
+      type,
+      slug,
+      lastReleasedAt: payload.releasedAt,
+    });
+    this.logEvent(event, slug, { leaseId, ...payload });
     await this.scheduleNextAlarm();
   }
 
