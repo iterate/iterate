@@ -4,6 +4,7 @@ import { match } from "schematch";
 import { z } from "zod/v4";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
+import { ResendWebhookReceivedEventPayload } from "../events.ts";
 import { logger } from "../tag-logger.ts";
 import { env } from "../../env.ts";
 import {
@@ -30,6 +31,16 @@ function parseGitRefBranch(ref: string): string | null {
   const prefix = "refs/heads/";
   if (!ref.startsWith(prefix)) return null;
   return ref.slice(prefix.length);
+}
+
+function parseSenderEmail(from: string): string {
+  const match = from.match(/<([^>]+)>/);
+  return match ? match[1] : from;
+}
+
+function parseRecipientLocal(to: string): string {
+  const email = to.includes("<") ? parseSenderEmail(to) : to;
+  return email.split("@")[0];
 }
 
 export const registerConsumers = () => {
@@ -69,6 +80,118 @@ export const registerConsumers = () => {
       logger.set({ machine: { id: machineId } });
       logger.info("[forwardSlackWebhook] Forwarded to machine");
       return `forwarded to ${machineId}`;
+    },
+  });
+
+  cc.registerConsumer({
+    name: "forwardResendWebhook",
+    on: "resend:webhook-received",
+    async handler(params) {
+      const payload = ResendWebhookReceivedEventPayload.parse(params.payload);
+      const resendEmailId = payload.data.email_id;
+      const senderEmail = parseSenderEmail(payload.data.from).toLowerCase();
+      const db = await getDb();
+
+      const user = await db.query.user.findFirst({
+        where: (u, { eq: whereEq }) => whereEq(u.email, senderEmail),
+      });
+      if (!user) {
+        logger.warn(`[Resend Webhook] No user found for sender ${senderEmail}`);
+        return `skipped: no user found for ${senderEmail}`;
+      }
+
+      const memberships = await db.query.organizationUserMembership.findMany({
+        where: (m, { eq: whereEq }) => whereEq(m.userId, user.id),
+        with: {
+          organization: {
+            with: {
+              projects: {
+                with: {
+                  machines: {
+                    where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
+                    limit: 1,
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+      if (memberships.length === 0) {
+        logger.set({ user: { id: user.id } });
+        logger.warn("[Resend Webhook] No org memberships for user");
+        return `skipped: user ${user.id} has no org memberships`;
+      }
+
+      const recipientLocal = payload.data.to[0] ? parseRecipientLocal(payload.data.to[0]) : "";
+      const projectSlugMatch = recipientLocal.match(/\+([^@]+)$/);
+      const targetProjectSlug = projectSlugMatch ? projectSlugMatch[1] : null;
+
+      let targetProject:
+        | (typeof schema.project.$inferSelect & {
+            machines: (typeof schema.machine.$inferSelect)[];
+          })
+        | null = null;
+
+      for (const membership of memberships) {
+        const org = membership.organization;
+        for (const project of org.projects) {
+          if (targetProjectSlug && project.slug === targetProjectSlug) {
+            targetProject = project;
+            break;
+          }
+          if (!targetProjectSlug && project.machines.length > 0 && !targetProject) {
+            targetProject = project;
+          }
+        }
+        if (targetProject) break;
+      }
+
+      if (!targetProject) {
+        logger.set({ user: { id: user.id } });
+        logger.warn(
+          `[Resend Webhook] No project found for email targetProjectSlug=${targetProjectSlug ?? "none"}`,
+        );
+        return `skipped: no project found for ${targetProjectSlug ?? "default route"}`;
+      }
+
+      const targetMachine = targetProject.machines[0];
+      if (!targetMachine) {
+        logger.set({ project: { id: targetProject.id }, user: { id: user.id } });
+        logger.info("[Resend Webhook] No active machine for target project");
+        return `skipped: project ${targetProject.id} has no active machine`;
+      }
+
+      const { createResendClient, fetchEmailContent, forwardEmailWebhookToMachine } =
+        await import("../integrations/resend/resend.ts");
+      const resendClient = createResendClient(env.RESEND_BOT_API_KEY);
+      const emailContent = await fetchEmailContent(resendClient, resendEmailId);
+
+      logger.debug("[Resend Webhook] Forwarding to machine", { machineId: targetMachine.id });
+      const forwardResult = await forwardEmailWebhookToMachine(
+        targetMachine,
+        {
+          ...payload,
+          _iterate: {
+            userId: user.id,
+            projectId: targetProject.id,
+            emailBody: emailContent
+              ? {
+                  text: emailContent.text,
+                  html: emailContent.html,
+                }
+              : null,
+          },
+        },
+        env,
+      );
+      if (!forwardResult.success) {
+        throw new Error(`Resend forward failed: ${forwardResult.error}`);
+      }
+
+      logger.set({ machine: { id: targetMachine.id }, user: { id: user.id } });
+      logger.info("[Resend Webhook] Forwarded to machine");
+      return `forwarded to ${targetMachine.id}`;
     },
   });
 
