@@ -5,9 +5,9 @@ import { RPCHandler } from "@orpc/server/fetch";
 import { RequestHeadersPlugin, type RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { z } from "zod/v4";
 import {
-  acquireResourceInputSchema,
-  deleteResourceInputSchema,
-  releaseResourceInputSchema,
+  AcquireResourceInput,
+  DeleteResourceInput,
+  ReleaseResourceInput,
   semaphoreContract,
   semaphoreDataSchema,
   semaphoreTypeSchema,
@@ -190,7 +190,7 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
     leaseMs: number;
     waitMs?: number;
   }): Promise<SemaphoreLeaseRecord | null> {
-    const { type, leaseMs, waitMs = 0 } = acquireResourceInputSchema.parse(params);
+    const { type, leaseMs, waitMs = 0 } = AcquireResourceInput.parse(params);
     const immediate = await this.tryAcquire(type, leaseMs);
     if (immediate) {
       return immediate;
@@ -223,7 +223,7 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
   }
 
   async release(params: { type: string; slug: string; leaseId: string }): Promise<boolean> {
-    const { slug, leaseId } = releaseResourceInputSchema.parse(params);
+    const { slug, leaseId } = ReleaseResourceInput.parse(params);
     const existing = this.ctx.storage.sql
       .exec<{ lease_id: string }>("SELECT lease_id FROM leases WHERE slug = ?", slug)
       .toArray()[0];
@@ -240,7 +240,7 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
   }
 
   async hasActiveLease(params: { type: string; slug: string }): Promise<boolean> {
-    const { slug } = deleteResourceInputSchema.parse(params);
+    const { slug } = DeleteResourceInput.parse(params);
     await this.reapExpiredLeases();
     const row = this.ctx.storage.sql
       .exec<{ count: number }>("SELECT COUNT(*) AS count FROM leases WHERE slug = ?", slug)

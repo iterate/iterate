@@ -60,7 +60,7 @@ export const semaphoreWaitMsSchema = z
   .nonnegative()
   .max(MAX_WAIT_MS, `waitMs must be <= ${MAX_WAIT_MS}`);
 
-export const resourceRecordSchema = z.object({
+export const SemaphoreResourceRecord = z.object({
   type: semaphoreTypeSchema,
   slug: semaphoreSlugSchema,
   data: semaphoreDataSchema,
@@ -68,7 +68,7 @@ export const resourceRecordSchema = z.object({
   updatedAt: z.string(),
 });
 
-export const leaseRecordSchema = z.object({
+export const SemaphoreLeaseRecord = z.object({
   type: semaphoreTypeSchema,
   slug: semaphoreSlugSchema,
   data: semaphoreDataSchema,
@@ -76,38 +76,38 @@ export const leaseRecordSchema = z.object({
   expiresAt: z.number().int().positive(),
 });
 
-export const addResourceInputSchema = z.object({
+export const AddResourceInput = z.object({
   type: semaphoreTypeSchema,
   slug: semaphoreSlugSchema,
   data: semaphoreDataSchema,
 });
 
-export const deleteResourceInputSchema = z.object({
+export const DeleteResourceInput = z.object({
   type: semaphoreTypeSchema,
   slug: semaphoreSlugSchema,
 });
 
-export const listResourcesInputSchema = z.object({
+export const ListResourcesInput = z.object({
   type: semaphoreTypeSchema.optional(),
 });
 
-export const acquireResourceInputSchema = z.object({
+export const AcquireResourceInput = z.object({
   type: semaphoreTypeSchema,
   leaseMs: semaphoreLeaseMsSchema,
   waitMs: semaphoreWaitMsSchema.optional(),
 });
 
-export const releaseResourceInputSchema = z.object({
+export const ReleaseResourceInput = z.object({
   type: semaphoreTypeSchema,
   slug: semaphoreSlugSchema,
   leaseId: z.string().uuid(),
 });
 
-export const deleteResourceResultSchema = z.object({
+export const DeleteResourceResult = z.object({
   deleted: z.boolean(),
 });
 
-export const releaseResourceResultSchema = z.object({
+export const ReleaseResourceResult = z.object({
   released: z.boolean(),
 });
 
@@ -120,8 +120,8 @@ export const semaphoreContract = oc.router({
         summary: "Add a resource to the semaphore inventory",
         tags: ["resources"],
       })
-      .input(addResourceInputSchema)
-      .output(resourceRecordSchema),
+      .input(AddResourceInput)
+      .output(SemaphoreResourceRecord),
 
     delete: oc
       .route({
@@ -130,8 +130,8 @@ export const semaphoreContract = oc.router({
         summary: "Delete a resource from the semaphore inventory",
         tags: ["resources"],
       })
-      .input(deleteResourceInputSchema)
-      .output(deleteResourceResultSchema),
+      .input(DeleteResourceInput)
+      .output(DeleteResourceResult),
 
     list: oc
       .route({
@@ -140,8 +140,8 @@ export const semaphoreContract = oc.router({
         summary: "List semaphore resources",
         tags: ["resources"],
       })
-      .input(listResourcesInputSchema)
-      .output(z.array(resourceRecordSchema)),
+      .input(ListResourcesInput)
+      .output(z.array(SemaphoreResourceRecord)),
 
     acquire: oc
       .route({
@@ -150,8 +150,8 @@ export const semaphoreContract = oc.router({
         summary: "Acquire a lease for the next available resource of a type",
         tags: ["resources"],
       })
-      .input(acquireResourceInputSchema)
-      .output(leaseRecordSchema),
+      .input(AcquireResourceInput)
+      .output(SemaphoreLeaseRecord),
 
     release: oc
       .route({
@@ -160,13 +160,13 @@ export const semaphoreContract = oc.router({
         summary: "Release an active resource lease",
         tags: ["resources"],
       })
-      .input(releaseResourceInputSchema)
-      .output(releaseResourceResultSchema),
+      .input(ReleaseResourceInput)
+      .output(ReleaseResourceResult),
   }),
 });
 
-export type SemaphoreResourceRecord = z.infer<typeof resourceRecordSchema>;
-export type SemaphoreLeaseRecord = z.infer<typeof leaseRecordSchema>;
+export type SemaphoreResourceRecord = z.infer<typeof SemaphoreResourceRecord>;
+export type SemaphoreLeaseRecord = z.infer<typeof SemaphoreLeaseRecord>;
 export type SemaphoreClient = ContractRouterClient<typeof semaphoreContract>;
 export type SemaphoreFetch = (
   input: URL | string | Request,

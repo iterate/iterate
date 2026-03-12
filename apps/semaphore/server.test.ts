@@ -1,3 +1,5 @@
+import { env } from "cloudflare:test";
+import { beforeEach, describe, expect, test } from "vitest";
 import migration0001Sql from "./migrations/0001_init.sql?raw";
 import { createSemaphoreClient } from "@iterate-com/semaphore-contract";
 import type { RawSemaphoreEnv } from "./server.ts";
@@ -49,9 +51,6 @@ async function callProcedure<T>(params: {
     payload: (await response.json()) as { json?: T },
   };
 }
-
-import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, test } from "vitest";
 
 const testEnv = env as unknown as RawSemaphoreEnv;
 
