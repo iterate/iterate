@@ -1,12 +1,11 @@
-import { serializeError } from "../errors.ts";
+import type { SerializedError } from "../errors.ts";
+import type { MetaMcpTools } from "../metamcp/tools.ts";
 
-export interface MetaMcpExecutionResult {
-  result: unknown;
-  logs: string[];
-  error?: ReturnType<typeof serializeError>;
-}
+export type MetaMcpExecutionResult =
+  | { success: true; logs: string[]; result: unknown }
+  | { success: false; logs: string[]; error: SerializedError };
 
-export interface MetaMcpExecutionEnvironment<TTools extends Record<string, unknown>> {
+export interface MetaMcpExecutionEnvironment {
   readonly kind: string;
-  execute(params: { code: string; tools: TTools }): Promise<MetaMcpExecutionResult>;
+  execute(params: { code: string; tools: MetaMcpTools }): Promise<MetaMcpExecutionResult>;
 }

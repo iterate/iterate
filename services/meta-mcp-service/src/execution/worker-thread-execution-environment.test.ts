@@ -1,5 +1,29 @@
 import { describe, expect, test } from "vitest";
 import { WorkerThreadMetaMcpExecutionEnvironment } from "./worker-thread-execution-environment.ts";
+import type { MetaMcpTools } from "../metamcp/tools.ts";
+
+function createTestTools(): MetaMcpTools {
+  return {
+    weather: {
+      get_forecast: async (input: { city: string }) => ({
+        summary: `Forecast for ${input.city}`,
+      }),
+    },
+    discover: async () => null,
+    describe: {
+      tool: async () => null,
+    },
+    catalog: {
+      namespaces: async () => ({ results: ["weather"] }),
+      tools: async () => ({ results: [] }),
+    },
+    metamcp: {
+      addServer: async () => null,
+      getSchema: async () => null,
+      startOAuth: async () => null,
+    },
+  };
+}
 
 describe("WorkerThreadMetaMcpExecutionEnvironment", () => {
   test("executes code through nested tool proxies", async () => {
@@ -14,26 +38,21 @@ describe("WorkerThreadMetaMcpExecutionEnvironment", () => {
         console.log("namespaces", namespaces);
         return { namespaces, forecast };
       `,
-      tools: {
-        weather: {
-          get_forecast: async (input: { city: string }) => ({
-            summary: `Forecast for ${input.city}`,
-          }),
-        },
-        catalog: {
-          namespaces: async () => ({ results: ["weather"] }),
-        },
-      },
+      tools: createTestTools(),
     });
 
-    expect(result.error).toBeUndefined();
-    expect(result.result).toEqual({
-      namespaces: ["weather", "catalog"],
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      throw new Error("Expected successful execution");
+    }
+
+    expect(result.result).toMatchObject({
+      namespaces: expect.arrayContaining(["weather", "discover", "describe", "catalog", "metamcp"]),
       forecast: {
         summary: "Forecast for Pune",
       },
     });
-    expect(result.logs).toContain("namespaces [ 'weather', 'catalog' ]");
+    expect(result.logs.some((log) => log.includes("namespaces"))).toBe(true);
   });
 
   test("times out runaway execution", async () => {
@@ -45,10 +64,14 @@ describe("WorkerThreadMetaMcpExecutionEnvironment", () => {
       code: `
         while (true) {}
       `,
-      tools: {},
+      tools: createTestTools(),
     });
 
-    expect(result.result).toBeNull();
-    expect(result.error?.message).toContain("timed out");
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error("Expected timed out execution");
+    }
+
+    expect(result.error.message).toContain("timed out");
   });
 });

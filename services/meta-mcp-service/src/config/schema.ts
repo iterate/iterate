@@ -1,33 +1,19 @@
-import { homedir } from "node:os";
-import { resolve } from "node:path";
 import { z } from "zod/v4";
-
-const home = homedir();
 
 const oauthAuthFieldsSchema = {
   scope: z.string().min(1).optional(),
   clientName: z.string().min(1).optional(),
-  clientUri: z.string().url().optional(),
-  redirectBaseUrl: z
-    .string()
-    .url()
-    .optional()
-    .describe(
-      "Optional public base URL for OAuth callbacks when the default Meta MCP URL is not the right browser-facing origin.",
-    ),
-  clientMetadataUrl: z.string().url().optional(),
-} as const;
+  clientUri: z.url().optional(),
+  clientMetadataUrl: z.url().optional(),
+};
 
 export const ServiceEnv = z.object({
   META_MCP_SERVICE_HOST: z.string().default("0.0.0.0"),
   META_MCP_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(19070),
-  META_MCP_SERVICE_PUBLIC_URL: z.string().url().optional(),
-  META_MCP_SERVICE_CONFIG_PATH: z
-    .string()
-    .default(resolve(home, ".config/meta-mcp-service/config.json")),
-  META_MCP_SERVICE_AUTH_PATH: z
-    .string()
-    .default(resolve(home, ".config/meta-mcp-service/auth.json")),
+  META_MCP_SERVICE_PUBLIC_URL: z.url().optional(),
+  META_MCP_SERVICE_SERVERS_PATH: z.string().optional(),
+  META_MCP_SERVICE_CONFIG_PATH: z.string().optional(),
+  META_MCP_SERVICE_AUTH_PATH: z.string().optional(),
 });
 
 export const AuthConfig = z.discriminatedUnion("type", [
@@ -52,18 +38,11 @@ export const AuthConfig = z.discriminatedUnion("type", [
   }),
 ]);
 
-const AuthInput = z.union([
-  AuthConfig,
-  z.enum(["auto", "oauth", "none"]).transform((type) => ({ type })),
-]);
+const AuthInput = z.union([AuthConfig, z.enum(["auto", "oauth", "none"])]);
 
 export const ServerConfig = z.object({
   id: z.string().min(1).describe("Stable server id used in config and OAuth state."),
   url: z.string().url().describe("Base URL for the remote MCP server."),
-  transport: z
-    .enum(["streamable-http", "auto"])
-    .default("auto")
-    .describe("Transport mode. Leave as auto unless you need to force streamable-http."),
   namespace: z
     .string()
     .min(1)
@@ -103,12 +82,16 @@ export const ServerInput = z.object({
 
 export const ParsedServerInput = ServerInput.extend({
   auth: AuthInput.optional(),
-}).transform((input) => ({
-  ...input,
-  auth: typeof input.auth === "string" ? { type: input.auth } : input.auth,
-}));
+});
 
-export const MetaMcpConfig = z.object({
+export function normalizeServerInput(input: ParsedServerInput): ServerInput {
+  return {
+    ...input,
+    auth: typeof input.auth === "string" ? { type: input.auth } : input.auth,
+  };
+}
+
+export const MetaMcpServersFile = z.object({
   servers: z.array(ServerConfig).default([]),
 });
 
@@ -152,7 +135,7 @@ export const OAuthAuthorizationState = z.object({
   expiresAt: z.string(),
 });
 
-export const OAuthStoreRecord = z.object({
+export const OAuthServerState = z.object({
   accessToken: z.string().min(1).optional(),
   refreshToken: z.string().optional(),
   expiresAt: z.string().optional(),
@@ -164,14 +147,21 @@ export const OAuthStoreRecord = z.object({
   authorization: OAuthAuthorizationState.optional(),
 });
 
-export const AuthStore = z.object({
-  oauth: z.record(z.string(), OAuthStoreRecord).default({}),
+export const MetaMcpAuthFile = z.object({
+  oauth: z.record(z.string(), OAuthServerState).default({}),
 });
 
-export type AuthStore = z.infer<typeof AuthStore>;
-export type MetaMcpConfig = z.infer<typeof MetaMcpConfig>;
+export const MetaMcpConfig = MetaMcpServersFile;
+export const AuthStore = MetaMcpAuthFile;
+export const OAuthStoreRecord = OAuthServerState;
+
+export type AuthStore = z.infer<typeof MetaMcpAuthFile>;
+export type MetaMcpAuthFile = z.infer<typeof MetaMcpAuthFile>;
+export type MetaMcpConfig = z.infer<typeof MetaMcpServersFile>;
+export type MetaMcpServersFile = z.infer<typeof MetaMcpServersFile>;
 export type OAuthAuthorizationState = z.infer<typeof OAuthAuthorizationState>;
-export type OAuthStoreRecord = z.infer<typeof OAuthStoreRecord>;
+export type OAuthStoreRecord = z.infer<typeof OAuthServerState>;
+export type OAuthServerState = z.infer<typeof OAuthServerState>;
 export type ServerConfig = z.infer<typeof ServerConfig>;
 export type ServerInput = z.infer<typeof ServerInput>;
 export type ParsedServerInput = z.infer<typeof ParsedServerInput>;

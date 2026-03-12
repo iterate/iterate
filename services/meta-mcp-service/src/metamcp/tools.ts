@@ -8,7 +8,7 @@ import {
 } from "../catalog.ts";
 import { serializeError } from "../errors.ts";
 import { ParsedServerInput } from "../config/schema.ts";
-import { UpstreamManager } from "../upstream-manager.ts";
+import type { UpstreamManager } from "../upstream-manager.ts";
 
 export const StartOAuthInput = z.object({
   serverId: z.string().min(1),
@@ -17,7 +17,6 @@ export const StartOAuthInput = z.object({
 const AddServerCatalogInput = z.object({
   id: z.string().min(1),
   url: z.string().url(),
-  transport: z.enum(["streamable-http", "auto"]).default("auto"),
   namespace: z.string().min(1).optional(),
   enabled: z.boolean().default(true),
   auth: z

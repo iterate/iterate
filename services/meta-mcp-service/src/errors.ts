@@ -21,9 +21,18 @@ export class MetaMcpError extends Error {
   }
 }
 
-export function serializeError(error: unknown) {
+export type SerializedError = {
+  type: "serialized_error";
+  name: string;
+  code: string;
+  message: string;
+  details: Record<string, unknown>;
+};
+
+export function serializeError(error: unknown): SerializedError {
   if (error instanceof MetaMcpError) {
     return {
+      type: "serialized_error",
       name: error.name,
       code: error.code,
       message: error.message,
@@ -33,6 +42,7 @@ export function serializeError(error: unknown) {
 
   if (error instanceof Error) {
     return {
+      type: "serialized_error",
       name: error.name,
       code: "ERROR",
       message: error.message,
@@ -41,6 +51,7 @@ export function serializeError(error: unknown) {
   }
 
   return {
+    type: "serialized_error",
     name: "Error",
     code: "ERROR",
     message: String(error),

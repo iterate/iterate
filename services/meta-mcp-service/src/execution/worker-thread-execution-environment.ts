@@ -1,6 +1,7 @@
 import { Worker } from "node:worker_threads";
 import { serializeError } from "../errors.ts";
 import { logInfo, logWarn } from "../logger.ts";
+import type { MetaMcpTools } from "../metamcp/tools.ts";
 import type { MetaMcpExecutionEnvironment, MetaMcpExecutionResult } from "./types.ts";
 
 type WorkerRequest =
@@ -184,9 +185,7 @@ function createWorkerSource() {
   `;
 }
 
-export class WorkerThreadMetaMcpExecutionEnvironment<
-  TTools extends Record<string, unknown>,
-> implements MetaMcpExecutionEnvironment<TTools> {
+export class WorkerThreadMetaMcpExecutionEnvironment implements MetaMcpExecutionEnvironment {
   readonly kind = "worker-thread";
 
   constructor(
@@ -196,7 +195,7 @@ export class WorkerThreadMetaMcpExecutionEnvironment<
     } = {},
   ) {}
 
-  async execute(params: { code: string; tools: TTools }): Promise<MetaMcpExecutionResult> {
+  async execute(params: { code: string; tools: MetaMcpTools }): Promise<MetaMcpExecutionResult> {
     const startedAt = Date.now();
     const timeoutMs = this.options.timeoutMs ?? 30_000;
     const maxLogs = this.options.maxLogs ?? 200;
@@ -232,7 +231,7 @@ export class WorkerThreadMetaMcpExecutionEnvironment<
 
       const timeout = setTimeout(() => {
         void finish({
-          result: null,
+          success: false,
           logs: [],
           error: serializeError(
             new Error(`Meta MCP execution timed out after ${String(timeoutMs)}ms`),
@@ -269,7 +268,7 @@ export class WorkerThreadMetaMcpExecutionEnvironment<
             durationMs: Date.now() - startedAt,
             logCount: message.logs.length,
           });
-          await finish({ result: message.result, logs: message.logs });
+          await finish({ success: true, logs: message.logs, result: message.result });
           return;
         }
 
@@ -286,7 +285,7 @@ export class WorkerThreadMetaMcpExecutionEnvironment<
                 : String(message.error),
           });
           await finish({
-            result: null,
+            success: false,
             logs: message.logs,
             error: serializeError(message.error),
           });
@@ -299,11 +298,17 @@ export class WorkerThreadMetaMcpExecutionEnvironment<
           error: error instanceof Error ? error.message : String(error),
         });
         await finish({
-          result: null,
+          success: false,
           logs: [],
           error: serializeError(error),
         });
       });
     });
   }
+}
+
+export function createWorkerThreadCodeExecutor() {
+  return new WorkerThreadMetaMcpExecutionEnvironment({
+    timeoutMs: 30_000,
+  });
 }

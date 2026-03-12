@@ -4,7 +4,8 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "meta-mcp:dev": "tsx watch --clear-screen=false src/server.ts",
+    "meta-mcp:dev": "tsx watch --clear-screen=false src/index.ts",
+    "meta-mcp:test": "vitest run -c vitest.config.ts",
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {

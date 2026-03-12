@@ -9,7 +9,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Hono } from "hono";
 import { describe, expect, test } from "vitest";
 import { z } from "zod/v4";
-import { MetaMcpFileStore } from "./config/file-store.ts";
 import { UpstreamManager } from "./upstream-manager.ts";
 
 async function getAvailablePort() {
@@ -127,13 +126,13 @@ async function startSlowMcpServer(params: { delayMs: number }) {
 describe("UpstreamManager timeouts", () => {
   test("times out slow upstream discovery", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "meta-mcp-upstream-timeout-"));
-    const configPath = join(tempRoot, "config.json");
+    const serversPath = join(tempRoot, "servers.json");
     const authPath = join(tempRoot, "auth.json");
     const slowServer = await startSlowMcpServer({ delayMs: 200 });
 
     try {
       await writeFile(
-        configPath,
+        serversPath,
         `${JSON.stringify(
           {
             servers: [
@@ -154,13 +153,14 @@ describe("UpstreamManager timeouts", () => {
       await writeFile(authPath, `${JSON.stringify({ oauth: {} }, null, 2)}\n`, "utf8");
 
       const upstream = new UpstreamManager(
-        new MetaMcpFileStore(configPath, authPath),
+        serversPath,
         "http://127.0.0.1:19070",
         {
           connectMs: 50,
           discoveryMs: 50,
           toolCallMs: 50,
         },
+        authPath,
       );
 
       await expect(upstream.listAvailableServers()).resolves.toEqual([

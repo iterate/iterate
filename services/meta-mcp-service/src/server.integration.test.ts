@@ -9,9 +9,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Hono } from "hono";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { z } from "zod/v4";
-import { startMetaMcpService } from "./server.ts";
 
 async function getAvailablePort() {
   return await new Promise<number>((resolve, reject) => {
@@ -161,13 +160,14 @@ async function startFakeMcpServer() {
 }
 
 async function withMetaMcpEnvironment<T>(
-  fn: (paths: { configPath: string; authPath: string; publicUrl: string }) => Promise<T>,
+  fn: (paths: { serversPath: string; authPath: string; publicUrl: string }) => Promise<T>,
 ) {
   const tempRoot = await mkdtemp(join(tmpdir(), "meta-mcp-service-test-"));
-  const configPath = join(tempRoot, "config.json");
+  const serversPath = join(tempRoot, "servers.json");
   const authPath = join(tempRoot, "auth.json");
 
   const previous = {
+    META_MCP_SERVICE_SERVERS_PATH: process.env.META_MCP_SERVICE_SERVERS_PATH,
     META_MCP_SERVICE_CONFIG_PATH: process.env.META_MCP_SERVICE_CONFIG_PATH,
     META_MCP_SERVICE_AUTH_PATH: process.env.META_MCP_SERVICE_AUTH_PATH,
     META_MCP_SERVICE_PUBLIC_URL: process.env.META_MCP_SERVICE_PUBLIC_URL,
@@ -175,15 +175,24 @@ async function withMetaMcpEnvironment<T>(
   };
 
   try {
-    await writeFile(authPath, `${JSON.stringify({ oauth: {} }, null, 2)}\n`, "utf8");
+    await writeFile(
+      authPath,
+      `${JSON.stringify(
+        { version: "1.0.0", oauth: {}, clientInformation: {}, tokens: {} },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
     const port = await getAvailablePort();
     const publicUrl = `http://127.0.0.1:${String(port)}`;
-    process.env.META_MCP_SERVICE_CONFIG_PATH = configPath;
+    process.env.META_MCP_SERVICE_SERVERS_PATH = serversPath;
+    delete process.env.META_MCP_SERVICE_CONFIG_PATH;
     process.env.META_MCP_SERVICE_AUTH_PATH = authPath;
     process.env.META_MCP_SERVICE_PUBLIC_URL = publicUrl;
     process.env.ITERATE_PROJECT_BASE_URL = publicUrl;
 
-    return await fn({ configPath, authPath, publicUrl });
+    return await fn({ serversPath, authPath, publicUrl });
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) {
@@ -195,6 +204,18 @@ async function withMetaMcpEnvironment<T>(
 
     await rm(tempRoot, { recursive: true, force: true });
   }
+}
+
+async function startMetaMcpService(options?: { host?: string; port?: number }) {
+  vi.resetModules();
+  const { startMetaMcpServer } = await import("./metamcp/server.ts");
+  const nodeServer = startMetaMcpServer(options);
+
+  return {
+    stop: async () => {
+      nodeServer.close();
+    },
+  };
 }
 
 async function createMetaMcpClient(url: string) {
@@ -233,22 +254,244 @@ async function executeCode(client: Client, code: string) {
 
 describe.sequential("meta-mcp-service integration", () => {
   test("redirects local mcp auth links to the saved provider URL", async () => {
-    await withMetaMcpEnvironment(async ({ configPath, authPath, publicUrl }) => {
-      await writeFile(configPath, `${JSON.stringify({ servers: [] }, null, 2)}\n`, "utf8");
+    await withMetaMcpEnvironment(async ({ serversPath, authPath, publicUrl }) => {
+      await writeFile(
+        serversPath,
+        `${JSON.stringify(
+          {
+            servers: [
+              {
+                id: "cloudflare-observability",
+                url: "https://cloudflare.example.com/mcp",
+                enabled: true,
+                auth: { type: "oauth" },
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
       await writeFile(
         authPath,
         `${JSON.stringify(
           {
+            version: "1.0.0",
             oauth: {
               "cloudflare-observability": {
                 authorization: {
-                  authUrl: `${publicUrl}/mcp-auth/test-state`,
+                  authUrl: `${publicUrl}/auth/start/test-state`,
                   providerAuthUrl: "https://provider.example.com/oauth/authorize",
-                  callbackUrl: `${publicUrl}/oauth/callback?serverId=cloudflare-observability`,
-                  redirectUrl: `${publicUrl}/oauth/callback?serverId=cloudflare-observability`,
+                  callbackUrl: `${publicUrl}/auth/finish`,
+                  redirectUrl: `${publicUrl}/auth/finish`,
                   localAuthState: "test-state",
                   expiresAt: new Date(Date.now() + 60_000).toISOString(),
                 },
+              },
+            },
+            clientInformation: {},
+            tokens: {},
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const port = await getAvailablePort();
+      const service = await startMetaMcpService({
+        host: "127.0.0.1",
+        port,
+      });
+
+      try {
+        const response = await fetch(`http://127.0.0.1:${String(port)}/auth/start/test-state`, {
+          redirect: "manual",
+        });
+
+        expect(response.status).toBe(302);
+        expect(response.headers.get("location")).toBe(
+          "https://provider.example.com/oauth/authorize",
+        );
+      } finally {
+        await service.stop();
+      }
+    });
+  });
+
+  test("returns a helpful message for invalid auth start state", async () => {
+    await withMetaMcpEnvironment(async ({ serversPath }) => {
+      await writeFile(serversPath, `${JSON.stringify({ servers: [] }, null, 2)}\n`, "utf8");
+
+      const port = await getAvailablePort();
+      const service = await startMetaMcpService({
+        host: "127.0.0.1",
+        port,
+      });
+
+      try {
+        const response = await fetch(`http://127.0.0.1:${String(port)}/auth/start/does-not-exist`);
+
+        expect(response.status).toBe(200);
+        await expect(response.text()).resolves.toContain(
+          "No saved info found to initiate this OAuth authorization",
+        );
+      } finally {
+        await service.stop();
+      }
+    });
+  });
+
+  test("returns a helpful message for invalid auth finish state", async () => {
+    await withMetaMcpEnvironment(async ({ serversPath }) => {
+      await writeFile(serversPath, `${JSON.stringify({ servers: [] }, null, 2)}\n`, "utf8");
+
+      const port = await getAvailablePort();
+      const service = await startMetaMcpService({
+        host: "127.0.0.1",
+        port,
+      });
+
+      try {
+        const response = await fetch(
+          `http://127.0.0.1:${String(port)}/auth/finish?state=does-not-exist&code=test-code`,
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.text()).resolves.toContain(
+          "No saved info found to finish this OAuth authorization",
+        );
+      } finally {
+        await service.stop();
+      }
+    });
+  });
+
+  test("reports waiting OAuth servers and reuses the saved auth state in api status", async () => {
+    await withMetaMcpEnvironment(async ({ serversPath, authPath, publicUrl }) => {
+      await writeFile(
+        serversPath,
+        `${JSON.stringify(
+          {
+            servers: [
+              {
+                id: "github",
+                url: "https://github.example.com/mcp",
+                enabled: true,
+                auth: { type: "oauth" },
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await writeFile(
+        authPath,
+        `${JSON.stringify(
+          {
+            version: "1.0.0",
+            oauth: {
+              github: {
+                authorization: {
+                  authUrl: `${publicUrl}/auth/start/existing-state`,
+                  providerAuthUrl: "https://provider.example.com/oauth/authorize",
+                  callbackUrl: `${publicUrl}/auth/finish`,
+                  redirectUrl: `${publicUrl}/auth/finish`,
+                  localAuthState: "existing-state",
+                  expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                },
+              },
+            },
+            clientInformation: {},
+            tokens: {},
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const port = await getAvailablePort();
+      const service = await startMetaMcpService({
+        host: "127.0.0.1",
+        port,
+      });
+
+      try {
+        const response = await fetch(`http://127.0.0.1:${String(port)}/api/status`);
+        const body = (await response.json()) as {
+          publicBaseUrl: string;
+          servers: Array<{
+            id: string;
+            auth: {
+              type: string;
+              connected: boolean;
+              waitingForOAuth: boolean;
+              startOAuthUrl: string | null;
+              pendingAuthUrl: string | null;
+              callbackUrl: string | null;
+              expiresAt: string | null;
+            };
+          }>;
+        };
+
+        expect(response.status).toBe(200);
+        expect(body.publicBaseUrl).toBe(publicUrl);
+        expect(body.servers).toMatchObject([
+          {
+            id: "github",
+            auth: {
+              type: "oauth",
+              connected: false,
+              waitingForOAuth: true,
+              startOAuthUrl: `${publicUrl}/auth/start/existing-state`,
+              pendingAuthUrl: "https://provider.example.com/oauth/authorize",
+              callbackUrl: `${publicUrl}/auth/finish`,
+              expiresAt: expect.any(String),
+            },
+          },
+        ]);
+      } finally {
+        await service.stop();
+      }
+    });
+  });
+
+  test("reports connected OAuth servers without generating a new auth state", async () => {
+    await withMetaMcpEnvironment(async ({ serversPath, authPath, publicUrl }) => {
+      await writeFile(
+        serversPath,
+        `${JSON.stringify(
+          {
+            servers: [
+              {
+                id: "github",
+                url: "https://github.example.com/mcp",
+                enabled: true,
+                auth: { type: "oauth" },
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await writeFile(
+        authPath,
+        `${JSON.stringify(
+          {
+            version: "1.0.0",
+            oauth: {},
+            clientInformation: {},
+            tokens: {
+              github: {
+                accessToken: "test-access-token",
+                tokenType: "Bearer",
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
               },
             },
           },
@@ -265,14 +508,38 @@ describe.sequential("meta-mcp-service integration", () => {
       });
 
       try {
-        const response = await fetch(`http://127.0.0.1:${String(port)}/mcp-auth/test-state`, {
-          redirect: "manual",
-        });
+        const response = await fetch(`http://127.0.0.1:${String(port)}/api/status`);
+        const body = (await response.json()) as {
+          publicBaseUrl: string;
+          servers: Array<{
+            id: string;
+            auth: {
+              type: string;
+              connected: boolean;
+              waitingForOAuth: boolean;
+              startOAuthUrl: string | null;
+              pendingAuthUrl: string | null;
+              callbackUrl: string | null;
+              expiresAt: string | null;
+            };
+          }>;
+        };
 
-        expect(response.status).toBe(302);
-        expect(response.headers.get("location")).toBe(
-          "https://provider.example.com/oauth/authorize",
-        );
+        expect(response.status).toBe(200);
+        expect(body.publicBaseUrl).toBe(publicUrl);
+        expect(body.servers).toMatchObject([
+          {
+            id: "github",
+            auth: {
+              type: "oauth",
+              connected: true,
+              waitingForOAuth: false,
+              startOAuthUrl: null,
+              pendingAuthUrl: null,
+              callbackUrl: null,
+            },
+          },
+        ]);
       } finally {
         await service.stop();
       }
@@ -283,9 +550,9 @@ describe.sequential("meta-mcp-service integration", () => {
     const fakeServer = await startFakeMcpServer();
 
     try {
-      await withMetaMcpEnvironment(async ({ configPath }) => {
+      await withMetaMcpEnvironment(async ({ serversPath }) => {
         await writeFile(
-          configPath,
+          serversPath,
           `${JSON.stringify(
             {
               servers: [
@@ -342,8 +609,8 @@ describe.sequential("meta-mcp-service integration", () => {
     const fakeServer = await startFakeMcpServer();
 
     try {
-      await withMetaMcpEnvironment(async ({ configPath }) => {
-        await writeFile(configPath, `${JSON.stringify({ servers: [] }, null, 2)}\n`, "utf8");
+      await withMetaMcpEnvironment(async ({ serversPath }) => {
+        await writeFile(serversPath, `${JSON.stringify({ servers: [] }, null, 2)}\n`, "utf8");
 
         const port = await getAvailablePort();
         const service = await startMetaMcpService({

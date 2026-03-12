@@ -3,20 +3,14 @@ import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { MetaMcpError } from "./errors.ts";
 import { logInfo, logWarn } from "./logger.ts";
-import { MetaMcpFileStore } from "./config/file-store.ts";
 import {
-  type AuthStore,
   type MetaMcpConfig,
+  normalizeServerInput,
   ParsedServerInput,
   ServerConfig,
 } from "./config/schema.ts";
-import {
-  beginOAuthAuthorization,
-  completeOAuthAuthorization,
-  createOAuthClientProvider,
-  resolveHeaders,
-  supportsOAuth,
-} from "./auth/oauth.ts";
+import { readServersFile, updateServersFile } from "./config/servers-file.ts";
+import { AuthManager, supportsOAuth } from "./auth/auth-manager.ts";
 
 export interface NormalizedTool {
   name: string;
@@ -109,12 +103,20 @@ export class UpstreamManager {
   private toolCache = new Map<string, NormalizedTool[]>();
   private inflightToolLoads = new Map<string, Promise<NormalizedTool[]>>();
   private catalogRevision = 0;
+  private readonly authManager: AuthManager;
 
   constructor(
-    private readonly fileStore: MetaMcpFileStore,
+    private readonly serversPath: string,
     private readonly publicBaseUrl: string,
     private readonly timeouts: UpstreamTimeouts = DEFAULT_TIMEOUTS,
-  ) {}
+    authPath?: string,
+  ) {
+    this.authManager = new AuthManager({
+      serversPath,
+      authPath,
+      publicBaseUrl,
+    });
+  }
 
   private async withTimeout<T>(params: {
     promise: Promise<T>;
@@ -150,17 +152,13 @@ export class UpstreamManager {
     });
   }
 
-  private async loadState(): Promise<{ config: MetaMcpConfig; authStore: AuthStore }> {
-    const [config, authStore] = await Promise.all([
-      this.fileStore.loadConfig(),
-      this.fileStore.loadAuthStore(),
-    ]);
-
+  private async loadState(): Promise<{ config: MetaMcpConfig }> {
+    const config = readServersFile(this.serversPath);
     logInfo("loaded runtime state", {
       serverCount: config.servers.length,
     });
 
-    return { config, authStore };
+    return { config };
   }
 
   getRevision() {
@@ -175,41 +173,29 @@ export class UpstreamManager {
     });
   }
 
-  private invalidateAuthStoreCache() {
+  private invalidateAuthCache() {
     this.resetAllServers();
   }
 
-  private async createTransport(params: {
-    server: ServerConfig;
-    authStore: AuthStore;
-    useOAuth: boolean;
-  }) {
+  private async createTransport(params: { server: ServerConfig; useOAuth: boolean }) {
     if (params.useOAuth) {
       return new StreamableHTTPClientTransport(new URL(params.server.url), {
-        authProvider: createOAuthClientProvider({
+        authProvider: this.authManager.createOAuthClientProvider({
           server: params.server,
-          fileStore: this.fileStore,
-          publicBaseUrl: this.publicBaseUrl,
+          redirectUrl: new URL("/auth/finish", this.publicBaseUrl).toString(),
         }),
       });
     }
 
     return new StreamableHTTPClientTransport(new URL(params.server.url), {
       requestInit: {
-        headers: await resolveHeaders({
-          server: params.server,
-          authStore: params.authStore,
-        }),
+        headers: await this.authManager.resolveHeaders(params.server),
       },
     });
   }
 
   private async throwOAuthRequired(server: ServerConfig) {
-    const authorization = await beginOAuthAuthorization({
-      server,
-      fileStore: this.fileStore,
-      publicBaseUrl: this.publicBaseUrl,
-    });
+    const authorization = await this.authManager.beginOAuthAuthorization(server);
 
     throw new MetaMcpError("OAUTH_REQUIRED", `OAuth required for server '${server.id}'`, {
       serverId: server.id,
@@ -222,17 +208,15 @@ export class UpstreamManager {
 
   private async connectManagedClient(params: {
     managed: ManagedClient;
-    authStore: AuthStore;
     preferredAuthMode?: "none" | "oauth";
   }): Promise<void> {
-    const { managed, authStore } = params;
+    const { managed } = params;
     const initialAuthMode =
       params.preferredAuthMode ?? (managed.server.auth.type === "oauth" ? "oauth" : "none");
 
     try {
       const transport = await this.createTransport({
         server: managed.server,
-        authStore,
         useOAuth: initialAuthMode === "oauth",
       });
       await this.withTimeout({
@@ -251,7 +235,6 @@ export class UpstreamManager {
       if (managed.server.auth.type === "auto") {
         const transport = await this.createTransport({
           server: managed.server,
-          authStore,
           useOAuth: true,
         });
 
@@ -279,15 +262,11 @@ export class UpstreamManager {
     }
   }
 
-  private async reconnectWithOAuth(params: {
-    managed: ManagedClient;
-    authStore: AuthStore;
-  }): Promise<void> {
+  private async reconnectWithOAuth(params: { managed: ManagedClient }): Promise<void> {
     await params.managed.client.close().catch(() => undefined);
     params.managed.connected = false;
     await this.connectManagedClient({
       managed: params.managed,
-      authStore: params.authStore,
       preferredAuthMode: "oauth",
     });
     params.managed.connected = true;
@@ -305,18 +284,17 @@ export class UpstreamManager {
         throw error;
       }
 
-      const { authStore } = await this.getEnabledServer(managed.server.id);
-      await this.reconnectWithOAuth({ managed, authStore });
+      await this.getEnabledServer(managed.server.id);
+      await this.reconnectWithOAuth({ managed });
       return await fn();
     }
   }
 
   private async probeServer(server: ServerConfig): Promise<{ tools: NormalizedTool[] }> {
     const managed = createManagedClient(server);
-    const authStore = await this.fileStore.loadAuthStore();
 
     try {
-      await this.connectManagedClient({ managed, authStore });
+      await this.connectManagedClient({ managed });
       const listToolsResult = await this.withOAuthRetry(managed, () =>
         this.withTimeout({
           promise: managed.client.listTools(),
@@ -339,10 +317,8 @@ export class UpstreamManager {
     }
   }
 
-  private async getEnabledServer(
-    serverId: string,
-  ): Promise<{ server: ServerConfig; authStore: AuthStore }> {
-    const { config, authStore } = await this.loadState();
+  private async getEnabledServer(serverId: string): Promise<{ server: ServerConfig }> {
+    const { config } = await this.loadState();
     const server = config.servers.find((item) => item.id === serverId && item.enabled);
     if (!server) {
       throw new MetaMcpError("SERVER_NOT_FOUND", `Unknown enabled server '${serverId}'`, {
@@ -350,11 +326,11 @@ export class UpstreamManager {
       });
     }
 
-    return { server, authStore };
+    return { server };
   }
 
   private async ensureConnected(serverId: string): Promise<ManagedClient> {
-    const { server, authStore } = await this.getEnabledServer(serverId);
+    const { server } = await this.getEnabledServer(serverId);
     const current = this.clients.get(serverId);
     if (current?.connected && current.server.url === server.url) {
       logInfo("reusing upstream client", {
@@ -368,10 +344,9 @@ export class UpstreamManager {
     logInfo("connecting upstream client", {
       serverId,
       url: server.url,
-      transport: server.transport,
       authType: server.auth.type,
     });
-    await this.connectManagedClient({ managed, authStore });
+    await this.connectManagedClient({ managed });
 
     managed.connected = true;
     this.clients.set(serverId, managed);
@@ -552,7 +527,7 @@ export class UpstreamManager {
   }
 
   async addServer(input: unknown): Promise<{ server: ServerConfig; toolCount: number }> {
-    const parsedInput = ParsedServerInput.parse(input);
+    const parsedInput = normalizeServerInput(ParsedServerInput.parse(input));
     const server = ServerConfig.parse({
       ...parsedInput,
       auth: parsedInput.auth ?? { type: "auto" },
@@ -562,7 +537,7 @@ export class UpstreamManager {
 
     try {
       const probeResult = await this.probeServer(server);
-      const nextConfig = await this.fileStore.updateConfig((config) => ({
+      const nextConfig = updateServersFile(this.serversPath, (config) => ({
         ...config,
         servers: [...config.servers.filter((existing) => existing.id !== server.id), server],
       }));
@@ -575,7 +550,7 @@ export class UpstreamManager {
       };
     } catch (error) {
       if (error instanceof MetaMcpError && error.code === "OAUTH_REQUIRED") {
-        const nextConfig = await this.fileStore.updateConfig((config) => ({
+        const nextConfig = updateServersFile(this.serversPath, (config) => ({
           ...config,
           servers: [...config.servers.filter((existing) => existing.id !== server.id), server],
         }));
@@ -597,11 +572,7 @@ export class UpstreamManager {
       });
     }
 
-    const authorization = await beginOAuthAuthorization({
-      server,
-      fileStore: this.fileStore,
-      publicBaseUrl: this.publicBaseUrl,
-    });
+    const authorization = await this.authManager.beginOAuthAuthorization(server);
 
     return {
       serverId,
@@ -619,14 +590,12 @@ export class UpstreamManager {
       });
     }
 
-    await completeOAuthAuthorization({
+    await this.authManager.completeOAuthAuthorization({
       server,
-      fileStore: this.fileStore,
-      publicBaseUrl: this.publicBaseUrl,
       authorizationCode: params.authorizationCode,
     });
 
-    this.invalidateAuthStoreCache();
+    this.invalidateAuthCache();
     this.resetServer(params.serverId);
   }
 }

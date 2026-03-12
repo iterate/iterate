@@ -22,3 +22,9 @@ export function logWarn(message: string, meta: Record<string, unknown> = {}) {
 export function logError(message: string, meta: Record<string, unknown> = {}) {
   console.error(`[${serviceName}] ${message}${formatMeta(meta)}`);
 }
+
+export const logger = {
+  info: logInfo,
+  warn: logWarn,
+  error: logError,
+};

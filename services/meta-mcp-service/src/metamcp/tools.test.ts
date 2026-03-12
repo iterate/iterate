@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { ParsedServerInput, type ServerConfig } from "../config/schema.ts";
+import { normalizeServerInput, ParsedServerInput, type ServerConfig } from "../config/schema.ts";
 import { MetaMcpError } from "../errors.ts";
 import { createMetaMcpTools } from "./tools.ts";
 
@@ -7,36 +7,41 @@ function createServer(id: string): ServerConfig {
   return {
     id,
     url: `https://${id}.example.com/mcp`,
-    transport: "auto",
     enabled: true,
     auth: { type: "auto" },
   };
 }
 
-describe("ParsedServerInput", () => {
-  test("accepts auth shorthand strings", () => {
+describe("normalizeServerInput", () => {
+  test("normalizes auth shorthand strings after parsing", () => {
     expect(
-      ParsedServerInput.parse({
-        id: "example",
-        url: "https://example.com/mcp",
-        auth: "oauth",
-      }).auth,
+      normalizeServerInput(
+        ParsedServerInput.parse({
+          id: "example",
+          url: "https://example.com/mcp",
+          auth: "oauth",
+        }),
+      ).auth,
     ).toEqual({ type: "oauth" });
 
     expect(
-      ParsedServerInput.parse({
-        id: "example",
-        url: "https://example.com/mcp",
-        auth: "auto",
-      }).auth,
+      normalizeServerInput(
+        ParsedServerInput.parse({
+          id: "example",
+          url: "https://example.com/mcp",
+          auth: "auto",
+        }),
+      ).auth,
     ).toEqual({ type: "auto" });
 
     expect(
-      ParsedServerInput.parse({
-        id: "example",
-        url: "https://example.com/mcp",
-        auth: "none",
-      }).auth,
+      normalizeServerInput(
+        ParsedServerInput.parse({
+          id: "example",
+          url: "https://example.com/mcp",
+          auth: "none",
+        }),
+      ).auth,
     ).toEqual({ type: "none" });
   });
 });
