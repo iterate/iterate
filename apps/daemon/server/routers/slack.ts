@@ -555,7 +555,11 @@ slackRouter.post("/agent-change-callback", async (c) => {
   }
 
   if (payload.isWorking) {
-    const scheduled = scheduleThreadStatusUpdate(payload.path, slackContext, payload.shortStatus || "Working");
+    const scheduled = scheduleThreadStatusUpdate(
+      payload.path,
+      slackContext,
+      payload.shortStatus || "Working",
+    );
     if (!scheduled) {
       return c.json({ success: true, suppressed: true });
     }

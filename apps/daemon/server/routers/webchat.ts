@@ -355,7 +355,10 @@ webchatRouter.post("/agent-change-callback", async (c) => {
   // Suppress stale "Thinking" status that OpenCode re-emits after tool
   // completion — by that point the agent has likely already posted its reply.
   if (payload.isWorking && payload.shortStatus) {
-    if (isThinkingStatus(payload.shortStatus) && agentPathProgressedPastThinking.has(payload.path)) {
+    if (
+      isThinkingStatus(payload.shortStatus) &&
+      agentPathProgressedPastThinking.has(payload.path)
+    ) {
       logger.log(
         `[webchat] suppressing stale Thinking status thread=${webchatThreadId} path=${payload.path}`,
       );
