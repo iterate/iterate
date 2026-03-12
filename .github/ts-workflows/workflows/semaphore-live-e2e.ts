@@ -12,6 +12,7 @@ export default workflow({
       branches: ["main"],
       paths: [
         "apps/semaphore/**",
+        "apps/semaphore-contract/**",
         ".github/ts-workflows/workflows/semaphore-live-e2e.ts",
         ".github/workflows/semaphore-live-e2e.yml",
       ],
@@ -19,6 +20,7 @@ export default workflow({
     pull_request: {
       paths: [
         "apps/semaphore/**",
+        "apps/semaphore-contract/**",
         ".github/ts-workflows/workflows/semaphore-live-e2e.ts",
         ".github/workflows/semaphore-live-e2e.yml",
       ],

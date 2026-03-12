@@ -10,11 +10,13 @@ on:
       - main
     paths:
       - apps/semaphore/**
+      - apps/semaphore-contract/**
       - .github/ts-workflows/workflows/semaphore-live-e2e.ts
       - .github/workflows/semaphore-live-e2e.yml
   pull_request:
     paths:
       - apps/semaphore/**
+      - apps/semaphore-contract/**
       - .github/ts-workflows/workflows/semaphore-live-e2e.ts
       - .github/workflows/semaphore-live-e2e.yml
   workflow_dispatch: {}
