@@ -1,5 +1,7 @@
 packages:
   - apps/cf-ingress-proxy-worker
+  - apps/semaphore
+  - apps/semaphore-contract
   - apps/project-ingress-proxy
   - apps/cli
   - apps/daemon

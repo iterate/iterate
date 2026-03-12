@@ -1107,6 +1107,65 @@ importers:
         specifier: ^8.19.0
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
 
+  apps/semaphore:
+    dependencies:
+      '@iterate-com/semaphore-contract':
+        specifier: workspace:*
+        version: link:../semaphore-contract
+      '@orpc/server':
+        specifier: ^1.13.4
+        version: 1.13.6(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.1))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      alchemy:
+        specifier: ^0.83.0
+        version: 0.83.3(@aws-sdk/client-s3@3.962.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(bufferutil@4.0.9)(kysely@0.28.8)(mysql2@3.18.1(@types/node@24.10.1))(pg@8.17.1)(postgres@3.4.7)(utf-8-validate@5.0.10)(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260205.0)(wrangler@4.68.1(@cloudflare/workers-types@4.20260207.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      hono:
+        specifier: ^4.11.3
+        version: 4.12.2
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+    devDependencies:
+      '@cloudflare/vitest-pool-workers':
+        specifier: ^0.12.17
+        version: 0.12.17(@cloudflare/workers-types@4.20260207.0)(@vitest/runner@4.0.18)(@vitest/snapshot@4.0.18)(bufferutil@4.0.9)(utf-8-validate@5.0.10)(vitest@3.2.4(@types/debug@4.1.12)(@types/node@24.10.1)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.31.1)(msw@2.12.10(@types/node@24.10.1)(typescript@5.9.3))(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))
+      '@cloudflare/workers-types':
+        specifier: ^4.20260207.0
+        version: 4.20260207.0
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.10.1
+      tsx:
+        specifier: ^4.20.6
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 3.2.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.1)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.31.1)(msw@2.12.10(@types/node@24.10.1)(typescript@5.9.3))(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
+      wrangler:
+        specifier: ^4.64.0
+        version: 4.68.1(@cloudflare/workers-types@4.20260207.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+
+  apps/semaphore-contract:
+    dependencies:
+      '@orpc/client':
+        specifier: ^1.13.4
+        version: 1.13.6(@opentelemetry/api@1.9.0)
+      '@orpc/contract':
+        specifier: ^1.13.5
+        version: 1.13.6(@opentelemetry/api@1.9.0)
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.10.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   experiments/archil-node-modules:
     dependencies:
       '@archildata/client':
