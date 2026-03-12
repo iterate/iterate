@@ -4,6 +4,8 @@
 
 It stores resource inventory in D1 and uses one Durable Object per resource `type` to coordinate active leases, waiters, and expiry.
 
+Consumers should use `@iterate-com/semaphore-contract` for the shared oRPC contract and `createSemaphoreClient`.
+
 ## API
 
 All endpoints require `Authorization: Bearer <SEMAPHORE_API_TOKEN>`.
@@ -18,14 +20,20 @@ All endpoints require `Authorization: Bearer <SEMAPHORE_API_TOKEN>`.
 
 - Resource identity is `{ type, slug }`
 - `slug` is unique within a `type`
-- `data` is an arbitrary JSON object and is returned in full by `list` and `acquire`
-- `leaseMs` is required
-- `waitMs` defaults to `0`
+- `data` is a JSON-serializable object and is returned in full by `list` and `acquire`
+- `leaseMs` is required and capped at `3600000`
+- `waitMs` defaults to `0` and is capped at `300000`
 - delete removes inventory immediately but does not revoke an active lease
+- waiting acquires are best-effort in v1; if a waiting client disconnects after the DO grants a lease, that lease may stay live until expiry
 
 ## Deploy
 
 Alchemy manages the Worker, D1 database, and Durable Object namespace.
 
-- `pnpm --filter @iterate-com/semaphore-worker test`
-- `pnpm --filter @iterate-com/semaphore-worker typecheck`
+## Local Commands
+
+- `pnpm --filter @iterate-com/semaphore test`
+- `pnpm --filter @iterate-com/semaphore typecheck`
+- `pnpm --filter @iterate-com/semaphore test:e2e`
+
+`test:e2e` boots the real Worker through Alchemy dev and expects the local Doppler and Cloudflare dev credentials path to be available.

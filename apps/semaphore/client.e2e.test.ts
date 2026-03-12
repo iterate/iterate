@@ -82,6 +82,10 @@ async function waitForHealth(baseUrl: string, timeoutMs: number) {
   throw new Error(`Timed out waiting for health at ${baseUrl}`);
 }
 
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function stopAlchemyDev(child: ChildProcessByStdio<null, Readable, Readable>): Promise<void> {
   if (child.exitCode !== null) {
     return;
@@ -165,12 +169,52 @@ describe("semaphore worker e2e", () => {
     expect(released).toEqual({ released: true });
   });
 
+  test("baseUrl client can wait for a lease and receive it after release", async () => {
+    const client = createSemaphoreClient({
+      apiKey: "test-token",
+      baseUrl,
+    });
+    const type = uniqueType();
+
+    await client.resources.add({
+      type,
+      slug: "only",
+      data: { token: "secret-only" },
+    });
+
+    const firstLease = await client.resources.acquire({
+      type,
+      leaseMs: 60_000,
+    });
+
+    const waitingLeasePromise = client.resources.acquire({
+      type,
+      leaseMs: 60_000,
+      waitMs: 2_000,
+    });
+
+    await sleep(250);
+
+    const released = await client.resources.release({
+      type,
+      slug: firstLease.slug,
+      leaseId: firstLease.leaseId,
+    });
+    expect(released).toEqual({ released: true });
+
+    const waitingLease = await waitingLeasePromise;
+    expect(waitingLease.slug).toBe("only");
+  });
+
   test("client injects the bearer token and rejects invalid credentials", async () => {
     const badClient = createSemaphoreClient({
       apiKey: "wrong-token",
       baseUrl,
     });
 
-    await expect(badClient.resources.list({})).rejects.toBeTruthy();
+    const error = await badClient.resources.list({}).catch((caught) => caught);
+
+    expect(error).toBeTruthy();
+    expect(String(error)).toContain("Missing or invalid Authorization header");
   });
 });

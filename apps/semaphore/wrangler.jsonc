@@ -1,6 +1,6 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "semaphore-worker-test",
+  "name": "semaphore-test",
   "main": "./server.ts",
   "compatibility_date": "2025-02-24",
   "compatibility_flags": ["nodejs_compat_v2"],
@@ -21,7 +21,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "semaphore-worker-test",
+      "database_name": "semaphore-test",
       "database_id": "00000000-0000-0000-0000-000000000000",
     },
   ],

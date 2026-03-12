@@ -4,11 +4,18 @@ import { ORPCError, implement, onError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
 import { RequestHeadersPlugin, type RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { z } from "zod/v4";
-import { semaphoreContract } from "@iterate-com/semaphore-contract";
-
-const SLUG_PATTERN = /^[a-z0-9-]+$/;
-
-type JsonObject = Record<string, unknown>;
+import {
+  acquireResourceInputSchema,
+  deleteResourceInputSchema,
+  releaseResourceInputSchema,
+  semaphoreContract,
+  semaphoreDataSchema,
+  semaphoreSlugSchema,
+  semaphoreTypeSchema,
+  type SemaphoreJsonObject,
+  type SemaphoreLeaseRecord,
+  type SemaphoreResourceRecord,
+} from "@iterate-com/semaphore-contract";
 
 type ResourceRow = {
   type: string;
@@ -18,28 +25,12 @@ type ResourceRow = {
   updated_at: string;
 };
 
-type ResourceRecord = {
-  type: string;
-  slug: string;
-  data: JsonObject;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type LeaseRecord = {
-  type: string;
-  slug: string;
-  data: JsonObject;
-  leaseId: string;
-  expiresAt: number;
-};
-
 type Waiter = {
   id: number;
   type: string;
   leaseMs: number;
   timeoutHandle: ReturnType<typeof setTimeout>;
-  resolve: (value: LeaseRecord | null) => void;
+  resolve: (value: SemaphoreLeaseRecord | null) => void;
 };
 
 type RawSemaphoreEnv = {
@@ -81,26 +72,27 @@ function readBearerToken(headerValue: string | null): string | null {
   return token.length > 0 ? token : null;
 }
 
-function normalizeSlugField(field: "type" | "slug", input: string): string {
-  const normalized = input.trim().toLowerCase();
-  if (!normalized) {
-    throw new ResourceInputError(`${field} is required`);
-  }
-  if (!SLUG_PATTERN.test(normalized) || !/[a-z]/.test(normalized)) {
-    throw new ResourceInputError(`${field} must match ^[a-z0-9-]+$ and include a letter`);
-  }
-  return normalized;
+function parseType(input: string): string {
+  return semaphoreTypeSchema.parse(input);
 }
 
-function parseData(value: string): JsonObject {
-  const parsed = JSON.parse(value) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new ResourceInputError("data must be a JSON object");
-  }
-  return parsed as JsonObject;
+function parseSlug(input: string): string {
+  return semaphoreSlugSchema.parse(input);
 }
 
-function rowToResourceRecord(row: ResourceRow): ResourceRecord {
+function parseData(value: string): SemaphoreJsonObject {
+  try {
+    return semaphoreDataSchema.parse(JSON.parse(value) as unknown);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new ResourceInputError("data must be valid JSON");
+    }
+
+    throw error;
+  }
+}
+
+function rowToResourceRecord(row: ResourceRow): SemaphoreResourceRecord {
   return {
     type: row.type,
     slug: row.slug,
@@ -115,7 +107,7 @@ export class ResourceInputError extends Error {}
 async function listResourcesFromDb(
   db: D1Database,
   params: { type?: string } = {},
-): Promise<ResourceRecord[]> {
+): Promise<SemaphoreResourceRecord[]> {
   const statement = params.type
     ? db
         .prepare(
@@ -134,9 +126,9 @@ async function insertResource(
   resource: {
     type: string;
     slug: string;
-    data: JsonObject;
+    data: SemaphoreJsonObject;
   },
-): Promise<ResourceRecord> {
+): Promise<SemaphoreResourceRecord> {
   await db
     .prepare("INSERT INTO resources (type, slug, data) VALUES (?, ?, ?)")
     .bind(resource.type, resource.slug, JSON.stringify(resource.data))
@@ -170,7 +162,10 @@ async function deleteResourceFromDb(
   return (result.meta.changes ?? 0) > 0;
 }
 
-async function selectInventoryByType(db: D1Database, type: string): Promise<ResourceRecord[]> {
+async function selectInventoryByType(
+  db: D1Database,
+  type: string,
+): Promise<SemaphoreResourceRecord[]> {
   const result = await db
     .prepare(
       "SELECT type, slug, data, created_at, updated_at FROM resources WHERE type = ? ORDER BY created_at ASC, slug ASC",
@@ -178,6 +173,14 @@ async function selectInventoryByType(db: D1Database, type: string): Promise<Reso
     .bind(type)
     .all<ResourceRow>();
   return (result.results ?? []).map(rowToResourceRecord);
+}
+
+async function hasInventoryForType(db: D1Database, type: string): Promise<boolean> {
+  const result = await db
+    .prepare("SELECT 1 AS present FROM resources WHERE type = ? LIMIT 1")
+    .bind(type)
+    .first<{ present: number }>();
+  return Boolean(result?.present);
 }
 
 export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
@@ -196,10 +199,9 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
     type: string;
     leaseMs: number;
     waitMs?: number;
-  }): Promise<LeaseRecord | null> {
-    const type = normalizeSlugField("type", params.type);
-    const waitMs = params.waitMs ?? 0;
-    const immediate = await this.tryAcquire(type, params.leaseMs);
+  }): Promise<SemaphoreLeaseRecord | null> {
+    const { type, leaseMs, waitMs = 0 } = acquireResourceInputSchema.parse(params);
+    const immediate = await this.tryAcquire(type, leaseMs);
     if (immediate) {
       return immediate;
     }
@@ -207,7 +209,7 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
       return null;
     }
 
-    return new Promise<LeaseRecord | null>((resolve) => {
+    return new Promise<SemaphoreLeaseRecord | null>((resolve) => {
       const waiterId = ++this.nextWaiterId;
       const timeoutHandle = setTimeout(() => {
         this.waiters = this.waiters.filter((waiter) => waiter.id !== waiterId);
@@ -217,7 +219,7 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
       this.waiters.push({
         id: waiterId,
         type,
-        leaseMs: params.leaseMs,
+        leaseMs,
         timeoutHandle,
         resolve,
       });
@@ -225,26 +227,24 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
   }
 
   async release(params: { type: string; slug: string; leaseId: string }): Promise<boolean> {
-    normalizeSlugField("type", params.type);
-    const slug = normalizeSlugField("slug", params.slug);
+    const { slug, leaseId } = releaseResourceInputSchema.parse(params);
     const existing = this.ctx.storage.sql
       .exec<{ lease_id: string }>("SELECT lease_id FROM leases WHERE slug = ?", slug)
       .toArray()[0];
 
-    if (!existing || existing.lease_id !== params.leaseId) {
+    if (!existing || existing.lease_id !== leaseId) {
       return false;
     }
 
     this.ctx.storage.sql.exec("DELETE FROM leases WHERE slug = ?", slug);
-    this.logEvent("released", slug, { leaseId: params.leaseId });
+    this.logEvent("released", slug, { leaseId });
     await this.scheduleNextAlarm();
     await this.dispatchWaiters();
     return true;
   }
 
   async hasActiveLease(params: { type: string; slug: string }): Promise<boolean> {
-    normalizeSlugField("type", params.type);
-    const slug = normalizeSlugField("slug", params.slug);
+    const { slug } = deleteResourceInputSchema.parse(params);
     await this.reapExpiredLeases();
     const row = this.ctx.storage.sql
       .exec<{ count: number }>("SELECT COUNT(*) AS count FROM leases WHERE slug = ?", slug)
@@ -253,7 +253,7 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
   }
 
   async inventoryChanged(params: { type: string }): Promise<void> {
-    normalizeSlugField("type", params.type);
+    parseType(params.type);
     await this.dispatchWaiters();
   }
 
@@ -286,8 +286,7 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
     );
   }
 
-  private async tryAcquire(typeInput: string, leaseMs: number): Promise<LeaseRecord | null> {
-    const type = normalizeSlugField("type", typeInput);
+  private async tryAcquire(type: string, leaseMs: number): Promise<SemaphoreLeaseRecord | null> {
     await this.reapExpiredLeases();
 
     const inventory = await selectInventoryByType(this.env.DB, type);
@@ -382,7 +381,7 @@ export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {
     await this.ctx.storage.setAlarm(nextLease.expires_at);
   }
 
-  private logEvent(event: string, slug: string | null, payload: JsonObject) {
+  private logEvent(event: string, slug: string | null, payload: SemaphoreJsonObject) {
     this.ctx.storage.sql.exec(
       "INSERT INTO events (occurred_at, event, slug, payload) VALUES (?, ?, ?, ?)",
       Date.now(),
@@ -421,6 +420,12 @@ function mapResourceError(error: unknown): never {
     throw new ORPCError("BAD_REQUEST", { message: error.message });
   }
 
+  if (error instanceof z.ZodError) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: error.issues[0]?.message ?? "Invalid request input.",
+    });
+  }
+
   if (error instanceof Error && /UNIQUE constraint failed/i.test(error.message)) {
     throw new ORPCError("CONFLICT", {
       message: "Resource already exists for this type and slug.",
@@ -438,8 +443,7 @@ const addResourceProcedure = os.resources.add
   .use(authProcedure)
   .handler(async ({ context, input }) => {
     try {
-      const type = normalizeSlugField("type", input.type);
-      const slug = normalizeSlugField("slug", input.slug);
+      const { type, slug, data } = input;
       const coordinator = getCoordinator(context.env, type);
       const hasActiveLease = await coordinator.hasActiveLease({ type, slug });
       if (hasActiveLease) {
@@ -451,7 +455,7 @@ const addResourceProcedure = os.resources.add
       const created = await insertResource(context.env.DB, {
         type,
         slug,
-        data: input.data,
+        data,
       });
       await coordinator.inventoryChanged({ type });
       return created;
@@ -464,8 +468,7 @@ const deleteResourceProcedure = os.resources.delete
   .use(authProcedure)
   .handler(async ({ context, input }) => {
     try {
-      const type = normalizeSlugField("type", input.type);
-      const slug = normalizeSlugField("slug", input.slug);
+      const { type, slug } = input;
       const deleted = await deleteResourceFromDb(context.env.DB, { type, slug });
       return { deleted };
     } catch (error) {
@@ -477,8 +480,7 @@ const listResourcesProcedure = os.resources.list
   .use(authProcedure)
   .handler(async ({ context, input }) => {
     try {
-      const type = input.type ? normalizeSlugField("type", input.type) : undefined;
-      return await listResourcesFromDb(context.env.DB, { type });
+      return await listResourcesFromDb(context.env.DB, { type: input.type });
     } catch (error) {
       return mapResourceError(error);
     }
@@ -488,17 +490,27 @@ const acquireResourceProcedure = os.resources.acquire
   .use(authProcedure)
   .handler(async ({ context, input }) => {
     try {
-      const type = normalizeSlugField("type", input.type);
+      const { type, leaseMs, waitMs = 0 } = input;
+      const hasInventory = await hasInventoryForType(context.env.DB, type);
+      if (!hasInventory) {
+        throw new ORPCError("NOT_FOUND", {
+          message: "No resources are configured for this type.",
+        });
+      }
+
       const coordinator = getCoordinator(context.env, type);
       const lease = await coordinator.acquire({
         type,
-        leaseMs: input.leaseMs,
-        waitMs: input.waitMs ?? 0,
+        leaseMs,
+        waitMs,
       });
 
       if (!lease) {
         throw new ORPCError("CONFLICT", {
-          message: "No resource is currently available for this type.",
+          message:
+            waitMs > 0
+              ? "No resource became available before waitMs elapsed."
+              : "No resource is currently available for this type.",
         });
       }
 
@@ -512,13 +524,12 @@ const releaseResourceProcedure = os.resources.release
   .use(authProcedure)
   .handler(async ({ context, input }) => {
     try {
-      const type = normalizeSlugField("type", input.type);
-      const slug = normalizeSlugField("slug", input.slug);
+      const { type, slug, leaseId } = input;
       const coordinator = getCoordinator(context.env, type);
       const released = await coordinator.release({
         type,
         slug,
-        leaseId: input.leaseId,
+        leaseId,
       });
       return { released };
     } catch (error) {
