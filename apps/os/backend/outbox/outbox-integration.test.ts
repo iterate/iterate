@@ -84,7 +84,10 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     await using fixture = await createOutboxFixture();
     const { db, queuer, outboxClient } = fixture;
     const secret = `basic_${Date.now()}_${Math.random()}`;
-    await outboxClient.send({ transaction: db, parent: db }, "test:basic", { message: secret });
+    await outboxClient.send(db, {
+      name: "test:basic",
+      payload: { message: secret },
+    });
 
     // Verify event was inserted
     const event = await vi.waitUntil(async () => {
@@ -114,7 +117,10 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     await using fixture = await createOutboxFixture();
     const { db, queuer, outboxClient } = fixture;
     const secret = `unstable_${Date.now()}_${Math.random()}`;
-    await outboxClient.send({ transaction: db, parent: db }, "test:unstable", { message: secret });
+    await outboxClient.send(db, {
+      name: "test:unstable",
+      payload: { message: secret },
+    });
 
     const event = await vi.waitUntil(async () => {
       return db.query.outboxEvent.findFirst({
@@ -149,7 +155,10 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     await using fixture = await createOutboxFixture();
     const { db, queuer, outboxClient } = fixture;
     const secret = `fail_${Date.now()}_${Math.random()}`;
-    await outboxClient.send({ transaction: db, parent: db }, "test:fail", { message: secret });
+    await outboxClient.send(db, {
+      name: "test:fail",
+      payload: { message: secret },
+    });
 
     const event = await vi.waitUntil(async () => {
       return db.query.outboxEvent.findFirst({

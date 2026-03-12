@@ -585,17 +585,16 @@ slackApp.post("/webhook", async (c) => {
           // Enqueue outbox event for forwarding to machine.
           // The outbox consumer handles retries (e.g. machine rebooting).
           // Deduplication is handled by the outbox's unique index on (name, deduplication_key).
-          const result = await outboxClient.send(
-            { transaction: db, parent: db },
-            "slack:webhook-received",
-            {
+          const result = await outboxClient.send(db, {
+            name: "slack:webhook-received",
+            payload: {
               projectId,
               machineId: targetMachine?.id ?? null,
               payload,
               correlation,
             },
-            { deduplicationKey: slackEventId },
-          );
+            deduplicationKey: slackEventId,
+          });
 
           if (result.duplicate) {
             logger.debug("[Slack Webhook] Duplicate event, skipping", {

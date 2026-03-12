@@ -11,21 +11,23 @@ test("oRPC procedure types are extracted correctly", () => {
 
 test("internal event types are type-safe", () => {
   const db = {} as DBLike;
-  expectTypeOf(outboxClient.send).toBeCallableWith(
-    { transaction: db, parent: db },
-    "testing:poke",
-    { dbtime: "2000-01-01T00:00:00.000Z", message: "hello" },
-  );
+  expectTypeOf(outboxClient.send).toBeCallableWith(db, {
+    name: "testing:poke",
+    payload: { dbtime: "2000-01-01T00:00:00.000Z", message: "hello" },
+  });
 
   expectTypeOf(outboxClient)
     .map((client) =>
-      client.send({ transaction: db, parent: db }, "testing:poke", {
-        dbtime: "2000-01-01T00:00:00.000Z",
-        message: "hello",
+      client.send(db, {
+        name: "testing:poke",
+        payload: {
+          dbtime: "2000-01-01T00:00:00.000Z",
+          message: "hello",
+        },
       }),
     )
     .resolves.toEqualTypeOf<{
-      eventId: string;
+      eventId: string | null;
       matchedConsumers: number;
       delays: TimePeriod[];
       duplicate: boolean;
@@ -33,38 +35,36 @@ test("internal event types are type-safe", () => {
 
   expectTypeOf(outboxClient)
     .map((client) =>
-      client.send(
-        { transaction: db, parent: db },
-        "testing:poke",
-        // @ts-expect-error - typo in payload
-        { dbtime: "2000-01-01T00:00:00.000Z", messageTYPO: "hello" },
-      ),
+      client.send(db, {
+        name: "testing:poke",
+        payload:
+          // @ts-expect-error - typo in payload
+          { dbtime: "2000-01-01T00:00:00.000Z", messageTYPO: "hello" },
+      }),
     )
     .resolves.toEqualTypeOf<{
-      eventId: string;
+      eventId: string | null;
       matchedConsumers: number;
       delays: TimePeriod[];
       duplicate: boolean;
     }>();
 
-  expectTypeOf(outboxClient.send).toBeCallableWith(
-    { transaction: db, parent: db },
+  expectTypeOf(outboxClient.send).toBeCallableWith(db, {
     // @ts-expect-error - typo in event name
-    "testing:pokeTYPO",
-    { message: "hello" },
-  );
+    name: "testing:pokeTYPO",
+    payload: { dbtime: "2000-01-01T00:00:00.000Z", message: "hello" },
+  });
 });
 
 test("machine:delete-requested event type", () => {
   const db = {} as DBLike;
-  expectTypeOf(outboxClient.send).toBeCallableWith(
-    { transaction: db, parent: db },
-    "machine:delete-requested",
-    {
+  expectTypeOf(outboxClient.send).toBeCallableWith(db, {
+    name: "machine:delete-requested",
+    payload: {
       machineId: "mach_123",
       type: "daytona" as const,
       externalId: "ext_123",
       metadata: {},
     },
-  );
+  });
 });

@@ -218,6 +218,12 @@ export type CTEParams<T, Name extends string, Payload> = {
   deduplicationKey?: FromQueryResult<T, string>;
 };
 
+export type SendParams<Name extends string, Payload> = {
+  name: Name;
+  payload: Payload;
+  deduplicationKey?: string;
+};
+
 export interface Queuer<DBConnection> {
   $types: {
     db: DBConnection;
@@ -235,7 +241,7 @@ export interface Queuer<DBConnection> {
       deduplicationKey?: string;
     },
   ) => Promise<{
-    eventId: string;
+    eventId: string | null;
     matchedConsumers: number;
     delays: TimePeriod[];
     duplicate: boolean;
@@ -665,16 +671,15 @@ export const createPostProcedureConsumerPlugin = <
 ) => {
   const consumerClient = createConsumerClient(...args);
 
-  return os.$context<{ db: DBConnection }>().middleware(async ({ context, next, path }, input) => {
+  return os.$context<{ db: DBConnection }>().middleware(async ({ next, path }, input) => {
     return next({
       context: {
         sendEvent: async <T extends {}>(db: DBConnection, output: T) => {
           const payload = { input, output };
-          await consumerClient.send(
-            { transaction: db as DBLike, parent: context.db as DBLike },
-            `rpc:${path.join(".")}`,
+          await consumerClient.send(db as DBLike, {
+            name: `rpc:${path.join(".")}`,
             payload,
-          );
+          });
 
           return output as T & { $enqueued: true };
         },
@@ -767,22 +772,15 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
   };
 
   const send = async <Name extends EventName>(
-    connections: {
-      /** the transaction reference for inserting the event record */
-      transaction: DBLike;
-      /** the parent db connection for processing consumers after commit */
-      parent: DBLike;
-    },
-    eventName: Name,
-    payload: EventTypes[Name],
-    options?: { deduplicationKey?: string },
+    connection: DBLike,
+    params: SendParams<Name, EventTypes[Name]>,
   ) => {
     // TODO: add a batch send API here, and batch pgmq job enqueueing in `enqueue`,
     // so fanout consumers don't need to insert one event/job at a time.
-    const addResult = await queuer.enqueue(connections.transaction as DBConnection, {
-      name: eventName,
-      payload: payload as never,
-      deduplicationKey: options?.deduplicationKey,
+    const addResult = await queuer.enqueue(connection as DBConnection, {
+      name: params.name,
+      payload: params.payload as never,
+      deduplicationKey: params.deduplicationKey,
     });
     for (const delay of new Set(addResult.delays)) {
       // as a convenience, we'll process the queue automatically after the delay + a 10% buffer
@@ -792,7 +790,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
       waitUntil(
         (async () => {
           await new Promise((resolve) => setTimeout(resolve, delayMs));
-          return queuer.processQueue(connections.parent as DBConnection);
+          return queuer.processQueue((await getDb()) as DBConnection);
         })(),
       );
     }

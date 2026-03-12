@@ -275,9 +275,9 @@ export const registerConsumers = () => {
       const writeSentinel = await pushSetupToMachine(machine, input);
 
       // Emit setup-pushed so the readiness probe can begin
-      await cc.send({ transaction: db, parent: db }, "machine:setup-pushed", {
-        machineId,
-        projectId,
+      await cc.send(db, {
+        name: "machine:setup-pushed",
+        payload: { machineId, projectId },
       });
 
       await writeSentinel();
@@ -328,11 +328,14 @@ export const registerConsumers = () => {
       }
 
       // Probe message sent successfully — emit probe-sent so polling begins
-      await cc.send({ transaction: db, parent: db }, "machine:probe-sent", {
-        machineId,
-        projectId,
-        threadId: sendResult.threadId,
-        messageId: sendResult.messageId,
+      await cc.send(db, {
+        name: "machine:probe-sent",
+        payload: {
+          machineId,
+          projectId,
+          threadId: sendResult.threadId,
+          messageId: sendResult.messageId,
+        },
       });
 
       logger.set({ machine: { id: machineId }, threadId: sendResult.threadId });
@@ -376,10 +379,13 @@ export const registerConsumers = () => {
 
       const responseText = await pollForProbeAnswer(fetcher, threadId);
 
-      await cc.send({ transaction: db, parent: db }, "machine:probe-succeeded", {
-        machineId,
-        projectId,
-        responseText,
+      await cc.send(db, {
+        name: "machine:probe-succeeded",
+        payload: {
+          machineId,
+          projectId,
+          responseText,
+        },
       });
 
       logger.set({ machine: { id: machineId } });
@@ -436,10 +442,13 @@ export const registerConsumers = () => {
           .where(eq(schema.machine.id, machineId));
 
         // Emit activated event inside the transaction for atomicity
-        await cc.send({ transaction: tx, parent: db }, "machine:activated", {
-          machineId,
-          projectId,
-          detachedMachineIds: detached.map((m) => m.id),
+        await cc.send(tx, {
+          name: "machine:activated",
+          payload: {
+            machineId,
+            projectId,
+            detachedMachineIds: detached.map((m) => m.id),
+          },
         });
 
         return true;

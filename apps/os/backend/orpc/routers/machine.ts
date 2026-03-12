@@ -313,14 +313,13 @@ export const machineRouter = {
       );
 
       // Emit restart event — UI derives "Restarting..." from this
-      await outboxClient.send(
-        { transaction: ctx.db, parent: ctx.db },
-        "machine:restart-requested",
-        {
+      await outboxClient.send(ctx.db, {
+        name: "machine:restart-requested",
+        payload: {
           machineId: input.machineId,
           projectId: ctx.project.id,
         },
-      );
+      });
 
       // Broadcast invalidation immediately so UI updates to show "Restarting..."
       const { broadcastInvalidation } = await import("../../utils/query-invalidation.ts");
@@ -355,14 +354,13 @@ export const machineRouter = {
       );
 
       // Emit restart event — UI derives "Restarting..." from this
-      await outboxClient.send(
-        { transaction: ctx.db, parent: ctx.db },
-        "machine:restart-requested",
-        {
+      await outboxClient.send(ctx.db, {
+        name: "machine:restart-requested",
+        payload: {
           machineId: input.machineId,
           projectId: ctx.project.id,
         },
-      );
+      });
 
       // Broadcast invalidation immediately so UI updates to show "Restarting..."
       const { broadcastInvalidation } = await import("../../utils/query-invalidation.ts");

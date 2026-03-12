@@ -761,17 +761,16 @@ githubApp.post("/webhook", async (c) => {
   }
   const eventType = xGithubEvent;
 
-  const result = await outboxClient.send(
-    { transaction: db, parent: db },
-    "github:webhook-received",
-    {
+  const result = await outboxClient.send(db, {
+    name: "github:webhook-received",
+    payload: {
       deliveryId,
       event: eventType,
       action: typeof payload.action === "string" ? payload.action : null,
       payload,
     },
-    { deduplicationKey: `github:${eventType}:${externalId}` },
-  );
+    deduplicationKey: `github:${eventType}:${externalId}`,
+  });
   if (result.duplicate) {
     logger.debug("[GitHub Webhook] Duplicate delivery, skipping", {
       deliveryId,

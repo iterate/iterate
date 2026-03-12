@@ -438,17 +438,16 @@ describe("GitHub Webhook Handler", () => {
 
       await expectWebhookMatch(res, { received: true });
       await flushBackgroundTasks();
-      expect(outboxClientSendMock).toHaveBeenCalledWith(
-        expect.any(Object), // connections
-        "github:webhook-received",
-        {
+      expect(outboxClientSendMock).toHaveBeenCalledWith(expect.any(Object), {
+        name: "github:webhook-received",
+        payload: {
           deliveryId: expect.any(String),
           event: "push",
           action: null,
           payload: iteratePushPayload,
         },
-        { deduplicationKey: expect.stringContaining("github:push:") },
-      );
+        deduplicationKey: expect.stringContaining("github:push:"),
+      });
     });
 
     it("still enqueues raw webhook events for non-main branch pushes", async () => {
@@ -467,9 +466,10 @@ describe("GitHub Webhook Handler", () => {
       await flushBackgroundTasks();
       expect(outboxClientSendMock).toHaveBeenCalledWith(
         expect.any(Object),
-        "github:webhook-received",
-        expect.any(Object),
-        expect.objectContaining({ deduplicationKey: expect.any(String) }),
+        expect.objectContaining({
+          name: "github:webhook-received",
+          deduplicationKey: expect.any(String),
+        }),
       );
     });
 
@@ -493,9 +493,10 @@ describe("GitHub Webhook Handler", () => {
       await flushBackgroundTasks();
       expect(outboxClientSendMock).toHaveBeenCalledWith(
         expect.any(Object),
-        "github:webhook-received",
-        expect.any(Object),
-        expect.objectContaining({ deduplicationKey: expect.any(String) }),
+        expect.objectContaining({
+          name: "github:webhook-received",
+          deduplicationKey: expect.any(String),
+        }),
       );
     });
   });
