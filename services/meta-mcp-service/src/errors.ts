@@ -1,3 +1,5 @@
+import { inspect } from "node:util";
+
 type MetaMcpErrorCode =
   | "INVALID_CONFIG"
   | "MISSING_BEARER_TOKEN"
@@ -45,7 +47,7 @@ export function serializeError(error: unknown): SerializedError {
       type: "serialized_error",
       name: error.name,
       code: "ERROR",
-      message: error.message,
+      message: inspect(error, { depth: 8, breakLength: 120 }),
       details: {},
     };
   }
@@ -54,7 +56,7 @@ export function serializeError(error: unknown): SerializedError {
     type: "serialized_error",
     name: "Error",
     code: "ERROR",
-    message: String(error),
+    message: inspect(error, { depth: 8, breakLength: 120 }),
     details: {},
   };
 }

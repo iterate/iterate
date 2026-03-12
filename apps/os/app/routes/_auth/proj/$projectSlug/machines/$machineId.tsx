@@ -272,33 +272,12 @@ function MachineDetailPage() {
     }),
   );
 
-  const metaMcpStatusQueryKey = daemon.daemon.metaMcp.getStatus.key();
   const metaMcpStatus = useQuery(
     daemon.daemon.metaMcp.getStatus.queryOptions({
       enabled: typeof window !== "undefined" && machine.state === "active",
       refetchInterval: 10000,
     }),
   );
-
-  const startMetaMcpOAuth = useMutation({
-    mutationFn: async (serverId: string) => daemonClient.daemon.metaMcp.startOAuth({ serverId }),
-    onSuccess: async (result) => {
-      window.open(result.authUrl, "_blank", "noopener,noreferrer");
-      const copied = await navigator.clipboard.writeText(result.callbackUrl).then(
-        () => true,
-        () => false,
-      );
-      toast.success(
-        copied
-          ? `Opened OAuth for ${result.serverId}. Callback URL copied.`
-          : `Opened OAuth for ${result.serverId}.`,
-      );
-      queryClient.invalidateQueries({ queryKey: metaMcpStatusQueryKey });
-    },
-    onError: (error) => {
-      toast.error("Failed to start OAuth: " + error.message);
-    },
-  });
 
   const agents = [...(agentsData ?? [])].sort(
     (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
@@ -669,7 +648,7 @@ function MachineDetailPage() {
       <section className="space-y-4 border-b pb-6">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-sm font-medium">Meta MCP</h2>
-          {metaMcpStatus.data?.ok && (
+          {metaMcpStatus.data && (
             <span className="text-xs text-muted-foreground">
               {metaMcpStatus.data.publicBaseUrl}
             </span>
@@ -689,28 +668,8 @@ function MachineDetailPage() {
           </div>
         )}
 
-        {metaMcpStatus.data?.ok === false && (
-          <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-            <div className="font-medium">Meta MCP configuration error</div>
-            <div>{metaMcpStatus.data.error.message}</div>
-            <div className="text-xs text-destructive/80">
-              Config: {metaMcpStatus.data.configPath}
-              <br />
-              Auth: {metaMcpStatus.data.authPath}
-            </div>
-          </div>
-        )}
-
-        {metaMcpStatus.data?.ok && (
+        {metaMcpStatus.data && (
           <>
-            {metaMcpStatus.data.publicBaseUrlIsPlaceholder && (
-              <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-300">
-                OAuth callback URLs are using a placeholder public URL right now, so connect flows
-                will not complete until ingress for port <code className="text-xs">19070</code> is
-                wired.
-              </div>
-            )}
-
             {metaMcpStatus.data.servers.length === 0 ? (
               <p className="text-xs text-muted-foreground">
                 No Meta MCP upstream servers configured.
@@ -718,17 +677,13 @@ function MachineDetailPage() {
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {metaMcpStatus.data.servers.map((server) => {
-                  const isPending =
-                    startMetaMcpOAuth.isPending && startMetaMcpOAuth.variables === server.id;
-
                   return (
                     <div key={server.id} className="rounded-lg border bg-background p-4">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-sm font-medium">{server.id}</div>
                           <div className="mt-1 text-xs text-muted-foreground">
-                            {server.namespace ?? server.id} · {server.transport} ·{" "}
-                            {server.toolCount} tools
+                            {server.namespace ?? server.id}
                           </div>
                         </div>
                         <div className="text-xs text-muted-foreground">{server.auth.type}</div>
@@ -737,28 +692,13 @@ function MachineDetailPage() {
                       <div className="mt-3 space-y-2 text-xs text-muted-foreground">
                         <div className="break-all">{server.url}</div>
 
-                        {server.auth.type === "bearer" && (
-                          <div>
-                            {server.auth.configured
-                              ? `Bearer token found in ${server.auth.env}`
-                              : `Missing bearer token env: ${server.auth.env}`}
-                          </div>
-                        )}
-
                         {(server.auth.type === "oauth" || server.auth.type === "auto") && (
-                          <ServerOAuthStatus
-                            server={server}
-                            isPending={isPending}
-                            onConnect={() => startMetaMcpOAuth.mutate(server.id)}
-                          />
+                          <ServerOAuthStatus auth={server.auth} />
                         )}
 
                         {server.auth.type === "none" && <div>No authentication required.</div>}
-
-                        {server.error && (
-                          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-destructive">
-                            {server.error}
-                          </div>
+                        {server.auth.type === "bearer" && (
+                          <div>Bearer authentication configured.</div>
                         )}
                       </div>
                     </div>
@@ -895,34 +835,56 @@ function MachineDetailPage() {
 }
 
 function ServerOAuthStatus(props: {
-  server: {
-    auth:
-      | { type: "oauth"; connected: boolean; callbackUrl: string }
-      | { type: "auto"; oauthConnected: boolean; callbackUrl: string };
-  };
-  isPending: boolean;
-  onConnect: () => void;
+  auth:
+    | {
+        type: "oauth";
+        connected: boolean;
+        waitingForOAuth: boolean;
+        startOAuthUrl: string | null;
+        pendingAuthUrl: string | null;
+        callbackUrl: string | null;
+        expiresAt: string | null;
+      }
+    | {
+        type: "auto";
+        connected: boolean;
+        waitingForOAuth: boolean;
+        startOAuthUrl: string | null;
+        pendingAuthUrl: string | null;
+        callbackUrl: string | null;
+        expiresAt: string | null;
+      };
 }) {
-  const { server, isPending, onConnect } = props;
-  const connected =
-    server.auth.type === "oauth" ? server.auth.connected : server.auth.oauthConnected;
+  const { auth } = props;
+  const connected = auth.connected;
   const statusText =
-    server.auth.type === "oauth"
+    auth.type === "oauth"
       ? connected
         ? "OAuth connected"
-        : "OAuth required"
+        : auth.waitingForOAuth
+          ? "OAuth required"
+          : "OAuth not started"
       : connected
         ? "Auto auth active. OAuth is already available if the server needs it."
-        : "Auto auth active. Meta MCP will try no auth first, then OAuth if needed.";
+        : auth.waitingForOAuth
+          ? "Auto auth active. OAuth is ready if the server needs it."
+          : "Auto auth active. Meta MCP will try no auth first, then OAuth if needed.";
 
   return (
     <div className="space-y-2">
       <div>{statusText}</div>
-      <div className="break-all">Callback: {server.auth.callbackUrl}</div>
-      <Button variant="outline" size="sm" onClick={onConnect} disabled={isPending}>
-        <ExternalLink className="h-3.5 w-3.5" />
-        {isPending ? "Starting..." : connected ? "Reconnect OAuth" : "Connect OAuth"}
-      </Button>
+      {auth.pendingAuthUrl && <div className="break-all">Provider: {auth.pendingAuthUrl}</div>}
+      {auth.callbackUrl && <div className="break-all">Callback: {auth.callbackUrl}</div>}
+      {auth.startOAuthUrl && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open(auth.startOAuthUrl!, "_blank", "noopener,noreferrer")}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          {connected ? "Reconnect OAuth" : "Connect OAuth"}
+        </Button>
+      )}
     </div>
   );
 }

@@ -4,68 +4,54 @@ import { publicProcedure } from "./init.ts";
 
 const META_MCP_SERVICE_BASE_URL = process.env.META_MCP_SERVICE_BASE_URL ?? "http://127.0.0.1:19070";
 
-const serializedErrorSchema = z.object({
-  name: z.string(),
-  code: z.string(),
-  message: z.string(),
-  details: z.record(z.string(), z.unknown()),
-});
-
-const metaMcpStatusSchema = z.discriminatedUnion("ok", [
-  z.object({
-    ok: z.literal(true),
-    publicBaseUrl: z.string().url(),
-    publicBaseUrlIsPlaceholder: z.boolean(),
-    configPath: z.string(),
-    authPath: z.string(),
-    servers: z.array(
-      z.object({
-        id: z.string(),
-        namespace: z.string().nullable(),
-        url: z.string().url(),
-        transport: z.enum(["streamable-http", "auto"]),
-        enabled: z.boolean(),
-        toolCount: z.number().int().nonnegative(),
-        error: z.string().optional(),
-        auth: z.discriminatedUnion("type", [
-          z.object({
-            type: z.literal("none"),
-          }),
-          z.object({
-            type: z.literal("auto"),
-            oauthConnected: z.boolean(),
-            expiresAt: z.string().nullable(),
-            callbackUrl: z.string().url(),
-          }),
-          z.object({
-            type: z.literal("bearer"),
-            env: z.string(),
-            configured: z.boolean(),
-          }),
-          z.object({
-            type: z.literal("oauth"),
-            connected: z.boolean(),
-            expiresAt: z.string().nullable(),
-            callbackUrl: z.string().url(),
-          }),
-        ]),
-      }),
-    ),
-  }),
-  z.object({
-    ok: z.literal(false),
-    publicBaseUrl: z.string().url(),
-    publicBaseUrlIsPlaceholder: z.boolean(),
-    configPath: z.string(),
-    authPath: z.string(),
-    error: serializedErrorSchema,
-  }),
-]);
-
-const metaMcpStartOAuthSchema = z.object({
-  serverId: z.string(),
-  authUrl: z.string(),
-  callbackUrl: z.string().url(),
+const metaMcpStatusSchema = z.object({
+  publicBaseUrl: z.string().url(),
+  servers: z.array(
+    z.object({
+      id: z.string(),
+      namespace: z.string().nullable(),
+      url: z.string().url(),
+      enabled: z.boolean(),
+      auth: z.discriminatedUnion("type", [
+        z.object({
+          type: z.literal("none"),
+          connected: z.boolean(),
+          waitingForOAuth: z.boolean(),
+          startOAuthUrl: z.null(),
+          pendingAuthUrl: z.null(),
+          callbackUrl: z.null(),
+          expiresAt: z.null(),
+        }),
+        z.object({
+          type: z.literal("bearer"),
+          connected: z.boolean(),
+          waitingForOAuth: z.boolean(),
+          startOAuthUrl: z.null(),
+          pendingAuthUrl: z.null(),
+          callbackUrl: z.null(),
+          expiresAt: z.null(),
+        }),
+        z.object({
+          type: z.literal("auto"),
+          connected: z.boolean(),
+          waitingForOAuth: z.boolean(),
+          startOAuthUrl: z.string().url().nullable(),
+          pendingAuthUrl: z.string().url().nullable(),
+          callbackUrl: z.string().url().nullable(),
+          expiresAt: z.string().nullable(),
+        }),
+        z.object({
+          type: z.literal("oauth"),
+          connected: z.boolean(),
+          waitingForOAuth: z.boolean(),
+          startOAuthUrl: z.string().url().nullable(),
+          pendingAuthUrl: z.string().url().nullable(),
+          callbackUrl: z.string().url().nullable(),
+          expiresAt: z.string().nullable(),
+        }),
+      ]),
+    }),
+  ),
 });
 
 async function requestMetaMcp(path: string, init?: RequestInit) {
@@ -114,22 +100,4 @@ export const metaMcpOrpcRouter = {
   getStatus: publicProcedure.handler(async () => {
     return metaMcpStatusSchema.parse(await requestMetaMcp("/api/status"));
   }),
-
-  startOAuth: publicProcedure
-    .input(
-      z.object({
-        serverId: z.string().min(1),
-      }),
-    )
-    .handler(async ({ input }) => {
-      return metaMcpStartOAuthSchema.parse(
-        await requestMetaMcp("/api/oauth/start", {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(input),
-        }),
-      );
-    }),
 };

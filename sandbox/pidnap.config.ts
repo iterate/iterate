@@ -7,7 +7,6 @@ const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/itera
 const sandboxDir = join(iterateRepo, "sandbox");
 const envFile = join(home, ".iterate/.env");
 const eventsServicePort = "17301";
-const metaMcpServicePort = "19070";
 // All DBs under ~/.local/share — persisted across machine replacement.
 const eventsServiceDatabasePath = join(home, ".local/share/events-service/events.sqlite");
 const daemonDatabasePath = join(home, ".local/share/daemon/db.sqlite");
@@ -209,10 +208,13 @@ export default defineConfig({
       name: "meta-mcp-service",
       definition: {
         command: "tsx",
-        args: ["src/server.ts"],
+        args: ["src/index.ts"],
         cwd: `${iterateRepo}/services/meta-mcp-service`,
         env: {
-          META_MCP_SERVICE_PORT: metaMcpServicePort,
+          META_MCP_SERVICE_HOST: "0.0.0.0",
+          META_MCP_SERVICE_PORT: "19070",
+          META_MCP_SERVICE_SERVERS_PATH: `${home}/.config/meta-mcp-service/servers.json`,
+          META_MCP_SERVICE_AUTH_PATH: `${home}/.config/meta-mcp-service/auth.json`,
         },
       },
       options: {

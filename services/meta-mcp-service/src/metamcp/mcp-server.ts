@@ -49,7 +49,7 @@ export function createMetaMCPServer(params: MetaMcpServerParams) {
       outputSchema: z.object({
         result: z.unknown().describe("The result of the executed code"),
         logs: z.array(z.string()).describe("Logs from the executed code"),
-        error: z.unknown().describe("Errors thrown from the executed code, if any"),
+        error: z.unknown().optional().describe("Errors thrown from the executed code, if any"),
       }),
     },
     async ({ code }, { sessionId }) => {
@@ -63,20 +63,32 @@ export function createMetaMCPServer(params: MetaMcpServerParams) {
           (e) => ({ success: false, logs: [], error: serializeError(e) }) as MetaMcpExecutionResult,
         );
 
+      const structuredContent =
+        result.success === false
+          ? {
+              result: null,
+              logs: result.logs,
+              error: result.error,
+            }
+          : {
+              result: result.result,
+              logs: result.logs,
+            };
+
       if (result.success === false) {
         logger.error(`Execute tool failed`, { sessionId, error: result.error });
         return {
           isError: true,
-          content: [{ text: JSON.stringify(result, null, 2), type: "text" }],
-          structuredContent: result,
+          content: [{ text: JSON.stringify(structuredContent, null, 2), type: "text" }],
+          structuredContent,
         };
       }
 
       logger.info(`Execute tool completed`, { sessionId, result: result.result });
       return {
         isError: false,
-        content: [{ text: JSON.stringify(result, null, 2), type: "text" }],
-        structuredContent: result,
+        content: [{ text: JSON.stringify(structuredContent, null, 2), type: "text" }],
+        structuredContent,
       };
     },
   );
