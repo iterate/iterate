@@ -4,7 +4,7 @@ export default defineWorkersConfig({
   test: {
     globals: true,
     include: ["./*.test.ts"],
-    exclude: ["./client.e2e.test.ts"],
+    exclude: ["./client.e2e.test.ts", "./live-e2e.test.ts"],
     poolOptions: {
       workers: {
         wrangler: {

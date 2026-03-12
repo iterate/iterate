@@ -35,5 +35,14 @@ Alchemy manages the Worker, D1 database, and Durable Object namespace.
 - `pnpm --filter @iterate-com/semaphore test`
 - `pnpm --filter @iterate-com/semaphore typecheck`
 - `pnpm --filter @iterate-com/semaphore test:e2e`
+- `pnpm --filter @iterate-com/semaphore test:e2e-live`
 
 `test:e2e` boots the real Worker through Alchemy dev and expects the local Doppler and Cloudflare dev credentials path to be available.
+
+`test:e2e-live` runs against an already-deployed worker using `SEMAPHORE_E2E_BASE_URL` and `SEMAPHORE_E2E_API_TOKEN` (or `SEMAPHORE_API_TOKEN`).
+
+## CI
+
+- PRs and `main` pushes only trigger the semaphore live deploy/test workflow when `apps/semaphore/**` or its workflow files change.
+- The live workflow deploys an ephemeral worker, runs `test:e2e-live`, then tears the worker down.
+- `main` runs that same live flow before deploying the production semaphore worker.

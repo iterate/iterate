@@ -9,6 +9,7 @@
     "test": "pnpm run test:workers",
     "test:workers": "vitest run",
     "test:e2e": "vitest run --config ./vitest.node.config.ts",
+    "test:e2e-live": "vitest run --config ./vitest.live.config.ts",
     "test:all": "pnpm run test:workers && pnpm run test:e2e",
     "typecheck": "tsc --noEmit"
   },
