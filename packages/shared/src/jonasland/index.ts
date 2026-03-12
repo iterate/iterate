@@ -7,6 +7,7 @@ import { NodeSDK } from "@opentelemetry/sdk-node";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink, type RPCLinkOptions } from "@orpc/client/fetch";
+import { type LinkWebsocketClientOptions } from "@orpc/client/websocket";
 import {
   inferRPCMethodFromContractRouter,
   type AnyContractRouter,
@@ -439,6 +440,8 @@ export interface ServiceManifestLike<TContract extends AnyContractRouter = AnyCo
   port: number;
   orpcContract: TContract;
 }
+
+export type RpcWebSocket = LinkWebsocketClientOptions["websocket"];
 
 export interface CreateOrpcRpcServiceClientOptions<TContract extends AnyContractRouter> {
   env: ServiceClientEnv;
