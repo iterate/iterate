@@ -1485,6 +1485,91 @@ describe("slack router", () => {
       expect(statusCallsAfterSecond).toHaveLength(1);
     });
 
+    it("suppresses 'Thinking' status after a more specific status (tool/writing) was shown", async () => {
+      const threadTs = "6161616161.616161";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: agentPath }),
+      });
+      subscribeToAgentChangesMock.mockResolvedValue({});
+      fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+      await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "event_callback",
+          event_id: "evt_suppress_thinking_1",
+          event: {
+            type: "app_mention",
+            ts: threadTs,
+            text: `<@${botUserId}> do something`,
+            user: "U_USER",
+            channel: "C_TEST",
+            event_ts: threadTs,
+          },
+          authorizations: [{ user_id: botUserId, is_bot: true }],
+        }),
+      });
+
+      // 1. First "Thinking" status → should be scheduled (initial thinking is fine)
+      const firstThinking = await slackRouter.request("/agent-change-callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "iterate:agent-updated",
+          payload: { path: agentPath, shortStatus: "🤔 Thinking", isWorking: true },
+        }),
+      });
+      expect((await firstThinking.json()).scheduled).toBe(true);
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      // 2. Tool status → should be scheduled (more specific)
+      const toolStatus = await slackRouter.request("/agent-change-callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "iterate:agent-updated",
+          payload: { path: agentPath, shortStatus: "🔧 Running bash", isWorking: true },
+        }),
+      });
+      expect((await toolStatus.json()).scheduled).toBe(true);
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      // 3. Second "Thinking" (after tool completes, LLM re-enters reasoning) → should be SUPPRESSED
+      // This is the key scenario: the agent already sent its reply during the tool call,
+      // and now the stale "Thinking" status would confusingly appear after the reply.
+      apiCallMock.mockClear();
+
+      const secondThinking = await slackRouter.request("/agent-change-callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "iterate:agent-updated",
+          payload: { path: agentPath, shortStatus: "🤔 Thinking", isWorking: true },
+        }),
+      });
+      const secondThinkingBody = await secondThinking.json();
+      // Should be suppressed — "Thinking" after tool status is stale
+      expect(secondThinkingBody.suppressed).toBe(true);
+      expect(secondThinkingBody.success).toBe(true);
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      // No new status call should have been made
+      const statusCalls = apiCallMock.mock.calls.filter(
+        (call) => call[0] === "assistant.threads.setStatus",
+      );
+      expect(statusCalls).toHaveLength(0);
+    });
+
     it("starts a new status cycle for a later FYI message after prior cleanup", async () => {
       const threadTs = "5959595959.595959";
       const secondTs = "5959595959.696969";

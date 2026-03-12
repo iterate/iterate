@@ -106,6 +106,13 @@ type SlackThreadContext = {
   lastStatusKey: string;
   /** Debounced timer for status updates while agent is working. */
   statusTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * True once a specific status (tool use, writing) has been shown. Used to
+   * suppress the generic "Thinking" status that OpenCode re-emits after tool
+   * completion — by that point the agent has likely already posted a reply, so
+   * flashing "Thinking" is confusing.
+   */
+  hasProgressedPastThinking: boolean;
 };
 
 const slackThreadContextByAgentPath = new Map<string, SlackThreadContext>();
@@ -548,7 +555,10 @@ slackRouter.post("/agent-change-callback", async (c) => {
   }
 
   if (payload.isWorking) {
-    scheduleThreadStatusUpdate(payload.path, slackContext, payload.shortStatus || "Working");
+    const scheduled = scheduleThreadStatusUpdate(payload.path, slackContext, payload.shortStatus || "Working");
+    if (!scheduled) {
+      return c.json({ success: true, suppressed: true });
+    }
     return c.json({ success: true, scheduled: true, debounceMs: STATUS_DEBOUNCE_MS });
   }
 
@@ -580,6 +590,7 @@ function ensureSlackThreadContext(params: {
     cycleId: `slk-${nanoid(8)}`,
     closing: false,
     lastStatusKey: "",
+    hasProgressedPastThinking: false,
   };
 
   slackThreadContextByAgentPath.set(params.agentPath, context);
@@ -590,16 +601,33 @@ function ensureSlackThreadContext(params: {
   }
 }
 
+function isThinkingStatus(rawStatus: string): boolean {
+  return rawStatus.includes("🤔") || rawStatus.toLowerCase().includes("thinking");
+}
+
+/** Returns true if a status update was scheduled, false if suppressed. */
 function scheduleThreadStatusUpdate(
   agentPath: string,
   context: SlackThreadContext,
   rawStatus: string,
-): void {
-  if (context.closing) return;
+): boolean {
+  if (context.closing) return false;
+
+  // After the agent has progressed past the initial "Thinking" phase (e.g. it
+  // ran a tool or started writing), suppress any subsequent "Thinking" status.
+  // OpenCode re-emits session.status:busy when the LLM re-enters reasoning
+  // after a tool call completes, but by that point the agent has likely already
+  // posted its reply — flashing "Thinking" after the reply is confusing.
+  if (isThinkingStatus(rawStatus) && context.hasProgressedPastThinking) {
+    return false;
+  }
+  if (!isThinkingStatus(rawStatus)) {
+    context.hasProgressedPastThinking = true;
+  }
 
   const statusPayload = toSlackStatus(rawStatus);
   const statusKey = JSON.stringify(statusPayload);
-  if (statusKey === context.lastStatusKey) return;
+  if (statusKey === context.lastStatusKey) return false;
 
   if (context.statusTimer) clearTimeout(context.statusTimer);
   const cycleId = context.cycleId;
@@ -607,6 +635,7 @@ function scheduleThreadStatusUpdate(
   context.statusTimer = setTimeout(() => {
     void flushThreadStatusUpdate(agentPath, context, cycleId, rawStatus, statusKey);
   }, STATUS_DEBOUNCE_MS);
+  return true;
 }
 
 async function flushThreadStatusUpdate(

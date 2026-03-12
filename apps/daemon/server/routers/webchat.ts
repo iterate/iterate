@@ -44,6 +44,17 @@ const logger = console;
 // Ephemeral per-thread status shown in webchat UI (similar UX to Slack's transient activity text).
 const webchatThreadStatuses = new Map<string, string>();
 const webchatThreadIdByAgentPath = new Map<string, string>();
+/**
+ * Tracks agent paths that have progressed past the initial "Thinking" phase.
+ * Used to suppress stale "Thinking" status that OpenCode re-emits when the LLM
+ * re-enters reasoning after a tool call — by that point the agent has likely
+ * already posted its reply.
+ */
+const agentPathProgressedPastThinking = new Set<string>();
+
+function isThinkingStatus(rawStatus: string): boolean {
+  return rawStatus.includes("🤔") || rawStatus.toLowerCase().includes("thinking");
+}
 const DAEMON_BASE_URL = `http://localhost:${process.env.PORT || "3001"}`;
 const AGENT_ROUTER_BASE_URL = `${DAEMON_BASE_URL}/api/agents`;
 const WEBCHAT_AGENT_CHANGE_CALLBACK_URL = `${DAEMON_BASE_URL}/api/integrations/webchat/agent-change-callback`;
@@ -339,6 +350,24 @@ webchatRouter.post("/agent-change-callback", async (c) => {
   if (!webchatThreadId) {
     logger.log(`[webchat] ignoring agent-change without mapped thread: ${payload.path}`);
     return c.json({ success: true, ignored: true });
+  }
+
+  // Suppress stale "Thinking" status that OpenCode re-emits after tool
+  // completion — by that point the agent has likely already posted its reply.
+  if (payload.isWorking && payload.shortStatus) {
+    if (isThinkingStatus(payload.shortStatus) && agentPathProgressedPastThinking.has(payload.path)) {
+      logger.log(
+        `[webchat] suppressing stale Thinking status thread=${webchatThreadId} path=${payload.path}`,
+      );
+      return c.json({ success: true, suppressed: true });
+    }
+    if (!isThinkingStatus(payload.shortStatus)) {
+      agentPathProgressedPastThinking.add(payload.path);
+    }
+  }
+
+  if (!payload.isWorking) {
+    agentPathProgressedPastThinking.delete(payload.path);
   }
 
   webchatThreadStatuses.set(webchatThreadId, payload.shortStatus);
