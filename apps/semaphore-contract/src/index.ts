@@ -176,30 +176,30 @@ export type SemaphoreFetch = (
 export type CreateSemaphoreClientOptions =
   | {
       apiKey: string;
-      baseUrl: string;
+      baseURL: string;
       fetch?: SemaphoreFetch;
     }
   | {
       apiKey: string;
       fetch: SemaphoreFetch;
-      baseUrl?: string;
+      baseURL?: string;
     };
 
 export const FETCH_ONLY_PLACEHOLDER_URL = "https://semaphore.invalid/api/orpc";
 
 export function resolveSemaphoreOrpcUrl(options: {
-  baseUrl?: string;
+  baseURL?: string;
   fetch?: SemaphoreFetch;
 }): string {
-  if (options.baseUrl) {
-    return new URL("/api/orpc", options.baseUrl).toString();
+  if (options.baseURL) {
+    return new URL("/api/orpc", options.baseURL).toString();
   }
 
   if (options.fetch) {
     return FETCH_ONLY_PLACEHOLDER_URL;
   }
 
-  throw new Error("createSemaphoreClient requires either baseUrl or fetch");
+  throw new Error("createSemaphoreClient requires either baseURL or fetch");
 }
 
 export function createSemaphoreClient(options: CreateSemaphoreClientOptions): SemaphoreClient {

@@ -64,11 +64,11 @@ function onceLineMatches(
   });
 }
 
-async function waitForHealth(baseUrl: string, timeoutMs: number) {
+async function waitForHealth(baseURL: string, timeoutMs: number) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const response = await fetch(new URL("/health", baseUrl));
+      const response = await fetch(new URL("/health", baseURL));
       if (response.ok && (await response.text()) === "OK") {
         return;
       }
@@ -79,7 +79,7 @@ async function waitForHealth(baseUrl: string, timeoutMs: number) {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
-  throw new Error(`Timed out waiting for health at ${baseUrl}`);
+  throw new Error(`Timed out waiting for health at ${baseURL}`);
 }
 
 async function sleep(ms: number) {
@@ -104,7 +104,7 @@ async function stopAlchemyDev(child: ChildProcessByStdio<null, Readable, Readabl
 
 describe("semaphore worker e2e", () => {
   let child: ChildProcessByStdio<null, Readable, Readable>;
-  let baseUrl = "";
+  let baseURL = "";
 
   beforeAll(async () => {
     const stage = `test-e2e-${randomUUID().slice(0, 8)}`;
@@ -129,18 +129,18 @@ describe("semaphore worker e2e", () => {
     );
 
     const rawUrl = await onceLineMatches(child, /http:\/\/localhost:\d+\/?/m, 120_000);
-    baseUrl = rawUrl.endsWith("/") ? rawUrl : `${rawUrl}/`;
-    await waitForHealth(baseUrl, 30_000);
+    baseURL = rawUrl.endsWith("/") ? rawUrl : `${rawUrl}/`;
+    await waitForHealth(baseURL, 30_000);
   }, 120_000);
 
   afterAll(async () => {
     await stopAlchemyDev(child);
   });
 
-  test("baseUrl client can add, list, acquire, and release resources against the live worker", async () => {
+  test("baseURL client can add, list, acquire, and release resources against the live worker", async () => {
     const client = createSemaphoreClient({
       apiKey: "test-token",
-      baseUrl,
+      baseURL,
     });
     const type = uniqueType();
 
@@ -169,10 +169,10 @@ describe("semaphore worker e2e", () => {
     expect(released).toEqual({ released: true });
   });
 
-  test("baseUrl client can wait for a lease and receive it after release", async () => {
+  test("baseURL client can wait for a lease and receive it after release", async () => {
     const client = createSemaphoreClient({
       apiKey: "test-token",
-      baseUrl,
+      baseURL,
     });
     const type = uniqueType();
 
@@ -209,7 +209,7 @@ describe("semaphore worker e2e", () => {
   test("client injects the bearer token and rejects invalid credentials", async () => {
     const badClient = createSemaphoreClient({
       apiKey: "wrong-token",
-      baseUrl,
+      baseURL,
     });
 
     const error = await badClient.resources.list({}).catch((caught) => caught);
