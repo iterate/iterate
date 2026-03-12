@@ -25,6 +25,25 @@ async function sleep(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForHealth(baseURL: string, timeoutMs: number) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch(new URL("/health", baseURL));
+      if (response.ok && (await response.text()) === "OK") {
+        return;
+      }
+    } catch {
+      // Keep polling until timeout.
+    }
+
+    await sleep(500);
+  }
+
+  throw new Error(`Timed out waiting for health at ${baseURL}`);
+}
+
 describe("live semaphore E2E", () => {
   let client: SemaphoreClient;
   const leasedResources: Array<{ type: string; slug: string; leaseId: string }> = [];
@@ -48,8 +67,11 @@ describe("live semaphore E2E", () => {
     }
   }
 
-  beforeAll(() => {
-    client = createSemaphoreClient(requireEnv());
+  beforeAll(async () => {
+    const env = requireEnv();
+    await waitForHealth(env.baseURL, 30_000);
+    await sleep(2_000);
+    client = createSemaphoreClient(env);
   });
 
   afterEach(async () => {

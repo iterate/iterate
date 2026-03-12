@@ -1122,8 +1122,8 @@ importers:
         specifier: ^4.11.3
         version: 4.12.2
       zod:
-        specifier: 4.1.12
-        version: 4.1.12
+        specifier: ^4.1.12
+        version: 4.3.6
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.12.17

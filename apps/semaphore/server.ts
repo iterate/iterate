@@ -434,7 +434,7 @@ function mapResourceError(error: unknown): never {
     throw new ORPCError("BAD_REQUEST", { message: error.message });
   }
 
-  if (error instanceof z.ZodError) {
+  if (isZodErrorLike(error)) {
     throw new ORPCError("BAD_REQUEST", {
       message: error.issues[0]?.message ?? "Invalid request input.",
     });
@@ -447,6 +447,18 @@ function mapResourceError(error: unknown): never {
   }
 
   throw error;
+}
+
+function isZodErrorLike(error: unknown): error is { issues: Array<{ message?: string }> } {
+  if (!(error instanceof z.ZodError) && !(error instanceof Error)) {
+    return false;
+  }
+
+  if (!("issues" in error)) {
+    return false;
+  }
+
+  return Array.isArray(error.issues);
 }
 
 function getCoordinator(env: SemaphoreEnv, type: string) {
