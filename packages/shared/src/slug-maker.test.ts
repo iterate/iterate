@@ -35,6 +35,13 @@ test("FUNNY_SLUG_WORDS excludes obvious technology terms", () => {
   }
 });
 
+test("FUNNY_SLUG_WORDS stays short and easy to read", () => {
+  for (const word of FUNNY_SLUG_WORDS) {
+    assert.match(word, /^[a-z]+$/);
+    assert.ok(word.length <= 8, `${word} should stay relatively short`);
+  }
+});
+
 test("makeFunnySlug returns three lowercase hyphenated words from the inventory", () => {
   const slug = makeFunnySlug();
   const parts = slug.split("-");

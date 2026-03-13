@@ -13,6 +13,9 @@ const DEFAULT_ZONE_NAME = "iterate.com";
 const DEFAULT_BASE_DOMAIN = "tunnel.iterate.com";
 const CERTIFICATE_POLL_INTERVAL_MS = 10_000;
 const CERTIFICATE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+const CLOUDFLARE_REQUEST_TIMEOUT_MS = 20_000;
+const CLOUDFLARE_MAX_RETRIES = 5;
+const CLOUDFLARE_RETRY_BASE_DELAY_MS = 1_000;
 const MAX_SLUG_ATTEMPTS = 1_000;
 
 type CloudflareEnvelope<T> = {
@@ -66,6 +69,16 @@ type SeedSummary = {
   alreadyPresentCount: number;
   createdHostnames: string[];
 };
+
+class CloudflareRequestError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = "CloudflareRequestError";
+  }
+}
 
 function getArgValue(args: string[], name: string): string | undefined {
   const index = args.indexOf(`--${name}`);
@@ -219,6 +232,7 @@ class CloudflareClient {
 
   async ensureCertificate(zoneId: string, baseDomain: string): Promise<CertificatePack> {
     const wildcardHost = `*.${baseDomain}`;
+    console.log(`Ensuring wildcard certificate for ${wildcardHost}`);
     const existing = selectReusableCertificatePack(
       await this.listCertificatePacks(zoneId),
       wildcardHost,
@@ -343,21 +357,76 @@ class CloudflareClient {
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${CLOUDFLARE_API_BASE}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${this.apiToken}`,
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {}),
-      },
-    });
-    const payload = (await response.json()) as CloudflareEnvelope<T>;
+    for (let attempt = 0; attempt < CLOUDFLARE_MAX_RETRIES; attempt += 1) {
+      try {
+        return await this.requestOnce<T>(path, init);
+      } catch (error) {
+        if (!(error instanceof CloudflareRequestError) || !error.retryable) {
+          throw error;
+        }
+
+        const isLastAttempt = attempt === CLOUDFLARE_MAX_RETRIES - 1;
+        if (isLastAttempt) {
+          throw error;
+        }
+
+        const delayMs = CLOUDFLARE_RETRY_BASE_DELAY_MS * 2 ** attempt;
+        console.warn(`${error.message}; retrying in ${delayMs}ms`);
+        await sleep(delayMs);
+      }
+    }
+    throw new Error(`Cloudflare API ${init?.method ?? "GET"} ${path} exhausted retries`);
+  }
+
+  private async requestOnce<T>(path: string, init?: RequestInit): Promise<T> {
+    let response: Response;
+
+    try {
+      response = await fetch(`${CLOUDFLARE_API_BASE}${path}`, {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${this.apiToken}`,
+          "Content-Type": "application/json",
+          ...(init?.headers ?? {}),
+        },
+        signal: AbortSignal.timeout(CLOUDFLARE_REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      if (error instanceof Error) {
+        const isTimeout = error.name === "TimeoutError" || error.name === "AbortError";
+        throw new CloudflareRequestError(
+          `Cloudflare API ${init?.method ?? "GET"} ${path} failed: ${error.message}`,
+          isTimeout,
+        );
+      }
+
+      throw error;
+    }
+
+    const rawBody = await response.text();
+    let payload: CloudflareEnvelope<T> | null = null;
+
+    if (rawBody) {
+      try {
+        payload = JSON.parse(rawBody) as CloudflareEnvelope<T>;
+      } catch {
+        payload = null;
+      }
+    }
+
     this.lastEnvelope = payload;
 
-    if (!response.ok || !payload.success) {
+    if (!response.ok || !payload?.success) {
       const message =
-        payload.errors.map((error) => error.message).join("; ") || response.statusText;
-      throw new Error(`Cloudflare API ${init?.method ?? "GET"} ${path} failed: ${message}`);
+        payload?.errors.map((error) => error.message).join("; ") ||
+        rawBody.trim().slice(0, 200) ||
+        response.statusText;
+      const retryable =
+        response.status === 408 || response.status === 429 || response.status >= 500;
+      throw new CloudflareRequestError(
+        `Cloudflare API ${init?.method ?? "GET"} ${path} failed: ${message}`,
+        retryable,
+      );
     }
 
     return payload.result;
@@ -407,6 +476,7 @@ export async function seedTunnelPool(options: CliOptions): Promise<SeedSummary> 
     options.zoneName,
   );
   const zoneId = await cloudflare.resolveZoneId();
+  console.log(`Resolved Cloudflare zone ${options.zoneName} to ${zoneId}`);
   const certificate = await cloudflare.ensureCertificate(zoneId, options.baseDomain);
   const existingResources = await semaphore.resources.list({ type: options.type });
   const existingSlugs = new Set(existingResources.map((resource) => resource.slug));
@@ -414,6 +484,9 @@ export async function seedTunnelPool(options: CliOptions): Promise<SeedSummary> 
   const createdHostnames: string[] = [];
 
   console.log(`Using wildcard certificate ${certificate.id} for *.${options.baseDomain}`);
+  console.log(
+    `Existing ${options.type} resources: ${existingResources.length}; creating ${missingCount}`,
+  );
 
   for (let index = 0; index < missingCount; index += 1) {
     const slug = pickUnusedSlug(existingSlugs);
