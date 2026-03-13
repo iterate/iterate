@@ -1,10 +1,6 @@
 import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../../utils/index.ts";
-import {
-  checkoutRefExpression,
-  jonaslandTriggerPaths,
-  setupRepoWithoutPnpmAction,
-} from "./paths.ts";
+import { checkoutRefExpression, setupRepoWithoutPnpmAction } from "./paths.ts";
 
 export default workflow({
   name: "e2e-tests",
@@ -14,13 +10,6 @@ export default workflow({
     "id-token": "write",
   },
   on: {
-    push: {
-      branches: ["main"],
-      paths: [...jonaslandTriggerPaths],
-    },
-    pull_request: {
-      paths: [...jonaslandTriggerPaths],
-    },
     workflow_dispatch: {
       inputs: {
         ref: {

@@ -3,7 +3,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "pnpm -r --parallel --filter '!./apps/daemon' --filter '!./apps/cf-ingress-proxy-worker' --filter '!./apps/semaphore' dev",
+    "dev": "pnpm os dev",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "oxfmt",
@@ -17,7 +17,7 @@
     "skills:list": "npx skills list -g -a claude-code -a opencode",
     "spec": "playwright test",
     "video": "VIDEO_MODE=1 playwright test",
-    "lint": "oxlint .",
+    "lint": "oxlint . --threads 1 --deny-warnings",
     "lint:check": "pnpm lint",
     "lint:fix": "oxlint . --fix",
     "prepare": "is-ci || husky",
