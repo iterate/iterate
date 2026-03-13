@@ -12,46 +12,19 @@ const metaMcpStatusSchema = z.object({
       namespace: z.string().nullable(),
       url: z.string().url(),
       enabled: z.boolean(),
-      auth: z.discriminatedUnion("type", [
-        z.object({
-          type: z.literal("none"),
-          connected: z.boolean(),
-          waitingForOAuth: z.boolean(),
-          startOAuthUrl: z.null(),
-          pendingAuthUrl: z.null(),
-          callbackUrl: z.null(),
-          expiresAt: z.null(),
-        }),
-        z.object({
-          type: z.literal("bearer"),
-          connected: z.boolean(),
-          waitingForOAuth: z.boolean(),
-          startOAuthUrl: z.null(),
-          pendingAuthUrl: z.null(),
-          callbackUrl: z.null(),
-          expiresAt: z.null(),
-        }),
-        z.object({
-          type: z.literal("auto"),
-          connected: z.boolean(),
-          waitingForOAuth: z.boolean(),
-          startOAuthUrl: z.string().url().nullable(),
-          pendingAuthUrl: z.string().url().nullable(),
-          callbackUrl: z.string().url().nullable(),
-          expiresAt: z.string().nullable(),
-        }),
-        z.object({
-          type: z.literal("oauth"),
-          connected: z.boolean(),
-          waitingForOAuth: z.boolean(),
-          startOAuthUrl: z.string().url().nullable(),
-          pendingAuthUrl: z.string().url().nullable(),
-          callbackUrl: z.string().url().nullable(),
-          expiresAt: z.string().nullable(),
-        }),
-      ]),
+      auth: z.object({
+        type: z.enum(["none", "bearer", "auto", "oauth"]),
+        connected: z.boolean(),
+      }),
     }),
   ),
+});
+
+const metaMcpOAuthStartSchema = z.object({
+  stateIdentifier: z.string(),
+  serverId: z.string(),
+  expiresAt: z.string(),
+  authenticationUrl: z.string(),
 });
 
 async function requestMetaMcp(path: string, init?: RequestInit) {
@@ -100,4 +73,11 @@ export const metaMcpOrpcRouter = {
   getStatus: publicProcedure.handler(async () => {
     return metaMcpStatusSchema.parse(await requestMetaMcp("/api/status"));
   }),
+  startOAuth: publicProcedure
+    .input(z.object({ serverId: z.string() }))
+    .handler(async ({ input }) => {
+      return metaMcpOAuthStartSchema.parse(
+        await requestMetaMcp(`/api/oauth/start/${input.serverId}`, { method: "POST" }),
+      );
+    }),
 };

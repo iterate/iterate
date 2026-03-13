@@ -55,7 +55,7 @@ describe("AuthManager OAuth lifecycle", () => {
     await writeFile(
       authPath,
       `${JSON.stringify(
-        { version: "1.0.0", oauth: {}, clientInformation: {}, tokens: {} },
+        { version: "1.0.0", pendingOAuth: {}, clientInformation: {}, tokens: {} },
         null,
         2,
       )}\n`,
@@ -97,19 +97,20 @@ describe("AuthManager OAuth lifecycle", () => {
     expect(state.authenticationUrl).toBe(
       `https://provider.example.com/oauth/authorize?state=${state.stateIdentifier}`,
     );
-    expect(authFile).toMatchObject({
-      oauth: {
-        github: {
-          authorization: {
-            localAuthState: state.stateIdentifier,
-            providerAuthUrl: `https://provider.example.com/oauth/authorize?state=${state.stateIdentifier}`,
-          },
-          codeVerifier: "code-verifier",
-          discoveryState: {
-            authorizationServerUrl: "https://provider.example.com",
-          },
-        },
+
+    const pendingOAuth = authFile.pendingOAuth as Record<string, unknown>;
+    expect(pendingOAuth[state.stateIdentifier]).toMatchObject({
+      serverId: "github",
+      authorization: {
+        localAuthState: state.stateIdentifier,
+        providerAuthUrl: `https://provider.example.com/oauth/authorize?state=${state.stateIdentifier}`,
       },
+      codeVerifier: "code-verifier",
+      discoveryState: {
+        authorizationServerUrl: "https://provider.example.com",
+      },
+    });
+    expect(authFile).toMatchObject({
       clientInformation: {
         github: {
           client_id: "client-123",
@@ -118,75 +119,55 @@ describe("AuthManager OAuth lifecycle", () => {
     });
   });
 
-  test("reuses an active saved OAuth state without calling auth again", async () => {
-    const existingState = {
-      version: "1.0.0",
-      oauth: {
-        github: {
-          authorization: {
-            authUrl: "http://127.0.0.1:19070/auth/start/existing-state",
-            providerAuthUrl: "https://provider.example.com/oauth/authorize",
-            callbackUrl: "http://127.0.0.1:19070/auth/finish",
-            redirectUrl: "http://127.0.0.1:19070/auth/finish",
-            localAuthState: "existing-state",
-            expiresAt: new Date(Date.now() + 60_000).toISOString(),
-          },
-        },
-      },
-      clientInformation: {},
-      tokens: {},
-    };
-    await writeFile(authPath, `${JSON.stringify(existingState, null, 2)}\n`, "utf8");
-
-    const authManager = new AuthManager();
-    const state = await authManager.startOAuthAuthorization("github");
-
-    expect(authMock).not.toHaveBeenCalled();
-    expect(state).toMatchObject({
-      stateIdentifier: "existing-state",
-      serverId: "github",
-      authenticationUrl: "https://provider.example.com/oauth/authorize",
-    });
-  });
-
-  test("replaces an expired OAuth state with a new one", async () => {
-    await writeFile(
-      authPath,
-      `${JSON.stringify(
-        {
-          version: "1.0.0",
-          oauth: {
-            github: {
-              authorization: {
-                authUrl: "http://127.0.0.1:19070/auth/start/expired-state",
-                providerAuthUrl: "https://provider.example.com/oauth/expired",
-                callbackUrl: "http://127.0.0.1:19070/auth/finish",
-                redirectUrl: "http://127.0.0.1:19070/auth/finish",
-                localAuthState: "expired-state",
-                expiresAt: new Date(Date.now() - 60_000).toISOString(),
-              },
-            },
-          },
-          clientInformation: {},
-          tokens: {},
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-
+  test("always generates a fresh state (no reuse of active state)", async () => {
+    let callCount = 0;
     authMock.mockImplementation(async (provider) => {
-      provider.redirectToAuthorization(new URL("https://provider.example.com/oauth/fresh"));
+      callCount++;
+      const state = await provider.state?.();
+      const authorizationUrl = new URL("https://provider.example.com/oauth/authorize");
+      if (state) {
+        authorizationUrl.searchParams.set("state", state);
+      }
+      provider.redirectToAuthorization(authorizationUrl);
       return "REDIRECTED";
     });
 
     const authManager = new AuthManager();
-    const state = await authManager.startOAuthAuthorization("github");
+    const state1 = await authManager.startOAuthAuthorization("github");
+    const state2 = await authManager.startOAuthAuthorization("github");
 
-    expect(authMock).toHaveBeenCalledOnce();
-    expect(state.stateIdentifier).not.toBe("expired-state");
-    expect(state.authenticationUrl).toBe("https://provider.example.com/oauth/fresh");
+    expect(callCount).toBe(2);
+    expect(state1.stateIdentifier).not.toBe(state2.stateIdentifier);
+  });
+
+  test("concurrent flows get independent state and code verifiers", async () => {
+    let callIndex = 0;
+    authMock.mockImplementation(async (provider) => {
+      callIndex++;
+      await provider.saveCodeVerifier!(`code-verifier-${callIndex}`);
+      const state = await provider.state?.();
+      const authorizationUrl = new URL("https://provider.example.com/oauth/authorize");
+      if (state) {
+        authorizationUrl.searchParams.set("state", state);
+      }
+      provider.redirectToAuthorization(authorizationUrl);
+      return "REDIRECTED";
+    });
+
+    const authManager = new AuthManager();
+    const [state1, state2] = await Promise.all([
+      authManager.startOAuthAuthorization("github"),
+      authManager.startOAuthAuthorization("github"),
+    ]);
+
+    expect(state1.stateIdentifier).not.toBe(state2.stateIdentifier);
+
+    const pending1 = await authManager.getPendingOAuth(state1.stateIdentifier);
+    const pending2 = await authManager.getPendingOAuth(state2.stateIdentifier);
+
+    expect(pending1?.codeVerifier).toBeDefined();
+    expect(pending2?.codeVerifier).toBeDefined();
+    expect(pending1?.codeVerifier).not.toBe(pending2?.codeVerifier);
   });
 
   test("clears expired state when looked up directly", async () => {
@@ -195,8 +176,9 @@ describe("AuthManager OAuth lifecycle", () => {
       `${JSON.stringify(
         {
           version: "1.0.0",
-          oauth: {
-            github: {
+          pendingOAuth: {
+            "expired-state": {
+              serverId: "github",
               authorization: {
                 authUrl: "http://127.0.0.1:19070/auth/start/expired-state",
                 providerAuthUrl: "https://provider.example.com/oauth/expired",
@@ -222,21 +204,20 @@ describe("AuthManager OAuth lifecycle", () => {
 
     expect(state).toBeNull();
     expect(authFile).toMatchObject({
-      oauth: {
-        github: {},
-      },
+      pendingOAuth: {},
     });
   });
 
-  test("persists tokens and clears transient oauth state after successful finish", async () => {
+  test("persists tokens and clears pending state after successful finish", async () => {
     const expiresAt = new Date(Date.now() + 60_000).toISOString();
     await writeFile(
       authPath,
       `${JSON.stringify(
         {
           version: "1.0.0",
-          oauth: {
-            github: {
+          pendingOAuth: {
+            "test-state": {
+              serverId: "github",
               authorization: {
                 authUrl: "http://127.0.0.1:19070/auth/start/test-state",
                 providerAuthUrl: "https://provider.example.com/oauth/authorize",
@@ -283,9 +264,7 @@ describe("AuthManager OAuth lifecycle", () => {
         "github is now authorized for Meta MCP. You can close this tab and return to the daemon.",
     });
     expect(authFile).toMatchObject({
-      oauth: {
-        github: {},
-      },
+      pendingOAuth: {},
       clientInformation: {
         github: {
           client_id: "client-123",

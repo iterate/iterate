@@ -178,7 +178,7 @@ async function withMetaMcpEnvironment<T>(
     await writeFile(
       authPath,
       `${JSON.stringify(
-        { version: "1.0.0", oauth: {}, clientInformation: {}, tokens: {} },
+        { version: "1.0.0", pendingOAuth: {}, clientInformation: {}, tokens: {} },
         null,
         2,
       )}\n`,
@@ -278,8 +278,9 @@ describe.sequential("meta-mcp-service integration", () => {
         `${JSON.stringify(
           {
             version: "1.0.0",
-            oauth: {
-              "cloudflare-observability": {
+            pendingOAuth: {
+              "test-state": {
+                serverId: "cloudflare-observability",
                 authorization: {
                   authUrl: `${publicUrl}/auth/start/test-state`,
                   providerAuthUrl: "https://provider.example.com/oauth/authorize",
@@ -359,17 +360,17 @@ describe.sequential("meta-mcp-service integration", () => {
         );
 
         expect(response.status).toBe(200);
-        await expect(response.text()).resolves.toContain(
-          "No saved info found to finish this OAuth authorization",
-        );
+        const html = await response.text();
+        expect(html).toContain("Connection Failed");
+        expect(html).toContain("expired or was already used");
       } finally {
         await service.stop();
       }
     });
   });
 
-  test("reports waiting OAuth servers and reuses the saved auth state in api status", async () => {
-    await withMetaMcpEnvironment(async ({ serversPath, authPath, publicUrl }) => {
+  test("reports disconnected OAuth servers in api status", async () => {
+    await withMetaMcpEnvironment(async ({ serversPath, publicUrl }) => {
       await writeFile(
         serversPath,
         `${JSON.stringify(
@@ -382,31 +383,6 @@ describe.sequential("meta-mcp-service integration", () => {
                 auth: { type: "oauth" },
               },
             ],
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
-      await writeFile(
-        authPath,
-        `${JSON.stringify(
-          {
-            version: "1.0.0",
-            oauth: {
-              github: {
-                authorization: {
-                  authUrl: `${publicUrl}/auth/start/existing-state`,
-                  providerAuthUrl: "https://provider.example.com/oauth/authorize",
-                  callbackUrl: `${publicUrl}/auth/finish`,
-                  redirectUrl: `${publicUrl}/auth/finish`,
-                  localAuthState: "existing-state",
-                  expiresAt: new Date(Date.now() + 60_000).toISOString(),
-                },
-              },
-            },
-            clientInformation: {},
-            tokens: {},
           },
           null,
           2,
@@ -429,11 +405,6 @@ describe.sequential("meta-mcp-service integration", () => {
             auth: {
               type: string;
               connected: boolean;
-              waitingForOAuth: boolean;
-              startOAuthUrl: string | null;
-              pendingAuthUrl: string | null;
-              callbackUrl: string | null;
-              expiresAt: string | null;
             };
           }>;
         };
@@ -446,11 +417,6 @@ describe.sequential("meta-mcp-service integration", () => {
             auth: {
               type: "oauth",
               connected: false,
-              waitingForOAuth: true,
-              startOAuthUrl: `${publicUrl}/auth/start/existing-state`,
-              pendingAuthUrl: "https://provider.example.com/oauth/authorize",
-              callbackUrl: `${publicUrl}/auth/finish`,
-              expiresAt: expect.any(String),
             },
           },
         ]);
@@ -460,7 +426,7 @@ describe.sequential("meta-mcp-service integration", () => {
     });
   });
 
-  test("reports connected OAuth servers without generating a new auth state", async () => {
+  test("reports connected OAuth servers in api status", async () => {
     await withMetaMcpEnvironment(async ({ serversPath, authPath, publicUrl }) => {
       await writeFile(
         serversPath,
@@ -485,7 +451,7 @@ describe.sequential("meta-mcp-service integration", () => {
         `${JSON.stringify(
           {
             version: "1.0.0",
-            oauth: {},
+            pendingOAuth: {},
             clientInformation: {},
             tokens: {
               github: {
@@ -516,11 +482,6 @@ describe.sequential("meta-mcp-service integration", () => {
             auth: {
               type: string;
               connected: boolean;
-              waitingForOAuth: boolean;
-              startOAuthUrl: string | null;
-              pendingAuthUrl: string | null;
-              callbackUrl: string | null;
-              expiresAt: string | null;
             };
           }>;
         };
@@ -533,10 +494,6 @@ describe.sequential("meta-mcp-service integration", () => {
             auth: {
               type: "oauth",
               connected: true,
-              waitingForOAuth: false,
-              startOAuthUrl: null,
-              pendingAuthUrl: null,
-              callbackUrl: null,
             },
           },
         ]);

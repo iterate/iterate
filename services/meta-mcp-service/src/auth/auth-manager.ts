@@ -16,7 +16,6 @@ import { MetaMcpError } from "../errors.ts";
 import {
   MetaMcpServersFile,
   type OAuthAuthorizationState,
-  type OAuthStoreRecord,
   type ServerConfig,
 } from "../config/schema.ts";
 import { serviceEnv } from "../env.ts";
@@ -65,7 +64,12 @@ const OAuthTokenRecord = z.looseObject({
   scopes: z.array(z.string()).optional(),
 });
 
-const OAuthRuntimeRecord = z.object({
+/**
+ * Each pending OAuth flow gets its own record, keyed by a unique state ID (UUID).
+ * This eliminates race conditions when multiple OAuth flows run concurrently for the same server.
+ */
+const PendingOAuthRecord = z.object({
+  serverId: z.string(),
   authorization: z
     .object({
       authUrl: z.string().url(),
@@ -80,9 +84,11 @@ const OAuthRuntimeRecord = z.object({
   discoveryState: OAuthDiscoveryStateRecord.optional(),
 });
 
+type PendingOAuthRecord = z.infer<typeof PendingOAuthRecord>;
+
 const AuthFileContents = z.object({
   version: z.literal("1.0.0").default("1.0.0"),
-  oauth: z.record(z.string(), OAuthRuntimeRecord).default({}),
+  pendingOAuth: z.record(z.string(), PendingOAuthRecord).default({}),
   clientInformation: z.record(z.string(), OAuthClientInformationRecord).default({}),
   tokens: z.record(z.string(), OAuthTokenRecord).default({}),
 });
@@ -157,7 +163,7 @@ function defaultClientMetadata(params: {
   };
 }
 
-function toOAuthTokens(record: OAuthStoreRecord): OAuthTokens | undefined {
+function toOAuthTokens(record: z.infer<typeof OAuthTokenRecord>): OAuthTokens | undefined {
   if (!record.accessToken || !record.tokenType) {
     return undefined;
   }
@@ -175,7 +181,10 @@ function toOAuthTokens(record: OAuthStoreRecord): OAuthTokens | undefined {
 
 function fromOAuthTokens(
   tokens: OAuthTokens,
-): Pick<OAuthStoreRecord, "accessToken" | "refreshToken" | "expiresAt" | "scopes" | "tokenType"> {
+): Pick<
+  z.infer<typeof OAuthTokenRecord>,
+  "accessToken" | "refreshToken" | "expiresAt" | "scopes" | "tokenType"
+> {
   return {
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token,
@@ -215,15 +224,6 @@ function createOAuthAuthorizationState(params: {
   };
 }
 
-function stripOAuthAuthorizationState(record: OAuthStoreRecord): OAuthStoreRecord {
-  return {
-    ...record,
-    authorization: undefined,
-    codeVerifier: undefined,
-    discoveryState: undefined,
-  };
-}
-
 function toOAuthState(serverId: string, authorization: OAuthAuthorizationState): OAuthState {
   return {
     stateIdentifier: authorization.localAuthState ?? "",
@@ -234,16 +234,19 @@ function toOAuthState(serverId: string, authorization: OAuthAuthorizationState):
 }
 
 class FileBackedOAuthClientProvider implements OAuthClientProvider {
-  private readonly oauthState = randomUUID();
+  private readonly oauthState: string;
 
   constructor(
     private readonly params: {
       server: ServerConfig;
       authManager: AuthManager;
       redirectUrl: string;
+      stateId?: string;
       onRedirect?: (authorizationUrl: URL) => void;
     },
-  ) {}
+  ) {
+    this.oauthState = params.stateId ?? randomUUID();
+  }
 
   get redirectUrl(): string {
     return this.params.redirectUrl;
@@ -303,18 +306,19 @@ class FileBackedOAuthClientProvider implements OAuthClientProvider {
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
-    await this.params.authManager.updateOAuthRecord({
-      serverId: this.params.server.id,
-      update: (current) => ({
+    await this.params.authManager.updatePendingOAuth(
+      this.oauthState,
+      this.params.server.id,
+      (current) => ({
         ...current,
         codeVerifier,
       }),
-    });
+    );
   }
 
   async codeVerifier(): Promise<string> {
-    const codeVerifier = (await this.params.authManager.getOAuthRecord(this.params.server.id))
-      .codeVerifier;
+    const record = await this.params.authManager.getPendingOAuth(this.oauthState);
+    const codeVerifier = record?.codeVerifier;
     if (!codeVerifier) {
       throw new MetaMcpError("OAUTH_MISSING_CODE_VERIFIER", "Missing OAuth code verifier", {
         serverId: this.params.server.id,
@@ -325,37 +329,37 @@ class FileBackedOAuthClientProvider implements OAuthClientProvider {
   }
 
   async saveDiscoveryState(state: OAuthDiscoveryState): Promise<void> {
-    await this.params.authManager.updateOAuthRecord({
-      serverId: this.params.server.id,
-      update: (current) => ({
+    await this.params.authManager.updatePendingOAuth(
+      this.oauthState,
+      this.params.server.id,
+      (current) => ({
         ...current,
-        discoveryState: state,
+        discoveryState: state as PendingOAuthRecord["discoveryState"],
       }),
-    });
+    );
   }
 
   async discoveryState(): Promise<OAuthDiscoveryState | undefined> {
-    const record = await this.params.authManager.getOAuthRecord(this.params.server.id);
-    return record.discoveryState as OAuthDiscoveryState | undefined;
+    const record = await this.params.authManager.getPendingOAuth(this.oauthState);
+    return record?.discoveryState as OAuthDiscoveryState | undefined;
   }
 
   async invalidateCredentials(
     scope: "all" | "client" | "tokens" | "verifier" | "discovery",
   ): Promise<void> {
-    await this.params.authManager.updateOAuthRecord({
-      serverId: this.params.server.id,
-      update: (current) => {
-        if (scope === "all") {
-          return {};
-        }
-
-        return {
+    if (scope === "all") {
+      await this.params.authManager.removePendingOAuth(this.oauthState);
+    } else if (scope === "verifier" || scope === "discovery") {
+      await this.params.authManager.updatePendingOAuth(
+        this.oauthState,
+        this.params.server.id,
+        (current) => ({
           ...current,
           ...(scope === "verifier" ? { codeVerifier: undefined } : {}),
           ...(scope === "discovery" ? { discoveryState: undefined } : {}),
-        };
-      },
-    });
+        }),
+      );
+    }
 
     if (scope === "all" || scope === "client") {
       await this.params.authManager.updateAuthFile((authFile) => {
@@ -407,7 +411,7 @@ export class AuthManager {
         console.error(`Failed to parse auth file at ${authPath}, resetting to empty object`);
         return AuthFileContents.parse({
           version: "1.0.0" as const,
-          oauth: {},
+          pendingOAuth: {},
           clientInformation: {},
           tokens: {},
         });
@@ -423,9 +427,42 @@ export class AuthManager {
     await this.saveAuthFile(update(authFile));
   }
 
-  async getOAuthRecord(serverId: string): Promise<OAuthStoreRecord> {
+  async getPendingOAuth(stateId: string): Promise<PendingOAuthRecord | undefined> {
     const authFile = await this.loadAuthFile();
-    return authFile.oauth[serverId] ?? {};
+    return authFile.pendingOAuth[stateId];
+  }
+
+  async updatePendingOAuth(
+    stateId: string,
+    serverId: string,
+    update: (current: PendingOAuthRecord) => PendingOAuthRecord,
+  ) {
+    await this.updateAuthFile((authFile) => ({
+      ...authFile,
+      pendingOAuth: {
+        ...authFile.pendingOAuth,
+        [stateId]: update(authFile.pendingOAuth[stateId] ?? { serverId }),
+      },
+    }));
+  }
+
+  async removePendingOAuth(stateId: string) {
+    await this.updateAuthFile((authFile) => {
+      const { [stateId]: _, ...rest } = authFile.pendingOAuth;
+      return { ...authFile, pendingOAuth: rest };
+    });
+  }
+
+  private async cleanupExpiredPendingOAuth() {
+    await this.updateAuthFile((authFile) => {
+      const pendingOAuth: typeof authFile.pendingOAuth = {};
+      for (const [stateId, record] of Object.entries(authFile.pendingOAuth)) {
+        if (!record.authorization || isOAuthAuthorizationActive(record.authorization)) {
+          pendingOAuth[stateId] = record;
+        }
+      }
+      return { ...authFile, pendingOAuth };
+    });
   }
 
   async getClientInformation(serverId: string): Promise<OAuthClientInformationMixed | undefined> {
@@ -436,19 +473,6 @@ export class AuthManager {
   async getTokens(serverId: string): Promise<OAuthTokens | undefined> {
     const authFile = await this.loadAuthFile();
     return toOAuthTokens(authFile.tokens[serverId] ?? {});
-  }
-
-  async updateOAuthRecord(params: {
-    serverId: string;
-    update: (current: OAuthStoreRecord) => OAuthStoreRecord;
-  }) {
-    await this.updateAuthFile((authFile) => ({
-      ...authFile,
-      oauth: {
-        ...authFile.oauth,
-        [params.serverId]: params.update(authFile.oauth[params.serverId] ?? {}),
-      },
-    }));
   }
 
   private async getServer(serverId: string): Promise<ServerConfig> {
@@ -463,12 +487,14 @@ export class AuthManager {
   public createOAuthClientProvider(params: {
     server: ServerConfig;
     redirectUrl: string;
+    stateId?: string;
     onRedirect?: (authorizationUrl: URL) => void;
   }) {
     return new FileBackedOAuthClientProvider({
       server: params.server,
       authManager: this,
       redirectUrl: params.redirectUrl,
+      stateId: params.stateId,
       onRedirect: params.onRedirect,
     });
   }
@@ -480,18 +506,10 @@ export class AuthManager {
       });
     }
 
-    const existingAuthorization = (await this.getOAuthRecord(server.id)).authorization;
-    if (existingAuthorization && isOAuthAuthorizationActive(existingAuthorization)) {
-      return existingAuthorization;
-    }
+    await this.cleanupExpiredPendingOAuth();
 
     const redirectUrl = buildOAuthCallbackUrl({
       publicBaseUrl: this.params.publicBaseUrl ?? getPublicBaseUrl(),
-    });
-
-    await this.updateOAuthRecord({
-      serverId: server.id,
-      update: (current) => stripOAuthAuthorizationState(current),
     });
 
     let nextAuthorization: OAuthAuthorizationState | undefined;
@@ -538,17 +556,16 @@ export class AuthManager {
         codeChallengeDigest: digestForLog(
           providerAuthUrl.searchParams.get("code_challenge") ?? undefined,
         ),
-        codeVerifierDigest: digestForLog((await this.getOAuthRecord(server.id)).codeVerifier),
+        codeVerifierDigest: digestForLog(
+          (await this.getPendingOAuth(provider.getLocalAuthState()))?.codeVerifier,
+        ),
       }),
     );
 
-    await this.updateOAuthRecord({
-      serverId: server.id,
-      update: (current) => ({
-        ...current,
-        authorization: nextAuthorization,
-      }),
-    });
+    await this.updatePendingOAuth(provider.getLocalAuthState(), server.id, (current) => ({
+      ...current,
+      authorization: nextAuthorization,
+    }));
 
     return nextAuthorization;
   }
@@ -559,52 +576,16 @@ export class AuthManager {
     return toOAuthState(serverId, authorization);
   }
 
-  public async saveOAuthSate(state: OAuthState) {
-    const parsedState = OAuthState.parse(state);
-    await this.updateOAuthRecord({
-      serverId: parsedState.serverId,
-      update: (current) => ({
-        ...current,
-        authorization: {
-          authUrl: buildLocalOAuthStartUrl({
-            publicBaseUrl: this.params.publicBaseUrl ?? getPublicBaseUrl(),
-            authState: parsedState.stateIdentifier,
-          }),
-          providerAuthUrl: parsedState.authenticationUrl,
-          callbackUrl: buildOAuthCallbackUrl({
-            publicBaseUrl: this.params.publicBaseUrl ?? getPublicBaseUrl(),
-          }),
-          redirectUrl: buildOAuthCallbackUrl({
-            publicBaseUrl: this.params.publicBaseUrl ?? getPublicBaseUrl(),
-          }),
-          localAuthState: parsedState.stateIdentifier,
-          expiresAt: parsedState.expiresAt,
-        },
-      }),
-    });
-  }
-
   public async getOAuthSate(stateIdentifier: string): Promise<OAuthState | null> {
-    const authFile = await this.loadAuthFile();
+    const pending = await this.getPendingOAuth(stateIdentifier);
+    if (!pending?.authorization) return null;
 
-    for (const [serverId, record] of Object.entries(authFile.oauth)) {
-      const authorization = record.authorization;
-      if (!authorization || authorization.localAuthState !== stateIdentifier) {
-        continue;
-      }
-
-      if (!isOAuthAuthorizationActive(authorization)) {
-        await this.updateOAuthRecord({
-          serverId,
-          update: (current) => stripOAuthAuthorizationState(current),
-        });
-        return null;
-      }
-
-      return toOAuthState(serverId, authorization);
+    if (!isOAuthAuthorizationActive(pending.authorization)) {
+      await this.removePendingOAuth(stateIdentifier);
+      return null;
     }
 
-    return null;
+    return toOAuthState(pending.serverId, pending.authorization);
   }
 
   public async finishOAuthAuthorization(
@@ -616,15 +597,17 @@ export class AuthManager {
       return { success: false, message: "No saved state found for the given state identifier" };
     }
 
-    const server = await this.getServer(savedState.serverId);
-    const authorization = (await this.getOAuthRecord(savedState.serverId)).authorization;
-    if (!authorization) {
+    const pending = await this.getPendingOAuth(stateIdentifier);
+    if (!pending?.authorization) {
       return { success: false, message: "Missing saved OAuth authorization" };
     }
 
+    const server = await this.getServer(savedState.serverId);
+
     const provider = this.createOAuthClientProvider({
       server,
-      redirectUrl: authorization.redirectUrl,
+      redirectUrl: pending.authorization.redirectUrl,
+      stateId: stateIdentifier,
     });
 
     console.info(
@@ -632,12 +615,10 @@ export class AuthManager {
       JSON.stringify({
         serverId: savedState.serverId,
         stateIdentifier,
-        providerState: authorization.providerAuthUrl
-          ? new URL(authorization.providerAuthUrl).searchParams.get("state")
+        providerState: pending.authorization.providerAuthUrl
+          ? new URL(pending.authorization.providerAuthUrl).searchParams.get("state")
           : null,
-        codeVerifierDigest: digestForLog(
-          (await this.getOAuthRecord(savedState.serverId)).codeVerifier,
-        ),
+        codeVerifierDigest: digestForLog(pending.codeVerifier),
       }),
     );
 
@@ -652,15 +633,7 @@ export class AuthManager {
       return { success: false, message: "OAuth authorization did not complete" };
     }
 
-    await this.updateOAuthRecord({
-      serverId: savedState.serverId,
-      update: (current) => ({
-        ...current,
-        authorization: undefined,
-        codeVerifier: undefined,
-        discoveryState: undefined,
-      }),
-    });
+    await this.removePendingOAuth(stateIdentifier);
 
     return {
       success: true,
@@ -672,8 +645,23 @@ export class AuthManager {
     server: ServerConfig;
     authorizationCode: string;
   }): Promise<void> {
-    const authorization = (await this.getOAuthRecord(params.server.id)).authorization;
-    if (!authorization) {
+    const authFile = await this.loadAuthFile();
+
+    let stateId: string | undefined;
+    let pendingRecord: PendingOAuthRecord | undefined;
+    for (const [id, record] of Object.entries(authFile.pendingOAuth)) {
+      if (
+        record.serverId === params.server.id &&
+        record.authorization &&
+        isOAuthAuthorizationActive(record.authorization)
+      ) {
+        stateId = id;
+        pendingRecord = record;
+        break;
+      }
+    }
+
+    if (!stateId || !pendingRecord?.authorization) {
       throw new MetaMcpError(
         "OAUTH_AUTHORIZATION_NOT_COMPLETED",
         "OAuth callback is missing a live saved auth state. Start OAuth again and complete the latest browser flow within 15 minutes.",
@@ -685,7 +673,8 @@ export class AuthManager {
 
     const provider = this.createOAuthClientProvider({
       server: params.server,
-      redirectUrl: authorization.redirectUrl,
+      redirectUrl: pendingRecord.authorization.redirectUrl,
+      stateId,
     });
 
     const result = await auth(provider, {
@@ -705,15 +694,7 @@ export class AuthManager {
       );
     }
 
-    await this.updateOAuthRecord({
-      serverId: params.server.id,
-      update: (current) => ({
-        ...current,
-        authorization: undefined,
-        codeVerifier: undefined,
-        discoveryState: undefined,
-      }),
-    });
+    await this.removePendingOAuth(stateId);
   }
 
   public async resolveHeaders(server: ServerConfig): Promise<Headers> {

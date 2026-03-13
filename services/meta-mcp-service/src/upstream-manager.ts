@@ -4,7 +4,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { MetaMcpError } from "./errors.ts";
 import { logInfo, logWarn } from "./logger.ts";
 import {
-  type MetaMcpConfig,
+  type MetaMcpServersFile,
   normalizeServerInput,
   ParsedServerInput,
   ServerConfig,
@@ -152,7 +152,7 @@ export class UpstreamManager {
     });
   }
 
-  private async loadState(): Promise<{ config: MetaMcpConfig }> {
+  private async loadState(): Promise<{ config: MetaMcpServersFile }> {
     const config = readServersFile(this.serversPath);
     logInfo("loaded runtime state", {
       serverCount: config.servers.length,
@@ -165,7 +165,7 @@ export class UpstreamManager {
     return this.catalogRevision;
   }
 
-  private invalidateConfigCache(nextConfig?: MetaMcpConfig) {
+  private invalidateConfigCache(nextConfig?: MetaMcpServersFile) {
     this.catalogRevision += 1;
     logInfo("invalidated catalog revision", {
       revision: this.catalogRevision,

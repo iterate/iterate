@@ -151,16 +151,9 @@ export const MetaMcpAuthFile = z.object({
   oauth: z.record(z.string(), OAuthServerState).default({}),
 });
 
-export const MetaMcpConfig = MetaMcpServersFile;
-export const AuthStore = MetaMcpAuthFile;
-export const OAuthStoreRecord = OAuthServerState;
-
-export type AuthStore = z.infer<typeof MetaMcpAuthFile>;
 export type MetaMcpAuthFile = z.infer<typeof MetaMcpAuthFile>;
-export type MetaMcpConfig = z.infer<typeof MetaMcpServersFile>;
 export type MetaMcpServersFile = z.infer<typeof MetaMcpServersFile>;
 export type OAuthAuthorizationState = z.infer<typeof OAuthAuthorizationState>;
-export type OAuthStoreRecord = z.infer<typeof OAuthServerState>;
 export type OAuthServerState = z.infer<typeof OAuthServerState>;
 export type ServerConfig = z.infer<typeof ServerConfig>;
 export type ServerInput = z.infer<typeof ServerInput>;
