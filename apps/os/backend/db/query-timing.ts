@@ -45,9 +45,7 @@ function getRequestPath(): string {
  * add latency to the query path.
  */
 export function instrumentClient(client: Client, source: "hyperdrive" | "pool"): Client {
-  const ae = (env as Record<string, unknown>).DB_QUERY_TIMING as
-    | AnalyticsEngineBinding
-    | undefined;
+  const ae = (env as Record<string, unknown>).DB_QUERY_TIMING as AnalyticsEngineBinding | undefined;
 
   if (!ae) return client;
 
