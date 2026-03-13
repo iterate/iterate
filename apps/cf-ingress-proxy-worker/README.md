@@ -145,8 +145,8 @@ Alchemy manages worker + D1 resources.
   - `INGRESS_PROXY_E2E_BASE_URL=https://ci-ingress.iterate.com INGRESS_PROXY_E2E_PROXY_BASE_DOMAIN=ci-ingress.iterate.com INGRESS_PROXY_E2E_API_TOKEN=<token> pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live`
   - Covers exact vs wildcard priority, wildcard specificity, create/update conflict paths, self-update behavior, and deployed websocket proxy echo.
 - CI:
-  - PRs/pushes deploy shared `ci-ingress`, then run live E2E against `https://ci-ingress.iterate.com`.
-  - `main` runs live E2E first, then deploys production worker only if live E2E passes.
+  - `workflow_dispatch` runs the live deploy/test/teardown flow against an ephemeral staging worker.
+  - `main` pushes still deploy the production worker directly.
 
 ## TODO (explicitly deferred)
 

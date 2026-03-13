@@ -214,8 +214,9 @@ async function* streamProcessLogs(params: {
     }
 
     if (size > offset) {
-      const chunk = readFileSync(filePath, "utf-8").slice(offset);
-      offset = size;
+      const buffer = readFileSync(filePath);
+      const chunk = buffer.subarray(offset).toString("utf-8");
+      offset = buffer.length;
 
       const combined = trailingBuffer + chunk;
       const parts = combined.split("\n");

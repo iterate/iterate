@@ -129,6 +129,8 @@ export default workflow({
           "working-directory": "apps/cf-ingress-proxy-worker",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+            WORKER_NAME: "ingress-proxy",
+            INGRESS_PROXY_HOSTNAME: "ingress.iterate.com",
           },
           run: "pnpm run deploy:prd",
         },
