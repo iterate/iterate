@@ -14,11 +14,9 @@ vi.mock("evlog", () => ({
   })),
 }));
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const mockEvlogSet = vi.fn((..._args: any[]) => {});
-const mockFlush = vi.fn((..._args: any[]) => {});
-const mockRecordError = vi.fn((..._args: any[]) => {});
-/* eslint-enable @typescript-eslint/no-explicit-any */
+const mockEvlogSet = vi.fn<(ctx: Record<string, unknown>) => void>();
+const mockFlush = vi.fn<() => void>();
+const mockRecordError = vi.fn<(error: unknown, context?: Record<string, unknown>) => void>();
 
 vi.mock("../evlog.ts", () => ({
   withRequestEvlogContext: vi.fn((_opts: unknown, cb: () => unknown) => cb()),
@@ -34,8 +32,7 @@ vi.mock("../evlog.ts", () => ({
   },
 }));
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockSendPostHogException = vi.fn((..._args: any[]) => Promise.resolve());
+const mockSendPostHogException = vi.fn<(opts: Record<string, unknown>) => Promise<void>>().mockResolvedValue(undefined);
 
 vi.mock("../lib/posthog.ts", () => ({
   sendPostHogException: mockSendPostHogException,
