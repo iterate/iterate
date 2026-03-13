@@ -81,7 +81,6 @@ export const registerConsumers = () => {
       }
 
       logger.set({ machine: { id: machineId } });
-      logger.info("[forwardSlackWebhook] Forwarded to machine");
       return `forwarded to ${machineId}`;
     },
   });
@@ -99,7 +98,7 @@ export const registerConsumers = () => {
         where: (u, { eq: whereEq }) => whereEq(u.email, senderEmail),
       });
       if (!user) {
-        logger.warn(`[Resend Webhook] No user found for sender ${senderEmail}`);
+        logger.warn(`No user found for sender ${senderEmail}`);
         return `skipped: no user found for ${senderEmail}`;
       }
 
@@ -122,7 +121,7 @@ export const registerConsumers = () => {
       });
       if (memberships.length === 0) {
         logger.set({ user: { id: user.id } });
-        logger.warn("[Resend Webhook] No org memberships for user");
+        logger.warn("No org memberships for user");
         return `skipped: user ${user.id} has no org memberships`;
       }
 
@@ -152,16 +151,13 @@ export const registerConsumers = () => {
 
       if (!targetProject) {
         logger.set({ user: { id: user.id } });
-        logger.warn(
-          `[Resend Webhook] No project found for email targetProjectSlug=${targetProjectSlug ?? "none"}`,
-        );
+        logger.warn(`No project found for email targetProjectSlug=${targetProjectSlug ?? "none"}`);
         return `skipped: no project found for ${targetProjectSlug ?? "default route"}`;
       }
 
       const targetMachine = targetProject.machines[0];
       if (!targetMachine) {
         logger.set({ project: { id: targetProject.id }, user: { id: user.id } });
-        logger.info("[Resend Webhook] No active machine for target project");
         return `skipped: project ${targetProject.id} has no active machine`;
       }
 
@@ -170,7 +166,7 @@ export const registerConsumers = () => {
       const resendClient = createResendClient(env.RESEND_BOT_API_KEY);
       const emailContent = await fetchEmailContent(resendClient, resendEmailId);
 
-      logger.debug("[Resend Webhook] Forwarding to machine", { machineId: targetMachine.id });
+      logger.debug("Forwarding to machine", { machineId: targetMachine.id });
       const forwardResult = await forwardEmailWebhookToMachine(
         targetMachine,
         {
@@ -193,7 +189,6 @@ export const registerConsumers = () => {
       }
 
       logger.set({ machine: { id: targetMachine.id }, user: { id: user.id } });
-      logger.info("[Resend Webhook] Forwarded to machine");
       return `forwarded to ${targetMachine.id}`;
     },
   });
@@ -223,7 +218,7 @@ export const registerConsumers = () => {
       const machine = connection?.project?.machines[0] ?? null;
       if (!machine) {
         logger.set({ deliveryId, projectId });
-        logger.warn("[PostHog Webhook] No active machine for Iterate Slack team");
+        logger.warn("No active machine for Iterate Slack team");
         return "skipped: no active machine for Iterate Slack team";
       }
 
@@ -238,12 +233,11 @@ export const registerConsumers = () => {
       } catch (error) {
         logger.set({ deliveryId, machineId: machine.id, projectId });
         throw new Error(
-          `[PostHog Webhook] Failed to forward to machine: ${error instanceof Error ? error.message : String(error)}`,
+          `Failed to forward to machine: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
 
       logger.set({ deliveryId, machineId: machine.id, projectId });
-      logger.info("[PostHog Webhook] Forwarded to machine");
       return `forwarded to ${machine.id}`;
     },
   });
@@ -274,7 +268,6 @@ export const registerConsumers = () => {
           });
 
           logger.set({ eventId: params.eventId, targetCount: result.length });
-          logger.info("[GitHub Webhook] Enqueued iterate machine pulls");
           return `enqueued ${result.length} iterate machine pull requests`;
         })
         .default(() => `skipped: unsupported github webhook ${params.payload.event}`);
@@ -295,7 +288,7 @@ export const registerConsumers = () => {
           machineId: params.payload.machineId,
           eventId: params.eventId,
         });
-        logger.warn("[GitHub Webhook] Skipping iterate pull for missing machine");
+        logger.warn("Skipping iterate pull for missing machine");
         return `skipped: machine ${params.payload.machineId} not found`;
       }
 
@@ -305,7 +298,6 @@ export const registerConsumers = () => {
           state: machine.state,
           eventId: params.eventId,
         });
-        logger.info("[GitHub Webhook] Skipping iterate pull for non-active machine");
         return `skipped: machine ${machine.id} state is ${machine.state}`;
       }
 
@@ -325,7 +317,6 @@ export const registerConsumers = () => {
         ref: params.payload.ref,
         eventId: params.eventId,
       });
-      logger.info("[GitHub Webhook] Triggered iterate pull on machine");
       return `triggered iterate pull on ${machine.id}`;
     },
   });
@@ -350,9 +341,6 @@ export const registerConsumers = () => {
 
       if (machine.state !== "starting") {
         logger.set({ machine: { id: machineId } });
-        logger.info(
-          `[provisionMachine] Skipping, machine no longer starting state=${machine.state}`,
-        );
         return `skipped: machine state is ${machine.state}`;
       }
 
@@ -406,8 +394,7 @@ export const registerConsumers = () => {
         .set({ metadata: mergedMetadata })
         .where(eq(schema.machine.id, machineId));
 
-      logger.set({ machine: { id: machineId } });
-      logger.info(`[provisionMachine] Machine provisioned type=${machine.type}`);
+      logger.set({ machine: { id: machineId }, machineType: machine.type });
       return `provisioned machine ${machineId}`;
     },
   });
@@ -444,7 +431,6 @@ export const registerConsumers = () => {
 
       const input = await getPushMachineSetupInput(db, env, machine);
       if (!input) {
-        logger.info("[pushMachineSetup] Sentinel matches, skipping setup + probe");
         return `skipped: setup already done for ${machineId}`;
       }
 
@@ -458,7 +444,6 @@ export const registerConsumers = () => {
 
       await writeSentinel();
 
-      logger.info("[pushMachineSetup] Setup pushed to machine");
       return `setup pushed to ${machineId}`;
     },
   });
@@ -484,9 +469,6 @@ export const registerConsumers = () => {
 
       if (machine.state !== "starting") {
         logger.set({ machine: { id: machineId } });
-        logger.info(
-          `[sendReadinessProbe] Skipping, machine no longer starting state=${machine.state}`,
-        );
         return `skipped: machine state is ${machine.state}`;
       }
 
@@ -514,8 +496,11 @@ export const registerConsumers = () => {
         },
       });
 
-      logger.set({ machine: { id: machineId }, threadId: sendResult.threadId });
-      logger.info(`[sendReadinessProbe] Probe message sent messageId=${sendResult.messageId}`);
+      logger.set({
+        machine: { id: machineId },
+        threadId: sendResult.threadId,
+        messageId: sendResult.messageId,
+      });
       return `probe sent, messageId=${sendResult.messageId}`;
     },
   });
@@ -542,9 +527,6 @@ export const registerConsumers = () => {
 
       if (machine.state !== "starting") {
         logger.set({ machine: { id: machineId } });
-        logger.info(
-          `[pollProbeResponse] Skipping, machine no longer starting state=${machine.state}`,
-        );
         return `skipped: machine state is ${machine.state}`;
       }
 
@@ -564,8 +546,7 @@ export const registerConsumers = () => {
         },
       });
 
-      logger.set({ machine: { id: machineId } });
-      logger.info(`[pollProbeResponse] Probe succeeded responseText=${responseText}`);
+      logger.set({ machine: { id: machineId }, responseText });
       return `probe succeeded: "${responseText}"`;
     },
   });
@@ -585,9 +566,6 @@ export const registerConsumers = () => {
 
       if (machine.state !== "starting") {
         logger.set({ machine: { id: machineId } });
-        logger.info(
-          `[activateMachine] Skipping, machine no longer starting state=${machine.state}`,
-        );
         return `skipped: machine state is ${machine.state}`;
       }
 
@@ -598,9 +576,6 @@ export const registerConsumers = () => {
         });
         if (current?.state !== "starting") {
           logger.set({ machine: { id: machineId } });
-          logger.info(
-            `[activateMachine] Skipping inside tx, state changed state=${current?.state}`,
-          );
           return false;
         }
 
@@ -630,8 +605,7 @@ export const registerConsumers = () => {
         return true;
       });
 
-      logger.set({ machine: { id: machineId } });
-      logger.info(`[activateMachine] Machine activated:${activated}`);
+      logger.set({ machine: { id: machineId }, activated });
       return `machine activated:${activated}`;
     },
   });
@@ -672,8 +646,11 @@ export const registerConsumers = () => {
         }),
       });
 
-      logger.set({ machine: { id: machineId }, project: { id: projectId } });
-      logger.info(`[deleteDetachedMachines] Fan-out delete enqueuedCount=${result.length}`);
+      logger.set({
+        machine: { id: machineId },
+        project: { id: projectId },
+        enqueuedCount: result.length,
+      });
       return `enqueued ${result.length} delete-requested events`;
     },
   });
@@ -700,7 +677,6 @@ export const registerConsumers = () => {
         .where(eq(schema.machine.id, machineId));
 
       logger.set({ machine: { id: machineId } });
-      logger.info("[deleteMachineViaProvider] Deleted machine");
       return `deleted machine ${machineId}`;
     },
   });
@@ -712,7 +688,6 @@ function registerTestConsumers() {
     name: "logPoke",
     on: "testing:poke",
     handler: (params) => {
-      logger.info(`[outbox] GOT: ${params.eventName}, message: ${params.payload.message}`);
       return "received message: " + params.payload.message;
     },
   });
@@ -721,10 +696,7 @@ function registerTestConsumers() {
     name: "logGreeting",
     on: "rpc:admin.outbox.poke",
     when: (params) => params.payload.input.message.includes("hi"),
-    handler: (params) => {
-      logger.info(
-        `[outbox] GOT: ${params.eventName}, server reply: ${params.payload.output.reply}`,
-      );
+    handler: () => {
       return "logged it";
     },
   });
