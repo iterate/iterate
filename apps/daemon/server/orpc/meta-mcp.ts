@@ -4,7 +4,7 @@ import { publicProcedure } from "./init.ts";
 
 const META_MCP_SERVICE_BASE_URL = process.env.META_MCP_SERVICE_BASE_URL ?? "http://127.0.0.1:19070";
 
-const metaMcpStatusSchema = z.object({
+const MetaMcpStatus = z.object({
   publicBaseUrl: z.string().url(),
   servers: z.array(
     z.object({
@@ -20,7 +20,7 @@ const metaMcpStatusSchema = z.object({
   ),
 });
 
-const metaMcpOAuthStartSchema = z.object({
+const MetaMcpOAuthStart = z.object({
   stateIdentifier: z.string(),
   serverId: z.string(),
   expiresAt: z.string(),
@@ -71,12 +71,12 @@ async function requestMetaMcp(path: string, init?: RequestInit) {
 
 export const metaMcpOrpcRouter = {
   getStatus: publicProcedure.handler(async () => {
-    return metaMcpStatusSchema.parse(await requestMetaMcp("/api/status"));
+    return MetaMcpStatus.parse(await requestMetaMcp("/api/status"));
   }),
   startOAuth: publicProcedure
     .input(z.object({ serverId: z.string() }))
     .handler(async ({ input }) => {
-      return metaMcpOAuthStartSchema.parse(
+      return MetaMcpOAuthStart.parse(
         await requestMetaMcp(`/api/oauth/start/${input.serverId}`, { method: "POST" }),
       );
     }),

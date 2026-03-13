@@ -6,7 +6,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createWorkerThreadCodeExecutor } from "../execution/worker-thread-execution-environment.ts";
 import { UpstreamManager } from "../upstream-manager.ts";
-import { AuthManager, supportsOAuth } from "../auth/auth-manager.ts";
+import { AuthManager } from "../auth/auth-manager.ts";
 import { serviceEnv } from "../env.ts";
 import { readServersFile } from "../config/servers-file.ts";
 import { createMetaMCPServer } from "./mcp-server.ts";
