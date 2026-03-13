@@ -13,7 +13,6 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as LayoutLessTerminalRouteImport } from './routes/_layout-less/terminal'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents/index'
-import { Route as OauthMetaMcpSuccessRouteImport } from './routes/oauth/meta-mcp/success'
 import { Route as AppAgentsNewRouteImport } from './routes/_app/agents/new'
 import { Route as AppAgentsSlugRouteImport } from './routes/_app/agents/$slug'
 
@@ -36,11 +35,6 @@ const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
   path: '/agents/',
   getParentRoute: () => AppRoute,
 } as any)
-const OauthMetaMcpSuccessRoute = OauthMetaMcpSuccessRouteImport.update({
-  id: '/oauth/meta-mcp/success',
-  path: '/oauth/meta-mcp/success',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AppAgentsNewRoute = AppAgentsNewRouteImport.update({
   id: '/agents/new',
   path: '/agents/new',
@@ -57,7 +51,6 @@ export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/agents/$slug': typeof AppAgentsSlugRoute
   '/agents/new': typeof AppAgentsNewRoute
-  '/oauth/meta-mcp/success': typeof OauthMetaMcpSuccessRoute
   '/agents': typeof AppAgentsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -65,7 +58,6 @@ export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
   '/agents/$slug': typeof AppAgentsSlugRoute
   '/agents/new': typeof AppAgentsNewRoute
-  '/oauth/meta-mcp/success': typeof OauthMetaMcpSuccessRoute
   '/agents': typeof AppAgentsIndexRoute
 }
 export interface FileRoutesById {
@@ -75,7 +67,6 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/agents/$slug': typeof AppAgentsSlugRoute
   '/_app/agents/new': typeof AppAgentsNewRoute
-  '/oauth/meta-mcp/success': typeof OauthMetaMcpSuccessRoute
   '/_app/agents/': typeof AppAgentsIndexRoute
 }
 export interface FileRouteTypes {
@@ -85,7 +76,6 @@ export interface FileRouteTypes {
     | '/'
     | '/agents/$slug'
     | '/agents/new'
-    | '/oauth/meta-mcp/success'
     | '/agents'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -93,7 +83,6 @@ export interface FileRouteTypes {
     | '/'
     | '/agents/$slug'
     | '/agents/new'
-    | '/oauth/meta-mcp/success'
     | '/agents'
   id:
     | '__root__'
@@ -102,14 +91,12 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/_app/agents/$slug'
     | '/_app/agents/new'
-    | '/oauth/meta-mcp/success'
     | '/_app/agents/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   LayoutLessTerminalRoute: typeof LayoutLessTerminalRoute
-  OauthMetaMcpSuccessRoute: typeof OauthMetaMcpSuccessRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -141,13 +128,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/agents'
       preLoaderRoute: typeof AppAgentsIndexRouteImport
       parentRoute: typeof AppRoute
-    }
-    '/oauth/meta-mcp/success': {
-      id: '/oauth/meta-mcp/success'
-      path: '/oauth/meta-mcp/success'
-      fullPath: '/oauth/meta-mcp/success'
-      preLoaderRoute: typeof OauthMetaMcpSuccessRouteImport
-      parentRoute: typeof rootRouteImport
     }
     '/_app/agents/new': {
       id: '/_app/agents/new'
@@ -185,7 +165,6 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   LayoutLessTerminalRoute: LayoutLessTerminalRoute,
-  OauthMetaMcpSuccessRoute: OauthMetaMcpSuccessRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
