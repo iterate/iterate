@@ -301,16 +301,31 @@ export const registerConsumers = () => {
         return `skipped: machine ${machine.id} state is ${machine.state}`;
       }
 
-      const runtime = await createMachineStub({
-        type: machine.type,
-        env,
-        externalId: machine.externalId,
-        metadata: (machine.metadata as Record<string, unknown>) ?? {},
-      });
-      const fetcher = await runtime.getFetcher(3000);
-      const baseUrl = await runtime.getBaseUrl(3000);
-      const daemonClient = createDaemonClient({ baseUrl, fetcher });
-      await daemonClient.daemon.pullIterateIterate({ ref: params.payload.ref });
+      try {
+        const runtime = await createMachineStub({
+          type: machine.type,
+          env,
+          externalId: machine.externalId,
+          metadata: (machine.metadata as Record<string, unknown>) ?? {},
+        });
+        const fetcher = await runtime.getFetcher(3000);
+        const baseUrl = await runtime.getBaseUrl(3000);
+        const daemonClient = createDaemonClient({ baseUrl, fetcher });
+        await daemonClient.daemon.pullIterateIterate({
+          ref: params.payload.ref,
+        });
+      } catch (e: unknown) {
+        if (e instanceof Error && e.name === "DaytonaNotFoundError") {
+          logger.set({
+            machineId: machine.id,
+            externalId: machine.externalId,
+            eventId: params.eventId,
+          });
+          logger.warn("Skipping iterate pull for deleted sandbox");
+          return `skipped: sandbox for machine ${machine.id} not found in Daytona (${machine.externalId})`;
+        }
+        throw e;
+      }
 
       logger.set({
         machineId: machine.id,
