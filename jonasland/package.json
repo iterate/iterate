@@ -1,0 +1,8 @@
+{
+  "name": "@iterate-com/jonasland",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "cd e2e && pnpm"
+  }
+}

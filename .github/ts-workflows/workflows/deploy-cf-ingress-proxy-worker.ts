@@ -22,6 +22,8 @@ export default workflow({
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             APP_STAGE: "prd",
+            WORKER_NAME: "ingress-proxy",
+            INGRESS_PROXY_HOSTNAME: "ingress.iterate.com",
           },
           run: "pnpm run deploy:prd",
         },

@@ -2,7 +2,7 @@
 
 Important directories:
 
-- `apps/os` - the dashboard for our product. In production, this is served on `os.iterate.com`. In development, it is something like `<username>.iterate-dev.com`
+- `apps/os` - the dashboard for our product. In production, this is served on `os.iterate.com`. In development, it is something like `<usernmame>.iterate-dev.com`
 - `apps/daemon` - the entrypoint for our "agent" which runs on Docker-based sandboxed machines (Fly.io or plain Docker (locally))
 - `packages/iterate` - the iterate CLI, which is globally installed `iterate`. Note that the CLI delegates to the local source code when run inside this repo, so you can use the globally-installed binary without worrying about which version is running
 - `spec` - our Playwright end to end tests. We call them "specs" rather than "e2e" because we use them to declare how our product is supposed to function.
@@ -40,13 +40,21 @@ await spinnerWaiter.settings.run({ spinnerTimeout: 120_000 }, async () => {
 });
 ```
 
-Don't write if statements, ternaries, or other conditionals in tests. You should usually duplicated code over complex helper functions with conditionals.
+Don't write if statements, ternaries, or other conditonals in tests. You should usually duplicated code over complex helper functions with conditionals.
 
 You can use the `playwriter-spec` skill to run a spec dynamically when the feature or the spec itself are in flux and not yet validated. Doing this before running via playwright directly can result in a much faster feedback loop, and allow you to adapt the spec/the product as you step through the test.
 
 ## Coding style
 
 When you're writing helpers/utilities/library functions, you have to try to LIMIT complexity and optionality. If you have a function that is only called once then DON'T give it any optional properties. Make the ones that are actually used required, and drop all the others. That makes call sites more explicit. If there are multiple parameters of the same type, use "options-bags" rather than long lists of positional parameters which can be accidentally flipped.
+
+- DO NOT guess at which of several env vars you've found in the codebase is correct. DO NOT write stuff like this. Instead, ask the human which they want!
+
+```ts
+process.env.JONASLAND_E2E_INGRESS_PROXY_DOMAIN ??
+  process.env.INGRESS_PROXY_DOMAIN ??
+  DEFAULT_INGRESS_PROXY_DOMAIN;
+```
 
 ## Writing React
 
@@ -76,13 +84,14 @@ Design for columnar 375px for mobile support, implement desktop as a view which 
 - Use `toast` from sonner, not inline messages
 - Use `EmptyState` for empty states
 - Use `Field` components for form accessibility
+- Render IDs and slugs with `packages/ui/src/components/identifier.tsx` so they stay monospaced and copyable
 
 Canonical example: `apps/os/app/routes/org/project/machines.tsx`
 
 ## Meta: writing AGENTS.md
 
 - Keep it brief, sacrifice grammar for the sake of concision.
-- Stick to facts which are likely to remain true, rather than prescriptive recipes ("XYZ can be found in the database" is better than "run this exact query" which might be invalid once the schema changes)
+- Stick to facts which are likely to remain true, rather than prescriptive recipes ("XYZ can be found in the database" is better than "run this exact query which might be invalid once the schema changes")
 
 ## Quick reference
 
@@ -95,14 +104,14 @@ For local Docker machines, refresh the sandbox image + default tag with: `pnpm s
 - Strict TS; infer types where possible
 - No `as any` — fix types or ask for help
 - File/folder names: kebab-case
-- Include file extensions (`.ts` or whatever) for relative imports
+- Include `.ts`/`.js` in relative imports (not package imports)
 - Use `node:` prefix for Node imports
 - Prefer named exports
 - Acronyms: all caps except `Id` (e.g., `callbackURL`, `userId`)
-- Use pnpm for packages
-- Use dedent for template strings
+- Use pnpm
+- Use remeda for utilities, dedent for template strings
 - Unit tests: `*.test.ts` next to source
-- Spec tests: `spec/*.spec.ts` (see [Writing Specs](#writing-specs))
+- Spec tests: `spec/*.spec.ts`
 
 ## Task system
 
@@ -194,8 +203,6 @@ Key project IDs: Iterate = `prj_01kh7ct9jke49vjq43j4wy3vyw`, team = `T0675PSN873
 ### Outbox queue operations
 
 Admin UI: `https://os.iterate.com/admin/outbox` — shows all events, filters by status/event/consumer, has "Process Queue" button.
-
-- CLI debugging: `iterate os admin outbox list-events --limit 50 --sort-direction desc` shows recent outbox history from prod. Use `--payload-contains '{"machineId": "mach_..."}'` or `--consumer-name myConsumer` to narrow down setup/probe issues without going straight to SQL. You can also look at the implementation of the listEvents procedure powering this command for inspiration on how you can query the DB directly to dig even deeper.
 
 To archive (soft-delete) stale messages directly:
 

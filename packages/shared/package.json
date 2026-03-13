@@ -5,15 +5,33 @@
   "type": "module",
   "exports": {
     "./jonasland": "./src/jonasland/index.ts",
+    "./jonasland/service-contract": "./src/jonasland/service-contract.ts",
+    "./jonasland/ingress-url": "./src/jonasland/ingress-url.ts",
+    "./jonasland/test-helpers": "./src/jonasland/test-helpers/index.ts",
+    "./jonasland/strip-ansi.ts": "./src/jonasland/strip-ansi.ts",
+    "./jonasland/deployment/deployment.ts": "./src/jonasland/deployment/deployment.ts",
+    "./jonasland/deployment/deployment-provider-manifest.ts": "./src/jonasland/deployment/deployment-provider-manifest.ts",
+    "./jonasland/deployment/docker-deployment.ts": "./src/jonasland/deployment/docker-deployment.ts",
+    "./jonasland/deployment/docker-deployment-manifest.ts": "./src/jonasland/deployment/docker-deployment-manifest.ts",
+    "./jonasland/deployment/fly-deployment.ts": "./src/jonasland/deployment/fly-deployment.ts",
+    "./jonasland/deployment/fly-deployment-manifest.ts": "./src/jonasland/deployment/fly-deployment-manifest.ts",
+    "./jonasland/deployment/deployment-utils.ts": "./src/jonasland/deployment/deployment-utils.ts",
     "./force-public-url-vite-plugin": "./src/dev/force-public-url-vite-plugin.ts",
     "./project-ingress": "./src/project-ingress.ts",
     "./github-agent-path": "./src/github-agent-path.ts",
     "./slug-maker": "./src/slug-maker.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --environment node src/jonasland/ingress-url.test.ts"
   },
   "dependencies": {
+    "@accelerated-software-development/caddy-api-client": "^0.4.3",
+    "@docker/node-sdk": "^0.0.17",
+    "@hono/node-server": "^1.19.10",
+    "@iterate-com/events": "workspace:*",
+    "@iterate-com/events-contract": "workspace:*",
+    "@iterate-com/registry": "workspace:*",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.206.0",
     "@opentelemetry/instrumentation-http": "^0.206.0",
@@ -23,17 +41,28 @@
     "@opentelemetry/semantic-conventions": "^1.38.0",
     "@orpc/client": "^1.13.5",
     "@orpc/contract": "^1.13.5",
+    "@orpc/openapi": "^1.13.6",
     "@orpc/openapi-client": "^1.13.5",
     "@orpc/otel": "^1.13.5",
     "@orpc/server": "^1.13.5",
     "@orpc/zod": "^1.13.5",
+    "delay": "^7.0.0",
+    "emittery": "2.0.0",
     "evlog": "^1.8.0",
+    "hono": "^4.12.5",
+    "openapi-fetch": "^0.14.0",
+    "p-retry": "^7.1.1",
+    "p-wait-for": "^6.0.0",
+    "pidnap": "workspace:*",
+    "vite": "7.2.4",
     "ws": "^8.18.3",
+    "yaml": "^2.8.2",
     "zod": "^4.1.11"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
+    "openapi-typescript": "^7.10.1",
     "typescript": "^5.9.3",
-    "vite": "7.2.4"
+    "vitest": "^4.0.18"
   }
 }

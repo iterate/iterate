@@ -1,0 +1,462 @@
+# =============================================================================
+# Iterate Sandbox Caddyfile
+# =============================================================================
+#
+# HOW TO READ THIS FILE
+# ---------------------
+# This file is the canonical routing explainer for jonasland. The first thing to
+# understand is the EFFECTIVE TARGET HOST for a request.
+#
+# A request may arrive with:
+# - a raw transport Host header
+# - an X-Forwarded-Host header that names the actual service target
+#
+# Example: Cloudflare ingress worker -> Fly machine
+# - Host: my-app.fly.dev
+# - X-Forwarded-Host: events__demo.ingress.iterate.com
+#
+# In that case:
+# - `my-app.fly.dev` is only the machine transport destination
+# - `events__demo.ingress.iterate.com` is the actual routing target
+# - we therefore route using X-Forwarded-Host
+# - we preserve the original raw Host in `X-Iterate-Original-Host`
+#
+# Once we have the effective target host, the file only does two things:
+#
+# 1. Classify the target:
+#    - if it matches one of our service host forms, it is ingress
+#    - otherwise it is egress
+#
+# 2. Resolve ingress requests to a simple tuple:
+#    - {vars.iterate_service_slug} // e.g. home
+#    - {vars.iterate_upstream} // e.g. 127.0.0.1:19030
+#    - {vars.iterate_dispatch_variant} // always "plain" unless the target needs extra Caddy directives
+#
+# Registry fragments and the built-in cache both produce the same tuple. Built-ins
+# live here only as a bootstrap cache so the system works before registry starts.
+#
+# REAL WORLD EXAMPLES
+# -------------------
+# Assume:
+#   ITERATE_INGRESS_HOST=iterate.customer-domain.com
+#   ITERATE_INGRESS_DEFAULT_SERVICE=home
+#
+# Effective target hosts that count as ingress:
+#   iterate.customer-domain.com             -> home (default ingress service)
+#   events.iterate.customer-domain.com      -> events
+#   events__iterate.customer-domain.com     -> events
+#   events.customer-domain.com              -> events   (if that host reaches us and is configured)
+#   events.iterate.localhost                -> events
+#
+# Effective target hosts that count as egress:
+#   api.openai.com
+#   slack.com
+#   1.1.1.1
+#
+# Forwarded ingress example:
+#   Host: my-app.fly.dev
+#   X-Forwarded-Host: events__iterate.customer-domain.com
+#   -> classify as ingress for `events`
+#
+# More host-shape examples:
+#   <customer-domain.com>                   -> default ingress service
+#   events.<customer-domain.com>            -> events (if your provider/worker maps that host to us)
+#   events__iterate.<customer-domain.com>   -> events
+#   events.iterate.<customer-domain.com>    -> events
+#
+# If ITERATE_INGRESS_DEFAULT_SERVICE=events then:
+#   iterate.customer-domain.com             -> events
+#   home.iterate.customer-domain.com        -> home
+#   home__iterate.customer-domain.com       -> home
+#
+# TRAFFIC MODEL
+# -------------
+# Caddy is the single HTTP(S) chokepoint for the machine. iptables in entry.sh
+# redirects outbound :80/:443 back into Caddy:
+#
+#   iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-ports 80
+#   iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 443
+#
+# That gives us:
+#   external ingress  -> Fly / CF proxy -> Caddy -> matched service
+#   internal ingress  -> sandbox app    -> Caddy -> matched service
+#   egress            -> sandbox app    -> Caddy -> direct or proxied external
+#
+# =============================================================================
+{
+	# Caddy admin API 
+	admin 127.0.0.1:2019
+
+	servers {
+		# Trust CF/Fly proxy hops for client IP derivation.
+		trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+		client_ip_headers X-Forwarded-For CF-Connecting-IP Fly-Client-IP
+	}
+
+	# On-demand self-signed certs for ANY hostname. On the egress path, Caddy
+	# acts as a MITM TLS proxy: iptables redirects outbound :443 here, Caddy
+	# generates a cert for the target hostname, terminates TLS, then forwards
+	# the request to the egress proxy. The machine trusts Caddy's root CA.
+	local_certs
+	auto_https off
+	# Keep runtime config file-driven (registry fragments + this root file).
+	persist_config off
+}
+
+# -----------------------------------------------------------------------------
+# Shared helpers
+# -----------------------------------------------------------------------------
+(iterate_cors_openapi) {
+	# CORS allowlist mirrors all ingress host forms:
+	#   1) {$ITERATE_INGRESS_HOST:iterate.localhost}
+	#   2) *.{$ITERATE_INGRESS_HOST:iterate.localhost}
+	#   3) *__{$ITERATE_INGRESS_HOST:iterate.localhost}  (intentionally no extra dot after __)
+	# Plus local dev hosts on iterate.localhost.
+	@iterate_api_preflight {
+		method OPTIONS
+		header_regexp Origin ^https?://((([a-z0-9-]+\.)?iterate\.localhost)|({$ITERATE_INGRESS_HOST:iterate.localhost})|([a-z0-9-]+\.{$ITERATE_INGRESS_HOST:iterate.localhost})|([a-z0-9-]+__{$ITERATE_INGRESS_HOST:iterate.localhost}))(:[0-9]+)?$
+	}
+	@iterate_api_cors {
+		header_regexp Origin ^https?://((([a-z0-9-]+\.)?iterate\.localhost)|({$ITERATE_INGRESS_HOST:iterate.localhost})|([a-z0-9-]+\.{$ITERATE_INGRESS_HOST:iterate.localhost})|([a-z0-9-]+__{$ITERATE_INGRESS_HOST:iterate.localhost}))(:[0-9]+)?$
+	}
+	header @iterate_api_cors {
+		Access-Control-Allow-Origin "{http.request.header.Origin}"
+		Access-Control-Allow-Methods "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+		Access-Control-Allow-Headers "authorization,content-type,x-request-id,traceparent,tracestate,baggage"
+		Access-Control-Expose-Headers "content-type,x-request-id"
+		Access-Control-Max-Age "600"
+		Vary "Origin"
+	}
+	respond @iterate_api_preflight 204
+}
+
+# Ingress route resolution always compiles down to the same tuple:
+# - service slug
+# - upstream
+# - optional extra proxy behavior (only for weird cases like FRP or OpenObserve)
+#
+# Most ingress requests go through the same default path:
+# - preserve the effective target host
+# - add CORS/openapi headers
+# - reverse_proxy to the resolved upstream
+#
+# Registry-generated fragments populate the same tuple as the built-in cache
+# below. The root Caddyfile does not care where a tuple came from once the
+# target host has been resolved.
+(iterate_reset_route_vars) {
+	vars {
+		iterate_extra_proxy_behavior ""
+		iterate_service_slug ""
+		iterate_upstream ""
+	}
+}
+
+# Trusted forwarded ingress rewrite:
+# - use X-Forwarded-Host as the effective routing host
+# - preserve the original public host separately for downstream consumers
+# We do this before host-shape classification so forwarded ingress is treated as
+# ingress immediately, not dragged through any egress path first.
+(iterate_apply_forwarded_ingress_host) {
+	@has_xfh header X-Forwarded-Host *
+	request_header @has_xfh X-Iterate-Original-Host {http.request.host}
+	request_header @has_xfh Host {http.request.header.X-Forwarded-Host}
+}
+
+# The default ingress service is a tiny cache of the same tuple fields that the
+# registry would otherwise emit dynamically. This exists only so the naked host
+# works before registry starts.
+(iterate_default_service_cache) {
+	map {$ITERATE_INGRESS_DEFAULT_SERVICE:home} {iterate_default_service_slug} {
+		home home
+		events events
+		default home
+	}
+	map {$ITERATE_INGRESS_DEFAULT_SERVICE:home} {iterate_default_upstream} {
+		home 127.0.0.1:19030
+		events 127.0.0.1:17320
+		default 127.0.0.1:19030
+	}
+}
+
+# Built-in bootstrap cache for services that are always present.
+# In theory these could all come from registry fragments; in practice we cache
+# them here so the system is useful before registry starts.
+(iterate_resolve_builtin_ingress) {
+	@default_ingress host {$ITERATE_INGRESS_HOST:iterate.localhost}
+	vars @default_ingress {
+		iterate_service_slug {iterate_default_service_slug}
+		iterate_upstream {iterate_default_upstream}
+	}
+
+	@home host home.iterate.localhost home.{$ITERATE_INGRESS_HOST:iterate.localhost} home__{$ITERATE_INGRESS_HOST:iterate.localhost}
+	vars @home {
+		iterate_service_slug home
+		iterate_upstream 127.0.0.1:19030
+	}
+
+	@events host events.iterate.localhost events.{$ITERATE_INGRESS_HOST:iterate.localhost} events__{$ITERATE_INGRESS_HOST:iterate.localhost}
+	vars @events {
+		iterate_service_slug events
+		iterate_upstream 127.0.0.1:17320
+	}
+
+	@pidnap host pidnap.iterate.localhost pidnap.{$ITERATE_INGRESS_HOST:iterate.localhost} pidnap__{$ITERATE_INGRESS_HOST:iterate.localhost}
+	vars @pidnap {
+		iterate_service_slug pidnap
+		iterate_upstream 127.0.0.1:17300
+	}
+
+	@registry host registry.iterate.localhost registry.{$ITERATE_INGRESS_HOST:iterate.localhost} registry__{$ITERATE_INGRESS_HOST:iterate.localhost}
+	vars @registry {
+		iterate_service_slug registry
+		iterate_upstream 127.0.0.1:17310
+	}
+
+	@caddy host caddy.iterate.localhost caddy.{$ITERATE_INGRESS_HOST:iterate.localhost} caddy__{$ITERATE_INGRESS_HOST:iterate.localhost}
+	vars @caddy {
+		iterate_service_slug caddy
+		iterate_upstream 127.0.0.1:2019
+	}
+
+	@frp host frp.iterate.localhost frp.{$ITERATE_INGRESS_HOST:iterate.localhost} frp__{$ITERATE_INGRESS_HOST:iterate.localhost}
+	vars @frp {
+		iterate_service_slug frp
+		iterate_extra_proxy_behavior frp-incantations
+		iterate_upstream 127.0.0.1:27000
+	}
+
+	@openobserve host openobserve.iterate.localhost openobserve.{$ITERATE_INGRESS_HOST:iterate.localhost} openobserve__{$ITERATE_INGRESS_HOST:iterate.localhost}
+	vars @openobserve {
+		iterate_service_slug openobserve
+		iterate_extra_proxy_behavior openobserve-incantations
+		iterate_upstream 127.0.0.1:5080
+	}
+
+	@otel_collector host otel-collector.iterate.localhost otel-collector.{$ITERATE_INGRESS_HOST:iterate.localhost} otel-collector__{$ITERATE_INGRESS_HOST:iterate.localhost}
+	vars @otel_collector {
+		iterate_service_slug otel-collector
+		iterate_upstream 127.0.0.1:15333
+	}
+}
+
+(iterate_caddy_health) {
+	# Keep this path global on purpose: it's handy to probe Caddy on any host
+	# from outside (ingress/public/internal) to confirm the proxy is alive.
+	handle /__iterate/caddy-health {
+		respond "ok" 200
+	}
+}
+
+# Detailed unresolved-ingress response.
+# This is intentionally noisy because these failures are otherwise confusing:
+# from the outside, the hostname looks like ingress, but internally no built-in
+# or registry route resolved it to an upstream.
+#
+# Example:
+# - request host: `unknown.demo.ingress.iterate.com`
+# - this clearly looks like one of our ingress host shapes
+# - but no route ever set `iterate_upstream`
+# - we return this JSON 404 instead of silently falling through to egress
+(iterate_respond_unresolved_ingress) {
+	header Content-Type application/json
+	respond "{\"error\":\"ingress_route_not_found\",\"message\":\"Host looked like iterate ingress, but no built-in or registry route resolved it.\",\"effectiveHost\":\"{http.request.host}\",\"originalHost\":\"{http.request.header.X-Iterate-Original-Host}\",\"forwardedHost\":\"{http.request.header.X-Forwarded-Host}\",\"resolvedService\":\"{vars.iterate_service_slug}\",\"resolvedUpstream\":\"{vars.iterate_upstream}\",\"extraProxyBehavior\":\"{vars.iterate_extra_proxy_behavior}\",\"ingressBaseHost\":\"{$ITERATE_INGRESS_HOST:iterate.localhost}\",\"defaultIngressService\":\"{$ITERATE_INGRESS_DEFAULT_SERVICE:home}\",\"examples\":[\"{$ITERATE_INGRESS_HOST:iterate.localhost}\",\"events.{$ITERATE_INGRESS_HOST:iterate.localhost}\",\"events__{$ITERATE_INGRESS_HOST:iterate.localhost}\",\"events.iterate.localhost\"]}" 404
+}
+
+# Common ingress proxy headers.
+# `X-Iterate-Resolved-Service` is only for downstream visibility:
+# - it tells the upstream which service slug Caddy resolved this request to
+# - it is useful in logs / debug responses when a naked host or forwarded host
+#   was mapped to some internal service
+# - it is NOT used by Caddy for routing and it is NOT what powers the 404 path
+#
+# Example:
+# - request host: `demo.ingress.iterate.com`
+# - default ingress service resolves that to `events`
+# - upstream receives: `X-Iterate-Resolved-Service: events`
+#
+# This is especially handy when the external host does not itself say `events`.
+(iterate_ingress_upstream_headers) {
+	header_up X-Iterate-Resolved-Service {vars.iterate_service_slug}
+}
+
+# Dispatch ingress requests based on the resolved tuple.
+# Most services use the default ingress path:
+# - `iterate_cors_openapi` always runs for ingress
+# - Caddy proxies to `{vars.iterate_upstream}`
+# - the upstream gets `X-Iterate-Resolved-Service`
+#
+# The special cases below are meant to read as:
+# - do the normal ingress thing
+# - and add one extra behavior
+(iterate_dispatch_ingress) {
+	route {
+		# FRP is normal ingress plus a longer-lived stream shutdown policy.
+		@iterate_frp_ingress {
+			vars iterate_extra_proxy_behavior frp-incantations
+		}
+		handle @iterate_frp_ingress {
+			import iterate_cors_openapi
+			reverse_proxy {vars.iterate_upstream} {
+				import iterate_ingress_upstream_headers
+				stream_close_delay 5m
+			}
+		}
+
+		# OpenObserve is normal ingress plus the auth header it expects from us.
+		@iterate_openobserve_ingress {
+			vars iterate_extra_proxy_behavior openobserve-incantations
+		}
+		handle @iterate_openobserve_ingress {
+			import iterate_cors_openapi
+			reverse_proxy {vars.iterate_upstream} {
+				import iterate_ingress_upstream_headers
+				header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
+			}
+		}
+
+		# Post-resolution ingress gate.
+		#
+		# Earlier in the pipeline we already tried all explicit ingress host rules:
+		# - built-in hosts like `events.iterate.localhost`
+		# - public subdomain hosts like `events.demo.ingress.iterate.com`
+		# - dunder hosts like `events__demo.ingress.iterate.com`
+		# - the naked public host when the default ingress service is selected
+		#
+		# Those explicit host matchers set `iterate_upstream`. This matcher does not
+		# decide WHAT to route to; it only asks whether route resolution already
+		# succeeded.
+		#
+		# Example ingress:
+		# - request host: `events__demo.ingress.iterate.com`
+		# - an earlier explicit host rule sets `iterate_upstream=127.0.0.1:17320`
+		# - `vars_regexp iterate_upstream .+` matches
+		# - we take the normal ingress path below
+		#
+		# Example egress:
+		# - request host: `api.github.com`
+		# - no explicit ingress rule sets `iterate_upstream`
+		# - this matcher does not match
+		# - the listener falls through to the egress handler
+		@iterate_has_ingress_upstream vars_regexp iterate_upstream .+
+		handle @iterate_has_ingress_upstream {
+			import iterate_cors_openapi
+			reverse_proxy {vars.iterate_upstream} {
+				import iterate_ingress_upstream_headers
+			}
+		}
+	}
+}
+
+# Shared listener pipeline:
+# 1. normalize any trusted forwarded ingress host
+# 2. answer global health checks
+# 3. resolve known hosts to the ingress tuple
+# 4. dispatch ingress only if resolution succeeded
+# 5. if the host still looks like ingress but did not resolve, return a detailed
+#    ingress 404 instead of leaking into the egress path
+(iterate_listener_pipeline) {
+	import iterate_apply_forwarded_ingress_host
+	import iterate_caddy_health
+
+	@local host 127.0.0.1 localhost
+	handle @local {
+		respond "caddy ok" 200
+	}
+
+	import iterate_reset_route_vars
+	import iterate_default_service_cache
+	import iterate_resolve_builtin_ingress
+	import /home/iterate/.iterate/caddy/registry-service-routes.caddy
+	import iterate_dispatch_ingress
+
+	# If we get here, no ingress route set `iterate_upstream`.
+	# We still do not want ingress-looking hosts to fall into egress.
+	@iterate_unresolved_ingress_host host {$ITERATE_INGRESS_HOST:iterate.localhost} *.{$ITERATE_INGRESS_HOST:iterate.localhost} *.iterate.localhost
+	handle @iterate_unresolved_ingress_host {
+		import iterate_respond_unresolved_ingress
+	}
+
+	@iterate_unresolved_ingress_dunder header_regexp Host ^[a-z0-9-]+__.+$
+	handle @iterate_unresolved_ingress_dunder {
+		import iterate_respond_unresolved_ingress
+	}
+}
+
+# Dispatch unmatched HTTP egress.
+# If ITERATE_EGRESS_PROXY is configured, route there while preserving the real
+# destination separately in X-Forwarded-* headers. Otherwise go directly to the
+# real destination on port 80.
+(iterate_dispatch_egress_http) {
+	@iterate_http_external_proxy expression `"{$ITERATE_EGRESS_PROXY:}" != ""`
+	handle @iterate_http_external_proxy {
+		reverse_proxy {$ITERATE_EGRESS_PROXY:localhost:0} {
+			header_up Host {upstream_hostport}
+			header_up X-Forwarded-Host {http.request.host}
+			header_up X-Forwarded-Proto http
+			header_down X-Iterate-Egress-Mode external-proxy
+			header_down X-Iterate-Egress-Proxy-Seen 1
+		}
+	}
+
+	handle {
+		reverse_proxy {host}:80 {
+			header_down X-Iterate-Egress-Mode transparent
+			header_down X-Iterate-Egress-Proxy-Seen 1
+		}
+	}
+}
+
+# Dispatch unmatched HTTPS egress.
+# Caddy has already terminated TLS for the original destination host, so direct
+# forwarding re-establishes upstream TLS using the original host as SNI.
+(iterate_dispatch_egress_https) {
+	@iterate_https_external_proxy expression `"{$ITERATE_EGRESS_PROXY:}" != ""`
+	handle @iterate_https_external_proxy {
+		reverse_proxy {$ITERATE_EGRESS_PROXY:localhost:0} {
+			header_up Host {upstream_hostport}
+			header_up X-Forwarded-Host {http.request.host}
+			header_up X-Forwarded-Proto https
+			header_down X-Iterate-Egress-Mode external-proxy
+			header_down X-Iterate-Egress-Proxy-Seen 1
+		}
+	}
+
+	handle {
+		reverse_proxy {host}:443 {
+			header_down X-Iterate-Egress-Mode transparent
+			header_down X-Iterate-Egress-Proxy-Seen 1
+			transport http {
+				tls
+				tls_server_name {host}
+			}
+		}
+	}
+}
+
+# =============================================================================
+# Main HTTP listener
+# =============================================================================
+:80 {
+	route {
+		import iterate_listener_pipeline
+		handle {
+			import iterate_dispatch_egress_http
+		}
+	}
+}
+
+# =============================================================================
+# Main HTTPS listener (ingress + MITM egress proxy)
+# =============================================================================
+:443 {
+	tls internal {
+		on_demand
+	}
+
+	route {
+		import iterate_listener_pipeline
+		handle {
+			import iterate_dispatch_egress_https
+		}
+	}
+}

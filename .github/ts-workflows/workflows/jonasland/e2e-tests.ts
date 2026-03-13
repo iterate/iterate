@@ -79,7 +79,7 @@ export default workflow({
             RUN_JONASLAND_E2E: "true",
             JONASLAND_SANDBOX_IMAGE: "${{ needs.build-image.outputs.image }}",
           },
-          run: "pnpm --filter ./jonasland/e2e exec vitest run",
+          run: "pnpm --filter ./jonasland/e2e vitest",
         },
         {
           name: "Upload jonasland e2e test artifacts",

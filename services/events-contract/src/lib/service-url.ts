@@ -1,6 +1,6 @@
 const DEFAULT_TARGET_PORT = 3000;
 
-const buildProjectPortUrl = (params: {
+const _buildProjectPortUrl = (params: {
   readonly projectBaseUrl: string;
   readonly port: number;
   readonly path?: string;
@@ -28,14 +28,21 @@ export interface ServiceManifestLike<TContract = unknown> {
 export const resolveServiceBaseUrl = (params: {
   readonly env: ServiceClientEnv;
   readonly manifest: ServiceManifestLike;
+  readonly preferSameOrigin?: boolean;
 }): string => {
   const candidate = params.env.ITERATE_PROJECT_BASE_URL?.trim();
+
+  if (params.preferSameOrigin && candidate) {
+    const parsed = new URL(candidate);
+    parsed.pathname = "/";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  }
 
   if (candidate) {
     const parsed = new URL(candidate);
 
-    // Explicit ports typically indicate local access (for example localhost:3000),
-    // but the env var is project-level. Always target the requested service port.
     if (parsed.port !== "") {
       parsed.hostname = parsed.hostname.replace(/^[0-9]+__/, "");
       parsed.port = String(params.manifest.port);
@@ -45,17 +52,19 @@ export const resolveServiceBaseUrl = (params: {
       return parsed.toString();
     }
 
-    // If the hostname is already prefixed with "<port>__", normalize back to base
-    // project hostname before applying the target port.
-    parsed.hostname = parsed.hostname.replace(/^[0-9]+__/, "");
+    parsed.hostname = parsed.hostname.replace(/^[a-z0-9_-]+__/, "");
     parsed.pathname = "/";
     parsed.search = "";
     parsed.hash = "";
 
-    return buildProjectPortUrl({
-      projectBaseUrl: parsed.toString(),
-      port: params.manifest.port,
-    });
+    if (params.manifest.port === DEFAULT_TARGET_PORT) {
+      return parsed.toString();
+    }
+
+    const baseUrl = parsed.toString();
+    const url = new URL(baseUrl);
+    url.hostname = `${params.manifest.slug}__${url.hostname}`;
+    return url.toString();
   }
 
   return `http://127.0.0.1:${params.manifest.port}/`;
@@ -64,11 +73,13 @@ export const resolveServiceBaseUrl = (params: {
 export const resolveServiceOrpcUrl = (params: {
   readonly env: ServiceClientEnv;
   readonly manifest: ServiceManifestLike;
+  readonly preferSameOrigin?: boolean;
 }): string => new URL("/orpc", resolveServiceBaseUrl(params)).toString();
 
 export const resolveServiceOrpcWebSocketUrl = (params: {
   readonly env: ServiceClientEnv;
   readonly manifest: ServiceManifestLike;
+  readonly preferSameOrigin?: boolean;
 }): string => {
   const url = new URL(resolveServiceBaseUrl(params));
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -81,9 +92,11 @@ export const resolveServiceOrpcWebSocketUrl = (params: {
 export const resolveServiceOpenApiUrl = (params: {
   readonly env: ServiceClientEnv;
   readonly manifest: ServiceManifestLike;
+  readonly preferSameOrigin?: boolean;
 }): string => new URL("/openapi.json", resolveServiceBaseUrl(params)).toString();
 
 export const resolveServiceOpenApiBaseUrl = (params: {
   readonly env: ServiceClientEnv;
   readonly manifest: ServiceManifestLike;
+  readonly preferSameOrigin?: boolean;
 }): string => new URL("/api", resolveServiceBaseUrl(params)).toString();

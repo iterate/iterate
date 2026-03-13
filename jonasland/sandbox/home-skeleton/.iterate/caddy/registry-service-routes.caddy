@@ -1,0 +1,3 @@
+# registry-service rewrites this file at runtime.
+# Keep this placeholder so root Caddyfile imports resolve before registry starts.
+

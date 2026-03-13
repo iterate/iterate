@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "doppler run --config dev -- sh -c 'WORKER_NAME=ingress-proxy-dev tsx ./alchemy.run.ts cli --dev --stage dev'",
-    "deploy:prd": "doppler run --config prd -- sh -c 'WORKER_NAME=ingress-proxy tsx ./alchemy.run.ts cli deploy --stage prd'",
-    "deploy": "pnpm run deploy:prd",
+    "dev": "doppler run --config dev -- tsx ./alchemy.run.ts cli --dev --stage dev",
+    "deploy:stg": "doppler run --config stg -- tsx ./alchemy.run.ts cli deploy --stage stg",
+    "deploy:prd": "doppler run --config prd -- tsx ./alchemy.run.ts cli deploy --stage prd",
     "test": "vitest run",
     "test:e2e-live": "vitest run --config ./vitest.live.config.ts",
     "typecheck": "tsc --noEmit",
@@ -15,6 +15,7 @@
     "db:watch": "pnpm run db:rebuild && tsx ./scripts/generate-queries.ts --watch"
   },
   "dependencies": {
+    "@iterate-com/shared": "workspace:*",
     "@orpc/server": "^1.13.4",
     "alchemy": "^0.83.0",
     "hono": "^4.11.3",
