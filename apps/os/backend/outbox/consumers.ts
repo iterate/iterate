@@ -20,6 +20,22 @@ import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
 import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
 import { outboxClient as cc } from "./client.ts";
 
+/**
+ * Detect errors indicating the provider sandbox no longer exists (e.g. Daytona
+ * 404, Fly app not found). These are non-retryable and should be handled
+ * gracefully rather than retried.
+ */
+function isSandboxGoneError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const name = (err as { name?: string }).name ?? "";
+  // Daytona SDK throws DaytonaNotFoundError on 404
+  if (name === "DaytonaNotFoundError") return true;
+  // Fly provider uses string matching for 404s
+  const msg = String(err).toLowerCase();
+  if (msg.includes("(404)") && msg.includes("not found")) return true;
+  return false;
+}
+
 const IterateMainPushWebhookPayload = z.object({
   event: z.literal("push"),
   payload: z.object({
@@ -301,16 +317,29 @@ export const registerConsumers = () => {
         return `skipped: machine ${machine.id} state is ${machine.state}`;
       }
 
-      const runtime = await createMachineStub({
-        type: machine.type,
-        env,
-        externalId: machine.externalId,
-        metadata: (machine.metadata as Record<string, unknown>) ?? {},
-      });
-      const fetcher = await runtime.getFetcher(3000);
-      const baseUrl = await runtime.getBaseUrl(3000);
-      const daemonClient = createDaemonClient({ baseUrl, fetcher });
-      await daemonClient.daemon.pullIterateIterate({ ref: params.payload.ref });
+      try {
+        const runtime = await createMachineStub({
+          type: machine.type,
+          env,
+          externalId: machine.externalId,
+          metadata: (machine.metadata as Record<string, unknown>) ?? {},
+        });
+        const fetcher = await runtime.getFetcher(3000);
+        const baseUrl = await runtime.getBaseUrl(3000);
+        const daemonClient = createDaemonClient({ baseUrl, fetcher });
+        await daemonClient.daemon.pullIterateIterate({ ref: params.payload.ref });
+      } catch (err) {
+        if (isSandboxGoneError(err)) {
+          logger.set({
+            machineId: machine.id,
+            externalId: machine.externalId,
+            eventId: params.eventId,
+          });
+          logger.warn("Skipping iterate pull: sandbox no longer exists at provider");
+          return `skipped: sandbox gone for machine ${machine.id}`;
+        }
+        throw err;
+      }
 
       logger.set({
         machineId: machine.id,
@@ -669,7 +698,17 @@ export const registerConsumers = () => {
         externalId,
         metadata,
       });
-      await runtime.delete();
+
+      try {
+        await runtime.delete();
+      } catch (err) {
+        if (isSandboxGoneError(err)) {
+          logger.set({ machine: { id: machineId }, externalId });
+          logger.warn("Provider sandbox already gone, proceeding with DB cleanup");
+        } else {
+          throw err;
+        }
+      }
 
       await db
         .update(schema.machine)
