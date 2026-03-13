@@ -48,8 +48,6 @@ process.env.JONASLAND_E2E_INGRESS_PROXY_DOMAIN ??
   DEFAULT_INGRESS_PROXY_DOMAIN;
 ```
 
-
-
 **Comments and docstrings are super important**
 
 - They must give additional context - it's helpful when they give usage examples or point to other places in the codebase

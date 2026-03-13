@@ -1803,31 +1803,6 @@ importers:
         specifier: ^4.3.2
         version: 4.3.2(typescript@5.9.3)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
 
-  services/egress-service:
-    dependencies:
-      '@hono/node-server':
-        specifier: ^1.19.10
-        version: 1.19.10(hono@4.12.5)
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      hono:
-        specifier: ^4.12.5
-        version: 4.12.5
-      http-proxy:
-        specifier: ^1.18.1
-        version: 1.18.1
-    devDependencies:
-      '@types/http-proxy':
-        specifier: ^1.17.16
-        version: 1.17.17
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.3.3
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
   services/events:
     dependencies:
       '@effect/platform':
