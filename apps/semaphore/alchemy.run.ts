@@ -1,5 +1,5 @@
 import alchemy from "alchemy";
-import { D1Database, DurableObjectNamespace, Worker } from "alchemy/cloudflare";
+import { D1Database, DurableObjectNamespace, Worker, WranglerJson } from "alchemy/cloudflare";
 import { z } from "zod/v4";
 
 const Env = z.object({
@@ -9,6 +9,8 @@ const Env = z.object({
 });
 
 const env = Env.parse(process.env);
+const wranglerJsonPath = "./wrangler.jsonc";
+const compatibilityDate = "2025-02-24";
 
 const app = await alchemy("semaphore", {
   password: env.ALCHEMY_PASSWORD,
@@ -31,14 +33,28 @@ const coordinator = DurableObjectNamespace<import("./server.ts").ResourceCoordin
 export const worker = await Worker("worker", {
   name: env.WORKER_NAME,
   entrypoint: "./server.ts",
-  compatibilityDate: "2025-02-24",
-  compatibility: "node",
+  compatibilityDate,
   bindings: {
     DB: db,
     RESOURCE_COORDINATOR: coordinator,
     SEMAPHORE_API_TOKEN: alchemy.secret(env.SEMAPHORE_API_TOKEN),
   },
   adopt: true,
+});
+
+await WranglerJson({
+  worker,
+  path: wranglerJsonPath,
+  secrets: false,
+  transform: {
+    wrangler: (spec) => ({
+      ...spec,
+      vars: {
+        ...(spec.vars ?? {}),
+        SEMAPHORE_API_TOKEN: "test-token",
+      },
+    }),
+  },
 });
 
 console.log(worker.url);

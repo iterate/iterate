@@ -78,6 +78,21 @@ jobs:
           fi
           echo "base_url=$base_url" >> "$GITHUB_OUTPUT"
           echo "Deployed ephemeral worker at: $base_url"
+      - name: Wait for deployed worker health check
+        run: |-
+          set -euo pipefail
+          base_url="${{ steps.deploy.outputs.base_url }}"
+          for attempt in $(seq 1 30); do
+            body="$(curl -fsS "$base_url/health" || true)"
+            if [ "$body" = "OK" ]; then
+              echo "Worker is healthy at $base_url/health"
+              exit 0
+            fi
+            echo "Waiting for worker health check at $base_url/health (attempt $attempt/30)"
+            sleep 2
+          done
+          echo "Worker did not become healthy at $base_url/health"
+          exit 1
       - name: Run live Vitest E2E against ephemeral deployment
         working-directory: apps/semaphore
         env:
