@@ -1,6 +1,7 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe } from "vitest";
+import { HttpResponse, http } from "msw";
 import { fromTrafficWithWebSocket, useMockHttpServer } from "@iterate-com/mock-http-proxy";
 import type { HarWithExtensions } from "@iterate-com/mock-http-proxy";
 import { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
@@ -10,6 +11,14 @@ import {
   DockerDeploymentTestEnv,
   FlyDeploymentTestEnv,
 } from "../../test-helpers/deployment-test-env.ts";
+import {
+  configureFrpEgressProxy,
+  harLooksLikeAiTraffic,
+  harRequestUrls,
+  replayFixtureOpenAiKey,
+  runPiConversation,
+  waitUntilFrpTunnelIsActive,
+} from "../../test-helpers/pi-agent-egress.ts";
 import { useFrpTunnelToDeployment } from "../../test-helpers/old/frp-egress-bridge.ts";
 import { test } from "../../test-support/e2e-test.ts";
 
@@ -85,8 +94,6 @@ const cases = [
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? "";
 const hasAiKeys = OPENAI_API_KEY.length > 0 && ANTHROPIC_API_KEY.length > 0;
-const replayFixtureOpenAiKey =
-  "sk-proj-XVqC7k9h6rEOfbSs8XP9qzlOELpRTFmbdEkkwejcF---sanitised-secret-acf2c7b4";
 const replayFixtureHarPath = join(
   process.cwd(),
   "vitest",
@@ -94,65 +101,6 @@ const replayFixtureHarPath = join(
   "fixtures",
   "docker-pi-conversation.har",
 );
-
-async function runPiConversation(params: { deployment: Deployment; sessionDir: string }) {
-  const baseArgs = [
-    "--provider",
-    "openai",
-    "--model",
-    "gpt-4o-mini",
-    "--thinking",
-    "off",
-    "--no-tools",
-    "--session-dir",
-    params.sessionDir,
-  ];
-  const turn1 = await params.deployment.exec([
-    "pi",
-    ...baseArgs,
-    "-p",
-    "Return only JavaScript code for a function named add that adds two numbers.",
-  ]);
-  const turn2 = await params.deployment.exec([
-    "pi",
-    ...baseArgs,
-    "--continue",
-    "-p",
-    "Revise that to TypeScript with explicit number types. Return only code.",
-  ]);
-  const turn3 = await params.deployment.exec([
-    "pi",
-    ...baseArgs,
-    "--continue",
-    "-p",
-    "Now add a minimal Vitest test below it. Return only code.",
-  ]);
-  return { turn1, turn2, turn3 };
-}
-
-async function configureFrpEgressProxy(params: { deployment: Deployment; egressProxyURL: string }) {
-  await params.deployment.setEnvVars({
-    ITERATE_EGRESS_PROXY: params.egressProxyURL,
-  });
-}
-
-function harRequestUrls(har: HarWithExtensions): string[] {
-  return (har.log?.entries ?? [])
-    .map((entry) => entry.request?.url)
-    .filter((value): value is string => Boolean(value));
-}
-
-function assertReplayLooksLikeAiTraffic(urls: string[]) {
-  return urls.some((url) => {
-    const host = new URL(url).host;
-    return (
-      host.includes("openai.com") ||
-      host.includes("anthropic.com") ||
-      host.includes("googleapis.com") ||
-      host.includes("generativelanguage.googleapis.com")
-    );
-  });
-}
 
 describe("egress", () => {
   describe.runIf(hasAiKeys).each(cases)("$id", ({ createDeployment, id, tags, timeoutMs }) => {
@@ -200,6 +148,9 @@ describe("egress", () => {
               deployment,
               egressProxyURL: bridge.egressProxyURL,
             });
+            await waitUntilFrpTunnelIsActive({
+              deployment,
+            });
 
             const recordedConversation = await runPiConversation({
               deployment,
@@ -225,7 +176,7 @@ describe("egress", () => {
             recordedHar = JSON.parse(await readFile(harPath, "utf8")) as HarWithExtensions;
             const recordedUrls = harRequestUrls(recordedHar);
             expect(recordedUrls.length).toBeGreaterThan(0);
-            expect(assertReplayLooksLikeAiTraffic(recordedUrls)).toBe(true);
+            expect(harLooksLikeAiTraffic(recordedUrls)).toBe(true);
           }
 
           if (!recordedHar) {
@@ -241,12 +192,15 @@ describe("egress", () => {
                 harPath: replayHarPath,
               },
             });
+            replayProxy.use(
+              http.get("http://127.0.0.1:27180/__iterate/health", () => {
+                return new HttpResponse("ok");
+              }),
+            );
             replayProxy.use(...fromTrafficWithWebSocket(recordedHar));
 
-            await deployment.shellWithRetry({
-              cmd: "curl -sS --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:27180/__iterate/health",
-              timeoutMs: 30_000,
-              retryIf: (result) => result.output.trim() === "000" || result.exitCode !== 0,
+            await waitUntilFrpTunnelIsActive({
+              deployment,
             });
 
             const replayedConversation = await runPiConversation({
@@ -318,6 +272,11 @@ describe("egress", () => {
                 harPath: replayHarPath,
               },
             });
+            replayProxy.use(
+              http.get("http://127.0.0.1:27180/__iterate/health", () => {
+                return new HttpResponse("ok");
+              }),
+            );
             replayProxy.use(...fromTrafficWithWebSocket(replayFixtureHar));
 
             bridge = await useFrpTunnelToDeployment({
@@ -329,6 +288,9 @@ describe("egress", () => {
             await configureFrpEgressProxy({
               deployment,
               egressProxyURL: bridge.egressProxyURL,
+            });
+            await waitUntilFrpTunnelIsActive({
+              deployment,
             });
 
             const replayedConversation = await runPiConversation({

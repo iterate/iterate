@@ -30,6 +30,10 @@ export default defineConfig({
     {
       name: "caddy",
       definition: {
+        // Keep the target user's HOME/XDG dirs explicit. Without -E, sudo resets
+        // env and Caddy relies on iterate-caddy's login-home defaults instead.
+        // With -E, this env block is preserved so Caddy writes PKI/state under
+        // /home/iterate-caddy instead of inheriting /home/iterate from pidnap.
         command: "sudo",
         args: [
           "-E",
@@ -39,14 +43,11 @@ export default defineConfig({
           "run",
           "--config",
           caddyRootCaddyfile,
-          "--adapter",
-          "caddyfile",
         ],
         env: {
           HOME: caddyDataHome,
           XDG_DATA_HOME: `${caddyDataHome}/.local/share`,
           XDG_CONFIG_HOME: `${caddyDataHome}/.config`,
-          ITERATE_INGRESS_DEFAULT_SERVICE: "home",
         },
       },
       options: {
@@ -54,6 +55,12 @@ export default defineConfig({
       },
       envOptions: {
         reloadDelay: "immediately",
+        onlyRestartIfChanged: [
+          "ITERATE_INGRESS_DEFAULT_SERVICE",
+          "ITERATE_INGRESS_HOST",
+          "ITERATE_INGRESS_ROUTING_TYPE",
+          "ITERATE_EGRESS_PROXY",
+        ],
       },
     },
     {
@@ -64,7 +71,6 @@ export default defineConfig({
         env: {
           PORT: "17310",
           REGISTRY_SERVICE_PORT: "17310",
-          ITERATE_INGRESS_DEFAULT_SERVICE: "home",
         },
       },
       options: {
