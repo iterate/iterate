@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import {
   type OAuthClientInformationMixed,
@@ -19,6 +19,7 @@ import {
   type OAuthStoreRecord,
   type ServerConfig,
 } from "../config/schema.ts";
+import { serviceEnv } from "../env.ts";
 
 const OAUTH_AUTHORIZATION_TTL_MS = 15 * 60 * 1000;
 
@@ -89,30 +90,32 @@ const AuthFileContents = z.object({
 type AuthFileContents = z.infer<typeof AuthFileContents>;
 
 function getServersPath() {
-  const serversPath = process.env.META_MCP_SERVICE_SERVERS_PATH;
-  if (!serversPath) {
-    throw new Error("META_MCP_SERVICE_SERVERS_PATH is required");
-  }
-
-  return serversPath;
+  return serviceEnv.META_MCP_SERVICE_SERVERS_PATH;
 }
 
 function getAuthPath() {
-  const authPath = process.env.META_MCP_SERVICE_AUTH_PATH;
-  if (!authPath) {
-    throw new Error("META_MCP_SERVICE_AUTH_PATH is required");
-  }
-
-  return authPath;
+  return serviceEnv.META_MCP_SERVICE_AUTH_PATH;
 }
 
 function getPublicBaseUrl() {
-  const publicBaseUrl = process.env.META_MCP_SERVICE_PUBLIC_URL;
-  if (!publicBaseUrl) {
-    throw new Error("META_MCP_SERVICE_PUBLIC_URL is required for OAuth flows");
-  }
+  return serviceEnv.META_MCP_SERVICE_PUBLIC_URL.toString();
+}
 
-  return publicBaseUrl;
+function digestForLog(value: string | undefined): string | null {
+  if (!value) return null;
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
+
+async function nodeRealmFetch(
+  input: string | URL | Request,
+  init?: RequestInit,
+): Promise<Response> {
+  const response = await fetch(input, init);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: new Headers(response.headers),
+  });
 }
 
 function isOAuthAuthorizationActive(authorization?: OAuthAuthorizationState): boolean {
@@ -197,17 +200,17 @@ function createOAuthAuthorizationState(params: {
   providerAuthUrl: string;
   publicBaseUrl: string;
   redirectUrl: string;
+  localAuthState: string;
 }): OAuthAuthorizationState {
-  const localAuthState = randomUUID();
   return {
     authUrl: buildLocalOAuthStartUrl({
       publicBaseUrl: params.publicBaseUrl,
-      authState: localAuthState,
+      authState: params.localAuthState,
     }),
     providerAuthUrl: params.providerAuthUrl,
     callbackUrl: params.redirectUrl,
     redirectUrl: params.redirectUrl,
-    localAuthState,
+    localAuthState: params.localAuthState,
     expiresAt: new Date(Date.now() + OAUTH_AUTHORIZATION_TTL_MS).toISOString(),
   };
 }
@@ -231,6 +234,8 @@ function toOAuthState(serverId: string, authorization: OAuthAuthorizationState):
 }
 
 class FileBackedOAuthClientProvider implements OAuthClientProvider {
+  private readonly oauthState = randomUUID();
+
   constructor(
     private readonly params: {
       server: ServerConfig;
@@ -287,6 +292,14 @@ class FileBackedOAuthClientProvider implements OAuthClientProvider {
 
   redirectToAuthorization(authorizationUrl: URL): void {
     this.params.onRedirect?.(authorizationUrl);
+  }
+
+  async state(): Promise<string> {
+    return this.oauthState;
+  }
+
+  getLocalAuthState(): string {
+    return this.oauthState;
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
@@ -490,6 +503,7 @@ export class AuthManager {
           providerAuthUrl: authorizationUrl.toString(),
           publicBaseUrl: this.params.publicBaseUrl ?? getPublicBaseUrl(),
           redirectUrl,
+          localAuthState: provider.getLocalAuthState(),
         });
       },
     });
@@ -498,6 +512,7 @@ export class AuthManager {
       await auth(provider, {
         serverUrl: server.url,
         scope: getOAuthAuthConfig(server).scope,
+        fetchFn: nodeRealmFetch,
       });
     } catch (error) {
       if (!(error instanceof UnauthorizedError)) {
@@ -512,6 +527,20 @@ export class AuthManager {
         { serverId: server.id },
       );
     }
+
+    const providerAuthUrl = new URL(nextAuthorization.providerAuthUrl ?? nextAuthorization.authUrl);
+    console.info(
+      "[meta-mcp-auth] begin",
+      JSON.stringify({
+        serverId: server.id,
+        localAuthState: nextAuthorization.localAuthState,
+        providerState: providerAuthUrl.searchParams.get("state"),
+        codeChallengeDigest: digestForLog(
+          providerAuthUrl.searchParams.get("code_challenge") ?? undefined,
+        ),
+        codeVerifierDigest: digestForLog((await this.getOAuthRecord(server.id)).codeVerifier),
+      }),
+    );
 
     await this.updateOAuthRecord({
       serverId: server.id,
@@ -598,10 +627,25 @@ export class AuthManager {
       redirectUrl: authorization.redirectUrl,
     });
 
+    console.info(
+      "[meta-mcp-auth] finish",
+      JSON.stringify({
+        serverId: savedState.serverId,
+        stateIdentifier,
+        providerState: authorization.providerAuthUrl
+          ? new URL(authorization.providerAuthUrl).searchParams.get("state")
+          : null,
+        codeVerifierDigest: digestForLog(
+          (await this.getOAuthRecord(savedState.serverId)).codeVerifier,
+        ),
+      }),
+    );
+
     const result = await auth(provider, {
       serverUrl: server.url,
       authorizationCode: code,
       scope: getOAuthAuthConfig(server).scope,
+      fetchFn: nodeRealmFetch,
     });
 
     if (result !== "AUTHORIZED") {
@@ -648,6 +692,7 @@ export class AuthManager {
       serverUrl: params.server.url,
       authorizationCode: params.authorizationCode,
       scope: getOAuthAuthConfig(params.server).scope,
+      fetchFn: nodeRealmFetch,
     });
 
     if (result !== "AUTHORIZED") {

@@ -379,6 +379,10 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
 });
 
 app.onError((err, c) => {
+  if (err instanceof Response) {
+    return err;
+  }
+
   const user = getPostHogUserContext(c);
   logger.error(
     `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,

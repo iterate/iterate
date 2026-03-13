@@ -80,7 +80,12 @@ describe("AuthManager OAuth lifecycle", () => {
       await provider.saveDiscoveryState!({
         authorizationServerUrl: "https://provider.example.com",
       });
-      provider.redirectToAuthorization(new URL("https://provider.example.com/oauth/authorize"));
+      const state = await provider.state?.();
+      const authorizationUrl = new URL("https://provider.example.com/oauth/authorize");
+      if (state) {
+        authorizationUrl.searchParams.set("state", state);
+      }
+      provider.redirectToAuthorization(authorizationUrl);
       return "REDIRECTED";
     });
 
@@ -89,13 +94,15 @@ describe("AuthManager OAuth lifecycle", () => {
     const authFile = await readJson(authPath);
 
     expect(state.serverId).toBe("github");
-    expect(state.authenticationUrl).toBe("https://provider.example.com/oauth/authorize");
+    expect(state.authenticationUrl).toBe(
+      `https://provider.example.com/oauth/authorize?state=${state.stateIdentifier}`,
+    );
     expect(authFile).toMatchObject({
       oauth: {
         github: {
           authorization: {
             localAuthState: state.stateIdentifier,
-            providerAuthUrl: "https://provider.example.com/oauth/authorize",
+            providerAuthUrl: `https://provider.example.com/oauth/authorize?state=${state.stateIdentifier}`,
           },
           codeVerifier: "code-verifier",
           discoveryState: {

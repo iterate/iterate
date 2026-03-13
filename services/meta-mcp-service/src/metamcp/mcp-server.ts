@@ -33,7 +33,7 @@ export function createMetaMCPServer(params: MetaMcpServerParams) {
         "3) call it with await tools.<namespace>.<tool>(args),",
         "4) return the result you want from this run.",
         "Use tools.catalog.namespaces(...) and tools.catalog.tools(...) when browsing is more useful than search.",
-        "If the needed tool is missing, add a server with tools.metamcp.servers.add({ id: <required-slug>, url: <url>, auth: 'auto' }).",
+        "If the needed tool is missing, add a server with tools.metamcp.addServer({ id: <required-slug>, url: <url>, auth: 'auto' }).",
         "Figure out a short stable slug from the URL hostname (e.g. 'github' from 'https://github.com/mcp'), keep auth as auto it should work in most cases.",
         "After addServer succeeds, the discovered tools are available in the same execution under tools.<namespace>.<tool>(args).",
         "Execution is stateless. Use the tools to complete the task and return the result.",

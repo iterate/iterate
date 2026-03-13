@@ -203,7 +203,10 @@ export function buildControlPlaneProjectIngressProxyBridgeStartUrl(params: {
 }
 
 function isAlwaysControlPlanePath(pathname: string): boolean {
-  return pathname === PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH;
+  return (
+    pathname === PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH ||
+    pathname === PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH
+  );
 }
 
 type ResolveMachineForIngressResult = {
