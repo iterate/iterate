@@ -151,9 +151,7 @@ export const registerConsumers = () => {
 
       if (!targetProject) {
         logger.set({ user: { id: user.id } });
-        logger.warn(
-          `No project found for email targetProjectSlug=${targetProjectSlug ?? "none"}`,
-        );
+        logger.warn(`No project found for email targetProjectSlug=${targetProjectSlug ?? "none"}`);
         return `skipped: no project found for ${targetProjectSlug ?? "default route"}`;
       }
 
