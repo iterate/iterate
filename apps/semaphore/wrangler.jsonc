@@ -1,25 +1,24 @@
 {
-  "name": "semaphore-test",
+  "name": "semaphore-test-e2e-5d670892",
   "main": "server.ts",
   "compatibility_date": "2025-02-24",
-  "vars": {
-    "SEMAPHORE_API_TOKEN": "test-token",
-  },
+  "compatibility_flags": [],
   "durable_objects": {
     "bindings": [
       {
         "name": "RESOURCE_COORDINATOR",
         "class_name": "ResourceCoordinator",
+        "script_name": "semaphore-test-e2e-5d670892",
       },
     ],
   },
   "d1_databases": [
     {
       "binding": "DB",
-      "database_id": "00000000-0000-0000-0000-000000000000",
-      "database_name": "semaphore-test",
+      "database_id": "semaphore-test-e2e-5d670892-resources",
+      "database_name": "semaphore-test-e2e-5d670892-resources",
       "migrations_dir": "./migrations",
-      "preview_database_id": "00000000-0000-0000-0000-000000000000",
+      "preview_database_id": "semaphore-test-e2e-5d670892-resources",
     },
   ],
   "migrations": [
@@ -29,4 +28,7 @@
       "new_classes": [],
     },
   ],
+  "vars": {
+    "SEMAPHORE_API_TOKEN": "test-token",
+  },
 }

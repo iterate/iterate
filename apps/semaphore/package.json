@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "wrangler:sync": "WORKER_NAME=semaphore-test SEMAPHORE_API_TOKEN=test-token GENERATE_WRANGLER_JSON=1 GENERATE_WRANGLER_ONLY=1 tsx ./alchemy.run.ts",
+    "wrangler:sync": "tsx ./wrangler-sync.ts",
     "dev": "doppler run --config dev -- sh -c 'WORKER_NAME=semaphore-dev tsx ./alchemy.run.ts cli --dev --stage dev'",
     "deploy:prd": "doppler run --config prd -- sh -c 'WORKER_NAME=semaphore tsx ./alchemy.run.ts cli deploy --stage prd'",
     "deploy": "pnpm run deploy:prd",
