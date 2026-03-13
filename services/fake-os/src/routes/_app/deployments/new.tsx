@@ -25,7 +25,7 @@ import {
   flyDeploymentOptsSchema,
   flyProviderOptsSchema,
 } from "@iterate-com/shared/jonasland/deployment/fly-deployment-manifest.ts";
-import { dockerDeploymentConfigSchema, flyDeploymentConfigSchema } from "@/deployment-config.ts";
+import { DockerDeploymentConfig, FlyDeploymentConfig } from "@/deployment-config.ts";
 import { orpc, orpcClient } from "@/lib/orpc.ts";
 import { createDeploymentSchema } from "@/server/db/schema.ts";
 
@@ -165,9 +165,8 @@ function NewDeployment() {
         className="space-y-6"
       >
         <FieldGroup>
-          <form.Field
-            name="provider"
-            children={(field) => {
+          <form.Field name="provider">
+            {(field) => {
               const isInvalid = shouldShowFieldError(
                 form.state.submissionAttempts,
                 field.state.meta,
@@ -197,7 +196,7 @@ function NewDeployment() {
                 </Field>
               );
             }}
-          />
+          </form.Field>
 
           <form.Field
             name="slug"
@@ -205,7 +204,8 @@ function NewDeployment() {
               onChange: createDeploymentSchema.shape.slug,
               onSubmit: createDeploymentSchema.shape.slug,
             }}
-            children={(field) => {
+          >
+            {(field) => {
               const isInvalid = shouldShowFieldError(
                 form.state.submissionAttempts,
                 field.state.meta,
@@ -234,12 +234,11 @@ function NewDeployment() {
                 </Field>
               );
             }}
-          />
+          </form.Field>
         </FieldGroup>
 
-        <form.Subscribe
-          selector={(state) => state.values.provider}
-          children={(provider) => (
+        <form.Subscribe selector={(state) => state.values.provider}>
+          {(provider) => (
             <div className="space-y-4">
               <form.Field
                 name="image"
@@ -247,7 +246,8 @@ function NewDeployment() {
                   onChange: provider === "docker" ? DockerImageField : FlyImageField,
                   onSubmit: provider === "docker" ? DockerImageField : FlyImageField,
                 }}
-                children={(field) => {
+              >
+                {(field) => {
                   const isInvalid = shouldShowFieldError(
                     form.state.submissionAttempts,
                     field.state.meta,
@@ -282,7 +282,7 @@ function NewDeployment() {
                     </Field>
                   );
                 }}
-              />
+              </form.Field>
 
               {provider === "fly" && (
                 <>
@@ -292,7 +292,8 @@ function NewDeployment() {
                       onChange: FlyApiTokenField,
                       onSubmit: FlyApiTokenField,
                     }}
-                    children={(field) => {
+                  >
+                    {(field) => {
                       const isInvalid = shouldShowFieldError(
                         form.state.submissionAttempts,
                         field.state.meta,
@@ -322,7 +323,7 @@ function NewDeployment() {
                         </Field>
                       );
                     }}
-                  />
+                  </form.Field>
 
                   <form.Field
                     name="flyApiBaseUrl"
@@ -330,7 +331,8 @@ function NewDeployment() {
                       onChange: FlyApiBaseUrlField,
                       onSubmit: FlyApiBaseUrlField,
                     }}
-                    children={(field) => {
+                  >
+                    {(field) => {
                       const isInvalid = shouldShowFieldError(
                         form.state.submissionAttempts,
                         field.state.meta,
@@ -359,7 +361,7 @@ function NewDeployment() {
                         </Field>
                       );
                     }}
-                  />
+                  </form.Field>
 
                   <form.Field
                     name="flyOrgSlug"
@@ -367,7 +369,8 @@ function NewDeployment() {
                       onChange: FlyOrgSlugField,
                       onSubmit: FlyOrgSlugField,
                     }}
-                    children={(field) => {
+                  >
+                    {(field) => {
                       const isInvalid = shouldShowFieldError(
                         form.state.submissionAttempts,
                         field.state.meta,
@@ -394,7 +397,7 @@ function NewDeployment() {
                         </Field>
                       );
                     }}
-                  />
+                  </form.Field>
 
                   <form.Field
                     name="flyRegion"
@@ -402,7 +405,8 @@ function NewDeployment() {
                       onChange: FlyRegionField,
                       onSubmit: FlyRegionField,
                     }}
-                    children={(field) => {
+                  >
+                    {(field) => {
                       const isInvalid = shouldShowFieldError(
                         form.state.submissionAttempts,
                         field.state.meta,
@@ -429,7 +433,7 @@ function NewDeployment() {
                         </Field>
                       );
                     }}
-                  />
+                  </form.Field>
 
                   <div className="grid grid-cols-2 gap-4">
                     <form.Field
@@ -438,7 +442,8 @@ function NewDeployment() {
                         onChange: FlyMachineCpusField,
                         onSubmit: FlyMachineCpusField,
                       }}
-                      children={(field) => {
+                    >
+                      {(field) => {
                         const isInvalid = shouldShowFieldError(
                           form.state.submissionAttempts,
                           field.state.meta,
@@ -464,7 +469,7 @@ function NewDeployment() {
                           </Field>
                         );
                       }}
-                    />
+                    </form.Field>
 
                     <form.Field
                       name="flyMachineMemoryMb"
@@ -472,7 +477,8 @@ function NewDeployment() {
                         onChange: FlyMachineMemoryMbField,
                         onSubmit: FlyMachineMemoryMbField,
                       }}
-                      children={(field) => {
+                    >
+                      {(field) => {
                         const isInvalid = shouldShowFieldError(
                           form.state.submissionAttempts,
                           field.state.meta,
@@ -498,7 +504,7 @@ function NewDeployment() {
                           </Field>
                         );
                       }}
-                    />
+                    </form.Field>
                   </div>
                 </>
               )}
@@ -509,7 +515,8 @@ function NewDeployment() {
                   onChange: makeJsonOverridesField(provider, generatedJsonOverrides),
                   onSubmit: makeJsonOverridesField(provider, generatedJsonOverrides),
                 }}
-                children={(field) => {
+              >
+                {(field) => {
                   const isInvalid = shouldShowFieldError(
                     form.state.submissionAttempts,
                     field.state.meta,
@@ -539,10 +546,10 @@ function NewDeployment() {
                     </Field>
                   );
                 }}
-              />
+              </form.Field>
             </div>
           )}
-        />
+        </form.Subscribe>
 
         {submitError && (
           <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
@@ -550,14 +557,13 @@ function NewDeployment() {
           </div>
         )}
 
-        <form.Subscribe
-          selector={(state) => [state.canSubmit, state.isSubmitting] as const}
-          children={([canSubmit, isSubmitting]) => (
+        <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
+          {([canSubmit, isSubmitting]) => (
             <Button type="submit" disabled={!canSubmit || isSubmitting}>
               {isSubmitting ? "Creating..." : "Create Deployment"}
             </Button>
           )}
-        />
+        </form.Subscribe>
       </form>
     </div>
   );
@@ -680,17 +686,17 @@ function buildConfigFromValues(values: FormValues, configRemainder: ConfigRemain
 
 function extractConfigRemainder(
   provider: Provider,
-  config: z.infer<typeof dockerDeploymentConfigSchema> | z.infer<typeof flyDeploymentConfigSchema>,
+  config: z.infer<typeof DockerDeploymentConfig> | z.infer<typeof FlyDeploymentConfig>,
 ): ConfigRemainder {
   if (provider === "docker") {
-    const dockerConfig = config as z.infer<typeof dockerDeploymentConfigSchema>;
+    const dockerConfig = config as z.infer<typeof DockerDeploymentConfig>;
     return {
       providerOpts: { ...dockerConfig.providerOpts },
       opts: omitKeys(dockerConfig.opts, ["image"]),
     };
   }
 
-  const flyConfig = config as z.infer<typeof flyDeploymentConfigSchema>;
+  const flyConfig = config as z.infer<typeof FlyDeploymentConfig>;
   return {
     providerOpts: omitKeys(flyConfig.providerOpts, ["flyApiToken", "flyApiBaseUrl"]),
     opts: omitKeys(flyConfig.opts, [
@@ -709,8 +715,8 @@ function parseProviderConfig(provider: Provider, value: string) {
 
   const providerResult =
     provider === "docker"
-      ? dockerDeploymentConfigSchema.safeParse(jsonResult.data)
-      : flyDeploymentConfigSchema.safeParse(jsonResult.data);
+      ? DockerDeploymentConfig.safeParse(jsonResult.data)
+      : FlyDeploymentConfig.safeParse(jsonResult.data);
 
   if (!providerResult.success) return null;
   return providerResult.data;
@@ -719,12 +725,12 @@ function parseProviderConfig(provider: Provider, value: string) {
 function hydrateValuesFromConfig(params: {
   slug: string;
   provider: Provider;
-  config: z.infer<typeof dockerDeploymentConfigSchema> | z.infer<typeof flyDeploymentConfigSchema>;
+  config: z.infer<typeof DockerDeploymentConfig> | z.infer<typeof FlyDeploymentConfig>;
   configRemainder: ConfigRemainder;
   jsonOverrides: string;
 }): FormValues {
   if (params.provider === "docker") {
-    const dockerConfig = params.config as z.infer<typeof dockerDeploymentConfigSchema>;
+    const dockerConfig = params.config as z.infer<typeof DockerDeploymentConfig>;
     return {
       ...createDefaultValues(params.provider, params.slug, params.configRemainder),
       image: dockerConfig.opts.image ?? DOCKER_DEFAULTS.image,
@@ -732,7 +738,7 @@ function hydrateValuesFromConfig(params: {
     };
   }
 
-  const flyConfig = params.config as z.infer<typeof flyDeploymentConfigSchema>;
+  const flyConfig = params.config as z.infer<typeof FlyDeploymentConfig>;
   return {
     ...createDefaultValues(params.provider, params.slug, params.configRemainder),
     image: flyConfig.opts.image ?? "",
@@ -764,8 +770,8 @@ function makeJsonOverridesField(provider: Provider, generatedValue: string) {
 
     const providerResult =
       provider === "docker"
-        ? dockerDeploymentConfigSchema.safeParse(jsonResult.data)
-        : flyDeploymentConfigSchema.safeParse(jsonResult.data);
+        ? DockerDeploymentConfig.safeParse(jsonResult.data)
+        : FlyDeploymentConfig.safeParse(jsonResult.data);
 
     addZodIssues(ctx, providerResult);
   });

@@ -13,8 +13,8 @@ import {
   type FlyDeploymentOpts,
 } from "@iterate-com/shared/jonasland/deployment/fly-deployment-manifest.ts";
 import {
-  dockerDeploymentConfigSchema as DockerConfig,
-  flyDeploymentConfigSchema as FlyConfig,
+  DockerDeploymentConfig as DockerConfig,
+  FlyDeploymentConfig as FlyConfig,
 } from "@/deployment-config.ts";
 
 export type DeploymentProviderName = "docker" | "fly";

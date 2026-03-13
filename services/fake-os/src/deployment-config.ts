@@ -8,15 +8,15 @@ import {
   flyProviderOptsSchema,
 } from "@iterate-com/shared/jonasland/deployment/fly-deployment-manifest.ts";
 
-export const dockerDeploymentConfigSchema = z.object({
+export const DockerDeploymentConfig = z.object({
   providerOpts: dockerProviderOptsSchema.default({}),
   opts: dockerDeploymentOptsSchema.omit({ slug: true }),
 });
 
-export const flyDeploymentConfigSchema = z.object({
+export const FlyDeploymentConfig = z.object({
   providerOpts: flyProviderOptsSchema,
   opts: flyDeploymentOptsSchema.omit({ slug: true }),
 });
 
-export type DockerDeploymentConfig = z.infer<typeof dockerDeploymentConfigSchema>;
-export type FlyDeploymentConfig = z.infer<typeof flyDeploymentConfigSchema>;
+export type DockerDeploymentConfig = z.infer<typeof DockerDeploymentConfig>;
+export type FlyDeploymentConfig = z.infer<typeof FlyDeploymentConfig>;
