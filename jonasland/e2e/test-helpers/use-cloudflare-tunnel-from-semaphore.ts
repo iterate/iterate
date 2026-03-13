@@ -3,36 +3,32 @@ import {
   cloudflareTunnelType,
   createSemaphoreClient,
 } from "@iterate-com/semaphore-contract";
+import type { CloudflareTunnelData as CloudflareTunnelDataShape } from "@iterate-com/semaphore-contract";
 
 const defaultLeaseMs = 10 * 60 * 1000;
 const defaultWaitMs = 60_000;
 
-export interface UseCloudflareTunnelOptions {
-  semaphoreApiKey: string;
-  semaphoreBaseUrl: string;
+export interface UseCloudflareTunnelFromSemaphoreOptions {
+  semaphoreWorkerApiKey: string;
+  semaphoreWorkerUrl: string;
   leaseMs?: number;
   waitMs?: number;
 }
 
-export interface CloudflareTunnelHandle extends AsyncDisposable {
-  readonly slug: string;
-  readonly leaseId: string;
-  readonly expiresAt: number;
-  readonly publicHostname: string;
-  readonly tunnelId: string;
-  readonly tunnelName: string;
-  readonly tunnelToken: string;
-  readonly service: string;
-  readonly createdAt: string;
-  release(): Promise<void>;
-}
+export type CloudflareTunnelHandle = AsyncDisposable &
+  CloudflareTunnelDataShape & {
+    readonly slug: string;
+    readonly leaseId: string;
+    readonly expiresAt: number;
+    release(): Promise<void>;
+  };
 
-export async function useCloudflareTunnel(
-  options: UseCloudflareTunnelOptions,
+export async function useCloudflareTunnelFromSemaphore(
+  options: UseCloudflareTunnelFromSemaphoreOptions,
 ): Promise<CloudflareTunnelHandle> {
   const client = createSemaphoreClient({
-    apiKey: options.semaphoreApiKey,
-    baseURL: options.semaphoreBaseUrl,
+    apiKey: options.semaphoreWorkerApiKey,
+    baseURL: options.semaphoreWorkerUrl,
   });
   const lease = await client.resources.acquire({
     type: cloudflareTunnelType,
@@ -59,6 +55,7 @@ export async function useCloudflareTunnel(
       slug: lease.slug,
       leaseId: lease.leaseId,
       expiresAt: lease.expiresAt,
+      provider: tunnel.provider,
       publicHostname: tunnel.publicHostname,
       tunnelId: tunnel.tunnelId,
       tunnelName: tunnel.tunnelName,
