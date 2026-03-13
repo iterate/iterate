@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { WorkerThreadMetaMcpExecutionEnvironment } from "./worker-thread-execution-environment.ts";
 import type { MetaMcpTools } from "../metamcp/tools.ts";
+import { WorkerThreadMetaMcpExecutionEnvironment } from "./worker-thread-execution-environment.ts";
 
 function createTestTools(): MetaMcpTools {
   return {
