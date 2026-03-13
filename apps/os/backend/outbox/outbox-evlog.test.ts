@@ -32,7 +32,9 @@ vi.mock("../evlog.ts", () => ({
   },
 }));
 
-const mockSendPostHogException = vi.fn<(opts: Record<string, unknown>) => Promise<void>>().mockResolvedValue(undefined);
+const mockSendPostHogException = vi
+  .fn<(opts: Record<string, unknown>) => Promise<void>>()
+  .mockResolvedValue(undefined);
 
 vi.mock("../lib/posthog.ts", () => ({
   sendPostHogException: mockSendPostHogException,
