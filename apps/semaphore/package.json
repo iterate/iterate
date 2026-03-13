@@ -1,0 +1,32 @@
+{
+  "name": "@iterate-com/semaphore",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "doppler run --config dev -- sh -c 'WORKER_NAME=semaphore-dev tsx ./alchemy.run.ts cli --dev --stage dev'",
+    "deploy:prd": "doppler run --config prd -- sh -c 'WORKER_NAME=semaphore tsx ./alchemy.run.ts cli deploy --stage prd'",
+    "deploy": "pnpm run deploy:prd",
+    "test": "pnpm run test:workers",
+    "test:workers": "vitest run",
+    "test:e2e": "vitest run --config ./vitest.node.config.ts",
+    "test:e2e-live": "vitest run --config ./vitest.live.config.ts",
+    "test:all": "pnpm run test:workers && pnpm run test:e2e",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@iterate-com/semaphore-contract": "workspace:*",
+    "@orpc/server": "^1.13.4",
+    "alchemy": "^0.83.0",
+    "hono": "^4.11.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.12.17",
+    "@cloudflare/workers-types": "^4.20260207.0",
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "3.2.4",
+    "wrangler": "^4.64.0"
+  }
+}

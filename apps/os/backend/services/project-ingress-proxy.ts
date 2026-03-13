@@ -14,10 +14,12 @@ import type { AuthSession } from "../auth/auth.ts";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
+import { SimpleKv } from "../utils/simple-kv.ts";
 
 const SANDBOX_INGRESS_PORT = 8080;
 const DEFAULT_TARGET_PORT = 3000;
 const TARGET_HOST_HEADER = "x-iterate-proxy-target-host";
+const RESOLVE_MACHINE_FOR_INGRESS_CACHE_TTL_MS = 10_000;
 export const PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH =
   "/api/project-ingress-proxy-auth/bridge-start";
 export const PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH = "/_/exchange-token";
@@ -109,25 +111,32 @@ export async function shouldHandleProjectIngressHostname(
 async function findProjectByCustomDomainHostname(
   hostname: string,
 ): Promise<typeof schema.project.$inferSelect | null> {
-  const db = getDb();
+  const db = await getDb();
   const normalizedHostname = hostname.toLowerCase();
 
   // hostname = custom_domain (exact) OR hostname LIKE '%.' || custom_domain (subdomain)
   // Order by domain length DESC so the longest (most specific) match wins.
   // e.g. `a.example.com` matches before `example.com` for hostname `4096.a.example.com`.
-  const results = await db
-    .select()
-    .from(schema.project)
-    .where(
-      or(
-        eq(schema.project.customDomain, normalizedHostname),
-        sql`${normalizedHostname} LIKE '%.' || ${schema.project.customDomain}`,
-      ),
-    )
-    .orderBy(sql`length(${schema.project.customDomain}) DESC`)
-    .limit(1);
+  try {
+    const results = await db
+      .select()
+      .from(schema.project)
+      .where(
+        or(
+          eq(schema.project.customDomain, normalizedHostname),
+          sql`${normalizedHostname} LIKE '%.' || ${schema.project.customDomain}`,
+        ),
+      )
+      .orderBy(sql`length(${schema.project.customDomain}) DESC`)
+      .limit(1);
 
-  return results[0] ?? null;
+    return results[0] ?? null;
+  } catch (err) {
+    logger.error("[project-ingress] findProjectByCustomDomainHostname failed", err, {
+      hostname: normalizedHostname,
+    });
+    return null;
+  }
 }
 
 /**
@@ -206,12 +215,50 @@ type ResolveMachineForIngressResult = {
   defaultPort?: number | null;
 };
 
+const resolveMachineForIngressCache = new SimpleKv<ResolveMachineForIngressResult>();
+
+function getResolveMachineForIngressCacheKey(params: {
+  target: IngressTarget;
+  userId: string;
+  isSystemAdmin: boolean;
+}): string {
+  const targetKey =
+    params.target.kind === "project"
+      ? `project:${params.target.projectSlug}:${params.target.targetPort}:${params.target.isPortExplicit}`
+      : `machine:${params.target.machineId}:${params.target.targetPort}:${params.target.isPortExplicit}`;
+  return `${params.userId}:${params.isSystemAdmin}:${targetKey}`;
+}
+
+function shouldCacheResolveMachineForIngressResult(
+  result: ResolveMachineForIngressResult,
+): boolean {
+  return result.machine?.state === "active" || result.machine?.state === "detached";
+}
+
 async function resolveMachineForIngress(
   target: IngressTarget,
   userId: string,
   isSystemAdmin: boolean,
 ): Promise<ResolveMachineForIngressResult> {
-  const db = getDb();
+  const cacheKey = getResolveMachineForIngressCacheKey({ target, userId, isSystemAdmin });
+  const cached = resolveMachineForIngressCache.get(cacheKey);
+  if (cached) return cached;
+
+  const result = await resolveMachineForIngressUncached(target, userId, isSystemAdmin);
+  if (shouldCacheResolveMachineForIngressResult(result)) {
+    resolveMachineForIngressCache.set(cacheKey, result, RESOLVE_MACHINE_FOR_INGRESS_CACHE_TTL_MS);
+  } else {
+    resolveMachineForIngressCache.delete(cacheKey);
+  }
+  return result;
+}
+
+async function resolveMachineForIngressUncached(
+  target: IngressTarget,
+  userId: string,
+  isSystemAdmin: boolean,
+): Promise<ResolveMachineForIngressResult> {
+  const db = await getDb();
 
   if (target.kind === "project") {
     const rows = await db
@@ -663,7 +710,7 @@ async function handleCustomDomainRequest(
 
   if (target.kind === "project") {
     // Find the active machine for this project
-    const db = getDb();
+    const db = await getDb();
     // Verify access
     const membershipRows = await db
       .select({ membershipId: schema.organizationUserMembership.id })

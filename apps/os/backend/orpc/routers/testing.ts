@@ -14,7 +14,6 @@ import {
   project,
   organizationUserMembership,
   projectConnection,
-  event,
 } from "../../db/schema.ts";
 import { slugifyWithSuffix } from "../../utils/slug.ts";
 import { getDefaultProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
@@ -218,34 +217,5 @@ export const testingRouter = {
       }
 
       return { success: true };
-    }),
-
-  // Insert a test event
-  insertEvent: projectProtectedProcedure
-    .input(
-      z.object({
-        ...ProjectInput.shape,
-        type: z.string().min(1),
-        payload: z.record(z.string(), z.unknown()).default({}),
-      }),
-    )
-    .handler(async ({ context: ctx, input }) => {
-      if (!isNonProd) {
-        throw new ORPCError("FORBIDDEN", {
-          message: "Testing endpoints are not available in production",
-        });
-      }
-
-      const [newEvent] = await ctx.db
-        .insert(event)
-        .values({
-          type: input.type,
-          payload: input.payload,
-          projectId: ctx.project.id,
-          externalId: `test:${crypto.randomUUID()}`,
-        })
-        .returning();
-
-      return newEvent;
     }),
 };

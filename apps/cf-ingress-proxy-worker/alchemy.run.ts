@@ -1,5 +1,5 @@
 import alchemy from "alchemy";
-import { D1Database, Worker } from "alchemy/cloudflare";
+import { D1Database, Worker, WranglerJson } from "alchemy/cloudflare";
 import { z } from "zod/v4";
 import { TypeIdPrefixSchema } from "./typeid-prefix.ts";
 
@@ -53,6 +53,22 @@ export const worker = await Worker("worker", {
   },
   routes,
   adopt: true,
+});
+
+await WranglerJson({
+  worker,
+  path: "./wrangler.jsonc",
+  secrets: false,
+  transform: {
+    wrangler: (spec) => ({
+      ...spec,
+      vars: {
+        ...(spec.vars ?? {}),
+        INGRESS_PROXY_API_TOKEN: "test-token",
+        TYPEID_PREFIX: "tst",
+      },
+    }),
+  },
 });
 
 console.log(worker.url);

@@ -1,5 +1,7 @@
 packages:
   - apps/cf-ingress-proxy-worker
+  - apps/semaphore
+  - apps/semaphore-contract
   - apps/project-ingress-proxy
   - apps/cli
   - apps/daemon
@@ -13,6 +15,7 @@ packages:
   - packages/pidnap/docker
   - repo-templates/**/*
   - .github/ts-workflows
+  - experiments/*
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:

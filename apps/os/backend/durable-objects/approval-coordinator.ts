@@ -5,8 +5,18 @@ import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import type { ApprovalStatus, DecisionStatus } from "../egress-proxy/types.ts";
 
-/** Minimal env interface to avoid circular dependency with CloudflareEnv */
-type DurableObjectEnv = { DATABASE_URL: string };
+/**
+ * Minimal env interface to avoid circular dependency with CloudflareEnv.
+ *
+ * Note: Cloudflare passes all worker bindings to DurableObjects at runtime,
+ * so IS_HYPERDRIVE and HYPERDRIVE will be present when the worker has them.
+ * Hyperdrive bindings do work from DOs, so we allow the Hyperdrive path here.
+ */
+type DurableObjectEnv = {
+  DATABASE_URL: string;
+  IS_HYPERDRIVE?: string;
+  HYPERDRIVE?: { connectionString: string };
+};
 
 type Resolver = (decision: DecisionStatus) => void;
 
@@ -129,7 +139,7 @@ export class ApprovalCoordinator extends DurableObject<DurableObjectEnv> {
 
   private async updateTimeoutStatus(approvalId: string) {
     try {
-      const db = getDbWithEnv(this.env);
+      const db = await getDbWithEnv(this.env);
       await db
         .update(schema.egressApproval)
         .set({

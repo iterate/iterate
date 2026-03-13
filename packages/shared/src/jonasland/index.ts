@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
@@ -8,28 +7,17 @@ import { NodeSDK } from "@opentelemetry/sdk-node";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink, type RPCLinkOptions } from "@orpc/client/fetch";
-import {
-  RPCLink as WebSocketRPCLink,
-  type LinkWebsocketClientOptions,
-} from "@orpc/client/websocket";
+import { type LinkWebsocketClientOptions } from "@orpc/client/websocket";
 import {
   inferRPCMethodFromContractRouter,
   type AnyContractRouter,
   type ContractRouterClient,
 } from "@orpc/contract";
 import { oc } from "@orpc/contract";
-import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { ORPCInstrumentation } from "@orpc/otel";
 import { onError } from "@orpc/server";
-import {
-  createRequestLogger,
-  initLogger,
-  log as rootLog,
-  type Log,
-  type RequestLogger,
-} from "evlog";
+import { createRequestLogger, initLogger, log as rootLog, type RequestLogger } from "evlog";
 import { createOTLPDrain } from "evlog/otlp";
-import { type Plugin } from "vite";
 import { z } from "zod/v4";
 
 type RuntimeGlobal = typeof globalThis & {
@@ -122,70 +110,6 @@ export function createServiceSubRouterContract(options?: {
         .output(ServiceSqlResult),
     },
   } as const;
-}
-
-type ServiceSubRouterBuilder = {
-  service: {
-    health: {
-      handler: (
-        handler: (args: {
-          context: ServiceContext;
-        }) => Promise<z.infer<typeof ServiceHealthOutput>>,
-      ) => unknown;
-    };
-    sql: {
-      handler: (
-        handler: (args: {
-          input: ServiceSqlInput;
-          context: ServiceContext;
-        }) => Promise<ServiceSqlResult>,
-      ) => unknown;
-    };
-  };
-};
-
-export function createServiceSubRouterHandlers<TBuilder extends ServiceSubRouterBuilder>(
-  builder: TBuilder,
-  options: {
-    manifest: {
-      name: string;
-      version: string;
-    };
-    executeSql: (statement: string) => Promise<SqlResultSet>;
-    logPrefix?: string;
-  },
-) {
-  const logPrefix = options.logPrefix ?? "service";
-
-  const health = builder.service.health.handler(async ({ context }) => {
-    infoFromContext(context, `${logPrefix}.health`, {
-      service: options.manifest.name,
-      request_id: context.requestId,
-    });
-
-    return {
-      ok: true,
-      service: options.manifest.name,
-      version: options.manifest.version,
-    };
-  });
-
-  const sql = builder.service.sql.handler(async ({ input, context }) => {
-    const startedAt = Date.now();
-    const result = transformSqlResultSet(await options.executeSql(input.statement));
-
-    infoFromContext(context, `${logPrefix}.sql`, {
-      service: options.manifest.name,
-      request_id: context.requestId,
-      duration_ms: Date.now() - startedAt,
-      rows: result.rows.length,
-      rows_affected: result.stat.rowsAffected,
-    });
-
-    return result;
-  });
-
-  return { health, sql };
 }
 
 function resolveTraceExporterUrl() {
@@ -290,46 +214,6 @@ export function createServiceRequestLogger(options: {
   requestId?: string;
 }): ServiceRequestLogger {
   return createRequestLogger<ServiceRequestLogFields>(options);
-}
-
-export function createServiceContextMiddleware(serviceName: string) {
-  const middleware = async ({
-    context,
-    next,
-  }: {
-    context: ServiceInitialContext;
-    next: (options: { context: ServiceContext }) => Promise<unknown>;
-  }) => {
-    const requestId = context.requestId || randomUUID();
-    const requestLog =
-      context.log ||
-      createServiceRequestLogger({
-        requestId,
-        method: "ORPC",
-        path: "unknown",
-      });
-
-    requestLog.set({
-      requestId,
-      service: serviceName,
-      ...currentSpanFields(),
-    });
-
-    return next({
-      context: {
-        ...context,
-        requestId,
-        serviceName,
-        log: requestLog,
-      },
-    });
-  };
-
-  Object.defineProperty(middleware, "name", {
-    value: "serviceContextMiddleware",
-  });
-
-  return middleware;
 }
 
 export function infoFromContext(
@@ -547,78 +431,6 @@ export function extractIncomingTraceContext<TContext>(
   return extract(carrier);
 }
 
-export function createBrowserErrorBridgePlugin(params: {
-  eventName: string;
-  logEventName: string;
-  logger: Pick<Log, "error">;
-}): Plugin {
-  return {
-    name: `${params.logEventName}-browser-error-bridge`,
-    configureServer(server) {
-      server.ws.on(params.eventName, (payload) => {
-        params.logger.error({
-          event: params.logEventName,
-          payload,
-        });
-      });
-    },
-    transformIndexHtml() {
-      return [
-        {
-          tag: "script",
-          attrs: { type: "module" },
-          injectTo: "body",
-          children: `
-            if (import.meta.hot) {
-              const normalizeErrorData = (value) => {
-                if (value instanceof Error) {
-                  return { name: value.name, message: value.message, stack: value.stack ?? null };
-                }
-                if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null) {
-                  return value;
-                }
-                try {
-                  return JSON.parse(JSON.stringify(value));
-                } catch {
-                  return String(value);
-                }
-              };
-              const send = (kind, data) => {
-                import.meta.hot.send("${params.eventName}", {
-                  kind,
-                  data,
-                  href: location.href,
-                  userAgent: navigator.userAgent,
-                  timestamp: new Date().toISOString(),
-                });
-              };
-              const originalConsoleError = console.error.bind(console);
-              console.error = (...args) => {
-                send("console.error", { args: args.map(normalizeErrorData) });
-                originalConsoleError(...args);
-              };
-              window.addEventListener("error", (event) => {
-                send("window.error", {
-                  message: event.message,
-                  filename: event.filename,
-                  lineno: event.lineno,
-                  colno: event.colno,
-                  error: normalizeErrorData(event.error),
-                });
-              });
-              window.addEventListener("unhandledrejection", (event) => {
-                send("window.unhandledrejection", {
-                  reason: normalizeErrorData(event.reason),
-                });
-              });
-            }
-          `,
-        },
-      ];
-    },
-  };
-}
-
 export interface ServiceClientEnv {
   ITERATE_PROJECT_BASE_URL?: string;
 }
@@ -637,19 +449,6 @@ export interface CreateOrpcRpcServiceClientOptions<TContract extends AnyContract
   url?: string;
   headers?: RPCLinkOptions<any>["headers"];
   fetch?: RPCLinkOptions<any>["fetch"];
-}
-
-export interface CreateOrpcOpenApiServiceClientOptions<TContract extends AnyContractRouter> {
-  env: ServiceClientEnv;
-  manifest: ServiceManifestLike<TContract>;
-  url?: string;
-  headers?: Record<string, string>;
-  fetch?: (request: Request, init?: RequestInit) => Promise<Response>;
-}
-
-export interface CreateOrpcRpcWebSocketServiceClientOptions<TContract extends AnyContractRouter> {
-  websocket: RpcWebSocket;
-  manifest: ServiceManifestLike<TContract>;
 }
 
 export function resolveServiceBaseUrl(params: {
@@ -678,25 +477,6 @@ export function resolveServiceOrpcUrl(params: {
   return new URL("/orpc", resolveServiceBaseUrl(params)).toString();
 }
 
-export function resolveServiceOpenApiBaseUrl(params: {
-  env: ServiceClientEnv;
-  manifest: ServiceManifestLike;
-}) {
-  return new URL("/api", resolveServiceBaseUrl(params)).toString();
-}
-
-export function resolveServiceOrpcWebSocketUrl(params: {
-  env: ServiceClientEnv;
-  manifest: ServiceManifestLike;
-}) {
-  const url = new URL(resolveServiceBaseUrl(params));
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = "/orpc/ws/";
-  url.search = "";
-  url.hash = "";
-  return url.toString();
-}
-
 export function createOrpcRpcServiceClient<TContract extends AnyContractRouter>(
   options: CreateOrpcRpcServiceClientOptions<TContract>,
 ): ContractRouterClient<TContract> {
@@ -707,24 +487,5 @@ export function createOrpcRpcServiceClient<TContract extends AnyContractRouter>(
     ...(options.fetch ? { fetch: options.fetch } : {}),
   });
 
-  return createORPCClient(link);
-}
-
-export function createOrpcOpenApiServiceClient<TContract extends AnyContractRouter>(
-  options: CreateOrpcOpenApiServiceClientOptions<TContract>,
-): ContractRouterClient<TContract> {
-  const link = new OpenAPILink(options.manifest.orpcContract, {
-    url: options.url ?? resolveServiceOpenApiBaseUrl(options),
-    ...(options.headers ? { headers: options.headers } : {}),
-    ...(options.fetch ? { fetch: options.fetch } : {}),
-  });
-
-  return createORPCClient(link);
-}
-
-export function createOrpcRpcWebSocketServiceClient<TContract extends AnyContractRouter>(
-  options: CreateOrpcRpcWebSocketServiceClientOptions<TContract>,
-): ContractRouterClient<TContract> {
-  const link = new WebSocketRPCLink({ websocket: options.websocket });
   return createORPCClient(link);
 }

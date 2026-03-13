@@ -137,12 +137,15 @@ export const reportStatus = os.machines.reportStatus
 
     // Always emit the fact that the daemon reported status.
     // Consumers decide whether to act (e.g. push setup, start the probe pipeline).
-    await outboxClient.send({ transaction: db, parent: db }, "machine:daemon-status-reported", {
-      machineId: machine.id,
-      projectId: machineWithOrg.projectId,
-      status,
-      message: message ?? "",
-      externalId: machineWithOrg.externalId,
+    await outboxClient.send(db, {
+      name: "machine:daemon-status-reported",
+      payload: {
+        machineId: machine.id,
+        projectId: machineWithOrg.projectId,
+        status,
+        message: message ?? "",
+        externalId: machineWithOrg.externalId,
+      },
     });
 
     logger.set({ machine: { id: machine.id }, status });

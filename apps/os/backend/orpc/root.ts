@@ -7,7 +7,6 @@ import { testingRouter } from "./routers/testing.ts";
 import { envVarRouter } from "./routers/env-var.ts";
 import { accessTokenRouter } from "./routers/access-token.ts";
 import { billingRouter } from "./routers/billing.ts";
-import { eventRouter } from "./routers/event.ts";
 import { secretRouter } from "./routers/secret.ts";
 import { webchatRouter } from "./routers/webchat.ts";
 
@@ -22,7 +21,6 @@ export const appRouter = {
   envVar: envVarRouter,
   accessToken: accessTokenRouter,
   billing: billingRouter,
-  event: eventRouter,
   secret: secretRouter,
   webchat: webchatRouter,
 };

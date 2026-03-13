@@ -1,6 +1,9 @@
 import type { appRouter } from "../orpc/root.ts";
 import type { MachineType } from "../db/schema.ts";
+import type { PosthogWebhookReceivedEventPayload } from "../events.ts";
+import type { ResendWebhookReceivedEventPayload } from "../events.ts";
 import { waitUntil } from "../../env.ts";
+import { getDb } from "../db/client.ts";
 import { type RouterEventTypes, createConsumerClient } from "./pgmq-lib.ts";
 import { queuer } from "./outbox-queuer.ts";
 
@@ -55,17 +58,27 @@ export type InternalEventTypes = {
     externalId: string;
     metadata: Record<string, unknown>;
   };
+  "slack:webhook-received": {
+    projectId: string;
+    machineId: string | null;
+    payload: Record<string, unknown>;
+    correlation: {
+      requestId: string;
+      traceparent: string;
+      slackEventId?: string;
+    };
+  };
   "github:webhook-received": {
-    sourceEventId: string;
     deliveryId: string;
     event: string;
     action: string | null;
     payload: Record<string, unknown>;
   };
+  "resend:webhook-received": ResendWebhookReceivedEventPayload;
+  "posthog:webhook-received": PosthogWebhookReceivedEventPayload;
   "machine:pull-iterate-iterate-requested": {
     machineId: string;
     ref: string;
-    sourceEventId: string;
   };
 };
 
@@ -74,4 +87,4 @@ type AppRouterEventTypes = RouterEventTypes<typeof appRouter>;
 export const outboxClient = createConsumerClient<
   InternalEventTypes & AppRouterEventTypes,
   typeof queuer.$types.db
->(queuer, { waitUntil });
+>(queuer, { waitUntil, getDb });

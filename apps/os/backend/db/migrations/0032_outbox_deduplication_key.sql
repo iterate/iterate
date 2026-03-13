@@ -1,0 +1,2 @@
+ALTER TABLE "outbox_event" ADD COLUMN "deduplication_key" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "outbox_event_name_dedup_key_unique" ON "outbox_event" USING btree ("name","deduplication_key") WHERE "outbox_event"."deduplication_key" is not null;

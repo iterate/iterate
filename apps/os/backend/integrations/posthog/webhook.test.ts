@@ -1,14 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
+import { outboxClient } from "../../outbox/client.ts";
 import { posthogProxyApp } from "./proxy.ts";
 
-vi.mock("../../../env.ts", () => ({
-  waitUntil: vi.fn((promise: Promise<unknown>) => promise),
-}));
-
-vi.mock("../../services/machine-readiness-probe.ts", () => ({
-  buildMachineFetcher: vi.fn(),
+vi.mock("../../outbox/client.ts", () => ({
+  outboxClient: {
+    send: vi.fn(),
+  },
 }));
 
 vi.mock("../../tag-logger.ts", () => ({
@@ -22,25 +20,20 @@ vi.mock("../../tag-logger.ts", () => ({
 }));
 
 describe("PostHog webhook forwarding", () => {
-  const buildMachineFetcherMock = vi.mocked(buildMachineFetcher);
+  const outboxSendMock = vi.mocked(outboxClient.send);
 
   beforeEach(() => {
-    buildMachineFetcherMock.mockReset();
+    outboxSendMock.mockReset();
+    outboxSendMock.mockResolvedValue({
+      eventId: "1",
+      matchedConsumers: 1,
+      delays: ["0s"],
+      duplicate: false,
+    });
   });
 
-  function createMockDb(connection: Record<string, unknown> | null) {
-    return {
-      query: {
-        projectConnection: {
-          findFirst: vi.fn().mockResolvedValue(connection),
-        },
-      },
-      insert: vi.fn().mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
-        }),
-      }),
-    };
+  function createMockDb() {
+    return {};
   }
 
   function createTestApp(mockDb: Record<string, unknown>, secret = "posthog-secret") {
@@ -57,7 +50,7 @@ describe("PostHog webhook forwarding", () => {
   }
 
   it("rejects webhook with invalid secret", async () => {
-    const app = createTestApp(createMockDb(null));
+    const app = createTestApp(createMockDb());
     const response = await app.request("/api/integrations/posthog/webhook", {
       method: "POST",
       headers: {
@@ -70,18 +63,8 @@ describe("PostHog webhook forwarding", () => {
     expect(response.status).toBe(401);
   });
 
-  it("forwards webhook to active machine for hardcoded slack team", async () => {
-    const forwardFetcher = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
-    buildMachineFetcherMock.mockResolvedValue(forwardFetcher as never);
-
-    const app = createTestApp(
-      createMockDb({
-        projectId: "prj_iterate",
-        project: {
-          machines: [{ id: "mach_1", type: "docker", externalId: "ext_1", metadata: {} }],
-        },
-      }),
-    );
+  it("records the raw webhook in the outbox", async () => {
+    const app = createTestApp(createMockDb());
 
     const response = await app.request("/api/integrations/posthog/webhook", {
       method: "POST",
@@ -94,10 +77,13 @@ describe("PostHog webhook forwarding", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(forwardFetcher).toHaveBeenCalledTimes(1);
-    expect(forwardFetcher).toHaveBeenCalledWith(
-      "/api/integrations/posthog/webhook",
-      expect.objectContaining({ method: "POST" }),
-    );
+    expect(outboxSendMock).toHaveBeenCalledWith(expect.any(Object), {
+      name: "posthog:webhook-received",
+      payload: {
+        deliveryId: "ph-delivery-1",
+        payload: { alert: { id: 123, name: "Error spike" } },
+      },
+      deduplicationKey: "ph-delivery-1",
+    });
   });
 });

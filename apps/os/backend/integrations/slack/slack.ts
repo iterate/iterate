@@ -14,6 +14,7 @@ import { withSpan } from "../../utils/otel.ts";
 import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
 
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
+import { outboxClient } from "../../outbox/client.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
 
 type CorrelationContext = {
@@ -570,18 +571,6 @@ slackApp.post("/webhook", async (c) => {
               : undefined,
           });
 
-          // Dedup check using external_id (Slack's event_id)
-          if (slackEventId) {
-            const existing = await db.query.event.findFirst({
-              where: (e, { eq }) => eq(e.externalId, slackEventId),
-            });
-            if (existing) {
-              logger.debug("[Slack Webhook] Duplicate, skipping", { slackEventId, correlation });
-              span.setAttribute("process.result", "duplicate_event");
-              return;
-            }
-          }
-
           const projectId = connection?.projectId;
           if (!projectId) {
             logger.set({ correlation });
@@ -593,23 +582,32 @@ slackApp.post("/webhook", async (c) => {
           // Get the single active machine for this project
           const targetMachine = connection.project?.machines[0] ?? null;
 
-          // Forward to machine if available
-          if (targetMachine) {
-            logger.debug("[Slack Webhook] Forwarding to machine", {
-              machineId: targetMachine.id,
+          // Enqueue outbox event for forwarding to machine.
+          // The outbox consumer handles retries (e.g. machine rebooting).
+          // Deduplication is handled by the outbox's unique index on (name, deduplication_key).
+          const result = await outboxClient.send(db, {
+            name: "slack:webhook-received",
+            payload: {
+              projectId,
+              machineId: targetMachine?.id ?? null,
+              payload,
+              correlation,
+            },
+            deduplicationKey: slackEventId,
+          });
+
+          if (result.duplicate) {
+            logger.debug("[Slack Webhook] Duplicate event, skipping", {
+              slackEventId,
               correlation,
             });
-            span.setAttribute("machine.id", targetMachine.id);
-            await forwardSlackWebhookToMachine(targetMachine, payload, env, correlation);
+            span.setAttribute("process.result", "duplicate_event");
+            return;
           }
 
-          // Save event with type slack:webhook-received, detailed info in payload
-          await db.insert(schema.event).values({
-            type: "slack:webhook-received",
-            payload: payload,
-            projectId,
-            externalId: slackEventId,
-          });
+          if (targetMachine) {
+            span.setAttribute("machine.id", targetMachine.id);
+          }
           span.setAttribute("process.result", "ok");
         } catch (err) {
           logger.error("[Slack Webhook] Background error", err, { correlation });
