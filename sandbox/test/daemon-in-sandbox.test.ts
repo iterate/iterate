@@ -18,7 +18,7 @@
  * See sandbox/test/helpers.ts for full configuration options.
  */
 
-import { describe } from "vitest";
+import { describe, expect } from "vitest";
 import { getDaemonClientForSandbox, getPidnapClientForSandbox } from "../providers/clients.ts";
 import type { Sandbox } from "../providers/types.ts";
 import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS, POLL_DEFAULTS } from "./helpers.ts";
@@ -113,6 +113,34 @@ async function fetchWithTimeout(url: string, timeoutMs = 10_000): Promise<Respon
   } catch {
     return null;
   }
+}
+
+async function waitForProcessesHealthy(params: {
+  sandbox: Sandbox;
+  processes: Record<string, "healthy">;
+  timeoutMs: number;
+}): Promise<void> {
+  const { sandbox, processes, timeoutMs } = params;
+  await expect
+    .poll(
+      async () => {
+        try {
+          const client = await getPidnapClient(sandbox);
+          const status = await client.processes.waitFor({
+            processes,
+            timeoutMs: 5_000,
+          });
+          return status.allMet;
+        } catch {
+          return false;
+        }
+      },
+      {
+        timeout: timeoutMs,
+        interval: 500,
+      },
+    )
+    .toBe(true);
 }
 
 // ============ Pidnap-Specific Tests ============
@@ -337,21 +365,20 @@ describe.runIf(RUN_SANDBOX_TESTS)("Container Restart", () => {
   test("filesystem persists and daemon restarts", async ({ sandbox, expect }) => {
     const filePath = "/home/iterate/.iterate/persist-test.txt";
     const fileContents = `persist-${Date.now()}`;
-    const client = await getPidnapClient(sandbox);
-    const backendReady = await client.processes.waitFor({
+    await waitForProcessesHealthy({
+      sandbox,
       processes: { "daemon-backend": "healthy" },
       timeoutMs: 60_000,
     });
-    expect(backendReady.allMet).toBe(true);
 
     await sandbox.exec(["sh", "-c", `printf '%s' '${fileContents}' > ${filePath}`]);
 
     await sandbox.restart();
-    const restartedBackend = await client.processes.waitFor({
+    await waitForProcessesHealthy({
+      sandbox,
       processes: { "daemon-backend": "healthy" },
       timeoutMs: 60_000,
     });
-    expect(restartedBackend.allMet).toBe(true);
 
     const restored = await sandbox.exec(["cat", filePath]);
     expect(restored).toBe(fileContents);
