@@ -546,7 +546,7 @@ const plugin = {
                   const source = String(node.source.value ?? "");
 
                   if (source.endsWith("/test-support/e2e-test.ts")) {
-                    hasHarnessImport = node.specifiers.some(
+                    hasHarnessImport ||= node.specifiers.some(
                       (specifier) =>
                         specifier.type === "ImportSpecifier" && specifier.imported.name === "test",
                     );
