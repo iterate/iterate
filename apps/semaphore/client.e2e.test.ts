@@ -108,7 +108,7 @@ describe("semaphore worker e2e", () => {
   let baseURL = "";
   let originalWranglerJson = "";
 
-  const wranglerJsonPath = new URL("./wrangler.jsonc", import.meta.url);
+  const wranglerJsonPath = new URL("./wrangler.jsonc", import.meta.url).pathname;
 
   beforeAll(async () => {
     originalWranglerJson = await readFile(wranglerJsonPath, "utf8");
