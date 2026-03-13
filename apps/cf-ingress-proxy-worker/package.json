@@ -3,11 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "wrangler:sync": "tsx ./wrangler-sync.ts",
     "dev": "doppler run --config dev -- sh -c 'WORKER_NAME=ingress-proxy-dev tsx ./alchemy.run.ts cli --dev --stage dev'",
     "deploy:prd": "doppler run --config prd -- sh -c 'WORKER_NAME=ingress-proxy tsx ./alchemy.run.ts cli deploy --stage prd'",
     "deploy": "pnpm run deploy:prd",
-    "test": "pnpm run wrangler:sync && vitest run",
+    "test": "vitest run",
     "test:e2e-live": "vitest run --config ./vitest.live.config.ts",
     "typecheck": "tsc --noEmit",
     "db:rebuild": "rm -f .local.db && sqlite3 .local.db '' && find migrations -name '*.sql' -print | sort | while read -r file; do sqlite3 .local.db < \"$file\"; done",
