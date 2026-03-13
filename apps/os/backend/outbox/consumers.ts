@@ -696,7 +696,7 @@ function registerTestConsumers() {
     name: "logGreeting",
     on: "rpc:admin.outbox.poke",
     when: (params) => params.payload.input.message.includes("hi"),
-    handler: (params) => {
+    handler: () => {
       return "logged it";
     },
   });
