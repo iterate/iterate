@@ -43,7 +43,6 @@ const jonaslandPaths = [
   "services/home/**",
   "services/egress-service/**",
   "services/registry/**",
-  "services/example/**",
   "packages/pidnap/**",
 ] as const;
 

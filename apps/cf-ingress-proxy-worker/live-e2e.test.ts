@@ -48,13 +48,13 @@ function makeProxyHostCandidates(baseUrl: string) {
   return [...new Set([preferred, baseHost])];
 }
 
-function makeConflictPatterns(baseUrl: string) {
+function makeDuplicatePatternConflictCase(baseUrl: string) {
   const domain =
     proxyBaseDomain && proxyBaseDomain.length > 0 ? proxyBaseDomain : new URL(baseUrl).host;
   const suffix = randomSuffix();
   return {
     existingPattern: `existing-${suffix}.${domain}`,
-    conflictingPattern: `existing-${suffix}.${domain}`,
+    duplicatePattern: `existing-${suffix}.${domain}`,
     otherPattern: `other-${suffix}.${domain}`,
   };
 }
@@ -270,14 +270,14 @@ describe("live ingress-proxy E2E", () => {
       makeRequest: (params: {
         env: { baseUrl: string; apiToken: string };
         suiteId: string;
-        conflictingPattern: string;
+        duplicatePattern: string;
         baseRouteId: string;
       }) =>
         createRoute({
           baseUrl: params.env.baseUrl,
           apiToken: params.env.apiToken,
           metadata: { suiteId: params.suiteId, kind: "conflict-create" },
-          patterns: [{ pattern: params.conflictingPattern, target: "https://example.com" }],
+          patterns: [{ pattern: params.duplicatePattern, target: "https://example.com" }],
         }),
     },
     {
@@ -285,7 +285,7 @@ describe("live ingress-proxy E2E", () => {
       makeRequest: (params: {
         env: { baseUrl: string; apiToken: string };
         suiteId: string;
-        conflictingPattern: string;
+        duplicatePattern: string;
         baseRouteId: string;
       }) =>
         updateRoute({
@@ -293,13 +293,13 @@ describe("live ingress-proxy E2E", () => {
           apiToken: params.env.apiToken,
           routeId: params.baseRouteId,
           metadata: { suiteId: params.suiteId, kind: "conflict-update" },
-          patterns: [{ pattern: params.conflictingPattern, target: "https://example.com" }],
+          patterns: [{ pattern: params.duplicatePattern, target: "https://example.com" }],
         }),
     },
   ])(
-    "returns CONFLICT for $name",
+    "returns CONFLICT for duplicate pattern on $name",
     async ({ makeRequest }) => {
-      const { existingPattern, conflictingPattern, otherPattern } = makeConflictPatterns(
+      const { existingPattern, duplicatePattern, otherPattern } = makeDuplicatePatternConflictCase(
         env.baseUrl,
       );
 
@@ -323,7 +323,7 @@ describe("live ingress-proxy E2E", () => {
         makeRequest({
           env,
           suiteId,
-          conflictingPattern,
+          duplicatePattern,
           baseRouteId: baseRoute.routeId,
         }),
       ).rejects.toMatchObject({ code: "CONFLICT" });

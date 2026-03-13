@@ -5,7 +5,6 @@ import { RequestHeadersPlugin, type RequestHeadersPluginContext } from "@orpc/se
 import { typeid } from "typeid-js";
 import { z } from "zod/v4";
 import {
-  MAX_PATTERN_LENGTH,
   normalizeExternalId,
   normalizePattern,
   normalizeRouteId,
@@ -18,6 +17,7 @@ import {
   insertRoutePatternStmt,
   insertRouteStmt,
   selectRouteById,
+  selectResolvedRouteByHost,
   selectRoutePatterns,
   selectRoutePatternsByRouteId,
   selectRoutes,
@@ -193,26 +193,6 @@ function resolveForwardingContext(request: Request): {
     proto: normalizeForwardedProto(undefined, request),
     forValue: resolveClientIp(request),
   };
-}
-
-function hostMatchesPattern(host: string, pattern: string): boolean {
-  if (pattern.length > MAX_PATTERN_LENGTH) return false;
-  const regexPattern = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-  return new RegExp(`^${regexPattern}$`).test(host);
-}
-
-function comparePatternSpecificity(
-  a: { pattern: string; id: number },
-  b: { pattern: string; id: number },
-): number {
-  const aHasWildcard = a.pattern.includes("*");
-  const bHasWildcard = b.pattern.includes("*");
-  if (aHasWildcard !== bHasWildcard) {
-    return aHasWildcard ? 1 : -1;
-  }
-  const lengthDelta = b.pattern.length - a.pattern.length;
-  if (lengthDelta !== 0) return lengthDelta;
-  return a.id - b.id;
 }
 
 function parseTargetUrl(target: string): URL {
@@ -460,22 +440,15 @@ export async function resolveRouteByHost(
   const host = normalizeInboundHost(rawHost);
   if (!host) return null;
 
-  const patterns = await selectRoutePatterns(db);
-  const winnerPattern = patterns
-    .filter((row) => hostMatchesPattern(host, row.pattern))
-    .sort(comparePatternSpecificity)[0];
-  if (!winnerPattern) return null;
-
-  const routeRows = await selectRouteById(db, { routeId: winnerPattern.route_id });
-  const route = routeRows[0];
-  if (!route) return null;
+  const winner = await selectResolvedRouteByHost(db, { host });
+  if (!winner) return null;
 
   return {
-    routeId: winnerPattern.route_id,
-    pattern: winnerPattern.pattern,
-    targetUrl: parseTargetUrl(winnerPattern.target),
-    headers: parseJsonObject(winnerPattern.headers, "headers") as RouteHeaders,
-    metadata: parseJsonObject(route.metadata, "metadata"),
+    routeId: winner.routeId,
+    pattern: winner.pattern,
+    targetUrl: parseTargetUrl(winner.target),
+    headers: parseJsonObject(winner.headers, "headers") as RouteHeaders,
+    metadata: parseJsonObject(winner.metadata, "metadata"),
   };
 }
 
