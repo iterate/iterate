@@ -14,16 +14,18 @@ vi.mock("evlog", () => ({
   })),
 }));
 
-const mockEvlogSet = vi.fn();
-const mockFlush = vi.fn();
-const mockRecordError = vi.fn();
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const mockEvlogSet = vi.fn((..._args: any[]) => {});
+const mockFlush = vi.fn((..._args: any[]) => {});
+const mockRecordError = vi.fn((..._args: any[]) => {});
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 vi.mock("../evlog.ts", () => ({
   withRequestEvlogContext: vi.fn((_opts: unknown, cb: () => unknown) => cb()),
-  flushRequestEvlog: (...args: unknown[]) => mockFlush(...args),
-  recordRequestEvlogError: (...args: unknown[]) => mockRecordError(...args),
+  flushRequestEvlog: mockFlush,
+  recordRequestEvlogError: mockRecordError,
   log: {
-    set: (...args: unknown[]) => mockEvlogSet(...args),
+    set: mockEvlogSet,
     info: vi.fn(),
     error: vi.fn(),
     warn: vi.fn(),
@@ -32,10 +34,11 @@ vi.mock("../evlog.ts", () => ({
   },
 }));
 
-const mockSendPostHogException = vi.fn(() => Promise.resolve());
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockSendPostHogException = vi.fn((..._args: any[]) => Promise.resolve());
 
 vi.mock("../lib/posthog.ts", () => ({
-  sendPostHogException: (...args: unknown[]) => mockSendPostHogException(...args),
+  sendPostHogException: mockSendPostHogException,
 }));
 
 vi.mock("../tag-logger.ts", () => ({
