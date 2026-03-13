@@ -15,6 +15,7 @@
   "dependencies": {
     "@iterate-com/example": "workspace:*",
     "@iterate-com/example-contract": "workspace:*",
+    "@iterate-com/semaphore-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*"
   },
   "devDependencies": {

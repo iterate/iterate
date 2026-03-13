@@ -5,6 +5,8 @@ packages:
   - apps/daemon
   - apps/iterate-com
   - apps/os
+  - apps/semaphore
+  - apps/semaphore-contract
   - sandbox
   - jonasland/sandbox
   - jonasland/e2e

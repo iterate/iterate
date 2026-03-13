@@ -1,14 +1,14 @@
 #!/usr/bin/env tsx
 
 import { setTimeout as sleep } from "node:timers/promises";
-import { createSemaphoreClient } from "../apps/semaphore-contract/src/index.ts";
-import { makeFunnySlug } from "../packages/shared/src/slug-maker.ts";
+import { createSemaphoreClient } from "../index.ts";
+import { makeFunnySlug } from "../../../../packages/shared/src/slug-maker.ts";
+import { CloudflareTunnelData, cloudflareTunnelType } from "./types.ts";
 
 const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4";
 const DEFAULT_SEMAPHORE_BASE_URL = "https://semaphore.iterate.workers.dev";
 const DEFAULT_TUNNEL_COUNT = 20;
 const DEFAULT_TUNNEL_SERVICE = "http://localhost:3000";
-const DEFAULT_TUNNEL_TYPE = "cloudflare-tunnel";
 const DEFAULT_ZONE_NAME = "iterate.com";
 const DEFAULT_BASE_DOMAIN = "tunnel.iterate.com";
 const CERTIFICATE_POLL_INTERVAL_MS = 10_000;
@@ -163,7 +163,7 @@ export function parseCliOptions(args: string[]): CliOptions {
     "count",
   );
   const service = (getArgValue(args, "service") ?? DEFAULT_TUNNEL_SERVICE).trim();
-  const type = (getArgValue(args, "type") ?? DEFAULT_TUNNEL_TYPE).trim().toLowerCase();
+  const type = (getArgValue(args, "type") ?? cloudflareTunnelType).trim().toLowerCase();
   const zoneName = (getArgValue(args, "zone") ?? DEFAULT_ZONE_NAME).trim().toLowerCase();
   const baseDomain = (getArgValue(args, "base-domain") ?? DEFAULT_BASE_DOMAIN).trim().toLowerCase();
   const semaphoreBaseUrl = (
@@ -173,8 +173,9 @@ export function parseCliOptions(args: string[]): CliOptions {
   ).trim();
 
   if (!service) throw new Error("--service must not be empty");
-  if (!/^https?:\/\//.test(service))
+  if (!/^https?:\/\//.test(service)) {
     throw new Error("--service must be an http:// or https:// URL");
+  }
   if (!type) throw new Error("--type must not be empty");
   if (!zoneName) throw new Error("--zone must not be empty");
   if (!baseDomain) throw new Error("--base-domain must not be empty");
@@ -375,6 +376,7 @@ class CloudflareClient {
         await sleep(delayMs);
       }
     }
+
     throw new Error(`Cloudflare API ${init?.method ?? "GET"} ${path} exhausted retries`);
   }
 
@@ -519,7 +521,9 @@ export async function seedTunnelPool(options: CliOptions): Promise<SeedSummary> 
         zoneId,
         publicHostname,
         tunnelId: tunnel.id,
-        comment: `Managed by scripts/seed-cloudflare-tunnel-pool.ts for semaphore type=${options.type}`,
+        comment:
+          "Managed by apps/semaphore-contract/src/cloudflare-tunnels/seed-cloudflare-tunnel-pool.ts " +
+          `for semaphore type=${options.type}`,
       });
       rollbackState.dnsRecordId = dnsRecord.id;
 
@@ -527,15 +531,15 @@ export async function seedTunnelPool(options: CliOptions): Promise<SeedSummary> 
       await semaphore.resources.add({
         type: options.type,
         slug,
-        data: {
-          provider: "cloudflare-tunnel",
+        data: CloudflareTunnelData.parse({
+          provider: cloudflareTunnelType,
           publicHostname,
           tunnelId: tunnel.id,
           tunnelName,
           tunnelToken,
           service: options.service,
           createdAt: new Date().toISOString(),
-        },
+        }),
       });
 
       createdHostnames.push(publicHostname);

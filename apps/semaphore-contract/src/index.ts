@@ -3,6 +3,7 @@ import { RPCLink } from "@orpc/client/fetch";
 import type { ContractRouterClient } from "@orpc/contract";
 import { oc } from "@orpc/contract";
 import { z } from "zod/v4";
+export * from "./cloudflare-tunnels/types.ts";
 
 export const SEMAPHORE_KEY_PATTERN = /^(?=.*[a-z])[a-z0-9-]+$/;
 export const MAX_LEASE_MS = 60 * 60 * 1000;

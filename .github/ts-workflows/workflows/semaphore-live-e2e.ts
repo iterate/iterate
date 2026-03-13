@@ -17,19 +17,11 @@ export default workflow({
         ".github/workflows/semaphore-live-e2e.yml",
       ],
     },
-    pull_request: {
-      paths: [
-        "apps/semaphore/**",
-        "apps/semaphore-contract/**",
-        ".github/ts-workflows/workflows/semaphore-live-e2e.ts",
-        ".github/workflows/semaphore-live-e2e.yml",
-      ],
-    },
     workflow_dispatch: {},
   },
   jobs: {
     "deploy-test-teardown": {
-      if: "github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.pull_request.head.repo.fork == false",
+      if: "github.event_name == 'workflow_dispatch'",
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       "timeout-minutes": 20,
       env: {
@@ -129,7 +121,6 @@ export default workflow({
     },
     "deploy-prd": {
       if: "github.event_name == 'push'",
-      needs: ["deploy-test-teardown"],
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         ...utils.setupRepo,

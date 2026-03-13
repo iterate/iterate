@@ -1113,6 +1113,65 @@ importers:
         specifier: ^8.19.0
         version: 8.19.0
 
+  apps/semaphore:
+    dependencies:
+      '@iterate-com/semaphore-contract':
+        specifier: workspace:*
+        version: link:../semaphore-contract
+      '@orpc/server':
+        specifier: ^1.13.4
+        version: 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
+      alchemy:
+        specifier: ^0.83.0
+        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(vite@7.3.1(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260205.0)(wrangler@4.70.0(@cloudflare/workers-types@4.20260305.0))
+      hono:
+        specifier: ^4.11.3
+        version: 4.12.5
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+    devDependencies:
+      '@cloudflare/vitest-pool-workers':
+        specifier: ^0.12.17
+        version: 0.12.19(@cloudflare/workers-types@4.20260305.0)(@vitest/runner@4.1.0-beta.6)(@vitest/snapshot@4.1.0-beta.6)(vitest@3.2.4(@types/debug@4.1.12)(@types/node@24.11.0)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.31.1)(msw@2.12.10(@types/node@24.11.0)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
+      '@cloudflare/workers-types':
+        specifier: ^4.20260207.0
+        version: 4.20260305.0
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.11.0
+      tsx:
+        specifier: ^4.20.6
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 3.2.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.11.0)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.31.1)(msw@2.12.10(@types/node@24.11.0)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+      wrangler:
+        specifier: ^4.64.0
+        version: 4.70.0(@cloudflare/workers-types@4.20260305.0)
+
+  apps/semaphore-contract:
+    dependencies:
+      '@orpc/client':
+        specifier: ^1.13.4
+        version: 1.13.6(@opentelemetry/api@1.9.0)
+      '@orpc/contract':
+        specifier: ^1.13.5
+        version: 1.13.6(@opentelemetry/api@1.9.0)
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.11.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   jonasland/e2e:
     dependencies:
       '@iterate-com/example':
@@ -1121,6 +1180,9 @@ importers:
       '@iterate-com/example-contract':
         specifier: workspace:*
         version: link:../../services/example-contract
+      '@iterate-com/semaphore-contract':
+        specifier: workspace:*
+        version: link:../../apps/semaphore-contract
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -25422,7 +25484,7 @@ snapshots:
       '@peculiar/asn1-x509': 2.6.1
       '@peculiar/x509': 1.14.3
       '@types/cors': 2.8.19
-      '@types/node': 25.3.3
+      '@types/node': 22.19.13
       async-mutex: 0.5.0
       base64-arraybuffer: 0.1.5
       body-parser: 1.20.4
