@@ -72,7 +72,6 @@ export const registerConsumers = () => {
           }
 
           logger.set({ sourceEventId: payload.sourceEventId, targetCount: machines.length });
-          logger.info("Enqueued iterate machine pulls");
           return `enqueued ${machines.length} iterate machine pull requests`;
         })
         .default(() => `skipped: unsupported github webhook ${params.payload.event}`);
@@ -103,7 +102,6 @@ export const registerConsumers = () => {
           state: machine.state,
           sourceEventId: params.payload.sourceEventId,
         });
-        logger.info("Skipping iterate pull for non-active machine");
         return `skipped: machine ${machine.id} state is ${machine.state}`;
       }
 
@@ -123,7 +121,6 @@ export const registerConsumers = () => {
         ref: params.payload.ref,
         sourceEventId: params.payload.sourceEventId,
       });
-      logger.info("Triggered iterate pull on machine");
       return `triggered iterate pull on ${machine.id}`;
     },
   });
@@ -148,7 +145,6 @@ export const registerConsumers = () => {
 
       if (machine.state !== "starting") {
         logger.set({ machine: { id: machineId } });
-        logger.info(`Skipping, machine no longer starting state=${machine.state}`);
         return `skipped: machine state is ${machine.state}`;
       }
 
@@ -203,7 +199,6 @@ export const registerConsumers = () => {
         .where(eq(schema.machine.id, machineId));
 
       logger.set({ machine: { id: machineId }, machineType: machine.type });
-      logger.info("Machine provisioned");
       return `provisioned machine ${machineId}`;
     },
   });
@@ -240,7 +235,6 @@ export const registerConsumers = () => {
 
       const input = await getPushMachineSetupInput(db, env, machine);
       if (!input) {
-        logger.info("Sentinel matches, skipping setup + probe");
         return `skipped: setup already done for ${machineId}`;
       }
 
@@ -254,7 +248,6 @@ export const registerConsumers = () => {
 
       await writeSentinel();
 
-      logger.info("Setup pushed to machine");
       return `setup pushed to ${machineId}`;
     },
   });
@@ -280,7 +273,6 @@ export const registerConsumers = () => {
 
       if (machine.state !== "starting") {
         logger.set({ machine: { id: machineId } });
-        logger.info(`Skipping, machine no longer starting state=${machine.state}`);
         return `skipped: machine state is ${machine.state}`;
       }
 
@@ -310,7 +302,6 @@ export const registerConsumers = () => {
         threadId: sendResult.threadId,
         messageId: sendResult.messageId,
       });
-      logger.info("Probe message sent");
       return `probe sent, messageId=${sendResult.messageId}`;
     },
   });
@@ -337,7 +328,6 @@ export const registerConsumers = () => {
 
       if (machine.state !== "starting") {
         logger.set({ machine: { id: machineId } });
-        logger.info(`Skipping, machine no longer starting state=${machine.state}`);
         return `skipped: machine state is ${machine.state}`;
       }
 
@@ -355,7 +345,6 @@ export const registerConsumers = () => {
       });
 
       logger.set({ machine: { id: machineId }, responseText });
-      logger.info("Probe succeeded");
       return `probe succeeded: "${responseText}"`;
     },
   });
@@ -375,7 +364,6 @@ export const registerConsumers = () => {
 
       if (machine.state !== "starting") {
         logger.set({ machine: { id: machineId } });
-        logger.info(`Skipping, machine no longer starting state=${machine.state}`);
         return `skipped: machine state is ${machine.state}`;
       }
 
@@ -386,7 +374,6 @@ export const registerConsumers = () => {
         });
         if (current?.state !== "starting") {
           logger.set({ machine: { id: machineId } });
-          logger.info(`Skipping inside tx, state changed state=${current?.state}`);
           return false;
         }
 
@@ -414,7 +401,6 @@ export const registerConsumers = () => {
       });
 
       logger.set({ machine: { id: machineId }, activated });
-      logger.info("Machine activation complete");
       return `machine activated:${activated}`;
     },
   });
@@ -452,7 +438,6 @@ export const registerConsumers = () => {
         project: { id: projectId },
         enqueuedCount: detached.length,
       });
-      logger.info("Fan-out delete enqueued");
       return `enqueued ${detached.length} delete-requested events`;
     },
   });
@@ -479,7 +464,6 @@ export const registerConsumers = () => {
         .where(eq(schema.machine.id, machineId));
 
       logger.set({ machine: { id: machineId } });
-      logger.info("Deleted machine");
       return `deleted machine ${machineId}`;
     },
   });
@@ -491,7 +475,6 @@ function registerTestConsumers() {
     name: "logPoke",
     on: "testing:poke",
     handler: (params) => {
-      logger.info(`GOT message: ${params.payload.message}`);
       return "received message: " + params.payload.message;
     },
   });
@@ -501,7 +484,6 @@ function registerTestConsumers() {
     on: "rpc:admin.outbox.poke",
     when: (params) => params.payload.input.message.includes("hi"),
     handler: (params) => {
-      logger.info(`GOT server reply: ${params.payload.output.reply}`);
       return "logged it";
     },
   });
