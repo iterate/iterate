@@ -216,10 +216,33 @@ function comparePatternSpecificity(
 }
 
 function parseTargetUrl(target: string): URL {
+  const trimmed = target.trim();
+  if (!trimmed) {
+    throw new RouteInputError("target must be a valid URL");
+  }
+
+  if (/^[/?#.]/.test(trimmed)) {
+    throw new RouteInputError("target must be a valid URL");
+  }
+
+  const withScheme = /^[a-z][a-z\d+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : /^(https?|wss?):/i.test(trimmed)
+      ? trimmed.replace(/^([a-z][a-z\d+.-]*):/i, "$1://")
+      : `https://${trimmed}`;
+
+  const normalizedInput = withScheme
+    .replace(/^ws:\/\//i, "http://")
+    .replace(/^wss:\/\//i, "https://");
+
   let parsed: URL;
   try {
-    parsed = new URL(target);
+    parsed = new URL(normalizedInput);
   } catch {
+    throw new RouteInputError("target must be a valid URL");
+  }
+
+  if (!parsed.hostname) {
     throw new RouteInputError("target must be a valid URL");
   }
 

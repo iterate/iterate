@@ -107,7 +107,6 @@ For local Docker machines, refresh the sandbox image + default tag with: `pnpm s
 - Include `.ts`/`.js` in relative imports (not package imports)
 - Use `node:` prefix for Node imports
 - Prefer named exports
-- Acronyms: all caps except `Id` (e.g., `callbackURL`, `userId`)
 - Use pnpm
 - Use remeda for utilities, dedent for template strings
 - Unit tests: `*.test.ts` next to source

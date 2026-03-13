@@ -1,3 +1,12 @@
+**Things we super mega care about**
+
+- API schemas / contracts / shape - e.g. what orpc routers exist, what classes and public functions in a library are exposed etc
+- Environment variables - they need to be well thought through and designed
+- Database schemas and migration
+- High level architecture
+
+DO NOT randomly add or modify these things without explicitly discussing and checking with a human. If the change you're reviewing does something like this, please flag it and ask the human to confirm this is good.
+
 **We care A LOT about idiomatic code and first party sources**
 
 - Use your MCP servers to research first party docs and recent example usage in other projects - especially when core project maintainers are involved

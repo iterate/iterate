@@ -253,6 +253,65 @@ describe("route groups", () => {
   });
 });
 
+describe("target parsing", () => {
+  test.each([
+    ["https://target.fly.dev", "https://target.fly.dev/"],
+    ["http://target.fly.dev", "http://target.fly.dev/"],
+    ["target.fly.dev", "https://target.fly.dev/"],
+    ["target.fly.dev/base", "https://target.fly.dev/base"],
+    ["ws://target.fly.dev/socket", "http://target.fly.dev/socket"],
+    ["wss://target.fly.dev/socket", "https://target.fly.dev/socket"],
+  ])("createRoute accepts and canonicalizes %s", async (input, expected) => {
+    const created = await createSinglePatternRoute({
+      pattern: "target-normalization.ingress.iterate.com",
+      target: input,
+    });
+
+    expect(created.patterns[0]?.target).toBe(expected);
+    const fetched = await getRoute(testEnv.DB, created.routeId);
+    expect(fetched?.patterns[0]?.target).toBe(expected);
+  });
+
+  test.each([
+    ["target.fly.dev", "https://target.fly.dev/"],
+    ["ws://target.fly.dev/socket", "http://target.fly.dev/socket"],
+    ["wss://target.fly.dev/socket", "https://target.fly.dev/socket"],
+  ])("updateRoute canonicalizes aliases consistently for %s", async (input, expected) => {
+    const created = await createSinglePatternRoute({
+      pattern: "target-update.ingress.iterate.com",
+      target: "https://initial.fly.dev",
+    });
+
+    const updated = await updateRoute(testEnv.DB, {
+      routeId: created.routeId,
+      metadata: {},
+      patterns: [{ pattern: "target-update.ingress.iterate.com", target: input }],
+    });
+
+    expect(updated.patterns[0]?.target).toBe(expected);
+    const fetched = await getRoute(testEnv.DB, created.routeId);
+    expect(fetched?.patterns[0]?.target).toBe(expected);
+  });
+
+  test.each([
+    "",
+    "   ",
+    "/relative-only",
+    "./relative-only",
+    "../relative-only",
+    "?query-only",
+    "#hash-only",
+    "ftp://target.fly.dev",
+  ])("rejects unsupported target %j", async (input) => {
+    await expect(
+      createSinglePatternRoute({
+        pattern: "target-invalid.ingress.iterate.com",
+        target: input,
+      }),
+    ).rejects.toThrow();
+  });
+});
+
 describe("proxy behavior", () => {
   test("builds upstream URL using target base path", () => {
     const upstream = buildUpstreamUrl(
@@ -261,6 +320,18 @@ describe("proxy behavior", () => {
     );
 
     expect(upstream.toString()).toBe("https://target.fly.dev/base/foo/bar?x=1");
+  });
+
+  test.each([
+    ["https://target.fly.dev/base", "https://target.fly.dev/base/foo?x=1"],
+    ["https://target.fly.dev/base/", "https://target.fly.dev/base/foo?x=1"],
+  ])("buildUpstreamUrl treats trailing slash equivalently for %s", (target, expected) => {
+    const upstream = buildUpstreamUrl(
+      new URL(target),
+      new URL("https://app.ingress.iterate.com/foo?x=1"),
+    );
+
+    expect(upstream.toString()).toBe(expected);
   });
 
   test("uses target host by default for cross-host proxying", async () => {
