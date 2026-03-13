@@ -104,7 +104,7 @@ For local Docker machines, refresh the sandbox image + default tag with: `pnpm s
 - Strict TS; infer types where possible
 - No `as any` — fix types or ask for help
 - File/folder names: kebab-case
-- Include `.ts`/`.js` in relative imports (not package imports)
+- Include file extensions (`.ts` or whatever) for relative imports
 - Use `node:` prefix for Node imports
 - Prefer named exports
 - Use pnpm
@@ -202,6 +202,8 @@ Key project IDs: Iterate = `prj_01kh7ct9jke49vjq43j4wy3vyw`, team = `T0675PSN873
 ### Outbox queue operations
 
 Admin UI: `https://os.iterate.com/admin/outbox` — shows all events, filters by status/event/consumer, has "Process Queue" button.
+
+- CLI debugging: `iterate os admin outbox list-events --limit 50 --sort-direction desc` shows recent outbox history from prod. Use `--payload-contains '{"machineId": "mach_..."}'` or `--consumer-name myConsumer` to narrow down setup/probe issues without going straight to SQL. You can also look at the implementation of the listEvents procedure powering this command for inspiration on how you can query the DB directly to dig even deeper.
 
 To archive (soft-delete) stale messages directly:
 

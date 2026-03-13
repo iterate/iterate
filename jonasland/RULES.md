@@ -39,6 +39,17 @@ We only use these modules internally. If you're re-exporting stuff, you probably
 **Do not over-use try/catch**
 It's okay for errors to escape! That's what they are for if something is wrong.
 
+**When there is ambiguity on intent, ASK FOR CONFIRMATION**
+E.g.: DO NOT guess at which of several env vars you've found in the codebase is correct. DO NOT write stuff like this. Instead, ask the human which they want!
+
+```ts
+process.env.JONASLAND_E2E_INGRESS_PROXY_DOMAIN ??
+  process.env.INGRESS_PROXY_DOMAIN ??
+  DEFAULT_INGRESS_PROXY_DOMAIN;
+```
+
+
+
 **Comments and docstrings are super important**
 
 - They must give additional context - it's helpful when they give usage examples or point to other places in the codebase

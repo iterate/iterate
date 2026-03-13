@@ -38,8 +38,7 @@
     "**/evalite-export/**",
     ".tmp-ci-build*",
     "**/*ignoreme*",
-    "packages/shared/src/jonasland/deployment/fly-api/generated/**",
-    "**/old/**"
+    "packages/shared/src/jonasland/deployment/fly-api/generated/**"
   ],
   "jsPlugins": [
     "./eslint.config.js",
@@ -225,7 +224,7 @@
       "plugins": ["react"]
     },
     {
-      "files": ["apps/os/app/**/*.ts", "apps/os/app/**/*.tsx"],
+      "files": ["apps/os/app/routes/**/*.ts", "apps/os/app/routes/**/*.tsx"],
       "plugins": ["typescript", "import", "react", "jsx-a11y"],
       "rules": {
         "jsx-a11y/no-autofocus": "off",
@@ -234,7 +233,7 @@
       }
     },
     {
-      "files": ["apps/daemon/client/**/*.ts", "apps/daemon/client/**/*.tsx"],
+      "files": ["apps/daemon/client/routes/**/*.ts", "apps/daemon/client/routes/**/*.tsx"],
       "plugins": ["typescript", "import", "react", "jsx-a11y"],
       "rules": {
         "jsx-a11y/no-autofocus": "off",
