@@ -99,26 +99,24 @@ async function stopService(child: ReturnType<typeof spawn>) {
   childProcesses.delete(child);
 }
 
-async function assertServiceWorks(params: {
-  baseURL: string;
-  expectedAssetPath: string;
-  expectedHtmlSnippet: string;
-}) {
+async function assertServiceWorks(params: { baseURL: string; expectedAssetPrefix: string }) {
   const rootResponse = await fetch(`${params.baseURL}/`);
   expect(rootResponse.status).toBe(200);
   expect(rootResponse.headers.get("content-type")).toContain("text/html");
 
   const html = await rootResponse.text();
   expect(html).toContain("<title>ws-test</title>");
-  expect(html).toContain(params.expectedHtmlSnippet);
 
   const assetPaths = parseAssetPaths(html);
-  expect(assetPaths).toContain(params.expectedAssetPath);
+  expect(assetPaths.some((path) => path.startsWith(params.expectedAssetPrefix))).toBe(true);
 
-  const assetResponse = await fetch(`${params.baseURL}${params.expectedAssetPath}`);
+  const assetPath = assetPaths.find((path) => path.startsWith(params.expectedAssetPrefix));
+  expect(assetPath).toBeDefined();
+
+  const assetResponse = await fetch(`${params.baseURL}${assetPath}`);
   expect(assetResponse.status).toBe(200);
 
-  const rpcResponse = await fetch(`${params.baseURL}/rpc/ping`);
+  const rpcResponse = await fetch(`${params.baseURL}/api/rpc/ping`);
   expect(rpcResponse.status).toBe(200);
   expect(await rpcResponse.text()).toContain('"message":"pong"');
 
@@ -170,8 +168,7 @@ describe("ws-test end-to-end", () => {
     try {
       await assertServiceWorks({
         baseURL,
-        expectedAssetPath: "/src/entry-client.tsx",
-        expectedHtmlSnippet: '<div id="root"></div>',
+        expectedAssetPrefix: "/src/",
       });
     } finally {
       await stopService(child);
@@ -184,6 +181,7 @@ describe("ws-test end-to-end", () => {
       command: "pnpm",
       args: ["start"],
       env: {
+        HONO_SERVE_CLIENT_BUNDLE: "true",
         PORT: "5192",
       },
       baseURL,
@@ -192,8 +190,7 @@ describe("ws-test end-to-end", () => {
     try {
       await assertServiceWorks({
         baseURL,
-        expectedAssetPath: "/static/entry-client.js",
-        expectedHtmlSnippet: 'data-app-css="1"',
+        expectedAssetPrefix: "/assets/",
       });
     } finally {
       await stopService(child);

@@ -1,11 +1,9 @@
-import type { Server as HttpServer, IncomingMessage } from "node:http";
-import { WebSocketServer } from "ws";
+import type { WebSocket } from "ws";
 import { createORPCClient } from "@orpc/client";
 import { oc } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { onError, implement, type RouterClient } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
-import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
 import { z } from "zod";
 
 const pingOutput = z.object({
@@ -45,48 +43,15 @@ export const httpRpcHandler = new RPCHandler(router, {
 });
 
 export function createBrowserOrpcClient(): RouterClient<OrpcRouter> {
+  const url =
+    typeof window === "undefined"
+      ? "http://127.0.0.1/api/rpc"
+      : new URL("/api/rpc", window.location.origin).toString();
   return createORPCClient(
     new OpenAPILink(contract, {
-      url: new URL("/rpc", window.location.origin).toString(),
+      url,
     }),
   );
 }
 
-export function attachOrpcWebSocketServer(server: HttpServer) {
-  const wsHandler = new WebSocketRPCHandler(router, {
-    interceptors: [
-      onError((error) => {
-        console.error(error);
-      }),
-    ],
-  });
-  const wss = new WebSocketServer({ noServer: true });
-
-  wss.on("connection", (ws: any) => {
-    void wsHandler.upgrade(ws, {
-      context: {},
-    });
-  });
-
-  const upgradeListener = (
-    req: IncomingMessage,
-    socket: import("node:stream").Duplex,
-    head: Buffer,
-  ) => {
-    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-    if (pathname !== "/orpc/ws") {
-      return;
-    }
-
-    wss.handleUpgrade(req, socket, head, (ws: any) => {
-      wss.emit("connection", ws, req);
-    });
-  };
-
-  server.on("upgrade", upgradeListener);
-
-  return () => {
-    server.off("upgrade", upgradeListener);
-    wss.close();
-  };
-}
+export type OrpcWebSocket = WebSocket;

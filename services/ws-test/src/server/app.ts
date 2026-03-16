@@ -1,13 +1,20 @@
+import type { HttpBindings } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { createNodeWebSocket } from "@hono/node-ws";
+import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
 import { Hono } from "hono";
-import { renderAppShell, isProductionRuntime } from "./html.ts";
-import { httpRpcHandler } from "./orpc.ts";
+import { httpRpcHandler, router } from "./orpc.ts";
 
-const app = new Hono();
+const app = new Hono<{ Bindings: HttpBindings }>();
+const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
-app.use("/rpc/*", async (c, next) => {
+function shouldServeClientBundle() {
+  return process.env.HONO_SERVE_CLIENT_BUNDLE?.trim().toLowerCase() === "true";
+}
+
+app.use("/api/rpc/*", async (c, next) => {
   const { matched, response } = await httpRpcHandler.handle(c.req.raw, {
-    prefix: "/rpc",
+    prefix: "/api/rpc",
     context: {},
   });
 
@@ -25,15 +32,28 @@ app.get("/api/health", (c) =>
   }),
 );
 
-if (isProductionRuntime()) {
+const wsHandler = new WebSocketRPCHandler(router);
+
+app.get(
+  "/orpc/ws",
+  upgradeWebSocket(() => ({
+    onOpen: (_event, ws) => {
+      void wsHandler.upgrade(ws.raw as import("./orpc.ts").OrpcWebSocket, {
+        context: {},
+      });
+    },
+  })),
+);
+
+if (shouldServeClientBundle()) {
   app.use(
-    "/static/*",
+    "/assets/*",
     serveStatic({
       root: "./dist/client",
     }),
   );
+  app.get("*", serveStatic({ root: "./dist/client", path: "_shell.html" }));
 }
 
-app.get("*", (c) => c.html(renderAppShell()));
-
 export default app;
+export { injectWebSocket };
