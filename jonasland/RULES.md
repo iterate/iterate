@@ -48,6 +48,13 @@ process.env.JONASLAND_E2E_INGRESS_PROXY_DOMAIN ??
   DEFAULT_INGRESS_PROXY_DOMAIN;
 ```
 
+**Prefer explicit dependencies over globals**
+
+- We like functional programming with dependencies explicitly passed in
+- Do not read globals like `process.env` inside helpers or library-style functions
+- Parse env and other ambient inputs at the boundary, then pass the concrete values down
+- If a function needs config, credentials, or policy toggles, make them explicit parameters
+
 **Comments and docstrings are super important**
 
 - They must give additional context - it's helpful when they give usage examples or point to other places in the codebase

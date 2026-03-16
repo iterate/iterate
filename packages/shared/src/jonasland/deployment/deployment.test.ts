@@ -60,7 +60,6 @@ class FakeProvider implements DeploymentProvider<TestInstanceSpecificOpts, TestL
     this.created.push(params);
     return {
       locator: { provider: "test", id: "created" } as const,
-      baseUrl: "http://created.test",
     };
   }
 
@@ -68,8 +67,11 @@ class FakeProvider implements DeploymentProvider<TestInstanceSpecificOpts, TestL
     this.connected.push(params);
     return {
       locator: params.locator,
-      baseUrl: "http://connected.test",
     };
+  }
+
+  getDefaultIngressHost() {
+    return "provider-default.test";
   }
 
   async recoverOpts(): Promise<TestInstanceSpecificOpts> {
@@ -209,10 +211,15 @@ describe("Deployment", () => {
       },
     ]);
     expect(deployment.slug).toBe("runtime-slug");
-    expect(deployment.baseUrl).toBe("http://created.test");
     expect(deployment.opts).toEqual({
       slug: "runtime-slug",
       image: "sandbox:test",
+      env: {
+        ITERATE_INGRESS_HOST: "provider-default.test",
+      },
+    });
+    expect(deployment.env).toEqual({
+      ITERATE_INGRESS_HOST: "provider-default.test",
     });
   });
 
@@ -253,18 +260,19 @@ describe("Deployment", () => {
         locator: { provider: "test", id: "existing" },
       },
     ]);
-    expect(deployment.baseUrl).toBe("http://connected.test");
     expect(deployment.opts).toEqual({
       slug: "runtime-slug",
       image: "sandbox:test",
       env: {
         FROM_FILE: "live",
         OTHER_VALUE: "2",
+        ITERATE_INGRESS_HOST: "provider-default.test",
       },
     });
     expect(deployment.env).toEqual({
       FROM_FILE: "live",
       OTHER_VALUE: "2",
+      ITERATE_INGRESS_HOST: "provider-default.test",
     });
   });
 
@@ -470,10 +478,12 @@ describe("Deployment", () => {
     expect(reloaded).toEqual({
       ALPHA: "2",
       BETA: "3",
+      ITERATE_INGRESS_HOST: "provider-default.test",
     });
     expect(deployment.env).toEqual({
       ALPHA: "2",
       BETA: "3",
+      ITERATE_INGRESS_HOST: "provider-default.test",
     });
   });
 
@@ -501,10 +511,13 @@ describe("Deployment", () => {
       { waitForHealthy: false },
     );
 
-    expect(provider.envFileContent).toBe('CUSTOM_TOKEN="two"\nEXISTING_VALUE="one"');
+    expect(provider.envFileContent).toBe(
+      'CUSTOM_TOKEN="two"\nEXISTING_VALUE="one"\nITERATE_INGRESS_HOST="provider-default.test"',
+    );
     expect(deployment.env).toEqual({
       CUSTOM_TOKEN: "two",
       EXISTING_VALUE: "one",
+      ITERATE_INGRESS_HOST: "provider-default.test",
     });
   });
 
@@ -540,23 +553,10 @@ describe("Deployment", () => {
     const waitUntilHealthySpy = vi
       .spyOn(deployment, "waitUntilHealthy")
       .mockImplementation(async () => {});
-    const waitForConfiguredTargetsSpy = vi
-      .spyOn(
-        deployment as unknown as {
-          waitForConfiguredNetworkTargets: (params: {
-            env: Record<string, string>;
-            timeoutMs: number;
-          }) => Promise<void>;
-        },
-        "waitForConfiguredNetworkTargets",
-      )
-      .mockImplementation(async () => {});
-
     await deployment.setEnvVars({
       CUSTOM_TOKEN: "value",
     });
 
     expect(waitUntilHealthySpy).toHaveBeenCalledOnce();
-    expect(waitForConfiguredTargetsSpy).toHaveBeenCalledOnce();
   });
 });

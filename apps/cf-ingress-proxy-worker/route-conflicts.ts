@@ -21,19 +21,25 @@ export function normalizePattern(input: string): string {
     throw new RouteInputError(`Invalid pattern: ${input}`);
   }
   const wildcardCount = (normalized.match(/\*/g) ?? []).length;
-  const wildcardTail = normalized.slice(1);
-  if (
-    wildcardCount > 0 &&
-    (wildcardCount !== 1 ||
-      !normalized.startsWith("*") ||
-      normalized.length <= 1 ||
-      /^[a-z0-9]$/.test(normalized[1] ?? "") ||
-      !wildcardTail.includes(".") ||
-      !/[a-z0-9]/.test(wildcardTail))
-  ) {
+  if (wildcardCount === 0) return normalized;
+  if (wildcardCount !== 1 || !normalized.startsWith("*")) {
     throw new RouteInputError(`Invalid pattern: ${input}`);
   }
-  return normalized;
+  if (normalized.startsWith("*__")) {
+    const rootPattern = normalized.slice(3);
+    if (!rootPattern || !rootPattern.includes(".") || !/[a-z0-9]/.test(rootPattern)) {
+      throw new RouteInputError(`Invalid pattern: ${input}`);
+    }
+    return normalized;
+  }
+  if (normalized.startsWith("*.")) {
+    const rootPattern = normalized.slice(2);
+    if (!rootPattern || !rootPattern.includes(".") || !/[a-z0-9]/.test(rootPattern)) {
+      throw new RouteInputError(`Invalid pattern: ${input}`);
+    }
+    return normalized;
+  }
+  throw new RouteInputError(`Invalid pattern: ${input}`);
 }
 
 export function normalizeRouteId(input: string): string {

@@ -18,7 +18,7 @@ VALUES (:routeId, :pattern, :target, :headers)
 INSERT INTO routes (id, external_id, metadata)
 VALUES (:routeId, :externalId, :metadata)
 
--- @query selectResolvedRouteByHost
+-- @query selectMatchingRoutePatternsByHost
 SELECT
   rp.route_id AS routeId,
   rp.pattern AS pattern,
@@ -27,13 +27,28 @@ SELECT
   r.metadata AS metadata
 FROM route_patterns rp
 INNER JOIN routes r ON r.id = rp.route_id
-WHERE length(rp.pattern) <= 253
-  AND :host GLOB rp.pattern
+WHERE
+  rp.pattern = :host
+  OR (
+    substr(rp.pattern, 1, 3) = '*__'
+    AND length(:host) > length(substr(rp.pattern, 4)) + 2
+    AND substr(:host, -length('__' || substr(rp.pattern, 4))) = '__' || substr(rp.pattern, 4)
+  )
+  OR (
+    substr(rp.pattern, 1, 2) = '*.'
+    AND length(:host) > length(substr(rp.pattern, 3)) + 1
+    AND substr(:host, -length('.' || substr(rp.pattern, 3))) = '.' || substr(rp.pattern, 3)
+  )
 ORDER BY
-  CASE WHEN rp.pattern NOT LIKE '%*%' THEN 1 ELSE 0 END DESC,
+  CASE
+    WHEN rp.pattern = :host THEN 0
+    WHEN substr(rp.pattern, 1, 3) = '*__' THEN 1
+    WHEN substr(rp.pattern, 1, 2) = '*.' THEN 2
+    ELSE 3
+  END ASC,
   length(rp.pattern) DESC,
   rp.id ASC
-LIMIT 1
+LIMIT 20
 
 -- @query selectRouteById
 SELECT id, external_id, metadata, created_at, updated_at

@@ -1,9 +1,22 @@
 import { ORPCError, implement } from "@orpc/server";
 import { fakeOsContract } from "@iterate-com/fake-os-contract";
 import { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
+import {
+  createDockerProvider,
+  resolveDockerLocator,
+} from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
+import {
+  createFlyProvider,
+  flyProviderOptsSchema,
+} from "@iterate-com/shared/jonasland/deployment/fly-deployment.ts";
 import { eq } from "drizzle-orm";
+import { z } from "zod";
 import * as schema from "./db/schema.ts";
 import { db } from "./db/index.ts";
+import {
+  parseDeploymentLocator,
+  type AnyDeploymentLocator,
+} from "./deployments/deployment-provider-factory.ts";
 import { deploymentRuntimeRegistry } from "./deployments/deployment-runtime-registry.ts";
 import { parseDeploymentConfig } from "./deployments/deployment-provider-factory.ts";
 
@@ -87,6 +100,20 @@ export const router = os.router({
       }
     }),
 
+    recover: os.deployments.recover.handler(async ({ input }) => {
+      try {
+        const recovered = await recoverExistingDeployment(input);
+        const saved = saveRecoveredDeploymentRow(recovered);
+        deploymentRuntimeRegistry.set({
+          slug: recovered.slug,
+          deployment: recovered.deployment,
+        });
+        return serializeDeployment(saved);
+      } catch (error) {
+        throw toOrpcBadRequest(error);
+      }
+    }),
+
     logs: os.deployments.logs.handler(async function* ({ input, signal }) {
       const deployment = await requireDeploymentRuntime(input.slug);
       for await (const entry of deployment.logs({ signal })) {
@@ -157,6 +184,16 @@ export const router = os.router({
 
 export type Router = typeof router;
 
+type RecoverDeploymentInput = z.infer<typeof schema.recoverDeploymentSchema>;
+
+type RecoveredDeploymentRecord = {
+  provider: "docker" | "fly";
+  slug: string;
+  deployment: Deployment;
+  opts: unknown;
+  deploymentLocator: AnyDeploymentLocator;
+};
+
 function updateDeploymentLocator(slug: string, locator: unknown) {
   return db
     .update(schema.deploymentsTable)
@@ -195,6 +232,116 @@ async function createRuntimeForRow(row: typeof schema.deploymentsTable.$inferSel
   updateDeploymentLocator(row.slug, locator);
 }
 
+async function recoverExistingDeployment(
+  input: RecoverDeploymentInput,
+): Promise<RecoveredDeploymentRecord> {
+  if (input.provider === "docker") {
+    const provider = createDockerProvider();
+    const locator = await resolveDockerLocator({ reference: input.reference });
+    await ensureRecoveredRuntimeIsConnectable({ provider, locator });
+    const deployment = await Deployment.connect({ provider, locator });
+    return {
+      provider: "docker",
+      slug: deployment.slug,
+      deployment,
+      opts: {
+        providerOpts: {},
+        opts: omitDeploymentSlug(deployment.opts),
+      },
+      deploymentLocator: parseDeploymentLocator({
+        provider: "docker",
+        locator: deployment.locator,
+      }),
+    };
+  }
+
+  const providerOpts = flyProviderOptsSchema.parse(input.providerOpts);
+  const provider = createFlyProvider(providerOpts);
+  const locator = parseDeploymentLocator({
+    provider: "fly",
+    locator: {
+      provider: "fly",
+      appName: input.appName,
+      ...(input.machineId ? { machineId: input.machineId } : {}),
+    },
+  });
+  await ensureRecoveredRuntimeIsConnectable({ provider, locator });
+  const deployment = await Deployment.connect({ provider, locator });
+  return {
+    provider: "fly",
+    slug: deployment.slug,
+    deployment,
+    opts: {
+      providerOpts,
+      opts: omitDeploymentSlug(deployment.opts),
+    },
+    deploymentLocator: parseDeploymentLocator({
+      provider: "fly",
+      locator: deployment.locator,
+    }),
+  };
+}
+
+async function ensureRecoveredRuntimeIsConnectable(params: {
+  provider: {
+    status(args: { signal?: AbortSignal; locator: AnyDeploymentLocator }): Promise<{
+      state: "unknown" | "running" | "starting" | "stopped" | "destroyed" | "error";
+      detail: string;
+    }>;
+    start(args: { signal?: AbortSignal; locator: AnyDeploymentLocator }): Promise<void>;
+  };
+  locator: AnyDeploymentLocator;
+}) {
+  const status = await params.provider.status({ locator: params.locator });
+  if (status.state === "destroyed") {
+    throw new Error(`Cannot recover destroyed deployment: ${status.detail}`);
+  }
+  if (status.state === "error") {
+    throw new Error(`Cannot recover deployment in error state: ${status.detail}`);
+  }
+  if (status.state === "stopped") {
+    await params.provider.start({ locator: params.locator });
+  }
+}
+
+function saveRecoveredDeploymentRow(params: RecoveredDeploymentRecord) {
+  const existing = db
+    .select()
+    .from(schema.deploymentsTable)
+    .where(eq(schema.deploymentsTable.slug, params.slug))
+    .get();
+
+  if (!existing) {
+    return db
+      .insert(schema.deploymentsTable)
+      .values({
+        provider: params.provider,
+        slug: params.slug,
+        opts: params.opts,
+        deploymentLocator: params.deploymentLocator,
+      })
+      .returning()
+      .get();
+  }
+
+  if (!isSameRecoveredRuntime(existing, params)) {
+    throw new Error(
+      `Deployment slug ${JSON.stringify(params.slug)} already exists in fake-os for a different runtime`,
+    );
+  }
+
+  return db
+    .update(schema.deploymentsTable)
+    .set({
+      provider: params.provider,
+      opts: params.opts,
+      deploymentLocator: params.deploymentLocator,
+    })
+    .where(eq(schema.deploymentsTable.slug, params.slug))
+    .returning()
+    .get();
+}
+
 function serializeDeployment(row: typeof schema.deploymentsTable.$inferSelect) {
   const runtime = deploymentRuntimeRegistry.get(row.slug)?.snapshot() ?? null;
   return {
@@ -202,7 +349,6 @@ function serializeDeployment(row: typeof schema.deploymentsTable.$inferSelect) {
     runtime: runtime
       ? {
           state: toContractRuntimeState(runtime.state),
-          baseUrl: runtime.baseUrl,
           providerStatus: runtime.providerStatus,
         }
       : null,
@@ -263,4 +409,48 @@ function toOrpcBadRequest(error: unknown) {
   return new ORPCError("BAD_REQUEST", {
     message: error instanceof Error ? error.message : String(error),
   });
+}
+
+function isSameRecoveredRuntime(
+  row: typeof schema.deploymentsTable.$inferSelect,
+  recovered: RecoveredDeploymentRecord,
+) {
+  if (row.provider !== recovered.provider) {
+    return false;
+  }
+  if (!row.deploymentLocator) {
+    return true;
+  }
+
+  if (recovered.provider === "docker") {
+    const current = parseDeploymentLocator({
+      provider: "docker",
+      locator: row.deploymentLocator,
+    });
+    const next = parseDeploymentLocator({
+      provider: "docker",
+      locator: recovered.deploymentLocator,
+    });
+    return (
+      current.containerId === next.containerId ||
+      (Boolean(current.containerName) &&
+        Boolean(next.containerName) &&
+        current.containerName === next.containerName)
+    );
+  }
+
+  const current = parseDeploymentLocator({
+    provider: "fly",
+    locator: row.deploymentLocator,
+  });
+  const next = parseDeploymentLocator({
+    provider: "fly",
+    locator: recovered.deploymentLocator,
+  });
+  return current.appName === next.appName;
+}
+
+function omitDeploymentSlug<TValue extends { slug: string }>(value: TValue): Omit<TValue, "slug"> {
+  const { slug: _slug, ...rest } = value;
+  return rest;
 }

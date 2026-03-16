@@ -110,7 +110,7 @@ pnpm --filter @iterate-com/jonasland-sandbox docker:shell -- \
   --env ITERATE_EGRESS_PROXY=http://host.docker.internal:19555
 
 # Inside container, all HTTPS traffic flows through:
-#   process → iptables → caddy MITM → egress-service → host proxy → internet
+#   process → iptables → caddy MITM → external-egress-proxy → host proxy → internet
 ```
 
 ## E2E tests

@@ -4,7 +4,6 @@ import { isAbsolute, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { randomUUID } from "node:crypto";
 import { DockerClient } from "@docker/node-sdk";
-import pWaitFor from "p-wait-for";
 import { stripAnsi } from "../strip-ansi.ts";
 import {
   type DeploymentProviderState,
@@ -47,6 +46,7 @@ const DOCKER_PNPM_STORE_MOUNT_PATH = "/home/iterate/.pnpm-store";
 const DOCKER_HOST_REPO_CHECKOUT_MOUNT_PATH = "/host/repo-checkout";
 const DOCKER_HOST_GIT_DIR_MOUNT_PATH = "/host/gitdir";
 const DOCKER_HOST_GIT_COMMON_DIR_MOUNT_PATH = "/host/commondir";
+const DOCKER_DEFAULT_INGRESS_HOST = "orb-stack.orb.local";
 
 let dockerClientPromise: Promise<DockerClient> | undefined;
 
@@ -62,51 +62,11 @@ async function dockerClient(): Promise<DockerClient> {
   }
 }
 
-function normalizeDockerNameForHost(name: string): string {
-  const normalized = name
-    .trim()
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9-]/g, "-")
-    .replaceAll(/-+/g, "-")
-    .replaceAll(/^-|-$/g, "");
-  return normalized.length > 0 ? normalized : "docker-deployment";
-}
-
 function resolveContainerName(explicit?: string): string {
   if (explicit && explicit.trim().length > 0) {
     return explicit.trim();
   }
   return `docker-deployment-${randomUUID().slice(0, 8)}`;
-}
-
-async function waitForPublishedPort(params: {
-  containerId: string;
-  containerPort: string;
-  signal?: AbortSignal;
-}): Promise<number> {
-  const docker = await dockerClient();
-  let resolved: number | undefined;
-  await pWaitFor(
-    async () => {
-      throwIfAborted(params.signal);
-      const info = await docker.containerInspect(params.containerId);
-      const hostPort = info.NetworkSettings?.Ports?.[params.containerPort]?.[0]?.HostPort;
-      if (hostPort) {
-        resolved = Number(hostPort);
-        return true;
-      }
-      return false;
-    },
-    {
-      interval: 100,
-      timeout: {
-        milliseconds: 10_000,
-        message: `No published port for ${params.containerPort}`,
-      },
-      signal: params.signal,
-    },
-  );
-  return resolved!;
 }
 
 export function createDockerProvider(
@@ -166,12 +126,11 @@ export function createDockerProvider(
       };
 
       const containerName = resolveContainerName(opts.slug);
-      const publicBaseHost = `${normalizeDockerNameForHost(containerName)}.orb.local`;
       const effectiveOpts = withDefaultDockerOpts({
         ...opts,
         env: {
           ...(opts.env ?? {}),
-          ITERATE_INGRESS_HOST: opts.env?.ITERATE_INGRESS_HOST ?? publicBaseHost,
+          ITERATE_INGRESS_HOST: opts.env?.ITERATE_INGRESS_HOST ?? DOCKER_DEFAULT_INGRESS_HOST,
           ITERATE_INGRESS_ROUTING_TYPE: opts.env?.ITERATE_INGRESS_ROUTING_TYPE ?? "subdomain-host",
         },
       });
@@ -206,20 +165,11 @@ export function createDockerProvider(
       if (!containerId) {
         throw new Error(`docker container create id missing: ${JSON.stringify(created)}`);
       }
-
       throwIfAborted(params.signal);
       await docker.containerStart(containerId);
-
-      const hostPort = await waitForPublishedPort({
-        containerId,
-        containerPort: "80/tcp",
-        signal: params.signal,
-      });
-      const baseUrl = `http://127.0.0.1:${String(hostPort)}`;
-      console.log(`[docker] container=${containerId.slice(0, 12)} port=${String(hostPort)}`);
+      console.log(`[docker] container=${containerId.slice(0, 12)} started`);
 
       return {
-        baseUrl,
         locator: {
           provider: "docker",
           containerId,
@@ -232,18 +182,15 @@ export function createDockerProvider(
       throwIfAborted(params.signal);
       const locator = toDockerLocator(params.locator);
       const info = await docker.containerInspect(locator.containerId);
-      const hostPort = await waitForPublishedPort({
-        containerId: locator.containerId,
-        containerPort: "80/tcp",
-        signal: params.signal,
-      });
       return {
-        baseUrl: `http://127.0.0.1:${String(hostPort)}`,
         locator: {
           ...locator,
           containerName: normalizeInspectName(info.Name) ?? locator.containerName,
         },
       };
+    },
+    getDefaultIngressHost() {
+      return DOCKER_DEFAULT_INGRESS_HOST;
     },
     async recoverOpts(params) {
       const docker = await dockerClient();
@@ -389,6 +336,26 @@ export async function inspectDockerContainer(params: {
 }): Promise<Awaited<ReturnType<DockerSdkClient["containerInspect"]>>> {
   const docker = await dockerClient();
   return await docker.containerInspect(params.locator.containerId);
+}
+
+export async function resolveDockerLocator(params: {
+  reference: string;
+}): Promise<DockerDeploymentLocator> {
+  const docker = await dockerClient();
+  const reference = params.reference.trim();
+  if (!reference) {
+    throw new Error("docker container reference is required");
+  }
+  const info = await docker.containerInspect(reference);
+  const containerId = info.Id;
+  if (!containerId) {
+    throw new Error(`Could not resolve docker container: ${reference}`);
+  }
+  return {
+    provider: "docker",
+    containerId,
+    ...(normalizeInspectName(info.Name) ? { containerName: normalizeInspectName(info.Name) } : {}),
+  };
 }
 
 function dedupeStringList(values: Array<string | undefined>): string[] | undefined {

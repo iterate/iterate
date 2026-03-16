@@ -2,7 +2,7 @@ import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 import { typeid } from "typeid-js";
 
-export { createDeploymentSchema } from "@iterate-com/fake-os-contract";
+export { createDeploymentSchema, recoverDeploymentSchema } from "@iterate-com/fake-os-contract";
 
 export const deploymentsTable = sqliteTable("deployments", {
   id: text()

@@ -45,7 +45,6 @@ export class Deployment {
   private _providerStatus: Awaited<ReturnType<DeploymentProvider["status"]>> | null = null;
   private _provider: DeploymentProvider | null = null;
 
-  public baseUrl = "";
   private _pidnap: PidnapClient | null = null;
   private _registryService: RegistryClient | null = null;
   private _eventsService: ContractRouterClient<EventBusContract> | null = null;
@@ -76,7 +75,6 @@ export class Deployment {
     assertValidDeploymentSlug(recoveredOpts.slug);
     await deployment.attachRuntime({
       locator: provisioned.locator,
-      baseUrl: provisioned.baseUrl,
       recoveredOpts,
       bootstrapEnv: recoveredOpts.env ?? {},
     });
@@ -108,7 +106,6 @@ export class Deployment {
     assertValidDeploymentSlug(recoveredOpts.slug);
     await deployment.attachRuntime({
       locator: attached.locator,
-      baseUrl: attached.baseUrl,
       recoveredOpts,
     });
     return deployment;
@@ -145,7 +142,6 @@ export class Deployment {
     return {
       slug: this._slug,
       state: this.state,
-      baseUrl: this.baseUrl || null,
       locator: this._locator,
       providerStatus: this._providerStatus,
       opts: this._opts,
@@ -206,7 +202,7 @@ export class Deployment {
     this.assertConnected();
     if (this._pidnap) return this._pidnap;
     this._pidnap = createPidnapClient({
-      url: `${this.baseUrl}/rpc`,
+      url: `${this.runtimeBaseUrl()}/rpc`,
       fetch: this.routedFetch("pidnap.iterate.localhost"),
     });
     return this._pidnap;
@@ -216,7 +212,7 @@ export class Deployment {
     this.assertConnected();
     if (this._registryService) return this._registryService;
     this._registryService = createRegistryClient({
-      url: `${this.baseUrl}/api`,
+      url: `${this.runtimeBaseUrl()}/api`,
       fetch: this.routedFetch("registry.iterate.localhost"),
     });
     return this._registryService;
@@ -236,11 +232,12 @@ export class Deployment {
     this.assertConnected();
     const signal = composeAbortSignal(params ?? {});
     const startedAt = Date.now();
+    const runtimeBaseUrl = this.runtimeBaseUrl();
 
-    console.log(`[deployment] waiting for caddy at ${this.baseUrl}/__iterate/caddy-health...`);
+    console.log(`[deployment] waiting for caddy at ${runtimeBaseUrl}/__iterate/caddy-health...`);
     await pWaitFor(
       async () => {
-        const resp = await fetch(`${this.baseUrl}/__iterate/caddy-health`, { signal }).catch(
+        const resp = await fetch(`${runtimeBaseUrl}/__iterate/caddy-health`, { signal }).catch(
           () => null,
         );
         return resp?.ok ?? false;
@@ -297,7 +294,10 @@ export class Deployment {
 
   async fetch(host: string, path: string, init?: RequestInit) {
     this.assertConnected();
-    const req = new Request(new URL(path.startsWith("/") ? path : `/${path}`, this.baseUrl), init);
+    const req = new Request(
+      new URL(path.startsWith("/") ? path : `/${path}`, this.runtimeBaseUrl()),
+      init,
+    );
     return await this.routedFetch(host)(req);
   }
 
@@ -317,7 +317,7 @@ export class Deployment {
       ? `${normalized.slice(0, -"-service".length)}.iterate.localhost`
       : `${normalized}.iterate.localhost`;
     const link = new OpenAPILink(params.orpcContract, {
-      url: `${this.baseUrl}/api`,
+      url: `${this.runtimeBaseUrl()}/api`,
       fetch: this.routedFetch(host),
     });
     return createORPCClient(link) as ContractRouterClient<TContract>;
@@ -616,7 +616,6 @@ export class Deployment {
     this._eventsService = null;
     this._locator = null;
     this._provider = null;
-    this.baseUrl = "";
     this._providerStatus = null;
     this._opts = null;
     this.transition("destroyed");
@@ -645,11 +644,9 @@ export class Deployment {
    */
   private async attachRuntime(params: {
     locator: unknown;
-    baseUrl: string;
     recoveredOpts: DeploymentOpts;
     bootstrapEnv?: Record<string, string>;
   }) {
-    this.baseUrl = params.baseUrl;
     this._slug = params.recoveredOpts.slug;
     this._locator = params.locator;
     this._opts = params.recoveredOpts;
@@ -707,7 +704,7 @@ export class Deployment {
    * `deployment.env` snapshot to match what was written.
    */
   private async writeRuntimeEnvFile(env: Record<string, string>) {
-    const normalizedEnv = normalizeRuntimeEnvRecord(env);
+    const normalizedEnv = this.resolveCanonicalRuntimeEnv(env);
     const envFileContent = serializeRuntimeEnvFile(normalizedEnv);
     const result = await this.shell({
       cmd: [
@@ -727,17 +724,43 @@ export class Deployment {
 
   private updateRuntimeEnvSnapshot(env: Record<string, string>) {
     if (!this._opts) return;
+    const nextEnv = this.resolveCanonicalRuntimeEnv(env);
     this._opts = {
       ...this._opts,
-      env: toOptionalRuntimeEnv(env),
+      env: toOptionalRuntimeEnv(nextEnv),
     };
   }
 
-  private routedFetch(host: string) {
-    if (!this.baseUrl) {
-      throw new Error(`${this.constructor.name} has no baseUrl`);
+  /**
+   * Internal deployment traffic intentionally goes through the same canonical
+   * ingress host as external callers. `ITERATE_INGRESS_HOST` is the single
+   * source of truth; providers only supply the fallback when runtime env is
+   * missing it.
+   */
+  private runtimeBaseUrl() {
+    return `http://${this.runtimeIngressHost()}`;
+  }
+
+  private runtimeIngressHost() {
+    const ingressHost = this.env.ITERATE_INGRESS_HOST?.trim();
+    if (!ingressHost) {
+      throw new Error(`${this.constructor.name} has no ITERATE_INGRESS_HOST`);
     }
-    return createHostRoutedFetch({ baseUrl: this.baseUrl, host });
+    return normalizeCanonicalIngressHost(ingressHost);
+  }
+
+  private resolveCanonicalRuntimeEnv(env: Record<string, string>) {
+    const ingressHost =
+      env.ITERATE_INGRESS_HOST?.trim() ||
+      this.provider.getDefaultIngressHost({ locator: this.locator });
+    return normalizeRuntimeEnvRecord({
+      ...env,
+      ITERATE_INGRESS_HOST: normalizeCanonicalIngressHost(ingressHost),
+    });
+  }
+
+  private routedFetch(host: string) {
+    return createHostRoutedFetch({ baseUrl: this.runtimeBaseUrl(), host });
   }
 
   private transition(
@@ -925,6 +948,17 @@ function parseRuntimeEnvValue(rawValue: string) {
     return rawValue.slice(1, -1);
   }
   return rawValue;
+}
+
+function normalizeCanonicalIngressHost(value: string) {
+  const normalized = value.trim().replace(/\/+$/, "");
+  if (!normalized) {
+    throw new Error("ITERATE_INGRESS_HOST is required");
+  }
+  if (/^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(normalized) || normalized.includes("/")) {
+    throw new Error(`ITERATE_INGRESS_HOST must be a host, received ${JSON.stringify(value)}`);
+  }
+  return normalized;
 }
 
 function resolveIngressProxyDomainFromBaseUrl(baseUrl: string): string {

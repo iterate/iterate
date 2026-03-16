@@ -6,7 +6,6 @@ import packageJson from "../package.json" with { type: "json" };
 
 export const DeploymentRuntime = z.object({
   state: z.enum(["pending", "connecting", "connected", "disconnected", "destroying", "destroyed"]),
-  baseUrl: z.string().nullable(),
   providerStatus: z
     .object({
       state: z.enum(["unknown", "running", "starting", "stopped", "destroyed", "error"]),
@@ -91,6 +90,26 @@ export const CreateDeploymentInput = z.object({
   }),
 });
 
+export const RecoverDockerDeploymentInput = z.object({
+  provider: z.literal("docker"),
+  reference: z.string().min(1, "Docker container reference is required"),
+});
+
+export const RecoverFlyDeploymentInput = z.object({
+  provider: z.literal("fly"),
+  appName: z.string().min(1, "Fly app name is required"),
+  machineId: z.string().min(1).optional(),
+  providerOpts: z.object({
+    flyApiToken: z.string().min(1, "Fly API token is required"),
+    flyApiBaseUrl: z.string().url().optional(),
+  }),
+});
+
+export const RecoverDeploymentInput = z.discriminatedUnion("provider", [
+  RecoverDockerDeploymentInput,
+  RecoverFlyDeploymentInput,
+]);
+
 export const SlugInput = z.object({ slug: z.string() });
 export const DeploymentPidnapProcessInput = z.object({
   slug: z.string(),
@@ -115,6 +134,14 @@ export const fakeOsContract = oc.router({
     create: oc
       .route({ method: "POST", path: "/deployments", summary: "Create deployment" })
       .input(CreateDeploymentInput)
+      .output(Deployment),
+    recover: oc
+      .route({
+        method: "POST",
+        path: "/deployments/recover",
+        summary: "Recover an existing deployment into fake-os",
+      })
+      .input(RecoverDeploymentInput)
       .output(Deployment),
     logs: oc
       .route({
@@ -192,6 +219,7 @@ export const fakeOsServiceManifest = {
 
 export {
   CreateDeploymentInput as createDeploymentSchema,
+  RecoverDeploymentInput as recoverDeploymentSchema,
   SlugInput as slugInputSchema,
   FakeOsServiceEnv as fakeOsServiceEnvSchema,
 };

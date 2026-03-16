@@ -6,12 +6,19 @@ import { describe } from "vitest";
 import { useMockHttpServer } from "@iterate-com/mock-http-proxy";
 import { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
 import { createDockerProvider } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";
-import { DockerDeploymentTestEnv } from "../../test-helpers/deployment-test-env.ts";
+import { z } from "zod/v4";
 import { useCloudflareTunnelFromSemaphore } from "../../test-helpers/use-cloudflare-tunnel-from-semaphore.ts";
 import { test } from "../../test-support/e2e-test.ts";
 
 const FRP_DATA_REMOTE_PORT = 27180;
 const FRP_READY_REGEX = /start proxy success|proxy added successfully|login to server success/i;
+
+const CloudflareTunnelTestEnv = z.object({
+  JONASLAND_SANDBOX_IMAGE: z.string().trim().min(1),
+  SEMAPHORE_API_TOKEN: z.string().trim().min(1),
+  SEMAPHORE_BASE_URL: z.string().trim().min(1),
+  E2E_NO_DISPOSE: z.string().optional(),
+});
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -125,29 +132,6 @@ async function connectFrpToPublicDeployment(params: {
   };
 }
 
-function requireSemaphoreWorkerEnv() {
-  const semaphoreWorkerUrl = process.env.SEMAPHORE_E2E_BASE_URL?.trim();
-  const semaphoreWorkerApiKey = (
-    process.env.SEMAPHORE_E2E_API_TOKEN ?? process.env.SEMAPHORE_API_TOKEN
-  )?.trim();
-
-  if (!semaphoreWorkerUrl) {
-    throw new Error(
-      "SEMAPHORE_E2E_BASE_URL is required for the Cloudflare tunnel semaphore fixture",
-    );
-  }
-  if (!semaphoreWorkerApiKey) {
-    throw new Error(
-      "SEMAPHORE_E2E_API_TOKEN (or SEMAPHORE_API_TOKEN) is required for the Cloudflare tunnel semaphore fixture",
-    );
-  }
-
-  return {
-    semaphoreWorkerUrl,
-    semaphoreWorkerApiKey,
-  };
-}
-
 describe("cloudflare tunnel", () => {
   test(
     "deployment-managed semaphore-backed tunnel becomes deployment ingress",
@@ -160,14 +144,15 @@ describe("cloudflare tunnel", () => {
         testSlug: e2e.testSlug,
         deploymentSlug: e2e.deploymentSlug,
       });
-      const semaphoreWorker = requireSemaphoreWorkerEnv();
-      const { image } = DockerDeploymentTestEnv.parse(process.env);
-      console.log("[cloudflare-tunnel.e2e] creating deployment", { image });
+      const env = CloudflareTunnelTestEnv.parse(process.env);
+      console.log("[cloudflare-tunnel.e2e] creating deployment", {
+        image: env.JONASLAND_SANDBOX_IMAGE,
+      });
       const deployment = await Deployment.create({
         provider: createDockerProvider({}),
         opts: {
           slug: e2e.deploymentSlug,
-          image,
+          image: env.JONASLAND_SANDBOX_IMAGE,
           env: {
             DOCKER_HOST_SYNC_ENABLED: "true",
           },
@@ -179,51 +164,26 @@ describe("cloudflare tunnel", () => {
         waitUntilHealthyTimeoutMs: 90_000,
       });
       await using cloudflareTunnel = await useCloudflareTunnelFromSemaphore({
-        semaphoreWorkerUrl: semaphoreWorker.semaphoreWorkerUrl,
-        semaphoreWorkerApiKey: semaphoreWorker.semaphoreWorkerApiKey,
+        apiToken: env.SEMAPHORE_API_TOKEN,
+        baseUrl: env.SEMAPHORE_BASE_URL,
+        leaseMs: 10 * 60 * 1000,
+        waitMs: 60_000,
       });
       const tunnelUrl = `https://${cloudflareTunnel.publicHostname}`;
-      console.log("[cloudflare-tunnel.e2e] leased semaphore tunnel", {
-        slug: cloudflareTunnel.slug,
-        publicHostname: cloudflareTunnel.publicHostname,
-        expiresAt: cloudflareTunnel.expiresAt,
-      });
 
-      await f.deployment.setEnvVars(
-        {
-          CLOUDFLARE_TUNNEL_ENABLED: "true",
-          CLOUDFLARE_TUNNEL_TOKEN: cloudflareTunnel.tunnelToken,
-          CLOUDFLARE_TUNNEL_PUBLIC_URL: tunnelUrl,
-        },
-        {
-          waitForHealthy: false,
-        },
-      );
-      await f.deployment.waitUntilHealthy({
-        timeoutMs: 90_000,
+      await f.deployment.setEnvVars({
+        ITERATE_INGRESS_HOST: cloudflareTunnel.publicHostname,
+        ITERATE_INGRESS_ROUTING_TYPE: "dunder-prefix",
+        CLOUDFLARE_TUNNEL_TOKEN: cloudflareTunnel.tunnelToken,
+        CLOUDFLARE_TUNNEL_PUBLIC_URL: tunnelUrl,
       });
-
-      await f.deployment.pidnap.processes.waitFor({
-        processes: {
-          "cloudflare-tunnel": "healthy",
-        },
-        timeoutMs: 90_000,
-      });
-      console.log("[cloudflare-tunnel.e2e] cloudflare tunnel reported healthy");
 
       console.log("[cloudflare-tunnel.e2e] tunnel url", tunnelUrl);
-      expect(
-        await waitForPublicText({
-          url: new URL("/__iterate/caddy-health", tunnelUrl).toString(),
-          timeoutMs: 90_000,
-          matches: (body) => body.includes("ok"),
-        }),
-      ).toContain("ok");
 
       await using routes = await f.useIngressProxyRoutes({
         targetURL: tunnelUrl,
         routingType: "dunder-prefix",
-        timeoutMs: 90_000,
+        timeoutMs: 60_000,
         metadata: {
           source: "jonasland-vitest-cloudflare-tunnel",
           deployment: f.snapshot(),

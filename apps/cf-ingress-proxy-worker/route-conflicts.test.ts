@@ -13,6 +13,7 @@ describe("normalizePattern", () => {
   it.each([
     ["App.Project.ingress.iterate.com.", "app.project.ingress.iterate.com"],
     ["*.PROJECT.ingress.iterate.com", "*.project.ingress.iterate.com"],
+    ["*__PROJECT.ingress.iterate.com", "*__project.ingress.iterate.com"],
     ["  app.project.ingress.iterate.com  ", "app.project.ingress.iterate.com"],
   ])("normalizes %s -> %s", (input, expected) => {
     expect(normalizePattern(input)).toBe(expected);

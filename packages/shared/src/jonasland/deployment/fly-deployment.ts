@@ -186,7 +186,6 @@ export function createFlyProvider(
           appName,
           machineId,
         },
-        baseUrl: `http://${appName}.${FLY_BASE_DOMAIN}`,
       };
     },
     async connect(params) {
@@ -205,8 +204,10 @@ export function createFlyProvider(
           ...locator,
           ...(machineId ? { machineId } : {}),
         },
-        baseUrl: `http://${locator.appName}.${FLY_BASE_DOMAIN}`,
       };
+    },
+    getDefaultIngressHost(params) {
+      return `${params.locator.appName}.${FLY_BASE_DOMAIN}`;
     },
     async recoverOpts(params) {
       const locator = toFlyLocator(params.locator);

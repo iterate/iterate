@@ -20,7 +20,7 @@ function DeploymentsIndex() {
           className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground"
         >
           <PlusIcon className="size-4" />
-          New
+          New / Recover
         </Link>
       </div>
 
@@ -33,7 +33,7 @@ function DeploymentsIndex() {
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground"
           >
             <PlusIcon className="size-4" />
-            Create your first deployment
+            Create or recover your first deployment
           </Link>
         </div>
       ) : (

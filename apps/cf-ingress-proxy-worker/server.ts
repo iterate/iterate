@@ -16,8 +16,8 @@ import {
   deleteRoutePatternsByRouteIdStmt,
   insertRoutePatternStmt,
   insertRouteStmt,
+  selectMatchingRoutePatternsByHost,
   selectRouteById,
-  selectResolvedRouteByHost,
   selectRoutePatterns,
   selectRoutePatternsByRouteId,
   selectRoutes,
@@ -440,7 +440,7 @@ export async function resolveRouteByHost(
   const host = normalizeInboundHost(rawHost);
   if (!host) return null;
 
-  const winner = await selectResolvedRouteByHost(db, { host });
+  const winner = (await selectMatchingRoutePatternsByHost(db, { host }))[0] ?? null;
   if (!winner) return null;
 
   return {

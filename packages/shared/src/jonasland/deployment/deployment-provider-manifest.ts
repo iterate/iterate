@@ -147,14 +147,16 @@ export interface DeploymentProvider<
   TLocator = unknown,
   TProviderOpts extends DeploymentProviderOpts = DeploymentProviderOpts,
 > extends DeploymentProviderManifest<TOpts, TLocator, TProviderOpts> {
-  create(params: { signal?: AbortSignal; opts: TOpts }): Promise<{
-    locator: TLocator;
-    baseUrl: string;
-  }>;
-  connect(params: { signal?: AbortSignal; locator: TLocator }): Promise<{
-    locator: TLocator;
-    baseUrl: string;
-  }>;
+  create(params: { signal?: AbortSignal; opts: TOpts }): Promise<{ locator: TLocator }>;
+  connect(params: { signal?: AbortSignal; locator: TLocator }): Promise<{ locator: TLocator }>;
+  /**
+   * Providers define the deployment's default ingress host.
+   *
+   * `deployment.ts` treats `ITERATE_INGRESS_HOST` as canonical runtime config,
+   * so this hook is only the fallback when the recovered runtime env does not
+   * already specify one.
+   */
+  getDefaultIngressHost(params: { locator: TLocator }): string;
   recoverOpts(params: { signal?: AbortSignal; locator: TLocator }): Promise<TOpts>;
   start(params: { signal?: AbortSignal; locator: TLocator }): Promise<void>;
   stop(params: { signal?: AbortSignal; locator: TLocator }): Promise<void>;

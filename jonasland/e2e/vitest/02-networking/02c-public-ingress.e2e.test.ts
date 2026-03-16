@@ -114,6 +114,14 @@ type PublicExposure = AsyncDisposable & {
   targetHost: string;
 };
 
+function requireIngressHost(deployment: Deployment) {
+  const ingressHost = deployment.env.ITERATE_INGRESS_HOST?.trim();
+  if (!ingressHost) {
+    throw new Error("deployment has no ITERATE_INGRESS_HOST");
+  }
+  return ingressHost;
+}
+
 const cases = [
   {
     id: "docker" as const,
@@ -136,12 +144,10 @@ const cases = [
       deployment: Deployment;
       timeoutMs: number;
     }) => {
-      const port = Number(new URL(deployment.baseUrl).port);
-      if (!Number.isFinite(port) || port <= 0) {
-        throw new Error(`docker deployment baseUrl has no local port: ${deployment.baseUrl}`);
-      }
+      const ingressHost = requireIngressHost(deployment);
       const tunnel = await useCloudflareTunnelToLocalhost({
-        localPort: port,
+        localHost: ingressHost,
+        localPort: 80,
         cloudflaredBin: process.env.JONASLAND_E2E_CLOUDFLARED_BIN,
         timeoutMs,
         waitForReady: false,
@@ -173,8 +179,8 @@ const cases = [
     },
 
     exposePublicTarget: async ({ deployment }: { deployment: Deployment; timeoutMs: number }) => ({
-      targetUrl: deployment.baseUrl,
-      targetHost: new URL(deployment.baseUrl).host,
+      targetUrl: `http://${requireIngressHost(deployment)}`,
+      targetHost: requireIngressHost(deployment),
       async [Symbol.asyncDispose]() {},
     }),
   },
@@ -198,7 +204,7 @@ describe("public ingress", () => {
         });
 
         console.log("[public-ingress] deployment created", {
-          baseUrl: f.deployment.baseUrl,
+          ingressHost: f.deployment.env.ITERATE_INGRESS_HOST,
           deploymentSlug: f.deployment.opts.slug,
         });
 
@@ -206,7 +212,7 @@ describe("public ingress", () => {
           signal: AbortSignal.timeout(timeoutMs),
         });
         console.log("[public-ingress] deployment reported alive", {
-          baseUrl: f.deployment.baseUrl,
+          ingressHost: f.deployment.env.ITERATE_INGRESS_HOST,
         });
 
         const pidnapConfigs = serviceManifestToPidnapConfig({

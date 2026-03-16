@@ -340,7 +340,7 @@ async function resolveDockerFrpControl(params: { deployment: Deployment }): Prom
       transport: url.protocol === "https:" ? "wss" : "websocket",
     };
   } catch {
-    // fall through to docker/baseUrl based resolution
+    // fall through to docker ingress-host based resolution
   }
   const locator = params.deployment.locator as Partial<DockerDeploymentLocator>;
   if (locator.provider === "docker" && typeof locator.containerId === "string") {
@@ -357,18 +357,16 @@ async function resolveDockerFrpControl(params: { deployment: Deployment }): Prom
         };
       }
     } catch {
-      // fall through to baseUrl based resolution
+      // fall through to canonical ingress-host based resolution
     }
   }
-  // For older Docker e2e setups, control server is exposed on deployment.baseUrl host:port.
-  const ingressUrl = new URL(
-    params.deployment.baseUrl.includes("://")
-      ? params.deployment.baseUrl
-      : `https://${params.deployment.baseUrl}`,
-  );
+  const ingressHost = params.deployment.env.ITERATE_INGRESS_HOST?.trim();
+  if (!ingressHost) {
+    throw new Error("deployment has no ITERATE_INGRESS_HOST");
+  }
   return {
-    host: "127.0.0.1",
-    port: Number.parseInt(ingressUrl.port || "80", 10),
+    host: ingressHost,
+    port: 80,
     transport: "websocket",
   };
 }
@@ -403,11 +401,11 @@ export async function useFrpTunnelToDeployment(params: {
     step = "compute-run-context";
     runId = sanitizeRunId(params.runId);
 
-    const ingressUrl = new URL(
-      params.deployment.baseUrl.includes("://")
-        ? params.deployment.baseUrl
-        : `https://${params.deployment.baseUrl}`,
-    );
+    const ingressHost = params.deployment.env.ITERATE_INGRESS_HOST?.trim();
+    if (!ingressHost) {
+      throw new Error("deployment has no ITERATE_INGRESS_HOST");
+    }
+    const ingressUrl = new URL(`https://${ingressHost}`);
     const ingressHostname = ingressUrl.hostname.toLowerCase();
 
     if (ingressHostname.endsWith(".fly.dev") || ingressHostname.endsWith(".ingress.iterate.com")) {

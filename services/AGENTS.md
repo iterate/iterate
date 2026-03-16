@@ -20,7 +20,7 @@
 
 ## Canonical service stack
 
-Every service (except `egress-service`) uses this stack:
+Every service in this directory uses this stack:
 
 - **Server:** Hono up front (`server.ts` + `src/server/app.ts`). Dev: `tsx server.ts` starts Hono, Vite in middleware mode. Prod: Hono serves static files from `dist/client/`
 - **SPA:** TanStack Start in SPA mode (`spa: { enabled: true }`) via `vite.config.ts`

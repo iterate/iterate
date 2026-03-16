@@ -27,7 +27,6 @@ function DeploymentOverview() {
             label="Created"
             value={deployment.createdAt ? new Date(deployment.createdAt).toLocaleString() : "—"}
           />
-          <DetailCard label="Base URL" value={deployment.runtime?.baseUrl ?? "—"} />
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
