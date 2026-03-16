@@ -124,6 +124,8 @@ All endpoints require `Authorization: Bearer <INGRESS_PROXY_API_TOKEN>`.
 
 Alchemy manages worker + D1 resources.
 
+- Doppler project: `ingress-proxy`
+- repo mapping: root [`doppler.yaml`](../../doppler.yaml) maps `apps/cf-ingress-proxy-worker/` to `ingress-proxy`
 - set `WORKER_NAME` before running `alchemy.run.ts`
 - worker name: `<WORKER_NAME>`
 - D1 name: `<WORKER_NAME>-routes`
@@ -132,6 +134,12 @@ Alchemy manages worker + D1 resources.
   - `pnpm run dev` (dev stage)
   - `pnpm run deploy:prd` (prod)
 
+Current secret split:
+
+- `ingress-proxy` now owns this app's Doppler scope
+- while the broader monorepo migration is in progress, shared deploy credentials in `ingress-proxy` are direct references back to `os`
+- worker-specific values like `INGRESS_PROXY_API_TOKEN` should be managed in `ingress-proxy`
+
 ## Tests
 
 - SQLite-backed unit tests for conflict/matching internals.
@@ -139,9 +147,6 @@ Alchemy manages worker + D1 resources.
 - Live deployment E2E (Vitest):
   - `INGRESS_PROXY_E2E_BASE_URL=<https://...workers.dev> INGRESS_PROXY_E2E_API_TOKEN=<token> pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live`
   - Covers exact vs wildcard priority, wildcard specificity, create/update conflict paths, self-update behavior, and deployed websocket proxy echo.
-- CI:
-  - PRs deploy ephemeral worker, run live E2E, then teardown.
-  - `main` runs the same live E2E flow first, then deploys production worker only if live E2E passes.
 
 ## TODO (explicitly deferred)
 
