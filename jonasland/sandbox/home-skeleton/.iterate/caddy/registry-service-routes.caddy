@@ -1,3 +1,6 @@
 # registry-service rewrites this file at runtime.
+# This is the dynamic counterpart to `builtin-handlers.caddy`.
 # Keep this placeholder so root Caddyfile imports resolve before registry starts.
+# Hosts that are owned by the built-in bootstrap fragment should not also appear
+# in this file.
 

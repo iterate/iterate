@@ -143,7 +143,10 @@ Do NOT copy shadcn components locally. Import from `@iterate-com/ui/components/*
 ```bash
 pnpm dev          # Start on port 3100
 pnpm typecheck    # Type check
-pnpm db:push      # Push schema to SQLite
+pnpm db:generate --name <name>  # Generate a migration from schema.ts
+pnpm db:migrate   # Apply committed migrations to SQLite
+pnpm db:tmp:preview  # Print raw SQL diff against a temp migrated DB
+pnpm db:schema    # Refresh derived drizzle/schema.sql
 pnpm db:studio    # Open Drizzle Studio
 ```
 

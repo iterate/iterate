@@ -14,7 +14,7 @@ Single front door is Caddy. All inbound HTTP(S) traffic and all sandbox egress t
   - Contains additive ingress route metadata for explicit service hosts.
 - `services/registry/src/caddy-sync.ts`
   - Renders registry-managed Caddy fragments and reloads Caddy after validation.
-- `services/registry/src/server.ts`
+- `services/registry/server.ts`
   - Seeds built-in registry-owned routes and triggers initial synchronization from route storage into Caddy.
 - `packages/shared/src/jonasland/ingress-url.ts`
   - Shared public-URL resolver.
@@ -134,17 +134,22 @@ Other forwarded headers:
 - `X-Forwarded-Proto` -> scheme (handled natively by Caddy `trusted_proxies`)
 - `Forwarded` (RFC 7239) is not used
 
-## Built-in internal hosts
+## Built-in hosts
+
+- Built-ins should always resolve on both:
+- `service.iterate.localhost`
+- `service.{$ITERATE_INGRESS_HOST}`
+- and, where supported by ingress host parsing, `service__{$ITERATE_INGRESS_HOST}`
 
 Current built-ins routed directly by root Caddyfile:
 
-- `pidnap.iterate.localhost` -> `127.0.0.1:17300`
-- `registry.iterate.localhost` -> `127.0.0.1:17310`
-- `events.iterate.localhost` -> `127.0.0.1:17320`
-- `caddy.iterate.localhost` -> `127.0.0.1:2019`
-- `openobserve.iterate.localhost` -> `127.0.0.1:5080`
-- `otel-collector.iterate.localhost` -> `127.0.0.1:15333`
-- `frp.iterate.localhost` -> `127.0.0.1:27000`
+- `pidnap.*` -> `127.0.0.1:17300`
+- `registry.*` -> `127.0.0.1:17310`
+- `events.*` -> `127.0.0.1:17320`
+- `caddy.*` -> `127.0.0.1:2019`
+- `openobserve.*` -> `127.0.0.1:5080`
+- `otel-collector.*` -> `127.0.0.1:15333`
+- `frp.*` -> `127.0.0.1:27000`
 
 Public exposure for admin/observability hosts is currently open by design.
 Auth hardening is a separate follow-up.

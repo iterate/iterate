@@ -12,11 +12,12 @@ describe("renderRoutesFragmentForTest", () => {
       "@route_example_hosts host example.iterate.localhost example.my-proj.iterate.app example__my-proj.iterate.app",
     );
     expect(rendered).toContain("# serviceSlug: example");
+    expect(rendered).toContain("handle @route_example_hosts {");
     expect(rendered).toContain("iterate_upstream 127.0.0.1:19040");
-    expect(rendered).not.toContain("iterate_extra_proxy_behavior");
+    expect(rendered).toContain("reverse_proxy 127.0.0.1:19040 {");
   });
 
-  test("maps FRP route directives to FRP extra proxy behavior", () => {
+  test("renders extra caddy directives inline for FRP routes", () => {
     const rendered = renderRoutesFragmentForTest({
       iterateIngressHost: "my-proj.iterate.app",
       routes: [
@@ -28,10 +29,9 @@ describe("renderRoutesFragmentForTest", () => {
       ],
     });
 
-    expect(rendered).toContain("iterate_extra_proxy_behavior frp-incantations");
-    expect(rendered).toContain("# extraProxyBehavior: frp-incantations");
     expect(rendered).toContain('# extraCaddyDirectives: ["stream_close_delay 5m"]');
-    expect(rendered).toContain("iterate_upstream 127.0.0.1:27000");
+    expect(rendered).toContain("reverse_proxy 127.0.0.1:27000 {");
+    expect(rendered).toContain("stream_close_delay 5m");
   });
 
   test("strips port from ITERATE_INGRESS_HOST for host matching", () => {
@@ -56,7 +56,7 @@ describe("renderRoutesFragmentForTest", () => {
     );
   });
 
-  test("maps auth directives to OpenObserve extra proxy behavior", () => {
+  test("renders auth directives inline for OpenObserve routes", () => {
     const rendered = renderRoutesFragmentForTest({
       iterateIngressHost: "my-proj.iterate.app",
       routes: [
@@ -70,8 +70,10 @@ describe("renderRoutesFragmentForTest", () => {
       ],
     });
 
-    expect(rendered).toContain("iterate_extra_proxy_behavior openobserve-incantations");
-    expect(rendered).toContain("# extraProxyBehavior: openobserve-incantations");
+    expect(rendered).toContain("handle @route_openobserve_hosts {");
+    expect(rendered).toContain(
+      'header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="',
+    );
     expect(rendered).toContain("iterate_service_slug openobserve");
   });
 

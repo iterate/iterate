@@ -6,4 +6,4 @@ setup:
   - project: os
     path: ./
   - project: ingress-proxy
-    path: apps/ingress-proxy/
+    path: apps/ingress-proxy-worker/

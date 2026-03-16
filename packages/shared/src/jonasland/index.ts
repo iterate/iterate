@@ -747,17 +747,8 @@ export async function registerServiceWithRegistry(params: {
   metadata?: Record<string, string | undefined>;
   tags?: string[];
 }): Promise<void> {
-  const registryUrl = process.env.ITERATE_REGISTRY_URL?.trim();
-  if (!registryUrl) {
-    serviceLog.info({
-      event: "service.registry.register_skipped",
-      reason: "ITERATE_REGISTRY_URL not set",
-      host: localHostForService({ slug: params.manifest.slug }),
-    });
-    return;
-  }
-
-  const { createRegistryClient } = await import("@iterate-com/registry/client");
+  const registryUrl = "http://registry.iterate.localhost";
+  const { createRegistryClient } = await import("@iterate-com/registry-contract");
   const registryClient = createRegistryClient({ url: registryUrl });
   const host = localHostForService({ slug: params.manifest.slug });
   const target = `127.0.0.1:${String(params.port)}`;

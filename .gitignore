@@ -16,6 +16,7 @@ dist
 .wrangler
 .dev.vars*
 .alchemy
+apps/ingress-proxy-worker/wrangler.json
 
 !.dev.vars.example
 .env*

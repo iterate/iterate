@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { DeploymentLogEntry } from "@iterate-com/fake-os-contract";
 import { LogViewer } from "../-log-viewer.tsx";
 import { orpcClient } from "@/lib/orpc.ts";
@@ -14,21 +14,23 @@ function DeploymentLogs() {
   const [status, setStatus] = useState<"connecting" | "streaming" | "error" | "closed">(
     "connecting",
   );
-  const iteratorRef = useRef<AsyncIterator<DeploymentLogEntry> | undefined>(undefined);
 
   useEffect(() => {
     const controller = new AbortController();
+    let isCurrent = true;
+    let iterator: AsyncIterator<DeploymentLogEntry> | undefined;
     setLines([]);
     setStatus("connecting");
 
     void (async () => {
       try {
         const stream = await orpcClient.deployments.logs({ slug });
-        iteratorRef.current = stream[Symbol.asyncIterator]();
+        iterator = stream[Symbol.asyncIterator]();
+        if (!isCurrent || controller.signal.aborted) return;
         setStatus("streaming");
 
         while (true) {
-          const next = await iteratorRef.current.next();
+          const next = await iterator.next();
           if (next.done) break;
           if (controller.signal.aborted) break;
           setLines((prev) => {
@@ -36,9 +38,10 @@ function DeploymentLogs() {
             return updated.length > 5000 ? updated.slice(-5000) : updated;
           });
         }
+        if (!isCurrent || controller.signal.aborted) return;
         setStatus("closed");
       } catch (error) {
-        if (controller.signal.aborted) return;
+        if (!isCurrent || controller.signal.aborted) return;
         const message = error instanceof Error ? error.message : String(error);
         setLines((prev) => [...prev, `\x1b[31m[error] ${message}\x1b[0m`]);
         setStatus("error");
@@ -46,8 +49,9 @@ function DeploymentLogs() {
     })();
 
     return () => {
+      isCurrent = false;
       controller.abort();
-      void iteratorRef.current?.return?.();
+      void iterator?.return?.();
     };
   }, [slug]);
 

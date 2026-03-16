@@ -12,8 +12,8 @@
  *   pnpm docker:shell -- --label dev.orbstack.http-port=80
  *
  * Flags:
- *   --image <tag>      Docker image (default: $JONASLAND_SANDBOX_IMAGE)
- *   --name <name>      Container name (auto-sets ITERATE_INGRESS_HOST)
+ *   --image <tag>      Docker image (default: $JONASLAND_SANDBOX_IMAGE or jonasland-sandbox:local)
+ *   --name <name>      Container name (always drives ITERATE_INGRESS_HOST)
  *   --label <K>=<V>    Docker label (repeatable)
  *   --no-host-sync     Disable host repo sync (enabled by default)
  *   --no-pidnap        Skip pidnap/caddy/iptables — just a bare shell
@@ -26,7 +26,7 @@ import { join } from "node:path";
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
 
 function parseArgs(argv: string[]) {
-  let image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:latest";
+  let image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
   let hostSync = true;
   let pidnap = true;
   let containerName: string | undefined;
@@ -62,6 +62,18 @@ function parseArgs(argv: string[]) {
     }
   }
   return { image, hostSync, pidnap, containerName, envPairs, labels };
+}
+
+function toOrbHost(value: string): string {
+  return value
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9-]/g, "-")
+    .replaceAll(/-+/g, "-")
+    .replaceAll(/^-|-$/g, "");
+}
+
+function defaultContainerName(): string {
+  return `jonasland-${Date.now().toString().slice(-8)}`;
 }
 
 function parseLabelArg(raw: string): { key: string; value: string } {
@@ -117,6 +129,7 @@ function waitForHealthy(containerId: string, timeoutMs: number): void {
 const { image, hostSync, pidnap, containerName, envPairs, labels } = parseArgs(
   process.argv.slice(2),
 );
+const effectiveContainerName = containerName ?? defaultContainerName();
 
 const createArgs: string[] = [
   "run",
@@ -127,22 +140,18 @@ const createArgs: string[] = [
   "host.docker.internal:host-gateway",
 ];
 
-if (containerName) {
-  createArgs.push("--name", containerName);
-  const orbHost = containerName
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9-]/g, "-")
-    .replaceAll(/-+/g, "-")
-    .replaceAll(/^-|-$/g, "");
-  const hasIngressHost = envPairs.some((e) => e.key === "ITERATE_INGRESS_HOST");
-  if (!hasIngressHost) {
-    envPairs.push(
-      { key: "ITERATE_INGRESS_HOST", value: `${orbHost}.orb.local` },
-      { key: "ITERATE_INGRESS_ROUTING_TYPE", value: "subdomain-host" },
-    );
-  }
-  console.log(`[docker-shell] name=${containerName}`);
+createArgs.push("--name", effectiveContainerName);
+
+const orbHost = toOrbHost(effectiveContainerName);
+const hasIngressHost = envPairs.some((e) => e.key === "ITERATE_INGRESS_HOST");
+if (!hasIngressHost) {
+  envPairs.push(
+    { key: "ITERATE_INGRESS_HOST", value: `${orbHost}.orb.local` },
+    { key: "ITERATE_INGRESS_ROUTING_TYPE", value: "subdomain-host" },
+  );
 }
+console.log(`[docker-shell] name=${effectiveContainerName}`);
+console.log(`[docker-shell] ingress-host=${orbHost}.orb.local`);
 
 if (!labels.some((l) => l.key === "dev.orbstack.http-port")) {
   labels.push({ key: "dev.orbstack.http-port", value: "80" });

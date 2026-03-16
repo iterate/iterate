@@ -5,15 +5,24 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./client": "./src/client.ts",
-    "./server": "./src/server.ts"
+    "./client": "./src/client.ts"
   },
   "scripts": {
     "dev": "NODE_ENV=development tsx server.ts",
-    "build": "tsc --noEmit",
+    "build": "vite build",
     "start": "NODE_ENV=production tsx server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --environment node src/resolve-public-url.test.ts"
+    "test": "vitest run --environment node src/caddy-sync.test.ts src/resolve-public-url.test.ts",
+    "cli": "tsx ./cli/cli.ts",
+    "db:generate": "drizzle-kit generate --prefix timestamp",
+    "db:migrate": "drizzle-kit migrate",
+    "db:migrate:dev": "pnpm run db:migrate",
+    "db:check": "drizzle-kit check",
+    "db:studio": "drizzle-kit studio",
+    "db:tmp:rebuild": "pnpm cli db tmp rebuild",
+    "db:tmp:preview": "pnpm cli db tmp preview",
+    "db:schema": "pnpm cli db schema",
+    "db:check:migration-ids": "pnpm cli db check-migration-ids"
   },
   "dependencies": {
     "@accelerated-software-development/caddy-api-client": "^0.4.3",
@@ -21,23 +30,43 @@
     "@hono/node-ws": "^1.3.0",
     "@iterate-com/registry-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
+    "@iterate-com/ui": "workspace:*",
     "@orpc/client": "*",
     "@orpc/contract": "*",
     "@orpc/openapi": "*",
     "@orpc/openapi-client": "^1.13.7",
     "@orpc/server": "*",
+    "@orpc/tanstack-query": "*",
     "@orpc/zod": "*",
+    "@tailwindcss/vite": "^4.2.1",
+    "@tanstack/react-query": "^5.90.21",
+    "@tanstack/react-query-devtools": "^5.90.21",
+    "@tanstack/react-router": "^1.163.3",
+    "@tanstack/react-router-devtools": "^1.163.3",
+    "@tanstack/react-start": "^1.163.3",
     "better-sqlite3": "^12.6.2",
     "drizzle-orm": "^0.45.1",
     "hono": "^4.12.5",
+    "lucide-react": "^0.545.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tailwindcss": "^4.2.1",
     "ws": "^8.18.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.0.10",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
     "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.1.4",
+    "drizzle-kit": "^0.31.9",
+    "trpc-cli": "0.12.4",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^4.0.18"
   }
 }

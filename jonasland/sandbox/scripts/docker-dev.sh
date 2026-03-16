@@ -31,18 +31,32 @@ PROXY_PORT=19555
 FRP_DATA_PORT=27180
 DOCKER_SHELL_ARGS=()
 HAS_IMAGE_FLAG=false
+CONTAINER_NAME=""
+HAS_NAME_FLAG=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --proxy-port) PROXY_PORT="$2"; shift 2 ;;
     --proxy-port=*) PROXY_PORT="${1#*=}"; shift ;;
     --image|--image=*) HAS_IMAGE_FLAG=true; DOCKER_SHELL_ARGS+=("$1"); shift ;;
+    --name)
+      HAS_NAME_FLAG=true
+      CONTAINER_NAME="$2"
+      DOCKER_SHELL_ARGS+=("$1" "$2")
+      shift 2
+      ;;
+    --name=*)
+      HAS_NAME_FLAG=true
+      CONTAINER_NAME="${1#*=}"
+      DOCKER_SHELL_ARGS+=("$1")
+      shift
+      ;;
     *) DOCKER_SHELL_ARGS+=("$1"); shift ;;
   esac
 done
 
 if [[ "$HAS_IMAGE_FLAG" == "false" ]]; then
-  DOCKER_SHELL_ARGS+=("--image" "jonasland-sandbox:latest")
+  DOCKER_SHELL_ARGS+=("--image" "jonasland-sandbox:local")
 fi
 
 if ! command -v frpc &>/dev/null; then
@@ -50,7 +64,10 @@ if ! command -v frpc &>/dev/null; then
   exit 1
 fi
 
-CONTAINER_NAME="jonasland-dev-$(date +%s | tail -c 5)"
+if [[ "$HAS_NAME_FLAG" == "false" ]]; then
+  CONTAINER_NAME="jonasland-dev-$(date +%s | tail -c 5)"
+  DOCKER_SHELL_ARGS+=("--name" "$CONTAINER_NAME")
+fi
 
 HAR_DIR="/tmp/jonasland-dev"
 mkdir -p "$HAR_DIR"
@@ -112,7 +129,6 @@ cd '$REPO_ROOT/jonasland/sandbox'
 FRP_SETUP_PID=\$!
 
 doppler run -- tsx scripts/docker-shell.ts \\
-  --name $CONTAINER_NAME \\
   ${DOCKER_SHELL_ARGS[*]:-}
 
 echo '[docker-dev] container exited, cleaning up...'

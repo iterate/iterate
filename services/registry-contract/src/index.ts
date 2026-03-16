@@ -1,4 +1,7 @@
+import { createORPCClient } from "@orpc/client";
 import { oc } from "@orpc/contract";
+import type { ContractRouterClient } from "@orpc/contract";
+import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import {
   ServiceSqlResult,
   createServiceSubRouterContract,
@@ -137,6 +140,20 @@ export const DbQueryResponse = z.union([
   }),
 ]);
 
+const StartupSeedOutput = z.object({
+  seededCount: z.number().int().nonnegative(),
+  routeCount: z.number().int().nonnegative(),
+});
+
+const StartupInitializeInput = z
+  .object({
+    registryServicePort: z.number().int().min(1).max(65535).optional(),
+  })
+  .optional()
+  .default({});
+
+const StartupInitializeOutput = StartupSeedOutput;
+
 const serviceSubRouter = createServiceSubRouterContract({
   healthSummary: "Registry service health metadata",
   sqlSummary: "Execute SQL against registry sqlite database",
@@ -265,62 +282,28 @@ export const registryContract = oc.router({
           total: z.number().int().nonnegative(),
         }),
       ),
-
-    caddyLoadInvocation: oc
-      .route({
-        method: "POST",
-        path: "/routes/caddy-load-invocation",
-        summary: "Generate and optionally apply Caddy /load payload",
-        tags: ["routes", "caddy"],
-      })
-      .input(
-        z.object({
-          listenAddress: z.string().optional(),
-          adminUrl: z.string().optional(),
-          apply: z.boolean().optional(),
-        }),
-      )
-      .output(
-        z.object({
-          invocation: z.object({
-            method: z.literal("POST"),
-            path: z.literal("/load"),
-            url: z.string(),
-            body: z.unknown(),
-          }),
-          routeCount: z.number().int().nonnegative(),
-          applied: z.boolean(),
-        }),
-      ),
   },
 
-  caddy: {
-    loadInvocation: oc
+  startup: {
+    seedRoutes: oc
       .route({
         method: "POST",
-        path: "/caddy/load-invocation",
-        summary: "Alias for routes.caddyLoadInvocation",
-        tags: ["caddy"],
+        path: "/startup/seed-routes",
+        summary: "Seed built-in registry routes",
+        tags: ["startup"],
       })
-      .input(
-        z.object({
-          listenAddress: z.string().optional(),
-          adminUrl: z.string().optional(),
-          apply: z.boolean().optional(),
-        }),
-      )
-      .output(
-        z.object({
-          invocation: z.object({
-            method: z.literal("POST"),
-            path: z.literal("/load"),
-            url: z.string(),
-            body: z.unknown(),
-          }),
-          routeCount: z.number().int().nonnegative(),
-          applied: z.boolean(),
-        }),
-      ),
+      .input(z.object({}).optional().default({}))
+      .output(StartupSeedOutput),
+
+    initialize: oc
+      .route({
+        method: "POST",
+        path: "/startup/initialize",
+        summary: "Seed routes and optionally write a synced route fragment",
+        tags: ["startup"],
+      })
+      .input(StartupInitializeInput)
+      .output(StartupInitializeOutput),
   },
 
   config: {
@@ -393,19 +376,50 @@ const ingressRoutingType = z
 export const RegistryServiceEnv = z.object({
   REGISTRY_SERVICE_HOST: nonEmptyStringWithTrimDefault("0.0.0.0"),
   REGISTRY_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(17310),
-  REGISTRY_DB_PATH: nonEmptyStringWithTrimDefault("/var/lib/jonasland/registry.sqlite"),
+  REGISTRY_DB_PATH: nonEmptyStringWithTrimDefault("./data/registry.sqlite"),
   REGISTRY_DB_STUDIO_EMBED_URL: nonEmptyStringWithTrimDefault(
     "https://studio.outerbase.com/embed/sqlite",
   ),
   REGISTRY_DB_STUDIO_NAME: nonEmptyStringWithTrimDefault("jonasland sqlite"),
   REGISTRY_DB_BASIC_AUTH_USER: _optionalNonEmptyStringWithTrim(),
   REGISTRY_DB_BASIC_AUTH_PASS: z.string().default(""),
+  SYNC_TO_CADDY_PATH: _optionalNonEmptyStringWithTrim(),
   ITERATE_INGRESS_HOST: nonEmptyStringWithTrimDefault("iterate.localhost"),
   ITERATE_INGRESS_ROUTING_TYPE: ingressRoutingType,
   ITERATE_INGRESS_DEFAULT_SERVICE: nonEmptyStringWithTrimDefault("registry"),
 });
 
 export type RegistryServiceEnv = z.infer<typeof RegistryServiceEnv>;
+
+export type RegistryClient = ContractRouterClient<typeof registryContract>;
+
+function toBasePath(url?: string): string {
+  if (!url) return "";
+
+  if (/^https?:\/\//.test(url)) {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname.replace(/\/(?:orpc|api)\/?$/, "")}`;
+  }
+
+  return url.replace(/\/(?:orpc|api)\/?$/, "");
+}
+
+function joinPath(basePath: string, suffix: string) {
+  const base = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath;
+  return `${base}${suffix}`;
+}
+
+export function createRegistryClient(params?: {
+  url?: string;
+  fetch?: typeof fetch;
+}): RegistryClient {
+  const basePath = toBasePath(params?.url);
+  const link = new OpenAPILink(registryContract, {
+    url: joinPath(basePath, "/api"),
+    ...(params?.fetch ? { fetch: params.fetch } : {}),
+  });
+  return createORPCClient(link);
+}
 
 export {
   RouteRecord as routeRecordSchema,
@@ -432,7 +446,7 @@ export const registryServiceManifest = {
   slug: "registry",
   version: packageJson.version ?? "0.0.0",
   port: 17310,
-  serverEntryPoint: "services/registry/src/server.ts",
+  serverEntryPoint: "services/registry/server.ts",
   orpcContract: registryContract,
   envVars: RegistryServiceEnv,
 } as const satisfies ServiceManifestWithEntryPoint;

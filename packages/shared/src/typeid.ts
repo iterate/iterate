@@ -19,7 +19,7 @@ function normalizePrefix(value: string, fieldName: "TYPEID_PREFIX" | "prefix") {
 export function typeid<TEnv extends TypeIdEnv, TPrefix extends string>(params: {
   env: TEnv;
   prefix: TPrefix;
-}): `${string}__${string}_${string}` {
+}): `${string}__${string}__${string}` {
   // We call the official TypeID implementation directly:
   // https://github.com/jetify-com/typeid-js
   //
@@ -29,5 +29,5 @@ export function typeid<TEnv extends TypeIdEnv, TPrefix extends string>(params: {
   const localPrefix = normalizePrefix(params.prefix, "prefix");
   const generated = createTypeId(localPrefix);
 
-  return `${globalPrefix}__${generated.getType()}_${generated.getSuffix()}` as `${string}__${string}_${string}`;
+  return `${generated.getType()}__${globalPrefix}__${generated.getSuffix()}` as `${string}__${string}__${string}`;
 }

@@ -5,7 +5,7 @@ import {
   serviceManifest as eventsServiceManifest,
 } from "@iterate-com/events-contract";
 import { createIngressProxyClient } from "@iterate-com/ingress-proxy-contract";
-import { createRegistryClient, type RegistryClient } from "@iterate-com/registry/client";
+import { createRegistryClient, type RegistryClient } from "@iterate-com/registry-contract";
 import { createORPCClient } from "@orpc/client";
 import { type AnyContractRouter, type ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";

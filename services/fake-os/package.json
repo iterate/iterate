@@ -7,9 +7,16 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "cli": "tsx ./cli/cli.ts",
+    "db:generate": "drizzle-kit generate --prefix timestamp",
+    "db:migrate": "drizzle-kit migrate",
+    "db:migrate:dev": "pnpm run db:migrate",
+    "db:check": "drizzle-kit check",
+    "db:studio": "drizzle-kit studio",
+    "db:tmp:rebuild": "pnpm cli db tmp rebuild",
+    "db:tmp:preview": "pnpm cli db tmp preview",
+    "db:schema": "pnpm cli db schema",
+    "db:check:migration-ids": "pnpm cli db check-migration-ids"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.10",
@@ -46,6 +53,8 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.1.4",
     "drizzle-kit": "^0.31.9",
+    "trpc-cli": "0.12.4",
+    "tsx": "^4.20.3",
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
     "vite-tsconfig-paths": "^5.1.4",

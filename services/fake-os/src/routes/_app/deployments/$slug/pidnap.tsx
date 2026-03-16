@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CopyIcon, RotateCwIcon } from "lucide-react";
 import type { PidnapLogEntry } from "@iterate-com/fake-os-contract";
 import { Badge } from "@iterate-com/ui/components/badge";
@@ -31,7 +31,6 @@ function DeploymentPidnapPage() {
     "connecting",
   );
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
-  const iteratorRef = useRef<AsyncIterator<PidnapLogEntry> | undefined>(undefined);
 
   const selectedProcess = useMemo(() => {
     if (processes.length === 0) return null;
@@ -64,6 +63,8 @@ function DeploymentPidnapPage() {
     }
 
     const controller = new AbortController();
+    let isCurrent = true;
+    let iterator: AsyncIterator<PidnapLogEntry> | undefined;
     setLines([]);
     setStreamStatus("connecting");
 
@@ -73,11 +74,12 @@ function DeploymentPidnapPage() {
           { slug, processSlug: selectedProcessSlug },
           { signal: controller.signal },
         );
-        iteratorRef.current = stream[Symbol.asyncIterator]();
+        iterator = stream[Symbol.asyncIterator]();
+        if (!isCurrent || controller.signal.aborted) return;
         setStreamStatus("streaming");
 
         while (true) {
-          const next = await iteratorRef.current.next();
+          const next = await iterator.next();
           if (next.done || controller.signal.aborted) break;
           setLines((previous) => {
             const updated = [...previous, next.value.text];
@@ -85,9 +87,10 @@ function DeploymentPidnapPage() {
           });
         }
 
-        setStreamStatus(controller.signal.aborted ? "closed" : "closed");
+        if (!isCurrent || controller.signal.aborted) return;
+        setStreamStatus("closed");
       } catch (error) {
-        if (controller.signal.aborted) return;
+        if (!isCurrent || controller.signal.aborted) return;
         const message = error instanceof Error ? error.message : String(error);
         setLines((previous) => [...previous, `[error] ${message}`]);
         setStreamStatus("error");
@@ -95,8 +98,9 @@ function DeploymentPidnapPage() {
     })();
 
     return () => {
+      isCurrent = false;
       controller.abort();
-      void iteratorRef.current?.return?.();
+      void iterator?.return?.();
     };
   }, [selectedProcessSlug, slug]);
 

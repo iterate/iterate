@@ -40,6 +40,12 @@ services/<name>/
   tsconfig.json
   drizzle.config.ts
   package.json
+  cli/
+    cli.ts                 # package-local trpc-cli entrypoint (`pnpm cli ...`)
+    router.ts              # local oRPC router for CLI commands
+    _cli.ts                # shared local CLI builder / meta
+    db/                    # typed command procedures grouped by domain
+    lib/                   # imperative helpers used by CLI commands
   AGENTS.md                # Service-specific notes
   src/
     server/
@@ -59,6 +65,53 @@ services/<name>/
     components/            # App-specific components
     router.tsx             # TanStack Router config + QueryClient singleton
 ```
+
+## Service CLI tools
+
+If a service needs local maintenance commands, build them as a package-local typed CLI, not as ad hoc top-level `scripts/*.ts` files.
+
+Use this pattern:
+
+- put the command system in `cli/`
+- expose it from `package.json` as `"cli": "tsx ./cli/cli.ts"`
+- invoke it as `pnpm cli ...`
+- compose commands with a local `@orpc/server` router and run them through `trpc-cli`
+- keep command procedures in `cli/<domain>/` and imperative helpers in `cli/lib/`
+- keep existing `db:*` package scripts only as thin compatibility aliases which call `pnpm cli ...`
+
+Example shape:
+
+```text
+services/<name>/
+  cli/
+    cli.ts
+    router.ts
+    _cli.ts
+    db/
+      rebuild-temp-db.ts
+      preview-sql.ts
+      dump-schema.ts
+      check-migration-ids.ts
+    lib/
+      db-utils.ts
+```
+
+The intended UX is:
+
+```bash
+pnpm cli db tmp rebuild
+pnpm cli db tmp preview
+pnpm cli db schema
+pnpm cli db check-migration-ids
+```
+
+Notes:
+
+- prefer `cli/` over `scripts/` when the tool has a stable command surface, typed inputs, help output, or will likely grow over time
+- reserve `scripts/` for genuine one-off utilities, generators, or migration shims
+- command files should export procedures, not execute side effects at module import time
+- return structured values from handlers and let `trpc-cli` print them, rather than hard-coding all output with `console.log`
+- if the CLI needs shared flags, aliases, descriptions, or later shell completion, put that behavior in `cli/cli.ts` and `cli/_cli.ts`, not in each command file
 
 ## Service recipe: Hono up front
 

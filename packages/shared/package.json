@@ -33,7 +33,7 @@
     "@iterate-com/events": "workspace:*",
     "@iterate-com/events-contract": "workspace:*",
     "@iterate-com/ingress-proxy-contract": "workspace:*",
-    "@iterate-com/registry": "workspace:*",
+    "@iterate-com/registry-contract": "workspace:*",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.206.0",
     "@opentelemetry/instrumentation-http": "^0.206.0",

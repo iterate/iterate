@@ -16,13 +16,23 @@ const isAgent =
 /** @type {import('lint-staged').Configuration} */
 const baseConfig = {
   "*": ["oxfmt --no-error-on-unmatched-pattern"],
-  "apps/ingress-proxy/{typesql.json,sql/migrations/**/*.sql,sql/queries.sql}": [
-    () => "pnpm -C apps/ingress-proxy run db:types:stale",
-    "git add apps/ingress-proxy/sql/queries.ts apps/ingress-proxy/sql/schema.sql",
+  "apps/ingress-proxy-worker/{typesql.json,sql/migrations/**/*.sql,sql/queries.sql}": [
+    () => "pnpm -C apps/ingress-proxy-worker run db:types:stale",
+    "git add apps/ingress-proxy-worker/sql/queries.ts apps/ingress-proxy-worker/sql/schema.sql",
   ],
   "apps/semaphore/{typesql.json,migrations/**/*.sql,sql/queries.sql}": [
     () => "pnpm -C apps/semaphore run db:types:stale",
     "git add apps/semaphore/sql/queries.ts",
+  ],
+  "services/fake-os/drizzle/**/*.sql": [
+    () => "pnpm -C services/fake-os run db:check:migration-ids",
+    () => "pnpm -C services/fake-os run db:schema",
+    "git add services/fake-os/drizzle/schema.sql",
+  ],
+  "services/registry/drizzle/**/*.sql": [
+    () => "pnpm -C services/registry run db:check:migration-ids",
+    () => "pnpm -C services/registry run db:schema",
+    "git add services/registry/drizzle/schema.sql",
   ],
   "skills/**": [
     () => "pnpm -C apps/iterate-com skills:generate",
