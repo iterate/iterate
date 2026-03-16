@@ -2,7 +2,7 @@ import { workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 export default workflow({
-  name: "CF Ingress Proxy Worker Live E2E",
+  name: "CF Ingress Proxy Worker Manual Live E2E",
   permissions: {
     contents: "read",
     deployments: "write",
@@ -125,7 +125,7 @@ export default workflow({
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "prd" }),
         {
-          name: "Deploy apps/cf-ingress-proxy-worker",
+          name: "Deploy apps/cf-ingress-proxy-worker directly (manual live E2E only)",
           "working-directory": "apps/cf-ingress-proxy-worker",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",

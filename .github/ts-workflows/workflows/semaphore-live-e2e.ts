@@ -2,7 +2,7 @@ import { workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 export default workflow({
-  name: "Semaphore Live E2E",
+  name: "Semaphore Manual Live E2E",
   permissions: {
     contents: "read",
     deployments: "write",
@@ -126,7 +126,7 @@ export default workflow({
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "prd" }),
         {
-          name: "Deploy apps/semaphore",
+          name: "Deploy apps/semaphore directly (manual live E2E only)",
           "working-directory": "apps/semaphore",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",

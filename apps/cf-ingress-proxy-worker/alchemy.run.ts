@@ -77,6 +77,9 @@ function deriveIngressBaseDomains(routePatterns: string[]): string[] {
 function buildE2EWildcardHostnames(baseDomains: string[]): string[] {
   return baseDomains.flatMap((domain) => {
     const base = `${E2E_WILDCARD_LABEL}.${domain}`;
+    // TODO: confirm Cloudflare accepts proxied records for this deeper wildcard shape.
+    // Keep generating both hostnames for now so the manual live-E2E workflow exercises
+    // the exact deployment path we care about; validate provider behavior separately.
     return [base, `*.${base}`];
   });
 }

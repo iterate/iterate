@@ -85,7 +85,7 @@ pnpm --filter @iterate-com/cf-ingress-proxy-worker typecheck
 pnpm --filter @iterate-com/cf-ingress-proxy-worker test
 ```
 
-For routing behavior changes (matching order, forwarding semantics), also run live E2E:
+For routing behavior changes (matching order, forwarding semantics), run live E2E manually before or after deploy:
 
 ```bash
 INGRESS_PROXY_E2E_BASE_URL=https://ci-ingress.iterate.com \
@@ -145,8 +145,9 @@ Alchemy manages worker + D1 resources.
   - `INGRESS_PROXY_E2E_BASE_URL=https://ci-ingress.iterate.com INGRESS_PROXY_E2E_PROXY_BASE_DOMAIN=ci-ingress.iterate.com INGRESS_PROXY_E2E_API_TOKEN=<token> pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live`
   - Covers exact vs wildcard priority, wildcard specificity, create/update conflict paths, self-update behavior, and deployed websocket proxy echo.
 - CI:
-  - `workflow_dispatch` runs the live deploy/test/teardown flow against an ephemeral staging worker.
-  - `main` pushes still deploy the production worker directly.
+  - `workflow_dispatch` is the only way we run the live deploy/test/teardown flow against an ephemeral staging worker.
+  - `main` pushes deploy the production worker directly with no live-E2E gate. This is intentional.
+  - If you want live validation, run the manual workflow or `test:e2e-live` yourself; production deploys do not wait on ingress-proxy live tests.
 
 ## TODO (explicitly deferred)
 
