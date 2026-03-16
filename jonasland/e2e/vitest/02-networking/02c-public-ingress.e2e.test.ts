@@ -255,7 +255,7 @@ describe("public ingress", () => {
         });
         const { publicBaseHost, publicBaseUrl } = routes;
         console.log("[public-ingress] ingress proxy routes created", {
-          routeIds: routes.routeIds,
+          rootHost: routes.route.rootHost,
           publicBaseHost,
           publicBaseUrl,
           ingressHost: f.deployment.env.ITERATE_INGRESS_HOST,

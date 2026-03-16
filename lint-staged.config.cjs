@@ -16,9 +16,9 @@ const isAgent =
 /** @type {import('lint-staged').Configuration} */
 const baseConfig = {
   "*": ["oxfmt --no-error-on-unmatched-pattern"],
-  "apps/cf-ingress-proxy-worker/{typesql.json,migrations/**/*.sql,sql/queries.sql}": [
-    () => "pnpm -C apps/cf-ingress-proxy-worker run db:types:stale",
-    "git add apps/cf-ingress-proxy-worker/sql/queries.ts",
+  "apps/ingress-proxy/{typesql.json,sql/migrations/**/*.sql,sql/queries.sql}": [
+    () => "pnpm -C apps/ingress-proxy run db:types:stale",
+    "git add apps/ingress-proxy/sql/queries.ts apps/ingress-proxy/sql/schema.sql",
   ],
   "apps/semaphore/{typesql.json,migrations/**/*.sql,sql/queries.sql}": [
     () => "pnpm -C apps/semaphore run db:types:stale",

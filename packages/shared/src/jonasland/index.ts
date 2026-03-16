@@ -44,12 +44,8 @@ import {
   type ServiceManifestWithEntryPoint,
   type SqlResultSet,
 } from "./service-contract.ts";
-import { useDeployment, useTmpDir } from "./test-helpers/index.ts";
-import type {
-  DeploymentLogsArtifact,
-  UseDeploymentFixture,
-  UseTmpDirFixture,
-} from "./test-helpers/index.ts";
+import { useTmpDir } from "./test-helpers/index.ts";
+import type { UseTmpDirFixture } from "./test-helpers/index.ts";
 
 type RuntimeGlobal = typeof globalThis & {
   __jonaslandOtelInitialized?: boolean;
@@ -869,9 +865,8 @@ export {
   ServiceSqlResultHeader,
   createServiceSubRouterContract,
 };
-export { useDeployment, useTmpDir };
+export { useTmpDir };
 export type {
-  DeploymentLogsArtifact,
   ServiceContext,
   ServiceInitialContext,
   ServiceManifestLike,
@@ -879,7 +874,6 @@ export type {
   ServiceRequestLogFields,
   ServiceRequestLogger,
   SqlResultSet,
-  UseDeploymentFixture,
   UseTmpDirFixture,
 };
 

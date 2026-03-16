@@ -244,3 +244,13 @@ PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_
 - Drizzle migration workflow: `.agents/skills/drizzle-migrations/SKILL.md` (MUST follow when making schema changes)
 - Drizzle migration conflicts: `docs/fixing-drizzle-migration-conflicts.md`
 - Sandbox image pipeline (build, tag, push, CI): `sandbox/README.md`
+
+# Testing strategy
+
+We test from as far away as possible. Services, whether they run in nodejs or workerd or are written in rust should all be tested through the network as e2e tests.
+
+This means we can later replace the implementation if we want, but keep our tests.
+
+One beautiful side effect of this strategy is that we can just "test against production", too.
+
+This means we need to invest in vitest test tooling that makes it easy to spin up lots of servers, run HTTP requests against them, etc.

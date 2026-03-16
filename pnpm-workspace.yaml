@@ -1,5 +1,6 @@
 packages:
-  - apps/cf-ingress-proxy-worker
+  - apps/ingress-proxy
+  - apps/ingress-proxy-contract
   - apps/project-ingress-proxy
   - apps/cli
   - apps/daemon

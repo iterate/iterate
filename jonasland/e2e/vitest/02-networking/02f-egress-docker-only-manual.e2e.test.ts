@@ -124,10 +124,7 @@ describe("egress", () => {
         },
       });
 
-      await using f = await e2e.useDeployment({
-        deployment,
-        waitUntilHealthyTimeoutMs: 60_000,
-      });
+      await using f = await e2e.useDeployment({ deployment });
 
       const tokenTunnelEnv = TokenBackedTunnelEnv.safeParse(process.env);
       await f.deployment.setEnvVars(
@@ -168,7 +165,6 @@ describe("egress", () => {
           deployment: f.snapshot(),
         },
       });
-      expect(routes.routeIds.length).toBe(1);
 
       await f.deployment.pidnap.processes.waitFor({
         processes: {

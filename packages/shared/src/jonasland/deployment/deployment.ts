@@ -4,6 +4,7 @@ import {
   type EventBusContract,
   serviceManifest as eventsServiceManifest,
 } from "@iterate-com/events-contract";
+import { createIngressProxyClient } from "@iterate-com/ingress-proxy-contract";
 import { createRegistryClient, type RegistryClient } from "@iterate-com/registry/client";
 import { createORPCClient } from "@orpc/client";
 import { type AnyContractRouter, type ContractRouterClient } from "@orpc/contract";
@@ -462,6 +463,10 @@ export class Deployment {
     timeoutMs?: number;
   }) {
     this.assertConnected();
+    const ingressProxyClient = createIngressProxyClient({
+      baseURL: normalizeIngressProxyBaseUrl(params.ingressProxyBaseUrl),
+      apiToken: params.ingressProxyApiKey.trim(),
+    });
     const publicBaseHost =
       params.publicBaseHost ??
       createPublicBaseHost({
@@ -469,50 +474,21 @@ export class Deployment {
         domain: resolveIngressProxyDomainFromBaseUrl(params.ingressProxyBaseUrl),
       });
     const routingType = params.routingType ?? "dunder-prefix";
-    const patterns = createIngressPatterns({
-      publicBaseHost,
-      targetURL: params.targetURL,
-      routingType,
-    });
-    const route = await callIngressProxyProcedure<{
-      routeId: string;
-      metadata: Record<string, unknown>;
-      patterns: Array<{
-        patternId: number;
-        pattern: string;
-        target: string;
-        headers: Record<string, string>;
-        createdAt: string;
-        updatedAt: string;
-      }>;
-      createdAt: string;
-      updatedAt: string;
-    }>({
-      baseUrl: normalizeIngressProxyBaseUrl(params.ingressProxyBaseUrl),
-      apiKey: params.ingressProxyApiKey.trim(),
-      name: "createRoute",
-      input: {
-        metadata: {
-          source: "deployment.useIngressProxyRoutes",
-          publicBaseHost,
-          deployment: this.snapshot(),
-          ...(params.metadata ?? {}),
-        },
-        patterns,
+    const route = await ingressProxyClient.routes.upsert({
+      rootHost: publicBaseHost,
+      targetUrl: params.targetURL,
+      metadata: {
+        source: "deployment.useIngressProxyRoutes",
+        publicBaseHost,
+        deployment: this.snapshot(),
+        ...(params.metadata ?? {}),
       },
     });
     let deleted = false;
     const deleteAll = async () => {
       if (deleted) return;
       deleted = true;
-      await callIngressProxyProcedure<{ deleted: boolean }>({
-        baseUrl: normalizeIngressProxyBaseUrl(params.ingressProxyBaseUrl),
-        apiKey: params.ingressProxyApiKey.trim(),
-        name: "deleteRoute",
-        input: {
-          routeId: route.routeId,
-        },
-      });
+      await ingressProxyClient.routes.remove({ rootHost: publicBaseHost });
     };
 
     try {
@@ -539,8 +515,7 @@ export class Deployment {
     return {
       publicBaseHost,
       publicBaseUrl: `https://${publicBaseHost}`,
-      createdRoutes: [route],
-      routeIds: [route.routeId],
+      route,
       deleteAll,
       async [Symbol.asyncDispose]() {
         if (process.env.E2E_NO_DISPOSE) return;
@@ -980,65 +955,6 @@ function sanitizeIngressSlug(input: string): string {
 
 function createPublicBaseHost(params: { slug: string; domain: string }) {
   return `${sanitizeIngressSlug(params.slug)}-${randomUUID().slice(0, 6)}.${params.domain}`;
-}
-
-function createIngressPatterns(params: {
-  publicBaseHost: string;
-  targetURL: string;
-  routingType: "subdomain-host" | "dunder-prefix";
-}): Array<{ pattern: string; target: string; headers?: Record<string, string> }> {
-  if (params.routingType === "subdomain-host") {
-    return [
-      {
-        pattern: params.publicBaseHost,
-        target: params.targetURL,
-      },
-      {
-        pattern: `*.${params.publicBaseHost}`,
-        target: params.targetURL,
-      },
-    ];
-  }
-
-  return [
-    {
-      pattern: params.publicBaseHost,
-      target: params.targetURL,
-    },
-    {
-      pattern: `*__${params.publicBaseHost}`,
-      target: params.targetURL,
-    },
-  ];
-}
-
-async function callIngressProxyProcedure<TResponse>(params: {
-  baseUrl: string;
-  apiKey: string;
-  name: string;
-  input: unknown;
-}): Promise<TResponse> {
-  const response = await fetch(`${params.baseUrl}/api/orpc/${params.name}`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${params.apiKey}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ json: params.input }),
-  });
-  const payload = (await response.json().catch(() => ({}))) as {
-    json?: TResponse;
-    error?: unknown;
-  };
-  if (!response.ok) {
-    throw new Error(
-      `ingress proxy ${params.name} failed (${response.status}): ${JSON.stringify(payload.json ?? payload.error ?? payload)}`,
-    );
-  }
-  if (payload.json === undefined) {
-    throw new Error(`ingress proxy ${params.name} returned no json payload`);
-  }
-  return payload.json;
 }
 
 async function waitForPublicText(params: {

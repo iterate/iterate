@@ -46,7 +46,7 @@ const DOCKER_PNPM_STORE_MOUNT_PATH = "/home/iterate/.pnpm-store";
 const DOCKER_HOST_REPO_CHECKOUT_MOUNT_PATH = "/host/repo-checkout";
 const DOCKER_HOST_GIT_DIR_MOUNT_PATH = "/host/gitdir";
 const DOCKER_HOST_GIT_COMMON_DIR_MOUNT_PATH = "/host/commondir";
-const DOCKER_DEFAULT_INGRESS_HOST = "orb-stack.orb.local";
+const DOCKER_ORBSTACK_HOST_SUFFIX = ".orb.local";
 
 let dockerClientPromise: Promise<DockerClient> | undefined;
 
@@ -130,7 +130,8 @@ export function createDockerProvider(
         ...opts,
         env: {
           ...(opts.env ?? {}),
-          ITERATE_INGRESS_HOST: opts.env?.ITERATE_INGRESS_HOST ?? DOCKER_DEFAULT_INGRESS_HOST,
+          ITERATE_INGRESS_HOST:
+            opts.env?.ITERATE_INGRESS_HOST ?? `${containerName}${DOCKER_ORBSTACK_HOST_SUFFIX}`,
           ITERATE_INGRESS_ROUTING_TYPE: opts.env?.ITERATE_INGRESS_ROUTING_TYPE ?? "subdomain-host",
         },
       });
@@ -189,8 +190,12 @@ export function createDockerProvider(
         },
       };
     },
-    getDefaultIngressHost() {
-      return DOCKER_DEFAULT_INGRESS_HOST;
+    getDefaultIngressHost(params) {
+      // Deployment slugs are already DNS-safe; see `isValidDeploymentSlug()` and
+      // `assertValidDeploymentSlug()` in `packages/shared/src/jonasland/deployment/deployment.ts`.
+      // Docker container names here come directly from that slug, and the locator
+      // fallback is the hex container id, so we can append the OrbStack suffix directly.
+      return `${params.locator.containerName ?? params.locator.containerId}${DOCKER_ORBSTACK_HOST_SUFFIX}`;
     },
     async recoverOpts(params) {
       const docker = await dockerClient();

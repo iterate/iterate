@@ -60,8 +60,8 @@ export default defineConfig({
     exclude: ["tests/old/**"],
     // These tests exercise real runtimes. Keep concurrency intentionally low, and
     // require each case to be safe under parallel execution with unique slugs.
-    maxWorkers: 2,
-    maxConcurrency: 2,
+    maxWorkers: 4,
+    maxConcurrency: 4,
     testTimeout: 120_000,
     onConsoleLog(log, type, entity) {
       if (entity?.type !== "test") return;

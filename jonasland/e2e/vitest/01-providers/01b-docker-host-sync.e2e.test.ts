@@ -42,10 +42,7 @@ describe("docker host sync", () => {
           image: env.image,
         },
       });
-      await using deploymentFixture = await e2e.useDeployment({
-        deployment,
-        waitUntilHealthyTimeoutMs: 120_000,
-      });
+      await using deploymentFixture = await e2e.useDeployment({ deployment });
 
       const locator = dockerDeploymentLocatorSchema.parse(deployment.locator);
       const inspect = await inspectDockerContainer({ locator });
@@ -91,10 +88,7 @@ describe("docker host sync", () => {
           },
         },
       });
-      await using deploymentFixture = await e2e.useDeployment({
-        deployment,
-        waitUntilHealthyTimeoutMs: 120_000,
-      });
+      await using deploymentFixture = await e2e.useDeployment({ deployment });
 
       // This locks the cache optimization to the real jonasland host-sync boot
       // path instead of only checking the provider config in isolation.

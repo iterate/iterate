@@ -73,7 +73,7 @@ describe("deployment provider contract", () => {
           });
           await using deploymentFixture = await e2e.useDeployment({
             deployment,
-            waitUntilHealthyTimeoutMs: false,
+            waitUntilHealthy: false,
           });
           logsPath = deploymentFixture.artifacts.logsPath!;
           console.log(

@@ -1,0 +1,85 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ingress-proxy",
+  "main": "server.ts",
+  "compatibility_date": "2026-02-05",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_name": "ingress-proxy-test",
+      "migrations_dir": "./sql/migrations",
+      "preview_database_id": "00000000-0000-0000-0000-000000000000",
+    },
+  ],
+  "env": {
+    "staging": {
+      "vars": {},
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_id": "5586365b-825e-4cfc-a698-aa1a94976241",
+          "database_name": "ingress-proxy-staging-routes",
+          "migrations_dir": "./sql/migrations",
+          "preview_database_id": "5586365b-825e-4cfc-a698-aa1a94976241",
+        },
+      ],
+      "routes": [
+        {
+          "pattern": "ci-ingress.iterate.com/*",
+          "zone_name": "iterate.com",
+        },
+        {
+          "pattern": "*.ci-ingress.iterate.com/*",
+          "zone_name": "iterate.com",
+        },
+        {
+          "pattern": "example-with-wildcards-for-e2e-tests.ci-ingress.iterate.com/*",
+          "zone_name": "iterate.com",
+        },
+        {
+          "pattern": "*.example-with-wildcards-for-e2e-tests.ci-ingress.iterate.com/*",
+          "zone_name": "iterate.com",
+        },
+      ],
+    },
+    "production": {
+      "vars": {},
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_id": "594c6c99-0f5b-4ec0-850c-bb58b8287ce7",
+          "database_name": "ingress-proxy-production-routes",
+          "migrations_dir": "./sql/migrations",
+          "preview_database_id": "594c6c99-0f5b-4ec0-850c-bb58b8287ce7",
+        },
+      ],
+      "routes": [
+        {
+          "pattern": "ingress.iterate.com/*",
+          "zone_name": "iterate.com",
+        },
+        {
+          "pattern": "*.ingress.iterate.com/*",
+          "zone_name": "iterate.com",
+        },
+        {
+          "pattern": "e2e-test.ingress.iterate.com/*",
+          "zone_name": "iterate.com",
+        },
+        {
+          "pattern": "*.e2e-test.ingress.iterate.com/*",
+          "zone_name": "iterate.com",
+        },
+        {
+          "pattern": "example-with-wildcards-for-e2e-tests.ingress.iterate.com/*",
+          "zone_name": "iterate.com",
+        },
+        {
+          "pattern": "*.example-with-wildcards-for-e2e-tests.ingress.iterate.com/*",
+          "zone_name": "iterate.com",
+        },
+      ],
+    },
+  },
+}

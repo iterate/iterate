@@ -139,52 +139,6 @@ importers:
         specifier: ^4.1.13
         version: 4.3.6
 
-  apps/cf-ingress-proxy-worker:
-    dependencies:
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      '@orpc/server':
-        specifier: ^1.13.4
-        version: 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
-      alchemy:
-        specifier: ^0.83.0
-        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(vite@7.3.1(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260205.0)(wrangler@4.70.0(@cloudflare/workers-types@4.20260305.0))
-      hono:
-        specifier: ^4.11.3
-        version: 4.12.5
-      typeid-js:
-        specifier: ^1.2.0
-        version: 1.2.0
-      zod:
-        specifier: 4.1.12
-        version: 4.1.12
-    devDependencies:
-      '@cloudflare/vitest-pool-workers':
-        specifier: ^0.12.17
-        version: 0.12.19(@cloudflare/workers-types@4.20260305.0)(@vitest/runner@4.1.0-beta.6)(@vitest/snapshot@4.1.0-beta.6)(vitest@3.2.4(@types/debug@4.1.12)(@types/node@24.11.0)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.31.1)(msw@2.12.10(@types/node@24.11.0)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      '@cloudflare/workers-types':
-        specifier: ^4.20260207.0
-        version: 4.20260305.0
-      '@types/node':
-        specifier: ^24.10.1
-        version: 24.11.0
-      tsx:
-        specifier: ^4.20.6
-        version: 4.21.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      typesql-cli:
-        specifier: github:iterate/typesql#5687eb2
-        version: https://codeload.github.com/iterate/typesql/tar.gz/5687eb2(@types/node@24.11.0)
-      vitest:
-        specifier: 3.2.4
-        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.11.0)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.31.1)(msw@2.12.10(@types/node@24.11.0)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
-      wrangler:
-        specifier: ^4.64.0
-        version: 4.70.0(@cloudflare/workers-types@4.20260305.0)
-
   apps/daemon:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
@@ -578,6 +532,83 @@ importers:
       vitest:
         specifier: ^3.0.5
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.11.0)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.31.1)(msw@2.12.10(@types/node@24.11.0)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+
+  apps/ingress-proxy:
+    dependencies:
+      '@iterate-com/ingress-proxy-contract':
+        specifier: workspace:*
+        version: link:../ingress-proxy-contract
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@orpc/openapi':
+        specifier: ^1.13.6
+        version: 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
+      '@orpc/server':
+        specifier: ^1.13.6
+        version: 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
+      '@orpc/zod':
+        specifier: ^1.13.6
+        version: 1.13.6(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.6(@opentelemetry/api@1.9.0))(@orpc/server@1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0))(ws@8.19.0)(zod@4.3.6)
+      hono:
+        specifier: ^4.12.5
+        version: 4.12.5
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20260207.0
+        version: 4.20260305.0
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.11.0
+      tsx:
+        specifier: ^4.20.6
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      typesql-cli:
+        specifier: github:iterate/typesql#5687eb2
+        version: https://codeload.github.com/iterate/typesql/tar.gz/5687eb2(@types/node@24.11.0)
+      vitest:
+        specifier: 3.2.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.11.0)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.31.1)(msw@2.12.10(@types/node@24.11.0)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+      wrangler:
+        specifier: ^4.64.0
+        version: 4.70.0(@cloudflare/workers-types@4.20260305.0)
+
+  apps/ingress-proxy-contract:
+    dependencies:
+      '@orpc/client':
+        specifier: ^1.13.6
+        version: 1.13.6(@opentelemetry/api@1.9.0)
+      '@orpc/contract':
+        specifier: ^1.13.6
+        version: 1.13.6(@opentelemetry/api@1.9.0)
+      '@orpc/openapi-client':
+        specifier: ^1.13.6
+        version: 1.13.6(@opentelemetry/api@1.9.0)
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+    devDependencies:
+      '@orpc/openapi':
+        specifier: ^1.13.6
+        version: 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
+      '@orpc/zod':
+        specifier: ^1.13.6
+        version: 1.13.6(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.6(@opentelemetry/api@1.9.0))(@orpc/server@1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0))(ws@8.19.0)(zod@4.3.6)
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.11.0
+      tsx:
+        specifier: ^4.20.6
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
   apps/iterate-com:
     dependencies:
@@ -1412,6 +1443,9 @@ importers:
       '@iterate-com/events-contract':
         specifier: workspace:*
         version: link:../../services/events-contract
+      '@iterate-com/ingress-proxy-contract':
+        specifier: workspace:*
+        version: link:../../apps/ingress-proxy-contract
       '@iterate-com/registry':
         specifier: workspace:*
         version: link:../../services/registry
@@ -1481,6 +1515,9 @@ importers:
       pidnap:
         specifier: workspace:*
         version: link:../pidnap
+      typeid-js:
+        specifier: ^1.2.0
+        version: 1.2.0
       vite:
         specifier: 7.2.4
         version: 7.2.4(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
@@ -21067,7 +21104,7 @@ snapshots:
 
   '@types/http-proxy@1.17.17':
     dependencies:
-      '@types/node': 24.11.0
+      '@types/node': 22.19.13
 
   '@types/istanbul-lib-coverage@2.0.6': {}
 
@@ -22768,10 +22805,6 @@ snapshots:
     dependencies:
       ms: 2.1.3
 
-  debug@4.4.3:
-    dependencies:
-      ms: 2.1.3
-
   debug@4.4.3(supports-color@10.2.2):
     dependencies:
       ms: 2.1.3
@@ -24231,7 +24264,7 @@ snapshots:
   http-proxy-agent@7.0.2:
     dependencies:
       agent-base: 7.1.4
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@10.2.2)
     transitivePeerDependencies:
       - supports-color
 
@@ -24252,13 +24285,6 @@ snapshots:
     dependencies:
       agent-base: 6.0.2
       debug: 4.4.3(supports-color@10.2.2)
-    transitivePeerDependencies:
-      - supports-color
-
-  https-proxy-agent@7.0.6:
-    dependencies:
-      agent-base: 7.1.4
-      debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
 
@@ -24621,7 +24647,7 @@ snapshots:
       decimal.js: 10.6.0
       html-encoding-sniffer: 6.0.0(@noble/hashes@2.0.1)
       http-proxy-agent: 7.0.2
-      https-proxy-agent: 7.0.6
+      https-proxy-agent: 7.0.6(supports-color@10.2.2)
       is-potential-custom-element-name: 1.0.1
       parse5: 8.0.0
       saxes: 6.0.0

@@ -28,27 +28,6 @@ function tomlString(value: string) {
   return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
-async function waitForPublicText(params: {
-  url: string;
-  timeoutMs: number;
-  matches: (body: string) => boolean;
-}) {
-  const deadline = Date.now() + params.timeoutMs;
-  let lastBody = "";
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(params.url, {
-        signal: AbortSignal.timeout(10_000),
-      });
-      const body = await response.text();
-      lastBody = body;
-      if (response.ok && params.matches(body)) return body;
-    } catch {}
-    await sleep(500);
-  }
-  throw new Error(`Timed out waiting for ${params.url}; last body=${lastBody}`);
-}
-
 async function connectFrpToPublicDeployment(params: {
   publicBaseHost: string;
   localTargetPort: number;
@@ -159,10 +138,7 @@ describe("cloudflare tunnel", () => {
         },
       });
 
-      await using f = await e2e.useDeployment({
-        deployment,
-        waitUntilHealthyTimeoutMs: 90_000,
-      });
+      await using f = await e2e.useDeployment({ deployment });
       await using cloudflareTunnel = await useCloudflareTunnelFromSemaphore({
         apiToken: env.SEMAPHORE_API_TOKEN,
         baseUrl: env.SEMAPHORE_BASE_URL,
@@ -189,10 +165,9 @@ describe("cloudflare tunnel", () => {
           deployment: f.snapshot(),
         },
       });
-      expect(routes.routeIds.length).toBe(1);
       console.log("[cloudflare-tunnel.e2e] created ingress proxy routes", {
         publicBaseHost: routes.publicBaseHost,
-        routeIds: routes.routeIds,
+        rootHost: routes.route.rootHost,
       });
 
       await f.deployment.pidnap.processes.waitFor({

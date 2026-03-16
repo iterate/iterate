@@ -230,7 +230,7 @@ async function startFrpc(params: {
 }
 
 type IngressRouteRecord = {
-  routeId: string;
+  rootHost: string;
 };
 
 async function callIngressProxyProcedure<TResponse>(params: {
@@ -276,18 +276,11 @@ async function createIngressRoute(params: {
   return await callIngressProxyProcedure<IngressRouteRecord>({
     baseUrl: params.baseUrl,
     apiToken: params.apiToken,
-    name: "createRoute",
+    name: "upsertRoute",
     input: {
+      rootHost: params.host,
+      targetUrl: params.target,
       metadata: params.metadata ?? {},
-      patterns: [
-        {
-          pattern: params.host,
-          target: params.target,
-          headers: {
-            Host: params.host,
-          },
-        },
-      ],
     },
   });
 }
@@ -295,14 +288,14 @@ async function createIngressRoute(params: {
 async function deleteIngressRoute(params: {
   baseUrl: string;
   apiToken: string;
-  routeId: string;
+  rootHost: string;
 }): Promise<void> {
   await callIngressProxyProcedure<{ deleted: boolean }>({
     baseUrl: params.baseUrl,
     apiToken: params.apiToken,
     name: "deleteRoute",
     input: {
-      routeId: params.routeId,
+      rootHost: params.rootHost,
     },
   });
 }
@@ -395,7 +388,7 @@ export async function useFrpTunnelToDeployment(params: {
   let controlServerPort = 80;
   let controlTransportProtocol: "websocket" | "wss" = "websocket";
   let dataProxyUrl = "";
-  let createdIngressRoute: { baseUrl: string; apiToken: string; routeId: string } | null = null;
+  let createdIngressRoute: { baseUrl: string; apiToken: string; rootHost: string } | null = null;
 
   try {
     step = "compute-run-context";
@@ -416,14 +409,15 @@ export async function useFrpTunnelToDeployment(params: {
         process.env.JONASLAND_E2E_INGRESS_PROXY_DOMAIN ?? DEFAULT_INGRESS_PROXY_DOMAIN;
       const ingressProxyApiToken = resolveIngressProxyApiToken();
 
-      controlServerHost = `frp__${runId}.${ingressProxyDomain}`;
+      const publicBaseHost = `${runId}.${ingressProxyDomain}`;
+      controlServerHost = `frp__${publicBaseHost}`;
       controlServerPort = 443;
       controlTransportProtocol = "wss";
 
       const route = await createIngressRoute({
         baseUrl: ingressProxyBaseUrl,
         apiToken: ingressProxyApiToken,
-        host: controlServerHost,
+        host: publicBaseHost,
         target: `https://${ingressHostname}`,
         metadata: {
           source: "jonasland-e2e-frp-bridge",
@@ -436,7 +430,7 @@ export async function useFrpTunnelToDeployment(params: {
       createdIngressRoute = {
         baseUrl: ingressProxyBaseUrl,
         apiToken: ingressProxyApiToken,
-        routeId: route.routeId,
+        rootHost: route.rootHost,
       };
     } else {
       const resolved = await resolveDockerFrpControl({ deployment: params.deployment });
