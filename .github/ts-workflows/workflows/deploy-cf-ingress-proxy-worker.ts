@@ -15,7 +15,7 @@ export default workflow({
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "prd" }),
+        ...utils.setupDoppler({ config: "prd", project: "ingress-proxy" }),
         {
           name: "Deploy apps/cf-ingress-proxy-worker",
           "working-directory": "apps/cf-ingress-proxy-worker",

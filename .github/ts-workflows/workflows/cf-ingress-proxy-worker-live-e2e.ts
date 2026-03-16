@@ -35,7 +35,7 @@ export default workflow({
       },
       steps: [
         ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "stg" }),
+        ...utils.setupDoppler({ config: "stg", project: "ingress-proxy" }),
         {
           name: "Set ephemeral worker name",
           run: [
@@ -64,7 +64,7 @@ export default workflow({
           run: [
             "set -euo pipefail",
             'deploy_log="$(mktemp)"',
-            `doppler run --config stg --preserve-env="WORKER_NAME,INGRESS_PROXY_API_TOKEN" -- sh -c 'WORKER_NAME="$WORKER_NAME" INGRESS_PROXY_API_TOKEN="$INGRESS_PROXY_API_TOKEN" pnpm exec tsx ./alchemy.run.ts cli deploy --stage ci' | tee "$deploy_log"`,
+            `doppler run --project ingress-proxy --config stg --preserve-env="WORKER_NAME,INGRESS_PROXY_API_TOKEN" -- sh -c 'WORKER_NAME="$WORKER_NAME" INGRESS_PROXY_API_TOKEN="$INGRESS_PROXY_API_TOKEN" pnpm exec tsx ./alchemy.run.ts cli deploy --stage ci' | tee "$deploy_log"`,
             'base_url="$(grep -Eo \'https://[^[:space:]]+\' "$deploy_log" | tail -n 1)"',
             'base_url="${base_url%/}"',
             'if [ -z "$base_url" ]; then',
@@ -103,7 +103,7 @@ export default workflow({
           },
           run: [
             "set -euo pipefail",
-            `doppler run --config stg --preserve-env="INGRESS_PROXY_E2E_BASE_URL,INGRESS_PROXY_E2E_API_TOKEN" -- sh -c 'pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live'`,
+            `doppler run --project ingress-proxy --config stg --preserve-env="INGRESS_PROXY_E2E_BASE_URL,INGRESS_PROXY_E2E_API_TOKEN" -- sh -c 'pnpm --filter @iterate-com/cf-ingress-proxy-worker test:e2e-live'`,
           ].join("\n"),
         },
         {
@@ -120,7 +120,7 @@ export default workflow({
             '  echo "WORKER_NAME not set; skipping teardown"',
             "  exit 0",
             "fi",
-            `doppler run --config stg --preserve-env="WORKER_NAME,INGRESS_PROXY_API_TOKEN" -- sh -c 'WORKER_NAME="$WORKER_NAME" INGRESS_PROXY_API_TOKEN="$INGRESS_PROXY_API_TOKEN" pnpm exec tsx ./alchemy.run.ts cli --destroy --stage ci' || echo "Teardown command failed; check Alchemy state manually for $WORKER_NAME"`,
+            `doppler run --project ingress-proxy --config stg --preserve-env="WORKER_NAME,INGRESS_PROXY_API_TOKEN" -- sh -c 'WORKER_NAME="$WORKER_NAME" INGRESS_PROXY_API_TOKEN="$INGRESS_PROXY_API_TOKEN" pnpm exec tsx ./alchemy.run.ts cli --destroy --stage ci' || echo "Teardown command failed; check Alchemy state manually for $WORKER_NAME"`,
           ].join("\n"),
         },
       ],
@@ -131,7 +131,7 @@ export default workflow({
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "prd" }),
+        ...utils.setupDoppler({ config: "prd", project: "ingress-proxy" }),
         {
           name: "Deploy apps/cf-ingress-proxy-worker",
           "working-directory": "apps/cf-ingress-proxy-worker",

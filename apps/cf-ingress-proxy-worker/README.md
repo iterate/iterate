@@ -124,6 +124,7 @@ All endpoints require `Authorization: Bearer <INGRESS_PROXY_API_TOKEN>`.
 
 Alchemy manages worker + D1 resources.
 
+- Doppler project: `ingress-proxy`
 - set `WORKER_NAME` before running `alchemy.run.ts`
 - worker name: `<WORKER_NAME>`
 - D1 name: `<WORKER_NAME>-routes`
@@ -131,6 +132,12 @@ Alchemy manages worker + D1 resources.
 - deploy scripts:
   - `pnpm run dev` (dev stage)
   - `pnpm run deploy:prd` (prod)
+
+Current secret split:
+
+- `ingress-proxy` now owns this app's Doppler scope
+- while the broader monorepo migration is in progress, shared deploy credentials in `ingress-proxy` are direct references back to `os`
+- worker-specific values like `INGRESS_PROXY_API_TOKEN` should be managed in `ingress-proxy`
 
 ## Tests
 
