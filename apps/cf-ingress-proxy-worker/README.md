@@ -125,6 +125,7 @@ All endpoints require `Authorization: Bearer <INGRESS_PROXY_API_TOKEN>`.
 Alchemy manages worker + D1 resources.
 
 - Doppler project: `ingress-proxy`
+- repo mapping: root [`doppler.yaml`](../../doppler.yaml) maps `apps/cf-ingress-proxy-worker/` to `ingress-proxy`
 - set `WORKER_NAME` before running `alchemy.run.ts`
 - worker name: `<WORKER_NAME>`
 - D1 name: `<WORKER_NAME>-routes`
