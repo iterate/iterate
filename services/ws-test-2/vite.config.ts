@@ -1,31 +1,24 @@
 import { defineConfig, loadEnv } from "vite";
 import tailwindcss from "@tailwindcss/vite";
+import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
 
-function createApiProxy(targetPort: number | undefined) {
-  if (!targetPort) {
-    return undefined;
-  }
-
-  return {
-    "/api": {
-      target: `http://127.0.0.1:${targetPort}`,
-      changeOrigin: true,
-      ws: true,
-    },
-  };
-}
+const DEFAULT_FRONTEND_PORT = 17301;
+const DEFAULT_API_PORT = 17302;
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const configuredPort = process.env.PORT?.trim() ? Number(process.env.PORT) : 0;
-  const backendPort = env.VITE_BACKEND_PORT?.trim() ? Number(env.VITE_BACKEND_PORT) : undefined;
-  const apiProxy = createApiProxy(backendPort);
+  const frontendPort = env.PORT?.trim() ? Number(env.PORT) : DEFAULT_FRONTEND_PORT;
+  const apiBaseUrl =
+    process.env.API_BASE_URL?.trim() ||
+    env.API_BASE_URL?.trim() ||
+    `http://127.0.0.1:${DEFAULT_API_PORT}`;
 
   return {
     plugins: [
+      devtools({ consolePiping: { enabled: true } }),
       tsconfigPaths({ projects: ["./tsconfig.json"] }),
       tanstackStart({
         srcDirectory: "src/frontend",
@@ -36,15 +29,27 @@ export default defineConfig(({ mode }) => {
     ],
     server: {
       host: true,
-      port: configuredPort || 0,
-      strictPort: Boolean(configuredPort),
-      proxy: apiProxy,
+      port: frontendPort,
+      strictPort: true,
+      proxy: {
+        "/api": {
+          target: apiBaseUrl,
+          changeOrigin: true,
+          ws: true,
+        },
+      },
     },
     preview: {
       host: true,
-      port: configuredPort || 4173,
-      strictPort: Boolean(configuredPort),
-      proxy: apiProxy,
+      port: frontendPort,
+      strictPort: true,
+      proxy: {
+        "/api": {
+          target: apiBaseUrl,
+          changeOrigin: true,
+          ws: true,
+        },
+      },
     },
   };
 });

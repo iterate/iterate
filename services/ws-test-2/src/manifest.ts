@@ -1,9 +1,8 @@
 import { z } from "zod";
 
-export const wsTest2ServiceEnvSchema = z.object({
-  HOST: z.string().trim().min(1).default("0.0.0.0"),
-  PORT: z.coerce.number().int().positive().default(3000),
-  VITE_BACKEND_PORT: z.coerce.number().int().positive().optional(),
+export const WsTest2ServiceEnv = z.object({
+  HOST: z.string().trim().min(1).optional(),
+  PORT: z.coerce.number().int().positive().optional(),
 });
 
 export const wsTest2ServiceManifest = {
@@ -14,11 +13,11 @@ export const wsTest2ServiceManifest = {
   apiBasePath: "/api",
   rpcPath: "/api/rpc",
   ptyWebSocketPath: "/api/pty/ws",
-  envSchema: wsTest2ServiceEnvSchema,
+  envSchema: WsTest2ServiceEnv,
 } as const;
 
-export type WsTest2ServiceEnv = z.infer<typeof wsTest2ServiceEnvSchema>;
+export type WsTest2ServiceEnv = z.infer<typeof WsTest2ServiceEnv>;
 
 export function getWsTest2ServiceEnv(raw: Record<string, string | undefined> = process.env) {
-  return wsTest2ServiceEnvSchema.parse(raw);
+  return WsTest2ServiceEnv.parse(raw);
 }

@@ -1,4 +1,4 @@
 import { os as osBase } from "@orpc/server";
 import type { TrpcCliMeta } from "trpc-cli";
 
-export const scriptCli = osBase.$meta<TrpcCliMeta>({});
+export const cliBase = osBase.$meta<TrpcCliMeta>({});

@@ -1,12 +1,13 @@
-import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import { getPort } from "get-port-please";
+import { x, type Result } from "tinyexec";
 
 const serviceDirectory =
   "/Users/jonastemplestein/.superset/worktrees/iterate/fly-v2-rebuilt-no-apps-os/services/ws-test-2";
 
-const childProcesses = new Set<ReturnType<typeof spawn>>();
+const childProcesses = new Set<Result>();
 
 function parseAssetPaths(html: string) {
   return Array.from(
@@ -60,37 +61,85 @@ async function assertPtyCommand(url: string, expectedOutput: string) {
   });
 }
 
-async function startService(params: {
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-  baseURL: string;
-}) {
-  const child = spawn(params.command, params.args, {
-    cwd: serviceDirectory,
-    env: { ...process.env, ...params.env },
-    stdio: ["ignore", "pipe", "pipe"],
+async function assertConfettiSocket(url: string) {
+  await new Promise<void>((resolve, reject) => {
+    const socket = new WebSocket(url);
+    const timeout = setTimeout(() => {
+      socket.terminate();
+      reject(new Error(`Timed out waiting for confetti websocket response from ${url}`));
+    }, 10_000);
+
+    socket.once("open", () => {
+      socket.send(
+        JSON.stringify({
+          type: "launch",
+          x: 0.5,
+          y: 0.25,
+        }),
+      );
+    });
+
+    socket.once("error", (error: Error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+
+    socket.on("message", (data: any) => {
+      const text = typeof data === "string" ? data : data.toString("utf8");
+      try {
+        const message = JSON.parse(text) as { type?: string; x?: number; y?: number };
+        if (message.type === "boom") {
+          clearTimeout(timeout);
+          socket.close();
+          resolve();
+        }
+      } catch {
+        // Ignore non-JSON frames.
+      }
+    });
+  });
+}
+
+function startProcess(args: string[]) {
+  const child = x("pnpm", args, {
+    persist: true,
+    throwOnError: true,
+    nodeOptions: {
+      cwd: serviceDirectory,
+      env: process.env,
+      stdio: "pipe",
+    },
   });
   childProcesses.add(child);
+  return child;
+}
 
-  let output = "";
-  child.stdout?.on("data", (chunk) => {
-    output += String(chunk);
-  });
-  child.stderr?.on("data", (chunk) => {
-    output += String(chunk);
-  });
-
+async function waitForService(params: { child: Result; baseURL: string }) {
   try {
     await waitForHealthy(params.baseURL);
-    return child;
   } catch (error) {
-    child.kill("SIGTERM");
+    params.child.kill("SIGTERM");
+
+    let output = "";
+    try {
+      const result = await params.child;
+      output = `${result.stdout}${result.stderr}`;
+    } catch (childError) {
+      if (childError instanceof Error && "output" in childError) {
+        const maybeOutput = childError.output as { stdout?: string; stderr?: string };
+        output = `${maybeOutput.stdout ?? ""}${maybeOutput.stderr ?? ""}`;
+      } else if (childError instanceof Error) {
+        output = childError.message;
+      } else {
+        output = String(childError);
+      }
+    }
+
     throw new Error(`${String(error)}\n\nProcess output:\n${output}`);
   }
 }
 
-async function stopService(child: ReturnType<typeof spawn>) {
+async function stopService(child: Result) {
   if (child.exitCode !== null || child.killed) {
     childProcesses.delete(child);
     return;
@@ -98,9 +147,10 @@ async function stopService(child: ReturnType<typeof spawn>) {
 
   child.kill("SIGTERM");
   await Promise.race([
-    new Promise<void>((resolve) => {
-      child.once("exit", () => resolve());
-    }),
+    Promise.resolve(child).then(
+      () => undefined,
+      () => undefined,
+    ),
     delay(5_000).then(() => {
       child.kill("SIGKILL");
     }),
@@ -126,6 +176,10 @@ async function assertServiceWorks(params: { baseURL: string }) {
   expect(rpcResponse.status).toBe(200);
   expect(await rpcResponse.text()).toContain('"message":"pong"');
 
+  await assertConfettiSocket(
+    params.baseURL.replace("http://", "ws://").replace("https://", "wss://") + "/api/confetti/ws",
+  );
+
   await assertPtyCommand(
     params.baseURL.replace("http://", "ws://").replace("https://", "wss://") +
       "/api/pty/ws?command=printf%20WS_TEST_HELLO&autorun=true",
@@ -134,27 +188,14 @@ async function assertServiceWorks(params: { baseURL: string }) {
 }
 
 beforeAll(async () => {
-  const build = spawn("pnpm", ["build"], {
-    cwd: serviceDirectory,
-    env: process.env,
-    stdio: ["ignore", "pipe", "pipe"],
+  await x("pnpm", ["build"], {
+    throwOnError: true,
+    nodeOptions: {
+      cwd: serviceDirectory,
+      env: process.env,
+      stdio: "pipe",
+    },
   });
-
-  let output = "";
-  build.stdout?.on("data", (chunk) => {
-    output += String(chunk);
-  });
-  build.stderr?.on("data", (chunk) => {
-    output += String(chunk);
-  });
-
-  const exitCode = await new Promise<number | null>((resolve) => {
-    build.once("exit", resolve);
-  });
-
-  if (exitCode !== 0) {
-    throw new Error(`ws-test build failed with exit code ${String(exitCode)}\n\n${output}`);
-  }
 }, 120_000);
 
 afterEach(async () => {
@@ -163,13 +204,11 @@ afterEach(async () => {
 
 describe("ws-test end-to-end", () => {
   test("dev server serves shell, assets, oRPC, and PTY websockets", async () => {
-    const baseURL = "http://127.0.0.1:5191";
-    const child = await startService({
-      command: "pnpm",
-      args: ["dev"],
-      env: {
-        PORT: "5191",
-      },
+    const port = await getPort();
+    const baseURL = `http://127.0.0.1:${port}`;
+    const child = startProcess(["dev", "--port", String(port)]);
+    await waitForService({
+      child,
       baseURL,
     });
 
@@ -183,13 +222,11 @@ describe("ws-test end-to-end", () => {
   }, 60_000);
 
   test("production server serves shell, built assets, oRPC, and PTY websockets", async () => {
-    const baseURL = "http://127.0.0.1:5192";
-    const child = await startService({
-      command: "pnpm",
-      args: ["start"],
-      env: {
-        PORT: "5192",
-      },
+    const port = await getPort();
+    const baseURL = `http://127.0.0.1:${port}`;
+    const child = startProcess(["preview", "--port", String(port)]);
+    await waitForService({
+      child,
       baseURL,
     });
 
