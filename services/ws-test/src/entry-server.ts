@@ -1,6 +1,6 @@
 import type { Server as HttpServer } from "node:http";
 import { createAdaptorServer } from "@hono/node-server";
-import app from "./server.ts";
+import app from "./server/app.ts";
 import { attachOrpcWebSocketServer } from "./server/orpc.ts";
 
 const host = process.env.HOST?.trim() || "0.0.0.0";
