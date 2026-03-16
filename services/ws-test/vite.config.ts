@@ -1,11 +1,33 @@
 import { resolve } from "node:path";
-import devServer, { defaultOptions } from "@hono/vite-dev-server";
+import { defineConfig } from "vite";
+import devServer from "@hono/vite-dev-server";
 import nodeAdapter from "@hono/vite-dev-server/node";
-import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import viteReact from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
+import { attachOrpcWebSocketServer } from "./src/server/orpc.ts";
+
+function orpcWebSocketPlugin() {
+  return {
+    name: "orpc-websocket-dev-server",
+    configureServer(server: import("vite").ViteDevServer) {
+      let detach: (() => void) | null = null;
+
+      server.httpServer?.once("listening", () => {
+        if (!server.httpServer || detach) {
+          return;
+        }
+
+        detach = attachOrpcWebSocketServer(server.httpServer as import("node:http").Server);
+      });
+
+      server.httpServer?.once("close", () => {
+        detach?.();
+        detach = null;
+      });
+    },
+  };
+}
 
 const clientBuild = {
   outDir: "dist/client",
@@ -28,7 +50,7 @@ const serverBuild = {
   copyPublicDir: false,
   emptyOutDir: false,
   rollupOptions: {
-    input: resolve(__dirname, "src/entry-server.tsx"),
+    input: resolve(__dirname, "src/entry-server.ts"),
     output: {
       entryFileNames: "index.js",
       chunkFileNames: "assets/[name]-[hash].js",
@@ -38,35 +60,26 @@ const serverBuild = {
   ssr: true,
 };
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ command, mode }) => ({
   plugins: [
-    tsconfigPaths({ projects: ["./tsconfig.json"] }),
-    tanstackRouter({ target: "react", autoCodeSplitting: true }),
+    ...(command === "serve"
+      ? [
+          devServer({
+            adapter: nodeAdapter,
+            entry: "./src/server.ts",
+            injectClientScript: false,
+          }),
+        ]
+      : []),
+    tanstackRouter({ target: "react" }),
     viteReact(),
-    tailwindcss(),
-    devServer({
-      adapter: nodeAdapter,
-      entry: "src/entry-server.tsx",
-      injectClientScript: false,
-      exclude: [/^\/src\/.+/, ...defaultOptions.exclude],
-    }),
+    tsconfigPaths({ projects: ["./tsconfig.json"] }),
+    ...(command === "serve" ? [orpcWebSocketPlugin()] : []),
   ],
   build: mode === "client" ? clientBuild : serverBuild,
-  optimizeDeps: {
-    exclude: ["cpu-features", "ssh2", "@docker/node-sdk", "web-vitals"],
-    include: ["react", "react-dom", "@tanstack/react-router"],
-  },
-  resolve: {
-    alias: {
-      "@": resolve(__dirname, "./src"),
-    },
-  },
   server: {
     host: true,
     port: process.env.PORT?.trim() ? Number(process.env.PORT) : 0,
     strictPort: Boolean(process.env.PORT?.trim()),
-    watch: {
-      ignored: ["**/routeTree.gen.ts"],
-    },
   },
 }));

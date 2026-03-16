@@ -13,12 +13,18 @@ import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
 import { getEnv, getStore, serviceName } from "./context.ts";
 import { createDbAuthorizeMiddleware } from "./db-browser.ts";
 import { router } from "./router.ts";
+import { ensureRegistryInitialized } from "./startup.ts";
 
 const env = getEnv();
 const app = new Hono<ServiceAppEnv>();
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
 applyServiceMiddleware(app);
+
+app.use("*", async (c, next) => {
+  await ensureRegistryInitialized({ requestURL: c.req.url });
+  await next();
+});
 
 const openAPIHandler = createServiceOpenAPIHandler({
   router,

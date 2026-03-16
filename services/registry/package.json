@@ -8,9 +8,11 @@
     "./client": "./src/client.ts"
   },
   "scripts": {
-    "dev": "NODE_ENV=development tsx server.ts",
-    "build": "vite build",
-    "start": "NODE_ENV=production tsx server.ts",
+    "dev": "vite",
+    "build:client": "NODE_ENV=production vite build --mode client",
+    "build:server": "NODE_ENV=production vite build",
+    "build": "pnpm build:client && pnpm build:server && pnpm typecheck",
+    "start": "NODE_ENV=production tsx src/entry-server.tsx",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --environment node src/caddy-sync.test.ts src/resolve-public-url.test.ts",
     "cli": "tsx ./cli/cli.ts",
@@ -43,7 +45,6 @@
     "@tanstack/react-query-devtools": "^5.90.21",
     "@tanstack/react-router": "^1.163.3",
     "@tanstack/react-router-devtools": "^1.163.3",
-    "@tanstack/react-start": "^1.163.3",
     "better-sqlite3": "^12.6.2",
     "drizzle-orm": "^0.45.1",
     "hono": "^4.12.5",
@@ -55,6 +56,8 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@hono/vite-dev-server": "^0.24.1",
+    "@tanstack/router-plugin": "^1.166.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.0.10",
     "@types/react": "^19.2.0",

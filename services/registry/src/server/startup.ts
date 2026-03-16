@@ -1,15 +1,17 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { serviceLog, getOtelRuntimeConfig } from "@iterate-com/shared/jonasland";
-import { createRegistryClient } from "../client.ts";
 import { renderRegistryRoutesFragment } from "./caddy-sync.ts";
-import { serviceName, type RegistryEnv } from "./context.ts";
+import { getEnv, getStore, serviceName, type RegistryEnv } from "./context.ts";
 import type { ServicesStore } from "./store.ts";
 
 const LEGACY_BUILTIN_SEED_HOSTS = new Set([
   "registry.iterate.localhost",
   "otel-collector.iterate.localhost",
 ]);
+
+let initializedOrigin: string | null = null;
+let initializePromise: Promise<void> | null = null;
 
 async function synchronizeRouteFragmentFromStore(params: {
   store: ServicesStore;
@@ -113,16 +115,49 @@ export async function synchronizeRegistryRoutes(params: {
   return await synchronizeRouteFragmentFromStore(params);
 }
 
-export async function initializeRegistryService(params: { host: string; port: number }) {
-  await createRegistryClient({
-    url: `http://127.0.0.1:${params.port}`,
-  }).startup.initialize({});
+export async function ensureRegistryInitialized(params: { requestURL: string }) {
+  const url = new URL(params.requestURL);
+  const origin = url.origin;
+  if (initializedOrigin === origin) {
+    return;
+  }
+  if (initializePromise) {
+    await initializePromise;
+    return;
+  }
+
+  initializePromise = (async () => {
+    const env = getEnv();
+    const store = await getStore();
+
+    await ensureSeededRoutes({
+      store,
+      env,
+    });
+    await synchronizeRegistryRoutes({
+      store,
+      env,
+    });
+
+    initializedOrigin = origin;
+  })();
+
+  try {
+    await initializePromise;
+  } finally {
+    if (initializedOrigin !== origin) {
+      initializePromise = null;
+    }
+  }
+
+  const host = url.hostname;
+  const port = url.port.length > 0 ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
 
   serviceLog.info({
     event: "service.started",
     service: serviceName,
-    host: params.host,
-    port: params.port,
+    host,
+    port,
     docs_path: "/api/docs",
     spec_path: "/api/openapi.json",
     orpc_path: "/api",

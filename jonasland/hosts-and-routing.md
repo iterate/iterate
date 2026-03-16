@@ -14,7 +14,7 @@ Single front door is Caddy. All inbound HTTP(S) traffic and all sandbox egress t
   - Contains additive ingress route metadata for explicit service hosts.
 - `services/registry/src/caddy-sync.ts`
   - Renders registry-managed Caddy fragments and reloads Caddy after validation.
-- `services/registry/server.ts`
+- `services/registry/src/entry-server.tsx`
   - Seeds built-in registry-owned routes and triggers initial synchronization from route storage into Caddy.
 - `packages/shared/src/jonasland/ingress-url.ts`
   - Shared public-URL resolver.

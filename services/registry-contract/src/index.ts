@@ -446,7 +446,7 @@ export const registryServiceManifest = {
   slug: "registry",
   version: packageJson.version ?? "0.0.0",
   port: 17310,
-  serverEntryPoint: "services/registry/server.ts",
+  serverEntryPoint: "services/registry/src/entry-server.tsx",
   orpcContract: registryContract,
   envVars: RegistryServiceEnv,
 } as const satisfies ServiceManifestWithEntryPoint;

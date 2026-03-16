@@ -72,7 +72,7 @@ export default defineConfig({
       name: "registry",
       definition: {
         command: tsxPath,
-        args: [join(iterateRepo, "services/registry/server.ts")],
+        args: [join(iterateRepo, "services/registry/src/entry-server.tsx")],
         env: {
           PORT: "17310",
           REGISTRY_SERVICE_PORT: "17310",
