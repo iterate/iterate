@@ -1,7 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { defineConfig } from "pidnap";
-import { daemonServiceManifest } from "../../services/daemon-contract/src/index.ts";
 
 const home = homedir();
 const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
@@ -141,60 +140,26 @@ export default defineConfig({
         reloadDelay: "immediately",
       },
     },
-    {
-      name: "daemon",
-      definition: {
-        command: tsxPath,
-        args: [join(iterateRepo, daemonServiceManifest.serverEntryPoint)],
-        env: {
-          PORT: String(daemonServiceManifest.port),
-        },
-      },
-      dependsOn: ["registry"],
-      options: {
-        restartPolicy: "always",
-      },
-      envOptions: {
-        reloadDelay: false,
-      },
-    },
-    // Optional apps (home/docs/outerbase/example) are on-demand and register routes via registry.
-    {
-      name: "home",
-      definition: {
-        command: tsxPath,
-        args: [join(iterateRepo, "services/home/src/server.ts")],
-        env: {
-          PORT: "19030",
-        },
-      },
-      dependsOn: ["registry"],
-      options: {
-        restartPolicy: "never",
-      },
-      envOptions: {
-        reloadDelay: "immediately",
-      },
-    },
-    {
-      name: "openobserve",
-      definition: {
-        command: "/usr/local/bin/openobserve",
-        args: [],
-        env: {
-          ZO_ROOT_USER_EMAIL: "root@example.com",
-          ZO_ROOT_USER_PASSWORD: "Complexpass#123",
-          ZO_LOCAL_MODE: "true",
-          ZO_DATA_DIR: "/var/lib/openobserve",
-        },
-      },
-      options: {
-        restartPolicy: "always",
-      },
-      envOptions: {
-        reloadDelay: "immediately",
-      },
-    },
+    // Optional apps (example) are on-demand and register routes via registry.
+    // {
+    //   name: "openobserve",
+    //   definition: {
+    //     command: "/usr/local/bin/openobserve",
+    //     args: [],
+    //     env: {
+    //       ZO_ROOT_USER_EMAIL: "root@example.com",
+    //       ZO_ROOT_USER_PASSWORD: "Complexpass#123",
+    //       ZO_LOCAL_MODE: "true",
+    //       ZO_DATA_DIR: "/var/lib/openobserve",
+    //     },
+    //   },
+    //   options: {
+    //     restartPolicy: "always",
+    //   },
+    //   envOptions: {
+    //     reloadDelay: "immediately",
+    //   },
+    // },
     {
       name: "otel-collector",
       definition: {

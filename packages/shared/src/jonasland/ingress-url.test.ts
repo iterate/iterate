@@ -65,7 +65,7 @@ describe("resolvePublicIngressUrl", () => {
     [
       "bla.proxy.iterate.com",
       "dunder-prefix",
-      "http://home.iterate.localhost",
+      "http://registry.iterate.localhost",
       "https://bla.proxy.iterate.com/",
     ],
   ])(
@@ -86,7 +86,7 @@ describe("resolvePublicIngressUrl", () => {
         resolvePublicIngressUrl({
           ingressHost: ingressHost || undefined,
           ingressRoutingType: ingressRoutingType || undefined,
-          defaultIngressServiceSlug: "home",
+          defaultIngressServiceSlug: "registry",
           internalUrl,
         }),
       ).toBe(expected);

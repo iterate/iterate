@@ -549,7 +549,7 @@ importers:
         version: 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
       '@orpc/zod':
         specifier: ^1.13.6
-        version: 1.13.6(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.6(@opentelemetry/api@1.9.0))(@orpc/server@1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0))(ws@8.19.0)(zod@4.3.6)
+        version: 1.13.6(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.7(@opentelemetry/api@1.9.0))(@orpc/server@1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0))(ws@8.19.0)(zod@4.3.6)
       hono:
         specifier: ^4.12.5
         version: 4.12.5
@@ -557,9 +557,6 @@ importers:
         specifier: ^4.1.12
         version: 4.3.6
     devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^4.20260207.0
-        version: 4.20260305.0
       '@types/node':
         specifier: ^24.10.1
         version: 24.11.0
@@ -1722,192 +1719,6 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.31.1)(msw@2.12.10(@types/node@25.3.3)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
 
-  services/daemon:
-    dependencies:
-      '@hono/node-server':
-        specifier: ^1.19.10
-        version: 1.19.10(hono@4.12.5)
-      '@hono/node-ws':
-        specifier: ^1.3.0
-        version: 1.3.0(@hono/node-server@1.19.10(hono@4.12.5))(hono@4.12.5)
-      '@iterate-com/daemon-contract':
-        specifier: workspace:*
-        version: link:../daemon-contract
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      '@iterate-com/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
-      '@lydell/node-pty':
-        specifier: ^1.0.1
-        version: 1.1.0
-      '@orpc/server':
-        specifier: '*'
-        version: 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
-      '@tailwindcss/vite':
-        specifier: ^4.1.17
-        version: 4.2.1(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      '@tanstack/react-query':
-        specifier: ^5.90.21
-        version: 5.90.21(react@19.2.4)
-      '@tanstack/react-router':
-        specifier: ^1.163.3
-        version: 1.166.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@tanstack/react-start':
-        specifier: ^1.163.3
-        version: 1.166.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      '@vitejs/plugin-react':
-        specifier: ^5.1.2
-        version: 5.1.4(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      '@xterm/addon-serialize':
-        specifier: 0.15.0-beta.103
-        version: 0.15.0-beta.103(@xterm/xterm@6.1.0-beta.103)
-      '@xterm/headless':
-        specifier: 6.1.0-beta.103
-        version: 6.1.0-beta.103
-      hono:
-        specifier: ^4.12.5
-        version: 4.12.5
-      react:
-        specifier: ^19.2.4
-        version: 19.2.4
-      react-dom:
-        specifier: ^19.2.4
-        version: 19.2.4(react@19.2.4)
-      schematch:
-        specifier: 0.2.1
-        version: 0.2.1
-      tailwindcss:
-        specifier: ^4.2.1
-        version: 4.2.1
-      tinyexec:
-        specifier: ^1.0.2
-        version: 1.0.2
-      ws:
-        specifier: ^8.18.3
-        version: 8.19.0
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
-    devDependencies:
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.3.3
-      '@types/react':
-        specifier: ^19.2.3
-        version: 19.2.14
-      '@types/react-dom':
-        specifier: ^19.2.2
-        version: 19.2.3(@types/react@19.2.14)
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
-      tsx:
-        specifier: ^4.21.0
-        version: 4.21.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vite:
-        specifier: ^7.3.1
-        version: 7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
-      vite-tsconfig-paths:
-        specifier: ^5.1.4
-        version: 5.1.4(typescript@5.9.3)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-
-  services/daemon-contract:
-    dependencies:
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      '@orpc/contract':
-        specifier: '*'
-        version: 1.13.6(@opentelemetry/api@1.9.0)
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
-    devDependencies:
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.3.3
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  services/docs:
-    dependencies:
-      '@hono/node-server':
-        specifier: ^1.19.10
-        version: 1.19.10(hono@4.12.5)
-      '@hono/node-ws':
-        specifier: ^1.3.0
-        version: 1.3.0(@hono/node-server@1.19.10(hono@4.12.5))(hono@4.12.5)
-      '@iterate-com/registry':
-        specifier: workspace:*
-        version: link:../registry
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      '@iterate-com/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
-      '@tanstack/react-query':
-        specifier: ^5.90.21
-        version: 5.90.21(react@19.2.4)
-      '@tanstack/react-router':
-        specifier: ^1.163.3
-        version: 1.166.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@tanstack/react-start':
-        specifier: ^1.163.3
-        version: 1.166.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      hono:
-        specifier: ^4.12.5
-        version: 4.12.5
-      lucide-react:
-        specifier: ^0.513.0
-        version: 0.513.0(react@19.2.4)
-      react:
-        specifier: ^19.2.4
-        version: 19.2.4
-      react-dom:
-        specifier: ^19.2.4
-        version: 19.2.4(react@19.2.4)
-      tailwindcss:
-        specifier: ^4.2.1
-        version: 4.2.1
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
-    devDependencies:
-      '@tailwindcss/vite':
-        specifier: ^4.1.10
-        version: 4.2.1(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.3.3
-      '@types/react':
-        specifier: ^19.1.8
-        version: 19.2.14
-      '@types/react-dom':
-        specifier: ^19.1.6
-        version: 19.2.3(@types/react@19.2.14)
-      '@vitejs/plugin-react':
-        specifier: ^4.5.2
-        version: 4.7.0(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      tsx:
-        specifier: ^4.19.4
-        version: 4.21.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vite:
-        specifier: ^7.3.1
-        version: 7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
-      vite-tsconfig-paths:
-        specifier: ^4.3.2
-        version: 4.3.2(typescript@5.9.3)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-
   services/events:
     dependencies:
       '@effect/platform':
@@ -2303,149 +2114,6 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
-  services/home:
-    dependencies:
-      '@hono/node-server':
-        specifier: ^1.19.10
-        version: 1.19.10(hono@4.12.5)
-      '@hono/node-ws':
-        specifier: ^1.3.0
-        version: 1.3.0(@hono/node-server@1.19.10(hono@4.12.5))(hono@4.12.5)
-      '@iterate-com/registry':
-        specifier: workspace:*
-        version: link:../registry
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      '@iterate-com/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
-      '@tanstack/react-query':
-        specifier: ^5.90.21
-        version: 5.90.21(react@19.2.4)
-      '@tanstack/react-router':
-        specifier: ^1.163.3
-        version: 1.166.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@tanstack/react-start':
-        specifier: ^1.163.3
-        version: 1.166.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      hono:
-        specifier: ^4.12.5
-        version: 4.12.5
-      lucide-react:
-        specifier: ^0.513.0
-        version: 0.513.0(react@19.2.4)
-      react:
-        specifier: ^19.2.4
-        version: 19.2.4
-      react-dom:
-        specifier: ^19.2.4
-        version: 19.2.4(react@19.2.4)
-      tailwindcss:
-        specifier: ^4.2.1
-        version: 4.2.1
-    devDependencies:
-      '@tailwindcss/vite':
-        specifier: ^4.1.10
-        version: 4.2.1(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.3.3
-      '@types/react':
-        specifier: ^19.1.8
-        version: 19.2.14
-      '@types/react-dom':
-        specifier: ^19.1.6
-        version: 19.2.3(@types/react@19.2.14)
-      '@vitejs/plugin-react':
-        specifier: ^4.5.2
-        version: 4.7.0(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      tsx:
-        specifier: ^4.19.4
-        version: 4.21.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vite:
-        specifier: ^7.3.1
-        version: 7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
-      vite-tsconfig-paths:
-        specifier: ^4.3.2
-        version: 4.3.2(typescript@5.9.3)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-
-  services/outerbase:
-    dependencies:
-      '@hono/node-server':
-        specifier: ^1.19.10
-        version: 1.19.10(hono@4.12.5)
-      '@hono/node-ws':
-        specifier: ^1.3.0
-        version: 1.3.0(@hono/node-server@1.19.10(hono@4.12.5))(hono@4.12.5)
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      '@iterate-com/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
-      '@tanstack/react-query':
-        specifier: ^5.90.21
-        version: 5.90.21(react@19.2.4)
-      '@tanstack/react-router':
-        specifier: ^1.163.3
-        version: 1.166.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@tanstack/react-start':
-        specifier: ^1.163.3
-        version: 1.166.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      better-sqlite3:
-        specifier: ^12.6.2
-        version: 12.6.2
-      drizzle-orm:
-        specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260305.0)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)
-      hono:
-        specifier: ^4.12.5
-        version: 4.12.5
-      lucide-react:
-        specifier: ^0.513.0
-        version: 0.513.0(react@19.2.4)
-      react:
-        specifier: ^19.2.4
-        version: 19.2.4
-      react-dom:
-        specifier: ^19.2.4
-        version: 19.2.4(react@19.2.4)
-      tailwindcss:
-        specifier: ^4.2.1
-        version: 4.2.1
-    devDependencies:
-      '@tailwindcss/vite':
-        specifier: ^4.1.10
-        version: 4.2.1(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.3.3
-      '@types/react':
-        specifier: ^19.1.8
-        version: 19.2.14
-      '@types/react-dom':
-        specifier: ^19.1.6
-        version: 19.2.3(@types/react@19.2.14)
-      '@vitejs/plugin-react':
-        specifier: ^4.5.2
-        version: 4.7.0(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      tsx:
-        specifier: ^4.19.4
-        version: 4.21.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vite:
-        specifier: ^7.3.1
-        version: 7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
-      vite-tsconfig-paths:
-        specifier: ^4.3.2
-        version: 4.3.2(typescript@5.9.3)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-
   services/registry:
     dependencies:
       '@accelerated-software-development/caddy-api-client':
@@ -2463,9 +2131,6 @@ importers:
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-      '@iterate-com/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
       '@orpc/client':
         specifier: '*'
         version: 1.13.6(@opentelemetry/api@1.9.0)
@@ -2475,27 +2140,15 @@ importers:
       '@orpc/openapi':
         specifier: '*'
         version: 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
+      '@orpc/openapi-client':
+        specifier: ^1.13.7
+        version: 1.13.7(@opentelemetry/api@1.9.0)
       '@orpc/server':
         specifier: '*'
         version: 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
       '@orpc/zod':
         specifier: '*'
         version: 1.13.6(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.6(@opentelemetry/api@1.9.0))(@orpc/server@1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0))(ws@8.19.0)(zod@4.3.6)
-      '@tailwindcss/vite':
-        specifier: ^4.1.17
-        version: 4.2.1(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      '@tanstack/react-query':
-        specifier: ^5.90.21
-        version: 5.90.21(react@19.2.4)
-      '@tanstack/react-router':
-        specifier: ^1.163.3
-        version: 1.166.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@tanstack/react-start':
-        specifier: ^1.163.3
-        version: 1.166.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      '@vitejs/plugin-react':
-        specifier: ^5.1.2
-        version: 5.1.4(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
       better-sqlite3:
         specifier: ^12.6.2
         version: 12.6.2
@@ -2505,21 +2158,6 @@ importers:
       hono:
         specifier: ^4.12.5
         version: 4.12.5
-      react:
-        specifier: ^19.2.4
-        version: 19.2.4
-      react-dom:
-        specifier: ^19.2.4
-        version: 19.2.4(react@19.2.4)
-      tailwindcss:
-        specifier: ^4.2.1
-        version: 4.2.1
-      vite:
-        specifier: ^7.3.1
-        version: 7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
-      vite-tsconfig-paths:
-        specifier: ^4.3.2
-        version: 4.3.2(typescript@5.9.3)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
       ws:
         specifier: ^8.18.3
         version: 8.19.0
@@ -2530,12 +2168,6 @@ importers:
       '@types/node':
         specifier: ^25.0.10
         version: 25.3.3
-      '@types/react':
-        specifier: ^19.2.3
-        version: 19.2.14
-      '@types/react-dom':
-        specifier: ^19.2.2
-        version: 19.2.3(@types/react@19.2.14)
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
@@ -5492,11 +5124,17 @@ packages:
   '@orpc/client@1.13.6':
     resolution: {integrity: sha512-M6lYM6fJUFp9GR+It/qglYTeXwspb6sGj46xXWHqHS6iDVquqju0bdYuLOfHx8CGJcUSzi0aKUcqMXiGJhBG3w==}
 
+  '@orpc/client@1.13.7':
+    resolution: {integrity: sha512-qqmS28q0GOo9sfTstAc6cy0NoitYvdwZlgGBLXDgXsHNtSkkSm3nI5M1ohgWYpSL+lfP/jWriTbJJrBYPzyCiQ==}
+
   '@orpc/contract@1.13.5':
     resolution: {integrity: sha512-JeklRu2kxsRKyaPeKqA40YHsGRLjQdAuEGNCNU6VxA3v4UReh8ZsDG+WvEoHfXIOLRn2VWBzEsbE1G2MwRCGsg==}
 
   '@orpc/contract@1.13.6':
     resolution: {integrity: sha512-wjnpKMsCBbUE7MxdS+9by1BIDTJ4vnfUk9he4GmxKQ8fvK/MRNHUR5jkNhsBCoLnigBrsAedHrr9AIqNgqquyQ==}
+
+  '@orpc/contract@1.13.7':
+    resolution: {integrity: sha512-zRm+5tvn8DVM4DHJVxQEiuoM7mGdlgIQzRjTqnJMBRV0+rBNyZniokZCGwfJHKCjtBaAtJWieuJLQ+dFj3gbcw==}
 
   '@orpc/interop@1.13.5':
     resolution: {integrity: sha512-l02yMZWJ9hJ2Z0PF14UsP2Hd71jbUbNgvA5/hxzGkx9ci89cgJ3F9yv3clpwz8VElfh2Qp9jta+peKgiRV1a5A==}
@@ -5515,6 +5153,9 @@ packages:
 
   '@orpc/openapi-client@1.13.6':
     resolution: {integrity: sha512-d1bAWpJSoK1HdVBPRmMlYCuqkR2nbdF3kztd7Xz2EsRdl5TRhNLqUJ+5CIfBZHuueicrpdBlwrOuLMmSlcGrew==}
+
+  '@orpc/openapi-client@1.13.7':
+    resolution: {integrity: sha512-0oWElGEtZ/EbfwOliMI6PccALpi8tp3aOyU746kJQRKTkSAwGohyRvfRA1R7BLbA3xwHTdNYB6ThaeYLvqiA0g==}
 
   '@orpc/openapi@1.13.5':
     resolution: {integrity: sha512-1GfVSCQ2Qfy8JrRdwei3oQmhj5AOnNntMzAF+YyZjfYhhqnFjWFyjk3iYfCJGih6TzpqmIxeLycPsvKcOhDwLQ==}
@@ -5573,6 +5214,14 @@ packages:
       '@opentelemetry/api':
         optional: true
 
+  '@orpc/shared@1.13.7':
+    resolution: {integrity: sha512-yP0oDIC98sZHqSTmr4SUXJo4RNw9yias1GYVJTiVTXrRUEdniafkLrSkOrOHgrILP3w93sKiE69V3+/T0TNSOQ==}
+    peerDependencies:
+      '@opentelemetry/api': '>=1.9.0'
+    peerDependenciesMeta:
+      '@opentelemetry/api':
+        optional: true
+
   '@orpc/standard-server-aws-lambda@1.13.5':
     resolution: {integrity: sha512-fnjglw4a24ORmFxRgqrPATwOjxhjrAx7i1mDM9JYVSouRBb5X3J3kcvvOeuqiCw6Ov1X6WczykziB5cLy8aIpQ==}
 
@@ -5601,6 +5250,9 @@ packages:
   '@orpc/standard-server-fetch@1.13.6':
     resolution: {integrity: sha512-O0bK4crjEOU9H4LzJ2abMjku3dvEhs8tcLXP/W5NXyH+Wm7qjBjDr6psxZ3YuaWdVbfd/P7CHtvw2rQDHJCNfQ==}
 
+  '@orpc/standard-server-fetch@1.13.7':
+    resolution: {integrity: sha512-Hj+41HAlao+JXuLffeLrPiADu8mhGqwVB34lf+JSLKGtZhxaX4n4MeZMYhFioExXC+/tanvSrbKKkJimfznIWQ==}
+
   '@orpc/standard-server-node@1.13.5':
     resolution: {integrity: sha512-cFyoKU6kHM2AcLd+fLdty3hohm5h1Sc0wAvXasI7PVZlx9mKxSfV1n4Ej2Una8ik1Jt62AH+o9fMLtPJ6/wvbQ==}
 
@@ -5613,11 +5265,17 @@ packages:
   '@orpc/standard-server-peer@1.13.6':
     resolution: {integrity: sha512-WTqjNS6A9sxR4HVxWUb9ZoBHeQiesHeANmVBFdM/QjAaPUZYKn6WACYU6Q2eGmsCUeTQFfMssk0BG2EsgRNEYw==}
 
+  '@orpc/standard-server-peer@1.13.7':
+    resolution: {integrity: sha512-mbjmkEVGtsWvGBBEieUuXdX+MAzllQZ0D9Z79kU4Ns9sVaBcvjCYSrL29/iXcYqVGTx23LS9PaYnIurAQejzSQ==}
+
   '@orpc/standard-server@1.13.5':
     resolution: {integrity: sha512-Upu82h5TlKOWlttcL+TTkIxyJEzjdKWd8Ri9ya8o1+BxYiqd/y3TQnmBQM+pfj8N1w+zI86Q3cLGB8RGtMqf5g==}
 
   '@orpc/standard-server@1.13.6':
     resolution: {integrity: sha512-GNYZXCWxYLVHsxBWR+bg5F12vDCsQghqxbqoFpMnA4goe58dugNWmuxM+aSDbI0D81YxkKDULSqft5S+GWi5ww==}
+
+  '@orpc/standard-server@1.13.7':
+    resolution: {integrity: sha512-5btxVTRAtgl9lmzg1XTCJYT8qd2QAAwcQ6XRvGXgLz56rSUCMf2vl3WeWPwlwiXXpueNvucPea/CaRGhJ9ZTeQ==}
 
   '@orpc/tanstack-query@1.13.6':
     resolution: {integrity: sha512-OBseuArjkAobKtKLVdzpepiS0fhc0TzW0O0Jixt1gkhkCiWG1xK8z0gZ7daQ85UBXRIoI9SXzwXhl+HVP+j14w==}
@@ -6936,9 +6594,6 @@ packages:
   '@remix-run/node-fetch-server@0.9.0':
     resolution: {integrity: sha512-SoLMv7dbH+njWzXnOY6fI08dFMI5+/dQ+vY3n8RnnbdG7MdJEgiP28Xj/xWlnRnED/aB6SFw56Zop+LbmaaKqA==}
 
-  '@rolldown/pluginutils@1.0.0-beta.27':
-    resolution: {integrity: sha512-+d0F4MKMCbeVUJwG96uQ4SgAznZNSq93I3V+9NHA4OpvqG8mRCpGdKmK8l/dl02h2CCDHwW2FqilnTyDcAnqjA==}
-
   '@rolldown/pluginutils@1.0.0-beta.40':
     resolution: {integrity: sha512-s3GeJKSQOwBlzdUrj4ISjJj5SfSh+aqn0wjOar4Bx95iV1ETI7F6S/5hLcfAxZ9kXDcyrAkxPlqmd1ZITttf+w==}
 
@@ -8161,12 +7816,6 @@ packages:
   '@vercel/oidc@3.1.0':
     resolution: {integrity: sha512-Fw28YZpRnA3cAHHDlkt7xQHiJ0fcL+NRcIqsocZQUSmbzeIKRpwttJjik5ZGanXP+vlA4SbTg+AbA3bP363l+w==}
     engines: {node: '>= 20'}
-
-  '@vitejs/plugin-react@4.7.0':
-    resolution: {integrity: sha512-gUu9hwfWvvEDBBmgtAowQCojwZmJ5mcLn3aufeCsitijs3+f2NsrPtlAWIR6OPiqljl96GVCUbLe0HyqIpVaoA==}
-    engines: {node: ^14.18.0 || >=16.0.0}
-    peerDependencies:
-      vite: ^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0
 
   '@vitejs/plugin-react@5.1.4':
     resolution: {integrity: sha512-VIcFLdRi/VYRU8OL/puL7QXMYafHmqOnwTZY50U1JPlCNj30PxCMx65c494b1K9be9hX83KVt0+gTEwTWLqToA==}
@@ -11340,11 +10989,6 @@ packages:
     resolution: {integrity: sha512-DqC6n3QQ77zdFpCMASA1a3Jlb64Hv2N2DciFGkO/4L9+q/IpIAuRlKOvCXabtRW6cQf8usbmM6BE/TOPysCdIA==}
     engines: {bun: '>=1.0.0', deno: '>=1.30.0', node: '>=8.0.0'}
 
-  lucide-react@0.513.0:
-    resolution: {integrity: sha512-CJZKq2g8Y8yN4Aq002GahSXbG2JpFv9kXwyiOAMvUBv7pxeOFHUWKB0mO7MiY4ZVFCV4aNjv2BJFq/z3DgKPQg==}
-    peerDependencies:
-      react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
-
   lucide-react@0.542.0:
     resolution: {integrity: sha512-w3hD8/SQB7+lzU2r4VdFyzzOzKnUjTZIF/MQJGSSvni7Llewni4vuViRppfRAa2guOsY5k4jZyxw/i9DQHv+dw==}
     peerDependencies:
@@ -12557,10 +12201,6 @@ packages:
 
   react-refresh@0.14.2:
     resolution: {integrity: sha512-jCvmsr+1IUSMUyzOkRcvnVbX3ZYC6g9TDrDbFuFmRDq7PD4yaGbLKNQL6k2jnArV8hjYxh7hVhAZB6s9HDGpZA==}
-    engines: {node: '>=0.10.0'}
-
-  react-refresh@0.17.0:
-    resolution: {integrity: sha512-z6F7K9bV85EfseRCp2bzrpyQ0Gkw1uLoCel9XBVWPg/TjRj94SkJzUTGfOa4bs7iJvBWtQG0Wq7wnI0syw3EBQ==}
     engines: {node: '>=0.10.0'}
 
   react-refresh@0.18.0:
@@ -17893,6 +17533,15 @@ snapshots:
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
+  '@orpc/client@1.13.7(@opentelemetry/api@1.9.0)':
+    dependencies:
+      '@orpc/shared': 1.13.7(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.7(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-fetch': 1.13.7(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-peer': 1.13.7(@opentelemetry/api@1.9.0)
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+
   '@orpc/contract@1.13.5(@opentelemetry/api@1.9.0)':
     dependencies:
       '@orpc/client': 1.13.5(@opentelemetry/api@1.9.0)
@@ -17906,6 +17555,15 @@ snapshots:
     dependencies:
       '@orpc/client': 1.13.6(@opentelemetry/api@1.9.0)
       '@orpc/shared': 1.13.6(@opentelemetry/api@1.9.0)
+      '@standard-schema/spec': 1.1.0
+      openapi-types: 12.1.3
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+
+  '@orpc/contract@1.13.7(@opentelemetry/api@1.9.0)':
+    dependencies:
+      '@orpc/client': 1.13.7(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.7(@opentelemetry/api@1.9.0)
       '@standard-schema/spec': 1.1.0
       openapi-types: 12.1.3
     transitivePeerDependencies:
@@ -17958,6 +17616,15 @@ snapshots:
       '@orpc/contract': 1.13.6(@opentelemetry/api@1.9.0)
       '@orpc/shared': 1.13.6(@opentelemetry/api@1.9.0)
       '@orpc/standard-server': 1.13.6(@opentelemetry/api@1.9.0)
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+
+  '@orpc/openapi-client@1.13.7(@opentelemetry/api@1.9.0)':
+    dependencies:
+      '@orpc/client': 1.13.7(@opentelemetry/api@1.9.0)
+      '@orpc/contract': 1.13.7(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.7(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.7(@opentelemetry/api@1.9.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
@@ -18064,6 +17731,13 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.9.0
 
+  '@orpc/shared@1.13.7(@opentelemetry/api@1.9.0)':
+    dependencies:
+      radash: 12.1.1
+      type-fest: 5.4.4
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.0
+
   '@orpc/standard-server-aws-lambda@1.13.5(@opentelemetry/api@1.9.0)':
     dependencies:
       '@orpc/shared': 1.13.5(@opentelemetry/api@1.9.0)
@@ -18112,6 +17786,13 @@ snapshots:
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
+  '@orpc/standard-server-fetch@1.13.7(@opentelemetry/api@1.9.0)':
+    dependencies:
+      '@orpc/shared': 1.13.7(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.7(@opentelemetry/api@1.9.0)
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+
   '@orpc/standard-server-node@1.13.5(@opentelemetry/api@1.9.0)':
     dependencies:
       '@orpc/shared': 1.13.5(@opentelemetry/api@1.9.0)
@@ -18142,6 +17823,13 @@ snapshots:
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
+  '@orpc/standard-server-peer@1.13.7(@opentelemetry/api@1.9.0)':
+    dependencies:
+      '@orpc/shared': 1.13.7(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.7(@opentelemetry/api@1.9.0)
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+
   '@orpc/standard-server@1.13.5(@opentelemetry/api@1.9.0)':
     dependencies:
       '@orpc/shared': 1.13.5(@opentelemetry/api@1.9.0)
@@ -18151,6 +17839,12 @@ snapshots:
   '@orpc/standard-server@1.13.6(@opentelemetry/api@1.9.0)':
     dependencies:
       '@orpc/shared': 1.13.6(@opentelemetry/api@1.9.0)
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+
+  '@orpc/standard-server@1.13.7(@opentelemetry/api@1.9.0)':
+    dependencies:
+      '@orpc/shared': 1.13.7(@opentelemetry/api@1.9.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
@@ -18181,6 +17875,22 @@ snapshots:
   '@orpc/zod@1.13.6(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.6(@opentelemetry/api@1.9.0))(@orpc/server@1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0))(ws@8.19.0)(zod@4.3.6)':
     dependencies:
       '@orpc/contract': 1.13.6(@opentelemetry/api@1.9.0)
+      '@orpc/json-schema': 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
+      '@orpc/openapi': 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
+      '@orpc/server': 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
+      '@orpc/shared': 1.13.6(@opentelemetry/api@1.9.0)
+      escape-string-regexp: 5.0.0
+      wildcard-match: 5.1.4
+      zod: 4.3.6
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - crossws
+      - fastify
+      - ws
+
+  '@orpc/zod@1.13.6(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.7(@opentelemetry/api@1.9.0))(@orpc/server@1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0))(ws@8.19.0)(zod@4.3.6)':
+    dependencies:
+      '@orpc/contract': 1.13.7(@opentelemetry/api@1.9.0)
       '@orpc/json-schema': 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
       '@orpc/openapi': 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
       '@orpc/server': 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
@@ -19661,8 +19371,6 @@ snapshots:
   '@remix-run/node-fetch-server@0.8.1': {}
 
   '@remix-run/node-fetch-server@0.9.0': {}
-
-  '@rolldown/pluginutils@1.0.0-beta.27': {}
 
   '@rolldown/pluginutils@1.0.0-beta.40': {}
 
@@ -21298,18 +21006,6 @@ snapshots:
   '@ver0/deep-equal@1.0.1': {}
 
   '@vercel/oidc@3.1.0': {}
-
-  '@vitejs/plugin-react@4.7.0(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))':
-    dependencies:
-      '@babel/core': 7.29.0
-      '@babel/plugin-transform-react-jsx-self': 7.27.1(@babel/core@7.29.0)
-      '@babel/plugin-transform-react-jsx-source': 7.27.1(@babel/core@7.29.0)
-      '@rolldown/pluginutils': 1.0.0-beta.27
-      '@types/babel__core': 7.20.5
-      react-refresh: 0.17.0
-      vite: 7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
-    transitivePeerDependencies:
-      - supports-color
 
   '@vitejs/plugin-react@5.1.4(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))':
     dependencies:
@@ -24931,10 +24627,6 @@ snapshots:
 
   lru.min@1.1.4: {}
 
-  lucide-react@0.513.0(react@19.2.4):
-    dependencies:
-      react: 19.2.4
-
   lucide-react@0.542.0(react@19.2.4):
     dependencies:
       react: 19.2.4
@@ -26600,8 +26292,6 @@ snapshots:
   react-is@18.3.1: {}
 
   react-refresh@0.14.2: {}
-
-  react-refresh@0.17.0: {}
 
   react-refresh@0.18.0: {}
 

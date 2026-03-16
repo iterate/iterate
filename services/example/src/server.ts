@@ -111,10 +111,17 @@ const server = createAdaptorServer({ fetch: app.fetch });
 server.listen(port, "0.0.0.0", () => {
   const address = server.address();
   const boundPort = address && typeof address === "object" ? (address as AddressInfo).port : port;
-  void registerServiceWithRegistry({
-    manifest: exampleServiceManifest,
-    port: boundPort,
-    metadata: { openapiPath: "/api/openapi.json", title: "Example Service" },
-    tags: ["openapi", "example"],
-  });
+  void getExampleDbRuntimeConfig().then((runtime) =>
+    registerServiceWithRegistry({
+      manifest: exampleServiceManifest,
+      port: boundPort,
+      metadata: {
+        openapiPath: "/api/openapi.json",
+        title: "Example Service",
+        sqlitePath: runtime.path,
+        sqliteAlias: "example",
+      },
+      tags: ["openapi", "example", "sqlite"],
+    }),
+  );
 });

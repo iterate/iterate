@@ -175,8 +175,9 @@ function http1Request(params: {
 export function createHostRoutedFetch(params: {
   baseUrl: string;
   host: string;
-}): (request: Request) => Promise<Response> {
-  return async (request: Request): Promise<Response> => {
+}): (input: URL | string | Request, init?: RequestInit) => Promise<Response> {
+  return async (input: URL | string | Request, init?: RequestInit): Promise<Response> => {
+    const request = input instanceof Request ? new Request(input, init) : new Request(input, init);
     const requestUrl = new URL(request.url);
     const url = new URL(`${requestUrl.pathname}${requestUrl.search}`, params.baseUrl);
     const headers: Record<string, string> = {};

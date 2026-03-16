@@ -72,11 +72,11 @@ Single front door is Caddy. All inbound HTTP(S) traffic and all sandbox egress t
 
 ### `ITERATE_INGRESS_DEFAULT_SERVICE`
 
-- Default: `home`
+- Default: `registry`
 - Meaning: service slug that owns the naked public hostname.
 - Examples:
-  - `ITERATE_INGRESS_DEFAULT_SERVICE=home`
-    - `my-sandbox.fly.dev` -> `home`
+  - `ITERATE_INGRESS_DEFAULT_SERVICE=registry`
+    - `my-sandbox.fly.dev` -> `registry`
   - `ITERATE_INGRESS_DEFAULT_SERVICE=events`
     - `my-sandbox.fly.dev` -> `events`
 - Consumed by:

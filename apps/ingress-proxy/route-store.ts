@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import {
   listRoutesOutputSchema,
   listRoutesInputSchema,
@@ -70,7 +71,18 @@ function parseCount(result: CountRoutesResult | null) {
   return Number(result?.total ?? 0);
 }
 
-const routeIdPrefix = "rte";
+const routeIdPrefix = "route";
+
+function processEnvWithTypeIdPrefix() {
+  const runtime = globalThis as typeof globalThis & {
+    __iterateTypeIdProcessEnv?: NodeJS.ProcessEnv;
+  };
+
+  runtime.__iterateTypeIdProcessEnv ??= {};
+  runtime.__iterateTypeIdProcessEnv.TYPEID_PREFIX = env.TYPEID_PREFIX;
+
+  return runtime.__iterateTypeIdProcessEnv as NodeJS.ProcessEnv & { TYPEID_PREFIX: string };
+}
 
 /**
  * All write paths go through root_host because that is the canonical deployment
@@ -125,7 +137,10 @@ export async function upsertRoute(
   const targetUrl = normalizeTargetUrl(parsed.targetUrl);
 
   await upsertRouteByRootHost(db, {
-    id: typeid({ env: process.env as { TYPEID_PREFIX: string }, prefix: routeIdPrefix }),
+    id: typeid({
+      env: processEnvWithTypeIdPrefix(),
+      prefix: routeIdPrefix,
+    }),
     rootHost,
     targetUrl,
     metadataJson: JSON.stringify(parsed.metadata),

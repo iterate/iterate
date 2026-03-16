@@ -51,8 +51,6 @@ Remove 60 LOC of duplicated SQL utilities.
 
 Files:
 
-- `sandbox/services/outerbase-iframe-service.ts` — import `transformLibsqlResultSet` from shared, delete local `convertSqliteType` and `transformRawResult`
-
 ### 2c: Use Existing Handler Factory
 
 Use `createServiceSubRouterHandlers()` that's defined but never imported.
@@ -183,7 +181,6 @@ Files:
 
 - `services/service-registry/src/server.ts` — `/rpc` → `/orpc`
 - `services/service-registry/src/client.ts` — default URL
-- `sandbox/services/home-service.ts` — health path
 - `e2e/test-helpers/index.ts` — client URLs
 
 ## Execution Order

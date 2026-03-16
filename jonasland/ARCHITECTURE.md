@@ -54,12 +54,12 @@ No custom Caddy plugins. No Docker socket mount. No sibling containers.
 
 - Caddy listens on port `80`.
 - `Host: pidnap.iterate.localhost` routes to `127.0.0.1:9876`.
-- `Host: registry.iterate.localhost` routes to `127.0.0.1:8777`.
+- `Host: registry.iterate.localhost` routes to `127.0.0.1:17310`.
 - `Host: caddy.iterate.localhost` routes to Caddy admin `127.0.0.1:2019`.
 - Any outbound HTTP(S) from root-owned processes is redirected to Caddy by iptables.
 - Caddy admin API listens on `0.0.0.0:2019` inside the container.
 - Admin API is reached externally via the single ingress URL + `Host: caddy.iterate.localhost`.
-- Registry ORPC listens on `0.0.0.0:8777` inside the container.
+- Registry oRPC/API listens on `0.0.0.0:17310` inside the container.
 
 ## E2E scope
 

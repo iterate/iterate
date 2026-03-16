@@ -744,7 +744,7 @@ export function createOrpcRpcWebSocketServiceClient<TContract extends AnyContrac
 export async function registerServiceWithRegistry(params: {
   manifest: ServiceManifestLike & { slug: string };
   port: number;
-  metadata?: { openapiPath?: string; title?: string };
+  metadata?: Record<string, string | undefined>;
   tags?: string[];
 }): Promise<void> {
   const registryUrl = process.env.ITERATE_REGISTRY_URL?.trim();
@@ -768,7 +768,15 @@ export async function registerServiceWithRegistry(params: {
       const result = await registryClient.routes.upsert({
         host,
         target,
-        ...(params.metadata ? { metadata: params.metadata } : {}),
+        ...(params.metadata
+          ? {
+              metadata: Object.fromEntries(
+                Object.entries(params.metadata).filter(
+                  (entry): entry is [string, string] => typeof entry[1] === "string",
+                ),
+              ),
+            }
+          : {}),
         ...(params.tags ? { tags: params.tags } : {}),
       });
 

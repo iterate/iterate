@@ -44,7 +44,7 @@ describe("resolvePublicUrl", () => {
     [
       "bla.proxy.iterate.com",
       "dunder-prefix",
-      "http://home.iterate.localhost",
+      "http://registry.iterate.localhost",
       "https://bla.proxy.iterate.com/",
     ],
   ])(
@@ -71,7 +71,7 @@ describe("resolvePublicUrl", () => {
             baseUrlType === "dunder-prefix" || baseUrlType === "subdomain-host"
               ? baseUrlType
               : undefined,
-          ITERATE_INGRESS_DEFAULT_SERVICE: "home",
+          ITERATE_INGRESS_DEFAULT_SERVICE: "registry",
           internalURL,
         }),
       ).toBe(expected);

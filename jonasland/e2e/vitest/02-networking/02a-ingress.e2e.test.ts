@@ -51,6 +51,7 @@ describe("ingress", () => {
       { tags: [...tc.tags], timeout: 20_000 + tc.baseTimeoutMs },
       async ({ e2e }) => {
         const deployment = await tc.create({ slug: e2e.deploymentSlug });
+        await using _deploymentFixture = await e2e.useDeployment({ deployment });
       },
     );
   });
@@ -187,12 +188,12 @@ describe("ingress", () => {
   //         console.log("[ingress] checking initial host matrix");
   //         const initialCases = [
   //           {
-  //             host: "home.iterate.localhost",
-  //             expectedService: "jonasland-home-service",
+  //             host: "registry.iterate.localhost",
+  //             expectedService: "jonasland-registry-service",
   //           },
   //           {
   //             host: publicBaseHost,
-  //             expectedService: "jonasland-home-service",
+  //             expectedService: "jonasland-registry-service",
   //           },
   //           {
   //             host: "example.iterate.localhost",

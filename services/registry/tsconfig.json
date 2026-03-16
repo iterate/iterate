@@ -9,7 +9,7 @@
       "@/*": ["./src/*"]
     },
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
-    "types": ["vite/client", "node"],
+    "types": ["node"],
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "noEmit": true,

@@ -5,23 +5,21 @@ export interface TypeIdEnv {
 }
 
 function normalizePrefix(value: string, fieldName: "TYPEID_PREFIX" | "prefix") {
-  const normalized = value.trim().replace(/_+$/g, "");
-
-  if (!normalized) {
+  if (!value) {
     throw new Error(`${fieldName} is required`);
   }
 
-  if (!/^[a-z]+$/.test(normalized)) {
+  if (!/^[a-z]+$/.test(value)) {
     throw new Error(`${fieldName} must contain lowercase letters only`);
   }
 
-  return normalized;
+  return value;
 }
 
 export function typeid<TEnv extends TypeIdEnv, TPrefix extends string>(params: {
   env: TEnv;
   prefix: TPrefix;
-}): `${string}_${string}` {
+}): `${string}__${string}_${string}` {
   // We call the official TypeID implementation directly:
   // https://github.com/jetify-com/typeid-js
   //
@@ -29,6 +27,7 @@ export function typeid<TEnv extends TypeIdEnv, TPrefix extends string>(params: {
   // their environment context and we never confuse ids across env boundaries.
   const globalPrefix = normalizePrefix(params.env.TYPEID_PREFIX, "TYPEID_PREFIX");
   const localPrefix = normalizePrefix(params.prefix, "prefix");
+  const generated = createTypeId(localPrefix);
 
-  return createTypeId(`${globalPrefix}${localPrefix}`).toString() as `${string}_${string}`;
+  return `${globalPrefix}__${generated.getType()}_${generated.getSuffix()}` as `${string}__${string}_${string}`;
 }

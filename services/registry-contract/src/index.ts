@@ -1,5 +1,8 @@
 import { oc } from "@orpc/contract";
-import { createServiceSubRouterContract } from "@iterate-com/shared/jonasland/service-contract";
+import {
+  ServiceSqlResult,
+  createServiceSubRouterContract,
+} from "@iterate-com/shared/jonasland/service-contract";
 import type { ServiceManifestWithEntryPoint } from "@iterate-com/shared/jonasland/service-contract";
 import { z } from "zod/v4";
 import packageJson from "../package.json" with { type: "json" };
@@ -38,6 +41,102 @@ export const GetPublicUrlOutput = z.object({
   publicURL: z.string(),
 });
 
+export const IngressEnvValues = z.object({
+  ITERATE_INGRESS_HOST: z.string().nullable(),
+  ITERATE_INGRESS_ROUTING_TYPE: z.enum(["dunder-prefix", "subdomain-host"]),
+  ITERATE_INGRESS_DEFAULT_SERVICE: z.string(),
+});
+
+export const OpenApiSource = z.object({
+  id: z.string(),
+  title: z.string(),
+  specUrl: z.string(),
+  serviceUrl: z.string(),
+});
+
+export const RegistryDbSource = z.object({
+  id: z.string(),
+  host: z.string(),
+  title: z.string(),
+  publicURL: z.string(),
+  sqlitePath: z.string(),
+  sqliteAlias: z.string(),
+  tags: z.array(z.string()),
+  updatedAt: z.string(),
+});
+
+export const LandingRouteRecord = RouteRecord.extend({
+  title: z.string(),
+  publicURL: z.string(),
+  docsURL: z.string().optional(),
+  hasOpenAPI: z.boolean(),
+  hasSqlite: z.boolean(),
+});
+
+export const LandingData = z.object({
+  ingress: IngressEnvValues,
+  routes: z.array(LandingRouteRecord),
+  docsSources: z.array(OpenApiSource),
+  dbSources: z.array(RegistryDbSource),
+});
+
+export const DbRuntimeTarget = z.object({
+  alias: z.string(),
+  path: z.string(),
+  host: z.string().optional(),
+  title: z.string().optional(),
+});
+
+export const DbRuntimeInput = z.object({
+  mainAlias: z.string().optional(),
+});
+
+export const DbRuntimeOutput = z.object({
+  studioSrc: z.string(),
+  selectedMainAlias: z.string(),
+  databases: z.array(DbRuntimeTarget),
+  mainPath: z.string(),
+  attached: z.record(z.string(), z.string()),
+});
+
+export const DbQueryRequest = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("query"),
+    id: z.number().int(),
+    statement: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("transaction"),
+    id: z.number().int(),
+    statements: z.array(z.string().min(1)).min(1),
+  }),
+]);
+
+export const DbQueryInput = z.object({
+  mainAlias: z.string().optional(),
+  request: DbQueryRequest,
+});
+
+export const DbQueryResponse = z.union([
+  z.object({
+    type: z.literal("query"),
+    id: z.number().int(),
+    data: ServiceSqlResult,
+    error: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("transaction"),
+    id: z.number().int(),
+    data: z.array(ServiceSqlResult),
+    error: z.string().optional(),
+  }),
+  z.object({
+    type: z.enum(["query", "transaction"]),
+    id: z.number().int(),
+    error: z.string(),
+  }),
+]);
+
 const serviceSubRouter = createServiceSubRouterContract({
   healthSummary: "Registry service health metadata",
   sqlSummary: "Execute SQL against registry sqlite database",
@@ -54,6 +153,72 @@ export const registryContract = oc.router({
     })
     .input(GetPublicUrlInput)
     .output(GetPublicUrlOutput),
+
+  landing: {
+    get: oc
+      .route({
+        method: "GET",
+        path: "/landing",
+        summary: "Get registry landing page data",
+        tags: ["landing"],
+      })
+      .input(z.object({}).optional().default({}))
+      .output(LandingData),
+  },
+
+  docs: {
+    listSources: oc
+      .route({
+        method: "GET",
+        path: "/docs/sources",
+        summary: "List OpenAPI documentation sources",
+        tags: ["docs"],
+      })
+      .input(z.object({}).optional().default({}))
+      .output(
+        z.object({
+          sources: z.array(OpenApiSource),
+          total: z.number().int().nonnegative(),
+        }),
+      ),
+  },
+
+  db: {
+    listSources: oc
+      .route({
+        method: "GET",
+        path: "/db/sources",
+        summary: "List sqlite databases discovered by the registry",
+        tags: ["db"],
+      })
+      .input(z.object({}).optional().default({}))
+      .output(
+        z.object({
+          sources: z.array(RegistryDbSource),
+          total: z.number().int().nonnegative(),
+        }),
+      ),
+
+    runtime: oc
+      .route({
+        method: "GET",
+        path: "/db/runtime",
+        summary: "Resolve DB browser runtime configuration",
+        tags: ["db"],
+      })
+      .input(DbRuntimeInput)
+      .output(DbRuntimeOutput),
+
+    query: oc
+      .route({
+        method: "POST",
+        path: "/db/query",
+        summary: "Execute a sqlite browser request",
+        tags: ["db"],
+      })
+      .input(DbQueryInput)
+      .output(DbQueryResponse),
+  },
 
   routes: {
     upsert: oc
@@ -229,9 +394,15 @@ export const RegistryServiceEnv = z.object({
   REGISTRY_SERVICE_HOST: nonEmptyStringWithTrimDefault("0.0.0.0"),
   REGISTRY_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(17310),
   REGISTRY_DB_PATH: nonEmptyStringWithTrimDefault("/var/lib/jonasland/registry.sqlite"),
+  REGISTRY_DB_STUDIO_EMBED_URL: nonEmptyStringWithTrimDefault(
+    "https://studio.outerbase.com/embed/sqlite",
+  ),
+  REGISTRY_DB_STUDIO_NAME: nonEmptyStringWithTrimDefault("jonasland sqlite"),
+  REGISTRY_DB_BASIC_AUTH_USER: _optionalNonEmptyStringWithTrim(),
+  REGISTRY_DB_BASIC_AUTH_PASS: z.string().default(""),
   ITERATE_INGRESS_HOST: nonEmptyStringWithTrimDefault("iterate.localhost"),
   ITERATE_INGRESS_ROUTING_TYPE: ingressRoutingType,
-  ITERATE_INGRESS_DEFAULT_SERVICE: nonEmptyStringWithTrimDefault("home"),
+  ITERATE_INGRESS_DEFAULT_SERVICE: nonEmptyStringWithTrimDefault("registry"),
 });
 
 export type RegistryServiceEnv = z.infer<typeof RegistryServiceEnv>;
@@ -242,6 +413,17 @@ export {
   ConfigEntry as configEntrySchema,
   GetPublicUrlInput as getPublicUrlInputSchema,
   GetPublicUrlOutput as getPublicUrlOutputSchema,
+  IngressEnvValues as ingressEnvValuesSchema,
+  OpenApiSource as openApiSourceSchema,
+  RegistryDbSource as registryDbSourceSchema,
+  LandingRouteRecord as landingRouteRecordSchema,
+  LandingData as landingDataSchema,
+  DbRuntimeTarget as dbRuntimeTargetSchema,
+  DbRuntimeInput as dbRuntimeInputSchema,
+  DbRuntimeOutput as dbRuntimeOutputSchema,
+  DbQueryRequest as dbQueryRequestSchema,
+  DbQueryInput as dbQueryInputSchema,
+  DbQueryResponse as dbQueryResponseSchema,
   RegistryServiceEnv as registryServiceEnvSchema,
 };
 

@@ -7,7 +7,6 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "db:migrate": "wrangler d1 migrations apply DB --remote",
-    "secret:sync:ingress-proxy-api-token": "wrangler secret put INGRESS_PROXY_API_TOKEN",
     "types:env": "wrangler types worker-configuration.d.ts --env production --strict-vars=false",
     "test": "vitest run",
     "test:e2e-live": "vitest run --config ./vitest.live.config.ts",
@@ -27,7 +26,6 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260207.0",
     "@types/node": "^24.10.1",
     "tsx": "^4.20.6",
     "typesql-cli": "github:iterate/typesql#5687eb2",

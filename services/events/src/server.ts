@@ -220,12 +220,19 @@ server.listen(port, "0.0.0.0", () => {
     otel: getOtelRuntimeConfig(),
   });
 
-  void registerServiceWithRegistry({
-    manifest: serviceManifest,
-    port,
-    metadata: { openapiPath: "/api/openapi.json", title: "Events Service" },
-    tags: ["openapi", "events"],
-  });
+  void getEventsDbRuntimeConfig().then((runtime) =>
+    registerServiceWithRegistry({
+      manifest: serviceManifest,
+      port,
+      metadata: {
+        openapiPath: "/api/openapi.json",
+        title: "Events Service",
+        sqlitePath: runtime.path,
+        sqliteAlias: "events_service",
+      },
+      tags: ["openapi", "events", "sqlite"],
+    }),
+  );
 });
 
 const shutdown = async () => {

@@ -308,20 +308,20 @@ From within fly and within docker
 ITERATE_INGRESS_HOST=whatever
 ITERATE_INGRESS_ROUTING_TYPE=dunder-prefix
 
-- GET http://iterate.localhost should work (home service)
-- GET http://home.iterate.localhost should work (home service)
+- GET http://iterate.localhost should work (registry service)
+- GET http://registry.iterate.localhost should work (registry service)
 - GET http://example.iterate.localhost should work (example service)
 
 then change ITERATE_INGRESS_DEFAULT_SERVICE=example in .env
 
 - GET http://iterate.localhost should work (example service)
-- GET http://home.iterate.localhost should work (home service)
+- GET http://registry.iterate.localhost should work (registry service)
 - GET http://example.iterate.localhost should work (example service)
 
 then restart (with .env still in tact)
 
 - GET http://iterate.localhost should work (example service)
-- GET http://home.iterate.localhost should work (home service)
+- GET http://registry.iterate.localhost should work (registry service)
 - GET http://example.iterate.localhost should work (example service)
 
 then test websockets using pnpx wscat or something 

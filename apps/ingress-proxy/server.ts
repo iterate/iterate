@@ -1,9 +1,9 @@
+import { env } from "cloudflare:workers";
 import { Hono } from "hono";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import packageJson from "./package.json" with { type: "json" };
-import { parseWorkerEnv, type RawIngressProxyWorkerEnv } from "./env.ts";
 import { buildUpstreamUrl, createUpstreamHeaders } from "./proxy.ts";
 import { listAllRoutes, resolveRouteByHost } from "./route-store.ts";
 import { ingressProxyRouter } from "./router.ts";
@@ -210,10 +210,7 @@ function renderDebugPage(params: {
 </html>`;
 }
 
-export async function proxyRequest(
-  request: Request,
-  env: ReturnType<typeof parseWorkerEnv>,
-): Promise<Response> {
+export async function proxyRequest(request: Request): Promise<Response> {
   const resolved = await resolveRouteByHost(env.DB, request.headers.get("host"));
   if (!resolved) {
     return jsonError(404, "route_not_found");
@@ -272,13 +269,12 @@ const openAPIHandler = new OpenAPIHandler(ingressProxyRouter, {
 });
 
 export const app = new Hono<{
-  Bindings: RawIngressProxyWorkerEnv;
+  Bindings: {};
 }>();
 
 app.get("/health", (c) => c.text("OK"));
 
 app.get("/__debug", async (c) => {
-  const env = parseWorkerEnv(c.env);
   const result = await listAllRoutes(env.DB);
   return c.html(
     renderDebugPage({
@@ -289,11 +285,9 @@ app.get("/__debug", async (c) => {
 });
 
 app.all("/api/*", async (c) => {
-  const env = parseWorkerEnv(c.env);
   const { matched, response } = await openAPIHandler.handle(c.req.raw, {
     prefix: "/api",
     context: {
-      env,
       request: c.req.raw,
     },
   });
@@ -306,8 +300,7 @@ app.all("/api/*", async (c) => {
 });
 
 app.all("*", async (c) => {
-  const env = parseWorkerEnv(c.env);
-  return proxyRequest(c.req.raw, env);
+  return proxyRequest(c.req.raw);
 });
 
 export default app;

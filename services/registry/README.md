@@ -26,4 +26,4 @@ Environment variables:
 
 - `ITERATE_INGRESS_HOST`
 - `ITERATE_INGRESS_ROUTING_TYPE` (`dunder-prefix` or `subdomain-host`, default `subdomain-host`)
-- `ITERATE_INGRESS_DEFAULT_SERVICE` (default `home`)
+- `ITERATE_INGRESS_DEFAULT_SERVICE` (default `registry`)

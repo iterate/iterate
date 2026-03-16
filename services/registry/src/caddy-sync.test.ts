@@ -47,12 +47,12 @@ describe("renderRoutesFragmentForTest", () => {
   test("routes bare public base host to default ingress service", () => {
     const rendered = renderRoutesFragmentForTest({
       iterateIngressHost: "my-proj.iterate.app",
-      iterateIngressDefaultService: "home",
-      routes: [{ host: "home.iterate.localhost", target: "127.0.0.1:19030" }],
+      iterateIngressDefaultService: "registry",
+      routes: [{ host: "registry.iterate.localhost", target: "127.0.0.1:17310" }],
     });
 
     expect(rendered).toContain(
-      "@route_home_hosts host home.iterate.localhost home.my-proj.iterate.app home__my-proj.iterate.app my-proj.iterate.app",
+      "@route_registry_hosts host registry.iterate.localhost registry.my-proj.iterate.app registry__my-proj.iterate.app my-proj.iterate.app",
     );
   });
 
@@ -80,15 +80,15 @@ describe("renderRoutesFragmentForTest", () => {
       iterateIngressHost: "my-proj.iterate.app",
       routes: [
         {
-          host: "docs.iterate.localhost",
-          target: "127.0.0.1:19050",
-          tags: ["seeded", "docs"],
-          metadata: { source: "registry-seed", title: "Docs Service" },
+          host: "registry.iterate.localhost",
+          target: "127.0.0.1:17310",
+          tags: ["seeded", "registry", "openapi", "sqlite"],
+          metadata: { source: "registry-seed", title: "Registry Service" },
         },
       ],
     });
 
-    expect(rendered).toContain("# tags: seeded, docs");
-    expect(rendered).toContain('# metadata: {"source":"registry-seed","title":"Docs Service"}');
+    expect(rendered).toContain("# tags: seeded, registry, openapi, sqlite");
+    expect(rendered).toContain('# metadata: {"source":"registry-seed","title":"Registry Service"}');
   });
 });

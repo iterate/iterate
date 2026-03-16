@@ -1,5 +1,6 @@
 import { createAdaptorServer } from "@hono/node-server";
 import app, { injectWebSocket } from "./src/server/app.ts";
+import { getExampleDbRuntimeConfig } from "./src/db.ts";
 
 const isDev = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT) || 0;
@@ -26,14 +27,21 @@ server.listen(port, "0.0.0.0", () => {
   const boundPort = address && typeof address === "object" ? address.port : port;
   console.log(`example listening on http://localhost:${boundPort}`);
 
-  import("@iterate-com/shared/jonasland").then(({ registerServiceWithRegistry }) => {
-    import("@iterate-com/example-contract").then(({ exampleServiceManifest }) => {
-      void registerServiceWithRegistry({
-        manifest: exampleServiceManifest,
-        port: boundPort,
-        metadata: { openapiPath: "/api/openapi.json", title: "Example Service" },
-        tags: ["openapi", "example"],
-      });
+  void Promise.all([
+    import("@iterate-com/shared/jonasland"),
+    import("@iterate-com/example-contract"),
+    getExampleDbRuntimeConfig(),
+  ]).then(([{ registerServiceWithRegistry }, { exampleServiceManifest }, runtime]) => {
+    return registerServiceWithRegistry({
+      manifest: exampleServiceManifest,
+      port: boundPort,
+      metadata: {
+        openapiPath: "/api/openapi.json",
+        title: "Example Service",
+        sqlitePath: runtime.path,
+        sqliteAlias: "example",
+      },
+      tags: ["openapi", "example", "sqlite"],
     });
   });
 });

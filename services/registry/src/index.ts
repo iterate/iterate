@@ -1,5 +1,6 @@
 export { createRegistryClient, type RegistryClient } from "./client.ts";
-export { registryRouter, startRegistryService } from "./server.ts";
+export { registryRouter } from "./server/app.ts";
+export { startRegistryService } from "./server.ts";
 export {
   ResolvePublicUrlError,
   resolvePublicUrl,

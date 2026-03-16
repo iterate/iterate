@@ -9,8 +9,7 @@
     "typecheck": "tsc --noEmit",
     "registry:start": "tsx ../../services/registry/src/server.ts",
     "events:start": "tsx ../../services/events/src/server.ts",
-    "example:start": "tsx ../../services/example/src/server.ts",
-    "docs:start": "tsx ../../services/docs/src/server.ts"
+    "example:start": "tsx ../../services/example/src/server.ts"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",

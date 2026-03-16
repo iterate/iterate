@@ -1,12 +1,11 @@
+import { env } from "cloudflare:workers";
 import { ingressProxyContract, type IngressProxyRoute } from "@iterate-com/ingress-proxy-contract";
 import { ORPCError, implement } from "@orpc/server";
 import { z } from "zod/v4";
-import type { IngressProxyWorkerEnv } from "./env.ts";
 import { getRouteByRootHost, listRoutes, removeRoute, upsertRoute } from "./route-store.ts";
 import { RouteInputError } from "./proxy.ts";
 
 type ORPCContext = {
-  env: IngressProxyWorkerEnv;
   request: Request;
 };
 
@@ -25,7 +24,7 @@ function readBearerToken(headerValue: string | null): string | null {
  * worker intentionally small while we are manually operating deploys and D1.
  */
 const authMiddleware = os.middleware(async ({ context, next }) => {
-  const expectedToken = context.env.INGRESS_PROXY_API_TOKEN;
+  const expectedToken = env.INGRESS_PROXY_API_TOKEN;
   const providedToken = readBearerToken(context.request.headers.get("authorization"));
 
   if (!providedToken || providedToken !== expectedToken) {
@@ -82,7 +81,7 @@ function mapRouteError(error: unknown): never {
  */
 const routesUpsert = os.routes.upsert.use(authMiddleware).handler(async ({ context, input }) => {
   try {
-    return await upsertRoute(context.env.DB, input);
+    return await upsertRoute(env.DB, input);
   } catch (error) {
     return mapRouteError(error);
   }
@@ -90,7 +89,7 @@ const routesUpsert = os.routes.upsert.use(authMiddleware).handler(async ({ conte
 
 const routesGet = os.routes.get.use(authMiddleware).handler(async ({ context, input }) => {
   try {
-    const route = await getRouteByRootHost(context.env.DB, input);
+    const route = await getRouteByRootHost(env.DB, input);
     if (!route) {
       throw new ORPCError("NOT_FOUND", {
         message: `No ingress route exists for ${input.rootHost}.`,
@@ -105,7 +104,7 @@ const routesGet = os.routes.get.use(authMiddleware).handler(async ({ context, in
 
 const routesList = os.routes.list.use(authMiddleware).handler(async ({ context, input }) => {
   try {
-    return await listRoutes(context.env.DB, input);
+    return await listRoutes(env.DB, input);
   } catch (error) {
     return mapRouteError(error);
   }
@@ -114,7 +113,7 @@ const routesList = os.routes.list.use(authMiddleware).handler(async ({ context, 
 const routesRemove = os.routes.remove.use(authMiddleware).handler(async ({ context, input }) => {
   try {
     return {
-      deleted: await removeRoute(context.env.DB, input),
+      deleted: await removeRoute(env.DB, input),
     };
   } catch (error) {
     return mapRouteError(error);
