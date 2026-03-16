@@ -82,7 +82,7 @@ function mapRouteError(error: unknown): never {
  */
 const routesUpsert = os.routes.upsert.use(authMiddleware).handler(async ({ context, input }) => {
   try {
-    return await upsertRoute(context.env.DB, context.env, input);
+    return await upsertRoute(context.env.DB, input);
   } catch (error) {
     return mapRouteError(error);
   }

@@ -24,9 +24,15 @@ const parsedEnvCache = new WeakMap<object, IngressProxyWorkerEnv>();
 export function parseWorkerEnv(env: RawIngressProxyWorkerEnv): IngressProxyWorkerEnv {
   const key = env as object;
   const cached = parsedEnvCache.get(key);
-  if (cached) return cached;
+  if (cached) {
+    process.env.TYPEID_PREFIX = cached.TYPEID_PREFIX;
+    return cached;
+  }
 
   const parsed = ingressProxyWorkerEnvSchema.parse(env);
+  // The shared TypeID helper reads from process.env so callers across the repo
+  // can use one convention. Populate it once at the worker boundary.
+  process.env.TYPEID_PREFIX = parsed.TYPEID_PREFIX;
   parsedEnvCache.set(key, parsed);
   return parsed;
 }

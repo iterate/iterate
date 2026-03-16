@@ -11,7 +11,6 @@ import {
 } from "@iterate-com/ingress-proxy-contract";
 import { typeid } from "@iterate-com/shared/typeid";
 import type { z } from "zod/v4";
-import type { IngressProxyWorkerEnv } from "./env.ts";
 import {
   deriveCandidateRootHosts,
   normalizeRootHost,
@@ -119,7 +118,6 @@ export async function listAllRoutes(
 
 export async function upsertRoute(
   db: D1Database,
-  env: Pick<IngressProxyWorkerEnv, "TYPEID_PREFIX">,
   params: z.input<typeof upsertRouteInputSchema>,
 ): Promise<IngressProxyRoute> {
   const parsed = upsertRouteInputSchema.parse(params);
@@ -127,7 +125,7 @@ export async function upsertRoute(
   const targetUrl = normalizeTargetUrl(parsed.targetUrl);
 
   await upsertRouteByRootHost(db, {
-    id: typeid({ env, prefix: routeIdPrefix }),
+    id: typeid({ env: process.env as { TYPEID_PREFIX: string }, prefix: routeIdPrefix }),
     rootHost,
     targetUrl,
     metadataJson: JSON.stringify(parsed.metadata),
