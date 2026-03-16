@@ -20,7 +20,7 @@ export function viteHonoFallthroughPlugin(): Plugin {
           return;
         }
 
-        const appModule = await server.ssrLoadModule("./src/server/app.ts");
+        const appModule = await server.ssrLoadModule("./src/server/backend-app.ts");
         appModule.injectWebSocket?.(server.httpServer as HttpServer);
       });
 
@@ -30,7 +30,7 @@ export function viteHonoFallthroughPlugin(): Plugin {
         }
 
         try {
-          const appModule = await server.ssrLoadModule("./src/server/app.ts");
+          const appModule = await server.ssrLoadModule("./src/server/backend-app.ts");
           const app = appModule.default;
 
           const listener = getRequestListener(

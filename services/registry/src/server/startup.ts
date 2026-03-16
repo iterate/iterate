@@ -10,7 +10,6 @@ const LEGACY_BUILTIN_SEED_HOSTS = new Set([
   "otel-collector.iterate.localhost",
 ]);
 
-let initializedOrigin: string | null = null;
 let initializePromise: Promise<void> | null = null;
 
 async function synchronizeRouteFragmentFromStore(params: {
@@ -115,12 +114,7 @@ export async function synchronizeRegistryRoutes(params: {
   return await synchronizeRouteFragmentFromStore(params);
 }
 
-export async function ensureRegistryInitialized(params: { requestURL: string }) {
-  const url = new URL(params.requestURL);
-  const origin = url.origin;
-  if (initializedOrigin === origin) {
-    return;
-  }
+export async function initializeRegistryService() {
   if (initializePromise) {
     await initializePromise;
     return;
@@ -138,26 +132,16 @@ export async function ensureRegistryInitialized(params: { requestURL: string }) 
       store,
       env,
     });
-
-    initializedOrigin = origin;
   })();
 
-  try {
-    await initializePromise;
-  } finally {
-    if (initializedOrigin !== origin) {
-      initializePromise = null;
-    }
-  }
-
-  const host = url.hostname;
-  const port = url.port.length > 0 ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+  await initializePromise;
+  const env = getEnv();
 
   serviceLog.info({
     event: "service.started",
     service: serviceName,
-    host,
-    port,
+    host: env.REGISTRY_SERVICE_HOST,
+    port: env.REGISTRY_SERVICE_PORT,
     docs_path: "/api/docs",
     spec_path: "/api/openapi.json",
     orpc_path: "/api",

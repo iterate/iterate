@@ -63,6 +63,7 @@ export default defineConfig(({ mode }) => ({
   },
   server: {
     host: true,
+    forwardConsole: true,
     port: process.env.PORT?.trim() ? Number(process.env.PORT) : 0,
     strictPort: Boolean(process.env.PORT?.trim()),
     watch: {

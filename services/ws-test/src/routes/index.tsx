@@ -1,20 +1,29 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { ClientOnly, createFileRoute } from "@tanstack/react-router";
+import { z } from "zod/v4";
+import { Badge } from "@iterate-com/ui/components/badge";
+import { Button } from "@iterate-com/ui/components/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@iterate-com/ui/components/card";
+import { Terminal } from "@iterate-com/ui/components/terminal";
 import { orpc } from "@/lib/orpc.ts";
 
-export const Route = createFileRoute("/")({
-  component: IndexPage,
+const TerminalParams = z.object({
+  command: z.string().optional(),
+  autorun: z.boolean().optional(),
+  ptyId: z.string().optional(),
 });
 
-function getWebSocketURL(pathname: string) {
-  const url = new URL(window.location.href);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = pathname;
-  url.search = "";
-  url.hash = "";
-  return url.toString();
-}
+export const Route = createFileRoute("/")({
+  validateSearch: TerminalParams,
+  component: IndexPage,
+});
 
 function readPingResult(data: unknown) {
   if (!data || typeof data !== "object") {
@@ -42,85 +51,173 @@ function readPingResult(data: unknown) {
   return null;
 }
 
-function IndexPage() {
-  const { data, isPending, error } = useQuery(orpc.ping.queryOptions({ input: {} }));
-  const [wsState, setWsState] = useState("connecting");
-  const [lastEvent, setLastEvent] = useState("waiting for websocket open");
-  const socketURL = useMemo(() => getWebSocketURL("/orpc/ws"), []);
-  const ping = readPingResult(data);
+function useVisualViewportHeight() {
+  const [height, setHeight] = useState("100dvh");
 
   useEffect(() => {
-    const socket = new WebSocket(socketURL);
+    const viewport = window.visualViewport;
+    if (!viewport) return;
 
-    socket.addEventListener("open", () => {
-      setWsState("connected");
-      setLastEvent("open");
-    });
-    socket.addEventListener("close", (event) => {
-      setWsState(`closed (${event.code})`);
-      setLastEvent("close");
-    });
-    socket.addEventListener("error", () => {
-      setWsState("error");
-      setLastEvent("error");
-    });
+    const update = () => setHeight(`${viewport.height}px`);
+    update();
+
+    viewport.addEventListener("resize", update);
+    viewport.addEventListener("scroll", update);
 
     return () => {
-      socket.close();
+      viewport.removeEventListener("resize", update);
+      viewport.removeEventListener("scroll", update);
     };
-  }, [socketURL]);
+  }, []);
+
+  return height;
+}
+
+function IndexPage() {
+  const { command, autorun, ptyId } = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const { data, isPending, error } = useQuery(orpc.ping.queryOptions({ input: {} }));
+  const ping = readPingResult(data);
+  const height = useVisualViewportHeight();
+
+  const handleParamsChange = useCallback(
+    (params: { ptyId?: string; clearCommand?: boolean }) => {
+      navigate({
+        search: (previous) => {
+          const next = { ...previous };
+          if (params.ptyId) next.ptyId = params.ptyId;
+          if (params.clearCommand) {
+            delete next.command;
+            delete next.autorun;
+          }
+          return next;
+        },
+        replace: true,
+      });
+    },
+    [navigate],
+  );
 
   return (
-    <main className="page-shell">
-      <div className="panel">
-        <p className="eyebrow">ws-test</p>
-        <h1>Hono up front spike</h1>
-        <p className="lede">
-          Reduced service using the Hono Vite dev-server plugin first, TanStack Router on the
-          client, oRPC over HTTP at <code>/rpc</code>, and a websocket upgrade attached directly to
-          the same Vite HTTP server at <code>/orpc/ws</code>.
-        </p>
-      </div>
-
-      <div className="grid">
-        <section className="card">
-          <h2>oRPC HTTP</h2>
-          <p className="meta">
-            Querying <code>GET /rpc/ping</code> through the oRPC client.
-          </p>
-          {isPending ? <p>Loading...</p> : null}
-          {error ? <p className="error">{String(error)}</p> : null}
-          {ping ? (
-            <dl className="facts">
-              <div>
-                <dt>Message</dt>
-                <dd>{ping.message}</dd>
+    <div
+      className="bg-background"
+      style={{
+        height,
+        paddingTop: "max(8px, env(safe-area-inset-top))",
+        paddingLeft: "max(8px, env(safe-area-inset-left))",
+        paddingRight: "max(8px, env(safe-area-inset-right))",
+        paddingBottom: "max(8px, env(safe-area-inset-bottom))",
+      }}
+    >
+      <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-3 md:flex-row">
+        <div className="flex w-full flex-col gap-3 md:max-w-sm">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <CardTitle>ws-test terminal</CardTitle>
+                  <CardDescription>
+                    TanStack Start SPA with Hono backend fallthrough and a PTY websocket at{" "}
+                    <code>/api/pty/ws</code>.
+                  </CardDescription>
+                </div>
+                <Badge variant="secondary">pty</Badge>
               </div>
-              <div>
-                <dt>Server time</dt>
-                <dd>{ping.serverTime}</dd>
-              </div>
-            </dl>
-          ) : null}
-        </section>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Button
+                className="w-full"
+                onClick={() =>
+                  navigate({
+                    search: {
+                      command: "printf 'hello from ws-test'",
+                      autorun: true,
+                      ptyId,
+                    },
+                    replace: true,
+                  })
+                }
+              >
+                Run hello
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() =>
+                  navigate({
+                    search: {
+                      command: "pwd",
+                      autorun: true,
+                      ptyId,
+                    },
+                    replace: true,
+                  })
+                }
+              >
+                Run pwd
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() =>
+                  navigate({
+                    search: {
+                      command: "ls",
+                      autorun: true,
+                      ptyId,
+                    },
+                    replace: true,
+                  })
+                }
+              >
+                Run ls
+              </Button>
+            </CardContent>
+          </Card>
 
-        <section className="card">
-          <h2>WebSocket</h2>
-          <p className="meta">
-            Opening a browser websocket to <code>{socketURL}</code>.
-          </p>
-          <dl className="facts">
-            <div>
-              <dt>Status</dt>
-              <dd>{wsState}</dd>
-            </div>
-            <div>
-              <dt>Last event</dt>
-              <dd>{lastEvent}</dd>
-            </div>
-          </dl>
-        </section>
+          <Card>
+            <CardHeader>
+              <CardTitle>oRPC health</CardTitle>
+              <CardDescription>
+                HTTP procedure wired through <code>GET /api/rpc/ping</code>.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              {isPending ? <p>Loading...</p> : null}
+              {error ? <p className="text-destructive">{String(error)}</p> : null}
+              {ping ? (
+                <>
+                  <p>
+                    <span className="font-medium">Message:</span> {ping.message}
+                  </p>
+                  <p>
+                    <span className="font-medium">Server time:</span> {ping.serverTime}
+                  </p>
+                </>
+              ) : null}
+              <p>
+                <span className="font-medium">Session:</span> {ptyId ?? "new shell"}
+              </p>
+              <p>
+                <span className="font-medium">Initial command:</span> {command ?? "none"}
+              </p>
+              <p>
+                <span className="font-medium">Autorun:</span> {autorun ? "true" : "false"}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card className="min-h-0 min-w-0 flex-1 overflow-hidden p-1">
+          <ClientOnly fallback={<div className="h-full w-full rounded-md bg-[#1e1e1e]" />}>
+            <Terminal
+              initialCommand={{ command, autorun }}
+              ptyId={ptyId}
+              onParamsChange={handleParamsChange}
+            />
+          </ClientOnly>
+        </Card>
       </div>
-    </main>
+    </div>
   );
 }

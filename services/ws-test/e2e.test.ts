@@ -31,22 +31,31 @@ async function waitForHealthy(baseURL: string) {
     .toBe(200);
 }
 
-async function openWebSocket(url: string) {
+async function assertPtyCommand(url: string, expectedOutput: string) {
   await new Promise<void>((resolve, reject) => {
     const socket = new WebSocket(url);
+    let transcript = "";
+
     const timeout = setTimeout(() => {
       socket.terminate();
-      reject(new Error(`Timed out connecting to ${url}`));
-    }, 5_000);
+      reject(
+        new Error(`Timed out waiting for PTY output from ${url}\n\nTranscript:\n${transcript}`),
+      );
+    }, 10_000);
 
-    socket.once("open", () => {
-      clearTimeout(timeout);
-      socket.close();
-      resolve();
-    });
     socket.once("error", (error: Error) => {
       clearTimeout(timeout);
       reject(error);
+    });
+
+    socket.on("message", (data: any) => {
+      const text = typeof data === "string" ? data : data.toString("utf8");
+      transcript += text;
+      if (transcript.includes(expectedOutput)) {
+        clearTimeout(timeout);
+        socket.close();
+        resolve();
+      }
     });
   });
 }
@@ -120,8 +129,10 @@ async function assertServiceWorks(params: { baseURL: string; expectedAssetPrefix
   expect(rpcResponse.status).toBe(200);
   expect(await rpcResponse.text()).toContain('"message":"pong"');
 
-  await openWebSocket(
-    params.baseURL.replace("http://", "ws://").replace("https://", "wss://") + "/orpc/ws",
+  await assertPtyCommand(
+    params.baseURL.replace("http://", "ws://").replace("https://", "wss://") +
+      "/api/pty/ws?command=printf%20WS_TEST_HELLO&autorun=true",
+    "WS_TEST_HELLO",
   );
 }
 
@@ -154,7 +165,7 @@ afterEach(async () => {
 });
 
 describe("ws-test end-to-end", () => {
-  test("dev server serves shell, assets, oRPC, and websockets", async () => {
+  test("dev server serves shell, assets, oRPC, and PTY websockets", async () => {
     const baseURL = "http://127.0.0.1:5191";
     const child = await startService({
       command: "pnpm",
@@ -175,7 +186,7 @@ describe("ws-test end-to-end", () => {
     }
   }, 60_000);
 
-  test("production server serves shell, built assets, oRPC, and websockets", async () => {
+  test("production server serves shell, built assets, oRPC, and PTY websockets", async () => {
     const baseURL = "http://127.0.0.1:5192";
     const child = await startService({
       command: "pnpm",
