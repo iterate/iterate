@@ -6,9 +6,9 @@
     "dev": "pnpm cli dev",
     "build": "NODE_ENV=production vite build && pnpm typecheck",
     "preview": "pnpm cli preview",
-    "worker:dev": "ALCHEMY_LOCAL=true ALCHEMY_CI_STATE_STORE_CHECK=false pnpm build && ALCHEMY_LOCAL=true ALCHEMY_CI_STATE_STORE_CHECK=false tsx ./alchemy.run.ts cli --dev",
-    "worker:deploy": "ALCHEMY_LOCAL=false ALCHEMY_CI_STATE_STORE_CHECK=false pnpm build && ALCHEMY_LOCAL=false ALCHEMY_CI_STATE_STORE_CHECK=false tsx ./alchemy.run.ts cli deploy",
-    "worker:destroy": "ALCHEMY_LOCAL=false ALCHEMY_CI_STATE_STORE_CHECK=false tsx ./alchemy.run.ts cli --destroy",
+    "worker:dev": "ALCHEMY_STAGE=dev ALCHEMY_LOCAL=true ALCHEMY_CI_STATE_STORE_CHECK=false pnpm build && ALCHEMY_STAGE=dev ALCHEMY_LOCAL=true ALCHEMY_CI_STATE_STORE_CHECK=false tsx ./alchemy.run.ts cli --dev",
+    "worker:deploy": "ALCHEMY_STAGE=dev ALCHEMY_CI_STATE_STORE_CHECK=false pnpm build && ALCHEMY_STAGE=dev ALCHEMY_CI_STATE_STORE_CHECK=false tsx ./alchemy.run.ts cli deploy",
+    "worker:destroy": "ALCHEMY_STAGE=dev ALCHEMY_CI_STATE_STORE_CHECK=false tsx ./alchemy.run.ts cli --destroy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --environment node e2e.test.ts",
     "test:e2e-live": "vitest run --environment node worker-live.test.ts",
@@ -20,7 +20,6 @@
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@iterate-com/ws-test-2-contract": "workspace:*",
-    "@lydell/node-pty": "^1.0.1",
     "@orpc/client": "*",
     "@orpc/contract": "*",
     "@orpc/openapi": "*",
@@ -62,5 +61,8 @@
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^4.0.18",
     "wrangler": "^4.73.0"
+  },
+  "optionalDependencies": {
+    "@lydell/node-pty": "^1.1.0"
   }
 }

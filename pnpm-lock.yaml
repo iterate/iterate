@@ -2508,9 +2508,6 @@ importers:
       '@iterate-com/ws-test-2-contract':
         specifier: workspace:*
         version: link:../ws-test-2-contract
-      '@lydell/node-pty':
-        specifier: ^1.0.1
-        version: 1.1.0
       '@orpc/client':
         specifier: '*'
         version: 1.13.7(@opentelemetry/api@1.9.0)
@@ -2629,6 +2626,10 @@ importers:
       wrangler:
         specifier: ^4.73.0
         version: 4.73.0(@cloudflare/workers-types@4.20260313.1)
+    optionalDependencies:
+      '@lydell/node-pty':
+        specifier: ^1.1.0
+        version: 1.1.0
 
   services/ws-test-2-contract:
     dependencies:
@@ -21186,7 +21187,7 @@ snapshots:
 
   '@types/better-sqlite3@7.6.13':
     dependencies:
-      '@types/node': 22.19.13
+      '@types/node': 25.3.3
 
   '@types/canvas-confetti@1.9.0': {}
 
@@ -21406,7 +21407,7 @@ snapshots:
 
   '@types/pg@8.18.0':
     dependencies:
-      '@types/node': 22.19.13
+      '@types/node': 25.3.3
       pg-protocol: 1.12.0
       pg-types: 2.2.0
 

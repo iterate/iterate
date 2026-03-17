@@ -10,13 +10,13 @@ export function configureApp(
   params: {
     upgradeWebSocket: UpgradeWebSocket;
     getContext: () => ReturnType<typeof createContext>;
-    createOrpcWebSocketHandlers: () => Record<string, unknown>;
-    createPtyApp?: (params: { upgradeWebSocket: UpgradeWebSocket }) => Hono<any>;
+    orpcWebSocketHandlers: Record<string, unknown>;
+    ptyApp?: Hono<any>;
   },
 ) {
   app.get(
     "/api/orpc/ws",
-    params.upgradeWebSocket(() => params.createOrpcWebSocketHandlers()),
+    params.upgradeWebSocket(() => params.orpcWebSocketHandlers),
   );
 
   app.get(
@@ -24,9 +24,8 @@ export function configureApp(
     params.upgradeWebSocket(() => createConfettiSocketHandlers()),
   );
 
-  const ptyApp = params.createPtyApp?.({ upgradeWebSocket: params.upgradeWebSocket });
-  if (ptyApp) {
-    app.route("/api/pty", ptyApp);
+  if (params.ptyApp) {
+    app.route("/api/pty", params.ptyApp);
   }
 
   applySharedHttpRoutes(app, {

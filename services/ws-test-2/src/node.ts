@@ -25,15 +25,15 @@ const wsHandler = new WebSocketRPCHandler(router, {
 configureApp(app, {
   upgradeWebSocket,
   getContext: () => createContext(process.env),
-  createPtyApp: createPtyRouter,
-  createOrpcWebSocketHandlers: () => ({
+  ptyApp: createPtyRouter({ upgradeWebSocket }),
+  orpcWebSocketHandlers: {
     onOpen(_event: unknown, ws: { raw?: WebSocket }) {
       if (!ws.raw) return;
       void wsHandler.upgrade(ws.raw, {
         context: createContext(process.env),
       });
     },
-  }),
+  },
 });
 
 const server = createAdaptorServer({ fetch: app.fetch });
