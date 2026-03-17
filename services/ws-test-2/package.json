@@ -6,8 +6,12 @@
     "dev": "pnpm cli dev",
     "build": "NODE_ENV=production vite build && pnpm typecheck",
     "preview": "pnpm cli preview",
+    "worker:dev": "pnpm build && tsx ./alchemy.run.ts cli --dev",
+    "worker:deploy": "pnpm build && tsx ./alchemy.run.ts cli deploy",
+    "worker:destroy": "tsx ./alchemy.run.ts cli --destroy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --environment node e2e.test.ts",
+    "test:e2e-live": "vitest run --environment node worker-live.test.ts",
     "cli": "tsx ./src/cli.ts"
   },
   "dependencies": {
@@ -27,6 +31,7 @@
     "@tanstack/react-start": "^1.166.2",
     "@xterm/addon-serialize": "0.15.0-beta.103",
     "@xterm/headless": "6.1.0-beta.103",
+    "alchemy": "^0.83.3",
     "canvas-confetti": "^1.9.4",
     "hono": "^4.12.5",
     "react": "^19.2.4",
@@ -38,6 +43,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260313.1",
     "@tanstack/devtools-vite": "^0.6.0",
     "@types/canvas-confetti": "^1.9.0",
     "@types/node": "^25.0.10",
@@ -51,6 +57,7 @@
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.0.18"
+    "vitest": "^4.0.18",
+    "wrangler": "^4.73.0"
   }
 }
