@@ -1,24 +1,46 @@
 import { Hono } from "hono";
+import { OpenAPIHandler } from "@orpc/openapi/fetch";
+import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { onError } from "@orpc/server";
-import { RPCHandler } from "@orpc/server/fetch";
+import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
+import { wsTest2ServiceManifest } from "../manifest.ts";
 import { serviceName, type WsTest2Context } from "./context.ts";
 import { router } from "./router.ts";
+
+const openAPIHandler = new OpenAPIHandler(router, {
+  plugins: [
+    new OpenAPIReferencePlugin({
+      docsProvider: "scalar",
+      docsPath: "/docs",
+      specPath: "/openapi.json",
+      schemaConverters: [new ZodToJsonSchemaConverter()],
+      specGenerateOptions: {
+        info: { title: "ws-test-2 API", version: wsTest2ServiceManifest.version },
+        servers: [{ url: "/api" }],
+      },
+    }),
+  ],
+  interceptors: [
+    onError((error) => {
+      console.error(error);
+    }),
+  ],
+});
 
 export function applySharedHttpRoutes(
   app: Hono<any>,
   params: { getContext: () => WsTest2Context },
 ) {
-  const rpcHandler = new RPCHandler(router, {
-    interceptors: [
-      onError((error) => {
-        console.error(error);
-      }),
-    ],
-  });
+  app.get("/api/health", (c) =>
+    c.json({
+      ok: true,
+      service: serviceName,
+    }),
+  );
 
-  app.all("/api/rpc/*", async (c) => {
-    const { matched, response } = await rpcHandler.handle(c.req.raw, {
-      prefix: "/api/rpc",
+  app.all("/api/*", async (c) => {
+    const { matched, response } = await openAPIHandler.handle(c.req.raw, {
+      prefix: "/api",
       context: params.getContext(),
     });
 
@@ -28,11 +50,4 @@ export function applySharedHttpRoutes(
 
     return c.newResponse(response.body, response);
   });
-
-  app.get("/api/health", (c) =>
-    c.json({
-      ok: true,
-      service: serviceName,
-    }),
-  );
 }

@@ -2505,6 +2505,9 @@ importers:
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@iterate-com/ws-test-2-contract':
+        specifier: workspace:*
+        version: link:../ws-test-2-contract
       '@lydell/node-pty':
         specifier: ^1.0.1
         version: 1.1.0
@@ -2514,6 +2517,9 @@ importers:
       '@orpc/contract':
         specifier: '*'
         version: 1.13.7(@opentelemetry/api@1.9.0)
+      '@orpc/openapi':
+        specifier: '*'
+        version: 1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0)
       '@orpc/openapi-client':
         specifier: ^1.13.7
         version: 1.13.7(@opentelemetry/api@1.9.0)
@@ -2523,6 +2529,9 @@ importers:
       '@orpc/tanstack-query':
         specifier: '*'
         version: 1.13.6(@opentelemetry/api@1.9.0)(@orpc/client@1.13.7(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.90.20)
+      '@orpc/zod':
+        specifier: '*'
+        version: 1.13.6(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.7(@opentelemetry/api@1.9.0))(@orpc/server@1.13.6(@opentelemetry/api@1.9.0)(ws@8.19.0))(ws@8.19.0)(zod@4.3.6)
       '@tailwindcss/vite':
         specifier: ^4.2.1
         version: 4.2.1(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
@@ -2620,6 +2629,31 @@ importers:
       wrangler:
         specifier: ^4.73.0
         version: 4.73.0(@cloudflare/workers-types@4.20260313.1)
+
+  services/ws-test-2-contract:
+    dependencies:
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@orpc/client':
+        specifier: '*'
+        version: 1.13.7(@opentelemetry/api@1.9.0)
+      '@orpc/contract':
+        specifier: '*'
+        version: 1.13.7(@opentelemetry/api@1.9.0)
+      '@orpc/openapi-client':
+        specifier: ^1.13.7
+        version: 1.13.7(@opentelemetry/api@1.9.0)
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.3.3
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
 packages:
 

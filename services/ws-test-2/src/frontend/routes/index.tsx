@@ -23,34 +23,10 @@ const TerminalParams = z.object({
 
 export const Route = createFileRoute("/")({
   validateSearch: TerminalParams,
+  loader: ({ context }) =>
+    context.queryClient.ensureQueryData(orpc.ping.queryOptions({ input: {} })),
   component: IndexPage,
 });
-
-function readPingResult(data: unknown) {
-  if (!data || typeof data !== "object") {
-    return null;
-  }
-
-  if ("json" in data && data.json && typeof data.json === "object") {
-    const payload = data.json as { message?: unknown; serverTime?: unknown };
-    if (typeof payload.message === "string" && typeof payload.serverTime === "string") {
-      return {
-        message: payload.message,
-        serverTime: payload.serverTime,
-      };
-    }
-  }
-
-  const payload = data as { message?: unknown; serverTime?: unknown };
-  if (typeof payload.message === "string" && typeof payload.serverTime === "string") {
-    return {
-      message: payload.message,
-      serverTime: payload.serverTime,
-    };
-  }
-
-  return null;
-}
 
 function useVisualViewportHeight() {
   const [height, setHeight] = useState("100dvh");
@@ -174,7 +150,6 @@ function IndexPage() {
   const { command, autorun, ptyId } = Route.useSearch();
   const navigate = Route.useNavigate();
   const { data, isPending, error } = useQuery(orpc.ping.queryOptions({ input: {} }));
-  const ping = readPingResult(data);
   const height = useVisualViewportHeight();
 
   const handleParamsChange = useCallback(
@@ -276,19 +251,20 @@ function IndexPage() {
             <CardHeader>
               <CardTitle>oRPC health</CardTitle>
               <CardDescription>
-                HTTP procedure wired through <code>GET /api/rpc/ping</code>.
+                HTTP procedure wired through <code>GET /api/ping</code> and mirrored on{" "}
+                <code>/api/orpc/ws</code>.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
               {isPending ? <p>Loading...</p> : null}
               {error ? <p className="text-destructive">{String(error)}</p> : null}
-              {ping ? (
+              {data ? (
                 <>
                   <p>
-                    <span className="font-medium">Message:</span> {ping.message}
+                    <span className="font-medium">Message:</span> {data.message}
                   </p>
                   <p>
-                    <span className="font-medium">Server time:</span> {ping.serverTime}
+                    <span className="font-medium">Server time:</span> {data.serverTime}
                   </p>
                 </>
               ) : null}
