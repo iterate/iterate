@@ -54,6 +54,7 @@ export class Deployment {
     provider: DeploymentProvider<TOpts, TLocator>;
     opts: TOpts;
     signal?: AbortSignal;
+    onLogEntry?: (entry: DeploymentLogEntry) => void | Promise<void>;
   }) {
     const deployment = new Deployment();
     deployment.assertState("new");
@@ -69,16 +70,39 @@ export class Deployment {
       signal: params.signal,
       opts,
     });
-    const recoveredOpts = await params.provider.recoverOpts({
-      locator: provisioned.locator,
-      signal: params.signal,
-    });
-    assertValidDeploymentSlug(recoveredOpts.slug);
-    await deployment.attachRuntime({
-      locator: provisioned.locator,
-      recoveredOpts,
-      bootstrapEnv: recoveredOpts.env ?? {},
-    });
+    const createLogScope = params.onLogEntry
+      ? createAbortScope({
+          signal: params.signal,
+        })
+      : null;
+    const createLogTask =
+      createLogScope && params.onLogEntry
+        ? deployment.runBackgroundTask(async () => {
+            for await (const entry of params.provider.logs({
+              locator: provisioned.locator,
+              signal: createLogScope.signal,
+              tail: 0,
+            })) {
+              await params.onLogEntry?.(normalizeDeploymentLogEntry(entry));
+            }
+          })
+        : null;
+
+    try {
+      const recoveredOpts = await params.provider.recoverOpts({
+        locator: provisioned.locator,
+        signal: params.signal,
+      });
+      assertValidDeploymentSlug(recoveredOpts.slug);
+      await deployment.attachRuntime({
+        locator: provisioned.locator,
+        recoveredOpts,
+        bootstrapEnv: recoveredOpts.env ?? {},
+      });
+    } finally {
+      createLogScope?.abort();
+      await Promise.allSettled([createLogTask]);
+    }
     return deployment;
   }
 

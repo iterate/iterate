@@ -6,12 +6,9 @@ const home = homedir();
 const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
 const tsxPath = `${iterateRepo}/packages/pidnap/node_modules/.bin/tsx`;
 const caddyRuntimeUser = "iterate-caddy";
-const caddyConfigDir = join(home, ".iterate/caddy");
-const caddyRootCaddyfile = join(caddyConfigDir, "Caddyfile");
 // Static bootstrap handlers are committed in `builtin-handlers.caddy`.
 // Dynamic registry-managed handlers are written here by the registry service.
-const syncToCaddyPath = join(caddyConfigDir, "registry-service-routes.caddy");
-const otelCollectorConfigPath = `${iterateRepo}/jonasland/sandbox/otel-collector/config.yaml`;
+const syncToCaddyPath = join(home, ".iterate/caddy", "registry-service-routes.caddy");
 const caddyDataHome = "/home/iterate-caddy";
 const cloudflareTunnelMetricsAddress = "127.0.0.1:20241";
 
@@ -20,13 +17,13 @@ export default defineConfig({
   // (though once caddy is alive it can be accessed using pidnap.iterate.localhost)
   http: {
     host: "0.0.0.0",
-    port: 17300,
+    port: 17300, // 173 = ITE haha
   },
   envFile: join(home, ".iterate/.env"),
   state: {
     autosaveFile: "/var/log/pidnap/state/autosave.json",
   },
-  logDir: "/var/log/pidnap",
+  logDir: join(home, ".iterate/pidnap-logs"),
   // Bootstrap routing rule: if a default-on service needs ingress before
   // registry has started, it should have a committed built-in handler in
   // `builtin-handlers.caddy`. Registry then owns only the dynamic fragment.
@@ -48,7 +45,7 @@ export default defineConfig({
           "run",
           "--watch",
           "--config",
-          caddyRootCaddyfile,
+          join(home, ".iterate/caddy", "Caddyfile"),
         ],
         env: {
           HOME: caddyDataHome,
@@ -144,7 +141,7 @@ export default defineConfig({
           ZO_ROOT_USER_EMAIL: "root@example.com",
           ZO_ROOT_USER_PASSWORD: "Complexpass#123",
           ZO_LOCAL_MODE: "true",
-          ZO_DATA_DIR: "/var/lib/openobserve",
+          ZO_DATA_DIR: `${home}/.iterate/openobserve`,
         },
       },
     },
@@ -152,7 +149,11 @@ export default defineConfig({
       name: "otel-collector",
       definition: {
         command: "/usr/local/bin/otelcol-contrib",
-        args: ["--config", otelCollectorConfigPath, "--set=service.telemetry.metrics.level=None"],
+        args: [
+          "--config",
+          join(iterateRepo, "jonasland/sandbox/otel-collector/config.yaml"),
+          "--set=service.telemetry.metrics.level=None",
+        ],
       },
       dependsOn: ["openobserve"],
     },

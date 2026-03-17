@@ -4,7 +4,6 @@
     "target": "ES2022",
     "jsx": "react-jsx",
     "module": "ESNext",
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     },
@@ -15,7 +14,6 @@
     "noEmit": true,
     "skipLibCheck": true,
     "strict": true,
-    "strictNullChecks": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true
   }

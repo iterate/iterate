@@ -4,7 +4,6 @@
     "target": "ES2024",
     "jsx": "react-jsx",
     "module": "ESNext",
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     },
@@ -14,7 +13,6 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "strict": true,
-    "strictNullChecks": true
+    "strict": true
   }
 }

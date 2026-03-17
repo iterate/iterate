@@ -3,6 +3,16 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "cli": "tsx ./cli.ts",
     "e2e": "cd e2e && pnpm"
+  },
+  "dependencies": {
+    "@iterate-com/shared": "workspace:*",
+    "@orpc/server": "*",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "trpc-cli": "0.12.4",
+    "tsx": "^4.20.6"
   }
 }

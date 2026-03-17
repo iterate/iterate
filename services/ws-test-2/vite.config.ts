@@ -4,20 +4,43 @@ import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
+import { z } from "zod";
 
-const DEFAULT_FRONTEND_PORT = 17301;
-const DEFAULT_API_PORT = 17302;
+const env = z
+  .object({
+    PORT: z.coerce.number().int().positive().default(17301),
+    API_BASE_URL: z.string().default("http://127.0.0.1:17302"),
+  })
+  .parse(process.env);
 
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), "");
-  const frontendPort = env.PORT?.trim() ? Number(env.PORT) : DEFAULT_FRONTEND_PORT;
-  const apiBaseUrl =
-    process.env.API_BASE_URL?.trim() ||
-    env.API_BASE_URL?.trim() ||
-    `http://127.0.0.1:${DEFAULT_API_PORT}`;
-
+export default defineConfig(() => {
   return {
+    server: {
+      host: true,
+      port: env.PORT,
+      strictPort: false,
+      proxy: {
+        "/api": {
+          target: env.API_BASE_URL,
+          changeOrigin: true,
+          ws: true,
+        },
+      },
+    },
+    preview: {
+      host: true,
+      port: env.PORT,
+      strictPort: true,
+      proxy: {
+        "/api": {
+          target: env.API_BASE_URL,
+          changeOrigin: true,
+          ws: true,
+        },
+      },
+    },
     plugins: [
+      // see tanstack start browser console in
       devtools({ consolePiping: { enabled: true } }),
       tsconfigPaths({ projects: ["./tsconfig.json"] }),
       tanstackStart({
@@ -27,29 +50,5 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       viteReact(),
     ],
-    server: {
-      host: true,
-      port: frontendPort,
-      strictPort: true,
-      proxy: {
-        "/api": {
-          target: apiBaseUrl,
-          changeOrigin: true,
-          ws: true,
-        },
-      },
-    },
-    preview: {
-      host: true,
-      port: frontendPort,
-      strictPort: true,
-      proxy: {
-        "/api": {
-          target: apiBaseUrl,
-          changeOrigin: true,
-          ws: true,
-        },
-      },
-    },
   };
 });
