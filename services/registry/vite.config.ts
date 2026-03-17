@@ -52,6 +52,9 @@ export default defineConfig(({ mode }) => ({
     }),
   ],
   build: mode === "client" ? clientBuild : serverBuild,
+  ssr: {
+    external: ["@lydell/node-pty", "@xterm/addon-serialize", "@xterm/headless", "schematch"],
+  },
   optimizeDeps: {
     exclude: ["cpu-features", "ssh2", "@docker/node-sdk", "web-vitals"],
     include: ["react", "react-dom", "@tanstack/react-router"],
@@ -62,7 +65,8 @@ export default defineConfig(({ mode }) => ({
     },
   },
   server: {
-    host: true,
+    allowedHosts: true,
+    host: "127.0.0.1",
     forwardConsole: true,
     port: process.env.PORT?.trim() ? Number(process.env.PORT) : 0,
     strictPort: Boolean(process.env.PORT?.trim()),

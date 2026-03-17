@@ -1,119 +1,145 @@
-import { Hono, type Context } from "hono";
-import type { UpgradeWebSocket, WSEvents, WSMessageReceive } from "hono/ws";
+import { Hono } from "hono";
+import { OpenAPIHandler } from "@orpc/openapi/fetch";
+import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { onError } from "@orpc/server";
-import { RPCHandler as WebSocketRPCHandler, type MinimalWebsocket } from "@orpc/server/websocket";
-import type { WsTest2ServiceEnv } from "../manifest.ts";
-import { createConfettiSocketHandlers } from "./confetti.ts";
-import { createOrpcContext } from "./context.ts";
-import { applySharedHttpRoutes } from "./http-app.ts";
+import { experimental_RPCHandler as RPCHandler } from "@orpc/server/crossws";
+import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
+import type { AdapterOptions, Hooks } from "crossws";
+import { wsTest2ServiceManifest } from "@iterate-com/ws-test-2-contract";
+import { createConfettiSocketHooks } from "./confetti.ts";
+import { createOrpcContext, serviceName, type WsTest2Env } from "./context.ts";
 import { router } from "./router.ts";
 
-type SharedWSEvents = Pick<WSEvents<any>, "onMessage" | "onClose" | "onError">;
-
-type RuntimeWebSocketAdapter = {
-  upgradeWebSocket: UpgradeWebSocket<any, any, SharedWSEvents>;
-};
-
-type CreateAppParams<TBindings extends object, TRuntime extends RuntimeWebSocketAdapter> = {
-  env: WsTest2ServiceEnv;
-  createWebSocketRuntime: (app: Hono<{ Bindings: TBindings }>) => TRuntime;
-  createPtyApp?: (params: {
-    upgradeWebSocket: TRuntime["upgradeWebSocket"];
-  }) => Hono<any> | undefined | Promise<Hono<any> | undefined>;
-};
-
-const orpcWebSocketHandler = new WebSocketRPCHandler(router, {
-  interceptors: [
-    onError((error) => {
-      console.error(error);
-    }),
-  ],
-});
-
-function getRawSocket(ws: { raw?: unknown }, close: (code?: number, reason?: string) => void) {
-  if (!ws.raw) {
-    close(1011, "raw websocket unavailable");
-    return null;
-  }
-
-  return ws.raw as MinimalWebsocket;
-}
-
-function normalizeMessageData(data: WSMessageReceive) {
-  if (typeof data === "string") return data;
-  if (data instanceof Blob) return data;
-  if (data instanceof ArrayBuffer) return data;
-  return new Uint8Array(data).slice().buffer;
-}
-
-function createOrpcWebSocketHandlers(params: {
-  context: ReturnType<typeof createOrpcContext>;
-}): SharedWSEvents {
-  return {
-    onMessage(event, ws) {
-      const rawSocket = getRawSocket(ws, ws.close.bind(ws));
-      if (!rawSocket) return;
-
-      void orpcWebSocketHandler
-        .message(rawSocket, normalizeMessageData(event.data), {
-          context: params.context,
-        })
-        .catch((error) => {
-          console.error(error);
-          ws.close(1011, "oRPC websocket error");
-        });
-    },
-    onClose(_event, ws) {
-      const rawSocket = getRawSocket(ws, ws.close.bind(ws));
-      if (!rawSocket) return;
-      orpcWebSocketHandler.close(rawSocket);
-    },
-    onError(_event, ws) {
-      const rawSocket = getRawSocket(ws, ws.close.bind(ws));
-      if (!rawSocket) return;
-      orpcWebSocketHandler.close(rawSocket);
-    },
-  };
-}
-
-export async function createApp<TBindings extends object, TRuntime extends RuntimeWebSocketAdapter>(
-  params: CreateAppParams<TBindings, TRuntime>,
-) {
+export async function createApp<TBindings extends object, TWebSocketServer = unknown>({
+  env,
+  // `app.ts` is shared by both Node and workerd, so it must not import the
+  // Node-only PTY implementation directly. The runtime boundary chooses which
+  // PTY hooks to pass in:
+  //
+  // - Node passes the real `createNodePtyHooks()`
+  // - workerd passes a tiny "not implemented" websocket
+  //
+  // We tried making this file branch on a boolean and dynamically import
+  // `./pty-node.ts`, but that leaked the Node-only module into the worker
+  // bundle because the bundler cannot prove that a shared function parameter is
+  // always false for the worker build.
+  ptyHooks,
+  createWebSocketServer,
+}: {
+  env: WsTest2Env;
+  ptyHooks: Partial<Hooks>;
+  createWebSocketServer: (options: AdapterOptions) => TWebSocketServer;
+}) {
   const app = new Hono<{ Bindings: TBindings }>();
-  const runtime = params.createWebSocketRuntime(app);
-  const ptyApp = params.createPtyApp
-    ? await params.createPtyApp({
-        upgradeWebSocket: runtime.upgradeWebSocket,
-      })
-    : undefined;
-  const createRequestContext = (_c: Context) => createOrpcContext(params.env);
+  const orpcHandler = new RPCHandler(router, {
+    interceptors: [
+      onError((error) => {
+        console.error(error);
+      }),
+    ],
+  });
+  const openApiHandler = new OpenAPIHandler(router, {
+    plugins: [
+      new OpenAPIReferencePlugin({
+        docsProvider: "scalar",
+        docsPath: "/docs",
+        specPath: "/openapi.json",
+        schemaConverters: [new ZodToJsonSchemaConverter()],
+        specGenerateOptions: {
+          info: { title: "ws-test-2 API", version: wsTest2ServiceManifest.version },
+          servers: [{ url: "/api" }],
+        },
+      }),
+    ],
+    interceptors: [
+      onError((error) => {
+        console.error(error);
+      }),
+    ],
+  });
+  const ws = createWebSocketServer({
+    async resolve(request) {
+      // CrossWS owns websocket routing. Hono only handles HTTP routes in this
+      // service; every websocket upgrade comes through this resolver.
+      const pathname = new URL(request.url, "http://localhost").pathname;
 
-  app.get(
-    "/api/orpc/ws",
-    runtime.upgradeWebSocket(
-      (c) =>
-        createOrpcWebSocketHandlers({
-          context: createRequestContext(c),
-        }),
-      { protocol: "orpc" },
-    ),
+      if (pathname === "/api/orpc/ws") {
+        return {
+          upgrade(request) {
+            // The oRPC websocket client expects the `orpc` subprotocol and both
+            // Node and workerd tests assert this behavior. Keep the handshake
+            // logic here with the websocket route instead of spreading it across
+            // the runtime entrypoints.
+            const requestedProtocols = request.headers
+              .get("sec-websocket-protocol")
+              ?.split(",")
+              .map((value) => value.trim())
+              .filter(Boolean);
+
+            if (!requestedProtocols?.includes("orpc")) {
+              return new Response("Expected Sec-WebSocket-Protocol: orpc", { status: 400 });
+            }
+
+            return {
+              headers: {
+                "Sec-WebSocket-Protocol": "orpc",
+              },
+            };
+          },
+          async message(peer, message) {
+            try {
+              await orpcHandler.message(peer, message, {
+                context: createOrpcContext(env),
+              });
+            } catch (error) {
+              console.error(error);
+              peer.close(1011, "oRPC websocket error");
+            }
+          },
+          close(peer) {
+            orpcHandler.close(peer);
+          },
+          error(peer, error) {
+            console.error(error);
+            orpcHandler.close(peer);
+          },
+        } satisfies Partial<Hooks>;
+      }
+
+      if (pathname === "/api/confetti/ws") {
+        return createConfettiSocketHooks();
+      }
+
+      if (pathname === "/api/pty/ws") {
+        return ptyHooks;
+      }
+
+      return {};
+    },
+  });
+
+  app.get("/api/health", (c) =>
+    c.json({
+      ok: true,
+      service: serviceName,
+    }),
   );
 
-  app.get(
-    "/api/confetti/ws",
-    runtime.upgradeWebSocket(() => createConfettiSocketHandlers()),
-  );
+  app.all("/api/*", async (c) => {
+    const { matched, response } = await openApiHandler.handle(c.req.raw, {
+      prefix: "/api",
+      context: createOrpcContext(env),
+    });
 
-  if (ptyApp) {
-    app.route("/api/pty", ptyApp);
-  }
+    if (!matched || !response) {
+      return c.json({ error: "not_found" }, 404);
+    }
 
-  applySharedHttpRoutes(app, {
-    createOrpcContext: createRequestContext,
+    return c.newResponse(response.body, response);
   });
 
   return {
     app,
-    ...runtime,
+    ws,
   };
 }

@@ -22,6 +22,7 @@ import {
   type ServiceAppEnv,
 } from "@iterate-com/shared/jonasland";
 import { Hono } from "hono";
+import { RPCHandler } from "@orpc/server/fetch";
 import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
 import { createServer as createViteServer, searchForWorkspaceRoot, type ViteDevServer } from "vite";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -70,6 +71,7 @@ const openAPIHandler = createServiceOpenAPIHandler({
   version: serviceManifest.version,
 });
 
+const rpcHandler = new RPCHandler(eventsRouter);
 const wsHandler = new WebSocketRPCHandler(eventsRouter);
 const wss = new WebSocketServer({ noServer: true });
 
@@ -96,6 +98,20 @@ app.get("/api/observability", createServiceObservabilityHandler(getEventsDbRunti
 app.get("/", async (c) => {
   const html = await readFile(viteUiIndexHtmlPath, "utf8");
   return c.html(html);
+});
+
+app.all("/orpc/*", async (c) => {
+  const context = {
+    requestId: c.get("requestId"),
+    serviceName,
+    log: c.get("requestLog"),
+  };
+  const { matched, response } = await rpcHandler.handle(c.req.raw, {
+    prefix: "/orpc",
+    context,
+  });
+  if (matched) return c.newResponse(response.body, response);
+  return c.json({ error: "not_found" }, 404);
 });
 
 applyOpenAPIRoute(app, openAPIHandler, serviceName);
@@ -195,6 +211,7 @@ const vite: ViteDevServer = await createViteServer({
   },
   appType: "spa",
   server: {
+    allowedHosts: true,
     middlewareMode: true,
     hmr: {
       server: server as unknown as HttpServer,
@@ -228,7 +245,7 @@ server.listen(port, "0.0.0.0", () => {
         openapiPath: "/api/openapi.json",
         title: "Events Service",
         sqlitePath: runtime.path,
-        sqliteAlias: "events_service",
+        sqliteAlias: "events",
       },
       tags: ["openapi", "events", "sqlite"],
     }),

@@ -51,7 +51,7 @@ server.listen(port, "0.0.0.0", () => {
         openapiPath: "/api/openapi.json",
         title: "Events Service",
         sqlitePath: runtime.path,
-        sqliteAlias: "events_service",
+        sqliteAlias: "events",
       },
       tags: ["openapi", "events", "sqlite"],
     }),

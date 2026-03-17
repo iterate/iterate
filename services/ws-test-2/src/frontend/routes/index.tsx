@@ -23,8 +23,6 @@ const TerminalParams = z.object({
 
 export const Route = createFileRoute("/")({
   validateSearch: TerminalParams,
-  loader: ({ context }) =>
-    context.queryClient.ensureQueryData(orpc.ping.queryOptions({ input: {} })),
   component: IndexPage,
 });
 

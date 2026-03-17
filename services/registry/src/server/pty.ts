@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import type { createNodeWebSocket } from "@hono/node-ws";
-import * as pty from "@lydell/node-pty";
-import { SerializeAddon } from "@xterm/addon-serialize";
-import XTermHeadless from "@xterm/headless/lib-headless/xterm-headless.js";
+import type { IPty } from "@lydell/node-pty";
 import { Hono } from "hono";
 import type { WSContext } from "hono/ws";
 import { match } from "schematch";
@@ -27,11 +26,18 @@ const ExecPtyCommand = z.object({
 
 interface PtySession {
   id: string;
-  ptyProcess: pty.IPty;
+  ptyProcess: IPty;
   ws: WSContext<WebSocket> | null;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
-  headlessTerminal: any;
-  serializeAddon: SerializeAddon;
+  headlessTerminal: {
+    write(data: string): void;
+    resize(cols: number, rows: number): void;
+    loadAddon(addon: unknown): void;
+    dispose(): void;
+  };
+  serializeAddon: {
+    serialize(): string;
+  };
   pendingCommand: { command: string; autorun: boolean } | null;
   shellReady: boolean;
 }
@@ -41,12 +47,34 @@ type UpgradeWebSocket = ReturnType<typeof createNodeWebSocket>["upgradeWebSocket
 const ptySessions = new Map<string, PtySession>();
 const wsToSessionId = new Map<WSContext<WebSocket>, string>();
 
+interface PtyRuntimeDeps {
+  pty: typeof import("@lydell/node-pty");
+  SerializeAddon: typeof import("@xterm/addon-serialize").SerializeAddon;
+  XTermHeadless: typeof import("@xterm/headless");
+}
+
+let ptyRuntimeDepsPromise: Promise<PtyRuntimeDeps> | undefined;
+const require = createRequire(import.meta.url);
+
+async function getPtyRuntimeDeps(): Promise<PtyRuntimeDeps> {
+  ptyRuntimeDepsPromise ??= Promise.resolve({
+    pty: require("@lydell/node-pty") as typeof import("@lydell/node-pty"),
+    SerializeAddon: require("@xterm/addon-serialize")
+      .SerializeAddon as typeof import("@xterm/addon-serialize").SerializeAddon,
+    XTermHeadless: require("@xterm/headless") as typeof import("@xterm/headless"),
+  });
+  return await ptyRuntimeDepsPromise;
+}
+
 function sendCommand(ws: WSContext<WebSocket>, command: object) {
   ws.send(COMMAND_PREFIX + JSON.stringify(command));
 }
 
 function scheduleCleanup(session: PtySession) {
-  if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
+  if (session.cleanupTimer) {
+    clearTimeout(session.cleanupTimer);
+  }
+
   session.cleanupTimer = setTimeout(() => {
     ptySessions.delete(session.id);
     session.headlessTerminal.dispose();
@@ -61,7 +89,8 @@ function cancelCleanup(session: PtySession) {
   }
 }
 
-function spawnPtyProcess(): pty.IPty {
+async function spawnPtyProcess(): Promise<IPty> {
+  const { pty } = await getPtyRuntimeDeps();
   const shell = process.env.SHELL || "/bin/bash";
   const env = {
     ...process.env,
@@ -80,8 +109,9 @@ function spawnPtyProcess(): pty.IPty {
   });
 }
 
-function createSession(ptyProcess: pty.IPty, ws: WSContext<WebSocket>): PtySession {
-  const headlessTerminal = new XTermHeadless.Terminal({ scrollback: 10_000, cols: 80, rows: 24 });
+async function createSession(ptyProcess: IPty, ws: WSContext<WebSocket>): Promise<PtySession> {
+  const { SerializeAddon, XTermHeadless } = await getPtyRuntimeDeps();
+  const headlessTerminal = new XTermHeadless.Terminal({ scrollback: 10000, cols: 80, rows: 24 });
   const serializeAddon = new SerializeAddon();
   headlessTerminal.loadAddon(serializeAddon);
 
@@ -99,7 +129,7 @@ function createSession(ptyProcess: pty.IPty, ws: WSContext<WebSocket>): PtySessi
   ptySessions.set(session.id, session);
   wsToSessionId.set(ws, session.id);
 
-  ptyProcess.onData((data) => {
+  ptyProcess.onData((data: string) => {
     session.headlessTerminal.write(data);
     session.ws?.send(data);
 
@@ -110,13 +140,17 @@ function createSession(ptyProcess: pty.IPty, ws: WSContext<WebSocket>): PtySessi
         session.pendingCommand = null;
         session.ptyProcess.write(command);
         if (autorun) session.ptyProcess.write("\r\n");
-        if (session.ws) sendCommand(session.ws, { type: "commandExecuted" });
+        if (session.ws) {
+          sendCommand(session.ws, { type: "commandExecuted" });
+        }
       }
     }
   });
 
-  ptyProcess.onExit(({ exitCode }) => {
-    if (!ptySessions.has(session.id)) return;
+  ptyProcess.onExit(({ exitCode }: { exitCode: number; signal?: number }) => {
+    if (!ptySessions.has(session.id)) {
+      return;
+    }
 
     cancelCleanup(session);
     session.headlessTerminal.dispose();
@@ -138,7 +172,9 @@ function createSession(ptyProcess: pty.IPty, ws: WSContext<WebSocket>): PtySessi
 
 function attachToSession(session: PtySession, ws: WSContext<WebSocket>) {
   cancelCleanup(session);
-  if (session.ws) wsToSessionId.delete(session.ws);
+  if (session.ws) {
+    wsToSessionId.delete(session.ws);
+  }
   session.ws = ws;
   wsToSessionId.set(ws, session.id);
 
@@ -180,21 +216,20 @@ export function createPtyRouter(params: { upgradeWebSocket: UpgradeWebSocket }) 
             }
           }
 
-          let ptyProcess: pty.IPty;
-          try {
-            ptyProcess = spawnPtyProcess();
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            ws.send(`\r\n\x1b[31mError: Failed to spawn process: ${message}\x1b[0m\r\n`);
-            ws.close(1011, "Failed to spawn process");
-            return;
-          }
-
-          session = createSession(ptyProcess, ws);
-          if (initialCommand) {
-            session.pendingCommand = { command: initialCommand, autorun: initialAutorun };
-          }
-          sendCommand(ws, { type: "ptyId", ptyId: session.id });
+          void (async () => {
+            try {
+              const ptyProcess = await spawnPtyProcess();
+              const nextSession = await createSession(ptyProcess, ws);
+              if (initialCommand) {
+                nextSession.pendingCommand = { command: initialCommand, autorun: initialAutorun };
+              }
+              sendCommand(ws, { type: "ptyId", ptyId: nextSession.id });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              ws.send(`\r\n\x1b[31mError: Failed to spawn process: ${message}\x1b[0m\r\n`);
+              ws.close(1011, "Failed to spawn process");
+            }
+          })();
         },
 
         onMessage(event, ws) {
@@ -218,6 +253,9 @@ export function createPtyRouter(params: { upgradeWebSocket: UpgradeWebSocket }) 
                   session.ptyProcess.write(command);
                   if (autorun) session.ptyProcess.write("\r\n");
                 })
+                .case(z.object({ type: z.literal("exec") }), () => {
+                  ws.send(`\r\n\x1b[31mError: exec command requires 'command' field\x1b[0m\r\n`);
+                })
                 .default(() => {});
               return;
             } catch (error) {
@@ -232,16 +270,20 @@ export function createPtyRouter(params: { upgradeWebSocket: UpgradeWebSocket }) 
         onClose(_event, ws) {
           const sessionId = wsToSessionId.get(ws);
           if (!sessionId) return;
+
           const session = ptySessions.get(sessionId);
           if (!session) return;
+
           detachFromSession(session);
         },
 
         onError(_event, ws) {
           const sessionId = wsToSessionId.get(ws);
           if (!sessionId) return;
+
           const session = ptySessions.get(sessionId);
           if (!session) return;
+
           detachFromSession(session);
         },
       };

@@ -84,6 +84,7 @@ const vite = await createViteServer({
   plugins: [tailwindcss(), react()],
   appType: "spa",
   server: {
+    allowedHosts: true,
     middlewareMode: true,
     fs: {
       strict: false,

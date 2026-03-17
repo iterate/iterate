@@ -4,11 +4,13 @@ import { defineConfig } from "pidnap";
 
 const home = homedir();
 const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
-const tsxPath = `${iterateRepo}/packages/pidnap/node_modules/.bin/tsx`;
 const caddyRuntimeUser = "iterate-caddy";
+const registryDbPath = join(home, ".iterate", "registry.db");
+const eventsDbPath = join(home, ".iterate", "events.db");
+const exampleDbPath = join(home, ".iterate", "example.db");
 // Static bootstrap handlers are committed in `builtin-handlers.caddy`.
 // Dynamic registry-managed handlers are written here by the registry service.
-const syncToCaddyPath = join(home, ".iterate/caddy", "registry-service-routes.caddy");
+const syncToCaddyPath = join(home, ".iterate", "registry-service-routes.caddy");
 const caddyDataHome = "/home/iterate-caddy";
 const cloudflareTunnelMetricsAddress = "127.0.0.1:20241";
 
@@ -43,9 +45,11 @@ export default defineConfig({
           caddyRuntimeUser,
           "/usr/local/bin/caddy",
           "run",
+          // This --watch is very important, because it means that caddy will reload when the registry service
+          // writes to ~/.iterate/registry-service-routes.caddy
           "--watch",
           "--config",
-          join(home, ".iterate/caddy", "Caddyfile"),
+          join(home, ".iterate", "Caddyfile"),
         ],
         env: {
           HOME: caddyDataHome,
@@ -68,11 +72,13 @@ export default defineConfig({
     {
       name: "registry",
       definition: {
-        command: tsxPath,
-        args: [join(iterateRepo, "services/registry/src/entry-server.tsx")],
+        command: "pnpm",
+        cwd: join(iterateRepo, "services/registry"),
+        args: ["dev"],
         env: {
           PORT: "17310",
           REGISTRY_SERVICE_PORT: "17310",
+          REGISTRY_DB_PATH: registryDbPath,
           // Registry never talks to the Caddy admin API directly; it only writes
           // the dynamic fragment and lets Caddy's `--watch` loop pick it up.
           SYNC_TO_CADDY_PATH: syncToCaddyPath,
@@ -123,25 +129,50 @@ export default defineConfig({
     {
       name: "events",
       definition: {
-        command: tsxPath,
-        args: [join(iterateRepo, "services/events/src/server.ts")],
+        command: "pnpm",
+        args: ["dev"],
+        cwd: join(iterateRepo, "services/events"),
         env: {
           PORT: "17320",
+          DATABASE_URL: eventsDbPath,
         },
       },
       dependsOn: ["registry"],
     },
-    // Optional apps (example) are on-demand and register routes via registry.
+    {
+      name: "example",
+      definition: {
+        command: "pnpm",
+        args: ["dev"],
+        cwd: join(iterateRepo, "services/example"),
+        env: {
+          PORT: "17340",
+          EXAMPLE_SERVICE_PORT: "17340",
+          EXAMPLE_DB_PATH: exampleDbPath,
+        },
+      },
+      healthCheck: {
+        url: "http://127.0.0.1:17340/api/__iterate/health",
+        intervalMs: 2_000,
+      },
+      dependsOn: ["registry"],
+      options: {
+        restartPolicy: "always",
+      },
+    },
     {
       name: "openobserve",
       definition: {
         command: "/usr/local/bin/openobserve",
         args: [],
         env: {
-          ZO_ROOT_USER_EMAIL: "root@example.com",
-          ZO_ROOT_USER_PASSWORD: "Complexpass#123",
+          ZO_ROOT_USER_EMAIL: "test@nustom..com",
+          ZO_ROOT_USER_PASSWORD: "424242",
           ZO_LOCAL_MODE: "true",
           ZO_DATA_DIR: `${home}/.iterate/openobserve`,
+          ZO_MMDB_DISABLE_DOWNLOAD: "true",
+          ZO_TELEMETRY: "false",
+          RUST_LOG: "warn",
         },
       },
     },

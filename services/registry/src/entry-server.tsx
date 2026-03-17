@@ -21,6 +21,7 @@ interface ViteManifestChunk {
 type ViteManifest = Record<string, ViteManifestChunk>;
 
 let cachedProdAppCssHrefs: string[] | null = null;
+const entryServerSetupKey = Symbol.for("iterate.registry.entry-server.setup");
 
 function isProductionRuntime() {
   return import.meta.env?.PROD ?? process.env.NODE_ENV === "production";
@@ -68,33 +69,39 @@ function getAppCssHrefs() {
   return ["/src/styles.css"];
 }
 
-if (isProductionRuntime()) {
-  app.use(compress());
-  app.use(
-    "/*",
-    serveStatic({
-      root: "./dist/client",
-    }),
-  );
-}
+const configuredApp = app as typeof app & { [entryServerSetupKey]?: boolean };
 
-app.use("*", async (c) => {
-  const requestHandler = createRequestHandler({
-    request: c.req.raw,
-    createRouter: () =>
-      createRouter({
-        appCssHrefs: getAppCssHrefs(),
+if (!configuredApp[entryServerSetupKey]) {
+  configuredApp[entryServerSetupKey] = true;
+
+  if (isProductionRuntime()) {
+    app.use(compress());
+    app.use(
+      "/*",
+      serveStatic({
+        root: "./dist/client",
       }),
-  });
+    );
+  }
 
-  return await requestHandler(({ responseHeaders, router }) => {
-    return renderRouterToString({
-      responseHeaders,
-      router,
-      children: <RouterServer router={router} />,
+  app.use("*", async (c) => {
+    const requestHandler = createRequestHandler({
+      request: c.req.raw,
+      createRouter: () =>
+        createRouter({
+          appCssHrefs: getAppCssHrefs(),
+        }),
+    });
+
+    return await requestHandler(({ responseHeaders, router }) => {
+      return renderRouterToString({
+        responseHeaders,
+        router,
+        children: <RouterServer router={router} />,
+      });
     });
   });
-});
+}
 
 if (process.env.NODE_ENV === "production") {
   const env = getEnv();

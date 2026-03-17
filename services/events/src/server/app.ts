@@ -14,6 +14,7 @@ import {
   serviceLog,
 } from "@iterate-com/shared/jonasland";
 import { Hono } from "hono";
+import { RPCHandler } from "@orpc/server/fetch";
 import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
 import { getEventsDbRuntimeConfig } from "../db.ts";
 import { disposeEventsRouterOperations, eventsRouter } from "../router.ts";
@@ -29,6 +30,7 @@ const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 applyServiceMiddleware(app);
 
 const wsHandler = new WebSocketRPCHandler(eventsRouter);
+const rpcHandler = new RPCHandler(eventsRouter);
 
 app.get(
   "/orpc/ws",
@@ -50,6 +52,20 @@ app.get(
     },
   })),
 );
+
+app.all("/orpc/*", async (c) => {
+  const context = {
+    requestId: c.get("requestId"),
+    serviceName,
+    log: c.get("requestLog"),
+  };
+  const { matched, response } = await rpcHandler.handle(c.req.raw, {
+    prefix: "/orpc",
+    context,
+  });
+  if (matched) return c.newResponse(response.body, response);
+  return c.json({ error: "not_found" }, 404);
+});
 
 app.get("/api/observability", createServiceObservabilityHandler(getEventsDbRuntimeConfig));
 

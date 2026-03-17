@@ -245,8 +245,8 @@ RUN printf ':8443 {\n  tls internal\n  respond "ok" 200\n}\n' > /tmp/caddy-pki.c
     rm /tmp/caddy-pki.caddyfile && \
     test -f /home/iterate-caddy/.local/share/caddy/pki/authorities/local/root.crt
 # Runtimes with compiled-in cert bundles that ignore the system store:
-#   - Node.js: NODE_EXTRA_CA_CERTS adds the caddy CA on top of built-in roots.
-#     NODE_USE_SYSTEM_CA=1 (v22.5+) makes Node read the system store directly.
+#   - Node.js: NODE_USE_SYSTEM_CA=1 (v22.5+) makes Node read the system store
+#     directly, so we do not need to point it at iterate-caddy's private home.
 #   - Python requests: uses certifi (Mozilla bundle) by default; override with
 #     REQUESTS_CA_BUNDLE pointing at the system bundle which includes caddy's CA.
 # Go, Rust (rustls-native-certs), curl, git all read the system store natively.
@@ -258,8 +258,7 @@ USER iterate
 ENV HOME=/home/iterate
 ENV XDG_DATA_HOME=/home/iterate/.local/share
 ENV XDG_CONFIG_HOME=/home/iterate/.config
-ENV NODE_EXTRA_CA_CERTS=/home/iterate-caddy/.local/share/caddy/pki/authorities/local/root.crt \
-    NODE_USE_SYSTEM_CA=1 \
+ENV NODE_USE_SYSTEM_CA=1 \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 # Set workspace root for dependency install and later runtime commands.
@@ -284,7 +283,6 @@ RUN pnpm install --frozen-lockfile --offline
 # Mark startup/support scripts executable at build-time, not runtime.
 RUN chmod +x \
     "$ITERATE_REPO/jonasland/sandbox/entry.sh" \
-    "$ITERATE_REPO/jonasland/sandbox/clickstack-launcher.sh" \
     "$ITERATE_REPO/jonasland/sandbox/sync-home-skeleton.sh" \
     "$ITERATE_REPO/jonasland/sandbox/providers/docker/sync-repo-from-host.sh"
 

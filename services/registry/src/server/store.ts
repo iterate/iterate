@@ -1,5 +1,5 @@
 import type { SqlResultSet } from "@iterate-com/shared/jonasland";
-import { openRegistryDatabase } from "./db/index.ts";
+import { initializeRegistryDatabase, openRegistryDatabase } from "./db/index.ts";
 
 export interface PersistedRoute {
   host: string;
@@ -77,6 +77,7 @@ export class ServicesStore {
   }
 
   static async open(dbPath: string): Promise<ServicesStore> {
+    await initializeRegistryDatabase(dbPath);
     return new ServicesStore(dbPath);
   }
 

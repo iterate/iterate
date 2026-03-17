@@ -48,6 +48,53 @@ function serviceUrlForRoute(route: PersistedRoute, env: RegistryEnv): string {
   });
 }
 
+function registryInternalHost(env: RegistryEnv): string {
+  return `${env.ITERATE_INGRESS_DEFAULT_SERVICE}.${env.ITERATE_INGRESS_HOST}`;
+}
+
+function registryPublicUrl(env: RegistryEnv): string {
+  return safePublicUrl({
+    env,
+    internalURL: `http://${registryInternalHost(env)}/`,
+  });
+}
+
+function registryDocsUrl(env: RegistryEnv): string {
+  return safePublicUrl({
+    env,
+    internalURL: `http://${registryInternalHost(env)}/api/docs`,
+  });
+}
+
+function registrySpecUrl(env: RegistryEnv): string {
+  return safePublicUrl({
+    env,
+    internalURL: `http://${registryInternalHost(env)}/api/openapi.json`,
+  });
+}
+
+function registryDocsSource(env: RegistryEnv) {
+  return {
+    id: "registry",
+    title: "Registry",
+    specUrl: "/api/openapi.json",
+    serviceUrl: registryPublicUrl(env),
+  };
+}
+
+function registrySqliteSource(env: RegistryEnv): SqliteRouteSource {
+  return {
+    id: "registry",
+    host: "registry",
+    title: "Registry",
+    publicURL: registryPublicUrl(env),
+    sqlitePath: env.REGISTRY_DB_PATH,
+    sqliteAlias: deriveAliasFromPath(env.REGISTRY_DB_PATH),
+    tags: ["builtin", "sqlite"],
+    updatedAt: new Date(0).toISOString(),
+  };
+}
+
 function docsUrlForRoute(route: PersistedRoute, env: RegistryEnv): string | undefined {
   if (!hasTag(route, "openapi")) return undefined;
   return safePublicUrl({
@@ -62,7 +109,7 @@ export function listOpenApiSources(params: { routes: PersistedRoute[]; env: Regi
   specUrl: string;
   serviceUrl: string;
 }> {
-  return params.routes
+  const discoveredSources = params.routes
     .filter((route) => hasTag(route, "openapi"))
     .map((route) => {
       const openApiPath = normalizeOpenApiPath(route.metadata.openapiPath);
@@ -77,8 +124,11 @@ export function listOpenApiSources(params: { routes: PersistedRoute[]; env: Regi
         serviceUrl: serviceUrlForRoute(route, params.env),
       };
     })
-    .filter((source): source is NonNullable<typeof source> => source !== null)
-    .sort((a, b) => a.title.localeCompare(b.title));
+    .filter((source): source is NonNullable<typeof source> => source !== null);
+
+  const sourcesById = new Map(discoveredSources.map((source) => [source.id, source] as const));
+  sourcesById.set("registry", registryDocsSource(params.env));
+  return Array.from(sourcesById.values()).sort((a, b) => a.title.localeCompare(b.title));
 }
 
 export function deriveAliasFromPath(filePath: string): string {
@@ -93,7 +143,7 @@ export function listSqliteSources(params: {
   routes: PersistedRoute[];
   env: RegistryEnv;
 }): SqliteRouteSource[] {
-  return params.routes
+  const discoveredSources = params.routes
     .filter((route) => hasTag(route, "sqlite"))
     .map((route) => {
       const sqlitePath = route.metadata.sqlitePath?.trim();
@@ -110,21 +160,20 @@ export function listSqliteSources(params: {
         updatedAt: route.updatedAt,
       };
     })
-    .filter((source): source is SqliteRouteSource => source !== null)
-    .sort((a, b) => a.title.localeCompare(b.title));
+    .filter((source): source is SqliteRouteSource => source !== null);
+
+  const sourcesById = new Map(discoveredSources.map((source) => [source.id, source] as const));
+  sourcesById.set("registry", registrySqliteSource(params.env));
+  return Array.from(sourcesById.values()).sort((a, b) => a.title.localeCompare(b.title));
 }
 
 export function buildLandingData(params: { routes: PersistedRoute[]; env: RegistryEnv }) {
   const docsSources = listOpenApiSources(params);
   const dbSources = listSqliteSources(params);
-  return {
-    ingress: {
-      ITERATE_INGRESS_HOST: params.env.ITERATE_INGRESS_HOST ?? null,
-      ITERATE_INGRESS_ROUTING_TYPE: params.env.ITERATE_INGRESS_ROUTING_TYPE,
-      ITERATE_INGRESS_DEFAULT_SERVICE: params.env.ITERATE_INGRESS_DEFAULT_SERVICE,
-    },
-    routes: params.routes
-      .map((route) => ({
+  const routesByHost = new Map(
+    params.routes.map((route) => [
+      route.host,
+      {
         ...route,
         title: routeTitle(route),
         publicURL: serviceUrlForRoute(route, params.env),
@@ -133,8 +182,36 @@ export function buildLandingData(params: { routes: PersistedRoute[]; env: Regist
           : {}),
         hasOpenAPI: hasTag(route, "openapi"),
         hasSqlite: hasTag(route, "sqlite"),
-      }))
-      .sort((a, b) => a.title.localeCompare(b.title)),
+      },
+    ]),
+  );
+  routesByHost.set(registryInternalHost(params.env), {
+    host: registryInternalHost(params.env),
+    target: `127.0.0.1:${params.env.REGISTRY_SERVICE_PORT}`,
+    metadata: {
+      source: "registry-builtin",
+      title: "Registry",
+      openapiPath: "/api/openapi.json",
+      sqlitePath: params.env.REGISTRY_DB_PATH,
+      sqliteAlias: deriveAliasFromPath(params.env.REGISTRY_DB_PATH),
+    },
+    tags: ["builtin", "registry", "openapi", "sqlite"],
+    caddyDirectives: [],
+    updatedAt: new Date(0).toISOString(),
+    title: "Registry",
+    publicURL: registryPublicUrl(params.env),
+    docsURL: registryDocsUrl(params.env),
+    hasOpenAPI: true,
+    hasSqlite: true,
+  });
+
+  return {
+    ingress: {
+      ITERATE_INGRESS_HOST: params.env.ITERATE_INGRESS_HOST ?? null,
+      ITERATE_INGRESS_ROUTING_TYPE: params.env.ITERATE_INGRESS_ROUTING_TYPE,
+      ITERATE_INGRESS_DEFAULT_SERVICE: params.env.ITERATE_INGRESS_DEFAULT_SERVICE,
+    },
+    routes: Array.from(routesByHost.values()).sort((a, b) => a.title.localeCompare(b.title)),
     docsSources,
     dbSources,
   };

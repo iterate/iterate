@@ -265,6 +265,14 @@ function resolveMainAlias(alias: string | undefined): string {
   return defaultMainAlias;
 }
 
+function buildStudioSrc(params: { env: RegistryEnv; mainAlias: string }): string {
+  const studioIframeUrl = new URL(params.env.REGISTRY_DB_STUDIO_EMBED_URL);
+  const currentName = studioIframeUrl.searchParams.get("name")?.trim();
+  const baseName = currentName || params.env.REGISTRY_DB_STUDIO_NAME;
+  studioIframeUrl.searchParams.set("name", `${baseName} (${params.mainAlias})`);
+  return studioIframeUrl.toString();
+}
+
 export async function getDbRuntimeData(params: {
   routes: PersistedRoute[];
   env: RegistryEnv;
@@ -280,7 +288,7 @@ export async function getDbRuntimeData(params: {
   const selectedMainAlias = resolveMainAlias(params.mainAlias);
   const session = await getSqliteSession(selectedMainAlias);
   return {
-    studioSrc,
+    studioSrc: buildStudioSrc({ env: params.env, mainAlias: selectedMainAlias }),
     selectedMainAlias,
     databases: sqliteTargets.map((target) => ({
       alias: target.alias,

@@ -89,7 +89,6 @@ export function createDockerProvider(
       ]);
 
       const defaultHostConfig: DockerHostConfig = {
-        PortBindings: { "80/tcp": [{ HostPort: "" }] },
         ExtraHosts: ["host.docker.internal:host-gateway"],
         CapAdd: ["NET_ADMIN"],
         ...(defaultMounts ? { Mounts: defaultMounts } : {}),

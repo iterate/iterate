@@ -1,59 +1,28 @@
 /// <reference types="@cloudflare/workers-types" />
 
-import { Hono } from "hono";
-import { createApp } from "./api/app.ts";
+import crossws, { type CloudflareDurableAdapter } from "crossws/adapters/cloudflare";
+import { getWsTest2ServiceEnv } from "@iterate-com/ws-test-2-contract";
+import type { Hooks } from "crossws";
 import { Env } from "../env.ts";
-import { getWsTest2ServiceEnv } from "./manifest.ts";
-import { upgradeWebSocket } from "./worker-upgrade-websocket.ts";
+import { createApp } from "./api/app.ts";
 
-declare const ENABLE_PTY: boolean;
-
-function createWorkerPtyUnavailableApp() {
-  const app = new Hono();
-
-  app.get("/ws", (c) => {
-    if (c.req.header("upgrade") !== "websocket") {
-      return c.text("Expected websocket", 426);
-    }
-
-    // Hono's Cloudflare websocket helper does not support `onOpen`, so the
-    // worker-only PTY fallback uses a manual WebSocketPair to emit the initial
-    // "not implemented" message immediately on connect.
-    // https://hono.dev/docs/helpers/websocket
-    // https://developers.cloudflare.com/workers/runtime-apis/websockets/
-    const pair = new WebSocketPair();
-    const client = pair[0];
-    const server = pair[1];
-
-    server.accept();
-    server.send("\r\nPTY is not implemented in Cloudflare Workers.\r\n");
-    server.close(4000, "PTY not implemented");
-
-    return new Response(null, {
-      status: 101,
-      webSocket: client,
-    });
-  });
-
-  return app;
-}
-
-const { app } = await createApp<Env, { upgradeWebSocket: typeof upgradeWebSocket }>({
+const { app, ws } = await createApp<Env, CloudflareDurableAdapter>({
   env: getWsTest2ServiceEnv({}),
-  createWebSocketRuntime: () => ({
-    upgradeWebSocket,
-  }),
-  createPtyApp: async ({ upgradeWebSocket }) =>
-    // Alchemy forwards Worker `bundle.define` values to esbuild, so this dead branch
-    // keeps the node-pty import out of the Cloudflare bundle while preserving the
-    // same mount point as the Node runtime.
-    // https://alchemy.run/providers/cloudflare/worker
-    // https://raw.githubusercontent.com/alchemy-run/alchemy/main/examples/cloudflare-worker/alchemy.run.ts
-    ENABLE_PTY
-      ? (await import("./api/pty.ts")).createPtyRouter({
-          upgradeWebSocket: upgradeWebSocket as never,
-        })
-      : createWorkerPtyUnavailableApp(),
+  ptyHooks: {
+    // Keep the worker PTY behavior inline at the runtime boundary. The important
+    // part is not the fallback message itself, it is that the worker entrypoint
+    // never imports `./api/pty-node.ts`.
+    //
+    // If workerd sees that module anywhere in its reachable graph it tries to
+    // bundle Node builtins from `node-pty` and crashes during local dev/startup.
+    // Passing a tiny fallback hook object here keeps the shared `app.ts` logic
+    // simple while making the bundle boundary explicit.
+    open(peer) {
+      peer.send("\r\nPTY is not implemented in Cloudflare Workers.\r\n");
+      peer.close(4000, "PTY not implemented");
+    },
+  } satisfies Partial<Hooks>,
+  createWebSocketServer: (options) => crossws(options),
 });
 
 app.get("*", async (c) => {
@@ -70,4 +39,14 @@ app.get("*", async (c) => {
   return await c.env.ASSETS.fetch(shellRequest);
 });
 
-export default app;
+export default {
+  fetch(request: Request, env: Env, context: ExecutionContext) {
+    if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      // Like Node, the worker entrypoint just forwards websocket upgrades to
+      // CrossWS. Route selection and protocol handling live in `app.ts`.
+      return ws.handleUpgrade(request, env, context);
+    }
+
+    return app.fetch(request, env, context);
+  },
+};

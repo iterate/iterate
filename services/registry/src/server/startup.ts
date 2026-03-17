@@ -69,11 +69,13 @@ export async function ensureSeededRoutes(params: { store: ServicesStore; env: Re
     {
       host: "events.iterate.localhost",
       target: "127.0.0.1:17320",
-      tags: ["seeded", "events", "openapi"],
+      tags: ["seeded", "events", "openapi", "sqlite"],
       metadata: {
         source: "registry-seed",
         title: "Events Service",
         openapiPath: "/api/openapi.json",
+        sqlitePath: "events.sqlite",
+        sqliteAlias: "events",
       },
     },
     {

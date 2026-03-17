@@ -1,17 +1,17 @@
 import {
-  getWsTest2ServiceEnv,
   wsTest2ServiceManifest,
-  type WsTest2ServiceEnv,
-} from "../manifest.ts";
+  type WsTest2ServiceEnv as WsTest2Env,
+} from "@iterate-com/ws-test-2-contract";
 
 export const serviceName = wsTest2ServiceManifest.serviceName;
+export type { WsTest2Env };
 
 export interface WsTest2Context {
-  env: WsTest2ServiceEnv;
+  env: WsTest2Env;
   serviceName: string;
 }
 
-export function createOrpcContext(env: WsTest2ServiceEnv): WsTest2Context {
+export function createOrpcContext(env: WsTest2Env): WsTest2Context {
   return {
     env,
     serviceName,

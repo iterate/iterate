@@ -281,7 +281,7 @@
 # 1. normalize any trusted forwarded ingress host
 # 2. answer global health checks
 # 3. precompute the naked-host bootstrap fallback
-# 4. handle built-in explicit service hosts directly from `builtin-handlers.caddy`
+# 4. handle built-in explicit service hosts directly
 # 5. handle registry-generated explicit service hosts directly from the dynamic
 #    fragment written by registry
 # 6. dispatch the naked-host fallback only if it is still unresolved by handlers
@@ -299,11 +299,44 @@
 	import iterate_reset_route_vars
 	import iterate_default_service_cache
 	import iterate_resolve_default_ingress_fallback
-	# Static bootstrap ownership lives in this committed fragment. These routes
+	# Static bootstrap ownership lives inline in this committed file. These routes
 	# should work even before registry starts or before it has written any dynamic
 	# fragment output.
-	import /home/iterate/.iterate/caddy/builtin-handlers.caddy
-	import iterate_handle_builtin_ingress
+	@pidnap_ingress host pidnap.iterate.localhost pidnap.{$ITERATE_INGRESS_HOST:iterate.localhost} pidnap__{$ITERATE_INGRESS_HOST:iterate.localhost}
+	handle @pidnap_ingress {
+		vars {
+			iterate_service_slug pidnap
+			iterate_upstream 127.0.0.1:17300
+		}
+		import iterate_proxy_resolved_ingress
+	}
+
+	@registry_ingress host registry.iterate.localhost registry.{$ITERATE_INGRESS_HOST:iterate.localhost} registry__{$ITERATE_INGRESS_HOST:iterate.localhost}
+	handle @registry_ingress {
+		vars {
+			iterate_service_slug registry
+			iterate_upstream 127.0.0.1:17310
+		}
+		import iterate_proxy_resolved_ingress
+	}
+
+	@caddy_ingress host caddy.iterate.localhost caddy.{$ITERATE_INGRESS_HOST:iterate.localhost} caddy__{$ITERATE_INGRESS_HOST:iterate.localhost}
+	handle @caddy_ingress {
+		vars {
+			iterate_service_slug caddy
+			iterate_upstream 127.0.0.1:2019
+		}
+		import iterate_proxy_resolved_ingress
+	}
+
+	@otel_collector_ingress host otel-collector.iterate.localhost otel-collector.{$ITERATE_INGRESS_HOST:iterate.localhost} otel-collector__{$ITERATE_INGRESS_HOST:iterate.localhost}
+	handle @otel_collector_ingress {
+		vars {
+			iterate_service_slug otel-collector
+			iterate_upstream 127.0.0.1:15333
+		}
+		import iterate_proxy_resolved_ingress
+	}
 	# Dynamic ownership lives in the registry-written fragment. The same host
 	# should not appear in both files.
 	import {$SYNC_TO_CADDY_PATH:/home/iterate/.iterate/caddy/registry-service-routes.caddy}
@@ -336,7 +369,6 @@
 	handle @iterate_http_external_proxy {
 		reverse_proxy {$ITERATE_EGRESS_PROXY:localhost:0} {
 			header_up Host {upstream_hostport}
-			header_up X-Forwarded-Host {http.request.host}
 			header_up X-Forwarded-Proto http
 			header_down X-Iterate-Egress-Mode external-proxy
 			header_down X-Iterate-Egress-Proxy-Seen 1
@@ -359,7 +391,6 @@
 	handle @iterate_https_external_proxy {
 		reverse_proxy {$ITERATE_EGRESS_PROXY:localhost:0} {
 			header_up Host {upstream_hostport}
-			header_up X-Forwarded-Host {http.request.host}
 			header_up X-Forwarded-Proto https
 			header_down X-Iterate-Egress-Mode external-proxy
 			header_down X-Iterate-Egress-Proxy-Seen 1

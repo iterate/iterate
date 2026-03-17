@@ -43,4 +43,4 @@ if [[ -f "${ITERATE_REPO}/.git/commondir" || -f "${ITERATE_REPO}/.git/gitdir" ]]
   rm -f "${ITERATE_REPO}/.git/commondir" "${ITERATE_REPO}/.git/gitdir"
 fi
 
-(cd "${ITERATE_REPO}" && CI=true npm_config_store_dir="${PNPM_STORE_DIR}" pnpm install --prod --frozen-lockfile --prefer-offline --ignore-scripts)
+(cd "${ITERATE_REPO}" && CI=true npm_config_store_dir="${PNPM_STORE_DIR}" pnpm install --frozen-lockfile --prefer-offline --ignore-scripts)

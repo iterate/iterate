@@ -12,6 +12,7 @@ import { createNodeWebSocket } from "@hono/node-ws";
 import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
 import { getEnv, getStore, serviceName } from "./context.ts";
 import { createDbAuthorizeMiddleware } from "./db-browser.ts";
+import { createPtyRouter } from "./pty.ts";
 import { router } from "./router.ts";
 import { initializeRegistryService } from "./startup.ts";
 
@@ -51,6 +52,7 @@ app.get(
   })),
 );
 
+app.route("/api/pty", createPtyRouter({ upgradeWebSocket }));
 applyOpenAPIRoute(app, openAPIHandler, serviceName, {
   extraContext: () => ({ getStore, env }),
 });

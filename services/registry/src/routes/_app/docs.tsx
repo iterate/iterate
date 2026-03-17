@@ -1,13 +1,9 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { useMemo } from "react";
+import { createFileRoute } from "@tanstack/react-router";
+import { ApiReferenceReact } from "@scalar/api-reference-react";
+import "@scalar/api-reference-react/style.css";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUpRight, BookOpenText } from "lucide-react";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@iterate-com/ui/components/card";
+import { BookOpenText } from "lucide-react";
 import {
   Empty,
   EmptyDescription,
@@ -15,33 +11,91 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@iterate-com/ui/components/empty";
-import { Button } from "@iterate-com/ui/components/button";
-import { orpc } from "@/lib/orpc.ts";
+
+interface DocsSourcesResponse {
+  sources: Array<{
+    id: string;
+    title: string;
+    specUrl: string;
+    serviceUrl: string;
+  }>;
+  total: number;
+}
 
 export const Route = createFileRoute("/_app/docs")({
   ssr: false,
   component: DocsPage,
 });
 
+function tagName(tag: unknown) {
+  if (typeof tag === "string") return tag;
+  if (tag && typeof tag === "object" && "name" in tag && typeof tag.name === "string") {
+    return tag.name;
+  }
+  return "";
+}
+
 function DocsPage() {
-  const { data, isPending } = useQuery(orpc.docs.listSources.queryOptions());
+  const { data, isPending } = useQuery<DocsSourcesResponse>({
+    queryKey: ["registry", "docs", "sources"],
+    queryFn: async () => {
+      const response = await fetch("/api/docs/sources");
+      if (!response.ok) {
+        throw new Error(`Failed to load docs sources (${response.status})`);
+      }
+      return (await response.json()) as DocsSourcesResponse;
+    },
+  });
   const sources = data?.sources ?? [];
+  const orderedSources = useMemo(
+    () =>
+      [...sources].sort((a, b) => {
+        if (a.id === "registry" && b.id !== "registry") return -1;
+        if (a.id !== "registry" && b.id === "registry") return 1;
+        return a.title.localeCompare(b.title);
+      }),
+    [sources],
+  );
+  const configuration = useMemo(
+    (): Parameters<typeof ApiReferenceReact>[0]["configuration"] => ({
+      title: "Registry API Docs",
+      layout: "modern",
+      defaultOpenAllTags: true,
+      operationTitleSource: "summary" as const,
+      operationsSorter: "method" as const,
+      documentDownloadType: "direct" as const,
+      telemetry: false,
+      defaultHttpClient: {
+        targetKey: "shell" as const,
+        clientKey: "curl" as const,
+      },
+      tagsSorter: (a: unknown, b: unknown) => {
+        const aName = tagName(a).toLowerCase();
+        const bName = tagName(b).toLowerCase();
+        const aIsService = aName === "service";
+        const bIsService = bName === "service";
+
+        if (aIsService && !bIsService) return 1;
+        if (!aIsService && bIsService) return -1;
+        return aName.localeCompare(bName);
+      },
+      sources: orderedSources.map((source, index) => ({
+        title: source.title,
+        url: source.specUrl,
+        default: source.id === "registry" || index === 0,
+      })),
+    }),
+    [orderedSources],
+  );
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Documentation sources</CardTitle>
-          <CardDescription>
-            Registry-discovered OpenAPI surfaces, ready to feed Scalar or external tooling.
-          </CardDescription>
-        </CardHeader>
-      </Card>
+    <div className="-m-4 flex min-h-[calc(100vh-2rem)] flex-col overflow-hidden bg-background">
+      {isPending ? (
+        <p className="m-4 text-sm text-muted-foreground">Loading docs sources...</p>
+      ) : null}
 
-      {isPending ? <p className="text-sm text-muted-foreground">Loading docs sources...</p> : null}
-
-      {sources.length === 0 && !isPending ? (
-        <Empty>
+      {orderedSources.length === 0 && !isPending ? (
+        <Empty className="m-4">
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <BookOpenText className="size-5" />
@@ -54,62 +108,11 @@ function DocsPage() {
         </Empty>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2">
-        {sources.map((source) => (
-          <Card key={source.id} className="border-zinc-200/80">
-            <CardHeader>
-              <CardTitle>{source.title}</CardTitle>
-              <CardDescription>{source.id}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="rounded-lg bg-muted/60 p-3">
-                <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
-                  Service URL
-                </p>
-                <p className="mt-1 break-all font-mono text-xs">{source.serviceUrl}</p>
-              </div>
-              <div className="rounded-lg bg-muted/60 p-3">
-                <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
-                  Spec URL
-                </p>
-                <p className="mt-1 break-all font-mono text-xs">{source.specUrl}</p>
-              </div>
-              <div className="flex gap-2">
-                <Button asChild size="sm">
-                  <a href={source.specUrl} target="_blank" rel="noreferrer">
-                    Open spec
-                    <ArrowUpRight className="size-4" />
-                  </a>
-                </Button>
-                <Button asChild variant="outline" size="sm">
-                  <a href={source.serviceUrl} target="_blank" rel="noreferrer">
-                    Open service
-                  </a>
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Registry API</CardTitle>
-          <CardDescription>
-            The registry itself still exposes its own OpenAPI and Scalar docs under `/api`.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex gap-2">
-          <Button asChild variant="outline">
-            <Link to="/routes">Back to routes</Link>
-          </Button>
-          <Button asChild>
-            <a href="/api/docs" target="_blank" rel="noreferrer">
-              Open registry docs
-            </a>
-          </Button>
-        </CardContent>
-      </Card>
+      {orderedSources.length > 0 ? (
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <ApiReferenceReact configuration={configuration} />
+        </div>
+      ) : null}
     </div>
   );
 }

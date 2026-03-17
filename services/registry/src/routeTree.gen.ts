@@ -11,11 +11,17 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppTerminalRouteImport } from './routes/_app/terminal'
 import { Route as AppRoutesRouteImport } from './routes/_app/routes'
 import { Route as AppDocsRouteImport } from './routes/_app/docs'
 import { Route as AppDbRouteImport } from './routes/_app/db'
 import { Route as AppConfigRouteImport } from './routes/_app/config'
 import { Route as AppCaddyRouteImport } from './routes/_app/caddy'
+import { Route as AppRoutesIndexRouteImport } from './routes/_app/routes/index'
+import { Route as AppRoutesSlugRouteImport } from './routes/_app/routes/$slug'
+import { Route as AppRoutesSlugIndexRouteImport } from './routes/_app/routes/$slug/index'
+import { Route as AppRoutesSlugDocsRouteImport } from './routes/_app/routes/$slug/docs'
+import { Route as AppRoutesSlugDbRouteImport } from './routes/_app/routes/$slug/db'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -24,6 +30,11 @@ const AppRoute = AppRouteImport.update({
 const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppTerminalRoute = AppTerminalRouteImport.update({
+  id: '/terminal',
+  path: '/terminal',
   getParentRoute: () => AppRoute,
 } as any)
 const AppRoutesRoute = AppRoutesRouteImport.update({
@@ -51,6 +62,31 @@ const AppCaddyRoute = AppCaddyRouteImport.update({
   path: '/caddy',
   getParentRoute: () => AppRoute,
 } as any)
+const AppRoutesIndexRoute = AppRoutesIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppRoutesRoute,
+} as any)
+const AppRoutesSlugRoute = AppRoutesSlugRouteImport.update({
+  id: '/$slug',
+  path: '/$slug',
+  getParentRoute: () => AppRoutesRoute,
+} as any)
+const AppRoutesSlugIndexRoute = AppRoutesSlugIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppRoutesSlugRoute,
+} as any)
+const AppRoutesSlugDocsRoute = AppRoutesSlugDocsRouteImport.update({
+  id: '/docs',
+  path: '/docs',
+  getParentRoute: () => AppRoutesSlugRoute,
+} as any)
+const AppRoutesSlugDbRoute = AppRoutesSlugDbRouteImport.update({
+  id: '/db',
+  path: '/db',
+  getParentRoute: () => AppRoutesSlugRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -58,15 +94,25 @@ export interface FileRoutesByFullPath {
   '/config': typeof AppConfigRoute
   '/db': typeof AppDbRoute
   '/docs': typeof AppDocsRoute
-  '/routes': typeof AppRoutesRoute
+  '/routes': typeof AppRoutesRouteWithChildren
+  '/terminal': typeof AppTerminalRoute
+  '/routes/$slug': typeof AppRoutesSlugRouteWithChildren
+  '/routes/': typeof AppRoutesIndexRoute
+  '/routes/$slug/db': typeof AppRoutesSlugDbRoute
+  '/routes/$slug/docs': typeof AppRoutesSlugDocsRoute
+  '/routes/$slug/': typeof AppRoutesSlugIndexRoute
 }
 export interface FileRoutesByTo {
   '/caddy': typeof AppCaddyRoute
   '/config': typeof AppConfigRoute
   '/db': typeof AppDbRoute
   '/docs': typeof AppDocsRoute
-  '/routes': typeof AppRoutesRoute
+  '/terminal': typeof AppTerminalRoute
   '/': typeof AppIndexRoute
+  '/routes': typeof AppRoutesIndexRoute
+  '/routes/$slug/db': typeof AppRoutesSlugDbRoute
+  '/routes/$slug/docs': typeof AppRoutesSlugDocsRoute
+  '/routes/$slug': typeof AppRoutesSlugIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -75,14 +121,42 @@ export interface FileRoutesById {
   '/_app/config': typeof AppConfigRoute
   '/_app/db': typeof AppDbRoute
   '/_app/docs': typeof AppDocsRoute
-  '/_app/routes': typeof AppRoutesRoute
+  '/_app/routes': typeof AppRoutesRouteWithChildren
+  '/_app/terminal': typeof AppTerminalRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/routes/$slug': typeof AppRoutesSlugRouteWithChildren
+  '/_app/routes/': typeof AppRoutesIndexRoute
+  '/_app/routes/$slug/db': typeof AppRoutesSlugDbRoute
+  '/_app/routes/$slug/docs': typeof AppRoutesSlugDocsRoute
+  '/_app/routes/$slug/': typeof AppRoutesSlugIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/caddy' | '/config' | '/db' | '/docs' | '/routes'
+  fullPaths:
+    | '/'
+    | '/caddy'
+    | '/config'
+    | '/db'
+    | '/docs'
+    | '/routes'
+    | '/terminal'
+    | '/routes/$slug'
+    | '/routes/'
+    | '/routes/$slug/db'
+    | '/routes/$slug/docs'
+    | '/routes/$slug/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/caddy' | '/config' | '/db' | '/docs' | '/routes' | '/'
+  to:
+    | '/caddy'
+    | '/config'
+    | '/db'
+    | '/docs'
+    | '/terminal'
+    | '/'
+    | '/routes'
+    | '/routes/$slug/db'
+    | '/routes/$slug/docs'
+    | '/routes/$slug'
   id:
     | '__root__'
     | '/_app'
@@ -91,7 +165,13 @@ export interface FileRouteTypes {
     | '/_app/db'
     | '/_app/docs'
     | '/_app/routes'
+    | '/_app/terminal'
     | '/_app/'
+    | '/_app/routes/$slug'
+    | '/_app/routes/'
+    | '/_app/routes/$slug/db'
+    | '/_app/routes/$slug/docs'
+    | '/_app/routes/$slug/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -112,6 +192,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/terminal': {
+      id: '/_app/terminal'
+      path: '/terminal'
+      fullPath: '/terminal'
+      preLoaderRoute: typeof AppTerminalRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/routes': {
@@ -149,15 +236,81 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCaddyRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/routes/': {
+      id: '/_app/routes/'
+      path: '/'
+      fullPath: '/routes/'
+      preLoaderRoute: typeof AppRoutesIndexRouteImport
+      parentRoute: typeof AppRoutesRoute
+    }
+    '/_app/routes/$slug': {
+      id: '/_app/routes/$slug'
+      path: '/$slug'
+      fullPath: '/routes/$slug'
+      preLoaderRoute: typeof AppRoutesSlugRouteImport
+      parentRoute: typeof AppRoutesRoute
+    }
+    '/_app/routes/$slug/': {
+      id: '/_app/routes/$slug/'
+      path: '/'
+      fullPath: '/routes/$slug/'
+      preLoaderRoute: typeof AppRoutesSlugIndexRouteImport
+      parentRoute: typeof AppRoutesSlugRoute
+    }
+    '/_app/routes/$slug/docs': {
+      id: '/_app/routes/$slug/docs'
+      path: '/docs'
+      fullPath: '/routes/$slug/docs'
+      preLoaderRoute: typeof AppRoutesSlugDocsRouteImport
+      parentRoute: typeof AppRoutesSlugRoute
+    }
+    '/_app/routes/$slug/db': {
+      id: '/_app/routes/$slug/db'
+      path: '/db'
+      fullPath: '/routes/$slug/db'
+      preLoaderRoute: typeof AppRoutesSlugDbRouteImport
+      parentRoute: typeof AppRoutesSlugRoute
+    }
   }
 }
+
+interface AppRoutesSlugRouteChildren {
+  AppRoutesSlugDbRoute: typeof AppRoutesSlugDbRoute
+  AppRoutesSlugDocsRoute: typeof AppRoutesSlugDocsRoute
+  AppRoutesSlugIndexRoute: typeof AppRoutesSlugIndexRoute
+}
+
+const AppRoutesSlugRouteChildren: AppRoutesSlugRouteChildren = {
+  AppRoutesSlugDbRoute: AppRoutesSlugDbRoute,
+  AppRoutesSlugDocsRoute: AppRoutesSlugDocsRoute,
+  AppRoutesSlugIndexRoute: AppRoutesSlugIndexRoute,
+}
+
+const AppRoutesSlugRouteWithChildren = AppRoutesSlugRoute._addFileChildren(
+  AppRoutesSlugRouteChildren,
+)
+
+interface AppRoutesRouteChildren {
+  AppRoutesSlugRoute: typeof AppRoutesSlugRouteWithChildren
+  AppRoutesIndexRoute: typeof AppRoutesIndexRoute
+}
+
+const AppRoutesRouteChildren: AppRoutesRouteChildren = {
+  AppRoutesSlugRoute: AppRoutesSlugRouteWithChildren,
+  AppRoutesIndexRoute: AppRoutesIndexRoute,
+}
+
+const AppRoutesRouteWithChildren = AppRoutesRoute._addFileChildren(
+  AppRoutesRouteChildren,
+)
 
 interface AppRouteChildren {
   AppCaddyRoute: typeof AppCaddyRoute
   AppConfigRoute: typeof AppConfigRoute
   AppDbRoute: typeof AppDbRoute
   AppDocsRoute: typeof AppDocsRoute
-  AppRoutesRoute: typeof AppRoutesRoute
+  AppRoutesRoute: typeof AppRoutesRouteWithChildren
+  AppTerminalRoute: typeof AppTerminalRoute
   AppIndexRoute: typeof AppIndexRoute
 }
 
@@ -166,7 +319,8 @@ const AppRouteChildren: AppRouteChildren = {
   AppConfigRoute: AppConfigRoute,
   AppDbRoute: AppDbRoute,
   AppDocsRoute: AppDocsRoute,
-  AppRoutesRoute: AppRoutesRoute,
+  AppRoutesRoute: AppRoutesRouteWithChildren,
+  AppTerminalRoute: AppTerminalRoute,
   AppIndexRoute: AppIndexRoute,
 }
 

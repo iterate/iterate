@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { CircleAlert, Database } from "lucide-react";
@@ -10,29 +10,21 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@iterate-com/ui/components/empty";
+import {
+  fetchLandingData,
+  getDbSourceForRoute,
+  getRouteBySlug,
+  type LandingDataResponse,
+} from "@/lib/landing.ts";
 
-export const Route = createFileRoute("/_app/db")({
+export const Route = createFileRoute("/_app/routes/$slug/db")({
   ssr: false,
-  component: DbPage,
+  component: ServiceDbPage,
 });
 
 type DbBridgeRequest =
   | { type: "query"; id: number; statement: string }
   | { type: "transaction"; id: number; statements: string[] };
-
-interface DbSourcesResponse {
-  sources: Array<{
-    id: string;
-    host: string;
-    title: string;
-    publicURL: string;
-    sqlitePath: string;
-    sqliteAlias: string;
-    tags: string[];
-    updatedAt: string;
-  }>;
-  total: number;
-}
 
 interface DbRuntimeResponse {
   studioSrc: string;
@@ -78,33 +70,26 @@ function isDbBridgeRequest(value: unknown): value is DbBridgeRequest {
   return false;
 }
 
-function describeRuntimeError(error: unknown) {
-  if (error instanceof Error) return error.message;
-  return "Failed to load the embedded DB viewer.";
-}
-
-function DbPage() {
-  const [requestedMainAlias, setRequestedMainAlias] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return new URLSearchParams(window.location.search).get("mainAlias") ?? "";
-  });
+function ServiceDbPage() {
+  const { slug } = Route.useParams();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
-  const { data: sourcesData } = useQuery<DbSourcesResponse>({
-    queryKey: ["registry", "db", "sources"],
-    queryFn: async () => await fetchJson<DbSourcesResponse>("/api/db/sources"),
+  const { data: landingData } = useQuery<LandingDataResponse>({
+    queryKey: ["registry", "landing"],
+    queryFn: fetchLandingData,
   });
-  const sources = sourcesData?.sources ?? [];
+  const route = getRouteBySlug(landingData, slug);
+  const dbSource = route ? getDbSourceForRoute(landingData, route) : undefined;
   const runtimeQuery = useQuery<DbRuntimeResponse>({
-    queryKey: ["registry", "db", "runtime", requestedMainAlias.trim()],
+    queryKey: ["registry", "db", "runtime", dbSource?.sqliteAlias ?? ""],
     queryFn: async () => {
       const url = new URL("/api/db/runtime", window.location.origin);
-      if (requestedMainAlias.trim()) {
-        url.searchParams.set("mainAlias", requestedMainAlias.trim());
+      if (dbSource?.sqliteAlias) {
+        url.searchParams.set("mainAlias", dbSource.sqliteAlias);
       }
       return await fetchJson<DbRuntimeResponse>(url);
     },
-    enabled: sources.length > 0,
+    enabled: Boolean(dbSource),
   });
 
   const runtimeData = runtimeQuery.data;
@@ -134,9 +119,7 @@ function DbPage() {
 
       void fetchJson<unknown>(url, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ request }),
       })
         .then((payload) => {
@@ -155,32 +138,30 @@ function DbPage() {
     };
 
     window.addEventListener("message", listener);
-    return () => {
-      window.removeEventListener("message", listener);
-    };
+    return () => window.removeEventListener("message", listener);
   }, [allowedStudioOrigins, runtimeData, selectedMainAlias]);
 
   return (
     <div className="-m-4 flex min-h-[calc(100vh-2rem)] flex-col overflow-hidden">
-      {sources.length === 0 ? (
+      {!dbSource ? (
         <Empty className="m-4">
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <Database className="size-5" />
             </EmptyMedia>
-            <EmptyTitle>No sqlite sources</EmptyTitle>
+            <EmptyTitle>No database for this service</EmptyTitle>
             <EmptyDescription>
-              Add a route tagged `sqlite` with `sqlitePath` metadata.
+              `{slug}` does not expose a sqlite source through the registry.
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : null}
 
-      {sources.length > 0 && runtimeQuery.isPending ? (
+      {dbSource && runtimeQuery.isPending ? (
         <p className="m-4 text-sm text-muted-foreground">Loading embedded DB viewer...</p>
       ) : null}
 
-      {sources.length > 0 && runtimeQuery.error ? (
+      {dbSource && runtimeQuery.error ? (
         <Card className="m-4 border-destructive/40">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-destructive">
@@ -188,7 +169,9 @@ function DbPage() {
               Could not initialize the DB viewer
             </CardTitle>
             <CardDescription className="text-destructive/90">
-              {describeRuntimeError(runtimeQuery.error)}
+              {runtimeQuery.error instanceof Error
+                ? runtimeQuery.error.message
+                : "Failed to load the embedded DB viewer."}
             </CardDescription>
           </CardHeader>
         </Card>
@@ -197,32 +180,15 @@ function DbPage() {
       {runtimeData ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-950">
           <div className="flex items-center gap-3 border-b border-slate-900 bg-slate-950 px-3 py-2">
-            <label
-              htmlFor="db-main-picker"
-              className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400"
-            >
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
               Service
-            </label>
-            <select
-              id="db-main-picker"
-              className="min-w-60 border-0 bg-transparent px-0 py-0 text-sm text-slate-100 outline-none"
-              value={selectedMainAlias}
-              onChange={(event) => {
-                const nextAlias = event.target.value;
-                setRequestedMainAlias(nextAlias);
-                const url = new URL(window.location.href);
-                url.searchParams.set("mainAlias", nextAlias);
-                window.history.replaceState({}, "", url);
-              }}
-            >
-              {runtimeData.databases.map((database) => (
-                <option key={database.alias} value={database.alias} className="bg-slate-950">
-                  {database.alias} - {database.title ?? database.host ?? database.path}
-                </option>
-              ))}
-            </select>
+            </span>
+            <span className="truncate text-sm text-slate-100">
+              {dbSource?.sqliteAlias} - {route?.title ?? route?.host ?? slug}
+            </span>
           </div>
           <iframe
+            key={selectedMainAlias}
             ref={iframeRef}
             title="Embedded Outerbase"
             src={runtimeData.studioSrc}

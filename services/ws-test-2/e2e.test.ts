@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import type { ClientRequest, IncomingMessage } from "node:http";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { getPort } from "get-port-please";
@@ -13,8 +14,13 @@ const serviceDirectory =
   "/Users/jonastemplestein/.superset/worktrees/iterate/fly-v2-rebuilt-no-apps-os/services/ws-test-2";
 
 const childProcesses = new Set<Result>();
+const COMMAND_PREFIX = "\x00[command]\x00";
 const asRpcWebSocket = (websocket: WebSocket): WsTest2RpcWebSocket =>
   websocket as unknown as WsTest2RpcWebSocket;
+
+function toWebSocketUrl(baseURL: string, pathname: string) {
+  return baseURL.replace("http://", "ws://").replace("https://", "wss://") + pathname;
+}
 
 function parseAssetPaths(html: string) {
   return Array.from(
@@ -62,6 +68,13 @@ async function retryUntilSuccess(label: string, action: () => Promise<void>, tim
   throw new Error(`${label}: ${errorMessage}`);
 }
 
+function readWebSocketText(data: unknown) {
+  if (typeof data === "string") return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
+  if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
+  return Buffer.from(data as Buffer).toString("utf8");
+}
+
 async function assertOpenApiPing(baseURL: string) {
   const client = createWsTest2Client({
     url: baseURL,
@@ -72,12 +85,78 @@ async function assertOpenApiPing(baseURL: string) {
   expect(result.serverTime).toBeTruthy();
 }
 
+async function assertWebSocketRpcProtocolHandshake(baseURL: string) {
+  await retryUntilSuccess("websocket rpc protocol handshake", async () => {
+    await new Promise<void>((resolve, reject) => {
+      const websocket = new WebSocket(toWebSocketUrl(baseURL, "/api/orpc/ws"), ["orpc"]);
+      const timeout = setTimeout(() => {
+        websocket.terminate();
+        reject(new Error("Timed out waiting for websocket rpc handshake"));
+      }, 10_000);
+
+      websocket.once("open", () => {
+        try {
+          expect(websocket.protocol).toBe("orpc");
+          clearTimeout(timeout);
+          websocket.close();
+          resolve();
+        } catch (error) {
+          clearTimeout(timeout);
+          reject(error);
+        }
+      });
+
+      websocket.once("error", (error: Error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+    });
+  });
+}
+
+async function assertWebSocketRpcRejectsProtocol(baseURL: string, protocols?: string[]) {
+  await retryUntilSuccess(
+    `websocket rpc rejects protocol ${protocols?.join(",") ?? "none"}`,
+    async () => {
+      await new Promise<void>((resolve, reject) => {
+        const websocket = protocols
+          ? new WebSocket(toWebSocketUrl(baseURL, "/api/orpc/ws"), protocols)
+          : new WebSocket(toWebSocketUrl(baseURL, "/api/orpc/ws"));
+        const timeout = setTimeout(() => {
+          websocket.terminate();
+          reject(new Error("Timed out waiting for websocket rpc rejection"));
+        }, 10_000);
+
+        websocket.once("open", () => {
+          clearTimeout(timeout);
+          reject(new Error("Expected websocket rpc handshake to fail"));
+        });
+
+        websocket.once(
+          "unexpected-response",
+          (_request: ClientRequest, response: IncomingMessage) => {
+            try {
+              expect(response.statusCode).toBe(400);
+              clearTimeout(timeout);
+              resolve();
+            } catch (error) {
+              clearTimeout(timeout);
+              reject(error);
+            }
+          },
+        );
+
+        websocket.once("error", () => {
+          // `unexpected-response` carries the assertion details.
+        });
+      });
+    },
+  );
+}
+
 async function assertWebSocketRpcPing(baseURL: string) {
   await retryUntilSuccess("websocket rpc ping", async () => {
-    const websocket = new WebSocket(
-      baseURL.replace("http://", "ws://").replace("https://", "wss://") + "/api/orpc/ws",
-      ["orpc"],
-    );
+    const websocket = new WebSocket(toWebSocketUrl(baseURL, "/api/orpc/ws"), ["orpc"]);
     const client = createWsTest2WebSocketClient({
       websocket: asRpcWebSocket(websocket),
     });
@@ -90,6 +169,16 @@ async function assertWebSocketRpcPing(baseURL: string) {
       websocket.close();
     }
   });
+}
+
+function parsePtyControlMessage(text: string) {
+  if (!text.startsWith(COMMAND_PREFIX)) return null;
+
+  return JSON.parse(text.slice(COMMAND_PREFIX.length)) as {
+    type?: string;
+    ptyId?: string;
+    data?: string;
+  };
 }
 
 async function assertPtyCommand(url: string, expectedOutput: string) {
@@ -113,12 +202,154 @@ async function assertPtyCommand(url: string, expectedOutput: string) {
         });
 
         socket.on("message", (data: any) => {
-          const text = typeof data === "string" ? data : data.toString("utf8");
+          const text = readWebSocketText(data);
           transcript += text;
           if (transcript.includes(expectedOutput)) {
             clearTimeout(timeout);
             socket.close();
             resolve();
+          }
+        });
+      }),
+    12_000,
+  );
+}
+
+async function assertPtyResume(baseURL: string) {
+  await retryUntilSuccess(
+    "pty websocket resume",
+    async () => {
+      const initialCommand = "printf WS_TEST_RESUME";
+      const resumedCommand = "printf WS_TEST_RESUMED";
+      const initialPtyId = await new Promise<string>((resolve, reject) => {
+        const socket = new WebSocket(
+          toWebSocketUrl(
+            baseURL,
+            `/api/pty/ws?command=${encodeURIComponent(initialCommand)}&autorun=true`,
+          ),
+        );
+        let transcript = "";
+        let ptyId: string | undefined;
+        const timeout = setTimeout(() => {
+          socket.terminate();
+          reject(
+            new Error(`Timed out waiting for PTY resume seed output\n\nTranscript:\n${transcript}`),
+          );
+        }, 10_000);
+
+        socket.once("error", (error: Error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+
+        socket.on("message", (data: unknown) => {
+          const text = readWebSocketText(data);
+          const control = parsePtyControlMessage(text);
+          if (control?.type === "ptyId" && control.ptyId) {
+            ptyId = control.ptyId;
+          }
+
+          if (!control) {
+            transcript += text;
+          }
+
+          if (ptyId && transcript.includes("WS_TEST_RESUME")) {
+            clearTimeout(timeout);
+            socket.close();
+            resolve(ptyId);
+          }
+        });
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        const socket = new WebSocket(
+          toWebSocketUrl(baseURL, `/api/pty/ws?ptyId=${encodeURIComponent(initialPtyId)}`),
+        );
+        let transcript = "";
+        let sawBufferReplay = false;
+        const timeout = setTimeout(() => {
+          socket.terminate();
+          reject(
+            new Error(
+              `Timed out waiting for PTY resume replay\n\nTranscript:\n${transcript}\n\nSaw buffer replay: ${String(
+                sawBufferReplay,
+              )}`,
+            ),
+          );
+        }, 10_000);
+
+        socket.once("open", () => {
+          socket.send(
+            COMMAND_PREFIX +
+              JSON.stringify({
+                type: "exec",
+                command: resumedCommand,
+                autorun: true,
+              }),
+          );
+        });
+
+        socket.once("error", (error: Error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+
+        socket.on("message", (data: unknown) => {
+          const text = readWebSocketText(data);
+          const control = parsePtyControlMessage(text);
+
+          if (control?.type === "buffer" && control.data?.includes("WS_TEST_RESUME")) {
+            sawBufferReplay = true;
+          }
+
+          if (!control) {
+            transcript += text;
+          }
+
+          if (sawBufferReplay && transcript.includes("WS_TEST_RESUMED")) {
+            clearTimeout(timeout);
+            socket.close();
+            resolve();
+          }
+        });
+      });
+    },
+    15_000,
+  );
+}
+
+async function assertConfettiInvalidPayload(url: string) {
+  await retryUntilSuccess(
+    "confetti invalid payload",
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const socket = new WebSocket(url);
+        const timeout = setTimeout(() => {
+          socket.terminate();
+          reject(new Error(`Timed out waiting for confetti error response from ${url}`));
+        }, 10_000);
+
+        socket.once("open", () => {
+          socket.send("not-json");
+        });
+
+        socket.once("error", (error: Error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+
+        socket.on("message", (data: unknown) => {
+          const text = readWebSocketText(data);
+          try {
+            const message = JSON.parse(text) as { type?: string; message?: string };
+            if (message.type === "error") {
+              expect(message.message).toBe("Invalid confetti payload");
+              clearTimeout(timeout);
+              socket.close();
+              resolve();
+            }
+          } catch {
+            // Ignore non-JSON frames.
           }
         });
       }),
@@ -153,7 +384,7 @@ async function assertConfettiSocket(url: string) {
         });
 
         socket.on("message", (data: any) => {
-          const text = typeof data === "string" ? data : data.toString("utf8");
+          const text = readWebSocketText(data);
           try {
             const message = JSON.parse(text) as { type?: string; x?: number; y?: number };
             if (message.type === "boom") {
@@ -259,17 +490,19 @@ async function assertServiceWorks(params: { baseURL: string }) {
   expect(assetResponse.status).toBe(200);
 
   await assertOpenApiPing(params.baseURL);
+  await assertWebSocketRpcProtocolHandshake(params.baseURL);
+  await assertWebSocketRpcRejectsProtocol(params.baseURL);
+  await assertWebSocketRpcRejectsProtocol(params.baseURL, ["wrong"]);
   await assertWebSocketRpcPing(params.baseURL);
 
-  await assertConfettiSocket(
-    params.baseURL.replace("http://", "ws://").replace("https://", "wss://") + "/api/confetti/ws",
-  );
+  await assertConfettiInvalidPayload(toWebSocketUrl(params.baseURL, "/api/confetti/ws"));
+  await assertConfettiSocket(toWebSocketUrl(params.baseURL, "/api/confetti/ws"));
 
   await assertPtyCommand(
-    params.baseURL.replace("http://", "ws://").replace("https://", "wss://") +
-      "/api/pty/ws?command=printf%20WS_TEST_HELLO&autorun=true",
+    `${toWebSocketUrl(params.baseURL, "/api/pty/ws")}?command=printf%20WS_TEST_HELLO&autorun=true`,
     "WS_TEST_HELLO",
   );
+  await assertPtyResume(params.baseURL);
 }
 
 beforeAll(async () => {

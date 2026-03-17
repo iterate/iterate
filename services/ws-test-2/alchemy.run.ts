@@ -43,9 +43,18 @@ export const worker = await Worker(APP_NAME, {
   bindings: {
     ASSETS: assets,
   },
-  // `bundle.define` is passed through to esbuild. We use it to make the worker
-  // PTY branch a compile-time false branch, so the dynamic import of `./api/pty.ts`
-  // is removed from the Cloudflare bundle.
+  // `bundle.define` is passed through to esbuild.
+  //
+  // Important nuance: that only helps when the compile-time constant appears in
+  // the same module as the branch/import that should be erased. We previously
+  // tried moving the PTY choice into the shared `src/api/app.ts` module and
+  // found that workerd still bundled `./api/pty-node.ts`, because esbuild could
+  // not prove that a shared function parameter was always false for the worker.
+  //
+  // The current implementation avoids that problem by keeping worker code on the
+  // PTY-unavailable path and keeping all references to the real Node PTY module
+  // in the Node entrypoint only.
+  //
   // https://alchemy.run/providers/cloudflare/worker
   // https://raw.githubusercontent.com/alchemy-run/alchemy/main/examples/cloudflare-worker/alchemy.run.ts
   bundle: {

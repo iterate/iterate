@@ -1,3 +1,5 @@
+import type { Hooks } from "crossws";
+import { defineHooks } from "crossws";
 import { z } from "zod";
 
 const ConfettiMessage = z.object({
@@ -6,14 +8,14 @@ const ConfettiMessage = z.object({
   y: z.number().min(0).max(1),
 });
 
-export function createConfettiSocketHandlers() {
+export function createConfettiSocketHooks(): Partial<Hooks> {
   let interval: ReturnType<typeof setInterval> | null = null;
 
-  function ensureInterval(ws: { send: (value: string) => void }) {
+  function ensureInterval(send: (value: string) => void) {
     if (interval) return;
 
     interval = setInterval(() => {
-      ws.send(
+      send(
         JSON.stringify({
           type: "boom",
           x: Math.random(),
@@ -23,21 +25,23 @@ export function createConfettiSocketHandlers() {
     }, 1300);
   }
 
-  return {
-    onMessage(event: { data: unknown }, ws: { send: (value: string) => void }) {
-      ensureInterval(ws);
+  return defineHooks({
+    message(peer, message) {
+      ensureInterval((value) => {
+        peer.send(value);
+      });
 
       try {
-        const message = ConfettiMessage.parse(JSON.parse(String(event.data)));
-        ws.send(
+        const payload = ConfettiMessage.parse(JSON.parse(message.text()));
+        peer.send(
           JSON.stringify({
             type: "boom",
-            x: message.x,
-            y: message.y,
+            x: payload.x,
+            y: payload.y,
           }),
         );
       } catch {
-        ws.send(
+        peer.send(
           JSON.stringify({
             type: "error",
             message: "Invalid confetti payload",
@@ -45,13 +49,13 @@ export function createConfettiSocketHandlers() {
         );
       }
     },
-    onClose() {
+    close() {
       if (interval) clearInterval(interval);
       interval = null;
     },
-    onError() {
+    error() {
       if (interval) clearInterval(interval);
       interval = null;
     },
-  };
+  });
 }

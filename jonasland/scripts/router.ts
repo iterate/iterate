@@ -1,9 +1,12 @@
-import { deploymentsRouter } from "./deployments.ts";
+import { deploymentRouter } from "./deployments.ts";
+import { imageRouter } from "./image.ts";
 import { scriptCli } from "./_cli.ts";
 import { helloScript } from "./example/hello.ts";
 
 export const router = scriptCli.router({
-  deployments: deploymentsRouter,
+  deployment: deploymentRouter,
+  deployments: deploymentRouter,
+  image: imageRouter,
   example: {
     hello: helloScript,
   },
