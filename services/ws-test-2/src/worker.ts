@@ -1,10 +1,10 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { Hono } from "hono";
-import { upgradeWebSocket } from "hono/cloudflare-workers";
-import { configureApp } from "./api/app.ts";
-import { createContext } from "./api/context.ts";
+import { createApp } from "./api/app.ts";
 import { Env } from "../env.ts";
+import { getWsTest2ServiceEnv } from "./manifest.ts";
+import { upgradeWebSocket } from "./worker-upgrade-websocket.ts";
 
 declare const ENABLE_PTY: boolean;
 
@@ -38,35 +38,22 @@ function createWorkerPtyUnavailableApp() {
   return app;
 }
 
-const app = new Hono<{ Bindings: Env }>();
-
-// Alchemy forwards Worker `bundle.define` values to esbuild, so this dead branch
-// keeps the node-pty import out of the Cloudflare bundle while preserving the
-// same mount point as the Node runtime.
-// https://alchemy.run/providers/cloudflare/worker
-// https://raw.githubusercontent.com/alchemy-run/alchemy/main/examples/cloudflare-worker/alchemy.run.ts
-const ptyApp = ENABLE_PTY
-  ? (await import("./api/pty.ts")).createPtyRouter({ upgradeWebSocket })
-  : createWorkerPtyUnavailableApp();
-
-configureApp(app, {
-  upgradeWebSocket,
-  getContext: () => createContext({}),
-  ptyApp,
-  orpcWebSocketHandlers: {
-    onOpen(
-      _event: unknown,
-      ws: { send: (value: string) => void; close: (code?: number, reason?: string) => void },
-    ) {
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          message: "oRPC websocket is not implemented in Cloudflare Workers yet.",
-        }),
-      );
-      ws.close(1013, "oRPC websocket not implemented");
-    },
-  },
+const { app } = await createApp<Env, { upgradeWebSocket: typeof upgradeWebSocket }>({
+  env: getWsTest2ServiceEnv({}),
+  createWebSocketRuntime: () => ({
+    upgradeWebSocket,
+  }),
+  createPtyApp: async ({ upgradeWebSocket }) =>
+    // Alchemy forwards Worker `bundle.define` values to esbuild, so this dead branch
+    // keeps the node-pty import out of the Cloudflare bundle while preserving the
+    // same mount point as the Node runtime.
+    // https://alchemy.run/providers/cloudflare/worker
+    // https://raw.githubusercontent.com/alchemy-run/alchemy/main/examples/cloudflare-worker/alchemy.run.ts
+    ENABLE_PTY
+      ? (await import("./api/pty.ts")).createPtyRouter({
+          upgradeWebSocket: upgradeWebSocket as never,
+        })
+      : createWorkerPtyUnavailableApp(),
 });
 
 app.get("*", async (c) => {

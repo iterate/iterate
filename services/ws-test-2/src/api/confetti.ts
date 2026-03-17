@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const confettiMessageSchema = z.object({
+const ConfettiMessage = z.object({
   type: z.literal("launch"),
   x: z.number().min(0).max(1),
   y: z.number().min(0).max(1),
@@ -9,21 +9,26 @@ const confettiMessageSchema = z.object({
 export function createConfettiSocketHandlers() {
   let interval: ReturnType<typeof setInterval> | null = null;
 
+  function ensureInterval(ws: { send: (value: string) => void }) {
+    if (interval) return;
+
+    interval = setInterval(() => {
+      ws.send(
+        JSON.stringify({
+          type: "boom",
+          x: Math.random(),
+          y: Math.random() * 0.6 + 0.1,
+        }),
+      );
+    }, 1300);
+  }
+
   return {
-    onOpen(_event: unknown, ws: { send: (value: string) => void }) {
-      interval = setInterval(() => {
-        ws.send(
-          JSON.stringify({
-            type: "boom",
-            x: Math.random(),
-            y: Math.random() * 0.6 + 0.1,
-          }),
-        );
-      }, 1300);
-    },
     onMessage(event: { data: unknown }, ws: { send: (value: string) => void }) {
+      ensureInterval(ws);
+
       try {
-        const message = confettiMessageSchema.parse(JSON.parse(String(event.data)));
+        const message = ConfettiMessage.parse(JSON.parse(String(event.data)));
         ws.send(
           JSON.stringify({
             type: "boom",
@@ -42,9 +47,11 @@ export function createConfettiSocketHandlers() {
     },
     onClose() {
       if (interval) clearInterval(interval);
+      interval = null;
     },
     onError() {
       if (interval) clearInterval(interval);
+      interval = null;
     },
   };
 }

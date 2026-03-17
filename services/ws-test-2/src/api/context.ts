@@ -11,16 +11,9 @@ export interface WsTest2Context {
   serviceName: string;
 }
 
-let cachedEnv: WsTest2ServiceEnv | null = null;
-
-export function createContext(raw: Record<string, string | undefined>): WsTest2Context {
+export function createOrpcContext(env: WsTest2ServiceEnv): WsTest2Context {
   return {
-    env: getWsTest2ServiceEnv(raw),
+    env,
     serviceName,
   };
-}
-
-export function getEnv() {
-  cachedEnv ??= getWsTest2ServiceEnv();
-  return cachedEnv;
 }

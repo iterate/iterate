@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { onError } from "@orpc/server";
@@ -29,7 +29,7 @@ const openAPIHandler = new OpenAPIHandler(router, {
 
 export function applySharedHttpRoutes(
   app: Hono<any>,
-  params: { getContext: () => WsTest2Context },
+  params: { createOrpcContext: (c: Context) => WsTest2Context },
 ) {
   app.get("/api/health", (c) =>
     c.json({
@@ -41,7 +41,7 @@ export function applySharedHttpRoutes(
   app.all("/api/*", async (c) => {
     const { matched, response } = await openAPIHandler.handle(c.req.raw, {
       prefix: "/api",
-      context: params.getContext(),
+      context: params.createOrpcContext(c),
     });
 
     if (!matched || !response) {
