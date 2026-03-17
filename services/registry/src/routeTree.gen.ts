@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppTerminalRouteImport } from './routes/_app/terminal'
+import { Route as AppStreamsRouteImport } from './routes/_app/streams'
 import { Route as AppRoutesRouteImport } from './routes/_app/routes'
 import { Route as AppDocsRouteImport } from './routes/_app/docs'
 import { Route as AppDbRouteImport } from './routes/_app/db'
@@ -35,6 +36,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
 const AppTerminalRoute = AppTerminalRouteImport.update({
   id: '/terminal',
   path: '/terminal',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppStreamsRoute = AppStreamsRouteImport.update({
+  id: '/streams',
+  path: '/streams',
   getParentRoute: () => AppRoute,
 } as any)
 const AppRoutesRoute = AppRoutesRouteImport.update({
@@ -95,6 +101,7 @@ export interface FileRoutesByFullPath {
   '/db': typeof AppDbRoute
   '/docs': typeof AppDocsRoute
   '/routes': typeof AppRoutesRouteWithChildren
+  '/streams': typeof AppStreamsRoute
   '/terminal': typeof AppTerminalRoute
   '/routes/$slug': typeof AppRoutesSlugRouteWithChildren
   '/routes/': typeof AppRoutesIndexRoute
@@ -107,6 +114,7 @@ export interface FileRoutesByTo {
   '/config': typeof AppConfigRoute
   '/db': typeof AppDbRoute
   '/docs': typeof AppDocsRoute
+  '/streams': typeof AppStreamsRoute
   '/terminal': typeof AppTerminalRoute
   '/': typeof AppIndexRoute
   '/routes': typeof AppRoutesIndexRoute
@@ -122,6 +130,7 @@ export interface FileRoutesById {
   '/_app/db': typeof AppDbRoute
   '/_app/docs': typeof AppDocsRoute
   '/_app/routes': typeof AppRoutesRouteWithChildren
+  '/_app/streams': typeof AppStreamsRoute
   '/_app/terminal': typeof AppTerminalRoute
   '/_app/': typeof AppIndexRoute
   '/_app/routes/$slug': typeof AppRoutesSlugRouteWithChildren
@@ -139,6 +148,7 @@ export interface FileRouteTypes {
     | '/db'
     | '/docs'
     | '/routes'
+    | '/streams'
     | '/terminal'
     | '/routes/$slug'
     | '/routes/'
@@ -151,6 +161,7 @@ export interface FileRouteTypes {
     | '/config'
     | '/db'
     | '/docs'
+    | '/streams'
     | '/terminal'
     | '/'
     | '/routes'
@@ -165,6 +176,7 @@ export interface FileRouteTypes {
     | '/_app/db'
     | '/_app/docs'
     | '/_app/routes'
+    | '/_app/streams'
     | '/_app/terminal'
     | '/_app/'
     | '/_app/routes/$slug'
@@ -199,6 +211,13 @@ declare module '@tanstack/react-router' {
       path: '/terminal'
       fullPath: '/terminal'
       preLoaderRoute: typeof AppTerminalRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/streams': {
+      id: '/_app/streams'
+      path: '/streams'
+      fullPath: '/streams'
+      preLoaderRoute: typeof AppStreamsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/routes': {
@@ -310,6 +329,7 @@ interface AppRouteChildren {
   AppDbRoute: typeof AppDbRoute
   AppDocsRoute: typeof AppDocsRoute
   AppRoutesRoute: typeof AppRoutesRouteWithChildren
+  AppStreamsRoute: typeof AppStreamsRoute
   AppTerminalRoute: typeof AppTerminalRoute
   AppIndexRoute: typeof AppIndexRoute
 }
@@ -320,6 +340,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppDbRoute: AppDbRoute,
   AppDocsRoute: AppDocsRoute,
   AppRoutesRoute: AppRoutesRouteWithChildren,
+  AppStreamsRoute: AppStreamsRoute,
   AppTerminalRoute: AppTerminalRoute,
   AppIndexRoute: AppIndexRoute,
 }

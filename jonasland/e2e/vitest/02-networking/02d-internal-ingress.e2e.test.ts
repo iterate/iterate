@@ -146,10 +146,10 @@ describe("internal ingress", () => {
         });
         await waitForInternalHealth({
           deployment,
-          host: "events.iterate.localhost",
-          path: "/api/__iterate/health",
+          host: "registry.iterate.localhost",
+          path: "/api/streams",
           timeoutMs,
-          expectedService: "@iterate-com/events-contract",
+          expectedService: null,
         });
 
         const pidnapConfigs = serviceManifestToPidnapConfig({
@@ -175,9 +175,9 @@ describe("internal ingress", () => {
             expectedService: null,
           },
           {
-            host: "events.iterate.localhost",
-            path: "/api/__iterate/health",
-            expectedService: "@iterate-com/events-contract",
+            host: "registry.iterate.localhost",
+            path: "/api/streams",
+            expectedService: null,
           },
           {
             host: "example.iterate.localhost",

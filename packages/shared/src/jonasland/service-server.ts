@@ -82,7 +82,7 @@ export function applyServiceMiddleware(app: Hono<ServiceAppEnv>) {
       status = 500;
       throw error;
     } finally {
-      const outgoingStatus = c.env.outgoing?.statusCode;
+      const outgoingStatus = c.env?.outgoing?.statusCode;
       if (typeof outgoingStatus === "number" && outgoingStatus > 0) {
         status = outgoingStatus;
       }

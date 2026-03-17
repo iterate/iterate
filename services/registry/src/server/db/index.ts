@@ -1,43 +1,56 @@
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { sql } from "drizzle-orm";
+import { dirname, resolve } from "node:path";
+import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import * as schema from "./schema.ts";
 
 export const DEFAULT_REGISTRY_DB_PATH = "./data/registry.sqlite";
+const MIGRATIONS_FOLDER = resolve(import.meta.dirname, "../../../drizzle");
+
+let databaseCache:
+  | {
+      dbPath: string;
+      db: ReturnType<typeof drizzle<typeof schema>>;
+    }
+  | undefined;
 
 export function openRegistryDatabase(
   dbPath = process.env.REGISTRY_DB_PATH ?? DEFAULT_REGISTRY_DB_PATH,
 ) {
   mkdirSync(dirname(dbPath), { recursive: true });
-  const db = drizzle(dbPath, { schema });
-  db.$client.pragma("journal_mode = WAL");
+  const sqlite = new Database(dbPath);
+  sqlite.pragma("journal_mode = WAL");
+  sqlite.pragma("foreign_keys = ON");
+  const db = drizzle({ client: sqlite, schema });
   return db;
 }
 
-export async function initializeRegistryDatabase(
+export type RegistryDatabase = ReturnType<typeof openRegistryDatabase>;
+
+export function initializeRegistryDatabase(
   dbPath = process.env.REGISTRY_DB_PATH ?? DEFAULT_REGISTRY_DB_PATH,
 ) {
   const db = openRegistryDatabase(dbPath);
-
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS routes (
-      host TEXT PRIMARY KEY NOT NULL,
-      target TEXT NOT NULL,
-      metadata_json TEXT NOT NULL,
-      tags_json TEXT NOT NULL,
-      caddy_directives_json TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )
-  `);
-
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS config (
-      key TEXT PRIMARY KEY NOT NULL,
-      value_json TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )
-  `);
-
+  migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
   return db;
+}
+
+export function getRegistryDatabase(
+  dbPath = process.env.REGISTRY_DB_PATH ?? DEFAULT_REGISTRY_DB_PATH,
+): RegistryDatabase {
+  if (databaseCache?.dbPath === dbPath) {
+    return databaseCache.db;
+  }
+
+  databaseCache?.db.$client.close();
+  const db = initializeRegistryDatabase(dbPath);
+  databaseCache = { dbPath, db };
+  return db;
+}
+
+export function closeRegistryDatabase() {
+  if (!databaseCache) return;
+  databaseCache.db.$client.close();
+  databaseCache = undefined;
 }

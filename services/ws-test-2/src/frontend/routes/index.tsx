@@ -21,6 +21,16 @@ const TerminalParams = z.object({
   ptyId: z.string().optional(),
 });
 
+function getWebSocketBaseUrl() {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL?.trim() || window.location.origin;
+  const url = new URL(baseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "";
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
+}
+
 export const Route = createFileRoute("/")({
   validateSearch: TerminalParams,
   component: IndexPage,
@@ -48,16 +58,13 @@ function useVisualViewportHeight() {
   return height;
 }
 
-function ConfettiDemo() {
+function ConfettiDemo({ wsBase }: { wsBase: string }) {
   const [status, setStatus] = useState("connecting");
   const socketRef = useRef<WebSocket | null>(null);
 
   const wsUrl = useMemo(() => {
-    const origin = new URL(window.location.origin);
-    origin.protocol = origin.protocol === "https:" ? "wss:" : "ws:";
-    origin.pathname = "/api/confetti/ws";
-    return origin.toString();
-  }, []);
+    return `${wsBase}/api/confetti/ws`;
+  }, [wsBase]);
 
   useEffect(() => {
     const socket = new WebSocket(wsUrl);
@@ -149,6 +156,7 @@ function IndexPage() {
   const navigate = Route.useNavigate();
   const { data, isPending, error } = useQuery(orpc.ping.queryOptions({ input: {} }));
   const height = useVisualViewportHeight();
+  const wsBase = useMemo(() => getWebSocketBaseUrl(), []);
 
   const handleParamsChange = useCallback(
     (params: { ptyId?: string; clearCommand?: boolean }) => {
@@ -279,13 +287,14 @@ function IndexPage() {
           </Card>
 
           <ClientOnly>
-            <ConfettiDemo />
+            <ConfettiDemo wsBase={wsBase} />
           </ClientOnly>
         </div>
 
         <Card className="min-h-0 min-w-0 flex-1 overflow-hidden border-0 bg-transparent shadow-none lg:p-0">
           <ClientOnly fallback={<div className="h-full w-full rounded-xl border bg-[#1e1e1e]" />}>
             <Terminal
+              wsBase={wsBase}
               initialCommand={{ command, autorun }}
               ptyId={ptyId}
               onParamsChange={handleParamsChange}

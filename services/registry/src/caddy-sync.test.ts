@@ -37,10 +37,10 @@ describe("renderRoutesFragmentForTest", () => {
   test("strips port from ITERATE_INGRESS_HOST for host matching", () => {
     const rendered = renderRoutesFragmentForTest({
       iterateIngressHost: "iterate.localhost:12412",
-      routes: [{ host: "events.iterate.localhost", target: "127.0.0.1:17320" }],
+      routes: [{ host: "example.iterate.localhost", target: "127.0.0.1:17340" }],
     });
 
-    expect(rendered).toContain("events.iterate.localhost events__iterate.localhost");
+    expect(rendered).toContain("example.iterate.localhost example__iterate.localhost");
     expect(rendered).not.toContain("iterate.localhost:12412");
   });
 

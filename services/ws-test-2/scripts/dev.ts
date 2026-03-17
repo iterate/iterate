@@ -71,6 +71,7 @@ async function runFrontendAndBackend(params: {
               ...process.env,
               PORT: String(frontendPort),
               API_BASE_URL: apiBaseUrl,
+              VITE_API_BASE_URL: apiBaseUrl,
             },
             stdio: "inherit",
           },

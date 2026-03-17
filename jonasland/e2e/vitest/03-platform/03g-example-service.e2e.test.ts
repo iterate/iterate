@@ -12,7 +12,7 @@ import { test } from "../../test-support/e2e-test.ts";
  * - hit `/api/things/ping` through host routing until it stabilizes
  * - exercise CRUD over `/api/things`
  * - call `/api/things/test/delayed-publish`
- * - verify the delayed event later appears in `deployment.eventsService`
+ * - verify the delayed event later appears through registry-hosted streams
  *
  * The old test intentionally used the service through caddy host routing rather
  * than calling internals directly. Keep that boundary when porting so this file

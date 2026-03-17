@@ -50,10 +50,8 @@
 #
 # Effective target hosts that count as ingress:
 #   iterate.customer-domain.com             -> home (default ingress service)
-#   events.iterate.customer-domain.com      -> events
-#   events__iterate.customer-domain.com     -> events
-#   events.customer-domain.com              -> events   (if that host reaches us and is configured)
-#   events.iterate.localhost                -> events
+#   iterate.customer-domain.com/streams     -> registry streams UI
+#   iterate.localhost/streams               -> registry streams UI
 #
 # Effective target hosts that count as egress:
 #   api.openai.com
@@ -62,8 +60,8 @@
 #
 # Forwarded ingress example:
 #   Host: my-app.fly.dev
-#   X-Forwarded-Host: events__iterate.customer-domain.com
-#   -> classify as ingress for `events`
+#   X-Forwarded-Host: iterate.customer-domain.com
+#   -> classify as ingress for the registry host
 #
 # More host-shape examples:
 #   <customer-domain.com>                   -> default ingress service

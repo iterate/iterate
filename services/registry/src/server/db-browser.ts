@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { basename, dirname, extname, resolve } from "node:path";
-import { drizzle } from "drizzle-orm/better-sqlite3";
+import Database from "better-sqlite3";
 import { ORPCError } from "@orpc/server";
 import {
   transformLibsqlResultSet,
@@ -20,7 +20,7 @@ type SqliteTarget = {
 };
 
 type SqliteSession = {
-  client: ReturnType<typeof drizzle>["$client"];
+  client: Database.Database;
   main: SqliteTarget;
   attached: Record<string, string>;
 };
@@ -166,10 +166,7 @@ function rewriteMainAliasQualifier(statement: string, mainAlias: string): string
     .replaceAll(bareAlias, "main.");
 }
 
-function executeSqlStatement(
-  client: ReturnType<typeof drizzle>["$client"],
-  statement: string,
-): SqlResultSet {
+function executeSqlStatement(client: Database.Database, statement: string): SqlResultSet {
   const prepared = client.prepare(statement);
   if (prepared.reader) {
     const headers = prepared.columns() as Array<{ name: string; type?: string | null }>;
@@ -198,7 +195,7 @@ async function createSqliteSession(mainAlias: string): Promise<SqliteSession> {
     throw new Error(`Unknown sqlite main alias: ${mainAlias}`);
   }
   const attached = buildAttachedMap(mainAlias);
-  const client = drizzle(main.path).$client;
+  const client = new Database(main.path);
   client.pragma("journal_mode = WAL");
   for (const [alias, filePath] of Object.entries(attached)) {
     client.exec(`ATTACH DATABASE ${escapeSqlString(filePath)} AS ${escapeSqlIdentifier(alias)}`);

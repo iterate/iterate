@@ -1,5 +1,6 @@
 import type { SqlResultSet } from "@iterate-com/shared/jonasland";
-import { initializeRegistryDatabase, openRegistryDatabase } from "./db/index.ts";
+import type Database from "better-sqlite3";
+import { getRegistryDatabase } from "./db/index.ts";
 
 export interface PersistedRoute {
   host: string;
@@ -70,15 +71,14 @@ function parseConfigRow(row: Record<string, unknown>): PersistedConfigEntry {
 }
 
 export class ServicesStore {
-  private readonly sqlite;
+  private readonly sqlite: Database.Database;
 
-  private constructor(dbPath: string) {
-    this.sqlite = openRegistryDatabase(dbPath).$client;
+  private constructor(sqlite: Database.Database) {
+    this.sqlite = sqlite;
   }
 
   static async open(dbPath: string): Promise<ServicesStore> {
-    await initializeRegistryDatabase(dbPath);
-    return new ServicesStore(dbPath);
+    return new ServicesStore(getRegistryDatabase(dbPath).$client);
   }
 
   async executeSql(statement: string): Promise<SqlResultSet> {
@@ -105,7 +105,7 @@ export class ServicesStore {
   }
 
   async close(): Promise<void> {
-    this.sqlite.close();
+    // Registry owns the shared sqlite client lifecycle centrally.
   }
 
   async upsertRoute(input: {

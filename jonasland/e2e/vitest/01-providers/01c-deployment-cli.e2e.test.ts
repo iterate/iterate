@@ -23,7 +23,7 @@ type CreatedDeploymentSummary = {
   provider: "docker" | "fly";
   slug: string;
   ingressHost?: string;
-  runtimeBaseUrl?: string;
+  ingressUrl?: string;
   locator: unknown;
   opts: unknown;
 };

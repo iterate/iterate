@@ -326,6 +326,6 @@ then restart (with .env still in tact)
 
 then test websockets using pnpx wscat or something 
 
-- GET http://events.iterate.localhost should work (events service)
+- GET http://iterate.localhost/streams should work (registry-hosted streams UI)
 
 */

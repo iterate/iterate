@@ -6,7 +6,6 @@ const home = homedir();
 const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
 const caddyRuntimeUser = "iterate-caddy";
 const registryDbPath = join(home, ".iterate", "registry.db");
-const eventsDbPath = join(home, ".iterate", "events.db");
 const exampleDbPath = join(home, ".iterate", "example.db");
 // Static bootstrap handlers are committed in `builtin-handlers.caddy`.
 // Dynamic registry-managed handlers are written here by the registry service.
@@ -125,19 +124,6 @@ export default defineConfig({
       envOptions: {
         onlyRestartIfChanged: ["CLOUDFLARE_TUNNEL_TOKEN"],
       },
-    },
-    {
-      name: "events",
-      definition: {
-        command: "pnpm",
-        args: ["dev"],
-        cwd: join(iterateRepo, "services/events"),
-        env: {
-          PORT: "17320",
-          DATABASE_URL: eventsDbPath,
-        },
-      },
-      dependsOn: ["registry"],
     },
     {
       name: "example",

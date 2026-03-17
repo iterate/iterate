@@ -24,36 +24,36 @@ describe("normalizePublicIngressUrlType", () => {
 
 describe("resolvePublicIngressUrl", () => {
   test.each([
-    ["", "", "http://events.iterate.localhost", "throw"],
+    ["", "", "http://example.iterate.localhost", "throw"],
     [
       "bla.proxy.iterate.com",
       "dunder-prefix",
-      "http://events.iterate.localhost",
-      "https://events__bla.proxy.iterate.com/",
+      "http://example.iterate.localhost",
+      "https://example__bla.proxy.iterate.com/",
     ],
     [
       "iterate.localhost:12345",
       "subdomain-host",
-      "http://events.iterate.localhost",
-      "http://events.iterate.localhost:12345/",
+      "http://example.iterate.localhost",
+      "http://example.iterate.localhost:12345/",
     ],
     [
       "bla.proxy.iterate.com",
       "dunder-prefix",
-      "events.iterate.localhost",
-      "https://events__bla.proxy.iterate.com/",
+      "example.iterate.localhost",
+      "https://example__bla.proxy.iterate.com/",
     ],
     [
       "bla.proxy.iterate.com",
       "dunder-prefix",
-      "http://events.iterate.localhost/a/b?x=1#frag",
-      "https://events__bla.proxy.iterate.com/a/b?x=1#frag",
+      "http://example.iterate.localhost/a/b?x=1#frag",
+      "https://example__bla.proxy.iterate.com/a/b?x=1#frag",
     ],
     [
       "bla.proxy.iterate.com",
       "",
-      "http://events.iterate.localhost",
-      "https://events.bla.proxy.iterate.com/",
+      "http://example.iterate.localhost",
+      "https://example.bla.proxy.iterate.com/",
     ],
     [
       "bla.proxy.iterate.com",

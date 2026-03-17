@@ -67,18 +67,6 @@ export async function ensureSeededRoutes(params: { store: ServicesStore; env: Re
     // live in `builtin-handlers.caddy` should not be duplicated into the dynamic
     // fragment written to `SYNC_TO_CADDY_PATH`.
     {
-      host: "events.iterate.localhost",
-      target: "127.0.0.1:17320",
-      tags: ["seeded", "events", "openapi", "sqlite"],
-      metadata: {
-        source: "registry-seed",
-        title: "Events Service",
-        openapiPath: "/api/openapi.json",
-        sqlitePath: "events.sqlite",
-        sqliteAlias: "events",
-      },
-    },
-    {
       host: "openobserve.iterate.localhost",
       target: "127.0.0.1:5080",
       caddyDirectives: [

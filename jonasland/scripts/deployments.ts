@@ -152,7 +152,7 @@ function summarizeCreatedDeployment(params: {
     provider: params.provider,
     slug: params.deployment.slug,
     ingressHost: params.deployment.env.ITERATE_INGRESS_HOST,
-    runtimeBaseUrl: `http://${params.deployment.env.ITERATE_INGRESS_HOST}`,
+    ingressUrl: `http://${params.deployment.env.ITERATE_INGRESS_HOST}`,
     locator: params.deployment.locator,
     opts: params.deployment.opts,
   };

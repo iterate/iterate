@@ -1,5 +1,5 @@
 import { createORPCClient } from "@orpc/client";
-import { oc } from "@orpc/contract";
+import { eventIterator, oc } from "@orpc/contract";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import {
@@ -35,6 +35,141 @@ export const ConfigEntry = z.object({
   value: z.unknown(),
   updatedAt: z.string(),
 });
+
+const ITERATE_EVENT_TYPE_PREFIX = "https://events.iterate.com/" as const;
+
+export const StreamPath = z.string().min(1);
+export type StreamPath = z.infer<typeof StreamPath>;
+
+export const Offset = z.string().min(1);
+export type Offset = z.infer<typeof Offset>;
+
+export const CreatedAt = z.string().datetime({ offset: true });
+export type CreatedAt = z.infer<typeof CreatedAt>;
+
+export const Version = z.union([z.string(), z.number()]);
+export type Version = z.infer<typeof Version>;
+
+export const IterateEventType = z.string().startsWith(ITERATE_EVENT_TYPE_PREFIX);
+export type IterateEventType = z.infer<typeof IterateEventType>;
+
+export const TraceContext = z.object({
+  traceId: z.string(),
+  spanId: z.string(),
+  parentSpanId: z.string().nullable(),
+});
+export type TraceContext = z.infer<typeof TraceContext>;
+
+const PlainUnknownRecord = z.record(z.string(), z.unknown());
+const PlainStringRecord = z.record(z.string().min(1), z.string());
+
+export const PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE =
+  `${ITERATE_EVENT_TYPE_PREFIX}events/stream/push-subscription-callback-added` as const;
+export const STREAM_CREATED_TYPE = `${ITERATE_EVENT_TYPE_PREFIX}events/stream/created` as const;
+export const STREAM_METADATA_UPDATED_TYPE =
+  `${ITERATE_EVENT_TYPE_PREFIX}events/stream/metadata-updated` as const;
+
+const RetryPolicyScheduleFixed = z.object({
+  type: z.literal("fixed"),
+  intervalMs: z.number().int().min(0),
+});
+
+const RetryPolicyScheduleExponential = z.object({
+  type: z.literal("exponential"),
+  baseMs: z.number().int().min(0),
+  factor: z.number().min(1),
+  maxMs: z.number().int().min(0).optional(),
+});
+
+export const PushSubscriptionRetrySchedule = z.discriminatedUnion("type", [
+  RetryPolicyScheduleFixed,
+  RetryPolicyScheduleExponential,
+]);
+export type PushSubscriptionRetrySchedule = z.infer<typeof PushSubscriptionRetrySchedule>;
+
+export const PushSubscriptionRetryPolicy = z.object({
+  times: z.number().int().min(0).optional(),
+  schedule: PushSubscriptionRetrySchedule.optional(),
+});
+export type PushSubscriptionRetryPolicy = z.infer<typeof PushSubscriptionRetryPolicy>;
+
+const PushSubscriptionType = z.enum([
+  "webhook",
+  "webhook-with-ack",
+  "websocket",
+  "websocket-with-ack",
+]);
+
+export const PushSubscriptionCallbackAddedPayload = z.object({
+  type: PushSubscriptionType,
+  URL: z.url(),
+  subscriptionSlug: z.string().min(1),
+  retryPolicy: PushSubscriptionRetryPolicy.optional(),
+  jsonataFilter: z.string().min(1).optional(),
+  jsonataTransform: z.string().min(1).optional(),
+  httpRequestHeaders: PlainStringRecord.optional(),
+  sendHistoricEventsFromOffset: Offset.optional(),
+});
+export type PushSubscriptionCallbackAddedPayload = z.infer<
+  typeof PushSubscriptionCallbackAddedPayload
+>;
+
+export const StreamMetadataUpdatedPayload = z.object({
+  metadata: PlainUnknownRecord,
+});
+export type StreamMetadataUpdatedPayload = z.infer<typeof StreamMetadataUpdatedPayload>;
+
+export const EventStreamEventInput = z.object({
+  type: IterateEventType,
+  payload: PlainUnknownRecord,
+  version: Version.optional(),
+});
+export type EventStreamEventInput = z.infer<typeof EventStreamEventInput>;
+
+export const EventStreamEvent = EventStreamEventInput.extend({
+  path: StreamPath,
+  offset: Offset,
+  createdAt: CreatedAt,
+  trace: TraceContext,
+});
+export type EventStreamEvent = z.infer<typeof EventStreamEvent>;
+
+export const EventStreamSummary = z.object({
+  path: StreamPath,
+  createdAt: CreatedAt,
+  eventCount: z.number().int().min(0),
+  lastEventCreatedAt: CreatedAt,
+  metadata: PlainUnknownRecord,
+});
+export type EventStreamSummary = z.infer<typeof EventStreamSummary>;
+
+const EventStreamQuery = z.object({
+  path: StreamPath,
+  offset: Offset.optional(),
+  live: z.preprocess((value) => {
+    if (typeof value === "string") {
+      if (value === "true") return true;
+      if (value === "false") return false;
+    }
+    return value;
+  }, z.boolean().optional()),
+});
+
+const FirehoseQuery = z.object({}).optional().default({});
+
+export const parsePushSubscriptionCallbackAddedPayload = (
+  input: unknown,
+): PushSubscriptionCallbackAddedPayload | undefined => {
+  const result = PushSubscriptionCallbackAddedPayload.safeParse(input);
+  return result.success ? result.data : undefined;
+};
+
+export const parseStreamMetadataUpdatedPayload = (
+  input: unknown,
+): StreamMetadataUpdatedPayload | undefined => {
+  const result = StreamMetadataUpdatedPayload.safeParse(input);
+  return result.success ? result.data : undefined;
+};
 
 export const GetPublicUrlInput = z.object({
   internalURL: z.string().min(1),
@@ -237,6 +372,94 @@ export const registryContract = oc.router({
       .output(DbQueryResponse),
   },
 
+  streams: {
+    append: oc
+      .route({
+        operationId: "appendStreamEvents",
+        method: "POST",
+        path: "/streams/{+path}",
+        successStatus: 204,
+        successDescription: "Events appended successfully",
+        summary: "Append one or more events to a stream",
+        tags: ["streams"],
+      })
+      .input(
+        z.object({
+          path: StreamPath,
+          events: z.array(EventStreamEventInput).min(1),
+        }),
+      )
+      .output(z.void()),
+
+    registerSubscription: oc
+      .route({
+        operationId: "registerPushSubscription",
+        method: "POST",
+        path: "/streams/{+path}/subscriptions",
+        summary: "Register a push subscription by appending an event",
+        tags: ["streams"],
+      })
+      .input(
+        z.object({
+          path: StreamPath,
+          subscription: PushSubscriptionCallbackAddedPayload,
+        }),
+      )
+      .output(z.void()),
+
+    ackOffset: oc
+      .route({
+        operationId: "acknowledgeSubscriptionOffset",
+        method: "POST",
+        path: "/streams/{+path}/subscriptions/{subscriptionSlug}/ack",
+        successStatus: 204,
+        successDescription: "Offset acknowledged",
+        summary: "Acknowledge delivery of a specific offset for a push subscription",
+        tags: ["streams"],
+      })
+      .input(
+        z.object({
+          path: StreamPath,
+          subscriptionSlug: z.string().min(1),
+          offset: Offset,
+        }),
+      )
+      .output(z.void()),
+
+    stream: oc
+      .route({
+        operationId: "streamEvents",
+        method: "GET",
+        path: "/streams/{+path}",
+        summary: "Read stream history and optionally stay subscribed for live events",
+        tags: ["streams"],
+      })
+      .input(EventStreamQuery)
+      .output(eventIterator(EventStreamEvent)),
+
+    firehose: oc
+      .route({
+        operationId: "streamFirehoseEvents",
+        method: "GET",
+        path: "/streams/firehose",
+        summary: "Read live events across all streams",
+        tags: ["streams"],
+      })
+      .input(FirehoseQuery)
+      .output(eventIterator(EventStreamEvent)),
+
+    list: oc
+      .route({
+        operationId: "listStreams",
+        method: "GET",
+        path: "/streams",
+        summary: "List streams with counts, recency, and metadata",
+        tags: ["streams"],
+      })
+      .input(z.object({}).optional().default({}))
+      .output(z.array(EventStreamSummary)),
+  },
+
   routes: {
     upsert: oc
       .route({
@@ -381,6 +604,7 @@ export const RegistryServiceEnv = z.object({
     "https://studio.outerbase.com/embed/sqlite",
   ),
   REGISTRY_DB_STUDIO_NAME: nonEmptyStringWithTrimDefault("jonasland sqlite"),
+  REGISTRY_STREAMS_WS_IDLE_DISCONNECT_MS: z.coerce.number().int().min(0).default(30_000),
   REGISTRY_DB_BASIC_AUTH_USER: _optionalNonEmptyStringWithTrim(),
   REGISTRY_DB_BASIC_AUTH_PASS: z.string().default(""),
   SYNC_TO_CADDY_PATH: _optionalNonEmptyStringWithTrim(),
@@ -425,10 +649,19 @@ export {
   RouteRecord as routeRecordSchema,
   RouteUpsertInput as routeUpsertInputSchema,
   ConfigEntry as configEntrySchema,
+  CreatedAt as createdAtSchema,
+  EventStreamEvent as eventStreamEventSchema,
+  EventStreamEventInput as eventStreamEventInputSchema,
+  EventStreamSummary as eventStreamSummarySchema,
   GetPublicUrlInput as getPublicUrlInputSchema,
   GetPublicUrlOutput as getPublicUrlOutputSchema,
   IngressEnvValues as ingressEnvValuesSchema,
+  IterateEventType as iterateEventTypeSchema,
+  Offset as offsetSchema,
   OpenApiSource as openApiSourceSchema,
+  PushSubscriptionCallbackAddedPayload as pushSubscriptionCallbackAddedPayloadSchema,
+  PushSubscriptionRetryPolicy as pushSubscriptionRetryPolicySchema,
+  PushSubscriptionRetrySchedule as pushSubscriptionRetryScheduleSchema,
   RegistryDbSource as registryDbSourceSchema,
   LandingRouteRecord as landingRouteRecordSchema,
   LandingData as landingDataSchema,
@@ -439,6 +672,10 @@ export {
   DbQueryInput as dbQueryInputSchema,
   DbQueryResponse as dbQueryResponseSchema,
   RegistryServiceEnv as registryServiceEnvSchema,
+  StreamMetadataUpdatedPayload as streamMetadataUpdatedPayloadSchema,
+  StreamPath as streamPathSchema,
+  TraceContext as traceContextSchema,
+  Version as versionSchema,
 };
 
 export const registryServiceManifest = {

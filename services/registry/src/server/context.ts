@@ -4,6 +4,7 @@ import {
   type ServiceRequestLogger,
 } from "@iterate-com/shared/jonasland";
 import { registryServiceEnvSchema } from "@iterate-com/registry-contract";
+import { closeRegistryDatabase } from "./db/index.ts";
 import { ServicesStore } from "./store.ts";
 
 export type RegistryEnv = ReturnType<typeof registryServiceEnvSchema.parse>;
@@ -51,4 +52,10 @@ export function getStore(): Promise<ServicesStore> {
     storePromise = ServicesStore.open(getEnv().REGISTRY_DB_PATH);
   }
   return storePromise;
+}
+
+export async function resetRegistryContextForTests() {
+  envCache = null;
+  storePromise = null;
+  closeRegistryDatabase();
 }

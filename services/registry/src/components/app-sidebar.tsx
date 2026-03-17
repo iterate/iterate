@@ -1,6 +1,7 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Activity,
   ArrowUpRight,
   BookOpenText,
   Database,
@@ -29,6 +30,7 @@ import {
 
 const staticItems = [
   { to: "/", label: "Home", icon: Home, exact: true },
+  { to: "/streams", label: "Event Streams", icon: Activity, exact: true },
   { to: "/terminal", label: "Terminal", icon: SquareTerminal, exact: true },
   { to: "/config", label: "Config", icon: Settings2, exact: true },
   { to: "/caddy", label: "Caddy", icon: Waypoints, exact: true },

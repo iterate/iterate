@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { desc, eq, sql } from "drizzle-orm";
-import { serviceManifest as eventsServiceManifest } from "@iterate-com/events-contract";
+import { createRegistryClient } from "@iterate-com/registry-contract";
 import {
   exampleContract,
   exampleServiceManifest,
   thingSchema,
 } from "@iterate-com/example-contract";
 import {
-  createLocalServiceOrpcClient,
   infoFromContext,
   transformSqlResultSet,
   type ServiceRequestLogger,
@@ -32,8 +31,8 @@ const THING_UPDATED_EVENT_TYPE = "https://events.iterate.com/example/thing-updat
 const THING_REMOVED_EVENT_TYPE = "https://events.iterate.com/example/thing-removed";
 const os = implement(exampleContract).$context<ExampleContext>();
 
-const eventsClient = createLocalServiceOrpcClient({
-  manifest: eventsServiceManifest,
+const registryClient = createRegistryClient({
+  url: "http://registry.iterate.localhost/api",
 });
 
 function normalizeStreamPath(path: string): string {
@@ -81,7 +80,7 @@ async function appendEventToStream(params: {
   const eventId = randomUUID();
 
   try {
-    await eventsClient.append(
+    await registryClient.streams.append(
       {
         path: normalizeStreamPath(params.path),
         events: [

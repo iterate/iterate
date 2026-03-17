@@ -1,4 +1,4 @@
-Service abstraction
+Apps abstraction
 
 services/example
 

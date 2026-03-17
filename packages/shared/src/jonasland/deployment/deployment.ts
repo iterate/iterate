@@ -1,19 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import {
-  type EventBusContract,
-  serviceManifest as eventsServiceManifest,
-} from "@iterate-com/events-contract";
 import { createIngressProxyClient } from "@iterate-com/ingress-proxy-contract";
 import { createRegistryClient, type RegistryClient } from "@iterate-com/registry-contract";
-import { createORPCClient } from "@orpc/client";
-import { type AnyContractRouter, type ContractRouterClient } from "@orpc/contract";
-import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import pRetry from "p-retry";
 import pWaitFor from "p-wait-for";
 import { createClient as createPidnapClient, type Client as PidnapClient } from "pidnap/client";
 import { createSlug } from "../create-slug.ts";
-import { localHostForService } from "../index.ts";
 import {
   composeAbortSignal,
   createAbortScope,
@@ -48,7 +40,6 @@ export class Deployment {
 
   private _pidnap: PidnapClient | null = null;
   private _registryService: RegistryClient | null = null;
-  private _eventsService: ContractRouterClient<EventBusContract> | null = null;
 
   static async create<TOpts extends DeploymentOpts = DeploymentOpts, TLocator = unknown>(params: {
     provider: DeploymentProvider<TOpts, TLocator>;
@@ -227,7 +218,7 @@ export class Deployment {
     this.assertConnected();
     if (this._pidnap) return this._pidnap;
     this._pidnap = createPidnapClient({
-      url: `${this.runtimeBaseUrl()}/rpc`,
+      url: `${this.ingressUrl()}/rpc`,
       fetch: this.routedFetch("pidnap.iterate.localhost"),
     });
     return this._pidnap;
@@ -237,32 +228,22 @@ export class Deployment {
     this.assertConnected();
     if (this._registryService) return this._registryService;
     this._registryService = createRegistryClient({
-      url: `${this.runtimeBaseUrl()}/api`,
+      url: `${this.ingressUrl()}/api`,
       fetch: this.routedFetch("registry.iterate.localhost"),
     });
     return this._registryService;
-  }
-
-  get eventsService() {
-    this.assertConnected();
-    if (this._eventsService) return this._eventsService;
-    this._eventsService = this.createServiceClient({
-      slug: eventsServiceManifest.slug,
-      orpcContract: eventsServiceManifest.orpcContract,
-    });
-    return this._eventsService;
   }
 
   async waitUntilHealthy(params?: { signal?: AbortSignal; timeoutMs?: number }) {
     this.assertConnected();
     const signal = composeAbortSignal(params ?? {});
     const startedAt = Date.now();
-    const runtimeBaseUrl = this.runtimeBaseUrl();
+    const ingressUrl = this.ingressUrl();
 
-    console.log(`[deployment] waiting for caddy at ${runtimeBaseUrl}/__iterate/caddy-health...`);
+    console.log(`[deployment] waiting for caddy at ${ingressUrl}/__iterate/caddy-health...`);
     await pWaitFor(
       async () => {
-        const resp = await fetch(`${runtimeBaseUrl}/__iterate/caddy-health`, { signal }).catch(
+        const resp = await fetch(`${ingressUrl}/__iterate/caddy-health`, { signal }).catch(
           () => null,
         );
         return resp?.ok ?? false;
@@ -291,10 +272,6 @@ export class Deployment {
         hostCandidates: ["registry.iterate.localhost"],
         path: "/api/__iterate/health",
       },
-      {
-        hostCandidates: [localHostForService({ slug: eventsServiceManifest.slug })],
-        path: "/api/__iterate/health",
-      },
     ];
 
     for (const check of routeChecks) {
@@ -320,7 +297,7 @@ export class Deployment {
   async fetch(host: string, path: string, init?: RequestInit) {
     this.assertConnected();
     const req = new Request(
-      new URL(path.startsWith("/") ? path : `/${path}`, this.runtimeBaseUrl()),
+      new URL(path.startsWith("/") ? path : `/${path}`, this.ingressUrl()),
       init,
     );
     return await this.routedFetch(host)(req);
@@ -331,21 +308,6 @@ export class Deployment {
     return await this.registryService.getPublicURL({
       internalURL: params.internalURL,
     });
-  }
-
-  createServiceClient<TContract extends AnyContractRouter>(params: {
-    slug: string;
-    orpcContract: TContract;
-  }) {
-    const normalized = params.slug.trim().toLowerCase();
-    const host = normalized.endsWith("-service")
-      ? `${normalized.slice(0, -"-service".length)}.iterate.localhost`
-      : `${normalized}.iterate.localhost`;
-    const link = new OpenAPILink(params.orpcContract, {
-      url: `${this.runtimeBaseUrl()}/api`,
-      fetch: this.routedFetch(host),
-    });
-    return createORPCClient(link) as ContractRouterClient<TContract>;
   }
 
   async exec(cmd: string[]) {
@@ -548,47 +510,6 @@ export class Deployment {
     };
   }
 
-  private async readCloudflareTunnelLogs() {
-    const result = await this.shell({
-      cmd: "tail -n 120 /var/log/pidnap/process/cloudflare-tunnel.log 2>/dev/null || true",
-    });
-    return result.output;
-  }
-
-  private async waitForConfiguredNetworkTargets(params: {
-    env: Record<string, string>;
-    timeoutMs: number;
-  }) {
-    await this.pidnap.processes.waitFor({
-      processes: {
-        caddy: "running",
-        registry: "running",
-        events: "running",
-      },
-      timeoutMs: params.timeoutMs,
-    });
-
-    if (
-      params.env.CLOUDFLARE_TUNNEL_ENABLED === "true" &&
-      !params.env.CLOUDFLARE_TUNNEL_PUBLIC_URL?.trim()
-    ) {
-      await this.shellWithRetry({
-        cmd: 'url=$(cat ~/.iterate/cloudflare-tunnel.url 2>/dev/null || true); if [ -n "$url" ]; then printf \'%s\' "$url"; fi',
-        timeoutMs: params.timeoutMs,
-        retryIf: (result) => result.exitCode !== 0 || !result.stdout.trim().startsWith("https://"),
-      });
-    }
-
-    const egressProxyUrl = params.env.ITERATE_EGRESS_PROXY?.trim();
-    if (egressProxyUrl) {
-      await this.shellWithRetry({
-        cmd: `curl -sS --max-time 2 -o /dev/null -w '%{http_code}' ${shQuote(`${egressProxyUrl}/__iterate/health`)} | grep -vq '^000$'`,
-        timeoutMs: params.timeoutMs,
-        retryIf: (result) => result.exitCode !== 0,
-      });
-    }
-  }
-
   async status(params: { signal?: AbortSignal } = {}) {
     this.assertConnected();
     const status = await this.provider.status({
@@ -612,7 +533,6 @@ export class Deployment {
 
     this._pidnap = null;
     this._registryService = null;
-    this._eventsService = null;
     this._locator = null;
     this._provider = null;
     this._providerStatus = null;
@@ -731,12 +651,13 @@ export class Deployment {
   }
 
   /**
-   * Internal deployment traffic intentionally goes through the same canonical
-   * ingress host as external callers. `ITERATE_INGRESS_HOST` is the single
-   * source of truth; providers only supply the fallback when runtime env is
-   * missing it.
+   * Build the fetch base URL directly from the canonical ingress host.
+   *
+   * This is intentionally just `http://${ITERATE_INGRESS_HOST}` so the host
+   * remains the real source of truth and the URL stays an explicit derived
+   * convenience, not a separate runtime concept.
    */
-  private runtimeBaseUrl() {
+  ingressUrl() {
     return `http://${this.runtimeIngressHost()}`;
   }
 
@@ -759,7 +680,7 @@ export class Deployment {
   }
 
   private routedFetch(host: string) {
-    return createHostRoutedFetch({ baseUrl: this.runtimeBaseUrl(), host });
+    return createHostRoutedFetch({ baseUrl: this.ingressUrl(), host });
   }
 
   private transition(

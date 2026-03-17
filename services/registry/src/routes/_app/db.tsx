@@ -128,16 +128,16 @@ function DbPage() {
       if (!isDbBridgeRequest(event.data)) return;
       const request = event.data;
       const url = new URL("/api/db/query", window.location.origin);
-      if (selectedMainAlias) {
-        url.searchParams.set("mainAlias", selectedMainAlias);
-      }
 
       void fetchJson<unknown>(url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
         },
-        body: JSON.stringify({ request }),
+        body: JSON.stringify({
+          ...(selectedMainAlias ? { mainAlias: selectedMainAlias } : {}),
+          request,
+        }),
       })
         .then((payload) => {
           iframeRef.current?.contentWindow?.postMessage(payload, event.origin);

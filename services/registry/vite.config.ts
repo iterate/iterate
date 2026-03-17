@@ -4,7 +4,7 @@ import nodeAdapter from "@hono/vite-dev-server/node";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import viteReact from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, type PluginOption } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 
 const clientBuild = {
@@ -50,7 +50,7 @@ export default defineConfig(({ mode }) => ({
       injectClientScript: false,
       exclude: [/^\/src\/.+/, ...defaultOptions.exclude],
     }),
-  ],
+  ] as unknown as PluginOption[],
   build: mode === "client" ? clientBuild : serverBuild,
   ssr: {
     external: ["@lydell/node-pty", "@xterm/addon-serialize", "@xterm/headless", "schematch"],

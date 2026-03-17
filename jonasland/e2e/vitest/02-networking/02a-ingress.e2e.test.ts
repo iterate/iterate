@@ -151,7 +151,7 @@ describe("ingress", () => {
   //         };
 
   //         await assertHealth({
-  //           host: "events.iterate.localhost",
+  //           host: "registry.iterate.localhost",
   //           expectedService: "@iterate-com/events-contract",
   //           waitTimeoutMs: timeoutMs,
   //         });
@@ -221,7 +221,7 @@ describe("ingress", () => {
   //           timeoutMs: timeoutMs + 60_000,
   //         });
   //         await assertHealth({
-  //           host: "events.iterate.localhost",
+  //           host: "registry.iterate.localhost",
   //           expectedService: "@iterate-com/events-contract",
   //           waitTimeoutMs: timeoutMs + 60_000,
   //         });
@@ -238,7 +238,7 @@ describe("ingress", () => {
 
   //         console.log("[ingress] checking websocket upgrade");
   //         await assertWebSocketUpgrade({
-  //           host: "events.iterate.localhost",
+  //           host: "registry.iterate.localhost",
   //           waitTimeoutMs: timeoutMs,
   //         });
   //       },

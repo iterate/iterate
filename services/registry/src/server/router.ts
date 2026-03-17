@@ -7,6 +7,7 @@ import { executeDbRequest, getDbRuntimeData } from "./db-browser.ts";
 import { buildLandingData, listOpenApiSources, listSqliteSources } from "./docs.ts";
 import { ResolvePublicUrlError, resolvePublicUrl } from "./resolve-public-url.ts";
 import { ensureSeededRoutes, synchronizeRegistryRoutes } from "./startup.ts";
+import { streamsRouter } from "./streams/router.ts";
 
 const os = implement(registryContract).$context<RegistryContext>();
 
@@ -140,6 +141,7 @@ export const registryRouter = os.router({
       });
     }),
   },
+  streams: streamsRouter,
   routes: {
     upsert: os.routes.upsert.handler(async ({ input, context }) => {
       const { route, routes, sync } = await upsertRouteAndSynchronize({ input, context });

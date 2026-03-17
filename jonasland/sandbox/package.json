@@ -8,7 +8,6 @@
     "docker:dev": "scripts/docker-dev.sh",
     "typecheck": "tsc --noEmit",
     "registry:start": "tsx ../../services/registry/src/entry-server.tsx",
-    "events:start": "tsx ../../services/events/src/server.ts",
     "example:start": "tsx ../../services/example/src/server.ts"
   },
   "devDependencies": {
@@ -26,7 +25,6 @@
     "pidnap": "workspace:*",
     "tsx": "^4.20.6",
     "valibot": "^1.2.0",
-    "@iterate-com/events-contract": "workspace:*",
     "@iterate-com/registry-contract": "workspace:*"
   }
 }
