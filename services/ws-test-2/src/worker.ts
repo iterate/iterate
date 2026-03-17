@@ -35,7 +35,11 @@ app.get("*", async (c) => {
     return assetResponse;
   }
 
-  const shellRequest = new Request(new URL("/_shell.html", c.req.url), c.req.raw);
+  if (new URL(c.req.url).pathname.startsWith("/assets/")) {
+    return assetResponse;
+  }
+
+  const shellRequest = new Request(new URL("/_shell", c.req.url), c.req.raw);
   return await c.env.ASSETS.fetch(shellRequest);
 });
 

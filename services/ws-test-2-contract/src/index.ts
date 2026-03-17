@@ -72,8 +72,10 @@ export function createWsTest2Client(params?: {
   fetch?: typeof fetch;
 }): WsTest2Client {
   const basePath = toBasePath(params?.url);
+  const fallbackOrigin =
+    typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:17302";
   const link = new OpenAPILink(wsTest2Contract, {
-    url: joinPath(basePath, "/api"),
+    url: new URL(joinPath(basePath, "/api"), fallbackOrigin).toString(),
     ...(params?.fetch ? { fetch: params.fetch } : {}),
   });
   return createORPCClient(link);

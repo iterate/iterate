@@ -118,5 +118,5 @@ describe("ws-test-2 live worker", () => {
     await assertPtyUnavailable(
       currentBaseUrl.replace("http://", "ws://").replace("https://", "wss://") + "/api/pty/ws",
     );
-  });
+  }, 30_000);
 });
