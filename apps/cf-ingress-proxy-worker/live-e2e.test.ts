@@ -20,27 +20,65 @@ function requireEnv() {
   return { baseUrl, apiToken };
 }
 
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableLiveE2eError(error: unknown): boolean {
+  if (error instanceof SyntaxError) {
+    return true;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error.message.includes("Unexpected non-JSON response");
+}
+
 async function callProcedure<T>(params: {
   name: string;
   input: unknown;
   baseUrl: string;
   apiToken: string;
 }): Promise<T> {
-  const response = await fetch(`${params.baseUrl}/api/orpc/${params.name}`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${params.apiToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ json: params.input }),
-  });
+  let lastError: unknown;
 
-  const payload = (await response.json()) as { json?: T };
-  if (!response.ok) {
-    throw payload.json;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      const response = await fetch(`${params.baseUrl}/api/orpc/${params.name}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${params.apiToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ json: params.input }),
+      });
+
+      const responseText = await response.text();
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.toLowerCase().includes("application/json")) {
+        throw new Error(
+          `Unexpected non-JSON response (status ${response.status}): ${responseText.slice(0, 200)}`,
+        );
+      }
+
+      const payload = JSON.parse(responseText) as { json?: T };
+      if (!response.ok) {
+        throw payload.json;
+      }
+
+      return payload.json as T;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 5 || !isRetryableLiveE2eError(error)) {
+        throw error;
+      }
+      await sleep(attempt * 250);
+    }
   }
 
-  return payload.json as T;
+  throw lastError;
 }
 
 function createRoute(params: {

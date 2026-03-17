@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
 import type { Readable } from "node:stream";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSemaphoreClient } from "@iterate-com/semaphore-contract";
@@ -105,8 +106,13 @@ async function stopAlchemyDev(child: ChildProcessByStdio<null, Readable, Readabl
 describe("semaphore worker e2e", () => {
   let child: ChildProcessByStdio<null, Readable, Readable>;
   let baseURL = "";
+  let originalWranglerJson = "";
+
+  const wranglerJsonPath = new URL("./wrangler.jsonc", import.meta.url).pathname;
 
   beforeAll(async () => {
+    originalWranglerJson = await readFile(wranglerJsonPath, "utf8");
+
     const stage = `test-e2e-${randomUUID().slice(0, 8)}`;
     const workerName = `semaphore-${stage}`;
 
@@ -134,7 +140,11 @@ describe("semaphore worker e2e", () => {
   }, 120_000);
 
   afterAll(async () => {
-    await stopAlchemyDev(child);
+    try {
+      await stopAlchemyDev(child);
+    } finally {
+      await writeFile(wranglerJsonPath, originalWranglerJson, "utf8");
+    }
   });
 
   test("baseURL client can add, list, acquire, and release resources against the live worker", async () => {

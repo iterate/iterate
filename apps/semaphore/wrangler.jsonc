@@ -1,9 +1,10 @@
 {
-  "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "semaphore-test",
-  "main": "./server.ts",
+  "main": "server.ts",
   "compatibility_date": "2025-02-24",
-  "compatibility_flags": ["nodejs_compat_v2"],
+  "vars": {
+    "SEMAPHORE_API_TOKEN": "test-token",
+  },
   "durable_objects": {
     "bindings": [
       {
@@ -12,20 +13,20 @@
       },
     ],
   },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_name": "semaphore-test",
+      "migrations_dir": "./migrations",
+      "preview_database_id": "00000000-0000-0000-0000-000000000000",
+    },
+  ],
   "migrations": [
     {
       "tag": "v1",
       "new_sqlite_classes": ["ResourceCoordinator"],
+      "new_classes": [],
     },
   ],
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "semaphore-test",
-      "database_id": "00000000-0000-0000-0000-000000000000",
-    },
-  ],
-  "vars": {
-    "SEMAPHORE_API_TOKEN": "test-token",
-  },
 }
