@@ -1,0 +1,10 @@
+{
+  "name": "dev-ws-test-2",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-02-05",
+  "compatibility_flags": [],
+  "assets": {
+    "directory": "dist/client",
+    "binding": "ASSETS"
+  }
+}

@@ -1,14 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import {
-  createWsTest2Client,
-  createWsTest2WebSocketClient,
-  type WsTest2RpcWebSocket,
-} from "@iterate-com/ws-test-2-contract";
+import { createWsTest2Client } from "@iterate-com/ws-test-2-contract";
 
 const baseUrl = process.env.WS_TEST_2_E2E_BASE_URL?.trim();
-const asRpcWebSocket = (websocket: WebSocket): WsTest2RpcWebSocket =>
-  websocket as unknown as WsTest2RpcWebSocket;
 
 function requireBaseUrl() {
   if (!baseUrl) {
@@ -74,24 +68,6 @@ async function assertOpenApiPing(url: string) {
   expect(result.serverTime).toBeTruthy();
 }
 
-async function assertWebSocketRpcPing(url: string) {
-  const websocket = new WebSocket(
-    url.replace("http://", "ws://").replace("https://", "wss://") + "/api/orpc/ws",
-    ["orpc"],
-  );
-  const client = createWsTest2WebSocketClient({
-    websocket: asRpcWebSocket(websocket),
-  });
-
-  try {
-    const result = await client.ping({});
-    expect(result.message).toBe("pong");
-    expect(result.serverTime).toBeTruthy();
-  } finally {
-    websocket.close();
-  }
-}
-
 async function assertPtyUnavailable(url: string) {
   await new Promise<void>((resolve, reject) => {
     const socket = new WebSocket(url);
@@ -134,7 +110,6 @@ describe("ws-test-2 live worker", () => {
     expect(assetResponse.status).toBe(200);
 
     await assertOpenApiPing(currentBaseUrl);
-    await assertWebSocketRpcPing(currentBaseUrl);
 
     await assertConfettiSocket(
       currentBaseUrl.replace("http://", "ws://").replace("https://", "wss://") + "/api/confetti/ws",

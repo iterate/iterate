@@ -13,9 +13,7 @@ export interface WsTest2Context {
 
 let cachedEnv: WsTest2ServiceEnv | null = null;
 
-export function createContext(
-  raw: Record<string, string | undefined> = process.env,
-): WsTest2Context {
+export function createContext(raw: Record<string, string | undefined>): WsTest2Context {
   return {
     env: getWsTest2ServiceEnv(raw),
     serviceName,
