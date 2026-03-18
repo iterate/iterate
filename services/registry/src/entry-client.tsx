@@ -1,7 +1,7 @@
+import "./styles.css";
 import { RouterClient } from "@tanstack/react-router/ssr/client";
 import { hydrateRoot } from "react-dom/client";
 import { createRouter } from "./router.tsx";
-import "./styles.css";
 
 function getInitialAppCssHrefs() {
   const links = document.querySelectorAll<HTMLLinkElement>("link[data-app-css]");

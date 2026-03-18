@@ -1,7 +1,7 @@
+import "@scalar/api-reference-react/style.css";
 import { useMemo } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { ApiReferenceReact } from "@scalar/api-reference-react";
-import "@scalar/api-reference-react/style.css";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpenText } from "lucide-react";
 import {
