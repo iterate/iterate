@@ -6,7 +6,6 @@ import { z } from "zod";
 export const ExampleAppEnv = z.object({
   VITE_POSTHOG_PUBLIC_KEY: z.string().trim().min(1, "VITE_POSTHOG_PUBLIC_KEY is required"),
   VITE_POSTHOG_PROXY_URL: z.string().trim().min(1).default("/api/integrations/posthog/proxy"),
-  CONFETTI_DELAY_MS: z.coerce.number().int().nonnegative().default(1300),
   PIRATE_SECRET: z.string().trim().min(1, "PIRATE_SECRET is required"),
 });
 

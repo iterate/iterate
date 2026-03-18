@@ -1,4 +1,4 @@
-import type { AppManifest } from "@iterate-com/shared/jonasland";
+import type { AppManifest } from "@iterate-com/shared/apps/define-app";
 import packageJson from "../package.json" with { type: "json" };
 
 const manifest = {

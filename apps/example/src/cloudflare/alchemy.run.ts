@@ -52,7 +52,7 @@ const assets = await Assets({
 
 export const worker = await Worker(APP_NAME, {
   name: workerName,
-  entrypoint: "./src/cloudflare/worker.ts",
+  entrypoint: "./src/cloudflare/entrypoint.ts",
   adopt: true,
   url: true,
   compatibility: "node",
@@ -65,7 +65,6 @@ export const worker = await Worker(APP_NAME, {
     ASSETS: assets,
     VITE_POSTHOG_PUBLIC_KEY: env.VITE_POSTHOG_PUBLIC_KEY,
     VITE_POSTHOG_PROXY_URL: env.VITE_POSTHOG_PROXY_URL,
-    CONFETTI_DELAY_MS: String(env.CONFETTI_DELAY_MS),
     PIRATE_SECRET: alchemy.secret(env.PIRATE_SECRET),
   },
   routes: env.WORKER_ROUTES.map((pattern) => ({ pattern })),

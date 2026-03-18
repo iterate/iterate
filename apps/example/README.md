@@ -5,7 +5,8 @@ Minimal full-stack app demonstrating a runtime-agnostic app layout:
 - **API:** Hono + oRPC over OpenAPI/HTTP with Drizzle ORM
 - **Frontend:** TanStack Start (SPA mode) + TanStack Query
 - **Runtimes:** Node.js (better-sqlite3) and Cloudflare Workers (D1)
-- **WebSockets:** ping-pong (1s delay echo) + confetti broadcast demos
+- **WebSockets:** ping-pong demo plus a Node-backed PTY terminal route
+- **Observability:** app-local TanStack devtools + evlog request logging
 
 ## Why It Is Structured This Way
 
@@ -57,9 +58,9 @@ The runtime provides three things:
 `mount()` mutates the provided Hono app in place and returns nothing.
 That keeps the final runtime-specific wiring in the entrypoint.
 
-### `src/node/server.ts`
+### `src/node/create-app.ts`
 
-This is the Node runtime entrypoint.
+This is the Node runtime composition helper.
 
 It is responsible for Node-specific concerns:
 
@@ -67,12 +68,22 @@ It is responsible for Node-specific concerns:
 - running Drizzle migrations
 - creating the Hono app instance
 - creating the Node websocket helper with `@hono/node-ws`
+- initializing `evlog` once for pretty request logging in local development
+- creating the Node-only terminal dependency
+
+### `src/node/entrypoint.ts`
+
+This is the thin Node server entrypoint.
+
+It is responsible for:
+
+- creating the HTTP server from the pre-wired Hono app
 - attaching websocket upgrades to the Node server with `injectWebSocket(server)`
 
-In other words, this file says: "take `exampleApp` and wire it into a Node
-runtime."
+Together these files say: "take `exampleApp`, wire it into a Node runtime, then
+listen on the requested host/port."
 
-### `src/cloudflare/worker.ts`
+### `src/cloudflare/entrypoint.ts`
 
 This is the Cloudflare Worker runtime entrypoint.
 
@@ -81,6 +92,7 @@ It is responsible for Worker-specific concerns:
 - opening the D1 database
 - creating the Hono app instance
 - using `upgradeWebSocket` from `hono/cloudflare-workers`
+- initializing the shared `evlog` formatter for Worker console/tail logs
 - serving both HTTP and websocket routes through `app.fetch(...)`
 
 This file says: "take the same `exampleApp` and wire it into a Cloudflare
@@ -128,8 +140,22 @@ The example app exposes a single typed client transport for application RPC:
 - `src/frontend/lib/orpc.ts` calls `createExampleClient()`
 
 That means all example-app oRPC clients talk to the HTTP OpenAPI surface under
-`/api`. The websocket endpoints are demo-only and are not a second supported
-transport for the app router.
+`/api`. The websocket endpoints are app-specific demos rather than a second
+supported transport for the app router.
+
+## Observability
+
+- `src/frontend/routes/__root.tsx`
+  - mounts TanStack Router + Query devtools directly under the real app
+    providers so the example shows the first-party integration plainly
+- `src/frontend/router.tsx`
+  - uses cache-level Query / Mutation error hooks for lightweight browser
+    debugging without duplicating handlers at every call site
+- `packages/shared/src/apps/middleware.ts`
+  - emits one evlog wide event per oRPC request, which keeps request logs
+    compact and readable in development
+- `src/api/routers/test.ts`
+  - demonstrates request-scoped logging and server-side exception reporting
 
 ## Dev
 
@@ -155,8 +181,6 @@ App-level env parsed in `src/env.ts`:
 - `VITE_POSTHOG_PROXY_URL`
   Proxy endpoint for frontend PostHog traffic. Defaults to
   `/api/integrations/posthog/proxy`.
-- `CONFETTI_DELAY_MS`
-  Delay before confetti fires on the websocket demo. Defaults to `1300`.
 - `PIRATE_SECRET`
   Required server-side secret exposed by the demo pirate-secret endpoint.
 

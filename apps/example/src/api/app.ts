@@ -1,27 +1,18 @@
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
-import { z } from "zod";
-import { defineApp } from "@iterate-com/shared/define-app";
-import { proxyPosthogRequest } from "@iterate-com/shared/jonasland";
+import { defineApp } from "@iterate-com/shared/apps/define-app";
+import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import manifest from "../manifest.ts";
-import type { ExampleDeps, ExampleInitialOrpcContext } from "./context.ts";
+import type { ExampleDeps } from "./context.ts";
 import { router } from "./router.ts";
 
-export const exampleApp = defineApp<ExampleDeps, ExampleInitialOrpcContext>({
+export const exampleApp = defineApp<ExampleDeps>({
   manifest,
-  createRequestContext({ request, deps }) {
-    return {
-      manifest,
-      req: {
-        headers: new Headers(request.headers),
-        url: request.url,
-      },
-      env: deps.env,
-      db: deps.db,
-    };
-  },
-  async register({ app, upgradeWebSocket, getRequestContext }) {
+  async register({ app, upgradeWebSocket, getDeps, getRequestContext }) {
+    // The OpenAPI handler is the single typed HTTP surface for the example app.
+    // The frontend client talks to `/api`, while the websocket routes below are
+    // standalone demos rather than a second RPC transport.
     const openApiHandler = new OpenAPIHandler(router, {
       plugins: [
         new OpenAPIReferencePlugin({
@@ -40,10 +31,6 @@ export const exampleApp = defineApp<ExampleDeps, ExampleInitialOrpcContext>({
       ],
     });
 
-    app.get("/api/health", (c) =>
-      c.json({ ok: true, service: getRequestContext(c.req.raw).manifest.slug }),
-    );
-
     // Shared app code owns the websocket paths themselves; runtimes only supply
     // the concrete upgrade helper that makes these routes work on Node or Workers.
     app.get(
@@ -57,69 +44,8 @@ export const exampleApp = defineApp<ExampleDeps, ExampleInitialOrpcContext>({
       })),
     );
     app.get(
-      "/api/confetti/ws",
-      upgradeWebSocket((c) => {
-        const { env } = getRequestContext(c.req.raw);
-        // Keep timer state inside the factory so each websocket connection gets its
-        // own interval/timeouts and cleanup can stay purely connection-scoped.
-        let interval: ReturnType<typeof setInterval> | null = null;
-        const timeouts = new Set<ReturnType<typeof setTimeout>>();
-
-        function ensureInterval(send: (value: string) => void) {
-          if (interval) return;
-          interval = setInterval(() => {
-            send(
-              JSON.stringify({
-                type: "boom",
-                x: Math.random(),
-                y: Math.random() * 0.6 + 0.1,
-              }),
-            );
-          }, env.CONFETTI_DELAY_MS);
-        }
-
-        function clearTimers() {
-          if (interval) clearInterval(interval);
-          interval = null;
-          for (const timeout of timeouts) {
-            clearTimeout(timeout);
-          }
-          timeouts.clear();
-        }
-
-        return {
-          onMessage(event, ws) {
-            ensureInterval((value) => ws.send(value));
-            if (typeof event.data !== "string") {
-              ws.send(JSON.stringify({ type: "error", message: "Invalid confetti payload" }));
-              return;
-            }
-
-            try {
-              const payload = z
-                .object({
-                  type: z.literal("launch"),
-                  x: z.number().min(0).max(1),
-                  y: z.number().min(0).max(1),
-                })
-                .parse(JSON.parse(event.data));
-              const timeout = setTimeout(() => {
-                timeouts.delete(timeout);
-                ws.send(JSON.stringify({ type: "boom", x: payload.x, y: payload.y }));
-              }, env.CONFETTI_DELAY_MS);
-              timeouts.add(timeout);
-            } catch {
-              ws.send(JSON.stringify({ type: "error", message: "Invalid confetti payload" }));
-            }
-          },
-          onClose() {
-            clearTimers();
-          },
-          onError() {
-            clearTimers();
-          },
-        };
-      }),
+      "/api/pty/ws",
+      upgradeWebSocket((c) => getDeps().terminal.createWebSocketEvents({ request: c.req.raw })),
     );
 
     app.all("/api/integrations/posthog/proxy/*", (c) =>

@@ -1,6 +1,6 @@
 {
   "name": "dev-example",
-  "main": "src/cloudflare/worker.ts",
+  "main": "src/cloudflare/entrypoint.ts",
   "compatibility_date": "2026-02-05",
   "compatibility_flags": [],
   "assets": {

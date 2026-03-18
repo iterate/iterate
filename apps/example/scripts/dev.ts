@@ -1,6 +1,6 @@
 import { checkPort, getPort } from "get-port-please";
 import { execConcurretly } from "@iterate-com/shared/dev/exec-concurrently";
-import { appScriptBase } from "@iterate-com/shared/jonasland";
+import { appScriptBase } from "@iterate-com/shared/apps/define-app";
 import { loadEnv } from "vite";
 import { z } from "zod";
 
@@ -49,7 +49,7 @@ async function runFrontendAndBackend(params: {
     commands: [
       [
         "tsx",
-        ["src/node/server.ts"],
+        ["--watch", "src/node/entrypoint.ts"],
         {
           nodeOptions: {
             env: { ...process.env, PORT: String(backendPort) },

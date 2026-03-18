@@ -9,50 +9,133 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
+import { Route as AppRouteImport } from './routes/_app'
+import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppThingsRouteImport } from './routes/_app/things'
+import { Route as AppTerminalRouteImport } from './routes/_app/terminal'
+import { Route as AppDebugRouteImport } from './routes/_app/debug'
 
-const IndexRoute = IndexRouteImport.update({
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
+} as any)
+const AppThingsRoute = AppThingsRouteImport.update({
+  id: '/things',
+  path: '/things',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppTerminalRoute = AppTerminalRouteImport.update({
+  id: '/terminal',
+  path: '/terminal',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDebugRoute = AppDebugRouteImport.update({
+  id: '/debug',
+  path: '/debug',
+  getParentRoute: () => AppRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
+  '/': typeof AppIndexRoute
+  '/debug': typeof AppDebugRoute
+  '/terminal': typeof AppTerminalRoute
+  '/things': typeof AppThingsRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
+  '/debug': typeof AppDebugRoute
+  '/terminal': typeof AppTerminalRoute
+  '/things': typeof AppThingsRoute
+  '/': typeof AppIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
+  '/_app': typeof AppRouteWithChildren
+  '/_app/debug': typeof AppDebugRoute
+  '/_app/terminal': typeof AppTerminalRoute
+  '/_app/things': typeof AppThingsRoute
+  '/_app/': typeof AppIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/debug' | '/terminal' | '/things'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/debug' | '/terminal' | '/things' | '/'
+  id:
+    | '__root__'
+    | '/_app'
+    | '/_app/debug'
+    | '/_app/terminal'
+    | '/_app/things'
+    | '/_app/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
+  AppRoute: typeof AppRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
+    '/_app': {
+      id: '/_app'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_app/': {
+      id: '/_app/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/things': {
+      id: '/_app/things'
+      path: '/things'
+      fullPath: '/things'
+      preLoaderRoute: typeof AppThingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/terminal': {
+      id: '/_app/terminal'
+      path: '/terminal'
+      fullPath: '/terminal'
+      preLoaderRoute: typeof AppTerminalRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/debug': {
+      id: '/_app/debug'
+      path: '/debug'
+      fullPath: '/debug'
+      preLoaderRoute: typeof AppDebugRouteImport
+      parentRoute: typeof AppRoute
     }
   }
 }
 
+interface AppRouteChildren {
+  AppDebugRoute: typeof AppDebugRoute
+  AppTerminalRoute: typeof AppTerminalRoute
+  AppThingsRoute: typeof AppThingsRoute
+  AppIndexRoute: typeof AppIndexRoute
+}
+
+const AppRouteChildren: AppRouteChildren = {
+  AppDebugRoute: AppDebugRoute,
+  AppTerminalRoute: AppTerminalRoute,
+  AppThingsRoute: AppThingsRoute,
+  AppIndexRoute: AppIndexRoute,
+}
+
+const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
+  AppRoute: AppRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

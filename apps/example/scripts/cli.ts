@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { appScriptBase } from "@iterate-com/shared/jonasland";
+import { appScriptBase } from "@iterate-com/shared/apps/define-app";
 import { createCli } from "trpc-cli";
 import manifest from "../src/manifest.ts";
 import { devScript, previewScript } from "./dev.ts";
