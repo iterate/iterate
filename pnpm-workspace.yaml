@@ -9,6 +9,8 @@ packages:
   - apps/os
   - apps/semaphore
   - apps/semaphore-contract
+  - apps/example
+  - apps/example-contract
   - sandbox
   - jonasland/sandbox
   - jonasland/e2e

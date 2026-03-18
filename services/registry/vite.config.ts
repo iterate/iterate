@@ -4,8 +4,23 @@ import nodeAdapter from "@hono/vite-dev-server/node";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import viteReact from "@vitejs/plugin-react";
-import { defineConfig, type PluginOption } from "vite";
+import { defineConfig, type Plugin, type PluginOption } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
+
+function honoNodeWsDevPlugin(): Plugin {
+  return {
+    name: "hono-node-ws-dev",
+    configureServer(server) {
+      server.httpServer?.on("listening", async () => {
+        const appModule = await server.ssrLoadModule("src/entry-server.tsx");
+        const { injectWebSocket } = await server.ssrLoadModule("src/server/app.ts");
+        if (typeof injectWebSocket === "function" && server.httpServer) {
+          injectWebSocket(server.httpServer);
+        }
+      });
+    },
+  };
+}
 
 const clientBuild = {
   outDir: "dist/client",
@@ -50,6 +65,7 @@ export default defineConfig(({ mode }) => ({
       injectClientScript: false,
       exclude: [/^\/src\/.+/, ...defaultOptions.exclude],
     }),
+    honoNodeWsDevPlugin(),
   ] as unknown as PluginOption[],
   build: mode === "client" ? clientBuild : serverBuild,
   ssr: {

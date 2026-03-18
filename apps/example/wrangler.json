@@ -1,0 +1,19 @@
+{
+  "name": "dev-example",
+  "main": "src/cloudflare/worker.ts",
+  "compatibility_date": "2026-02-05",
+  "compatibility_flags": [],
+  "assets": {
+    "directory": "dist/client",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_id": "321cf9aa-2734-4709-95e5-71a817f6f899",
+      "database_name": "dev-example-db",
+      "migrations_dir": "./drizzle",
+      "preview_database_id": "321cf9aa-2734-4709-95e5-71a817f6f899"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import { describe } from "vitest";
-import { exampleServiceManifest } from "@iterate-com/example-contract";
+import { exampleServiceManifest } from "@iterate-com/example-old-contract";
 import { serviceManifestToPidnapConfig } from "@iterate-com/shared/jonasland";
 import { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
 import { createDockerProvider } from "@iterate-com/shared/jonasland/deployment/docker-deployment.ts";

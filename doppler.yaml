@@ -7,3 +7,5 @@ setup:
     path: ./
   - project: ingress-proxy
     path: apps/ingress-proxy-worker/
+  - project: example
+    path: apps/example/

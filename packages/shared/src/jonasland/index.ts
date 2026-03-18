@@ -884,3 +884,13 @@ export {
   type ServiceAppVariables,
   type ServiceAppEnv,
 } from "./service-server.ts";
+export {
+  appScriptBase,
+  defineApp,
+  type AttachAppRuntimeOptions,
+  type AttachAppRuntimeResult,
+  type AppInitialContext,
+  type AppManifest,
+  type DefinedApp,
+  type RuntimeOrpcContext,
+} from "../define-app.ts";

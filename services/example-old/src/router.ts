@@ -6,7 +6,7 @@ import {
   exampleContract,
   exampleServiceManifest,
   thingSchema,
-} from "@iterate-com/example-contract";
+} from "@iterate-com/example-old-contract";
 import {
   infoFromContext,
   transformSqlResultSet,

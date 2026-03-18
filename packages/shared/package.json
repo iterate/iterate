@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./define-app": "./src/define-app.ts",
     "./typeid": "./src/typeid.ts",
     "./jonasland": "./src/jonasland/index.ts",
     "./jonasland/service-contract": "./src/jonasland/service-contract.ts",
@@ -47,6 +48,7 @@
     "@orpc/otel": "^1.13.5",
     "@orpc/server": "^1.13.5",
     "@orpc/zod": "^1.13.5",
+    "crossws": "^0.4.4",
     "delay": "^7.0.0",
     "emittery": "2.0.0",
     "evlog": "^1.8.0",

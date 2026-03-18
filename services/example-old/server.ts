@@ -29,7 +29,7 @@ server.listen(port, "0.0.0.0", () => {
 
   void Promise.all([
     import("@iterate-com/shared/jonasland"),
-    import("@iterate-com/example-contract"),
+    import("@iterate-com/example-old-contract"),
     getExampleDbRuntimeConfig(),
   ]).then(([{ registerServiceWithRegistry }, { exampleServiceManifest }, runtime]) => {
     return registerServiceWithRegistry({

@@ -4,27 +4,22 @@ import { appScriptBase } from "@iterate-com/shared/jonasland";
 import { loadEnv } from "vite";
 import { z } from "zod";
 
-const DEFAULT_FRONTEND_PORT = 17301;
-const DEFAULT_BACKEND_PORT = 17302;
+const DEFAULT_FRONTEND_PORT = 17401;
+const DEFAULT_BACKEND_PORT = 17402;
+
 const ServeInput = z.object({
   port: z.coerce.number().int().positive().optional(),
 });
 
 async function getDefaultBackendPort() {
   const preferredPort = await checkPort(DEFAULT_BACKEND_PORT, "0.0.0.0");
-  if (preferredPort) {
-    return preferredPort;
-  }
-
+  if (preferredPort) return preferredPort;
   return await getPort({ port: 0, host: "0.0.0.0" });
 }
 
 function getPortFromUrl(urlString: string) {
   const url = new URL(urlString);
-  if (url.port) {
-    return Number(url.port);
-  }
-
+  if (url.port) return Number(url.port);
   return url.protocol === "https:" ? 443 : 80;
 }
 
@@ -54,7 +49,7 @@ async function runFrontendAndBackend(params: {
     commands: [
       [
         "tsx",
-        ["src/node.ts"],
+        ["src/node/server.ts"],
         {
           nodeOptions: {
             env: { ...process.env, PORT: String(backendPort) },
@@ -84,9 +79,7 @@ async function runFrontendAndBackend(params: {
 }
 
 export const devScript = appScriptBase
-  .meta({
-    description: "Run the ws-test-2 Vite dev server and backend concurrently",
-  })
+  .meta({ description: "Run the example Vite dev server and backend concurrently" })
   .input(ServeInput)
   .handler(async ({ input }) =>
     runFrontendAndBackend({
@@ -97,9 +90,7 @@ export const devScript = appScriptBase
   );
 
 export const previewScript = appScriptBase
-  .meta({
-    description: "Run the ws-test-2 Vite preview server and backend concurrently",
-  })
+  .meta({ description: "Run the example Vite preview server and backend concurrently" })
   .input(ServeInput)
   .handler(async ({ input }) =>
     runFrontendAndBackend({

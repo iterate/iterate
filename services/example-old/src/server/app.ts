@@ -1,5 +1,5 @@
 import { createNodeWebSocket } from "@hono/node-ws";
-import { exampleServiceManifest } from "@iterate-com/example-contract";
+import { exampleServiceManifest } from "@iterate-com/example-old-contract";
 import {
   applyServiceMiddleware,
   createServiceObservabilityHandler,
