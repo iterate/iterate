@@ -2,7 +2,7 @@ import { workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 export default workflow({
-  name: "Semaphore Live E2E",
+  name: "Semaphore Manual Live E2E",
   permissions: {
     contents: "read",
     deployments: "write",
@@ -17,19 +17,11 @@ export default workflow({
         ".github/workflows/semaphore-live-e2e.yml",
       ],
     },
-    pull_request: {
-      paths: [
-        "apps/semaphore/**",
-        "apps/semaphore-contract/**",
-        ".github/ts-workflows/workflows/semaphore-live-e2e.ts",
-        ".github/workflows/semaphore-live-e2e.yml",
-      ],
-    },
     workflow_dispatch: {},
   },
   jobs: {
     "deploy-test-teardown": {
-      if: "github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.pull_request.head.repo.fork == false",
+      if: "github.event_name == 'workflow_dispatch'",
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       "timeout-minutes": 20,
       env: {
@@ -129,13 +121,12 @@ export default workflow({
     },
     "deploy-prd": {
       if: "github.event_name == 'push'",
-      needs: ["deploy-test-teardown"],
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "prd" }),
         {
-          name: "Deploy apps/semaphore",
+          name: "Deploy apps/semaphore directly (manual live E2E only)",
           "working-directory": "apps/semaphore",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",

@@ -1,0 +1,27 @@
+@import "tailwindcss";
+@import "@iterate-com/ui/globals.css";
+
+@source "../src/**/*.{ts,tsx}";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  @apply bg-background text-foreground;
+}
+
+[data-testid="terminal-container"] .xterm {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+[data-testid="terminal-container"] .xterm-viewport {
+  overflow-y: auto !important;
+}

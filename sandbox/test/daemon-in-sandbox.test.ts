@@ -18,24 +18,18 @@
  * See sandbox/test/helpers.ts for full configuration options.
  */
 
-import { describe } from "vitest";
+import { describe, expect } from "vitest";
 import { getDaemonClientForSandbox, getPidnapClientForSandbox } from "../providers/clients.ts";
 import type { Sandbox } from "../providers/types.ts";
 import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS, POLL_DEFAULTS } from "./helpers.ts";
 
-class TerminalProcessStateError extends Error {}
-
-type WaitForRunningInput = {
-  target: string | number;
+type WaitForInput = {
+  processes: Record<string, "healthy">;
   timeoutMs?: number;
-  pollIntervalMs?: number;
-  includeLogs?: boolean;
-  logTailLines?: number;
 };
 
-type WaitForRunningResponse = {
-  state: string;
-  logs?: string;
+type WaitForResponse = {
+  allMet: boolean;
 };
 
 type GetProcessInput = {
@@ -50,15 +44,15 @@ type GetProcessResponse = {
 
 type PidnapLikeClient = {
   processes: {
-    waitForRunning(input: WaitForRunningInput): Promise<WaitForRunningResponse>;
+    waitFor(input: WaitForInput): Promise<WaitForResponse>;
     get(input: GetProcessInput): Promise<GetProcessResponse>;
   };
 };
 
 async function callPidnapViaSandbox<T>(params: {
   sandbox: Sandbox;
-  action: "waitForRunning" | "get";
-  input: WaitForRunningInput | GetProcessInput;
+  action: "waitFor" | "get";
+  input: WaitForInput | GetProcessInput;
 }): Promise<T> {
   const encodedInput = Buffer.from(JSON.stringify(params.input)).toString("base64");
   const script = [
@@ -67,8 +61,8 @@ async function callPidnapViaSandbox<T>(params: {
     "const action = process.env.PIDNAP_ACTION;",
     'const input = JSON.parse(Buffer.from(process.env.PIDNAP_INPUT_B64 ?? "", "base64").toString("utf8"));',
     "const result =",
-    '  action === "waitForRunning"',
-    "    ? await client.processes.waitForRunning(input)",
+    '  action === "waitFor"',
+    "    ? await client.processes.waitFor(input)",
     "    : await client.processes.get(input);",
     "process.stdout.write(JSON.stringify(result));",
   ].join("\n");
@@ -97,10 +91,10 @@ async function getPidnapClient(sandbox: Sandbox): Promise<PidnapLikeClient> {
 
   return {
     processes: {
-      waitForRunning: (input) =>
-        callPidnapViaSandbox<WaitForRunningResponse>({
+      waitFor: (input) =>
+        callPidnapViaSandbox<WaitForResponse>({
           sandbox,
-          action: "waitForRunning",
+          action: "waitFor",
           input,
         }),
       get: (input) =>
@@ -121,69 +115,32 @@ async function fetchWithTimeout(url: string, timeoutMs = 10_000): Promise<Respon
   }
 }
 
-/**
- * Wait for a process to become healthy using pidnap client.
- *
- * NOTE: Currently failing on Daytona due to oRPC routing issue.
- * See tasks/daytona-provider-testing.md for details.
- */
-async function waitForServiceHealthy(params: {
+async function waitForProcessesHealthy(params: {
   sandbox: Sandbox;
-  process: string;
-  timeoutMs?: number;
+  processes: Record<string, "healthy">;
+  timeoutMs: number;
 }): Promise<void> {
-  const { sandbox, process, timeoutMs = 60_000 } = params;
-
-  if (sandbox.type === "fly" && (process === "daemon-backend" || process === "daemon-frontend")) {
-    const healthUrl =
-      process === "daemon-backend"
-        ? "http://127.0.0.1:3001/api/health"
-        : "http://127.0.0.1:3000/api/health";
-    const start = Date.now();
-    let lastError: unknown;
-
-    while (Date.now() - start < timeoutMs) {
-      try {
-        const response = await sandbox.exec(["curl", "-sf", "--max-time", "5", healthUrl]);
-        if (response.includes('"status":"ok"')) return;
-      } catch (error) {
-        lastError = error;
-      }
-      await new Promise((r) => setTimeout(r, 500));
-    }
-
-    throw new Error(`Timeout waiting for ${process} to become healthy: ${String(lastError)}`);
-  }
-
-  const start = Date.now();
-  let lastError: unknown;
-
-  while (Date.now() - start < timeoutMs) {
-    const remainingMs = timeoutMs - (Date.now() - start);
-    try {
-      const client = await getPidnapClient(sandbox);
-      const status = await client.processes.waitForRunning({
-        target: process,
-        timeoutMs: Math.min(10_000, remainingMs),
-        pollIntervalMs: 500,
-        includeLogs: true,
-        logTailLines: 120,
-      });
-
-      if (status.state === "running") return;
-      if (status.state === "stopped" || status.state === "max-restarts-reached") {
-        throw new TerminalProcessStateError(
-          `Process ${process} failed while starting. Final state=${status.state}. Logs:\n${status.logs ?? "(none)"}`,
-        );
-      }
-    } catch (error) {
-      if (error instanceof TerminalProcessStateError) throw error;
-      lastError = error;
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-
-  throw new Error(`Timeout waiting for ${process} to become healthy: ${String(lastError)}`);
+  const { sandbox, processes, timeoutMs } = params;
+  await expect
+    .poll(
+      async () => {
+        try {
+          const client = await getPidnapClient(sandbox);
+          const status = await client.processes.waitFor({
+            processes,
+            timeoutMs: 5_000,
+          });
+          return status.allMet;
+        } catch {
+          return false;
+        }
+      },
+      {
+        timeout: timeoutMs,
+        interval: 500,
+      },
+    )
+    .toBe(true);
 }
 
 // ============ Pidnap-Specific Tests ============
@@ -191,8 +148,12 @@ async function waitForServiceHealthy(params: {
 describe.runIf(RUN_SANDBOX_TESTS)("Pidnap Integration", () => {
   describe("Env Var Hot Reload", () => {
     test("dynamically added env var available in shell and pidnap", async ({ sandbox, expect }) => {
-      await waitForServiceHealthy({ sandbox, process: "daemon-backend", timeoutMs: 30000 });
       const client = await getPidnapClient(sandbox);
+      const backendReady = await client.processes.waitFor({
+        processes: { "daemon-backend": "healthy" },
+        timeoutMs: 30_000,
+      });
+      expect(backendReady.allMet).toBe(true);
 
       // Step 1: Add a new env var to ~/.iterate/.env via exec
       // Using dotenv format (KEY=value) which works for both shell sourcing and dotenv parsing
@@ -223,8 +184,12 @@ describe.runIf(RUN_SANDBOX_TESTS)("Pidnap Integration", () => {
 
   describe("Process Management", () => {
     test("processes.get returns running state for daemon-backend", async ({ sandbox, expect }) => {
-      await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
       const client = await getPidnapClient(sandbox);
+      const backendReady = await client.processes.waitFor({
+        processes: { "daemon-backend": "healthy" },
+        timeoutMs: 60_000,
+      });
+      expect(backendReady.allMet).toBe(true);
       const result = await client.processes.get({ target: "daemon-backend" });
       expect(result.state).toBe("running");
       await expect(client.processes.get({ target: "nonexistent" })).rejects.toThrow(
@@ -247,7 +212,12 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
   });
 
   test("daemon accessible", async ({ sandbox, expect }) => {
-    await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
+    const client = await getPidnapClient(sandbox);
+    const backendReady = await client.processes.waitFor({
+      processes: { "daemon-backend": "healthy" },
+      timeoutMs: 60_000,
+    });
+    expect(backendReady.allMet).toBe(true);
     const baseUrl = await sandbox.getBaseUrl({ port: 3000 });
 
     // Verify health endpoint from host
@@ -265,9 +235,15 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
   }, 90000);
 
   test("PTY endpoint works", async ({ sandbox, expect }) => {
-    // Wait for both backend (has the PTY endpoint) and frontend (Vite proxy for WebSocket)
-    await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
-    await waitForServiceHealthy({ sandbox, process: "daemon-frontend" });
+    const client = await getPidnapClient(sandbox);
+    const daemonReady = await client.processes.waitFor({
+      processes: {
+        "daemon-backend": "healthy",
+        "daemon-frontend": "healthy",
+      },
+      timeoutMs: 60_000,
+    });
+    expect(daemonReady.allMet).toBe(true);
 
     const baseUrl = await sandbox.getBaseUrl({ port: 3000 });
 
@@ -305,7 +281,12 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
   }, 90000);
 
   test("serves assets and routes correctly", async ({ sandbox, expect }) => {
-    await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
+    const client = await getPidnapClient(sandbox);
+    const backendReady = await client.processes.waitFor({
+      processes: { "daemon-backend": "healthy" },
+      timeoutMs: 60_000,
+    });
+    expect(backendReady.allMet).toBe(true);
     const baseUrl = await sandbox.getBaseUrl({ port: 3000 });
     const orpc = (await getDaemonClientForSandbox(sandbox)) as any;
 
@@ -384,14 +365,20 @@ describe.runIf(RUN_SANDBOX_TESTS)("Container Restart", () => {
   test("filesystem persists and daemon restarts", async ({ sandbox, expect }) => {
     const filePath = "/home/iterate/.iterate/persist-test.txt";
     const fileContents = `persist-${Date.now()}`;
-
-    await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
+    await waitForProcessesHealthy({
+      sandbox,
+      processes: { "daemon-backend": "healthy" },
+      timeoutMs: 60_000,
+    });
 
     await sandbox.exec(["sh", "-c", `printf '%s' '${fileContents}' > ${filePath}`]);
 
     await sandbox.restart();
-
-    await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
+    await waitForProcessesHealthy({
+      sandbox,
+      processes: { "daemon-backend": "healthy" },
+      timeoutMs: 60_000,
+    });
 
     const restored = await sandbox.exec(["cat", filePath]);
     expect(restored).toBe(fileContents);

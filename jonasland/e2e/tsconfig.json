@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "esnext",
     "module": "esnext",
-    "lib": ["esnext"],
+    "lib": ["esnext", "dom", "dom.iterable"],
     "types": ["node", "@playwright/test"],
     "strict": true,
     "verbatimModuleSyntax": true,
@@ -14,9 +14,14 @@
   },
   "include": [
     "test-helpers/**/*.ts",
+    "test-support/**/*.ts",
     "tests/**/*.ts",
     "spec/**/*.ts",
+    "vitest/**/*.ts",
+    "playwright/**/*.ts",
+    "vitest.shims.d.ts",
     "vitest.config.ts",
     "playwright.config.ts"
-  ]
+  ],
+  "exclude": ["tests/old/**", "test-helpers/old/**", "spec/old/**", "old/**"]
 }

@@ -178,6 +178,9 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
+      healthCheck: {
+        url: "http://127.0.0.1:3001/api/health",
+      },
       envOptions: {
         // Reload after OS pushes ~/.iterate/.env (contains SLACK_BOT_TOKEN etc.)
         // Safe now that daemon no longer writes to .env (PR #1030 moved to push-based setup).
@@ -198,6 +201,9 @@ export default defineConfig({
       },
       options: {
         restartPolicy: "always",
+      },
+      healthCheck: {
+        url: "http://127.0.0.1:3000/api/health",
       },
       envOptions: {
         inheritGlobalEnv: false,

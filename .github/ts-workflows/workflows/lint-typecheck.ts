@@ -35,7 +35,7 @@ export default workflow({
         },
         {
           name: "Run Lint",
-          run: "pnpm exec oxlint . --threads 1 --deny-warnings",
+          run: "pnpm lint",
         },
         {
           name: "Run Typecheck",

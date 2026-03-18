@@ -16,11 +16,13 @@ dist
 .wrangler
 .dev.vars*
 .alchemy
+apps/ingress-proxy-worker/wrangler.json
 
 !.dev.vars.example
 .env*
 !.env.example
 !apps/os/sandbox/home-skeleton/.iterate/.env
+!jonasland/sandbox/home-skeleton/.iterate/.env
 
 .cursor/rules
 .rules
@@ -28,9 +30,6 @@ dist
 
 .cache
 __pycache__/
-
-# Experiment artifacts
-experiments/*/disk-config.json
 
 # ad-hoc ignored files/paths
 *ignoreme*
@@ -68,4 +67,3 @@ playwriter-screenshot-*
 # PR video recordings
 pr-videos/
 *.log
-experiments/archil-node-modules/disk-config.json
