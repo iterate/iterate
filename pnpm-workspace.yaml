@@ -7,6 +7,9 @@ packages:
   - apps/daemon
   - apps/iterate-com
   - apps/os
+  - apps/auth
+  - apps/auth-contract
+  - apps/auth-example
   - sandbox
   - jonasland/sandbox
   - jonasland/e2e

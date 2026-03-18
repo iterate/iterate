@@ -17,3 +17,4 @@ export { Input as ShadInput } from "./components/input.tsx";
 export { Textarea as ShadTextarea } from "./components/textarea.tsx";
 export { Label } from "./components/label.tsx";
 export { cn } from "./lib/utils.ts";
+export { ThemeProvider, useTheme } from "next-themes";

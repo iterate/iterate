@@ -1,0 +1,51 @@
+{
+  "name": "@iterate-com/auth",
+  "version": "0.0.0-dev",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./server": "./src/lib/server.ts",
+    "./client": "./src/lib/client.ts"
+  },
+  "scripts": {
+    "dev": "doppler run --project auth --config dev -- alchemy dev",
+    "build": "vite build",
+    "typegen": "wrangler types",
+    "typecheck": "tsgo --noEmit",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@better-auth/drizzle-adapter": "^1.5.5",
+    "@better-auth/oauth-provider": "^1.5.5",
+    "@iterate-com/auth-contract": "workspace:*",
+    "@iterate-com/ui": "workspace:*",
+    "@orpc/server": "^1.13.7",
+    "@orpc/tanstack-query": "^1.13.6",
+    "@tanstack/react-query": "^5.90.21",
+    "@tanstack/react-router": "^1.167.0",
+    "@tanstack/react-start": "^1.166.11",
+    "alchemy": "^0.83.3",
+    "better-auth": "^1.5.5",
+    "drizzle-orm": "^0.45.1",
+    "hono": "^4.12.8",
+    "jose": "^6.2.1",
+    "oauth4webapi": "^3.8.5",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "sonner": "^2.0.7",
+    "tailwindcss": "^4.2.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.28.0",
+    "@cloudflare/workers-types": "^4.20260317.1",
+    "@tailwindcss/vite": "^4.2.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@typescript/native-preview": "7.0.0-dev.20260315.1",
+    "@vitejs/plugin-react": "^6.0.1",
+    "drizzle-kit": "^0.31.9",
+    "vite": "^8.0.0",
+    "wrangler": "^4.74.0"
+  }
+}
