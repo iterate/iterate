@@ -1,6 +1,6 @@
 import { os as osBase } from "@orpc/server";
-import type { Hono } from "hono";
-import type { AdapterInstance, AdapterOptions } from "crossws";
+import type { Context, Hono, MiddlewareHandler } from "hono";
+import type { WSContext } from "hono/ws";
 
 export interface AppCliMeta {
   description?: string;
@@ -35,127 +35,157 @@ export interface AppManifest {
 }
 
 /**
- * Base initial oRPC context for every app defined with this helper.
+ * Base request-scoped fields shared by every app defined with this helper.
  *
- * Important nuance:
- * - This is the INITIAL context, not the final execution context.
- * - Middleware is free to add more fields later.
- * - `req` is always present so middleware can inspect the incoming request
- *   without forcing every runtime entrypoint to thread `Request` manually
- *   through its own custom context shape.
+ * App authors can layer their own request context on top of this, but the
+ * manifest and lightweight request metadata are always available to the app
+ * definition helper.
  *
- * We intentionally keep this base type small because we do not want runtime
- * entrypoints such as `server.ts` or `worker.ts` to be forced to construct
- * fields that really belong to middleware. Parsed runtime `env` is the main
- * exception: it is runtime-owned data that is frequently needed by handlers and
- * middleware, so it belongs in the initial context contract. If auth or
- * organization middleware adds `user`, `session`, or other derived values in
- * the future, those should still stay middleware-owned rather than leaking into
- * the runtime wiring contract.
+ * We intentionally keep only lightweight request metadata here so middleware
+ * can inspect the incoming request without forcing every runtime entrypoint to
+ * thread a full `Request` object through its own custom context shape.
  */
-export interface AppInitialContext<TEnv> {
+export interface AppRequestContextBase {
   manifest: AppManifest;
-  req: Request;
-  env: TEnv;
+  req: {
+    headers: Headers;
+    url: string;
+  };
 }
 
 /**
- * The runtime-specific part of the initial context.
+ * Default request context shape when an app chooses to expose all runtime deps
+ * directly to request handlers.
  *
- * Runtime callers provide this object. It contains only the fields that truly
- * belong to the runtime, such as parsed `env`, `db`, or other runtime-owned
- * resources. The app module itself is responsible for adding `manifest` and the
- * live `Request` when it assembles the full initial oRPC context.
+ * This keeps the old "initial context = request metadata + runtime-owned
+ * values" pattern available, but the runtime entrypoint itself now speaks only
+ * in terms of deps rather than oRPC context internals.
  */
-export type RuntimeOrpcContext<TInitialOrpcContext extends AppInitialContext<unknown>> = Omit<
-  TInitialOrpcContext,
-  "manifest" | "req"
->;
+export type AppInitialContext<TDeps extends object> = AppRequestContextBase & TDeps;
+
+/**
+ * Shared websocket event surface used by runtime-agnostic apps.
+ *
+ * Both Node and Cloudflare expose an `upgradeWebSocket` helper in Hono, but
+ * Cloudflare does not support `onOpen`. We keep the shared contract inside the
+ * overlapping subset so app modules can register websocket routes once without
+ * leaking runtime-specific behavior into the app definition.
+ */
+export interface AppWebSocketEvents {
+  onMessage?: (event: MessageEvent, ws: WSContext) => void | Promise<void>;
+  onClose?: (event: CloseEvent, ws: WSContext) => void | Promise<void>;
+  onError?: (event: Event, ws: WSContext) => void | Promise<void>;
+}
+
+/**
+ * Minimal upgrade helper contract shared by Node and Cloudflare runtimes.
+ *
+ * Runtime entrypoints pass their concrete Hono helper through this narrowed
+ * function type. Shared app code should treat it as "register a websocket route
+ * using the common event subset", not as a place to rely on adapter-specific
+ * lifecycle hooks such as Node-only `onOpen`.
+ */
+export type AppUpgradeWebSocket = (
+  createEvents: (context: Context) => AppWebSocketEvents | Promise<AppWebSocketEvents>,
+) => MiddlewareHandler;
 
 /**
  * The options seen by the runtime entrypoint.
  *
- * Runtime callers provide only the runtime-owned portion of context.
- *
- * `defineApp` deliberately does not synthesize a higher-level
- * `createInitialOrpcContext` callback for the app definition anymore. The app
- * module is the place that actually has two of the missing pieces:
- *
- * - the app's own static `manifest`
- * - the live `Request` at the HTTP / websocket callsite
- *
- * The runtime callback contributes the third piece:
- *
- * - parsed runtime `env` and other runtime-owned resources
- *
- * Keeping `createRuntimeOrpcContext` visible inside `app.ts` makes the data
- * flow more obvious and removes one layer of indirection.
+ * Runtime callers provide only runtime-owned deps such as parsed env, database
+ * clients, or runtime-specific adapters. The app definition can then project
+ * those deps into request context however it likes.
  */
-export interface AttachAppRuntimeOptions<
-  TInitialOrpcContext extends AppInitialContext<TEnv>,
-  TEnv,
-  TCrossws extends AdapterInstance,
-> {
-  honoApp: Hono;
-  crosswsAdapter: (options: AdapterOptions) => TCrossws;
-  createRuntimeOrpcContext: () => RuntimeOrpcContext<TInitialOrpcContext>;
-}
-
-export interface AttachAppRuntimeResult<TCrossws extends AdapterInstance> {
-  honoApp: Hono;
-  crossws: TCrossws;
+export interface MountAppOptions<TDeps extends object> {
+  app: Hono;
+  upgradeWebSocket: AppUpgradeWebSocket;
+  getDeps: () => TDeps;
 }
 
 /**
  * Public shape of a runtime-agnostic app definition.
  */
-export interface DefinedApp<TInitialOrpcContext extends AppInitialContext<TEnv>, TEnv> {
+export interface DefinedApp<TDeps extends object, TRequestContext extends AppRequestContextBase> {
   manifest: AppManifest;
-  attachRuntime: <TCrossws extends AdapterInstance>(
-    options: AttachAppRuntimeOptions<TInitialOrpcContext, TEnv, TCrossws>,
-  ) => Promise<AttachAppRuntimeResult<TCrossws>>;
+  mount: (options: MountAppOptions<TDeps>) => Promise<void>;
 }
 
 /**
  * `defineApp` is intentionally small and boring.
  *
  * It does not create a Hono app.
- * It does not create a CrossWS server.
  * It does not register routes or install middleware.
  *
  * The goal is only to make one boundary explicit:
  *
  * 1. The app definition owns static metadata and shared routing/websocket logic.
- * 2. The runtime entrypoint owns concrete runtime resources.
+ * 2. The runtime entrypoint owns concrete runtime deps.
  *
  * This split came from wanting to stay runtime-agnostic. We do not know yet
  * whether an app should ultimately run on Node, Cloudflare Workers, or
  * something else. By keeping the app definition separate from runtime wiring,
  * we can reuse the same app logic across multiple runtimes.
  *
- * The most subtle part of this helper is the context typing:
+ * The most subtle part of this helper is the dep/context typing:
  *
- * - `TInitialOrpcContext` represents only the INITIAL context passed into oRPC.
+ * - `TDeps` represents runtime-owned dependencies supplied by the entrypoint.
+ * - `TRequestContext` represents the INITIAL context passed into oRPC.
  * - Middleware can extend that into a richer EXECUTION context later.
- * - `AppInitialContext<TEnv>` makes parsed runtime env a first-class part of
- *   the initial context contract.
- * - Runtime callers provide only `RuntimeOrpcContext<T>`, i.e. the initial
- *   context minus `manifest` and `req` but including `env` and other
- *   runtime-owned values.
- * - The app module itself assembles the full initial context by combining its
- *   own `manifest`, the live `Request`, and `createRuntimeOrpcContext()`,
- *   which includes parsed `env`.
+ * - By default, request context is just `AppInitialContext<TDeps>`, i.e. the
+ *   shared request metadata plus all deps.
+ * - Apps can override `createRequestContext` if they want to expose only a
+ *   projection of those deps to request handlers.
  *
  * This keeps future middleware additions from "blowing up" the runtime API.
  * If middleware later adds `user`, `session`, `organization`, etc., those
  * fields should be inferred through middleware composition rather than added to
  * the runtime contract of `server.ts` and `worker.ts`.
  */
-export function defineApp<TInitialOrpcContext extends AppInitialContext<TEnv>, TEnv>(definition: {
+export function defineApp<
+  TDeps extends object,
+  TRequestContext extends AppRequestContextBase = AppInitialContext<TDeps>,
+>(definition: {
   manifest: AppManifest;
-  attachRuntime: <TCrossws extends AdapterInstance>(
-    options: AttachAppRuntimeOptions<TInitialOrpcContext, TEnv, TCrossws>,
-  ) => Promise<AttachAppRuntimeResult<TCrossws>>;
-}): DefinedApp<TInitialOrpcContext, TEnv> {
-  return definition;
+  createRequestContext?: (options: {
+    request: Request;
+    manifest: AppManifest;
+    deps: TDeps;
+  }) => TRequestContext;
+  register: (options: {
+    app: Hono;
+    upgradeWebSocket: AppUpgradeWebSocket;
+    getDeps: () => TDeps;
+    getRequestContext: (request: Request) => TRequestContext;
+  }) => Promise<void>;
+}): DefinedApp<TDeps, TRequestContext> {
+  const createRequestContext =
+    definition.createRequestContext ??
+    ((options: { request: Request; manifest: AppManifest; deps: TDeps }) =>
+      ({
+        manifest: options.manifest,
+        req: {
+          headers: new Headers(options.request.headers),
+          url: options.request.url,
+        },
+        ...options.deps,
+      }) as unknown as TRequestContext);
+
+  return {
+    manifest: definition.manifest,
+    async mount({ app, upgradeWebSocket, getDeps }) {
+      const getRequestContext = (request: Request) =>
+        createRequestContext({
+          request,
+          manifest: definition.manifest,
+          deps: getDeps(),
+        });
+
+      await definition.register({
+        app,
+        upgradeWebSocket,
+        getDeps,
+        getRequestContext,
+      });
+    },
+  };
 }

@@ -9,3 +9,5 @@ setup:
     path: apps/ingress-proxy-worker/
   - project: example
     path: apps/example/
+  - project: test
+    path: apps/test/

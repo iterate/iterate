@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./define-app": "./src/define-app.ts",
+    "./apps/orpc": "./src/apps/orpc/index.ts",
     "./typeid": "./src/typeid.ts",
     "./jonasland": "./src/jonasland/index.ts",
     "./jonasland/service-contract": "./src/jonasland/service-contract.ts",
@@ -20,6 +21,7 @@
     "./jonasland/deployment/deployment-utils.ts": "./src/jonasland/deployment/deployment-utils.ts",
     "./force-public-url-vite-plugin": "./src/dev/force-public-url-vite-plugin.ts",
     "./dev/exec-concurrently": "./src/dev/exec-concurrently.ts",
+    "./posthog": "./src/posthog.ts",
     "./project-ingress": "./src/project-ingress.ts",
     "./github-agent-path": "./src/github-agent-path.ts",
     "./slug-maker": "./src/slug-maker.ts"
@@ -48,7 +50,6 @@
     "@orpc/otel": "^1.13.5",
     "@orpc/server": "^1.13.5",
     "@orpc/zod": "^1.13.5",
-    "crossws": "^0.4.4",
     "delay": "^7.0.0",
     "emittery": "2.0.0",
     "evlog": "^1.8.0",

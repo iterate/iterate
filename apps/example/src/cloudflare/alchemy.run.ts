@@ -2,9 +2,9 @@ import alchemy from "alchemy";
 import { Assets, D1Database, Worker, WranglerJson } from "alchemy/cloudflare";
 import { z } from "zod";
 import { ExampleAppEnv } from "../env.ts";
-import { appManifest } from "../manifest.ts";
+import manifest from "../manifest.ts";
 
-const APP_NAME = appManifest.slug;
+const APP_NAME = manifest.slug;
 
 const AlchemyEnv = ExampleAppEnv.extend({
   ALCHEMY_PASSWORD: z.string().trim().min(1, "ALCHEMY_PASSWORD is required"),

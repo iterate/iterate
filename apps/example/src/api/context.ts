@@ -5,6 +5,11 @@ import type * as schema from "./db/schema.ts";
 
 export type ExampleDb = BaseSQLiteDatabase<"sync" | "async", unknown, typeof schema>;
 
+export interface ExampleDeps {
+  env: ExampleRuntimeEnv;
+  db: ExampleDb;
+}
+
 /**
  * Initial oRPC context for the example app.
  *
@@ -13,6 +18,4 @@ export type ExampleDb = BaseSQLiteDatabase<"sync" | "async", unknown, typeof sch
  * inferred through middleware composition rather than added here, because
  * runtime entrypoints should only be responsible for values they truly own.
  */
-export interface ExampleInitialOrpcContext extends AppInitialContext<ExampleRuntimeEnv> {
-  db: ExampleDb;
-}
+export interface ExampleInitialOrpcContext extends AppInitialContext<ExampleDeps> {}

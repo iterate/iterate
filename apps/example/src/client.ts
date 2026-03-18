@@ -1,5 +1,4 @@
 import { createORPCClient } from "@orpc/client";
-import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { exampleContract } from "@iterate-com/example-contract";
@@ -14,16 +13,11 @@ export function createExampleClient(params?: {
   fetch?: typeof fetch;
 }): ExampleClient {
   const base = params?.url ?? FALLBACK_ORIGIN;
+  // Keep a single transport story for the example app: typed clients call the
+  // OpenAPI-backed HTTP API, while raw websocket routes stay demo-only.
   const link = new OpenAPILink(exampleContract, {
     url: `${base}/api`,
     ...(params?.fetch ? { fetch: params.fetch } : {}),
   });
-  return createORPCClient(link);
-}
-
-export function createExampleWebSocketClient(params?: { url?: string }): ExampleClient {
-  const base = params?.url ?? FALLBACK_ORIGIN;
-  const wsUrl = base.replace(/^http/, "ws") + "/api/orpc/ws";
-  const link = new WebSocketRPCLink({ websocket: new WebSocket(wsUrl, ["orpc"]) });
   return createORPCClient(link);
 }

@@ -2,10 +2,10 @@
 
 Minimal full-stack app demonstrating a runtime-agnostic app layout:
 
-- **API:** Hono + oRPC (HTTP + WebSocket) with Drizzle ORM
+- **API:** Hono + oRPC over OpenAPI/HTTP with Drizzle ORM
 - **Frontend:** TanStack Start (SPA mode) + TanStack Query
 - **Runtimes:** Node.js (better-sqlite3) and Cloudflare Workers (D1)
-- **WebSockets:** ping-pong (1s delay echo) + confetti broadcast
+- **WebSockets:** ping-pong (1s delay echo) + confetti broadcast demos
 
 ## Why It Is Structured This Way
 
@@ -32,9 +32,8 @@ This file exports `exampleApp`, which is the runtime-agnostic app definition.
 
 It contains the shared behavior:
 
-- creates the oRPC handler
 - creates the OpenAPI handler
-- defines websocket route resolution
+- registers websocket demo routes
 - attaches HTTP routes to the provided Hono app
 
 It does **not** decide whether the app is running on Node or Cloudflare.
@@ -42,28 +41,21 @@ It does **not** decide whether the app is running on Node or Cloudflare.
 Instead, it exposes:
 
 ```ts
-exampleApp.attachRuntime({
-  honoApp,
-  crosswsAdapter,
-  createRuntimeOrpcContext,
+exampleApp.mount({
+  app,
+  upgradeWebSocket,
+  getDeps,
 });
 ```
 
 The runtime provides three things:
 
-- `honoApp`: the concrete Hono app instance to attach routes to
-- `crosswsAdapter`: the runtime-specific CrossWS adapter factory
-- `createRuntimeOrpcContext`: only the runtime-owned part of the initial oRPC context
+- `app`: the concrete Hono app instance to attach routes to
+- `upgradeWebSocket`: the runtime-specific Hono websocket helper
+- `getDeps`: the runtime-owned dependency bag, such as parsed `env` and `db`
 
-The returned value is:
-
-```ts
-{
-  (honoApp, crossws);
-}
-```
-
-That means the runtime entrypoint still owns the final server-specific wiring.
+`mount()` mutates the provided Hono app in place and returns nothing.
+That keeps the final runtime-specific wiring in the entrypoint.
 
 ### `src/node/server.ts`
 
@@ -74,8 +66,8 @@ It is responsible for Node-specific concerns:
 - opening the SQLite database with `better-sqlite3`
 - running Drizzle migrations
 - creating the Hono app instance
-- using the Node CrossWS adapter
-- attaching websocket upgrades to the Node server
+- creating the Node websocket helper with `@hono/node-ws`
+- attaching websocket upgrades to the Node server with `injectWebSocket(server)`
 
 In other words, this file says: "take `exampleApp` and wire it into a Node
 runtime."
@@ -88,8 +80,8 @@ It is responsible for Worker-specific concerns:
 
 - opening the D1 database
 - creating the Hono app instance
-- using the Cloudflare CrossWS adapter
-- handling websocket upgrades using the Worker runtime APIs
+- using `upgradeWebSocket` from `hono/cloudflare-workers`
+- serving both HTTP and websocket routes through `app.fetch(...)`
 
 This file says: "take the same `exampleApp` and wire it into a Cloudflare
 runtime."
@@ -103,34 +95,41 @@ There are two different context ideas in play here:
 
 This example is careful not to confuse them.
 
-`defineApp` only preserves the app definition shape and types. The actual
-assembly of the initial oRPC context happens in `src/api/app.ts`, because that
-file is the place that has:
+`defineApp` preserves the app definition shape while separating two ideas:
 
-- the app's own `appManifest`
-- the live `Request`
-- the runtime-owned values returned by `createRuntimeOrpcContext()`, including
-  parsed `env`
+- **runtime deps**: the values returned by `getDeps()`
+- **initial oRPC context**: the request-scoped object passed into handlers
 
-Runtimes do **not** pass either of those in manually. Instead they provide
-`createRuntimeOrpcContext`, and `src/api/app.ts` assembles the full initial
-context by merging:
+By default, `defineApp` turns deps into request context by combining:
 
 ```ts
 {
-  manifest: appManifest,
-  req,
-  ...createRuntimeOrpcContext(),
+  manifest,
+  req: { headers, url },
+  ...deps,
 }
 ```
 
-That means runtime files only provide values they truly own, like parsed `env`
-and `db`.
+This example keeps an explicit `createRequestContext()` in `src/api/app.ts` even
+though the default would work, because it makes the projection layer obvious:
+the runtime only provides deps, while the app decides what belongs in request
+context.
 
 This matters because middleware may add more context later. If auth middleware
 eventually injects `user` or `session`, those fields should stay
 middleware-derived rather than being added to the runtime contract for
 `server.ts` or `worker.ts`.
+
+## Client Transport
+
+The example app exposes a single typed client transport for application RPC:
+
+- `src/client.ts` uses `OpenAPILink`
+- `src/frontend/lib/orpc.ts` calls `createExampleClient()`
+
+That means all example-app oRPC clients talk to the HTTP OpenAPI surface under
+`/api`. The websocket endpoints are demo-only and are not a second supported
+transport for the app router.
 
 ## Dev
 

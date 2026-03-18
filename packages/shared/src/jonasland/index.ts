@@ -855,6 +855,7 @@ export function serviceManifestToPidnapConfig(params: {
 }
 
 export { createSlug };
+export { proxyPosthogRequest } from "../posthog.ts";
 export { stripAnsi } from "./strip-ansi.ts";
 export {
   ServiceDebugOutput,
@@ -887,10 +888,11 @@ export {
 export {
   appScriptBase,
   defineApp,
-  type AttachAppRuntimeOptions,
-  type AttachAppRuntimeResult,
   type AppInitialContext,
   type AppManifest,
+  type AppRequestContextBase,
+  type AppUpgradeWebSocket,
+  type AppWebSocketEvents,
   type DefinedApp,
-  type RuntimeOrpcContext,
+  type MountAppOptions,
 } from "../define-app.ts";

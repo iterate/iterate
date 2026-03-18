@@ -1,10 +1,16 @@
 import { desc, eq, sql } from "drizzle-orm";
 import { ORPCError, implement } from "@orpc/server";
 import { exampleContract } from "@iterate-com/example-contract";
+import { withRequestLogger } from "@iterate-com/shared/apps/orpc";
 import type { ExampleInitialOrpcContext } from "../context.ts";
 import { thingsTable } from "../db/schema.ts";
 
-const os = implement(exampleContract).$context<ExampleInitialOrpcContext>();
+// The shared app logger middleware only depends on the `defineApp` initial
+// context contract (`manifest`, `req.headers`, `req.url`), so we can attach it
+// once at the base builder and keep every procedure request-scoped by default.
+const os = implement(exampleContract)
+  .$context<ExampleInitialOrpcContext>()
+  .use(withRequestLogger());
 
 const rootRouter = os.router({
   service: {
