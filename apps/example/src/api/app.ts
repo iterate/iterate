@@ -4,15 +4,30 @@ import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { defineApp } from "@iterate-com/shared/apps/define-app";
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import manifest from "../manifest.ts";
-import type { ExampleDeps } from "./context.ts";
+import type { ExampleDeps, ExampleInitialOrpcContext } from "./context.ts";
 import { router } from "./router.ts";
 
-export const exampleApp = defineApp<ExampleDeps>({
+export const exampleApp = defineApp<ExampleDeps, ExampleInitialOrpcContext>({
   manifest,
+  createRequestContext({ request, manifest, deps }) {
+    return {
+      manifest,
+      req: {
+        headers: new Headers(request.headers),
+        url: request.url,
+        raw: request,
+      },
+      ...deps,
+    };
+  },
   async register({ app, upgradeWebSocket, getDeps, getRequestContext }) {
     // The OpenAPI handler is the single typed HTTP surface for the example app.
     // The frontend client talks to `/api`, while the websocket routes below are
     // standalone demos rather than a second RPC transport.
+    //
+    // The paths themselves come from the contract package. In particular, the
+    // shared `iterate.*` contract defines the `/__iterate/*` OpenAPI routes, and
+    // this handler simply serves that contract under the `/api` prefix.
     const openApiHandler = new OpenAPIHandler(router, {
       plugins: [
         new OpenAPIReferencePlugin({
@@ -55,8 +70,9 @@ export const exampleApp = defineApp<ExampleDeps>({
       }),
     );
 
-    // The example app's typed oRPC clients use the OpenAPI-backed HTTP surface.
-    // The websocket routes above are standalone demos rather than a second RPC transport.
+    // `/api/*` is the typed HTTP surface for the app. Matching RPC procedures go
+    // through the OpenAPI handler, and unmatched `/api/*` requests stop here with
+    // a JSON 404 instead of falling through to later Hono routes.
     app.all("/api/*", async (c) => {
       const { matched, response } = await openApiHandler.handle(c.req.raw, {
         prefix: "/api",

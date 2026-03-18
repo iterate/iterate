@@ -4,8 +4,15 @@ import { testRouter } from "./routers/test.ts";
 import { thingsRouter } from "./routers/things.ts";
 import { os } from "./base.ts";
 
+// Concrete implementation of `exampleContract`.
+//
+// The shared contract owns the `/__iterate/*` OpenAPI paths, while this file is
+// where those contract keys are matched to actual handlers with
+// `os.<procedure>.handler(...)`.
 function createIterateDebugOutput() {
   if (typeof process === "undefined") {
+    // Workers do not expose Node process metrics, so we return explicit sentinel
+    // values while still satisfying the shared debug contract shape.
     return {
       pid: -1,
       ppid: -1,
@@ -68,6 +75,8 @@ export const router = os.router({
     })),
     debug: os.iterate.debug.handler(async () => createIterateDebugOutput()),
     execSql: os.iterate.execSql.handler(async () => {
+      // `iterate.execSql` stays in the shared contract for tooling consistency
+      // even when a specific app chooses not to support raw SQL execution.
       throw new ORPCError("NOT_IMPLEMENTED", {
         message: "iterate.execSql is not available for this app",
       });

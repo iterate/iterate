@@ -1,15 +1,20 @@
 import { oc } from "@orpc/contract";
-import { createServiceSubRouterContract } from "@iterate-com/shared/jonasland/service-contract";
+import { iterateMetaRouterContract } from "@iterate-com/shared/apps/iterate-contract";
 import { z } from "zod";
 
-const serviceSubRouter = createServiceSubRouterContract({
-  healthSummary: "Example service health metadata",
-  sqlSummary: "Execute SQL against example database",
-  debugSummary: "Example service runtime debug details",
-});
-
+/**
+ * Shared source of truth for the example app's typed RPC surface.
+ *
+ * `implement(exampleContract)` in `apps/example/src/api/base.ts` binds the
+ * server implementation to this contract, and `os.router({...})` in
+ * `apps/example/src/api/router.ts` provides the actual handlers.
+ *
+ * The `iterate.*` subtree is the shared app-level operator/debug namespace that
+ * all apps may expose under `/__iterate/*`, while the rest of this file is the
+ * example app's own domain-specific surface.
+ */
 export const exampleContract = oc.router({
-  ...serviceSubRouter,
+  ...iterateMetaRouterContract,
   ping: oc
     .route({ method: "GET", path: "/ping", summary: "Ping", tags: ["debug"] })
     .input(z.object({}).optional().default({}))
@@ -23,6 +28,41 @@ export const exampleContract = oc.router({
     })
     .input(z.object({}).optional().default({}))
     .output(z.object({ secret: z.string() })),
+  test: {
+    logDemo: oc
+      .route({
+        method: "POST",
+        path: "/test/log-demo",
+        summary: "Emit a multi-step server log demo",
+        tags: ["debug", "test"],
+      })
+      .input(
+        z.object({
+          label: z.string().trim().min(1).default("frontend-button"),
+        }),
+      )
+      .output(
+        z.object({
+          ok: z.literal(true),
+          label: z.string(),
+          requestId: z.string(),
+          steps: z.array(z.string()),
+        }),
+      ),
+    serverThrow: oc
+      .route({
+        method: "POST",
+        path: "/test/server-throw",
+        summary: "Throw a real server exception for stack trace testing",
+        tags: ["debug", "test"],
+      })
+      .input(
+        z.object({
+          message: z.string().trim().min(1).default("Example server test exception"),
+        }),
+      )
+      .output(z.never()),
+  },
   things: {
     create: oc
       .route({ method: "POST", path: "/things", summary: "Create a thing", tags: ["things"] })

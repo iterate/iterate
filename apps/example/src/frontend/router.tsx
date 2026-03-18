@@ -37,6 +37,9 @@ export function getRouter() {
     context,
     defaultPreload: "intent",
     scrollRestoration: true,
+    defaultPendingComponent: () => (
+      <div className="min-h-screen bg-background p-4 text-sm text-muted-foreground">Loading...</div>
+    ),
     defaultNotFoundComponent: () => <p className="p-4 text-muted-foreground">Not found</p>,
   });
 

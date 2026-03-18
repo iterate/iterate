@@ -1,10 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import * as pty from "@lydell/node-pty";
+import { createNodeWebSocket } from "@hono/node-ws";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import XTermHeadless from "@xterm/headless/lib-headless/xterm-headless.js";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { Hono } from "hono";
 import { z } from "zod";
+import type { ExampleDeps } from "../api/context.ts";
+import * as schema from "../api/db/schema.ts";
 import type { ExampleTerminalDep } from "../api/terminal.ts";
+import { exampleApp } from "../api/app.ts";
+import { ExampleAppEnv, ExampleNodeEnv } from "../env.ts";
 
 const COMMAND_PREFIX = "\x00[command]\x00";
 const TERMINAL_TTL_MS = 10 * 60 * 1000;
@@ -261,5 +269,33 @@ export function createNodeTerminalDep(): ExampleTerminalDep {
         },
       };
     },
+  };
+}
+
+export async function createExampleNodeApp(envInput?: ExampleNodeEnv) {
+  const env = envInput ?? ExampleNodeEnv.parse(process.env);
+
+  const db = drizzle(env.EXAMPLE_DB_PATH, { schema });
+  db.$client.pragma("journal_mode = WAL");
+  migrate(db, { migrationsFolder: new URL("../../drizzle", import.meta.url).pathname });
+
+  const deps: ExampleDeps = {
+    env: ExampleAppEnv.parse(env),
+    db,
+    terminal: createNodeTerminalDep(),
+  };
+
+  const app = new Hono();
+  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
+
+  await exampleApp.mount({
+    app,
+    getDeps: () => deps,
+    upgradeWebSocket,
+  });
+
+  return {
+    app,
+    injectWebSocket,
   };
 }

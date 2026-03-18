@@ -71,17 +71,18 @@ It is responsible for Node-specific concerns:
 - initializing `evlog` once for pretty request logging in local development
 - creating the Node-only terminal dependency
 
-### `src/node/entrypoint.ts`
+### `vite.config.ts`
 
-This is the thin Node server entrypoint.
+This is the only local Vite config for the example app.
 
 It is responsible for:
 
-- creating the HTTP server from the pre-wired Hono app
-- attaching websocket upgrades to the Node server with `injectWebSocket(server)`
+- serving the frontend during `pnpm dev`
+- using the embedded Node app plugin so `/api` traffic shares the same Vite port in development
+- building the SPA output that `vite preview` serves for the lightweight production-like path
 
-Together these files say: "take `exampleApp`, wire it into a Node runtime, then
-listen on the requested host/port."
+Together these files say: "take `exampleApp`, wire it into a Node runtime for
+the API, and let Vite own both the dev server and preview server lifecycle."
 
 ### `src/cloudflare/entrypoint.ts`
 
@@ -160,9 +161,9 @@ supported transport for the app router.
 ## Dev
 
 ```bash
-pnpm dev          # Vite frontend + Node API backend
-pnpm build        # Production build
-pnpm preview      # Preview production build locally
+pnpm dev          # Vite dev server with embedded Node API on one port
+pnpm build        # Build the SPA output
+pnpm start        # Preview the built app with Vite
 ```
 
 ## Cloudflare Worker
@@ -219,6 +220,6 @@ pnpm drizzle-kit push        # Push schema directly (dev)
 ## CLI
 
 ```bash
-pnpm cli dev       # Start dev servers
-pnpm cli preview   # Start preview servers
+pnpm dev       # Start the embedded Vite app
+pnpm start     # Preview the built Vite app
 ```

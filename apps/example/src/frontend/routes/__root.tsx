@@ -12,21 +12,18 @@ import { TanStackDevtools } from "@tanstack/react-devtools";
 import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { Button } from "@iterate-com/ui/components/button";
-import {
-  PostHogProvider,
-  setupPosthog,
-  shouldEnablePosthog,
-} from "@iterate-com/ui/components/posthog";
+import { PostHogProvider, setupPosthog } from "@iterate-com/ui/components/posthog";
 import appCss from "../styles.css?url";
 
 export interface RouterContext {
   queryClient: QueryClient;
 }
 
-const posthog = setupPosthog({
-  apiKey: import.meta.env.VITE_POSTHOG_PUBLIC_KEY,
-  proxyUrl: import.meta.env.VITE_POSTHOG_PROXY_URL,
-});
+// Keep the example app focused on the TanStack Start + runtime wiring demos.
+// PostHog is used elsewhere in the repo, but disabling it here avoids unrelated
+// third-party browser behavior obscuring the Cloudflare SPA proof-of-concept.
+const posthog = setupPosthog({});
+const posthogEnabled = false;
 
 export const Route = createRootRouteWithContext<RouterContext>()({
   head: () => ({
@@ -60,10 +57,7 @@ function RootComponent() {
   const { queryClient } = Route.useRouteContext();
 
   return (
-    <PostHogProvider
-      client={posthog}
-      enabled={shouldEnablePosthog(import.meta.env.VITE_POSTHOG_PUBLIC_KEY)}
-    >
+    <PostHogProvider client={posthog} enabled={posthogEnabled}>
       <QueryClientProvider client={queryClient}>
         <Outlet />
         <ExampleDevtools />

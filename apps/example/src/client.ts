@@ -5,19 +5,35 @@ import { exampleContract } from "@iterate-com/example-contract";
 
 export type ExampleClient = ContractRouterClient<typeof exampleContract>;
 
-const FALLBACK_ORIGIN =
-  typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:17401";
+function resolveExampleApiUrl(url?: string) {
+  // OpenAPILink wants a concrete URL. In the browser we derive it lazily from
+  // window.location, but server-side callers must pass an absolute base URL
+  // explicitly instead of relying on "/api".
+  //
+  // First-party docs:
+  // - OpenAPILink setup:
+  //   https://orpc.unnoq.com/docs/openapi/client/openapi-link
+  // - Lazy URL for environment-aware resolution:
+  //   https://orpc.unnoq.com/docs/openapi/client/openapi-link#lazy-url
+  if (url) {
+    return new URL("/api", url).toString();
+  }
+
+  if (typeof window === "undefined") {
+    throw new Error("createExampleClient requires an absolute url when used on the server");
+  }
+
+  return new URL("/api", window.location.origin).toString();
+}
 
 export function createExampleClient(params?: {
   url?: string;
   fetch?: typeof fetch;
 }): ExampleClient {
-  const base = params?.url ?? FALLBACK_ORIGIN;
-  // Keep a single transport story for the example app: typed clients call the
-  // OpenAPI-backed HTTP API, while raw websocket routes stay demo-only.
-  const link = new OpenAPILink(exampleContract, {
-    url: `${base}/api`,
-    ...(params?.fetch ? { fetch: params.fetch } : {}),
-  });
-  return createORPCClient(link);
+  return createORPCClient(
+    new OpenAPILink(exampleContract, {
+      url: () => resolveExampleApiUrl(params?.url),
+      ...(params?.fetch ? { fetch: params.fetch } : {}),
+    }),
+  );
 }

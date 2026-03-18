@@ -28,6 +28,7 @@ import {
   type Log,
   type RequestLogger,
 } from "evlog";
+import { initWorkersLogger } from "evlog/workers";
 import { sendBatchToOTLP } from "evlog/otlp";
 import type { DrainContext } from "evlog";
 import type { Plugin } from "vite";
@@ -278,6 +279,23 @@ export function initializeServiceEvlog(serviceName: string): void {
   });
 }
 
+export function initializeServiceWorkersEvlog(serviceName: string): void {
+  const drainEndpoint = resolveEvlogDrainEndpoint();
+
+  initWorkersLogger({
+    env: {
+      service: serviceName,
+      environment: process.env.NODE_ENV ?? "development",
+      version: process.env.npm_package_version || "0.0.0",
+    },
+    ...(drainEndpoint
+      ? {
+          drain: createSilentOTLPDrain(drainEndpoint),
+        }
+      : {}),
+  });
+}
+
 export const serviceLog = rootLog;
 
 export function createServiceRequestLogger(options: {
@@ -301,7 +319,7 @@ export function createServiceContextMiddleware(serviceName: string) {
       context.log ||
       createServiceRequestLogger({
         requestId,
-        method: "ORPC",
+        method: "oRPC",
         path: "unknown",
       });
 
@@ -895,4 +913,4 @@ export {
   type AppWebSocketEvents,
   type DefinedApp,
   type MountAppOptions,
-} from "../define-app.ts";
+} from "../apps/define-app.ts";

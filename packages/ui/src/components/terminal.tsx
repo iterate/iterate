@@ -82,9 +82,8 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   }, [ctrlActive]);
 
   const wsUrl = useMemo(() => {
-    const baseUri = new URL(document.baseURI);
-    const protocol = baseUri.protocol === "https:" ? "wss:" : "ws:";
-    const base = wsBase || `${protocol}//${baseUri.host}`;
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const base = wsBase || `${protocol}//${window.location.host}`;
     const params = new URLSearchParams();
 
     if (ptyId) params.set("ptyId", ptyId);
@@ -338,13 +337,13 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         </div>
       )}
 
-      <div className="relative min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1 p-2">
         <button
           type="button"
           ref={containerRef}
           data-testid="terminal-container"
           data-connection-status={connectionStatus}
-          className="absolute inset-0 border-0 bg-transparent p-0"
+          className="absolute inset-2 border-0 bg-transparent p-0"
           onClick={() => terminalRef.current?.focus()}
           onKeyDown={(event) => {
             if (event.key !== "Enter" && event.key !== " ") return;

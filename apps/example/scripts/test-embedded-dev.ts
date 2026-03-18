@@ -1,10 +1,20 @@
 export {};
 
-const DEFAULT_BASE_URL = "http://127.0.0.1:17401";
 const SOCKET_TIMEOUT_MS = 5_000;
+const HMR_NEGATIVE_TIMEOUT_MS = 1_500;
+
+type Mode = "dev" | "start";
+
+function getMode(): Mode {
+  const input = process.argv[2]?.trim();
+  if (input === "start") return "start";
+  return "dev";
+}
 
 function getBaseUrl() {
-  const input = process.argv[2]?.trim() || process.env.EXAMPLE_BASE_URL?.trim() || DEFAULT_BASE_URL;
+  const mode = getMode();
+  const defaultBaseUrl = mode === "start" ? "http://localhost:4173" : "http://localhost:5173";
+  const input = process.argv[3]?.trim() || process.env.EXAMPLE_BASE_URL?.trim() || defaultBaseUrl;
   return new URL(input);
 }
 
@@ -153,16 +163,71 @@ async function assertViteHmrWebSocket(baseUrl: URL) {
   );
 }
 
+async function assertViteHmrWebSocketUnavailable(baseUrl: URL) {
+  const url = new URL("/", toWebSocketUrl(baseUrl));
+
+  await new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(url, "vite-hmr");
+    let settled = false;
+
+    function succeed() {
+      if (settled) return;
+      settled = true;
+      console.log(`[ok] vite hmr websocket unavailable -> ${url}`);
+      resolve();
+    }
+
+    function fail(error: Error) {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    }
+
+    const timer = setTimeout(() => {
+      ws.close();
+      succeed();
+    }, HMR_NEGATIVE_TIMEOUT_MS);
+
+    ws.addEventListener("open", () => {
+      clearTimeout(timer);
+      fail(new Error(`Vite HMR websocket unexpectedly connected: ${url}`));
+      ws.close();
+    });
+
+    ws.addEventListener("message", (event) => {
+      clearTimeout(timer);
+      fail(new Error(`Vite HMR websocket unexpectedly sent data: ${String(event.data)}`));
+      ws.close();
+    });
+
+    ws.addEventListener("error", () => {
+      clearTimeout(timer);
+      succeed();
+    });
+
+    ws.addEventListener("close", () => {
+      clearTimeout(timer);
+      succeed();
+    });
+  });
+}
+
 async function main() {
+  const mode = getMode();
   const baseUrl = getBaseUrl();
 
-  console.log(`Checking embedded dev server at ${baseUrl.toString()}`);
+  console.log(`Checking example ${mode} server at ${baseUrl.toString()}`);
 
   await assertHttpPing(baseUrl);
   await assertPingWebSocket(baseUrl);
-  await assertViteHmrWebSocket(baseUrl);
 
-  console.log("All embedded dev checks passed.");
+  if (mode === "dev") {
+    await assertViteHmrWebSocket(baseUrl);
+  } else {
+    await assertViteHmrWebSocketUnavailable(baseUrl);
+  }
+
+  console.log(`All example ${mode} checks passed.`);
 }
 
 await main().catch((error: unknown) => {

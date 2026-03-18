@@ -9,23 +9,22 @@ const pingQueryOptions = {
   staleTime: 30_000,
 };
 
+// Keep this route client-rendered only. Start route loaders are isomorphic, so
+// prefetching here would also run during server-side shell/SSR execution and
+// would pull the browser oRPC client into the wrong environment.
+//
+// First-party docs:
+// - Start execution model:
+//   https://tanstack.com/start/latest/docs/framework/react/guide/execution-model
+// - SPA mode shell behavior:
+//   https://tanstack.com/start/latest/docs/framework/react/guide/spa-mode
 export const Route = createFileRoute("/_app/debug")({
-  loader: async ({ context }) => {
-    await context.queryClient.ensureQueryData(pingQueryOptions);
-  },
   component: DebugPage,
 });
 
 function getWebSocketBaseUrl() {
-  const baseUrl =
-    import.meta.env.VITE_API_BASE_URL?.trim() ||
-    (typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:17402");
-  const url = new URL(baseUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = "";
-  url.search = "";
-  url.hash = "";
-  return url.toString().replace(/\/$/, "");
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}`;
 }
 
 function PingPongDemo({ wsBase }: { wsBase: string }) {

@@ -1,7 +1,11 @@
-import { useCallback } from "react";
+import { lazy, Suspense, useCallback } from "react";
 import { ClientOnly, createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
-import { Terminal } from "@iterate-com/ui/components/terminal";
+
+const Terminal = lazy(async () => {
+  const module = await import("@iterate-com/ui/components/terminal");
+  return { default: module.Terminal };
+});
 
 const TerminalParams = z.object({
   command: z.string().optional(),
@@ -45,13 +49,15 @@ function TerminalPage() {
     <div className="flex min-h-full flex-1 flex-col">
       <div className="flex-1 overflow-hidden bg-[#1e1e1e]">
         <ClientOnly fallback={<div className="h-full w-full bg-[#1e1e1e]" />}>
-          <div className="h-full w-full">
-            <Terminal
-              initialCommand={{ command, autorun }}
-              ptyId={ptyId}
-              onParamsChange={updateParams}
-            />
-          </div>
+          <Suspense fallback={<div className="h-full w-full bg-[#1e1e1e]" />}>
+            <div className="h-full w-full">
+              <Terminal
+                initialCommand={{ command, autorun }}
+                ptyId={ptyId}
+                onParamsChange={updateParams}
+              />
+            </div>
+          </Suspense>
         </ClientOnly>
       </div>
     </div>

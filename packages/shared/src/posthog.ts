@@ -5,6 +5,10 @@ export interface ProxyPosthogRequestOptions {
   assetHost?: string;
 }
 
+function isNullBodyStatus(status: number) {
+  return status === 101 || status === 103 || status === 204 || status === 205 || status === 304;
+}
+
 export async function proxyPosthogRequest(options: ProxyPosthogRequestOptions): Promise<Response> {
   const apiHost = options.apiHost ?? "eu.i.posthog.com";
   const assetHost = options.assetHost ?? "eu-assets.i.posthog.com";
@@ -34,7 +38,11 @@ export async function proxyPosthogRequest(options: ProxyPosthogRequestOptions): 
     responseHeaders.delete("content-length");
   }
 
-  return new Response(await upstreamResponse.arrayBuffer(), {
+  const body = isNullBodyStatus(upstreamResponse.status)
+    ? null
+    : await upstreamResponse.arrayBuffer();
+
+  return new Response(body, {
     status: upstreamResponse.status,
     headers: responseHeaders,
   });

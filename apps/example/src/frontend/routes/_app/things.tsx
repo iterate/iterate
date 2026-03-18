@@ -11,9 +11,6 @@ const thingsListQueryOptions = {
 };
 
 export const Route = createFileRoute("/_app/things")({
-  loader: async ({ context }) => {
-    await context.queryClient.ensureQueryData(thingsListQueryOptions);
-  },
   component: ThingsPage,
 });
 

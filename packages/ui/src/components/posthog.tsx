@@ -8,10 +8,22 @@ export interface SetupPosthogOptions {
   uiHost?: string;
   appStage?: string;
   bootstrapFromUrl?: boolean;
+  sessionRecording?: boolean;
 }
 
 export function shouldEnablePosthog(apiKey?: string) {
   return Boolean(apiKey);
+}
+
+function resolveBrowserUrl(url?: string) {
+  if (!url) return undefined;
+  if (typeof window === "undefined") return url;
+
+  try {
+    return new URL(url, window.location.origin).toString();
+  } catch {
+    return url;
+  }
 }
 
 function getBootstrapConfig() {
@@ -31,16 +43,20 @@ export function setupPosthog(options: SetupPosthogOptions): PostHog {
   if (!shouldEnablePosthog(options.apiKey) || typeof window === "undefined") return posthog;
 
   return posthog.init(options.apiKey!, {
-    api_host: options.proxyUrl ?? "/api/integrations/posthog/proxy",
-    ui_host: options.uiHost ?? "https://eu.posthog.com",
+    api_host: resolveBrowserUrl(options.proxyUrl ?? "/api/integrations/posthog/proxy"),
+    ui_host: resolveBrowserUrl(options.uiHost ?? "https://eu.posthog.com"),
     bootstrap: options.bootstrapFromUrl ? getBootstrapConfig() : undefined,
     defaults: "2026-01-30",
     capture_pageleave: true,
     capture_exceptions: true,
-    session_recording: {
-      maskAllInputs: true,
-      maskTextSelector: "*",
-    },
+    ...(options.sessionRecording === false
+      ? {}
+      : {
+          session_recording: {
+            maskAllInputs: true,
+            maskTextSelector: "*",
+          },
+        }),
     loaded: options.appStage
       ? (client: PostHogInterface) => {
           client.register({

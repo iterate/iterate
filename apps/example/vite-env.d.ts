@@ -3,7 +3,6 @@
 interface ImportMetaEnv {
   readonly VITE_POSTHOG_PUBLIC_KEY?: string;
   readonly VITE_POSTHOG_PROXY_URL?: string;
-  readonly VITE_API_BASE_URL?: string;
 }
 
 interface ImportMeta {

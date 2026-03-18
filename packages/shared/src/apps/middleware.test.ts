@@ -1,13 +1,24 @@
 import { call, ORPCError, os } from "@orpc/server";
 import { describe, expect, it } from "vitest";
-import type { AppInitialContext, AppManifest } from "../../define-app.ts";
-import { requireHeader, withRequestLogger } from "./middleware.ts";
+import type { AppInitialContext, AppManifest } from "./define-app.ts";
+import { requireHeader, useEvlog } from "./middleware.ts";
 
 interface TestEnv {
   PIRATE_SECRET: string;
 }
 
-type TestAppContext = AppInitialContext<TestEnv>;
+type TestAppContext = AppInitialContext<TestEnv> & {
+  req: AppInitialContext<TestEnv>["req"] & {
+    raw: Request;
+  };
+};
+
+function makeRawRequest(headers?: Headers): Request {
+  return new Request("https://example.test/api/ping", {
+    method: "GET",
+    headers,
+  });
+}
 
 function makeManifest(): AppManifest {
   return {
@@ -24,6 +35,7 @@ function makeContext(headers?: Headers): TestAppContext {
     req: {
       headers: headers ?? new Headers(),
       url: "https://example.test/api/ping",
+      raw: makeRawRequest(headers),
     },
     env: {
       PIRATE_SECRET: "blackbeard",
@@ -109,7 +121,7 @@ describe("shared app orpc middleware", () => {
   it("injects a request id and logger without a full app runtime", async () => {
     const procedure = os
       .$context<TestAppContext>()
-      .use(withRequestLogger())
+      .use(useEvlog())
       .handler(async ({ context }) => ({
         requestId: context.requestId,
         hasLogger: typeof context.logger.info === "function",
@@ -124,6 +136,37 @@ describe("shared app orpc middleware", () => {
       requestId: "req_123",
       hasLogger: true,
       slug: "example-app",
+    });
+  });
+
+  it("uses the raw request to enrich worker-shaped request logs", async () => {
+    const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    const procedure = os
+      .$context<TestAppContext>()
+      .use(useEvlog())
+      .handler(async ({ context }) => ({
+        requestId: context.requestId,
+        loggerContext: context.logger.getContext(),
+      }));
+
+    await expect(
+      call(procedure, undefined, {
+        context: makeContext(
+          new Headers({
+            "cf-ray": "ray_123",
+            traceparent,
+          }),
+        ),
+      }),
+    ).resolves.toMatchObject({
+      requestId: "ray_123",
+      loggerContext: {
+        requestId: "ray_123",
+        method: "GET",
+        path: "/api/ping",
+        cfRay: "ray_123",
+        traceparent,
+      },
     });
   });
 });

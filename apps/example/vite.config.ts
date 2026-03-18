@@ -1,77 +1,27 @@
 import tailwindcss from "@tailwindcss/vite";
-import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
+import { embeddedNodeAppVitePlugin } from "@iterate-com/shared/apps/embedded-node-app-vite-plugin";
 import { defineConfig } from "vite";
-import tsconfigPaths from "vite-tsconfig-paths";
-import { z } from "zod";
-import { ExampleAppEnv } from "./src/env.ts";
+import { createExampleNodeApp } from "./src/node/create-app.ts";
 
-const env = ExampleAppEnv.extend({
-  PORT: z.coerce.number().int().positive().default(17401),
-  API_BASE_URL: z.string().default("http://127.0.0.1:17402"),
-}).parse(process.env);
-
-export default defineConfig(() => {
-  return {
-    server: {
-      host: true,
-      port: env.PORT,
-      strictPort: false,
-      watch: {
-        ignored: ["**/routeTree.gen.ts"],
-      },
-      proxy: {
-        "/api": {
-          target: env.API_BASE_URL,
-          changeOrigin: true,
-          ws: true,
-        },
-      },
-    },
-    preview: {
-      host: true,
-      port: env.PORT,
-      strictPort: true,
-      proxy: {
-        "/api": {
-          target: env.API_BASE_URL,
-          changeOrigin: true,
-          ws: true,
-        },
-      },
-    },
-    build: {
-      target: "es2024",
-    },
-    plugins: [
-      tsconfigPaths({ projects: ["./tsconfig.json"] }),
-      tanstackStart({
-        srcDirectory: "src/frontend",
-        spa: {
-          enabled: true,
-          prerender: {
-            // Emit the SPA shell at index.html so Cloudflare asset bindings can serve it natively.
-            outputPath: "/index.html",
-          },
-        },
-      }),
-      viteReact(),
-      tailwindcss(),
-      devtools({
-        consolePiping: { enabled: false },
-        editor: {
-          name: "Cursor",
-          open: async (path, lineNumber, columnNumber) => {
-            const { exec } = await import("node:child_process");
-            const location =
-              `${path.replaceAll("$", "\\$")}` +
-              `${lineNumber ? `:${lineNumber}` : ""}` +
-              `${columnNumber ? `:${columnNumber}` : ""}`;
-            exec(`cursor -g "${location}"`);
-          },
-        },
-      }),
-    ],
-  };
+export default defineConfig({
+  // new in vite 8 - replaces vite-tsconfig-paths
+  resolve: {
+    tsconfigPaths: true,
+  },
+  // new in vite 8 - prints browser errors in server stdout
+  server: {
+    forwardConsole: true,
+  },
+  plugins: [
+    embeddedNodeAppVitePlugin({
+      createApp: createExampleNodeApp,
+    }),
+    tanstackStart({
+      srcDirectory: "src/frontend",
+    }),
+    viteReact(),
+    tailwindcss(),
+  ],
 });
