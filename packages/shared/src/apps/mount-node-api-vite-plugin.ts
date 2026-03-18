@@ -2,44 +2,44 @@ import type { IncomingMessage, RequestListener, Server as HttpServer } from "nod
 import type { Plugin, PreviewServer, ViteDevServer } from "vite";
 
 /**
- * Mount an already-wired Node app behind Vite during development.
+ * Mount a Node API onto Vite's dev/preview server.
  *
- * The real runtime should own app construction, env parsing, db setup, and
- * websocket wiring. This plugin only teaches Vite dev how to delegate `/api`
- * HTTP and websocket traffic to that ready-made Node app while leaving the
- * frontend and HMR behavior alone.
+ * Vite owns the HTTP server. This plugin attaches `/api` request handling and
+ * websocket upgrade wiring to that existing server, leaving the frontend and
+ * HMR behavior alone. The real runtime should own app construction, env
+ * parsing, db setup, and websocket wiring.
  */
-export function embeddedNodeAppVitePlugin(options: {
-  createApp: () => Promise<{
+export function mountNodeApi(options: {
+  handler: () => Promise<{
     requestListener: RequestListener;
     injectWebSocket: (server: HttpServer) => void;
   }>;
 }): Plugin {
-  let appPromise: Promise<{
+  let handlerPromise: Promise<{
     requestListener: RequestListener;
     injectWebSocket: (server: HttpServer) => void;
   }> | null = null;
   let didInjectWebSocket = false;
 
-  function getEmbeddedApp() {
-    appPromise ??= options.createApp();
-    return appPromise;
+  function getHandler() {
+    handlerPromise ??= options.handler();
+    return handlerPromise;
   }
 
   function attach(server: ViteDevServer | PreviewServer) {
     if (server.httpServer && !didInjectWebSocket) {
-      void getEmbeddedApp()
+      void getHandler()
         .then(({ injectWebSocket }) => {
           if (!server.httpServer || didInjectWebSocket) return;
 
           const httpServer = server.httpServer;
           const originalOn = httpServer.on.bind(httpServer);
 
-          // The embedded app captures an `upgrade` listener from the server.
-          // Vite owns this server in dev, so temporarily wrap `on("upgrade")`
-          // while the app installs its listener and only forward `/api`
-          // upgrades to it. That keeps Vite's own HMR websocket and any future
-          // non-API upgrades out of the app-local websocket handler.
+          // The handler captures an `upgrade` listener from the server. Vite
+          // owns this server in dev, so temporarily wrap `on("upgrade")` while
+          // the handler installs its listener and only forward `/api` upgrades
+          // to it. That keeps Vite's own HMR websocket and any future non-API
+          // upgrades out of the app-local websocket handler.
           httpServer.on = ((
             event: Parameters<typeof httpServer.on>[0],
             listener: Parameters<typeof httpServer.on>[1],
@@ -78,7 +78,7 @@ export function embeddedNodeAppVitePlugin(options: {
           return;
         }
 
-        void getEmbeddedApp()
+        void getHandler()
           .then(({ requestListener }) => {
             requestListener(req, res);
           })
@@ -90,7 +90,7 @@ export function embeddedNodeAppVitePlugin(options: {
   }
 
   return {
-    name: "embedded-node-app-vite-plugin",
+    name: "mount-node-api",
     configureServer(server) {
       return attach(server);
     },

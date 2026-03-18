@@ -5,7 +5,7 @@
   "type": "module",
   "exports": {
     "./apps/define-app": "./src/apps/define-app.ts",
-    "./apps/embedded-node-app-vite-plugin": "./src/apps/embedded-node-app-vite-plugin.ts",
+    "./apps/mount-node-api-vite-plugin": "./src/apps/mount-node-api-vite-plugin.ts",
     "./apps/middleware": "./src/apps/middleware.ts",
     "./apps/iterate-contract": "./src/apps/iterate-contract.ts",
     "./request-logging": "./src/request-logging.ts",

@@ -3,7 +3,7 @@
 Minimal full-stack app demonstrating a runtime-agnostic app layout:
 
 - **API:** Hono + oRPC over OpenAPI/HTTP with Drizzle ORM
-- **Frontend:** TanStack Start (SPA mode) + TanStack Query
+- **Frontend:** TanStack Start + TanStack Query
 - **Runtimes:** Node.js (better-sqlite3) and Cloudflare Workers (D1)
 - **WebSockets:** ping-pong demo plus a Node-backed PTY terminal route
 - **Observability:** app-local TanStack devtools + evlog request logging
@@ -58,7 +58,7 @@ The runtime provides three things:
 `mount()` mutates the provided Hono app in place and returns nothing.
 That keeps the final runtime-specific wiring in the entrypoint.
 
-### `src/node/create-app.ts`
+### `src/node.ts`
 
 This is the Node runtime composition helper.
 
@@ -84,7 +84,7 @@ It is responsible for:
 Together these files say: "take `exampleApp`, wire it into a Node runtime for
 the API, and let Vite own both the dev server and preview server lifecycle."
 
-### `src/cloudflare/entrypoint.ts`
+### `src/worker.ts`
 
 This is the Cloudflare Worker runtime entrypoint.
 
@@ -93,8 +93,8 @@ It is responsible for Worker-specific concerns:
 - opening the D1 database
 - creating the Hono app instance
 - using `upgradeWebSocket` from `hono/cloudflare-workers`
-- initializing the shared `evlog` formatter for Worker console/tail logs
-- serving both HTTP and websocket routes through `app.fetch(...)`
+- mounting the shared app routes for `/api/*`
+- delegating all other requests to TanStack Start's default server entry
 
 This file says: "take the same `exampleApp` and wire it into a Cloudflare
 runtime."
@@ -131,7 +131,7 @@ context.
 This matters because middleware may add more context later. If auth middleware
 eventually injects `user` or `session`, those fields should stay
 middleware-derived rather than being added to the runtime contract for
-`server.ts` or `worker.ts`.
+`worker.ts` or `node.ts`.
 
 ## Client Transport
 
@@ -169,8 +169,8 @@ pnpm start        # Preview the built app with Vite
 ## Cloudflare Worker
 
 ```bash
-pnpm worker:dev     # Local wrangler dev
-pnpm worker:deploy  # Deploy to Cloudflare
+pnpm cf:dev     # Local Cloudflare/Vite dev
+pnpm cf:deploy  # Build and deploy to Cloudflare
 ```
 
 ## Env
@@ -191,14 +191,16 @@ Node-only env:
 - `PORT`
 - `EXAMPLE_DB_PATH`
 
-Cloudflare deploy-time env used by `src/cloudflare/alchemy.run.ts`:
+Cloudflare worker env:
 
-- `ALCHEMY_PASSWORD`
-- `ALCHEMY_LOCAL`
-- `ALCHEMY_STAGE`
+- `CLOUDFLARE_WORKER_NAME`
+  Optional worker name override. Defaults to `dev-example`.
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
-- `WORKER_ROUTES`
+- `CLOUDFLARE_D1_DATABASE_ID`
+  Remote D1 database ID for real Cloudflare deploys. Local `pnpm cf:dev` uses a
+  placeholder automatically, so this is not required just to run the app
+  locally.
 
 This app now relies on the per-directory Doppler setup declared in `doppler.yaml`:
 
