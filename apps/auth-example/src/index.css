@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    @apply bg-[#f6f0e8] font-sans text-[#1f2f38];
+  }
+
+  body {
+    @apply min-h-screen min-w-[320px] m-0;
+    background:
+      radial-gradient(circle at top, rgba(255, 255, 255, 0.85), transparent 42%),
+      linear-gradient(160deg, #f8f3ec 0%, #ead7c2 48%, #d6e2e5 100%);
+  }
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.35;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(210, 109, 77, 0.18), transparent 22%),
+    radial-gradient(circle at 80% 30%, rgba(31, 47, 56, 0.12), transparent 24%),
+    radial-gradient(circle at 50% 80%, rgba(125, 106, 88, 0.16), transparent 28%);
+  pointer-events: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+@media (prefers-reduced-motion) {
+  *,
+  ::before,
+  ::after {
+    animation: none !important;
+  }
+}
