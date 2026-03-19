@@ -2,6 +2,7 @@ import { eq, and, inArray, sql } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { match } from "schematch";
 import { z } from "zod/v4";
+import { ORPCError } from "@orpc/client";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import {
@@ -17,7 +18,6 @@ import {
 } from "../services/machine-readiness-probe.ts";
 import { buildMachineEnvVars } from "../services/machine-creation.ts";
 import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
-import { ORPCError } from "@orpc/client";
 import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
 import { outboxClient as cc } from "./client.ts";
 
@@ -331,10 +331,7 @@ export const registerConsumers = () => {
         // status code).  The oRPC client surfaces this as an ORPCError with
         // code "MALFORMED_ORPC_ERROR_RESPONSE".  Retrying indefinitely is
         // wasteful — the next push to main will fan-out a fresh attempt.
-        if (
-          e instanceof ORPCError &&
-          e.code === "MALFORMED_ORPC_ERROR_RESPONSE"
-        ) {
+        if (e instanceof ORPCError && e.code === "MALFORMED_ORPC_ERROR_RESPONSE") {
           logger.set({
             machineId: machine.id,
             orpcCode: e.code,
