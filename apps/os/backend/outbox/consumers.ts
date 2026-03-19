@@ -2,6 +2,7 @@ import { eq, and, inArray, sql } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { match } from "schematch";
 import { z } from "zod/v4";
+import { ORPCError } from "@orpc/client";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import {
@@ -324,6 +325,23 @@ export const registerConsumers = () => {
           logger.warn("Skipping iterate pull for deleted sandbox");
           return `skipped: sandbox for machine ${machine.id} not found in Daytona (${machine.externalId})`;
         }
+
+        // The daemon may be mid-restart (from a prior pull) or the sandbox
+        // proxy may return a non-oRPC response (HTML error page, unusual
+        // status code).  The oRPC client surfaces this as an ORPCError with
+        // code "MALFORMED_ORPC_ERROR_RESPONSE".  Retrying indefinitely is
+        // wasteful — the next push to main will fan-out a fresh attempt.
+        if (e instanceof ORPCError && e.code === "MALFORMED_ORPC_ERROR_RESPONSE") {
+          logger.set({
+            machineId: machine.id,
+            orpcCode: e.code,
+            orpcStatus: e.status,
+            eventId: params.eventId,
+          });
+          logger.warn("Skipping iterate pull: daemon returned non-oRPC error response");
+          return `skipped: machine ${machine.id} daemon returned malformed oRPC response (status ${e.status})`;
+        }
+
         throw e;
       }
 
