@@ -10,9 +10,9 @@
   "scripts": {
     "auth:dev": "doppler run --project auth --config dev -- alchemy dev",
     "build": "vite build",
-    "typegen": "wrangler types",
     "typecheck": "tsgo --noEmit",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "deploy:prd": "doppler run --project auth --config prd -- alchemy deploy"
   },
   "dependencies": {
     "@better-auth/drizzle-adapter": "^1.5.5",

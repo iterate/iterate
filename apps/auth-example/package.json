@@ -4,19 +4,27 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "auth-example:dev": "bun --hot src/index.ts"
+    "auth-example:dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typegen": "wrangler types --no-include-runtime",
+    "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
     "@iterate-com/auth": "workspace:*",
-    "bun": "^1.3.10",
-    "bun-plugin-tailwind": "^0.1.2",
+    "hono": "^4.12.8",
     "react": "^19",
     "react-dom": "^19",
-    "tailwindcss": "^4.1.11"
+    "tailwindcss": "^4.2.1"
   },
   "devDependencies": {
-    "@types/bun": "latest",
+    "@cloudflare/vite-plugin": "^1.28.0",
+    "@cloudflare/workers-types": "^4.20260317.1",
+    "@tailwindcss/vite": "^4.2.1",
     "@types/react": "^19",
-    "@types/react-dom": "^19"
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.0.1",
+    "vite": "^8.0.0",
+    "wrangler": "^4.75.0"
   }
 }
