@@ -51,7 +51,7 @@
     "@orpc/client": "^1.13.4",
     "@orpc/server": "^1.13.4",
     "better-auth": "1.4.3",
-    "trpc-cli": "https://pkg.pr.new/mmkal/trpc-cli@0c36e3a",
+    "trpc-cli": "0.14.0",
     "zod": "4.1.12"
   },
   "devDependencies": {
