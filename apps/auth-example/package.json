@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "typegen": "wrangler types --no-include-runtime",
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "tsgo --noEmit",
+    "deploy": "pnpm build && wrangler deploy"
   },
   "dependencies": {
     "@iterate-com/auth": "workspace:*",

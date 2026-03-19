@@ -32,6 +32,19 @@ export const auth = betterAuth({
   },
   disabledPaths: ["/token"],
   telemetry: { enabled: false },
+  advanced: {
+    ipAddress: {
+      ipAddressHeaders: ["cf-connecting-ip"],
+    },
+  },
+  session: {
+    storeSessionInDatabase: true,
+    cookieCache: {
+      enabled: true,
+      maxAge: 5 * 60,
+      strategy: "compact",
+    },
+  },
 });
 
 export type Auth = typeof auth;
