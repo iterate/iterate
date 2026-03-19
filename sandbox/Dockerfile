@@ -221,6 +221,7 @@ WORKDIR /home/iterate/src/github.com/iterate/iterate
 # This way, unless the dependencies change, we don't have to download from pnpm
 # TODO: consider BuildKit cache mount for pnpm store to speed CI builds.
 COPY --chown=iterate:iterate package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY --chown=iterate:iterate patches ./patches
 RUN ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "amd64" ]; then PNPM_ARCH="x64"; else PNPM_ARCH="arm64"; fi && \
     pnpm fetch --config.platform=linux --config.arch="$PNPM_ARCH" --config.libc=glibc
