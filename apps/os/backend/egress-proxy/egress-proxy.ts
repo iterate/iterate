@@ -541,6 +541,21 @@ function secretErrorResponse(
   );
 }
 
+export function forwardProxyResponse(response: Response): Response {
+  const responseHeaders = new Headers();
+  response.headers.forEach((value, key) => {
+    if (!STRIP_RESPONSE_HEADERS.includes(key.toLowerCase())) {
+      responseHeaders.set(key, value);
+    }
+  });
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: responseHeaders,
+  });
+}
+
 /**
  * Main egress proxy endpoint.
  * Receives requests from mitmproxy and forwards to original destination.
@@ -835,22 +850,18 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
       }
     }
 
-    // Build response headers
-    const responseHeaders = new Headers();
-    response.headers.forEach((value, key) => {
-      if (!STRIP_RESPONSE_HEADERS.includes(key.toLowerCase())) {
-        responseHeaders.set(key, value);
-      }
-    });
-
     logger.debug("Egress proxy response", { status: response.status });
 
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: responseHeaders,
-    });
+    return forwardProxyResponse(response);
   } catch (err) {
+    if (err instanceof Response) {
+      logger.error("Egress proxy threw a response", new Error(`HTTP ${err.status}`), {
+        url: originalURL,
+        status: err.status,
+      });
+      return forwardProxyResponse(err);
+    }
+
     logger.error("Egress proxy error", err, { url: originalURL });
 
     return c.json(

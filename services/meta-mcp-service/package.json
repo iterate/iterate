@@ -1,0 +1,24 @@
+{
+  "name": "@iterate-com/meta-mcp-service",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "meta-mcp:dev": "tsx watch --clear-screen=false src/index.ts",
+    "meta-mcp:test": "vitest run -c vitest.config.ts",
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@hono/mcp": "^0.2.3",
+    "@hono/node-server": "^1.19.9",
+    "@hono/zod-validator": "^0.7.5",
+    "@mmkal/json-schema-to-typescript": "^15.0.4",
+    "@modelcontextprotocol/sdk": "^1.25.1",
+    "hono": "^4.11.10",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "vitest": "^4.0.18"
+  }
+}

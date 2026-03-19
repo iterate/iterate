@@ -21,6 +21,7 @@ export interface DaemonDefinition {
 export const DAEMON_DEFINITIONS: readonly DaemonDefinition[] = [
   { id: "iterate-daemon", name: "Iterate", internalPort: 3000, hasWebUI: true },
   { id: "iterate-daemon-server", name: "Iterate Server", internalPort: 3001, hasWebUI: false },
+  { id: "meta-mcp-service", name: "Meta MCP", internalPort: 19070, hasWebUI: false },
   { id: "opencode", name: "OpenCode", internalPort: 4096, hasWebUI: true },
   { id: "jaeger-ui", name: "Jaeger", internalPort: 16686, hasWebUI: true },
   { id: "jaeger-otlp-http", name: "Jaeger OTLP", internalPort: 4318, hasWebUI: false },

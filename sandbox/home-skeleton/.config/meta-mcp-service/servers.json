@@ -1,0 +1,31 @@
+{
+  "servers": [
+    {
+      "id": "exa",
+      "url": "https://mcp.exa.ai/mcp",
+      "transport": "auto",
+      "enabled": true,
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "context7",
+      "url": "https://mcp.context7.com/mcp",
+      "transport": "auto",
+      "enabled": true,
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "gh-grep",
+      "url": "https://mcp.grep.app",
+      "transport": "auto",
+      "enabled": true,
+      "auth": {
+        "type": "none"
+      }
+    }
+  ]
+}

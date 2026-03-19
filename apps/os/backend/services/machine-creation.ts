@@ -1,7 +1,10 @@
 import { eq, and, isNull } from "drizzle-orm";
 import { typeid } from "typeid-js";
 import { buildCanonicalMachineExternalId } from "@iterate-com/sandbox/providers/naming";
-import { buildMachineIngressEnvVars } from "@iterate-com/shared/project-ingress";
+import {
+  buildMachineIngressEnvVars,
+  buildMachinePortUrl,
+} from "@iterate-com/shared/project-ingress";
 import type { CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
@@ -71,6 +74,7 @@ export type CreateMachineParams = {
 };
 
 const AGENT_STAGE_COMPONENT_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+const META_MCP_SERVICE_PORT = 19070;
 
 function normalizeAgentStageComponent(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -125,12 +129,19 @@ export async function buildMachineEnvVars(params: {
   const envVars = Object.fromEntries(globalEnvVars.map((envVar) => [envVar.key, envVar.value]));
   const agentStage = buildAgentStageEnvValue(env);
 
+  const ingressScheme = getIngressSchemeFromPublicUrl(env.VITE_PUBLIC_URL);
   const ingressEnvVars = buildMachineIngressEnvVars({
     projectSlug,
     projectIngressDomain: env.PROJECT_INGRESS_DOMAIN,
     osBaseUrl: env.VITE_PUBLIC_URL,
-    scheme: getIngressSchemeFromPublicUrl(env.VITE_PUBLIC_URL),
+    scheme: ingressScheme,
     customDomain,
+  });
+  const metaMcpServicePublicUrl = buildMachinePortUrl({
+    scheme: ingressScheme,
+    projectIngressDomain: env.PROJECT_INGRESS_DOMAIN,
+    machineId,
+    port: META_MCP_SERVICE_PORT,
   });
 
   return {
@@ -145,6 +156,7 @@ export async function buildMachineEnvVars(params: {
     ITERATE_PROJECT_SLUG: projectSlug,
     ITERATE_AGENT_STAGE: agentStage,
     ITERATE_EGRESS_PROXY_URL: `${env.VITE_PUBLIC_URL}/api/egress-proxy`,
+    META_MCP_SERVICE_PUBLIC_URL: metaMcpServicePublicUrl,
     ITERATE_GITHUB_APP_SLUG: env.GITHUB_APP_SLUG,
     ...(env.DANGEROUS_RAW_SECRETS_ENABLED === "true" ? { ITERATE_SKIP_PROXY: "true" } : {}),
     GH_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,

@@ -71,9 +71,19 @@ export interface FileRoutesById {
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/terminal' | '/' | '/agents/$slug' | '/agents/new' | '/agents'
+  fullPaths:
+    | '/terminal'
+    | '/'
+    | '/agents/$slug'
+    | '/agents/new'
+    | '/agents'
   fileRoutesByTo: FileRoutesByTo
-  to: '/terminal' | '/' | '/agents/$slug' | '/agents/new' | '/agents'
+  to:
+    | '/terminal'
+    | '/'
+    | '/agents/$slug'
+    | '/agents/new'
+    | '/agents'
   id:
     | '__root__'
     | '/_app'

@@ -24,7 +24,7 @@ import { buildProjectIngressLink } from "@/lib/project-ingress-link.ts";
 import { useSessionUser } from "@/hooks/use-session-user.ts";
 import { Button } from "@/components/ui/button.tsx";
 import { orpc, orpcClient } from "@/lib/orpc.tsx";
-import { createDaemonProxyClient } from "@/lib/daemon-client.ts";
+import { createDaemonProxyClient, createDaemonQueryUtils } from "@/lib/daemon-client.ts";
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
   component: MachineDetailPage,
@@ -35,6 +35,7 @@ const PIDNAP_PROCESSES = [
   "daemon-backend",
   "daemon-frontend",
   "events",
+  "meta-mcp-service",
   "opencode",
   "egress-proxy",
   "project-ingress-proxy",
@@ -176,6 +177,8 @@ function MachineDetailPage() {
     [orgSlug, params.projectSlug, params.machineId],
   );
 
+  const daemon = useMemo(() => createDaemonQueryUtils(daemonClient), [daemonClient]);
+
   const metadata = machine.metadata as MachineMetadata;
   const { services } = machine;
 
@@ -253,21 +256,28 @@ function MachineDetailPage() {
     toast.success(`Copied: ${text}`);
   };
 
-  const { data: agentsData, isLoading: agentsLoading } = useQuery({
-    queryKey: ["daemon", params.machineId, "listAgents"],
-    queryFn: () => daemonClient.daemon.listAgents(),
-    // TODO: this breaks after restart — lastEvent becomes machine:restart-requested
-    // or machine:daemon-status-reported, disabling the query permanently.
-    // Fix: fetch all events for the machine (not just lastEvent), then check
-    // events.has("machine:activated"). That way even detached machines still
-    // render their agents list, which is useful.
-    enabled:
-      typeof window !== "undefined" &&
-      machine.state === "active" &&
-      (machine.lastEvent?.name === "machine:activated" ||
-        machine.lastEvent?.name === "machine:probe-succeeded"),
-    refetchInterval: 10000,
-  });
+  const { data: agentsData, isLoading: agentsLoading } = useQuery(
+    daemon.daemon.listAgents.queryOptions({
+      // TODO: this breaks after restart — lastEvent becomes machine:restart-requested
+      // or machine:daemon-status-reported, disabling the query permanently.
+      // Fix: fetch all events for the machine (not just lastEvent), then check
+      // events.has("machine:activated"). That way even detached machines still
+      // render their agents list, which is useful.
+      enabled:
+        typeof window !== "undefined" &&
+        machine.state === "active" &&
+        (machine.lastEvent?.name === "machine:activated" ||
+          machine.lastEvent?.name === "machine:probe-succeeded"),
+      refetchInterval: 10000,
+    }),
+  );
+
+  const metaMcpStatus = useQuery(
+    daemon.daemon.metaMcp.getStatus.queryOptions({
+      enabled: typeof window !== "undefined" && machine.state === "active",
+      refetchInterval: 10000,
+    }),
+  );
 
   const agents = [...(agentsData ?? [])].sort(
     (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
@@ -635,6 +645,8 @@ function MachineDetailPage() {
         </div>
       </section>
 
+      <MetaMcpSection metaMcpStatus={metaMcpStatus} daemonClient={daemonClient} />
+
       <section className="space-y-3 border-b pb-6">
         <h2 className="text-sm font-medium">Agents</h2>
 
@@ -756,5 +768,113 @@ function MachineDetailPage() {
         destructive
       />
     </div>
+  );
+}
+
+type MetaMcpStatusData = {
+  publicBaseUrl: string;
+  servers: Array<{
+    id: string;
+    namespace: string | null;
+    url: string;
+    enabled: boolean;
+    auth: {
+      type: "none" | "bearer" | "auto" | "oauth";
+      connected: boolean;
+    };
+  }>;
+};
+
+function MetaMcpSection(props: {
+  metaMcpStatus: ReturnType<typeof useQuery<MetaMcpStatusData>>;
+  daemonClient: ReturnType<typeof createDaemonProxyClient>;
+}) {
+  const { metaMcpStatus, daemonClient } = props;
+
+  const startOAuth = useMutation({
+    mutationFn: async (serverId: string) => daemonClient.daemon.metaMcp.startOAuth({ serverId }),
+    onSuccess: (data) => {
+      window.open(data.authenticationUrl, "_blank", "noopener,noreferrer");
+    },
+    onError: (error) => {
+      toast.error("Failed to start OAuth: " + error.message);
+    },
+  });
+
+  return (
+    <section className="space-y-4 border-b pb-6">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-medium">Meta MCP</h2>
+        {metaMcpStatus.data && (
+          <span className="text-xs text-muted-foreground">{metaMcpStatus.data.publicBaseUrl}</span>
+        )}
+      </div>
+
+      {metaMcpStatus.isLoading && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner />
+          Loading Meta MCP status...
+        </div>
+      )}
+
+      {metaMcpStatus.error && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+          Failed to load Meta MCP status: {metaMcpStatus.error.message}
+        </div>
+      )}
+
+      {metaMcpStatus.data && (
+        <>
+          {metaMcpStatus.data.servers.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              No Meta MCP upstream servers configured.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {metaMcpStatus.data.servers.map((server) => (
+                <div key={server.id} className="rounded-lg border bg-background p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">{server.id}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {server.namespace ?? server.id}
+                      </div>
+                    </div>
+                    <div className="text-xs text-muted-foreground">{server.auth.type}</div>
+                  </div>
+
+                  <div className="mt-3 space-y-2 text-xs text-muted-foreground">
+                    <div className="break-all">{server.url}</div>
+
+                    {server.auth.type === "none" && <div>No authentication required.</div>}
+                    {server.auth.type === "bearer" && <div>Bearer authentication configured.</div>}
+                    {(server.auth.type === "oauth" || server.auth.type === "auto") && (
+                      <div className="space-y-2">
+                        <div>
+                          {server.auth.connected ? "OAuth connected" : "OAuth not connected"}
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={startOAuth.isPending}
+                          onClick={() => startOAuth.mutate(server.id)}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          {startOAuth.isPending
+                            ? "Starting..."
+                            : server.auth.connected
+                              ? "Reconnect OAuth"
+                              : "Connect OAuth"}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
