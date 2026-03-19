@@ -29,6 +29,7 @@ import { ResendWebhookReceivedEventPayload } from "../../events.ts";
 import { outboxClient } from "../../outbox/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
+import { parseRecipientLocal, parseSenderEmail } from "../../email/email-routing.ts";
 
 export const resendApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
@@ -107,23 +108,6 @@ export async function fetchEmailContent(
     logger.error("[Resend] Error fetching email content", err, { emailId });
     return null;
   }
-}
-
-/**
- * Parse sender email from "Name <email@domain.com>" format
- */
-function parseSenderEmail(from: string): string {
-  const match = from.match(/<([^>]+)>/);
-  return match ? match[1] : from;
-}
-
-/**
- * Parse recipient email to extract the local part (before @)
- * e.g., "agent+projectslug@mail.iterate.com" -> "agent+projectslug"
- */
-function parseRecipientLocal(to: string): string {
-  const email = to.includes("<") ? parseSenderEmail(to) : to;
-  return email.split("@")[0];
 }
 
 /**
@@ -206,8 +190,8 @@ async function verifyResendWebhook(
 /**
  * Resend webhook handler
  *
- * Receives inbound emails and forwards them to the appropriate machine's daemon.
- * Maps sender email -> user -> organizationMembership -> project -> machine
+ * Receives inbound emails and stores them as outbox events.
+ * Downstream consumers resolve routing, provision resources if needed, and forward to daemons.
  */
 resendApp.post("/webhook", async (c) => {
   const body = await c.req.text();

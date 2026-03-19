@@ -239,6 +239,13 @@
       "when": 1773320939218,
       "tag": "0033_drop_event_table",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1773908701051,
+      "tag": "0034_email_inbound_deliveries",
+      "breakpoints": true
     }
   ]
 }

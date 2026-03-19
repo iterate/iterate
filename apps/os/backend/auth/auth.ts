@@ -5,7 +5,6 @@ import { admin, bearer, deviceAuthorization, emailOTP } from "better-auth/plugin
 import { oneTimeToken } from "better-auth/plugins/one-time-token";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
-import { minimatch } from "minimatch";
 import { and, eq, gte } from "drizzle-orm";
 import { z } from "zod/v4";
 import { type DB } from "../db/client.ts";
@@ -15,12 +14,13 @@ import { logger } from "../tag-logger.ts";
 import { captureServerEvent } from "../lib/posthog.ts";
 import { createResendClient, sendEmail } from "../integrations/resend/resend.ts";
 import { normalizeProjectIngressProxyRedirectPath } from "../services/project-ingress-proxy.ts";
+import { matchesSignupAllowlist, parseSignupAllowlist } from "../email/signup-allowlist.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
 
 /** Generate a DiceBear avatar URL using a hash of the user's email as seed */
-function generateDefaultAvatar(email: string): string {
+export function generateDefaultAvatar(email: string): string {
   const normalized = email.trim().toLowerCase();
   // Simple hash to avoid exposing email in URL
   let hash = 0;
@@ -29,17 +29,6 @@ function generateDefaultAvatar(email: string): string {
     hash |= 0;
   }
   return `https://api.dicebear.com/9.x/notionists/svg?seed=${Math.abs(hash).toString(36)}`;
-}
-
-function parseEmailPatterns(value: string) {
-  return value
-    .split(",")
-    .map((p) => p.trim().toLowerCase())
-    .filter((p) => p.length > 0);
-}
-
-function matchesEmailPattern(email: string, patterns: string[]) {
-  return patterns.some((pattern) => minimatch(email, pattern));
 }
 
 function projectIngressProxyOneTimeTokenExchangePlugin(db: DB) {
@@ -85,7 +74,7 @@ function projectIngressProxyOneTimeTokenExchangePlugin(db: DB) {
 }
 
 function createAuth(db: DB, envParam: CloudflareEnv) {
-  const allowSignupFromEmails = parseEmailPatterns(envParam.SIGNUP_ALLOWLIST);
+  const allowSignupFromEmails = parseSignupAllowlist(envParam.SIGNUP_ALLOWLIST);
 
   return betterAuth({
     baseURL: envParam.VITE_PUBLIC_URL,
@@ -123,7 +112,7 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
         create: {
           before: async (user) => {
             const email = user.email.trim().toLowerCase();
-            if (!matchesEmailPattern(email, allowSignupFromEmails)) {
+            if (!matchesSignupAllowlist(email, allowSignupFromEmails)) {
               throw new APIError("FORBIDDEN", {
                 message: "Sign up is not available for this email address",
               });
@@ -272,6 +261,52 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
 export const getAuth = (db: DB) => createAuth(db, env);
 
 export const getAuthWithEnv = (db: DB, envParam: CloudflareEnv) => createAuth(db, envParam);
+
+export async function createUserFromVerifiedEmail(params: {
+  db: DB;
+  env: CloudflareEnv;
+  email: string;
+  name: string;
+  /** Does nothing, but ensures that you, the caller, have a damn good reason for creating a user with this email address */
+  consideredVerifiedReason: string;
+}): Promise<typeof schema.user.$inferSelect> {
+  const auth = getAuthWithEnv(params.db, params.env);
+  const authContext = await auth.$context;
+  const normalizedEmail = params.email.trim().toLowerCase();
+
+  const existing = await authContext.internalAdapter.findUserByEmail(normalizedEmail, {
+    includeAccounts: true,
+  });
+  if (existing?.user) {
+    if (!existing.accounts?.some((account) => account.providerId === "credential")) {
+      await authContext.internalAdapter.createAccount({
+        userId: existing.user.id,
+        providerId: "credential",
+        accountId: existing.user.id,
+        password: await authContext.password.hash(crypto.randomUUID()),
+      });
+    }
+
+    return existing.user as typeof schema.user.$inferSelect;
+  }
+
+  const user = await authContext.internalAdapter.createUser({
+    email: normalizedEmail,
+    emailVerified: true,
+    name: params.name,
+    image: generateDefaultAvatar(normalizedEmail),
+    role: "user",
+  });
+
+  await authContext.internalAdapter.createAccount({
+    userId: user.id,
+    providerId: "credential",
+    accountId: user.id,
+    password: await authContext.password.hash(crypto.randomUUID()),
+  });
+
+  return user as typeof schema.user.$inferSelect;
+}
 
 export type Auth = ReturnType<typeof getAuth>;
 export type AuthSession = Awaited<ReturnType<Auth["api"]["getSession"]>>;

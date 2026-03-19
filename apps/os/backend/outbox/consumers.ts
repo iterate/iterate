@@ -15,9 +15,18 @@ import {
   sendProbeMessage,
   pollForProbeAnswer,
 } from "../services/machine-readiness-probe.ts";
-import { buildMachineEnvVars } from "../services/machine-creation.ts";
+import { buildMachineEnvVars, createMachineForProject } from "../services/machine-creation.ts";
+import { createUserFromVerifiedEmail } from "../auth/auth.ts";
 import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
 import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
+import { isSignupAllowed } from "../email/signup-allowlist.ts";
+import {
+  getDefaultOrganizationNameFromEmail,
+  parseRecipientLocal,
+  parseSender,
+} from "../email/email-routing.ts";
+import { slugifyWithSuffix } from "../utils/slug.ts";
+import { getDefaultProjectSandboxProvider } from "../utils/sandbox-providers.ts";
 import { outboxClient as cc } from "./client.ts";
 
 const IterateMainPushWebhookPayload = z.object({
@@ -36,14 +45,27 @@ function parseGitRefBranch(ref: string): string | null {
   return ref.slice(prefix.length);
 }
 
-function parseSenderEmail(from: string): string {
-  const match = from.match(/<([^>]+)>/);
-  return match ? match[1] : from;
+function createDefaultMachineName(sandboxProvider: string): string {
+  const date = new Date();
+  const month = date.toLocaleString("en-US", { month: "short" }).toLowerCase();
+  const day = date.getDate();
+  const hour = date.getHours().toString().padStart(2, "0");
+  const minute = date.getMinutes().toString().padStart(2, "0");
+  return `${sandboxProvider}-${month}-${day}-${hour}h${minute}`;
 }
 
-function parseRecipientLocal(to: string): string {
-  const email = to.includes("<") ? parseSenderEmail(to) : to;
-  return email.split("@")[0];
+async function findAvailableWorkspaceSlug(db: Awaited<ReturnType<typeof getDb>>, baseSlug: string) {
+  let candidate = baseSlug;
+
+  while (true) {
+    const [existingOrg, existingProject] = await Promise.all([
+      db.query.organization.findFirst({ where: eq(schema.organization.slug, candidate) }),
+      db.query.project.findFirst({ where: eq(schema.project.slug, candidate) }),
+    ]);
+
+    if (!existingOrg && !existingProject) return candidate;
+    candidate = slugifyWithSuffix(baseSlug);
+  }
 }
 
 export const registerConsumers = () => {
@@ -86,20 +108,40 @@ export const registerConsumers = () => {
   });
 
   cc.registerConsumer({
-    name: "forwardResendWebhook",
+    name: "routeResendWebhook",
     on: "resend:webhook-received",
     async handler(params) {
       const payload = ResendWebhookReceivedEventPayload.parse(params.payload);
       const resendEmailId = payload.data.email_id;
-      const senderEmail = parseSenderEmail(payload.data.from).toLowerCase();
       const db = await getDb();
-
+      const senderEmail = parseSender(payload.data.from).email;
       const user = await db.query.user.findFirst({
-        where: (u, { eq: whereEq }) => whereEq(u.email, senderEmail),
+        where: eq(schema.user.email, senderEmail),
       });
+
       if (!user) {
-        logger.warn(`No user found for sender ${senderEmail}`);
-        return `skipped: no user found for ${senderEmail}`;
+        if (!isSignupAllowed(senderEmail, env.SIGNUP_ALLOWLIST)) {
+          logger.warn(`sender ${senderEmail} is not allowlisted for email onboarding`);
+          return `skipped: sender ${senderEmail} is not allowlisted`;
+        }
+
+        await db.insert(schema.emailInboundDelivery).values({
+          provider: "resend",
+          externalId: resendEmailId,
+          outboxEventId: params.eventId,
+          status: "pending",
+        });
+
+        await cc.send(db, {
+          name: "email:onboarding-requested",
+          payload: {
+            provider: "resend",
+            externalEmailId: resendEmailId,
+          },
+          deduplicationKey: senderEmail,
+        });
+
+        return `enqueued onboarding for ${senderEmail}`;
       }
 
       const memberships = await db.query.organizationUserMembership.findMany({
@@ -110,7 +152,8 @@ export const registerConsumers = () => {
               projects: {
                 with: {
                   machines: {
-                    where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
+                    where: (m, { inArray: whereInArray }) =>
+                      whereInArray(m.state, ["active", "starting"]),
                     limit: 1,
                   },
                 },
@@ -161,12 +204,23 @@ export const registerConsumers = () => {
         return `skipped: project ${targetProject.id} has no active machine`;
       }
 
+      if (targetMachine.state === "starting") {
+        await db.insert(schema.emailInboundDelivery).values({
+          provider: "resend",
+          externalId: resendEmailId,
+          outboxEventId: params.eventId,
+          projectId: targetProject.id,
+          status: "pending",
+        });
+        logger.set({ machine: { id: targetMachine.id }, user: { id: user.id } });
+        return `waiting for machine ${targetMachine.id} to activate`;
+      }
+
       const { createResendClient, fetchEmailContent, forwardEmailWebhookToMachine } =
         await import("../integrations/resend/resend.ts");
       const resendClient = createResendClient(env.RESEND_BOT_API_KEY);
       const emailContent = await fetchEmailContent(resendClient, resendEmailId);
 
-      logger.debug("Forwarding to machine", { machineId: targetMachine.id });
       const forwardResult = await forwardEmailWebhookToMachine(
         targetMachine,
         {
@@ -190,6 +244,92 @@ export const registerConsumers = () => {
 
       logger.set({ machine: { id: targetMachine.id }, user: { id: user.id } });
       return `forwarded to ${targetMachine.id}`;
+    },
+  });
+
+  cc.registerConsumer({
+    name: "onboardEmailSender",
+    on: "email:onboarding-requested",
+    async handler(params) {
+      const db = await getDb();
+      const delivery = await db.query.emailInboundDelivery.findFirst({
+        where: eq(schema.emailInboundDelivery.externalId, params.payload.externalEmailId),
+      });
+      if (!delivery) {
+        throw new Error(`missing inbound delivery for ${params.payload.externalEmailId}`);
+      }
+
+      const event = await db.query.outboxEvent.findFirst({
+        where: eq(schema.outboxEvent.id, delivery.outboxEventId),
+      });
+      if (!event) {
+        throw new Error(`missing outbox event ${delivery.outboxEventId}`);
+      }
+
+      const payload = ResendWebhookReceivedEventPayload.parse(event.payload);
+      const sender = parseSender(payload.data.from);
+      const user = await createUserFromVerifiedEmail({
+        db,
+        env,
+        email: sender.email,
+        name: sender.name,
+        consideredVerifiedReason:
+          "Received email from this account, so we know they have access to it!",
+      });
+
+      const projectSlug = await findAvailableWorkspaceSlug(
+        db,
+        getDefaultOrganizationNameFromEmail(sender.email),
+      );
+
+      const projectId = await db.transaction(async (tx) => {
+        const [organization] = await tx
+          .insert(schema.organization)
+          .values({ name: projectSlug, slug: projectSlug })
+          .returning();
+        if (!organization) {
+          throw new Error(`failed to create organization for ${sender.email}`);
+        }
+
+        await tx.insert(schema.organizationUserMembership).values({
+          organizationId: organization.id,
+          userId: user.id,
+          role: "owner",
+        });
+
+        const [project] = await tx
+          .insert(schema.project)
+          .values({
+            name: projectSlug,
+            slug: projectSlug,
+            organizationId: organization.id,
+            sandboxProvider: getDefaultProjectSandboxProvider(env, import.meta.env.DEV),
+          })
+          .returning();
+        if (!project) {
+          throw new Error(`failed to create project for ${sender.email}`);
+        }
+
+        return project.id;
+      });
+
+      await db
+        .update(schema.emailInboundDelivery)
+        .set({ projectId })
+        .where(eq(schema.emailInboundDelivery.id, delivery.id));
+
+      await createMachineForProject({
+        db,
+        env,
+        projectId,
+        name: createDefaultMachineName(getDefaultProjectSandboxProvider(env, import.meta.env.DEV)),
+      });
+
+      logger.set({
+        project: { id: projectId },
+        user: { id: user.id },
+      });
+      return `onboarded ${params.payload.externalEmailId}`;
     },
   });
 
@@ -626,6 +766,32 @@ export const registerConsumers = () => {
   });
 
   // ── Post-activation pipeline ──────────────────────────────────────────
+
+  cc.registerConsumer({
+    name: "enqueueReadyEmailForwards",
+    on: "machine:activated",
+    async handler(params) {
+      const db = await getDb();
+      const deliveries = await db.query.emailInboundDelivery.findMany({
+        where: and(
+          eq(schema.emailInboundDelivery.projectId, params.payload.projectId),
+          eq(schema.emailInboundDelivery.status, "pending"),
+        ),
+        with: { outboxEvent: true },
+      });
+
+      for (const delivery of deliveries) {
+        // todo: better sendBatch support. Could also improve sendCTE to make it work better with select+join results
+        await cc.send(db, {
+          name: "resend:webhook-received",
+          payload: ResendWebhookReceivedEventPayload.parse(delivery.outboxEvent.payload),
+          deduplicationKey: `${delivery.externalId}:machine:activated:${params.eventId}`,
+        });
+      }
+
+      return `enqueued ${deliveries.length} email forwards`;
+    },
+  });
 
   // When a machine is activated, find detached machines and fan out delete events
   cc.registerConsumer({

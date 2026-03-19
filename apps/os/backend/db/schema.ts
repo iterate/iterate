@@ -9,6 +9,7 @@ import {
   index,
   integer,
   bigserial,
+  bigint,
   check,
 } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
@@ -38,6 +39,9 @@ export type MachineState = (typeof MachineState)[number];
 // Machine types
 export const MachineType = [...SandboxMachineType] as const;
 export type MachineType = (typeof MachineType)[number];
+
+export const EmailInboundDeliveryStatus = ["pending", "forwarded"] as const;
+export type EmailInboundDeliveryStatus = (typeof EmailInboundDeliveryStatus)[number];
 
 // Secret metadata for OAuth tokens
 export type SecretMetadata = {
@@ -480,6 +484,36 @@ export const projectConnectionRelations = relations(projectConnection, ({ one })
   user: one(user, {
     fields: [projectConnection.userId],
     references: [user.id],
+  }),
+}));
+
+export const emailInboundDelivery = pgTable(
+  "email_inbound_delivery",
+  (t) => ({
+    id: iterateId("mail"),
+    provider: t.text().notNull().default("resend"),
+    externalId: t.text().notNull(),
+    outboxEventId: bigint("outbox_event_id", { mode: "number" })
+      .notNull()
+      .references(() => outboxEvent.id, { onDelete: "cascade" }),
+    status: t
+      .text({ enum: [...EmailInboundDeliveryStatus] })
+      .notNull()
+      .default("pending"),
+    projectId: t.text().references(() => project.id, { onDelete: "set null" }),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.provider, t.externalId), index().on(t.projectId, t.status)],
+);
+
+export const emailInboundDeliveryRelations = relations(emailInboundDelivery, ({ one }) => ({
+  outboxEvent: one(outboxEvent, {
+    fields: [emailInboundDelivery.outboxEventId],
+    references: [outboxEvent.id],
+  }),
+  project: one(project, {
+    fields: [emailInboundDelivery.projectId],
+    references: [project.id],
   }),
 }));
 // #endregion ========== Organization & Project ==========
