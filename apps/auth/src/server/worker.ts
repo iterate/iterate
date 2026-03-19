@@ -19,7 +19,6 @@ app.use(
   variablesProvider(),
   cors({
     origin: (origin) => origin,
-    credentials: true,
   }),
 );
 

@@ -4,8 +4,7 @@ import { authClient } from "../utils/auth-client.ts";
 export const Route = createFileRoute("/_auth")({
   beforeLoad: async ({ location }) => {
     const session = await authClient.getSession().catch(() => null);
-    const url = location.href + location.searchStr;
-    if (!session) throw redirect({ to: "/login", search: { redirect: url } });
+    if (!session) throw redirect({ to: "/login", search: { redirect: location.href } });
     return { session };
   },
 });

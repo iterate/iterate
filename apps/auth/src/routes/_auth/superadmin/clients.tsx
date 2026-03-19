@@ -49,6 +49,7 @@ function ClientsPage() {
 function CreateClientForm() {
   const [clientName, setClientName] = useState("");
   const [redirectURIs, setRedirectURIs] = useState("");
+  const listClientsQuery = useQuery(orpc.superadmin.oauth.listClients.queryOptions());
 
   const createClientMutation = useMutation(
     orpc.superadmin.oauth.createClient.mutationOptions({
@@ -56,6 +57,7 @@ function CreateClientForm() {
         toast.success("OAuth client created");
         setClientName("");
         setRedirectURIs("");
+        listClientsQuery.refetch();
       },
     }),
   );

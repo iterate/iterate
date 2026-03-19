@@ -6,7 +6,7 @@ export const auth = createIterateAuth({
   clientId: process.env.ITERATE_OAUTH_CLIENT_ID!,
   clientSecret: process.env.ITERATE_OAUTH_CLIENT_SECRET!,
   redirectURI: process.env.ITERATE_OAUTH_REDIRECT_URI!,
-  issuer: "http://localhost:5173/api/auth",
+  issuer: process.env.ITERATE_OAUTH_ISSUER!,
 });
 
 serve({
