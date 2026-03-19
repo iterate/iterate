@@ -8,7 +8,7 @@
     "./client": "./src/lib/client.ts"
   },
   "scripts": {
-    "dev": "doppler run --project auth --config dev -- alchemy dev",
+    "auth:dev": "doppler run --project auth --config dev -- alchemy dev",
     "build": "vite build",
     "typegen": "wrangler types",
     "typecheck": "tsgo --noEmit",
