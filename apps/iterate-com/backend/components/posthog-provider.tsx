@@ -18,7 +18,10 @@ const POSTHOG_RECORDING_ERROR = "Called on script loaded before session recordin
 if (typeof window !== "undefined") {
   window.addEventListener("error", (event) => {
     // Check the Error object directly (avoids browser-specific prefixes like "Uncaught Error: ...")
-    if (event.error?.message === POSTHOG_RECORDING_ERROR || event.message?.includes(POSTHOG_RECORDING_ERROR)) {
+    if (
+      event.error?.message === POSTHOG_RECORDING_ERROR ||
+      event.message?.includes(POSTHOG_RECORDING_ERROR)
+    ) {
       event.preventDefault();
     }
   });
