@@ -45,6 +45,10 @@ onlyBuiltDependencies:
   - esbuild
   - sharp
   - workerd
+  - bun
+
+patchedDependencies:
+  "@better-auth/drizzle-adapter": "patches/@better-auth__drizzle-adapter.patch"
 
 overrides:
   # x402,viem are optional peer dependencies of agents sdk, which is source of lot of unnecessary/deprecated packages, removing them is fine

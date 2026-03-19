@@ -74,12 +74,6 @@
       "@babel/parser": "^7.28.0",
       "workerd": "1.20260205.0",
       "miniflare": "4.20260205.0"
-    },
-    "ignoredBuiltDependencies": [
-      "bun"
-    ],
-    "patchedDependencies": {
-      "@better-auth/drizzle-adapter": "patches/@better-auth__drizzle-adapter.patch"
     }
   },
   "dependencies": {
