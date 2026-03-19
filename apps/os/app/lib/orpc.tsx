@@ -51,10 +51,14 @@ export const makeOrpcClient = createIsomorphicFn()
           url: `${window.location.origin}/api/orpc`,
           plugins: [
             new DurableIteratorLinkPlugin({
-              url: () => {
+              url: (tokenPayload) => {
                 const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-                return `${protocol}://${window.location.host}/api/orpc-iterator/project-deployments`;
+                const endpoint = tokenPayload.chn.startsWith("deployment:")
+                  ? "deployment"
+                  : "project-deployments";
+                return `${protocol}://${window.location.host}/api/orpc-iterator/${endpoint}`;
               },
+              refreshTokenBeforeExpireInSeconds: () => 300,
             }),
           ],
         }),

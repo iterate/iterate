@@ -466,6 +466,12 @@ app.get("/api/orpc-iterator/project-deployments", async (c) => {
     namespace: c.env.PROJECT_DURABLE_OBJECT,
   });
 });
+app.get("/api/orpc-iterator/deployment", async (c) => {
+  return upgradeDurableIteratorRequest(c.req.raw, {
+    signingKey: c.env.ENCRYPTION_SECRET,
+    namespace: c.env.DEPLOYMENT_DURABLE_OBJECT,
+  });
+});
 
 app.all("/api/orpc/*", async (c, next) => {
   // Skip if this is the daemon-facing endpoint (handled below)
