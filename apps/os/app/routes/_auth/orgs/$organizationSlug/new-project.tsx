@@ -4,7 +4,15 @@ import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-q
 import { toast } from "sonner";
 import { orpc, orpcClient } from "@/lib/orpc.tsx";
 import { Button } from "@/components/ui/button.tsx";
-import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field.tsx";
+import { Checkbox } from "@/components/ui/checkbox.tsx";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldSet,
+} from "@/components/ui/field.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import {
   Select,
@@ -14,19 +22,9 @@ import {
   SelectValue,
 } from "@/components/ui/select.tsx";
 
-type ProjectSandboxProvider = "daytona" | "docker" | "fly" | "spec-machine";
-
-const SANDBOX_PROVIDER_LABELS: Record<ProjectSandboxProvider, string> = {
-  daytona: "Daytona (Cloud)",
-  docker: "Docker",
-  fly: "Fly.io",
-  "spec-machine": "Spec machine",
-};
-
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/new-project")({
   component: NewProjectPage,
   loader: ({ context, params }) => {
-    // Non-blocking prefetch - component will suspend if data not ready
     context.queryClient.prefetchQuery(
       orpc.organization.withProjects.queryOptions({
         input: { organizationSlug: params.organizationSlug },
@@ -55,22 +53,23 @@ function NewProjectPage() {
   );
   const hasEnabledSandboxProvider = enabledSandboxProviders.length > 0;
 
-  // Default name for first project is org name (slug will match org slug)
-  const isFirstProject = !org?.projects?.length;
-  const defaultName = isFirstProject ? (org?.name ?? "") : "";
-  const [name, setName] = useState(defaultName);
-  const [sandboxProvider, setSandboxProvider] = useState<ProjectSandboxProvider>(
-    sandboxProviders.defaultProvider,
+  const isFirstProject = (org.projects?.length ?? 0) === 0;
+  const defaultName = isFirstProject ? (org.name ?? "") : "";
+  const [name, setName] = useState<string>(defaultName);
+  const [jonasLand, setJonasLand] = useState(false);
+  const [sandboxProvider, setSandboxProvider] = useState(sandboxProviders.defaultProvider);
+  const selectedSandboxProvider = sandboxProviders.providers.find(
+    (provider) => provider.type === sandboxProvider,
   );
 
   const createProject = useMutation({
-    mutationFn: async (input: { projectName: string; sandboxProvider: ProjectSandboxProvider }) => {
-      return orpcClient.project.create({
+    mutationFn: () =>
+      orpcClient.project.create({
         organizationSlug: params.organizationSlug,
-        name: input.projectName,
-        sandboxProvider: input.sandboxProvider,
-      });
-    },
+        name: name.trim(),
+        sandboxProvider,
+        jonasLand,
+      }),
     onSuccess: async (project) => {
       await queryClient.invalidateQueries({
         queryKey: orpc.organization.withProjects.key({
@@ -79,7 +78,7 @@ function NewProjectPage() {
       });
       toast.success("Project created");
       navigate({
-        to: "/proj/$projectSlug",
+        to: project.jonasLand ? "/jonasland/$projectSlug" : "/proj/$projectSlug",
         params: { projectSlug: project.slug },
       });
     },
@@ -91,16 +90,15 @@ function NewProjectPage() {
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (name.trim() && hasEnabledSandboxProvider) {
-      createProject.mutate({
-        projectName: name.trim(),
-        sandboxProvider,
-      });
+      createProject.mutate();
     }
   };
 
   return (
-    <div className="p-8 max-w-2xl space-y-6">
-      <h1 className="text-2xl font-bold">New project</h1>
+    <div className="max-w-md space-y-6 p-4">
+      <FieldDescription>
+        Create a project in {org.name} and choose which renderer it should open in.
+      </FieldDescription>
       <form onSubmit={handleSubmit}>
         <FieldGroup>
           <FieldSet>
@@ -114,12 +112,24 @@ function NewProjectPage() {
                 autoFocus
               />
             </Field>
+            <Field orientation="horizontal">
+              <Checkbox
+                id="jonas-land"
+                checked={jonasLand}
+                onCheckedChange={(checked) => setJonasLand(checked === true)}
+                disabled={createProject.isPending}
+              />
+              <FieldContent>
+                <FieldLabel htmlFor="jonas-land">jonasland</FieldLabel>
+                <FieldDescription>Open this project in the jonasland renderer.</FieldDescription>
+              </FieldContent>
+            </Field>
             {sandboxProviders.showProviderSelector ? (
               <Field>
                 <FieldLabel>Sandbox provider</FieldLabel>
                 <Select
                   value={sandboxProvider}
-                  onValueChange={(value) => setSandboxProvider(value as ProjectSandboxProvider)}
+                  onValueChange={(value) => setSandboxProvider(value as typeof sandboxProvider)}
                   disabled={createProject.isPending}
                 >
                   <SelectTrigger>
@@ -137,7 +147,7 @@ function NewProjectPage() {
             ) : (
               <Field>
                 <FieldLabel>Sandbox provider</FieldLabel>
-                <Input value={SANDBOX_PROVIDER_LABELS[sandboxProvider]} disabled />
+                <Input value={selectedSandboxProvider?.label ?? sandboxProvider} disabled />
               </Field>
             )}
           </FieldSet>
