@@ -17,7 +17,8 @@ const shouldEnablePostHog = () => {
 const POSTHOG_RECORDING_ERROR = "Called on script loaded before session recording is available";
 if (typeof window !== "undefined") {
   window.addEventListener("error", (event) => {
-    if (event.message === POSTHOG_RECORDING_ERROR) {
+    // Check the Error object directly (avoids browser-specific prefixes like "Uncaught Error: ...")
+    if (event.error?.message === POSTHOG_RECORDING_ERROR || event.message?.includes(POSTHOG_RECORDING_ERROR)) {
       event.preventDefault();
     }
   });
