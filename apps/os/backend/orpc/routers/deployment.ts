@@ -42,6 +42,22 @@ async function assertDeploymentBelongsToProject(
   }
 }
 
+function makeProjectIterator(projectId: string, signingKey: string) {
+  return new DurableIterator<ProjectDurableObject>(`project:${projectId}`, {
+    signingKey,
+    // The client chooses the DO upgrade endpoint from token tags. That is more explicit
+    // than inferring the namespace from the channel name string.
+    tags: ["project-durable-object"],
+  }).rpc("api");
+}
+
+function makeDeploymentIterator(deploymentId: string, signingKey: string) {
+  return new DurableIterator<DeploymentDurableObject>(`deployment:${deploymentId}`, {
+    signingKey,
+    tags: ["deployment-durable-object"],
+  }).rpc("api");
+}
+
 export const deploymentRouter = {
   list: projectProtectedProcedure.input(ProjectInput).handler(async ({ context: ctx }) => {
     const projectStub = await getProjectStub(ctx);
@@ -78,9 +94,10 @@ export const deploymentRouter = {
     .handler(async ({ context: ctx }) => {
       await getProjectStub(ctx);
 
-      return new DurableIterator<ProjectDurableObject>(`project:${ctx.project.id}`, {
-        signingKey: ctx.env.ENCRYPTION_SECRET,
-      }).rpc("deployments");
+      // This procedure intentionally returns a live project snapshot stream.
+      // The Jonas Land list page consumes it with TanStack Query live queries,
+      // which mirrors the first-party oRPC guidance for Event Iterator / Durable Iterator.
+      return makeProjectIterator(ctx.project.id, ctx.env.ENCRYPTION_SECRET);
     }),
 
   get: projectProtectedProcedure
@@ -118,9 +135,11 @@ export const deploymentRouter = {
       const projectStub = await getProjectStub(ctx);
       await assertDeploymentBelongsToProject(projectStub, input.deploymentId);
 
-      return new DurableIterator<DeploymentDurableObject>(`deployment:${input.deploymentId}`, {
-        signingKey: ctx.env.ENCRYPTION_SECRET,
-      }).rpc("deployment");
+      // This is the deployment event stream. The root iterator carries typed events
+      // (`snapshot` and `log`) so the frontend can consume it through TanStack Query's
+      // streamed helpers like a normal top-level async iterator, while `api.*` remains
+      // available on the same websocket for imperative DO-local RPC when needed.
+      return makeDeploymentIterator(input.deploymentId, ctx.env.ENCRYPTION_SECRET);
     }),
 
   start: projectProtectedMutation

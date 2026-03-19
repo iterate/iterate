@@ -53,9 +53,13 @@ export const makeOrpcClient = createIsomorphicFn()
             new DurableIteratorLinkPlugin({
               url: (tokenPayload) => {
                 const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-                const endpoint = tokenPayload.chn.startsWith("deployment:")
+                const endpoint = tokenPayload.tags?.includes("deployment-durable-object")
                   ? "deployment"
                   : "project-deployments";
+
+                // oRPC's Durable Iterator tokens already carry tags. Using those tags to pick
+                // the upgrade endpoint keeps the transport contract explicit and avoids baking
+                // namespace routing into the channel name string itself.
                 return `${protocol}://${window.location.host}/api/orpc-iterator/${endpoint}`;
               },
               refreshTokenBeforeExpireInSeconds: () => 300,

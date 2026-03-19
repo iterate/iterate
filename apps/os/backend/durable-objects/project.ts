@@ -188,7 +188,10 @@ export class ProjectDurableObject extends DurableIteratorObject<
     await this.publishSnapshot();
   }
 
-  deployments(_ws: DurableIteratorWebsocket) {
+  api(_ws: DurableIteratorWebsocket) {
+    // Like the deployment DO, keep the project coordinator's imperative surface as oRPC
+    // methods inside the iterator websocket. The outer app router can expose thinner
+    // top-level procedures for TanStack Query without duplicating business rules here.
     return {
       create: rpc
         .input(

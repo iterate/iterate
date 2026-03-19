@@ -38,6 +38,19 @@ export type DeploymentSnapshot = {
   logs: DeploymentLog[];
 };
 
+export type DeploymentEvent =
+  | {
+      type: "snapshot";
+      snapshot: {
+        deployment: DeploymentSummary;
+        isPrimary: boolean;
+      };
+    }
+  | {
+      type: "log";
+      log: DeploymentLog;
+    };
+
 type Env = {
   ENCRYPTION_SECRET: string;
   PROJECT_DURABLE_OBJECT: DurableObjectNamespace<ProjectDurableObject>;
@@ -45,11 +58,7 @@ type Env = {
 
 const rpc = os.$context<Record<string, never>>();
 
-export class DeploymentDurableObject extends DurableIteratorObject<
-  DeploymentSnapshot,
-  Env,
-  unknown
-> {
+export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEvent, Env, unknown> {
   private initialized: Promise<void>;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -57,7 +66,7 @@ export class DeploymentDurableObject extends DurableIteratorObject<
       signingKey: env.ENCRYPTION_SECRET,
       resumeRetentionSeconds: 60,
       onSubscribed: (websocket) => {
-        void this.publishSnapshot({ targets: [websocket] });
+        void this.publishSnapshotEvent({ targets: [websocket] });
       },
     });
 
@@ -141,9 +150,8 @@ export class DeploymentDurableObject extends DurableIteratorObject<
       this.insertLog("info", `Using detached ingress host ${input.uniqueIngressHost}`);
     }
 
-    const deployment = this.mustReadDeployment();
-    await this.publishSnapshot();
-    return deployment;
+    await this.publishSnapshotEvent();
+    return this.mustReadDeployment();
   }
 
   async attachPrimary(): Promise<DeploymentSummary> {
@@ -169,9 +177,8 @@ export class DeploymentDurableObject extends DurableIteratorObject<
       `Attached primary ingress host ${this.mustReadConfig().primaryIngressHost}`,
     );
 
-    const updated = this.mustReadDeployment();
-    await this.publishSnapshot();
-    return updated;
+    await this.publishSnapshotEvent();
+    return this.mustReadDeployment();
   }
 
   async detachPrimary(): Promise<DeploymentSummary> {
@@ -197,9 +204,8 @@ export class DeploymentDurableObject extends DurableIteratorObject<
       `Detached from primary ingress host; using ${this.mustReadConfig().uniqueIngressHost}`,
     );
 
-    const updated = this.mustReadDeployment();
-    await this.publishSnapshot();
-    return updated;
+    await this.publishSnapshotEvent();
+    return this.mustReadDeployment();
   }
 
   async start(): Promise<DeploymentSummary> {
@@ -229,7 +235,7 @@ export class DeploymentDurableObject extends DurableIteratorObject<
     await this.scheduleAlarm(400);
 
     const updated = this.mustReadDeployment();
-    await this.publishSnapshot();
+    await this.publishSnapshotEvent();
     await this.notifyProject();
     return updated;
   }
@@ -261,7 +267,7 @@ export class DeploymentDurableObject extends DurableIteratorObject<
     await this.scheduleAlarm(400);
 
     const updated = this.mustReadDeployment();
-    await this.publishSnapshot();
+    await this.publishSnapshotEvent();
     await this.notifyProject();
     return updated;
   }
@@ -289,7 +295,7 @@ export class DeploymentDurableObject extends DurableIteratorObject<
     this.insertLog("error", "Destroyed deployment resources");
 
     const updated = this.mustReadDeployment();
-    await this.publishSnapshot();
+    await this.publishSnapshotEvent();
     await this.notifyProject();
     return updated;
   }
@@ -304,8 +310,17 @@ export class DeploymentDurableObject extends DurableIteratorObject<
     return this.readSnapshot();
   }
 
-  deployment(_ws: DurableIteratorWebsocket) {
+  api(_ws: DurableIteratorWebsocket) {
+    // This is oRPC method RPC inside the Durable Iterator websocket, not Cloudflare's
+    // server-side-only DO RPC. Keeping the imperative surface here lets the DO define its
+    // own client contract while the outer app router decides which pieces to expose as
+    // ordinary top-level query/mutation/stream procedures.
     return {
+      getSnapshot: rpc
+        .input(z.object({}))
+        .handler(() => this.getSnapshot())
+        .callable(),
+
       start: rpc
         .input(z.object({}))
         .handler(() => this.start())
@@ -360,7 +375,7 @@ export class DeploymentDurableObject extends DurableIteratorObject<
       return;
     }
 
-    await this.publishSnapshot();
+    await this.publishSnapshotEvent();
     await this.notifyProject();
   }
 
@@ -470,15 +485,49 @@ export class DeploymentDurableObject extends DurableIteratorObject<
   }
 
   private insertLog(level: DeploymentLog["level"], message: string) {
+    const createdAt = new Date().toISOString();
     this.ctx.storage.sql.exec(
       `
         INSERT INTO deployment_logs (created_at, level, message)
         VALUES (?, ?, ?)
       `,
-      new Date().toISOString(),
+      createdAt,
       level,
       message,
     );
+
+    const log = this.ctx.storage.sql
+      .exec<{
+        id: number;
+        created_at: string;
+        level: DeploymentLog["level"];
+        message: string;
+      }>(
+        `
+          SELECT id, created_at, level, message
+          FROM deployment_logs
+          ORDER BY id DESC
+          LIMIT 1
+        `,
+      )
+      .toArray()[0];
+
+    if (!log) {
+      throw new Error("Expected deployment log to exist after insert");
+    }
+
+    // The root durable iterator stream carries a small event union. That keeps one durable
+    // iterator connection useful for both TanStack streamed queries and direct websocket
+    // consumers: snapshots replace route state, while logs append to the terminal view.
+    this.publishEvent({
+      type: "log",
+      log: {
+        id: log.id,
+        createdAt: log.created_at,
+        level: log.level,
+        message: log.message,
+      },
+    });
   }
 
   private setState(state: DeploymentState) {
@@ -507,14 +556,29 @@ export class DeploymentDurableObject extends DurableIteratorObject<
     await this.ctx.storage.setAlarm(Date.now() + delayMs);
   }
 
-  private async publishSnapshot(options?: { targets?: DurableIteratorWebsocket[] }) {
-    this.publishEvent(this.readSnapshot(), options);
-  }
-
   private async notifyProject() {
     const { projectId } = this.mustReadConfig();
     await this.env.PROJECT_DURABLE_OBJECT.getByName(
       `project:${projectId}`,
     ).deploymentStateChanged();
+  }
+
+  private async publishSnapshotEvent(options?: { targets?: DurableIteratorWebsocket[] }) {
+    const deployment = this.mustReadDeployment();
+    const isPrimary =
+      (await this.env.PROJECT_DURABLE_OBJECT.getByName(
+        `project:${deployment.projectId}`,
+      ).getPrimaryDeploymentId()) === deployment.id;
+
+    this.publishEvent(
+      {
+        type: "snapshot",
+        snapshot: {
+          deployment,
+          isPrimary,
+        },
+      },
+      options,
+    );
   }
 }

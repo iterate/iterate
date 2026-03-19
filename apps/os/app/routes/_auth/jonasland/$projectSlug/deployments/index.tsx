@@ -1,7 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { ExternalLink, Plus, Rocket, Star } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state.tsx";
@@ -20,8 +20,8 @@ import {
 import { orpc, orpcClient } from "@/lib/orpc.tsx";
 
 export const Route = createFileRoute("/_auth/jonasland/$projectSlug/deployments/")({
-  loader: ({ context, params }) => {
-    context.queryClient.prefetchQuery(
+  loader: async ({ context, params }) => {
+    await context.queryClient.ensureQueryData(
       orpc.deployment.list.queryOptions({
         input: { projectSlug: params.projectSlug },
       }),
@@ -32,6 +32,7 @@ export const Route = createFileRoute("/_auth/jonasland/$projectSlug/deployments/
 
 function JonasLandDeploymentsPage() {
   const params = Route.useParams();
+  const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [deploymentName, setDeploymentName] = useState("");
   const [transport, setTransport] = useState<"http" | "durable-iterator">("http");
@@ -39,55 +40,58 @@ function JonasLandDeploymentsPage() {
   const listQueryOptions = orpc.deployment.list.queryOptions({
     input: { projectSlug: params.projectSlug },
   });
-  const { data: initialDeployments } = useSuspenseQuery(listQueryOptions);
-  const [deployments, setDeployments] = useState<Array<(typeof initialDeployments)[number]>>(() => [
-    ...initialDeployments,
-  ]);
-
-  const projectStream = useQuery({
-    queryKey: [...listQueryOptions.queryKey, "project-stream"],
-    queryFn: () => orpcClient.deployment.connectProject({ projectSlug: params.projectSlug }),
-    enabled: typeof window !== "undefined",
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: Number.POSITIVE_INFINITY,
-    retry: 1,
-  });
+  const listQueryKey = listQueryOptions.queryKey;
+  const { data: deployments } = useSuspenseQuery(listQueryOptions);
+  const setDeploymentsCache = useEffectEvent(
+    (nextDeployments: Array<(typeof deployments)[number]>) => {
+      queryClient.setQueryData(listQueryKey, (current: typeof deployments | undefined) =>
+        Object.assign([...nextDeployments], {
+          [Symbol.dispose]: current?.[Symbol.dispose] ?? (() => {}),
+        }),
+      );
+    },
+  );
 
   useEffect(() => {
-    if (!projectStream.data) {
+    if (typeof window === "undefined") {
       return;
     }
 
     let active = true;
-    const iterator = projectStream.data;
+    let iterator: Awaited<ReturnType<typeof orpcClient.deployment.connectProject>> | null = null;
 
     void (async () => {
       try {
+        iterator = await orpcClient.deployment.connectProject({ projectSlug: params.projectSlug });
+        if (!active) {
+          return;
+        }
+
+        setTransport("durable-iterator");
+
         for await (const event of iterator) {
           if (!active) {
             return;
           }
 
-          setTransport("durable-iterator");
-          setDeployments(event.deployments);
+          // TanStack Query still owns the deployments collection. The websocket side effect
+          // only hydrates that cache with fresher project snapshots from the DO.
+          setDeploymentsCache(event.deployments);
         }
-      } catch (error) {
+      } catch {
         if (!active) {
           return;
         }
 
         setTransport("http");
-        toast.error(
-          "Failed to sync deployments: " + (error instanceof Error ? error.message : String(error)),
-        );
       }
     })();
 
     return () => {
       active = false;
-      void iterator.return();
+      void iterator?.return();
     };
-  }, [projectStream.data]);
+  }, [params.projectSlug, queryClient, listQueryKey]);
 
   const createDeployment = useMutation({
     mutationFn: async () => {
@@ -97,7 +101,7 @@ function JonasLandDeploymentsPage() {
       });
     },
     onSuccess: (nextDeployments) => {
-      setDeployments(nextDeployments);
+      setDeploymentsCache(nextDeployments);
       setCreateOpen(false);
       setDeploymentName("");
       toast.success("Deployment created");
@@ -115,7 +119,7 @@ function JonasLandDeploymentsPage() {
       });
     },
     onSuccess: (nextDeployments) => {
-      setDeployments(nextDeployments);
+      setDeploymentsCache(nextDeployments);
       toast.success("Primary deployment updated");
     },
     onError: (error) => {
