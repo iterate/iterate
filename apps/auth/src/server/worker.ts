@@ -15,11 +15,11 @@ import { appRouter } from "./orpc/index.ts";
 const app = hono();
 
 app.use(
-  contextStorage(),
-  variablesProvider(),
   cors({
     origin: (origin) => origin,
   }),
+  contextStorage(),
+  variablesProvider(),
 );
 
 app.get("/api/auth/.well-known/openid-configuration", (c) =>
