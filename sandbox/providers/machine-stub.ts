@@ -2,6 +2,7 @@ import { DaytonaProvider } from "./daytona/provider.ts";
 import { DockerProvider, type DockerSandbox } from "./docker/provider.ts";
 import { FlyProvider } from "./fly/provider.ts";
 import type { MachineType, ProviderState, Sandbox, SandboxFetcher } from "./types.ts";
+import { parseSpecMachineEmail } from "../../apps/os/backend/email/spec-machine.ts";
 import { asRecord } from "./utils.ts";
 
 export interface CreateMachineConfig {
@@ -107,6 +108,10 @@ function parsePortFromUrl(url: string): number {
   if (parsed.protocol === "https:") return 443;
   if (parsed.protocol === "http:") return 80;
   throw new Error(`Could not parse port from URL: ${url}`);
+}
+
+function normalizePathWithQuery(pathWithQuery: string): string {
+  return pathWithQuery.startsWith("//") ? pathWithQuery.slice(1) : pathWithQuery;
 }
 
 function toRawEnv(params: {
@@ -363,11 +368,13 @@ function createFlyStub(options: CreateMachineStubOptions): MachineStub {
 }
 
 function createSpecMachineStub(options: CreateMachineStubOptions): MachineStub {
-  const specMachineMetadata = asRecord((options.metadata as { specMachine?: unknown }).specMachine);
-  const baseUrl = asString(specMachineMetadata.baseUrl);
+  const emailSender = asString((options.metadata as { emailSender?: unknown }).emailSender);
+  const baseUrl = emailSender ? parseSpecMachineEmail(emailSender)?.baseUrl : undefined;
 
   if (!baseUrl) {
-    throw new Error(`spec-machine metadata.baseUrl missing for ${options.externalId}`);
+    throw new Error(
+      `spec-machine emailSender metadata missing or invalid for ${options.externalId}`,
+    );
   }
 
   return {
@@ -381,7 +388,7 @@ function createSpecMachineStub(options: CreateMachineStubOptions): MachineStub {
       if (!response.ok) {
         throw new Error(`spec-machine bootstrap failed: HTTP ${response.status}`);
       }
-      return { metadata: { specMachine: { baseUrl } } };
+      return {};
     },
     async start(): Promise<void> {},
     async stop(): Promise<void> {},
@@ -390,16 +397,24 @@ function createSpecMachineStub(options: CreateMachineStubOptions): MachineStub {
     async delete(): Promise<void> {},
     async getFetcher(_port: number): Promise<SandboxFetcher> {
       return async (input, init) => {
-        const pathWithQuery =
-          input instanceof Request
-            ? `${new URL(input.url).pathname}${new URL(input.url).search}`
-            : input instanceof URL
-              ? `${input.pathname}${input.search}`
-              : /^https?:\/\//.test(input)
-                ? `${new URL(input).pathname}${new URL(input).search}`
-                : input.startsWith("/")
-                  ? input
-                  : `/${input}`;
+        if (input instanceof Request) {
+          const requestUrl = new URL(input.url);
+          const url = new URL(
+            normalizePathWithQuery(`${requestUrl.pathname}${requestUrl.search}`),
+            baseUrl,
+          );
+          return fetch(new Request(url, input), init);
+        }
+
+        const pathWithQuery = normalizePathWithQuery(
+          input instanceof URL
+            ? `${input.pathname}${input.search}`
+            : /^https?:\/\//.test(input)
+              ? `${new URL(input).pathname}${new URL(input).search}`
+              : input.startsWith("/")
+                ? input
+                : `/${input}`,
+        );
         const url = new URL(pathWithQuery, baseUrl).toString();
         return fetch(url, init);
       };

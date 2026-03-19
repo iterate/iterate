@@ -29,8 +29,7 @@ import { ResendWebhookReceivedEventPayload } from "../../events.ts";
 import { outboxClient } from "../../outbox/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
-import { parseRecipientLocal, parseSenderEmail } from "../../email/email-routing.ts";
-import { parseSpecMachineEmail } from "../../email/spec-machine.ts";
+import { parseSenderEmail } from "../../email/email-routing.ts";
 
 export const resendApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
@@ -210,8 +209,6 @@ resendApp.post("/webhook", async (c) => {
     return c.text("Invalid JSON", 400);
   }
 
-  const isSpecMachineWebhook = Boolean(parseSpecMachineEmail(parseSenderEmail(payload.data.from)));
-
   // Verify webhook signature if secret is configured
   if (webhookSecret) {
     const client = createResendClient(c.env.RESEND_BOT_API_KEY);
@@ -240,72 +237,6 @@ resendApp.post("/webhook", async (c) => {
   const emailData = payload.data;
   const senderEmail = parseSenderEmail(emailData.from);
   const resendEmailId = emailData.email_id;
-
-  // Validate inbound email is addressed to this stage
-  // Expected format: {stage}@{RESEND_BOT_DOMAIN} or {stage}+{extra}@{RESEND_BOT_DOMAIN}
-  const expectedStage = c.env.VITE_APP_STAGE;
-  const recipientEmail = emailData.to[0] || "";
-  const recipientLocal = parseRecipientLocal(recipientEmail); // e.g., "dev-mmkal" or "dev-mmkal+projectslug"
-  const recipientStage = recipientLocal.split("+")[0]; // Strip any +suffix
-
-  // Header to track forwarding and prevent infinite loops
-  const FORWARDED_HEADER = "x-iterate-forwarded-from";
-  const alreadyForwarded = c.req.header(FORWARDED_HEADER);
-
-  if (recipientStage !== expectedStage && !isSpecMachineWebhook) {
-    // In production, forward to the correct stage instead of ignoring
-    // Only forward if: 1) we're in staging, 2) not already forwarded, 3) target is a dev stage
-    const isStaging = expectedStage === "stg";
-    const isDevStage = recipientStage.startsWith("dev-");
-
-    if (isStaging && !alreadyForwarded && isDevStage) {
-      // Build target URL by replacing hostname in current URL
-      // Expected: stg-os.iterate.com -> dev-xxx-os.dev.iterate.com
-      const currentUrl = new URL(c.req.url);
-
-      // Replace hostname {stage}-os.dev.iterate.com
-      const targetHostname = `${recipientStage}-os.dev.iterate.com`;
-      const targetUrl = new URL(currentUrl);
-      targetUrl.hostname = targetHostname;
-
-      logger.set({ url: targetUrl.href });
-      logger.info(
-        `[Resend Webhook] Forwarding email to correct stage expectedStage=${expectedStage} recipientStage=${recipientStage}`,
-      );
-
-      try {
-        // Forward all headers, adding our forwarded-from header
-        const forwardHeaders = new Headers(c.req.raw.headers);
-        forwardHeaders.set(FORWARDED_HEADER, expectedStage);
-
-        const forwardResponse = await fetch(targetUrl.href, {
-          method: "POST",
-          headers: forwardHeaders,
-          body,
-        });
-
-        // Return the exact response from the target, with an extra header
-        const responseHeaders = new Headers(forwardResponse.headers);
-        responseHeaders.set("x-iterate-forwarded-to", recipientStage);
-
-        return new Response(forwardResponse.body, {
-          status: forwardResponse.status,
-          statusText: forwardResponse.statusText,
-          headers: responseHeaders,
-        });
-      } catch (error) {
-        logger.error("[Resend Webhook] Failed to forward email", error, {
-          url: targetUrl.href,
-        });
-        return c.json({ ok: false, message: "Failed to forward to correct stage" }, 502);
-      }
-    }
-
-    logger.info(
-      `[Resend Webhook] Email addressed to different stage, ignoring expectedStage=${expectedStage} recipientStage=${recipientStage}`,
-    );
-    return c.json({ ok: true, message: "Email addressed to different stage" });
-  }
 
   logger.debug("[Resend Webhook] Received email", {
     from: senderEmail,

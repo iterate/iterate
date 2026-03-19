@@ -1,7 +1,9 @@
 import { createHmac, randomUUID } from "node:crypto";
+import { execSync } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createWorkerClient } from "../../apps/daemon/server/orpc/client.ts";
 import { buildSpecMachineEmail } from "../../apps/os/backend/email/spec-machine.ts";
+import playwrightConfig from "../../playwright.config.ts";
 
 type RequestRecord = {
   method: string;
@@ -22,6 +24,10 @@ function json(response: ServerResponse, statusCode: number, body: unknown) {
   response.end(JSON.stringify(body));
 }
 
+function orpcJson(response: ServerResponse, body: unknown) {
+  return json(response, 200, { json: body });
+}
+
 async function readRequestBody(request: IncomingMessage) {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
@@ -37,19 +43,41 @@ function signSvixMessage(params: { body: string; secret: string; id: string; tim
   return `v1,${signature}`;
 }
 
+async function getAppUrl() {
+  const { baseURL } = playwrightConfig.use;
+  const response = await fetch(baseURL, { method: "GET", redirect: "manual" });
+  const redirectLocation = response.headers.get("location");
+  if (redirectLocation) {
+    return new URL(redirectLocation, baseURL).toString().replace(/\/$/, "");
+  }
+
+  return baseURL.replace(/\/$/, "");
+}
+
 export class SpecMachine {
   private readonly server: Server;
-  private readonly threads = new Map<string, ThreadMessage[]>();
-  private readonly files = new Map<string, string>();
-  private readonly directories = new Set<string>();
-  private readonly requestsInternal: RequestRecord[] = [];
+  private readonly threads: Map<string, ThreadMessage[]>;
+  private readonly files: Map<string, string>;
+  private readonly directories: Set<string>;
+  private readonly requestsInternal: RequestRecord[];
 
   public readonly baseUrl: string;
   public readonly senderEmail: string;
 
-  private constructor(params: { server: Server; baseUrl: string }) {
+  private constructor(params: {
+    server: Server;
+    baseUrl: string;
+    requests: RequestRecord[];
+    threads: Map<string, ThreadMessage[]>;
+    files: Map<string, string>;
+    directories: Set<string>;
+  }) {
     this.server = params.server;
     this.baseUrl = params.baseUrl;
+    this.requestsInternal = params.requests;
+    this.threads = params.threads;
+    this.files = params.files;
+    this.directories = params.directories;
     this.senderEmail = buildSpecMachineEmail({ baseUrl: this.baseUrl });
   }
 
@@ -87,7 +115,7 @@ export class SpecMachine {
         json: parsedJson,
       });
 
-      if (method === "POST" && url.pathname === "/__spec-machine/bootstrap") {
+      if (method === "POST" && ["/__spec-machine/bootstrap", "/bootstrap"].includes(url.pathname)) {
         const body = parsedJson as { envVars: Record<string, string> };
         const previousBaseUrl = process.env.ITERATE_OS_BASE_URL;
         const previousApiKey = process.env.ITERATE_OS_API_KEY;
@@ -115,7 +143,7 @@ export class SpecMachine {
       if (method === "POST" && url.pathname === "/api/orpc/tool/readFile") {
         const body = parsedJson as { json: { path: string } };
         const content = state.files.get(body.json.path);
-        return json(response, 200, {
+        return orpcJson(response, {
           path: body.json.path,
           content: content ?? null,
           exists: !!content,
@@ -125,7 +153,7 @@ export class SpecMachine {
       if (method === "POST" && url.pathname === "/api/orpc/tool/writeFile") {
         const body = parsedJson as { json: { path: string; content: string } };
         state.files.set(body.json.path, body.json.content);
-        return json(response, 200, {
+        return orpcJson(response, {
           path: body.json.path,
           bytesWritten: Buffer.byteLength(body.json.content),
         });
@@ -136,7 +164,7 @@ export class SpecMachine {
         const [command, ...args] = body.json.command;
 
         if (command === "test" && args[0] === "-d") {
-          return json(response, 200, {
+          return orpcJson(response, {
             exitCode: state.directories.has(args[1] ?? "") ? 0 : 1,
             stdout: "",
             stderr: "",
@@ -150,7 +178,7 @@ export class SpecMachine {
           }
         }
 
-        return json(response, 200, { exitCode: 0, stdout: "", stderr: "" });
+        return orpcJson(response, { exitCode: 0, stdout: "", stderr: "" });
       }
 
       if (method === "POST" && url.pathname === "/api/integrations/webchat/webhook") {
@@ -187,14 +215,11 @@ export class SpecMachine {
     const specMachine = new SpecMachine({
       server,
       baseUrl: `http://127.0.0.1:${address.port}`,
+      requests: state.requests,
+      threads: state.threads,
+      files: state.files,
+      directories: state.directories,
     });
-    specMachine.requestsInternal.push(...state.requests);
-    specMachine.threads.clear();
-    for (const [key, value] of state.threads) specMachine.threads.set(key, value);
-    specMachine.files.clear();
-    for (const [key, value] of state.files) specMachine.files.set(key, value);
-    specMachine.directories.clear();
-    for (const value of state.directories) specMachine.directories.add(value);
     return specMachine;
   }
 
@@ -203,7 +228,7 @@ export class SpecMachine {
   }
 
   async sendFakeResendWebhook(params: { subject: string; text: string }) {
-    const appUrl = process.env.APP_URL || "http://localhost:5173";
+    const appUrl = await getAppUrl();
     const now = new Date().toISOString();
     const body = JSON.stringify({
       type: "email.received",
@@ -225,7 +250,10 @@ export class SpecMachine {
       },
     });
 
-    const secret = process.env.RESEND_BOT_WEBHOOK_SECRET;
+    let secret = process.env.RESEND_BOT_WEBHOOK_SECRET;
+    if (!secret) {
+      secret = execSync(`doppler secrets get RESEND_BOT_WEBHOOK_SECRET --plain`).toString().trim();
+    }
     if (!secret) {
       throw new Error("RESEND_BOT_WEBHOOK_SECRET must be set for fake resend webhooks");
     }

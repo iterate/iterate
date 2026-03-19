@@ -279,7 +279,7 @@ export async function createUserFromVerifiedEmail(params: {
   });
   if (existing?.user) {
     if (!existing.accounts?.some((account) => account.providerId === "credential")) {
-      await authContext.internalAdapter.createAccount({
+      await params.db.insert(schema.account).values({
         userId: existing.user.id,
         providerId: "credential",
         accountId: existing.user.id,
@@ -290,15 +290,22 @@ export async function createUserFromVerifiedEmail(params: {
     return existing.user as typeof schema.user.$inferSelect;
   }
 
-  const user = await authContext.internalAdapter.createUser({
-    email: normalizedEmail,
-    emailVerified: true,
-    name: params.name,
-    image: generateDefaultAvatar(normalizedEmail),
-    role: "user",
-  });
+  const [user] = await params.db
+    .insert(schema.user)
+    .values({
+      email: normalizedEmail,
+      emailVerified: true,
+      name: params.name,
+      image: generateDefaultAvatar(normalizedEmail),
+      role: "user",
+    })
+    .returning();
 
-  await authContext.internalAdapter.createAccount({
+  if (!user) {
+    throw new Error(`Failed to create user for ${normalizedEmail}`);
+  }
+
+  await params.db.insert(schema.account).values({
     userId: user.id,
     providerId: "credential",
     accountId: user.id,

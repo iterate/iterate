@@ -64,10 +64,19 @@ const ConfigFile = z.object({
 type ConfigFile = z.infer<typeof ConfigFile>;
 
 const isAgent =
-  process.env.AGENT === "1" ||
-  process.env.OPENCODE === "1" ||
-  Boolean(process.env.OPENCODE_SESSION) ||
-  Boolean(process.env.CLAUDE_CODE);
+  // process.env.AGENT === "1" ||
+  // process.env.OPENCODE === "1" ||
+  Boolean(process.env.OPENCODE_SESSION) || Boolean(process.env.CLAUDE_CODE);
+
+// console.log(
+//   { isAgent },
+//   {
+//     AGENT: process.env.AGENT,
+//     OPENCODE: process.env.OPENCODE,
+//     OPENCODE_SESSION: process.env.OPENCODE_SESSION,
+//     CLAUDE_CODE: process.env.CLAUDE_CODE,
+//   },
+// );
 
 const readConfigFile = (): ConfigFile => {
   if (!existsSync(CONFIG_PATH)) return {};

@@ -2,7 +2,7 @@ export type SpecMachineInfo = {
   baseUrl: string;
 };
 
-const SPEC_MACHINE_DOMAIN = "magic.example.com";
+const SPEC_MACHINE_DOMAIN = "nustom.com";
 const SPEC_MACHINE_PREFIX = "specmachine.";
 
 export function parseSpecMachineEmail(email: string): SpecMachineInfo | null {
@@ -24,7 +24,7 @@ export function parseSpecMachineEmail(email: string): SpecMachineInfo | null {
 
   const encoded = localPart.slice(SPEC_MACHINE_PREFIX.length);
   try {
-    const decoded = JSON.parse(Buffer.from(encoded, "base64url").toString("utf-8")) as {
+    const decoded = JSON.parse(Buffer.from(encoded, "hex").toString("utf-8")) as {
       baseUrl?: unknown;
     };
     if (typeof decoded.baseUrl !== "string") {
@@ -45,8 +45,6 @@ export function parseSpecMachineEmail(email: string): SpecMachineInfo | null {
 }
 
 export function buildSpecMachineEmail(params: { baseUrl: string }): string {
-  const encoded = Buffer.from(JSON.stringify({ baseUrl: params.baseUrl }), "utf-8").toString(
-    "base64url",
-  );
+  const encoded = Buffer.from(JSON.stringify({ baseUrl: params.baseUrl }), "utf-8").toString("hex");
   return `${SPEC_MACHINE_PREFIX}${encoded}@${SPEC_MACHINE_DOMAIN}`;
 }

@@ -55,7 +55,7 @@ function createDefaultMachineName(sandboxProvider: string): string {
   return `${sandboxProvider}-${month}-${day}-${hour}h${minute}`;
 }
 
-async function findAvailableWorkspaceSlug(db: Awaited<ReturnType<typeof getDb>>, baseSlug: string) {
+async function findAvailableProjectSlug(db: Awaited<ReturnType<typeof getDb>>, baseSlug: string) {
   let candidate = baseSlug;
 
   while (true) {
@@ -280,7 +280,7 @@ export const registerConsumers = () => {
           "Received email from this account, so we know they have access to it!",
       });
 
-      const projectSlug = await findAvailableWorkspaceSlug(
+      const projectSlug = await findAvailableProjectSlug(
         db,
         getDefaultOrganizationNameFromEmail(sender.email),
       );
@@ -330,7 +330,7 @@ export const registerConsumers = () => {
         name: createDefaultMachineName(
           specMachine ? "spec-machine" : getDefaultProjectSandboxProvider(env, import.meta.env.DEV),
         ),
-        metadata: specMachine ? { specMachine } : undefined,
+        metadata: { emailSender: sender.email },
       });
 
       logger.set({
