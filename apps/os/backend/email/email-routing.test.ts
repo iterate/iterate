@@ -5,6 +5,7 @@ import {
   parseSender,
   parseSenderEmail,
 } from "./email-routing.ts";
+import { buildSpecMachineEmail, parseSpecMachineEmail } from "./spec-machine.ts";
 import { isSignupAllowed } from "./signup-allowlist.ts";
 
 describe("email routing helpers", () => {
@@ -31,5 +32,12 @@ describe("email routing helpers", () => {
   test("matches signup allowlist patterns", () => {
     expect(isSignupAllowed("person@example.com", "*@example.com,admin@iterate.com")).toBe(true);
     expect(isSignupAllowed("person@other.com", "*@example.com,admin@iterate.com")).toBe(false);
+  });
+
+  test("parses spec machine email", () => {
+    const email = buildSpecMachineEmail({ baseUrl: "http://127.0.0.1:45678" });
+    expect(parseSpecMachineEmail(email)).toEqual({
+      baseUrl: "http://127.0.0.1:45678/",
+    });
   });
 });

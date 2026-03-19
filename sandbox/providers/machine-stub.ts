@@ -362,6 +362,57 @@ function createFlyStub(options: CreateMachineStubOptions): MachineStub {
   });
 }
 
+function createSpecMachineStub(options: CreateMachineStubOptions): MachineStub {
+  const specMachineMetadata = asRecord((options.metadata as { specMachine?: unknown }).specMachine);
+  const baseUrl = asString(specMachineMetadata.baseUrl);
+
+  if (!baseUrl) {
+    throw new Error(`spec-machine metadata.baseUrl missing for ${options.externalId}`);
+  }
+
+  return {
+    type: "spec-machine",
+    async create(config: CreateMachineConfig): Promise<MachineStubResult> {
+      const response = await fetch(`${baseUrl}/__spec-machine/bootstrap`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config),
+      });
+      if (!response.ok) {
+        throw new Error(`spec-machine bootstrap failed: HTTP ${response.status}`);
+      }
+      return { metadata: { specMachine: { baseUrl } } };
+    },
+    async start(): Promise<void> {},
+    async stop(): Promise<void> {},
+    async restart(): Promise<void> {},
+    async archive(): Promise<void> {},
+    async delete(): Promise<void> {},
+    async getFetcher(_port: number): Promise<SandboxFetcher> {
+      return async (input, init) => {
+        const pathWithQuery =
+          input instanceof Request
+            ? `${new URL(input.url).pathname}${new URL(input.url).search}`
+            : input instanceof URL
+              ? `${input.pathname}${input.search}`
+              : /^https?:\/\//.test(input)
+                ? `${new URL(input).pathname}${new URL(input).search}`
+                : input.startsWith("/")
+                  ? input
+                  : `/${input}`;
+        const url = new URL(pathWithQuery, baseUrl).toString();
+        return fetch(url, init);
+      };
+    },
+    async getBaseUrl(_port: number): Promise<string> {
+      return baseUrl;
+    },
+    async getProviderState(): Promise<ProviderState> {
+      return { state: "running" };
+    },
+  };
+}
+
 export async function createMachineStub(options: CreateMachineStubOptions): Promise<MachineStub> {
   const { type } = options;
 
@@ -372,6 +423,8 @@ export async function createMachineStub(options: CreateMachineStubOptions): Prom
       return createDaytonaStub(options);
     case "fly":
       return createFlyStub(options);
+    case "spec-machine":
+      return createSpecMachineStub(options);
     default: {
       const exhaustiveCheck: never = type;
       throw new Error(`Unknown machine type: ${exhaustiveCheck}`);

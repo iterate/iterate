@@ -25,6 +25,7 @@ import {
   parseRecipientLocal,
   parseSender,
 } from "../email/email-routing.ts";
+import { parseSpecMachineEmail } from "../email/spec-machine.ts";
 import { slugifyWithSuffix } from "../utils/slug.ts";
 import { getDefaultProjectSandboxProvider } from "../utils/sandbox-providers.ts";
 import { outboxClient as cc } from "./client.ts";
@@ -219,7 +220,8 @@ export const registerConsumers = () => {
       const { createResendClient, fetchEmailContent, forwardEmailWebhookToMachine } =
         await import("../integrations/resend/resend.ts");
       const resendClient = createResendClient(env.RESEND_BOT_API_KEY);
-      const emailContent = await fetchEmailContent(resendClient, resendEmailId);
+      const emailContent =
+        payload._iterate_email_content || (await fetchEmailContent(resendClient, resendEmailId));
 
       const forwardResult = await forwardEmailWebhookToMachine(
         targetMachine,
@@ -268,6 +270,7 @@ export const registerConsumers = () => {
 
       const payload = ResendWebhookReceivedEventPayload.parse(event.payload);
       const sender = parseSender(payload.data.from);
+      const specMachine = parseSpecMachineEmail(sender.email);
       const user = await createUserFromVerifiedEmail({
         db,
         env,
@@ -303,7 +306,9 @@ export const registerConsumers = () => {
             name: projectSlug,
             slug: projectSlug,
             organizationId: organization.id,
-            sandboxProvider: getDefaultProjectSandboxProvider(env, import.meta.env.DEV),
+            sandboxProvider: specMachine
+              ? "spec-machine"
+              : getDefaultProjectSandboxProvider(env, import.meta.env.DEV),
           })
           .returning();
         if (!project) {
@@ -322,7 +327,10 @@ export const registerConsumers = () => {
         db,
         env,
         projectId,
-        name: createDefaultMachineName(getDefaultProjectSandboxProvider(env, import.meta.env.DEV)),
+        name: createDefaultMachineName(
+          specMachine ? "spec-machine" : getDefaultProjectSandboxProvider(env, import.meta.env.DEV),
+        ),
+        metadata: specMachine ? { specMachine } : undefined,
       });
 
       logger.set({

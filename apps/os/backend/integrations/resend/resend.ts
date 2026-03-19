@@ -30,6 +30,7 @@ import { outboxClient } from "../../outbox/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
 import { parseRecipientLocal, parseSenderEmail } from "../../email/email-routing.ts";
+import { parseSpecMachineEmail } from "../../email/spec-machine.ts";
 
 export const resendApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
@@ -197,6 +198,20 @@ resendApp.post("/webhook", async (c) => {
   const body = await c.req.text();
   const webhookSecret = c.env.RESEND_BOT_WEBHOOK_SECRET;
 
+  let payload: ResendWebhookReceivedEventPayload;
+  try {
+    payload = ResendWebhookReceivedEventPayload.parse(JSON.parse(body));
+  } catch (error) {
+    logger.warn(
+      error instanceof z.ZodError
+        ? `[Resend Webhook] Invalid JSON: ${z.prettifyError(error)}`
+        : `[Resend Webhook] Invalid JSON: ${String(error)}`,
+    );
+    return c.text("Invalid JSON", 400);
+  }
+
+  const isSpecMachineWebhook = Boolean(parseSpecMachineEmail(parseSenderEmail(payload.data.from)));
+
   // Verify webhook signature if secret is configured
   if (webhookSecret) {
     const client = createResendClient(c.env.RESEND_BOT_API_KEY);
@@ -215,18 +230,6 @@ resendApp.post("/webhook", async (c) => {
       logger.debug("[Resend Webhook] Invalid signature");
       return c.text("Invalid signature", 401);
     }
-  }
-
-  let payload: ResendWebhookReceivedEventPayload;
-  try {
-    payload = ResendWebhookReceivedEventPayload.parse(JSON.parse(body));
-  } catch (error) {
-    logger.warn(
-      error instanceof z.ZodError
-        ? `[Resend Webhook] Invalid JSON: ${z.prettifyError(error)}`
-        : `[Resend Webhook] Invalid JSON: ${String(error)}`,
-    );
-    return c.text("Invalid JSON", 400);
   }
 
   // Only handle email.received events
@@ -249,7 +252,7 @@ resendApp.post("/webhook", async (c) => {
   const FORWARDED_HEADER = "x-iterate-forwarded-from";
   const alreadyForwarded = c.req.header(FORWARDED_HEADER);
 
-  if (recipientStage !== expectedStage) {
+  if (recipientStage !== expectedStage && !isSpecMachineWebhook) {
     // In production, forward to the correct stage instead of ignoring
     // Only forward if: 1) we're in staging, 2) not already forwarded, 3) target is a dev stage
     const isStaging = expectedStage === "stg";
