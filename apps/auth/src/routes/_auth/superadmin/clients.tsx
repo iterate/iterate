@@ -93,7 +93,10 @@ function CreateClientForm() {
             className="w-full"
             disabled={createClientMutation.isPending || !clientName || !redirectURIs}
             onClick={() =>
-              createClientMutation.mutate({ clientName, redirectURIs: redirectURIs.split(",") })
+              createClientMutation.mutate({
+                clientName,
+                redirectURIs: redirectURIs.split(",").map((uri) => uri.trim()),
+              })
             }
           >
             {createClientMutation.isPending ? "Creating..." : "Create client"}

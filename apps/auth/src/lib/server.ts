@@ -224,7 +224,7 @@ export type AuthenticateResult = {
 export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfra) {
   const prefix = config.cookiePrefix ?? "iterate";
   const SESSION_COOKIE = `${prefix}_session`;
-  const issuer = config.issuer ?? DEFAULT_ISSUER;
+  const issuer = new URL(config.issuer ?? DEFAULT_ISSUER).href;
   const { jwks, doRefresh, cookieOpts } = infra;
 
   function serializeSessionCookie(tokenSet: TokenSet): string {
