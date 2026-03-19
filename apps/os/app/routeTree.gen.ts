@@ -39,7 +39,9 @@ import { Route as AuthOrgsOrganizationSlugBillingRouteImport } from './routes/_a
 import { Route as AuthJonaslandProjectSlugSettingsRouteImport } from './routes/_auth/jonasland/$projectSlug/settings.tsx'
 import { Route as AuthJonaslandProjectSlugDeploymentsRouteImport } from './routes/_auth/jonasland/$projectSlug/deployments.tsx'
 import { Route as AuthProjProjectSlugMachinesIndexRouteImport } from './routes/_auth/proj/$projectSlug/machines/index.tsx'
+import { Route as AuthJonaslandProjectSlugDeploymentsIndexRouteImport } from './routes/_auth/jonasland/$projectSlug/deployments/index.tsx'
 import { Route as AuthProjProjectSlugMachinesMachineIdRouteImport } from './routes/_auth/proj/$projectSlug/machines/$machineId.tsx'
+import { Route as AuthJonaslandProjectSlugDeploymentsDeploymentIdRouteImport } from './routes/_auth/jonasland/$projectSlug/deployments/$deploymentId.tsx'
 
 const LogoutRoute = LogoutRouteImport.update({
   id: '/logout',
@@ -207,11 +209,23 @@ const AuthProjProjectSlugMachinesIndexRoute =
     path: '/machines/',
     getParentRoute: () => AuthProjProjectSlugRoute,
   } as any)
+const AuthJonaslandProjectSlugDeploymentsIndexRoute =
+  AuthJonaslandProjectSlugDeploymentsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthJonaslandProjectSlugDeploymentsRoute,
+  } as any)
 const AuthProjProjectSlugMachinesMachineIdRoute =
   AuthProjProjectSlugMachinesMachineIdRouteImport.update({
     id: '/machines/$machineId',
     path: '/machines/$machineId',
     getParentRoute: () => AuthProjProjectSlugRoute,
+  } as any)
+const AuthJonaslandProjectSlugDeploymentsDeploymentIdRoute =
+  AuthJonaslandProjectSlugDeploymentsDeploymentIdRouteImport.update({
+    id: '/$deploymentId',
+    path: '/$deploymentId',
+    getParentRoute: () => AuthJonaslandProjectSlugDeploymentsRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -229,7 +243,7 @@ export interface FileRoutesByFullPath {
   '/proj/$projectSlug': typeof AuthProjProjectSlugRouteWithChildren
   '/user/settings': typeof AuthUserSettingsRoute
   '/admin/': typeof AuthAdminIndexRoute
-  '/jonasland/$projectSlug/deployments': typeof AuthJonaslandProjectSlugDeploymentsRoute
+  '/jonasland/$projectSlug/deployments': typeof AuthJonaslandProjectSlugDeploymentsRouteWithChildren
   '/jonasland/$projectSlug/settings': typeof AuthJonaslandProjectSlugSettingsRoute
   '/orgs/$organizationSlug/billing': typeof AuthOrgsOrganizationSlugBillingRoute
   '/orgs/$organizationSlug/new-project': typeof AuthOrgsOrganizationSlugNewProjectRoute
@@ -243,7 +257,9 @@ export interface FileRoutesByFullPath {
   '/jonasland/$projectSlug/': typeof AuthJonaslandProjectSlugIndexRoute
   '/orgs/$organizationSlug/': typeof AuthOrgsOrganizationSlugIndexRoute
   '/proj/$projectSlug/': typeof AuthProjProjectSlugIndexRoute
+  '/jonasland/$projectSlug/deployments/$deploymentId': typeof AuthJonaslandProjectSlugDeploymentsDeploymentIdRoute
   '/proj/$projectSlug/machines/$machineId': typeof AuthProjProjectSlugMachinesMachineIdRoute
+  '/jonasland/$projectSlug/deployments/': typeof AuthJonaslandProjectSlugDeploymentsIndexRoute
   '/proj/$projectSlug/machines': typeof AuthProjProjectSlugMachinesIndexRoute
 }
 export interface FileRoutesByTo {
@@ -257,7 +273,6 @@ export interface FileRoutesByTo {
   '/admin/session-info': typeof AuthAdminSessionInfoRoute
   '/user/settings': typeof AuthUserSettingsRoute
   '/admin': typeof AuthAdminIndexRoute
-  '/jonasland/$projectSlug/deployments': typeof AuthJonaslandProjectSlugDeploymentsRoute
   '/jonasland/$projectSlug/settings': typeof AuthJonaslandProjectSlugSettingsRoute
   '/orgs/$organizationSlug/billing': typeof AuthOrgsOrganizationSlugBillingRoute
   '/orgs/$organizationSlug/new-project': typeof AuthOrgsOrganizationSlugNewProjectRoute
@@ -271,7 +286,9 @@ export interface FileRoutesByTo {
   '/jonasland/$projectSlug': typeof AuthJonaslandProjectSlugIndexRoute
   '/orgs/$organizationSlug': typeof AuthOrgsOrganizationSlugIndexRoute
   '/proj/$projectSlug': typeof AuthProjProjectSlugIndexRoute
+  '/jonasland/$projectSlug/deployments/$deploymentId': typeof AuthJonaslandProjectSlugDeploymentsDeploymentIdRoute
   '/proj/$projectSlug/machines/$machineId': typeof AuthProjProjectSlugMachinesMachineIdRoute
+  '/jonasland/$projectSlug/deployments': typeof AuthJonaslandProjectSlugDeploymentsIndexRoute
   '/proj/$projectSlug/machines': typeof AuthProjProjectSlugMachinesIndexRoute
 }
 export interface FileRoutesById {
@@ -291,7 +308,7 @@ export interface FileRoutesById {
   '/_auth/proj/$projectSlug': typeof AuthProjProjectSlugRouteWithChildren
   '/_auth/user/settings': typeof AuthUserSettingsRoute
   '/_auth/admin/': typeof AuthAdminIndexRoute
-  '/_auth/jonasland/$projectSlug/deployments': typeof AuthJonaslandProjectSlugDeploymentsRoute
+  '/_auth/jonasland/$projectSlug/deployments': typeof AuthJonaslandProjectSlugDeploymentsRouteWithChildren
   '/_auth/jonasland/$projectSlug/settings': typeof AuthJonaslandProjectSlugSettingsRoute
   '/_auth/orgs/$organizationSlug/billing': typeof AuthOrgsOrganizationSlugBillingRoute
   '/_auth/orgs/$organizationSlug/new-project': typeof AuthOrgsOrganizationSlugNewProjectRoute
@@ -305,7 +322,9 @@ export interface FileRoutesById {
   '/_auth/jonasland/$projectSlug/': typeof AuthJonaslandProjectSlugIndexRoute
   '/_auth/orgs/$organizationSlug/': typeof AuthOrgsOrganizationSlugIndexRoute
   '/_auth/proj/$projectSlug/': typeof AuthProjProjectSlugIndexRoute
+  '/_auth/jonasland/$projectSlug/deployments/$deploymentId': typeof AuthJonaslandProjectSlugDeploymentsDeploymentIdRoute
   '/_auth/proj/$projectSlug/machines/$machineId': typeof AuthProjProjectSlugMachinesMachineIdRoute
+  '/_auth/jonasland/$projectSlug/deployments/': typeof AuthJonaslandProjectSlugDeploymentsIndexRoute
   '/_auth/proj/$projectSlug/machines/': typeof AuthProjProjectSlugMachinesIndexRoute
 }
 export interface FileRouteTypes {
@@ -339,7 +358,9 @@ export interface FileRouteTypes {
     | '/jonasland/$projectSlug/'
     | '/orgs/$organizationSlug/'
     | '/proj/$projectSlug/'
+    | '/jonasland/$projectSlug/deployments/$deploymentId'
     | '/proj/$projectSlug/machines/$machineId'
+    | '/jonasland/$projectSlug/deployments/'
     | '/proj/$projectSlug/machines'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -353,7 +374,6 @@ export interface FileRouteTypes {
     | '/admin/session-info'
     | '/user/settings'
     | '/admin'
-    | '/jonasland/$projectSlug/deployments'
     | '/jonasland/$projectSlug/settings'
     | '/orgs/$organizationSlug/billing'
     | '/orgs/$organizationSlug/new-project'
@@ -367,7 +387,9 @@ export interface FileRouteTypes {
     | '/jonasland/$projectSlug'
     | '/orgs/$organizationSlug'
     | '/proj/$projectSlug'
+    | '/jonasland/$projectSlug/deployments/$deploymentId'
     | '/proj/$projectSlug/machines/$machineId'
+    | '/jonasland/$projectSlug/deployments'
     | '/proj/$projectSlug/machines'
   id:
     | '__root__'
@@ -400,7 +422,9 @@ export interface FileRouteTypes {
     | '/_auth/jonasland/$projectSlug/'
     | '/_auth/orgs/$organizationSlug/'
     | '/_auth/proj/$projectSlug/'
+    | '/_auth/jonasland/$projectSlug/deployments/$deploymentId'
     | '/_auth/proj/$projectSlug/machines/$machineId'
+    | '/_auth/jonasland/$projectSlug/deployments/'
     | '/_auth/proj/$projectSlug/machines/'
   fileRoutesById: FileRoutesById
 }
@@ -623,12 +647,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthProjProjectSlugMachinesIndexRouteImport
       parentRoute: typeof AuthProjProjectSlugRoute
     }
+    '/_auth/jonasland/$projectSlug/deployments/': {
+      id: '/_auth/jonasland/$projectSlug/deployments/'
+      path: '/'
+      fullPath: '/jonasland/$projectSlug/deployments/'
+      preLoaderRoute: typeof AuthJonaslandProjectSlugDeploymentsIndexRouteImport
+      parentRoute: typeof AuthJonaslandProjectSlugDeploymentsRoute
+    }
     '/_auth/proj/$projectSlug/machines/$machineId': {
       id: '/_auth/proj/$projectSlug/machines/$machineId'
       path: '/machines/$machineId'
       fullPath: '/proj/$projectSlug/machines/$machineId'
       preLoaderRoute: typeof AuthProjProjectSlugMachinesMachineIdRouteImport
       parentRoute: typeof AuthProjProjectSlugRoute
+    }
+    '/_auth/jonasland/$projectSlug/deployments/$deploymentId': {
+      id: '/_auth/jonasland/$projectSlug/deployments/$deploymentId'
+      path: '/$deploymentId'
+      fullPath: '/jonasland/$projectSlug/deployments/$deploymentId'
+      preLoaderRoute: typeof AuthJonaslandProjectSlugDeploymentsDeploymentIdRouteImport
+      parentRoute: typeof AuthJonaslandProjectSlugDeploymentsRoute
     }
   }
 }
@@ -651,8 +689,26 @@ const AuthAdminRouteWithChildren = AuthAdminRoute._addFileChildren(
   AuthAdminRouteChildren,
 )
 
+interface AuthJonaslandProjectSlugDeploymentsRouteChildren {
+  AuthJonaslandProjectSlugDeploymentsDeploymentIdRoute: typeof AuthJonaslandProjectSlugDeploymentsDeploymentIdRoute
+  AuthJonaslandProjectSlugDeploymentsIndexRoute: typeof AuthJonaslandProjectSlugDeploymentsIndexRoute
+}
+
+const AuthJonaslandProjectSlugDeploymentsRouteChildren: AuthJonaslandProjectSlugDeploymentsRouteChildren =
+  {
+    AuthJonaslandProjectSlugDeploymentsDeploymentIdRoute:
+      AuthJonaslandProjectSlugDeploymentsDeploymentIdRoute,
+    AuthJonaslandProjectSlugDeploymentsIndexRoute:
+      AuthJonaslandProjectSlugDeploymentsIndexRoute,
+  }
+
+const AuthJonaslandProjectSlugDeploymentsRouteWithChildren =
+  AuthJonaslandProjectSlugDeploymentsRoute._addFileChildren(
+    AuthJonaslandProjectSlugDeploymentsRouteChildren,
+  )
+
 interface AuthJonaslandProjectSlugRouteChildren {
-  AuthJonaslandProjectSlugDeploymentsRoute: typeof AuthJonaslandProjectSlugDeploymentsRoute
+  AuthJonaslandProjectSlugDeploymentsRoute: typeof AuthJonaslandProjectSlugDeploymentsRouteWithChildren
   AuthJonaslandProjectSlugSettingsRoute: typeof AuthJonaslandProjectSlugSettingsRoute
   AuthJonaslandProjectSlugIndexRoute: typeof AuthJonaslandProjectSlugIndexRoute
 }
@@ -660,7 +716,7 @@ interface AuthJonaslandProjectSlugRouteChildren {
 const AuthJonaslandProjectSlugRouteChildren: AuthJonaslandProjectSlugRouteChildren =
   {
     AuthJonaslandProjectSlugDeploymentsRoute:
-      AuthJonaslandProjectSlugDeploymentsRoute,
+      AuthJonaslandProjectSlugDeploymentsRouteWithChildren,
     AuthJonaslandProjectSlugSettingsRoute:
       AuthJonaslandProjectSlugSettingsRoute,
     AuthJonaslandProjectSlugIndexRoute: AuthJonaslandProjectSlugIndexRoute,

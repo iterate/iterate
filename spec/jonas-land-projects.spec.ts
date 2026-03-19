@@ -14,7 +14,6 @@ test.describe("jonasland projects", () => {
     await page.getByLabel("jonasland").click();
     await page.getByRole("button", { name: "Create project" }).click();
 
-    await page.waitForURL(/\/jonasland\/[^/]+$/);
     await page.locator('[data-component="JonasLandProjectHomePage"]').first().waitFor();
 
     const projectSlug = page.url().split("/").at(-1) ?? "";
@@ -29,7 +28,8 @@ test.describe("jonasland projects", () => {
     const uniqueId = Date.now();
     const orgName = `jonasland deploy org ${uniqueId}`;
     const projectName = `jonasland deploy project ${uniqueId}`;
-    const deploymentName = `deployment ${uniqueId}`;
+    const firstDeploymentName = `deployment ${uniqueId} a`;
+    const secondDeploymentName = `deployment ${uniqueId} b`;
 
     await login(page, `jonas-land-deploy-${uniqueId}+test@nustom.com`);
     await createOrganization(page, orgName);
@@ -39,26 +39,102 @@ test.describe("jonasland projects", () => {
     await page.getByLabel("jonasland").click();
     await page.getByRole("button", { name: "Create project" }).click();
 
-    await page.locator('[data-component="JonasLandProjectHomePage"]').waitFor();
+    await page.locator('[data-component="JonasLandProjectHomePage"]').first().waitFor();
+    const projectSlug = page.url().split("/").at(-1) ?? "";
+
     await sidebarButton(page, "Deployments").click();
     await page.locator('[data-component="JonasLandDeploymentsPage"]').waitFor();
     await page.locator('[data-transport="durable-iterator"]').waitFor();
 
     await page.getByRole("button", { name: "New deployment" }).click();
-    await page.getByLabel("Deployment name").fill(deploymentName);
+    await page.getByLabel("Deployment name").fill(firstDeploymentName);
     await page.getByRole("button", { name: "Create deployment" }).click();
 
-    const deploymentCard = page.locator("[data-deployment-id]").first();
-    await deploymentCard.waitFor();
-    await deploymentCard.locator('[data-deployment-state="created"]').waitFor();
+    const firstDeployment = page.locator(`[data-deployment-name="${firstDeploymentName}"]`);
+    await firstDeployment.waitFor();
+    await page
+      .locator(`[data-deployment-name="${firstDeploymentName}"][data-primary="true"]`)
+      .waitFor();
+    await page
+      .locator(`[data-deployment-name="${firstDeploymentName}"][data-deployment-state="running"]`)
+      .waitFor();
 
-    await deploymentCard.getByRole("button", { name: "Start" }).click();
-    await deploymentCard.locator('[data-deployment-state="running"]').waitFor();
+    await page.getByRole("button", { name: "New deployment" }).click();
+    await page.getByLabel("Deployment name").fill(secondDeploymentName);
+    await page.getByRole("button", { name: "Create deployment" }).click();
 
-    await deploymentCard.getByRole("button", { name: "Stop" }).click();
-    await deploymentCard.locator('[data-deployment-state="stopped"]').waitFor();
+    const secondDeployment = page.locator(`[data-deployment-name="${secondDeploymentName}"]`);
+    await secondDeployment.waitFor();
+    await page
+      .locator(`[data-deployment-name="${secondDeploymentName}"][data-primary="true"]`)
+      .waitFor();
+    await page
+      .locator(`[data-deployment-name="${firstDeploymentName}"][data-primary="false"]`)
+      .waitFor();
 
-    await deploymentCard.getByRole("button", { name: "Destroy" }).click();
-    await deploymentCard.locator('[data-deployment-state="destroyed"]').waitFor();
+    await firstDeployment.getByRole("button", { name: "Make primary" }).click();
+    await page
+      .locator(`[data-deployment-name="${firstDeploymentName}"][data-primary="true"]`)
+      .waitFor();
+    await firstDeployment.getByText(`${projectSlug}.jonasland.local`).waitFor();
+    await page
+      .locator(`[data-deployment-name="${secondDeploymentName}"][data-primary="false"]`)
+      .waitFor();
+
+    await firstDeployment.getByRole("link", { name: "Details" }).click();
+    await page.locator('[data-component="JonasLandDeploymentDetailPage"]').waitFor();
+    await page.locator('[data-transport="durable-iterator"]').waitFor();
+    await page.locator("[data-log-line]").first().waitFor();
+
+    await page.getByRole("button", { name: "Stop" }).click();
+    await page.locator('[data-deployment-state="stopped"]').waitFor();
+    await page
+      .locator('[data-component="JonasLandDeploymentDetailPage"]')
+      .getByText("Deployment stopped")
+      .waitFor();
+
+    await page.getByRole("button", { name: "Destroy" }).click();
+    await page.locator('[data-deployment-state="destroyed"]').waitFor();
+    await page
+      .locator('[data-component="JonasLandDeploymentDetailPage"]')
+      .getByText("Destroyed deployment resources")
+      .waitFor();
+  });
+
+  test("jonasland deployments can still be created when the project iterator socket dies", async ({
+    page,
+  }) => {
+    const uniqueId = Date.now();
+    const orgName = `jonasland iterator org ${uniqueId}`;
+    const projectName = `jonasland iterator project ${uniqueId}`;
+    const firstDeploymentName = `deployment ${uniqueId} one`;
+    const secondDeploymentName = `deployment ${uniqueId} two`;
+
+    await page.routeWebSocket("**/api/orpc-iterator/project-deployments", (ws) =>
+      ws.close({ code: 1011, reason: "test disconnect" }),
+    );
+
+    await login(page, `jonas-land-iterator-${uniqueId}+test@nustom.com`);
+    await createOrganization(page, orgName);
+
+    await sidebarButton(page, /^(Create|New) project$/).click();
+    await page.getByLabel("Project name").fill(projectName);
+    await page.getByLabel("jonasland").click();
+    await page.getByRole("button", { name: "Create project" }).click();
+
+    await page.locator('[data-component="JonasLandProjectHomePage"]').first().waitFor();
+
+    await sidebarButton(page, "Deployments").click();
+    await page.locator('[data-component="JonasLandDeploymentsPage"]').waitFor();
+
+    await page.getByRole("button", { name: "New deployment" }).click();
+    await page.getByLabel("Deployment name").fill(firstDeploymentName);
+    await page.getByRole("button", { name: "Create deployment" }).click();
+    await page.locator(`[data-deployment-name="${firstDeploymentName}"]`).waitFor();
+
+    await page.getByRole("button", { name: "New deployment" }).click();
+    await page.getByLabel("Deployment name").fill(secondDeploymentName);
+    await page.getByRole("button", { name: "Create deployment" }).click();
+    await page.locator(`[data-deployment-name="${secondDeploymentName}"]`).waitFor();
   });
 });
