@@ -1,9 +1,0 @@
-# Monorepo Doppler mapping.
-# We intentionally pin projects here but not configs:
-# local dev config names vary by user (`dev_<name>`), while many scripts pass
-# `--config` explicitly. This file exists to document and set project scope.
-setup:
-  - project: os
-    path: ./
-  - project: ingress-proxy
-    path: apps/cf-ingress-proxy-worker/
