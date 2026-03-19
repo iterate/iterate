@@ -1,15 +1,32 @@
-import { DurableObject } from "cloudflare:workers";
+import { os } from "@orpc/server";
+import { z } from "zod/v4";
+import {
+  DurableIteratorObject,
+  type DurableIteratorWebsocket,
+} from "@orpc/experimental-durable-iterator/durable-object";
 import type { DeploymentDurableObject, DeploymentSummary } from "./deployment.ts";
 
 type Env = {
+  ENCRYPTION_SECRET: string;
   DEPLOYMENT_DURABLE_OBJECT: DurableObjectNamespace<DeploymentDurableObject>;
 };
 
-export class ProjectDurableObject extends DurableObject<Env> {
+const rpc = os.$context<Record<string, never>>();
+
+export class ProjectDurableObject extends DurableIteratorObject<
+  { deployments: DeploymentSummary[] },
+  Env,
+  unknown
+> {
   private initialized: Promise<void>;
 
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
+    super(ctx, env, {
+      signingKey: env.ENCRYPTION_SECRET,
+      onSubscribed: (websocket) => {
+        void this.publishSnapshot({ targets: [websocket] });
+      },
+    });
     this.initialized = this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS deployments (
@@ -73,6 +90,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
 
     this.upsertDeployment(deployment);
+    await this.publishSnapshot();
     return deployment;
   }
 
@@ -84,6 +102,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     ).start();
 
     this.upsertDeployment(deployment);
+    await this.publishSnapshot();
     return deployment;
   }
 
@@ -95,6 +114,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     ).stop();
 
     this.upsertDeployment(deployment);
+    await this.publishSnapshot();
     return deployment;
   }
 
@@ -106,7 +126,53 @@ export class ProjectDurableObject extends DurableObject<Env> {
     ).destroy();
 
     this.upsertDeployment(deployment);
+    await this.publishSnapshot();
     return deployment;
+  }
+
+  deployments(_ws: DurableIteratorWebsocket) {
+    return {
+      create: rpc
+        .input(
+          z.object({
+            name: z.string().min(1).max(100),
+          }),
+        )
+        .handler(({ input }) =>
+          this.createDeployment({
+            projectId: _ws["~orpc"].deserializeTokenPayload().chn.replace(/^project:/, ""),
+            name: input.name,
+          }),
+        )
+        .callable(),
+
+      start: rpc
+        .input(
+          z.object({
+            deploymentId: z.string(),
+          }),
+        )
+        .handler(({ input }) => this.startDeployment(input))
+        .callable(),
+
+      stop: rpc
+        .input(
+          z.object({
+            deploymentId: z.string(),
+          }),
+        )
+        .handler(({ input }) => this.stopDeployment(input))
+        .callable(),
+
+      destroy: rpc
+        .input(
+          z.object({
+            deploymentId: z.string(),
+          }),
+        )
+        .handler(({ input }) => this.destroyDeployment(input))
+        .callable(),
+    };
   }
 
   private upsertDeployment(deployment: DeploymentSummary) {
@@ -129,6 +195,15 @@ export class ProjectDurableObject extends DurableObject<Env> {
       deployment.createdAt,
       deployment.updatedAt,
       deployment.destroyedAt,
+    );
+  }
+
+  private async publishSnapshot(options?: { targets?: DurableIteratorWebsocket[] }) {
+    this.publishEvent(
+      {
+        deployments: await this.listDeployments(),
+      },
+      options,
     );
   }
 }

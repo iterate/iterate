@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Plus, Rocket } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state.tsx";
@@ -33,26 +33,75 @@ export const Route = createFileRoute("/_auth/jonasland/$projectSlug/deployments"
 
 function JonasLandDeploymentsPage() {
   const params = Route.useParams();
-  const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [deploymentName, setDeploymentName] = useState("");
+  const [transport, setTransport] = useState<"http" | "durable-iterator">("http");
 
   const deploymentsQueryOptions = orpc.deployment.list.queryOptions({
     input: { projectSlug: params.projectSlug },
   });
   const { data: deployments } = useSuspenseQuery(deploymentsQueryOptions);
+  const [liveDeployments, setLiveDeployments] = useState<Array<(typeof deployments)[number]>>(
+    () => [...deployments],
+  );
+
+  const deploymentStream = useQuery({
+    queryKey: [...deploymentsQueryOptions.queryKey, "stream"],
+    queryFn: () => orpcClient.deployment.connect({ projectSlug: params.projectSlug }),
+    enabled: typeof window !== "undefined",
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: Number.POSITIVE_INFINITY,
+    retry: 1,
+  });
+
+  useEffect(() => {
+    if (!deploymentStream.data) {
+      return;
+    }
+
+    let active = true;
+    const iterator = deploymentStream.data;
+
+    void (async () => {
+      try {
+        for await (const event of iterator) {
+          if (!active) {
+            return;
+          }
+
+          setTransport("durable-iterator");
+          setLiveDeployments(event.deployments);
+        }
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+
+        setTransport("http");
+        toast.error(
+          "Failed to sync deployments: " + (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    })();
+
+    return () => {
+      active = false;
+      void iterator.return();
+    };
+  }, [deploymentStream.data]);
 
   const createDeployment = useMutation({
-    mutationFn: () =>
-      orpcClient.deployment.create({
-        projectSlug: params.projectSlug,
-        name: deploymentName.trim(),
-      }),
-    onSuccess: async () => {
+    mutationFn: async () => {
+      if (!deploymentStream.data) {
+        throw new Error("Deployment stream not ready");
+      }
+
+      return deploymentStream.data.deployments.create({ name: deploymentName.trim() });
+    },
+    onSuccess: () => {
       setCreateOpen(false);
       setDeploymentName("");
       toast.success("Deployment created");
-      await queryClient.invalidateQueries({ queryKey: deploymentsQueryOptions.queryKey });
     },
     onError: (error) => {
       toast.error("Failed to create deployment: " + error.message);
@@ -60,14 +109,15 @@ function JonasLandDeploymentsPage() {
   });
 
   const startDeployment = useMutation({
-    mutationFn: (deploymentId: string) =>
-      orpcClient.deployment.start({
-        projectSlug: params.projectSlug,
-        deploymentId,
-      }),
-    onSuccess: async () => {
+    mutationFn: async (deploymentId: string) => {
+      if (!deploymentStream.data) {
+        throw new Error("Deployment stream not ready");
+      }
+
+      return deploymentStream.data.deployments.start({ deploymentId });
+    },
+    onSuccess: () => {
       toast.success("Deployment started");
-      await queryClient.invalidateQueries({ queryKey: deploymentsQueryOptions.queryKey });
     },
     onError: (error) => {
       toast.error("Failed to start deployment: " + error.message);
@@ -75,14 +125,15 @@ function JonasLandDeploymentsPage() {
   });
 
   const stopDeployment = useMutation({
-    mutationFn: (deploymentId: string) =>
-      orpcClient.deployment.stop({
-        projectSlug: params.projectSlug,
-        deploymentId,
-      }),
-    onSuccess: async () => {
+    mutationFn: async (deploymentId: string) => {
+      if (!deploymentStream.data) {
+        throw new Error("Deployment stream not ready");
+      }
+
+      return deploymentStream.data.deployments.stop({ deploymentId });
+    },
+    onSuccess: () => {
       toast.success("Deployment stopped");
-      await queryClient.invalidateQueries({ queryKey: deploymentsQueryOptions.queryKey });
     },
     onError: (error) => {
       toast.error("Failed to stop deployment: " + error.message);
@@ -90,14 +141,15 @@ function JonasLandDeploymentsPage() {
   });
 
   const destroyDeployment = useMutation({
-    mutationFn: (deploymentId: string) =>
-      orpcClient.deployment.destroy({
-        projectSlug: params.projectSlug,
-        deploymentId,
-      }),
-    onSuccess: async () => {
+    mutationFn: async (deploymentId: string) => {
+      if (!deploymentStream.data) {
+        throw new Error("Deployment stream not ready");
+      }
+
+      return deploymentStream.data.deployments.destroy({ deploymentId });
+    },
+    onSuccess: () => {
       toast.success("Deployment destroyed");
-      await queryClient.invalidateQueries({ queryKey: deploymentsQueryOptions.queryKey });
     },
     onError: (error) => {
       toast.error("Failed to destroy deployment: " + error.message);
@@ -112,10 +164,16 @@ function JonasLandDeploymentsPage() {
     createDeployment.mutate();
   };
 
+  const renderedDeployments = transport === "durable-iterator" ? liveDeployments : deployments;
+
   return (
-    <div className="space-y-6 p-4" data-component="JonasLandDeploymentsPage">
+    <div
+      className="space-y-6 p-4"
+      data-component="JonasLandDeploymentsPage"
+      data-transport={transport}
+    >
       <HeaderActions>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
+        <Button size="sm" onClick={() => setCreateOpen(true)} disabled={!deploymentStream.data}>
           <Plus className="h-4 w-4" />
           New deployment
         </Button>
@@ -145,7 +203,12 @@ function JonasLandDeploymentsPage() {
               </FieldSet>
             </FieldGroup>
             <SheetFooter>
-              <Button type="submit" disabled={!deploymentName.trim() || createDeployment.isPending}>
+              <Button
+                type="submit"
+                disabled={
+                  !deploymentName.trim() || createDeployment.isPending || !deploymentStream.data
+                }
+              >
                 {createDeployment.isPending ? "Creating..." : "Create deployment"}
               </Button>
             </SheetFooter>
@@ -153,13 +216,13 @@ function JonasLandDeploymentsPage() {
         </SheetContent>
       </Sheet>
 
-      {deployments.length === 0 ? (
+      {renderedDeployments.length === 0 ? (
         <EmptyState
           icon={<Rocket className="h-12 w-12" />}
           title="No deployments yet"
           description="Create a deployment to exercise the new durable object lifecycle."
           action={
-            <Button onClick={() => setCreateOpen(true)}>
+            <Button onClick={() => setCreateOpen(true)} disabled={!deploymentStream.data}>
               <Plus className="h-4 w-4" />
               Create deployment
             </Button>
@@ -167,7 +230,7 @@ function JonasLandDeploymentsPage() {
         />
       ) : (
         <div className="space-y-3">
-          {deployments.map((deployment) => (
+          {renderedDeployments.map((deployment) => (
             <Card
               key={deployment.id}
               className="border rounded-lg"
@@ -204,7 +267,11 @@ function JonasLandDeploymentsPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={deployment.state === "running" || deployment.state === "destroyed"}
+                    disabled={
+                      !deploymentStream.data ||
+                      deployment.state === "running" ||
+                      deployment.state === "destroyed"
+                    }
                     onClick={() => startDeployment.mutate(deployment.id)}
                   >
                     Start
@@ -213,6 +280,7 @@ function JonasLandDeploymentsPage() {
                     size="sm"
                     variant="outline"
                     disabled={
+                      !deploymentStream.data ||
                       deployment.state === "created" ||
                       deployment.state === "stopped" ||
                       deployment.state === "destroyed"
@@ -224,7 +292,7 @@ function JonasLandDeploymentsPage() {
                   <Button
                     size="sm"
                     variant="destructive"
-                    disabled={deployment.state === "destroyed"}
+                    disabled={!deploymentStream.data || deployment.state === "destroyed"}
                     onClick={() => destroyDeployment.mutate(deployment.id)}
                   >
                     Destroy

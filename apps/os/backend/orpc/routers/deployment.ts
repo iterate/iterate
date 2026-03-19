@@ -1,10 +1,12 @@
 import { z } from "zod/v4";
 import { ORPCError } from "@orpc/server";
+import { DurableIterator } from "@orpc/experimental-durable-iterator";
 import {
   ProjectInput,
   projectProtectedMutation,
   projectProtectedProcedure,
 } from "../procedures.ts";
+import type { ProjectDurableObject } from "../../durable-objects/project.ts";
 
 export const deploymentRouter = {
   list: projectProtectedProcedure.input(ProjectInput).handler(async ({ context: ctx }) => {
@@ -15,6 +17,18 @@ export const deploymentRouter = {
     }
 
     return ctx.env.PROJECT_DURABLE_OBJECT.getByName(`project:${ctx.project.id}`).listDeployments();
+  }),
+
+  connect: projectProtectedProcedure.input(ProjectInput).handler(({ context: ctx }) => {
+    if (!ctx.project.jonasLand) {
+      throw new ORPCError("BAD_REQUEST", {
+        message: "Deployments are only available for jonasland projects",
+      });
+    }
+
+    return new DurableIterator<ProjectDurableObject>(`project:${ctx.project.id}`, {
+      signingKey: ctx.env.ENCRYPTION_SECRET,
+    }).rpc("deployments");
   }),
 
   create: projectProtectedMutation

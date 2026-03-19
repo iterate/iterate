@@ -1,6 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
+import { DurableIteratorLinkPlugin } from "@orpc/experimental-durable-iterator/client";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import { createRouterClient, type RouterClient } from "@orpc/server";
 import { createIsomorphicFn } from "@tanstack/react-start";
@@ -44,7 +45,20 @@ export const makeOrpcClient = createIsomorphicFn()
       }),
   )
   .client(
-    (): OrpcClient => createORPCClient(new RPCLink({ url: `${window.location.origin}/api/orpc` })),
+    (): OrpcClient =>
+      createORPCClient(
+        new RPCLink({
+          url: `${window.location.origin}/api/orpc`,
+          plugins: [
+            new DurableIteratorLinkPlugin({
+              url: () => {
+                const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+                return `${protocol}://${window.location.host}/api/orpc-iterator/project-deployments`;
+              },
+            }),
+          ],
+        }),
+      ),
   );
 
 export const orpcClient = makeOrpcClient();
