@@ -1,3 +1,4 @@
+import { type ComponentProps } from "react";
 import { Link, type LinkProps } from "@tanstack/react-router";
 import { ChevronDown, Plus } from "lucide-react";
 import {
@@ -20,7 +21,7 @@ interface DropdownItem {
   slug: string;
 }
 
-interface BreadcrumbDropdownProps extends React.ComponentProps<"li"> {
+interface BreadcrumbDropdownProps extends ComponentProps<"li"> {
   /** Display name of the currently selected item */
   currentName: string;
   /** ID of the currently selected item (for aria-current) */
@@ -162,7 +163,7 @@ interface ProjectBreadcrumbDropdownProps {
   currentId: string;
   currentSlug: string;
   organizationSlug: string;
-  items: DropdownItem[];
+  items: Array<DropdownItem & { jonasLand: boolean }>;
   isCurrentPage?: boolean;
 }
 
@@ -184,7 +185,9 @@ export function ProjectBreadcrumbDropdown({
       ariaLabel="switch project"
       prefix="Project:"
       getItemLinkProps={(item) => ({
-        to: "/proj/$projectSlug",
+        to: items.find((project) => project.id === item.id)?.jonasLand
+          ? "/jonasland/$projectSlug"
+          : "/proj/$projectSlug",
         params: { projectSlug: item.slug },
       })}
       addAction={{

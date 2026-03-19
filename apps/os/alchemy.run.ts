@@ -695,6 +695,18 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     className: "ApprovalCoordinator",
     sqlite: true,
   });
+  const PROJECT_DURABLE_OBJECT = DurableObjectNamespace<
+    import("./backend/worker.ts").ProjectDurableObject
+  >("project-durable-object", {
+    className: "ProjectDurableObject",
+    sqlite: true,
+  });
+  const DEPLOYMENT_DURABLE_OBJECT = DurableObjectNamespace<
+    import("./backend/worker.ts").DeploymentDurableObject
+  >("deployment-durable-object", {
+    className: "DeploymentDurableObject",
+    sqlite: true,
+  });
 
   const parseCsv = (value: string | undefined): string[] =>
     (value ?? "")
@@ -768,6 +780,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       ALLOWED_DOMAINS: allowedDomains.join(","),
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
+      PROJECT_DURABLE_OBJECT,
+      DEPLOYMENT_DURABLE_OBJECT,
       PROJECT_INGRESS_DOMAIN: projectIngressDomain,
       // Archil R2: derived from alchemy state, not Doppler
       ARCHIL_R2_BUCKET_NAME: archilBucket.name,

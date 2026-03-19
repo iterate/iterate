@@ -4,6 +4,7 @@ import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-q
 import { toast } from "sonner";
 import { orpc, orpcClient } from "@/lib/orpc.tsx";
 import { Button } from "@/components/ui/button.tsx";
+import { Checkbox } from "@/components/ui/checkbox.tsx";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import {
@@ -13,14 +14,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select.tsx";
-
-type ProjectSandboxProvider = "daytona" | "docker" | "fly";
-
-const SANDBOX_PROVIDER_LABELS: Record<ProjectSandboxProvider, string> = {
-  daytona: "Daytona (Cloud)",
-  docker: "Docker",
-  fly: "Fly.io",
-};
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/new-project")({
   component: NewProjectPage,
@@ -58,18 +51,20 @@ function NewProjectPage() {
   const isFirstProject = !org?.projects?.length;
   const defaultName = isFirstProject ? (org?.name ?? "") : "";
   const [name, setName] = useState(defaultName);
-  const [sandboxProvider, setSandboxProvider] = useState<ProjectSandboxProvider>(
-    sandboxProviders.defaultProvider,
+  const [jonasLand, setJonasLand] = useState(false);
+  const [sandboxProvider, setSandboxProvider] = useState(sandboxProviders.defaultProvider);
+  const selectedSandboxProvider = sandboxProviders.providers.find(
+    (provider) => provider.type === sandboxProvider,
   );
 
   const createProject = useMutation({
-    mutationFn: async (input: { projectName: string; sandboxProvider: ProjectSandboxProvider }) => {
-      return orpcClient.project.create({
+    mutationFn: () =>
+      orpcClient.project.create({
         organizationSlug: params.organizationSlug,
-        name: input.projectName,
-        sandboxProvider: input.sandboxProvider,
-      });
-    },
+        name: name.trim(),
+        sandboxProvider,
+        jonasLand,
+      }),
     onSuccess: async (project) => {
       await queryClient.invalidateQueries({
         queryKey: orpc.organization.withProjects.key({
@@ -78,7 +73,7 @@ function NewProjectPage() {
       });
       toast.success("Project created");
       navigate({
-        to: "/proj/$projectSlug",
+        to: project.jonasLand ? "/jonasland/$projectSlug" : "/proj/$projectSlug",
         params: { projectSlug: project.slug },
       });
     },
@@ -90,10 +85,7 @@ function NewProjectPage() {
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (name.trim() && hasEnabledSandboxProvider) {
-      createProject.mutate({
-        projectName: name.trim(),
-        sandboxProvider,
-      });
+      createProject.mutate();
     }
   };
 
@@ -113,12 +105,26 @@ function NewProjectPage() {
                 autoFocus
               />
             </Field>
+            <Field orientation="horizontal">
+              <Checkbox
+                id="jonas-land"
+                checked={jonasLand}
+                onCheckedChange={(checked) => setJonasLand(checked === true)}
+                disabled={createProject.isPending}
+              />
+              <div data-slot="field-content" className="space-y-1">
+                <FieldLabel htmlFor="jonas-land">jonasland</FieldLabel>
+                <p className="text-sm text-muted-foreground">
+                  Open this project in the jonasland renderer.
+                </p>
+              </div>
+            </Field>
             {sandboxProviders.showProviderSelector ? (
               <Field>
                 <FieldLabel>Sandbox provider</FieldLabel>
                 <Select
                   value={sandboxProvider}
-                  onValueChange={(value) => setSandboxProvider(value as ProjectSandboxProvider)}
+                  onValueChange={(value) => setSandboxProvider(value as typeof sandboxProvider)}
                   disabled={createProject.isPending}
                 >
                   <SelectTrigger>
@@ -136,7 +142,7 @@ function NewProjectPage() {
             ) : (
               <Field>
                 <FieldLabel>Sandbox provider</FieldLabel>
-                <Input value={SANDBOX_PROVIDER_LABELS[sandboxProvider]} disabled />
+                <Input value={selectedSandboxProvider?.label ?? sandboxProvider} disabled />
               </Field>
             )}
           </FieldSet>

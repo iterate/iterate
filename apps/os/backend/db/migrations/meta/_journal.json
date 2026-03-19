@@ -239,6 +239,13 @@
       "when": 1773320939218,
       "tag": "0033_drop_event_table",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1773849040838,
+      "tag": "0034_add_jonas_land_to_project",
+      "breakpoints": true
     }
   ]
 }

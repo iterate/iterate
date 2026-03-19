@@ -255,6 +255,7 @@ export const project = pgTable(
     id: iterateId("prj"),
     name: t.text().notNull(),
     slug: t.text().notNull().unique(), // Globally unique URL-safe slug
+    jonasLand: t.boolean().notNull().default(false),
     organizationId: t
       .text()
       .notNull()
