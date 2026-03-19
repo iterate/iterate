@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Globe, Logs, Star } from "lucide-react";
 import { toast } from "sonner";
 import { HeaderActions } from "@/components/header-actions.tsx";
@@ -9,8 +8,8 @@ import { Button } from "@/components/ui/button.tsx";
 import { orpc, orpcClient } from "@/lib/orpc.tsx";
 
 export const Route = createFileRoute("/_auth/jonasland/$projectSlug/deployments/$deploymentId")({
-  loader: ({ context, params }) => {
-    context.queryClient.prefetchQuery(
+  loader: async ({ context, params }) => {
+    await context.queryClient.ensureQueryData(
       orpc.deployment.get.queryOptions({
         input: {
           projectSlug: params.projectSlug,
@@ -24,68 +23,42 @@ export const Route = createFileRoute("/_auth/jonasland/$projectSlug/deployments/
 
 function JonasLandDeploymentDetailPage() {
   const params = Route.useParams();
+  const queryClient = useQueryClient();
   const detailQueryOptions = orpc.deployment.get.queryOptions({
     input: {
       projectSlug: params.projectSlug,
       deploymentId: params.deploymentId,
     },
   });
-  const { data: initialSnapshot } = useSuspenseQuery(detailQueryOptions);
-  const [snapshot, setSnapshot] = useState(() => initialSnapshot);
-  const [transport, setTransport] = useState<"http" | "durable-iterator">("http");
-
-  const deploymentStream = useQuery({
-    queryKey: [...detailQueryOptions.queryKey, "stream"],
-    queryFn: () =>
-      orpcClient.deployment.connect({
+  const { data: snapshot } = useSuspenseQuery(detailQueryOptions);
+  const liveEventsQuery = useQuery(
+    orpc.deployment.connect.experimental_streamedOptions({
+      input: {
         projectSlug: params.projectSlug,
         deploymentId: params.deploymentId,
-      }),
-    enabled: typeof window !== "undefined",
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: Number.POSITIVE_INFINITY,
-    retry: 1,
-  });
-
-  useEffect(() => {
-    if (!deploymentStream.data) {
-      return;
-    }
-
-    let active = true;
-    const iterator = deploymentStream.data;
-
-    void (async () => {
-      try {
-        for await (const event of iterator) {
-          if (!active) {
-            return;
-          }
-
-          setTransport("durable-iterator");
-          setSnapshot((current) => ({
-            ...current,
-            deployment: event.deployment,
-            logs: event.logs,
-          }));
-        }
-      } catch (error) {
-        if (!active) {
-          return;
-        }
-
-        setTransport("http");
-        toast.error(
-          "Failed to sync deployment: " + (error instanceof Error ? error.message : String(error)),
-        );
-      }
-    })();
-
-    return () => {
-      active = false;
-      void iterator.return();
-    };
-  }, [deploymentStream.data]);
+      },
+      enabled: typeof window !== "undefined",
+      retry: 1,
+      initialData: [],
+      queryFnOptions: {
+        refetchMode: "reset",
+        maxChunks: 200,
+      },
+    }),
+  );
+  const transport = liveEventsQuery.isError ? "http" : "durable-iterator";
+  // Snapshot data and log data have different shapes, so they should not share one cache.
+  // The route query is durable/canonical state for TanStack Start, while the DO event stream
+  // carries transient updates. TanStack Query owns both caches, and the component derives the
+  // current view from those caches instead of copying either into local state.
+  const liveSnapshot =
+    liveEventsQuery.data?.findLast((event) => event.type === "snapshot")?.snapshot ?? null;
+  const deployment = liveSnapshot?.deployment ?? snapshot.deployment;
+  const isPrimary = liveSnapshot?.isPrimary ?? snapshot.isPrimary;
+  const logs = [
+    ...snapshot.logs,
+    ...(liveEventsQuery.data?.flatMap((event) => (event.type === "log" ? [event.log] : [])) ?? []),
+  ];
 
   const startDeployment = useMutation({
     mutationFn: async () =>
@@ -94,7 +67,16 @@ function JonasLandDeploymentDetailPage() {
         deploymentId: params.deploymentId,
       }),
     onSuccess: (deployment) => {
-      setSnapshot((current) => ({ ...current, deployment }));
+      queryClient.setQueryData(
+        detailQueryOptions.queryKey,
+        (current: typeof snapshot | undefined) =>
+          current
+            ? {
+                ...current,
+                deployment,
+              }
+            : current,
+      );
       toast.success("Deployment started");
     },
     onError: (error) => {
@@ -109,7 +91,16 @@ function JonasLandDeploymentDetailPage() {
         deploymentId: params.deploymentId,
       }),
     onSuccess: (deployment) => {
-      setSnapshot((current) => ({ ...current, deployment }));
+      queryClient.setQueryData(
+        detailQueryOptions.queryKey,
+        (current: typeof snapshot | undefined) =>
+          current
+            ? {
+                ...current,
+                deployment,
+              }
+            : current,
+      );
       toast.success("Deployment stopped");
     },
     onError: (error) => {
@@ -124,15 +115,22 @@ function JonasLandDeploymentDetailPage() {
         deploymentId: params.deploymentId,
       }),
     onSuccess: (deployment) => {
-      setSnapshot((current) => ({ ...current, deployment }));
+      queryClient.setQueryData(
+        detailQueryOptions.queryKey,
+        (current: typeof snapshot | undefined) =>
+          current
+            ? {
+                ...current,
+                deployment,
+              }
+            : current,
+      );
       toast.success("Deployment destroyed");
     },
     onError: (error) => {
       toast.error("Failed to destroy deployment: " + error.message);
     },
   });
-
-  const deployment = snapshot.deployment;
 
   return (
     <div
@@ -183,7 +181,7 @@ function JonasLandDeploymentDetailPage() {
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <p className="text-sm font-medium">{deployment.name}</p>
-            {snapshot.isPrimary && (
+            {isPrimary && (
               <span className="inline-flex items-center gap-1 text-xs text-foreground">
                 <Star className="h-3.5 w-3.5 fill-current" />
                 Primary
@@ -211,7 +209,7 @@ function JonasLandDeploymentDetailPage() {
           </div>
           <div className="overflow-hidden rounded-lg border bg-black text-zinc-100">
             <div className="max-h-[420px] overflow-y-auto p-3 font-mono text-xs leading-5">
-              {snapshot.logs.map((log) => (
+              {logs.map((log) => (
                 <div key={log.id} data-log-line={log.id}>
                   <span className="text-zinc-500">
                     {new Date(log.createdAt).toLocaleTimeString("en-GB", {
