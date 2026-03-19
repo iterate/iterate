@@ -1,0 +1,13 @@
+{
+  "name": "master-tour-api-poc",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "getkeys": "node getkeys.mjs",
+    "demo": "node demo.mjs"
+  },
+  "dependencies": {
+    "oauth-1.0a": "^2.2.6"
+  }
+}
