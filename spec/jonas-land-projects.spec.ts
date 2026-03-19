@@ -15,12 +15,12 @@ test.describe("jonasland projects", () => {
     await page.getByRole("button", { name: "Create project" }).click();
 
     await page.waitForURL(/\/jonasland\/[^/]+$/);
-    await page.locator('[data-component="JonasLandProjectHomePage"]').waitFor();
+    await page.locator('[data-component="JonasLandProjectHomePage"]').first().waitFor();
 
     const projectSlug = page.url().split("/").at(-1) ?? "";
 
     await page.goto(`/proj/${projectSlug}`);
-    await page.locator('[data-component="JonasLandProjectHomePage"]').waitFor();
+    await page.locator('[data-component="JonasLandProjectHomePage"]').first().waitFor();
   });
 
   test("jonasland deployments can be created and driven through the durable object lifecycle", async ({
@@ -42,6 +42,7 @@ test.describe("jonasland projects", () => {
     await page.locator('[data-component="JonasLandProjectHomePage"]').waitFor();
     await sidebarButton(page, "Deployments").click();
     await page.locator('[data-component="JonasLandDeploymentsPage"]').waitFor();
+    await page.locator('[data-transport="durable-iterator"]').waitFor();
 
     await page.getByRole("button", { name: "New deployment" }).click();
     await page.getByLabel("Deployment name").fill(deploymentName);
