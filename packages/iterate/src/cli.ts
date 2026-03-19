@@ -885,7 +885,7 @@ export const getCli = async () => {
     description: "Iterate CLI",
   });
 
-  return { cli, prompts: isAgent ? prompts : prompts };
+  return { cli, prompts: isAgent ? undefined : prompts };
 };
 
 export const runCli = async () => {
