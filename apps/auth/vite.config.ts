@@ -11,7 +11,6 @@ export default defineConfig({
     }),
     tailwindcss(),
     tanstackStart({
-      spa: { enabled: true },
       router: { addExtensions: true, semicolons: true, quoteStyle: "double" },
       importProtection: { behavior: "error" },
     }),

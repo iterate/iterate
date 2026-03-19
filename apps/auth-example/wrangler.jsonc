@@ -9,10 +9,16 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"],
   },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+    },
+  },
   "routes": [
     {
-      "pattern": "auth-example.iterate.app",
-      "custom_domain": true,
+      "pattern": "auth-example.iterate.app/*",
+      "zone_name": "iterate.app",
     },
   ],
 }

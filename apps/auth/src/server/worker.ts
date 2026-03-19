@@ -9,8 +9,9 @@ import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { onError, ORPCError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
 import { auth } from "./auth.ts";
-import { hono, variablesProvider } from "./utils/hono.ts";
+import { hono, variablesProvider, type Variables } from "./utils/hono.ts";
 import { appRouter } from "./orpc/index.ts";
+import type { CloudflareEnv } from "./env.ts";
 
 const app = hono();
 
@@ -54,6 +55,29 @@ app.all("/api/orpc/*", async (c) => {
   return c.newResponse(response.body, response);
 });
 
-app.all("*", (c) => tanstackStartServerEntry.fetch(c.req.raw));
+type RequestContext = {
+  cloudflare: {
+    env: CloudflareEnv;
+    ctx: ExecutionContext<unknown>;
+  };
+  variables: Variables;
+};
+
+declare module "@tanstack/react-start" {
+  interface Register {
+    server: {
+      requestContext: RequestContext;
+    };
+  }
+}
+
+app.all("*", (c) =>
+  tanstackStartServerEntry.fetch(c.req.raw, {
+    context: {
+      cloudflare: { env: c.env, ctx: c.executionCtx as ExecutionContext<unknown> },
+      variables: c.var,
+    },
+  }),
+);
 
 export default app;
