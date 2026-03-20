@@ -509,7 +509,9 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
       // Verify it was processed successfully
       const archive = await queuer.peekArchive(db);
       const archived = archive.find(
-        (m) => m.message.consumer_name === "slowHandler" && (m.message.event_payload as any)?.message === slug,
+        (m) =>
+          m.message.consumer_name === "slowHandler" &&
+          (m.message.event_payload as any)?.message === slug,
       );
       expect(archived).toBeTruthy();
       expect(archived!.read_ct).toBe(1); // Only read once — no re-delivery
