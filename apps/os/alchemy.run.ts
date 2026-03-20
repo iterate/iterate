@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { CronExpressionParser } from "cron-parser";
 import alchemy, { type Scope } from "alchemy";
 import {
+  AnalyticsEngineDataset,
   DurableObjectNamespace,
   Hyperdrive,
   R2Bucket,
@@ -740,6 +741,13 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     adopt: true,
   });
 
+  // Workers Analytics Engine dataset for DB query timing instrumentation.
+  // Queryable via the SQL API as `SELECT ... FROM DB_QUERY_TIMING`.
+  // Dataset is auto-created on first write — no dashboard setup needed.
+  const queryTimingDataset = AnalyticsEngineDataset("db-query-timing", {
+    dataset: "DB_QUERY_TIMING",
+  });
+
   // Archil R2 bucket — one bucket per stage, with per-project prefixes inside.
   // Archil's FUSE client talks to R2 via S3 protocol using the API token credentials from Doppler.
   // todo: generate a bucket dynamically for each project
@@ -760,6 +768,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       ...dbConfig,
       ...envSecrets,
       HYPERDRIVE: hyperdriveBinding,
+      DB_QUERY_TIMING: queryTimingDataset,
       // Only set for deployed workers — tells getDb() to use per-request Client.
       // In local dev / miniflare, this is absent and getDb() uses a cached Pool.
       ...(!isDevelopment && { IS_HYPERDRIVE: "true" }),
