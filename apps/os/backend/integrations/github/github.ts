@@ -740,7 +740,7 @@ githubApp.post("/webhook", async (c) => {
       trackWebhookEvent(env, {
         distinctId: `github:${repoFullName}`,
         event: "github:webhook_received",
-        properties: { ...payload, _event_type: xGithubEvent },
+        properties: summarizeGitHubWebhookForPostHog(payload, xGithubEvent),
         groups,
       });
     })().catch((err) => {
@@ -786,6 +786,45 @@ githubApp.post("/webhook", async (c) => {
 
   return c.json({ received: true });
 });
+
+// ── PostHog webhook summary ────────────────────────────────────────
+
+/**
+ * Extract only the useful metadata from a GitHub webhook payload for PostHog
+ * tracking. Raw payloads can exceed PostHog's ~1MB event size limit (e.g. PRs
+ * with large diffs, issue_comment with long bodies, pushes with many commits).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function summarizeGitHubWebhookForPostHog(
+  payload: any,
+  eventType?: string,
+): Record<string, unknown> {
+  return {
+    _event_type: eventType,
+    action: payload.action,
+    sender_login: payload.sender?.login,
+    repo_full_name: payload.repository?.full_name,
+    // PR metadata
+    pr_number: payload.pull_request?.number ?? payload.number,
+    pr_state: payload.pull_request?.state,
+    pr_title: payload.pull_request?.title?.slice(0, 200),
+    pr_draft: payload.pull_request?.draft,
+    pr_merged: payload.pull_request?.merged,
+    // Issue metadata
+    issue_number: payload.issue?.number,
+    issue_title: payload.issue?.title?.slice(0, 200),
+    // Push metadata
+    ref: payload.ref,
+    before: payload.before,
+    after: payload.after,
+    commits_count: payload.commits?.length,
+    // Comment metadata (truncated)
+    comment_id: payload.comment?.id,
+    comment_body_preview: payload.comment?.body?.slice(0, 200),
+    // Installation metadata
+    installation_id: payload.installation?.id,
+  };
+}
 
 // ── Signature Verification ─────────────────────────────────────────
 
