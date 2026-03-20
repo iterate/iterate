@@ -55,6 +55,20 @@ function createDefaultMachineName(sandboxProvider: string): string {
   return `${sandboxProvider}-${month}-${day}-${hour}h${minute}`;
 }
 
+function isMissingSandboxError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  if (error.name === "DaytonaNotFoundError") return true;
+
+  return [
+    /No such container/i,
+    /not found in Daytona/i,
+    /failed \(404\)/i,
+    /machine .* not found/i,
+    /app .* not found/i,
+  ].some((pattern) => pattern.test(error.message));
+}
+
 async function findAvailableProjectSlug(db: Awaited<ReturnType<typeof getDb>>, baseSlug: string) {
   let candidate = baseSlug;
 
@@ -463,14 +477,14 @@ export const registerConsumers = () => {
           ref: params.payload.ref,
         });
       } catch (e: unknown) {
-        if (e instanceof Error && e.name === "DaytonaNotFoundError") {
+        if (isMissingSandboxError(e)) {
           logger.set({
             machineId: machine.id,
             externalId: machine.externalId,
             eventId: params.eventId,
           });
-          logger.warn("Skipping iterate pull for deleted sandbox");
-          return `skipped: sandbox for machine ${machine.id} not found in Daytona (${machine.externalId})`;
+          logger.warn("Skipping iterate pull for missing sandbox");
+          return `skipped: sandbox for machine ${machine.id} no longer exists (${machine.externalId})`;
         }
         throw e;
       }
