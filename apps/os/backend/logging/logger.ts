@@ -2,11 +2,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { mergeLogRecords } from "./request-log.ts";
 import type { WideLog } from "./types.ts";
 import * as formatters from "./formatters.ts";
+import * as buffer from "./buffer.ts";
+
+const helpers = { ...formatters, ...buffer };
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 type ExitHandler = (
   log: WideLog,
-  helpers: typeof import("./formatters.ts"),
+  helpers: typeof import("./formatters.ts") & typeof import("./buffer.ts"),
 ) => void | Promise<void>;
 
 type Store = {
@@ -15,7 +18,6 @@ type Store = {
 };
 
 const storage = new AsyncLocalStorage<Store>();
-const globalExitHandlers = new Set<ExitHandler>();
 
 function cloneLog<T>(value: T): T {
   return structuredClone(value);
@@ -31,7 +33,7 @@ function getStore(why: string): Store {
       },
       exitHandlers: [],
     };
-    globalExitHandlers.forEach((handler) => handler(store!.log, formatters));
+    logger.globalExitHandlers.forEach((handler) => handler(store!.log, helpers));
   }
 
   return store;
@@ -93,11 +95,11 @@ function parseArgs(args: unknown[]): {
 }
 
 async function emitExitHandlers(log: WideLog, handlers: ExitHandler[]): Promise<void> {
-  await Promise.allSettled(handlers.map(async (handler) => handler(log, formatters)));
+  await Promise.allSettled(handlers.map(async (handler) => handler(log, helpers)));
 }
 
 export const logger = {
-  run: async <T>(callback: () => T | Promise<T>): Promise<T> => {
+  run: async <T>(callback: (params: { store: Store }) => T | Promise<T>): Promise<T> => {
     const parent = storage.getStore();
     const store: Store = {
       log: {
@@ -112,7 +114,7 @@ export const logger = {
 
     return storage.run(store, async () => {
       try {
-        return await callback();
+        return await callback({ store });
       } catch (error) {
         const currentStore = getStore(`logger.run catch ${error}`);
         const errors = Array.isArray(currentStore.log.errors) ? [...currentStore.log.errors] : [];
@@ -138,7 +140,7 @@ export const logger = {
           0,
         );
         await emitExitHandlers(cloneLog(currentStore.log), [
-          ...globalExitHandlers,
+          ...logger.globalExitHandlers,
           ...currentStore.exitHandlers,
         ]);
       }
@@ -152,20 +154,8 @@ export const logger = {
     store.log = mergeLogRecords(store.log, patch) as WideLog;
   },
 
-  onExit: (handler: ExitHandler): (() => void) => {
-    const store = storage.getStore();
-    if (store) {
-      store.exitHandlers.push(handler);
-      return () => {
-        store.exitHandlers = store.exitHandlers.filter((candidate) => candidate !== handler);
-      };
-    }
-
-    globalExitHandlers.add(handler);
-    return () => {
-      globalExitHandlers.delete(handler);
-    };
-  },
+  getStore,
+  globalExitHandlers: [] as ExitHandler[],
 
   info: (...args: unknown[]): void => {
     const store = getStore(`logger.info(${args.join(", ")})`);

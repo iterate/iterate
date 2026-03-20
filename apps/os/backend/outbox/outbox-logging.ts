@@ -1,33 +1,23 @@
 import { logger } from "../logging/index.ts";
-import type { JobLifecycleHook, QueuerEvent } from "./pgmq-lib.ts";
 import {
   sendLogExceptionToPostHog,
   sendPostHogException,
   type PostHogRequestContext,
   type PostHogUserContext,
 } from "../lib/posthog.ts";
+import type { JobLifecycleHook, QueuerEvent } from "./pgmq-lib.ts";
 
 const appStage =
   process.env.VITE_APP_STAGE ?? process.env.APP_STAGE ?? process.env.NODE_ENV ?? "development";
 
 export const createOutboxJobLifecycleHook = (): JobLifecycleHook => {
   return async (ctx, run) => {
-    const requestId = `outbox:${ctx.consumerName}:${ctx.jobId}:${ctx.attempt}`;
-    const path = `outbox/${ctx.consumerName}`;
     const eventContext = ctx.eventContext as {
       causedBy?: { eventId: number; consumerName: string; jobId: number | string };
     } | null;
 
-    return logger.run(async () => {
+    return logger.run(async ({ store }) => {
       logger.set({
-        service: "os",
-        environment: appStage,
-        request: {
-          id: requestId,
-          method: "OUTBOX",
-          path,
-          status: 200,
-        },
         user: {
           id: "system:outbox",
           email: "outbox@system",
@@ -41,7 +31,7 @@ export const createOutboxJobLifecycleHook = (): JobLifecycleHook => {
           causation: eventContext?.causedBy ?? null,
         },
       });
-      logger.onExit((log) => {
+      store.exitHandlers.push((log) => {
         if (!log.errors?.length) return;
         void sendLogExceptionToPostHog({
           log,

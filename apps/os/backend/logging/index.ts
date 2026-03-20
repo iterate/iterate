@@ -6,6 +6,5 @@
 export { logger } from "./logger.ts";
 export { clearBufferedLogEvents, getBufferedLogEvents, recordBufferedLog } from "./buffer.ts";
 export { appendDevLogFile, writeJsonLog, writePrettyLog } from "./outputs.ts";
-export { shouldKeepLogEvent } from "./filter.ts";
 export { formatJsonLogEvent, formatPrettyLogEvent } from "./formatters.ts";
 export { wrapWaitUntilWithLogging } from "./wait-until.ts";

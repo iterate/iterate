@@ -3,22 +3,30 @@ import type { WideLog } from "./types.ts";
 
 const MAX_PRETTY_VALUE_LENGTH = 500;
 
-export function formatPrettyLogEvent(event: WideLog): string {
+const formatMeta = (meta: WideLog["meta"]): string => {
+  return `${meta.id}: ${new Date(meta.start).toTimeString()} ${meta.durationMs}ms`;
+};
+export function formatPrettyLogEvent({ meta, ...rest }: WideLog): string {
   let truncated = false;
+  const lines: string[] = [];
+  lines.push(formatMeta(meta));
 
-  const lines = Object.entries(event).map(([key, value]) => {
-    const inspected = inspectValue(value);
-    if (inspected.length <= MAX_PRETTY_VALUE_LENGTH) return `${key}: ${inspected}`;
+  const additional = Object.entries(rest).map(([key, value]) => {
+    let inspected: string;
+    if (key === "parent" && Object.keys((value as {}) || {}).join(",") === "meta") {
+      inspected = formatMeta((value as WideLog).meta);
+    } else {
+      inspected = inspectValue(value);
+    }
+    const prefix = "  ";
+    if (inspected.length <= MAX_PRETTY_VALUE_LENGTH) return `${prefix}${key}: ${inspected}`;
     truncated = true;
-    return `${key}: ${inspected.slice(0, MAX_PRETTY_VALUE_LENGTH)}...`;
+    return `${prefix}${key}: ${inspected.slice(0, MAX_PRETTY_VALUE_LENGTH)}...`;
   });
+  lines.push(...additional);
+  if (truncated) lines.push(`untruncatedOutput: pnpm log ${meta.id}`);
 
-  return [
-    ...lines,
-    ...(truncated && typeof event.meta?.id === "string"
-      ? [`untruncatedOutput: pnpm log ${event.meta.id}`]
-      : []),
-  ].join("\n");
+  return lines.join("\n");
 }
 
 export function formatJsonLogEvent(event: WideLog): string {

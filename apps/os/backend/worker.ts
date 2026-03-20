@@ -1,3 +1,4 @@
+import jsonata from "@mmkal/jsonata/sync";
 import { Hono, type Context } from "hono";
 import { minimatch } from "minimatch";
 import { parseRouter } from "trpc-cli";
@@ -15,6 +16,7 @@ import {
   isProjectIngressHostname,
   parseProjectIngressHostname,
 } from "@iterate-com/shared/project-ingress";
+import dedent from "dedent";
 import type { CloudflareEnv } from "../env.ts";
 import { isNonProd } from "../env.ts";
 import { getDb } from "./db/client.ts";
@@ -32,12 +34,7 @@ import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
 import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
 import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
-import {
-  appendDevLogFile,
-  logger,
-  recordBufferedLog,
-  shouldKeepLogEvent,
-} from "./logging/index.ts";
+import { appendDevLogFile, logger, recordBufferedLog } from "./logging/index.ts";
 import { sendLogExceptionToPostHog, type PostHogUserContext } from "./lib/posthog.ts";
 import { registerConsumers } from "./outbox/consumers.ts";
 import { queuer } from "./outbox/outbox-queuer.ts";
@@ -85,15 +82,36 @@ registerConsumers();
 const appStage =
   process.env.VITE_APP_STAGE ?? process.env.APP_STAGE ?? process.env.NODE_ENV ?? "development";
 
-logger.onExit(recordBufferedLog);
-logger.onExit(async (log, helpers) => {
+const getLogKeepExpression = () => {
+  if (process.env.EVLOG_KEEP) {
+    throw new Error("EVLOG_KEEP is no longer supported. Use LOG_KEEP instead.");
+  }
+  const expr =
+    process.env.LOG_KEEP ||
+    dedent`
+      $contains(request.path, '/api/integrations/posthog/proxy') = false /* posthog proxy is slow but frequent */
+      and (
+        (request.status ?? 999) > 299
+        or (meta.durationMs ?? 999) >= 500
+        or $count(errors) > 0
+        or $contains(request.url, 'logmepls')
+      )
+    `;
+  return jsonata(expr);
+};
+const logKeepExpression = getLogKeepExpression();
+
+logger.globalExitHandlers = [];
+logger.globalExitHandlers.push(recordBufferedLog);
+logger.globalExitHandlers.push(async (log, helpers) => {
+  const keep = Boolean(logKeepExpression.evaluate(log));
   if (import.meta.env.DEV) {
-    if (shouldKeepLogEvent(log)) console.log(log);
+    if (keep) process.stdout.write(helpers.formatPrettyLogEvent(log) + "\n");
     await appendDevLogFile(log);
     return;
   }
 
-  if (shouldKeepLogEvent(log)) process.stdout.write(helpers.formatJsonLogEvent(log) + "\n");
+  if (keep) process.stdout.write(helpers.formatJsonLogEvent(log) + "\n");
 });
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
@@ -114,10 +132,10 @@ const requestInfoForWideLog = (
 ) => {
   const url = new URL(c.req.raw.url);
   return {
-    id: requestId,
-    method: c.req.method,
     path: c.req.path,
     status: -1,
+    method: c.req.method,
+    id: requestId,
     url: c.req.raw.url,
     hostname: url.hostname,
     traceparent: c.req.raw.headers.get("traceparent"),
@@ -130,13 +148,17 @@ export type RequestInfoForWideLog = ReturnType<typeof requestInfoForWideLog>;
 app.use("*", async (c, next) => {
   const requestId = c.req.header("cf-ray")?.trim() || crypto.randomUUID();
 
-  return logger.run(async () => {
-    logger.set({ service: "os", environment: appStage });
-    logger.set({ request: requestInfoForWideLog(requestId, c) });
-    logger.set({ user: { id: "anonymous", email: "unknown" } });
-    logger.onExit((log) => {
+  return logger.run(async ({ store }) => {
+    logger.set({
+      service: "os",
+      environment: appStage,
+      request: requestInfoForWideLog(requestId, c),
+      user: { id: "anonymous", email: "unknown" },
+    });
+    store.exitHandlers.push((log) => {
       if (!log.errors?.length) return;
       c.executionCtx.waitUntil(sendLogExceptionToPostHog({ log, env: c.env }));
+      logger.set({ sentToPostHog: true });
     });
 
     try {

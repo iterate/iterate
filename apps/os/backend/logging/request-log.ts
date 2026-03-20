@@ -76,12 +76,16 @@ export function toParsedLogError(
 }
 
 export function inspectValue(value: unknown): string {
-  return util.inspect(value, {
+  const inspected = util.inspect(value, {
     depth: 4,
-    colors: false,
+    colors: true,
     compact: true,
-    breakLength: Infinity,
+    breakLength: 80,
     maxArrayLength: 20,
     maxStringLength: 300,
   });
+  if (inspected.includes("\n")) {
+    return inspected.replace(/^{ /, "{\n  ").replaceAll("\n", "\n  ");
+  }
+  return inspected;
 }

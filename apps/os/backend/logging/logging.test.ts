@@ -1,20 +1,19 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import {
-  appendDevLogFile,
-  clearBufferedLogEvents,
-  getBufferedLogEvents,
-  logger,
-  recordBufferedLog,
-  shouldKeepLogEvent,
-  writeJsonLog,
-  writePrettyLog,
-} from "./index.ts";
 import { createOutboxJobLifecycleHook, sendDLQToPostHog } from "../outbox/outbox-logging.ts";
 import type {
   ConsumerJobContext,
   ConsumerJobQueueMessage,
   QueuerEvent,
 } from "../outbox/pgmq-lib.ts";
+import {
+  appendDevLogFile,
+  clearBufferedLogEvents,
+  getBufferedLogEvents,
+  logger,
+  recordBufferedLog,
+  writeJsonLog,
+  writePrettyLog,
+} from "./index.ts";
 
 const { mockSendPostHogException } = vi.hoisted(() => ({
   mockSendPostHogException: vi.fn<(opts: Record<string, unknown>) => Promise<void>>(),
@@ -68,8 +67,6 @@ describe("logging", () => {
   let cleanupHandlers: Array<() => void> = [];
 
   beforeEach(() => {
-    delete process.env.LOG_KEEP;
-    delete process.env.EVLOG_KEEP;
     clearBufferedLogEvents();
     cleanupHandlers = [logger.onExit(recordBufferedLog)];
     vi.clearAllMocks();
@@ -180,13 +177,6 @@ describe("logging", () => {
         }),
       }),
     );
-  });
-
-  test("legacy EVLOG_KEEP is rejected", () => {
-    process.env.EVLOG_KEEP = "true";
-    expect(() =>
-      shouldKeepLogEvent({ meta: { id: "x", start: "", end: "", durationMs: 0 } }),
-    ).toThrow(/EVLOG_KEEP is no longer supported/);
   });
 
   test("logging helpers are opt-in", async () => {
