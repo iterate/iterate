@@ -794,7 +794,7 @@ githubApp.post("/webhook", async (c) => {
  * tracking. Raw payloads can exceed PostHog's ~1MB event size limit (e.g. PRs
  * with large diffs, issue_comment with long bodies, pushes with many commits).
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw GitHub webhook payload is untyped
 function summarizeGitHubWebhookForPostHog(
   payload: any,
   eventType?: string,
