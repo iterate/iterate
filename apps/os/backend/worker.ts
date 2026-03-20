@@ -158,7 +158,6 @@ app.use("*", async (c, next) => {
     store.exitHandlers.push((log) => {
       if (!log.errors?.length) return;
       c.executionCtx.waitUntil(sendLogExceptionToPostHog({ log, env: c.env }));
-      logger.set({ sentToPostHog: true });
     });
 
     try {

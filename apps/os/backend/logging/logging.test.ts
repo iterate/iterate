@@ -64,16 +64,17 @@ function makeQueuerEvent(overrides: Partial<QueuerEvent> = {}): QueuerEvent {
 }
 
 describe("logging", () => {
-  let cleanupHandlers: Array<() => void> = [];
+  let previousGlobalExitHandlers = [...logger.globalExitHandlers];
 
   beforeEach(() => {
     clearBufferedLogEvents();
-    cleanupHandlers = [logger.onExit(recordBufferedLog)];
+    previousGlobalExitHandlers = [...logger.globalExitHandlers];
+    logger.globalExitHandlers = [recordBufferedLog];
     vi.clearAllMocks();
   });
 
   afterEach(() => {
-    cleanupHandlers.forEach((cleanup) => cleanup());
+    logger.globalExitHandlers = previousGlobalExitHandlers;
     delete process.env.LOG_KEEP;
     delete process.env.EVLOG_KEEP;
     delete process.env.POSTHOG_PUBLIC_KEY;
@@ -138,21 +139,45 @@ describe("logging", () => {
     expect(outcome).toEqual({ ok: true, result: "done" });
 
     const [event] = getBufferedLogEvents();
-    expect(event.request).toEqual(
-      expect.objectContaining({
-        id: "outbox:test-consumer:42:1",
-        method: "OUTBOX",
-        path: "outbox/test-consumer",
-        status: 200,
-      }),
-    );
     expect(event.outbox).toEqual(
       expect.objectContaining({
+        ok: true,
         consumerName: "test-consumer",
         eventName: "testing:poke",
-        status: "success",
         result: "done",
         causation: { eventId: 50, consumerName: "parent", jobId: 10 },
+      }),
+    );
+  });
+
+  test("outbox errors keep parent request context when nested", async () => {
+    const hook = createOutboxJobLifecycleHook();
+
+    await logger.run(async () => {
+      logger.set({
+        service: "os",
+        environment: "test",
+        request: { id: "req_parent", method: "POST", path: "/api/do-thing", status: 500 },
+      });
+
+      await hook(makeJobCtx(), async () => ({
+        ok: false as const,
+        error: new Error("outbox boom"),
+      }));
+    });
+
+    const events = getBufferedLogEvents();
+    const outboxEvent = events.find(
+      (event) =>
+        (event.outbox as { consumerName?: string } | undefined)?.consumerName === "test-consumer",
+    );
+    expect(outboxEvent?.parent).toEqual(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          id: "req_parent",
+          method: "POST",
+          path: "/api/do-thing",
+        }),
       }),
     );
   });
@@ -199,11 +224,16 @@ describe("logging", () => {
     await appendDevLogFile(log);
 
     expect(stdoutWrite).toHaveBeenCalled();
-    expect(stderrWrite).toHaveBeenCalled();
+    expect(stderrWrite).not.toHaveBeenCalled();
   });
 
-  test("logging outside logger.run is illegal", () => {
-    expect(() => logger.set({ foo: "bar" })).toThrow(/illegal/);
-    expect(() => logger.info("hi")).toThrow(/illegal/);
+  test("logging outside logger.run is reported via global handlers", () => {
+    logger.set({ foo: "bar" });
+    logger.info("hi");
+
+    const events = getBufferedLogEvents();
+    expect(events).toHaveLength(2);
+    expect(events[0].errors).toEqual([expect.any(Error)]);
+    expect(events[1].errors).toEqual([expect.any(Error)]);
   });
 });

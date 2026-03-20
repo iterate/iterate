@@ -44,24 +44,10 @@ export const createOutboxJobLifecycleHook = (): JobLifecycleHook => {
       });
 
       const outcome = await run();
-      logger.set({
-        request: { status: outcome.ok ? 200 : 500 },
-        outbox: {
-          status: outcome.ok ? "success" : "error",
-          ...(outcome.ok ? { result: String(outcome.result) } : {}),
-        },
-      });
+      logger.set({ outbox: { ...outcome } });
 
       if (!outcome.ok) {
-        logger.error(outcome.error, {
-          outbox: {
-            consumerName: ctx.consumerName,
-            jobId: ctx.jobId,
-            attempt: ctx.attempt,
-            eventName: ctx.eventName,
-            eventId: ctx.eventId,
-          },
-        });
+        logger.error(outcome.error);
       }
 
       return outcome;

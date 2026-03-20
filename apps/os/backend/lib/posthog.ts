@@ -166,12 +166,23 @@ export async function sendPostHogException(
 }
 
 function toPostHogRequestContext(event: WideLog): PostHogRequestContext {
-  const request =
+  const eventRequest =
     (event.request as Partial<RequestInfoForWideLog> & {
       waitUntil?: boolean;
       parentRequestId?: string;
       trpcProcedure?: string;
     }) || {};
+  const parent =
+    typeof event.parent === "object" && event.parent !== null
+      ? (event.parent as WideLog)
+      : undefined;
+  const parentRequest =
+    (parent?.request as Partial<RequestInfoForWideLog> & {
+      waitUntil?: boolean;
+      parentRequestId?: string;
+      trpcProcedure?: string;
+    }) || {};
+  const request = { ...parentRequest, ...eventRequest };
 
   return {
     id: request.id ?? "unknown",

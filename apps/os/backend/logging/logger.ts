@@ -107,7 +107,7 @@ export const logger = {
           id: `log_${crypto.randomUUID().replaceAll("-", "")}`,
           start: new Date().toISOString(),
         },
-        ...(parent && { parent: { meta: parent.log.meta } }),
+        ...(parent && { parent: cloneLog(parent.log) }),
       },
       exitHandlers: [],
     };
