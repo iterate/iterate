@@ -475,7 +475,12 @@ export const registerConsumers = () => {
         // error page, unusual status code) when mid-restart.  The oRPC client
         // surfaces this as code "MALFORMED_ORPC_ERROR_RESPONSE".
         if (e instanceof ORPCError && e.code === "MALFORMED_ORPC_ERROR_RESPONSE") {
-          logger.set({ machineId, orpcCode: e.code, orpcStatus: e.status, eventId: params.eventId });
+          logger.set({
+            machineId,
+            orpcCode: e.code,
+            orpcStatus: e.status,
+            eventId: params.eventId,
+          });
           logger.warn("Skipping setup push: daemon returned non-oRPC error response");
           return `skipped: machine ${machineId} daemon returned malformed oRPC response (status ${e.status})`;
         }
@@ -491,7 +496,12 @@ export const registerConsumers = () => {
         writeSentinel = await pushSetupToMachine(machine, input);
       } catch (e: unknown) {
         if (e instanceof ORPCError && e.code === "MALFORMED_ORPC_ERROR_RESPONSE") {
-          logger.set({ machineId, orpcCode: e.code, orpcStatus: e.status, eventId: params.eventId });
+          logger.set({
+            machineId,
+            orpcCode: e.code,
+            orpcStatus: e.status,
+            eventId: params.eventId,
+          });
           logger.warn("Skipping setup push: daemon returned non-oRPC error response during push");
           return `skipped: machine ${machineId} daemon returned malformed oRPC response (status ${e.status})`;
         }
