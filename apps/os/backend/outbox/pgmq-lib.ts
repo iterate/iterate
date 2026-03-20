@@ -391,7 +391,9 @@ export const createPgmqQueuer = (queueOptions: {
           `).catch((err) => {
             // Best-effort: if the message was already archived (success/DLQ)
             // the set_vt call will fail — that's fine, just log and stop.
-            logger.warn(`[outbox] VT heartbeat failed for msg_id=${job!.msg_id}: ${err instanceof Error ? err.message : String(err)}`);
+            logger.warn(
+              `[outbox] VT heartbeat failed for msg_id=${job!.msg_id}: ${err instanceof Error ? err.message : String(err)}`,
+            );
             clearInterval(heartbeat);
           });
         }, heartbeatMs);
