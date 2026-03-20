@@ -834,7 +834,7 @@ function summarizeGitHubWebhookForPostHog(
   // Final safety: if the serialized payload is still too large, fall back to
   // a minimal hand-picked summary.
   const serialized = JSON.stringify(out);
-  if (serialized.length > MAX_POSTHOG_PAYLOAD_BYTES) {
+  if (new TextEncoder().encode(serialized).byteLength > MAX_POSTHOG_PAYLOAD_BYTES) {
     return {
       _event_type: eventType,
       _truncated: true,
