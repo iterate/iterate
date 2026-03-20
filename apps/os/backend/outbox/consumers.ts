@@ -329,9 +329,17 @@ export const registerConsumers = () => {
         // The daemon may be mid-restart (from a prior pull) or the sandbox
         // proxy may return a non-oRPC response (HTML error page, unusual
         // status code).  The oRPC client surfaces this as an ORPCError with
-        // code "MALFORMED_ORPC_ERROR_RESPONSE".  Retrying indefinitely is
-        // wasteful — the next push to main will fan-out a fresh attempt.
-        if (e instanceof ORPCError && e.code === "MALFORMED_ORPC_ERROR_RESPONSE") {
+        // a code derived from the HTTP status — "BAD_GATEWAY" (502),
+        // "SERVICE_UNAVAILABLE" (503), "GATEWAY_TIMEOUT" (504), or the
+        // catch-all "MALFORMED_ORPC_ERROR_RESPONSE".  Retrying indefinitely
+        // is wasteful — the next push to main will fan-out a fresh attempt.
+        const TRANSIENT_ORPC_CODES: string[] = [
+          "BAD_GATEWAY",
+          "SERVICE_UNAVAILABLE",
+          "GATEWAY_TIMEOUT",
+          "MALFORMED_ORPC_ERROR_RESPONSE",
+        ];
+        if (e instanceof ORPCError && TRANSIENT_ORPC_CODES.includes(e.code)) {
           logger.set({
             machineId: machine.id,
             orpcCode: e.code,
@@ -339,7 +347,7 @@ export const registerConsumers = () => {
             eventId: params.eventId,
           });
           logger.warn("Skipping iterate pull: daemon returned non-oRPC error response");
-          return `skipped: machine ${machine.id} daemon returned malformed oRPC response (status ${e.status})`;
+          return `skipped: machine ${machine.id} daemon returned malformed oRPC response (code ${e.code}, status ${e.status})`;
         }
 
         throw e;
