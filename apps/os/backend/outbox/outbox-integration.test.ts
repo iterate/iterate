@@ -20,14 +20,15 @@ type TestEventTypes = {
   "test:basic": { message: string };
   "test:unstable": { message: string };
   "test:fail": { message: string };
+  "test:slow": { message: string };
 };
 
-const createOutboxFixture = async () => {
+const createOutboxFixture = async (opts?: { readVtSeconds?: number }) => {
   const db = getTestDb();
   const queueName = `cq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   await db.execute(sql`select pgmq.create(${queueName}::text)`);
 
-  const queuer = createPgmqQueuer({ queueName });
+  const queuer = createPgmqQueuer({ queueName, readVtSeconds: opts?.readVtSeconds });
   const waitUntilPromises: Array<Promise<unknown>> = [];
   const outboxClient = createConsumerClient<TestEventTypes, DBLike>(queuer, {
     getDb: async () => db,
@@ -458,4 +459,63 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
       outboxEventContext: expect.any(Object),
     });
   });
+
+  test(
+    "VT heartbeat: slow handler keeps message invisible so concurrent reads do not re-deliver",
+    { timeout: 30_000 },
+    async () => {
+      // Use a short VT (2s) so we don't need to wait long.
+      // The handler takes 4s — without a heartbeat the message would become
+      // visible after 2s and a concurrent processQueue call would re-read it.
+      const readVtSeconds = 2;
+      await using fixture = await createOutboxFixture({ readVtSeconds });
+      const { db, queuer, outboxClient } = fixture;
+
+      let handlerCallCount = 0;
+      outboxClient.registerConsumer({
+        name: "slowHandler",
+        on: "test:slow",
+        handler: async (params) => {
+          handlerCallCount++;
+          // Sleep longer than the VT
+          await new Promise((resolve) => setTimeout(resolve, 4000));
+          return "slow done: " + params.payload.message;
+        },
+      });
+
+      const slug = `slow_${Date.now()}_${Math.random()}`;
+      await outboxClient.send(db, {
+        name: "test:slow",
+        payload: { message: slug },
+      });
+
+      // Start processing — the handler will take ~4s
+      const processPromise = queuer.processQueue(db);
+
+      // Wait for the VT to expire (2s + a small margin)
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+
+      // Try a concurrent read — if heartbeat is working, this should find nothing
+      const concurrentResult = await queuer.processQueue(db);
+
+      // Wait for the first process to finish
+      await processPromise;
+
+      // The handler should have been called exactly once — the heartbeat kept
+      // the message invisible so the concurrent processQueue got nothing.
+      expect(handlerCallCount).toBe(1);
+      expect(concurrentResult).toMatch(/^0 messages processed/);
+
+      // Verify it was processed successfully
+      const archive = await queuer.peekArchive(db);
+      const archived = archive.find(
+        (m) => m.message.consumer_name === "slowHandler" && (m.message.event_payload as any)?.message === slug,
+      );
+      expect(archived).toBeTruthy();
+      expect(archived!.read_ct).toBe(1); // Only read once — no re-delivery
+      expect(archived!.message.processing_results).toEqual([
+        expect.stringContaining("slow done: " + slug),
+      ]);
+    },
+  );
 });

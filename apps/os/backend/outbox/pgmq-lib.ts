@@ -306,8 +306,15 @@ export const createPgmqQueuer = (queueOptions: {
   queueName: string;
   /** Optional lifecycle hook called around each consumer job execution. */
   onJob?: JobLifecycleHook;
+  /**
+   * Visibility timeout in seconds used when reading messages from the queue.
+   * While a handler is running a heartbeat will periodically re-extend the VT
+   * so the message stays invisible until the handler settles.
+   * @default 30
+   */
+  readVtSeconds?: number;
 }): Queuer<DBLike> => {
-  const { queueName, onJob } = queueOptions;
+  const { queueName, onJob, readVtSeconds = 30 } = queueOptions;
   const pgmqQueueTableName = `q_${queueName}`;
   const pgmqArchiveTableName = `a_${queueName}`;
 
@@ -328,7 +335,7 @@ export const createPgmqQueuer = (queueOptions: {
       sql`
         select * from pgmq.read(
           queue_name => ${queueName}::text,
-          vt         => 30,
+          vt         => ${readVtSeconds},
           qty        => 10
         )
       `,
@@ -355,15 +362,40 @@ export const createPgmqQueuer = (queueOptions: {
           );
         }
         logger.info(`[outbox] START msg_id=${job.msg_id} consumer=${consumer.name}`);
+        // Determine the effective VT for this job (consumer override or queue default)
+        const effectiveVtSeconds = consumer.visibilityTimeout
+          ? periodSeconds(consumer.visibilityTimeout)
+          : readVtSeconds;
         if (consumer.visibilityTimeout) {
           await exec(sql`
             select pgmq.set_vt(
               queue_name => ${queueName}::text,
               msg_id => ${job.msg_id}::bigint,
-              vt => ${periodSeconds(consumer.visibilityTimeout)}::integer
+              vt => ${effectiveVtSeconds}::integer
             )
           `);
         }
+
+        // Start a heartbeat that re-extends VT while the handler is running.
+        // This prevents the message from becoming visible again if the handler
+        // takes longer than the VT — closing the race that caused read_ct=166.
+        const heartbeatMs = Math.max(1000, (effectiveVtSeconds * 1000) / 2);
+        const heartbeatVt = effectiveVtSeconds; // re-extend by the full VT each tick
+        const heartbeat = setInterval(() => {
+          exec(sql`
+            select pgmq.set_vt(
+              queue_name => ${queueName}::text,
+              msg_id => ${job!.msg_id}::bigint,
+              vt => ${heartbeatVt}::integer
+            )
+          `).catch((err) => {
+            // Best-effort: if the message was already archived (success/DLQ)
+            // the set_vt call will fail — that's fine, just log and stop.
+            logger.warn(`[outbox] VT heartbeat failed for msg_id=${job!.msg_id}`, err);
+            clearInterval(heartbeat);
+          });
+        }, heartbeatMs);
+
         const causation: OutboxCausation = {
           eventId: job.message.event_id,
           consumerName: consumer.name,
@@ -397,7 +429,12 @@ export const createPgmqQueuer = (queueOptions: {
           eventContext: job.message.event_context,
         };
 
-        const outcome = onJob ? await onJob(jobCtx, runHandler) : await runHandler();
+        let outcome: { ok: true; result: string | void } | { ok: false; error: unknown };
+        try {
+          outcome = onJob ? await onJob(jobCtx, runHandler) : await runHandler();
+        } finally {
+          clearInterval(heartbeat);
+        }
 
         if (!outcome.ok) throw outcome.error;
         const result = outcome.result;
