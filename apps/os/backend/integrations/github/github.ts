@@ -789,41 +789,62 @@ githubApp.post("/webhook", async (c) => {
 
 // ── PostHog webhook summary ────────────────────────────────────────
 
+const MAX_STRING_LENGTH = 500;
+const MAX_POSTHOG_PAYLOAD_BYTES = 900_000; // stay under PostHog's ~1MB limit
+
 /**
- * Extract only the useful metadata from a GitHub webhook payload for PostHog
- * tracking. Raw payloads can exceed PostHog's ~1MB event size limit (e.g. PRs
- * with large diffs, issue_comment with long bodies, pushes with many commits).
+ * Summarize a GitHub webhook payload for PostHog tracking.
+ *
+ * Keeps all top-level primitives and second-level primitives (flattened as
+ * `key.subkey`). Arrays are replaced with their length. Deeply nested objects
+ * and long strings are truncated so the total serialized size stays under
+ * PostHog's ~1MB event limit.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw GitHub webhook payload is untyped
-function summarizeGitHubWebhookForPostHog(
-  payload: any,
-  eventType?: string,
-): Record<string, unknown> {
-  return {
-    _event_type: eventType,
-    action: payload.action,
-    sender_login: payload.sender?.login,
-    repo_full_name: payload.repository?.full_name,
-    // PR metadata
-    pr_number: payload.pull_request?.number ?? payload.number,
-    pr_state: payload.pull_request?.state,
-    pr_title: payload.pull_request?.title?.slice(0, 200),
-    pr_draft: payload.pull_request?.draft,
-    pr_merged: payload.pull_request?.merged,
-    // Issue metadata
-    issue_number: payload.issue?.number,
-    issue_title: payload.issue?.title?.slice(0, 200),
-    // Push metadata
-    ref: payload.ref,
-    before: payload.before,
-    after: payload.after,
-    commits_count: payload.commits?.length,
-    // Comment metadata (truncated)
-    comment_id: payload.comment?.id,
-    comment_body_preview: payload.comment?.body?.slice(0, 200),
-    // Installation metadata
-    installation_id: payload.installation?.id,
-  };
+function summarizeGitHubWebhookForPostHog(payload: any, eventType?: string): Record<string, unknown> {
+  const out: Record<string, unknown> = { _event_type: eventType };
+
+  for (const [key, value] of Object.entries(payload)) {
+    if (value === null || value === undefined) continue;
+
+    if (Array.isArray(value)) {
+      out[`${key}_count`] = value.length;
+    } else if (typeof value === "object") {
+      // Flatten second-level primitives
+      for (const [subKey, subValue] of Object.entries(value as Record<string, unknown>)) {
+        if (subValue === null || subValue === undefined) continue;
+        if (typeof subValue === "string") {
+          out[`${key}.${subKey}`] = subValue.length > MAX_STRING_LENGTH ? subValue.slice(0, MAX_STRING_LENGTH) : subValue;
+        } else if (typeof subValue !== "object") {
+          out[`${key}.${subKey}`] = subValue;
+        }
+        // Skip deeply nested objects/arrays
+      }
+    } else if (typeof value === "string") {
+      out[key] = value.length > MAX_STRING_LENGTH ? value.slice(0, MAX_STRING_LENGTH) : value;
+    } else {
+      out[key] = value;
+    }
+  }
+
+  // Final safety: if the serialized payload is still too large, fall back to
+  // a minimal hand-picked summary.
+  const serialized = JSON.stringify(out);
+  if (serialized.length > MAX_POSTHOG_PAYLOAD_BYTES) {
+    return {
+      _event_type: eventType,
+      _truncated: true,
+      action: payload.action,
+      "sender.login": payload.sender?.login,
+      "repository.full_name": payload.repository?.full_name,
+      pr_number: payload.pull_request?.number ?? payload.number,
+      issue_number: payload.issue?.number,
+      ref: payload.ref,
+      "installation.id": payload.installation?.id,
+    };
+  }
+
+  return out;
 }
 
 // ── Signature Verification ─────────────────────────────────────────
