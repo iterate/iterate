@@ -1,6 +1,6 @@
 import { logger } from "../tag-logger.ts";
 import { createPgmqQueuer } from "./pgmq-lib.ts";
-import { createOutboxJobLifecycleHook, sendDLQToPostHog } from "./outbox-evlog.ts";
+import { createOutboxJobLifecycleHook, sendDLQToPostHog } from "./outbox-logging.ts";
 
 /** low-level queuer for our outbox. No types here, since types are partially inferred from our oRPC router definitions */
 export const queuer = createPgmqQueuer({

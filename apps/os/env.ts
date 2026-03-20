@@ -1,5 +1,5 @@
 import type { worker } from "./alchemy.run.ts";
-import { wrapWaitUntilWithEvlog } from "./backend/evlog.ts";
+import { wrapWaitUntilWithLogging } from "./backend/logging/index.ts";
 import { logger } from "./backend/tag-logger.ts";
 import type { RegionConfig, jsonEnvVar, ArchilApiKeys } from "./backend/worker-config.ts";
 
@@ -39,7 +39,7 @@ export function waitUntil(promise: Promise<unknown>): void {
   // Best effort: waitUntil receives an already-created Promise, so execution may
   // already be in-flight before we can attach a child evlog context. We still
   // wrap and flush to avoid losing logs; worst case we emit an extra line.
-  const wrappedPromise = wrapWaitUntilWithEvlog(promise);
+  const wrappedPromise = wrapWaitUntilWithLogging(promise);
   _waitUntil(
     wrappedPromise.catch((error) => {
       logger.error("waitUntil error", error);

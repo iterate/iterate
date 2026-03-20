@@ -10,8 +10,6 @@ import { onError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { createRouterClient } from "@orpc/server";
 import { sql } from "drizzle-orm";
-import { initLogger } from "evlog";
-import { createWorkersLogger, initWorkersLogger } from "evlog/workers";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import {
   isProjectIngressHostname,
@@ -35,13 +33,14 @@ import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
 import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import {
-  flushRequestEvlog,
-  log as evlog,
-  setRequestEvlogFlushHandler,
-  withRequestEvlogContext,
-} from "./evlog.ts";
-import { sendEvlogExceptionToPostHog, type PostHogUserContext } from "./lib/posthog.ts";
-import { logger } from "./tag-logger.ts";
+  appendDevLogFile,
+  logger,
+  recordBufferedLog,
+  shouldKeepLogEvent,
+  writeJsonLog,
+  writePrettyLog,
+} from "./logging/index.ts";
+import { sendLogExceptionToPostHog, type PostHogUserContext } from "./lib/posthog.ts";
 import { registerConsumers } from "./outbox/consumers.ts";
 import { queuer } from "./outbox/outbox-queuer.ts";
 import * as workerConfig from "./worker-config.ts";
@@ -88,28 +87,16 @@ registerConsumers();
 const appStage =
   process.env.VITE_APP_STAGE ?? process.env.APP_STAGE ?? process.env.NODE_ENV ?? "development";
 
-setRequestEvlogFlushHandler(sendEvlogExceptionToPostHog);
+logger.onExit(recordBufferedLog);
+logger.onExit(async (log) => {
+  if (import.meta.env.DEV) {
+    await appendDevLogFile(log);
+    if (process.env.LOG_PRETTY_TERMINAL === "1" && shouldKeepLogEvent(log)) writePrettyLog(log);
+    return;
+  }
 
-if (import.meta.env.DEV) {
-  // Use initLogger directly in dev to enable pretty tree-format output.
-  // initWorkersLogger hardcodes pretty: false, which is correct for production
-  // (CF Workers dashboard needs raw objects) but noisy locally.
-  initLogger({
-    env: {
-      service: "os",
-      environment: appStage,
-    },
-    pretty: true,
-    stringify: false,
-  });
-} else {
-  initWorkersLogger({
-    env: {
-      service: "os",
-      environment: appStage,
-    },
-  });
-}
+  if (shouldKeepLogEvent(log)) writeJsonLog(log);
+});
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
@@ -123,62 +110,48 @@ function getPostHogUserContext(
   };
 }
 
+const requestInfoForWideLog = (
+  requestId: string,
+  c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
+) => {
+  return {
+    id: requestId,
+    method: c.req.method,
+    path: c.req.path,
+    status: -1,
+    url: c.req.raw.url,
+    traceparent: c.req.raw.headers.get("traceparent") || undefined,
+    cfRay: c.req.raw.headers.get("cf-ray") || undefined,
+    cloudflare: {
+      colo: c.req.raw.cf?.colo,
+      country: c.req.raw.cf?.country,
+      city: c.req.raw.cf?.city,
+      timezone: c.req.raw.cf?.timezone,
+    },
+  };
+};
+export type RequestInfoForWideLog = ReturnType<typeof requestInfoForWideLog>;
+
 app.use("*", async (c, next) => {
-  const requestLogger = createWorkersLogger(c.req.raw);
-  const currentContext = requestLogger.getContext();
-  const requestId =
-    typeof currentContext.requestId === "string" && currentContext.requestId.length > 0
-      ? currentContext.requestId
-      : crypto.randomUUID();
-  const method = typeof currentContext.method === "string" ? currentContext.method : c.req.method;
-  const path = typeof currentContext.path === "string" ? currentContext.path : c.req.path;
+  const requestId = c.req.header("cf-ray")?.trim() || crypto.randomUUID();
 
-  requestLogger.set({
-    request: {
-      id: requestId,
-      method,
-      path,
-      status: 500,
-      duration: 0,
-      waitUntil: false,
-    },
-    user: {
-      id: "anonymous",
-      email: "unknown",
-    },
+  return logger.run(async () => {
+    logger.set({ service: "os", environment: appStage });
+    logger.set({ request: requestInfoForWideLog(requestId, c) });
+    logger.set({ user: { id: "anonymous", email: "unknown" } });
+    logger.onExit((log) => {
+      if (!log.errors?.length) return;
+      c.executionCtx.waitUntil(sendLogExceptionToPostHog({ log, env: c.env }));
+    });
+
+    try {
+      const result = await next();
+      logger.set({ request: { status: c.res.status } });
+      return result;
+    } finally {
+      logger.set({ user: getPostHogUserContext(c) });
+    }
   });
-
-  const requestStartedAt = Date.now();
-  return withRequestEvlogContext(
-    {
-      logger: requestLogger,
-      request: {
-        requestId,
-        method,
-        path,
-      },
-      env: c.env,
-      executionCtx: c.executionCtx,
-    },
-    async () => {
-      let status = 500;
-      try {
-        await next();
-        status = c.res.status;
-      } finally {
-        const user = getPostHogUserContext(c);
-        const duration = Date.now() - requestStartedAt;
-        evlog.set({
-          request: {
-            status,
-            duration,
-          },
-          user,
-        });
-        flushRequestEvlog();
-      }
-    },
-  );
 });
 
 app.use("*", async (c, next) => {
