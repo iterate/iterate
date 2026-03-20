@@ -83,6 +83,5 @@ export function inspectValue(value: unknown): string {
     breakLength: Infinity,
     maxArrayLength: 20,
     maxStringLength: 300,
-    sorted: true,
   });
 }

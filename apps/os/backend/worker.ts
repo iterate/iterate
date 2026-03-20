@@ -37,8 +37,6 @@ import {
   logger,
   recordBufferedLog,
   shouldKeepLogEvent,
-  writeJsonLog,
-  writePrettyLog,
 } from "./logging/index.ts";
 import { sendLogExceptionToPostHog, type PostHogUserContext } from "./lib/posthog.ts";
 import { registerConsumers } from "./outbox/consumers.ts";
@@ -88,14 +86,14 @@ const appStage =
   process.env.VITE_APP_STAGE ?? process.env.APP_STAGE ?? process.env.NODE_ENV ?? "development";
 
 logger.onExit(recordBufferedLog);
-logger.onExit(async (log) => {
+logger.onExit(async (log, helpers) => {
   if (import.meta.env.DEV) {
+    if (shouldKeepLogEvent(log)) console.log(log);
     await appendDevLogFile(log);
-    if (process.env.LOG_PRETTY_TERMINAL === "1" && shouldKeepLogEvent(log)) writePrettyLog(log);
     return;
   }
 
-  if (shouldKeepLogEvent(log)) writeJsonLog(log);
+  if (shouldKeepLogEvent(log)) process.stdout.write(helpers.formatJsonLogEvent(log) + "\n");
 });
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
@@ -114,20 +112,17 @@ const requestInfoForWideLog = (
   requestId: string,
   c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
 ) => {
+  const url = new URL(c.req.raw.url);
   return {
     id: requestId,
     method: c.req.method,
     path: c.req.path,
     status: -1,
     url: c.req.raw.url,
-    traceparent: c.req.raw.headers.get("traceparent") || undefined,
-    cfRay: c.req.raw.headers.get("cf-ray") || undefined,
-    cloudflare: {
-      colo: c.req.raw.cf?.colo,
-      country: c.req.raw.cf?.country,
-      city: c.req.raw.cf?.city,
-      timezone: c.req.raw.cf?.timezone,
-    },
+    hostname: url.hostname,
+    traceparent: c.req.raw.headers.get("traceparent"),
+    cfRay: c.req.raw.headers.get("cf-ray"),
+    timezone: c.req.raw.cf?.timezone,
   };
 };
 export type RequestInfoForWideLog = ReturnType<typeof requestInfoForWideLog>;
@@ -370,20 +365,7 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
   );
 });
 
-app.onError((err, c) => {
-  const user = getPostHogUserContext(c);
-  logger.error(
-    `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,
-    {
-      request: {
-        path: c.req.path,
-        method: c.req.method,
-        status: 500,
-      },
-      user,
-    },
-    err,
-  );
+app.onError((_err, c) => {
   return c.json({ error: "Internal Server Error" }, 500);
 });
 

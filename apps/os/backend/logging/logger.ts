@@ -1,9 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mergeLogRecords } from "./request-log.ts";
 import type { WideLog } from "./types.ts";
+import * as formatters from "./formatters.ts";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
-type ExitHandler = (log: WideLog) => void | Promise<void>;
+type ExitHandler = (
+  log: WideLog,
+  helpers: typeof import("./formatters.ts"),
+) => void | Promise<void>;
 
 type Store = {
   log: WideLog;
@@ -18,10 +22,17 @@ function cloneLog<T>(value: T): T {
   return structuredClone(value);
 }
 
-function getStore(): Store {
-  const store = storage.getStore();
+function getStore(why: string): Store {
+  let store = storage.getStore();
   if (!store) {
-    throw new Error("Logging outside logger.run(...) is illegal");
+    // console.log("getStore", { why, globalExitHandlers });
+    store = {
+      startedAt: Date.now(),
+      log: { meta: { id: "", start: new Date().toISOString() }, errors: [] },
+      exitHandlers: [],
+    };
+    store.log.errors!.push(new Error(`Logging outside logger.run(...) is illegal (${why})`));
+    globalExitHandlers.forEach((handler) => handler(store!.log, formatters));
   }
 
   return store;
@@ -83,20 +94,19 @@ function parseArgs(args: unknown[]): {
 }
 
 async function emitExitHandlers(log: WideLog, handlers: ExitHandler[]): Promise<void> {
-  await Promise.allSettled(handlers.map(async (handler) => handler(log)));
+  await Promise.allSettled(handlers.map(async (handler) => handler(log, formatters)));
 }
 
 export const logger = {
   run: async <T>(callback: () => T | Promise<T>): Promise<T> => {
-    console.log("logger.run", callback);
     const parent = storage.getStore();
     const store: Store = {
       log: {
         meta: {
-          id: `log_${crypto.randomUUID()}`,
+          id: `log_${crypto.randomUUID().replaceAll("-", "")}`,
           start: new Date().toISOString(),
         },
-        ...(parent ? { parent: cloneLog(parent.log) } : {}),
+        ...(parent && { parent: { meta: parent.log.meta } }),
       },
       startedAt: Date.now(),
       exitHandlers: [],
@@ -106,7 +116,7 @@ export const logger = {
       try {
         return await callback();
       } catch (error) {
-        const currentStore = getStore();
+        const currentStore = getStore(`logger.run catch ${error}`);
         const errors = Array.isArray(currentStore.log.errors) ? [...currentStore.log.errors] : [];
         errors.push(toParsedError(error));
         currentStore.log.errors = errors;
@@ -123,10 +133,15 @@ export const logger = {
         currentStore.log.messages = messages;
         throw error;
       } finally {
-        const currentStore = getStore();
+        const currentStore = getStore(`logger.run finally`);
         currentStore.log.meta.end = new Date().toISOString();
         currentStore.log.meta.durationMs = Math.max(Date.now() - currentStore.startedAt, 0);
-        console.log("logger.run", currentStore.log, globalExitHandlers, currentStore.exitHandlers);
+        // console.log(
+        //   "logger.run finally",
+        //   currentStore.log,
+        //   globalExitHandlers,
+        //   currentStore.exitHandlers,
+        // );
         await emitExitHandlers(cloneLog(currentStore.log), [
           ...globalExitHandlers,
           ...currentStore.exitHandlers,
@@ -135,10 +150,10 @@ export const logger = {
     });
   },
 
-  get: (): WideLog => cloneLog(getStore().log),
+  get: (): WideLog => cloneLog(getStore(`logger.get`).log),
 
   set: (patch: Record<string, unknown>): void => {
-    const store = getStore();
+    const store = getStore(`logger.set`);
     store.log = mergeLogRecords(store.log, patch) as WideLog;
   },
 
@@ -158,7 +173,7 @@ export const logger = {
   },
 
   info: (...args: unknown[]): void => {
-    const store = getStore();
+    const store = getStore(`logger.info(${args.join(", ")})`);
     const { message, patch } = parseArgs(args);
     store.log = mergeLogRecords(store.log, patch) as WideLog;
     store.log.messages = [
@@ -168,7 +183,7 @@ export const logger = {
   },
 
   debug: (...args: unknown[]): void => {
-    const store = getStore();
+    const store = getStore(`logger.debug(${args.join(", ")})`);
     const { message, patch } = parseArgs(args);
     store.log = mergeLogRecords(store.log, patch) as WideLog;
     store.log.messages = [
@@ -178,7 +193,7 @@ export const logger = {
   },
 
   warn: (...args: unknown[]): void => {
-    const store = getStore();
+    const store = getStore(`logger.warn(${args.join(", ")})`);
     const { message, patch } = parseArgs(args);
     store.log = mergeLogRecords(store.log, patch) as WideLog;
     store.log.messages = [
@@ -188,7 +203,7 @@ export const logger = {
   },
 
   error: (...args: unknown[]): void => {
-    const store = getStore();
+    const store = getStore(`logger.error(${args.join(", ")})`);
     const { message, patch, error } = parseArgs(args);
     store.log = mergeLogRecords(store.log, patch) as WideLog;
     store.log.errors = [...(store.log.errors ?? []), toParsedError(error ?? message, message)];

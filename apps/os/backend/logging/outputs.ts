@@ -12,7 +12,7 @@ export async function appendDevLogFile(log: WideLog): Promise<void> {
 }
 
 export function writePrettyLog(log: WideLog): void {
-  process.stderr.write(`${formatPrettyLogEvent(log)}\n`);
+  process.stdout.write(`${formatPrettyLogEvent(log)}\n`);
 }
 
 export function writeJsonLog(log: WideLog): void {
