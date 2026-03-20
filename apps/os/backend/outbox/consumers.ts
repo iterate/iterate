@@ -462,12 +462,41 @@ export const registerConsumers = () => {
       const { getPushMachineSetupInput, pushSetupToMachine } =
         await import("../services/machine-setup.ts");
 
-      const input = await getPushMachineSetupInput(db, env, machine);
+      let input;
+      try {
+        input = await getPushMachineSetupInput(db, env, machine);
+      } catch (e: unknown) {
+        if (e instanceof Error && e.name === "DaytonaNotFoundError") {
+          logger.set({ machineId, externalId: machine.externalId, eventId: params.eventId });
+          logger.warn("Skipping setup push for deleted sandbox");
+          return `skipped: sandbox for machine ${machineId} not found in Daytona (${machine.externalId})`;
+        }
+        // The daemon (or sandbox proxy) may return a non-oRPC response (HTML
+        // error page, unusual status code) when mid-restart.  The oRPC client
+        // surfaces this as code "MALFORMED_ORPC_ERROR_RESPONSE".
+        if (e instanceof ORPCError && e.code === "MALFORMED_ORPC_ERROR_RESPONSE") {
+          logger.set({ machineId, orpcCode: e.code, orpcStatus: e.status, eventId: params.eventId });
+          logger.warn("Skipping setup push: daemon returned non-oRPC error response");
+          return `skipped: machine ${machineId} daemon returned malformed oRPC response (status ${e.status})`;
+        }
+        throw e;
+      }
+
       if (!input) {
         return `skipped: setup already done for ${machineId}`;
       }
 
-      const writeSentinel = await pushSetupToMachine(machine, input);
+      let writeSentinel;
+      try {
+        writeSentinel = await pushSetupToMachine(machine, input);
+      } catch (e: unknown) {
+        if (e instanceof ORPCError && e.code === "MALFORMED_ORPC_ERROR_RESPONSE") {
+          logger.set({ machineId, orpcCode: e.code, orpcStatus: e.status, eventId: params.eventId });
+          logger.warn("Skipping setup push: daemon returned non-oRPC error response during push");
+          return `skipped: machine ${machineId} daemon returned malformed oRPC response (status ${e.status})`;
+        }
+        throw e;
+      }
 
       // Emit setup-pushed so the readiness probe can begin
       await cc.send(db, {
