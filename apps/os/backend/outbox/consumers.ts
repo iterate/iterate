@@ -446,7 +446,7 @@ export const registerConsumers = () => {
     when: (params) => params.payload.status === "ready" && !!params.payload.externalId,
     visibilityTimeout: "120s", // env write + repo clones can take a while
     retry: (job) => {
-      if (job.read_ct <= 2) return { retry: true, reason: "retrying setup push", delay: "10s" };
+      if (job.read_ct <= 4) return { retry: true, reason: "retrying setup push", delay: "15s" };
       return { retry: false, reason: "setup push failed after retries" };
     },
     async handler(params) {
@@ -462,7 +462,27 @@ export const registerConsumers = () => {
       const { getPushMachineSetupInput, pushSetupToMachine } =
         await import("../services/machine-setup.ts");
 
-      const input = await getPushMachineSetupInput(db, env, machine);
+      let input;
+      try {
+        input = await getPushMachineSetupInput(db, env, machine);
+      } catch (e: unknown) {
+        // The daemon may still be starting up when the outbox fires
+        // immediately after daemon-status-reported.  The sandbox proxy
+        // or half-ready daemon can return a non-oRPC 500 which the
+        // client surfaces as MALFORMED_ORPC_ERROR_RESPONSE, or a
+        // well-formed oRPC INTERNAL_SERVER_ERROR.  Log and re-throw
+        // so the retry policy can handle it.
+        if (e instanceof ORPCError) {
+          logger.set({
+            machineId: machine.id,
+            orpcCode: e.code,
+            orpcStatus: e.status,
+            eventId: params.eventId,
+          });
+          logger.warn("pushMachineSetup: daemon oRPC call failed, will retry");
+        }
+        throw e;
+      }
       if (!input) {
         return `skipped: setup already done for ${machineId}`;
       }
