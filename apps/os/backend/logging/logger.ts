@@ -11,7 +11,6 @@ type ExitHandler = (
 
 type Store = {
   log: WideLog;
-  startedAt: number;
   exitHandlers: ExitHandler[];
 };
 
@@ -25,13 +24,13 @@ function cloneLog<T>(value: T): T {
 function getStore(why: string): Store {
   let store = storage.getStore();
   if (!store) {
-    // console.log("getStore", { why, globalExitHandlers });
     store = {
-      startedAt: Date.now(),
-      log: { meta: { id: "", start: new Date().toISOString() }, errors: [] },
+      log: {
+        meta: { id: "", start: new Date().toISOString() },
+        errors: [new Error(`Logging outside logger.run(...) is illegal (${why})`)],
+      },
       exitHandlers: [],
     };
-    store.log.errors!.push(new Error(`Logging outside logger.run(...) is illegal (${why})`));
     globalExitHandlers.forEach((handler) => handler(store!.log, formatters));
   }
 
@@ -39,7 +38,7 @@ function getStore(why: string): Store {
 }
 
 function formatMessage(level: LogLevel, message: string, startedAt: number): string {
-  const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+  const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1).replace(/\.?0+$/, "");
   return `[${level.toUpperCase()}] ${elapsedSeconds}s: ${message}`;
 }
 
@@ -108,7 +107,6 @@ export const logger = {
         },
         ...(parent && { parent: { meta: parent.log.meta } }),
       },
-      startedAt: Date.now(),
       exitHandlers: [],
     };
 
@@ -127,7 +125,7 @@ export const logger = {
           formatMessage(
             "error",
             error instanceof Error ? error.message : String(error),
-            currentStore.startedAt,
+            new Date(currentStore.log.meta.start).getTime(),
           ),
         );
         currentStore.log.messages = messages;
@@ -135,13 +133,10 @@ export const logger = {
       } finally {
         const currentStore = getStore(`logger.run finally`);
         currentStore.log.meta.end = new Date().toISOString();
-        currentStore.log.meta.durationMs = Math.max(Date.now() - currentStore.startedAt, 0);
-        // console.log(
-        //   "logger.run finally",
-        //   currentStore.log,
-        //   globalExitHandlers,
-        //   currentStore.exitHandlers,
-        // );
+        currentStore.log.meta.durationMs = Math.max(
+          Date.now() - new Date(currentStore.log.meta.start).getTime(),
+          0,
+        );
         await emitExitHandlers(cloneLog(currentStore.log), [
           ...globalExitHandlers,
           ...currentStore.exitHandlers,
@@ -178,7 +173,7 @@ export const logger = {
     store.log = mergeLogRecords(store.log, patch) as WideLog;
     store.log.messages = [
       ...(store.log.messages ?? []),
-      formatMessage("info", message, store.startedAt),
+      formatMessage("info", message, new Date(store.log.meta.start).getTime()),
     ];
   },
 
@@ -188,7 +183,7 @@ export const logger = {
     store.log = mergeLogRecords(store.log, patch) as WideLog;
     store.log.messages = [
       ...(store.log.messages ?? []),
-      formatMessage("debug", message, store.startedAt),
+      formatMessage("debug", message, new Date(store.log.meta.start).getTime()),
     ];
   },
 
@@ -198,7 +193,7 @@ export const logger = {
     store.log = mergeLogRecords(store.log, patch) as WideLog;
     store.log.messages = [
       ...(store.log.messages ?? []),
-      formatMessage("warn", message, store.startedAt),
+      formatMessage("warn", message, new Date(store.log.meta.start).getTime()),
     ];
   },
 
@@ -209,7 +204,7 @@ export const logger = {
     store.log.errors = [...(store.log.errors ?? []), toParsedError(error ?? message, message)];
     store.log.messages = [
       ...(store.log.messages ?? []),
-      formatMessage("error", message, store.startedAt),
+      formatMessage("error", message, new Date(store.log.meta.start).getTime()),
     ];
   },
 };
