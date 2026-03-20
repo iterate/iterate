@@ -801,7 +801,10 @@ const MAX_POSTHOG_PAYLOAD_BYTES = 900_000; // stay under PostHog's ~1MB limit
  * PostHog's ~1MB event limit.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw GitHub webhook payload is untyped
-function summarizeGitHubWebhookForPostHog(payload: any, eventType?: string): Record<string, unknown> {
+function summarizeGitHubWebhookForPostHog(
+  payload: any,
+  eventType?: string,
+): Record<string, unknown> {
   const out: Record<string, unknown> = { _event_type: eventType };
 
   for (const [key, value] of Object.entries(payload)) {
@@ -814,7 +817,8 @@ function summarizeGitHubWebhookForPostHog(payload: any, eventType?: string): Rec
       for (const [subKey, subValue] of Object.entries(value as Record<string, unknown>)) {
         if (subValue === null || subValue === undefined) continue;
         if (typeof subValue === "string") {
-          out[`${key}.${subKey}`] = subValue.length > MAX_STRING_LENGTH ? subValue.slice(0, MAX_STRING_LENGTH) : subValue;
+          out[`${key}.${subKey}`] =
+            subValue.length > MAX_STRING_LENGTH ? subValue.slice(0, MAX_STRING_LENGTH) : subValue;
         } else if (typeof subValue !== "object") {
           out[`${key}.${subKey}`] = subValue;
         }
