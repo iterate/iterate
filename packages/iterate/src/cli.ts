@@ -9,7 +9,7 @@ import { RPCLink } from "@orpc/client/fetch";
 import { os } from "@orpc/server";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
-import { createCli, parseRouter, type AnyRouter } from "trpc-cli";
+import { createCli, parseRouter, type AnyRouter, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod/v4";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 
@@ -899,7 +899,7 @@ export const getCli = async () => {
 
 export const runCli = async () => {
   const { cli, prompts: cliPrompts } = await getCli();
-  await cli.run({ prompts: cliPrompts });
+  await cli.run({ prompts: cliPrompts, logger: yamlTableConsoleLogger });
 };
 
 // todo: move this to trpc-cli

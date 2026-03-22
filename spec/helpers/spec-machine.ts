@@ -51,7 +51,22 @@ async function getAppUrl() {
     return new URL(redirectLocation, baseURL).toString().replace(/\/$/, "");
   }
 
+  const url = new URL(baseURL);
+  if (["localhost", "127.0.0.1"].includes(url.hostname)) {
+    url.hostname = "local.iterate.com";
+    return url.toString().replace(/\/$/, "");
+  }
+
   return baseURL.replace(/\/$/, "");
+}
+
+function getLocalWorkerUrl() {
+  const url = new URL(playwrightConfig.use.baseURL);
+  if (["localhost", "127.0.0.1"].includes(url.hostname)) {
+    url.hostname = "local.iterate.com";
+  }
+
+  return url.toString().replace(/\/$/, "");
 }
 
 function getLocalPostgresPort() {
@@ -124,7 +139,7 @@ export async function createSpecMachine(): Promise<SpecMachine> {
       const previousApiKey = process.env.ITERATE_OS_API_KEY;
       const previousMachineId = process.env.ITERATE_MACHINE_ID;
 
-      process.env.ITERATE_OS_BASE_URL = body.envVars.ITERATE_OS_BASE_URL;
+      process.env.ITERATE_OS_BASE_URL = getLocalWorkerUrl();
       process.env.ITERATE_OS_API_KEY = body.envVars.ITERATE_OS_API_KEY;
       process.env.ITERATE_MACHINE_ID = body.envVars.ITERATE_MACHINE_ID;
 

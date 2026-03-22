@@ -1,0 +1,21 @@
+{
+  "name": "@iterate-com/auth-contract",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@orpc/client": "^1.13.4",
+    "@orpc/contract": "^1.13.5",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@typescript/native-preview": "7.0.0-dev.20260315.1"
+  }
+}

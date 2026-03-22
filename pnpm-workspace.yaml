@@ -7,6 +7,9 @@ packages:
   - apps/daemon
   - apps/iterate-com
   - apps/os
+  - apps/auth
+  - apps/auth-contract
+  - apps/auth-example
   - sandbox
   - jonasland/sandbox
   - jonasland/e2e
@@ -42,6 +45,10 @@ onlyBuiltDependencies:
   - esbuild
   - sharp
   - workerd
+  - bun
+
+patchedDependencies:
+  "@better-auth/drizzle-adapter": "patches/@better-auth__drizzle-adapter.patch"
 
 overrides:
   # x402,viem are optional peer dependencies of agents sdk, which is source of lot of unnecessary/deprecated packages, removing them is fine
