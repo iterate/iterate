@@ -155,6 +155,12 @@ app.use("*", async (c, next) => {
       request: requestInfoForWideLog(requestId, c),
       user: { id: "anonymous", email: "unknown" },
     });
+    if (import.meta.env.DEV) {
+      const posthogEgressOverride = c.req.header("x-replace-posthog-egress");
+      if (posthogEgressOverride) {
+        logger.set({ egress: { ["https://eu.i.posthog.com"]: posthogEgressOverride } });
+      }
+    }
     store.exitHandlers.push((log) => {
       if (!log.errors?.length) return;
       c.executionCtx.waitUntil(sendLogExceptionToPostHog({ log, env: c.env }));

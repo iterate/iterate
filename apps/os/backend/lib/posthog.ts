@@ -42,8 +42,41 @@ function getTimestamp(timestamp?: string): string {
   return timestamp ?? new Date().toISOString();
 }
 
+function getEffectiveEgress(log: WideLog): Record<string, string> {
+  let original: WideLog | undefined = log;
+  while (original) {
+    if (original.egress) return original.egress;
+    original = original.parent;
+  }
+  return {};
+}
+
+function resolveEgressURL(url: string, log: WideLog): string {
+  const egress = getEffectiveEgress(log);
+  if (Object.keys(egress).length === 0) return url;
+
+  if (egress[url]) return egress[url]!;
+
+  const target = new URL(url);
+  if (egress[target.origin]) {
+    return new URL(
+      `${target.pathname}${target.search}${target.hash}`,
+      egress[target.origin]!,
+    ).toString();
+  }
+
+  if (egress[target.hostname]) {
+    return new URL(
+      `${target.pathname}${target.search}${target.hash}`,
+      egress[target.hostname]!,
+    ).toString();
+  }
+
+  return url;
+}
+
 async function posthogCapture(body: Record<string, unknown>): Promise<void> {
-  const response = await fetch(POSTHOG_CAPTURE_URL, {
+  const response = await fetch(resolveEgressURL(POSTHOG_CAPTURE_URL, logger.get()), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
