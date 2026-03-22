@@ -1,8 +1,8 @@
+import { parseSpecMachineEmail } from "../../apps/os/backend/email/spec-machine.ts";
 import { DaytonaProvider } from "./daytona/provider.ts";
 import { DockerProvider, type DockerSandbox } from "./docker/provider.ts";
 import { FlyProvider } from "./fly/provider.ts";
 import type { MachineType, ProviderState, Sandbox, SandboxFetcher } from "./types.ts";
-import { parseSpecMachineEmail } from "../../apps/os/backend/email/spec-machine.ts";
 import { asRecord } from "./utils.ts";
 
 export interface CreateMachineConfig {
