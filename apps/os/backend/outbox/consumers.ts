@@ -740,4 +740,20 @@ function registerTestConsumers() {
       throw new Error(`[test_error] Attempt ${params.job.attempt} failed ${Math.random()}`);
     },
   });
+
+  cc.registerConsumer({
+    name: "testingSuccessConsumer",
+    on: "rpc:testing.emitSuccessfulOutboxEvent",
+    handler: (params) => {
+      return `testing success: ${String(params.payload.input.message)}`;
+    },
+  });
+
+  cc.registerConsumer({
+    name: "testingFailingConsumer",
+    on: "rpc:testing.emitFailingOutboxEvent",
+    handler: (params) => {
+      throw new Error(`[test_outbox_consumer_error] ${String(params.payload.input.message)}`);
+    },
+  });
 }

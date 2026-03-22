@@ -116,6 +116,7 @@ logger.globalExitHandlers.push(async (log, helpers) => {
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
+export { app };
 
 function getPostHogUserContext(
   c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
@@ -155,7 +156,7 @@ app.use("*", async (c, next) => {
       request: requestInfoForWideLog(requestId, c),
       user: { id: "anonymous", email: "unknown" },
     });
-    if (import.meta.env.DEV) {
+    if (isNonProd) {
       const posthogEgressOverride = c.req.header("x-replace-posthog-egress");
       if (posthogEgressOverride) {
         logger.set({ egress: { ["https://eu.i.posthog.com"]: posthogEgressOverride } });
@@ -191,6 +192,15 @@ app.get("/api/observability", (c) => {
       note: "Viewer runs inside the sandbox",
     },
   });
+});
+
+app.get("/api/testing/throw-hono-error", (c) => {
+  if (!isNonProd) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const marker = c.req.query("marker") ?? "default";
+  throw new Error(`[test_hono_error] ${marker}`);
 });
 
 app.post("/api/debug/trigger-error", (c) => {

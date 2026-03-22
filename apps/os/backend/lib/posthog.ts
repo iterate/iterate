@@ -45,10 +45,10 @@ function getTimestamp(timestamp?: string): string {
 function getEffectiveEgress(log: WideLog): Record<string, string> {
   let original: WideLog | undefined = log;
   while (original) {
-    if (original.egress) return original.egress;
+    if (original.egress) return original.egress as Record<string, string>;
     original = original.parent;
   }
-  return {};
+  return {} as Record<string, string>;
 }
 
 function resolveEgressURL(url: string, log: WideLog): string {

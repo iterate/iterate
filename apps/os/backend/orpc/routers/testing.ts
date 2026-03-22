@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import {
   publicProcedure,
@@ -18,6 +18,7 @@ import {
 import { slugifyWithSuffix } from "../../utils/slug.ts";
 import { getDefaultProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
 import { isNonProd } from "../../../env.ts";
+import { queuer } from "../../outbox/outbox-queuer.ts";
 
 /** Generate a DiceBear avatar URL using a hash of the email as seed */
 function generateDefaultAvatar(email: string): string {
@@ -49,6 +50,117 @@ export const testingRouter = {
     }
     return { triggered: true, timestamp: new Date().toISOString() };
   }),
+
+  throwTrpcError: publicProcedure
+    .input(z.object({ message: z.string().default("Intentional testingRouter error") }).optional())
+    .handler(({ input }) => {
+      if (!isNonProd) {
+        throw new ORPCError("FORBIDDEN", {
+          message: "Testing endpoints are not available in production",
+        });
+      }
+
+      throw new Error(input?.message ?? "Intentional testingRouter error");
+    }),
+
+  emitSuccessfulOutboxEvent: publicProcedure
+    .input(z.object({ message: z.string() }))
+    .handler(async ({ context: ctx, input }) => {
+      if (!isNonProd) {
+        throw new ORPCError("FORBIDDEN", {
+          message: "Testing endpoints are not available in production",
+        });
+      }
+
+      const output = await ctx.db.transaction(async (tx) => {
+        const result = await tx.execute(sql`select now()::text as now`);
+        const rows = result.rows as { now: string }[];
+        const dbtime = rows[0]?.now ?? new Date().toISOString();
+        return ctx.sendEvent(tx, { dbtime, message: input.message });
+      });
+
+      const processResult = await queuer.processQueue(ctx.db);
+      return { ...output, processResult };
+    }),
+
+  emitFailingOutboxEvent: publicProcedure
+    .input(z.object({ message: z.string() }))
+    .handler(async ({ context: ctx, input }) => {
+      if (!isNonProd) {
+        throw new ORPCError("FORBIDDEN", {
+          message: "Testing endpoints are not available in production",
+        });
+      }
+
+      const output = await ctx.db.transaction(async (tx) => {
+        const result = await tx.execute(sql`select now()::text as now`);
+        const rows = result.rows as { now: string }[];
+        const dbtime = rows[0]?.now ?? new Date().toISOString();
+        return ctx.sendEvent(tx, { dbtime, message: input.message });
+      });
+
+      const processResult = await queuer.processQueue(ctx.db);
+      return { ...output, processResult };
+    }),
+
+  processOutboxQueue: publicProcedure.handler(async ({ context: ctx }) => {
+    if (!isNonProd) {
+      throw new ORPCError("FORBIDDEN", {
+        message: "Testing endpoints are not available in production",
+      });
+    }
+
+    return await queuer.processQueue(ctx.db);
+  }),
+
+  insertMalformedOutboxJob: publicProcedure
+    .input(z.object({ marker: z.string() }))
+    .handler(async ({ context: ctx, input }) => {
+      if (!isNonProd) {
+        throw new ORPCError("FORBIDDEN", {
+          message: "Testing endpoints are not available in production",
+        });
+      }
+
+      await ctx.db.execute(sql`
+        select * from pgmq.send(
+          queue_name => 'consumer_job_queue',
+          msg => ${JSON.stringify({ nope: true, marker: input.marker })}::jsonb
+        )
+      `);
+
+      const processResult = await queuer.processQueue(ctx.db);
+      return { inserted: true, processResult };
+    }),
+
+  insertMissingConsumerOutboxJob: publicProcedure
+    .input(z.object({ marker: z.string() }))
+    .handler(async ({ context: ctx, input }) => {
+      if (!isNonProd) {
+        throw new ORPCError("FORBIDDEN", {
+          message: "Testing endpoints are not available in production",
+        });
+      }
+
+      await ctx.db.execute(sql`
+        select * from pgmq.send(
+          queue_name => 'consumer_job_queue',
+          msg => ${JSON.stringify({
+            consumer_name: `missing-consumer-${input.marker}`,
+            status: "pending",
+            event_name: `testing:missing-consumer:${input.marker}`,
+            event_id: 999999,
+            event_payload: { marker: input.marker },
+            event_context: {},
+            processing_results: [],
+            environment: process.env.APP_STAGE || process.env.NODE_ENV || "unknown",
+          })}::jsonb
+        )
+      `);
+
+      const processResult = await queuer.processQueue(ctx.db);
+      return { inserted: true, processResult };
+    }),
 
   // Create test user (for e2e tests)
   createTestUser: publicProcedure
