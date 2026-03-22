@@ -54,12 +54,36 @@ async function getAppUrl() {
   return baseURL.replace(/\/$/, "");
 }
 
+function getLocalPostgresPort() {
+  const postgresPort = execSync(`tsx ./scripts/docker-compose.ts port postgres 5432`)
+    .toString()
+    .trim()
+    .split(":")
+    .at(-1);
+
+  if (!postgresPort) {
+    throw new Error("Failed to determine local postgres port for specs");
+  }
+
+  return postgresPort;
+}
+
+async function archiveOlderMachinePullJobs(cutoff: Date) {
+  execSync(
+    [
+      `psql "postgres://postgres:postgres@127.0.0.1:${getLocalPostgresPort()}/os"`,
+      `-c "SELECT pgmq.archive('consumer_job_queue', msg_id) FROM pgmq.q_consumer_job_queue WHERE message->>'consumer_name' = 'triggerMachinePullIterateIterate' AND enqueued_at < '${cutoff.toISOString()}'::timestamptz"`,
+    ].join(" "),
+  );
+}
+
 export class SpecMachine {
   private readonly server: Server;
   private readonly threads: Map<string, ThreadMessage[]>;
   private readonly files: Map<string, string>;
   private readonly directories: Set<string>;
   private readonly requestsInternal: RequestRecord[];
+  private readonly createdAt: Date;
 
   public readonly baseUrl: string;
   public readonly senderEmail: string;
@@ -71,6 +95,7 @@ export class SpecMachine {
     threads: Map<string, ThreadMessage[]>;
     files: Map<string, string>;
     directories: Set<string>;
+    createdAt: Date;
   }) {
     this.server = params.server;
     this.baseUrl = params.baseUrl;
@@ -78,6 +103,7 @@ export class SpecMachine {
     this.threads = params.threads;
     this.files = params.files;
     this.directories = params.directories;
+    this.createdAt = params.createdAt;
     this.senderEmail = buildSpecMachineEmail({ baseUrl: this.baseUrl });
   }
 
@@ -87,6 +113,7 @@ export class SpecMachine {
       threads: new Map<string, ThreadMessage[]>(),
       files: new Map<string, string>(),
       directories: new Set<string>(),
+      createdAt: new Date(),
     };
 
     const server = createServer(async (request, response) => {
@@ -219,6 +246,7 @@ export class SpecMachine {
       threads: state.threads,
       files: state.files,
       directories: state.directories,
+      createdAt: state.createdAt,
     });
     return specMachine;
   }
@@ -228,6 +256,8 @@ export class SpecMachine {
   }
 
   async sendFakeResendWebhook(params: { subject: string; text: string }) {
+    await archiveOlderMachinePullJobs(this.createdAt);
+
     const appUrl = await getAppUrl();
     const now = new Date().toISOString();
     const body = JSON.stringify({
