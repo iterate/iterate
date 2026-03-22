@@ -306,8 +306,10 @@ export const createPgmqQueuer = (queueOptions: {
   queueName: string;
   /** Optional lifecycle hook called around each consumer job execution. */
   onJob?: JobLifecycleHook;
+  /** Hard limit on how many times a job can be read from the queue. Retry configurations beyond this number won't be respected. */
+  maxReadCount?: number;
 }): Queuer<DBLike> => {
-  const { queueName, onJob } = queueOptions;
+  const { queueName, onJob, maxReadCount = 20 } = queueOptions;
   const pgmqQueueTableName = `q_${queueName}`;
   const pgmqArchiveTableName = `a_${queueName}`;
 
@@ -324,7 +326,46 @@ export const createPgmqQueuer = (queueOptions: {
 
   const processQueue: Queuer<DBLike>["processQueue"] = async (db) => {
     const exec = getExec(db);
-    const jobQueueMessages = await exec(
+    const appendProcessingResult = (params: {
+      job: ConsumerJobQueueMessage;
+      status: "success" | "retrying" | "failed";
+      processingResult: string;
+    }) => {
+      return sql<typeof params.job>`
+        update pgmq.${sql.identifier(pgmqQueueTableName)}
+        set message = jsonb_set(
+          message,
+          '{processing_results}',
+          message->'processing_results' || jsonb_build_array(${params.processingResult}::text)
+        ) || ${JSON.stringify({ status: params.status })}::jsonb
+        where msg_id = ${params.job.msg_id}::bigint
+        returning *
+      `;
+    };
+    const archiveFailedJob = async (params: {
+      job: ConsumerJobQueueMessage;
+      error: string;
+      processingResult: string;
+      logMessage: string;
+    }) => {
+      const [updated] = await exec.rows(sql<typeof params.job>`
+        with appended as (
+          ${appendProcessingResult({
+            job: params.job,
+            status: "failed",
+            processingResult: params.processingResult,
+          })}
+        ),
+        archived as (
+          select * from pgmq.archive(queue_name => ${queueName}::text, msg_id => ${params.job.msg_id}::bigint)
+        )
+        select appended.* from appended cross join archived limit 1
+      `);
+      if (!updated) throw new Error(`Failed to archive message ${params.job.msg_id}`);
+      emit("statusChange", { job: updated, error: params.error, isDLQ: true });
+      logger.warn(params.logMessage);
+    };
+    const jobQueueMessages = await exec<{ msg_id: number | string }>(
       sql`
         select * from pgmq.read(
           queue_name => ${queueName}::text,
@@ -350,9 +391,21 @@ export const createPgmqQueuer = (queueOptions: {
             `consumerName:${job.message.consumer_name}`
           ];
         if (!consumer) {
-          throw new Error(
-            `[outbox] no consumer found for event=${job.message.event_name} consumer=${job.message.consumer_name}`,
+          throw Object.assign(
+            new Error(
+              `[outbox] no consumer found for event=${job.message.event_name} consumer=${job.message.consumer_name}`,
+            ),
+            { retryable: false },
           );
+        }
+        if (job.read_ct > maxReadCount) {
+          await archiveFailedJob({
+            job,
+            error: "max read count exceeded",
+            processingResult: `#${job.read_ct} error: max read count ${maxReadCount} exceeded before handler ran`,
+            logMessage: `[outbox] DLQ msg_id=${job.msg_id} after read_ct=${job.read_ct}; exceeded maxReadCount=${maxReadCount} before handler ran`,
+          });
+          continue;
         }
         logger.info(`[outbox] START msg_id=${job.msg_id} consumer=${consumer.name}`);
         if (consumer.visibilityTimeout) {
@@ -404,23 +457,27 @@ export const createPgmqQueuer = (queueOptions: {
 
         results.push(result);
         const [updated] = await exec.rows(sql<typeof job>`
-          update pgmq.${sql.identifier(pgmqQueueTableName)}
-          set message = jsonb_set(
-            message,
-            '{processing_results}',
-            message->'processing_results' || jsonb_build_array(${`#${job.read_ct} success: ${String(result)}`}::text)
-          ) || '{"status": "success"}'::jsonb
-          where msg_id = ${job.msg_id}::bigint
-          returning *
-        `);
-        await exec(sql`
-          select pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
+          with updated as (
+            ${appendProcessingResult({
+              job,
+              status: "success",
+              processingResult: `#${job.read_ct} success: ${String(result)}`,
+            })}
+          ),
+          archived as (
+            select * from pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
+          )
+          select updated.* from updated cross join archived limit 1
         `);
         emit("statusChange", { job: updated });
         logger.info(`[outbox] DONE msg_id=${job.msg_id}. Result: ${result}`);
       } catch (e) {
         if (!job) {
-          logger.error(`[outbox] unparseable message, skipping`, e, { job: _job });
+          const msgId = Number(_job.msg_id);
+          logger.warn(`[outbox] unparseable message, archiving msg_id=${msgId}`);
+          await exec(sql`
+            select * from pgmq.archive(queue_name => ${queueName}::text, msg_id => ${msgId}::bigint)
+          `);
           continue;
         }
         let retryFn = consumer?.retry ?? defaultRetryFn;
@@ -433,39 +490,34 @@ export const createPgmqQueuer = (queueOptions: {
           .join(". ");
         const isDLQ = !retry.retry;
         logger.error(`[outbox] FAILED msg_id=${job.msg_id}. ${retryMessage}`, e);
-
-        const statusObj = JSON.stringify({ status: retry.retry ? "retrying" : "failed" });
-
-        const [updated] = await exec.rows(sql<typeof job>`
-          update pgmq.${sql.identifier(pgmqQueueTableName)}
-          set message = jsonb_set(
-            message,
-            '{processing_results}',
-            message->'processing_results' || jsonb_build_array(${`#${job.read_ct} error: ${String(e)}. ${retryMessage}`}::text)
-          ) || ${statusObj}::jsonb
-          where msg_id = ${job.msg_id}::bigint
-          returning *
-        `);
-        const eventData: QueuerEvent = { job: updated, error: String(e), isDLQ };
         if (isDLQ) {
-          logger.warn(
-            `[outbox] giving up on ${job.msg_id} after ${job.read_ct} attempts. Archiving (DLQ = archive + status=failed)`,
-          );
-          const archived = await exec(sql`
-            select * from pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
-          `);
-          if (!archived.rows[0]) throw new Error(`Failed to archive message ${job.msg_id}`);
+          await archiveFailedJob({
+            job,
+            error: String(e),
+            processingResult: `#${job.read_ct} error: ${String(e)}. ${retryMessage}`,
+            logMessage: `[outbox] giving up on ${job.msg_id} after ${job.read_ct} attempts. Archiving (DLQ = archive + status=failed)`,
+          });
         } else {
           logger.info(`[outbox] Setting msg_id=${job.msg_id} to visible in ${retry.delay}`);
-          await exec(sql`
-            select pgmq.set_vt(
-              queue_name => ${queueName}::text,
-              msg_id => ${job.msg_id}::bigint,
-              vt => ${periodSeconds(retry.delay)}::integer
+          const [updated] = await exec.rows(sql<typeof job>`
+            with updated as (
+              ${appendProcessingResult({
+                job,
+                status: "retrying",
+                processingResult: `#${job.read_ct} error: ${String(e)}. ${retryMessage}`,
+              })}
+            ),
+            vt_bump as (
+              select pgmq.set_vt(
+                queue_name => ${queueName}::text,
+                msg_id => ${job.msg_id}::bigint,
+                vt => ${periodSeconds(retry.delay)}::integer
+              )
             )
+            select updated.* from updated cross join vt_bump limit 1
           `);
+          emit("statusChange", { job: updated, error: String(e), isDLQ: false });
         }
-        emit("statusChange", eventData);
       }
     }
 

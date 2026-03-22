@@ -1,9 +1,9 @@
-import { defineConfig, devices } from "@playwright/test";
+import { devices, type PlaywrightTestConfig } from "@playwright/test";
 
 const baseURL = process.env.APP_URL || "http://localhost:5173";
 const videoMode = !!process.env.VIDEO_MODE;
 
-export default defineConfig({
+export default {
   testDir: "spec",
   testMatch: "**/*.spec.ts",
   fullyParallel: false,
@@ -41,4 +41,4 @@ export default defineConfig({
     timeout: 180_000,
     stdout: "pipe", // without this on startup failure it just says "Couldn't start. Exit code 1."
   },
-});
+} satisfies PlaywrightTestConfig;

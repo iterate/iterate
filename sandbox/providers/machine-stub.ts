@@ -1,3 +1,4 @@
+import { parseSpecMachineEmail } from "../../apps/os/backend/email/spec-machine.ts";
 import { DaytonaProvider } from "./daytona/provider.ts";
 import { DockerProvider, type DockerSandbox } from "./docker/provider.ts";
 import { FlyProvider } from "./fly/provider.ts";
@@ -107,6 +108,10 @@ function parsePortFromUrl(url: string): number {
   if (parsed.protocol === "https:") return 443;
   if (parsed.protocol === "http:") return 80;
   throw new Error(`Could not parse port from URL: ${url}`);
+}
+
+function normalizePathWithQuery(pathWithQuery: string): string {
+  return pathWithQuery.startsWith("//") ? pathWithQuery.slice(1) : pathWithQuery;
 }
 
 function toRawEnv(params: {
@@ -362,6 +367,67 @@ function createFlyStub(options: CreateMachineStubOptions): MachineStub {
   });
 }
 
+function createSpecMachineStub(options: CreateMachineStubOptions): MachineStub {
+  const emailSender = asString((options.metadata as { emailSender?: unknown }).emailSender);
+  const baseUrl = emailSender ? parseSpecMachineEmail(emailSender)?.baseUrl : undefined;
+
+  if (!baseUrl) {
+    throw new Error(
+      `spec-machine emailSender metadata missing or invalid for ${options.externalId}`,
+    );
+  }
+
+  return {
+    type: "spec-machine",
+    async create(config: CreateMachineConfig): Promise<MachineStubResult> {
+      const response = await fetch(`${baseUrl}/__spec-machine/bootstrap`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config),
+      });
+      if (!response.ok) {
+        throw new Error(`spec-machine bootstrap failed: HTTP ${response.status}`);
+      }
+      return {};
+    },
+    async start(): Promise<void> {},
+    async stop(): Promise<void> {},
+    async restart(): Promise<void> {},
+    async archive(): Promise<void> {},
+    async delete(): Promise<void> {},
+    async getFetcher(_port: number): Promise<SandboxFetcher> {
+      return async (input, init) => {
+        if (input instanceof Request) {
+          const requestUrl = new URL(input.url);
+          const url = new URL(
+            normalizePathWithQuery(`${requestUrl.pathname}${requestUrl.search}`),
+            baseUrl,
+          );
+          return fetch(new Request(url, input), init);
+        }
+
+        const pathWithQuery = normalizePathWithQuery(
+          input instanceof URL
+            ? `${input.pathname}${input.search}`
+            : /^https?:\/\//.test(input)
+              ? `${new URL(input).pathname}${new URL(input).search}`
+              : input.startsWith("/")
+                ? input
+                : `/${input}`,
+        );
+        const url = new URL(pathWithQuery, baseUrl).toString();
+        return fetch(url, init);
+      };
+    },
+    async getBaseUrl(_port: number): Promise<string> {
+      return baseUrl;
+    },
+    async getProviderState(): Promise<ProviderState> {
+      return { state: "running" };
+    },
+  };
+}
+
 export async function createMachineStub(options: CreateMachineStubOptions): Promise<MachineStub> {
   const { type } = options;
 
@@ -372,6 +438,8 @@ export async function createMachineStub(options: CreateMachineStubOptions): Prom
       return createDaytonaStub(options);
     case "fly":
       return createFlyStub(options);
+    case "spec-machine":
+      return createSpecMachineStub(options);
     default: {
       const exhaustiveCheck: never = type;
       throw new Error(`Unknown machine type: ${exhaustiveCheck}`);
