@@ -1,6 +1,6 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { execSync } from "node:child_process";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createWorkerClient } from "../../apps/daemon/server/orpc/client.ts";
 import { buildSpecMachineEmail } from "../../apps/os/backend/email/spec-machine.ts";
 import playwrightConfig from "../../playwright.config.ts";
@@ -77,250 +77,218 @@ async function archiveOlderMachinePullJobs(cutoff: Date) {
   );
 }
 
-export class SpecMachine {
-  private readonly server: Server;
-  private readonly threads: Map<string, ThreadMessage[]>;
-  private readonly files: Map<string, string>;
-  private readonly directories: Set<string>;
-  private readonly requestsInternal: RequestRecord[];
-  private readonly createdAt: Date;
+export type SpecMachine = {
+  baseUrl: string;
+  senderEmail: string;
+  requests: RequestRecord[];
+  sendFakeResendWebhook(params: { subject: string; text: string }): Promise<unknown>;
+  [Symbol.asyncDispose](): Promise<void>;
+};
 
-  public readonly baseUrl: string;
-  public readonly senderEmail: string;
+export async function createSpecMachine(): Promise<SpecMachine> {
+  const requests: RequestRecord[] = [];
+  const threads = new Map<string, ThreadMessage[]>();
+  const files = new Map<string, string>();
+  const directories = new Set<string>();
+  const createdAt = new Date();
 
-  private constructor(params: {
-    server: Server;
-    baseUrl: string;
-    requests: RequestRecord[];
-    threads: Map<string, ThreadMessage[]>;
-    files: Map<string, string>;
-    directories: Set<string>;
-    createdAt: Date;
-  }) {
-    this.server = params.server;
-    this.baseUrl = params.baseUrl;
-    this.requestsInternal = params.requests;
-    this.threads = params.threads;
-    this.files = params.files;
-    this.directories = params.directories;
-    this.createdAt = params.createdAt;
-    this.senderEmail = buildSpecMachineEmail({ baseUrl: this.baseUrl });
-  }
-
-  static async create() {
-    const state = {
-      requests: [] as RequestRecord[],
-      threads: new Map<string, ThreadMessage[]>(),
-      files: new Map<string, string>(),
-      directories: new Set<string>(),
-      createdAt: new Date(),
-    };
-
-    const server = createServer(async (request, response) => {
-      const method = request.method ?? "GET";
-      const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      const text = await readRequestBody(request);
-      const contentType = request.headers["content-type"] ?? "";
-      let parsedJson: unknown;
-      if (typeof contentType === "string" && contentType.includes("application/json") && text) {
-        try {
-          parsedJson = JSON.parse(text);
-        } catch {
-          parsedJson = undefined;
-        }
+  const server = createServer(async (request, response) => {
+    const method = request.method ?? "GET";
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    const text = await readRequestBody(request);
+    const contentType = request.headers["content-type"] ?? "";
+    let parsedJson: unknown;
+    if (typeof contentType === "string" && contentType.includes("application/json") && text) {
+      try {
+        parsedJson = JSON.parse(text);
+      } catch {
+        parsedJson = undefined;
       }
+    }
 
-      state.requests.push({
-        method,
-        path: url.pathname,
-        headers: Object.fromEntries(
-          Object.entries(request.headers).flatMap(([key, value]) =>
-            typeof value === "string" ? [[key, value]] : value ? [[key, value.join(",")]] : [],
-          ),
+    requests.push({
+      method,
+      path: url.pathname,
+      headers: Object.fromEntries(
+        Object.entries(request.headers).flatMap(([key, value]) =>
+          typeof value === "string" ? [[key, value]] : value ? [[key, value.join(",")]] : [],
         ),
-        text,
-        json: parsedJson,
-      });
-
-      if (method === "POST" && ["/__spec-machine/bootstrap", "/bootstrap"].includes(url.pathname)) {
-        const body = parsedJson as { envVars: Record<string, string> };
-        const previousBaseUrl = process.env.ITERATE_OS_BASE_URL;
-        const previousApiKey = process.env.ITERATE_OS_API_KEY;
-        const previousMachineId = process.env.ITERATE_MACHINE_ID;
-
-        process.env.ITERATE_OS_BASE_URL = body.envVars.ITERATE_OS_BASE_URL;
-        process.env.ITERATE_OS_API_KEY = body.envVars.ITERATE_OS_API_KEY;
-        process.env.ITERATE_MACHINE_ID = body.envVars.ITERATE_MACHINE_ID;
-
-        try {
-          const client = createWorkerClient();
-          await client.machines.reportStatus({
-            machineId: body.envVars.ITERATE_MACHINE_ID,
-            status: "ready",
-          });
-        } finally {
-          process.env.ITERATE_OS_BASE_URL = previousBaseUrl;
-          process.env.ITERATE_OS_API_KEY = previousApiKey;
-          process.env.ITERATE_MACHINE_ID = previousMachineId;
-        }
-
-        return json(response, 200, { ok: true });
-      }
-
-      if (method === "POST" && url.pathname === "/api/orpc/tool/readFile") {
-        const body = parsedJson as { json: { path: string } };
-        const content = state.files.get(body.json.path);
-        return orpcJson(response, {
-          path: body.json.path,
-          content: content ?? null,
-          exists: !!content,
-        });
-      }
-
-      if (method === "POST" && url.pathname === "/api/orpc/tool/writeFile") {
-        const body = parsedJson as { json: { path: string; content: string } };
-        state.files.set(body.json.path, body.json.content);
-        return orpcJson(response, {
-          path: body.json.path,
-          bytesWritten: Buffer.byteLength(body.json.content),
-        });
-      }
-
-      if (method === "POST" && url.pathname === "/api/orpc/tool/execCommand") {
-        const body = parsedJson as { json: { command: string[] } };
-        const [command, ...args] = body.json.command;
-
-        if (command === "test" && args[0] === "-d") {
-          return orpcJson(response, {
-            exitCode: state.directories.has(args[1] ?? "") ? 0 : 1,
-            stdout: "",
-            stderr: "",
-          });
-        }
-
-        if (command === "git" && args[0] === "clone") {
-          const targetPath = args.at(-1);
-          if (targetPath) {
-            state.directories.add(`${targetPath}/.git`);
-          }
-        }
-
-        return orpcJson(response, { exitCode: 0, stdout: "", stderr: "" });
-      }
-
-      if (method === "POST" && url.pathname === "/api/integrations/webchat/webhook") {
-        const body = parsedJson as { threadId: string; text: string };
-        const messages = state.threads.get(body.threadId) ?? [];
-        messages.push({ role: "user", text: body.text });
-        messages.push({ role: "assistant", text: "3" });
-        state.threads.set(body.threadId, messages);
-        return json(response, 200, { success: true, threadId: body.threadId });
-      }
-
-      if (method === "GET" && url.pathname.startsWith("/api/integrations/webchat/threads/")) {
-        const threadId = decodeURIComponent(url.pathname.split("/")[5] ?? "");
-        return json(response, 200, { threadId, messages: state.threads.get(threadId) ?? [] });
-      }
-
-      if (method === "POST" && url.pathname === "/api/integrations/email/webhook") {
-        return json(response, 200, { success: true });
-      }
-
-      json(response, 404, { error: "Not found" });
+      ),
+      text,
+      json: parsedJson,
     });
 
-    await new Promise<void>((resolve, reject) => {
-      server.listen(0, "127.0.0.1", () => resolve());
-      server.on("error", reject);
-    });
+    if (method === "POST" && ["/__spec-machine/bootstrap", "/bootstrap"].includes(url.pathname)) {
+      const body = parsedJson as { envVars: Record<string, string> };
+      const previousBaseUrl = process.env.ITERATE_OS_BASE_URL;
+      const previousApiKey = process.env.ITERATE_OS_API_KEY;
+      const previousMachineId = process.env.ITERATE_MACHINE_ID;
 
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Failed to determine spec machine address");
+      process.env.ITERATE_OS_BASE_URL = body.envVars.ITERATE_OS_BASE_URL;
+      process.env.ITERATE_OS_API_KEY = body.envVars.ITERATE_OS_API_KEY;
+      process.env.ITERATE_MACHINE_ID = body.envVars.ITERATE_MACHINE_ID;
+
+      try {
+        const client = createWorkerClient();
+        await client.machines.reportStatus({
+          machineId: body.envVars.ITERATE_MACHINE_ID,
+          status: "ready",
+        });
+      } finally {
+        process.env.ITERATE_OS_BASE_URL = previousBaseUrl;
+        process.env.ITERATE_OS_API_KEY = previousApiKey;
+        process.env.ITERATE_MACHINE_ID = previousMachineId;
+      }
+
+      return json(response, 200, { ok: true });
     }
 
-    const specMachine = new SpecMachine({
-      server,
-      baseUrl: `http://127.0.0.1:${address.port}`,
-      requests: state.requests,
-      threads: state.threads,
-      files: state.files,
-      directories: state.directories,
-      createdAt: state.createdAt,
-    });
-    return specMachine;
+    if (method === "POST" && url.pathname === "/api/orpc/tool/readFile") {
+      const body = parsedJson as { json: { path: string } };
+      const content = files.get(body.json.path);
+      return orpcJson(response, {
+        path: body.json.path,
+        content: content ?? null,
+        exists: !!content,
+      });
+    }
+
+    if (method === "POST" && url.pathname === "/api/orpc/tool/writeFile") {
+      const body = parsedJson as { json: { path: string; content: string } };
+      files.set(body.json.path, body.json.content);
+      return orpcJson(response, {
+        path: body.json.path,
+        bytesWritten: Buffer.byteLength(body.json.content),
+      });
+    }
+
+    if (method === "POST" && url.pathname === "/api/orpc/tool/execCommand") {
+      const body = parsedJson as { json: { command: string[] } };
+      const [command, ...args] = body.json.command;
+
+      if (command === "test" && args[0] === "-d") {
+        return orpcJson(response, {
+          exitCode: directories.has(args[1] ?? "") ? 0 : 1,
+          stdout: "",
+          stderr: "",
+        });
+      }
+
+      if (command === "git" && args[0] === "clone") {
+        const targetPath = args.at(-1);
+        if (targetPath) {
+          directories.add(`${targetPath}/.git`);
+        }
+      }
+
+      return orpcJson(response, { exitCode: 0, stdout: "", stderr: "" });
+    }
+
+    if (method === "POST" && url.pathname === "/api/integrations/webchat/webhook") {
+      const body = parsedJson as { threadId: string; text: string };
+      const messages = threads.get(body.threadId) ?? [];
+      messages.push({ role: "user", text: body.text });
+      messages.push({ role: "assistant", text: "3" });
+      threads.set(body.threadId, messages);
+      return json(response, 200, { success: true, threadId: body.threadId });
+    }
+
+    if (method === "GET" && url.pathname.startsWith("/api/integrations/webchat/threads/")) {
+      const threadId = decodeURIComponent(url.pathname.split("/")[5] ?? "");
+      return json(response, 200, { threadId, messages: threads.get(threadId) ?? [] });
+    }
+
+    if (method === "POST" && url.pathname === "/api/integrations/email/webhook") {
+      return json(response, 200, { success: true });
+    }
+
+    json(response, 404, { error: "Not found" });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+    server.on("error", reject);
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to determine spec machine address");
   }
 
-  get requests() {
-    return this.requestsInternal;
-  }
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const senderEmail = buildSpecMachineEmail({ baseUrl });
 
-  async sendFakeResendWebhook(params: { subject: string; text: string }) {
-    await archiveOlderMachinePullJobs(this.createdAt);
+  const specMachine = {
+    baseUrl,
+    senderEmail,
+    requests,
+    server,
+    async sendFakeResendWebhook(params: { subject: string; text: string }) {
+      await archiveOlderMachinePullJobs(createdAt);
 
-    const appUrl = await getAppUrl();
-    const now = new Date().toISOString();
-    const body = JSON.stringify({
-      type: "email.received",
-      created_at: now,
-      data: {
-        email_id: `email_${randomUUID()}`,
+      const appUrl = await getAppUrl();
+      const now = new Date().toISOString();
+      const body = JSON.stringify({
+        type: "email.received",
         created_at: now,
-        from: this.senderEmail,
-        to: ["bot@example.com"],
-        cc: [],
-        bcc: [],
-        message_id: `<${randomUUID()}@spec-machine>`,
-        subject: params.subject,
-        attachments: [],
-      },
-      _iterate_email_content: {
-        text: params.text,
-        html: null,
-      },
-    });
-
-    let secret = process.env.RESEND_BOT_WEBHOOK_SECRET;
-    if (!secret) {
-      secret = execSync(`doppler secrets get RESEND_BOT_WEBHOOK_SECRET --plain`).toString().trim();
-    }
-    if (!secret) {
-      throw new Error("RESEND_BOT_WEBHOOK_SECRET must be set for fake resend webhooks");
-    }
-
-    const id = `msg_${randomUUID()}`;
-    const timestamp = String(Math.floor(Date.now() / 1000));
-
-    const response = await fetch(`${appUrl}/api/integrations/resend/webhook`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "svix-id": id,
-        "svix-timestamp": timestamp,
-        "svix-signature": signSvixMessage({ body, secret, id, timestamp }),
-      },
-      body,
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `Fake resend webhook failed: HTTP ${response.status} ${await response.text()}`,
-      );
-    }
-
-    return response.json();
-  }
-
-  async [Symbol.asyncDispose]() {
-    await new Promise<void>((resolve, reject) => {
-      this.server.close((error) => {
-        if (error) reject(error);
-        else resolve();
+        data: {
+          email_id: `email_${randomUUID()}`,
+          created_at: now,
+          from: senderEmail,
+          to: ["bot@example.com"],
+          cc: [],
+          bcc: [],
+          message_id: `<${randomUUID()}@spec-machine>`,
+          subject: params.subject,
+          attachments: [],
+        },
+        _iterate_email_content: {
+          text: params.text,
+          html: null,
+        },
       });
-    });
-  }
-}
 
-export async function createSpecMachine() {
-  return SpecMachine.create();
+      let secret = process.env.RESEND_BOT_WEBHOOK_SECRET;
+      if (!secret) {
+        secret = execSync(`doppler secrets get RESEND_BOT_WEBHOOK_SECRET --plain`)
+          .toString()
+          .trim();
+      }
+      if (!secret) {
+        throw new Error("RESEND_BOT_WEBHOOK_SECRET must be set for fake resend webhooks");
+      }
+
+      const id = `msg_${randomUUID()}`;
+      const timestamp = String(Math.floor(Date.now() / 1000));
+
+      const response = await fetch(`${appUrl}/api/integrations/resend/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "svix-id": id,
+          "svix-timestamp": timestamp,
+          "svix-signature": signSvixMessage({ body, secret, id, timestamp }),
+        },
+        body,
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Fake resend webhook failed: HTTP ${response.status} ${await response.text()}`,
+        );
+      }
+
+      return response.json();
+    },
+    async [Symbol.asyncDispose]() {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+    },
+  };
+
+  return specMachine;
 }
