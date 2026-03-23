@@ -62,10 +62,11 @@ describe("Manager - Reload & Remove", () => {
 
       // Reload second process (index 1)
       await manager.reloadProcessByTarget(1, longRunningProcess);
-      await wait(150);
+      await expect
+        .poll(() => manager.getProcessByTarget(1)?.state, { timeout: 5000, interval: 100 })
+        .toBe("running");
 
       const proc = manager.getProcessByTarget(1);
-      expect(proc?.state).toBe("running");
       expect(proc?.name).toBe("proc2");
 
       await manager.stop();

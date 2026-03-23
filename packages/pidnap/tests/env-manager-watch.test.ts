@@ -59,10 +59,9 @@ describe("EnvManager - File Watching", () => {
     // Modify the file
     writeFileSync(join(testDir, ".env"), "VAR1=updated\nVAR2=new");
 
-    // Wait for file watcher (increased for reliability)
-    await wait(500);
-
-    expect(envManager.getEnvVars("any")).toEqual({ VAR1: "updated", VAR2: "new" });
+    await expect
+      .poll(() => envManager.getEnvVars("any"), { timeout: 5000, interval: 100 })
+      .toEqual({ VAR1: "updated", VAR2: "new" });
 
     envManager.close();
   });
@@ -146,17 +145,16 @@ describe("EnvManager - File Watching", () => {
     // Create a new env file
     writeFileSync(join(testDir, ".env.newapp"), "NEW_VAR=value");
 
-    // Wait for file watcher
-    await wait(500);
-
-    expect(events).toContain("newapp");
-    expect(envManager.getEnvVars("newapp")).toEqual({
-      GLOBAL: "1",
-      NEW_VAR: "value",
-    });
+    await expect.poll(() => events, { timeout: 5000, interval: 100 }).toContain("newapp");
+    await expect
+      .poll(() => envManager.getEnvVars("newapp"), { timeout: 5000, interval: 100 })
+      .toEqual({
+        GLOBAL: "1",
+        NEW_VAR: "value",
+      });
 
     envManager.close();
-  });
+  }, 10000);
 
   it("should cleanup watchers on close", async () => {
     writeFileSync(join(testDir, ".env"), "VAR=1");
