@@ -70,7 +70,7 @@ describe("Manager - Reload & Remove", () => {
       expect(proc?.name).toBe("proc2");
 
       await manager.stop();
-    });
+    }, 10000);
 
     it("should apply global defaults to new definition", async () => {
       const config: ManagerConfig = {

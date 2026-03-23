@@ -56,6 +56,7 @@ USER iterate
 WORKDIR $ITERATE_REPO
 
 COPY --chown=iterate:iterate package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY --chown=iterate:iterate patches ./patches
 RUN --mount=type=cache,target=/home/iterate/.local/share/pnpm/store,uid=1001,gid=1001 \
     pnpm fetch --prod
 
