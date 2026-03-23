@@ -43,7 +43,7 @@ function signSvixMessage(params: { body: string; secret: string; id: string; tim
   return `v1,${signature}`;
 }
 
-async function getAppUrl() {
+async function getFallbackAppUrl() {
   const { baseURL } = playwrightConfig.use;
   const response = await fetch(baseURL, { method: "GET", redirect: "manual" });
   const redirectLocation = response.headers.get("location");
@@ -146,6 +146,7 @@ export async function createSpecMachine(): Promise<SpecMachine> {
   const files = new Map<string, string>();
   const directories = new Set<string>();
   const createdAt = new Date();
+  let iterateOsBaseUrl: string | undefined;
 
   const server = createServer(async (request, response) => {
     const method = request.method ?? "GET";
@@ -175,6 +176,7 @@ export async function createSpecMachine(): Promise<SpecMachine> {
 
     if (method === "POST" && ["/__spec-machine/bootstrap", "/bootstrap"].includes(url.pathname)) {
       const body = parsedJson as { envVars: Record<string, string> };
+      iterateOsBaseUrl = body.envVars.ITERATE_OS_BASE_URL;
       const previousBaseUrl = process.env.ITERATE_OS_BASE_URL;
       const previousApiKey = process.env.ITERATE_OS_API_KEY;
       const previousMachineId = process.env.ITERATE_MACHINE_ID;
@@ -281,7 +283,7 @@ export async function createSpecMachine(): Promise<SpecMachine> {
     async sendFakeResendWebhook(params: { subject: string; text: string }) {
       await archiveOlderMachinePullJobs(createdAt);
 
-      const appUrl = await getAppUrl();
+      const appUrl = iterateOsBaseUrl ?? (await getFallbackAppUrl());
       const now = new Date().toISOString();
       const body = JSON.stringify({
         type: "email.received",
