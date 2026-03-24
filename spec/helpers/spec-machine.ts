@@ -43,17 +43,6 @@ function signSvixMessage(params: { body: string; secret: string; id: string; tim
   return `v1,${signature}`;
 }
 
-async function getFallbackAppUrl() {
-  const { baseURL } = playwrightConfig.use;
-  const response = await fetch(baseURL, { method: "GET", redirect: "manual" });
-  const redirectLocation = response.headers.get("location");
-  if (redirectLocation) {
-    return new URL(redirectLocation, baseURL).origin;
-  }
-
-  return new URL(baseURL).origin;
-}
-
 async function postWithManualRedirect(params: {
   url: string;
   headers: Record<string, string>;
@@ -122,7 +111,6 @@ export async function createSpecMachine(): Promise<SpecMachine> {
   const threads = new Map<string, ThreadMessage[]>();
   const files = new Map<string, string>();
   const directories = new Set<string>();
-  let iterateOsBaseUrl: string | undefined;
 
   const server = createServer(async (request, response) => {
     const method = request.method ?? "GET";
@@ -150,9 +138,8 @@ export async function createSpecMachine(): Promise<SpecMachine> {
       json: parsedJson,
     });
 
-    if (method === "POST" && ["/__spec-machine/bootstrap", "/bootstrap"].includes(url.pathname)) {
+    if (method === "POST" && url.pathname === "/bootstrap") {
       const body = parsedJson as { envVars: Record<string, string> };
-      iterateOsBaseUrl = body.envVars.ITERATE_OS_BASE_URL;
       const previousBaseUrl = process.env.ITERATE_OS_BASE_URL;
       const previousApiKey = process.env.ITERATE_OS_API_KEY;
       const previousMachineId = process.env.ITERATE_MACHINE_ID;
@@ -257,7 +244,7 @@ export async function createSpecMachine(): Promise<SpecMachine> {
     requests,
     server,
     async sendFakeResendWebhook(params: { subject: string; text: string }) {
-      const appUrl = iterateOsBaseUrl ?? (await getFallbackAppUrl());
+      const appUrl = playwrightConfig.use.baseURL;
       const now = new Date().toISOString();
       const body = JSON.stringify({
         type: "email.received",

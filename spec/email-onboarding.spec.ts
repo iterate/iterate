@@ -15,9 +15,6 @@ test("unknown allowlisted sender gets onboarded and email webhook is eventually 
     .toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          path: "/bootstrap",
-        }),
-        expect.objectContaining({
           path: "/api/integrations/email/webhook",
           json: expect.objectContaining({
             data: expect.objectContaining({

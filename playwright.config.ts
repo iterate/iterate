@@ -41,4 +41,4 @@ export default {
     timeout: 180_000,
     stdout: "pipe", // without this on startup failure it just says "Couldn't start. Exit code 1."
   },
-} satisfies PlaywrightTestConfig;
+} as const satisfies PlaywrightTestConfig;
