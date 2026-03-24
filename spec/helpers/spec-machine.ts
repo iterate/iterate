@@ -48,10 +48,10 @@ async function getFallbackAppUrl() {
   const response = await fetch(baseURL, { method: "GET", redirect: "manual" });
   const redirectLocation = response.headers.get("location");
   if (redirectLocation) {
-    return new URL(redirectLocation, baseURL).toString().replace(/\/$/, "");
+    return new URL(redirectLocation, baseURL).origin;
   }
 
-  return baseURL.replace(/\/$/, "");
+  return new URL(baseURL).origin;
 }
 
 async function postWithManualRedirect(params: {
