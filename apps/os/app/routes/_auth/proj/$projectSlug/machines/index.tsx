@@ -317,7 +317,7 @@ function ProjectMachinesPage() {
           description="Create your first machine to get started."
           action={
             <Button asChild>
-              <Link to="/proj/$projectSlug/machines" params={params} search={{ create: true }}>
+              <Link to={Route.fullPath} params={params} search={{ create: true }}>
                 Create Machine
               </Link>
             </Button>
@@ -334,7 +334,7 @@ function ProjectMachinesPage() {
     <div className="space-y-6 p-4">
       <HeaderActions>
         <Button asChild size="sm">
-          <Link to="/proj/$projectSlug/machines" params={params} search={{ create: true }}>
+          <Link to={Route.fullPath} params={params} search={{ create: true }}>
             <Plus className="h-4 w-4" />
             <span className="hidden sm:inline">Create Machine</span>
           </Link>

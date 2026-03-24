@@ -187,12 +187,12 @@ const AuthProjProjectSlugMachinesMachineIdRoute =
   } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof AuthIndexRoute
   '/device': typeof DeviceRoute
   '/login': typeof LoginRoute
   '/logout': typeof LogoutRoute
   '/admin': typeof AuthAdminRouteWithChildren
   '/connection-conflict': typeof AuthConnectionConflictRoute
+  '/': typeof AuthIndexRoute
   '/admin/api-tools': typeof AuthAdminApiToolsRoute
   '/admin/outbox': typeof AuthAdminOutboxRoute
   '/admin/session-info': typeof AuthAdminSessionInfoRoute
@@ -212,7 +212,7 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationSlug/': typeof AuthOrgsOrganizationSlugIndexRoute
   '/proj/$projectSlug/': typeof AuthProjProjectSlugIndexRoute
   '/proj/$projectSlug/machines/$machineId': typeof AuthProjProjectSlugMachinesMachineIdRoute
-  '/proj/$projectSlug/machines/': typeof AuthProjProjectSlugMachinesIndexRoute
+  '/proj/$projectSlug/machines': typeof AuthProjProjectSlugMachinesIndexRoute
 }
 export interface FileRoutesByTo {
   '/device': typeof DeviceRoute
@@ -272,12 +272,12 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    | '/'
     | '/device'
     | '/login'
     | '/logout'
     | '/admin'
     | '/connection-conflict'
+    | '/'
     | '/admin/api-tools'
     | '/admin/outbox'
     | '/admin/session-info'
@@ -297,7 +297,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/'
     | '/proj/$projectSlug/'
     | '/proj/$projectSlug/machines/$machineId'
-    | '/proj/$projectSlug/machines/'
+    | '/proj/$projectSlug/machines'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/device'
@@ -387,7 +387,7 @@ declare module '@tanstack/react-router' {
     '/_auth': {
       id: '/_auth'
       path: ''
-      fullPath: '/'
+      fullPath: ''
       preLoaderRoute: typeof AuthRouteImport
       parentRoute: typeof rootRouteImport
     }
@@ -541,7 +541,7 @@ declare module '@tanstack/react-router' {
     '/_auth/proj/$projectSlug/machines/': {
       id: '/_auth/proj/$projectSlug/machines/'
       path: '/machines'
-      fullPath: '/proj/$projectSlug/machines/'
+      fullPath: '/proj/$projectSlug/machines'
       preLoaderRoute: typeof AuthProjProjectSlugMachinesIndexRouteImport
       parentRoute: typeof AuthProjProjectSlugRoute
     }

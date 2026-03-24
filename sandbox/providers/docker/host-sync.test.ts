@@ -63,7 +63,7 @@ describe
 describe.runIf(RUN_SANDBOX_TESTS && TEST_CONFIG.provider === "docker")(
   "Docker Worktree Sync",
   () => {
-    test("container git state matches host worktree exactly", async ({ expect }) => {
+    test.concurrent("container git state matches host worktree exactly", async ({ expect }) => {
       await withWorktree({
         repoRoot: ITERATE_REPO_PATH_ON_HOST,
         fn: async (worktree) => {
@@ -107,6 +107,6 @@ describe.runIf(RUN_SANDBOX_TESTS && TEST_CONFIG.provider === "docker")(
           });
         },
       });
-    }, 120000);
+    }, 45000);
   },
 );

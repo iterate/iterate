@@ -6,6 +6,8 @@ import {
   uniqueIndex,
   unique,
   index,
+  integer,
+  bigserial,
   bigint,
   check,
 } from "drizzle-orm/pg-core";

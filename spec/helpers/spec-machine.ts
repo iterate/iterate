@@ -109,29 +109,6 @@ async function parseJsonResponse(response: Response) {
   }
 }
 
-function getLocalPostgresPort() {
-  const postgresPort = execSync(`tsx ./scripts/docker-compose.ts port postgres 5432`)
-    .toString()
-    .trim()
-    .split(":")
-    .at(-1);
-
-  if (!postgresPort) {
-    throw new Error("Failed to determine local postgres port for specs");
-  }
-
-  return postgresPort;
-}
-
-async function archiveOlderMachinePullJobs(cutoff: Date) {
-  execSync(
-    [
-      `psql "postgres://postgres:postgres@127.0.0.1:${getLocalPostgresPort()}/os"`,
-      `-c "SELECT pgmq.archive('consumer_job_queue', msg_id) FROM pgmq.q_consumer_job_queue WHERE message->>'consumer_name' = 'triggerMachinePullIterateIterate' AND enqueued_at < '${cutoff.toISOString()}'::timestamptz"`,
-    ].join(" "),
-  );
-}
-
 export type SpecMachine = {
   baseUrl: string;
   senderEmail: string;
@@ -145,7 +122,6 @@ export async function createSpecMachine(): Promise<SpecMachine> {
   const threads = new Map<string, ThreadMessage[]>();
   const files = new Map<string, string>();
   const directories = new Set<string>();
-  const createdAt = new Date();
   let iterateOsBaseUrl: string | undefined;
 
   const server = createServer(async (request, response) => {
@@ -281,8 +257,6 @@ export async function createSpecMachine(): Promise<SpecMachine> {
     requests,
     server,
     async sendFakeResendWebhook(params: { subject: string; text: string }) {
-      await archiveOlderMachinePullJobs(createdAt);
-
       const appUrl = iterateOsBaseUrl ?? (await getFallbackAppUrl());
       const now = new Date().toISOString();
       const body = JSON.stringify({

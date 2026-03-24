@@ -6,25 +6,6 @@ import { logger as baseLogger } from "../src/logger.ts";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-type EnvManagerWatcherAccess = {
-  cwdWatcher: {
-    on(eventName: "ready", listener: () => void): void;
-  } | null;
-};
-
-type EnvManagerFileAccess = {
-  handleNewFile(filePath: string): void;
-};
-
-async function waitForCwdWatcherReady(envManager: EnvManager) {
-  const cwdWatcher = (envManager as unknown as EnvManagerWatcherAccess).cwdWatcher;
-  if (!cwdWatcher) return;
-
-  await new Promise<void>((resolve) => {
-    cwdWatcher.on("ready", () => resolve());
-  });
-}
-
 describe("EnvManager - File Watching", () => {
   const testDir = join(import.meta.dirname, ".temp/env-manager-watch");
   const logger = baseLogger({ name: "env-manager-watch" });
@@ -78,12 +59,13 @@ describe("EnvManager - File Watching", () => {
     // Modify the file
     writeFileSync(join(testDir, ".env"), "VAR1=updated\nVAR2=new");
 
-    await expect
-      .poll(() => envManager.getEnvVars("any"), { timeout: 5000, interval: 100 })
-      .toEqual({ VAR1: "updated", VAR2: "new" });
+    // Wait for file watcher (increased for reliability)
+    await wait(500);
+
+    expect(envManager.getEnvVars("any")).toEqual({ VAR1: "updated", VAR2: "new" });
 
     envManager.close();
-  }, 10000);
+  });
 
   it("should handle multiple env files changing", async () => {
     writeFileSync(join(testDir, ".env"), "GLOBAL=1");
@@ -158,23 +140,23 @@ describe("EnvManager - File Watching", () => {
       }
     });
 
-    await waitForCwdWatcherReady(envManager);
+    // Wait for watcher to be ready
+    await wait(200);
 
-    const newEnvFilePath = join(testDir, ".env.newapp");
-    writeFileSync(newEnvFilePath, "NEW_VAR=value");
+    // Create a new env file
+    writeFileSync(join(testDir, ".env.newapp"), "NEW_VAR=value");
 
-    (envManager as unknown as EnvManagerFileAccess).handleNewFile(newEnvFilePath);
+    // Wait for file watcher
+    await wait(500);
 
-    await expect.poll(() => events, { timeout: 10000, interval: 100 }).toContain("newapp");
-    await expect
-      .poll(() => envManager.getEnvVars("newapp"), { timeout: 10000, interval: 100 })
-      .toEqual({
-        GLOBAL: "1",
-        NEW_VAR: "value",
-      });
+    expect(events).toContain("newapp");
+    expect(envManager.getEnvVars("newapp")).toEqual({
+      GLOBAL: "1",
+      NEW_VAR: "value",
+    });
 
     envManager.close();
-  }, 10000);
+  });
 
   it("should cleanup watchers on close", async () => {
     writeFileSync(join(testDir, ".env"), "VAR=1");
