@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
@@ -17,7 +17,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet.tsx";
-import { orpc, orpcClient } from "@/lib/orpc.tsx";
+import { orpc } from "@/lib/orpc.tsx";
 
 export const Route = createFileRoute("/_auth/jonasland/$projectSlug/deployments/")({
   loader: async ({ context, params }) => {
@@ -35,113 +35,58 @@ function JonasLandDeploymentsPage() {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [deploymentName, setDeploymentName] = useState("");
-  const [transport, setTransport] = useState<"http" | "durable-iterator">("http");
 
   const listQueryOptions = orpc.deployment.list.queryOptions({
     input: { projectSlug: params.projectSlug },
   });
-  const listQueryKey = listQueryOptions.queryKey;
   const { data: deployments } = useSuspenseQuery(listQueryOptions);
-  const setDeploymentsCache = useEffectEvent(
-    (nextDeployments: Array<(typeof deployments)[number]>) => {
-      queryClient.setQueryData(listQueryKey, (current: typeof deployments | undefined) =>
-        Object.assign([...nextDeployments], {
-          [Symbol.dispose]: current?.[Symbol.dispose] ?? (() => {}),
-        }),
-      );
-    },
+  const listQueryKey = orpc.deployment.list.key({
+    input: { projectSlug: params.projectSlug },
+  });
+
+  const createDeployment = useMutation(
+    orpc.deployment.create.mutationOptions({
+      onSuccess: async () => {
+        await queryClient.invalidateQueries({ queryKey: listQueryKey });
+        // Keep the form state local. The server owns the deployment list, and invalidation keeps
+        // the page aligned with the same top-level oRPC query shape used everywhere else.
+        setCreateOpen(false);
+        setDeploymentName("");
+        toast.success("Deployment created");
+      },
+      onError: (error) => {
+        toast.error("Failed to create deployment: " + error.message);
+      },
+    }),
   );
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    let active = true;
-    let iterator: Awaited<ReturnType<typeof orpcClient.deployment.connectProject>> | null = null;
-
-    void (async () => {
-      try {
-        iterator = await orpcClient.deployment.connectProject({ projectSlug: params.projectSlug });
-        if (!active) {
-          return;
-        }
-
-        setTransport("durable-iterator");
-
-        for await (const event of iterator) {
-          if (!active) {
-            return;
-          }
-
-          // TanStack Query still owns the deployments collection. The websocket side effect
-          // only hydrates that cache with fresher project snapshots from the DO.
-          setDeploymentsCache(event.deployments);
-        }
-      } catch {
-        if (!active) {
-          return;
-        }
-
-        setTransport("http");
-      }
-    })();
-
-    return () => {
-      active = false;
-      void iterator?.return();
-    };
-  }, [params.projectSlug, queryClient, listQueryKey]);
-
-  const createDeployment = useMutation({
-    mutationFn: async () => {
-      return orpcClient.deployment.create({
-        projectSlug: params.projectSlug,
-        name: deploymentName.trim(),
-      });
-    },
-    onSuccess: (nextDeployments) => {
-      setDeploymentsCache(nextDeployments);
-      setCreateOpen(false);
-      setDeploymentName("");
-      toast.success("Deployment created");
-    },
-    onError: (error) => {
-      toast.error("Failed to create deployment: " + error.message);
-    },
-  });
-
-  const makePrimary = useMutation({
-    mutationFn: async (deploymentId: string) => {
-      return orpcClient.deployment.makePrimary({
-        projectSlug: params.projectSlug,
-        deploymentId,
-      });
-    },
-    onSuccess: (nextDeployments) => {
-      setDeploymentsCache(nextDeployments);
-      toast.success("Primary deployment updated");
-    },
-    onError: (error) => {
-      toast.error("Failed to make deployment primary: " + error.message);
-    },
-  });
+  const makePrimary = useMutation(
+    orpc.deployment.makePrimary.mutationOptions({
+      onSuccess: async () => {
+        await queryClient.invalidateQueries({ queryKey: listQueryKey });
+        toast.success("Primary deployment updated");
+      },
+      onError: (error) => {
+        toast.error("Failed to make deployment primary: " + error.message);
+      },
+    }),
+  );
 
   const handleCreateDeployment = (event: FormEvent) => {
     event.preventDefault();
-    if (!deploymentName.trim()) {
+    const name = deploymentName.trim();
+    if (!name) {
       return;
     }
 
-    createDeployment.mutate();
+    createDeployment.mutate({
+      projectSlug: params.projectSlug,
+      name,
+    });
   };
 
   return (
-    <div
-      className="space-y-6 p-4"
-      data-component="JonasLandDeploymentsPage"
-      data-transport={transport}
-    >
+    <div className="space-y-6 p-4" data-component="JonasLandDeploymentsPage">
       <HeaderActions>
         <Button size="sm" onClick={() => setCreateOpen(true)}>
           <Plus className="h-4 w-4" />
@@ -223,9 +168,7 @@ function JonasLandDeploymentsPage() {
                             ? "bg-amber-500"
                             : deployment.state === "starting" || deployment.state === "stopping"
                               ? "bg-blue-500"
-                              : deployment.state === "failed"
-                                ? "bg-red-500"
-                                : "bg-zinc-400",
+                              : "bg-zinc-400",
                     ].join(" ")}
                   />
                   <p className="font-medium">{deployment.name}</p>
@@ -261,7 +204,12 @@ function JonasLandDeploymentsPage() {
                   size="sm"
                   variant="outline"
                   disabled={deployment.isPrimary}
-                  onClick={() => makePrimary.mutate(deployment.id)}
+                  onClick={() =>
+                    makePrimary.mutate({
+                      projectSlug: params.projectSlug,
+                      deploymentId: deployment.id,
+                    })
+                  }
                 >
                   Make primary
                 </Button>

@@ -1,7 +1,6 @@
-import { DurableIterator } from "@orpc/experimental-durable-iterator";
 import { ORPCError } from "@orpc/server";
 import { z } from "zod/v4";
-import type { DeploymentDurableObject } from "../../durable-objects/deployment.ts";
+import type { DeploymentDurableObject, DeploymentLog } from "../../durable-objects/deployment.ts";
 import type { ProjectDurableObject } from "../../durable-objects/project.ts";
 import {
   ProjectInput,
@@ -9,59 +8,52 @@ import {
   projectProtectedProcedure,
 } from "../procedures.ts";
 
-async function getProjectStub(ctx: {
-  project: { id: string; slug: string; jonasLand: boolean };
-  env: {
-    ENCRYPTION_SECRET: string;
-    PROJECT_DURABLE_OBJECT: DurableObjectNamespace<ProjectDurableObject>;
-  };
-}) {
-  if (!ctx.project.jonasLand) {
+const DeploymentInput = z.object({
+  ...ProjectInput.shape,
+  deploymentId: z.string(),
+});
+
+function assertJonaslandProject(project: { jonasLand: boolean }) {
+  if (!project.jonasLand) {
     throw new ORPCError("BAD_REQUEST", {
       message: "Deployments are only available for jonasland projects",
     });
   }
-
-  const stub = ctx.env.PROJECT_DURABLE_OBJECT.getByName(`project:${ctx.project.id}`);
-  await stub.initialize({
-    projectId: ctx.project.id,
-    primaryIngressHost: `${ctx.project.slug}.jonasland.local`,
-  });
-  return stub;
 }
 
-async function assertDeploymentBelongsToProject(
-  stub: DurableObjectStub<ProjectDurableObject>,
-  deploymentId: string,
-) {
-  const hasDeployment = await stub.hasDeployment({ deploymentId });
+function getProjectDo(context: {
+  project: { id: string; slug: string; jonasLand: boolean };
+  env: {
+    PROJECT_DURABLE_OBJECT: DurableObjectNamespace<ProjectDurableObject>;
+    DEPLOYMENT_DURABLE_OBJECT: DurableObjectNamespace<DeploymentDurableObject>;
+  };
+}) {
+  assertJonaslandProject(context.project);
+  return context.env.PROJECT_DURABLE_OBJECT.getByName(`project:${context.project.id}`);
+}
+
+async function getDeploymentDo(input: {
+  context: {
+    env: {
+      DEPLOYMENT_DURABLE_OBJECT: DurableObjectNamespace<DeploymentDurableObject>;
+    };
+  };
+  projectDo: DurableObjectStub<ProjectDurableObject>;
+  deploymentId: string;
+}) {
+  const hasDeployment = await input.projectDo.hasDeployment({ deploymentId: input.deploymentId });
   if (!hasDeployment) {
     throw new ORPCError("NOT_FOUND", {
-      message: `Deployment ${deploymentId} not found for this project`,
+      message: `Deployment ${input.deploymentId} not found for this project`,
     });
   }
-}
 
-function makeProjectIterator(projectId: string, signingKey: string) {
-  return new DurableIterator<ProjectDurableObject>(`project:${projectId}`, {
-    signingKey,
-    // The client chooses the DO upgrade endpoint from token tags. That is more explicit
-    // than inferring the namespace from the channel name string.
-    tags: ["project-durable-object"],
-  }).rpc("api");
-}
-
-function makeDeploymentIterator(deploymentId: string, signingKey: string) {
-  return new DurableIterator<DeploymentDurableObject>(`deployment:${deploymentId}`, {
-    signingKey,
-    tags: ["deployment-durable-object"],
-  }).rpc("api");
+  return input.context.env.DEPLOYMENT_DURABLE_OBJECT.getByName(`deployment:${input.deploymentId}`);
 }
 
 export const deploymentRouter = {
-  list: projectProtectedProcedure.input(ProjectInput).handler(async ({ context: ctx }) => {
-    const projectStub = await getProjectStub(ctx);
-    return projectStub.listDeployments();
+  list: projectProtectedProcedure.input(ProjectInput).handler(async ({ context }) => {
+    return getProjectDo(context).listDeployments();
   }),
 
   create: projectProtectedMutation
@@ -71,120 +63,103 @@ export const deploymentRouter = {
         name: z.string().min(1).max(100),
       }),
     )
-    .handler(async ({ context: ctx, input }) => {
-      const projectStub = await getProjectStub(ctx);
-      return projectStub.createDeployment({ name: input.name });
+    .handler(async ({ context, input }) => {
+      return getProjectDo(context).createDeployment({
+        name: input.name,
+        primaryIngressHost: `${context.project.slug}.jonasland.local`,
+      });
     }),
 
   makePrimary: projectProtectedMutation
-    .input(
-      z.object({
-        ...ProjectInput.shape,
-        deploymentId: z.string(),
-      }),
-    )
-    .handler(async ({ context: ctx, input }) => {
-      const projectStub = await getProjectStub(ctx);
-      await assertDeploymentBelongsToProject(projectStub, input.deploymentId);
-      return projectStub.setPrimaryDeployment({ deploymentId: input.deploymentId });
+    .input(DeploymentInput)
+    .handler(async ({ context, input }) => {
+      const projectDo = getProjectDo(context);
+      await getDeploymentDo({ context, projectDo, deploymentId: input.deploymentId });
+      return projectDo.setPrimaryDeployment({
+        deploymentId: input.deploymentId,
+        primaryIngressHost: `${context.project.slug}.jonasland.local`,
+      });
     }),
 
-  connectProject: projectProtectedProcedure
-    .input(ProjectInput)
-    .handler(async ({ context: ctx }) => {
-      await getProjectStub(ctx);
+  get: projectProtectedProcedure.input(DeploymentInput).handler(async ({ context, input }) => {
+    const projectDo = getProjectDo(context);
+    const deploymentDo = await getDeploymentDo({
+      context,
+      projectDo,
+      deploymentId: input.deploymentId,
+    });
+    const [deployment, primaryDeploymentId] = await Promise.all([
+      deploymentDo.getSummary(),
+      projectDo.getPrimaryDeploymentId(),
+    ]);
 
-      // This procedure intentionally returns a live project snapshot stream.
-      // The Jonas Land list page consumes it with TanStack Query live queries,
-      // which mirrors the first-party oRPC guidance for Event Iterator / Durable Iterator.
-      return makeProjectIterator(ctx.project.id, ctx.env.ENCRYPTION_SECRET);
-    }),
+    return {
+      deployment,
+      isPrimary: primaryDeploymentId === input.deploymentId,
+    };
+  }),
 
-  get: projectProtectedProcedure
-    .input(
-      z.object({
-        ...ProjectInput.shape,
-        deploymentId: z.string(),
-      }),
-    )
-    .handler(async ({ context: ctx, input }) => {
-      const projectStub = await getProjectStub(ctx);
-      await assertDeploymentBelongsToProject(projectStub, input.deploymentId);
+  logs: projectProtectedProcedure.input(DeploymentInput).handler(async function* ({
+    context,
+    input,
+    signal,
+  }) {
+    const projectDo = getProjectDo(context);
+    const deploymentDo = await getDeploymentDo({
+      context,
+      projectDo,
+      deploymentId: input.deploymentId,
+    });
+    // Keep logs on an ordinary top-level oRPC stream so the browser can use the documented
+    // TanStack Query streamed API. The DO stays a small Cloudflare RPC target that only knows
+    // how to list existing log rows and wait for the next appended row.
+    const backlog = await deploymentDo.listLogs();
 
-      const [snapshot, primaryDeploymentId] = await Promise.all([
-        ctx.env.DEPLOYMENT_DURABLE_OBJECT.getByName(
-          `deployment:${input.deploymentId}`,
-        ).getSnapshot(),
-        projectStub.getPrimaryDeploymentId(),
-      ]);
+    let afterId = 0;
+    for (const log of backlog) {
+      afterId = log.id;
+      yield log;
+    }
 
-      return {
-        ...snapshot,
-        isPrimary: primaryDeploymentId === input.deploymentId,
-      };
-    }),
+    while (!signal?.aborted) {
+      const log: DeploymentLog | null = await deploymentDo.waitForNextLog({
+        afterId,
+        timeoutMs: 10_000,
+      });
 
-  connect: projectProtectedProcedure
-    .input(
-      z.object({
-        ...ProjectInput.shape,
-        deploymentId: z.string(),
-      }),
-    )
-    .handler(async ({ context: ctx, input }) => {
-      const projectStub = await getProjectStub(ctx);
-      await assertDeploymentBelongsToProject(projectStub, input.deploymentId);
+      if (!log) {
+        continue;
+      }
 
-      // This is the deployment event stream. The root iterator carries typed events
-      // (`snapshot` and `log`) so the frontend can consume it through TanStack Query's
-      // streamed helpers like a normal top-level async iterator, while `api.*` remains
-      // available on the same websocket for imperative DO-local RPC when needed.
-      return makeDeploymentIterator(input.deploymentId, ctx.env.ENCRYPTION_SECRET);
-    }),
+      afterId = log.id;
+      yield log;
+    }
+  }),
 
-  start: projectProtectedMutation
-    .input(
-      z.object({
-        ...ProjectInput.shape,
-        deploymentId: z.string(),
-      }),
-    )
-    .handler(async ({ context: ctx, input }) => {
-      const projectStub = await getProjectStub(ctx);
-      await assertDeploymentBelongsToProject(projectStub, input.deploymentId);
+  start: projectProtectedMutation.input(DeploymentInput).handler(async ({ context, input }) => {
+    const projectDo = getProjectDo(context);
+    const deployment = await (
+      await getDeploymentDo({ context, projectDo, deploymentId: input.deploymentId })
+    ).start();
+    await projectDo.syncDeployment(deployment);
+    return deployment;
+  }),
 
-      return ctx.env.DEPLOYMENT_DURABLE_OBJECT.getByName(
-        `deployment:${input.deploymentId}`,
-      ).start();
-    }),
+  stop: projectProtectedMutation.input(DeploymentInput).handler(async ({ context, input }) => {
+    const projectDo = getProjectDo(context);
+    const deployment = await (
+      await getDeploymentDo({ context, projectDo, deploymentId: input.deploymentId })
+    ).stop();
+    await projectDo.syncDeployment(deployment);
+    return deployment;
+  }),
 
-  stop: projectProtectedMutation
-    .input(
-      z.object({
-        ...ProjectInput.shape,
-        deploymentId: z.string(),
-      }),
-    )
-    .handler(async ({ context: ctx, input }) => {
-      const projectStub = await getProjectStub(ctx);
-      await assertDeploymentBelongsToProject(projectStub, input.deploymentId);
-
-      return ctx.env.DEPLOYMENT_DURABLE_OBJECT.getByName(`deployment:${input.deploymentId}`).stop();
-    }),
-
-  destroy: projectProtectedMutation
-    .input(
-      z.object({
-        ...ProjectInput.shape,
-        deploymentId: z.string(),
-      }),
-    )
-    .handler(async ({ context: ctx, input }) => {
-      const projectStub = await getProjectStub(ctx);
-      await assertDeploymentBelongsToProject(projectStub, input.deploymentId);
-
-      return ctx.env.DEPLOYMENT_DURABLE_OBJECT.getByName(
-        `deployment:${input.deploymentId}`,
-      ).destroy();
-    }),
+  destroy: projectProtectedMutation.input(DeploymentInput).handler(async ({ context, input }) => {
+    const projectDo = getProjectDo(context);
+    const deployment = await (
+      await getDeploymentDo({ context, projectDo, deploymentId: input.deploymentId })
+    ).destroy();
+    await projectDo.syncDeployment(deployment);
+    return deployment;
+  }),
 };

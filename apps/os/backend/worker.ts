@@ -9,8 +9,6 @@ import { RPCHandler } from "@orpc/server/fetch";
 import { onError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { createRouterClient } from "@orpc/server";
-import { DurableIteratorHandlerPlugin } from "@orpc/experimental-durable-iterator";
-import { upgradeDurableIteratorRequest } from "@orpc/experimental-durable-iterator/durable-object";
 import { sql } from "drizzle-orm";
 import { initLogger } from "evlog";
 import { createWorkersLogger, initWorkersLogger } from "evlog/workers";
@@ -458,19 +456,6 @@ const appOrpcHandler = new RPCHandler(appRouter, {
       }
     }),
   ],
-  plugins: [new DurableIteratorHandlerPlugin()],
-});
-app.get("/api/orpc-iterator/project-deployments", async (c) => {
-  return upgradeDurableIteratorRequest(c.req.raw, {
-    signingKey: c.env.ENCRYPTION_SECRET,
-    namespace: c.env.PROJECT_DURABLE_OBJECT,
-  });
-});
-app.get("/api/orpc-iterator/deployment", async (c) => {
-  return upgradeDurableIteratorRequest(c.req.raw, {
-    signingKey: c.env.ENCRYPTION_SECRET,
-    namespace: c.env.DEPLOYMENT_DURABLE_OBJECT,
-  });
 });
 
 app.all("/api/orpc/*", async (c, next) => {

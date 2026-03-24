@@ -1,10 +1,4 @@
-import { os } from "@orpc/server";
-import { z } from "zod/v4";
-import {
-  DurableIteratorObject,
-  type DurableIteratorWebsocket,
-} from "@orpc/experimental-durable-iterator/durable-object";
-import type { ProjectDurableObject } from "./project.ts";
+import { DurableObject } from "cloudflare:workers";
 
 export type DeploymentState =
   | "created"
@@ -12,12 +6,10 @@ export type DeploymentState =
   | "running"
   | "stopping"
   | "stopped"
-  | "failed"
   | "destroyed";
 
 export type DeploymentSummary = {
   id: string;
-  projectId: string;
   name: string;
   state: DeploymentState;
   createdAt: string;
@@ -33,57 +25,34 @@ export type DeploymentLog = {
   message: string;
 };
 
-export type DeploymentSnapshot = {
-  deployment: DeploymentSummary;
-  logs: DeploymentLog[];
+type LogWaiter = {
+  afterId: number;
+  finish: (log: DeploymentLog | null) => void;
 };
 
-export type DeploymentEvent =
-  | {
-      type: "snapshot";
-      snapshot: {
-        deployment: DeploymentSummary;
-        isPrimary: boolean;
-      };
-    }
-  | {
-      type: "log";
-      log: DeploymentLog;
-    };
-
-type Env = {
-  ENCRYPTION_SECRET: string;
-  PROJECT_DURABLE_OBJECT: DurableObjectNamespace<ProjectDurableObject>;
+type StateWaiter = {
+  states: DeploymentState[];
+  finish: (deployment: DeploymentSummary | null) => void;
 };
 
-const rpc = os.$context<Record<string, never>>();
-
-export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEvent, Env, unknown> {
+export class DeploymentDurableObject extends DurableObject<Record<string, never>> {
   private initialized: Promise<void>;
+  private logWaiters = new Set<LogWaiter>();
+  private stateWaiters = new Set<StateWaiter>();
 
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env, {
-      signingKey: env.ENCRYPTION_SECRET,
-      resumeRetentionSeconds: 60,
-      onSubscribed: (websocket) => {
-        void this.publishSnapshotEvent({ targets: [websocket] });
-      },
-    });
+  constructor(ctx: DurableObjectState, env: Record<string, never>) {
+    super(ctx, env);
 
     this.initialized = this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS deployment (
           id TEXT PRIMARY KEY,
-          project_id TEXT NOT NULL,
           name TEXT NOT NULL,
           state TEXT NOT NULL,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           destroyed_at TEXT,
-          ingress_host TEXT NOT NULL,
-          unique_ingress_host TEXT NOT NULL,
-          primary_ingress_host TEXT NOT NULL,
-          boot_step INTEGER NOT NULL DEFAULT 0
+          ingress_host TEXT NOT NULL
         )
       `);
       this.ctx.storage.sql.exec(`
@@ -99,12 +68,9 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
 
   async initialize(input: {
     deploymentId: string;
-    projectId: string;
     name: string;
     createdAt: string;
-    uniqueIngressHost: string;
-    primaryIngressHost: string;
-    isPrimary: boolean;
+    ingressHost: string;
   }): Promise<DeploymentSummary> {
     await this.initialized;
 
@@ -117,44 +83,31 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
       `
         INSERT INTO deployment (
           id,
-          project_id,
           name,
           state,
           created_at,
           updated_at,
           destroyed_at,
-          ingress_host,
-          unique_ingress_host,
-          primary_ingress_host,
-          boot_step
+          ingress_host
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
       input.deploymentId,
-      input.projectId,
       input.name,
       "created",
       input.createdAt,
       input.createdAt,
       null,
-      input.isPrimary ? input.primaryIngressHost : input.uniqueIngressHost,
-      input.uniqueIngressHost,
-      input.primaryIngressHost,
-      0,
+      input.ingressHost,
     );
 
     this.insertLog("info", `Deployment ${input.name} created`);
-    if (input.isPrimary) {
-      this.insertLog("info", `Attached primary ingress host ${input.primaryIngressHost}`);
-    } else {
-      this.insertLog("info", `Using detached ingress host ${input.uniqueIngressHost}`);
-    }
+    this.insertLog("info", `Using detached ingress host ${input.ingressHost}`);
 
-    await this.publishSnapshotEvent();
     return this.mustReadDeployment();
   }
 
-  async attachPrimary(): Promise<DeploymentSummary> {
+  async attachPrimary(input: { primaryIngressHost: string }): Promise<DeploymentSummary> {
     await this.initialized;
 
     const deployment = this.mustReadDeployment();
@@ -166,18 +119,15 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
     this.ctx.storage.sql.exec(
       `
         UPDATE deployment
-        SET ingress_host = primary_ingress_host, updated_at = ?
+        SET ingress_host = ?, updated_at = ?
         WHERE id = ?
       `,
+      input.primaryIngressHost,
       now,
       deployment.id,
     );
-    this.insertLog(
-      "info",
-      `Attached primary ingress host ${this.mustReadConfig().primaryIngressHost}`,
-    );
+    this.insertLog("info", `Attached primary ingress host ${input.primaryIngressHost}`);
 
-    await this.publishSnapshotEvent();
     return this.mustReadDeployment();
   }
 
@@ -189,22 +139,20 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
       return deployment;
     }
 
+    const detachedIngressHost = `${deployment.id}.jonasland.local`;
     const now = new Date().toISOString();
     this.ctx.storage.sql.exec(
       `
         UPDATE deployment
-        SET ingress_host = unique_ingress_host, updated_at = ?
+        SET ingress_host = ?, updated_at = ?
         WHERE id = ?
       `,
+      detachedIngressHost,
       now,
       deployment.id,
     );
-    this.insertLog(
-      "info",
-      `Detached from primary ingress host; using ${this.mustReadConfig().uniqueIngressHost}`,
-    );
+    this.insertLog("info", `Detached from primary ingress host; using ${detachedIngressHost}`);
 
-    await this.publishSnapshotEvent();
     return this.mustReadDeployment();
   }
 
@@ -217,14 +165,16 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
     }
 
     if (deployment.state === "starting" || deployment.state === "running") {
-      return deployment;
+      return deployment.state === "running"
+        ? deployment
+        : this.waitForState({ states: ["running"], timeoutMs: 5_000 });
     }
 
     const now = new Date().toISOString();
     this.ctx.storage.sql.exec(
       `
         UPDATE deployment
-        SET state = ?, updated_at = ?, boot_step = 0
+        SET state = ?, updated_at = ?
         WHERE id = ?
       `,
       "starting",
@@ -232,12 +182,14 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
       deployment.id,
     );
     this.insertLog("info", `Starting deployment on ${deployment.ingressHost}`);
+    this.insertLog("info", "Booting runtime");
+    this.insertLog("info", `Binding ingress host ${deployment.ingressHost}`);
     await this.scheduleAlarm(400);
 
-    const updated = this.mustReadDeployment();
-    await this.publishSnapshotEvent();
-    await this.notifyProject();
-    return updated;
+    return this.waitForState({
+      states: ["running"],
+      timeoutMs: 5_000,
+    });
   }
 
   async stop(): Promise<DeploymentSummary> {
@@ -250,6 +202,13 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
 
     if (deployment.state === "created" || deployment.state === "stopped") {
       return deployment;
+    }
+
+    if (deployment.state === "stopping") {
+      return this.waitForState({
+        states: ["stopped"],
+        timeoutMs: 5_000,
+      });
     }
 
     const now = new Date().toISOString();
@@ -266,10 +225,10 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
     this.insertLog("warn", "Stopping deployment");
     await this.scheduleAlarm(400);
 
-    const updated = this.mustReadDeployment();
-    await this.publishSnapshotEvent();
-    await this.notifyProject();
-    return updated;
+    return this.waitForState({
+      states: ["stopped"],
+      timeoutMs: 5_000,
+    });
   }
 
   async destroy(): Promise<DeploymentSummary> {
@@ -294,10 +253,7 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
     );
     this.insertLog("error", "Destroyed deployment resources");
 
-    const updated = this.mustReadDeployment();
-    await this.publishSnapshotEvent();
-    await this.notifyProject();
-    return updated;
+    return this.mustReadDeployment();
   }
 
   async getSummary(): Promise<DeploymentSummary> {
@@ -305,85 +261,92 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
     return this.mustReadDeployment();
   }
 
-  async getSnapshot(): Promise<DeploymentSnapshot> {
+  async listLogs(input?: { limit?: number }) {
     await this.initialized;
-    return this.readSnapshot();
+    return this.readLogs(input?.limit);
   }
 
-  api(_ws: DurableIteratorWebsocket) {
-    // This is oRPC method RPC inside the Durable Iterator websocket, not Cloudflare's
-    // server-side-only DO RPC. Keeping the imperative surface here lets the DO define its
-    // own client contract while the outer app router decides which pieces to expose as
-    // ordinary top-level query/mutation/stream procedures.
-    return {
-      getSnapshot: rpc
-        .input(z.object({}))
-        .handler(() => this.getSnapshot())
-        .callable(),
+  async waitForNextLog(input: { afterId: number; timeoutMs?: number }) {
+    await this.initialized;
 
-      start: rpc
-        .input(z.object({}))
-        .handler(() => this.start())
-        .callable(),
-      stop: rpc
-        .input(z.object({}))
-        .handler(() => this.stop())
-        .callable(),
-      destroy: rpc
-        .input(z.object({}))
-        .handler(() => this.destroy())
-        .callable(),
-    };
+    const nextLog = this.readLogsAfter(input.afterId, 1)[0];
+    if (nextLog) {
+      return nextLog;
+    }
+
+    return new Promise<DeploymentLog | null>((resolve) => {
+      const waiter: LogWaiter = {
+        afterId: input.afterId,
+        finish: (log) => {
+          clearTimeout(timeoutId);
+          this.logWaiters.delete(waiter);
+          resolve(log);
+        },
+      };
+
+      const timeoutId = setTimeout(() => {
+        waiter.finish(null);
+      }, input.timeoutMs ?? 30_000);
+
+      this.logWaiters.add(waiter);
+    });
+  }
+
+  async waitForState(input: { states: DeploymentState[]; timeoutMs?: number }) {
+    await this.initialized;
+
+    const deployment = this.mustReadDeployment();
+    if (input.states.includes(deployment.state)) {
+      return deployment;
+    }
+
+    return new Promise<DeploymentSummary>((resolve, reject) => {
+      const waiter: StateWaiter = {
+        states: input.states,
+        finish: (nextDeployment) => {
+          clearTimeout(timeoutId);
+          this.stateWaiters.delete(waiter);
+          if (!nextDeployment) {
+            reject(new Error(`Timed out waiting for deployment state: ${input.states.join(", ")}`));
+            return;
+          }
+          resolve(nextDeployment);
+        },
+      };
+
+      const timeoutId = setTimeout(() => {
+        waiter.finish(null);
+      }, input.timeoutMs ?? 30_000);
+
+      this.stateWaiters.add(waiter);
+    });
   }
 
   async alarm() {
     await this.initialized;
 
     const deployment = this.readDeployment();
-    if (!deployment) {
-      return;
-    }
-
-    if (deployment.state === "destroyed") {
+    if (!deployment || deployment.state === "destroyed") {
       return;
     }
 
     if (deployment.state === "starting") {
-      const bootStep = this.mustReadConfig().bootStep;
-
-      if (bootStep === 0) {
-        this.updateBootStep(1);
-        this.insertLog("info", "Booting runtime");
-        await this.scheduleAlarm(400);
-      } else if (bootStep === 1) {
-        this.updateBootStep(2);
-        this.insertLog("info", `Binding ingress host ${deployment.ingressHost}`);
-        await this.scheduleAlarm(400);
-      } else {
-        this.setState("running");
-        this.updateBootStep(0);
-        this.insertLog("info", "Deployment is now running");
-        await this.scheduleAlarm(2_000);
-      }
-    } else if (deployment.state === "running") {
-      this.insertLog("info", "Heartbeat OK");
+      this.setState("running");
+      this.insertLog("info", "Deployment is now running");
       await this.scheduleAlarm(2_000);
-    } else if (deployment.state === "stopping") {
-      this.setState("stopped");
-      this.insertLog("warn", "Deployment stopped");
-    } else {
       return;
     }
 
-    await this.publishSnapshotEvent();
-    await this.notifyProject();
-  }
+    if (deployment.state === "running") {
+      this.insertLog("info", "Heartbeat OK");
+      await this.scheduleAlarm(2_000);
+      return;
+    }
 
-  private readSnapshot(): DeploymentSnapshot {
-    return {
-      deployment: this.mustReadDeployment(),
-      logs: this.readLogs(),
-    };
+    if (deployment.state === "stopping") {
+      this.setState("stopped");
+      this.insertLog("warn", "Deployment stopped");
+    }
   }
 
   private mustReadDeployment(): DeploymentSummary {
@@ -398,7 +361,6 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
     const row = this.ctx.storage.sql
       .exec<{
         id: string;
-        project_id: string;
         name: string;
         state: DeploymentState;
         created_at: string;
@@ -407,7 +369,7 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
         ingress_host: string;
       }>(
         `
-          SELECT id, project_id, name, state, created_at, updated_at, destroyed_at, ingress_host
+          SELECT id, name, state, created_at, updated_at, destroyed_at, ingress_host
           FROM deployment
           LIMIT 1
         `,
@@ -420,41 +382,12 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
 
     return {
       id: row.id,
-      projectId: row.project_id,
       name: row.name,
       state: row.state,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       destroyedAt: row.destroyed_at,
       ingressHost: row.ingress_host,
-    };
-  }
-
-  private mustReadConfig() {
-    const row = this.ctx.storage.sql
-      .exec<{
-        project_id: string;
-        unique_ingress_host: string;
-        primary_ingress_host: string;
-        boot_step: number;
-      }>(
-        `
-          SELECT project_id, unique_ingress_host, primary_ingress_host, boot_step
-          FROM deployment
-          LIMIT 1
-        `,
-      )
-      .toArray()[0];
-
-    if (!row) {
-      throw new Error("Deployment not initialized");
-    }
-
-    return {
-      projectId: row.project_id,
-      uniqueIngressHost: row.unique_ingress_host,
-      primaryIngressHost: row.primary_ingress_host,
-      bootStep: row.boot_step,
     };
   }
 
@@ -484,6 +417,33 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
       }));
   }
 
+  private readLogsAfter(afterId: number, limit = 20): DeploymentLog[] {
+    return this.ctx.storage.sql
+      .exec<{
+        id: number;
+        created_at: string;
+        level: "info" | "warn" | "error";
+        message: string;
+      }>(
+        `
+          SELECT id, created_at, level, message
+          FROM deployment_logs
+          WHERE id > ?
+          ORDER BY id ASC
+          LIMIT ?
+        `,
+        afterId,
+        limit,
+      )
+      .toArray()
+      .map((row) => ({
+        id: row.id,
+        createdAt: row.created_at,
+        level: row.level,
+        message: row.message,
+      }));
+  }
+
   private insertLog(level: DeploymentLog["level"], message: string) {
     const createdAt = new Date().toISOString();
     this.ctx.storage.sql.exec(
@@ -496,7 +456,7 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
       message,
     );
 
-    const log = this.ctx.storage.sql
+    const row = this.ctx.storage.sql
       .exec<{
         id: number;
         created_at: string;
@@ -512,22 +472,22 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
       )
       .toArray()[0];
 
-    if (!log) {
+    if (!row) {
       throw new Error("Expected deployment log to exist after insert");
     }
 
-    // The root durable iterator stream carries a small event union. That keeps one durable
-    // iterator connection useful for both TanStack streamed queries and direct websocket
-    // consumers: snapshots replace route state, while logs append to the terminal view.
-    this.publishEvent({
-      type: "log",
-      log: {
-        id: log.id,
-        createdAt: log.created_at,
-        level: log.level,
-        message: log.message,
-      },
-    });
+    const log = {
+      id: row.id,
+      createdAt: row.created_at,
+      level: row.level,
+      message: row.message,
+    };
+
+    for (const waiter of [...this.logWaiters]) {
+      if (log.id > waiter.afterId) {
+        waiter.finish(log);
+      }
+    }
   }
 
   private setState(state: DeploymentState) {
@@ -539,46 +499,19 @@ export class DeploymentDurableObject extends DurableIteratorObject<DeploymentEve
       state,
       new Date().toISOString(),
     );
-  }
-
-  private updateBootStep(step: number) {
-    this.ctx.storage.sql.exec(
-      `
-        UPDATE deployment
-        SET boot_step = ?, updated_at = ?
-      `,
-      step,
-      new Date().toISOString(),
-    );
+    this.resolveStateWaiters();
   }
 
   private async scheduleAlarm(delayMs: number) {
     await this.ctx.storage.setAlarm(Date.now() + delayMs);
   }
 
-  private async notifyProject() {
-    const { projectId } = this.mustReadConfig();
-    await this.env.PROJECT_DURABLE_OBJECT.getByName(
-      `project:${projectId}`,
-    ).deploymentStateChanged();
-  }
-
-  private async publishSnapshotEvent(options?: { targets?: DurableIteratorWebsocket[] }) {
+  private resolveStateWaiters() {
     const deployment = this.mustReadDeployment();
-    const isPrimary =
-      (await this.env.PROJECT_DURABLE_OBJECT.getByName(
-        `project:${deployment.projectId}`,
-      ).getPrimaryDeploymentId()) === deployment.id;
-
-    this.publishEvent(
-      {
-        type: "snapshot",
-        snapshot: {
-          deployment,
-          isPrimary,
-        },
-      },
-      options,
-    );
+    for (const waiter of [...this.stateWaiters]) {
+      if (waiter.states.includes(deployment.state)) {
+        waiter.finish(deployment);
+      }
+    }
   }
 }

@@ -1,9 +1,4 @@
-import { os } from "@orpc/server";
-import { z } from "zod/v4";
-import {
-  DurableIteratorObject,
-  type DurableIteratorWebsocket,
-} from "@orpc/experimental-durable-iterator/durable-object";
+import { DurableObject } from "cloudflare:workers";
 import type { DeploymentDurableObject, DeploymentSummary } from "./deployment.ts";
 
 export type ProjectDeploymentSummary = DeploymentSummary & {
@@ -11,41 +6,26 @@ export type ProjectDeploymentSummary = DeploymentSummary & {
 };
 
 type Env = {
-  ENCRYPTION_SECRET: string;
   DEPLOYMENT_DURABLE_OBJECT: DurableObjectNamespace<DeploymentDurableObject>;
 };
 
-const rpc = os.$context<Record<string, never>>();
-
-export class ProjectDurableObject extends DurableIteratorObject<
-  { deployments: ProjectDeploymentSummary[]; primaryDeploymentId: string | null },
-  Env,
-  unknown
-> {
+export class ProjectDurableObject extends DurableObject<Env> {
   private initialized: Promise<void>;
 
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env, {
-      signingKey: env.ENCRYPTION_SECRET,
-      resumeRetentionSeconds: 60,
-      onSubscribed: (websocket) => {
-        void this.publishSnapshot({ targets: [websocket] });
-      },
-    });
+    super(ctx, env);
 
     this.initialized = this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(`
-        CREATE TABLE IF NOT EXISTS project_meta (
-          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-          project_id TEXT NOT NULL,
-          primary_ingress_host TEXT NOT NULL,
-          primary_deployment_id TEXT
-        )
-      `);
-      this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS deployments (
           id TEXT PRIMARY KEY,
-          created_at TEXT NOT NULL
+          name TEXT NOT NULL,
+          state TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          destroyed_at TEXT,
+          ingress_host TEXT NOT NULL,
+          is_primary INTEGER NOT NULL DEFAULT 0
         )
       `);
       this.ctx.storage.sql.exec(`
@@ -55,127 +35,112 @@ export class ProjectDurableObject extends DurableIteratorObject<
     });
   }
 
-  async initialize(input: { projectId: string; primaryIngressHost: string }) {
-    await this.initialized;
-
-    const existing = this.readMeta();
-    if (existing) {
-      if (existing.projectId !== input.projectId) {
-        throw new Error("Project durable object already initialized with a different project");
-      }
-
-      this.ctx.storage.sql.exec(
-        `
-          UPDATE project_meta
-          SET primary_ingress_host = ?
-          WHERE singleton = 1
-        `,
-        input.primaryIngressHost,
-      );
-      return;
-    }
-
-    this.ctx.storage.sql.exec(
-      `
-        INSERT INTO project_meta (singleton, project_id, primary_ingress_host, primary_deployment_id)
-        VALUES (1, ?, ?, NULL)
-      `,
-      input.projectId,
-      input.primaryIngressHost,
-    );
-  }
-
   async listDeployments(): Promise<ProjectDeploymentSummary[]> {
     await this.initialized;
 
-    const meta = this.mustReadMeta();
-    const rows = this.ctx.storage.sql
-      .exec<{ id: string }>(
+    return this.ctx.storage.sql
+      .exec<{
+        id: string;
+        name: string;
+        state: DeploymentSummary["state"];
+        created_at: string;
+        updated_at: string;
+        destroyed_at: string | null;
+        ingress_host: string;
+        is_primary: number;
+      }>(
         `
-          SELECT id
+          SELECT id, name, state, created_at, updated_at, destroyed_at, ingress_host, is_primary
           FROM deployments
           ORDER BY created_at DESC
         `,
       )
-      .toArray();
-
-    const deployments = await Promise.all(
-      rows.map(async (row) => {
-        const summary = await this.getDeploymentStub(row.id).getSummary();
-        return {
-          ...summary,
-          isPrimary: summary.id === meta.primaryDeploymentId,
-        };
-      }),
-    );
-
-    return deployments;
+      .toArray()
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        state: row.state,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        destroyedAt: row.destroyed_at,
+        ingressHost: row.ingress_host,
+        isPrimary: row.is_primary === 1,
+      }));
   }
 
-  async createDeployment(input: { name: string }): Promise<ProjectDeploymentSummary[]> {
+  async createDeployment(input: {
+    name: string;
+    primaryIngressHost: string;
+  }): Promise<ProjectDeploymentSummary[]> {
     await this.initialized;
 
-    const meta = this.mustReadMeta();
     const createdAt = new Date().toISOString();
     const deploymentId = `dep_${crypto.randomUUID().replaceAll("-", "")}`;
 
-    await this.getDeploymentStub(deploymentId).initialize({
+    const deployment = await this.deploymentDo(deploymentId).initialize({
       deploymentId,
-      projectId: meta.projectId,
       name: input.name,
       createdAt,
-      uniqueIngressHost: `${deploymentId}.jonasland.local`,
-      primaryIngressHost: meta.primaryIngressHost,
-      isPrimary: false,
+      ingressHost: `${deploymentId}.jonasland.local`,
     });
+    this.syncDeploymentSummary({ ...deployment, isPrimary: false });
 
-    this.ctx.storage.sql.exec(
-      `
-        INSERT INTO deployments (id, created_at)
-        VALUES (?, ?)
-      `,
+    await this.setPrimaryDeployment({
       deploymentId,
-      createdAt,
-    );
-
-    await this.setPrimaryDeployment({ deploymentId });
-    await this.getDeploymentStub(deploymentId).start();
+      primaryIngressHost: input.primaryIngressHost,
+    });
+    this.syncDeploymentSummary({
+      ...(await this.deploymentDo(deploymentId).start()),
+      isPrimary: true,
+    });
 
     return this.listDeployments();
   }
 
-  async setPrimaryDeployment(input: { deploymentId: string }): Promise<ProjectDeploymentSummary[]> {
+  async setPrimaryDeployment(input: {
+    deploymentId: string;
+    primaryIngressHost: string;
+  }): Promise<ProjectDeploymentSummary[]> {
     await this.initialized;
 
-    const meta = this.mustReadMeta();
     this.assertDeploymentExists(input.deploymentId);
 
-    if (meta.primaryDeploymentId === input.deploymentId) {
+    const primaryDeploymentId = this.readPrimaryDeploymentId();
+    if (primaryDeploymentId === input.deploymentId) {
       return this.listDeployments();
     }
 
-    if (meta.primaryDeploymentId) {
-      this.assertDeploymentExists(meta.primaryDeploymentId);
-      await this.getDeploymentStub(meta.primaryDeploymentId).detachPrimary();
+    if (primaryDeploymentId) {
+      this.assertDeploymentExists(primaryDeploymentId);
+      this.syncDeploymentSummary({
+        ...(await this.deploymentDo(primaryDeploymentId).detachPrimary()),
+        isPrimary: false,
+      });
     }
 
-    await this.getDeploymentStub(input.deploymentId).attachPrimary();
-    this.ctx.storage.sql.exec(
-      `
-        UPDATE project_meta
-        SET primary_deployment_id = ?
-        WHERE singleton = 1
-      `,
-      input.deploymentId,
-    );
+    this.ctx.storage.sql.exec(`UPDATE deployments SET is_primary = 0`);
+    this.syncDeploymentSummary({
+      ...(await this.deploymentDo(input.deploymentId).attachPrimary({
+        primaryIngressHost: input.primaryIngressHost,
+      })),
+      isPrimary: true,
+    });
 
-    await this.publishSnapshot();
     return this.listDeployments();
+  }
+
+  async syncDeployment(input: DeploymentSummary): Promise<void> {
+    await this.initialized;
+
+    this.syncDeploymentSummary({
+      ...input,
+      isPrimary: this.readPrimaryDeploymentId() === input.id,
+    });
   }
 
   async getPrimaryDeploymentId(): Promise<string | null> {
     await this.initialized;
-    return this.mustReadMeta().primaryDeploymentId;
+    return this.readPrimaryDeploymentId();
   }
 
   async hasDeployment(input: { deploymentId: string }): Promise<boolean> {
@@ -183,82 +148,8 @@ export class ProjectDurableObject extends DurableIteratorObject<
     return this.readDeploymentIndex(input.deploymentId) !== null;
   }
 
-  async deploymentStateChanged() {
-    await this.initialized;
-    await this.publishSnapshot();
-  }
-
-  api(_ws: DurableIteratorWebsocket) {
-    // Like the deployment DO, keep the project coordinator's imperative surface as oRPC
-    // methods inside the iterator websocket. The outer app router can expose thinner
-    // top-level procedures for TanStack Query without duplicating business rules here.
-    return {
-      create: rpc
-        .input(
-          z.object({
-            name: z.string().min(1).max(100),
-          }),
-        )
-        .handler(({ input }) => this.createDeployment(input))
-        .callable(),
-
-      makePrimary: rpc
-        .input(
-          z.object({
-            deploymentId: z.string(),
-          }),
-        )
-        .handler(({ input }) => this.setPrimaryDeployment(input))
-        .callable(),
-    };
-  }
-
-  private async publishSnapshot(options?: { targets?: DurableIteratorWebsocket[] }) {
-    this.publishEvent(
-      {
-        deployments: await this.listDeployments(),
-        primaryDeploymentId: this.mustReadMeta().primaryDeploymentId,
-      },
-      options,
-    );
-  }
-
-  private getDeploymentStub(deploymentId: string) {
+  private deploymentDo(deploymentId: string) {
     return this.env.DEPLOYMENT_DURABLE_OBJECT.getByName(`deployment:${deploymentId}`);
-  }
-
-  private mustReadMeta() {
-    const meta = this.readMeta();
-    if (!meta) {
-      throw new Error("Project durable object not initialized");
-    }
-    return meta;
-  }
-
-  private readMeta() {
-    const row = this.ctx.storage.sql
-      .exec<{
-        project_id: string;
-        primary_ingress_host: string;
-        primary_deployment_id: string | null;
-      }>(
-        `
-          SELECT project_id, primary_ingress_host, primary_deployment_id
-          FROM project_meta
-          WHERE singleton = 1
-        `,
-      )
-      .toArray()[0];
-
-    if (!row) {
-      return null;
-    }
-
-    return {
-      projectId: row.project_id,
-      primaryIngressHost: row.primary_ingress_host,
-      primaryDeploymentId: row.primary_deployment_id,
-    };
   }
 
   private readDeploymentIndex(deploymentId: string) {
@@ -273,6 +164,55 @@ export class ProjectDurableObject extends DurableIteratorObject<
           deploymentId,
         )
         .toArray()[0] ?? null
+    );
+  }
+
+  private readPrimaryDeploymentId() {
+    return (
+      this.ctx.storage.sql
+        .exec<{ id: string }>(
+          `
+            SELECT id
+            FROM deployments
+            WHERE is_primary = 1
+            LIMIT 1
+          `,
+        )
+        .toArray()[0]?.id ?? null
+    );
+  }
+
+  private syncDeploymentSummary(input: ProjectDeploymentSummary) {
+    this.ctx.storage.sql.exec(
+      `
+        INSERT INTO deployments (
+          id,
+          name,
+          state,
+          created_at,
+          updated_at,
+          destroyed_at,
+          ingress_host,
+          is_primary
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          state = excluded.state,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at,
+          destroyed_at = excluded.destroyed_at,
+          ingress_host = excluded.ingress_host,
+          is_primary = excluded.is_primary
+      `,
+      input.id,
+      input.name,
+      input.state,
+      input.createdAt,
+      input.updatedAt,
+      input.destroyedAt,
+      input.ingressHost,
+      input.isPrimary ? 1 : 0,
     );
   }
 

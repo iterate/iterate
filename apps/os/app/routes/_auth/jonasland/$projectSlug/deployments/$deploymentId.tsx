@@ -5,7 +5,7 @@ import { Globe, Logs, Star } from "lucide-react";
 import { toast } from "sonner";
 import { HeaderActions } from "@/components/header-actions.tsx";
 import { Button } from "@/components/ui/button.tsx";
-import { orpc, orpcClient } from "@/lib/orpc.tsx";
+import { orpc } from "@/lib/orpc.tsx";
 
 export const Route = createFileRoute("/_auth/jonasland/$projectSlug/deployments/$deploymentId")({
   loader: async ({ context, params }) => {
@@ -30,113 +30,81 @@ function JonasLandDeploymentDetailPage() {
       deploymentId: params.deploymentId,
     },
   });
-  const { data: snapshot } = useSuspenseQuery(detailQueryOptions);
-  const liveEventsQuery = useQuery(
-    orpc.deployment.connect.experimental_streamedOptions({
+  const listQueryKey = orpc.deployment.list.key({
+    input: { projectSlug: params.projectSlug },
+  });
+  const detailQueryKey = orpc.deployment.get.key({
+    input: {
+      projectSlug: params.projectSlug,
+      deploymentId: params.deploymentId,
+    },
+  });
+  const { data: detail } = useSuspenseQuery(detailQueryOptions);
+  const logsQuery = useQuery(
+    orpc.deployment.logs.experimental_streamedOptions({
       input: {
         projectSlug: params.projectSlug,
         deploymentId: params.deploymentId,
       },
       enabled: typeof window !== "undefined",
-      retry: 1,
-      initialData: [],
+      retry: true,
       queryFnOptions: {
         refetchMode: "reset",
         maxChunks: 200,
       },
     }),
   );
-  const transport = liveEventsQuery.isError ? "http" : "durable-iterator";
-  // Snapshot data and log data have different shapes, so they should not share one cache.
-  // The route query is durable/canonical state for TanStack Start, while the DO event stream
-  // carries transient updates. TanStack Query owns both caches, and the component derives the
-  // current view from those caches instead of copying either into local state.
-  const liveSnapshot =
-    liveEventsQuery.data?.findLast((event) => event.type === "snapshot")?.snapshot ?? null;
-  const deployment = liveSnapshot?.deployment ?? snapshot.deployment;
-  const isPrimary = liveSnapshot?.isPrimary ?? snapshot.isPrimary;
-  const logs = [
-    ...snapshot.logs,
-    ...(liveEventsQuery.data?.flatMap((event) => (event.type === "log" ? [event.log] : [])) ?? []),
-  ];
+  const deployment = detail.deployment;
+  const isPrimary = detail.isPrimary;
+  const logs = logsQuery.data ?? [];
 
-  const startDeployment = useMutation({
-    mutationFn: async () =>
-      orpcClient.deployment.start({
-        projectSlug: params.projectSlug,
-        deploymentId: params.deploymentId,
-      }),
-    onSuccess: (deployment) => {
-      queryClient.setQueryData(
-        detailQueryOptions.queryKey,
-        (current: typeof snapshot | undefined) =>
-          current
-            ? {
-                ...current,
-                deployment,
-              }
-            : current,
-      );
-      toast.success("Deployment started");
-    },
-    onError: (error) => {
-      toast.error("Failed to start deployment: " + error.message);
-    },
-  });
+  const refreshDeploymentQueries = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: detailQueryKey }),
+      queryClient.invalidateQueries({ queryKey: listQueryKey }),
+    ]);
+  };
 
-  const stopDeployment = useMutation({
-    mutationFn: async () =>
-      orpcClient.deployment.stop({
-        projectSlug: params.projectSlug,
-        deploymentId: params.deploymentId,
-      }),
-    onSuccess: (deployment) => {
-      queryClient.setQueryData(
-        detailQueryOptions.queryKey,
-        (current: typeof snapshot | undefined) =>
-          current
-            ? {
-                ...current,
-                deployment,
-              }
-            : current,
-      );
-      toast.success("Deployment stopped");
-    },
-    onError: (error) => {
-      toast.error("Failed to stop deployment: " + error.message);
-    },
-  });
+  const startDeployment = useMutation(
+    orpc.deployment.start.mutationOptions({
+      onSuccess: async () => {
+        await refreshDeploymentQueries();
+        toast.success("Deployment started");
+      },
+      onError: (error) => {
+        toast.error("Failed to start deployment: " + error.message);
+      },
+    }),
+  );
 
-  const destroyDeployment = useMutation({
-    mutationFn: async () =>
-      orpcClient.deployment.destroy({
-        projectSlug: params.projectSlug,
-        deploymentId: params.deploymentId,
-      }),
-    onSuccess: (deployment) => {
-      queryClient.setQueryData(
-        detailQueryOptions.queryKey,
-        (current: typeof snapshot | undefined) =>
-          current
-            ? {
-                ...current,
-                deployment,
-              }
-            : current,
-      );
-      toast.success("Deployment destroyed");
-    },
-    onError: (error) => {
-      toast.error("Failed to destroy deployment: " + error.message);
-    },
-  });
+  const stopDeployment = useMutation(
+    orpc.deployment.stop.mutationOptions({
+      onSuccess: async () => {
+        await refreshDeploymentQueries();
+        toast.success("Deployment stopped");
+      },
+      onError: (error) => {
+        toast.error("Failed to stop deployment: " + error.message);
+      },
+    }),
+  );
+
+  const destroyDeployment = useMutation(
+    orpc.deployment.destroy.mutationOptions({
+      onSuccess: async () => {
+        await refreshDeploymentQueries();
+        toast.success("Deployment destroyed");
+      },
+      onError: (error) => {
+        toast.error("Failed to destroy deployment: " + error.message);
+      },
+    }),
+  );
 
   return (
     <div
       className="space-y-6 p-4"
       data-component="JonasLandDeploymentDetailPage"
-      data-transport={transport}
       data-deployment-id={deployment.id}
       data-deployment-state={deployment.state}
     >
@@ -150,7 +118,12 @@ function JonasLandDeploymentDetailPage() {
               deployment.state === "running" ||
               deployment.state === "destroyed"
             }
-            onClick={() => startDeployment.mutate()}
+            onClick={() =>
+              startDeployment.mutate({
+                projectSlug: params.projectSlug,
+                deploymentId: params.deploymentId,
+              })
+            }
           >
             Start
           </Button>
@@ -162,7 +135,12 @@ function JonasLandDeploymentDetailPage() {
               deployment.state === "stopped" ||
               deployment.state === "destroyed"
             }
-            onClick={() => stopDeployment.mutate()}
+            onClick={() =>
+              stopDeployment.mutate({
+                projectSlug: params.projectSlug,
+                deploymentId: params.deploymentId,
+              })
+            }
           >
             Stop
           </Button>
@@ -170,7 +148,12 @@ function JonasLandDeploymentDetailPage() {
             size="sm"
             variant="destructive"
             disabled={deployment.state === "destroyed"}
-            onClick={() => destroyDeployment.mutate()}
+            onClick={() =>
+              destroyDeployment.mutate({
+                projectSlug: params.projectSlug,
+                deploymentId: params.deploymentId,
+              })
+            }
           >
             Destroy
           </Button>
@@ -209,7 +192,7 @@ function JonasLandDeploymentDetailPage() {
           </div>
           <div className="overflow-hidden rounded-lg border bg-black text-zinc-100">
             <div className="max-h-[420px] overflow-y-auto p-3 font-mono text-xs leading-5">
-              {logs.map((log) => (
+              {logs.map((log: (typeof logs)[number]) => (
                 <div key={log.id} data-log-line={log.id}>
                   <span className="text-zinc-500">
                     {new Date(log.createdAt).toLocaleTimeString("en-GB", {

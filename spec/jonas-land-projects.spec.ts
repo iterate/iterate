@@ -44,7 +44,6 @@ test.describe("jonasland projects", () => {
 
     await sidebarButton(page, "Deployments").click();
     await page.locator('[data-component="JonasLandDeploymentsPage"]').waitFor();
-    await page.locator('[data-transport="durable-iterator"]').waitFor();
 
     await page.getByRole("button", { name: "New deployment" }).click();
     await page.getByLabel("Deployment name").fill(firstDeploymentName);
@@ -83,7 +82,6 @@ test.describe("jonasland projects", () => {
 
     await firstDeployment.getByRole("link", { name: "Details" }).click();
     await page.locator('[data-component="JonasLandDeploymentDetailPage"]').waitFor();
-    await page.locator('[data-transport="durable-iterator"]').waitFor();
     await page.locator("[data-log-line]").first().waitFor();
 
     await page.getByRole("button", { name: "Stop" }).click();
@@ -101,20 +99,14 @@ test.describe("jonasland projects", () => {
       .waitFor();
   });
 
-  test("jonasland deployments can still be created when the project iterator socket dies", async ({
-    page,
-  }) => {
+  test("jonasland can create a second deployment without hanging the UI", async ({ page }) => {
     const uniqueId = Date.now();
-    const orgName = `jonasland iterator org ${uniqueId}`;
-    const projectName = `jonasland iterator project ${uniqueId}`;
+    const orgName = `jonasland second deploy org ${uniqueId}`;
+    const projectName = `jonasland second deploy project ${uniqueId}`;
     const firstDeploymentName = `deployment ${uniqueId} one`;
     const secondDeploymentName = `deployment ${uniqueId} two`;
 
-    await page.routeWebSocket("**/api/orpc-iterator/project-deployments", (ws) =>
-      ws.close({ code: 1011, reason: "test disconnect" }),
-    );
-
-    await login(page, `jonas-land-iterator-${uniqueId}+test@nustom.com`);
+    await login(page, `jonas-land-second-deploy-${uniqueId}+test@nustom.com`);
     await createOrganization(page, orgName);
 
     await sidebarButton(page, /^(Create|New) project$/).click();
@@ -136,5 +128,8 @@ test.describe("jonasland projects", () => {
     await page.getByLabel("Deployment name").fill(secondDeploymentName);
     await page.getByRole("button", { name: "Create deployment" }).click();
     await page.locator(`[data-deployment-name="${secondDeploymentName}"]`).waitFor();
+    await page
+      .locator(`[data-deployment-name="${secondDeploymentName}"][data-primary="true"]`)
+      .waitFor();
   });
 });
