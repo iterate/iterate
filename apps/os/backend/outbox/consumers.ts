@@ -166,16 +166,16 @@ export const registerConsumers = () => {
 
       logger.set({
         emailRouting: {
-          project: routing.project?.slug,
-          projectId: routing.project?.id,
-          machine: routing.machine?.state,
-          machineId: routing.machine?.id,
-          machineExternalId: routing.machine?.externalId,
-          userId: routing.user?.id,
+          project: routing?.project?.slug,
+          projectId: routing?.project?.id,
+          machine: routing?.machine?.state,
+          machineId: routing?.machine?.id,
+          machineExternalId: routing?.machine?.externalId,
+          userId: routing?.user?.id,
         },
       });
 
-      if (routing.machine?.state === "active") {
+      if (routing?.machine?.state === "active") {
         // happy path: machine is already active
         const { createResendClient, fetchEmailContent, forwardEmailWebhookToMachine } =
           await import("../integrations/resend/resend.ts");
