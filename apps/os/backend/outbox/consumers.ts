@@ -21,11 +21,7 @@ import { createUserFromVerifiedEmail } from "../auth/auth.ts";
 import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
 import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
 import { isSignupAllowed } from "../email/signup-allowlist.ts";
-import {
-  getDefaultOrganizationNameFromEmail,
-  parseRecipientLocal,
-  parseSender,
-} from "../email/email-routing.ts";
+import { getDefaultOrganizationNameFromEmail, parseSender } from "../email/email-routing.ts";
 import { parseSpecMachineEmail } from "../email/spec-machine.ts";
 import { slugifyWithSuffix } from "../utils/slug.ts";
 import { getDefaultProjectSandboxProvider } from "../utils/sandbox-providers.ts";
@@ -131,23 +127,116 @@ export const registerConsumers = () => {
       const resendEmailId = payload.data.email_id;
       const db = await getDb();
       const senderEmail = parseSender(payload.data.from).email;
-      const user = await db.query.user.findFirst({
-        where: eq(schema.user.email, senderEmail),
+      const [routing] = await db
+        .select({
+          user: schema.user,
+          project: schema.project,
+          machine: schema.machine,
+        })
+        .from(schema.user)
+        .leftJoin(
+          schema.organizationUserMembership,
+          eq(schema.organizationUserMembership.userId, schema.user.id),
+        )
+        .leftJoin(
+          schema.organization,
+          eq(schema.organization.id, schema.organizationUserMembership.organizationId),
+        )
+        .leftJoin(schema.project, eq(schema.project.organizationId, schema.organization.id))
+        .leftJoin(
+          schema.machine,
+          and(
+            eq(schema.machine.projectId, schema.project.id),
+            inArray(schema.machine.state, ["active", "starting"]),
+          ),
+        )
+        .where(eq(schema.user.email, senderEmail))
+        .orderBy(
+          sql`
+            case
+              when ${schema.machine.state} = 'active' then 0
+              when ${schema.machine.state} = 'starting' then 1
+              when ${schema.project.id} is not null then 2
+              else 3
+            end
+          `,
+          schema.project.createdAt,
+        )
+        .limit(1);
+
+      logger.set({
+        emailRouting: {
+          project: routing.project?.slug,
+          projectId: routing.project?.id,
+          machine: routing.machine?.state,
+          machineId: routing.machine?.id,
+          machineExternalId: routing.machine?.externalId,
+          userId: routing.user?.id,
+        },
       });
 
-      if (!user) {
-        if (!isSignupAllowed(senderEmail, env.SIGNUP_ALLOWLIST)) {
-          logger.warn(`sender ${senderEmail} is not allowlisted for email onboarding`);
-          return `skipped: sender ${senderEmail} is not allowlisted`;
+      if (routing.machine?.state === "active") {
+        // happy path: machine is already active
+        const { createResendClient, fetchEmailContent, forwardEmailWebhookToMachine } =
+          await import("../integrations/resend/resend.ts");
+        const resendClient = createResendClient(env.RESEND_BOT_API_KEY);
+        const emailContent =
+          payload._iterate_email_content || (await fetchEmailContent(resendClient, resendEmailId));
+
+        const forwardResult = await forwardEmailWebhookToMachine(
+          routing.machine,
+          {
+            ...payload,
+            _iterate: {
+              userId: routing.user.id,
+              projectId: routing.machine.projectId,
+              emailBody: emailContent
+                ? {
+                    text: emailContent.text,
+                    html: emailContent.html,
+                  }
+                : null,
+            },
+          },
+          env,
+        );
+        if (!forwardResult.success) {
+          throw new Error(`Resend forward failed: ${forwardResult.error}`);
         }
 
-        await db.insert(schema.emailInboundDelivery).values({
+        await db
+          .update(schema.emailInboundDelivery)
+          .set({ status: "forwarded" })
+          .where(eq(schema.emailInboundDelivery.externalId, resendEmailId));
+
+        return `forwarded to ${routing.machine.id}`;
+      }
+
+      if (!routing?.user && !isSignupAllowed(senderEmail, env.SIGNUP_ALLOWLIST)) {
+        logger.warn(`sender ${senderEmail} is not allowlisted for email onboarding`);
+        return `skipped: sender ${senderEmail} is not allowlisted`;
+      }
+
+      await db
+        .insert(schema.emailInboundDelivery)
+        .values({
           provider: "resend",
           externalId: resendEmailId,
           outboxEventId: params.eventId,
+          projectId: routing?.project?.id ?? null,
           status: "pending",
+        })
+        .onConflictDoUpdate({
+          target: [schema.emailInboundDelivery.provider, schema.emailInboundDelivery.externalId],
+          set: {
+            outboxEventId: params.eventId,
+            projectId: routing?.project?.id ?? sql`${schema.emailInboundDelivery.projectId}`,
+            status: "pending",
+            updatedAt: new Date(),
+          },
         });
 
+      if (!routing?.user) {
         await cc.send(db, {
           name: "email:onboarding-requested",
           payload: {
@@ -160,107 +249,7 @@ export const registerConsumers = () => {
         return `enqueued onboarding for ${senderEmail}`;
       }
 
-      const memberships = await db.query.organizationUserMembership.findMany({
-        where: (m, { eq: whereEq }) => whereEq(m.userId, user.id),
-        with: {
-          organization: {
-            with: {
-              projects: {
-                with: {
-                  machines: {
-                    where: (m, { inArray: whereInArray }) =>
-                      whereInArray(m.state, ["active", "starting"]),
-                    limit: 1,
-                  },
-                },
-              },
-            },
-          },
-        },
-      });
-      if (memberships.length === 0) {
-        logger.set({ user: { id: user.id } });
-        logger.warn("No org memberships for user");
-        return `skipped: user ${user.id} has no org memberships`;
-      }
-
-      const recipientLocal = payload.data.to[0] ? parseRecipientLocal(payload.data.to[0]) : "";
-      const projectSlugMatch = recipientLocal.match(/\+([^@]+)$/);
-      const targetProjectSlug = projectSlugMatch ? projectSlugMatch[1] : null;
-
-      let targetProject:
-        | (typeof schema.project.$inferSelect & {
-            machines: (typeof schema.machine.$inferSelect)[];
-          })
-        | null = null;
-
-      for (const membership of memberships) {
-        const org = membership.organization;
-        for (const project of org.projects) {
-          if (targetProjectSlug && project.slug === targetProjectSlug) {
-            targetProject = project;
-            break;
-          }
-          if (!targetProjectSlug && project.machines.length > 0 && !targetProject) {
-            targetProject = project;
-          }
-        }
-        if (targetProject) break;
-      }
-
-      if (!targetProject) {
-        logger.set({ user: { id: user.id } });
-        logger.warn(`No project found for email targetProjectSlug=${targetProjectSlug ?? "none"}`);
-        return `skipped: no project found for ${targetProjectSlug ?? "default route"}`;
-      }
-
-      const targetMachine = targetProject.machines[0];
-      if (!targetMachine) {
-        logger.set({ project: { id: targetProject.id }, user: { id: user.id } });
-        return `skipped: project ${targetProject.id} has no active machine`;
-      }
-
-      if (targetMachine.state === "starting") {
-        await db.insert(schema.emailInboundDelivery).values({
-          provider: "resend",
-          externalId: resendEmailId,
-          outboxEventId: params.eventId,
-          projectId: targetProject.id,
-          status: "pending",
-        });
-        logger.set({ machine: { id: targetMachine.id }, user: { id: user.id } });
-        return `waiting for machine ${targetMachine.id} to activate`;
-      }
-
-      const { createResendClient, fetchEmailContent, forwardEmailWebhookToMachine } =
-        await import("../integrations/resend/resend.ts");
-      const resendClient = createResendClient(env.RESEND_BOT_API_KEY);
-      const emailContent =
-        payload._iterate_email_content || (await fetchEmailContent(resendClient, resendEmailId));
-
-      const forwardResult = await forwardEmailWebhookToMachine(
-        targetMachine,
-        {
-          ...payload,
-          _iterate: {
-            userId: user.id,
-            projectId: targetProject.id,
-            emailBody: emailContent
-              ? {
-                  text: emailContent.text,
-                  html: emailContent.html,
-                }
-              : null,
-          },
-        },
-        env,
-      );
-      if (!forwardResult.success) {
-        throw new Error(`Resend forward failed: ${forwardResult.error}`);
-      }
-
-      logger.set({ machine: { id: targetMachine.id }, user: { id: user.id } });
-      return `forwarded to ${targetMachine.id}`;
+      return `waiting for active machine`;
     },
   });
 
