@@ -13,6 +13,10 @@ type RequestRecord = {
   json?: unknown;
 };
 
+export type SpecMachineRequestHandler = (
+  request: Request,
+) => Response | undefined | Promise<Response | undefined>;
+
 type ThreadMessage = {
   role: string;
   text: string;
@@ -24,8 +28,12 @@ function json(response: ServerResponse, statusCode: number, body: unknown) {
   response.end(JSON.stringify(body));
 }
 
-function orpcJson(response: ServerResponse, body: unknown) {
-  return json(response, 200, { json: body });
+async function sendFetchResponse(response: ServerResponse, fetchResponse: Response) {
+  response.statusCode = fetchResponse.status;
+  fetchResponse.headers.forEach((value, key) => {
+    response.setHeader(key, value);
+  });
+  response.end(await fetchResponse.text());
 }
 
 async function readRequestBody(request: IncomingMessage) {
@@ -102,127 +110,195 @@ export type SpecMachine = {
   baseUrl: string;
   senderEmail: string;
   requests: RequestRecord[];
+  requestHandlers: SpecMachineRequestHandler[];
   sendFakeResendWebhook(params: { subject: string; text: string }): Promise<unknown>;
   [Symbol.asyncDispose](): Promise<void>;
 };
 
 export async function createSpecMachine(): Promise<SpecMachine> {
   const requests: RequestRecord[] = [];
+  const requestHandlers: SpecMachineRequestHandler[] = [];
   const threads = new Map<string, ThreadMessage[]>();
   const files = new Map<string, string>();
   const directories = new Set<string>();
 
-  const server = createServer(async (request, response) => {
-    const method = request.method ?? "GET";
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const text = await readRequestBody(request);
-    const contentType = request.headers["content-type"] ?? "";
-    let parsedJson: unknown;
-    if (typeof contentType === "string" && contentType.includes("application/json") && text) {
-      try {
-        parsedJson = JSON.parse(text);
-      } catch {
-        parsedJson = undefined;
-      }
+  requestHandlers.push(async function handleBootstrap(request) {
+    if (request.method !== "POST" || new URL(request.url).pathname !== "/bootstrap") {
+      return;
     }
 
-    requests.push({
-      method,
-      path: url.pathname,
-      headers: Object.fromEntries(
-        Object.entries(request.headers).flatMap(([key, value]) =>
-          typeof value === "string" ? [[key, value]] : value ? [[key, value.join(",")]] : [],
-        ),
-      ),
-      text,
-      json: parsedJson,
-    });
+    const body = (await request.json()) as { envVars: Record<string, string> };
+    const previousBaseUrl = process.env.ITERATE_OS_BASE_URL;
+    const previousApiKey = process.env.ITERATE_OS_API_KEY;
+    const previousMachineId = process.env.ITERATE_MACHINE_ID;
 
-    if (method === "POST" && url.pathname === "/bootstrap") {
-      const body = parsedJson as { envVars: Record<string, string> };
-      const previousBaseUrl = process.env.ITERATE_OS_BASE_URL;
-      const previousApiKey = process.env.ITERATE_OS_API_KEY;
-      const previousMachineId = process.env.ITERATE_MACHINE_ID;
+    process.env.ITERATE_OS_BASE_URL = body.envVars.ITERATE_OS_BASE_URL;
+    process.env.ITERATE_OS_API_KEY = body.envVars.ITERATE_OS_API_KEY;
+    process.env.ITERATE_MACHINE_ID = body.envVars.ITERATE_MACHINE_ID;
 
-      process.env.ITERATE_OS_BASE_URL = body.envVars.ITERATE_OS_BASE_URL;
-      process.env.ITERATE_OS_API_KEY = body.envVars.ITERATE_OS_API_KEY;
-      process.env.ITERATE_MACHINE_ID = body.envVars.ITERATE_MACHINE_ID;
-
-      try {
-        const client = createWorkerClient();
-        await client.machines.reportStatus({
-          machineId: body.envVars.ITERATE_MACHINE_ID,
-          status: "ready",
-        });
-      } finally {
-        process.env.ITERATE_OS_BASE_URL = previousBaseUrl;
-        process.env.ITERATE_OS_API_KEY = previousApiKey;
-        process.env.ITERATE_MACHINE_ID = previousMachineId;
-      }
-
-      return json(response, 200, { ok: true });
+    try {
+      const client = createWorkerClient();
+      await client.machines.reportStatus({
+        machineId: body.envVars.ITERATE_MACHINE_ID,
+        status: "ready",
+      });
+    } finally {
+      process.env.ITERATE_OS_BASE_URL = previousBaseUrl;
+      process.env.ITERATE_OS_API_KEY = previousApiKey;
+      process.env.ITERATE_MACHINE_ID = previousMachineId;
     }
 
-    if (method === "POST" && url.pathname === "/api/orpc/tool/readFile") {
-      const body = parsedJson as { json: { path: string } };
-      const content = files.get(body.json.path);
-      return orpcJson(response, {
+    return Response.json({ ok: true });
+  });
+
+  requestHandlers.push(async function handleReadFile(request) {
+    if (request.method !== "POST" || new URL(request.url).pathname !== "/api/orpc/tool/readFile") {
+      return;
+    }
+
+    const body = (await request.json()) as { json: { path: string } };
+    const content = files.get(body.json.path);
+    return Response.json({
+      json: {
         path: body.json.path,
         content: content ?? null,
         exists: !!content,
-      });
+      },
+    });
+  });
+
+  requestHandlers.push(async function handleWriteFile(request) {
+    if (request.method !== "POST" || new URL(request.url).pathname !== "/api/orpc/tool/writeFile") {
+      return;
     }
 
-    if (method === "POST" && url.pathname === "/api/orpc/tool/writeFile") {
-      const body = parsedJson as { json: { path: string; content: string } };
-      files.set(body.json.path, body.json.content);
-      return orpcJson(response, {
+    const body = (await request.json()) as { json: { path: string; content: string } };
+    files.set(body.json.path, body.json.content);
+    return Response.json({
+      json: {
         path: body.json.path,
         bytesWritten: Buffer.byteLength(body.json.content),
-      });
+      },
+    });
+  });
+
+  requestHandlers.push(async function handleExecCommand(request) {
+    if (
+      request.method !== "POST" ||
+      new URL(request.url).pathname !== "/api/orpc/tool/execCommand"
+    ) {
+      return;
     }
 
-    if (method === "POST" && url.pathname === "/api/orpc/tool/execCommand") {
-      const body = parsedJson as { json: { command: string[] } };
-      const [command, ...args] = body.json.command;
+    const body = (await request.json()) as { json: { command: string[] } };
+    const [command, ...args] = body.json.command;
 
-      if (command === "test" && args[0] === "-d") {
-        return orpcJson(response, {
+    if (command === "test" && args[0] === "-d") {
+      return Response.json({
+        json: {
           exitCode: directories.has(args[1] ?? "") ? 0 : 1,
           stdout: "",
           stderr: "",
-        });
-      }
+        },
+      });
+    }
 
-      if (command === "git" && args[0] === "clone") {
-        const targetPath = args.at(-1);
-        if (targetPath) {
-          directories.add(`${targetPath}/.git`);
+    if (command === "git" && args[0] === "clone") {
+      const targetPath = args.at(-1);
+      if (targetPath) {
+        directories.add(`${targetPath}/.git`);
+      }
+    }
+
+    return Response.json({
+      json: { exitCode: 0, stdout: "", stderr: "" },
+    });
+  });
+
+  requestHandlers.push(async function handleWebchatWebhook(request) {
+    if (
+      request.method !== "POST" ||
+      new URL(request.url).pathname !== "/api/integrations/webchat/webhook"
+    ) {
+      return;
+    }
+
+    const body = (await request.json()) as { threadId: string; text: string };
+    const messages = threads.get(body.threadId) ?? [];
+    messages.push({ role: "user", text: body.text });
+    messages.push({ role: "assistant", text: "3" });
+    threads.set(body.threadId, messages);
+    return Response.json({ success: true, threadId: body.threadId });
+  });
+
+  requestHandlers.push(function handleWebchatThread(request) {
+    const pathname = new URL(request.url).pathname;
+    if (request.method !== "GET" || !pathname.startsWith("/api/integrations/webchat/threads/")) {
+      return;
+    }
+
+    const threadId = decodeURIComponent(pathname.split("/")[5] ?? "");
+    return Response.json({ threadId, messages: threads.get(threadId) ?? [] });
+  });
+
+  requestHandlers.push(function handleEmailWebhook(request) {
+    if (
+      request.method !== "POST" ||
+      new URL(request.url).pathname !== "/api/integrations/email/webhook"
+    ) {
+      return;
+    }
+
+    return Response.json({ success: true });
+  });
+
+  const server = createServer(async (request, response) => {
+    try {
+      const method = request.method ?? "GET";
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      const text = await readRequestBody(request);
+      const contentType = request.headers["content-type"] ?? "";
+      let parsedJson: unknown;
+      if (typeof contentType === "string" && contentType.includes("application/json") && text) {
+        try {
+          parsedJson = JSON.parse(text);
+        } catch {
+          parsedJson = undefined;
         }
       }
 
-      return orpcJson(response, { exitCode: 0, stdout: "", stderr: "" });
-    }
+      const requestRecord = {
+        method,
+        path: url.pathname,
+        headers: Object.fromEntries(
+          Object.entries(request.headers).flatMap(([key, value]) =>
+            typeof value === "string" ? [[key, value]] : value ? [[key, value.join(",")]] : [],
+          ),
+        ),
+        text,
+        json: parsedJson,
+      } satisfies RequestRecord;
 
-    if (method === "POST" && url.pathname === "/api/integrations/webchat/webhook") {
-      const body = parsedJson as { threadId: string; text: string };
-      const messages = threads.get(body.threadId) ?? [];
-      messages.push({ role: "user", text: body.text });
-      messages.push({ role: "assistant", text: "3" });
-      threads.set(body.threadId, messages);
-      return json(response, 200, { success: true, threadId: body.threadId });
-    }
+      requests.push(requestRecord);
 
-    if (method === "GET" && url.pathname.startsWith("/api/integrations/webchat/threads/")) {
-      const threadId = decodeURIComponent(url.pathname.split("/")[5] ?? "");
-      return json(response, 200, { threadId, messages: threads.get(threadId) ?? [] });
-    }
+      const handlerRequest = new Request(url, {
+        method,
+        headers: requestRecord.headers,
+        body: method === "GET" || method === "HEAD" ? undefined : text,
+      });
 
-    if (method === "POST" && url.pathname === "/api/integrations/email/webhook") {
-      return json(response, 200, { success: true });
-    }
+      for (const handler of requestHandlers) {
+        const handlerResult = await handler(handlerRequest.clone());
+        if (!handlerResult) continue;
 
-    json(response, 404, { error: "Not found" });
+        await sendFetchResponse(response, handlerResult);
+        return;
+      }
+
+      json(response, 404, { error: "Not found" });
+    } catch (error) {
+      json(response, 500, { error: String(error) });
+    }
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -242,6 +318,7 @@ export async function createSpecMachine(): Promise<SpecMachine> {
     baseUrl,
     senderEmail,
     requests,
+    requestHandlers,
     server,
     async sendFakeResendWebhook(params: { subject: string; text: string }) {
       const appUrl = playwrightConfig.use.baseURL;
