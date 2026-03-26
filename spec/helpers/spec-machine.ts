@@ -159,6 +159,7 @@ export type SpecMachine = {
   senderEmail: string;
   requests: RequestRecord[];
   requestHandlers: SpecMachineRequestHandler[];
+  reportReady(): Promise<void>;
   sendFakeResendWebhook(params: { subject: string; text: string; from?: string }): Promise<unknown>;
   [Symbol.asyncDispose](): Promise<void>;
 };
@@ -169,6 +170,13 @@ export async function createSpecMachine(): Promise<SpecMachine> {
   const threads = new Map<string, ThreadMessage[]>();
   const files = new Map<string, string>();
   const directories = new Set<string>();
+  let bootstrapEnvVars:
+    | {
+        ITERATE_OS_BASE_URL: string;
+        ITERATE_OS_API_KEY: string;
+        ITERATE_MACHINE_ID: string;
+      }
+    | undefined;
 
   requestHandlers.push(async function handleBootstrap(request) {
     if (request.method !== "POST" || new URL(request.url).pathname !== "/bootstrap") {
@@ -176,6 +184,11 @@ export async function createSpecMachine(): Promise<SpecMachine> {
     }
 
     const body = (await request.json()) as { envVars: Record<string, string> };
+    bootstrapEnvVars = {
+      ITERATE_OS_BASE_URL: body.envVars.ITERATE_OS_BASE_URL,
+      ITERATE_OS_API_KEY: body.envVars.ITERATE_OS_API_KEY,
+      ITERATE_MACHINE_ID: body.envVars.ITERATE_MACHINE_ID,
+    };
     const previousBaseUrl = process.env.ITERATE_OS_BASE_URL;
     const previousApiKey = process.env.ITERATE_OS_API_KEY;
     const previousMachineId = process.env.ITERATE_MACHINE_ID;
@@ -368,6 +381,31 @@ export async function createSpecMachine(): Promise<SpecMachine> {
     requests,
     requestHandlers,
     server,
+    async reportReady() {
+      if (!bootstrapEnvVars) {
+        throw new Error("Spec machine has not bootstrapped yet");
+      }
+
+      const previousBaseUrl = process.env.ITERATE_OS_BASE_URL;
+      const previousApiKey = process.env.ITERATE_OS_API_KEY;
+      const previousMachineId = process.env.ITERATE_MACHINE_ID;
+
+      process.env.ITERATE_OS_BASE_URL = bootstrapEnvVars.ITERATE_OS_BASE_URL;
+      process.env.ITERATE_OS_API_KEY = bootstrapEnvVars.ITERATE_OS_API_KEY;
+      process.env.ITERATE_MACHINE_ID = bootstrapEnvVars.ITERATE_MACHINE_ID;
+
+      try {
+        const client = createWorkerClient();
+        await client.machines.reportStatus({
+          machineId: bootstrapEnvVars.ITERATE_MACHINE_ID,
+          status: "ready",
+        });
+      } finally {
+        process.env.ITERATE_OS_BASE_URL = previousBaseUrl;
+        process.env.ITERATE_OS_API_KEY = previousApiKey;
+        process.env.ITERATE_MACHINE_ID = previousMachineId;
+      }
+    },
     async sendFakeResendWebhook(params: { subject: string; text: string; from?: string }) {
       const now = new Date().toISOString();
       return sendFakeResendWebhookPayload({

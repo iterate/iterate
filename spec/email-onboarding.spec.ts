@@ -1,10 +1,8 @@
 import { expect } from "@playwright/test";
 import { getDbWithEnv } from "../apps/os/backend/db/client.ts";
-import { outboxClient } from "../apps/os/backend/outbox/client.ts";
-import { queuer } from "../apps/os/backend/outbox/outbox-queuer.ts";
 import { resolveLocalDockerPostgresPort } from "../apps/os/scripts/local-docker-postgres-port.ts";
 import { test } from "./test-helpers.ts";
-import { createSpecMachine, sendFakeResendWebhookPayload } from "./helpers/spec-machine.ts";
+import { createSpecMachine } from "./helpers/spec-machine.ts";
 
 const localDatabaseUrl = `postgres://postgres:postgres@localhost:${resolveLocalDockerPostgresPort()}/os`;
 
@@ -251,32 +249,29 @@ test("active machine webhook failure remains recoverable", async () => {
 
 test("existing user with no active machine yet gets replayed after activation", async () => {
   await using specMachine = await createSpecMachine();
-  outboxClient.registerConsumer({
-    name: "testReplayPendingEmailDeliveries",
-    on: "machine:activated",
-    async handler(params) {
-      await withLocalDb(async (_db, pgClient) => {
-        const { rows } = await pgClient.query<{ payload: Record<string, unknown> }>(
-          `
-            select outbox_event.payload as payload
-            from email_inbound_delivery
-            join outbox_event
-              on outbox_event.id = email_inbound_delivery.outbox_event_id
-            where email_inbound_delivery.project_id = $1
-              and email_inbound_delivery.status = 'pending'
-            order by email_inbound_delivery.created_at desc
-            limit 1
-          `,
-          [params.payload.projectId],
-        );
+  let shouldHideSetupSentinel = false;
+  specMachine.requestHandlers.unshift(async function hideSetupSentinelOnce(request) {
+    if (
+      !shouldHideSetupSentinel ||
+      request.method !== "POST" ||
+      new URL(request.url).pathname !== "/api/orpc/tool/readFile"
+    ) {
+      return;
+    }
 
-        for (const { payload } of rows) {
-          await sendFakeResendWebhookPayload(payload);
-        }
-      });
+    const body = (await request.json()) as { json: { path: string } };
+    if (body.json.path !== "~/.iterate/.setup-done") {
+      return;
+    }
 
-      return `replayed pending emails for ${params.payload.projectId}`;
-    },
+    shouldHideSetupSentinel = false;
+    return Response.json({
+      json: {
+        path: body.json.path,
+        content: null,
+        exists: false,
+      },
+    });
   });
 
   await specMachine.sendFakeResendWebhook({
@@ -294,7 +289,7 @@ test("existing user with no active machine yet gets replayed after activation", 
     )
     .toBe(1);
 
-  await withLocalDb(async (db, pgClient) => {
+  await withLocalDb(async (_db, pgClient) => {
     const { rows } = await pgClient.query<{ projectId: string; machineId: string }>(
       `
         select
@@ -320,7 +315,7 @@ test("existing user with no active machine yet gets replayed after activation", 
       throw new Error(`missing routing for ${specMachine.senderEmail}`);
     }
 
-    await pgClient.query(`update machine set state = $1 where id = $2`, ["detached", routing.machineId]);
+    await pgClient.query(`update machine set state = $1 where id = $2`, ["starting", routing.machineId]);
 
     await specMachine.sendFakeResendWebhook({
       subject: "second email",
@@ -337,17 +332,29 @@ test("existing user with no active machine yet gets replayed after activation", 
       )
       .toBe(1);
 
-    await pgClient.query(`update machine set state = $1 where id = $2`, ["active", routing.machineId]);
+    await expect
+      .poll(
+        async () => {
+          const pendingRows = await pgClient.query<{ count: string }>(
+            `
+              select count(*)::text as count
+              from email_inbound_delivery
+              join outbox_event
+                on outbox_event.id = email_inbound_delivery.outbox_event_id
+              where email_inbound_delivery.project_id = $1
+                and email_inbound_delivery.status = 'pending'
+                and outbox_event.payload->'data'->>'subject' = 'second email'
+            `,
+            [routing.projectId],
+          );
+          return Number(pendingRows.rows[0]?.count ?? "0");
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(1);
 
-    await outboxClient.send(db, {
-      name: "machine:activated",
-      payload: {
-        machineId: routing.machineId,
-        projectId: routing.projectId,
-        detachedMachineIds: [],
-      },
-    });
-    await queuer.processQueue(db);
+    shouldHideSetupSentinel = true;
+    await specMachine.reportReady();
   });
 
   await expect
