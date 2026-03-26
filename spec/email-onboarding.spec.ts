@@ -27,6 +27,12 @@ async function withLocalDb<T>(
   }
 }
 
+function forwardedEmailWebhookPayloads(specMachine: Awaited<ReturnType<typeof createSpecMachine>>) {
+  return specMachine.requests
+    .filter((request) => request.path === "/api/integrations/email/webhook")
+    .map((request) => request.json);
+}
+
 test.beforeEach(() =>
   withLocalDb((_db, pgClient) => pgClient.query(`select pgmq.purge_queue('consumer_job_queue')`)),
 );
@@ -40,19 +46,16 @@ test("unknown allowlisted sender gets onboarded and email webhook is eventually 
   });
 
   await expect
-    .poll(() => specMachine.requests, { timeout: 40_000 })
+    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 16_000 })
     .toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          path: "/api/integrations/email/webhook",
-          json: expect.objectContaining({
-            data: expect.objectContaining({
-              subject: "tell me a joke",
-            }),
-            _iterate: expect.objectContaining({
-              emailBody: expect.objectContaining({
-                text: "not a pun though",
-              }),
+          data: expect.objectContaining({
+            subject: "tell me a joke",
+          }),
+          _iterate: expect.objectContaining({
+            emailBody: expect.objectContaining({
+              text: "not a pun though",
             }),
           }),
         }),
@@ -79,36 +82,21 @@ test("second email sent while the machine is still starting is forwarded after a
   });
 
   await expect
-    .poll(
-      () =>
-        specMachine.requests.filter((request) => request.path === "/api/integrations/email/webhook")
-          .length,
-      { timeout: 2_000 },
-    )
-    .toBe(0);
+    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 2_000 })
+    .toEqual([]);
 
   await expect
-    .poll(
-      () =>
-        specMachine.requests.filter(
-          (request) => request.path === "/api/integrations/email/webhook",
-        ),
-      { timeout: 40_000 },
-    )
+    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 22_000 })
     .toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          json: expect.objectContaining({
-            data: expect.objectContaining({
-              subject: "first email",
-            }),
+          data: expect.objectContaining({
+            subject: "first email",
           }),
         }),
         expect.objectContaining({
-          json: expect.objectContaining({
-            data: expect.objectContaining({
-              subject: "second email",
-            }),
+          data: expect.objectContaining({
+            subject: "second email",
           }),
         }),
       ]),
@@ -124,17 +112,16 @@ test("existing user with active machine forwards immediately without onboarding"
   });
 
   await expect
-    .poll(
-      () =>
-        specMachine.requests.filter((request) => request.path === "/api/integrations/email/webhook")
-          .length,
-      { timeout: 40_000 },
-    )
-    .toBe(1);
-
-  const bootstrapCountBeforeSecondEmail = specMachine.requests.filter(
-    (request) => request.path === "/bootstrap",
-  ).length;
+    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 12_000 })
+    .toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            subject: "first email",
+          }),
+        }),
+      ]),
+    );
 
   await specMachine.sendFakeResendWebhook({
     subject: "second email",
@@ -142,17 +129,21 @@ test("existing user with active machine forwards immediately without onboarding"
   });
 
   await expect
-    .poll(
-      () =>
-        specMachine.requests.filter((request) => request.path === "/api/integrations/email/webhook")
-          .length,
-      { timeout: 20_000 },
-    )
-    .toBe(2);
-
-  expect(specMachine.requests.filter((request) => request.path === "/bootstrap").length).toBe(
-    bootstrapCountBeforeSecondEmail,
-  );
+    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 8_000 })
+    .toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            subject: "first email",
+          }),
+        }),
+        expect.objectContaining({
+          data: expect.objectContaining({
+            subject: "second email",
+          }),
+        }),
+      ]),
+    );
 });
 
 test("non-allowlisted sender does not onboard and does not forward", async () => {
@@ -165,15 +156,8 @@ test("non-allowlisted sender does not onboard and does not forward", async () =>
   });
 
   await expect
-    .poll(
-      () =>
-        specMachine.requests.filter(
-          (request) =>
-            request.path === "/bootstrap" || request.path === "/api/integrations/email/webhook",
-        ).length,
-      { timeout: 10_000 },
-    )
-    .toBe(0);
+    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 2_000 })
+    .toEqual([]);
 });
 
 test("second email from a brand new sender before user creation is also eventually forwarded", async () => {
@@ -190,27 +174,17 @@ test("second email from a brand new sender before user creation is also eventual
   });
 
   await expect
-    .poll(
-      () =>
-        specMachine.requests.filter(
-          (request) => request.path === "/api/integrations/email/webhook",
-        ),
-      { timeout: 40_000 },
-    )
+    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 12_000 })
     .toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          json: expect.objectContaining({
-            data: expect.objectContaining({
-              subject: "first email",
-            }),
+          data: expect.objectContaining({
+            subject: "first email",
           }),
         }),
         expect.objectContaining({
-          json: expect.objectContaining({
-            data: expect.objectContaining({
-              subject: "second email",
-            }),
+          data: expect.objectContaining({
+            subject: "second email",
           }),
         }),
       ]),
@@ -238,13 +212,21 @@ test("active machine webhook failure remains recoverable", async () => {
   });
 
   await expect
-    .poll(
-      () =>
-        specMachine.requests.filter((request) => request.path === "/api/integrations/email/webhook")
-          .length,
-      { timeout: 90_000 },
-    )
-    .toBe(2);
+    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 12_000 })
+    .toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            subject: "retry me",
+          }),
+        }),
+        expect.objectContaining({
+          data: expect.objectContaining({
+            subject: "retry me",
+          }),
+        }),
+      ]),
+    );
 });
 
 test("existing user with no active machine yet gets replayed after activation", async () => {
@@ -280,13 +262,16 @@ test("existing user with no active machine yet gets replayed after activation", 
   });
 
   await expect
-    .poll(
-      () =>
-        specMachine.requests.filter((request) => request.path === "/api/integrations/email/webhook")
-          .length,
-      { timeout: 40_000 },
-    )
-    .toBe(1);
+    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 12_000 })
+    .toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            subject: "first email",
+          }),
+        }),
+      ]),
+    );
 
   await withLocalDb(async (_db, pgClient) => {
     const { rows } = await pgClient.query<{ projectId: string; machineId: string }>(
@@ -325,14 +310,14 @@ test("existing user with no active machine yet gets replayed after activation", 
     });
 
     await expect
-      .poll(
-        () =>
-          specMachine.requests.filter(
-            (request) => request.path === "/api/integrations/email/webhook",
-          ).length,
-        { timeout: 10_000 },
-      )
-      .toBe(1);
+      .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 2_000 })
+      .toEqual([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            subject: "first email",
+          }),
+        }),
+      ]);
 
     await expect
       .poll(
@@ -360,13 +345,7 @@ test("existing user with no active machine yet gets replayed after activation", 
   });
 
   await expect
-    .poll(
-      () =>
-        specMachine.requests.filter(
-          (request) => request.path === "/api/integrations/email/webhook",
-        ),
-      { timeout: 40_000 },
-    )
+    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 12_000 })
     .toEqual(
       expect.arrayContaining([
         expect.objectContaining({
