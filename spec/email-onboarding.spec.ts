@@ -73,16 +73,19 @@ test("second email sent while the machine is still starting is forwarded after a
     text: "first body",
   });
 
-  await expect
-    .poll(() => specMachine.requests.filter((request) => request.path === "/bootstrap").length, {
-      timeout: 40_000,
-    })
-    .toBe(1);
-
   await specMachine.sendFakeResendWebhook({
     subject: "second email",
     text: "second body",
   });
+
+  await expect
+    .poll(
+      () =>
+        specMachine.requests.filter((request) => request.path === "/api/integrations/email/webhook")
+          .length,
+      { timeout: 2_000 },
+    )
+    .toBe(0);
 
   await expect
     .poll(
@@ -123,9 +126,8 @@ test("existing user with active machine forwards immediately without onboarding"
   await expect
     .poll(
       () =>
-        specMachine.requests.filter(
-          (request) => request.path === "/api/integrations/email/webhook",
-        ).length,
+        specMachine.requests.filter((request) => request.path === "/api/integrations/email/webhook")
+          .length,
       { timeout: 40_000 },
     )
     .toBe(1);
@@ -142,16 +144,15 @@ test("existing user with active machine forwards immediately without onboarding"
   await expect
     .poll(
       () =>
-        specMachine.requests.filter(
-          (request) => request.path === "/api/integrations/email/webhook",
-        ).length,
+        specMachine.requests.filter((request) => request.path === "/api/integrations/email/webhook")
+          .length,
       { timeout: 20_000 },
     )
     .toBe(2);
 
-  expect(
-    specMachine.requests.filter((request) => request.path === "/bootstrap").length,
-  ).toBe(bootstrapCountBeforeSecondEmail);
+  expect(specMachine.requests.filter((request) => request.path === "/bootstrap").length).toBe(
+    bootstrapCountBeforeSecondEmail,
+  );
 });
 
 test("non-allowlisted sender does not onboard and does not forward", async () => {
@@ -239,9 +240,8 @@ test("active machine webhook failure remains recoverable", async () => {
   await expect
     .poll(
       () =>
-        specMachine.requests.filter(
-          (request) => request.path === "/api/integrations/email/webhook",
-        ).length,
+        specMachine.requests.filter((request) => request.path === "/api/integrations/email/webhook")
+          .length,
       { timeout: 90_000 },
     )
     .toBe(2);
@@ -282,9 +282,8 @@ test("existing user with no active machine yet gets replayed after activation", 
   await expect
     .poll(
       () =>
-        specMachine.requests.filter(
-          (request) => request.path === "/api/integrations/email/webhook",
-        ).length,
+        specMachine.requests.filter((request) => request.path === "/api/integrations/email/webhook")
+          .length,
       { timeout: 40_000 },
     )
     .toBe(1);
@@ -315,7 +314,10 @@ test("existing user with no active machine yet gets replayed after activation", 
       throw new Error(`missing routing for ${specMachine.senderEmail}`);
     }
 
-    await pgClient.query(`update machine set state = $1 where id = $2`, ["starting", routing.machineId]);
+    await pgClient.query(`update machine set state = $1 where id = $2`, [
+      "starting",
+      routing.machineId,
+    ]);
 
     await specMachine.sendFakeResendWebhook({
       subject: "second email",
