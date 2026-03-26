@@ -189,7 +189,6 @@ export async function createSpecMachine(): Promise<SpecMachine> {
   const requests: RequestRecord[] = [];
   const requestHandlers: SpecMachineRequestHandler[] = [];
   const runtimes = new Map<string, RuntimeState>();
-  let latestRuntimeExternalId: string | undefined;
   let providerBaseUrl = "";
 
   async function reportReady(runtime: RuntimeState) {
@@ -377,7 +376,6 @@ export async function createSpecMachine(): Promise<SpecMachine> {
       started: true,
     };
     runtimes.set(config.externalId, runtime);
-    latestRuntimeExternalId = config.externalId;
 
     const bootstrapRequest = new Request(new URL("/bootstrap", providerBaseUrl), {
       method: "POST",
