@@ -369,39 +369,63 @@ function createFlyStub(options: CreateMachineStubOptions): MachineStub {
 
 function createSpecMachineStub(options: CreateMachineStubOptions): MachineStub {
   const emailSender = asString((options.metadata as { emailSender?: unknown }).emailSender);
-  const baseUrl = emailSender ? parseSpecMachineEmail(emailSender)?.baseUrl : undefined;
+  const providerBaseUrl = emailSender
+    ? parseSpecMachineEmail(emailSender)?.providerBaseUrl
+    : undefined;
 
-  if (!baseUrl) {
+  if (!providerBaseUrl) {
     throw new Error(
       `spec-machine emailSender metadata missing or invalid for ${options.externalId}`,
     );
   }
 
+  const runtimePath = `/__spec-machine/machines/${encodeURIComponent(options.externalId)}`;
+
+  function toRuntimePath(pathWithQuery: string) {
+    return pathWithQuery.startsWith(runtimePath) ? pathWithQuery : `${runtimePath}${pathWithQuery}`;
+  }
+
   return {
     type: "spec-machine",
     async create(config: CreateMachineConfig): Promise<MachineStubResult> {
-      const response = await fetch(`${baseUrl}/__spec-machine/bootstrap`, {
+      const response = await fetch(new URL("/__spec-machine/machines", providerBaseUrl), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
       });
       if (!response.ok) {
-        throw new Error(`spec-machine bootstrap failed: HTTP ${response.status}`);
+        throw new Error(`spec-machine create failed: HTTP ${response.status}`);
       }
       return {};
     },
-    async start(): Promise<void> {},
-    async stop(): Promise<void> {},
-    async restart(): Promise<void> {},
-    async archive(): Promise<void> {},
-    async delete(): Promise<void> {},
+    async start(): Promise<void> {
+      await fetch(new URL(`${runtimePath}/__lifecycle/start`, providerBaseUrl), {
+        method: "POST",
+      });
+    },
+    async stop(): Promise<void> {
+      await fetch(new URL(`${runtimePath}/__lifecycle/stop`, providerBaseUrl), {
+        method: "POST",
+      });
+    },
+    async restart(): Promise<void> {
+      await fetch(new URL(`${runtimePath}/__lifecycle/restart`, providerBaseUrl), {
+        method: "POST",
+      });
+    },
+    async archive(): Promise<void> {
+      await fetch(new URL(runtimePath, providerBaseUrl), { method: "DELETE" });
+    },
+    async delete(): Promise<void> {
+      await fetch(new URL(runtimePath, providerBaseUrl), { method: "DELETE" });
+    },
     async getFetcher(_port: number): Promise<SandboxFetcher> {
       return async (input, init) => {
         if (input instanceof Request) {
           const requestUrl = new URL(input.url);
           const url = new URL(
-            normalizePathWithQuery(`${requestUrl.pathname}${requestUrl.search}`),
-            baseUrl,
+            toRuntimePath(normalizePathWithQuery(`${requestUrl.pathname}${requestUrl.search}`)),
+            providerBaseUrl,
           );
           return fetch(new Request(url, input), init);
         }
@@ -415,12 +439,12 @@ function createSpecMachineStub(options: CreateMachineStubOptions): MachineStub {
                 ? input
                 : `/${input}`,
         );
-        const url = new URL(pathWithQuery, baseUrl).toString();
+        const url = new URL(toRuntimePath(pathWithQuery), providerBaseUrl).toString();
         return fetch(url, init);
       };
     },
     async getBaseUrl(_port: number): Promise<string> {
-      return baseUrl;
+      return new URL(runtimePath, providerBaseUrl).toString();
     },
     async getProviderState(): Promise<ProviderState> {
       return { state: "running" };

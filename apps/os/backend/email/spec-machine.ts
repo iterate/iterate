@@ -1,5 +1,5 @@
 export type SpecMachineInfo = {
-  baseUrl: string;
+  providerBaseUrl: string;
 };
 
 const SPEC_MACHINE_DOMAIN = "nustom.com";
@@ -25,26 +25,31 @@ export function parseSpecMachineEmail(email: string): SpecMachineInfo | null {
   const encoded = localPart.slice(SPEC_MACHINE_PREFIX.length);
   try {
     const decoded = JSON.parse(Buffer.from(encoded, "hex").toString("utf-8")) as {
+      providerBaseUrl?: unknown;
       baseUrl?: unknown;
     };
-    if (typeof decoded.baseUrl !== "string") {
+    const rawBaseUrl = decoded.providerBaseUrl ?? decoded.baseUrl;
+    if (typeof rawBaseUrl !== "string") {
       return null;
     }
 
-    const baseUrl = new URL(decoded.baseUrl);
-    if (!["http:", "https:"].includes(baseUrl.protocol)) {
+    const providerBaseUrl = new URL(rawBaseUrl);
+    if (!["http:", "https:"].includes(providerBaseUrl.protocol)) {
       return null;
     }
 
     return {
-      baseUrl: baseUrl.toString(),
+      providerBaseUrl: providerBaseUrl.toString(),
     };
   } catch {
     return null;
   }
 }
 
-export function buildSpecMachineEmail(params: { baseUrl: string }): string {
-  const encoded = Buffer.from(JSON.stringify({ baseUrl: params.baseUrl }), "utf-8").toString("hex");
+export function buildSpecMachineEmail(params: { providerBaseUrl: string }): string {
+  const encoded = Buffer.from(
+    JSON.stringify({ providerBaseUrl: params.providerBaseUrl }),
+    "utf-8",
+  ).toString("hex");
   return `${SPEC_MACHINE_PREFIX}${encoded}@${SPEC_MACHINE_DOMAIN}`;
 }

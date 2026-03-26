@@ -35,9 +35,9 @@ describe("email routing helpers", () => {
   });
 
   test("parses spec machine email", () => {
-    const email = buildSpecMachineEmail({ baseUrl: "http://127.0.0.1:45678" });
+    const email = buildSpecMachineEmail({ providerBaseUrl: "http://127.0.0.1:45678" });
     expect(parseSpecMachineEmail(email)).toEqual({
-      baseUrl: "http://127.0.0.1:45678/",
+      providerBaseUrl: "http://127.0.0.1:45678/",
     });
   });
 });

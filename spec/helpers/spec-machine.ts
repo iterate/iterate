@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createWorkerClient } from "../../apps/daemon/server/orpc/client.ts";
 import { buildSpecMachineEmail } from "../../apps/os/backend/email/spec-machine.ts";
 import playwrightConfig from "../../playwright.config.ts";
+import type { CreateMachineConfig } from "../../sandbox/providers/machine-stub.ts";
 
 type RequestRecord = {
   method: string;
@@ -11,6 +12,7 @@ type RequestRecord = {
   headers: Record<string, string>;
   text: string;
   json?: unknown;
+  machineExternalId?: string;
 };
 
 export type SpecMachineRequestHandler = (
@@ -21,6 +23,26 @@ type ThreadMessage = {
   role: string;
   text: string;
 };
+
+type BootstrapEnvVars = {
+  ITERATE_OS_BASE_URL: string;
+  ITERATE_OS_API_KEY: string;
+  ITERATE_MACHINE_ID: string;
+};
+
+type RuntimeState = {
+  externalId: string;
+  threads: Map<string, ThreadMessage[]>;
+  files: Map<string, string>;
+  directories: Set<string>;
+  bootstrapEnvVars: BootstrapEnvVars | undefined;
+  started: boolean;
+};
+
+function normalizeMachinePath(pathname: string) {
+  const runtimeMatch = pathname.match(/^\/__spec-machine\/machines\/[^/]+(\/.*)$/);
+  return (runtimeMatch?.[1] ?? pathname).replace(/^\/+/, "/");
+}
 
 function json(response: ServerResponse, statusCode: number, body: unknown) {
   response.statusCode = statusCode;
@@ -155,7 +177,7 @@ export async function sendFakeResendWebhookPayload(payload: Record<string, unkno
 }
 
 export type SpecMachine = {
-  baseUrl: string;
+  providerBaseUrl: string;
   senderEmail: string;
   requests: RequestRecord[];
   requestHandlers: SpecMachineRequestHandler[];
@@ -167,40 +189,40 @@ export type SpecMachine = {
 export async function createSpecMachine(): Promise<SpecMachine> {
   const requests: RequestRecord[] = [];
   const requestHandlers: SpecMachineRequestHandler[] = [];
-  const threads = new Map<string, ThreadMessage[]>();
-  const files = new Map<string, string>();
-  const directories = new Set<string>();
-  let bootstrapEnvVars:
-    | {
-        ITERATE_OS_BASE_URL: string;
-        ITERATE_OS_API_KEY: string;
-        ITERATE_MACHINE_ID: string;
-      }
-    | undefined;
+  const runtimes = new Map<string, RuntimeState>();
+  let latestRuntimeExternalId: string | undefined;
+  let providerBaseUrl = "";
 
-  requestHandlers.push(async function handleBootstrap(request) {
-    if (request.method !== "POST" || new URL(request.url).pathname !== "/bootstrap") {
-      return;
+  function getLatestRuntime() {
+    if (!latestRuntimeExternalId) {
+      throw new Error("Spec machine provider has not created any machines yet");
     }
 
-    const body = (await request.json()) as { envVars: Record<string, string> };
-    bootstrapEnvVars = {
-      ITERATE_OS_BASE_URL: body.envVars.ITERATE_OS_BASE_URL,
-      ITERATE_OS_API_KEY: body.envVars.ITERATE_OS_API_KEY,
-      ITERATE_MACHINE_ID: body.envVars.ITERATE_MACHINE_ID,
-    };
+    const runtime = runtimes.get(latestRuntimeExternalId);
+    if (!runtime) {
+      throw new Error(`Missing runtime for ${latestRuntimeExternalId}`);
+    }
+
+    return runtime;
+  }
+
+  async function reportReady(runtime: RuntimeState) {
+    if (!runtime.bootstrapEnvVars) {
+      throw new Error("Spec machine has not bootstrapped yet");
+    }
+
     const previousBaseUrl = process.env.ITERATE_OS_BASE_URL;
     const previousApiKey = process.env.ITERATE_OS_API_KEY;
     const previousMachineId = process.env.ITERATE_MACHINE_ID;
 
-    process.env.ITERATE_OS_BASE_URL = body.envVars.ITERATE_OS_BASE_URL;
-    process.env.ITERATE_OS_API_KEY = body.envVars.ITERATE_OS_API_KEY;
-    process.env.ITERATE_MACHINE_ID = body.envVars.ITERATE_MACHINE_ID;
+    process.env.ITERATE_OS_BASE_URL = runtime.bootstrapEnvVars.ITERATE_OS_BASE_URL;
+    process.env.ITERATE_OS_API_KEY = runtime.bootstrapEnvVars.ITERATE_OS_API_KEY;
+    process.env.ITERATE_MACHINE_ID = runtime.bootstrapEnvVars.ITERATE_MACHINE_ID;
 
     try {
       const client = createWorkerClient();
       await client.machines.reportStatus({
-        machineId: body.envVars.ITERATE_MACHINE_ID,
+        machineId: runtime.bootstrapEnvVars.ITERATE_MACHINE_ID,
         status: "ready",
       });
     } finally {
@@ -208,17 +230,36 @@ export async function createSpecMachine(): Promise<SpecMachine> {
       process.env.ITERATE_OS_API_KEY = previousApiKey;
       process.env.ITERATE_MACHINE_ID = previousMachineId;
     }
+  }
 
+  async function handleBootstrap(request: Request, runtime: RuntimeState) {
+    if (
+      request.method !== "POST" ||
+      normalizeMachinePath(new URL(request.url).pathname) !== "/bootstrap"
+    ) {
+      return;
+    }
+
+    const body = (await request.json()) as { envVars: Record<string, string> };
+    runtime.bootstrapEnvVars = {
+      ITERATE_OS_BASE_URL: body.envVars.ITERATE_OS_BASE_URL,
+      ITERATE_OS_API_KEY: body.envVars.ITERATE_OS_API_KEY,
+      ITERATE_MACHINE_ID: body.envVars.ITERATE_MACHINE_ID,
+    };
+    await reportReady(runtime);
     return Response.json({ ok: true });
-  });
+  }
 
-  requestHandlers.push(async function handleReadFile(request) {
-    if (request.method !== "POST" || new URL(request.url).pathname !== "/api/orpc/tool/readFile") {
+  async function handleReadFile(request: Request, runtime: RuntimeState) {
+    if (
+      request.method !== "POST" ||
+      normalizeMachinePath(new URL(request.url).pathname) !== "/api/orpc/tool/readFile"
+    ) {
       return;
     }
 
     const body = (await request.json()) as { json: { path: string } };
-    const content = files.get(body.json.path);
+    const content = runtime.files.get(body.json.path);
     return Response.json({
       json: {
         path: body.json.path,
@@ -226,27 +267,30 @@ export async function createSpecMachine(): Promise<SpecMachine> {
         exists: !!content,
       },
     });
-  });
+  }
 
-  requestHandlers.push(async function handleWriteFile(request) {
-    if (request.method !== "POST" || new URL(request.url).pathname !== "/api/orpc/tool/writeFile") {
+  async function handleWriteFile(request: Request, runtime: RuntimeState) {
+    if (
+      request.method !== "POST" ||
+      normalizeMachinePath(new URL(request.url).pathname) !== "/api/orpc/tool/writeFile"
+    ) {
       return;
     }
 
     const body = (await request.json()) as { json: { path: string; content: string } };
-    files.set(body.json.path, body.json.content);
+    runtime.files.set(body.json.path, body.json.content);
     return Response.json({
       json: {
         path: body.json.path,
         bytesWritten: Buffer.byteLength(body.json.content),
       },
     });
-  });
+  }
 
-  requestHandlers.push(async function handleExecCommand(request) {
+  async function handleExecCommand(request: Request, runtime: RuntimeState) {
     if (
       request.method !== "POST" ||
-      new URL(request.url).pathname !== "/api/orpc/tool/execCommand"
+      normalizeMachinePath(new URL(request.url).pathname) !== "/api/orpc/tool/execCommand"
     ) {
       return;
     }
@@ -257,7 +301,7 @@ export async function createSpecMachine(): Promise<SpecMachine> {
     if (command === "test" && args[0] === "-d") {
       return Response.json({
         json: {
-          exitCode: directories.has(args[1] ?? "") ? 0 : 1,
+          exitCode: runtime.directories.has(args[1] ?? "") ? 0 : 1,
           stdout: "",
           stderr: "",
         },
@@ -267,51 +311,101 @@ export async function createSpecMachine(): Promise<SpecMachine> {
     if (command === "git" && args[0] === "clone") {
       const targetPath = args.at(-1);
       if (targetPath) {
-        directories.add(`${targetPath}/.git`);
+        runtime.directories.add(`${targetPath}/.git`);
       }
     }
 
     return Response.json({
       json: { exitCode: 0, stdout: "", stderr: "" },
     });
-  });
+  }
 
-  requestHandlers.push(async function handleWebchatWebhook(request) {
+  async function handleWebchatWebhook(request: Request, runtime: RuntimeState) {
     if (
       request.method !== "POST" ||
-      new URL(request.url).pathname !== "/api/integrations/webchat/webhook"
+      normalizeMachinePath(new URL(request.url).pathname) !== "/api/integrations/webchat/webhook"
     ) {
       return;
     }
 
     const body = (await request.json()) as { threadId: string; text: string };
-    const messages = threads.get(body.threadId) ?? [];
+    const messages = runtime.threads.get(body.threadId) ?? [];
     messages.push({ role: "user", text: body.text });
     messages.push({ role: "assistant", text: "3" });
-    threads.set(body.threadId, messages);
+    runtime.threads.set(body.threadId, messages);
     return Response.json({ success: true, threadId: body.threadId });
-  });
+  }
 
-  requestHandlers.push(function handleWebchatThread(request) {
-    const pathname = new URL(request.url).pathname;
+  function handleWebchatThread(request: Request, runtime: RuntimeState) {
+    const pathname = normalizeMachinePath(new URL(request.url).pathname);
     if (request.method !== "GET" || !pathname.startsWith("/api/integrations/webchat/threads/")) {
       return;
     }
 
     const threadId = decodeURIComponent(pathname.split("/")[5] ?? "");
-    return Response.json({ threadId, messages: threads.get(threadId) ?? [] });
-  });
+    return Response.json({ threadId, messages: runtime.threads.get(threadId) ?? [] });
+  }
 
-  requestHandlers.push(function handleEmailWebhook(request) {
+  function handleEmailWebhook(request: Request) {
     if (
       request.method !== "POST" ||
-      new URL(request.url).pathname !== "/api/integrations/email/webhook"
+      normalizeMachinePath(new URL(request.url).pathname) !== "/api/integrations/email/webhook"
     ) {
       return;
     }
 
     return Response.json({ success: true });
-  });
+  }
+
+  async function dispatchRuntimeRequest(params: {
+    runtime: RuntimeState;
+    request: Request;
+  }): Promise<Response | undefined> {
+    const { runtime, request } = params;
+
+    for (const handler of requestHandlers) {
+      const handlerResult = await handler(request.clone());
+      if (handlerResult) {
+        return handlerResult;
+      }
+    }
+
+    return (
+      (await handleBootstrap(request.clone(), runtime)) ??
+      (await handleReadFile(request.clone(), runtime)) ??
+      (await handleWriteFile(request.clone(), runtime)) ??
+      (await handleExecCommand(request.clone(), runtime)) ??
+      (await handleWebchatWebhook(request.clone(), runtime)) ??
+      handleWebchatThread(request.clone(), runtime) ??
+      handleEmailWebhook(request.clone())
+    );
+  }
+
+  async function createRuntime(config: CreateMachineConfig) {
+    const runtime: RuntimeState = {
+      externalId: config.externalId,
+      threads: new Map<string, ThreadMessage[]>(),
+      files: new Map<string, string>(),
+      directories: new Set<string>(),
+      bootstrapEnvVars: undefined,
+      started: true,
+    };
+    runtimes.set(config.externalId, runtime);
+    latestRuntimeExternalId = config.externalId;
+
+    const bootstrapRequest = new Request(new URL("/bootstrap", providerBaseUrl), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(config),
+    });
+    const bootstrapResponse = await dispatchRuntimeRequest({
+      runtime,
+      request: bootstrapRequest,
+    });
+    if (!bootstrapResponse?.ok) {
+      throw new Error(`spec-machine bootstrap failed for ${config.externalId}`);
+    }
+  }
 
   const server = createServer(async (request, response) => {
     try {
@@ -328,35 +422,97 @@ export async function createSpecMachine(): Promise<SpecMachine> {
         }
       }
 
+      const headers = Object.fromEntries(
+        Object.entries(request.headers).flatMap(([key, value]) =>
+          typeof value === "string" ? [[key, value]] : value ? [[key, value.join(",")]] : [],
+        ),
+      );
+
+      if (method === "POST" && url.pathname === "/__spec-machine/machines") {
+        const config = JSON.parse(text) as CreateMachineConfig;
+        await createRuntime(config);
+        json(response, 200, { ok: true, externalId: config.externalId });
+        return;
+      }
+
+      const lifecycleMatch = url.pathname.match(
+        /^\/__spec-machine\/machines\/([^/]+)\/__lifecycle\/(start|stop|restart)$/,
+      );
+      if (lifecycleMatch && method === "POST") {
+        const externalId = decodeURIComponent(lifecycleMatch[1] ?? "");
+        const action = lifecycleMatch[2];
+        const runtime = runtimes.get(externalId);
+        if (!runtime) {
+          json(response, 404, { error: `Unknown machine ${externalId}` });
+          return;
+        }
+
+        if (action === "start") {
+          runtime.started = true;
+        }
+        if (action === "stop") {
+          runtime.started = false;
+        }
+        if (action === "restart") {
+          runtime.started = true;
+        }
+
+        json(response, 200, { ok: true, externalId, action });
+        return;
+      }
+
+      const deleteMatch = url.pathname.match(/^\/__spec-machine\/machines\/([^/]+)$/);
+      if (deleteMatch && method === "DELETE") {
+        const externalId = decodeURIComponent(deleteMatch[1] ?? "");
+        runtimes.delete(externalId);
+        json(response, 200, { ok: true, externalId });
+        return;
+      }
+
+      const runtimeMatch = url.pathname.match(/^\/__spec-machine\/machines\/([^/]+)(\/.*)$/);
+      if (!runtimeMatch) {
+        json(response, 404, { error: "Not found" });
+        return;
+      }
+
+      const externalId = decodeURIComponent(runtimeMatch[1] ?? "");
+      const runtimePath = normalizeMachinePath(runtimeMatch[0] ?? "/");
+      const runtime = runtimes.get(externalId);
+      if (!runtime) {
+        json(response, 404, { error: `Unknown machine ${externalId}` });
+        return;
+      }
+
+      if (!runtime.started) {
+        json(response, 503, { error: `Machine ${externalId} is stopped` });
+        return;
+      }
+
       const requestRecord = {
         method,
-        path: url.pathname,
-        headers: Object.fromEntries(
-          Object.entries(request.headers).flatMap(([key, value]) =>
-            typeof value === "string" ? [[key, value]] : value ? [[key, value.join(",")]] : [],
-          ),
-        ),
+        path: runtimePath,
+        headers,
         text,
         json: parsedJson,
+        machineExternalId: externalId,
       } satisfies RequestRecord;
-
       requests.push(requestRecord);
 
-      const handlerRequest = new Request(url, {
+      const handlerRequest = new Request(new URL(runtimePath, providerBaseUrl), {
         method,
         headers: requestRecord.headers,
         body: method === "GET" || method === "HEAD" ? undefined : text,
       });
-
-      for (const handler of requestHandlers) {
-        const handlerResult = await handler(handlerRequest.clone());
-        if (!handlerResult) continue;
-
-        await sendFetchResponse(response, handlerResult);
+      const handlerResult = await dispatchRuntimeRequest({
+        runtime,
+        request: handlerRequest,
+      });
+      if (!handlerResult) {
+        json(response, 404, { error: "Not found" });
         return;
       }
 
-      json(response, 404, { error: "Not found" });
+      await sendFetchResponse(response, handlerResult);
     } catch (error) {
       json(response, 500, { error: String(error) });
     }
@@ -372,39 +528,16 @@ export async function createSpecMachine(): Promise<SpecMachine> {
     throw new Error("Failed to determine spec machine address");
   }
 
-  const baseUrl = `http://127.0.0.1:${address.port}`;
-  const senderEmail = buildSpecMachineEmail({ baseUrl });
+  providerBaseUrl = `http://127.0.0.1:${address.port}`;
+  const senderEmail = buildSpecMachineEmail({ providerBaseUrl });
 
-  const specMachine = {
-    baseUrl,
+  return {
+    providerBaseUrl,
     senderEmail,
     requests,
     requestHandlers,
-    server,
     async reportReady() {
-      if (!bootstrapEnvVars) {
-        throw new Error("Spec machine has not bootstrapped yet");
-      }
-
-      const previousBaseUrl = process.env.ITERATE_OS_BASE_URL;
-      const previousApiKey = process.env.ITERATE_OS_API_KEY;
-      const previousMachineId = process.env.ITERATE_MACHINE_ID;
-
-      process.env.ITERATE_OS_BASE_URL = bootstrapEnvVars.ITERATE_OS_BASE_URL;
-      process.env.ITERATE_OS_API_KEY = bootstrapEnvVars.ITERATE_OS_API_KEY;
-      process.env.ITERATE_MACHINE_ID = bootstrapEnvVars.ITERATE_MACHINE_ID;
-
-      try {
-        const client = createWorkerClient();
-        await client.machines.reportStatus({
-          machineId: bootstrapEnvVars.ITERATE_MACHINE_ID,
-          status: "ready",
-        });
-      } finally {
-        process.env.ITERATE_OS_BASE_URL = previousBaseUrl;
-        process.env.ITERATE_OS_API_KEY = previousApiKey;
-        process.env.ITERATE_MACHINE_ID = previousMachineId;
-      }
+      await reportReady(getLatestRuntime());
     },
     async sendFakeResendWebhook(params: { subject: string; text: string; from?: string }) {
       const now = new Date().toISOString();
@@ -437,6 +570,4 @@ export async function createSpecMachine(): Promise<SpecMachine> {
       });
     },
   };
-
-  return specMachine;
 }
