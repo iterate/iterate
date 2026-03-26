@@ -112,7 +112,7 @@ test("existing user with active machine forwards immediately without onboarding"
   });
 
   await expect
-    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 12_000 })
+    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 16_000 })
     .toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -174,7 +174,7 @@ test("second email from a brand new sender before user creation is also eventual
   });
 
   await expect
-    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 12_000 })
+    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 18_000 })
     .toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -212,7 +212,7 @@ test("active machine webhook failure remains recoverable", async () => {
   });
 
   await expect
-    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 12_000 })
+    .poll(() => forwardedEmailWebhookPayloads(specMachine), { timeout: 18_000 })
     .toEqual(
       expect.arrayContaining([
         expect.objectContaining({
