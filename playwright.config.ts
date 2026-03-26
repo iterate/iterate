@@ -35,10 +35,23 @@ export default {
     },
   ],
   webServer: {
-    command: "pnpm dev", // todo: uncomment when dev script runs os and daemon
+    command: isAgent()
+      ? `sh -c "echo 'Agents are not allowed to start the dev server through playwright. They need to run it themselves separately, ideally with nohup and writing output to a file they can check.' && exit 1"`
+      : "pnpm dev", // todo: uncomment when dev script runs os and daemon
     url: baseURL,
     reuseExistingServer: true,
     timeout: 180_000,
     stdout: "pipe", // without this on startup failure it just says "Couldn't start. Exit code 1."
   },
 } as const satisfies PlaywrightTestConfig;
+
+function isAgent() {
+  // Check all known agent env vars for robustness
+  return (
+    process.env.CODEX_CI === "1" ||
+    process.env.AGENT === "1" ||
+    process.env.OPENCODE === "1" ||
+    !!process.env.OPENCODE_SESSION ||
+    !!process.env.CLAUDE_CODE
+  );
+}
