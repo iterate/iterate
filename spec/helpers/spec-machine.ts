@@ -106,12 +106,60 @@ async function parseJsonResponse(response: Response) {
   }
 }
 
+async function getResendBotWebhookSecret() {
+  let secret = process.env.RESEND_BOT_WEBHOOK_SECRET;
+  if (!secret) {
+    secret = execSync(`doppler secrets get RESEND_BOT_WEBHOOK_SECRET --plain`).toString().trim();
+  }
+  if (!secret) {
+    throw new Error("RESEND_BOT_WEBHOOK_SECRET must be set for fake resend webhooks");
+  }
+  return secret;
+}
+
+export async function sendFakeResendWebhookPayload(payload: Record<string, unknown>) {
+  const appUrl = playwrightConfig.use.baseURL;
+  const body = JSON.stringify(payload);
+  const secret = await getResendBotWebhookSecret();
+  const id = `msg_${randomUUID()}`;
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const headers = {
+    "Content-Type": "application/json",
+    "svix-id": id,
+    "svix-timestamp": timestamp,
+    "svix-signature": signSvixMessage({ body, secret, id, timestamp }),
+  };
+
+  let response: Response | undefined;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try {
+      response = await postWithManualRedirect({
+        url: `${appUrl}/api/integrations/resend/webhook`,
+        headers,
+        body,
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+
+  if (!response) {
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  return parseJsonResponse(response);
+}
+
 export type SpecMachine = {
   baseUrl: string;
   senderEmail: string;
   requests: RequestRecord[];
   requestHandlers: SpecMachineRequestHandler[];
-  sendFakeResendWebhook(params: { subject: string; text: string }): Promise<unknown>;
+  sendFakeResendWebhook(params: { subject: string; text: string; from?: string }): Promise<unknown>;
   [Symbol.asyncDispose](): Promise<void>;
 };
 
@@ -320,16 +368,15 @@ export async function createSpecMachine(): Promise<SpecMachine> {
     requests,
     requestHandlers,
     server,
-    async sendFakeResendWebhook(params: { subject: string; text: string }) {
-      const appUrl = playwrightConfig.use.baseURL;
+    async sendFakeResendWebhook(params: { subject: string; text: string; from?: string }) {
       const now = new Date().toISOString();
-      const body = JSON.stringify({
+      return sendFakeResendWebhookPayload({
         type: "email.received",
         created_at: now,
         data: {
           email_id: `email_${randomUUID()}`,
           created_at: now,
-          from: senderEmail,
+          from: params.from ?? senderEmail,
           to: ["bot@example.com"],
           cc: [],
           bcc: [],
@@ -342,34 +389,6 @@ export async function createSpecMachine(): Promise<SpecMachine> {
           html: null,
         },
       });
-
-      let secret = process.env.RESEND_BOT_WEBHOOK_SECRET;
-      if (!secret) {
-        secret = execSync(`doppler secrets get RESEND_BOT_WEBHOOK_SECRET --plain`)
-          .toString()
-          .trim();
-      }
-      if (!secret) {
-        throw new Error("RESEND_BOT_WEBHOOK_SECRET must be set for fake resend webhooks");
-      }
-
-      const id = `msg_${randomUUID()}`;
-      const timestamp = String(Math.floor(Date.now() / 1000));
-
-      const headers = {
-        "Content-Type": "application/json",
-        "svix-id": id,
-        "svix-timestamp": timestamp,
-        "svix-signature": signSvixMessage({ body, secret, id, timestamp }),
-      };
-
-      const response = await postWithManualRedirect({
-        url: `${appUrl}/api/integrations/resend/webhook`,
-        headers,
-        body,
-      });
-
-      return parseJsonResponse(response);
     },
     async [Symbol.asyncDispose]() {
       await new Promise<void>((resolve, reject) => {
