@@ -490,6 +490,7 @@ export const emailInboundDelivery = pgTable(
     id: iterateId("mail"),
     provider: t.text().notNull().default("resend"),
     externalId: t.text().notNull(),
+    senderEmail: t.text().notNull(),
     outboxEventId: bigint("outbox_event_id", { mode: "number" })
       .notNull()
       .references(() => outboxEvent.id, { onDelete: "cascade" }),
@@ -500,7 +501,11 @@ export const emailInboundDelivery = pgTable(
     projectId: t.text().references(() => project.id, { onDelete: "set null" }),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.provider, t.externalId), index().on(t.projectId, t.status)],
+  (t) => [
+    uniqueIndex().on(t.provider, t.externalId),
+    index().on(t.projectId, t.status),
+    index().on(t.senderEmail, t.projectId, t.status),
+  ],
 );
 
 export const emailInboundDeliveryRelations = relations(emailInboundDelivery, ({ one }) => ({

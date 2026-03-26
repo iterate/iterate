@@ -246,6 +246,13 @@
       "when": 1773908701051,
       "tag": "0034_email_inbound_deliveries",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1774519572572,
+      "tag": "0035_add_sender_email_to_email_inbound_delivery",
+      "breakpoints": true
     }
   ]
 }

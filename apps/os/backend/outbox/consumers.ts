@@ -1,4 +1,4 @@
-import { eq, and, inArray, sql } from "drizzle-orm";
+import { eq, and, inArray, isNull, sql } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { match } from "schematch";
 import { z } from "zod/v4";
@@ -222,6 +222,7 @@ export const registerConsumers = () => {
         .values({
           provider: "resend",
           externalId: resendEmailId,
+          senderEmail,
           outboxEventId: params.eventId,
           projectId: routing?.project?.id ?? null,
           status: "pending",
@@ -230,6 +231,7 @@ export const registerConsumers = () => {
           target: [schema.emailInboundDelivery.provider, schema.emailInboundDelivery.externalId],
           set: {
             outboxEventId: params.eventId,
+            senderEmail,
             projectId: routing?.project?.id ?? sql`${schema.emailInboundDelivery.projectId}`,
             status: "pending",
             updatedAt: new Date(),
@@ -325,7 +327,13 @@ export const registerConsumers = () => {
       await db
         .update(schema.emailInboundDelivery)
         .set({ projectId })
-        .where(eq(schema.emailInboundDelivery.id, delivery.id));
+        .where(
+          and(
+            eq(schema.emailInboundDelivery.senderEmail, sender.email),
+            isNull(schema.emailInboundDelivery.projectId),
+            eq(schema.emailInboundDelivery.status, "pending"),
+          ),
+        );
 
       await createMachineForProject({
         db,
