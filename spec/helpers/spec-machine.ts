@@ -181,7 +181,6 @@ export type SpecMachine = {
   senderEmail: string;
   requests: RequestRecord[];
   requestHandlers: SpecMachineRequestHandler[];
-  reportReady(): Promise<void>;
   sendFakeResendWebhook(params: { subject: string; text: string; from?: string }): Promise<unknown>;
   [Symbol.asyncDispose](): Promise<void>;
 };
@@ -192,19 +191,6 @@ export async function createSpecMachine(): Promise<SpecMachine> {
   const runtimes = new Map<string, RuntimeState>();
   let latestRuntimeExternalId: string | undefined;
   let providerBaseUrl = "";
-
-  function getLatestRuntime() {
-    if (!latestRuntimeExternalId) {
-      throw new Error("Spec machine provider has not created any machines yet");
-    }
-
-    const runtime = runtimes.get(latestRuntimeExternalId);
-    if (!runtime) {
-      throw new Error(`Missing runtime for ${latestRuntimeExternalId}`);
-    }
-
-    return runtime;
-  }
 
   async function reportReady(runtime: RuntimeState) {
     if (!runtime.bootstrapEnvVars) {
@@ -536,9 +522,6 @@ export async function createSpecMachine(): Promise<SpecMachine> {
     senderEmail,
     requests,
     requestHandlers,
-    async reportReady() {
-      await reportReady(getLatestRuntime());
-    },
     async sendFakeResendWebhook(params: { subject: string; text: string; from?: string }) {
       const now = new Date().toISOString();
       return sendFakeResendWebhookPayload({
