@@ -1034,9 +1034,6 @@ importers:
       effect:
         specifier: ^3.16.0
         version: 3.19.19
-      evlog:
-        specifier: ^1.8.0
-        version: 1.11.0(react@19.2.4)
       hono:
         specifier: ^4.10.7
         version: 4.12.8
