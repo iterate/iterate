@@ -1,6 +1,54 @@
 import http from "node:http";
 import { once } from "node:events";
 import { expect, test } from "vitest";
+import * as YAML from "yaml";
+
+expect.addSnapshotSerializer({
+  test: () => true,
+  print: (val) => {
+    return YAML.stringify(normalizeSnapshotValue(val));
+  },
+});
+
+function normalizeSnapshotValue(value: unknown, path: string[] = []): unknown {
+  const key = path[path.length - 1];
+
+  if (key === "api_key") return "<api-key>";
+  if (key === "timestamp") return "<timestamp>";
+  if (key === "lineno") return "<line-number>";
+  if (key === "colno") return "<column-number>";
+  if (key === "duration") return "<duration-ms>";
+  if (key === "jobId") return "<job-id>";
+  if (key === "id" && path.at(-2) === "request") return "<request-id>";
+
+  if (Array.isArray(value)) {
+    return value.map((entry, index) => normalizeSnapshotValue(entry, [...path, String(index)]));
+  }
+
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entryValue]) => [
+        entryKey,
+        normalizeSnapshotValue(entryValue, [...path, entryKey]),
+      ]),
+    );
+  }
+
+  if (typeof value !== "string") return value;
+
+  return value
+    .replaceAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
+    .replaceAll(/(?<=\btrpc-)\<uuid\>/g, "<marker>")
+    .replaceAll(/(?<=\bhono-)\<uuid\>/g, "<marker>")
+    .replaceAll(/(?<=\boutbox-fail-)\<uuid\>/g, "<marker>")
+    .replaceAll(/(?<=\boutbox-success-)\<uuid\>/g, "<marker>")
+    .replaceAll(/(?<=\bmalformed-)\<uuid\>/g, "<marker>")
+    .replaceAll(/(?<=\bmissing-consumer-)\<uuid\>/g, "<marker>")
+    .replaceAll(/https?:\/\/[^/\s]+/g, "<origin>")
+    .replaceAll("/Users/mmkal/src/iterate", "<repo>")
+    .replaceAll(/\boutbox:[^:\s]+:\d+\b/g, "outbox:<consumer>:<job-id>")
+    .replaceAll(/\bmissing-consumer-[^"' ]+\b/g, "missing-consumer-<marker>");
+}
 
 test("captures a trpc procedure error", async () => {
   await using integration = await createPostHogIntegration();
@@ -23,6 +71,106 @@ test("captures a trpc procedure error", async () => {
       method: "POST",
     },
   });
+  expect(captured.body).toMatchInlineSnapshot(`
+    api_key: <api-key>
+    event: $exception
+    distinct_id: anonymous
+    properties:
+      $exception_list:
+        - type: NonErrorThrowable
+          value: "oRPC Error unknown <origin>/api/orpc/testing/throwTrpcError:
+            [test_trpc_error] trpc-<marker>"
+          mechanism:
+            handled: true
+            synthetic: false
+          stacktrace:
+            type: raw
+            frames:
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/logging/logger.ts
+                function: toParsedError
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/logging/logger.ts
+                function: Object.error
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/worker.ts
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-PFM44RO3.js
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/@orpc_server_fetch.js
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/@orpc_server_fetch.js
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/worker.ts
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                function: dispatch
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                function: dispatch
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                function: dispatch
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+      $environment: dev-misha
+      $lib: os-logging
+      request:
+        id: <request-id>
+        method: POST
+        path: /api/orpc/testing/throwTrpcError
+        status: 500
+        duration: <duration-ms>
+        waitUntil: false
+        url: <origin>/api/orpc/testing/throwTrpcError
+      user:
+        id: anonymous
+        email: unknown
+    timestamp: <timestamp>
+  `);
 });
 
 test("captures a hono endpoint error", async () => {
@@ -44,6 +192,105 @@ test("captures a hono endpoint error", async () => {
       method: "GET",
     },
   });
+  expect(captured.body).toMatchInlineSnapshot(`
+    api_key: <api-key>
+    event: $exception
+    distinct_id: anonymous
+    properties:
+      $exception_list:
+        - type: Error
+          value: "[test_hono_error] hono-<marker>"
+          mechanism:
+            handled: true
+            synthetic: false
+          stacktrace:
+            type: raw
+            frames:
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/worker.ts
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                function: dispatch
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-EFPPX6X2.js
+                function: NoopContextManager2.with
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-EFPPX6X2.js
+                function: ContextAPI2.with
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/utils/otel-init.ts
+                function: withExtractedTraceContext
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/worker.ts
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                function: dispatch
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/worker.ts
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+      $environment: dev-misha
+      $lib: os-logging
+      request:
+        id: <request-id>
+        method: GET
+        path: /api/testing/throw-hono-error
+        status: 500
+        duration: <duration-ms>
+        waitUntil: false
+        url: <origin>/api/testing/throw-hono-error?marker=hono-<marker>
+      user:
+        id: anonymous
+        email: unknown
+    timestamp: <timestamp>
+  `);
 });
 
 test("does not capture PostHog for successful outbox consumer flow", async () => {
@@ -64,6 +311,7 @@ test("does not capture PostHog for successful outbox consumer flow", async () =>
       { timeout: 1_000 },
     )
     .toBe(false);
+  expect(integration.capture.requests).toMatchInlineSnapshot(`[]`);
 });
 
 test("captures an outbox consumer error", async () => {
@@ -86,6 +334,105 @@ test("captures an outbox consumer error", async () => {
       method: "POST",
     },
   });
+  expect(captured.body).toMatchInlineSnapshot(`
+    api_key: <api-key>
+    event: $exception
+    distinct_id: system:outbox
+    properties:
+      $exception_list:
+        - type: Error
+          value: "[test_outbox_consumer_error] outbox-fail-<marker>"
+          mechanism:
+            handled: true
+            synthetic: false
+          stacktrace:
+            type: raw
+            frames:
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/consumers.ts
+                function: Object.handler
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
+                function: Object.handler
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
+                function: runHandler
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/outbox-logging.ts
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/logging/logger.ts
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/logging/logger.ts
+                function: Object.run
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/outbox-logging.ts
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
+                function: processQueue
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/orpc/routers/testing.ts
+                function: Object.handler
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+      $environment: dev-misha
+      $lib: os-logging
+      request:
+        id: <request-id>
+        method: POST
+        path: /api/orpc/testing/emitFailingOutboxEvent
+        status: -1
+        duration: <duration-ms>
+        waitUntil: false
+        url: <origin>/api/orpc/testing/emitFailingOutboxEvent
+      user:
+        id: system:outbox
+        email: outbox@system
+    timestamp: <timestamp>
+  `);
 });
 
 test("captures a malformed outbox job error", async () => {
@@ -108,6 +455,126 @@ test("captures a malformed outbox job error", async () => {
       method: "OUTBOX",
     },
   });
+  expect(captured.body).toMatchInlineSnapshot(`
+    api_key: <api-key>
+    event: $exception
+    distinct_id: system:outbox
+    properties:
+      $exception_list:
+        - type: OutboxDLQ:invalid-consumer-job
+          value: >-
+            Error: [outbox] invalid message: ✖ Invalid input: expected string,
+            received undefined
+              → at message.event_name
+            ✖ Invalid input: expected string, received undefined
+              → at message.consumer_name
+            ✖ Invalid input: expected number, received undefined
+              → at message.event_id
+            ✖ Invalid input: expected object, received undefined
+              → at message.event_payload
+            ✖ Invalid input: expected array, received undefined
+              → at message.processing_results
+            ✖ Invalid input: expected string, received undefined
+              → at message.environment
+          mechanism:
+            handled: true
+            synthetic: false
+          stacktrace:
+            type: raw
+            frames:
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/outbox-logging.ts
+                function: sendDLQToPostHog
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
+                function: emit
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
+                function: processQueue
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/orpc/routers/testing.ts
+                function: Object.handler
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                function: next
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                function: next
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                function: next
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/@orpc_server_fetch.js
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+      $environment: dev-misha
+      $lib: outbox-dlq
+      request:
+        id: <request-id>
+        method: OUTBOX
+        path: outbox/invalid-consumer-job
+        status: 500
+        duration: <duration-ms>
+        waitUntil: false
+      user:
+        id: system:outbox
+        email: outbox@system
+      outbox:
+        consumerName: invalid-consumer-job
+        jobId: <job-id>
+        attempt: 1
+        eventName: invalid-message
+        eventId: -1
+        causation: null
+        processingResults: []
+        status: failed
+    timestamp: <timestamp>
+  `);
 });
 
 test("captures a missing consumer error", async () => {
@@ -130,6 +597,119 @@ test("captures a missing consumer error", async () => {
       method: "OUTBOX",
     },
   });
+  expect(captured.body).toMatchInlineSnapshot(`
+    api_key: <api-key>
+    event: $exception
+    distinct_id: system:outbox
+    properties:
+      $exception_list:
+        - type: OutboxDLQ:missing-consumer-<marker>>
+          value: "Error: [outbox] no consumer found for
+            event=testing:missing-consumer:missing-consumer-<marker>>
+            consumer=missing-consumer-<marker>>"
+          mechanism:
+            handled: true
+            synthetic: false
+          stacktrace:
+            type: raw
+            frames:
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/outbox-logging.ts
+                function: sendDLQToPostHog
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
+                function: emit
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
+                function: archiveFailedJob
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
+                function: processQueue
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/orpc/routers/testing.ts
+                function: Object.handler
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                function: next
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                function: next
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                function: next
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: false
+      $environment: dev-misha
+      $lib: outbox-dlq
+      request:
+        id: <request-id>
+        method: OUTBOX
+        path: outbox/missing-consumer-<marker>>
+        status: 500
+        duration: <duration-ms>
+        waitUntil: false
+      user:
+        id: system:outbox
+        email: outbox@system
+      outbox:
+        consumerName: missing-consumer-<marker>>
+        jobId: <job-id>
+        attempt: 1
+        eventName: testing:missing-consumer:missing-consumer-<marker>>
+        eventId: 999999
+        causation: null
+        processingResults:
+          - "#1 error: Error: [outbox] no consumer found for
+            event=testing:missing-consumer:missing-consumer-<marker>>
+            consumer=missing-consumer-<marker>>. retry: false. reason: Error marked
+            non-retryable."
+        status: failed
+    timestamp: <timestamp>
+  `);
 });
 
 type CapturedPostHogRequest = {
