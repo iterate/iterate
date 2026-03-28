@@ -10,6 +10,23 @@ const shouldEnablePostHog = () => {
   return true;
 };
 
+// Suppress a known PostHog SDK race condition where the lazy-loaded session
+// recording script's onload fires before initSessionRecording is registered
+// (typically caused by ad blockers partially blocking the script).
+// See: https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/extensions/replay/session-recording.ts
+const POSTHOG_RECORDING_ERROR = "Called on script loaded before session recording is available";
+if (typeof window !== "undefined") {
+  window.addEventListener("error", (event) => {
+    // Check the Error object directly (avoids browser-specific prefixes like "Uncaught Error: ...")
+    if (
+      event.error?.message === POSTHOG_RECORDING_ERROR ||
+      event.message?.includes(POSTHOG_RECORDING_ERROR)
+    ) {
+      event.preventDefault();
+    }
+  });
+}
+
 // Initialize PostHog client-side only when enabled
 if (shouldEnablePostHog()) {
   posthog.init(import.meta.env.VITE_POSTHOG_PUBLIC_KEY!, {

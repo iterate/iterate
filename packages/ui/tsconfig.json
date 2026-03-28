@@ -11,7 +11,6 @@
     "allowImportingTsExtensions": true,
     "moduleResolution": "bundler",
     "skipLibCheck": true,
-    "baseUrl": ".",
     "paths": {
       "@iterate-com/ui/*": ["./src/*"]
     }

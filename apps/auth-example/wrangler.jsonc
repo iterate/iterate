@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "iterate-auth-example",
+  "main": "./src/worker.ts",
+  "compatibility_date": "2026-03-19",
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+    },
+  },
+  "routes": [
+    {
+      "pattern": "auth-example.iterate.app/*",
+      "zone_name": "iterate.app",
+    },
+  ],
+}

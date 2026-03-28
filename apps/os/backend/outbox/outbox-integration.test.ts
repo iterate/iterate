@@ -186,6 +186,170 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     expect(archived!.message.processing_results).toHaveLength(4);
   });
 
+  test("processQueue archives overclaimed stale jobs and still runs fresh jobs", async () => {
+    const db = getTestDb();
+    const queueName = `cq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    await db.execute(sql`select pgmq.create(${queueName}::text)`);
+
+    const queuer = createPgmqQueuer({ queueName, maxReadCount: 3 });
+    const outboxClient = createConsumerClient<TestEventTypes, DBLike>(queuer, {
+      getDb: async () => db,
+      waitUntil: () => {},
+    });
+
+    outboxClient.registerConsumer({
+      name: "logBasic",
+      on: "test:basic",
+      handler: (params) => `received: ${params.payload.message}`,
+    });
+
+    try {
+      const stale = await outboxClient.send(db, {
+        name: "test:basic",
+        payload: { message: "stale" },
+      });
+      const fresh = await outboxClient.send(db, {
+        name: "test:basic",
+        payload: { message: "fresh" },
+      });
+
+      await db.execute(sql`
+        update pgmq.${sql.identifier(`q_${queueName}`)}
+        set read_ct = 4
+        where (message->>'event_id')::bigint = ${Number(stale.eventId)}
+      `);
+
+      await queuer.processQueue(db);
+
+      const archived = await queuer.peekArchive(db);
+      const staleEventId = Number(stale.eventId);
+      const freshEventId = Number(fresh.eventId);
+      expect(archived.find((m) => m.message.event_id === staleEventId)?.message.status).toBe(
+        "failed",
+      );
+      expect(
+        archived.find((m) => m.message.event_id === staleEventId)?.message.processing_results,
+      ).toEqual(expect.arrayContaining([expect.stringContaining("max read count 3 exceeded")]));
+      expect(archived.find((m) => m.message.event_id === freshEventId)?.message.status).toBe(
+        "success",
+      );
+    } finally {
+      await vi.waitUntil(async () => (await queuer.peekQueue(db)).length === 0);
+    }
+  });
+
+  test("processQueue DLQs crash-looped jobs before running handler", async () => {
+    const db = getTestDb();
+    const queueName = `cq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    await db.execute(sql`select pgmq.create(${queueName}::text)`);
+
+    const queuer = createPgmqQueuer({ queueName, maxReadCount: 3 });
+    const outboxClient = createConsumerClient<TestEventTypes, DBLike>(queuer, {
+      getDb: async () => db,
+      waitUntil: () => {},
+    });
+
+    let handlerCalls = 0;
+    outboxClient.registerConsumer({
+      name: "logBasic",
+      on: "test:basic",
+      handler: () => {
+        handlerCalls += 1;
+        return "should not run";
+      },
+    });
+
+    const event = await outboxClient.send(db, {
+      name: "test:basic",
+      payload: { message: "crash-loop" },
+    });
+
+    await db.execute(sql`
+      update pgmq.${sql.identifier(`q_${queueName}`)}
+      set read_ct = 4
+      where (message->>'event_id')::bigint = ${Number(event.eventId)}
+    `);
+
+    await queuer.processQueue(db);
+
+    const archived = await queuer.peekArchive(db);
+    const eventId = Number(event.eventId);
+    const match = archived.find((m) => m.message.event_id === eventId);
+    expect(handlerCalls).toBe(0);
+    expect(match).toBeTruthy();
+    expect(match!.message.status).toBe("failed");
+    expect(match!.message.processing_results).toEqual(
+      expect.arrayContaining([expect.stringContaining("max read count 3 exceeded")]),
+    );
+  });
+
+  test("processQueue archives malformed queue rows immediately", async () => {
+    const db = getTestDb();
+    const queueName = `cq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    await db.execute(sql`select pgmq.create(${queueName}::text)`);
+
+    const queuer = createPgmqQueuer({ queueName, maxReadCount: 3 });
+
+    try {
+      await db.execute(sql`
+        select * from pgmq.send(
+          ${queueName}::text,
+          jsonb_build_object('totally', 'wrong')
+        )
+      `);
+
+      await queuer.processQueue(db);
+
+      const archived = await db.execute(sql<{ message: unknown }[]>`
+        select message from pgmq.${sql.identifier(`a_${queueName}`)}
+      `);
+      expect(archived).toHaveLength(1);
+      expect(archived[0]?.message).toEqual({ totally: "wrong" });
+      const remaining = await db.execute(sql<{ count: number }[]>`
+        select count(*)::int as count from pgmq.${sql.identifier(`q_${queueName}`)}
+      `);
+      expect(remaining[0]?.count).toBe(0);
+    } finally {
+      await db.$client.end({ timeout: 0 });
+    }
+  });
+
+  test("processQueue archives jobs whose consumer no longer exists", async () => {
+    const db = getTestDb();
+    const queueName = `cq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    await db.execute(sql`select pgmq.create(${queueName}::text)`);
+
+    const queuer = createPgmqQueuer({ queueName, maxReadCount: 3 });
+
+    try {
+      await db.execute(sql`
+        select * from pgmq.send(
+          ${queueName}::text,
+          jsonb_build_object(
+            'event_name', 'test:basic',
+            'consumer_name', 'deletedConsumer',
+            'event_id', 123,
+            'event_payload', jsonb_build_object('message', 'x'),
+            'processing_results', '[]'::jsonb,
+            'environment', 'test'
+          )
+        )
+      `);
+
+      await queuer.processQueue(db);
+
+      const archived = await queuer.peekArchive(db);
+      expect(archived).toHaveLength(1);
+      expect(archived[0]?.message.consumer_name).toBe("deletedConsumer");
+      expect(archived[0]?.message.status).toBe("failed");
+      expect(archived[0]?.message.processing_results).toEqual(
+        expect.arrayContaining([expect.stringContaining("no consumer found")]),
+      );
+    } finally {
+      await db.$client.end({ timeout: 0 });
+    }
+  });
+
   test("sendCTE: atomically inserts row and outbox event", { timeout: 30_000 }, async () => {
     await using fixture = await createOutboxFixture();
     const { db, queuer, outboxClient } = fixture;

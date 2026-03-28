@@ -22,6 +22,12 @@ export const ResendWebhookReceivedEventPayload = z.object({
       }),
     ),
   }),
+  _iterate_email_content: z
+    .object({
+      text: z.string(),
+      html: z.string().nullable().optional(),
+    })
+    .optional(),
 });
 
 export type ResendWebhookReceivedEventPayload = z.infer<typeof ResendWebhookReceivedEventPayload>;

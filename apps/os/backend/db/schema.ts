@@ -5,10 +5,8 @@ import {
   text,
   uniqueIndex,
   unique,
-  jsonb,
   index,
-  integer,
-  bigserial,
+  bigint,
   check,
 } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
@@ -38,6 +36,9 @@ export type MachineState = (typeof MachineState)[number];
 // Machine types
 export const MachineType = [...SandboxMachineType] as const;
 export type MachineType = (typeof MachineType)[number];
+
+export const EmailInboundDeliveryStatus = ["pending", "forwarded"] as const;
+export type EmailInboundDeliveryStatus = (typeof EmailInboundDeliveryStatus)[number];
 
 // Secret metadata for OAuth tokens
 export type SecretMetadata = {
@@ -328,7 +329,7 @@ export const secret = pgTable(
     encryptedValue: t.text().notNull(),
     description: t.text(), // Human-readable description for UI and .env comments
     egressProxyRule: t.text(), // URL pattern for egress proxy (e.g. "api.openai.com/*")
-    metadata: jsonb().$type<SecretMetadata>(), // OAuth metadata, expiry, etc.
+    metadata: t.jsonb().$type<SecretMetadata>(), // OAuth metadata, expiry, etc.
     lastSuccessAt: t.timestamp({ withTimezone: true }), // Last successful use
     lastFailedAt: t.timestamp({ withTimezone: true }), // Last failed use (401, etc.)
     ...withTimestamps,
@@ -368,10 +369,10 @@ export const egressPolicy = pgTable(
       .text()
       .notNull()
       .references(() => project.id, { onDelete: "cascade" }),
-    priority: integer().notNull().default(100),
+    priority: t.integer().notNull().default(100),
     urlPattern: t.text(),
     method: t.text(),
-    headerMatch: jsonb().$type<Record<string, string>>(),
+    headerMatch: t.jsonb().$type<Record<string, string>>(),
     decision: t.text({ enum: ["allow", "deny", "human_approval"] }).notNull(),
     reason: t.text(),
     ...withTimestamps,
@@ -397,7 +398,7 @@ export const egressApproval = pgTable(
     policyId: t.text().references(() => egressPolicy.id, { onDelete: "set null" }),
     method: t.text().notNull(),
     url: t.text().notNull(),
-    headers: jsonb().$type<Record<string, string>>().notNull(),
+    headers: t.jsonb().$type<Record<string, string>>().notNull(),
     body: t.text(),
     status: t
       .text({ enum: ["pending", "approved", "rejected", "timeout"] })
@@ -482,6 +483,41 @@ export const projectConnectionRelations = relations(projectConnection, ({ one })
     references: [user.id],
   }),
 }));
+
+export const emailInboundDelivery = pgTable(
+  "email_inbound_delivery",
+  (t) => ({
+    id: iterateId("mail"),
+    provider: t.text().notNull().default("resend"),
+    externalId: t.text().notNull(),
+    senderEmail: t.text().notNull(),
+    outboxEventId: bigint("outbox_event_id", { mode: "number" })
+      .notNull()
+      .references(() => outboxEvent.id, { onDelete: "cascade" }),
+    status: t
+      .text({ enum: [...EmailInboundDeliveryStatus] })
+      .notNull()
+      .default("pending"),
+    projectId: t.text().references(() => project.id, { onDelete: "set null" }),
+    ...withTimestamps,
+  }),
+  (t) => [
+    uniqueIndex().on(t.provider, t.externalId),
+    index().on(t.projectId, t.status),
+    index().on(t.senderEmail, t.projectId, t.status),
+  ],
+);
+
+export const emailInboundDeliveryRelations = relations(emailInboundDelivery, ({ one }) => ({
+  outboxEvent: one(outboxEvent, {
+    fields: [emailInboundDelivery.outboxEventId],
+    references: [outboxEvent.id],
+  }),
+  project: one(project, {
+    fields: [emailInboundDelivery.projectId],
+    references: [project.id],
+  }),
+}));
 // #endregion ========== Organization & Project ==========
 
 // #region ========== Machine ==========
@@ -500,7 +536,7 @@ export const machine = pgTable(
       .notNull()
       .default("starting"),
     externalId: t.text().notNull(),
-    metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
+    metadata: t.jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
   }),
   (t) => [
@@ -601,10 +637,10 @@ export type OutboxEventContext = {
 export const outboxEvent = pgTable(
   "outbox_event",
   (t) => ({
-    id: bigserial("id", { mode: "number" }).primaryKey(),
+    id: t.bigserial({ mode: "number" }).primaryKey(),
     name: t.text().notNull(),
-    payload: jsonb().$type<Record<string, unknown>>().notNull(),
-    context: jsonb().$type<OutboxEventContext>().notNull().default({}),
+    payload: t.jsonb().$type<Record<string, unknown>>().notNull(),
+    context: t.jsonb().$type<OutboxEventContext>().notNull().default({}),
     deduplicationKey: t.text(),
     ...withTimestamps,
   }),

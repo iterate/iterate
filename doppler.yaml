@@ -7,3 +7,5 @@ setup:
     path: ./
   - project: ingress-proxy
     path: apps/cf-ingress-proxy-worker/
+  - project: auth
+    path: apps/auth/
