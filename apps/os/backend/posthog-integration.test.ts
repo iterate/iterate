@@ -293,6 +293,75 @@ test("captures a hono endpoint error", async () => {
   `);
 });
 
+test("captures a waitUntil error", async () => {
+  await using integration = await createPostHogIntegration();
+  const marker = `wait-until-${crypto.randomUUID()}`;
+  const response = await integration.callProcedure({
+    name: "testing/throwWaitUntilError",
+    input: { message: `[test_wait_until_error] ${marker}` },
+  });
+
+  expect(response.ok).toBe(true);
+
+  const captured = await integration.capture.waitForRequest({
+    predicate: (body) =>
+      body.properties &&
+      typeof body.properties === "object" &&
+      "request" in body.properties &&
+      typeof body.properties.request === "object" &&
+      body.properties.request !== null &&
+      "waitUntil" in body.properties.request &&
+      body.properties.request.waitUntil === true &&
+      JSON.stringify(body).includes(marker),
+  });
+
+  expect(captured.body.properties).toMatchObject({
+    request: {
+      path: "/api/orpc/testing/throwWaitUntilError#waitUntil",
+      method: "POST",
+      waitUntil: true,
+      parentRequestId: expect.any(String),
+    },
+  });
+  expect(captured.body).toMatchInlineSnapshot(`
+    api_key: <api-key>
+    event: $exception
+    distinct_id: anonymous
+    properties:
+      $exception_list:
+        - type: Error
+          value: "[test_wait_until_error] wait-until-<uuid>"
+          mechanism:
+            handled: true
+            synthetic: false
+          stacktrace:
+            type: raw
+            frames:
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/orpc/routers/testing.ts
+                function: <anonymous>
+                lineno: <line-number>
+                colno: <column-number>
+                in_app: true
+      $environment: dev-misha
+      $lib: os-logging
+      request:
+        id: <request-id>
+        method: POST
+        path: /api/orpc/testing/throwWaitUntilError#waitUntil
+        status: 500
+        duration: <duration-ms>
+        waitUntil: true
+        parentRequestId: <uuid>
+        url: <origin>/api/orpc/testing/throwWaitUntilError
+      user:
+        id: anonymous
+        email: unknown
+    timestamp: <timestamp>
+  `);
+});
+
 test("does not capture PostHog for successful outbox consumer flow", async () => {
   await using integration = await createPostHogIntegration();
   const marker = `outbox-success-${crypto.randomUUID()}`;
@@ -813,7 +882,7 @@ async function createPostHogIntegration(): Promise<PostHogIntegrationContext> {
   };
 }
 
-const integrationBaseUrl = process.env.APP_URL || "http://localhost:5173";
+const integrationBaseUrl = process.env.APP_URL || "http://local.iterate.com:5173";
 
 async function fetchWithManualRedirect(input: string | URL, init: RequestInit): Promise<Response> {
   let url = new URL(input, integrationBaseUrl);

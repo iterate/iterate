@@ -1,13 +1,20 @@
 import { logger } from "./logger.ts";
+import type { WideLog } from "./types.ts";
 
 type WaitUntilTask<T> = Promise<T> | (() => Promise<T>);
+type WaitUntilOptions = {
+  onError?: (log: WideLog) => void | Promise<void>;
+};
 
 function resolveTask<T>(task: WaitUntilTask<T>): Promise<T> {
   if (typeof task === "function") return Promise.resolve().then(task);
   return task;
 }
 
-export function wrapWaitUntilWithLogging<T>(task: WaitUntilTask<T>): Promise<T> {
+export function wrapWaitUntilWithLogging<T>(
+  task: WaitUntilTask<T>,
+  options?: WaitUntilOptions,
+): Promise<T> {
   let parent: ReturnType<typeof logger.get>;
 
   try {
@@ -38,6 +45,7 @@ export function wrapWaitUntilWithLogging<T>(task: WaitUntilTask<T>): Promise<T> 
         waitUntil: true,
         parentRequestId,
       },
+      ...(parent.egress ? { egress: parent.egress } : {}),
       ...(parent.user ? { user: parent.user } : {}),
     });
 
@@ -47,6 +55,7 @@ export function wrapWaitUntilWithLogging<T>(task: WaitUntilTask<T>): Promise<T> 
       return result;
     } catch (error) {
       logger.error(error, { request: { parentRequestId, waitUntil: true } });
+      await options?.onError?.(logger.get());
       throw error;
     }
   });

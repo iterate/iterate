@@ -17,7 +17,7 @@ import {
 } from "../../db/schema.ts";
 import { slugifyWithSuffix } from "../../utils/slug.ts";
 import { getDefaultProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
-import { isNonProd } from "../../../env.ts";
+import { isNonProd, waitUntil } from "../../../env.ts";
 import { queuer } from "../../outbox/outbox-queuer.ts";
 
 /** Generate a DiceBear avatar URL using a hash of the email as seed */
@@ -61,6 +61,23 @@ export const testingRouter = {
       }
 
       throw new Error(input?.message ?? "Intentional testingRouter error");
+    }),
+
+  throwWaitUntilError: publicProcedure
+    .input(z.object({ message: z.string().default("Intentional waitUntil error") }).optional())
+    .handler(({ input }) => {
+      if (!isNonProd) {
+        throw new ORPCError("FORBIDDEN", {
+          message: "Testing endpoints are not available in production",
+        });
+      }
+
+      waitUntil(async () => {
+        await Promise.resolve();
+        throw new Error(input?.message ?? "Intentional waitUntil error");
+      });
+
+      return { scheduled: true };
     }),
 
   emitSuccessfulOutboxEvent: publicProcedure
