@@ -174,7 +174,8 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
     throw new Error(`Project not found: ${projectId}`);
   }
 
-  // Provision persistent storage unless explicitly set to local-only.
+  // Local Docker sandboxes use ephemeral local persistence by default.
+  // Non-Docker providers still provision Archil unless explicitly local-only.
   const persistenceMode = await db.query.projectEnvVar.findFirst({
     where: and(
       eq(schema.projectEnvVar.projectId, projectId),
@@ -182,7 +183,8 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
       isNull(schema.projectEnvVar.machineId),
     ),
   });
-  if (persistenceMode?.value !== "local") {
+  // todo: just get rid of archil for now, we can come back to it when we have more demanding persistence requirements
+  if (projectRecord.sandboxProvider !== "docker" && persistenceMode?.value !== "local") {
     await ensureProjectArchilDisk(db, env, {
       projectId,
       projectSlug: projectRecord.slug,

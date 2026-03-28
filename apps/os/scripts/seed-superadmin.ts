@@ -6,13 +6,14 @@
  *
  * Usage: doppler run --config dev -- tsx apps/os/scripts/seed-global-secrets.ts
  */
+import { pathToFileURL } from "node:url";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { hashPassword } from "better-auth/crypto";
 import { sql } from "drizzle-orm";
 import * as schema from "../backend/db/schema.ts";
 
-async function main() {
+export async function seedSuperadmin() {
   const databaseUrl = process.env.PSCALE_DATABASE_URL || process.env.DATABASE_URL;
   const encryptionSecret = process.env.ENCRYPTION_SECRET;
   const password = process.env.SERVICE_AUTH_TOKEN;
@@ -72,8 +73,12 @@ async function main() {
 }
 
 // look for --run so we can import values from this file without running it immediately
-if (process.argv.includes("--run")) {
-  main().catch((err) => {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href &&
+  process.argv.includes("--run")
+) {
+  seedSuperadmin().catch((err) => {
     console.error("Failed to seed superadmin:", err);
     process.exit(1);
   });

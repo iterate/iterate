@@ -15,6 +15,7 @@
     "typecheck": "tsgo -b",
     "db:migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",
+    "data-reset": "doppler run --preserve-env=DATABASE_URL,PSCALE_DATABASE_URL,LOCAL_DOCKER_POSTGRES_PORT -- tsx scripts/data-reset.ts",
     "db:studio": "drizzle-kit studio",
     "db:studio:prd": "PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_POSTGRES_URL) drizzle-kit studio",
     "billing:generate": "tsx scripts/generate-billing-meters.ts"

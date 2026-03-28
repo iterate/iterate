@@ -6,6 +6,7 @@
  *
  * Usage: doppler run --config dev -- tsx apps/os/scripts/seed-global-secrets.ts
  */
+import { pathToFileURL } from "node:url";
 import { and, isNull, notInArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
@@ -51,7 +52,7 @@ export const GLOBAL_SECRETS_CONFIG = [
 
 export type GlobalSecretEnvVarName = (typeof GLOBAL_SECRETS_CONFIG)[number]["envVar"];
 
-async function main() {
+export async function seedGlobalSecrets() {
   const databaseUrl = process.env.PSCALE_DATABASE_URL || process.env.DATABASE_URL;
   const encryptionSecret = process.env.ENCRYPTION_SECRET;
 
@@ -138,8 +139,12 @@ async function main() {
 }
 
 // look for --run so we can import values from this file without running it immediately
-if (process.argv.includes("--run")) {
-  main().catch((err) => {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href &&
+  process.argv.includes("--run")
+) {
+  seedGlobalSecrets().catch((err) => {
     console.error("Failed to seed secrets:", err);
     process.exit(1);
   });
