@@ -38,12 +38,12 @@ function normalizeSnapshotValue(value: unknown, path: string[] = []): unknown {
 
   return value
     .replaceAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
-    .replaceAll(/(?<=\btrpc-)\<uuid\>/g, "<marker>")
-    .replaceAll(/(?<=\bhono-)\<uuid\>/g, "<marker>")
-    .replaceAll(/(?<=\boutbox-fail-)\<uuid\>/g, "<marker>")
-    .replaceAll(/(?<=\boutbox-success-)\<uuid\>/g, "<marker>")
-    .replaceAll(/(?<=\bmalformed-)\<uuid\>/g, "<marker>")
-    .replaceAll(/(?<=\bmissing-consumer-)\<uuid\>/g, "<marker>")
+    .replaceAll(/(?<=\btrpc-)<uuid>/g, "<marker>")
+    .replaceAll(/(?<=\bhono-)<uuid>/g, "<marker>")
+    .replaceAll(/(?<=\boutbox-fail-)<uuid>/g, "<marker>")
+    .replaceAll(/(?<=\boutbox-success-)<uuid>/g, "<marker>")
+    .replaceAll(/(?<=\bmalformed-)<uuid>/g, "<marker>")
+    .replaceAll(/(?<=\bmissing-consumer-)<uuid>/g, "<marker>")
     .replaceAll(/https?:\/\/[^/\s]+/g, "<origin>")
     .replaceAll("/Users/mmkal/src/iterate", "<repo>")
     .replaceAll(/\boutbox:[^:\s]+:\d+\b/g, "outbox:<consumer>:<job-id>")
