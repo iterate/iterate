@@ -1,8 +1,6 @@
 import http from "node:http";
 import { once } from "node:events";
-import { expect } from "@playwright/test";
-import { test } from "./test-helpers.ts";
-import { fetchWithManualRedirect } from "./helpers/fetch.ts";
+import { expect, test } from "vitest";
 
 test("captures a trpc procedure error", async () => {
   await using integration = await createPostHogIntegration();
@@ -19,14 +17,12 @@ test("captures a trpc procedure error", async () => {
   });
 
   expect(captured.body.event).toBe("$exception");
-  expect(captured.body.properties).toEqual(
-    expect.objectContaining({
-      request: expect.objectContaining({
-        path: "/api/orpc/testing/throwTrpcError",
-        method: "POST",
-      }),
-    }),
-  );
+  expect(captured.body.properties).toMatchObject({
+    request: {
+      path: "/api/orpc/testing/throwTrpcError",
+      method: "POST",
+    },
+  });
 });
 
 test("captures a hono endpoint error", async () => {
@@ -42,14 +38,12 @@ test("captures a hono endpoint error", async () => {
     predicate: (body) => JSON.stringify(body).includes(marker),
   });
 
-  expect(captured.body.properties).toEqual(
-    expect.objectContaining({
-      request: expect.objectContaining({
-        path: "/api/testing/throw-hono-error",
-        method: "GET",
-      }),
-    }),
-  );
+  expect(captured.body.properties).toMatchObject({
+    request: {
+      path: "/api/testing/throw-hono-error",
+      method: "GET",
+    },
+  });
 });
 
 test("does not capture PostHog for successful outbox consumer flow", async () => {
@@ -86,14 +80,12 @@ test("captures an outbox consumer error", async () => {
     predicate: (body) => JSON.stringify(body).includes(marker),
   });
 
-  expect(captured.body.properties).toEqual(
-    expect.objectContaining({
-      request: expect.objectContaining({
-        path: "/api/orpc/testing/emitFailingOutboxEvent",
-        method: "POST",
-      }),
-    }),
-  );
+  expect(captured.body.properties).toMatchObject({
+    request: {
+      path: "/api/orpc/testing/emitFailingOutboxEvent",
+      method: "POST",
+    },
+  });
 });
 
 test("captures a malformed outbox job error", async () => {
@@ -110,14 +102,12 @@ test("captures a malformed outbox job error", async () => {
     predicate: (body) => JSON.stringify(body).includes("invalid message"),
   });
 
-  expect(captured.body.properties).toEqual(
-    expect.objectContaining({
-      request: expect.objectContaining({
-        path: "outbox/invalid-consumer-job",
-        method: "OUTBOX",
-      }),
-    }),
-  );
+  expect(captured.body.properties).toMatchObject({
+    request: {
+      path: "outbox/invalid-consumer-job",
+      method: "OUTBOX",
+    },
+  });
 });
 
 test("captures a missing consumer error", async () => {
@@ -134,14 +124,12 @@ test("captures a missing consumer error", async () => {
     predicate: (body) => JSON.stringify(body).includes("no consumer found"),
   });
 
-  expect(captured.body.properties).toEqual(
-    expect.objectContaining({
-      request: expect.objectContaining({
-        path: expect.stringContaining("outbox/missing-consumer-"),
-        method: "OUTBOX",
-      }),
-    }),
-  );
+  expect(captured.body.properties).toMatchObject({
+    request: {
+      path: expect.stringContaining("outbox/missing-consumer-"),
+      method: "OUTBOX",
+    },
+  });
 });
 
 type CapturedPostHogRequest = {
@@ -243,4 +231,39 @@ async function createPostHogIntegration(): Promise<PostHogIntegrationContext> {
       await once(server, "close");
     },
   };
+}
+
+const integrationBaseUrl = process.env.APP_URL || "http://localhost:5173";
+
+async function fetchWithManualRedirect(input: string | URL, init: RequestInit): Promise<Response> {
+  let url = new URL(input, integrationBaseUrl);
+  let redirectsRemaining = 5;
+
+  while (true) {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        ...init,
+        redirect: "manual",
+      });
+    } catch (error) {
+      const details =
+        error instanceof Error && error.message ? ` Original error: ${error.message}` : "";
+      throw new Error(
+        `Failed to reach the dev server at ${url.toString()}. Make sure \`pnpm dev\` is running.${details}`,
+      );
+    }
+
+    if (response.status < 300 || response.status >= 400) {
+      return response;
+    }
+
+    const redirectLocation = response.headers.get("location");
+    if (!redirectLocation || redirectsRemaining <= 0) {
+      return response;
+    }
+
+    url = new URL(redirectLocation, url);
+    redirectsRemaining -= 1;
+  }
 }
