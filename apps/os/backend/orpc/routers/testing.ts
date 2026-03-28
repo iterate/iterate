@@ -113,6 +113,17 @@ export const testingRouter = {
     return await queuer.processQueue(ctx.db);
   }),
 
+  purgeOutboxQueue: publicProcedure.handler(async ({ context: ctx }) => {
+    if (!isNonProd) {
+      throw new ORPCError("FORBIDDEN", {
+        message: "Testing endpoints are not available in production",
+      });
+    }
+
+    await ctx.db.execute(sql`select pgmq.purge_queue('consumer_job_queue')`);
+    return { ok: true };
+  }),
+
   insertMalformedOutboxJob: publicProcedure
     .input(z.object({ marker: z.string() }))
     .handler(async ({ context: ctx, input }) => {
@@ -125,7 +136,11 @@ export const testingRouter = {
       await ctx.db.execute(sql`
         select * from pgmq.send(
           queue_name => 'consumer_job_queue',
-          msg => ${JSON.stringify({ nope: true, marker: input.marker })}::jsonb
+          msg => ${JSON.stringify({
+            nope: true,
+            marker: input.marker,
+            event_context: getTestingEventContext(ctx),
+          })}::jsonb
         )
       `);
 
@@ -151,7 +166,7 @@ export const testingRouter = {
             event_name: `testing:missing-consumer:${input.marker}`,
             event_id: 999999,
             event_payload: { marker: input.marker },
-            event_context: {},
+            event_context: getTestingEventContext(ctx),
             processing_results: [],
             environment: process.env.APP_STAGE || process.env.NODE_ENV || "unknown",
           })}::jsonb
@@ -331,3 +346,16 @@ export const testingRouter = {
       return { success: true };
     }),
 };
+
+function getTestingEventContext(ctx: { rawRequest: Request }): Record<string, unknown> {
+  const posthogEgressOverride = ctx.rawRequest.headers.get("x-replace-posthog-egress");
+  if (!posthogEgressOverride) return {};
+
+  return {
+    telemetry: {
+      egress: {
+        ["https://eu.i.posthog.com"]: posthogEgressOverride,
+      },
+    },
+  };
+}

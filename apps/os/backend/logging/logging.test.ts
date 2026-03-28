@@ -39,8 +39,11 @@ function makeJobCtx(overrides: Partial<ConsumerJobContext> = {}): ConsumerJobCon
   };
 }
 
-function makeQueuerEvent(overrides: Partial<QueuerEvent> = {}): QueuerEvent {
+function makeQueuerEvent(
+  overrides: Partial<Extract<QueuerEvent, { kind: "parsed-job" }>> = {},
+): QueuerEvent {
   return {
+    kind: "parsed-job",
     job: {
       msg_id: 42,
       enqueued_at: "2026-01-01T00:00:00Z",

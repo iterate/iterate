@@ -61,7 +61,15 @@ test("does not capture PostHog for successful outbox consumer flow", async () =>
   });
 
   expect(response.ok).toBe(true);
-  await expect.poll(() => integration.capture.requests.length, { timeout: 1_000 }).toBe(0);
+  await expect
+    .poll(
+      () =>
+        integration.capture.requests.some((request) =>
+          JSON.stringify(request.body).includes(marker),
+        ),
+      { timeout: 1_000 },
+    )
+    .toBe(false);
 });
 
 test("captures an outbox consumer error", async () => {
@@ -105,8 +113,8 @@ test("captures a malformed outbox job error", async () => {
   expect(captured.body.properties).toEqual(
     expect.objectContaining({
       request: expect.objectContaining({
-        path: "/api/orpc/testing/insertMalformedOutboxJob",
-        method: "POST",
+        path: "outbox/invalid-consumer-job",
+        method: "OUTBOX",
       }),
     }),
   );
@@ -129,8 +137,8 @@ test("captures a missing consumer error", async () => {
   expect(captured.body.properties).toEqual(
     expect.objectContaining({
       request: expect.objectContaining({
-        path: "/api/orpc/testing/insertMissingConsumerOutboxJob",
-        method: "POST",
+        path: expect.stringContaining("outbox/missing-consumer-"),
+        method: "OUTBOX",
       }),
     }),
   );
@@ -180,6 +188,15 @@ async function createPostHogIntegration(): Promise<PostHogIntegrationContext> {
     throw new Error("Failed to bind capture server");
   }
   const captureOrigin = `http://127.0.0.1:${address.port}`;
+
+  await fetchWithManualRedirect("/api/orpc/testing/purgeOutboxQueue", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-replace-posthog-egress": captureOrigin,
+    },
+    body: JSON.stringify({ json: {} }),
+  });
 
   return {
     capture: {

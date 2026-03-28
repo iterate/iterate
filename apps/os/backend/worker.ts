@@ -146,22 +146,33 @@ const requestInfoForWideLog = (
 };
 export type RequestInfoForWideLog = ReturnType<typeof requestInfoForWideLog>;
 
+function seedRequestLogContext(
+  c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
+  requestId: string,
+): void {
+  logger.set({
+    service: "os",
+    environment: appStage,
+    request: requestInfoForWideLog(requestId, c),
+    user: { id: "anonymous", email: "unknown" },
+  });
+  if (isNonProd) {
+    const posthogEgressOverride = c.req.header("x-replace-posthog-egress");
+    if (posthogEgressOverride) {
+      logger.set({
+        egress: {
+          ["https://eu.i.posthog.com"]: posthogEgressOverride,
+        },
+      });
+    }
+  }
+}
+
 app.use("*", async (c, next) => {
   const requestId = c.req.header("cf-ray")?.trim() || crypto.randomUUID();
 
   return logger.run(async ({ store }) => {
-    logger.set({
-      service: "os",
-      environment: appStage,
-      request: requestInfoForWideLog(requestId, c),
-      user: { id: "anonymous", email: "unknown" },
-    });
-    if (isNonProd) {
-      const posthogEgressOverride = c.req.header("x-replace-posthog-egress");
-      if (posthogEgressOverride) {
-        logger.set({ egress: { ["https://eu.i.posthog.com"]: posthogEgressOverride } });
-      }
-    }
+    seedRequestLogContext(c, requestId);
     store.exitHandlers.push((log) => {
       if (!log.errors?.length) return;
       c.executionCtx.waitUntil(sendLogExceptionToPostHog({ log, env: c.env }));
@@ -402,7 +413,19 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
   );
 });
 
-app.onError((_err, c) => {
+app.onError((err, c) => {
+  c.executionCtx.waitUntil(
+    logger.run(async ({ store }) => {
+      seedRequestLogContext(c, c.req.header("cf-ray")?.trim() || crypto.randomUUID());
+      logger.set({ user: getPostHogUserContext(c) });
+      store.exitHandlers.push((log) => {
+        if (!log.errors?.length) return;
+        c.executionCtx.waitUntil(sendLogExceptionToPostHog({ log, env: c.env }));
+      });
+      logger.set({ request: { status: 500 } });
+      logger.error("Hono unhandled error", err);
+    }),
+  );
   return c.json({ error: "Internal Server Error" }, 500);
 });
 

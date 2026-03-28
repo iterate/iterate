@@ -149,6 +149,11 @@ export const logger = {
 
   get: (): WideLog => cloneLog(getStore(`logger.get`).log),
 
+  peek: (): WideLog | undefined => {
+    const store = storage.getStore();
+    return store ? cloneLog(store.log) : undefined;
+  },
+
   set: (patch: Record<string, unknown>): void => {
     const store = getStore(`logger.set`);
     store.log = mergeLogRecords(store.log, patch) as WideLog;
