@@ -47,11 +47,11 @@ const AppAgentsSlugRoute = AppAgentsSlugRouteImport.update({
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/terminal': typeof LayoutLessTerminalRoute
   '/': typeof AppIndexRoute
+  '/terminal': typeof LayoutLessTerminalRoute
   '/agents/$slug': typeof AppAgentsSlugRoute
   '/agents/new': typeof AppAgentsNewRoute
-  '/agents': typeof AppAgentsIndexRoute
+  '/agents/': typeof AppAgentsIndexRoute
 }
 export interface FileRoutesByTo {
   '/terminal': typeof LayoutLessTerminalRoute
@@ -71,7 +71,7 @@ export interface FileRoutesById {
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/terminal' | '/' | '/agents/$slug' | '/agents/new' | '/agents'
+  fullPaths: '/' | '/terminal' | '/agents/$slug' | '/agents/new' | '/agents/'
   fileRoutesByTo: FileRoutesByTo
   to: '/terminal' | '/' | '/agents/$slug' | '/agents/new' | '/agents'
   id:
@@ -94,7 +94,7 @@ declare module '@tanstack/react-router' {
     '/_app': {
       id: '/_app'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
@@ -115,7 +115,7 @@ declare module '@tanstack/react-router' {
     '/_app/agents/': {
       id: '/_app/agents/'
       path: '/agents'
-      fullPath: '/agents'
+      fullPath: '/agents/'
       preLoaderRoute: typeof AppAgentsIndexRouteImport
       parentRoute: typeof AppRoute
     }

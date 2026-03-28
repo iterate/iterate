@@ -867,21 +867,21 @@ function getFetch(targetUrl: string, { headers }: { headers: HeadersInit }): typ
   const requestHeaders = new Headers(headers);
   const requestHost = requestHeaders.get("host") ?? requestHeaders.get("x-forwarded-host");
   if (!requestHost) {
-    return fetch;
+    return (input, init) => fetch(input, init);
   }
 
   let requestHostname: string;
   try {
     requestHostname = new URL(`http://${requestHost}`).hostname;
   } catch {
-    return fetch;
+    return (input, init) => fetch(input, init);
   }
 
   if (new URL(targetUrl).hostname !== requestHostname) {
-    return fetch;
+    return (input, init) => fetch(input, init);
   }
 
-  return env.SELF.fetch;
+  return (input, init) => env.SELF.fetch(input, init);
 }
 
 /**

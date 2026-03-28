@@ -14,12 +14,13 @@ import {
   SelectValue,
 } from "@/components/ui/select.tsx";
 
-type ProjectSandboxProvider = "daytona" | "docker" | "fly";
+type ProjectSandboxProvider = "daytona" | "docker" | "fly" | "spec-machine";
 
 const SANDBOX_PROVIDER_LABELS: Record<ProjectSandboxProvider, string> = {
   daytona: "Daytona (Cloud)",
   docker: "Docker",
   fly: "Fly.io",
+  "spec-machine": "Spec machine",
 };
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug/settings")({

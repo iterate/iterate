@@ -75,6 +75,10 @@ export type InternalEventTypes = {
     payload: Record<string, unknown>;
   };
   "resend:webhook-received": ResendWebhookReceivedEventPayload;
+  "email:onboarding-requested": {
+    provider: "resend";
+    externalEmailId: string;
+  };
   "posthog:webhook-received": PosthogWebhookReceivedEventPayload;
   "machine:pull-iterate-iterate-requested": {
     machineId: string;

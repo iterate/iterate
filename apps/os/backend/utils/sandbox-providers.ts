@@ -1,6 +1,6 @@
 import type { CloudflareEnv } from "../../env.ts";
 
-export const PROJECT_SANDBOX_PROVIDER = ["fly", "docker", "daytona"] as const;
+export const PROJECT_SANDBOX_PROVIDER = ["fly", "docker", "daytona", "spec-machine"] as const;
 export type ProjectSandboxProvider = (typeof PROJECT_SANDBOX_PROVIDER)[number];
 
 export type SandboxProviderOption = {

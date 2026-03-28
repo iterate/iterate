@@ -1,4 +1,4 @@
-import { eq, and, inArray, sql } from "drizzle-orm";
+import { eq, and, inArray, isNull, sql } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { match } from "schematch";
 import { z } from "zod/v4";
@@ -16,9 +16,15 @@ import {
   sendProbeMessage,
   pollForProbeAnswer,
 } from "../services/machine-readiness-probe.ts";
-import { buildMachineEnvVars } from "../services/machine-creation.ts";
+import { buildMachineEnvVars, createMachineForProject } from "../services/machine-creation.ts";
+import { createUserFromVerifiedEmail } from "../auth/auth.ts";
 import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
 import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
+import { isSignupAllowed } from "../email/signup-allowlist.ts";
+import { getDefaultOrganizationNameFromEmail, parseSender } from "../email/email-routing.ts";
+import { parseSpecMachineEmail } from "../email/spec-machine.ts";
+import { slugifyWithSuffix } from "../utils/slug.ts";
+import { getDefaultProjectSandboxProvider } from "../utils/sandbox-providers.ts";
 import { outboxClient as cc } from "./client.ts";
 
 const IterateMainPushWebhookPayload = z.object({
@@ -37,14 +43,41 @@ function parseGitRefBranch(ref: string): string | null {
   return ref.slice(prefix.length);
 }
 
-function parseSenderEmail(from: string): string {
-  const match = from.match(/<([^>]+)>/);
-  return match ? match[1] : from;
+function createDefaultMachineName(sandboxProvider: string): string {
+  const date = new Date();
+  const month = date.toLocaleString("en-US", { month: "short" }).toLowerCase();
+  const day = date.getDate();
+  const hour = date.getHours().toString().padStart(2, "0");
+  const minute = date.getMinutes().toString().padStart(2, "0");
+  return `${sandboxProvider}-${month}-${day}-${hour}h${minute}`;
 }
 
-function parseRecipientLocal(to: string): string {
-  const email = to.includes("<") ? parseSenderEmail(to) : to;
-  return email.split("@")[0];
+function isMissingSandboxError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  if (error.name === "DaytonaNotFoundError") return true;
+
+  return [
+    /No such container/i,
+    /not found in Daytona/i,
+    /failed \(404\)/i,
+    /machine .* not found/i,
+    /app .* not found/i,
+  ].some((pattern) => pattern.test(error.message));
+}
+
+async function findAvailableProjectSlug(db: Awaited<ReturnType<typeof getDb>>, baseSlug: string) {
+  let candidate = baseSlug;
+
+  while (true) {
+    const [existingOrg, existingProject] = await Promise.all([
+      db.query.organization.findFirst({ where: eq(schema.organization.slug, candidate) }),
+      db.query.project.findFirst({ where: eq(schema.project.slug, candidate) }),
+    ]);
+
+    if (!existingOrg && !existingProject) return candidate;
+    candidate = slugifyWithSuffix(baseSlug);
+  }
 }
 
 export const registerConsumers = () => {
@@ -87,110 +120,236 @@ export const registerConsumers = () => {
   });
 
   cc.registerConsumer({
-    name: "forwardResendWebhook",
+    name: "routeResendWebhook",
     on: "resend:webhook-received",
     async handler(params) {
       const payload = ResendWebhookReceivedEventPayload.parse(params.payload);
       const resendEmailId = payload.data.email_id;
-      const senderEmail = parseSenderEmail(payload.data.from).toLowerCase();
       const db = await getDb();
+      const senderEmail = parseSender(payload.data.from).email;
+      const [routing] = await db
+        .select({
+          user: schema.user,
+          project: schema.project,
+          machine: schema.machine,
+        })
+        .from(schema.user)
+        .leftJoin(
+          schema.organizationUserMembership,
+          eq(schema.organizationUserMembership.userId, schema.user.id),
+        )
+        .leftJoin(
+          schema.organization,
+          eq(schema.organization.id, schema.organizationUserMembership.organizationId),
+        )
+        .leftJoin(schema.project, eq(schema.project.organizationId, schema.organization.id))
+        .leftJoin(
+          schema.machine,
+          and(
+            eq(schema.machine.projectId, schema.project.id),
+            inArray(schema.machine.state, ["active", "starting"]),
+          ),
+        )
+        .where(eq(schema.user.email, senderEmail))
+        .orderBy(
+          sql`
+            case
+              when ${schema.machine.state} = 'active' then 0
+              when ${schema.machine.state} = 'starting' then 1
+              when ${schema.project.id} is not null then 2
+              else 3
+            end
+          `,
+          schema.project.createdAt,
+        )
+        .limit(1);
 
-      const user = await db.query.user.findFirst({
-        where: (u, { eq: whereEq }) => whereEq(u.email, senderEmail),
+      logger.set({
+        emailRouting: {
+          project: routing?.project?.slug,
+          projectId: routing?.project?.id,
+          machine: routing?.machine?.state,
+          machineId: routing?.machine?.id,
+          machineExternalId: routing?.machine?.externalId,
+          userId: routing?.user?.id,
+        },
       });
-      if (!user) {
-        logger.warn(`No user found for sender ${senderEmail}`);
-        return `skipped: no user found for ${senderEmail}`;
-      }
 
-      const memberships = await db.query.organizationUserMembership.findMany({
-        where: (m, { eq: whereEq }) => whereEq(m.userId, user.id),
-        with: {
-          organization: {
-            with: {
-              projects: {
-                with: {
-                  machines: {
-                    where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
-                    limit: 1,
-                  },
-                },
-              },
+      if (routing?.machine?.state === "active") {
+        // happy path: machine is already active
+        const { createResendClient, fetchEmailContent, forwardEmailWebhookToMachine } =
+          await import("../integrations/resend/resend.ts");
+        const resendClient = createResendClient(env.RESEND_BOT_API_KEY);
+        const emailContent =
+          payload._iterate_email_content || (await fetchEmailContent(resendClient, resendEmailId));
+
+        const forwardResult = await forwardEmailWebhookToMachine(
+          routing.machine,
+          {
+            ...payload,
+            _iterate: {
+              userId: routing.user.id,
+              projectId: routing.machine.projectId,
+              emailBody: emailContent
+                ? {
+                    text: emailContent.text,
+                    html: emailContent.html,
+                  }
+                : null,
             },
           },
-        },
-      });
-      if (memberships.length === 0) {
-        logger.set({ user: { id: user.id } });
-        logger.warn("No org memberships for user");
-        return `skipped: user ${user.id} has no org memberships`;
-      }
-
-      const recipientLocal = payload.data.to[0] ? parseRecipientLocal(payload.data.to[0]) : "";
-      const projectSlugMatch = recipientLocal.match(/\+([^@]+)$/);
-      const targetProjectSlug = projectSlugMatch ? projectSlugMatch[1] : null;
-
-      let targetProject:
-        | (typeof schema.project.$inferSelect & {
-            machines: (typeof schema.machine.$inferSelect)[];
-          })
-        | null = null;
-
-      for (const membership of memberships) {
-        const org = membership.organization;
-        for (const project of org.projects) {
-          if (targetProjectSlug && project.slug === targetProjectSlug) {
-            targetProject = project;
-            break;
-          }
-          if (!targetProjectSlug && project.machines.length > 0 && !targetProject) {
-            targetProject = project;
-          }
+          env,
+        );
+        if (!forwardResult.success) {
+          throw new Error(`Resend forward failed: ${forwardResult.error}`);
         }
-        if (targetProject) break;
+
+        await db
+          .update(schema.emailInboundDelivery)
+          .set({ status: "forwarded" })
+          .where(eq(schema.emailInboundDelivery.externalId, resendEmailId));
+
+        return `forwarded to ${routing.machine.id}`;
       }
 
-      if (!targetProject) {
-        logger.set({ user: { id: user.id } });
-        logger.warn(`No project found for email targetProjectSlug=${targetProjectSlug ?? "none"}`);
-        return `skipped: no project found for ${targetProjectSlug ?? "default route"}`;
+      if (!routing?.user && !isSignupAllowed(senderEmail, env.SIGNUP_ALLOWLIST)) {
+        logger.warn(`sender ${senderEmail} is not allowlisted for email onboarding`);
+        return `skipped: sender ${senderEmail} is not allowlisted`;
       }
 
-      const targetMachine = targetProject.machines[0];
-      if (!targetMachine) {
-        logger.set({ project: { id: targetProject.id }, user: { id: user.id } });
-        return `skipped: project ${targetProject.id} has no active machine`;
-      }
-
-      const { createResendClient, fetchEmailContent, forwardEmailWebhookToMachine } =
-        await import("../integrations/resend/resend.ts");
-      const resendClient = createResendClient(env.RESEND_BOT_API_KEY);
-      const emailContent = await fetchEmailContent(resendClient, resendEmailId);
-
-      logger.debug("Forwarding to machine", { machineId: targetMachine.id });
-      const forwardResult = await forwardEmailWebhookToMachine(
-        targetMachine,
-        {
-          ...payload,
-          _iterate: {
-            userId: user.id,
-            projectId: targetProject.id,
-            emailBody: emailContent
-              ? {
-                  text: emailContent.text,
-                  html: emailContent.html,
-                }
-              : null,
+      await db
+        .insert(schema.emailInboundDelivery)
+        .values({
+          provider: "resend",
+          externalId: resendEmailId,
+          senderEmail,
+          outboxEventId: params.eventId,
+          projectId: routing?.project?.id ?? null,
+          status: "pending",
+        })
+        .onConflictDoUpdate({
+          target: [schema.emailInboundDelivery.provider, schema.emailInboundDelivery.externalId],
+          set: {
+            outboxEventId: params.eventId,
+            senderEmail,
+            projectId: routing?.project?.id ?? sql`${schema.emailInboundDelivery.projectId}`,
+            status: "pending",
+            updatedAt: new Date(),
           },
-        },
-        env,
-      );
-      if (!forwardResult.success) {
-        throw new Error(`Resend forward failed: ${forwardResult.error}`);
+        });
+
+      if (!routing?.user) {
+        await cc.send(db, {
+          name: "email:onboarding-requested",
+          payload: {
+            provider: "resend",
+            externalEmailId: resendEmailId,
+          },
+          deduplicationKey: senderEmail,
+        });
+
+        return `enqueued onboarding for ${senderEmail}`;
       }
 
-      logger.set({ machine: { id: targetMachine.id }, user: { id: user.id } });
-      return `forwarded to ${targetMachine.id}`;
+      return `waiting for active machine`;
+    },
+  });
+
+  cc.registerConsumer({
+    name: "onboardEmailSender",
+    on: "email:onboarding-requested",
+    async handler(params) {
+      const db = await getDb();
+      const delivery = await db.query.emailInboundDelivery.findFirst({
+        where: eq(schema.emailInboundDelivery.externalId, params.payload.externalEmailId),
+      });
+      if (!delivery) {
+        throw new Error(`missing inbound delivery for ${params.payload.externalEmailId}`);
+      }
+
+      const event = await db.query.outboxEvent.findFirst({
+        where: eq(schema.outboxEvent.id, delivery.outboxEventId),
+      });
+      if (!event) {
+        throw new Error(`missing outbox event ${delivery.outboxEventId}`);
+      }
+
+      const payload = ResendWebhookReceivedEventPayload.parse(event.payload);
+      const sender = parseSender(payload.data.from);
+      const specMachine = parseSpecMachineEmail(sender.email);
+      const user = await createUserFromVerifiedEmail({
+        db,
+        env,
+        email: sender.email,
+        name: sender.name,
+        consideredVerifiedReason:
+          "Received email from this account, so we know they have access to it!",
+      });
+
+      const projectSlug = await findAvailableProjectSlug(
+        db,
+        getDefaultOrganizationNameFromEmail(sender.email),
+      );
+
+      const projectId = await db.transaction(async (tx) => {
+        const [organization] = await tx
+          .insert(schema.organization)
+          .values({ name: projectSlug, slug: projectSlug })
+          .returning();
+        if (!organization) {
+          throw new Error(`failed to create organization for ${sender.email}`);
+        }
+
+        await tx.insert(schema.organizationUserMembership).values({
+          organizationId: organization.id,
+          userId: user.id,
+          role: "owner",
+        });
+
+        const [project] = await tx
+          .insert(schema.project)
+          .values({
+            name: projectSlug,
+            slug: projectSlug,
+            organizationId: organization.id,
+            sandboxProvider: specMachine
+              ? "spec-machine"
+              : getDefaultProjectSandboxProvider(env, import.meta.env.DEV),
+          })
+          .returning();
+        if (!project) {
+          throw new Error(`failed to create project for ${sender.email}`);
+        }
+
+        return project.id;
+      });
+
+      await db
+        .update(schema.emailInboundDelivery)
+        .set({ projectId })
+        .where(
+          and(
+            eq(schema.emailInboundDelivery.senderEmail, sender.email),
+            isNull(schema.emailInboundDelivery.projectId),
+            eq(schema.emailInboundDelivery.status, "pending"),
+          ),
+        );
+
+      await createMachineForProject({
+        db,
+        env,
+        projectId,
+        name: createDefaultMachineName(
+          specMachine ? "spec-machine" : getDefaultProjectSandboxProvider(env, import.meta.env.DEV),
+        ),
+        metadata: { emailSender: sender.email },
+      });
+
+      logger.set({
+        project: { id: projectId },
+        user: { id: user.id },
+      });
+      return `onboarded ${params.payload.externalEmailId}`;
     },
   });
 
@@ -316,14 +475,14 @@ export const registerConsumers = () => {
           ref: params.payload.ref,
         });
       } catch (e: unknown) {
-        if (e instanceof Error && e.name === "DaytonaNotFoundError") {
+        if (isMissingSandboxError(e)) {
           logger.set({
             machineId: machine.id,
             externalId: machine.externalId,
             eventId: params.eventId,
           });
-          logger.warn("Skipping iterate pull for deleted sandbox");
-          return `skipped: sandbox for machine ${machine.id} not found in Daytona (${machine.externalId})`;
+          logger.warn("Skipping iterate pull for missing sandbox");
+          return `skipped: sandbox for machine ${machine.id} no longer exists (${machine.externalId})`;
         }
 
         // The daemon may be mid-restart (from a prior pull) or the sandbox
@@ -665,6 +824,32 @@ export const registerConsumers = () => {
   });
 
   // ── Post-activation pipeline ──────────────────────────────────────────
+
+  cc.registerConsumer({
+    name: "enqueueReadyEmailForwards",
+    on: "machine:activated",
+    async handler(params) {
+      const db = await getDb();
+      const deliveries = await db.query.emailInboundDelivery.findMany({
+        where: and(
+          eq(schema.emailInboundDelivery.projectId, params.payload.projectId),
+          eq(schema.emailInboundDelivery.status, "pending"),
+        ),
+        with: { outboxEvent: true },
+      });
+
+      for (const delivery of deliveries) {
+        // todo: better sendBatch support. Could also improve sendCTE to make it work better with select+join results
+        await cc.send(db, {
+          name: "resend:webhook-received",
+          payload: ResendWebhookReceivedEventPayload.parse(delivery.outboxEvent.payload),
+          deduplicationKey: `${delivery.externalId}:machine:activated:${params.eventId}`,
+        });
+      }
+
+      return `enqueued ${deliveries.length} email forwards`;
+    },
+  });
 
   // When a machine is activated, find detached machines and fan out delete events
   cc.registerConsumer({

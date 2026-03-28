@@ -4,8 +4,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Building2, Check, X } from "lucide-react";
-import { isFreeEmailDomain } from "../../../backend/utils/free-email-domains.ts";
-import { slugify } from "../../../backend/utils/slug.ts";
+import { getDefaultOrganizationNameFromEmail } from "../../../backend/email/email-routing.ts";
 import { Button } from "@/components/ui/button.tsx";
 import { authMiddleware } from "@/lib/auth-middleware.ts";
 import { orpc, orpcClient } from "@/lib/orpc.tsx";
@@ -27,12 +26,7 @@ const getDefaultOrgName = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     const user = await context.variables.orpcCaller.user.me();
-    const [localPart, domain] = user.email.split("@");
-    // For free email providers (gmail, yahoo, etc), use the username as the org name
-    // For work emails, use the domain (without .com suffix)
-    // Slugify to match what the slug will be (name === slug for simplicity)
-    if (isFreeEmailDomain(domain)) return slugify(localPart.split("+")[0]);
-    return slugify(domain.replace(/\.com$/, ""));
+    return getDefaultOrganizationNameFromEmail(user.email);
   });
 
 const maybeRedirectToOrg = createServerFn({ method: "GET" })
