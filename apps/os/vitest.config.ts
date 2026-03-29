@@ -4,7 +4,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    include: ["**/*.test.ts"],
+    include: [
+      "backend/**/*.test.ts",
+      "app/**/*.test.ts",
+      "backend/**/*.test.tsx",
+      "app/**/*.test.tsx",
+    ],
     exclude: ["**/*.integration.test.ts"],
     testTimeout: 120_000,
     passWithNoTests: true,
