@@ -7,60 +7,6 @@ import { expect, test } from "vitest";
 import * as YAML from "yaml";
 import type { AppRouter } from "./orpc/root.ts";
 
-expect.addSnapshotSerializer({
-  test: () => true,
-  print: (val) => {
-    return YAML.stringify(normalizeSnapshotValue(val));
-  },
-});
-
-function normalizeSnapshotValue(value: unknown, path: string[] = []): unknown {
-  const key = path[path.length - 1];
-
-  if (key === "api_key") return "<api-key>";
-  if (key === "timestamp") return "<timestamp>";
-  if (key === "start") return "<timestamp>";
-  if (key === "end") return "<timestamp>";
-  if (key === "lineno") return "<line-number>";
-  if (key === "colno") return "<column-number>";
-  if (key === "duration") return "<duration-ms>";
-  if (key === "durationMs") return "<duration-ms>";
-  if (key === "jobId") return "<job-id>";
-  if (key === "id" && path.at(-2) === "request") return "<request-id>";
-  if (key === "id" && path.at(-2) === "meta") return "<log-id>";
-  if (key === "parentRequestId") return "<request-id>";
-  if (key === "cfRay") return "<cf-ray>";
-
-  if (Array.isArray(value)) {
-    return value.map((entry, index) => normalizeSnapshotValue(entry, [...path, String(index)]));
-  }
-
-  if (typeof value === "object" && value !== null) {
-    return Object.fromEntries(
-      Object.entries(value).map(([entryKey, entryValue]) => [
-        entryKey,
-        normalizeSnapshotValue(entryValue, [...path, entryKey]),
-      ]),
-    );
-  }
-
-  if (typeof value !== "string") return value;
-
-  return value
-    .replaceAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
-    .replaceAll(/(?<=\btrpc-)<uuid>/g, "<marker>")
-    .replaceAll(/(?<=\bhono-)<uuid>/g, "<marker>")
-    .replaceAll(/(?<=\boutbox-fail-)<uuid>/g, "<marker>")
-    .replaceAll(/(?<=\boutbox-success-)<uuid>/g, "<marker>")
-    .replaceAll(/(?<=\bmalformed-)<uuid>/g, "<marker>")
-    .replaceAll(/(?<=\bmissing-consumer-)<uuid>/g, "<marker>")
-    .replaceAll(/(?<=\bwait-until-)<uuid>/g, "<marker>")
-    .replaceAll(/https?:\/\/[^/\s]+/g, "<origin>")
-    .replaceAll("/Users/mmkal/src/iterate", "<repo>")
-    .replaceAll(/\boutbox:[^:\s]+:\d+\b/g, "outbox:<consumer>:<job-id>")
-    .replaceAll(/\bmissing-consumer-[^"' ]+\b/g, "missing-consumer-<marker>");
-}
-
 test("captures a trpc procedure error", async () => {
   await using integration = await createPostHogIntegration();
   const marker = `trpc-${crypto.randomUUID()}`;
@@ -79,7 +25,7 @@ test("captures a trpc procedure error", async () => {
       method: "POST",
     },
   });
-  expect(captured.body).toMatchInlineSnapshot(`
+  expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
     api_key: <api-key>
     event: $exception
     distinct_id: anonymous
@@ -117,21 +63,21 @@ test("captures a trpc procedure error", async () => {
                 in_app: true
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-PFM44RO3.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/@orpc_server_fetch.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/@orpc_server_fetch.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
                 lineno: <line-number>
                 colno: <column-number>
@@ -145,26 +91,26 @@ test("captures a trpc procedure error", async () => {
                 in_app: true
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: dispatch
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: dispatch
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: dispatch
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
-      $environment: dev-misha
+      $environment: <environment>
       $lib: os-logging
       request:
         id: <request-id>
@@ -200,7 +146,7 @@ test("captures a hono endpoint error", async () => {
       method: "GET",
     },
   });
-  expect(captured.body).toMatchInlineSnapshot(`
+  expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
     api_key: <api-key>
     event: $exception
     distinct_id: anonymous
@@ -223,28 +169,28 @@ test("captures a hono endpoint error", async () => {
                 in_app: true
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: dispatch
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-EFPPX6X2.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: NoopContextManager2.with
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-EFPPX6X2.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: ContextAPI2.with
                 lineno: <line-number>
                 colno: <column-number>
@@ -265,14 +211,14 @@ test("captures a hono endpoint error", async () => {
                 in_app: true
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: dispatch
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/hono.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
                 lineno: <line-number>
                 colno: <column-number>
@@ -284,7 +230,7 @@ test("captures a hono endpoint error", async () => {
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: true
-      $environment: dev-misha
+      $environment: <environment>
       $lib: os-logging
       request:
         id: <request-id>
@@ -321,7 +267,7 @@ test("captures a waitUntil error", async () => {
       parentRequestId: expect.any(String),
     },
   });
-  expect(captured.body).toMatchInlineSnapshot(`
+  expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
     api_key: <api-key>
     event: $exception
     distinct_id: anonymous
@@ -342,7 +288,7 @@ test("captures a waitUntil error", async () => {
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: true
-      $environment: dev-misha
+      $environment: <environment>
       $lib: os-logging
       request:
         id: <request-id>
@@ -379,14 +325,14 @@ test("captures the raw request log for a trpc procedure error", async () => {
       status: 500,
     },
   });
-  expect(captured).toMatchInlineSnapshot(`
+  expect(normalize(captured, { marker })).toMatchInlineSnapshot(`
     meta:
       id: <log-id>
       start: <timestamp>
       end: <timestamp>
       durationMs: <duration-ms>
     service: os
-    environment: dev-misha
+    environment: <environment>
     request:
       path: /api/orpc/testing/throwTrpcError
       status: 500
@@ -406,16 +352,16 @@ test("captures the raw request log for a trpc procedure error", async () => {
     message: "[test_trpc_error_log] trpc-<marker>"
     stack: >-
       Error: [test_trpc_error_log] trpc-<marker>
-          at Object.handler (<repo>/apps/os/backend/orpc/routers/testing.ts:64:13)
-          at <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js:243:32
-          at runWithSpan (<repo>/apps/os/node_modules/.vite/deps_ssr/chunk-PFM44RO3.js:76:12)
-          at next (<repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js:241:26)
-          at next (<repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js:234:23)
-          at <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js:228:24
-          at next (<repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js:223:26)
-          at <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js:123:22
-          at <repo>/apps/os/node_modules/.vite/deps_ssr/@orpc_server_fetch.js:124:34
-          at <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-PFM44RO3.js:292:14
+          at Object.handler (<repo>/apps/os/backend/orpc/routers/testing.ts:<line-number>:<column-number>)
+          at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
+          at runWithSpan (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
+          at next (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
+          at next (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
+          at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
+          at next (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
+          at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
+          at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
+          at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
     errors:
       - name: NonErrorThrowable
         message: "oRPC Error unknown <origin>/api/orpc/testing/throwTrpcError:
@@ -423,16 +369,16 @@ test("captures the raw request log for a trpc procedure error", async () => {
         stack: >-
           Error: oRPC Error unknown <origin>/api/orpc/testing/throwTrpcError:
           [test_trpc_error_log] trpc-<marker>
-              at toParsedError (<repo>/apps/os/backend/logging/logger.ts:60:12)
-              at Object.error (<repo>/apps/os/backend/logging/logger.ts:199:54)
-              at <repo>/apps/os/backend/worker.ts:462:16
-              at <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-PFM44RO3.js:294:13
-              at <repo>/apps/os/node_modules/.vite/deps_ssr/@orpc_server_fetch.js:89:22
-              at <repo>/apps/os/node_modules/.vite/deps_ssr/@orpc_server_fetch.js:400:24
-              at <repo>/apps/os/backend/worker.ts:478:33
-              at dispatch (<repo>/apps/os/node_modules/.vite/deps_ssr/hono.js:37:17)
-              at dispatch (<repo>/apps/os/node_modules/.vite/deps_ssr/hono.js:37:17)
-              at dispatch (<repo>/apps/os/node_modules/.vite/deps_ssr/hono.js:37:17)
+              at toParsedError (<repo>/apps/os/backend/logging/logger.ts:<line-number>:<column-number>)
+              at Object.error (<repo>/apps/os/backend/logging/logger.ts:<line-number>:<column-number>)
+              at <repo>/apps/os/backend/worker.ts:<line-number>:<column-number>
+              at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
+              at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
+              at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
+              at <repo>/apps/os/backend/worker.ts:<line-number>:<column-number>
+              at dispatch (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
+              at dispatch (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
+              at dispatch (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
     messages:
       - "[ERROR] 0s: oRPC Error unknown <origin>/api/orpc/testing/throwTrpcError:
         [test_trpc_error_log] trpc-<marker>"
@@ -460,7 +406,7 @@ test("captures the raw waitUntil child log", async () => {
       parentRequestId: integration.lastRequestId(),
     },
   });
-  expect(captured).toMatchInlineSnapshot(`
+  expect(normalize(captured, { marker })).toMatchInlineSnapshot(`
     meta:
       id: <log-id>
       start: <timestamp>
@@ -471,7 +417,7 @@ test("captures the raw waitUntil child log", async () => {
         id: <log-id>
         start: <timestamp>
       service: os
-      environment: dev-misha
+      environment: <environment>
       request:
         path: /api/orpc/testing/throwWaitUntilError
         status: -1
@@ -488,7 +434,7 @@ test("captures the raw waitUntil child log", async () => {
       egress:
         https://eu.i.posthog.com: <origin>
     service: os
-    environment: dev-misha
+    environment: <environment>
     request:
       id: <request-id>
       method: POST
@@ -506,12 +452,12 @@ test("captures the raw waitUntil child log", async () => {
         message: "[test_wait_until_log] wait-until-<marker>"
         stack: |-
           Error: [test_wait_until_log] wait-until-<marker>
-              at <repo>/apps/os/backend/orpc/routers/testing.ts:78:15
+              at <repo>/apps/os/backend/orpc/routers/testing.ts:<line-number>:<column-number>
       - name: Error
         message: "[test_wait_until_log] wait-until-<marker>"
         stack: |-
           Error: [test_wait_until_log] wait-until-<marker>
-              at <repo>/apps/os/backend/orpc/routers/testing.ts:78:15
+              at <repo>/apps/os/backend/orpc/routers/testing.ts:<line-number>:<column-number>
     messages:
       - "[ERROR] 0s: Error: [test_wait_until_log] wait-until-<marker>"
       - "[INFO] 0s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid>
@@ -534,7 +480,9 @@ test("does not capture PostHog for successful outbox consumer flow", async () =>
       { timeout: 1_000 },
     )
     .toBe(false);
-  expect(integration.capture.requests).toMatchInlineSnapshot(`[]`);
+  expect(normalize(integration.capture.requests)).toMatchInlineSnapshot(`
+    []
+  `);
 });
 
 test("captures an outbox consumer error", async () => {
@@ -552,7 +500,7 @@ test("captures an outbox consumer error", async () => {
       method: "POST",
     },
   });
-  expect(captured.body).toMatchInlineSnapshot(`
+  expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
     api_key: <api-key>
     event: $exception
     distinct_id: system:outbox
@@ -636,7 +584,7 @@ test("captures an outbox consumer error", async () => {
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: true
-      $environment: dev-misha
+      $environment: <environment>
       $lib: os-logging
       request:
         id: <request-id>
@@ -668,7 +616,7 @@ test("captures a malformed outbox job error", async () => {
       method: "OUTBOX",
     },
   });
-  expect(captured.body).toMatchInlineSnapshot(`
+  expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
     api_key: <api-key>
     event: $exception
     distinct_id: system:outbox
@@ -725,47 +673,47 @@ test("captures a malformed outbox job error", async () => {
                 in_app: true
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: next
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: next
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: next
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/@orpc_server_fetch.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
-      $environment: dev-misha
+      $environment: <environment>
       $lib: outbox-dlq
       request:
         id: <request-id>
@@ -807,7 +755,7 @@ test("captures a missing consumer error", async () => {
       method: "OUTBOX",
     },
   });
-  expect(captured.body).toMatchInlineSnapshot(`
+  expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
     api_key: <api-key>
     event: $exception
     distinct_id: system:outbox
@@ -860,40 +808,40 @@ test("captures a missing consumer error", async () => {
                 in_app: true
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: next
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: next
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: next
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js
+                filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
                 lineno: <line-number>
                 colno: <column-number>
                 in_app: false
-      $environment: dev-misha
+      $environment: <environment>
       $lib: outbox-dlq
       request:
         id: <request-id>
@@ -1062,6 +1010,73 @@ async function createPostHogIntegration(): Promise<PostHogIntegrationContext> {
       await once(server, "close");
     },
   };
+}
+
+function normalize(value: unknown, params: { marker?: string } = {}): string {
+  const yaml = YAML.stringify(normalizeSnapshotValue(value));
+  const withMarker = params.marker ? yaml.replaceAll(params.marker, "<marker>") : yaml;
+
+  return withMarker
+    .replaceAll(process.cwd(), "<repo>")
+    .replaceAll(/https?:\/\/[^/\s]+/g, "<origin>")
+    .replaceAll(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "<timestamp>")
+    .replaceAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
+    .replaceAll(/\boutbox:[^:\s]+:\d+\b/g, "outbox:<consumer>:<job-id>")
+    .replaceAll(/\bmissing-consumer-[^"' ):\n]+\b/g, "missing-consumer-<marker>")
+    .replace(/<repo>\/[^ :)\n"]+(?::\d+:\d+)?/g, (match) => normalizeRepoPath(match));
+}
+
+function normalizeRepoPath(value: string): string {
+  const [, path, line, column] = value.match(/^(<repo>\/[^ :)\n"]+?)(?::(\d+):(\d+))?$/) ?? [];
+  if (!path) return value;
+
+  const nodeModulesIndex = path.indexOf("/node_modules/");
+  const normalizedPath =
+    nodeModulesIndex >= 0
+      ? `<repo>/.../node_modules/${path.slice(nodeModulesIndex + "/node_modules/".length).split("/")[0] ?? "unknown"}/...`
+      : path;
+
+  if (!line || !column) return normalizedPath;
+  return `${normalizedPath}:<line-number>:<column-number>`;
+}
+
+function normalizeSnapshotValue(value: unknown, path: string[] = []): unknown {
+  const key = path[path.length - 1];
+
+  if (key === "api_key") return "<api-key>";
+  if (key === "timestamp") return "<timestamp>";
+  if (key === "start") return "<timestamp>";
+  if (key === "end") return "<timestamp>";
+  if (key === "lineno") return "<line-number>";
+  if (key === "colno") return "<column-number>";
+  if (key === "duration") return "<duration-ms>";
+  if (key === "durationMs") return "<duration-ms>";
+  if (key === "jobId") return "<job-id>";
+  if (key === "id" && path.at(-2) === "request") return "<request-id>";
+  if (key === "id" && path.at(-2) === "meta") return "<log-id>";
+  if (key === "parentRequestId") return "<request-id>";
+  if (key === "cfRay") return "<cf-ray>";
+  if (key === "$environment" || key === "environment") return "<environment>";
+
+  if (Array.isArray(value)) {
+    return value.map((entry, index) => normalizeSnapshotValue(entry, [...path, String(index)]));
+  }
+
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entryValue]) => [
+        entryKey,
+        normalizeSnapshotValue(entryValue, [...path, entryKey]),
+      ]),
+    );
+  }
+
+  if (typeof value !== "string") return value;
+
+  return value.replaceAll(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+    "<uuid>",
+  );
 }
 
 const integrationBaseUrl = process.env.APP_URL || "http://local.iterate.com:5173";
