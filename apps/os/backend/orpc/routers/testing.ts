@@ -37,11 +37,6 @@ function generateDefaultAvatar(email: string): string {
  * These endpoints are only available in non-production environments
  */
 export const testingRouter = {
-  // Health check
-  health: publicProcedure.handler(() => {
-    return { status: "ok", timestamp: new Date().toISOString() };
-  }),
-
   // Trigger query invalidation broadcast (for e2e tests)
   triggerInvalidation: publicMutation.handler(async () => {
     if (!isNonProd) {

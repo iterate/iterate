@@ -32,7 +32,7 @@ export default workflow({
           name: "Wait for dev server",
           run: dedent`
             for i in $(seq 1 180); do
-              if curl -fsS http://local.iterate.com:5173/api/orpc/testing/health >/dev/null; then
+              if curl -fsS http://local.iterate.com:5173/api/testing/db-connection-probe >/dev/null; then
                 exit 0
               fi
               sleep 1
