@@ -22,6 +22,7 @@
     "lint:fix": "oxlint . --fix",
     "prepare": "is-ci || husky",
     "vitest": "pnpm os test",
+    "int": "pnpm os test:integration",
     "test": "pnpm -r --parallel test",
     "test:tunnel-pool": "tsx --test packages/shared/src/slug-maker.test.ts scripts/seed-cloudflare-tunnel-pool.test.ts",
     "test:onboarding": "pnpm -r --parallel test:onboarding",

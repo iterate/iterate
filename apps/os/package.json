@@ -11,6 +11,7 @@
     "dev:vite": "vite",
     "preview": "pnpm run build && vite preview",
     "test": "doppler run -- vitest",
+    "test:integration": "doppler run -- vitest run --config vitest.integration.config.ts",
     "test:db-connection-leaks": "doppler run -- sh -c 'ENABLE_DB_CONNECTION_LEAK_TEST=true vitest run backend/testing/db-connection-leak-check.test.ts'",
     "typecheck": "tsgo -b",
     "db:migrate": "drizzle-kit migrate",
