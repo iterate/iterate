@@ -19,6 +19,7 @@ import { slugifyWithSuffix } from "../../utils/slug.ts";
 import { getDefaultProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
 import { isNonProd, waitUntil } from "../../../env.ts";
 import { queuer } from "../../outbox/outbox-queuer.ts";
+import { clearBufferedLogEvents, getBufferedLogEvents } from "../../logging/index.ts";
 
 /** Generate a DiceBear avatar URL using a hash of the email as seed */
 function generateDefaultAvatar(email: string): string {
@@ -139,6 +140,27 @@ export const testingRouter = {
 
     await ctx.db.execute(sql`select pgmq.purge_queue('consumer_job_queue')`);
     return { ok: true };
+  }),
+
+  clearBufferedLogs: publicProcedure.handler(() => {
+    if (!isNonProd) {
+      throw new ORPCError("FORBIDDEN", {
+        message: "Testing endpoints are not available in production",
+      });
+    }
+
+    clearBufferedLogEvents();
+    return { ok: true };
+  }),
+
+  getBufferedLogs: publicProcedure.handler(() => {
+    if (!isNonProd) {
+      throw new ORPCError("FORBIDDEN", {
+        message: "Testing endpoints are not available in production",
+      });
+    }
+
+    return { logs: getBufferedLogEvents() };
   }),
 
   insertMalformedOutboxJob: publicProcedure

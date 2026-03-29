@@ -183,6 +183,7 @@ app.use("*", async (c, next) => {
       logger.set({ request: { status: c.res.status } });
       return result;
     } finally {
+      c.res.headers.set("x-iterate-request-id", requestId);
       logger.set({ user: getPostHogUserContext(c) });
     }
   });

@@ -1,7 +1,11 @@
 import http from "node:http";
 import { once } from "node:events";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
+import type { RouterClient } from "@orpc/server";
 import { expect, test } from "vitest";
 import * as YAML from "yaml";
+import type { AppRouter } from "./orpc/root.ts";
 
 expect.addSnapshotSerializer({
   test: () => true,
@@ -15,11 +19,17 @@ function normalizeSnapshotValue(value: unknown, path: string[] = []): unknown {
 
   if (key === "api_key") return "<api-key>";
   if (key === "timestamp") return "<timestamp>";
+  if (key === "start") return "<timestamp>";
+  if (key === "end") return "<timestamp>";
   if (key === "lineno") return "<line-number>";
   if (key === "colno") return "<column-number>";
   if (key === "duration") return "<duration-ms>";
+  if (key === "durationMs") return "<duration-ms>";
   if (key === "jobId") return "<job-id>";
   if (key === "id" && path.at(-2) === "request") return "<request-id>";
+  if (key === "id" && path.at(-2) === "meta") return "<log-id>";
+  if (key === "parentRequestId") return "<request-id>";
+  if (key === "cfRay") return "<cf-ray>";
 
   if (Array.isArray(value)) {
     return value.map((entry, index) => normalizeSnapshotValue(entry, [...path, String(index)]));
@@ -44,6 +54,7 @@ function normalizeSnapshotValue(value: unknown, path: string[] = []): unknown {
     .replaceAll(/(?<=\boutbox-success-)<uuid>/g, "<marker>")
     .replaceAll(/(?<=\bmalformed-)<uuid>/g, "<marker>")
     .replaceAll(/(?<=\bmissing-consumer-)<uuid>/g, "<marker>")
+    .replaceAll(/(?<=\bwait-until-)<uuid>/g, "<marker>")
     .replaceAll(/https?:\/\/[^/\s]+/g, "<origin>")
     .replaceAll("/Users/mmkal/src/iterate", "<repo>")
     .replaceAll(/\boutbox:[^:\s]+:\d+\b/g, "outbox:<consumer>:<job-id>")
@@ -53,12 +64,9 @@ function normalizeSnapshotValue(value: unknown, path: string[] = []): unknown {
 test("captures a trpc procedure error", async () => {
   await using integration = await createPostHogIntegration();
   const marker = `trpc-${crypto.randomUUID()}`;
-  const response = await integration.callProcedure({
-    name: "testing/throwTrpcError",
-    input: { message: `[test_trpc_error] ${marker}` },
-  });
-
-  expect(response.ok).toBe(false);
+  await expect(
+    integration.client.testing.throwTrpcError({ message: `[test_trpc_error] ${marker}` }),
+  ).rejects.toBeTruthy();
 
   const captured = await integration.capture.waitForRequest({
     predicate: (body) => JSON.stringify(body).includes(marker),
@@ -296,23 +304,13 @@ test("captures a hono endpoint error", async () => {
 test("captures a waitUntil error", async () => {
   await using integration = await createPostHogIntegration();
   const marker = `wait-until-${crypto.randomUUID()}`;
-  const response = await integration.callProcedure({
-    name: "testing/throwWaitUntilError",
-    input: { message: `[test_wait_until_error] ${marker}` },
+  await integration.client.testing.throwWaitUntilError({
+    message: `[test_wait_until_error] ${marker}`,
   });
-
-  expect(response.ok).toBe(true);
 
   const captured = await integration.capture.waitForRequest({
     predicate: (body) =>
-      body.properties &&
-      typeof body.properties === "object" &&
-      "request" in body.properties &&
-      typeof body.properties.request === "object" &&
-      body.properties.request !== null &&
-      "waitUntil" in body.properties.request &&
-      body.properties.request.waitUntil === true &&
-      JSON.stringify(body).includes(marker),
+      body.properties?.request?.waitUntil === true && JSON.stringify(body).includes(marker),
   });
 
   expect(captured.body.properties).toMatchObject({
@@ -330,7 +328,7 @@ test("captures a waitUntil error", async () => {
     properties:
       $exception_list:
         - type: Error
-          value: "[test_wait_until_error] wait-until-<uuid>"
+          value: "[test_wait_until_error] wait-until-<marker>"
           mechanism:
             handled: true
             synthetic: false
@@ -353,7 +351,7 @@ test("captures a waitUntil error", async () => {
         status: 500
         duration: <duration-ms>
         waitUntil: true
-        parentRequestId: <uuid>
+        parentRequestId: <request-id>
         url: <origin>/api/orpc/testing/throwWaitUntilError
       user:
         id: anonymous
@@ -362,15 +360,171 @@ test("captures a waitUntil error", async () => {
   `);
 });
 
+test("captures the raw request log for a trpc procedure error", async () => {
+  await using integration = await createPostHogIntegration();
+  const marker = `trpc-${crypto.randomUUID()}`;
+  await expect(
+    integration.client.testing.throwTrpcError({ message: `[test_trpc_error_log] ${marker}` }),
+  ).rejects.toBeTruthy();
+
+  const captured = await integration.logs.waitForLog({
+    predicate: (log: any) => log.request?.id === integration.lastRequestId(),
+  });
+
+  expect(captured).toMatchObject({
+    request: {
+      id: integration.lastRequestId(),
+      path: "/api/orpc/testing/throwTrpcError",
+      method: "POST",
+      status: 500,
+    },
+  });
+  expect(captured).toMatchInlineSnapshot(`
+    meta:
+      id: <log-id>
+      start: <timestamp>
+      end: <timestamp>
+      durationMs: <duration-ms>
+    service: os
+    environment: dev-misha
+    request:
+      path: /api/orpc/testing/throwTrpcError
+      status: 500
+      method: POST
+      id: <request-id>
+      url: <origin>/api/orpc/testing/throwTrpcError
+      hostname: local.iterate.com
+      traceparent: null
+      cfRay: <cf-ray>
+      timezone: Asia/Singapore
+    user:
+      id: anonymous
+      email: unknown
+    egress:
+      https://eu.i.posthog.com: <origin>
+    name: Error
+    message: "[test_trpc_error_log] trpc-<marker>"
+    stack: >-
+      Error: [test_trpc_error_log] trpc-<marker>
+          at Object.handler (<repo>/apps/os/backend/orpc/routers/testing.ts:64:13)
+          at <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js:243:32
+          at runWithSpan (<repo>/apps/os/node_modules/.vite/deps_ssr/chunk-PFM44RO3.js:76:12)
+          at next (<repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js:241:26)
+          at next (<repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js:234:23)
+          at <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js:228:24
+          at next (<repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js:223:26)
+          at <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-ONVKXQNY.js:123:22
+          at <repo>/apps/os/node_modules/.vite/deps_ssr/@orpc_server_fetch.js:124:34
+          at <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-PFM44RO3.js:292:14
+    errors:
+      - name: NonErrorThrowable
+        message: "oRPC Error unknown <origin>/api/orpc/testing/throwTrpcError:
+          [test_trpc_error_log] trpc-<marker>"
+        stack: >-
+          Error: oRPC Error unknown <origin>/api/orpc/testing/throwTrpcError:
+          [test_trpc_error_log] trpc-<marker>
+              at toParsedError (<repo>/apps/os/backend/logging/logger.ts:60:12)
+              at Object.error (<repo>/apps/os/backend/logging/logger.ts:199:54)
+              at <repo>/apps/os/backend/worker.ts:462:16
+              at <repo>/apps/os/node_modules/.vite/deps_ssr/chunk-PFM44RO3.js:294:13
+              at <repo>/apps/os/node_modules/.vite/deps_ssr/@orpc_server_fetch.js:89:22
+              at <repo>/apps/os/node_modules/.vite/deps_ssr/@orpc_server_fetch.js:400:24
+              at <repo>/apps/os/backend/worker.ts:478:33
+              at dispatch (<repo>/apps/os/node_modules/.vite/deps_ssr/hono.js:37:17)
+              at dispatch (<repo>/apps/os/node_modules/.vite/deps_ssr/hono.js:37:17)
+              at dispatch (<repo>/apps/os/node_modules/.vite/deps_ssr/hono.js:37:17)
+    messages:
+      - "[ERROR] 0s: oRPC Error unknown <origin>/api/orpc/testing/throwTrpcError:
+        [test_trpc_error_log] trpc-<marker>"
+  `);
+});
+
+test("captures the raw waitUntil child log", async () => {
+  await using integration = await createPostHogIntegration();
+  const marker = `wait-until-${crypto.randomUUID()}`;
+  await integration.client.testing.throwWaitUntilError({
+    message: `[test_wait_until_log] ${marker}`,
+  });
+
+  const captured = await integration.logs.waitForLog({
+    predicate: (log: any) =>
+      log.request?.waitUntil === true &&
+      log.request.parentRequestId === integration.lastRequestId(),
+  });
+
+  expect(captured).toMatchObject({
+    request: {
+      path: "/api/orpc/testing/throwWaitUntilError#waitUntil",
+      method: "POST",
+      waitUntil: true,
+      parentRequestId: integration.lastRequestId(),
+    },
+  });
+  expect(captured).toMatchInlineSnapshot(`
+    meta:
+      id: <log-id>
+      start: <timestamp>
+      end: <timestamp>
+      durationMs: <duration-ms>
+    parent:
+      meta:
+        id: <log-id>
+        start: <timestamp>
+      service: os
+      environment: dev-misha
+      request:
+        path: /api/orpc/testing/throwWaitUntilError
+        status: -1
+        method: POST
+        id: <request-id>
+        url: <origin>/api/orpc/testing/throwWaitUntilError
+        hostname: local.iterate.com
+        traceparent: null
+        cfRay: <cf-ray>
+        timezone: Asia/Singapore
+      user:
+        id: anonymous
+        email: unknown
+      egress:
+        https://eu.i.posthog.com: <origin>
+    service: os
+    environment: dev-misha
+    request:
+      id: <request-id>
+      method: POST
+      path: /api/orpc/testing/throwWaitUntilError#waitUntil
+      status: 500
+      waitUntil: true
+      parentRequestId: <request-id>
+    egress:
+      https://eu.i.posthog.com: <origin>
+    user:
+      id: anonymous
+      email: unknown
+    errors:
+      - name: Error
+        message: "[test_wait_until_log] wait-until-<marker>"
+        stack: |-
+          Error: [test_wait_until_log] wait-until-<marker>
+              at <repo>/apps/os/backend/orpc/routers/testing.ts:78:15
+      - name: Error
+        message: "[test_wait_until_log] wait-until-<marker>"
+        stack: |-
+          Error: [test_wait_until_log] wait-until-<marker>
+              at <repo>/apps/os/backend/orpc/routers/testing.ts:78:15
+    messages:
+      - "[ERROR] 0s: Error: [test_wait_until_log] wait-until-<marker>"
+      - "[INFO] 0s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid>
+        path=/api/orpc/testing/throwWaitUntilError#waitUntil errorCount=1"
+      - "[INFO] 0s: PostHog log exception sent requestId=<uuid>:waitUntil:<uuid>"
+      - "[ERROR] 0s: [test_wait_until_log] wait-until-<marker>"
+  `);
+});
+
 test("does not capture PostHog for successful outbox consumer flow", async () => {
   await using integration = await createPostHogIntegration();
   const marker = `outbox-success-${crypto.randomUUID()}`;
-  const response = await integration.callProcedure({
-    name: "testing/emitSuccessfulOutboxEvent",
-    input: { message: marker },
-  });
-
-  expect(response.ok).toBe(true);
+  await integration.client.testing.emitSuccessfulOutboxEvent({ message: marker });
   await expect
     .poll(
       () =>
@@ -386,12 +540,7 @@ test("does not capture PostHog for successful outbox consumer flow", async () =>
 test("captures an outbox consumer error", async () => {
   await using integration = await createPostHogIntegration();
   const marker = `outbox-fail-${crypto.randomUUID()}`;
-  const response = await integration.callProcedure({
-    name: "testing/emitFailingOutboxEvent",
-    input: { message: marker },
-  });
-
-  expect(response.ok).toBe(true);
+  await integration.client.testing.emitFailingOutboxEvent({ message: marker });
 
   const captured = await integration.capture.waitForRequest({
     predicate: (body) => JSON.stringify(body).includes(marker),
@@ -507,12 +656,7 @@ test("captures an outbox consumer error", async () => {
 test("captures a malformed outbox job error", async () => {
   await using integration = await createPostHogIntegration();
   const marker = `malformed-${crypto.randomUUID()}`;
-  const response = await integration.callProcedure({
-    name: "testing/insertMalformedOutboxJob",
-    input: { marker },
-  });
-
-  expect(response.ok).toBe(true);
+  await integration.client.testing.insertMalformedOutboxJob({ marker });
 
   const captured = await integration.capture.waitForRequest({
     predicate: (body) => JSON.stringify(body).includes("invalid message"),
@@ -649,15 +793,12 @@ test("captures a malformed outbox job error", async () => {
 test("captures a missing consumer error", async () => {
   await using integration = await createPostHogIntegration();
   const marker = `missing-consumer-${crypto.randomUUID()}`;
-  const response = await integration.callProcedure({
-    name: "testing/insertMissingConsumerOutboxJob",
-    input: { marker },
-  });
-
-  expect(response.ok).toBe(true);
+  await integration.client.testing.insertMissingConsumerOutboxJob({ marker });
 
   const captured = await integration.capture.waitForRequest({
-    predicate: (body) => JSON.stringify(body).includes("no consumer found"),
+    predicate: (body) =>
+      body.properties?.request?.method === "OUTBOX" &&
+      JSON.stringify(body).includes("no consumer found"),
   });
 
   expect(captured.body.properties).toMatchObject({
@@ -787,20 +928,25 @@ type CapturedPostHogRequest = {
 };
 
 type PostHogIntegrationContext = {
+  client: RouterClient<AppRouter>;
+  lastRequestId(): string;
   capture: {
     requests: CapturedPostHogRequest[];
     waitForRequest(params: {
       timeoutMs?: number;
-      predicate?: (body: Record<string, unknown>) => boolean;
+      predicate?: (body: any) => boolean;
     }): Promise<CapturedPostHogRequest>;
   };
-  callProcedure(params: { name: string; input?: unknown }): Promise<Response>;
+  logs: {
+    waitForLog(params: { timeoutMs?: number; predicate?: (body: any) => boolean }): Promise<any>;
+  };
   callEndpoint(params: { path: string }): Promise<Response>;
   [Symbol.asyncDispose](): Promise<void>;
 };
 
 async function createPostHogIntegration(): Promise<PostHogIntegrationContext> {
   const requests: CapturedPostHogRequest[] = [];
+  let lastRequestId: string | null = null;
   const server = http.createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) {
@@ -834,14 +980,37 @@ async function createPostHogIntegration(): Promise<PostHogIntegrationContext> {
     },
     body: JSON.stringify({ json: {} }),
   });
+  await fetchWithManualRedirect("/api/orpc/testing/clearBufferedLogs", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ json: {} }),
+  });
 
   return {
+    client: createORPCClient(
+      new RPCLink({
+        url: new URL("/api/orpc", integrationBaseUrl).toString(),
+        headers: {
+          "x-replace-posthog-egress": captureOrigin,
+        },
+        fetch: async (input, init) => {
+          const response = await fetch(input, init);
+          lastRequestId = response.headers.get("x-iterate-request-id");
+          return response;
+        },
+      }),
+    ) as RouterClient<AppRouter>,
+    lastRequestId() {
+      if (!lastRequestId) {
+        throw new Error("No x-iterate-request-id has been captured yet.");
+      }
+      return lastRequestId;
+    },
     capture: {
       requests,
-      async waitForRequest(params: {
-        timeoutMs?: number;
-        predicate?: (body: Record<string, unknown>) => boolean;
-      }) {
+      async waitForRequest(params: { timeoutMs?: number; predicate?: (body: any) => boolean }) {
         const timeoutMs = params.timeoutMs ?? 5_000;
         const startedAt = Date.now();
 
@@ -858,15 +1027,28 @@ async function createPostHogIntegration(): Promise<PostHogIntegrationContext> {
         );
       },
     },
-    async callProcedure(params: { name: string; input?: unknown }): Promise<Response> {
-      return await fetchWithManualRedirect(`/api/orpc/${params.name}`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-replace-posthog-egress": captureOrigin,
-        },
-        body: JSON.stringify({ json: params.input ?? {} }),
-      });
+    logs: {
+      async waitForLog(params: { timeoutMs?: number; predicate?: (body: any) => boolean }) {
+        const timeoutMs = params.timeoutMs ?? 5_000;
+        const startedAt = Date.now();
+
+        while (Date.now() - startedAt < timeoutMs) {
+          const response = await fetchWithManualRedirect("/api/orpc/testing/getBufferedLogs", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ json: {} }),
+          });
+          const body = (await response.json()) as { json: { logs: Record<string, unknown>[] } };
+          const logs = body.json.logs;
+          const match = logs.find((log) => (params.predicate ? params.predicate(log) : true));
+          if (match) return match;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+
+        throw new Error(`Timed out waiting for buffered log event.`);
+      },
     },
     async callEndpoint(params: { path: string }): Promise<Response> {
       return await fetchWithManualRedirect(params.path, {
