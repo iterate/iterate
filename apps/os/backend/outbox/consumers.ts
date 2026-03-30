@@ -627,7 +627,11 @@ export const registerConsumers = () => {
         input = await getPushMachineSetupInput(db, env, machine);
       } catch (e: unknown) {
         if (isMissingSandboxError(e)) {
-          logger.set({ machineId: machine.id, externalId: machine.externalId, eventId: params.eventId });
+          logger.set({
+            machineId: machine.id,
+            externalId: machine.externalId,
+            eventId: params.eventId,
+          });
           logger.warn("Skipping setup push for deleted sandbox");
           return `skipped: sandbox for machine ${machineId} not found (${machine.externalId})`;
         }
