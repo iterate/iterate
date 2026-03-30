@@ -331,20 +331,19 @@ export class DeploymentDurableObject extends DurableObject<Record<string, never>
     }
 
     if (deployment.state === "starting") {
-      this.setState("running");
+      this.setState(deployment.id, "running");
       this.insertLog("info", "Deployment is now running");
       await this.scheduleAlarm(2_000);
       return;
     }
 
     if (deployment.state === "running") {
-      this.insertLog("info", "Heartbeat OK");
       await this.scheduleAlarm(2_000);
       return;
     }
 
     if (deployment.state === "stopping") {
-      this.setState("stopped");
+      this.setState(deployment.id, "stopped");
       this.insertLog("warn", "Deployment stopped");
     }
   }
@@ -490,14 +489,16 @@ export class DeploymentDurableObject extends DurableObject<Record<string, never>
     }
   }
 
-  private setState(state: DeploymentState) {
+  private setState(deploymentId: string, state: DeploymentState) {
     this.ctx.storage.sql.exec(
       `
         UPDATE deployment
         SET state = ?, updated_at = ?
+        WHERE id = ?
       `,
       state,
       new Date().toISOString(),
+      deploymentId,
     );
     this.resolveStateWaiters();
   }
