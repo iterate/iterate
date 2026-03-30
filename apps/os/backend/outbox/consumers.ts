@@ -626,12 +626,17 @@ export const registerConsumers = () => {
       try {
         input = await getPushMachineSetupInput(db, env, machine);
       } catch (e: unknown) {
-        // The daemon may still be starting up when the outbox fires
-        // immediately after daemon-status-reported.  The sandbox proxy
-        // or half-ready daemon can return a non-oRPC 500 which the
-        // client surfaces as MALFORMED_ORPC_ERROR_RESPONSE, or a
-        // well-formed oRPC INTERNAL_SERVER_ERROR.  Log and re-throw
-        // so the retry policy can handle it.
+        if (isMissingSandboxError(e)) {
+          logger.set({ machineId: machine.id, externalId: machine.externalId, eventId: params.eventId });
+          logger.warn("Skipping setup push for deleted sandbox");
+          return `skipped: sandbox for machine ${machineId} not found (${machine.externalId})`;
+        }
+        // The daemon may be mid-restart or the sandbox proxy may return
+        // a non-oRPC response (HTML error page, 502, etc.).  The oRPC
+        // client surfaces these as ORPCError with codes like BAD_GATEWAY,
+        // MALFORMED_ORPC_ERROR_RESPONSE, or INTERNAL_SERVER_ERROR.
+        // Retrying is wasteful — the next daemon-status-reported event
+        // will fan-out a fresh attempt.
         if (e instanceof ORPCError) {
           logger.set({
             machineId: machine.id,
@@ -639,7 +644,8 @@ export const registerConsumers = () => {
             orpcStatus: e.status,
             eventId: params.eventId,
           });
-          logger.warn("pushMachineSetup: daemon oRPC call failed, will retry");
+          logger.warn("Skipping setup push: daemon returned oRPC error");
+          return `skipped: machine ${machineId} daemon oRPC error ${e.code} (status ${e.status})`;
         }
         throw e;
       }
@@ -647,7 +653,23 @@ export const registerConsumers = () => {
         return `skipped: setup already done for ${machineId}`;
       }
 
-      const writeSentinel = await pushSetupToMachine(machine, input);
+      let writeSentinel;
+      try {
+        writeSentinel = await pushSetupToMachine(machine, input);
+      } catch (e: unknown) {
+        // Same transient daemon/proxy errors can occur during the push phase.
+        if (e instanceof ORPCError) {
+          logger.set({
+            machineId: machine.id,
+            orpcCode: e.code,
+            orpcStatus: e.status,
+            eventId: params.eventId,
+          });
+          logger.warn("Skipping setup push: daemon returned oRPC error during push");
+          return `skipped: machine ${machineId} daemon oRPC error ${e.code} during push (status ${e.status})`;
+        }
+        throw e;
+      }
 
       // Emit setup-pushed so the readiness probe can begin
       await cc.send(db, {
