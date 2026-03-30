@@ -606,7 +606,12 @@ export const registerConsumers = () => {
     when: (params) => params.payload.status === "ready" && !!params.payload.externalId,
     visibilityTimeout: "120s", // env write + repo clones can take a while
     retry: (job) => {
-      if (job.read_ct <= 4) return { retry: true, reason: "retrying setup push", delay: "15s" };
+      // Exponential backoff: 15s, 30s, 60s, 60s, 60s, 60s (~5 min total).
+      // The daemon may take a while to become ready after reporting status.
+      if (job.read_ct <= 6) {
+        const delaySec = Math.min(15 * 2 ** (job.read_ct - 1), 60);
+        return { retry: true, reason: "retrying setup push", delay: `${delaySec}s` };
+      }
       return { retry: false, reason: "setup push failed after retries" };
     },
     async handler(params) {
