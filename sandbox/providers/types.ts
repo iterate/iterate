@@ -11,13 +11,13 @@ const TARGET_HOST_HEADER = "x-iterate-proxy-target-host";
 /**
  * Provider types supported by the sandbox system.
  */
-export type ProviderType = "docker" | "daytona" | "fly" | "spec-machine";
+export type ProviderType = "docker" | "daytona" | "fly";
 
 /**
  * Machine types used by OS machine management.
  * Kept here as a shared source of truth for frontend/backend callers.
  */
-export const MachineType = ["daytona", "docker", "fly", "spec-machine"] as const;
+export const MachineType = ["daytona", "docker", "fly"] as const;
 export type MachineType = (typeof MachineType)[number];
 
 /**

@@ -495,12 +495,12 @@ export async function waitForHttpOk(params: { url: string; timeoutMs?: number })
 
 export async function waitForPidnapProcessRunning(params: {
   client: PidnapClient;
-  target: string | number;
+  target: string;
   timeoutMs?: number;
 }): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 45_000;
   const result = await params.client.processes.waitForRunning({
-    target: params.target,
+    processSlug: params.target,
     timeoutMs,
     pollIntervalMs: 250,
     includeLogs: true,
@@ -510,7 +510,7 @@ export async function waitForPidnapProcessRunning(params: {
   if (result.state === "running") return;
 
   throw new Error(
-    `pidnap process "${String(params.target)}" did not become running (state=${result.state}, elapsedMs=${String(result.elapsedMs)}, restarts=${String(result.restarts)})\n${result.logs ?? ""}`,
+    `pidnap process "${params.target}" did not become running (state=${result.state}, elapsedMs=${String(result.elapsedMs)}, restarts=${String(result.restarts)})\n${result.logs ?? ""}`,
   );
 }
 
@@ -562,7 +562,7 @@ export interface ProjectDeployment {
   assertIptablesRedirect(): Promise<void>;
   restart(): Promise<void>;
   waitForPidnapProcessRunning(params: {
-    target: string | number;
+    target: string;
     timeoutMs?: number;
   }): Promise<void>;
   [Symbol.asyncDispose](): Promise<void>;

@@ -10,10 +10,21 @@ packages:
   - apps/auth
   - apps/auth-contract
   - apps/auth-example
+  - jonasland
+  - apps/ingress-proxy-worker
+  - apps/ingress-proxy-contract
+  - apps/example
+  - apps/daemon-v2
+  - apps/example-contract
+  - apps/daemon-v2-contract
+  - apps/events
+  - apps/events-contract
   - sandbox
   - jonasland/sandbox
   - jonasland/e2e
   - services/*
+  - '!services/events'
+  - '!services/events-contract'
   - packages/*
   - packages/pidnap/docker
   - repo-templates/**/*
@@ -38,11 +49,16 @@ minimumReleaseAgeExclude:
   - pidnap
   - schematch
   - trpc-cli
+  - hono
+  - "@hono/node-server"
+  - "@hono/node-ws"
 
 onlyBuiltDependencies:
   - "@tailwindcss/oxide"
   - better-sqlite3
   - esbuild
+  - lightningcss
+  - node-pty
   - sharp
   - workerd
   - bun

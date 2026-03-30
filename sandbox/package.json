@@ -25,15 +25,15 @@
   },
   "dependencies": {
     "@daytonaio/sdk": "^0.128.1",
-    "@orpc/client": "^1.13.4",
-    "@orpc/server": "^1.13.4",
+    "@orpc/client": "1.13.13",
+    "@orpc/server": "1.13.13",
     "pidnap": "workspace:*",
     "undici": "^7.10.0",
     "zod": "^3.25.30"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
-    "trpc-cli": "0.14.0",
+    "trpc-cli": "^0.12.4",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   }

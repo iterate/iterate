@@ -3,13 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsx scripts/build-image.ts",
-    "image-refs": "tsx scripts/image-refs.ts",
+    "build": "doppler run -- tsx scripts/build-image.ts",
+    "docker:shell": "doppler run -- tsx scripts/docker-shell.ts",
+    "docker:dev": "scripts/docker-dev.sh",
     "typecheck": "tsc --noEmit",
-    "registry:start": "tsx ../../services/registry-service/src/server.ts",
-    "events:start": "tsx ../../services/events-service/src/server.ts",
-    "orders:start": "tsx ../../services/orders-service/src/server.ts",
-    "docs:start": "tsx ../../services/docs-service/src/server.ts"
+    "registry:start": "tsx ../../services/registry/src/entry-server.tsx",
+    "example:start": "tsx ../../services/example/src/server.ts"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
@@ -17,13 +16,15 @@
   },
   "dependencies": {
     "@accelerated-software-development/caddy-api-client": "^0.4.3",
-    "@orpc/client": "^1.13.5",
-    "@orpc/contract": "^1.13.5",
-    "@orpc/server": "^1.13.5",
+    "@orpc/client": "1.13.13",
+    "@orpc/contract": "1.13.13",
+    "@orpc/server": "1.13.13",
     "better-sqlite3": "^12.4.1",
     "drizzle-orm": "^0.45.1",
     "http-proxy": "^1.18.1",
+    "pidnap": "workspace:*",
     "tsx": "^4.20.6",
-    "valibot": "^1.2.0"
+    "valibot": "^1.2.0",
+    "@iterate-com/daemon-v2-contract": "workspace:*"
   }
 }

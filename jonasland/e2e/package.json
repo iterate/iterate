@@ -3,24 +3,34 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "doppler run -- vitest run",
-    "test:e2e": "RUN_JONASLAND_E2E=true doppler run -- vitest run",
-    "spec": "playwright test -c playwright.config.ts",
-    "spec:e2e": "RUN_JONASLAND_E2E=true playwright test -c playwright.config.ts",
+    "vitest": "doppler run --preserve-env=JONASLAND_SANDBOX_IMAGE -- vitest run --tags-filter='!fly'",
+    "vitest:all": "doppler run --preserve-env=JONASLAND_SANDBOX_IMAGE -- vitest run",
+    "vitest:docker": "doppler run --preserve-env=JONASLAND_SANDBOX_IMAGE -- vitest run --tags-filter=docker",
+    "vitest:fly": "doppler run --preserve-env=JONASLAND_SANDBOX_IMAGE -- vitest run --tags-filter=fly",
+    "playwright": "doppler run --preserve-env=JONASLAND_SANDBOX_IMAGE -- playwright test",
+    "tags": "doppler run --preserve-env=JONASLAND_SANDBOX_IMAGE -- vitest --list-tags",
+    "test": "pnpm vitest",
     "typecheck": "tsc --noEmit"
   },
-  "devDependencies": {
+  "dependencies": {
     "@accelerated-software-development/caddy-api-client": "^0.4.3",
     "@docker/node-sdk": "^0.0.17",
     "@iterate-com/events-contract": "workspace:*",
+    "@iterate-com/example-contract": "workspace:*",
     "@iterate-com/orders-contract": "workspace:*",
-    "@iterate-com/shared": "workspace:*",
-    "@orpc/contract": "^1.13.5",
-    "@playwright/test": "^1.58.2",
+    "@iterate-com/semaphore-contract": "workspace:*",
+    "@orpc/contract": "1.13.13",
+    "@iterate-com/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@iterate-com/mock-http-proxy": "workspace:*",
     "@types/node": "^25.0.10",
     "emittery": "1.2.0",
     "mockttp": "^4.2.1",
+    "msw": "^2.12.10",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "4.1.0-beta.6",
+    "yaml": "^2.8.2",
+    "zod": "^4.3.6"
   }
 }
