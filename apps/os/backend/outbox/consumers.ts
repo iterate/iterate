@@ -663,7 +663,11 @@ export const registerConsumers = () => {
       } catch (e: unknown) {
         // Sandbox may have been deleted while we were pushing setup.
         if (isMissingSandboxError(e)) {
-          logger.set({ machineId: machine.id, externalId: machine.externalId, eventId: params.eventId });
+          logger.set({
+            machineId: machine.id,
+            externalId: machine.externalId,
+            eventId: params.eventId,
+          });
           logger.warn("Skipping setup push: sandbox deleted during push");
           return `skipped: sandbox for machine ${machineId} deleted during push (${machine.externalId})`;
         }
