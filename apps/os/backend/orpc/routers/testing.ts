@@ -19,6 +19,8 @@ import { slugifyWithSuffix } from "../../utils/slug.ts";
 import { getDefaultProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
 import { isNonProd, waitUntil } from "../../../env.ts";
 import { queuer } from "../../outbox/outbox-queuer.ts";
+import { logger } from "../../logging/index.ts";
+import { toParsedLogError } from "../../logging/request-log.ts";
 import { clearBufferedLogEvents, getBufferedLogEvents } from "../../logging/index.ts";
 
 /** Generate a DiceBear avatar URL using a hash of the email as seed */
@@ -30,6 +32,65 @@ function generateDefaultAvatar(email: string): string {
     hash |= 0;
   }
   return `https://api.dicebear.com/9.x/notionists/svg?seed=${Math.abs(hash).toString(36)}`;
+}
+
+const ThrowableKind = z.enum(["string", "error", "custom-error", "error-with-detail"]);
+
+const FailureMechanism = z.enum(["throw", "logger-error", "logger-warn"]);
+
+export const FailureScenario = z.object({
+  marker: z.string(),
+  throwable: ThrowableKind,
+  mechanism: FailureMechanism,
+});
+export type FailureScenario = z.infer<typeof FailureScenario>;
+
+class TestingCustomError extends Error {
+  constructor(
+    readonly exampleGroup: string,
+    readonly exampleField: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "TestingCustomError";
+  }
+}
+
+export function runTestingFailureScenario(input: FailureScenario): void {
+  const throwable = createTestingThrowable(input);
+  const message = throwable instanceof Error ? throwable.message : String(throwable);
+
+  switch (input.mechanism) {
+    case "throw":
+      throw throwable;
+    case "logger-error":
+      logger.error(message, throwable);
+      return;
+    case "logger-warn":
+      logger.set({ errors: [toParsedLogError(throwable)] });
+      logger.warn(message);
+      return;
+  }
+}
+
+export function createTestingThrowable(input: FailureScenario): string | Error {
+  const message = `[test_${input.throwable.replaceAll("-", "_")}] ${input.marker}`;
+
+  switch (input.throwable) {
+    case "string":
+      return message;
+    case "error":
+      return new Error(message);
+    case "custom-error":
+      return new TestingCustomError("testing-example", input.marker, message);
+    case "error-with-detail":
+      return Object.assign(new Error(message), {
+        detail: {
+          bar: 123,
+          marker: input.marker,
+        },
+      });
+  }
 }
 
 /**
@@ -47,34 +108,31 @@ export const testingRouter = {
     return { triggered: true, timestamp: new Date().toISOString() };
   }),
 
-  throwOrpcError: publicProcedure
-    .input(z.object({ message: z.string().default("Intentional testingRouter error") }).optional())
-    .handler(({ input }) => {
-      if (!isNonProd) {
-        throw new ORPCError("FORBIDDEN", {
-          message: "Testing endpoints are not available in production",
-        });
-      }
-
-      throw new Error(input?.message ?? "Intentional testingRouter error");
-    }),
-
-  throwWaitUntilError: publicProcedure
-    .input(z.object({ message: z.string().default("Intentional waitUntil error") }).optional())
-    .handler(({ input }) => {
-      if (!isNonProd) {
-        throw new ORPCError("FORBIDDEN", {
-          message: "Testing endpoints are not available in production",
-        });
-      }
-
-      waitUntil(async () => {
-        await Promise.resolve();
-        throw new Error(input?.message ?? "Intentional waitUntil error");
+  emitRequestFailure: publicProcedure.input(FailureScenario).handler(({ input }) => {
+    if (!isNonProd) {
+      throw new ORPCError("FORBIDDEN", {
+        message: "Testing endpoints are not available in production",
       });
+    }
 
-      return { scheduled: true };
-    }),
+    runTestingFailureScenario(input);
+    return { logged: true };
+  }),
+
+  emitWaitUntilFailure: publicProcedure.input(FailureScenario).handler(({ input }) => {
+    if (!isNonProd) {
+      throw new ORPCError("FORBIDDEN", {
+        message: "Testing endpoints are not available in production",
+      });
+    }
+
+    waitUntil(async () => {
+      await Promise.resolve();
+      runTestingFailureScenario(input);
+    });
+
+    return { scheduled: true };
+  }),
 
   emitSuccessfulOutboxEvent: publicProcedure
     .input(z.object({ message: z.string() }))
@@ -96,8 +154,8 @@ export const testingRouter = {
       return { ...output, processResult };
     }),
 
-  emitFailingOutboxEvent: publicProcedure
-    .input(z.object({ message: z.string() }))
+  emitOutboxFailure: publicProcedure
+    .input(FailureScenario)
     .handler(async ({ context: ctx, input }) => {
       if (!isNonProd) {
         throw new ORPCError("FORBIDDEN", {
@@ -109,7 +167,7 @@ export const testingRouter = {
         const result = await tx.execute(sql`select now()::text as now`);
         const rows = result.rows as { now: string }[];
         const dbtime = rows[0]?.now ?? new Date().toISOString();
-        return ctx.sendEvent(tx, { dbtime, message: input.message });
+        return ctx.sendEvent(tx, { dbtime, ...input });
       });
 
       const processResult = await queuer.processQueue(ctx.db);

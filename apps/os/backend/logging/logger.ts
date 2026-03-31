@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { mergeLogRecords } from "./request-log.ts";
+import { mergeLogRecords, toParsedLogError } from "./request-log.ts";
 import type { WideLog } from "./types.ts";
 import * as formatters from "./formatters.ts";
 import * as buffer from "./buffer.ts";
@@ -42,23 +42,6 @@ function getStore(why: string): Store {
 function formatMessage(level: LogLevel, message: string, startedAt: number): string {
   const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1).replace(/\.?0+$/, "");
   return `[${level.toUpperCase()}] ${elapsedSeconds}s: ${message}`;
-}
-
-function toParsedError(error: unknown, fallbackMessage?: string): unknown {
-  if (error instanceof Error) {
-    return {
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-      ...("cause" in error ? { cause: (error as Error & { cause?: unknown }).cause } : {}),
-    };
-  }
-
-  return {
-    name: "NonErrorThrowable",
-    message: fallbackMessage ?? String(error),
-    stack: new Error(fallbackMessage ?? String(error)).stack,
-  };
 }
 
 function parseArgs(args: unknown[]): {
@@ -118,7 +101,7 @@ export const logger = {
       } catch (error) {
         const currentStore = getStore(`logger.run catch ${error}`);
         const errors = Array.isArray(currentStore.log.errors) ? [...currentStore.log.errors] : [];
-        errors.push(toParsedError(error));
+        errors.push(toParsedLogError(error));
         currentStore.log.errors = errors;
         const messages = Array.isArray(currentStore.log.messages)
           ? [...currentStore.log.messages]
@@ -196,7 +179,7 @@ export const logger = {
     const store = getStore(`logger.error(${args.join(", ")})`);
     const { message, patch, error } = parseArgs(args);
     store.log = mergeLogRecords(store.log, patch) as WideLog;
-    store.log.errors = [...(store.log.errors ?? []), toParsedError(error ?? message, message)];
+    store.log.errors = [...(store.log.errors ?? []), toParsedLogError(error ?? message, message)];
     store.log.messages = [
       ...(store.log.messages ?? []),
       formatMessage("error", message, new Date(store.log.meta.start).getTime()),

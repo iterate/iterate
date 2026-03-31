@@ -16,6 +16,13 @@ export const createOutboxJobLifecycleHook = (): JobLifecycleHook => {
 
     return logger.run(async ({ store }) => {
       logger.set({
+        request: {
+          id: `outbox:${ctx.consumerName}:${ctx.jobId}`,
+          method: "OUTBOX",
+          path: `outbox/${ctx.consumerName}`,
+          status: -1,
+          waitUntil: false,
+        },
         user: {
           id: "system:outbox",
           email: "outbox@system",
@@ -42,7 +49,12 @@ export const createOutboxJobLifecycleHook = (): JobLifecycleHook => {
       });
 
       const outcome = await run();
-      logger.set({ outbox: { ...outcome } });
+      logger.set({
+        request: {
+          status: outcome.ok ? 200 : 500,
+        },
+        outbox: { ...outcome },
+      });
 
       if (!outcome.ok) {
         logger.error(outcome.error);

@@ -58,13 +58,19 @@ export function toParsedLogError(
   message: string;
   stack?: string;
   cause?: unknown;
+  [key: string]: unknown;
 } {
   if (error instanceof Error) {
+    const extraEntries = Object.entries(error).filter(
+      ([key]) => !["name", "message", "stack", "cause"].includes(key),
+    );
+
     return {
       name: error.name,
       message: error.message,
       stack: error.stack,
       ...("cause" in error ? { cause: (error as Error & { cause?: unknown }).cause } : {}),
+      ...Object.fromEntries(extraEntries),
     };
   }
 

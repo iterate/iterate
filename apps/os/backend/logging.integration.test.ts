@@ -13,7 +13,11 @@ test("captures an orpc procedure error", async () => {
   await using fixture = await createLoggingFixture();
   const marker = `orpc-${crypto.randomUUID()}`;
   await expect(
-    fixture.client.testing.throwOrpcError({ message: `[test_orpc_error] ${marker}` }),
+    fixture.client.testing.emitRequestFailure({
+      mechanism: "throw",
+      throwable: "error",
+      marker,
+    }),
   ).rejects.toBeTruthy();
 
   const captured = await fixture.posthog.waitForRequest({
@@ -23,7 +27,7 @@ test("captures an orpc procedure error", async () => {
   expect(captured.body.event).toBe("$exception");
   expect(captured.body.properties).toMatchObject({
     request: {
-      path: "/api/orpc/testing/throwOrpcError",
+      path: "/api/orpc/testing/emitRequestFailure",
       method: "POST",
     },
   });
@@ -34,13 +38,27 @@ test("captures an orpc procedure error", async () => {
     properties:
       $exception_list:
         - type: Error
-          value: "[test_orpc_error] <marker>"
+          value: "[test_error] <marker>"
           mechanism:
             handled: true
             synthetic: false
           stacktrace:
             type: raw
             frames:
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/orpc/routers/testing.ts
+                function: createTestingThrowable
+                lineno: <lineno>
+                colno: <colno>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/orpc/routers/testing.ts
+                function: runTestingFailureScenario
+                lineno: <lineno>
+                colno: <colno>
+                in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/orpc/routers/testing.ts
@@ -97,30 +115,16 @@ test("captures an orpc procedure error", async () => {
                 lineno: <lineno>
                 colno: <colno>
                 in_app: false
-              - platform: custom
-                lang: javascript
-                filename: <repo>/.../node_modules/.vite/...
-                function: <anonymous>
-                lineno: <lineno>
-                colno: <colno>
-                in_app: false
-              - platform: custom
-                lang: javascript
-                filename: <repo>/.../node_modules/.vite/...
-                function: <anonymous>
-                lineno: <lineno>
-                colno: <colno>
-                in_app: false
       $environment: <$environment>
       $lib: os-logging
       request:
         id: <id>
         method: POST
-        path: /api/orpc/testing/throwOrpcError
+        path: /api/orpc/testing/emitRequestFailure
         status: 500
         duration: <duration>
         waitUntil: false
-        url: <origin>/api/orpc/testing/throwOrpcError
+        url: <origin>/api/orpc/testing/emitRequestFailure
       user:
         id: <id>
         email: unknown
@@ -251,8 +255,10 @@ test("captures a hono endpoint error", async () => {
 test("captures a waitUntil error", async () => {
   await using fixture = await createLoggingFixture();
   const marker = `wait-until-${crypto.randomUUID()}`;
-  await fixture.client.testing.throwWaitUntilError({
-    message: `[test_wait_until_error] ${marker}`,
+  await fixture.client.testing.emitWaitUntilFailure({
+    mechanism: "throw",
+    throwable: "error",
+    marker,
   });
 
   const captured = await fixture.posthog.waitForRequest({
@@ -262,7 +268,7 @@ test("captures a waitUntil error", async () => {
 
   expect(captured.body.properties).toMatchObject({
     request: {
-      path: "/api/orpc/testing/throwWaitUntilError#waitUntil",
+      path: "/api/orpc/testing/emitWaitUntilFailure#waitUntil",
       method: "POST",
       waitUntil: true,
       parentRequestId: expect.any(String),
@@ -275,13 +281,27 @@ test("captures a waitUntil error", async () => {
     properties:
       $exception_list:
         - type: Error
-          value: "[test_wait_until_error] <marker>"
+          value: "[test_error] <marker>"
           mechanism:
             handled: true
             synthetic: false
           stacktrace:
             type: raw
             frames:
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/orpc/routers/testing.ts
+                function: createTestingThrowable
+                lineno: <lineno>
+                colno: <colno>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/orpc/routers/testing.ts
+                function: runTestingFailureScenario
+                lineno: <lineno>
+                colno: <colno>
+                in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/orpc/routers/testing.ts
@@ -294,12 +314,12 @@ test("captures a waitUntil error", async () => {
       request:
         id: <id>
         method: POST
-        path: /api/orpc/testing/throwWaitUntilError#waitUntil
+        path: /api/orpc/testing/emitWaitUntilFailure#waitUntil
         status: 500
         duration: <duration>
         waitUntil: true
         parentRequestId: <parent-request-id>
-        url: <origin>/api/orpc/testing/throwWaitUntilError
+        url: <origin>/api/orpc/testing/emitWaitUntilFailure
       user:
         id: <id>
         email: unknown
@@ -311,7 +331,11 @@ test("captures the raw request log for an orpc procedure error", async () => {
   await using fixture = await createLoggingFixture();
   const marker = `orpc-${crypto.randomUUID()}`;
   await expect(
-    fixture.client.testing.throwOrpcError({ message: `[test_orpc_error_log] ${marker}` }),
+    fixture.client.testing.emitRequestFailure({
+      mechanism: "throw",
+      throwable: "error",
+      marker,
+    }),
   ).rejects.toBeTruthy();
 
   const captured = await fixture.logs.waitForLog({
@@ -321,7 +345,7 @@ test("captures the raw request log for an orpc procedure error", async () => {
   expect(captured).toMatchObject({
     request: {
       id: fixture.lastRequestId(),
-      path: "/api/orpc/testing/throwOrpcError",
+      path: "/api/orpc/testing/emitRequestFailure",
       method: "POST",
       status: 500,
     },
@@ -335,11 +359,11 @@ test("captures the raw request log for an orpc procedure error", async () => {
     service: os
     environment: dev-misha
     request:
-      path: /api/orpc/testing/throwOrpcError
+      path: /api/orpc/testing/emitRequestFailure
       status: 500
       method: POST
       id: <id>
-      url: <origin>/api/orpc/testing/throwOrpcError
+      url: <origin>/api/orpc/testing/emitRequestFailure
       hostname: local.iterate.com
       traceparent: null
       cfRay: <cf-ray>
@@ -351,9 +375,11 @@ test("captures the raw request log for an orpc procedure error", async () => {
       <origin> <origin>
     errors:
       - name: Error
-        message: "[test_orpc_error_log] <marker>"
+        message: "[test_error] <marker>"
         stack: >-
-          Error: [test_orpc_error_log] <marker>
+          Error: [test_error] <marker>
+              at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+              at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at Object.handler (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at <repo>/.../node_modules/.vite/...
               at runWithSpan (<repo>/.../node_modules/.vite/...)
@@ -362,18 +388,85 @@ test("captures the raw request log for an orpc procedure error", async () => {
               at <repo>/.../node_modules/.vite/...
               at next (<repo>/.../node_modules/.vite/...)
               at <repo>/.../node_modules/.vite/...
-              at <repo>/.../node_modules/.vite/...
-              at <repo>/.../node_modules/.vite/...
     messages:
-      - "[ERROR] <elapsed>s: Error: [test_orpc_error_log] <marker>""
+      - "[ERROR] <elapsed>s: Error: [test_error] <marker>""
+  `);
+});
+
+test("captures detail for an inline logger.warn", async () => {
+  await using fixture = await createLoggingFixture();
+  const marker = `warn-detail-${crypto.randomUUID()}`;
+  await fixture.client.testing.emitRequestFailure({
+    mechanism: "logger-warn",
+    throwable: "error-with-detail",
+    marker,
+  });
+
+  const captured = await fixture.logs.waitForLog({
+    predicate: (log: any) => log.request?.id === fixture.lastRequestId(),
+  });
+
+  expect(captured).toMatchObject({
+    request: {
+      id: fixture.lastRequestId(),
+      path: "/api/orpc/testing/emitRequestFailure",
+      method: "POST",
+      status: 200,
+    },
+  });
+  expect(normalize(captured, { marker })).toMatchInlineSnapshot(`
+    "meta:
+      id: <id>
+      start: <start>
+      end: <end>
+      durationMs: <duration-ms>
+    service: os
+    environment: dev-misha
+    request:
+      path: /api/orpc/testing/emitRequestFailure
+      status: 200
+      method: POST
+      id: <id>
+      url: <origin>/api/orpc/testing/emitRequestFailure
+      hostname: local.iterate.com
+      traceparent: null
+      cfRay: <cf-ray>
+      timezone: <timezone>
+    user:
+      id: <id>
+      email: unknown
+    egress:
+      <origin> <origin>
+    errors:
+      - name: Error
+        message: "[test_error_with_detail] <marker>"
+        stack: >-
+          Error: [test_error_with_detail] <marker>
+              at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+              at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+              at Object.handler (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+              at <repo>/.../node_modules/.vite/...
+              at runWithSpan (<repo>/.../node_modules/.vite/...)
+              at next (<repo>/.../node_modules/.vite/...)
+              at next (<repo>/.../node_modules/.vite/...)
+              at <repo>/.../node_modules/.vite/...
+              at next (<repo>/.../node_modules/.vite/...)
+              at <repo>/.../node_modules/.vite/...
+        detail:
+          bar: 123
+          marker: <marker>
+    messages:
+      - "[WARN] <elapsed>s: [test_error_with_detail] <marker>""
   `);
 });
 
 test("captures the raw waitUntil child log", async () => {
   await using fixture = await createLoggingFixture();
   const marker = `wait-until-${crypto.randomUUID()}`;
-  await fixture.client.testing.throwWaitUntilError({
-    message: `[test_wait_until_log] ${marker}`,
+  await fixture.client.testing.emitWaitUntilFailure({
+    mechanism: "throw",
+    throwable: "error",
+    marker,
   });
 
   const captured = await fixture.logs.waitForLog({
@@ -383,7 +476,7 @@ test("captures the raw waitUntil child log", async () => {
 
   expect(captured).toMatchObject({
     request: {
-      path: "/api/orpc/testing/throwWaitUntilError#waitUntil",
+      path: "/api/orpc/testing/emitWaitUntilFailure#waitUntil",
       method: "POST",
       waitUntil: true,
       parentRequestId: fixture.lastRequestId(),
@@ -402,11 +495,11 @@ test("captures the raw waitUntil child log", async () => {
       service: os
       environment: dev-misha
       request:
-        path: /api/orpc/testing/throwWaitUntilError
+        path: /api/orpc/testing/emitWaitUntilFailure
         status: -1
         method: POST
         id: <id>
-        url: <origin>/api/orpc/testing/throwWaitUntilError
+        url: <origin>/api/orpc/testing/emitWaitUntilFailure
         hostname: local.iterate.com
         traceparent: null
         cfRay: <cf-ray>
@@ -421,7 +514,7 @@ test("captures the raw waitUntil child log", async () => {
     request:
       id: <id>
       method: POST
-      path: /api/orpc/testing/throwWaitUntilError#waitUntil
+      path: /api/orpc/testing/emitWaitUntilFailure#waitUntil
       status: 500
       waitUntil: true
       parentRequestId: <parent-request-id>
@@ -432,21 +525,116 @@ test("captures the raw waitUntil child log", async () => {
       email: unknown
     errors:
       - name: Error
-        message: "[test_wait_until_log] <marker>"
-        stack: |-
-          Error: [test_wait_until_log] <marker>
+        message: "[test_error] <marker>"
+        stack: >-
+          Error: [test_error] <marker>
+              at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+              at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
       - name: Error
-        message: "[test_wait_until_log] <marker>"
-        stack: |-
-          Error: [test_wait_until_log] <marker>
+        message: "[test_error] <marker>"
+        stack: >-
+          Error: [test_error] <marker>
+              at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+              at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
     messages:
-      - "[ERROR] <elapsed>s: Error: [test_wait_until_log] <marker>"
+      - "[ERROR] <elapsed>s: Error: [test_error] <marker>"
       - "[INFO] <elapsed>s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid>
-        path=/api/orpc/testing/throwWaitUntilError#waitUntil errorCount=1"
+        path=/api/orpc/testing/emitWaitUntilFailure#waitUntil errorCount=1"
       - "[INFO] <elapsed>s: PostHog log exception sent requestId=<uuid>:waitUntil:<uuid>"
-      - "[ERROR] <elapsed>s: [test_wait_until_log] <marker>""
+      - "[ERROR] <elapsed>s: [test_error] <marker>""
+  `);
+});
+
+test("captures custom error properties in a waitUntil log", async () => {
+  await using fixture = await createLoggingFixture();
+  const marker = `wait-until-custom-${crypto.randomUUID()}`;
+  await fixture.client.testing.emitWaitUntilFailure({
+    mechanism: "throw",
+    throwable: "custom-error",
+    marker,
+  });
+
+  const captured = await fixture.logs.waitForLog({
+    predicate: (log: any) =>
+      log.request?.waitUntil === true && log.request.parentRequestId === fixture.lastRequestId(),
+  });
+
+  expect(captured).toMatchObject({
+    request: {
+      path: "/api/orpc/testing/emitWaitUntilFailure#waitUntil",
+      method: "POST",
+      waitUntil: true,
+      parentRequestId: fixture.lastRequestId(),
+    },
+  });
+  expect(normalize(captured, { marker })).toMatchInlineSnapshot(`
+    "meta:
+      id: <id>
+      start: <start>
+      end: <end>
+      durationMs: <duration-ms>
+    parent:
+      meta:
+        id: <id>
+        start: <start>
+      service: os
+      environment: dev-misha
+      request:
+        path: /api/orpc/testing/emitWaitUntilFailure
+        status: -1
+        method: POST
+        id: <id>
+        url: <origin>/api/orpc/testing/emitWaitUntilFailure
+        hostname: local.iterate.com
+        traceparent: null
+        cfRay: <cf-ray>
+        timezone: <timezone>
+      user:
+        id: <id>
+        email: unknown
+      egress:
+        <origin> <origin>
+    service: os
+    environment: dev-misha
+    request:
+      id: <id>
+      method: POST
+      path: /api/orpc/testing/emitWaitUntilFailure#waitUntil
+      status: 500
+      waitUntil: true
+      parentRequestId: <parent-request-id>
+    egress:
+      <origin> <origin>
+    user:
+      id: <id>
+      email: unknown
+    errors:
+      - name: TestingCustomError
+        message: "[test_custom_error] <marker>"
+        stack: >-
+          TestingCustomError: [test_custom_error] <marker>
+              at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+              at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+              at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
+        exampleGroup: testing-example
+        exampleField: <marker>
+      - name: TestingCustomError
+        message: "[test_custom_error] <marker>"
+        stack: >-
+          TestingCustomError: [test_custom_error] <marker>
+              at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+              at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+              at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
+        exampleGroup: testing-example
+        exampleField: <marker>
+    messages:
+      - "[ERROR] <elapsed>s: TestingCustomError: [test_custom_error] <marker>"
+      - "[INFO] <elapsed>s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid>
+        path=/api/orpc/testing/emitWaitUntilFailure#waitUntil errorCount=1"
+      - "[INFO] <elapsed>s: PostHog log exception sent requestId=<uuid>:waitUntil:<uuid>"
+      - "[ERROR] <elapsed>s: [test_custom_error] <marker>""
   `);
 });
 
@@ -467,7 +655,11 @@ test("does not capture PostHog for successful outbox consumer flow", async () =>
 test("captures an outbox consumer error", async () => {
   await using fixture = await createLoggingFixture();
   const marker = `outbox-fail-${crypto.randomUUID()}`;
-  await fixture.client.testing.emitFailingOutboxEvent({ message: marker });
+  await fixture.client.testing.emitOutboxFailure({
+    mechanism: "throw",
+    throwable: "error",
+    marker,
+  });
 
   const captured = await fixture.posthog.waitForRequest({
     predicate: (body) => JSON.stringify(body).includes(marker),
@@ -475,8 +667,8 @@ test("captures an outbox consumer error", async () => {
 
   expect(captured.body.properties).toMatchObject({
     request: {
-      path: "/api/orpc/testing/emitFailingOutboxEvent",
-      method: "POST",
+      path: "outbox/testingFailureConsumer",
+      method: "OUTBOX",
     },
   });
   expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
@@ -486,13 +678,27 @@ test("captures an outbox consumer error", async () => {
     properties:
       $exception_list:
         - type: Error
-          value: "[test_outbox_consumer_error] <marker>"
+          value: "[test_error] <marker>"
           mechanism:
             handled: true
             synthetic: false
           stacktrace:
             type: raw
             frames:
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/orpc/routers/testing.ts
+                function: createTestingThrowable
+                lineno: <lineno>
+                colno: <colno>
+                in_app: true
+              - platform: custom
+                lang: javascript
+                filename: <repo>/apps/os/backend/orpc/routers/testing.ts
+                function: runTestingFailureScenario
+                lineno: <lineno>
+                colno: <colno>
+                in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/consumers.ts
@@ -549,34 +755,115 @@ test("captures an outbox consumer error", async () => {
                 lineno: <lineno>
                 colno: <colno>
                 in_app: true
-              - platform: custom
-                lang: javascript
-                filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
-                function: processQueue
-                lineno: <lineno>
-                colno: <colno>
-                in_app: true
-              - platform: custom
-                lang: javascript
-                filename: <repo>/apps/os/backend/orpc/routers/testing.ts
-                function: Object.handler
-                lineno: <lineno>
-                colno: <colno>
-                in_app: true
       $environment: <$environment>
       $lib: os-logging
       request:
         id: <id>
-        method: POST
-        path: /api/orpc/testing/emitFailingOutboxEvent
-        status: -1
+        method: OUTBOX
+        path: outbox/testingFailureConsumer
+        status: 500
         duration: <duration>
         waitUntil: false
-        url: <origin>/api/orpc/testing/emitFailingOutboxEvent
+        url: <origin>/api/orpc/testing/emitOutboxFailure
       user:
         id: <id>
         email: outbox@system
     timestamp: <timestamp>"
+  `);
+});
+
+test("captures assigned detail in an outbox log", async () => {
+  await using fixture = await createLoggingFixture();
+  const marker = `outbox-detail-${crypto.randomUUID()}`;
+  await fixture.client.testing.emitOutboxFailure({
+    mechanism: "throw",
+    throwable: "error-with-detail",
+    marker,
+  });
+
+  const captured = await fixture.logs.waitForLog({
+    predicate: (log: any) =>
+      log.request?.method === "OUTBOX" && JSON.stringify(log).includes(marker),
+  });
+
+  expect(captured).toMatchObject({
+    request: {
+      path: "outbox/testingFailureConsumer",
+      method: "OUTBOX",
+      status: 500,
+    },
+  });
+  expect(normalize(captured, { marker })).toMatchInlineSnapshot(`
+    "meta:
+      id: <id>
+      start: <start>
+      end: <end>
+      durationMs: <duration-ms>
+    parent:
+      meta:
+        id: <id>
+        start: <start>
+      service: os
+      environment: dev-misha
+      request:
+        path: /api/orpc/testing/emitOutboxFailure
+        status: -1
+        method: POST
+        id: <id>
+        url: <origin>/api/orpc/testing/emitOutboxFailure
+        hostname: local.iterate.com
+        traceparent: null
+        cfRay: <cf-ray>
+        timezone: <timezone>
+      user:
+        id: <id>
+        email: unknown
+      egress:
+        <origin> <origin>
+      messages:
+        - "[INFO] <elapsed>s: [outbox] adding to pgmq:rpc:testing.emitOutboxFailure"
+        - "[INFO] <elapsed>s: [outbox] Path: rpc:testing.emitOutboxFailure. Consumers: 1.
+          Filtered: testingFailureConsumer"
+        - "[INFO] <elapsed>s: [outbox] processing 1 messages"
+        - "[INFO] <elapsed>s: [outbox] START msg_id=<job-id> consumer=testingFailureConsumer"
+    request:
+      id: <id>
+      method: OUTBOX
+      path: outbox/testingFailureConsumer
+      status: 500
+      waitUntil: false
+    user:
+      id: <id>
+      email: outbox@system
+    outbox:
+      consumerName: testingFailureConsumer
+      jobId: <job-id>
+      attempt: 1
+      eventName: rpc:testing.emitOutboxFailure
+      eventId: <event-id>
+      causation: null
+      ok: false
+      error: {}
+    errors:
+      - name: Error
+        message: "[test_error_with_detail] <marker>"
+        stack: >-
+          Error: [test_error_with_detail] <marker>
+              at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+              at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+              at Object.handler (<repo>/apps/os/backend/outbox/consumers.ts:<lineno>:<colno>)
+              at Object.handler (<repo>/apps/os/backend/outbox/pgmq-lib.ts:<lineno>:<colno>)
+              at <repo>/apps/os/backend/outbox/pgmq-lib.ts:<lineno>:<colno>
+              at runHandler (<repo>/apps/os/backend/outbox/pgmq-lib.ts:<lineno>:<colno>)
+              at <repo>/apps/os/backend/outbox/outbox-logging.ts:<lineno>:<colno>
+              at <repo>/apps/os/backend/logging/logger.ts:<lineno>:<colno>
+              at Object.run (<repo>/apps/os/backend/logging/logger.ts:<lineno>:<colno>)
+              at <repo>/apps/os/backend/outbox/outbox-logging.ts:<lineno>:<colno>
+        detail:
+          bar: 123
+          marker: <marker>
+    messages:
+      - "[ERROR] <elapsed>s: Error: [test_error_with_detail] <marker>""
   `);
 });
 
@@ -709,7 +996,7 @@ test("captures a malformed outbox job error", async () => {
         jobId: <job-id>
         attempt: 1
         eventName: invalid-message
-        eventId: -1
+        eventId: <event-id>
         causation: null
         processingResults: []
         status: failed
@@ -837,7 +1124,7 @@ test("captures a missing consumer error", async () => {
         jobId: <job-id>
         attempt: 1
         eventName: testing:missing-consumer:<marker>
-        eventId: 999999
+        eventId: <event-id>
         causation: null
         processingResults:
           - "#1 error: Error: [outbox] no consumer found for
@@ -1066,7 +1353,7 @@ async function createLoggingFixture(): Promise<LoggingFixture> {
 
 function normalize(value: unknown, params: { marker?: string } = {}): string {
   const yaml = YAML.stringify(value, function replacer(this: any, key, rawValue) {
-    const normalizeableKeys = `id,api_key,timestamp,start,end,lineno,colno,duration,durationMs,jobId,parentRequestId,cfRay,timezone,$environment`;
+    const normalizeableKeys = `id,api_key,timestamp,start,end,lineno,colno,duration,durationMs,jobId,eventId,parentRequestId,cfRay,timezone,$environment`;
     if (normalizeableKeys.split(",").includes(key))
       return `<${key.replace(/[A-Z]/g, (letter: string) => `-${letter.toLowerCase()}`)}>`;
     if (typeof rawValue !== "string") return rawValue;
@@ -1085,6 +1372,7 @@ function normalize(value: unknown, params: { marker?: string } = {}): string {
     .replaceAll(repoRoot, "<repo>")
     .replaceAll(/https?:\/\/[^/\s]+/g, "<origin>")
     .replaceAll(/\[(DEBUG|INFO|WARN|ERROR)\] \d+(?:\.\d+)?s:/g, "[$1] <elapsed>s:")
+    .replaceAll(/msg_id=\d+/g, "msg_id=<job-id>")
     .trimEnd();
 }
 
