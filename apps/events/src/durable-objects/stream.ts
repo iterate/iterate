@@ -483,10 +483,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       "content-type": "application/json",
       ...args.subscription.headers,
     };
-    const requestBody = {
-      subscriptionSlug: args.slug,
+    const attempted = makeAttemptedRecord({
+      at: attemptedAt,
       event: nextEvent,
-    };
+      headers,
+      slug: args.slug,
+      url: args.subscription.url,
+    });
 
     let response: Response;
     try {
@@ -496,18 +499,16 @@ export class StreamDurableObject extends DurableObject<Env> {
         init: {
           method: "POST",
           headers,
-          body: JSON.stringify(requestBody),
+          body: JSON.stringify(attempted.body),
         },
       });
     } catch (error) {
       const message = readErrorMessage(error, webhookTimeoutMs);
       return makeDeliveryFailedEvent({
-        attemptedAt,
+        attempted,
         bodyPreview: null,
         deliveredEventOffset: nextEvent.offset,
         deliveryRevision: args.subscription.revision,
-        event: nextEvent,
-        headers,
         lastAcknowledgedOffset: args.subscription.cursor.lastAcknowledgedOffset,
         message,
         observedLastOffset,
@@ -515,7 +516,6 @@ export class StreamDurableObject extends DurableObject<Env> {
         retries: args.subscription.cursor.retries + 1,
         slug: args.slug,
         statusCode: null,
-        url: args.subscription.url,
       });
     }
 
@@ -529,12 +529,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (!response.ok) {
       const message = `Webhook failed with ${response.status}`;
       return makeDeliveryFailedEvent({
-        attemptedAt,
+        attempted,
         bodyPreview,
         deliveredEventOffset: nextEvent.offset,
         deliveryRevision: args.subscription.revision,
-        event: nextEvent,
-        headers,
         lastAcknowledgedOffset: args.subscription.cursor.lastAcknowledgedOffset,
         message,
         observedLastOffset,
@@ -542,7 +540,6 @@ export class StreamDurableObject extends DurableObject<Env> {
         retries: args.subscription.cursor.retries + 1,
         slug: args.slug,
         statusCode: response.status,
-        url: args.subscription.url,
       });
     }
 
@@ -554,12 +551,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         deliveryRevision: args.subscription.revision,
         deliveredEventOffset: nextEvent.offset,
         observedLastOffset,
-        attempted: {
-          at: attemptedAt,
-          url: args.subscription.url,
-          headers,
-          body: requestBody,
-        },
+        attempted,
         response: {
           statusCode: response.status,
           bodyPreview,
@@ -666,20 +658,22 @@ const subscriptionStateSchema = z.object({
   cursor: subscriptionCursorSchema,
 });
 
+const subscriptionAttemptedSchema = z.object({
+  at: createdAt,
+  url: z.url(),
+  headers: z.record(z.string(), z.string()),
+  body: z.object({
+    subscriptionSlug: z.string().trim().min(1),
+    event: Event,
+  }),
+});
+
 const subscriptionDeliverySucceededPayloadSchema = z.object({
   slug: z.string().trim().min(1),
   deliveryRevision: z.number().int().nonnegative(),
   deliveredEventOffset: Offset,
   observedLastOffset: Offset.nullable(),
-  attempted: z.object({
-    at: createdAt,
-    url: z.url(),
-    headers: z.record(z.string(), z.string()),
-    body: z.object({
-      subscriptionSlug: z.string().trim().min(1),
-      event: Event,
-    }),
-  }),
+  attempted: subscriptionAttemptedSchema,
   response: z.object({
     statusCode: z.number().int(),
     bodyPreview: z.string().nullable(),
@@ -695,15 +689,7 @@ const subscriptionDeliveryFailedPayloadSchema = z.object({
   deliveryRevision: z.number().int().nonnegative(),
   deliveredEventOffset: Offset,
   observedLastOffset: Offset.nullable(),
-  attempted: z.object({
-    at: createdAt,
-    url: z.url(),
-    headers: z.record(z.string(), z.string()),
-    body: z.object({
-      subscriptionSlug: z.string().trim().min(1),
-      event: Event,
-    }),
-  }),
+  attempted: subscriptionAttemptedSchema,
   response: z.object({
     statusCode: z.number().int().nullable(),
     bodyPreview: z.string().nullable(),
@@ -738,6 +724,7 @@ const streamStateSchema = z.object({
 
 type StreamState = z.infer<typeof streamStateSchema>;
 type SubscriptionState = z.infer<typeof subscriptionStateSchema>;
+type SubscriptionAttempted = z.infer<typeof subscriptionAttemptedSchema>;
 
 export function createEmptyStreamState(): StreamState {
   return {
@@ -979,11 +966,10 @@ function rearmSubscriptionIfStreamAdvanced(args: {
 }
 
 function makeDeliveryFailedEvent(args: {
-  attemptedAt: string;
+  attempted: SubscriptionAttempted;
   bodyPreview: string | null;
   deliveredEventOffset: string;
   deliveryRevision: number;
-  headers: Record<string, string>;
   lastAcknowledgedOffset: string | null;
   message: string;
   observedLastOffset: string | null;
@@ -991,8 +977,6 @@ function makeDeliveryFailedEvent(args: {
   retries: number;
   slug: string;
   statusCode: number | null;
-  url: string;
-  event: Event;
 }) {
   return EventInput.parse({
     path: args.path,
@@ -1002,15 +986,7 @@ function makeDeliveryFailedEvent(args: {
       deliveryRevision: args.deliveryRevision,
       deliveredEventOffset: args.deliveredEventOffset,
       observedLastOffset: args.observedLastOffset,
-      attempted: {
-        at: args.attemptedAt,
-        url: args.url,
-        headers: args.headers,
-        body: {
-          subscriptionSlug: args.slug,
-          event: args.event,
-        },
-      },
+      attempted: args.attempted,
       response: {
         statusCode: args.statusCode,
         bodyPreview: args.bodyPreview,
@@ -1024,11 +1000,29 @@ function makeDeliveryFailedEvent(args: {
           message: args.message,
           statusCode: args.statusCode,
           bodyPreview: args.bodyPreview,
-          at: args.attemptedAt,
+          at: args.attempted.at,
         },
       },
     },
   });
+}
+
+function makeAttemptedRecord(args: {
+  at: string;
+  event: Event;
+  headers: Record<string, string>;
+  slug: string;
+  url: string;
+}): SubscriptionAttempted {
+  return {
+    at: args.at,
+    url: args.url,
+    headers: args.headers,
+    body: {
+      subscriptionSlug: args.slug,
+      event: args.event,
+    },
+  };
 }
 
 async function postWebhookWithTimeout(args: { url: string; init: RequestInit; timeoutMs: number }) {

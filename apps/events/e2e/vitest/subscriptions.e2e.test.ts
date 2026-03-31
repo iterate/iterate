@@ -310,6 +310,49 @@ describe.sequential("subscription e2e", () => {
   );
 
   test(
+    "multiple queued user events drain in offset order",
+    async () => {
+      /**
+       * The scheduler only delivers one event per subscription attempt, but a
+       * backlog should still drain in stream offset order without requiring new
+       * external traffic.
+       */
+      await using hook = await useWebhookSink({ pathname: "/ordered" });
+      hook.replyJson(200, { ok: true });
+
+      const path = app.newStreamPath();
+      await app.appendEvents({
+        path,
+        events: [
+          app.subscriptionSet({
+            path,
+            slug: "alpha",
+            url: hook.endpointUrl,
+            startFrom: "head",
+          }),
+          app.userEvent({ path, payload: { value: 1 } }),
+          app.userEvent({ path, payload: { value: 2 } }),
+          app.userEvent({ path, payload: { value: 3 } }),
+        ],
+      });
+
+      const deliveries = await hook.waitForCount({ count: 3, timeoutMs: 2_500 });
+
+      expect(deliveries.map((delivery) => delivery.payload?.event.offset)).toEqual([
+        app.expectedOffset(2),
+        app.expectedOffset(3),
+        app.expectedOffset(4),
+      ]);
+      expect(deliveries.map((delivery) => delivery.payload?.event.payload)).toEqual([
+        { value: 1 },
+        { value: 2 },
+        { value: 3 },
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "never delivers internal subscription bookkeeping events, even with two subscribers",
     async () => {
       await using alpha = await useWebhookSink({ pathname: "/alpha" });
