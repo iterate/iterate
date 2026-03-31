@@ -33,7 +33,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
-    "trpc-cli": "0.14.0",
+    "trpc-cli": "^0.12.4",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   }
