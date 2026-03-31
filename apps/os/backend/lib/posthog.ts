@@ -1,7 +1,7 @@
-import type { WideEvent } from "evlog";
 import { waitUntil } from "../../env.ts";
-import type { EvlogExceptionEvent } from "../evlog-event-schema.ts";
+import type { WideLog } from "../logging/types.ts";
 import { logger } from "../tag-logger.ts";
+import type { RequestInfoForWideLog } from "../worker.ts";
 
 const POSTHOG_CAPTURE_URL = "https://eu.i.posthog.com/capture/";
 
@@ -38,24 +38,45 @@ export type PostHogUserContext = {
   email: string;
 };
 
-type EvlogPostHogEnv = {
-  POSTHOG_PUBLIC_KEY?: string;
-  VITE_APP_STAGE?: string;
-};
-
-export type EvlogExceptionPayload = {
-  event: WideEvent;
-  errors?: Error[];
-  env?: EvlogPostHogEnv;
-  executionCtx?: { waitUntil: (promise: Promise<unknown>) => void };
-};
-
 function getTimestamp(timestamp?: string): string {
   return timestamp ?? new Date().toISOString();
 }
 
+function getEffectiveEgress(log: WideLog): Record<string, string> {
+  let original: WideLog | undefined = log;
+  while (original) {
+    if (original.egress) return original.egress as Record<string, string>;
+    original = original.parent;
+  }
+  return {} as Record<string, string>;
+}
+
+function resolveEgressURL(url: string, log: WideLog): string {
+  const egress = getEffectiveEgress(log);
+  if (Object.keys(egress).length === 0) return url;
+
+  if (egress[url]) return egress[url]!;
+
+  const target = new URL(url);
+  if (egress[target.origin]) {
+    return new URL(
+      `${target.pathname}${target.search}${target.hash}`,
+      egress[target.origin]!,
+    ).toString();
+  }
+
+  if (egress[target.hostname]) {
+    return new URL(
+      `${target.pathname}${target.search}${target.hash}`,
+      egress[target.hostname]!,
+    ).toString();
+  }
+
+  return url;
+}
+
 async function posthogCapture(body: Record<string, unknown>): Promise<void> {
-  const response = await fetch(POSTHOG_CAPTURE_URL, {
+  const response = await fetch(resolveEgressURL(POSTHOG_CAPTURE_URL, logger.get()), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -177,59 +198,91 @@ export async function sendPostHogException(
   });
 }
 
-function toPostHogRequestContext(event: EvlogExceptionEvent): PostHogRequestContext {
-  const request = event.request;
+function toPostHogRequestContext(event: WideLog): PostHogRequestContext {
+  const eventRequest =
+    (event.request as Partial<RequestInfoForWideLog> & {
+      waitUntil?: boolean;
+      parentRequestId?: string;
+      trpcProcedure?: string;
+    }) || {};
+  const parent =
+    typeof event.parent === "object" && event.parent !== null
+      ? (event.parent as WideLog)
+      : undefined;
+  const parentRequest =
+    (parent?.request as Partial<RequestInfoForWideLog> & {
+      waitUntil?: boolean;
+      parentRequestId?: string;
+      trpcProcedure?: string;
+    }) || {};
+  const request = { ...parentRequest, ...eventRequest };
+
   return {
-    id: request.id,
-    method: request.method,
-    path: request.path,
-    status: request.status,
-    duration: request.duration,
-    waitUntil: request.waitUntil,
-    parentRequestId: request.parentRequestId,
-    trpcProcedure: request.trpcProcedure,
-    url: request.url,
+    id: request.id ?? "unknown",
+    method: request.method ?? "unknown",
+    path: request.path ?? "unknown",
+    status: request.status ?? 500,
+    duration: event.meta.durationMs ?? 0,
+    waitUntil: request?.waitUntil === true,
+    parentRequestId: request.parentRequestId ?? undefined,
+    trpcProcedure: typeof event.trpcProcedure === "string" ? event.trpcProcedure : undefined,
+    url: request.url ?? undefined,
   };
 }
 
-function toPostHogUserContext(event: EvlogExceptionEvent): PostHogUserContext {
-  const user = event.user;
+function toPostHogUserContext(event: WideLog): PostHogUserContext {
+  const user = event.user as Record<string, unknown> | undefined;
   return {
-    id: user.id,
-    email: user.email,
+    id: typeof user?.id === "string" ? user.id : "anonymous",
+    email: typeof user?.email === "string" ? user.email : "unknown",
   };
 }
 
-export async function sendEvlogExceptionToPostHog(payload: EvlogExceptionPayload): Promise<void> {
-  if (!payload.errors || payload.errors.length === 0) return;
+export async function sendLogExceptionToPostHog(params: {
+  log: WideLog;
+  env?: { POSTHOG_PUBLIC_KEY?: string; VITE_APP_STAGE?: string };
+}): Promise<void> {
+  const errors = (params.log.errors ?? []).map((entry) => {
+    const normalized =
+      typeof entry === "object" && entry !== null
+        ? (entry as Record<string, unknown>)
+        : { message: String(entry) };
+    const error = new Error(
+      typeof normalized.message === "string" ? normalized.message : String(entry),
+    );
+    error.name = typeof normalized.name === "string" ? normalized.name : "Error";
+    error.stack = typeof normalized.stack === "string" ? normalized.stack : undefined;
+    return error;
+  });
 
-  const apiKey = payload.env?.POSTHOG_PUBLIC_KEY;
+  if (errors.length === 0) return;
+
+  const apiKey = params.env?.POSTHOG_PUBLIC_KEY;
   if (!apiKey) {
-    logger.warn("POSTHOG_PUBLIC_KEY missing for evlog exception flush");
+    logger.warn("POSTHOG_PUBLIC_KEY missing for log exception flush");
     return;
   }
 
-  const event = payload.event as unknown as EvlogExceptionEvent;
-  const request = toPostHogRequestContext(event);
-  const user = toPostHogUserContext(event);
+  const request = toPostHogRequestContext(params.log);
+  const user = toPostHogUserContext(params.log);
 
   logger.info(
-    `PostHog evlog exception dispatch requestId=${request.id} path=${request.path} errorCount=${payload.errors.length} waitUntil=${Boolean(payload.executionCtx)}`,
+    `PostHog log exception dispatch requestId=${request.id} path=${request.path} errorCount=${errors.length}`,
   );
 
   try {
     await sendPostHogException({
       apiKey,
       distinctId: user.id,
-      errors: payload.errors,
+      errors,
       request,
       user,
-      environment: payload.env?.VITE_APP_STAGE ?? evlogAppStage,
-      lib: "evlog-worker",
+      environment: params.env?.VITE_APP_STAGE ?? evlogAppStage,
+      lib: "os-logging",
     });
-    logger.info(`PostHog evlog exception sent requestId=${request.id}`);
+    logger.info(`PostHog log exception sent requestId=${request.id}`);
   } catch (error) {
-    logger.error("PostHog evlog exception failed", {
+    logger.error("PostHog log exception failed", {
       requestId: request.id,
       path: request.path,
       error: error instanceof Error ? error.message : String(error),

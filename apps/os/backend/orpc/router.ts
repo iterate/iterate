@@ -6,6 +6,7 @@ import { workerContract } from "../../../daemon/server/orpc/contract.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
+import { waitUntil } from "../../env.ts";
 import { parseTokenIdFromApiKey } from "../egress-proxy/api-key-utils.ts";
 import { decrypt } from "../utils/encryption.ts";
 import { parseGitHubFullName } from "../utils/github-repo.ts";
@@ -118,7 +119,7 @@ async function authenticateApiKey(
 export const reportStatus = os.machines.reportStatus
   .use(withApiKey)
   .handler(async ({ input, context }) => {
-    const { db, env, executionCtx } = context;
+    const { db, env } = context;
 
     // Authenticate and get machine
     const { machine } = await authenticateApiKey(db, context.apiKey, input.machineId);
@@ -152,7 +153,7 @@ export const reportStatus = os.machines.reportStatus
     logger.info("Machine daemon status reported");
 
     // Broadcast invalidation to update UI in real-time
-    executionCtx.waitUntil(
+    waitUntil(
       broadcastInvalidation(env).catch((err) => {
         logger.error("Failed to broadcast invalidation", err);
       }),
