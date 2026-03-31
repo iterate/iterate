@@ -7,6 +7,7 @@ export const CodemodeUiOpenApiSource = z.object({
   url: z.string().trim().url(),
   baseUrl: z.string().trim().url().optional(),
   namespace: z.string().trim().min(1).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
 });
 
 export const CodemodeUiOrpcContractSource = z.object({
@@ -51,12 +52,11 @@ export const WEATHER_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
   type: "openapi",
   namespace: "weather",
   url: "https://api.weather.gov/openapi.json",
-};
-
-export const OPENF1_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
-  type: "openapi",
-  namespace: "openf1",
-  url: "https://api.openf1.org/openapi.json",
+  headers: {
+    "user-agent": "iterate-codemode (jonas@iterate.com)",
+    accept:
+      "application/geo+json, application/vnd.oai.openapi+json, application/json;q=0.9, */*;q=0.1",
+  },
 };
 
 export const DEFAULT_CODEMODE_SOURCES: CodemodeUiSource[] = [
@@ -89,14 +89,8 @@ export const CODEMODE_SOURCE_PRESETS: CodemodeSourcePreset[] = [
   {
     id: "weather-openapi",
     title: "Weather.gov OpenAPI",
-    description: "National Weather Service OpenAPI with alerts, forecasts, and stations.",
+    description: "Public NOAA weather alerts and forecast endpoints via OpenAPI.",
     source: WEATHER_OPENAPI_SOURCE,
-  },
-  {
-    id: "openf1-openapi",
-    title: "OpenF1 OpenAPI",
-    description: "Public Formula 1 telemetry and event data exposed as OpenAPI.",
-    source: OPENF1_OPENAPI_SOURCE,
   },
   {
     id: "example-contract",

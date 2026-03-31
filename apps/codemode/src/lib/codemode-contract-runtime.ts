@@ -27,6 +27,7 @@ import {
 } from "~/lib/derive-contract-context.ts";
 import {
   buildOpenApiCodemodeContext,
+  type CodemodeOpenApiFetch,
   type CodemodeOpenApiSource as RuntimeOpenApiSource,
 } from "~/lib/openapi-codemode-context.ts";
 
@@ -34,41 +35,52 @@ function trimTrailingSlash(value: string) {
   return value.replace(/\/+$/, "");
 }
 
-function createExampleClient(config: AppConfig): ContractRouterClient<typeof exampleContract> {
+function createExampleClient(
+  config: AppConfig,
+  fetcher?: CodemodeOpenApiFetch,
+): ContractRouterClient<typeof exampleContract> {
   return createORPCClient(
     new OpenAPILink(exampleContract, {
       url: new URL("/api", trimTrailingSlash(config.codemodeApis.exampleBaseUrl)).toString(),
+      ...(fetcher ? { fetch: fetcher } : {}),
     }),
   );
 }
 
-function createEventsClient(config: AppConfig): ContractRouterClient<typeof eventsContract> {
+function createEventsClient(
+  config: AppConfig,
+  fetcher?: CodemodeOpenApiFetch,
+): ContractRouterClient<typeof eventsContract> {
   return createORPCClient(
     new OpenAPILink(eventsContract, {
       url: new URL("/api", trimTrailingSlash(config.codemodeApis.eventsBaseUrl)).toString(),
+      ...(fetcher ? { fetch: fetcher } : {}),
     }),
   );
 }
 
-function createCodemodeClients(config: AppConfig) {
+function createCodemodeClients(config: AppConfig, fetcher?: CodemodeOpenApiFetch) {
   return {
-    example: createExampleClient(config),
-    events: createEventsClient(config),
+    example: createExampleClient(config, fetcher),
+    events: createEventsClient(config, fetcher),
     semaphore: createSemaphoreClient({
       baseURL: config.codemodeApis.semaphoreBaseUrl,
       apiKey: config.codemodeApis.semaphoreApiToken.exposeSecret(),
+      ...(fetcher ? { fetch: fetcher } : {}),
     }) as SemaphoreClient,
     ingressProxy: createIngressProxyClient({
       baseURL: config.codemodeApis.ingressProxyBaseUrl,
       apiToken: config.codemodeApis.ingressProxyApiToken.exposeSecret(),
+      ...(fetcher ? { fetch: fetcher } : {}),
     }) as IngressProxyClient,
   };
 }
 
 function createContractRegistry(
   config: AppConfig,
+  fetcher?: CodemodeOpenApiFetch,
 ): Record<CodemodeContractSourceService, ContractRegistry[string]> {
-  const clients = createCodemodeClients(config);
+  const clients = createCodemodeClients(config, fetcher);
 
   return {
     example: {
@@ -148,14 +160,15 @@ function resolveOpenApiSource(
 
 function mergeCodemodeContexts(contexts: DerivedContractContext[]): DerivedContractContext {
   const fetchTypeExpression = "{ fetch: typeof fetch }";
+  const fetchRuntimeExpression = "{ fetch: (...args) => fetch(...args) }";
 
   if (contexts.length === 0) {
     return {
       declarations: [],
-      ctxExpression: "{ fetch }",
+      ctxExpression: fetchRuntimeExpression,
       ctxTypeExpression: fetchTypeExpression,
       providers: [],
-      sandboxPrelude: "const ctx = { fetch };",
+      sandboxPrelude: "const ctx = { fetch: (...args) => fetch(...args) };",
       ctxTypes: "declare const ctx: { fetch: typeof fetch };",
     };
   }
@@ -164,9 +177,9 @@ function mergeCodemodeContexts(contexts: DerivedContractContext[]): DerivedContr
     const context = contexts[0]!;
     return {
       ...context,
-      ctxExpression: `Object.assign({ fetch }, ${context.ctxExpression})`,
+      ctxExpression: `Object.assign(${fetchRuntimeExpression}, ${context.ctxExpression})`,
       ctxTypeExpression: `${fetchTypeExpression} & (${context.ctxTypeExpression})`,
-      sandboxPrelude: `const ctx = Object.assign({ fetch }, ${context.ctxExpression});`,
+      sandboxPrelude: `const ctx = Object.assign(${fetchRuntimeExpression}, ${context.ctxExpression});`,
       ctxTypes: [
         ...context.declarations,
         "",
@@ -177,7 +190,7 @@ function mergeCodemodeContexts(contexts: DerivedContractContext[]): DerivedContr
   }
 
   const declarations = contexts.flatMap((context) => context.declarations);
-  const ctxExpression = `Object.assign({ fetch }, ${contexts
+  const ctxExpression = `Object.assign(${fetchRuntimeExpression}, ${contexts
     .map((context) => context.ctxExpression)
     .join(", ")})`;
   const ctxTypeExpression = [fetchTypeExpression]
@@ -197,9 +210,11 @@ function mergeCodemodeContexts(contexts: DerivedContractContext[]): DerivedContr
 export async function buildCodemodeContextFromSources(options: {
   config: AppConfig;
   sources?: CodemodeSource[];
+  fetch?: CodemodeOpenApiFetch;
+  includeTypes?: boolean;
 }) {
   const selectedSources = normalizeCodemodeSources(options.sources ?? []);
-  const contractRegistry = createContractRegistry(options.config);
+  const contractRegistry = createContractRegistry(options.config, options.fetch);
   const contexts: DerivedContractContext[] = [];
 
   const selectedContractRegistry = Object.fromEntries(
@@ -225,6 +240,8 @@ export async function buildCodemodeContextFromSources(options: {
     contexts.push(
       await buildOpenApiCodemodeContext(openApiSources, {
         providerName: "openapi",
+        fetch: options.fetch,
+        includeTypes: options.includeTypes,
       }),
     );
   }

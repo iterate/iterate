@@ -4,7 +4,6 @@ import {
   EXAMPLE_OPENAPI_SOURCE,
   PETSTORE_OPENAPI_SOURCE,
   WEATHER_OPENAPI_SOURCE,
-  OPENF1_OPENAPI_SOURCE,
   type CodemodeUiSource,
 } from "~/lib/codemode-sources.ts";
 
@@ -157,41 +156,40 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
 };`,
   },
   {
-    id: "weather-and-pets",
-    title: "Weather And Pets",
-    description: "Mix Weather.gov alerts with Petstore inventory in one ctx.",
-    sources: [WEATHER_OPENAPI_SOURCE, PETSTORE_OPENAPI_SOURCE],
+    id: "weather-alerts",
+    title: "Weather Alerts",
+    description: "Fetch active California alerts from the Weather.gov OpenAPI source.",
+    sources: [WEATHER_OPENAPI_SOURCE],
     code: `async ({ ctx }) => {
   const alerts = await ctx.weather.alerts_active({
     area: "CA",
   });
-  const pets = await ctx.petstore.findPetsByStatus({ status: "available" });
 
   return {
     alertCount: Array.isArray(alerts?.features) ? alerts.features.length : null,
-    petCount: Array.isArray(pets) ? pets.length : null,
-    firstPetName: Array.isArray(pets) ? (pets[0]?.name ?? null) : null,
+    headline: Array.isArray(alerts?.features)
+      ? (alerts.features[0]?.properties?.headline ?? null)
+      : null,
   };
 };`,
   },
   {
-    id: "openf1-session-index",
-    title: "Formula One Sessions",
-    description: "Query OpenF1 and return a compact session snapshot.",
-    sources: [OPENF1_OPENAPI_SOURCE],
+    id: "formula-one-results",
+    title: "Formula One Results",
+    description: "Fetch recent F1 race results directly from a public endpoint.",
+    sources: [],
     code: `async ({ ctx }) => {
-  const sessions = await ctx.openf1.sessions_sessions_get({
-    year: 2024,
-    country_name: "United Kingdom",
-  });
+  const response = await ctx.fetch("https://api.jolpi.ca/ergast/f1/2024/5/results.json");
+  const data = await response.json();
+  const race = data?.MRData?.RaceTable?.Races?.[0] ?? null;
 
-  return Array.isArray(sessions)
-    ? sessions.slice(0, 5).map((session) => ({
-        session_name: session.session_name,
-        location: session.location,
-        date_start: session.date_start,
-      }))
-    : sessions;
+  return race
+    ? {
+        raceName: race.raceName,
+        round: race.round,
+        winner: race.Results?.[0]?.Driver?.familyName ?? null,
+      }
+    : null;
 };`,
   },
   {
@@ -203,6 +201,7 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
   const lines = [];
   const stream = await ctx.example.test.randomLogStream({
     count: 4,
+    minDelayMs: 0,
     maxDelayMs: 25,
   });
 
@@ -211,32 +210,6 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
   }
 
   return { lines };
-};`,
-  },
-  {
-    id: "stream-events-to-summary",
-    title: "Stream Events",
-    description: "Read the latest events from a stream with async iteration.",
-    sources: [{ type: "orpc-contract", service: "events" }],
-    code: `async ({ ctx }) => {
-  const items = [];
-  const stream = await ctx.events.stream({
-    path: "/codemode/demo/audit",
-    live: false,
-  });
-
-  for await (const event of stream) {
-    items.push({
-      offset: event.offset,
-      type: event.type,
-    });
-
-    if (items.length >= 5) {
-      break;
-    }
-  }
-
-  return { items };
 };`,
   },
   {

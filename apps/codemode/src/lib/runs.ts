@@ -29,7 +29,8 @@ export const listRuns = createServerFn({ method: "GET" }).handler(async ({ conte
   const rows = await context.db
     .select()
     .from(codemodeRunsTable)
-    .orderBy(desc(codemodeRunsTable.id));
+    .orderBy(desc(codemodeRunsTable.id))
+    .limit(30);
 
   return rows.map((row) => {
     const run = parseRun(row);

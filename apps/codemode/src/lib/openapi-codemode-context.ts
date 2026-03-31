@@ -66,6 +66,11 @@ export type CodemodeOpenApiSource = PublicCodemodeOpenApiSource & {
   operationAliases?: Record<string, string>;
 };
 
+export type CodemodeOpenApiFetch = (
+  input: URL | string | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
 type ProcedureKind = "value" | "stream";
 
 type OpenApiProcedure = {
@@ -97,6 +102,53 @@ function trimTrailingSlash(value: string) {
 
 function trimLeadingSlash(value: string) {
   return value.replace(/^\/+/, "");
+}
+
+/**
+ * Adapted from @cloudflare/codemode's OpenAPI MCP helper so large public specs
+ * with internal $refs can be traversed without exploding the runtime.
+ */
+function resolveRefs(value: unknown, root: unknown, seen = new Set<string>()): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value !== "object") return value;
+
+  if (Array.isArray(value)) {
+    return value.map((item) => resolveRefs(item, root, seen));
+  }
+
+  const record = value as Record<string, unknown>;
+  if (typeof record.$ref === "string") {
+    const ref = record.$ref;
+    if (seen.has(ref)) {
+      return { $circular: ref };
+    }
+
+    if (!ref.startsWith("#/")) {
+      return record;
+    }
+
+    seen.add(ref);
+    const parts = ref
+      .slice(2)
+      .split("/")
+      .map((part) => part.replace(/~1/g, "/").replace(/~0/g, "~"));
+    let resolved = root;
+
+    for (const part of parts) {
+      resolved =
+        typeof resolved === "object" && resolved !== null
+          ? (resolved as Record<string, unknown>)[part]
+          : undefined;
+    }
+
+    const result = resolveRefs(resolved, root, seen);
+    seen.delete(ref);
+    return result;
+  }
+
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => [key, resolveRefs(entry, root, seen)]),
+  );
 }
 
 function toPascalCase(value: string) {
@@ -536,6 +588,11 @@ function appendQueryParams(url: URL, query: unknown) {
   }
 }
 
+function isJsonLikeContentType(contentType: string) {
+  const normalized = contentType.toLowerCase();
+  return normalized.includes("application/json") || normalized.includes("+json");
+}
+
 function parseSseValue(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) return "";
@@ -555,49 +612,52 @@ async function* parseSseStream(response: Response): AsyncIterable<unknown> {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+      const chunks = buffer.split(/\r?\n\r?\n/);
+      buffer = chunks.pop() ?? "";
 
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-    const chunks = buffer.split(/\r?\n\r?\n/);
-    buffer = chunks.pop() ?? "";
+      for (const chunk of chunks) {
+        const lines = chunk.split(/\r?\n/);
+        let event = "message";
+        const dataLines: string[] = [];
 
-    for (const chunk of chunks) {
-      const lines = chunk.split(/\r?\n/);
-      let event = "message";
-      const dataLines: string[] = [];
+        for (const line of lines) {
+          if (line.startsWith("event:")) {
+            event = line.slice(6).trim();
+            continue;
+          }
 
-      for (const line of lines) {
-        if (line.startsWith("event:")) {
-          event = line.slice(6).trim();
+          if (line.startsWith("data:")) {
+            dataLines.push(line.slice(5).trimStart());
+          }
+        }
+
+        const payload = parseSseValue(dataLines.join("\n"));
+
+        if (dataLines.length === 0 && event === "message") {
           continue;
         }
 
-        if (line.startsWith("data:")) {
-          dataLines.push(line.slice(5).trimStart());
+        if (event === "done") {
+          return;
         }
+
+        if (event === "error") {
+          throw new Error(typeof payload === "string" ? payload : JSON.stringify(payload));
+        }
+
+        yield payload;
       }
 
-      const payload = parseSseValue(dataLines.join("\n"));
-
-      if (dataLines.length === 0 && event === "message") {
-        continue;
+      if (done) {
+        break;
       }
-
-      if (event === "done") {
-        return;
-      }
-
-      if (event === "error") {
-        throw new Error(typeof payload === "string" ? payload : JSON.stringify(payload));
-      }
-
-      yield payload;
     }
-
-    if (done) {
-      break;
-    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
   }
 }
 
@@ -625,6 +685,7 @@ async function buildProcedureFromOperation(options: {
   headers?: Record<string, string>;
   operationAliases?: Record<string, string>;
   baseUrl?: string;
+  fetch?: CodemodeOpenApiFetch;
 }): Promise<OpenApiProcedure | null> {
   const operationId =
     options.operation.operationId ??
@@ -672,7 +733,7 @@ async function buildProcedureFromOperation(options: {
       requestHeaders.set("accept", "text/event-stream");
     }
 
-    const response = await fetch(url, requestInit);
+    const response = await (options.fetch ?? fetch)(url, requestInit);
     if (!response.ok) {
       throw new Error(`${options.method.toUpperCase()} ${url} failed with ${response.status}`);
     }
@@ -686,7 +747,7 @@ async function buildProcedureFromOperation(options: {
     }
 
     const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
+    if (isJsonLikeContentType(contentType)) {
       return response.json();
     }
 
@@ -791,6 +852,72 @@ function buildValueToolDescriptors(procedures: OpenApiProcedure[]): JsonSchemaTo
   );
 }
 
+function estimateSchemaSize(schema: JsonSchema | undefined) {
+  if (schema === undefined) {
+    return 0;
+  }
+
+  try {
+    return JSON.stringify(schema).length;
+  } catch {
+    return 0;
+  }
+}
+
+function shouldCompactTypeDefinitions(procedures: OpenApiProcedure[]) {
+  const totalSchemaSize = procedures.reduce(
+    (sum, procedure) =>
+      sum + estimateSchemaSize(procedure.inputSchema) + estimateSchemaSize(procedure.outputSchema),
+    0,
+  );
+
+  return procedures.length > 24 || totalSchemaSize > 120_000;
+}
+
+function buildFallbackValueTypeDefinitions(procedures: OpenApiProcedure[], providerName: string) {
+  if (procedures.length === 0) {
+    return "";
+  }
+
+  const declarations: string[] = [];
+  const providerLines: string[] = [`declare const ${providerName}: {`];
+
+  for (const procedure of procedures) {
+    const baseName = toPascalCase(procedure.rpcToolName);
+    const inputTypeName = `${baseName}Input`;
+    const outputTypeName = `${baseName}Output`;
+    const compactInput = estimateSchemaSize(procedure.inputSchema) > 12_000;
+    const compactOutput = estimateSchemaSize(procedure.outputSchema) > 12_000;
+
+    try {
+      declarations.push(
+        compactInput
+          ? `type ${inputTypeName} = unknown;`
+          : jsonSchemaToType(procedure.inputSchema, inputTypeName),
+      );
+    } catch {
+      declarations.push(`type ${inputTypeName} = unknown;`);
+    }
+
+    try {
+      declarations.push(
+        compactOutput || !procedure.outputSchema
+          ? `type ${outputTypeName} = unknown;`
+          : jsonSchemaToType(procedure.outputSchema, outputTypeName),
+      );
+    } catch {
+      declarations.push(`type ${outputTypeName} = unknown;`);
+    }
+
+    providerLines.push(
+      `  ${JSON.stringify(procedure.rpcToolName)}: (input: ${inputTypeName}) => Promise<${outputTypeName}>;`,
+    );
+  }
+
+  providerLines.push("};");
+  return [...declarations, "", ...providerLines].join("\n");
+}
+
 function buildStreamTypeDefinitions(procedures: OpenApiProcedure[], providerName: string) {
   if (procedures.length === 0) {
     return "";
@@ -803,12 +930,18 @@ function buildStreamTypeDefinitions(procedures: OpenApiProcedure[], providerName
     const baseName = toPascalCase(procedure.rpcToolName);
     const inputTypeName = `${baseName}Input`;
     const yieldTypeName = `${baseName}Yield`;
+    const compactInput = estimateSchemaSize(procedure.inputSchema) > 12_000;
+    const compactYield = estimateSchemaSize(procedure.outputSchema) > 12_000;
 
-    declarations.push(jsonSchemaToType(procedure.inputSchema, inputTypeName));
     declarations.push(
-      procedure.outputSchema
-        ? jsonSchemaToType(procedure.outputSchema, yieldTypeName)
-        : `type ${yieldTypeName} = unknown;`,
+      compactInput
+        ? `type ${inputTypeName} = unknown;`
+        : jsonSchemaToType(procedure.inputSchema, inputTypeName),
+    );
+    declarations.push(
+      compactYield || !procedure.outputSchema
+        ? `type ${yieldTypeName} = unknown;`
+        : jsonSchemaToType(procedure.outputSchema, yieldTypeName),
     );
     providerLines.push(
       `  ${JSON.stringify(procedure.rpcToolName)}: (input: ${inputTypeName}) => Promise<AsyncIterable<${yieldTypeName}>>;`,
@@ -819,28 +952,67 @@ function buildStreamTypeDefinitions(procedures: OpenApiProcedure[], providerName
   return [...declarations, "", ...providerLines].join("\n");
 }
 
-async function loadOpenApiDocument(source: CodemodeOpenApiSource) {
-  const response = await fetch(source.url);
+function buildTypeDeclarations(options: { procedures: OpenApiProcedure[]; providerName: string }) {
+  const valueProcedures = options.procedures.filter((procedure) => procedure.kind === "value");
+  const streamProcedures = options.procedures.filter((procedure) => procedure.kind === "stream");
+  const useCompactMode = shouldCompactTypeDefinitions(options.procedures);
+
+  return [
+    "// Generated from OpenAPI sources",
+    ...(valueProcedures.length > 0
+      ? (() => {
+          if (useCompactMode) {
+            return [buildFallbackValueTypeDefinitions(valueProcedures, options.providerName)];
+          }
+
+          try {
+            return [
+              generateTypesFromJsonSchema(buildValueToolDescriptors(valueProcedures)).replace(
+                "declare const codemode:",
+                `declare const ${options.providerName}:`,
+              ),
+            ];
+          } catch {
+            return [buildFallbackValueTypeDefinitions(valueProcedures, options.providerName)];
+          }
+        })()
+      : []),
+    ...(streamProcedures.length > 0
+      ? ["", buildStreamTypeDefinitions(streamProcedures, `${options.providerName}_stream`)]
+      : []),
+  ];
+}
+
+async function loadOpenApiDocument(
+  source: CodemodeOpenApiSource,
+  options?: { fetch?: CodemodeOpenApiFetch },
+) {
+  const response = await (options?.fetch ?? fetch)(source.url, {
+    headers: source.headers,
+  });
   if (!response.ok) {
     throw new Error(`Failed to fetch OpenAPI document ${source.url}: ${response.status}`);
   }
 
   const json = (await response.json()) as OpenApiDocument;
+  const resolved = resolveRefs(json, json) as OpenApiDocument;
   return {
-    document: json,
-    namespace: source.namespace ?? deriveNamespace(json, source.url),
+    document: resolved,
+    namespace: source.namespace ?? deriveNamespace(resolved, source.url),
   };
 }
 
 export async function buildOpenApiCodemodeContext(
   sources: CodemodeOpenApiSource[],
-  options?: { providerName?: string },
+  options?: { providerName?: string; fetch?: CodemodeOpenApiFetch; includeTypes?: boolean },
 ) {
   const providerName = options?.providerName ?? "rpc";
   const procedures: OpenApiProcedure[] = [];
 
   for (const source of sources) {
-    const loaded = await loadOpenApiDocument(source);
+    const loaded = await loadOpenApiDocument(source, {
+      fetch: options?.fetch,
+    });
 
     for (const [path, pathItem] of Object.entries(loaded.document.paths ?? {})) {
       for (const method of HTTP_METHODS) {
@@ -857,6 +1029,7 @@ export async function buildOpenApiCodemodeContext(
           headers: source.headers,
           operationAliases: source.operationAliases,
           baseUrl: source.baseUrl,
+          fetch: options?.fetch,
         });
 
         if (procedure) {
@@ -891,33 +1064,32 @@ export async function buildOpenApiCodemodeContext(
     });
   }
 
-  const declarations = [
-    "// Generated from OpenAPI sources",
-    ...(valueProcedures.length > 0
-      ? [
-          generateTypesFromJsonSchema(buildValueToolDescriptors(valueProcedures)).replace(
-            "declare const codemode:",
-            `declare const ${providerName}:`,
-          ),
-        ]
-      : []),
-    ...(streamProcedures.length > 0
-      ? ["", buildStreamTypeDefinitions(streamProcedures, `${providerName}_stream`)]
-      : []),
-  ];
+  const declarations =
+    options?.includeTypes === false
+      ? []
+      : buildTypeDeclarations({
+          procedures,
+          providerName,
+        });
 
   const context: DerivedContractContext = {
     declarations,
     providers,
     ctxExpression: emitRuntimeTree(procedureTree, procedures, providerName),
-    ctxTypeExpression: emitTypeTree(procedureTree, procedures, providerName),
+    ctxTypeExpression:
+      options?.includeTypes === false
+        ? "{}"
+        : emitTypeTree(procedureTree, procedures, providerName),
     sandboxPrelude: `const ctx = ${emitRuntimeTree(procedureTree, procedures, providerName)};`,
-    ctxTypes: [
-      ...declarations,
-      "",
-      `declare const ctx: ${emitTypeTree(procedureTree, procedures, providerName)};`,
-      "",
-    ].join("\n"),
+    ctxTypes:
+      options?.includeTypes === false
+        ? "declare const ctx: {};"
+        : [
+            ...declarations,
+            "",
+            `declare const ctx: ${emitTypeTree(procedureTree, procedures, providerName)};`,
+            "",
+          ].join("\n"),
   };
 
   return context;

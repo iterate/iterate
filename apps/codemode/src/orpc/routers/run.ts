@@ -46,6 +46,7 @@ export const runRouter = {
     const runtimeContext = await buildCodemodeContextFromSources({
       config: context.config,
       sources: input.sources,
+      fetch: (request, init) => context.outbound.fetch(request, init),
     });
 
     return runtimeContext.ctxTypes;
