@@ -1,6 +1,6 @@
 import alchemy from "alchemy";
 import { D1Database, TanStackStart } from "alchemy/cloudflare";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
 
@@ -20,6 +20,11 @@ const AlchemyEnv = z.object({
 
 const env = AlchemyEnv.parse(process.env);
 const compiledAppConfig = parseAppConfigFromEnv({
+  configSchema: AppConfig,
+  prefix: "APP_CONFIG_",
+  env: process.env,
+});
+const rawAppConfig = compileRawAppConfigFromEnv({
   configSchema: AppConfig,
   prefix: "APP_CONFIG_",
   env: process.env,
@@ -48,7 +53,7 @@ export const worker = await TanStackStart(APP_NAME, {
   adopt: true,
   bindings: {
     DB: db,
-    APP_CONFIG: JSON.stringify(compiledAppConfig, null, 2),
+    APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
   },
   wrangler: {
     main: "./src/entry.workerd.ts",

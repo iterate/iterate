@@ -1,6 +1,6 @@
 import alchemy from "alchemy";
 import { D1Database, DurableObjectNamespace, TanStackStart } from "alchemy/cloudflare";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
 import type { StreamDurableObject } from "~/entry.workerd.ts";
@@ -49,6 +49,11 @@ const compiledAppConfig = parseAppConfigFromEnv({
   prefix: "APP_CONFIG_",
   env: process.env,
 });
+const rawAppConfig = compileRawAppConfigFromEnv({
+  configSchema: AppConfig,
+  prefix: "APP_CONFIG_",
+  env: process.env,
+});
 
 // Cursor and many test runners set CI=1. Alchemy rejects its default local
 // state store in CI mode, so clear CI only for explicitly local runs.
@@ -79,7 +84,7 @@ export const worker = await TanStackStart(APP_NAME, {
   bindings: {
     DB: db,
     STREAM: stream,
-    APP_CONFIG: JSON.stringify(compiledAppConfig, null, 2),
+    APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
   },
   wrangler: {
     main: "./src/entry.workerd.ts",

@@ -1,10 +1,20 @@
 import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { defaultExclude } from "vitest/config";
+
+const appRoot = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineWorkersConfig({
+  resolve: {
+    alias: {
+      "~": resolve(appRoot, "src"),
+    },
+  },
   test: {
     globals: true,
-    include: ["./*.test.ts"],
-    exclude: ["./client.e2e.test.ts", "./live-e2e.test.ts"],
+    include: ["./src/**/*.test.ts"],
+    exclude: [...defaultExclude, "**/src/routes/**/*.test.ts", "./client.e2e.test.ts", "./e2e/**"],
     poolOptions: {
       workers: {
         // This Worker's Durable Object uses SQLite alarms. Per-test storage snapshots
@@ -16,5 +26,7 @@ export default defineWorkersConfig({
         },
       },
     },
+    hookTimeout: 60_000,
+    testTimeout: 45_000,
   },
 });

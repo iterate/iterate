@@ -4,13 +4,13 @@ priority: medium
 size: large
 ---
 
-# cf-ingress-proxy-worker improvements
+# ingress-proxy improvements
 
-Rewrite the cf-ingress-proxy-worker to be a clean, minimal, transparent proxy worthy of being a showcase CF Workers project. Add comprehensive E2E tests.
+Rewrite the ingress-proxy app to be a clean, minimal, transparent proxy worthy of being a showcase Cloudflare Workers project. Add comprehensive E2E tests.
 
 ## Context
 
-The cf-ingress-proxy-worker is a programmable ingress proxy on Cloudflare Workers. It stores hostname→target mappings in D1 and proxies requests. It was originally vibe-coded and needs a proper rewrite.
+The ingress-proxy app is a programmable ingress proxy on Cloudflare Workers. It stores hostname→target mappings in D1 and proxies requests. It was originally vibe-coded and needs a proper rewrite.
 
 Goal: Kent C. Dodds / Barda-quality code. Minimal, transparent, zero unnecessary overhead on the request path.
 

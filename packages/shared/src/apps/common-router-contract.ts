@@ -1,11 +1,12 @@
 import { oc } from "@orpc/contract";
 import { z } from "zod";
+import { INTERNAL_OPENAPI_TAG } from "./openapi.ts";
 
 const EmptyInput = z.object({}).optional().default({});
 
 export const commonContract = oc.router({
   health: oc
-    .route({ method: "GET", path: "/__common/health", tags: ["common"] })
+    .route({ method: "GET", path: "/__common/health", tags: [INTERNAL_OPENAPI_TAG] })
     .input(EmptyInput)
     .output(
       z.object({
@@ -15,15 +16,15 @@ export const commonContract = oc.router({
       }),
     ),
   publicConfig: oc
-    .route({ method: "GET", path: "/__common/public-config", tags: ["common"] })
+    .route({ method: "GET", path: "/__common/public-config", tags: [INTERNAL_OPENAPI_TAG] })
     .input(EmptyInput)
     .output(z.record(z.string(), z.unknown())),
   debug: oc
-    .route({ method: "GET", path: "/__common/debug", tags: ["common"] })
+    .route({ method: "GET", path: "/__common/debug", tags: [INTERNAL_OPENAPI_TAG] })
     .input(EmptyInput)
     .output(z.record(z.string(), z.unknown())),
   execSql: oc
-    .route({ method: "POST", path: "/__common/sql", tags: ["common"] })
+    .route({ method: "POST", path: "/__common/sql", tags: [INTERNAL_OPENAPI_TAG] })
     .input(
       z.object({
         statement: z.string().min(1),
@@ -43,7 +44,7 @@ export const commonContract = oc.router({
       }),
     ),
   refreshRegistry: oc
-    .route({ method: "POST", path: "/__common/refresh-registry", tags: ["common"] })
+    .route({ method: "POST", path: "/__common/refresh-registry", tags: [INTERNAL_OPENAPI_TAG] })
     .input(
       z
         .object({

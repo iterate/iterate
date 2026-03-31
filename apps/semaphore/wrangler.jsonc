@@ -1,6 +1,6 @@
 {
   "name": "semaphore",
-  "main": "server.ts",
+  "main": "src/entry.workerd.ts",
   "compatibility_date": "2025-02-24",
   "compatibility_flags": [],
   "durable_objects": {
@@ -29,6 +29,6 @@
     },
   ],
   "vars": {
-    "SEMAPHORE_API_TOKEN": "test-token",
+    "APP_CONFIG": "{\"sharedApiSecret\":\"test-token\"}",
   },
 }
