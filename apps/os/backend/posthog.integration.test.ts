@@ -1,6 +1,7 @@
 import http from "node:http";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
@@ -27,7 +28,7 @@ test("captures a trpc procedure error", async () => {
     },
   });
   expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
-    "api_key: <api-key>
+    "api_key: <api_key>
     event: $exception
     distinct_id: anonymous
     properties:
@@ -46,84 +47,84 @@ test("captures a trpc procedure error", async () => {
                 lang: javascript
                 filename: <repo>/apps/os/backend/logging/logger.ts
                 function: toParsedError
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/logging/logger.ts
                 function: Object.error
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/worker.ts
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/worker.ts
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: dispatch
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: dispatch
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: dispatch
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
-      $environment: <environment>
+      $environment: <$environment>
       $lib: os-logging
       request:
-        id: <request-id>
+        id: <id>
         method: POST
         path: /api/orpc/testing/throwTrpcError
         status: 500
-        duration: <duration-ms>
+        duration: <duration>
         waitUntil: false
         url: <origin>/api/orpc/testing/throwTrpcError
       user:
-        id: anonymous
+        id: <id>
         email: unknown
     timestamp: <timestamp>"
   `);
@@ -149,7 +150,7 @@ test("captures a hono endpoint error", async () => {
     },
   });
   expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
-    "api_key: <api-key>
+    "api_key: <api_key>
     event: $exception
     distinct_id: anonymous
     properties:
@@ -166,84 +167,84 @@ test("captures a hono endpoint error", async () => {
                 lang: javascript
                 filename: <repo>/apps/os/backend/worker.ts
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: dispatch
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: NoopContextManager2.with
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: ContextAPI2.with
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/utils/otel-init.ts
                 function: withExtractedTraceContext
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/worker.ts
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: dispatch
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/worker.ts
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
-      $environment: <environment>
+      $environment: <$environment>
       $lib: os-logging
       request:
-        id: <request-id>
+        id: <id>
         method: GET
         path: /api/testing/throw-hono-error
         status: 500
-        duration: <duration-ms>
+        duration: <duration>
         waitUntil: false
         url: <origin>/api/testing/throw-hono-error?marker=<marker>
       user:
-        id: anonymous
+        id: <id>
         email: unknown
     timestamp: <timestamp>"
   `);
@@ -270,7 +271,7 @@ test("captures a waitUntil error", async () => {
     },
   });
   expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
-    "api_key: <api-key>
+    "api_key: <api_key>
     event: $exception
     distinct_id: anonymous
     properties:
@@ -287,22 +288,22 @@ test("captures a waitUntil error", async () => {
                 lang: javascript
                 filename: <repo>/apps/os/backend/orpc/routers/testing.ts
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
-      $environment: <environment>
+      $environment: <$environment>
       $lib: os-logging
       request:
-        id: <request-id>
+        id: <id>
         method: POST
         path: /api/orpc/testing/throwWaitUntilError#waitUntil
         status: 500
-        duration: <duration-ms>
+        duration: <duration>
         waitUntil: true
-        parentRequestId: <request-id>
+        parentRequestId: <parent-request-id>
         url: <origin>/api/orpc/testing/throwWaitUntilError
       user:
-        id: anonymous
+        id: <id>
         email: unknown
     timestamp: <timestamp>"
   `);
@@ -329,24 +330,24 @@ test("captures the raw request log for a trpc procedure error", async () => {
   });
   expect(normalize(captured, { marker })).toMatchInlineSnapshot(`
     "meta:
-      id: <log-id>
-      start: <timestamp>
-      end: <timestamp>
+      id: <id>
+      start: <start>
+      end: <end>
       durationMs: <duration-ms>
     service: os
-    environment: <environment>
+    environment: dev-misha
     request:
       path: /api/orpc/testing/throwTrpcError
       status: 500
       method: POST
-      id: <request-id>
+      id: <id>
       url: <origin>/api/orpc/testing/throwTrpcError
       hostname: local.iterate.com
       traceparent: null
       cfRay: <cf-ray>
       timezone: Asia/Singapore
     user:
-      id: anonymous
+      id: <id>
       email: unknown
     egress:
       <origin> <origin>
@@ -354,16 +355,16 @@ test("captures the raw request log for a trpc procedure error", async () => {
     message: "[test_trpc_error_log] <marker>"
     stack: >-
       Error: [test_trpc_error_log] <marker>
-          at Object.handler (<repo>/apps/os/backend/orpc/routers/testing.ts:<line-number>:<column-number>)
-          at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
-          at runWithSpan (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
-          at next (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
-          at next (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
-          at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
-          at next (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
-          at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
-          at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
-          at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
+          at Object.handler (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+          at <repo>/.../node_modules/.vite/...
+          at runWithSpan (<repo>/.../node_modules/.vite/...)
+          at next (<repo>/.../node_modules/.vite/...)
+          at next (<repo>/.../node_modules/.vite/...)
+          at <repo>/.../node_modules/.vite/...
+          at next (<repo>/.../node_modules/.vite/...)
+          at <repo>/.../node_modules/.vite/...
+          at <repo>/.../node_modules/.vite/...
+          at <repo>/.../node_modules/.vite/...
     errors:
       - name: NonErrorThrowable
         message: "oRPC Error unknown
@@ -373,16 +374,16 @@ test("captures the raw request log for a trpc procedure error", async () => {
           Error: oRPC Error unknown
           <origin>/api/orpc/testing/throwTrpcError:
           [test_trpc_error_log] <marker>
-              at toParsedError (<repo>/apps/os/backend/logging/logger.ts:<line-number>:<column-number>)
-              at Object.error (<repo>/apps/os/backend/logging/logger.ts:<line-number>:<column-number>)
-              at <repo>/apps/os/backend/worker.ts:<line-number>:<column-number>
-              at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
-              at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
-              at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
-              at <repo>/apps/os/backend/worker.ts:<line-number>:<column-number>
-              at dispatch (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
-              at dispatch (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
-              at dispatch (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
+              at toParsedError (<repo>/apps/os/backend/logging/logger.ts:<lineno>:<colno>)
+              at Object.error (<repo>/apps/os/backend/logging/logger.ts:<lineno>:<colno>)
+              at <repo>/apps/os/backend/worker.ts:<lineno>:<colno>
+              at <repo>/.../node_modules/.vite/...
+              at <repo>/.../node_modules/.vite/...
+              at <repo>/.../node_modules/.vite/...
+              at <repo>/apps/os/backend/worker.ts:<lineno>:<colno>
+              at dispatch (<repo>/.../node_modules/.vite/...)
+              at dispatch (<repo>/.../node_modules/.vite/...)
+              at dispatch (<repo>/.../node_modules/.vite/...)
     messages:
       - "[ERROR] 0s: oRPC Error unknown
         <origin>/api/orpc/testing/throwTrpcError:
@@ -413,56 +414,56 @@ test("captures the raw waitUntil child log", async () => {
   });
   expect(normalize(captured, { marker })).toMatchInlineSnapshot(`
     "meta:
-      id: <log-id>
-      start: <timestamp>
-      end: <timestamp>
+      id: <id>
+      start: <start>
+      end: <end>
       durationMs: <duration-ms>
     parent:
       meta:
-        id: <log-id>
-        start: <timestamp>
+        id: <id>
+        start: <start>
       service: os
-      environment: <environment>
+      environment: dev-misha
       request:
         path: /api/orpc/testing/throwWaitUntilError
         status: -1
         method: POST
-        id: <request-id>
+        id: <id>
         url: <origin>/api/orpc/testing/throwWaitUntilError
         hostname: local.iterate.com
         traceparent: null
         cfRay: <cf-ray>
         timezone: Asia/Singapore
       user:
-        id: anonymous
+        id: <id>
         email: unknown
       egress:
         <origin> <origin>
     service: os
-    environment: <environment>
+    environment: dev-misha
     request:
-      id: <request-id>
+      id: <id>
       method: POST
       path: /api/orpc/testing/throwWaitUntilError#waitUntil
       status: 500
       waitUntil: true
-      parentRequestId: <request-id>
+      parentRequestId: <parent-request-id>
     egress:
       <origin> <origin>
     user:
-      id: anonymous
+      id: <id>
       email: unknown
     errors:
       - name: Error
         message: "[test_wait_until_log] <marker>"
-        stack: >-
+        stack: |-
           Error: [test_wait_until_log] <marker>
-              at <repo>/apps/os/backend/orpc/routers/testing.ts:<line-number>:<column-number>
+              at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
       - name: Error
         message: "[test_wait_until_log] <marker>"
-        stack: >-
+        stack: |-
           Error: [test_wait_until_log] <marker>
-              at <repo>/apps/os/backend/orpc/routers/testing.ts:<line-number>:<column-number>
+              at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
     messages:
       - "[ERROR] 0s: Error: [test_wait_until_log] <marker>"
       - "[INFO] 0s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid>
@@ -504,7 +505,7 @@ test("captures an outbox consumer error", async () => {
     },
   });
   expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
-    "api_key: <api-key>
+    "api_key: <api_key>
     event: $exception
     distinct_id: system:outbox
     properties:
@@ -521,84 +522,84 @@ test("captures an outbox consumer error", async () => {
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/consumers.ts
                 function: Object.handler
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
                 function: Object.handler
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
                 function: runHandler
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/outbox-logging.ts
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/logging/logger.ts
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/logging/logger.ts
                 function: Object.run
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/outbox-logging.ts
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
                 function: processQueue
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/orpc/routers/testing.ts
                 function: Object.handler
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
-      $environment: <environment>
+      $environment: <$environment>
       $lib: os-logging
       request:
-        id: <request-id>
+        id: <id>
         method: POST
         path: /api/orpc/testing/emitFailingOutboxEvent
         status: -1
-        duration: <duration-ms>
+        duration: <duration>
         waitUntil: false
         url: <origin>/api/orpc/testing/emitFailingOutboxEvent
       user:
-        id: system:outbox
+        id: <id>
         email: outbox@system
     timestamp: <timestamp>"
   `);
@@ -620,7 +621,7 @@ test("captures a malformed outbox job error", async () => {
     },
   });
   expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
-    "api_key: <api-key>
+    "api_key: <api_key>
     event: $exception
     distinct_id: system:outbox
     properties:
@@ -650,83 +651,83 @@ test("captures a malformed outbox job error", async () => {
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/outbox-logging.ts
                 function: sendDLQToPostHog
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
                 function: emit
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
                 function: processQueue
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/orpc/routers/testing.ts
                 function: Object.handler
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: next
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: next
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: next
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
-      $environment: <environment>
+      $environment: <$environment>
       $lib: outbox-dlq
       request:
-        id: <request-id>
+        id: <id>
         method: OUTBOX
         path: outbox/invalid-consumer-job
         status: 500
-        duration: <duration-ms>
+        duration: <duration>
         waitUntil: false
       user:
-        id: system:outbox
+        id: <id>
         email: outbox@system
       outbox:
         consumerName: invalid-consumer-job
@@ -759,7 +760,7 @@ test("captures a missing consumer error", async () => {
     },
   });
   expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
-    "api_key: <api-key>
+    "api_key: <api_key>
     event: $exception
     distinct_id: system:outbox
     properties:
@@ -778,83 +779,83 @@ test("captures a missing consumer error", async () => {
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/outbox-logging.ts
                 function: sendDLQToPostHog
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
                 function: emit
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
                 function: archiveFailedJob
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/outbox/pgmq-lib.ts
                 function: processQueue
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/apps/os/backend/orpc/routers/testing.ts
                 function: Object.handler
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: true
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: next
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: next
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: next
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
-                lineno: <line-number>
-                colno: <column-number>
+                lineno: <lineno>
+                colno: <colno>
                 in_app: false
-      $environment: <environment>
+      $environment: <$environment>
       $lib: outbox-dlq
       request:
-        id: <request-id>
+        id: <id>
         method: OUTBOX
         path: outbox/missing-consumer-<marker>
         status: 500
-        duration: <duration-ms>
+        duration: <duration>
         waitUntil: false
       user:
-        id: system:outbox
+        id: <id>
         email: outbox@system
       outbox:
         consumerName: missing-consumer-<marker>
@@ -1016,60 +1017,67 @@ async function createPostHogIntegration(): Promise<PostHogIntegrationContext> {
 }
 
 function normalize(value: unknown, params: { marker?: string } = {}): string {
-  const yaml = YAML.stringify(
-    value,
-    function replacer(this: Record<string, unknown>, key, rawValue) {
-      if (key === "api_key") return "<api-key>";
-      if (key === "timestamp" || key === "start" || key === "end") return "<timestamp>";
-      if (key === "lineno") return "<line-number>";
-      if (key === "colno") return "<column-number>";
-      if (key === "duration" || key === "durationMs") return "<duration-ms>";
-      if (key === "jobId") return "<job-id>";
-      if (key === "parentRequestId") return "<request-id>";
-      if (key === "cfRay") return "<cf-ray>";
-      if (key === "$environment" || key === "environment") return "<environment>";
+  const yaml = YAML.stringify(value, function replacer(this: any, key, rawValue) {
+    const normalizeableKeys =
+      "id,api_key,timestamp,start,end,lineno,colno,duration,durationMs,jobId,parentRequestId,cfRay,$environment";
+    if (normalizeableKeys.split(",").includes(key))
+      return `<${key.replace(/[A-Z]/g, (letter: string) => `-${letter.toLowerCase()}`)}>`;
+    if (typeof rawValue !== "string") return rawValue;
+    return rawValue
+      .replaceAll(repoRoot, "<repo>")
+      .replaceAll(params.marker || randomUUID(), "<marker>")
+      .replaceAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
+      .replace(/<repo>\/[^ :)\n"]+(?::\d+:\d+)?/g, (path) => {
+        if (path.includes(":")) path = `${path.split(":")[0]}:<lineno>:<colno>`;
+        if (!path.includes("/node_modules/")) return path;
+        return `<repo>/.../node_modules/${path.split("/node_modules/")[1].split("/")[0]}/...`;
+      });
+    // .replace(/(<repo>\/.*\/)(:\d+:\d+)$/, "$1:<lineno>:<colno>")
+    // .replace(/<repo>\/(.*)\/node_modules\/(.*?)(\/.*)/g, "<repo>/.../node_modules/$2/...");
 
-      if (key === "id") {
-        if ("path" in this && "method" in this) return "<request-id>";
-        if ("start" in this) return "<log-id>";
-      }
+    // .split(" ")
+    // .map((word) =>
+    //   word
+    //     .replace(/^(.*)\/node_modules\/(.*?)(\/.*)$/, ".../node_modules/$2/...")
+    //     .replace(/(<repo>\/.*\/)(:\d+:\d+)$/, "$1:<lineno>:<colno>"),
+    // )
+    // .join(" ");
 
-      if (typeof rawValue !== "string") return rawValue;
+    // const normalizedPath = rawValue
+    //   .replaceAll(repoRoot, "<repo>")
+    //   .replace(/<repo>\/[^ :)\n"]+(?::\d+:\d+)?/g, (match) => {
+    //     const [, path, line, column] =
+    //       match.match(/^(<repo>\/[^ :)\n"]+?)(?::(\d+):(\d+))?$/) ?? [];
+    //     if (!path) return match;
 
-      const normalizedPath = rawValue
-        .replaceAll(repoRoot, "<repo>")
-        .replace(/<repo>\/[^ :)\n"]+(?::\d+:\d+)?/g, (match) => {
-          const [, path, line, column] =
-            match.match(/^(<repo>\/[^ :)\n"]+?)(?::(\d+):(\d+))?$/) ?? [];
-          if (!path) return match;
+    //     const collapsedPath = path;
 
-          const nodeModulesIndex = path.indexOf("/node_modules/");
-          const collapsedPath =
-            nodeModulesIndex >= 0
-              ? `<repo>/.../node_modules/${path.slice(nodeModulesIndex + "/node_modules/".length).split("/")[0] ?? "unknown"}/...`
-              : path;
+    //     const nodeModulesIndex = path.indexOf("/node_modules/");
+    //     if (nodeModulesIndex >= 0) {
+    //       const packageName =
+    //         path.slice(nodeModulesIndex + "/node_modules/".length).split("/")[0] ?? "unknown";
+    //       return `<repo>/.../node_modules/${packageName}/...`;
+    //     }
+    //     if (!line || !column) return collapsedPath;
+    //     return `${collapsedPath}:<line-number>:<column-number>`;
+    //   });
 
-          if (!line || !column) return collapsedPath;
-          return `${collapsedPath}:<line-number>:<column-number>`;
-        });
+    // let normalizedString = normalizedPath
+    //   .replaceAll(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "<timestamp>")
+    //   .replaceAll(/\boutbox:[^:\s]+:\d+\b/g, "outbox:<consumer>:<job-id>");
 
-      let normalizedString = normalizedPath
-        .replaceAll(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "<timestamp>")
-        .replaceAll(/\boutbox:[^:\s]+:\d+\b/g, "outbox:<consumer>:<job-id>");
+    // if (params.marker) {
+    //   normalizedString = normalizedString.replaceAll(params.marker, "<marker>");
+    // }
 
-      if (params.marker) {
-        normalizedString = normalizedString.replaceAll(params.marker, "<marker>");
-      }
-
-      return normalizedString
-        .replaceAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
-        .replaceAll("missing-consumer-missing-consumer-<marker>", "missing-consumer-<marker>")
-        .replaceAll(
-          "testing:missing-consumer:missing-consumer-<marker>",
-          "testing:missing-consumer:<marker>",
-        );
-    },
-  );
+    // return normalizedString
+    //   .replaceAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
+    //   .replaceAll("missing-consumer-missing-consumer-<marker>", "missing-consumer-<marker>")
+    //   .replaceAll(
+    //     "testing:missing-consumer:missing-consumer-<marker>",
+    //     "testing:missing-consumer:<marker>",
+    //   );
+  });
 
   return yaml
     .replaceAll(repoRoot, "<repo>")
