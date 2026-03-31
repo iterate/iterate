@@ -54,16 +54,16 @@ export async function handleIngressProxyRequest(
       };
 
       const normalizedHost = normalizeInboundHost(request.headers.get("host"));
+      if (isManagementHost(normalizedHost)) {
+        return handler.fetch(request, { context });
+      }
+
       const resolvedRoute = await resolveRouteByHost(env.DB, request.headers.get("host"));
-      if (resolvedRoute && !isManagementHost(normalizedHost)) {
+      if (resolvedRoute) {
         return proxyRequestToRoute(request, resolvedRoute);
       }
 
-      if (!resolvedRoute && !isManagementHost(normalizedHost)) {
-        return routeNotFoundResponse();
-      }
-
-      return handler.fetch(request, { context });
+      return routeNotFoundResponse();
     },
   );
 }
