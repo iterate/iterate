@@ -10,13 +10,13 @@ import * as YAML from "yaml";
 import type { AppRouter } from "./orpc/root.ts";
 
 test("captures a trpc procedure error", async () => {
-  await using integration = await createPostHogIntegration();
+  await using fixture = await createLoggingFixture();
   const marker = `trpc-${crypto.randomUUID()}`;
   await expect(
-    integration.client.testing.throwTrpcError({ message: `[test_trpc_error] ${marker}` }),
+    fixture.client.testing.throwTrpcError({ message: `[test_trpc_error] ${marker}` }),
   ).rejects.toBeTruthy();
 
-  const captured = await integration.capture.waitForRequest({
+  const captured = await fixture.posthog.waitForRequest({
     predicate: (body) => JSON.stringify(body).includes(marker),
   });
 
@@ -131,15 +131,15 @@ test("captures a trpc procedure error", async () => {
 });
 
 test("captures a hono endpoint error", async () => {
-  await using integration = await createPostHogIntegration();
+  await using fixture = await createLoggingFixture();
   const marker = `hono-${crypto.randomUUID()}`;
-  const response = await integration.callEndpoint({
+  const response = await fixture.callEndpoint({
     path: `/api/testing/throw-hono-error?marker=${marker}`,
   });
 
   expect(response.ok).toBe(false);
 
-  const captured = await integration.capture.waitForRequest({
+  const captured = await fixture.posthog.waitForRequest({
     predicate: (body) => JSON.stringify(body).includes(marker),
   });
 
@@ -251,13 +251,13 @@ test("captures a hono endpoint error", async () => {
 });
 
 test("captures a waitUntil error", async () => {
-  await using integration = await createPostHogIntegration();
+  await using fixture = await createLoggingFixture();
   const marker = `wait-until-${crypto.randomUUID()}`;
-  await integration.client.testing.throwWaitUntilError({
+  await fixture.client.testing.throwWaitUntilError({
     message: `[test_wait_until_error] ${marker}`,
   });
 
-  const captured = await integration.capture.waitForRequest({
+  const captured = await fixture.posthog.waitForRequest({
     predicate: (body) =>
       body.properties?.request?.waitUntil === true && JSON.stringify(body).includes(marker),
   });
@@ -310,19 +310,19 @@ test("captures a waitUntil error", async () => {
 });
 
 test("captures the raw request log for a trpc procedure error", async () => {
-  await using integration = await createPostHogIntegration();
+  await using fixture = await createLoggingFixture();
   const marker = `trpc-${crypto.randomUUID()}`;
   await expect(
-    integration.client.testing.throwTrpcError({ message: `[test_trpc_error_log] ${marker}` }),
+    fixture.client.testing.throwTrpcError({ message: `[test_trpc_error_log] ${marker}` }),
   ).rejects.toBeTruthy();
 
-  const captured = await integration.logs.waitForLog({
-    predicate: (log: any) => log.request?.id === integration.lastRequestId(),
+  const captured = await fixture.logs.waitForLog({
+    predicate: (log: any) => log.request?.id === fixture.lastRequestId(),
   });
 
   expect(captured).toMatchObject({
     request: {
-      id: integration.lastRequestId(),
+      id: fixture.lastRequestId(),
       path: "/api/orpc/testing/throwTrpcError",
       method: "POST",
       status: 500,
@@ -392,16 +392,15 @@ test("captures the raw request log for a trpc procedure error", async () => {
 });
 
 test("captures the raw waitUntil child log", async () => {
-  await using integration = await createPostHogIntegration();
+  await using fixture = await createLoggingFixture();
   const marker = `wait-until-${crypto.randomUUID()}`;
-  await integration.client.testing.throwWaitUntilError({
+  await fixture.client.testing.throwWaitUntilError({
     message: `[test_wait_until_log] ${marker}`,
   });
 
-  const captured = await integration.logs.waitForLog({
+  const captured = await fixture.logs.waitForLog({
     predicate: (log: any) =>
-      log.request?.waitUntil === true &&
-      log.request.parentRequestId === integration.lastRequestId(),
+      log.request?.waitUntil === true && log.request.parentRequestId === fixture.lastRequestId(),
   });
 
   expect(captured).toMatchObject({
@@ -409,7 +408,7 @@ test("captures the raw waitUntil child log", async () => {
       path: "/api/orpc/testing/throwWaitUntilError#waitUntil",
       method: "POST",
       waitUntil: true,
-      parentRequestId: integration.lastRequestId(),
+      parentRequestId: fixture.lastRequestId(),
     },
   });
   expect(normalize(captured, { marker })).toMatchInlineSnapshot(`
@@ -474,27 +473,25 @@ test("captures the raw waitUntil child log", async () => {
 });
 
 test("does not capture PostHog for successful outbox consumer flow", async () => {
-  await using integration = await createPostHogIntegration();
+  await using fixture = await createLoggingFixture();
   const marker = `outbox-success-${crypto.randomUUID()}`;
-  await integration.client.testing.emitSuccessfulOutboxEvent({ message: marker });
+  await fixture.client.testing.emitSuccessfulOutboxEvent({ message: marker });
   await expect
     .poll(
       () =>
-        integration.capture.requests.some((request) =>
-          JSON.stringify(request.body).includes(marker),
-        ),
+        fixture.posthog.requests.some((request) => JSON.stringify(request.body).includes(marker)),
       { timeout: 1_000 },
     )
     .toBe(false);
-  expect(normalize(integration.capture.requests)).toMatchInlineSnapshot(`"[]"`);
+  expect(normalize(fixture.posthog.requests)).toMatchInlineSnapshot(`"[]"`);
 });
 
 test("captures an outbox consumer error", async () => {
-  await using integration = await createPostHogIntegration();
+  await using fixture = await createLoggingFixture();
   const marker = `outbox-fail-${crypto.randomUUID()}`;
-  await integration.client.testing.emitFailingOutboxEvent({ message: marker });
+  await fixture.client.testing.emitFailingOutboxEvent({ message: marker });
 
-  const captured = await integration.capture.waitForRequest({
+  const captured = await fixture.posthog.waitForRequest({
     predicate: (body) => JSON.stringify(body).includes(marker),
   });
 
@@ -606,11 +603,11 @@ test("captures an outbox consumer error", async () => {
 });
 
 test("captures a malformed outbox job error", async () => {
-  await using integration = await createPostHogIntegration();
+  await using fixture = await createLoggingFixture();
   const marker = `malformed-${crypto.randomUUID()}`;
-  await integration.client.testing.insertMalformedOutboxJob({ marker });
+  await fixture.client.testing.insertMalformedOutboxJob({ marker });
 
-  const captured = await integration.capture.waitForRequest({
+  const captured = await fixture.posthog.waitForRequest({
     predicate: (body) => JSON.stringify(body).includes("invalid message"),
   });
 
@@ -743,11 +740,11 @@ test("captures a malformed outbox job error", async () => {
 });
 
 test("captures a missing consumer error", async () => {
-  await using integration = await createPostHogIntegration();
+  await using fixture = await createLoggingFixture();
   const marker = `missing-consumer-${crypto.randomUUID()}`;
-  await integration.client.testing.insertMissingConsumerOutboxJob({ marker });
+  await fixture.client.testing.insertMissingConsumerOutboxJob({ marker });
 
-  const captured = await integration.capture.waitForRequest({
+  const captured = await fixture.posthog.waitForRequest({
     predicate: (body) =>
       body.properties?.request?.method === "OUTBOX" &&
       JSON.stringify(body).includes("no consumer found"),
@@ -874,15 +871,85 @@ test("captures a missing consumer error", async () => {
   `);
 });
 
+test("returns a clean 400 and logs invalid orpc input", async () => {
+  await using fixture = await createLoggingFixture();
+
+  const error = await fixture.client.testing
+    .emitSuccessfulOutboxEvent({ message: 123 as never })
+    .catch((error) => error);
+
+  expect(error).toMatchObject({
+    code: "BAD_REQUEST",
+    message: "Input validation failed",
+    status: 400,
+    data: { issues: [{ code: "invalid_type", expected: "string", path: ["message"] }] },
+  });
+  expect(normalize(error)).toMatchInlineSnapshot(`
+    "defined: false
+    code: BAD_REQUEST
+    status: 400
+    message: Input validation failed
+    data:
+      issues:
+        - expected: string
+          code: invalid_type
+          path:
+            - message
+          message: "Invalid input: expected string, received number""
+  `);
+
+  const captured = await fixture.logs.waitForLog({
+    predicate: (log) => log.request?.id === fixture.lastRequestId(),
+  });
+
+  expect(captured).toMatchObject({
+    request: {
+      id: fixture.lastRequestId(),
+      path: "/api/orpc/testing/emitSuccessfulOutboxEvent",
+      method: "POST",
+      status: 400,
+    },
+  });
+  expect(normalize(captured)).toMatchInlineSnapshot(`
+    "meta:
+      id: <id>
+      start: <start>
+      end: <end>
+      durationMs: <duration-ms>
+    service: os
+    environment: dev-misha
+    request:
+      path: /api/orpc/testing/emitSuccessfulOutboxEvent
+      status: 400
+      method: POST
+      id: <id>
+      url: <origin>/api/orpc/testing/emitSuccessfulOutboxEvent
+      hostname: local.iterate.com
+      traceparent: null
+      cfRay: <cf-ray>
+      timezone: <timezone>
+    user:
+      id: <id>
+      email: unknown
+    egress:
+      <origin> <origin>
+    messages:
+      - "[WARN] 0s: oRPC Error 400
+        <origin>/api/orpc/testing/emitSuccessfulOutboxEvent:
+        Input validation failed (message: Invalid input: expected string, received
+        number)""
+  `);
+});
+
 type CapturedPostHogRequest = {
   path: string;
   body: Record<string, unknown>;
 };
 
-type PostHogIntegrationContext = {
+type LoggingFixture = {
   client: RouterClient<AppRouter>;
   lastRequestId(): string;
-  capture: {
+  posthog: {
     requests: CapturedPostHogRequest[];
     waitForRequest(params: {
       timeoutMs?: number;
@@ -896,7 +963,7 @@ type PostHogIntegrationContext = {
   [Symbol.asyncDispose](): Promise<void>;
 };
 
-async function createPostHogIntegration(): Promise<PostHogIntegrationContext> {
+async function createLoggingFixture(): Promise<LoggingFixture> {
   const requests: CapturedPostHogRequest[] = [];
   let lastRequestId: string | null = null;
   const server = http.createServer(async (req, res) => {
@@ -960,7 +1027,7 @@ async function createPostHogIntegration(): Promise<PostHogIntegrationContext> {
       }
       return lastRequestId;
     },
-    capture: {
+    posthog: {
       requests,
       async waitForRequest(params: { timeoutMs?: number; predicate?: (body: any) => boolean }) {
         const timeoutMs = params.timeoutMs ?? 5_000;
@@ -1018,8 +1085,7 @@ async function createPostHogIntegration(): Promise<PostHogIntegrationContext> {
 
 function normalize(value: unknown, params: { marker?: string } = {}): string {
   const yaml = YAML.stringify(value, function replacer(this: any, key, rawValue) {
-    const normalizeableKeys =
-      "id,api_key,timestamp,start,end,lineno,colno,duration,durationMs,jobId,parentRequestId,cfRay,$environment";
+    const normalizeableKeys = `id,api_key,timestamp,start,end,lineno,colno,duration,durationMs,jobId,parentRequestId,cfRay,timezone,$environment`;
     if (normalizeableKeys.split(",").includes(key))
       return `<${key.replace(/[A-Z]/g, (letter: string) => `-${letter.toLowerCase()}`)}>`;
     if (typeof rawValue !== "string") return rawValue;
