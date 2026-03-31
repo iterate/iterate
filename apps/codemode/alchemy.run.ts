@@ -1,5 +1,5 @@
 import alchemy from "alchemy";
-import { D1Database, TanStackStart, WorkerLoader } from "alchemy/cloudflare";
+import { D1Database, TanStackStart, Worker, WorkerLoader } from "alchemy/cloudflare";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
@@ -65,6 +65,29 @@ const db = await D1Database("codemode-db", {
   adopt: true,
 });
 
+const outboundWorker = await Worker("codemode-outbound", {
+  name: `${workerName}-outbound`,
+  adopt: true,
+  compatibilityFlags: ["global_fetch_strictly_public"],
+  script: `
+export default {
+  async fetch(request) {
+    const startedAt = Date.now();
+    console.log("[codemode-outbound]", request.method, request.url);
+    const response = await fetch(request);
+    console.log(
+      "[codemode-outbound]",
+      request.method,
+      request.url,
+      response.status,
+      Date.now() - startedAt + "ms",
+    );
+    return response;
+  },
+};
+  `,
+});
+
 export const worker = await TanStackStart(APP_NAME, {
   name: workerName,
   adopt: true,
@@ -79,6 +102,7 @@ export const worker = await TanStackStart(APP_NAME, {
     ),
     DB: db,
     LOADER: WorkerLoader(),
+    OUTBOUND: outboundWorker,
   },
   wrangler: {
     main: "./src/entry.workerd.ts",

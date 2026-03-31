@@ -1,17 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Copy, Sparkles, Wand2 } from "lucide-react";
+import { createFileRoute, redirect } from "@tanstack/react-router";
+import { ChevronLeft, ChevronRight, Copy, Eye, Sparkles, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@iterate-com/ui/components/button";
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@iterate-com/ui/components/field";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@iterate-com/ui/components/field";
 import {
   Sheet,
   SheetContent,
@@ -21,7 +15,14 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { z } from "zod";
-import { HeaderActions } from "~/components/header-actions.tsx";
+import {
+  CODEMODE_SOURCE_PRESETS,
+  DEFAULT_CODEMODE_SOURCES,
+  DEFAULT_CODEMODE_SOURCES_YAML,
+  formatCodemodeSourcesYaml,
+  parseCodemodeSourcesYaml,
+  type CodemodeUiSource,
+} from "~/lib/codemode-sources.ts";
 import { CODEMODE_EXAMPLES, CODEMODE_V2_STARTER } from "~/lib/codemode-v2.ts";
 import { runsQueryKey } from "~/lib/runs.ts";
 import { orpcClient } from "~/orpc/client.ts";
@@ -30,24 +31,67 @@ const RunFunctionForm = z.object({
   code: z.string().trim().min(1, "Code is required"),
 });
 
+const SearchSchema = z.object({
+  sources: z.string().optional(),
+});
+
 export const Route = createFileRoute("/_app/runs-v2-new")({
   staticData: {
     breadcrumb: "Codemode",
   },
-  component: NewDeterministicRunPage,
+  validateSearch: SearchSchema,
+  beforeLoad: ({ search }) => {
+    if (!search.sources) {
+      throw redirect({
+        to: "/runs-v2-new",
+        search: {
+          sources: DEFAULT_CODEMODE_SOURCES_YAML,
+        },
+        replace: true,
+      });
+    }
+  },
+  component: NewRunPage,
 });
 
-function NewDeterministicRunPage() {
-  const navigate = useNavigate();
+function NewRunPage() {
+  const search = Route.useSearch();
+  const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
   const [isCtxSheetOpen, setIsCtxSheetOpen] = useState(false);
+  const [isSourcesOpen, setIsSourcesOpen] = useState(true);
+  const [sourcesYaml, setSourcesYaml] = useState(search.sources ?? DEFAULT_CODEMODE_SOURCES_YAML);
+  const parsedSources = parseSourcesYamlSafely(sourcesYaml);
+  const selectedSources = parsedSources.ok ? parsedSources.sources : DEFAULT_CODEMODE_SOURCES;
+
+  useEffect(() => {
+    setSourcesYaml(search.sources ?? DEFAULT_CODEMODE_SOURCES_YAML);
+  }, [search.sources]);
+
+  const syncSources = (nextSources: CodemodeUiSource[]) => {
+    const nextYaml = formatCodemodeSourcesYaml(nextSources);
+    setSourcesYaml(nextYaml);
+    void navigate({
+      search: (previous) => ({
+        ...previous,
+        sources: nextYaml,
+      }),
+      replace: true,
+    });
+  };
+
   const ctxTypeDefinitionQuery = useQuery({
-    queryKey: ["codemode-ctx-type-definition"],
-    queryFn: () => orpcClient.ctxTypeDefinition({}),
+    queryKey: ["codemode-ctx-type-definition", selectedSources],
+    queryFn: () =>
+      orpcClient.ctxTypeDefinition({
+        sources: selectedSources,
+      }),
+    enabled: parsedSources.ok,
     placeholderData: "Loading ctx type definitions...",
   });
+
   const runMutation = useMutation({
-    mutationFn: (input: { code: string }) => orpcClient.runV2(input),
+    mutationFn: (input: { code: string; sources: CodemodeUiSource[] }) => orpcClient.runV2(input),
     onError: (error) => {
       toast.error(readErrorMessage(error));
     },
@@ -62,8 +106,14 @@ function NewDeterministicRunPage() {
       onSubmit: RunFunctionForm,
     },
     onSubmit: async ({ value }) => {
+      if (!parsedSources.ok) {
+        toast.error(parsedSources.error);
+        return;
+      }
+
       const run = await runMutation.mutateAsync({
         code: value.code.trim(),
+        sources: parsedSources.sources,
       });
 
       await queryClient.invalidateQueries({ queryKey: runsQueryKey });
@@ -71,31 +121,52 @@ function NewDeterministicRunPage() {
     },
   });
 
+  const applySourcesYaml = (nextYaml: string) => {
+    setSourcesYaml(nextYaml);
+
+    const parsed = parseSourcesYamlSafely(nextYaml);
+    if (!parsed.ok) {
+      return;
+    }
+
+    void navigate({
+      search: (previous) => ({
+        ...previous,
+        sources: nextYaml,
+      }),
+      replace: true,
+    });
+  };
+
+  const appendPreset = (source: CodemodeUiSource) => {
+    const nextSources = [...selectedSources, source];
+    syncSources(nextSources);
+    toast.success(`Added ${readSourceTitle(source)}`);
+  };
+
   return (
-    <section className="w-full space-y-6 p-4">
-      <HeaderActions>
-        <Button type="button" variant="outline" onClick={() => setIsCtxSheetOpen(true)}>
-          See <code>ctx</code> types
-        </Button>
-      </HeaderActions>
-
-      <div className="space-y-4 rounded-xl border bg-card p-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <Sparkles className="size-4" />
-              <span>Codemode</span>
-            </div>
-            <p className="max-w-4xl text-sm text-muted-foreground">
-              Write an{" "}
-              <code>
-                async ({"{ ctx }"}) =&gt; {"{ ... }"}
-              </code>{" "}
-              function. It runs in a Cloudflare Dynamic Worker with outbound fetch blocked and a
-              typed, injected <code>ctx</code> for events, example, semaphore, and ingress-proxy.
-            </p>
+    <section className="space-y-6 p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Sparkles className="size-4" />
+            <span>Codemode</span>
           </div>
+          <p className="max-w-4xl text-sm text-muted-foreground">
+            Write the codemode function in TypeScript. Define <code>ctx</code> with YAML on the
+            right. The YAML is the real source model, and the type sheet updates from the current
+            valid source set.
+          </p>
+        </div>
 
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => syncSources(DEFAULT_CODEMODE_SOURCES)}
+          >
+            Reset sources
+          </Button>
           <Button
             type="button"
             variant="outline"
@@ -103,119 +174,182 @@ function NewDeterministicRunPage() {
           >
             Reset starter
           </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setIsSourcesOpen((value) => !value)}
+          >
+            {isSourcesOpen ? (
+              <ChevronRight className="size-4" />
+            ) : (
+              <ChevronLeft className="size-4" />
+            )}
+            {isSourcesOpen ? "Hide sources" : "Show sources"}
+          </Button>
         </div>
+      </div>
 
-        <form
-          className="space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            void form.handleSubmit();
-          }}
+      <form
+        className="space-y-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void form.handleSubmit();
+        }}
+      >
+        <div
+          className={
+            isSourcesOpen
+              ? "grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(24rem,0.95fr)]"
+              : "grid gap-6"
+          }
         >
-          <FieldGroup>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <FieldLabel htmlFor="codemode-source">Codemode snippet</FieldLabel>
+                <FieldDescription>Return a value to save it with the run.</FieldDescription>
+              </div>
+
+              <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
+                {([canSubmit, isSubmitting]) => (
+                  <Button type="submit" disabled={!canSubmit || isSubmitting || !parsedSources.ok}>
+                    {isSubmitting ? "Running..." : "Run codemode"}
+                  </Button>
+                )}
+              </form.Subscribe>
+            </div>
+
             <form.Field name="code">
               {(field) => {
                 const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
 
                 return (
                   <Field data-invalid={isInvalid}>
-                    <FieldLabel htmlFor={field.name}>Source</FieldLabel>
                     <SourceCodeBlock
                       code={field.state.value}
                       language="typescript"
                       editable={true}
                       onChange={field.handleChange}
-                      className="min-h-[34rem]"
+                      className="min-h-[42rem]"
                     />
-                    <FieldDescription>
-                      Return a value to save it with the run. Throwing is captured separately.
-                    </FieldDescription>
                     {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                   </Field>
                 );
               }}
             </form.Field>
-          </FieldGroup>
-
-          <div className="flex flex-wrap gap-2">
-            <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
-              {([canSubmit, isSubmitting]) => (
-                <Button type="submit" disabled={!canSubmit || isSubmitting}>
-                  {isSubmitting ? "Running..." : "Run codemode"}
-                </Button>
-              )}
-            </form.Subscribe>
           </div>
-        </form>
-      </div>
 
-      <div className="space-y-3 rounded-xl border bg-card p-4">
-        <div className="space-y-1">
-          <p className="text-sm font-medium">Working notes</p>
-          <p className="text-sm text-muted-foreground">
-            <code>console.log</code> is captured, network egress is blocked, and all four injected
-            services are live in production.
-          </p>
+          {isSourcesOpen ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <FieldLabel htmlFor="sources-yaml">Sources YAML</FieldLabel>
+                  <FieldDescription>
+                    Edit the <code>sources[]</code> structure directly.
+                  </FieldDescription>
+                </div>
+
+                <Button type="button" variant="outline" onClick={() => setIsCtxSheetOpen(true)}>
+                  <Eye className="size-4" />
+                  See <code>ctx</code> types
+                </Button>
+              </div>
+
+              <Field data-invalid={!parsedSources.ok}>
+                <SourceCodeBlock
+                  code={sourcesYaml}
+                  language="text"
+                  editable={true}
+                  onChange={applySourcesYaml}
+                  className="min-h-[42rem]"
+                />
+                {!parsedSources.ok ? (
+                  <FieldError errors={[{ message: parsedSources.error }]} />
+                ) : null}
+              </Field>
+
+              <div className="flex flex-wrap gap-2">
+                {CODEMODE_SOURCE_PRESETS.map((preset) => (
+                  <Button
+                    key={preset.id}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => appendPreset(preset.source)}
+                  >
+                    {preset.title}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
-        <SourceCodeBlock
-          code={`async ({ ctx }) => {
-  const ping = await ctx.example.ping({});
-  const streams = await ctx.events.listStreams({});
-  const resources = await ctx.semaphore.resources.list({});
-  const routes = await ctx.ingressProxy.routes.list({ limit: 1, offset: 0 });
-
-  return {
-    ping,
-    streams: streams.length,
-    resources: resources.length,
-    routes: routes.total,
-  };
-};`}
-          language="typescript"
-          className="min-h-52"
-        />
-      </div>
+      </form>
 
       <div className="space-y-3">
         <div className="space-y-1">
-          <p className="text-sm font-medium">Copy-paste examples</p>
+          <p className="text-sm font-medium">Examples</p>
           <p className="text-sm text-muted-foreground">
-            Use one directly or paste pieces into the editor above.
+            Each example is a pair: the sources YAML and the TypeScript snippet.
           </p>
         </div>
 
-        <div className="grid gap-4 2xl:grid-cols-3 xl:grid-cols-2">
+        <div className="space-y-4">
           {CODEMODE_EXAMPLES.map((example) => (
-            <article key={example.id} className="space-y-3 rounded-xl border bg-card p-4">
-              <div className="space-y-1">
-                <p className="text-sm font-medium">{example.title}</p>
-                <p className="text-sm text-muted-foreground">{example.description}</p>
+            <article
+              key={example.id}
+              className="space-y-3 border-t pt-4 first:border-t-0 first:pt-0"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">{example.title}</p>
+                  <p className="text-sm text-muted-foreground">{example.description}</p>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      form.setFieldValue("code", example.code);
+                      syncSources(example.sources);
+                      toast.success(`Loaded "${example.title}"`);
+                    }}
+                  >
+                    <Wand2 className="size-4" />
+                    Use example
+                  </Button>
+
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => void copySnippet(example.code, example.title)}
+                  >
+                    <Copy className="size-4" />
+                    Copy code
+                  </Button>
+                </div>
               </div>
 
-              <SourceCodeBlock code={example.code} language="typescript" className="min-h-64" />
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1.75fr)]">
+                <div className="space-y-1">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Sources YAML
+                  </p>
+                  <SourceCodeBlock
+                    code={formatCodemodeSourcesYaml(example.sources)}
+                    language="text"
+                    className="min-h-52"
+                  />
+                </div>
 
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    form.setFieldValue("code", example.code);
-                    toast.success(`Loaded "${example.title}" into the editor`);
-                  }}
-                >
-                  <Wand2 className="size-4" />
-                  Use example
-                </Button>
-
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => void copySnippet(example.code, example.title)}
-                >
-                  <Copy className="size-4" />
-                  Copy
-                </Button>
+                <div className="space-y-1">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Code
+                  </p>
+                  <SourceCodeBlock code={example.code} language="typescript" className="min-h-52" />
+                </div>
               </div>
             </article>
           ))}
@@ -230,14 +364,16 @@ function NewDeterministicRunPage() {
               <code>ctx</code>
               <span> types</span>
             </SheetTitle>
-            <SheetDescription>
-              Full TypeScript definition of the runtime interface available to codemode snippets.
-            </SheetDescription>
+            <SheetDescription>Generated from the current valid source YAML.</SheetDescription>
           </SheetHeader>
 
           <div className="min-h-0 flex-1 overflow-hidden p-4">
             <SourceCodeBlock
-              code={ctxTypeDefinitionQuery.data ?? "Loading ctx type definitions..."}
+              code={
+                parsedSources.ok
+                  ? (ctxTypeDefinitionQuery.data ?? "Loading ctx type definitions...")
+                  : parsedSources.error
+              }
               language="typescript"
               className="h-full min-h-0"
             />
@@ -246,6 +382,28 @@ function NewDeterministicRunPage() {
       </Sheet>
     </section>
   );
+}
+
+function parseSourcesYamlSafely(yamlText: string) {
+  try {
+    return {
+      ok: true as const,
+      sources: parseCodemodeSourcesYaml(yamlText),
+    };
+  } catch (error) {
+    return {
+      ok: false as const,
+      error: readErrorMessage(error),
+    };
+  }
+}
+
+function readSourceTitle(source: CodemodeUiSource) {
+  if (source.type === "orpc-contract") {
+    return source.service;
+  }
+
+  return source.namespace?.trim() || source.url;
 }
 
 async function copySnippet(code: string, title: string) {

@@ -28,7 +28,8 @@ export default {
           manifest,
           config,
           db,
-          loader: workerEnv.LOADER,
+          loader: env.LOADER,
+          outbound: env.OUTBOUND,
           log,
           rawRequest: request,
         };

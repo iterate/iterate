@@ -1,7 +1,7 @@
 import type { CodemodeRun } from "@iterate-com/codemode-contract";
 import type { AppContext } from "~/context.ts";
 import { codemodeRunsTable } from "~/db/schema.ts";
-import { buildCodemodeContractContext } from "~/lib/codemode-contract-runtime.ts";
+import { buildCodemodeContextFromSources } from "~/lib/codemode-contract-runtime.ts";
 import { executeCodemodeFunction } from "~/lib/execute-code-v2.ts";
 import { os } from "~/orpc/orpc.ts";
 
@@ -25,7 +25,9 @@ export const runRouter = {
     const execution = await executeCodemodeFunction({
       code: input.code,
       loader: context.loader,
+      outbound: context.outbound,
       config: context.config,
+      sources: input.sources,
     });
     const run: CodemodeRun = {
       id: createRunId(),
@@ -40,7 +42,12 @@ export const runRouter = {
 
     return run;
   }),
-  ctxTypeDefinition: os.ctxTypeDefinition.handler(
-    async ({ context }) => buildCodemodeContractContext(context.config).ctxTypes,
-  ),
+  ctxTypeDefinition: os.ctxTypeDefinition.handler(async ({ context, input }) => {
+    const runtimeContext = await buildCodemodeContextFromSources({
+      config: context.config,
+      sources: input.sources,
+    });
+
+    return runtimeContext.ctxTypes;
+  }),
 };

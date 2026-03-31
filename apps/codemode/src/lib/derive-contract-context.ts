@@ -1,12 +1,13 @@
 import {
   generateTypesFromJsonSchema,
-  resolveProvider,
+  jsonSchemaToType,
   sanitizeToolName,
   type JsonSchemaToolDescriptors,
-} from "@cloudflare/codemode";
+} from "~/lib/codemode/index.ts";
+import { getEventIteratorSchemaDetails } from "@orpc/contract";
 import { z } from "zod";
 
-type ProcedureSchema = z.ZodType;
+type ProcedureSchema = unknown;
 
 type ProcedureMeta = {
   route?: {
@@ -22,10 +23,7 @@ type ContractProcedure = {
   "~orpc"?: ProcedureMeta;
 };
 
-interface ContractTree {
-  [key: string]: ContractProcedure | ContractTree;
-}
-
+type ContractTree = Record<string, unknown>;
 type ClientTree = Record<string, unknown>;
 
 export interface ContractSpec {
@@ -34,12 +32,21 @@ export interface ContractSpec {
 }
 
 export type ContractRegistry = Record<string, ContractSpec>;
+export type DerivedProviderMode = "value" | "stream";
+
+export interface DerivedProvider {
+  name: string;
+  fns: Record<string, (...args: unknown[]) => Promise<unknown>>;
+  mode: DerivedProviderMode;
+  positionalArgs?: boolean;
+}
 
 type ProcedureDescriptor = {
   rpcToolName: string;
   description: string;
   inputSchema: ProcedureSchema;
   outputSchema?: ProcedureSchema;
+  kind: DerivedProviderMode;
   runtimePath: string[];
   invoke: (input: unknown) => Promise<unknown>;
 };
@@ -51,8 +58,11 @@ type ProcedureTreeNode = {
 
 export interface DerivedContractContext {
   ctxTypes: string;
-  provider: ReturnType<typeof resolveProvider>;
+  providers: DerivedProvider[];
   sandboxPrelude: string;
+  declarations: string[];
+  ctxExpression: string;
+  ctxTypeExpression: string;
 }
 
 function isProcedure(value: unknown): value is ContractProcedure {
@@ -113,6 +123,7 @@ function collectProcedures(
 
       const clientProcedure = getClientProcedure(client, nextRawPath);
       const rpcToolName = [sanitizeToolName(namespace), ...nextSafePath].join("__");
+      const streamDetails = getEventIteratorSchemaDetails(meta.outputSchema as never);
 
       procedures.push({
         rpcToolName,
@@ -122,10 +133,11 @@ function collectProcedures(
           meta.route?.path ??
           `${namespace}.${nextRawPath.join(".")}`,
         inputSchema: meta.inputSchema,
-        outputSchema: meta.outputSchema,
+        outputSchema: streamDetails?.yields ?? meta.outputSchema,
+        kind: streamDetails ? "stream" : "value",
         runtimePath: [namespace, ...nextRawPath],
         invoke: async (input: unknown) => {
-          const parsedInput = meta.inputSchema!.parse(input ?? {});
+          const parsedInput = (meta.inputSchema as z.ZodType).parse(input ?? {});
           return clientProcedure(parsedInput);
         },
       });
@@ -164,33 +176,51 @@ function buildProcedureTree(procedures: ProcedureDescriptor[]): ProcedureTreeNod
   return root;
 }
 
-function emitRuntimeTree(node: ProcedureTreeNode, rootProviderName: string): string {
+function findProcedure(procedures: ProcedureDescriptor[], rpcToolName: string) {
+  return procedures.find((procedure) => procedure.rpcToolName === rpcToolName);
+}
+
+function emitRuntimeTree(
+  node: ProcedureTreeNode,
+  procedures: ProcedureDescriptor[],
+  providerName: string,
+): string {
   const entries: string[] = [];
 
   for (const [segment, child] of node.children) {
     if (child.rpcToolName) {
+      const procedure = findProcedure(procedures, child.rpcToolName);
+      const rootProviderName =
+        procedure?.kind === "stream" ? `${providerName}_stream` : providerName;
       entries.push(
         `${JSON.stringify(segment)}: (input) => ${rootProviderName}.${child.rpcToolName}(input ?? {})`,
       );
       continue;
     }
 
-    entries.push(`${JSON.stringify(segment)}: ${emitRuntimeTree(child, rootProviderName)}`);
+    entries.push(`${JSON.stringify(segment)}: ${emitRuntimeTree(child, procedures, providerName)}`);
   }
 
   return `{ ${entries.join(", ")} }`;
 }
 
-function emitTypeTree(node: ProcedureTreeNode, rootProviderName: string): string {
+function emitTypeTree(
+  node: ProcedureTreeNode,
+  procedures: ProcedureDescriptor[],
+  providerName: string,
+): string {
   const lines: string[] = ["{"];
 
   for (const [segment, child] of node.children) {
     if (child.rpcToolName) {
+      const procedure = findProcedure(procedures, child.rpcToolName);
+      const rootProviderName =
+        procedure?.kind === "stream" ? `${providerName}_stream` : providerName;
       lines.push(`  ${JSON.stringify(segment)}: typeof ${rootProviderName}.${child.rpcToolName};`);
       continue;
     }
 
-    const nested = emitTypeTree(child, rootProviderName)
+    const nested = emitTypeTree(child, procedures, providerName)
       .split("\n")
       .map((line, index) => (index === 0 ? line : `  ${line}`))
       .join("\n");
@@ -207,13 +237,13 @@ function buildToolDescriptors(procedures: ProcedureDescriptor[]): JsonSchemaTool
       procedure.rpcToolName,
       {
         description: procedure.description,
-        inputSchema: z.toJSONSchema(procedure.inputSchema, {
+        inputSchema: z.toJSONSchema(procedure.inputSchema as z.ZodType, {
           io: "input",
           unrepresentable: "any",
         }) as never,
         ...(procedure.outputSchema
           ? {
-              outputSchema: z.toJSONSchema(procedure.outputSchema, {
+              outputSchema: z.toJSONSchema(procedure.outputSchema as z.ZodType, {
                 io: "output",
                 unrepresentable: "any",
               }) as never,
@@ -222,6 +252,62 @@ function buildToolDescriptors(procedures: ProcedureDescriptor[]): JsonSchemaTool
       },
     ]),
   ) as JsonSchemaToolDescriptors;
+}
+
+function toPascalCase(value: string) {
+  return value
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0]!.toUpperCase() + part.slice(1))
+    .join("");
+}
+
+function buildStreamTypeDefinitions(procedures: ProcedureDescriptor[], providerName: string) {
+  if (procedures.length === 0) {
+    return "";
+  }
+
+  const declarations: string[] = [];
+  const providerLines: string[] = [`declare const ${providerName}: {`];
+
+  for (const procedure of procedures) {
+    const baseName = toPascalCase(procedure.rpcToolName);
+    const inputTypeName = `${baseName}Input`;
+    const yieldTypeName = `${baseName}Yield`;
+
+    declarations.push(
+      jsonSchemaToType(
+        z.toJSONSchema(procedure.inputSchema as z.ZodType, {
+          io: "input",
+          unrepresentable: "any",
+        }) as never,
+        inputTypeName,
+      ),
+    );
+
+    if (procedure.outputSchema) {
+      declarations.push(
+        jsonSchemaToType(
+          z.toJSONSchema(procedure.outputSchema as z.ZodType, {
+            io: "output",
+            unrepresentable: "any",
+          }) as never,
+          yieldTypeName,
+        ),
+      );
+    } else {
+      declarations.push(`type ${yieldTypeName} = unknown;`);
+    }
+
+    providerLines.push(
+      `  ${JSON.stringify(procedure.rpcToolName)}: (input: ${inputTypeName}) => Promise<AsyncIterable<${yieldTypeName}>>;`,
+    );
+  }
+
+  providerLines.push("};");
+  return [...declarations, "", ...providerLines].join("\n");
 }
 
 function collectAllProcedures(registry: ContractRegistry): ProcedureDescriptor[] {
@@ -237,30 +323,65 @@ export function deriveContractContext(
   const providerName = options?.providerName ?? "rpc";
   const procedures = collectAllProcedures(registry);
   const procedureTree = buildProcedureTree(procedures);
-  const provider = resolveProvider({
-    name: providerName,
-    tools: Object.fromEntries(
-      procedures.map((procedure) => [
-        procedure.rpcToolName,
-        {
-          execute: procedure.invoke,
-        },
-      ]),
-    ),
-  });
+  const valueProcedures = procedures.filter((procedure) => procedure.kind === "value");
+  const streamProcedures = procedures.filter((procedure) => procedure.kind === "stream");
+  const providers: DerivedProvider[] = [];
+
+  if (valueProcedures.length > 0) {
+    providers.push({
+      name: providerName,
+      mode: "value",
+      fns: Object.fromEntries(
+        valueProcedures.map((procedure) => [procedure.rpcToolName, procedure.invoke]),
+      ),
+    });
+  }
+
+  if (streamProcedures.length > 0) {
+    providers.push({
+      name: `${providerName}_stream`,
+      mode: "stream",
+      fns: Object.fromEntries(
+        streamProcedures.map((procedure) => [procedure.rpcToolName, procedure.invoke]),
+      ),
+    });
+  }
 
   return {
+    declarations: [
+      "// Generated from selected oRPC contracts via @cloudflare/codemode",
+      ...(valueProcedures.length > 0
+        ? [
+            generateTypesFromJsonSchema(buildToolDescriptors(valueProcedures)).replace(
+              "declare const codemode:",
+              `declare const ${providerName}:`,
+            ),
+          ]
+        : []),
+      ...(streamProcedures.length > 0
+        ? ["", buildStreamTypeDefinitions(streamProcedures, `${providerName}_stream`)]
+        : []),
+    ],
+    providers,
+    ctxExpression: emitRuntimeTree(procedureTree, procedures, providerName),
+    ctxTypeExpression: emitTypeTree(procedureTree, procedures, providerName),
+    sandboxPrelude: `const ctx = ${emitRuntimeTree(procedureTree, procedures, providerName)};`,
     ctxTypes: [
       "// Generated from selected oRPC contracts via @cloudflare/codemode",
-      generateTypesFromJsonSchema(buildToolDescriptors(procedures)).replace(
-        "declare const codemode:",
-        `declare const ${providerName}:`,
-      ),
+      ...(valueProcedures.length > 0
+        ? [
+            generateTypesFromJsonSchema(buildToolDescriptors(valueProcedures)).replace(
+              "declare const codemode:",
+              `declare const ${providerName}:`,
+            ),
+          ]
+        : []),
+      ...(streamProcedures.length > 0
+        ? ["", buildStreamTypeDefinitions(streamProcedures, `${providerName}_stream`)]
+        : []),
       "",
-      `declare const ctx: ${emitTypeTree(procedureTree, providerName)};`,
+      `declare const ctx: ${emitTypeTree(procedureTree, procedures, providerName)};`,
       "",
     ].join("\n"),
-    provider,
-    sandboxPrelude: `const ctx = ${emitRuntimeTree(procedureTree, providerName)};`,
   };
 }

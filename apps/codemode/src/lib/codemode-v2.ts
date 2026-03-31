@@ -1,8 +1,19 @@
+import {
+  DEFAULT_CODEMODE_SOURCES,
+  EVENTS_OPENAPI_SOURCE,
+  EXAMPLE_OPENAPI_SOURCE,
+  PETSTORE_OPENAPI_SOURCE,
+  WEATHER_OPENAPI_SOURCE,
+  OPENF1_OPENAPI_SOURCE,
+  type CodemodeUiSource,
+} from "~/lib/codemode-sources.ts";
+
 export interface CodemodeExampleSnippet {
   id: string;
   title: string;
   description: string;
   code: string;
+  sources: CodemodeUiSource[];
 }
 
 export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
@@ -11,6 +22,7 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
     title: "Service Overview",
     description:
       "Ping example, count streams, inspect semaphore inventory, and list ingress routes.",
+    sources: DEFAULT_CODEMODE_SOURCES,
     code: `async ({ ctx }) => {
   const ping = await ctx.example.ping({});
   const streams = await ctx.events.listStreams({});
@@ -29,6 +41,7 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
     id: "event-audit",
     title: "Append And Inspect Events",
     description: "Write an event, then read back the latest stream state.",
+    sources: [EXAMPLE_OPENAPI_SOURCE, EVENTS_OPENAPI_SOURCE],
     code: `async ({ ctx }) => {
   const append = await ctx.events.append({
     path: "/codemode/demo/audit",
@@ -53,6 +66,7 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
     id: "log-demo",
     title: "Capture Example Logs",
     description: "Run the example log demo and persist each step as an event.",
+    sources: [EXAMPLE_OPENAPI_SOURCE, EVENTS_OPENAPI_SOURCE],
     code: `async ({ ctx }) => {
   const demo = await ctx.example.test.logDemo({
     label: "codemode-homepage-example",
@@ -78,6 +92,7 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
     id: "lease-and-route",
     title: "Lease And Route",
     description: "Lease a tunnel from semaphore and build an ingress route from it.",
+    sources: DEFAULT_CODEMODE_SOURCES,
     code: `async ({ ctx }) => {
   const lease = await ctx.semaphore.resources.acquire({
     type: "cloudflare-tunnel",
@@ -101,6 +116,7 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
     id: "inventory-cross-check",
     title: "Cross-Check Inventory",
     description: "Compare leased semaphore tunnel resources against ingress route metadata.",
+    sources: DEFAULT_CODEMODE_SOURCES,
     code: `async ({ ctx }) => {
   const resources = await ctx.semaphore.resources.list({
     type: "cloudflare-tunnel",
@@ -124,6 +140,125 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
         ? "leased"
         : "not-leased",
   }));
+};`,
+  },
+  {
+    id: "petstore-status",
+    title: "Petstore Status",
+    description: "Pull live public pets from Swagger Petstore through the OpenAPI source.",
+    sources: [PETSTORE_OPENAPI_SOURCE],
+    code: `async ({ ctx }) => {
+  const pets = await ctx.petstore.findPetsByStatus({ status: "available" });
+
+  return {
+    count: Array.isArray(pets) ? pets.length : null,
+    first: Array.isArray(pets) ? (pets[0] ?? null) : null,
+  };
+};`,
+  },
+  {
+    id: "weather-and-pets",
+    title: "Weather And Pets",
+    description: "Mix Weather.gov alerts with Petstore inventory in one ctx.",
+    sources: [WEATHER_OPENAPI_SOURCE, PETSTORE_OPENAPI_SOURCE],
+    code: `async ({ ctx }) => {
+  const alerts = await ctx.weather.alerts_active({
+    area: "CA",
+  });
+  const pets = await ctx.petstore.findPetsByStatus({ status: "available" });
+
+  return {
+    alertCount: Array.isArray(alerts?.features) ? alerts.features.length : null,
+    petCount: Array.isArray(pets) ? pets.length : null,
+    firstPetName: Array.isArray(pets) ? (pets[0]?.name ?? null) : null,
+  };
+};`,
+  },
+  {
+    id: "openf1-session-index",
+    title: "Formula One Sessions",
+    description: "Query OpenF1 and return a compact session snapshot.",
+    sources: [OPENF1_OPENAPI_SOURCE],
+    code: `async ({ ctx }) => {
+  const sessions = await ctx.openf1.sessions_sessions_get({
+    year: 2024,
+    country_name: "United Kingdom",
+  });
+
+  return Array.isArray(sessions)
+    ? sessions.slice(0, 5).map((session) => ({
+        session_name: session.session_name,
+        location: session.location,
+        date_start: session.date_start,
+      }))
+    : sessions;
+};`,
+  },
+  {
+    id: "stream-example-logs",
+    title: "Stream Example Logs",
+    description: "Consume the async log stream directly with for-await.",
+    sources: [{ type: "orpc-contract", service: "example" }],
+    code: `async ({ ctx }) => {
+  const lines = [];
+  const stream = await ctx.example.test.randomLogStream({
+    count: 4,
+    maxDelayMs: 25,
+  });
+
+  for await (const line of stream) {
+    lines.push(line);
+  }
+
+  return { lines };
+};`,
+  },
+  {
+    id: "stream-events-to-summary",
+    title: "Stream Events",
+    description: "Read the latest events from a stream with async iteration.",
+    sources: [{ type: "orpc-contract", service: "events" }],
+    code: `async ({ ctx }) => {
+  const items = [];
+  const stream = await ctx.events.stream({
+    path: "/codemode/demo/audit",
+    live: false,
+  });
+
+  for await (const event of stream) {
+    items.push({
+      offset: event.offset,
+      type: event.type,
+    });
+
+    if (items.length >= 5) {
+      break;
+    }
+  }
+
+  return { items };
+};`,
+  },
+  {
+    id: "raw-fetch-openapi",
+    title: "Raw Fetch",
+    description: "Use the sandbox's internet fetch directly and return JSON.",
+    sources: [],
+    code: `async ({ ctx }) => {
+  const response = await ctx.fetch("https://api.github.com/repos/cloudflare/workers-sdk", {
+    headers: {
+      accept: "application/vnd.github+json",
+      "user-agent": "iterate-codemode",
+    },
+  });
+
+  const repo = await response.json();
+
+  return {
+    full_name: repo.full_name,
+    stargazers_count: repo.stargazers_count,
+    open_issues_count: repo.open_issues_count,
+  };
 };`,
   },
 ];

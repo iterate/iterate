@@ -8,6 +8,7 @@ export interface AppContext {
   config: AppConfig;
   db: BaseSQLiteDatabase<"sync" | "async", unknown, typeof schema>;
   loader: WorkerLoader;
+  outbound: Fetcher;
   log: SharedRequestLogger;
   rawRequest?: Request;
 }
