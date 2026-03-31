@@ -1,24 +1,36 @@
 packages:
-  - apps/cf-ingress-proxy-worker
-  - apps/semaphore
-  - apps/semaphore-contract
+  - jonasland
+  - apps/ingress-proxy-worker
+  - apps/ingress-proxy-contract
   - apps/project-ingress-proxy
   - apps/cli
   - apps/daemon
   - apps/iterate-com
   - apps/os
-  - apps/auth
-  - apps/auth-contract
-  - apps/auth-example
+  - apps/semaphore
+  - apps/semaphore-contract
+  - apps/example
+  - apps/fake-os
+  - apps/daemon-v2
+  - apps/fetch-test
+  - apps/example-3
+  - apps/example-contract
+  - apps/fake-os-contract
+  - apps/daemon-v2-contract
+  - apps/example-v2
+  - apps/example-v2-contract
+  - apps/events
+  - apps/events-contract
   - sandbox
   - jonasland/sandbox
   - jonasland/e2e
   - services/*
+  - '!services/events'
+  - '!services/events-contract'
   - packages/*
   - packages/pidnap/docker
   - repo-templates/**/*
   - .github/ts-workflows
-  - experiments/*
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
@@ -38,21 +50,36 @@ minimumReleaseAgeExclude:
   - pidnap
   - schematch
   - trpc-cli
+  - hono
+  - "@hono/node-server"
+  - "@hono/node-ws"
 
 onlyBuiltDependencies:
   - "@tailwindcss/oxide"
   - better-sqlite3
   - esbuild
+  - lightningcss
+  - node-pty
   - sharp
   - workerd
-  - bun
-
-patchedDependencies:
-  "@better-auth/drizzle-adapter": "patches/@better-auth__drizzle-adapter.patch"
 
 overrides:
   # x402,viem are optional peer dependencies of agents sdk, which is source of lot of unnecessary/deprecated packages, removing them is fine
+  "axios": "1.13.6"
   "agents>x402": "-"
   "agents>viem": "-"
   "quicktype-core>readable-stream": "npm:vite-compatible-readable-stream@3.6.1"
   "better-sqlite3": "npm:libsql@0.5.22"
+  "@orpc/server": "1.13.6"
+  "@orpc/client": "1.13.6"
+  "@orpc/contract": "1.13.6"
+  "@orpc/openapi": "1.13.6"
+  "@orpc/zod": "1.13.6"
+  "@orpc/otel": "1.13.6"
+  "@orpc/openapi-client": "1.13.6"
+  "@orpc/json-schema": "1.13.6"
+  "@orpc/react-query": "1.13.6"
+  "@orpc/tanstack-query": "1.13.6"
+  "@tanstack/query-core": "5.90.21"
+  "@tanstack/react-query": "5.90.21"
+  "trpc-cli": "0.14.0"

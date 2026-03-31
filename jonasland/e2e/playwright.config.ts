@@ -3,7 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 const videoMode = !!process.env.VIDEO_MODE;
 
 export default defineConfig({
-  testDir: "spec",
+  testDir: "playwright",
   testMatch: "**/*.spec.ts",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,

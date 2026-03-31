@@ -1,0 +1,165 @@
+import {
+  StreamCreatedPayload,
+  StreamMetadataUpdatedPayload,
+  STREAM_CREATED_TYPE,
+  STREAM_METADATA_UPDATED_TYPE,
+  type Event,
+} from "@iterate-com/events-contract";
+import type {
+  EventFeedItem,
+  GroupedEventFeedItem,
+  StreamFeedItem,
+  StreamRendererMode,
+} from "~/lib/stream-feed-types.ts";
+
+export function projectWireToFeed(events: readonly Event[]): StreamFeedItem[] {
+  return events.flatMap((event) => projectEventToFeed(event));
+}
+
+export function toEventFeedItem(event: Event): EventFeedItem {
+  return {
+    kind: "event",
+    path: event.path,
+    offset: event.offset,
+    createdAt: event.createdAt,
+    eventType: event.type,
+    timestamp: getTimestamp(event.createdAt),
+    raw: event,
+  };
+}
+
+export function projectEventToFeed(event: Event): StreamFeedItem[] {
+  const eventFeedItem = toEventFeedItem(event);
+  const semanticItem = toSemanticFeedItem(event);
+
+  if (semanticItem == null) {
+    return [eventFeedItem];
+  }
+
+  return [eventFeedItem, semanticItem];
+}
+
+export function getEventFeedItems(feed: readonly StreamFeedItem[]): EventFeedItem[] {
+  return feed.filter((item): item is EventFeedItem => item.kind === "event");
+}
+
+export function buildDisplayFeed(
+  feed: readonly StreamFeedItem[],
+  mode: StreamRendererMode,
+): StreamFeedItem[] | null {
+  if (mode === "raw") {
+    return null;
+  }
+
+  if (mode === "pretty") {
+    return feed.filter((item) => item.kind !== "event");
+  }
+
+  const displayFeed: StreamFeedItem[] = [];
+  let currentGroup: EventFeedItem[] = [];
+
+  for (const item of feed) {
+    if (item.kind === "event") {
+      if (currentGroup[0]?.eventType === item.eventType) {
+        currentGroup.push(item);
+        continue;
+      }
+
+      flushCurrentGroup(displayFeed, currentGroup);
+      currentGroup = [item];
+      continue;
+    }
+
+    flushCurrentGroup(displayFeed, currentGroup);
+    currentGroup = [];
+    displayFeed.push(item);
+  }
+
+  flushCurrentGroup(displayFeed, currentGroup);
+
+  return displayFeed;
+}
+
+function flushCurrentGroup(displayFeed: StreamFeedItem[], currentGroup: readonly EventFeedItem[]) {
+  if (currentGroup.length === 0) {
+    return;
+  }
+
+  displayFeed.push(createGroupedOrSingleEvent(currentGroup));
+}
+
+export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
+  if (event.type === STREAM_CREATED_TYPE) {
+    const payload = StreamCreatedPayload.safeParse(event.payload);
+
+    if (payload.success) {
+      return {
+        kind: "stream-created",
+        parentPath: event.path,
+        createdPath: payload.data.path,
+        timestamp: getTimestamp(event.createdAt),
+        raw: event,
+      };
+    }
+  }
+
+  if (event.type === STREAM_METADATA_UPDATED_TYPE) {
+    const payload = StreamMetadataUpdatedPayload.safeParse(event.payload);
+
+    if (payload.success) {
+      return {
+        kind: "stream-metadata-updated",
+        path: event.path,
+        metadata: payload.data.metadata,
+        timestamp: getTimestamp(event.createdAt),
+        raw: event,
+      };
+    }
+  }
+
+  return null;
+}
+
+export function createGroupedOrSingleEvent(
+  events: readonly EventFeedItem[],
+): EventFeedItem | GroupedEventFeedItem {
+  if (events.length === 0) {
+    throw new Error("Cannot create a grouped event item from an empty list.");
+  }
+
+  if (events.length === 1) {
+    return events[0];
+  }
+
+  return {
+    kind: "grouped-event",
+    eventType: events[0].eventType,
+    count: events.length,
+    events: [...events],
+    firstTimestamp: events[0].timestamp,
+    lastTimestamp: events[events.length - 1].timestamp,
+  };
+}
+
+export function getAdjacentEventOffset(
+  events: readonly EventFeedItem[],
+  currentOffset: string | undefined,
+  direction: "previous" | "next",
+) {
+  if (currentOffset == null) {
+    return undefined;
+  }
+
+  const index = events.findIndex((event) => event.offset === currentOffset);
+
+  if (index === -1) {
+    return undefined;
+  }
+
+  const adjacentIndex = direction === "previous" ? index - 1 : index + 1;
+  return events[adjacentIndex]?.offset;
+}
+
+function getTimestamp(createdAt: string) {
+  return Number.isNaN(Date.parse(createdAt)) ? Date.now() : Date.parse(createdAt);
+}

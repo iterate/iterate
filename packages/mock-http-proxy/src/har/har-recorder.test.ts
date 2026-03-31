@@ -87,13 +87,9 @@ async function getCompressedResponse(
 }
 
 describe("HarRecorder", () => {
-  test("decodes brotli responses and sanitizes headers", async () => {
+  test("decodes brotli responses and sanitizes headers via default sanitizer", async () => {
     const recorder = await HarRecorder.create({
       decodeContentEncodings: ["br"],
-      sanitize: {
-        requestHeaders: ["authorization"],
-        responseHeaders: ["set-cookie"],
-      },
     });
     const payload = JSON.stringify({ ok: true, source: "brotli" });
     const compressed = brotliCompressSync(Buffer.from(payload, "utf8"));
@@ -128,8 +124,12 @@ describe("HarRecorder", () => {
       throw new Error("missing entry");
     }
 
-    expect(harHeaderValue(entry.request.headers, "authorization")).toBe("<redacted>");
-    expect(harHeaderValue(entry.response.headers, "set-cookie")).toBe("<redacted>");
+    expect(harHeaderValue(entry.request.headers, "authorization")).toBe(
+      "Bearer s---sanitised-secret-2bb80d53",
+    );
+    expect(harHeaderValue(entry.response.headers, "set-cookie")).toBe(
+      "session=---sanitised-secret-ba7816bf",
+    );
     expect(harHeaderValue(entry.response.headers, "content-encoding")).toBeUndefined();
     expect(entry.response.content.text).toBe(payload);
   });
@@ -189,9 +189,6 @@ describe("HarRecorder", () => {
   test("records websocket entries via the same filter pipeline", async () => {
     const recorder = await HarRecorder.create({
       filter: (entry) => entry.url.hostname === "api.openai.com",
-      sanitize: {
-        requestHeaders: ["authorization"],
-      },
     });
 
     recorder.appendWebSocketExchange({
@@ -221,7 +218,9 @@ describe("HarRecorder", () => {
     const entries = recorder.getHar().log.entries;
     expect(entries).toHaveLength(1);
     expect(entries[0]?.request.url).toBe("wss://api.openai.com/v1/responses");
-    expect(harHeaderValue(entries[0]?.request.headers ?? [], "authorization")).toBe("<redacted>");
+    expect(harHeaderValue(entries[0]?.request.headers ?? [], "authorization")).toBe(
+      "Bearer s---sanitised-secret-2bb80d53",
+    );
   });
 
   test("writes to configured harPath", async () => {

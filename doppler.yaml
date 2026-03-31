@@ -6,6 +6,14 @@ setup:
   - project: os
     path: ./
   - project: ingress-proxy
-    path: apps/cf-ingress-proxy-worker/
-  - project: auth
-    path: apps/auth/
+    path: apps/ingress-proxy-worker/
+  - project: example
+    path: apps/example/
+  - project: example
+    path: apps/example-v2/
+  - project: example
+    path: apps/fetch-test/
+  - project: events
+    path: apps/events/
+  - project: test
+    path: apps/test/

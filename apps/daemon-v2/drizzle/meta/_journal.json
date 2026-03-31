@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1773675894010,
+      "tag": "20260316154454_init",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1773764923280,
+      "tag": "20260317162843_add-streams",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1774386136036,
+      "tag": "20260324210216_remove-streams",
+      "breakpoints": true
+    }
+  ]
+}

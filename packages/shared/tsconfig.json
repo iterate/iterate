@@ -4,6 +4,7 @@
     "module": "esnext",
     "lib": ["esnext"],
     "types": ["node"],
+    "jsx": "react-jsx",
     "strict": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
@@ -12,6 +13,6 @@
     "moduleResolution": "bundler",
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["src/**/*.test.ts", "src/**/old/**"]
 }

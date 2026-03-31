@@ -1,6 +1,6 @@
 {
   "$schema": "https://ui.shadcn.com/schema.json",
-  "style": "new-york",
+  "style": "base-nova",
   "rsc": true,
   "tsx": true,
   "tailwind": {
@@ -16,5 +16,8 @@
     "hooks": "@iterate-com/ui/hooks",
     "lib": "@iterate-com/ui/lib",
     "ui": "@iterate-com/ui/components"
+  },
+  "registries": {
+    "@ai-elements": "https://registry.ai-sdk.dev/{name}.json"
   }
 }

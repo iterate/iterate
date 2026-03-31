@@ -378,6 +378,108 @@ const plugin = {
               };
             },
           },
+          /**
+           * Contract packages (`apps/*-contract/src`) are imported by BOTH server
+           * and client (browser) code. They must contain nothing but oRPC contract
+           * definitions, Zod schemas, and lightweight client wiring. Pulling in
+           * anything heavier — Node built-ins, OpenTelemetry, evlog, vite, the
+           * shared barrel, etc. — breaks Vite production builds and bloats client
+           * bundles.
+           *
+           * This rule enforces an explicit allowlist of permitted runtime import
+           * sources. Type-only imports (`import type { … }`) are always fine
+           * because they're erased at build time.
+           *
+           * Allowlist entries:
+           * - `ALLOWED_RUNTIME_IMPORT_PREFIXES`: exact match or `pkg + "/..."` subpaths.
+           * - `ALLOWED_RUNTIME_IMPORT_REGEX`: optional RegExp `source` strings (must match
+           *   full specifier). Use only when a prefix is too broad.
+           *
+           * If you need to add a new package, verify it has ZERO transitive
+           * Node/server deps, then add a prefix or regex below.
+           */
+          "contract-package-imports": {
+            meta: {
+              type: "problem",
+              docs: {
+                description:
+                  "Restrict runtime imports in *-contract packages to a small allowlist of lightweight packages",
+              },
+            },
+            create: (context) => {
+              /** @type {string[]} */
+              const ALLOWED_RUNTIME_IMPORT_PREFIXES = [
+                "zod",
+                "@orpc/contract",
+                "@orpc/zod",
+                "@iterate-com/shared/apps",
+                "@iterate-com/shared/jonasland",
+                "@orpc/client",
+                "@orpc/openapi-client",
+              ];
+              /** @type {string[]} Full specifier must match (anchored in code). */
+              const ALLOWED_RUNTIME_IMPORT_REGEX = [
+                // Reserved for one-off imports that are not expressible as a safe prefix.
+              ];
+              const compiledRegex = ALLOWED_RUNTIME_IMPORT_REGEX.map(
+                (pattern) => new RegExp(`^${pattern}$`),
+              );
+
+              /**
+               * @param {string} source
+               */
+              function isAllowedRuntimeImport(source) {
+                if (
+                  ALLOWED_RUNTIME_IMPORT_PREFIXES.some(
+                    (pkg) => source === pkg || source.startsWith(pkg + "/"),
+                  )
+                ) {
+                  return true;
+                }
+                return compiledRegex.some((re) => re.test(source));
+              }
+
+              const filename = context.filename ?? "";
+              const isTestFile = /\.(test|spec)\.[cm]?[jt]sx?$/.test(filename);
+
+              const allowedListForMessage =
+                ALLOWED_RUNTIME_IMPORT_PREFIXES.map((p) => `  • ${p} (and ${p}/…)`).join("\n") +
+                (ALLOWED_RUNTIME_IMPORT_REGEX.length > 0
+                  ? "\n\n" + ALLOWED_RUNTIME_IMPORT_REGEX.map((p) => `  • /^${p}$/`).join("\n")
+                  : "");
+
+              return {
+                ImportDeclaration: (node) => {
+                  if (isTestFile) return;
+                  if (node.importKind === "type") return;
+
+                  const allSpecifiersTypeOnly =
+                    node.specifiers.length > 0 &&
+                    node.specifiers.every((s) => s.importKind === "type");
+                  if (allSpecifiersTypeOnly) return;
+
+                  const source = node.source.value;
+
+                  if (source.startsWith(".") || source.startsWith("/")) return;
+
+                  if (isAllowedRuntimeImport(source)) return;
+
+                  context.report({
+                    node,
+                    message:
+                      `Forbidden runtime import "${source}" in a contract package.\n\n` +
+                      `Contract packages are imported by both server and browser code, so they ` +
+                      `must stay ultra-light. Only these runtime imports are allowed:\n\n` +
+                      allowedListForMessage +
+                      `\n\nRelative imports and \`import type\` are always fine.\n` +
+                      `If "${source}" is genuinely lightweight (zero Node/server deps), add a ` +
+                      `prefix to ALLOWED_RUNTIME_IMPORT_PREFIXES or a pattern to ` +
+                      `ALLOWED_RUNTIME_IMPORT_REGEX in eslint.config.js.`,
+                  });
+                },
+              };
+            },
+          },
           "no-implied-eval": {
             meta: {
               type: "problem",
@@ -409,6 +511,98 @@ const plugin = {
                   context.report({
                     node: firstArg,
                     message: "Implied eval. Pass a function instead of a string.",
+                  });
+                },
+              };
+            },
+          },
+          "no-global-vitest-expect-in-jonasland-e2e": {
+            meta: {
+              type: "problem",
+              docs: {
+                description:
+                  "Disallow importing global expect from vitest in jonasland/e2e/vitest tests, because concurrent tests must use context-bound expect",
+              },
+            },
+            create: (context) => {
+              const filename = context.filename || "";
+              const normalizedFilename = filename.replaceAll("\\", "/");
+              const isJonaslandVitestFile = normalizedFilename.includes("/jonasland/e2e/vitest/");
+
+              if (!isJonaslandVitestFile) {
+                return {};
+              }
+
+              return {
+                ImportDeclaration: (node) => {
+                  if (node.source.value !== "vitest") return;
+
+                  for (const specifier of node.specifiers) {
+                    if (specifier.type !== "ImportSpecifier") continue;
+                    if (specifier.imported.name !== "expect") continue;
+                    context.report({
+                      node: specifier,
+                      message:
+                        'Do not import global `expect` from "vitest" in `jonasland/e2e/vitest`. This is not concurrency-safe. Use the per-test context instead: `async ({ task, expect }) => { ... }`, and prefer `task.name` over `expect.getState().currentTestName`.',
+                    });
+                  }
+                },
+              };
+            },
+          },
+          "jonasland-e2e-test-harness": {
+            meta: {
+              type: "problem",
+              docs: {
+                description:
+                  "Require .test.ts files in jonasland/e2e to import `test` from the local e2e harness instead of directly from vitest",
+              },
+            },
+            create: (context) => {
+              const filename = context.filename || "";
+              const normalizedFilename = filename.replaceAll("\\", "/");
+              const isJonaslandE2ETestFile =
+                normalizedFilename.includes("/jonasland/e2e/") &&
+                normalizedFilename.endsWith(".test.ts") &&
+                !normalizedFilename.includes("/tests/old/") &&
+                !normalizedFilename.includes("/spec/old/") &&
+                !normalizedFilename.includes("/old/");
+
+              if (!isJonaslandE2ETestFile) {
+                return {};
+              }
+
+              let hasHarnessImport = false;
+
+              return {
+                ImportDeclaration: (node) => {
+                  const source = String(node.source.value ?? "");
+
+                  if (source.endsWith("/test-support/e2e-test.ts")) {
+                    hasHarnessImport ||= node.specifiers.some(
+                      (specifier) =>
+                        specifier.type === "ImportSpecifier" && specifier.imported.name === "test",
+                    );
+                  }
+
+                  if (source !== "vitest") return;
+
+                  for (const specifier of node.specifiers) {
+                    if (specifier.type !== "ImportSpecifier") continue;
+                    if (specifier.imported.name !== "test") continue;
+                    context.report({
+                      node: specifier,
+                      message:
+                        'Do not import `test` from "vitest" in `jonasland/e2e/*.test.ts`. Import it from the local harness instead: `import { test } from "../../test-support/e2e-test.ts"`.',
+                    });
+                  }
+                },
+                "Program:exit": (node) => {
+                  if (hasHarnessImport) return;
+                  context.report({
+                    node,
+                    message:
+                      "jonasland/e2e .test.ts files must import `{ test }` from the local `test-support/e2e-test.ts` harness so the shared E2E fixture auto-loads.",
                   });
                 },
               };
