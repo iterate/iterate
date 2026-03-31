@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "doppler run -- tsx ./alchemy.run.ts",
-    "build": "doppler run -- pnpm exec vite build --config vite.cf.config.ts",
+    "build": "doppler run -- pnpm exec vite build",
     "deploy": "doppler run --config prd -- tsx ./alchemy.run.ts",
     "demo": "pnpm iterate --local-router ./scripts/demo/router.ts local-router",
     "demo:hello-world": "pnpm iterate --local-router ./scripts/demo/router.ts local-router hello-world",

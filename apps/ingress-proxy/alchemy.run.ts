@@ -110,9 +110,9 @@ export const worker = await TanStackStart(APP_NAME, {
       headSamplingRate: 1,
     },
   },
-  build: "pnpm exec vite build --config vite.cf.config.ts",
+  build: "pnpm exec vite build",
   dev: {
-    command: "pnpm exec vite dev --config vite.cf.config.ts",
+    command: "pnpm exec vite dev",
   },
 });
 

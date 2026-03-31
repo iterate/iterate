@@ -21,13 +21,11 @@ export default defineConfig({
   },
   plugins: [
     devtools(), // must be first
-    // Just a thinly wrapped cloudflare plugin that picks up the
-    // .alchemy/local/wrangler.jsonc that alchemy.run.ts made
+    // Temporarily disabled: PostHog source map upload fails in this worktree
+    // layout because the CLI cannot determine the current git branch.
     alchemy(),
     tanstackStart(),
     viteReact(),
     tailwindcss(),
-    // Temporarily disabled: PostHog source map upload fails in this worktree
-    // layout because the CLI cannot determine the current git branch.
   ],
 });

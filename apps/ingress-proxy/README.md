@@ -13,7 +13,7 @@ Cloudflare-only: TanStack Start + oRPC + raw D1 route registry, plus public-host
 ## Key files
 
 - `alchemy.run.ts` — Alchemy app + D1 + TanStackStart
-- `vite.cf.config.ts` — Alchemy Cloudflare TanStack Start plugin; optional `PORT` for dev
+- `vite.config.ts` — Alchemy Cloudflare TanStack Start plugin; optional `PORT` for dev
 - `src/entry.workerd.ts` — Worker fetch + `withEvlog` + host-based split between dashboard/API traffic and proxy traffic
 - `src/context.ts` — `manifest`, `config`, `env`, `db`, `log`
 - `src/lib/proxy.ts` — ingress-host normalization plus upstream request/header rewriting

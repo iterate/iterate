@@ -9,7 +9,7 @@
   "scripts": {
     "cli": "doppler run -- iterate --local-router ./scripts/router.ts local-router",
     "dev": "doppler run -- tsx ./alchemy.run.ts",
-    "build": "doppler run -- pnpm exec vite build --config vite.cf.config.ts",
+    "build": "doppler run -- pnpm exec vite build",
     "deploy": "doppler run --config prd -- tsx ./alchemy.run.ts",
     "seed:tunnel-pool": "doppler run -- iterate --local-router ./scripts/router.ts local-router seed-cloudflare-tunnel-pool",
     "typecheck": "tsc --noEmit",

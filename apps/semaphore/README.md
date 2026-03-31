@@ -13,7 +13,7 @@ Cloudflare-only: TanStack Start + oRPC + raw D1 inventory storage, with a Durabl
 ## Key files
 
 - `alchemy.run.ts` — Alchemy app + D1 + Durable Object + TanStackStart
-- `vite.cf.config.ts` — Alchemy Cloudflare TanStack Start plugin; optional `PORT` for dev
+- `vite.config.ts` — Alchemy Cloudflare TanStack Start plugin; optional `PORT` for dev
 - `src/entry.workerd.ts` — Worker fetch + `withEvlog`
 - `src/context.ts` — `manifest`, `config`, `env`, `db`, `log`
 - `src/durable-objects/resource-coordinator.ts` — lease orchestration, alarms, and waiter dispatch

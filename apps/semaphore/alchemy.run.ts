@@ -1,6 +1,6 @@
 import alchemy from "alchemy";
 import { D1Database, DurableObjectNamespace, TanStackStart } from "alchemy/cloudflare";
-import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { compileRawAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
 import type { ResourceCoordinator } from "~/durable-objects/resource-coordinator.ts";
@@ -44,11 +44,6 @@ const env = AlchemyEnv.parse(process.env);
 if (!env.ALCHEMY_LOCAL && env.WORKER_ROUTES.length === 0) {
   throw new Error("WORKER_ROUTES is required when deploying. Set it in Doppler.");
 }
-const compiledAppConfig = parseAppConfigFromEnv({
-  configSchema: AppConfig,
-  prefix: "APP_CONFIG_",
-  env: process.env,
-});
 const rawAppConfig = compileRawAppConfigFromEnv({
   configSchema: AppConfig,
   prefix: "APP_CONFIG_",
@@ -107,9 +102,9 @@ export const worker = await TanStackStart(APP_NAME, {
       headSamplingRate: 1,
     },
   },
-  build: "pnpm exec vite build --config vite.cf.config.ts",
+  build: "pnpm exec vite build",
   dev: {
-    command: "pnpm exec vite dev --config vite.cf.config.ts",
+    command: "pnpm exec vite dev",
   },
 });
 
