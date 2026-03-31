@@ -11,7 +11,9 @@ export const orpcOpenApiHandler = new OpenAPIHandler(appRouter, {
   plugins: [
     new CORSPlugin({ origin: "*" }),
     new EvlogHandlerPlugin<AppContext>(),
-    createOpenApiReferencePluginForApp(manifest, ["debug", "test", "things"]),
+    createOpenApiReferencePluginForApp(manifest, ["debug", "test", "things"], {
+      defaultOpenFirstTag: true,
+    }),
   ],
 });
 
