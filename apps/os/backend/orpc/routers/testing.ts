@@ -47,7 +47,7 @@ export const testingRouter = {
     return { triggered: true, timestamp: new Date().toISOString() };
   }),
 
-  throwTrpcError: publicProcedure
+  throwOrpcError: publicProcedure
     .input(z.object({ message: z.string().default("Intentional testingRouter error") }).optional())
     .handler(({ input }) => {
       if (!isNonProd) {

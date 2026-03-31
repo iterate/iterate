@@ -9,11 +9,11 @@ import { expect, test } from "vitest";
 import * as YAML from "yaml";
 import type { AppRouter } from "./orpc/root.ts";
 
-test("captures a trpc procedure error", async () => {
+test("captures an orpc procedure error", async () => {
   await using fixture = await createLoggingFixture();
-  const marker = `trpc-${crypto.randomUUID()}`;
+  const marker = `orpc-${crypto.randomUUID()}`;
   await expect(
-    fixture.client.testing.throwTrpcError({ message: `[test_trpc_error] ${marker}` }),
+    fixture.client.testing.throwOrpcError({ message: `[test_orpc_error] ${marker}` }),
   ).rejects.toBeTruthy();
 
   const captured = await fixture.posthog.waitForRequest({
@@ -23,7 +23,7 @@ test("captures a trpc procedure error", async () => {
   expect(captured.body.event).toBe("$exception");
   expect(captured.body.properties).toMatchObject({
     request: {
-      path: "/api/orpc/testing/throwTrpcError",
+      path: "/api/orpc/testing/throwOrpcError",
       method: "POST",
     },
   });
@@ -33,8 +33,8 @@ test("captures a trpc procedure error", async () => {
     distinct_id: anonymous
     properties:
       $exception_list:
-        - type: NonErrorThrowable
-          value: "Error: [test_trpc_error] <marker>"
+        - type: Error
+          value: "[test_orpc_error] <marker>"
           mechanism:
             handled: true
             synthetic: false
@@ -43,22 +43,8 @@ test("captures a trpc procedure error", async () => {
             frames:
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/backend/logging/logger.ts
-                function: toParsedError
-                lineno: <lineno>
-                colno: <colno>
-                in_app: true
-              - platform: custom
-                lang: javascript
-                filename: <repo>/apps/os/backend/logging/logger.ts
-                function: Object.error
-                lineno: <lineno>
-                colno: <colno>
-                in_app: true
-              - platform: custom
-                lang: javascript
-                filename: <repo>/apps/os/backend/worker.ts
-                function: <anonymous>
+                filename: <repo>/apps/os/backend/orpc/routers/testing.ts
+                function: Object.handler
                 lineno: <lineno>
                 colno: <colno>
                 in_app: true
@@ -72,6 +58,41 @@ test("captures a trpc procedure error", async () => {
               - platform: custom
                 lang: javascript
                 filename: <repo>/.../node_modules/.vite/...
+                function: runWithSpan
+                lineno: <lineno>
+                colno: <colno>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/.../node_modules/.vite/...
+                function: next
+                lineno: <lineno>
+                colno: <colno>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/.../node_modules/.vite/...
+                function: next
+                lineno: <lineno>
+                colno: <colno>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/.../node_modules/.vite/...
+                function: <anonymous>
+                lineno: <lineno>
+                colno: <colno>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/.../node_modules/.vite/...
+                function: next
+                lineno: <lineno>
+                colno: <colno>
+                in_app: false
+              - platform: custom
+                lang: javascript
+                filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
                 lineno: <lineno>
                 colno: <colno>
@@ -85,29 +106,8 @@ test("captures a trpc procedure error", async () => {
                 in_app: false
               - platform: custom
                 lang: javascript
-                filename: <repo>/apps/os/backend/worker.ts
+                filename: <repo>/.../node_modules/.vite/...
                 function: <anonymous>
-                lineno: <lineno>
-                colno: <colno>
-                in_app: true
-              - platform: custom
-                lang: javascript
-                filename: <repo>/.../node_modules/.vite/...
-                function: dispatch
-                lineno: <lineno>
-                colno: <colno>
-                in_app: false
-              - platform: custom
-                lang: javascript
-                filename: <repo>/.../node_modules/.vite/...
-                function: dispatch
-                lineno: <lineno>
-                colno: <colno>
-                in_app: false
-              - platform: custom
-                lang: javascript
-                filename: <repo>/.../node_modules/.vite/...
-                function: dispatch
                 lineno: <lineno>
                 colno: <colno>
                 in_app: false
@@ -116,11 +116,11 @@ test("captures a trpc procedure error", async () => {
       request:
         id: <id>
         method: POST
-        path: /api/orpc/testing/throwTrpcError
+        path: /api/orpc/testing/throwOrpcError
         status: 500
         duration: <duration>
         waitUntil: false
-        url: <origin>/api/orpc/testing/throwTrpcError
+        url: <origin>/api/orpc/testing/throwOrpcError
       user:
         id: <id>
         email: unknown
@@ -307,11 +307,11 @@ test("captures a waitUntil error", async () => {
   `);
 });
 
-test("captures the raw request log for a trpc procedure error", async () => {
+test("captures the raw request log for an orpc procedure error", async () => {
   await using fixture = await createLoggingFixture();
-  const marker = `trpc-${crypto.randomUUID()}`;
+  const marker = `orpc-${crypto.randomUUID()}`;
   await expect(
-    fixture.client.testing.throwTrpcError({ message: `[test_trpc_error_log] ${marker}` }),
+    fixture.client.testing.throwOrpcError({ message: `[test_orpc_error_log] ${marker}` }),
   ).rejects.toBeTruthy();
 
   const captured = await fixture.logs.waitForLog({
@@ -321,7 +321,7 @@ test("captures the raw request log for a trpc procedure error", async () => {
   expect(captured).toMatchObject({
     request: {
       id: fixture.lastRequestId(),
-      path: "/api/orpc/testing/throwTrpcError",
+      path: "/api/orpc/testing/throwOrpcError",
       method: "POST",
       status: 500,
     },
@@ -335,11 +335,11 @@ test("captures the raw request log for a trpc procedure error", async () => {
     service: os
     environment: dev-misha
     request:
-      path: /api/orpc/testing/throwTrpcError
+      path: /api/orpc/testing/throwOrpcError
       status: 500
       method: POST
       id: <id>
-      url: <origin>/api/orpc/testing/throwTrpcError
+      url: <origin>/api/orpc/testing/throwOrpcError
       hostname: local.iterate.com
       traceparent: null
       cfRay: <cf-ray>
@@ -349,37 +349,23 @@ test("captures the raw request log for a trpc procedure error", async () => {
       email: unknown
     egress:
       <origin> <origin>
-    name: Error
-    message: "[test_trpc_error_log] <marker>"
-    stack: >-
-      Error: [test_trpc_error_log] <marker>
-          at Object.handler (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
-          at <repo>/.../node_modules/.vite/...
-          at runWithSpan (<repo>/.../node_modules/.vite/...)
-          at next (<repo>/.../node_modules/.vite/...)
-          at next (<repo>/.../node_modules/.vite/...)
-          at <repo>/.../node_modules/.vite/...
-          at next (<repo>/.../node_modules/.vite/...)
-          at <repo>/.../node_modules/.vite/...
-          at <repo>/.../node_modules/.vite/...
-          at <repo>/.../node_modules/.vite/...
     errors:
-      - name: NonErrorThrowable
-        message: "Error: [test_trpc_error_log] <marker>"
+      - name: Error
+        message: "[test_orpc_error_log] <marker>"
         stack: >-
-          Error: Error: [test_trpc_error_log] <marker>
-              at toParsedError (<repo>/apps/os/backend/logging/logger.ts:<lineno>:<colno>)
-              at Object.error (<repo>/apps/os/backend/logging/logger.ts:<lineno>:<colno>)
-              at <repo>/apps/os/backend/worker.ts:<lineno>:<colno>
+          Error: [test_orpc_error_log] <marker>
+              at Object.handler (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
+              at <repo>/.../node_modules/.vite/...
+              at runWithSpan (<repo>/.../node_modules/.vite/...)
+              at next (<repo>/.../node_modules/.vite/...)
+              at next (<repo>/.../node_modules/.vite/...)
+              at <repo>/.../node_modules/.vite/...
+              at next (<repo>/.../node_modules/.vite/...)
               at <repo>/.../node_modules/.vite/...
               at <repo>/.../node_modules/.vite/...
               at <repo>/.../node_modules/.vite/...
-              at <repo>/apps/os/backend/worker.ts:<lineno>:<colno>
-              at dispatch (<repo>/.../node_modules/.vite/...)
-              at dispatch (<repo>/.../node_modules/.vite/...)
-              at dispatch (<repo>/.../node_modules/.vite/...)
     messages:
-      - "[ERROR] 0s: Error: [test_trpc_error_log] <marker>""
+      - "[ERROR] <elapsed>s: Error: [test_orpc_error_log] <marker>""
   `);
 });
 
@@ -456,11 +442,11 @@ test("captures the raw waitUntil child log", async () => {
           Error: [test_wait_until_log] <marker>
               at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
     messages:
-      - "[ERROR] 0s: Error: [test_wait_until_log] <marker>"
-      - "[INFO] 0s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid>
+      - "[ERROR] <elapsed>s: Error: [test_wait_until_log] <marker>"
+      - "[INFO] <elapsed>s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid>
         path=/api/orpc/testing/throwWaitUntilError#waitUntil errorCount=1"
-      - "[INFO] 0s: PostHog log exception sent requestId=<uuid>:waitUntil:<uuid>"
-      - "[ERROR] 0s: [test_wait_until_log] <marker>""
+      - "[INFO] <elapsed>s: PostHog log exception sent requestId=<uuid>:waitUntil:<uuid>"
+      - "[ERROR] <elapsed>s: [test_wait_until_log] <marker>""
   `);
 });
 
@@ -925,8 +911,14 @@ test("returns a clean 400 and logs invalid orpc input", async () => {
       email: unknown
     egress:
       <origin> <origin>
+    errors:
+      - name: Error
+        message: Input validation failed
+        stack: |-
+          Error: Input validation failed
+              at <repo>/.../node_modules/.vite/...
     messages:
-      - "[WARN] 0s: ✖ Invalid input: expected string, received number → at message""
+      - "[WARN] <elapsed>s: ✖ Invalid input: expected string, received number → at message""
   `);
 });
 
@@ -1087,56 +1079,12 @@ function normalize(value: unknown, params: { marker?: string } = {}): string {
         if (!path.includes("/node_modules/")) return path;
         return `<repo>/.../node_modules/${path.split("/node_modules/")[1].split("/")[0]}/...`;
       });
-    // .replace(/(<repo>\/.*\/)(:\d+:\d+)$/, "$1:<lineno>:<colno>")
-    // .replace(/<repo>\/(.*)\/node_modules\/(.*?)(\/.*)/g, "<repo>/.../node_modules/$2/...");
-
-    // .split(" ")
-    // .map((word) =>
-    //   word
-    //     .replace(/^(.*)\/node_modules\/(.*?)(\/.*)$/, ".../node_modules/$2/...")
-    //     .replace(/(<repo>\/.*\/)(:\d+:\d+)$/, "$1:<lineno>:<colno>"),
-    // )
-    // .join(" ");
-
-    // const normalizedPath = rawValue
-    //   .replaceAll(repoRoot, "<repo>")
-    //   .replace(/<repo>\/[^ :)\n"]+(?::\d+:\d+)?/g, (match) => {
-    //     const [, path, line, column] =
-    //       match.match(/^(<repo>\/[^ :)\n"]+?)(?::(\d+):(\d+))?$/) ?? [];
-    //     if (!path) return match;
-
-    //     const collapsedPath = path;
-
-    //     const nodeModulesIndex = path.indexOf("/node_modules/");
-    //     if (nodeModulesIndex >= 0) {
-    //       const packageName =
-    //         path.slice(nodeModulesIndex + "/node_modules/".length).split("/")[0] ?? "unknown";
-    //       return `<repo>/.../node_modules/${packageName}/...`;
-    //     }
-    //     if (!line || !column) return collapsedPath;
-    //     return `${collapsedPath}:<line-number>:<column-number>`;
-    //   });
-
-    // let normalizedString = normalizedPath
-    //   .replaceAll(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "<timestamp>")
-    //   .replaceAll(/\boutbox:[^:\s]+:\d+\b/g, "outbox:<consumer>:<job-id>");
-
-    // if (params.marker) {
-    //   normalizedString = normalizedString.replaceAll(params.marker, "<marker>");
-    // }
-
-    // return normalizedString
-    //   .replaceAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
-    //   .replaceAll("missing-consumer-missing-consumer-<marker>", "missing-consumer-<marker>")
-    //   .replaceAll(
-    //     "testing:missing-consumer:missing-consumer-<marker>",
-    //     "testing:missing-consumer:<marker>",
-    //   );
   });
 
   return yaml
     .replaceAll(repoRoot, "<repo>")
     .replaceAll(/https?:\/\/[^/\s]+/g, "<origin>")
+    .replaceAll(/\[(DEBUG|INFO|WARN|ERROR)\] \d+(?:\.\d+)?s:/g, "[$1] <elapsed>s:")
     .trimEnd();
 }
 

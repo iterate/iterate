@@ -447,8 +447,11 @@ const appOrpcHandler = new RPCHandler(appRouter, {
 
       const errorDetails = { name: error.name, message: error.message, stack: error.stack || "" };
 
-      if (effectiveStatus >= 500) logger.error(message, errorDetails);
-      else logger.warn(message);
+      if (effectiveStatus >= 500) logger.error(message, error);
+      else {
+        logger.set({ errors: [errorDetails] });
+        logger.warn(message);
+      }
     }),
   ],
 });
@@ -495,8 +498,11 @@ const daemonOrpcHandler = new RPCHandler(workerRouter, {
 
       const errorDetails = { name: error.name, message: error.message, stack: error.stack || "" };
 
-      if (effectiveStatus >= 500) logger.error(message, errorDetails);
-      else logger.warn(message);
+      if (effectiveStatus >= 500) logger.error(message, error);
+      else {
+        logger.set({ errors: [errorDetails] });
+        logger.warn(message);
+      }
     }),
   ],
   plugins: [new RequestHeadersPlugin()],
