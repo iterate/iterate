@@ -16,11 +16,13 @@ dist
 .wrangler
 .dev.vars*
 .alchemy
+apps/ingress-proxy-worker/wrangler.json
 
 !.dev.vars.example
 .env*
 !.env.example
 !apps/os/sandbox/home-skeleton/.iterate/.env
+!jonasland/sandbox/home-skeleton/.iterate/.env
 
 .cursor/rules
 .rules

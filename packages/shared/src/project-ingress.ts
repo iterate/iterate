@@ -33,14 +33,14 @@ const PROJECT_SLUG_PATTERN = /^[a-z0-9-]+$/;
 const RESERVED_PROJECT_SLUGS = new Set(["prj", "org"]);
 
 /**
- * Named service aliases — map friendly subdomain names to port numbers.
+ * Named port aliases map friendly subdomain names to port numbers.
  * e.g. `opencode.templestein.com` → port 4096
  *
  * Used for:
  * - Parsing: `opencode.templestein.com` → port 4096
  * - Generation: port 4096 → `opencode.templestein.com` (first alias wins)
  */
-export const SERVICE_ALIASES: Record<string, number> = {
+export const NAMED_PORT_ALIASES: Record<string, number> = {
   opencode: 4096,
   daemon: 3000,
 };
@@ -49,9 +49,9 @@ export const SERVICE_ALIASES: Record<string, number> = {
  * Reverse map: port → preferred alias name (first alias for each port wins).
  * Used by URL builders to emit `opencode.templestein.com` instead of `4096.templestein.com`.
  */
-export const PORT_TO_ALIAS: Record<number, string> = {};
-for (const [name, port] of Object.entries(SERVICE_ALIASES)) {
-  if (!(port in PORT_TO_ALIAS)) PORT_TO_ALIAS[port] = name;
+export const PORT_TO_NAMED_ALIAS: Record<number, string> = {};
+for (const [name, port] of Object.entries(NAMED_PORT_ALIASES)) {
+  if (!(port in PORT_TO_NAMED_ALIAS)) PORT_TO_NAMED_ALIAS[port] = name;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ export type ParsedCustomDomainHostname =
  * Custom domain hostnames:
  *   `templestein.com`                     → project, port 3000
  *   `4096.templestein.com`                → project, port 4096
- *   `opencode.templestein.com`            → project, port from SERVICE_ALIASES
+ *   `opencode.templestein.com`            → project, port from NAMED_PORT_ALIASES
  *   `4096__mach_abc.templestein.com`      → machine mach_abc, port 4096
  *   `mach_abc.templestein.com`            → machine mach_abc, port 3000
  *
@@ -190,8 +190,8 @@ export function parseCustomDomainHostname(
     };
   }
 
-  // Check for service alias: `opencode`
-  const aliasPort = SERVICE_ALIASES[subdomainPart];
+  // Check for named port alias: `opencode`
+  const aliasPort = NAMED_PORT_ALIASES[subdomainPart];
   if (aliasPort !== undefined) {
     return { ok: true, target: { kind: "project", targetPort: aliasPort } };
   }
@@ -279,7 +279,7 @@ export function buildMachineIngressEnvVars(params: {
  * Example (custom domain):
  *   projectBaseUrl = "https://templestein.com"
  *   port = 4096
- *   → "https://opencode.templestein.com/"  (uses SERVICE_ALIASES)
+ *   → "https://opencode.templestein.com/"  (uses NAMED_PORT_ALIASES)
  */
 export function buildProjectPortUrl(params: {
   projectBaseUrl: string;
@@ -294,7 +294,7 @@ export function buildProjectPortUrl(params: {
       url.hostname = `${port}__${url.hostname}`;
     } else {
       // Custom domains: prefer named alias (opencode) over numeric port (4096)
-      const alias = PORT_TO_ALIAS[port];
+      const alias = PORT_TO_NAMED_ALIAS[port];
       url.hostname = `${alias ?? port}.${url.hostname}`;
     }
   }

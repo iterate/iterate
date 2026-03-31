@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
 import * as prompts from "@clack/prompts";
 import { createORPCClient } from "@orpc/client";
@@ -9,7 +10,7 @@ import { RPCLink } from "@orpc/client/fetch";
 import { os } from "@orpc/server";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
-import { createCli, parseRouter, type AnyRouter, yamlTableConsoleLogger } from "trpc-cli";
+import { createCli, parseRouter, type AnyRouter } from "trpc-cli";
 import { z } from "zod/v4";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 
@@ -91,6 +92,62 @@ const writeConfigFile = (configFile: ConfigFile): void => {
 
 /** Global override set by --config flag before CLI commands run. */
 let configFlagOverride: string | undefined;
+
+/**
+ * We strip host-level flags before handing argv to `trpc-cli`,
+ * That keeps router-local help/validation focused on the mounted
+ * procedures instead of teaching every local router about iterate-specific flags.
+ *
+ * Usage examples:
+ * - `iterate --local-router ./jonasland/scripts/mounted-router.ts jonasland example hello`
+ * - `iterate --config dev doctor`
+ */
+const consumeCliStringFlag = (flagName: string): string | undefined => {
+  const args = process.argv.slice(2);
+  const flagIndex = args.indexOf(flagName);
+  if (flagIndex === -1) return undefined;
+  const value = args[flagIndex + 1];
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${flagName} requires a value`);
+  }
+  process.argv.splice(flagIndex + 2, 2);
+  return value;
+};
+
+/**
+ * `trpc-cli` already has a built-in "load a router from a filepath" flow in its own
+ * bin entrypoint, but it's not exported:
+ * - README: https://github.com/mmkal/trpc-cli#using-existing-routers
+ * So I put a small version here for now
+ *
+ *
+ * Usage example:
+ * - `iterate --local-router ./scripts/router.ts local-router --help`
+ *
+ * # ./scripts/router.ts
+ * export const router = os.router({
+ *   deployment: deploymentRouter,
+ *   image: imageRouter,
+ * })
+ */
+const loadLocalRouter = async (routerPath: string) => {
+  const fullPath = resolve(process.cwd(), routerPath);
+  const importedModule = (await import(pathToFileURL(fullPath).href)) as {
+    router?: import("@orpc/server").Router<any, any>;
+  };
+  const router = importedModule.router;
+  if (router == null) {
+    throw new Error(
+      `Local router module ${JSON.stringify(routerPath)} must export a named "router" value.`,
+    );
+  }
+  if (typeof router !== "object") {
+    throw new Error(
+      `Local router module ${JSON.stringify(routerPath)} exported a router mount, but it is not an object.`,
+    );
+  }
+  return router;
+};
 
 /**
  * Resolve which config name to use.
@@ -823,14 +880,9 @@ const launcherProcedures = {
 };
 
 export const getCli = async () => {
-  // Parse --config flag early, before trpc-cli sees the args
-  const args = process.argv.slice(2);
-  const configFlagIndex = args.indexOf("--config");
-  if (configFlagIndex !== -1 && args[configFlagIndex + 1]) {
-    configFlagOverride = args[configFlagIndex + 1];
-    // Remove --config <name> from argv so trpc-cli doesn't choke on it
-    process.argv.splice(configFlagIndex + 2, 2);
-  }
+  const localRouterPath = consumeCliStringFlag("--local-router");
+  // Parse custom top-level flags early, before trpc-cli sees the args.
+  configFlagOverride = consumeCliStringFlag("--config");
 
   const resolved = resolveConfig(process.cwd());
 
@@ -876,6 +928,16 @@ export const getCli = async () => {
     }
   }
 
+  if (localRouterPath) {
+    // Keep local-router commands under a fixed prefix so they compose cleanly with the
+    // built-in iterate command tree instead of colliding with launcher, os, or daemon
+    // procedures:
+    // `iterate --local-router ./scripts/router.ts local-router ...`
+    routers.push({
+      localRouter: await loadLocalRouter(localRouterPath),
+    });
+  }
+
   const router = Object.assign({}, ...routers);
 
   const cli = createCli({
@@ -890,7 +952,7 @@ export const getCli = async () => {
 
 export const runCli = async () => {
   const { cli, prompts: cliPrompts } = await getCli();
-  await cli.run({ prompts: cliPrompts, logger: yamlTableConsoleLogger });
+  await cli.run({ prompts: cliPrompts });
 };
 
 // todo: move this to trpc-cli

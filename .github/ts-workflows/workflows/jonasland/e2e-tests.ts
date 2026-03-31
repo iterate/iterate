@@ -1,10 +1,6 @@
 import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../../utils/index.ts";
-import {
-  checkoutRefExpression,
-  jonaslandTriggerPaths,
-  setupRepoWithoutPnpmAction,
-} from "./paths.ts";
+import { checkoutRefExpression, setupRepoWithoutPnpmAction } from "./paths.ts";
 
 export default workflow({
   name: "e2e-tests",
@@ -14,13 +10,6 @@ export default workflow({
     "id-token": "write",
   },
   on: {
-    push: {
-      branches: ["main"],
-      paths: [...jonaslandTriggerPaths],
-    },
-    pull_request: {
-      paths: [...jonaslandTriggerPaths],
-    },
     workflow_dispatch: {
       inputs: {
         ref: {
@@ -79,7 +68,7 @@ export default workflow({
             RUN_JONASLAND_E2E: "true",
             JONASLAND_SANDBOX_IMAGE: "${{ needs.build-image.outputs.image }}",
           },
-          run: "pnpm --filter ./jonasland/e2e exec vitest run",
+          run: "pnpm --filter ./jonasland/e2e vitest",
         },
         {
           name: "Upload jonasland e2e test artifacts",
