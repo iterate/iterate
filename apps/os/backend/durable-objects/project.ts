@@ -38,34 +38,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   async listDeployments(): Promise<ProjectDeploymentSummary[]> {
     await this.initialized;
 
-    return this.ctx.storage.sql
-      .exec<{
-        id: string;
-        name: string;
-        state: DeploymentSummary["state"];
-        created_at: string;
-        updated_at: string;
-        destroyed_at: string | null;
-        ingress_host: string;
-        is_primary: number;
-      }>(
-        `
-          SELECT id, name, state, created_at, updated_at, destroyed_at, ingress_host, is_primary
-          FROM deployments
-          ORDER BY created_at DESC
-        `,
-      )
-      .toArray()
-      .map((row) => ({
-        id: row.id,
-        name: row.name,
-        state: row.state,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        destroyedAt: row.destroyed_at,
-        ingressHost: row.ingress_host,
-        isPrimary: row.is_primary === 1,
-      }));
+    return this.readDeploymentSummaries();
   }
 
   async createDeployment(input: {
@@ -91,10 +64,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       deploymentId,
       primaryIngressHost: input.primaryIngressHost,
     });
-    this.syncDeploymentSummary({
-      ...(await this.deploymentDo(deploymentId).start()),
-      isPrimary: true,
-    });
+    await this.deploymentDo(deploymentId).start();
 
     return this.listDeployments();
   }
@@ -140,9 +110,27 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   }
 
+  async getDeployment(input: { deploymentId: string }): Promise<ProjectDeploymentSummary | null> {
+    await this.initialized;
+    return this.readDeploymentSummary(input.deploymentId);
+  }
+
   async getPrimaryDeploymentId(): Promise<string | null> {
     await this.initialized;
     return this.readPrimaryDeploymentId();
+  }
+
+  async clearPrimaryDeployment(input: { deploymentId: string }): Promise<void> {
+    await this.initialized;
+
+    this.ctx.storage.sql.exec(
+      `
+        UPDATE deployments
+        SET is_primary = 0
+        WHERE id = ?
+      `,
+      input.deploymentId,
+    );
   }
 
   async hasDeployment(input: { deploymentId: string }): Promise<boolean> {
@@ -167,6 +155,75 @@ export class ProjectDurableObject extends DurableObject<Env> {
         )
         .toArray()[0] ?? null
     );
+  }
+
+  private readDeploymentSummaries() {
+    return this.ctx.storage.sql
+      .exec<{
+        id: string;
+        name: string;
+        state: DeploymentSummary["state"];
+        created_at: string;
+        updated_at: string;
+        destroyed_at: string | null;
+        ingress_host: string;
+        is_primary: number;
+      }>(
+        `
+          SELECT id, name, state, created_at, updated_at, destroyed_at, ingress_host, is_primary
+          FROM deployments
+          ORDER BY created_at DESC
+        `,
+      )
+      .toArray()
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        state: row.state,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        destroyedAt: row.destroyed_at,
+        ingressHost: row.ingress_host,
+        isPrimary: row.is_primary === 1,
+      }));
+  }
+
+  private readDeploymentSummary(deploymentId: string): ProjectDeploymentSummary | null {
+    const row = this.ctx.storage.sql
+      .exec<{
+        id: string;
+        name: string;
+        state: DeploymentSummary["state"];
+        created_at: string;
+        updated_at: string;
+        destroyed_at: string | null;
+        ingress_host: string;
+        is_primary: number;
+      }>(
+        `
+          SELECT id, name, state, created_at, updated_at, destroyed_at, ingress_host, is_primary
+          FROM deployments
+          WHERE id = ?
+          LIMIT 1
+        `,
+        deploymentId,
+      )
+      .toArray()[0];
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: row.id,
+      name: row.name,
+      state: row.state,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      destroyedAt: row.destroyed_at,
+      ingressHost: row.ingress_host,
+      isPrimary: row.is_primary === 1,
+    };
   }
 
   private readPrimaryDeploymentId() {

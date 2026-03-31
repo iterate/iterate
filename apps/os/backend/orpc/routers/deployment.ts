@@ -84,19 +84,17 @@ export const deploymentRouter = {
 
   get: projectProtectedProcedure.input(DeploymentInput).handler(async ({ context, input }) => {
     const projectDo = getProjectDo(context);
-    const deploymentDo = await getDeploymentDo({
-      context,
-      projectDo,
-      deploymentId: input.deploymentId,
-    });
-    const [deployment, primaryDeploymentId] = await Promise.all([
-      deploymentDo.getSummary(),
-      projectDo.getPrimaryDeploymentId(),
-    ]);
+    const summary = await projectDo.getDeployment({ deploymentId: input.deploymentId });
+    if (!summary) {
+      throw new ORPCError("NOT_FOUND", {
+        message: `Deployment ${input.deploymentId} not found for this project`,
+      });
+    }
+    const { isPrimary, ...deployment } = summary;
 
     return {
       deployment,
-      isPrimary: primaryDeploymentId === input.deploymentId,
+      isPrimary,
     };
   }),
 
@@ -139,28 +137,20 @@ export const deploymentRouter = {
 
   start: projectProtectedMutation.input(DeploymentInput).handler(async ({ context, input }) => {
     const projectDo = getProjectDo(context);
-    const deployment = await (
+    return (
       await getDeploymentDo({ context, projectDo, deploymentId: input.deploymentId })
     ).start();
-    await projectDo.syncDeployment(deployment);
-    return deployment;
   }),
 
   stop: projectProtectedMutation.input(DeploymentInput).handler(async ({ context, input }) => {
     const projectDo = getProjectDo(context);
-    const deployment = await (
-      await getDeploymentDo({ context, projectDo, deploymentId: input.deploymentId })
-    ).stop();
-    await projectDo.syncDeployment(deployment);
-    return deployment;
+    return (await getDeploymentDo({ context, projectDo, deploymentId: input.deploymentId })).stop();
   }),
 
   destroy: projectProtectedMutation.input(DeploymentInput).handler(async ({ context, input }) => {
     const projectDo = getProjectDo(context);
-    const deployment = await (
+    return (
       await getDeploymentDo({ context, projectDo, deploymentId: input.deploymentId })
     ).destroy();
-    await projectDo.syncDeployment(deployment);
-    return deployment;
   }),
 };

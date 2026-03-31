@@ -178,6 +178,7 @@ export class DeploymentDurableObject extends DurableObject<Env> {
     this.insertLog("info", `Starting deployment on ${deployment.ingressHost}`);
     this.insertLog("info", "Booting runtime");
     this.insertLog("info", `Binding ingress host ${deployment.ingressHost}`);
+    await this.syncProject();
     await this.scheduleAlarm(400);
 
     return this.mustReadDeployment();
@@ -201,6 +202,7 @@ export class DeploymentDurableObject extends DurableObject<Env> {
 
     this.persistState(deployment.id, "stopping");
     this.insertLog("warn", "Stopping deployment");
+    await this.syncProject();
     await this.scheduleAlarm(400);
 
     return this.mustReadDeployment();
@@ -214,19 +216,29 @@ export class DeploymentDurableObject extends DurableObject<Env> {
       return deployment;
     }
 
+    const projectDo = this.projectDo();
+    const isPrimary = projectDo && (await projectDo.getPrimaryDeploymentId()) === deployment.id;
+    const ingressHost = isPrimary ? `${deployment.id}.jonasland.local` : deployment.ingressHost;
     const now = new Date().toISOString();
     this.ctx.storage.sql.exec(
       `
         UPDATE deployment
-        SET state = ?, updated_at = ?, destroyed_at = ?
+        SET state = ?, updated_at = ?, destroyed_at = ?, ingress_host = ?
         WHERE id = ?
       `,
       "destroyed",
       now,
       now,
+      ingressHost,
       deployment.id,
     );
+
+    if (isPrimary) {
+      await projectDo.clearPrimaryDeployment({ deploymentId: deployment.id });
+    }
+
     this.insertLog("error", "Destroyed deployment resources");
+    await this.syncProject();
 
     return this.mustReadDeployment();
   }
@@ -278,12 +290,6 @@ export class DeploymentDurableObject extends DurableObject<Env> {
     if (deployment.state === "starting") {
       await this.setStateAndSyncProject(deployment.id, "running");
       this.insertLog("info", "Deployment is now running");
-      await this.scheduleAlarm(2_000);
-      return;
-    }
-
-    if (deployment.state === "running") {
-      await this.scheduleAlarm(2_000);
       return;
     }
 
@@ -449,15 +455,16 @@ export class DeploymentDurableObject extends DurableObject<Env> {
 
   private async setStateAndSyncProject(deploymentId: string, state: DeploymentState) {
     this.persistState(deploymentId, state);
+    await this.syncProject();
+  }
 
-    const projectId = this.readProjectId();
-    if (!projectId) {
+  private async syncProject() {
+    const projectDo = this.projectDo();
+    if (!projectDo) {
       return;
     }
 
-    await this.env.PROJECT_DURABLE_OBJECT.getByName(`project:${projectId}`).syncDeployment(
-      this.mustReadDeployment(),
-    );
+    await projectDo.syncDeployment(this.mustReadDeployment());
   }
 
   private async scheduleAlarm(delayMs: number) {
@@ -476,5 +483,14 @@ export class DeploymentDurableObject extends DurableObject<Env> {
         )
         .toArray()[0]?.project_id ?? null
     );
+  }
+
+  private projectDo() {
+    const projectId = this.readProjectId();
+    if (!projectId) {
+      return null;
+    }
+
+    return this.env.PROJECT_DURABLE_OBJECT.getByName(`project:${projectId}`);
   }
 }
