@@ -6,8 +6,10 @@
     "types": ["node"],
     "strict": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "moduleResolution": "bundler",
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "resolveJsonModule": true
   },
-  "include": ["*.ts"]
+  "include": ["**/*.ts", "../lib/**/*.ts"]
 }
