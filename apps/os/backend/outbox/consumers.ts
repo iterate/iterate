@@ -2,7 +2,7 @@ import { eq, and, inArray, isNull, sql } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { match } from "schematch";
 import { z } from "zod/v4";
-import { ORPCError } from "@orpc/client";
+
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import {
@@ -50,20 +50,6 @@ function createDefaultMachineName(sandboxProvider: string): string {
   const hour = date.getHours().toString().padStart(2, "0");
   const minute = date.getMinutes().toString().padStart(2, "0");
   return `${sandboxProvider}-${month}-${day}-${hour}h${minute}`;
-}
-
-function isMissingSandboxError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-
-  if (error.name === "DaytonaNotFoundError") return true;
-
-  return [
-    /No such container/i,
-    /not found in Daytona/i,
-    /failed \(404\)/i,
-    /machine .* not found/i,
-    /app .* not found/i,
-  ].some((pattern) => pattern.test(error.message));
 }
 
 async function findAvailableProjectSlug(db: Awaited<ReturnType<typeof getDb>>, baseSlug: string) {
@@ -621,28 +607,26 @@ export const registerConsumers = () => {
       try {
         input = await getPushMachineSetupInput(db, env, machine);
       } catch (e: unknown) {
-        if (isMissingSandboxError(e)) {
-          logger.set({ machineId, externalId: machine.externalId, eventId: params.eventId });
-          logger.warn("pushMachineSetup: sandbox not found, skipping");
-          return `skipped: sandbox for machine ${machineId} not found (${machine.externalId})`;
-        }
-        // The daemon may be mid-restart or the sandbox proxy may return a
-        // non-oRPC response (HTML error page, 502, etc.).  The oRPC client
-        // surfaces these as ORPCError with codes like BAD_GATEWAY,
-        // MALFORMED_ORPC_ERROR_RESPONSE, or INTERNAL_SERVER_ERROR.
-        // Retrying is wasteful — the next daemon-status-reported event
-        // will fan-out a fresh attempt.
-        if (e instanceof ORPCError) {
-          logger.set({
-            machineId: machine.id,
-            orpcCode: e.code,
-            orpcStatus: e.status,
-            eventId: params.eventId,
-          });
-          logger.warn("pushMachineSetup: daemon oRPC error, skipping");
-          return `skipped: machine ${machineId} daemon oRPC error ${e.code} (status ${e.status})`;
-        }
-        throw e;
+        // All errors are non-retryable: the next daemon-status-reported event
+        // will fan-out a fresh attempt, so retrying is wasteful.
+        // Known error families:
+        //   - isMissingSandboxError: sandbox was deleted
+        //   - ORPCError: daemon mid-restart, proxy 502, HTML error page, etc.
+        //   - TypeError/DOMException: fetch network failures, DNS, timeouts
+        //   - DaytonaError/DaytonaRateLimitError: provider API errors
+        //   - Error("Internal Server Error"): ORPCError not matched by instanceof
+        //     due to bundle code-splitting class identity issues
+        const errorName = e instanceof Error ? e.name : String(e);
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        logger.set({
+          machineId: machine.id,
+          externalId: machine.externalId,
+          eventId: params.eventId,
+          errorName,
+          errorMessage,
+        });
+        logger.warn("pushMachineSetup: error getting setup input, skipping");
+        return `skipped: machine ${machineId} setup input error ${errorName}: ${errorMessage}`;
       }
       if (!input) {
         return `skipped: setup already done for ${machineId}`;
@@ -652,22 +636,18 @@ export const registerConsumers = () => {
       try {
         writeSentinel = await pushSetupToMachine(machine, input);
       } catch (e: unknown) {
-        if (isMissingSandboxError(e)) {
-          logger.set({ machineId, externalId: machine.externalId, eventId: params.eventId });
-          logger.warn("pushMachineSetup: sandbox not found during push, skipping");
-          return `skipped: sandbox for machine ${machineId} not found during push (${machine.externalId})`;
-        }
-        if (e instanceof ORPCError) {
-          logger.set({
-            machineId: machine.id,
-            orpcCode: e.code,
-            orpcStatus: e.status,
-            eventId: params.eventId,
-          });
-          logger.warn("pushMachineSetup: daemon oRPC error during push, skipping");
-          return `skipped: machine ${machineId} daemon oRPC error during push ${e.code} (status ${e.status})`;
-        }
-        throw e;
+        // Same catch-all rationale as above.
+        const errorName = e instanceof Error ? e.name : String(e);
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        logger.set({
+          machineId: machine.id,
+          externalId: machine.externalId,
+          eventId: params.eventId,
+          errorName,
+          errorMessage,
+        });
+        logger.warn("pushMachineSetup: error during push, skipping");
+        return `skipped: machine ${machineId} push error ${errorName}: ${errorMessage}`;
       }
 
       // Emit setup-pushed so the readiness probe can begin
