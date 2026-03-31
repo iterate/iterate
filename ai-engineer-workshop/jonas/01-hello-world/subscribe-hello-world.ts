@@ -4,7 +4,8 @@
  * and the matching streamed event that comes back over SSE.
  *
  * Run:
- *   node 01-hello-world/subscribe-hello-world.ts
+ *   # from ai-engineer-workshop/jonas
+ *   pnpm tsx 01-hello-world/subscribe-hello-world.ts
  */
 import { createEventsClient } from "../../lib/sdk.ts";
 

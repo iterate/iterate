@@ -19,7 +19,7 @@ With the caveat that the stream processors are all _pulling_ from the streams. T
 
 ## 02 — Basic LLM loop (`jonas/02-basic-llm-loop`)
 
-Demonstrates URL-style event types on the events API, a live subscriber, and [TanStack AI](https://tanstack.com/ai) streaming: each chunk from `chat()` is appended back as `https://events.iterate.com/agent/output-item-added`.
+Demonstrates a tiny event-driven LLM loop with [TanStack AI](https://tanstack.com/ai): one subscriber watches a stream for `https://events.iterate.com/agent/input-item-added`, runs `chat()`, and appends each streamed chunk back as `https://events.iterate.com/agent/output-item-added`.
 
 **Prerequisites**
 
@@ -29,16 +29,40 @@ Demonstrates URL-style event types on the events API, a live subscriber, and [Ta
 
 **Run the subscriber** (needs network + API key):
 
-```bash
-cd ai-engineer-workshop/jonas
-doppler run --project ai-engineer-workshop --config dev_jonas -- node 02-basic-llm-loop/run-llm-subscriber.ts
-```
-
-**In another terminal**, append a user message to the stream:
+Run this from the package root `ai-engineer-workshop/jonas`, not from inside `02-basic-llm-loop/`.
 
 ```bash
 cd ai-engineer-workshop/jonas
-node 02-basic-llm-loop/append-input-item.ts Your prompt here
+doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm tsx 02-basic-llm-loop/run-llm-subscriber.ts
 ```
 
-Optional env: `BASE_URL`, `STREAM_PATH` (default `/jonas/basic-llm-loop`), `OPENAI_MODEL` (must be a supported OpenAI chat model name; default `gpt-4o-mini`).
+That script prints:
+
+- the exact browser URL to open
+- a JSON event you can paste into the stream page input
+
+If `STREAM_PATH` is not set, it generates a fresh stream path like `/jonas/02-basic-llm/a1b2c3` for that run.
+
+So the whole demo can be:
+
+1. Start the subscriber in one terminal.
+2. Open the URL printed by the script in your browser.
+3. Paste an event like this into the input at the bottom of the page:
+
+```json
+{
+  "path": "/jonas/02-basic-llm/<random-short-string>",
+  "type": "https://events.iterate.com/agent/input-item-added",
+  "payload": {
+    "item": {
+      "role": "user",
+      "content": "Say hello in one short sentence."
+    }
+  }
+}
+```
+
+4. Submit it and literally watch it happen in the stream feed: the input event lands, the subscriber sees it, and the LLM appends output chunk events back into the same stream.
+5. Keep posting more `input-item-added` events into that same stream if you want a back-and-forth conversation. The subscriber now rebuilds the prior turns from the stream and sends that history back to the LLM on each new user message.
+
+Optional env: `BASE_URL`, `STREAM_PATH` (otherwise defaults to `/jonas/02-basic-llm/<random-short-string>`), `OPENAI_MODEL` (must be a supported OpenAI chat model name; default `gpt-4o-mini`).

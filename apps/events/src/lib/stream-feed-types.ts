@@ -11,17 +11,20 @@ export const streamRendererModeOptions: ReadonlyArray<{
   {
     value: "raw-pretty",
     label: "Raw + Pretty",
-    description: "Show semantic cards alongside grouped raw events.",
+    description:
+      "Keep grouped raw wire rows while interleaving semantic cards at the same cursor—best when you need both fidelity and readability.",
   },
   {
     value: "pretty",
     label: "Pretty",
-    description: "Hide raw event rows and focus on semantic items only.",
+    description:
+      "Hide raw wire rows and show only semantic projections (messages, tools, lifecycle, errors). Use when chunk noise is distracting.",
   },
   {
     value: "raw",
     label: "Raw",
-    description: "Show the full raw event stream as a serialized dump.",
+    description:
+      "Serialized dump of every event object—copy/paste debugging and exact contract diffs.",
   },
 ];
 
@@ -30,11 +33,15 @@ export interface ContentBlock {
   text: string;
 }
 
+export type MessageStreamStatus = "streaming" | "complete";
+
 export interface MessageFeedItem {
   kind: "message";
   role: "user" | "assistant";
   content: ContentBlock[];
   timestamp: number;
+  /** Present for assistant messages reconstructed from agent output chunks. */
+  streamStatus?: MessageStreamStatus;
 }
 
 export type ToolState = "pending" | "running" | "completed" | "error";

@@ -4,7 +4,8 @@
  * Override `BASE_URL` and `STREAM_PATH` to point at another deployment or a local server.
  *
  * Run:
- *   node 01-hello-world/append-hello-world.ts
+ *   # from ai-engineer-workshop/jonas
+ *   pnpm tsx 01-hello-world/append-hello-world.ts
  */
 import { createEventsClient } from "../../lib/sdk.ts";
 
