@@ -24,11 +24,14 @@ function readBearerToken(headerValue: string | null): string | null {
   return token.length > 0 ? token : null;
 }
 
-const authProcedure = os.middleware(async ({ context, next }) => {
+function hasValidBearerToken(context: AppContext): boolean {
   const expectedToken = context.config.sharedApiSecret.exposeSecret();
   const providedToken = readBearerToken(context.rawRequest?.headers.get("authorization") ?? null);
+  return Boolean(providedToken && providedToken === expectedToken);
+}
 
-  if (!providedToken || providedToken !== expectedToken) {
+const authProcedure = os.middleware(async ({ context, next }) => {
+  if (!hasValidBearerToken(context)) {
     throw new ORPCError("UNAUTHORIZED", {
       message: "Missing or invalid Authorization header",
     });
@@ -147,7 +150,7 @@ const deleteResourceProcedure = os.resources.delete
 const listResourcesProcedure = os.resources.list.handler(async ({ context, input }) => {
   try {
     const resources = await listResourcesFromDb(context.env.DB, { type: input.type });
-    return resources.map(sanitizePublicResource);
+    return hasValidBearerToken(context) ? resources : resources.map(sanitizePublicResource);
   } catch (error) {
     return mapResourceError(error);
   }
@@ -162,7 +165,7 @@ const findResourceProcedure = os.resources.find.handler(async ({ context, input 
       });
     }
 
-    return sanitizePublicResource(resource);
+    return hasValidBearerToken(context) ? resource : sanitizePublicResource(resource);
   } catch (error) {
     return mapResourceError(error);
   }
