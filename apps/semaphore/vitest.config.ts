@@ -1,6 +1,6 @@
-import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
 import { defaultExclude } from "vitest/config";
 
 const appRoot = fileURLToPath(new URL(".", import.meta.url));

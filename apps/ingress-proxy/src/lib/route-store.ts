@@ -12,12 +12,6 @@ import {
 import { typeid } from "@iterate-com/shared/typeid";
 import type { z } from "zod";
 import {
-  deriveCandidateRootHosts,
-  normalizeRootHost,
-  normalizeTargetUrl,
-  RouteInputError,
-} from "~/lib/proxy.ts";
-import {
   countRoutes,
   deleteRouteByRootHost,
   selectRouteByRootHost,
@@ -29,6 +23,12 @@ import {
   type SelectRouteCandidatesByRootHostsResult,
   type SelectRoutesPageResult,
 } from "../../sql/queries.ts";
+import {
+  deriveCandidateRootHosts,
+  normalizeRootHost,
+  normalizeTargetUrl,
+  RouteInputError,
+} from "~/lib/proxy.ts";
 
 type RouteRow =
   | SelectRouteByRootHostResult
