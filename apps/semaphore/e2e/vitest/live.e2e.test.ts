@@ -1,58 +1,36 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
-import { createSemaphoreClient, type SemaphoreClient } from "@iterate-com/semaphore-contract";
-
-const baseURL = process.env.SEMAPHORE_E2E_BASE_URL;
-const apiKey = process.env.SEMAPHORE_E2E_API_TOKEN ?? process.env.SEMAPHORE_API_TOKEN;
-
-function requireEnv() {
-  if (!baseURL) {
-    throw new Error("SEMAPHORE_E2E_BASE_URL is required for live E2E tests");
-  }
-
-  if (!apiKey) {
-    throw new Error("SEMAPHORE_E2E_API_TOKEN (or SEMAPHORE_API_TOKEN) is required");
-  }
-
-  return { apiKey, baseURL };
-}
+import {
+  createSemaphoreAppFixture,
+  requireSemaphoreApiToken,
+  requireSemaphoreBaseUrl,
+  sleep,
+  waitForHealth,
+} from "../helpers.ts";
 
 function uniqueType() {
   return `live-e2e-${randomUUID().slice(0, 8)}`;
 }
 
-async function sleep(ms: number) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
+const app = createSemaphoreAppFixture({
+  apiKey: requireSemaphoreApiToken(),
+  baseURL: requireSemaphoreBaseUrl(),
+});
 
-async function waitForHealth(baseURL: string, timeoutMs: number) {
-  const startedAt = Date.now();
-
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const response = await fetch(new URL("/health", baseURL));
-      if (response.ok && (await response.text()) === "OK") {
-        return;
-      }
-    } catch {
-      // Keep polling until timeout.
-    }
-
-    await sleep(500);
-  }
-
-  throw new Error(`Timed out waiting for health at ${baseURL}`);
-}
-
-describe("live semaphore E2E", () => {
-  let client: SemaphoreClient;
+describe.sequential("live semaphore E2E", () => {
   const leasedResources: Array<{ type: string; slug: string; leaseId: string }> = [];
   const createdResources: Array<{ type: string; slug: string }> = [];
 
   async function cleanup() {
     for (const lease of leasedResources.splice(0).reverse()) {
       try {
-        await client.resources.release(lease);
+        await app.apiFetch("/api/resources/release", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(lease),
+        });
       } catch {
         // best-effort cleanup
       }
@@ -60,7 +38,12 @@ describe("live semaphore E2E", () => {
 
     for (const resource of createdResources.splice(0).reverse()) {
       try {
-        await client.resources.delete(resource);
+        await app.apiFetch(
+          `/api/resources/${encodeURIComponent(resource.type)}/${encodeURIComponent(resource.slug)}`,
+          {
+            method: "DELETE",
+          },
+        );
       } catch {
         // best-effort cleanup
       }
@@ -68,10 +51,8 @@ describe("live semaphore E2E", () => {
   }
 
   beforeAll(async () => {
-    const env = requireEnv();
-    await waitForHealth(env.baseURL, 30_000);
+    await waitForHealth(app.baseURL, 30_000);
     await sleep(2_000);
-    client = createSemaphoreClient(env);
   }, 120_000);
 
   afterEach(async () => {
@@ -85,40 +66,69 @@ describe("live semaphore E2E", () => {
   test("can add, list, acquire, release, and delete resources", async () => {
     const type = uniqueType();
 
-    const alpha = await client.resources.add({
-      type,
-      slug: "alpha",
-      data: { token: "secret-alpha" },
+    const alpha = await apiJson<{ slug: string }>("/api/resources", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type,
+        slug: "alpha",
+        data: { token: "secret-alpha" },
+      }),
     });
     createdResources.push({ type, slug: alpha.slug });
 
-    const beta = await client.resources.add({
-      type,
-      slug: "beta",
-      data: { token: "secret-beta" },
+    const beta = await apiJson<{ slug: string }>("/api/resources", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type,
+        slug: "beta",
+        data: { token: "secret-beta" },
+      }),
     });
     createdResources.push({ type, slug: beta.slug });
 
-    const listed = await client.resources.list({ type });
+    const listed = await apiJson<
+      Array<{ slug: string; leaseState: string; leasedUntil: number | null }>
+    >(`/api/resources?type=${encodeURIComponent(type)}`, { method: "GET" });
     expect(listed.map((resource) => resource.slug)).toEqual(["alpha", "beta"]);
     expect(listed[0]?.leaseState).toBe("available");
     expect(listed[0]?.leasedUntil).toBeNull();
 
-    const lease = await client.resources.acquire({
-      type,
-      leaseMs: 60_000,
+    const lease = await apiJson<{ slug: string; leaseId: string }>("/api/resources/acquire", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type,
+        leaseMs: 60_000,
+      }),
     });
     leasedResources.push({ type, slug: lease.slug, leaseId: lease.leaseId });
     expect(lease.slug).toBe("alpha");
 
-    const leasedList = await client.resources.list({ type });
+    const leasedList = await apiJson<Array<{ leaseState: string; leasedUntil: number | null }>>(
+      `/api/resources?type=${encodeURIComponent(type)}`,
+      { method: "GET" },
+    );
     expect(leasedList[0]?.leaseState).toBe("leased");
     expect(leasedList[0]?.leasedUntil).toEqual(expect.any(Number));
 
-    const released = await client.resources.release({
-      type,
-      slug: lease.slug,
-      leaseId: lease.leaseId,
+    const released = await apiJson<{ released: boolean }>("/api/resources/release", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type,
+        slug: lease.slug,
+        leaseId: lease.leaseId,
+      }),
     });
     expect(released).toEqual({ released: true });
     leasedResources.splice(
@@ -131,13 +141,23 @@ describe("live semaphore E2E", () => {
       1,
     );
 
-    expect(await client.resources.delete({ type, slug: "alpha" })).toEqual({ deleted: true });
+    expect(
+      await apiJson<{ deleted: boolean }>(
+        `/api/resources/${encodeURIComponent(type)}/${encodeURIComponent("alpha")}`,
+        { method: "DELETE" },
+      ),
+    ).toEqual({ deleted: true });
     createdResources.splice(
       createdResources.findIndex((resource) => resource.type === type && resource.slug === "alpha"),
       1,
     );
 
-    expect(await client.resources.delete({ type, slug: "beta" })).toEqual({ deleted: true });
+    expect(
+      await apiJson<{ deleted: boolean }>(
+        `/api/resources/${encodeURIComponent(type)}/${encodeURIComponent("beta")}`,
+        { method: "DELETE" },
+      ),
+    ).toEqual({ deleted: true });
     createdResources.splice(
       createdResources.findIndex((resource) => resource.type === type && resource.slug === "beta"),
       1,
@@ -147,32 +167,59 @@ describe("live semaphore E2E", () => {
   test("can wait for a lease and acquire it after release", async () => {
     const type = uniqueType();
 
-    const created = await client.resources.add({
-      type,
-      slug: "only",
-      data: { token: "secret-only" },
+    const created = await apiJson<{ slug: string }>("/api/resources", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type,
+        slug: "only",
+        data: { token: "secret-only" },
+      }),
     });
     createdResources.push({ type, slug: created.slug });
 
-    const firstLease = await client.resources.acquire({
-      type,
-      leaseMs: 60_000,
+    const firstLease = await apiJson<{ slug: string; leaseId: string }>("/api/resources/acquire", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type,
+        leaseMs: 60_000,
+      }),
     });
     leasedResources.push({ type, slug: firstLease.slug, leaseId: firstLease.leaseId });
 
-    const waitingLeasePromise = client.resources.acquire({
-      type,
-      leaseMs: 60_000,
-      waitMs: 5_000,
-    });
+    const waitingLeasePromise = apiJson<{ slug: string; leaseId: string }>(
+      "/api/resources/acquire",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type,
+          leaseMs: 60_000,
+          waitMs: 5_000,
+        }),
+      },
+    );
 
     await sleep(250);
 
     expect(
-      await client.resources.release({
-        type,
-        slug: firstLease.slug,
-        leaseId: firstLease.leaseId,
+      await apiJson<{ released: boolean }>("/api/resources/release", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type,
+          slug: firstLease.slug,
+          leaseId: firstLease.leaseId,
+        }),
       }),
     ).toEqual({ released: true });
     leasedResources.splice(
@@ -190,3 +237,14 @@ describe("live semaphore E2E", () => {
     expect(waitingLease.slug).toBe("only");
   }, 120_000);
 });
+
+async function apiJson<T>(pathname: string, init: RequestInit) {
+  const response = await app.apiFetch(pathname, init);
+  const body = await response.text();
+
+  if (!response.ok) {
+    throw new Error(body || `${init.method ?? "GET"} ${pathname} failed with ${response.status}`);
+  }
+
+  return JSON.parse(body) as T;
+}

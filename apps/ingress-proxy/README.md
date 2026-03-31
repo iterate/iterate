@@ -27,7 +27,7 @@ pnpm dev          # doppler + Alchemy local (Vite); optional PORT= for fixed por
 pnpm build        # production client/server bundle
 pnpm deploy       # `doppler run --config prd` — `_shared` resolves `ALCHEMY_STAGE=prd`
 pnpm test         # typecheck + unit tests under src/
-pnpm test:e2e     # requires `INGRESS_PROXY_E2E_BASE_URL`
+pnpm test:e2e     # requires `INGRESS_PROXY_BASE_URL`
 ```
 
 ## Contract

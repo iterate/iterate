@@ -30,8 +30,7 @@ pnpm deploy       # `doppler run --config prd` — `_shared` resolves `ALCHEMY_S
 pnpm seed:tunnel-pool
 pnpm test         # typecheck only; worker-backed Vitest needs `pnpm test:workers`
 pnpm test:workers
-pnpm test:e2e     # requires `SEMAPHORE_E2E_BASE_URL`
-pnpm test:e2e:local
+pnpm test:e2e     # requires `SEMAPHORE_BASE_URL`
 ```
 
 ## Contract

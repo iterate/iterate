@@ -1,37 +1,27 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createIngressProxyClient } from "@iterate-com/ingress-proxy-contract";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import {
+  createIngressProxyAppFixture,
+  ingressProxyBaseDomain,
+  requireIngressProxyApiToken,
+  requireIngressProxyBaseUrl,
+} from "../helpers.ts";
 
-const baseUrl = process.env.INGRESS_PROXY_E2E_BASE_URL;
-const apiToken = process.env.INGRESS_PROXY_E2E_API_TOKEN ?? process.env.INGRESS_PROXY_API_TOKEN;
-const proxyBaseDomain = process.env.INGRESS_PROXY_E2E_PROXY_BASE_DOMAIN?.trim();
 const wildcardSubdomainBaseLabel = "example-with-wildcards-for-e2e-tests";
-
-function requireEnv() {
-  if (!baseUrl) {
-    throw new Error("INGRESS_PROXY_E2E_BASE_URL is required for live E2E tests");
-  }
-
-  if (!apiToken) {
-    throw new Error("INGRESS_PROXY_E2E_API_TOKEN (or INGRESS_PROXY_API_TOKEN) is required");
-  }
-
-  return { baseUrl, apiToken };
-}
+const app = createIngressProxyAppFixture({
+  apiToken: requireIngressProxyApiToken(),
+  baseURL: requireIngressProxyBaseUrl(),
+});
 
 function randomSuffix() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function makeRootHost(currentBaseUrl: string) {
-  const domain =
-    proxyBaseDomain && proxyBaseDomain.length > 0 ? proxyBaseDomain : new URL(currentBaseUrl).host;
-  return `proxy-${randomSuffix()}.${domain}`;
+  return `proxy-${randomSuffix()}.${ingressProxyBaseDomain(currentBaseUrl)}`;
 }
 
 function makeWildcardRootHost(currentBaseUrl: string) {
-  const domain =
-    proxyBaseDomain && proxyBaseDomain.length > 0 ? proxyBaseDomain : new URL(currentBaseUrl).host;
-  return `${wildcardSubdomainBaseLabel}.${domain}`;
+  return `${wildcardSubdomainBaseLabel}.${ingressProxyBaseDomain(currentBaseUrl)}`;
 }
 
 function normalizeHeaders(
@@ -46,29 +36,21 @@ function normalizeHeaders(
   );
 }
 
-describe("live ingress proxy", () => {
+describe.sequential("live ingress proxy", () => {
   const createdRootHosts = new Set<string>();
-  let env: ReturnType<typeof requireEnv>;
 
   async function cleanupCreatedRoutes() {
-    const client = createIngressProxyClient({
-      baseURL: env.baseUrl,
-      apiToken: env.apiToken,
-    });
-
     for (const rootHost of Array.from(createdRootHosts).reverse()) {
       try {
-        await client.routes.remove({ rootHost });
+        await app.apiFetch(`/api/routes/${encodeURIComponent(rootHost)}`, {
+          method: "DELETE",
+        });
       } catch {
         // best-effort cleanup
       }
       createdRootHosts.delete(rootHost);
     }
   }
-
-  beforeAll(async () => {
-    env = requireEnv();
-  }, 120_000);
 
   afterEach(async () => {
     await cleanupCreatedRoutes();
@@ -79,7 +61,7 @@ describe("live ingress proxy", () => {
   });
 
   it("serves OpenAPI for the route contract", async () => {
-    const response = await fetch(new URL("/api/openapi.json", env.baseUrl));
+    const response = await app.fetch("/api/openapi.json");
     expect(response.status).toBe(200);
 
     const payload = (await response.json()) as {
@@ -91,28 +73,38 @@ describe("live ingress proxy", () => {
   }, 120_000);
 
   it("creates, gets, lists, and proxies exact root hosts through httpbin", async () => {
-    const client = createIngressProxyClient({
-      baseURL: env.baseUrl,
-      apiToken: env.apiToken,
-    });
-    const rootHost = makeRootHost(env.baseUrl);
+    const rootHost = makeRootHost(app.baseURL);
     const token = randomSuffix();
 
-    const created = await client.routes.upsert({
-      rootHost,
-      targetUrl: "https://httpbin.org",
-      metadata: { kind: "exact" },
-    });
+    const created = await apiJson<{ id: string; rootHost: string }>(
+      `/api/routes/${encodeURIComponent(rootHost)}`,
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          targetUrl: "https://httpbin.org",
+          metadata: { kind: "exact" },
+        }),
+      },
+    );
     createdRootHosts.add(rootHost);
 
     expect(created.id).toBeTruthy();
     expect(created.rootHost).toBe(rootHost);
 
-    const fetched = await client.routes.get({ rootHost });
+    const fetched = await apiJson<{ id: string; rootHost: string }>(
+      `/api/routes/${encodeURIComponent(rootHost)}`,
+      { method: "GET" },
+    );
     expect(fetched.id).toBe(created.id);
     expect(fetched.rootHost).toBe(rootHost);
 
-    const listed = await client.routes.list({ limit: 100, offset: 0 });
+    const listed = await apiJson<{ routes: Array<{ rootHost: string }> }>(
+      "/api/routes?limit=100&offset=0",
+      { method: "GET" },
+    );
     expect(listed.routes.some((route) => route.rootHost === rootHost)).toBe(true);
 
     const response = await fetch(
@@ -144,16 +136,17 @@ describe("live ingress proxy", () => {
   }, 120_000);
 
   it("proxies both dunder and subdomain forms for one root host", async () => {
-    const client = createIngressProxyClient({
-      baseURL: env.baseUrl,
-      apiToken: env.apiToken,
-    });
-    const rootHost = makeWildcardRootHost(env.baseUrl);
+    const rootHost = makeWildcardRootHost(app.baseURL);
 
-    await client.routes.upsert({
-      rootHost,
-      targetUrl: "https://httpbin.org",
-      metadata: { kind: "wildcard-forms" },
+    await apiJson<{ id: string }>(`/api/routes/${encodeURIComponent(rootHost)}`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        targetUrl: "https://httpbin.org",
+        metadata: { kind: "wildcard-forms" },
+      }),
     });
     createdRootHosts.add(rootHost);
 
@@ -171,3 +164,14 @@ describe("live ingress proxy", () => {
     }
   }, 120_000);
 });
+
+async function apiJson<T>(pathname: string, init: RequestInit) {
+  const response = await app.apiFetch(pathname, init);
+  const body = await response.text();
+
+  if (!response.ok) {
+    throw new Error(body || `${init.method ?? "GET"} ${pathname} failed with ${response.status}`);
+  }
+
+  return JSON.parse(body) as T;
+}

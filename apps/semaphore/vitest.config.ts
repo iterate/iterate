@@ -59,7 +59,7 @@ export default defineWorkersConfig({
   test: {
     globals: true,
     include: ["./src/**/*.test.ts"],
-    exclude: [...defaultExclude, "**/src/routes/**/*.test.ts", "./client.e2e.test.ts", "./e2e/**"],
+    exclude: [...defaultExclude, "**/src/routes/**/*.test.ts", "./e2e/**"],
     poolOptions: {
       workers: {
         // This Worker's Durable Object uses SQLite alarms. Per-test storage snapshots
