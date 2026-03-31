@@ -23,26 +23,6 @@ export const commonContract = oc.router({
     .route({ method: "GET", path: "/__common/debug", tags: [INTERNAL_OPENAPI_TAG] })
     .input(EmptyInput)
     .output(z.record(z.string(), z.unknown())),
-  execSql: oc
-    .route({ method: "POST", path: "/__common/sql", tags: [INTERNAL_OPENAPI_TAG] })
-    .input(
-      z.object({
-        statement: z.string().min(1),
-      }),
-    )
-    .output(
-      z.object({
-        rows: z.array(z.record(z.string(), z.unknown())),
-        columns: z.array(z.string()),
-        stat: z.object({
-          rowsAffected: z.number().int(),
-          rowsRead: z.number().int().nullable(),
-          rowsWritten: z.number().int().nullable(),
-          queryDurationMs: z.number().int().nullable(),
-        }),
-        lastInsertRowid: z.number().int().optional(),
-      }),
-    ),
   refreshRegistry: oc
     .route({ method: "POST", path: "/__common/refresh-registry", tags: [INTERNAL_OPENAPI_TAG] })
     .input(
