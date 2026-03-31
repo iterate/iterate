@@ -642,24 +642,24 @@ test("captures custom error properties in a waitUntil log", async () => {
       id: <id>
       email: unknown
     errors:
-      - name: Error
+      - name: TestingCustomError
         message: "[test_custom_error] <marker>"
         stack: |-
-          Error: [test_custom_error] <marker>
+          TestingCustomError: [test_custom_error] <marker>
               at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
         exampleField: <marker>
-      - name: Error
+      - name: TestingCustomError
         message: "[test_custom_error] <marker>"
         stack: |-
-          Error: [test_custom_error] <marker>
+          TestingCustomError: [test_custom_error] <marker>
               at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
         exampleField: <marker>
     messages:
-      - "[ERROR] <elapsed>s: Error: [test_custom_error] <marker>"
+      - "[ERROR] <elapsed>s: TestingCustomError: [test_custom_error] <marker>"
       - "[INFO] <elapsed>s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid> path=/api/orpc/testing/emitWaitUntilFailure#waitUntil errorCount=1"
       - "[INFO] <elapsed>s: PostHog log exception sent requestId=<uuid>:waitUntil:<uuid>"
       - "[ERROR] <elapsed>s: [test_custom_error] <marker>""
