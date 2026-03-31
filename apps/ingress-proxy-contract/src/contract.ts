@@ -1,4 +1,5 @@
 import { oc } from "@orpc/contract";
+import { commonContract } from "@iterate-com/shared/apps/common-router-contract";
 import { z } from "zod";
 
 const rootHostChars = /^[a-z0-9._-]+$/;
@@ -160,13 +161,13 @@ export const RemoveRouteOutput = z.object({
 });
 
 export const ingressProxyContract = oc.router({
+  common: commonContract,
   routes: {
     upsert: oc
       .route({
         method: "PUT",
         path: "/routes/{rootHost}",
-        summary: "Create or update a root-host ingress route",
-        tags: ["routes"],
+        tags: ["Routes"],
       })
       .input(UpsertRouteInput)
       .output(IngressProxyRoute),
@@ -175,8 +176,7 @@ export const ingressProxyContract = oc.router({
       .route({
         method: "GET",
         path: "/routes/{rootHost}",
-        summary: "Get a route by root host",
-        tags: ["routes"],
+        tags: ["Routes"],
       })
       .input(GetRouteInput)
       .output(IngressProxyRoute),
@@ -185,8 +185,7 @@ export const ingressProxyContract = oc.router({
       .route({
         method: "GET",
         path: "/routes",
-        summary: "List ingress routes",
-        tags: ["routes"],
+        tags: ["Routes"],
       })
       .input(ListRoutesInput)
       .output(ListRoutesOutput),
@@ -195,8 +194,7 @@ export const ingressProxyContract = oc.router({
       .route({
         method: "DELETE",
         path: "/routes/{rootHost}",
-        summary: "Delete a route by root host",
-        tags: ["routes"],
+        tags: ["Routes"],
       })
       .input(RemoveRouteInput)
       .output(RemoveRouteOutput),

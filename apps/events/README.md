@@ -12,7 +12,7 @@ Cloudflare-only: TanStack Start + oRPC + Drizzle on D1, Alchemy + Vite.
 ## Key files
 
 - `alchemy.run.ts` — Alchemy app + D1 + TanStackStart
-- `vite.cf.config.ts` — Alchemy Cloudflare TanStack Start plugin + PostHog; optional `PORT` for dev
+- `vite.config.ts` — Alchemy Cloudflare TanStack Start plugin + PostHog; optional `PORT` for dev
 - `src/entry.workerd.ts` — Worker fetch + `withEvlog` + oRPC WS upgrade via `crossws`
 - `src/context.ts` — `manifest`, `config`, `db`, `log`
 - `src/orpc/*` — contract binding + handlers

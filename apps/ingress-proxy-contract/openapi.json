@@ -10,11 +10,135 @@
   ],
   "openapi": "3.1.1",
   "paths": {
+    "/__common/health": {
+      "get": {
+        "operationId": "common.health",
+        "tags": ["(internal)"],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "app": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["ok", "app", "version"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__common/public-config": {
+      "get": {
+        "operationId": "common.publicConfig",
+        "tags": ["(internal)"],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__common/debug": {
+      "get": {
+        "operationId": "common.debug",
+        "tags": ["(internal)"],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__common/refresh-registry": {
+      "post": {
+        "operationId": "common.refreshRegistry",
+        "tags": ["(internal)"],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "registryBaseUrl": {
+                    "type": "string",
+                    "format": "uri",
+                    "default": "http://iterate.localhost"
+                  },
+                  "baseUrl": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "default": {
+                  "registryBaseUrl": "http://iterate.localhost"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/routes/{rootHost}": {
       "put": {
         "operationId": "routes.upsert",
-        "summary": "Create or update a root-host ingress route",
-        "tags": ["routes"],
+        "tags": ["Routes"],
         "parameters": [
           {
             "name": "rootHost",
@@ -92,8 +216,7 @@
       },
       "get": {
         "operationId": "routes.get",
-        "summary": "Get a route by root host",
-        "tags": ["routes"],
+        "tags": ["Routes"],
         "parameters": [
           {
             "name": "rootHost",
@@ -147,8 +270,7 @@
       },
       "delete": {
         "operationId": "routes.remove",
-        "summary": "Delete a route by root host",
-        "tags": ["routes"],
+        "tags": ["Routes"],
         "parameters": [
           {
             "name": "rootHost",
@@ -194,8 +316,7 @@
     "/routes": {
       "get": {
         "operationId": "routes.list",
-        "summary": "List ingress routes",
-        "tags": ["routes"],
+        "tags": ["Routes"],
         "parameters": [
           {
             "name": "limit",

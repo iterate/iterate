@@ -1,6 +1,6 @@
 import { createORPCClient } from "@orpc/client";
-import { RPCLink } from "@orpc/client/fetch";
 import type { ContractRouterClient } from "@orpc/contract";
+import { OpenAPILink } from "@orpc/openapi-client/fetch";
 
 import { semaphoreContract } from "./contract.ts";
 
@@ -22,14 +22,14 @@ export type CreateSemaphoreClientOptions =
       baseURL?: string;
     };
 
-export const FETCH_ONLY_PLACEHOLDER_URL = "https://semaphore.invalid/api/orpc";
+export const FETCH_ONLY_PLACEHOLDER_URL = "https://semaphore.invalid/api";
 
 export function resolveSemaphoreOrpcUrl(options: {
   baseURL?: string;
   fetch?: SemaphoreFetch;
 }): string {
   if (options.baseURL) {
-    return new URL("/api/orpc", options.baseURL).toString();
+    return new URL("/api", options.baseURL).toString();
   }
 
   if (options.fetch) {
@@ -42,9 +42,7 @@ export function resolveSemaphoreOrpcUrl(options: {
 export function createSemaphoreClient(options: CreateSemaphoreClientOptions): SemaphoreClient {
   const url = resolveSemaphoreOrpcUrl(options);
 
-  // RPCLink still expects a URL even when callers provide a custom fetch. Using a placeholder here
-  // lets service-binding or loopback fetchers handle dispatch without a public base URL.
-  const link = new RPCLink({
+  const link = new OpenAPILink(semaphoreContract, {
     url,
     headers: {
       Authorization: `Bearer ${options.apiKey}`,

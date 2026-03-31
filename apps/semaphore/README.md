@@ -1,48 +1,38 @@
-# semaphore
+# Semaphore app
 
-`apps/semaphore` is a tiny Cloudflare Worker for leasing shared resources.
+Cloudflare-only: TanStack Start + oRPC + raw D1 inventory storage, with a Durable Object coordinator per resource type.
 
-It stores resource inventory in D1 and uses one Durable Object per resource `type` to coordinate active leases, waiters, and expiry.
+## Stack
 
-Consumers should use `@iterate-com/semaphore-contract` for the shared oRPC contract and `createSemaphoreClient`.
+- **API:** oRPC over OpenAPI/HTTP at `/api`
+- **Frontend:** TanStack Start + Router + Query
+- **DB:** raw D1 queries via generated TypeSQL helpers (`sql/queries.ts`)
+- **Coordinator:** one Durable Object per resource `type` handles active leases, waiters, and expiry
+- **Secrets:** Doppler project `semaphore` (see repo `doppler.yaml`). `DOPPLER_CONFIG` is injected by `doppler run`, and `_shared` defines `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. The bearer token now lives in root-level `APP_CONFIG.sharedApiSecret`.
 
-## API
+## Key files
 
-All endpoints require `Authorization: Bearer <SEMAPHORE_API_TOKEN>`.
+- `alchemy.run.ts` — Alchemy app + D1 + Durable Object + TanStackStart
+- `vite.config.ts` — Alchemy Cloudflare TanStack Start plugin; optional `PORT` for dev
+- `src/entry.workerd.ts` — Worker fetch + `withEvlog`
+- `src/context.ts` — `manifest`, `config`, `env`, `db`, `log`
+- `src/durable-objects/resource-coordinator.ts` — lease orchestration, alarms, and waiter dispatch
+- `src/lib/resource-store.ts` — D1-backed resource reads/writes and lease-state mirroring
+- `src/orpc/*` — contract binding + handlers
 
-- `resources.add({ type, slug, data })`
-- `resources.delete({ type, slug })`
-- `resources.list({ type? })`
-- `resources.acquire({ type, leaseMs, waitMs? })`
-- `resources.release({ type, slug, leaseId })`
+## Scripts
 
-## Model
+```bash
+pnpm cli          # doppler + iterate local-router commands
+pnpm dev          # doppler + Alchemy local (Vite); optional PORT= for fixed port; Ctrl+C to stop
+pnpm build        # production client/server bundle
+pnpm deploy       # `doppler run --config prd` — `_shared` resolves `ALCHEMY_STAGE=prd`
+pnpm seed:tunnel-pool
+pnpm test         # typecheck only; worker-backed Vitest needs `pnpm test:workers`
+pnpm test:workers
+pnpm test:e2e     # requires `SEMAPHORE_BASE_URL`
+```
 
-- Resource identity is `{ type, slug }`
-- `slug` is unique within a `type`
-- `data` is a JSON-serializable object and is returned in full by `list` and `acquire`
-- `leaseMs` is required and capped at `3600000`
-- `waitMs` defaults to `0` and is capped at `300000`
-- delete removes inventory immediately but does not revoke an active lease
-- waiting acquires are best-effort in v1; if a waiting client disconnects after the DO grants a lease, that lease may stay live until expiry
+## Contract
 
-## Deploy
-
-Alchemy manages the Worker, D1 database, and Durable Object namespace.
-
-## Local Commands
-
-- `pnpm --filter @iterate-com/semaphore test`
-- `pnpm --filter @iterate-com/semaphore typecheck`
-- `pnpm --filter @iterate-com/semaphore test:e2e`
-- `pnpm --filter @iterate-com/semaphore test:e2e-live`
-
-`test:e2e` boots the real Worker through Alchemy dev and expects the local Doppler and Cloudflare dev credentials path to be available.
-
-`test:e2e-live` runs against an already-deployed worker using `SEMAPHORE_E2E_BASE_URL` and `SEMAPHORE_E2E_API_TOKEN` (or `SEMAPHORE_API_TOKEN`).
-
-## CI
-
-- PRs and `main` pushes only trigger the semaphore live deploy/test workflow when `apps/semaphore/**` or its workflow files change.
-- The live workflow deploys an ephemeral worker, runs `test:e2e-live`, then tears the worker down.
-- `main` runs that same live flow before deploying the production semaphore worker.
+[`apps/semaphore-contract`](../semaphore-contract) — `src/orpc/orpc.ts` implements it.

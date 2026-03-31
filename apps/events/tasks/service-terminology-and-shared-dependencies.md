@@ -97,11 +97,11 @@ Roughly **79 files** matched `service` (case-insensitive) under `apps/`. Not exh
 - Machine router: “**service** URLs” for daemons.
 - Worker `service: "os"`, **`SERVICE_AUTH_TOKEN`**, etc.
 
-### **ingress-proxy-worker**
+### **ingress-proxy**
 
 - Comments describing host forms: `service__…`, `service.…`; “downstream services”.
 
-### **cf-ingress-proxy-worker**
+### **cf-ingress-proxy**
 
 - **`worker-configuration.d.ts`**: generated Cloudflare types (`ServiceWorkerGlobalScope`, `Service<…>`, `LoopbackServiceStub`, `service_tier`, etc.) — noise for product naming.
 

@@ -435,6 +435,12 @@ export interface ParseAppConfigFromEnvOptions<TSchema extends z.ZodTypeAny> {
   env: AppConfigEnv;
 }
 
+export interface CompileRawAppConfigFromEnvOptions<TSchema extends z.ZodTypeAny> {
+  configSchema: TSchema;
+  prefix: string;
+  env: AppConfigEnv;
+}
+
 /**
  * Parse app runtime config from environment variables.
  *
@@ -454,6 +460,20 @@ export function parseAppConfigFromEnv<TSchema extends z.ZodTypeAny>({
   prefix,
   env,
 }: ParseAppConfigFromEnvOptions<TSchema>) {
+  const rawConfig = compileRawAppConfigFromEnv({
+    configSchema,
+    prefix,
+    env,
+  });
+
+  return configSchema.parse(rawConfig);
+}
+
+export function compileRawAppConfigFromEnv<TSchema extends z.ZodTypeAny>({
+  configSchema,
+  prefix,
+  env,
+}: CompileRawAppConfigFromEnvOptions<TSchema>) {
   const baseKey = getBaseConfigEnvKey(prefix);
   const configEnv = pickConfigEnv({ env, prefix });
   const baseConfig = parseRawAppConfig(configEnv[baseKey], baseKey);
@@ -465,5 +485,7 @@ export function parseAppConfigFromEnv<TSchema extends z.ZodTypeAny>({
     prefix,
   });
 
-  return configSchema.parse(deepMerge(baseConfig, overrides));
+  const rawConfig = deepMerge(baseConfig, overrides);
+  configSchema.parse(rawConfig);
+  return rawConfig;
 }

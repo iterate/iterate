@@ -11,6 +11,7 @@
     "openapi:generate": "tsx ./scripts/generate-openapi.ts"
   },
   "dependencies": {
+    "@iterate-com/shared": "workspace:*",
     "@orpc/client": "1.13.13",
     "@orpc/contract": "1.13.13",
     "@orpc/openapi-client": "1.13.13",

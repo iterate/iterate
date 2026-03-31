@@ -1,62 +1,113 @@
 import alchemy from "alchemy";
-import { D1Database, DurableObjectNamespace, Worker, WranglerJson } from "alchemy/cloudflare";
-import { z } from "zod/v4";
+import { D1Database, DurableObjectNamespace, TanStackStart } from "alchemy/cloudflare";
+import { compileRawAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { z } from "zod";
+import { AppConfig } from "./src/app.ts";
+import type { ResourceCoordinator } from "~/durable-objects/resource-coordinator.ts";
 
-const Env = z.object({
-  ALCHEMY_PASSWORD: z.string().optional(),
-  WORKER_NAME: z.string().trim().min(1, "WORKER_NAME is required"),
-  SEMAPHORE_API_TOKEN: z.string().trim().min(1, "SEMAPHORE_API_TOKEN is required"),
+const APP_NAME = "semaphore";
+
+const AlchemyEnv = z.object({
+  ALCHEMY_PASSWORD: z.string().trim().min(1, "ALCHEMY_PASSWORD is required"),
+  ALCHEMY_LOCAL: z.stringbool(),
+  ALCHEMY_STAGE: z
+    .string()
+    .trim()
+    .min(1, "ALCHEMY_STAGE is required")
+    .regex(/^[\w-]+$/, "ALCHEMY_STAGE must contain only letters, numbers, underscores, or hyphens"),
+  CLOUDFLARE_API_TOKEN: z.string().trim().min(1, "CLOUDFLARE_API_TOKEN is required"),
+  CLOUDFLARE_ACCOUNT_ID: z.string().trim().min(1, "CLOUDFLARE_ACCOUNT_ID is required"),
+  WORKER_ROUTES: z
+    .string()
+    .optional()
+    .transform((value) =>
+      (value ?? "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .map((entry) => entry.replace(/\/\*$/, ""))
+        .filter(Boolean),
+    )
+    .pipe(
+      z.array(
+        z
+          .string()
+          .min(1)
+          .refine(
+            (hostname) => !hostname.includes("/") && !hostname.includes("://"),
+            "WORKER_ROUTES entries must be hostnames without scheme or path",
+          ),
+      ),
+    ),
 });
 
-const env = Env.parse(process.env);
-const wranglerJsonPath = "./wrangler.jsonc";
-const compatibilityDate = "2025-02-24";
+const env = AlchemyEnv.parse(process.env);
+if (!env.ALCHEMY_LOCAL && env.WORKER_ROUTES.length === 0) {
+  throw new Error("WORKER_ROUTES is required when deploying. Set it in Doppler.");
+}
+const rawAppConfig = compileRawAppConfigFromEnv({
+  configSchema: AppConfig,
+  prefix: "APP_CONFIG_",
+  env: process.env,
+});
 
-const app = await alchemy("semaphore", {
+if (env.ALCHEMY_LOCAL) delete process.env.CI;
+
+const app = await alchemy(APP_NAME, {
+  stage: env.ALCHEMY_STAGE,
+  local: env.ALCHEMY_LOCAL,
   password: env.ALCHEMY_PASSWORD,
 });
 
+const workerName = `${APP_NAME}-${app.stage}`;
+const primaryUrl = env.WORKER_ROUTES[0] ? `https://${env.WORKER_ROUTES[0]}` : undefined;
+
 const db = await D1Database("resources-db", {
-  name: `${env.WORKER_NAME}-resources`,
+  name: `${workerName}-resources`,
   migrationsDir: "./migrations",
   adopt: true,
 });
 
-const coordinator = DurableObjectNamespace<import("./server.ts").ResourceCoordinator>(
-  "resource-coordinator",
-  {
-    className: "ResourceCoordinator",
-    sqlite: true,
-  },
-);
+const coordinator = DurableObjectNamespace<ResourceCoordinator>("resource-coordinator", {
+  className: "ResourceCoordinator",
+  sqlite: true,
+});
 
-export const worker = await Worker("worker", {
-  name: env.WORKER_NAME,
-  entrypoint: "./server.ts",
-  compatibilityDate,
+export const worker = await TanStackStart(APP_NAME, {
+  name: workerName,
+  adopt: true,
   bindings: {
     DB: db,
     RESOURCE_COORDINATOR: coordinator,
-    SEMAPHORE_API_TOKEN: alchemy.secret(env.SEMAPHORE_API_TOKEN),
+    APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
   },
-  adopt: true,
+  wrangler: {
+    main: "./src/entry.workerd.ts",
+  },
+  routes: env.WORKER_ROUTES.map((hostname) => ({
+    pattern: `${hostname}/*`,
+    adopt: true,
+  })),
+  observability: {
+    enabled: true,
+    headSamplingRate: 1,
+    logs: {
+      enabled: true,
+      headSamplingRate: 1,
+      persist: true,
+      invocationLogs: true,
+    },
+    traces: {
+      enabled: true,
+      persist: true,
+      headSamplingRate: 1,
+    },
+  },
+  build: "pnpm exec vite build",
+  dev: {
+    command: "pnpm exec vite dev",
+  },
 });
 
-await WranglerJson({
-  worker,
-  path: wranglerJsonPath,
-  secrets: false,
-  transform: {
-    wrangler: (spec) => ({
-      ...spec,
-      vars: {
-        ...(spec.vars ?? {}),
-        SEMAPHORE_API_TOKEN: "test-token",
-      },
-    }),
-  },
-});
-
-console.log(worker.url);
+console.log({ url: primaryUrl ?? worker.url, workersDevUrl: worker.url });
 
 await app.finalize();

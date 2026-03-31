@@ -6,7 +6,7 @@ setup:
   - project: os
     path: ./
   - project: ingress-proxy
-    path: apps/ingress-proxy-worker/
+    path: apps/ingress-proxy/
   - project: example
     path: apps/example/
   - project: example
@@ -15,5 +15,7 @@ setup:
     path: apps/fetch-test/
   - project: events
     path: apps/events/
+  - project: semaphore
+    path: apps/semaphore/
   - project: test
     path: apps/test/

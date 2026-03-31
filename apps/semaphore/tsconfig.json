@@ -1,19 +1,28 @@
 {
+  "include": ["**/*.ts", "**/*.tsx", "raw-sql.d.ts", "alchemy.run.ts"],
   "compilerOptions": {
-    "target": "esnext",
-    "module": "esnext",
-    "lib": ["esnext"],
-    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers", "node"],
-    "sourceMap": true,
-    "strict": true,
-    "verbatimModuleSyntax": true,
-    "isolatedModules": true,
-    "noUncheckedSideEffectImports": true,
-    "noEmit": true,
-    "allowImportingTsExtensions": true,
+    "target": "ES2024",
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "paths": {
+      "~/*": ["./src/*"],
+      "@iterate-com/ui/*": ["../../packages/ui/src/*"],
+      "@iterate-com/shared/*": ["../../packages/shared/src/*"],
+      "@iterate-com/shared/posthog/vite-plugin": [
+        "../../packages/shared/src/posthog/sourcemaps-vite-plugin.ts"
+      ]
+    },
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": [
+      "vite/client",
+      "node",
+      "@cloudflare/workers-types",
+      "@cloudflare/vitest-pool-workers"
+    ],
     "moduleResolution": "bundler",
-    "skipLibCheck": true
-  },
-  "include": ["*.ts", "*.d.ts"],
-  "exclude": ["node_modules", "dist"]
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true
+  }
 }

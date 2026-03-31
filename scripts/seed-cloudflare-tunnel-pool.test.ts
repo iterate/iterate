@@ -6,7 +6,7 @@ import {
   countMissingResources,
   pickUnusedSlug,
   selectReusableCertificatePack,
-} from "./seed-cloudflare-tunnel-pool.ts";
+} from "../apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts";
 
 test("countMissingResources tops up to the requested pool size", () => {
   assert.equal(countMissingResources(0, 20), 20);

@@ -1,4 +1,5 @@
 import { oc } from "@orpc/contract";
+import { commonContract } from "@iterate-com/shared/apps/common-router-contract";
 import { z } from "zod";
 
 export const SEMAPHORE_KEY_PATTERN = /^(?=.*[a-z])[a-z0-9-]+$/;
@@ -93,6 +94,11 @@ export const ListResourcesInput = z.object({
   type: semaphoreTypeSchema.optional(),
 });
 
+export const FindResourceInput = z.object({
+  type: semaphoreTypeSchema,
+  slug: semaphoreSlugSchema,
+});
+
 export const AcquireResourceInput = z.object({
   type: semaphoreTypeSchema,
   leaseMs: semaphoreLeaseMsSchema,
@@ -114,13 +120,13 @@ export const ReleaseResourceResult = z.object({
 });
 
 export const semaphoreContract = oc.router({
+  common: commonContract,
   resources: oc.router({
     add: oc
       .route({
         method: "POST",
         path: "/resources",
-        summary: "Add a resource to the semaphore inventory",
-        tags: ["resources"],
+        tags: ["Resources"],
       })
       .input(AddResourceInput)
       .output(SemaphoreResourceRecord),
@@ -129,8 +135,7 @@ export const semaphoreContract = oc.router({
       .route({
         method: "DELETE",
         path: "/resources/{type}/{slug}",
-        summary: "Delete a resource from the semaphore inventory",
-        tags: ["resources"],
+        tags: ["Resources"],
       })
       .input(DeleteResourceInput)
       .output(DeleteResourceResult),
@@ -139,18 +144,25 @@ export const semaphoreContract = oc.router({
       .route({
         method: "GET",
         path: "/resources",
-        summary: "List semaphore resources",
-        tags: ["resources"],
+        tags: ["Resources"],
       })
       .input(ListResourcesInput)
       .output(z.array(SemaphoreResourceRecord)),
+
+    find: oc
+      .route({
+        method: "GET",
+        path: "/resources/{type}/{slug}",
+        tags: ["Resources"],
+      })
+      .input(FindResourceInput)
+      .output(SemaphoreResourceRecord),
 
     acquire: oc
       .route({
         method: "POST",
         path: "/resources/acquire",
-        summary: "Acquire a lease for the next available resource of a type",
-        tags: ["resources"],
+        tags: ["Resources"],
       })
       .input(AcquireResourceInput)
       .output(SemaphoreLeaseRecord),
@@ -159,8 +171,7 @@ export const semaphoreContract = oc.router({
       .route({
         method: "POST",
         path: "/resources/release",
-        summary: "Release an active resource lease",
-        tags: ["resources"],
+        tags: ["Resources"],
       })
       .input(ReleaseResourceInput)
       .output(ReleaseResourceResult),
