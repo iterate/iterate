@@ -40,7 +40,7 @@ await spinnerWaiter.settings.run({ spinnerTimeout: 120_000 }, async () => {
 });
 ```
 
-Don't write if statements, ternaries, or other conditionals in tests. You should usually duplicate code over complex helper functions with conditionals.
+Don't write if statements, ternaries, or other conditionals in tests. You should usually duplicated code over complex helper functions with conditionals.
 
 You can use the `playwriter-spec` skill to run a spec dynamically when the feature or the spec itself are in flux and not yet validated. Doing this before running via playwright directly can result in a much faster feedback loop, and allow you to adapt the spec/the product as you step through the test.
 
@@ -48,13 +48,7 @@ You can use the `playwriter-spec` skill to run a spec dynamically when the featu
 
 When you're writing helpers/utilities/library functions, you have to try to LIMIT complexity and optionality. If you have a function that is only called once then DON'T give it any optional properties. Make the ones that are actually used required, and drop all the others. That makes call sites more explicit. If there are multiple parameters of the same type, use "options-bags" rather than long lists of positional parameters which can be accidentally flipped.
 
-- DO NOT guess at which of several env vars you've found in the codebase is correct. DO NOT write stuff like this. Instead, ask the human which they want!
-
-```ts
-process.env.JONASLAND_E2E_INGRESS_PROXY_DOMAIN ??
-  process.env.INGRESS_PROXY_DOMAIN ??
-  DEFAULT_INGRESS_PROXY_DOMAIN;
-```
+Similarly, avoid "fallback" values which just encourage the proliferation of uncertain system behavior. Instead of accomodating for bizarre system states and adding code complexity to account for it, make the bizarre state impossible to reach in the first place.
 
 ## Writing React
 
@@ -84,14 +78,13 @@ Design for columnar 375px for mobile support, implement desktop as a view which 
 - Use `toast` from sonner, not inline messages
 - Use `EmptyState` for empty states
 - Use `Field` components for form accessibility
-- Render IDs and slugs with `packages/ui/src/components/identifier.tsx` so they stay monospaced and copyable
 
 Canonical example: `apps/os/app/routes/org/project/machines.tsx`
 
 ## Meta: writing AGENTS.md
 
 - Keep it brief, sacrifice grammar for the sake of concision.
-- Stick to facts which are likely to remain true, rather than prescriptive recipes ("XYZ can be found in the database" is better than "run this exact query which might be invalid once the schema changes")
+- Stick to facts which are likely to remain true, rather than prescriptive recipes ("XYZ can be found in the database" is better than "run this exact query" which might be invalid once the schema changes)
 
 ## Quick reference
 
@@ -107,10 +100,11 @@ For local Docker machines, refresh the sandbox image + default tag with: `pnpm s
 - Include file extensions (`.ts` or whatever) for relative imports
 - Use `node:` prefix for Node imports
 - Prefer named exports
-- Use pnpm
-- Use remeda for utilities, dedent for template strings
+- Acronyms: all caps except `Id` (e.g., `callbackURL`, `userId`)
+- Use pnpm for packages
+- Use dedent for template strings
 - Unit tests: `*.test.ts` next to source
-- Spec tests: `spec/*.spec.ts`
+- Spec tests: `spec/*.spec.ts` (see [Writing Specs](#writing-specs))
 
 ## Task system
 
@@ -244,13 +238,3 @@ PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_
 - Drizzle migration workflow: `.agents/skills/drizzle-migrations/SKILL.md` (MUST follow when making schema changes)
 - Drizzle migration conflicts: `docs/fixing-drizzle-migration-conflicts.md`
 - Sandbox image pipeline (build, tag, push, CI): `sandbox/README.md`
-
-# Testing strategy
-
-We test from as far away as possible. Services, whether they run in nodejs or workerd or are written in rust should all be tested through the network as e2e tests.
-
-This means we can later replace the implementation if we want, but keep our tests.
-
-One beautiful side effect of this strategy is that we can just "test against production", too.
-
-This means we need to invest in vitest test tooling that makes it easy to spin up lots of servers, run HTTP requests against them, etc.
