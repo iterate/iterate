@@ -39,11 +39,12 @@ const createdAt = z.iso.datetime({ offset: true });
 const retryDelayMs = [250, 1_000, 5_000] as const;
 const maxBodyPreviewLength = 200;
 const webhookTimeoutMs = 2_000;
+const bodyPreviewTimeoutMs = 250;
 
 /**
- * One stream per Durable Object: append-only event log in SQLite, a reduced
- * projection kept in memory and storage, and newline-delimited fanout for live
- * readers.
+ * One stream per Durable Object: append-only event log in SQLite, one reduced
+ * projection kept in memory and storage, and one DO alarm derived from that
+ * reduced subscription state.
  *
  * Raw history and SSE keep internal subscription bookkeeping events visible.
  * Only the server-managed webhook delivery loop filters those events out, or it
@@ -124,7 +125,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
 
     this.state = structuredClone(nextState);
-    await this.updateAlarm(nextState);
+    await this.updateAlarm();
 
     for (const event of insertedEvents) {
       this.publish(event);
@@ -135,10 +136,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     return { created, events };
-  }
-
-  async getState(): Promise<StreamState> {
-    return structuredClone(this.state);
   }
 
   /**
@@ -155,10 +152,14 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     const dueSubscriptions = getDueSubscriptions({ now: Date.now(), state: this.state });
     if (dueSubscriptions.length === 0) {
-      await this.updateAlarm(this.state);
+      await this.updateAlarm();
       return;
     }
 
+    // Agents runs due schedules sequentially to prevent overlap inside one
+    // schedule. We deliberately diverge here because each subscription owns an
+    // independent webhook target and cursor, so parallel delivery avoids
+    // head-of-line blocking between unrelated subscribers.
     const outcomeEvents = (
       await Promise.all(
         dueSubscriptions.map(async ([slug, subscription]) => {
@@ -177,7 +178,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     ).filter((event): event is EventInput => event != null);
 
     if (outcomeEvents.length === 0) {
-      await this.updateAlarm(this.state);
+      await this.updateAlarm();
       return;
     }
 
@@ -244,6 +245,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  async getState(): Promise<StreamState> {
+    return structuredClone(this.state);
+  }
+
   /**
    * `events` is the append-only log; `reduced_state` is the fast projection we
    * can return from `getState()` without replaying the whole stream on every
@@ -306,7 +311,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error("Persisted reduced_state is missing lastOffset even though events exist.");
     }
 
-    return structuredClone(persistedState);
+    return persistedState;
   }
 
   /**
@@ -427,8 +432,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     return Offset.parse((BigInt(prevOffset) + 1n).toString().padStart(width, "0"));
   }
 
-  private async updateAlarm(state: StreamState) {
-    const nextAlarmAt = getNextAlarmAt(state);
+  private async updateAlarm() {
+    const nextAlarmAt = getNextAlarmAt(this.state);
     if (nextAlarmAt == null) {
       await this.ctx.storage.deleteAlarm();
       return;
@@ -443,8 +448,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     slug: string;
     subscription: SubscriptionState;
   }) {
-    const deliverableEvents = getDeliverableEvents(args.events);
-    const nextEvent = deliverableEvents[0];
+    const { nextEvent, followingEvent } = getDeliveryWindow(args.events);
     if (!nextEvent) {
       // Clearing `nextDeliveryAt` is still event-sourced. A caught-up pass emits
       // an internal cursor event instead of mutating hidden scheduler state.
@@ -468,6 +472,14 @@ export class StreamDurableObject extends DurableObject<Env> {
     const attemptedAt = new Date().toISOString();
     const observedLastOffset =
       args.events.at(-1)?.offset ?? args.subscription.cursor.lastAcknowledgedOffset;
+    const headers = {
+      "content-type": "application/json",
+      ...args.subscription.headers,
+    };
+    const requestBody = {
+      subscriptionSlug: args.slug,
+      event: nextEvent,
+    };
 
     let response: Response;
     try {
@@ -476,14 +488,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         url: args.subscription.url,
         init: {
           method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...args.subscription.headers,
-          },
-          body: JSON.stringify({
-            subscriptionSlug: args.slug,
-            event: nextEvent,
-          }),
+          headers,
+          body: JSON.stringify(requestBody),
         },
       });
     } catch (error) {
@@ -493,6 +499,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         bodyPreview: null,
         deliveredEventOffset: nextEvent.offset,
         deliveryRevision: args.subscription.revision,
+        event: nextEvent,
+        headers,
         lastAcknowledgedOffset: args.subscription.cursor.lastAcknowledgedOffset,
         message,
         observedLastOffset,
@@ -500,10 +508,17 @@ export class StreamDurableObject extends DurableObject<Env> {
         retries: args.subscription.cursor.retries + 1,
         slug: args.slug,
         statusCode: null,
+        url: args.subscription.url,
       });
     }
 
-    const bodyPreview = truncateBodyPreview(await safeReadResponseText(response));
+    // Response previews are audit context only. Never let a peer that sends
+    // headers and then stalls the body pin the whole alarm pass.
+    const bodyPreview = await readResponsePreview({
+      maxLength: maxBodyPreviewLength,
+      response,
+      timeoutMs: bodyPreviewTimeoutMs,
+    });
     if (!response.ok) {
       const message = `Webhook failed with ${response.status}`;
       return makeDeliveryFailedEvent({
@@ -511,6 +526,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         bodyPreview,
         deliveredEventOffset: nextEvent.offset,
         deliveryRevision: args.subscription.revision,
+        event: nextEvent,
+        headers,
         lastAcknowledgedOffset: args.subscription.cursor.lastAcknowledgedOffset,
         message,
         observedLastOffset,
@@ -518,6 +535,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         retries: args.subscription.cursor.retries + 1,
         slug: args.slug,
         statusCode: response.status,
+        url: args.subscription.url,
       });
     }
 
@@ -529,13 +547,19 @@ export class StreamDurableObject extends DurableObject<Env> {
         deliveryRevision: args.subscription.revision,
         deliveredEventOffset: nextEvent.offset,
         observedLastOffset,
+        attempted: {
+          at: attemptedAt,
+          url: args.subscription.url,
+          headers,
+          body: requestBody,
+        },
         response: {
           statusCode: response.status,
           bodyPreview,
         },
         cursor: {
           lastAcknowledgedOffset: nextEvent.offset,
-          nextDeliveryAt: deliverableEvents[1] == null ? null : attemptedAt,
+          nextDeliveryAt: followingEvent == null ? null : attemptedAt,
           retries: 0,
           lastError: null,
         },
@@ -640,6 +664,15 @@ const subscriptionDeliverySucceededPayloadSchema = z.object({
   deliveryRevision: z.number().int().nonnegative(),
   deliveredEventOffset: Offset,
   observedLastOffset: Offset.nullable(),
+  attempted: z.object({
+    at: createdAt,
+    url: z.url(),
+    headers: z.record(z.string(), z.string()),
+    body: z.object({
+      subscriptionSlug: z.string().trim().min(1),
+      event: Event,
+    }),
+  }),
   response: z.object({
     statusCode: z.number().int(),
     bodyPreview: z.string().nullable(),
@@ -655,6 +688,15 @@ const subscriptionDeliveryFailedPayloadSchema = z.object({
   deliveryRevision: z.number().int().nonnegative(),
   deliveredEventOffset: Offset,
   observedLastOffset: Offset.nullable(),
+  attempted: z.object({
+    at: createdAt,
+    url: z.url(),
+    headers: z.record(z.string(), z.string()),
+    body: z.object({
+      subscriptionSlug: z.string().trim().min(1),
+      event: Event,
+    }),
+  }),
   response: z.object({
     statusCode: z.number().int().nullable(),
     bodyPreview: z.string().nullable(),
@@ -702,7 +744,10 @@ export function createEmptyStreamState(): StreamState {
 
 /**
  * Replay and append share the same reducer so state cannot drift based on which
- * code path produced it.
+ * code path produced it. The key subscription fences are:
+ * - stale outcomes are ignored when `deliveryRevision` no longer matches
+ * - caught-up or successful outcomes re-arm when the stream advanced while the
+ *   webhook call was in flight
  */
 export function reduceStreamState(args: { state: StreamState; event: Event }): StreamState {
   const { state, event } = args;
@@ -754,12 +799,12 @@ export function reduceStreamState(args: { state: StreamState; event: Event }): S
       subscription.cursor = payload.cursor;
       // If the stream advanced during the attempt, clearing `nextDeliveryAt`
       // would strand newer user events. Re-arm and rescan instead.
-      if (
-        payload.cursor.nextDeliveryAt == null &&
-        state.lastOffset !== payload.observedLastOffset
-      ) {
-        subscription.cursor.nextDeliveryAt = event.createdAt;
-      }
+      rearmSubscriptionIfStreamAdvanced({
+        createdAt: event.createdAt,
+        observedLastOffset: payload.observedLastOffset,
+        previousLastOffset: state.lastOffset,
+        subscription,
+      });
       return nextState;
     }
     case SUBSCRIPTION_DELIVERY_FAILED_TYPE: {
@@ -782,12 +827,12 @@ export function reduceStreamState(args: { state: StreamState; event: Event }): S
       }
 
       subscription.cursor = payload.cursor;
-      if (
-        payload.cursor.nextDeliveryAt == null &&
-        state.lastOffset !== payload.observedLastOffset
-      ) {
-        subscription.cursor.nextDeliveryAt = event.createdAt;
-      }
+      rearmSubscriptionIfStreamAdvanced({
+        createdAt: event.createdAt,
+        observedLastOffset: payload.observedLastOffset,
+        previousLastOffset: state.lastOffset,
+        subscription,
+      });
       return nextState;
     }
     default: {
@@ -862,15 +907,20 @@ function computeNextRetryAt(args: { now: number; retries: number }) {
 }
 
 function getNextAlarmAt(state: StreamState) {
-  const dueAt = Object.values(state.subscriptions)
-    .flatMap((subscription) =>
-      subscription.cursor.nextDeliveryAt == null
-        ? []
-        : [Date.parse(subscription.cursor.nextDeliveryAt)],
-    )
-    .sort((left, right) => left - right)[0];
+  let nextAlarmAt: number | null = null;
 
-  return dueAt ?? null;
+  for (const subscription of Object.values(state.subscriptions)) {
+    if (subscription.cursor.nextDeliveryAt == null) {
+      continue;
+    }
+
+    const dueAt = Date.parse(subscription.cursor.nextDeliveryAt);
+    if (nextAlarmAt == null || dueAt < nextAlarmAt) {
+      nextAlarmAt = dueAt;
+    }
+  }
+
+  return nextAlarmAt;
 }
 
 function getDueSubscriptions(args: { now: number; state: StreamState }) {
@@ -883,8 +933,42 @@ function getDueSubscriptions(args: { now: number; state: StreamState }) {
   });
 }
 
-function getDeliverableEvents(events: Event[]) {
-  return events.filter((event) => !isInternalSubscriptionEventType(event.type));
+function getDeliveryWindow(events: Event[]) {
+  let nextEvent: Event | null = null;
+  let followingEvent: Event | null = null;
+
+  for (const event of events) {
+    if (isInternalSubscriptionEventType(event.type)) {
+      continue;
+    }
+
+    if (nextEvent == null) {
+      nextEvent = event;
+      continue;
+    }
+
+    followingEvent = event;
+    break;
+  }
+
+  return {
+    nextEvent,
+    followingEvent,
+  };
+}
+
+function rearmSubscriptionIfStreamAdvanced(args: {
+  createdAt: string;
+  observedLastOffset: string | null;
+  previousLastOffset: string | null;
+  subscription: SubscriptionState;
+}) {
+  if (
+    args.subscription.cursor.nextDeliveryAt == null &&
+    args.previousLastOffset !== args.observedLastOffset
+  ) {
+    args.subscription.cursor.nextDeliveryAt = args.createdAt;
+  }
 }
 
 function makeDeliveryFailedEvent(args: {
@@ -892,6 +976,7 @@ function makeDeliveryFailedEvent(args: {
   bodyPreview: string | null;
   deliveredEventOffset: string;
   deliveryRevision: number;
+  headers: Record<string, string>;
   lastAcknowledgedOffset: string | null;
   message: string;
   observedLastOffset: string | null;
@@ -899,6 +984,8 @@ function makeDeliveryFailedEvent(args: {
   retries: number;
   slug: string;
   statusCode: number | null;
+  url: string;
+  event: Event;
 }) {
   return EventInput.parse({
     path: args.path,
@@ -908,6 +995,15 @@ function makeDeliveryFailedEvent(args: {
       deliveryRevision: args.deliveryRevision,
       deliveredEventOffset: args.deliveredEventOffset,
       observedLastOffset: args.observedLastOffset,
+      attempted: {
+        at: args.attemptedAt,
+        url: args.url,
+        headers: args.headers,
+        body: {
+          subscriptionSlug: args.slug,
+          event: args.event,
+        },
+      },
       response: {
         statusCode: args.statusCode,
         bodyPreview: args.bodyPreview,
@@ -944,22 +1040,6 @@ async function postWebhookWithTimeout(args: { url: string; init: RequestInit; ti
   }
 }
 
-async function safeReadResponseText(response: Response) {
-  try {
-    return await response.text();
-  } catch {
-    return "";
-  }
-}
-
-function truncateBodyPreview(body: string) {
-  if (body.length <= maxBodyPreviewLength) {
-    return body || null;
-  }
-
-  return `${body.slice(0, maxBodyPreviewLength)}...`;
-}
-
 function readErrorMessage(error: unknown, timeoutMs: number) {
   if (error instanceof Error) {
     if (error.name === "AbortError") {
@@ -970,4 +1050,84 @@ function readErrorMessage(error: unknown, timeoutMs: number) {
   }
 
   return String(error);
+}
+
+async function readResponsePreview(args: {
+  response: Response;
+  timeoutMs: number;
+  maxLength: number;
+}) {
+  if (args.response.body == null) {
+    return null;
+  }
+
+  const reader = args.response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let previewLength = 0;
+
+  try {
+    while (previewLength < args.maxLength) {
+      const chunk = await readStreamChunkWithTimeout({
+        reader,
+        timeoutMs: args.timeoutMs,
+      });
+      if (chunk == null || chunk.done) {
+        break;
+      }
+
+      const text = decoder.decode(chunk.value, { stream: true });
+      previewLength += text.length;
+      chunks.push(text);
+    }
+
+    chunks.push(decoder.decode());
+  } catch {
+    return truncateBodyPreview({
+      body: chunks.join(""),
+      maxLength: args.maxLength,
+    });
+  } finally {
+    // `cancel()` can itself hang against a peer that never finishes the body.
+    // Fire-and-forget cleanup here because the preview is best-effort audit
+    // data, not part of the delivery success fence.
+    void reader.cancel().catch(() => {});
+  }
+
+  return truncateBodyPreview({
+    body: chunks.join(""),
+    maxLength: args.maxLength,
+  });
+}
+
+async function readStreamChunkWithTimeout(args: {
+  reader: ReadableStreamDefaultReader<Uint8Array>;
+  timeoutMs: number;
+}) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      args.reader.read(),
+      new Promise<null>((resolve) => {
+        timeout = setTimeout(() => resolve(null), args.timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout != null) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function truncateBodyPreview(args: { body: string; maxLength: number }) {
+  if (args.body.length === 0) {
+    return null;
+  }
+
+  if (args.body.length <= args.maxLength) {
+    return args.body;
+  }
+
+  return `${args.body.slice(0, args.maxLength)}...`;
 }

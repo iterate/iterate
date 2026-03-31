@@ -3,6 +3,8 @@
  * and `getState()`, so the same assertions can run against local or deployed
  * workers.
  */
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { HttpResponse, http } from "msw";
 import { describe, expect, test } from "vitest";
@@ -12,7 +14,14 @@ import {
   SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE,
   SUBSCRIPTION_SET_TYPE,
 } from "@iterate-com/events-contract";
-import { createEventsE2eFixture, requireEventsBaseUrl, useWebhookSink } from "../helpers.ts";
+import { createNativeMswServer } from "../../../../packages/mock-http-proxy/src/server/msw-server-adapter.ts";
+import {
+  collectAsyncIterableUntilIdle,
+  createEventsE2eFixture,
+  requireEventsBaseUrl,
+  useWebhookSink,
+  waitForStreamState,
+} from "../helpers.ts";
 
 const app = createEventsE2eFixture({
   baseURL: requireEventsBaseUrl(),
@@ -27,7 +36,7 @@ describe.sequential("subscription e2e", () => {
       hook.replyJson(200, { ok: true });
 
       const path = app.newStreamPath();
-      await app.client.append({
+      await app.appendEvents({
         path,
         events: [
           app.subscriptionSet({
@@ -41,6 +50,14 @@ describe.sequential("subscription e2e", () => {
       });
 
       const deliveries = await hook.waitForCount({ count: 1 });
+      const historyAfterSuccess = await collectAsyncIterableUntilIdle({
+        iterable: await app.client.stream({ path, live: false }),
+        idleMs: 250,
+      });
+      const succeededDeliveryEvent = historyAfterSuccess.find(
+        (event) => event.type === SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE,
+      );
+
       expect(deliveries.map((delivery) => delivery.payload)).toEqual([
         {
           subscriptionSlug: "alpha",
@@ -51,8 +68,25 @@ describe.sequential("subscription e2e", () => {
           }),
         },
       ]);
+      expect(succeededDeliveryEvent).toMatchObject({
+        payload: {
+          attempted: {
+            url: hook.endpointUrl,
+            headers: {
+              "content-type": "application/json",
+            },
+            body: {
+              subscriptionSlug: "alpha",
+              event: {
+                offset: app.expectedOffset(2),
+                payload: { value: 1 },
+              },
+            },
+          },
+        },
+      });
 
-      expect(await app.getParsedState(path)).toMatchObject({
+      expect(await app.getState(path)).toMatchObject({
         subscriptions: {
           alpha: {
             type: "webhook",
@@ -81,7 +115,7 @@ describe.sequential("subscription e2e", () => {
       ]);
 
       const path = app.newStreamPath();
-      await app.client.append({
+      await app.appendEvents({
         path,
         events: [
           app.subscriptionSet({
@@ -94,17 +128,42 @@ describe.sequential("subscription e2e", () => {
         ],
       });
 
-      const failedState = await app.waitForState({
+      const failedState = await waitForStreamState({
+        app,
         streamPath: path,
-        predicate: (state) => state.subscriptions.alpha?.cursor.retries === 1,
+        predicate: (state) => subscriptionCursor(state, "alpha")?.retries === 1,
+      });
+      const historyAfterFailure = await collectAsyncIterableUntilIdle({
+        iterable: await app.client.stream({ path, live: false }),
+        idleMs: 250,
       });
       const scheduledRetryAt = Date.parse(
-        failedState.subscriptions.alpha?.cursor.nextDeliveryAt ?? "",
+        subscriptionCursor(failedState, "alpha")?.nextDeliveryAt ?? "",
+      );
+      const failedDeliveryEvent = historyAfterFailure.find(
+        (event) => event.type === SUBSCRIPTION_DELIVERY_FAILED_TYPE,
       );
 
       const deliveries = await hook.waitForCount({ count: 2 });
       const retryDelayMs = deliveries[1]!.startedAtMs - deliveries[0]!.startedAtMs;
 
+      expect(failedDeliveryEvent).toMatchObject({
+        payload: {
+          attempted: {
+            url: hook.endpointUrl,
+            headers: {
+              "content-type": "application/json",
+            },
+            body: {
+              subscriptionSlug: "alpha",
+              event: {
+                offset: app.expectedOffset(2),
+                payload: { value: 1 },
+              },
+            },
+          },
+        },
+      });
       expect(retryDelayMs).toBeGreaterThanOrEqual(200);
       expect(deliveries[1]!.startedAtMs).toBeGreaterThanOrEqual(scheduledRetryAt - 50);
       expect(deliveries.map((delivery) => delivery.payload?.event.type)).toEqual([
@@ -112,18 +171,59 @@ describe.sequential("subscription e2e", () => {
         "https://events.iterate.com/events/example/value-recorded",
       ]);
 
-      const state = await app.waitForState({
+      const state = await waitForStreamState({
+        app,
         streamPath: path,
         predicate: (currentState) =>
-          currentState.subscriptions.alpha?.cursor.lastAcknowledgedOffset === app.expectedOffset(2),
+          subscriptionCursor(currentState, "alpha")?.lastAcknowledgedOffset ===
+          app.expectedOffset(2),
       });
 
-      expect(state.subscriptions.alpha?.cursor).toEqual({
+      expect(subscriptionCursor(state, "alpha")).toEqual({
         lastAcknowledgedOffset: app.expectedOffset(2),
         nextDeliveryAt: null,
         retries: 0,
         lastError: null,
       });
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "retry still happens without extra worker traffic between attempts",
+    async () => {
+      /**
+       * Agents explicitly tests that retries are driven by scheduler state, not
+       * by incidental later calls. After the initial append we only watch the
+       * sink and let the DO alarm wake itself.
+       */
+      await using hook = await useWebhookSink({ pathname: "/retry-alone" });
+      hook.replySequence([
+        () => new HttpResponse("nope", { status: 500 }),
+        () => HttpResponse.json({ ok: true }),
+      ]);
+
+      const path = app.newStreamPath();
+      await app.appendEvents({
+        path,
+        events: [
+          app.subscriptionSet({
+            path,
+            slug: "alpha",
+            url: hook.endpointUrl,
+            startFrom: "head",
+          }),
+          app.userEvent({ path, payload: { value: 1 } }),
+        ],
+      });
+
+      const deliveries = await hook.waitForCount({ count: 2, timeoutMs: 2_500 });
+
+      expect(deliveries[1]!.startedAtMs - deliveries[0]!.startedAtMs).toBeGreaterThanOrEqual(200);
+      expect(deliveries.map((delivery) => delivery.payload?.event.offset)).toEqual([
+        app.expectedOffset(2),
+        app.expectedOffset(2),
+      ]);
     },
     testTimeoutMs,
   );
@@ -135,12 +235,12 @@ describe.sequential("subscription e2e", () => {
       hook.replyJson(200, { ok: true });
 
       const path = app.newStreamPath();
-      await app.client.append({
+      await app.appendEvent({
         path,
         type: "https://events.iterate.com/events/example/value-recorded",
         payload: { value: 1 },
       });
-      await app.client.append({
+      await app.appendEvents({
         path,
         events: [
           app.subscriptionSet({
@@ -169,7 +269,7 @@ describe.sequential("subscription e2e", () => {
       beta.replyJson(200, { ok: true });
 
       const path = app.newStreamPath();
-      await app.client.append({
+      await app.appendEvents({
         path,
         events: [
           app.subscriptionSet({
@@ -191,20 +291,20 @@ describe.sequential("subscription e2e", () => {
       await alpha.waitForCount({ count: 1 });
       await beta.waitForCount({ count: 1 });
 
-      expect(alpha.eventTypes()).toEqual([
+      expect(deliveredEventTypes(alpha)).toEqual([
         "https://events.iterate.com/events/example/value-recorded",
       ]);
-      expect(beta.eventTypes()).toEqual([
+      expect(deliveredEventTypes(beta)).toEqual([
         "https://events.iterate.com/events/example/value-recorded",
       ]);
-      expect(alpha.eventTypes()).not.toContain(SUBSCRIPTION_SET_TYPE);
-      expect(alpha.eventTypes()).not.toContain(SUBSCRIPTION_CURSOR_UPDATED_TYPE);
-      expect(alpha.eventTypes()).not.toContain(SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE);
-      expect(alpha.eventTypes()).not.toContain(SUBSCRIPTION_DELIVERY_FAILED_TYPE);
-      expect(beta.eventTypes()).not.toContain(SUBSCRIPTION_SET_TYPE);
-      expect(beta.eventTypes()).not.toContain(SUBSCRIPTION_CURSOR_UPDATED_TYPE);
-      expect(beta.eventTypes()).not.toContain(SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE);
-      expect(beta.eventTypes()).not.toContain(SUBSCRIPTION_DELIVERY_FAILED_TYPE);
+      expect(deliveredEventTypes(alpha)).not.toContain(SUBSCRIPTION_SET_TYPE);
+      expect(deliveredEventTypes(alpha)).not.toContain(SUBSCRIPTION_CURSOR_UPDATED_TYPE);
+      expect(deliveredEventTypes(alpha)).not.toContain(SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE);
+      expect(deliveredEventTypes(alpha)).not.toContain(SUBSCRIPTION_DELIVERY_FAILED_TYPE);
+      expect(deliveredEventTypes(beta)).not.toContain(SUBSCRIPTION_SET_TYPE);
+      expect(deliveredEventTypes(beta)).not.toContain(SUBSCRIPTION_CURSOR_UPDATED_TYPE);
+      expect(deliveredEventTypes(beta)).not.toContain(SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE);
+      expect(deliveredEventTypes(beta)).not.toContain(SUBSCRIPTION_DELIVERY_FAILED_TYPE);
     },
     testTimeoutMs,
   );
@@ -224,7 +324,7 @@ describe.sequential("subscription e2e", () => {
       fast.replyJson(200, { ok: true });
 
       const path = app.newStreamPath();
-      await app.client.append({
+      await app.appendEvents({
         path,
         events: [
           app.subscriptionSet({
@@ -248,19 +348,145 @@ describe.sequential("subscription e2e", () => {
       expect(fastDelivery?.payload?.event.offset).toBe(app.expectedOffset(3));
       expect(fastDelivery!.startedAtMs - startedAtMs).toBeLessThan(1_800);
 
-      const slowState = await app.waitForState({
+      const slowState = await waitForStreamState({
+        app,
         streamPath: path,
         timeoutMs: 4_000,
-        predicate: (state) => state.subscriptions.slow?.cursor.retries === 1,
+        predicate: (state) => subscriptionCursor(state, "slow")?.retries === 1,
       });
 
-      expect(slowState.subscriptions.fast?.cursor.lastAcknowledgedOffset).toBe(
+      expect(subscriptionCursor(slowState, "fast")?.lastAcknowledgedOffset).toBe(
         app.expectedOffset(3),
       );
-      expect(slowState.subscriptions.slow?.cursor.lastAcknowledgedOffset).toBeNull();
-      expect(slowState.subscriptions.slow?.cursor.lastError?.message).toContain("timed out");
-      expect(slowState.subscriptions.slow?.cursor.nextDeliveryAt).toEqual(expect.any(String));
+      expect(subscriptionCursor(slowState, "slow")?.lastAcknowledgedOffset).toBeNull();
+      expect(subscriptionCursor(slowState, "slow")?.lastError?.message).toContain("timed out");
+      expect(subscriptionCursor(slowState, "slow")?.nextDeliveryAt).toEqual(expect.any(String));
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "a never-ending response body does not stop a healthy sibling from finishing",
+    async () => {
+      await using hanging = await useStreamingWebhookServer({
+        pathname: "/hanging-body",
+        handler: http.post("/hanging-body", async () => {
+          return new HttpResponse(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode("partial"));
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "text/plain" },
+            },
+          );
+        }),
+      });
+      await using healthy = await useWebhookSink({ pathname: "/healthy-body" });
+
+      healthy.replyJson(200, { ok: true });
+
+      const path = app.newStreamPath();
+      await app.appendEvents({
+        path,
+        events: [
+          app.subscriptionSet({
+            path,
+            slug: "hanging",
+            url: hanging.endpointUrl,
+            startFrom: "head",
+          }),
+          app.subscriptionSet({
+            path,
+            slug: "healthy",
+            url: healthy.endpointUrl,
+            startFrom: "head",
+          }),
+          app.userEvent({ path, payload: { value: 1 } }),
+        ],
+      });
+
+      await healthy.waitForCount({ count: 1, timeoutMs: 1_500 });
+      const state = await waitForStreamState({
+        app,
+        streamPath: path,
+        timeoutMs: 1_500,
+        predicate: (currentState) =>
+          subscriptionCursor(currentState, "healthy")?.lastAcknowledgedOffset ===
+            app.expectedOffset(3) &&
+          subscriptionCursor(currentState, "hanging")?.lastAcknowledgedOffset ===
+            app.expectedOffset(3),
+      });
+
+      expect(subscriptionCursor(state, "healthy")?.lastAcknowledgedOffset).toBe(
+        app.expectedOffset(3),
+      );
+      expect(subscriptionCursor(state, "hanging")?.lastAcknowledgedOffset).toBe(
+        app.expectedOffset(3),
+      );
     },
     testTimeoutMs,
   );
 });
+
+function subscriptionCursor(state: Record<string, unknown>, slug: string) {
+  const subscriptions = state.subscriptions;
+  if (typeof subscriptions !== "object" || subscriptions == null || Array.isArray(subscriptions)) {
+    return undefined;
+  }
+
+  const subscription = (subscriptions as Record<string, unknown>)[slug];
+  if (typeof subscription !== "object" || subscription == null || Array.isArray(subscription)) {
+    return undefined;
+  }
+
+  const cursor = (subscription as Record<string, unknown>).cursor;
+  if (typeof cursor !== "object" || cursor == null || Array.isArray(cursor)) {
+    return undefined;
+  }
+
+  return cursor as {
+    lastAcknowledgedOffset: string | null;
+    nextDeliveryAt: string | null;
+    retries: number;
+    lastError: { message?: string } | null;
+  };
+}
+
+async function useStreamingWebhookServer(args: {
+  pathname: string;
+  handler: ReturnType<typeof http.post>;
+}) {
+  const server = createNativeMswServer(args.handler);
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  const address = server.address() as AddressInfo;
+  const endpointUrl = new URL(args.pathname, `http://127.0.0.1:${String(address.port)}`).toString();
+
+  return {
+    endpointUrl,
+    async [Symbol.asyncDispose]() {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+    },
+  };
+}
+
+function deliveredEventTypes(hook: {
+  deliveries(): Array<{ payload: { event?: { type?: string } } | null }>;
+}) {
+  return hook
+    .deliveries()
+    .map((delivery) => delivery.payload?.event?.type)
+    .filter((type): type is string => type != null);
+}

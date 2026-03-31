@@ -4,7 +4,6 @@ import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import {
-  Offset,
   SUBSCRIPTION_REMOVED_TYPE,
   SUBSCRIPTION_SET_TYPE,
   type Event,
@@ -14,35 +13,8 @@ import {
 import { useMockHttpServer } from "@iterate-com/mock-http-proxy";
 import { HttpResponse, http } from "msw";
 import { vi } from "vitest";
-import { z } from "zod";
-
-const subscriptionStateSliceSchema = z
-  .object({
-    subscriptions: z.record(
-      z.string(),
-      z
-        .object({
-          cursor: z.object({
-            lastAcknowledgedOffset: Offset.nullable(),
-            nextDeliveryAt: z.string().nullable(),
-            retries: z.number().int().nonnegative(),
-            lastError: z
-              .object({
-                message: z.string(),
-                statusCode: z.number().int().nullable(),
-                bodyPreview: z.string().nullable(),
-                at: z.string(),
-              })
-              .nullable(),
-          }),
-        })
-        .passthrough(),
-    ),
-  })
-  .passthrough();
 
 export type Events2Client = ContractRouterClient<typeof eventsContract>;
-
 export type Events2AppFixture = {
   baseURL: string;
   client: Events2Client;
@@ -60,32 +32,21 @@ export function requireEventsBaseUrl() {
   return value.replace(/\/+$/, "");
 }
 
-export function createEvents2AppFixture(args: { baseURL: string }): Events2AppFixture {
+export function createEventsE2eFixture(args: { baseURL: string }) {
   const baseURL = args.baseURL.replace(/\/+$/, "");
   const client = createORPCClient(
     new OpenAPILink(eventsContract, {
       url: new URL("/api", baseURL).toString(),
     }),
   ) as Events2Client;
+  const userEventType = "https://events.iterate.com/events/example/value-recorded";
 
   return {
     baseURL,
     client,
-    fetch: (pathname, init) => fetch(new URL(pathname, baseURL), init),
-  };
-}
-
-/**
- * These helpers intentionally keep the e2e tests black-box. They only talk to
- * the worker over HTTP and parse `getState()` locally when a test needs to make
- * assertions about the reduced projection.
- */
-export function createEventsE2eFixture(args: { baseURL: string }) {
-  const app = createEvents2AppFixture(args);
-  const userEventType = "https://events.iterate.com/events/example/value-recorded";
-
-  return {
-    ...app,
+    fetch(pathname: string, init?: RequestInit) {
+      return fetch(new URL(pathname, baseURL), init);
+    },
     newStreamPath(prefix = "/subscriptions") {
       return `${prefix}/${randomUUID().slice(0, 8)}`;
     },
@@ -131,43 +92,62 @@ export function createEventsE2eFixture(args: { baseURL: string }) {
         payload: args.payload,
       };
     },
-    async getParsedState(streamPath: string) {
-      return subscriptionStateSliceSchema.parse(await app.client.getState({ streamPath }));
-    },
-    async waitForState(args: {
-      predicate: (state: z.infer<typeof subscriptionStateSliceSchema>) => boolean;
-      streamPath: string;
-      timeoutMs?: number;
-    }) {
-      let lastState = await subscriptionStateSliceSchema.parseAsync(
-        await app.client.getState({ streamPath: args.streamPath }),
-      );
-
-      try {
-        await vi.waitFor(
-          async () => {
-            lastState = await subscriptionStateSliceSchema.parseAsync(
-              await app.client.getState({ streamPath: args.streamPath }),
-            );
-            if (!args.predicate(lastState)) {
-              throw new Error("state not ready yet");
-            }
-          },
-          {
-            interval: 50,
-            timeout: args.timeoutMs ?? 5_000,
-          },
-        );
-      } catch (error) {
-        throw new Error(
-          `Timed out waiting for stream state on ${args.streamPath}: ${JSON.stringify(lastState, null, 2)}`,
-          { cause: error },
-        );
+    async getState(streamPath: string) {
+      const state = await client.getState({ streamPath });
+      if (typeof state !== "object" || state == null || Array.isArray(state)) {
+        throw new Error(`Expected object stream state for ${streamPath}.`);
       }
 
-      return lastState;
+      return state as Record<string, unknown>;
+    },
+    appendEvents(args: { path: string; events: EventInput[] }) {
+      return client.append(args);
+    },
+    appendEvent(args: { path: string; type: string; payload: EventInput["payload"] }) {
+      return client.append(args);
     },
   };
+}
+
+export function createEvents2AppFixture(args: { baseURL: string }): Events2AppFixture {
+  const app = createEventsE2eFixture(args);
+
+  return {
+    baseURL: app.baseURL,
+    client: app.client,
+    fetch: app.fetch,
+  };
+}
+
+export async function waitForStreamState(args: {
+  app: ReturnType<typeof createEventsE2eFixture>;
+  predicate: (state: Record<string, unknown>) => boolean;
+  streamPath: string;
+  timeoutMs?: number;
+}) {
+  let lastState = await args.app.getState(args.streamPath);
+
+  try {
+    await vi.waitFor(
+      async () => {
+        lastState = await args.app.getState(args.streamPath);
+        if (!args.predicate(lastState)) {
+          throw new Error("state not ready yet");
+        }
+      },
+      {
+        interval: 50,
+        timeout: args.timeoutMs ?? 5_000,
+      },
+    );
+  } catch (error) {
+    throw new Error(
+      `Timed out waiting for stream state on ${args.streamPath}: ${JSON.stringify(lastState, null, 2)}`,
+      { cause: error },
+    );
+  }
+
+  return lastState;
 }
 
 /**
@@ -208,11 +188,6 @@ export async function useWebhookSink(args: { pathname: string }) {
       );
     },
     deliveries,
-    eventTypes() {
-      return deliveries()
-        .map((delivery) => delivery.payload?.event.type)
-        .filter((type): type is string => type != null);
-    },
     async waitForCount(args: { count: number; timeoutMs?: number }) {
       await vi.waitFor(
         () => {

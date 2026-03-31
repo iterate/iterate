@@ -201,6 +201,28 @@ describe("stream reducer and helpers", () => {
           deliveryRevision: 1,
           deliveredEventOffset: "0000000000000001",
           observedLastOffset: "0000000000000001",
+          attempted: {
+            at: "2026-01-01T00:00:00.000Z",
+            url: "https://example.com/hook",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: {
+              subscriptionSlug: "alpha",
+              event: event({
+                offset: "0000000000000001",
+                type: SUBSCRIPTION_SET_TYPE,
+                payload: {
+                  slug: "alpha",
+                  subscription: {
+                    type: "webhook",
+                    url: "https://example.com/hook",
+                    startFrom: "tail",
+                  },
+                },
+              }),
+            },
+          },
           response: {
             statusCode: 200,
             bodyPreview: "ok",
@@ -245,6 +267,21 @@ describe("stream reducer and helpers", () => {
           deliveryRevision: 1,
           deliveredEventOffset: "0000000000000002",
           observedLastOffset: "0000000000000002",
+          attempted: {
+            at: "2026-01-01T00:00:00.000Z",
+            url: "https://example.com/hook",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: {
+              subscriptionSlug: "alpha",
+              event: event({
+                offset: "0000000000000002",
+                type: "https://events.iterate.com/events/example/value-recorded",
+                payload: { value: 1 },
+              }),
+            },
+          },
           response: {
             statusCode: 200,
             bodyPreview: "ok",
@@ -294,6 +331,21 @@ describe("stream reducer and helpers", () => {
           deliveryRevision: 1,
           deliveredEventOffset: "0000000000000002",
           observedLastOffset: "0000000000000002",
+          attempted: {
+            at: "2026-01-01T00:00:00.000Z",
+            url: "https://example.com/hook",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: {
+              subscriptionSlug: "alpha",
+              event: event({
+                offset: "0000000000000002",
+                type: "https://events.iterate.com/events/example/value-recorded",
+                payload: { value: 1 },
+              }),
+            },
+          },
           response: {
             statusCode: 500,
             bodyPreview: "nope",
@@ -325,6 +377,168 @@ describe("stream reducer and helpers", () => {
         at: "2026-01-01T00:00:00.000Z",
       },
     });
+  });
+
+  test("delivery-failed payload records the attempted webhook context", () => {
+    const failedEvent = event({
+      offset: "0000000000000003",
+      type: SUBSCRIPTION_DELIVERY_FAILED_TYPE,
+      payload: {
+        slug: "alpha",
+        deliveryRevision: 1,
+        deliveredEventOffset: "0000000000000002",
+        observedLastOffset: "0000000000000002",
+        attempted: {
+          at: "2026-01-01T00:00:00.000Z",
+          url: "https://example.com/hook",
+          headers: {
+            "content-type": "application/json",
+            "x-test": "true",
+          },
+          body: {
+            subscriptionSlug: "alpha",
+            event: event({
+              offset: "0000000000000002",
+              type: "https://events.iterate.com/events/example/value-recorded",
+              payload: { value: 1 },
+            }),
+          },
+        },
+        response: {
+          statusCode: 500,
+          bodyPreview: "nope",
+          message: "Webhook failed with 500",
+        },
+        cursor: {
+          lastAcknowledgedOffset: null,
+          nextDeliveryAt: "2026-01-01T00:00:00.250Z",
+          retries: 1,
+          lastError: {
+            message: "Webhook failed with 500",
+            statusCode: 500,
+            bodyPreview: "nope",
+            at: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      },
+    });
+
+    const state = reduce(createEmptyStreamState(), [
+      event({
+        offset: "0000000000000001",
+        type: SUBSCRIPTION_SET_TYPE,
+        payload: {
+          slug: "alpha",
+          subscription: {
+            type: "webhook",
+            url: "https://example.com/hook",
+            startFrom: "head",
+          },
+        },
+      }),
+      event({
+        offset: "0000000000000002",
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { value: 1 },
+      }),
+      failedEvent,
+    ]);
+
+    expect(failedEvent.payload).toMatchObject({
+      attempted: {
+        url: "https://example.com/hook",
+        headers: {
+          "content-type": "application/json",
+          "x-test": "true",
+        },
+        body: {
+          subscriptionSlug: "alpha",
+          event: {
+            offset: "0000000000000002",
+            payload: { value: 1 },
+          },
+        },
+      },
+    });
+    expect(state.subscriptions.alpha?.cursor.retries).toBe(1);
+  });
+
+  test("delivery-succeeded payload records the attempted webhook context", () => {
+    const succeededEvent = event({
+      offset: "0000000000000003",
+      type: SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE,
+      payload: {
+        slug: "alpha",
+        deliveryRevision: 1,
+        deliveredEventOffset: "0000000000000002",
+        observedLastOffset: "0000000000000002",
+        attempted: {
+          at: "2026-01-01T00:00:00.000Z",
+          url: "https://example.com/hook",
+          headers: {
+            "content-type": "application/json",
+            "x-test": "true",
+          },
+          body: {
+            subscriptionSlug: "alpha",
+            event: event({
+              offset: "0000000000000002",
+              type: "https://events.iterate.com/events/example/value-recorded",
+              payload: { value: 1 },
+            }),
+          },
+        },
+        response: {
+          statusCode: 200,
+          bodyPreview: "ok",
+        },
+        cursor: {
+          lastAcknowledgedOffset: "0000000000000002",
+          nextDeliveryAt: null,
+          retries: 0,
+          lastError: null,
+        },
+      },
+    });
+
+    const state = reduce(createEmptyStreamState(), [
+      event({
+        offset: "0000000000000001",
+        type: SUBSCRIPTION_SET_TYPE,
+        payload: {
+          slug: "alpha",
+          subscription: {
+            type: "webhook",
+            url: "https://example.com/hook",
+            startFrom: "head",
+          },
+        },
+      }),
+      event({
+        offset: "0000000000000002",
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { value: 1 },
+      }),
+      succeededEvent,
+    ]);
+
+    expect(succeededEvent.payload).toMatchObject({
+      attempted: {
+        url: "https://example.com/hook",
+        headers: {
+          "content-type": "application/json",
+          "x-test": "true",
+        },
+        body: {
+          subscriptionSlug: "alpha",
+          event: {
+            offset: "0000000000000002",
+            payload: { value: 1 },
+          },
+        },
+      },
+    });
+    expect(state.subscriptions.alpha?.cursor.lastAcknowledgedOffset).toBe("0000000000000002");
   });
 
   test("cursor-updated clears due state when a head subscription is caught up", () => {
@@ -401,6 +615,21 @@ describe("stream reducer and helpers", () => {
           deliveryRevision: 1,
           deliveredEventOffset: "0000000000000002",
           observedLastOffset: "0000000000000002",
+          attempted: {
+            at: "2026-01-01T00:00:00.000Z",
+            url: "https://example.com/hook",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: {
+              subscriptionSlug: "alpha",
+              event: event({
+                offset: "0000000000000002",
+                type: "https://events.iterate.com/events/example/value-recorded",
+                payload: { value: 1 },
+              }),
+            },
+          },
           response: {
             statusCode: 200,
             bodyPreview: "ok",

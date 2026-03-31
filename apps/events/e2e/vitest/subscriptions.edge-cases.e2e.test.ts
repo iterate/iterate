@@ -11,6 +11,7 @@ import {
   createEventsE2eFixture,
   requireEventsBaseUrl,
   useWebhookSink,
+  waitForStreamState,
 } from "../helpers.ts";
 
 const app = createEventsE2eFixture({
@@ -31,7 +32,7 @@ describe.sequential("subscription edge cases", () => {
       hook.replyJson(200, { ok: true });
 
       const path = app.newStreamPath("/subscriptions-edge");
-      await app.client.append({
+      await app.appendEvents({
         path,
         events: [
           app.subscriptionSet({
@@ -43,11 +44,12 @@ describe.sequential("subscription edge cases", () => {
         ],
       });
 
-      const state = await app.waitForState({
+      const state = await waitForStreamState({
+        app,
         streamPath: path,
         timeoutMs: 1_500,
         predicate: (currentState) =>
-          currentState.subscriptions.alpha?.cursor.nextDeliveryAt === null,
+          subscriptionCursor(currentState, "alpha")?.nextDeliveryAt === null,
       });
       const history = await collectAsyncIterableUntilIdle({
         iterable: await app.client.stream({ path, live: false }),
@@ -56,8 +58,8 @@ describe.sequential("subscription edge cases", () => {
 
       expect(hook.deliveries()).toHaveLength(0);
       expect(history.map((event) => event.type)).toContain(SUBSCRIPTION_CURSOR_UPDATED_TYPE);
-      expect(hook.eventTypes()).not.toContain(SUBSCRIPTION_CURSOR_UPDATED_TYPE);
-      expect(state.subscriptions.alpha?.cursor.nextDeliveryAt).toBeNull();
+      expect(deliveredEventTypes(hook)).not.toContain(SUBSCRIPTION_CURSOR_UPDATED_TYPE);
+      expect(subscriptionCursor(state, "alpha")?.nextDeliveryAt).toBeNull();
     },
     testTimeoutMs,
   );
@@ -85,7 +87,7 @@ describe.sequential("subscription edge cases", () => {
       );
 
       const path = app.newStreamPath("/subscriptions-edge");
-      await app.client.append({
+      await app.appendEvents({
         path,
         events: [
           app.subscriptionSet({
@@ -102,7 +104,7 @@ describe.sequential("subscription edge cases", () => {
         expect(seenRequests).toHaveLength(1);
       });
 
-      await app.client.append({
+      await app.appendEvent({
         path,
         type: "https://events.iterate.com/events/example/value-recorded",
         payload: { value: 2 },
@@ -111,14 +113,18 @@ describe.sequential("subscription edge cases", () => {
       releaseFirstResponse.resolve(HttpResponse.json({ ok: true }));
 
       await hook.waitForCount({ count: 2, timeoutMs: 1_500 });
-      const state = await app.waitForState({
+      const state = await waitForStreamState({
+        app,
         streamPath: path,
         timeoutMs: 1_500,
         predicate: (currentState) =>
-          currentState.subscriptions.alpha?.cursor.lastAcknowledgedOffset === app.expectedOffset(3),
+          subscriptionCursor(currentState, "alpha")?.lastAcknowledgedOffset ===
+          app.expectedOffset(3),
       });
 
-      expect(state.subscriptions.alpha?.cursor.lastAcknowledgedOffset).toBe(app.expectedOffset(3));
+      expect(subscriptionCursor(state, "alpha")?.lastAcknowledgedOffset).toBe(
+        app.expectedOffset(3),
+      );
     },
     testTimeoutMs,
   );
@@ -147,7 +153,7 @@ describe.sequential("subscription edge cases", () => {
       );
 
       const path = app.newStreamPath("/subscriptions-edge");
-      await app.client.append({
+      await app.appendEvents({
         path,
         events: [
           app.subscriptionSet({
@@ -164,7 +170,7 @@ describe.sequential("subscription edge cases", () => {
         expect(seenCount).toBe(1);
       });
 
-      await app.client.append({
+      await app.appendEvents({
         path,
         events: [
           app.subscriptionSet({
@@ -179,18 +185,95 @@ describe.sequential("subscription edge cases", () => {
       releaseFirstResponse.resolve(HttpResponse.json({ ok: true }));
 
       try {
-        const state = await app.waitForState({
+        const state = await waitForStreamState({
+          app,
           streamPath: path,
           timeoutMs: 1_500,
           predicate: (currentState) =>
-            currentState.subscriptions.alpha?.cursor.lastAcknowledgedOffset === null,
+            subscriptionCursor(currentState, "alpha")?.lastAcknowledgedOffset === null,
         });
 
-        expect(state.subscriptions.alpha?.cursor.lastAcknowledgedOffset).toBeNull();
-        expect(state.subscriptions.alpha?.cursor.nextDeliveryAt).toEqual(expect.any(String));
+        expect(subscriptionCursor(state, "alpha")?.lastAcknowledgedOffset).toBeNull();
+        expect(subscriptionCursor(state, "alpha")?.nextDeliveryAt).toEqual(expect.any(String));
       } finally {
         releaseReplayResponse.resolve(HttpResponse.json({ ok: true }));
       }
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "rewinding during an in-flight failed delivery should not inherit the stale failure cursor",
+    async () => {
+      /**
+       * A stale failed outcome is the dangerous branch because it could
+       * otherwise schedule retries and overwrite a newer rewind. After the
+       * rewind, the subscription may replay successfully, but it must not keep
+       * the stale failure's retry/error state.
+       */
+      const releaseFirstResponse = createGate<Response>();
+      let seenCount = 0;
+
+      await using hook = await useWebhookSink({ pathname: "/rewind-failed" });
+      hook.use(
+        http.post(hook.endpointUrl, async () => {
+          seenCount += 1;
+          if (seenCount === 1) {
+            return releaseFirstResponse.promise;
+          }
+
+          return HttpResponse.json({ ok: true });
+        }),
+      );
+
+      const path = app.newStreamPath("/subscriptions-edge");
+      await app.appendEvents({
+        path,
+        events: [
+          app.subscriptionSet({
+            path,
+            slug: "alpha",
+            url: hook.endpointUrl,
+            startFrom: "head",
+          }),
+          app.userEvent({ path, payload: { value: 1 } }),
+        ],
+      });
+
+      await waitFor(() => {
+        expect(seenCount).toBe(1);
+      });
+
+      await app.appendEvents({
+        path,
+        events: [
+          app.subscriptionSet({
+            path,
+            slug: "alpha",
+            url: hook.endpointUrl,
+            startFrom: "head",
+          }),
+        ],
+      });
+
+      releaseFirstResponse.resolve(new HttpResponse("nope", { status: 500 }));
+
+      const state = await waitForStreamState({
+        app,
+        streamPath: path,
+        timeoutMs: 1_500,
+        predicate: (currentState) =>
+          subscriptionCursor(currentState, "alpha")?.lastAcknowledgedOffset ===
+            app.expectedOffset(2) &&
+          subscriptionCursor(currentState, "alpha")?.nextDeliveryAt === null,
+      });
+
+      expect(subscriptionCursor(state, "alpha")).toMatchObject({
+        lastAcknowledgedOffset: app.expectedOffset(2),
+        nextDeliveryAt: null,
+        retries: 0,
+        lastError: null,
+      });
     },
     testTimeoutMs,
   );
@@ -214,7 +297,7 @@ describe.sequential("subscription edge cases", () => {
       );
 
       const path = app.newStreamPath("/subscriptions-edge");
-      await app.client.append({
+      await app.appendEvents({
         path,
         events: [
           app.subscriptionSet({
@@ -231,7 +314,7 @@ describe.sequential("subscription edge cases", () => {
         expect(startedRequests).toBe(1);
       });
 
-      await app.client.append({
+      await app.appendEvents({
         path,
         events: [app.subscriptionRemoved({ path, slug: "alpha" })],
       });
@@ -239,18 +322,43 @@ describe.sequential("subscription edge cases", () => {
       releaseResponse.resolve(HttpResponse.json({ ok: true }));
       await delay(250);
 
-      const state = await app.waitForState({
+      const state = await waitForStreamState({
+        app,
         streamPath: path,
         timeoutMs: 1_500,
-        predicate: (currentState) => currentState.subscriptions.alpha == null,
+        predicate: (currentState) => subscriptionCursor(currentState, "alpha") == null,
       });
 
-      expect(state.subscriptions.alpha).toBeUndefined();
+      expect(subscriptionCursor(state, "alpha")).toBeUndefined();
       expect(hook.deliveries()).toHaveLength(1);
     },
     testTimeoutMs,
   );
 });
+
+function subscriptionCursor(state: Record<string, unknown>, slug: string) {
+  const subscriptions = state.subscriptions;
+  if (typeof subscriptions !== "object" || subscriptions == null || Array.isArray(subscriptions)) {
+    return undefined;
+  }
+
+  const subscription = (subscriptions as Record<string, unknown>)[slug];
+  if (typeof subscription !== "object" || subscription == null || Array.isArray(subscription)) {
+    return undefined;
+  }
+
+  const cursor = (subscription as Record<string, unknown>).cursor;
+  if (typeof cursor !== "object" || cursor == null || Array.isArray(cursor)) {
+    return undefined;
+  }
+
+  return cursor as {
+    lastAcknowledgedOffset: string | null;
+    nextDeliveryAt: string | null;
+    retries?: number;
+    lastError?: unknown;
+  };
+}
 
 function createGate<T>() {
   let resolve!: (value: T) => void;
@@ -266,4 +374,13 @@ async function waitFor(assertion: () => void) {
     interval: 50,
     timeout: 1_500,
   });
+}
+
+function deliveredEventTypes(hook: {
+  deliveries(): Array<{ payload: { event?: { type?: string } } | null }>;
+}) {
+  return hook
+    .deliveries()
+    .map((delivery) => delivery.payload?.event?.type)
+    .filter((type): type is string => type != null);
 }
