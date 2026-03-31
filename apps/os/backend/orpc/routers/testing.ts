@@ -45,54 +45,6 @@ export const FailureScenario = z.object({
 });
 export type FailureScenario = z.infer<typeof FailureScenario>;
 
-class TestingCustomError extends Error {
-  constructor(
-    readonly exampleGroup: string,
-    readonly exampleField: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "TestingCustomError";
-  }
-}
-
-export function runTestingFailureScenario(input: FailureScenario): void {
-  const throwable = createTestingThrowable(input);
-  const message = throwable instanceof Error ? throwable.message : String(throwable);
-
-  switch (input.mechanism) {
-    case "throw":
-      throw throwable;
-    case "logger-error":
-      logger.error(message, throwable);
-      return;
-    case "logger-warn":
-      logger.set({ errors: [toParsedLogError(throwable)] });
-      logger.warn(message);
-      return;
-  }
-}
-
-export function createTestingThrowable(input: FailureScenario): string | Error {
-  const message = `[test_${input.throwable.replaceAll("-", "_")}] ${input.marker}`;
-
-  switch (input.throwable) {
-    case "string":
-      return message;
-    case "error":
-      return new Error(message);
-    case "custom-error":
-      return new TestingCustomError("testing-example", input.marker, message);
-    case "error-with-detail":
-      return Object.assign(new Error(message), {
-        detail: {
-          bar: 123,
-          marker: input.marker,
-        },
-      });
-  }
-}
-
 /**
  * Testing router - provides helpers for test setup
  * These endpoints are only available in non-production environments
@@ -438,6 +390,49 @@ export const testingRouter = {
       return { success: true };
     }),
 };
+
+class TestingCustomError extends Error {
+  exampleField: string;
+
+  constructor(exampleField: string, message: string) {
+    super(message);
+    this.exampleField = exampleField;
+  }
+}
+
+/** Emit one synthetic failure shape for logging integration coverage. */
+export function runTestingFailureScenario(input: FailureScenario): void {
+  const throwable = createTestingThrowable(input);
+  const message = throwable instanceof Error ? throwable.message : String(throwable);
+
+  switch (input.mechanism) {
+    case "throw":
+      throw throwable;
+    case "logger-error":
+      logger.error(message, throwable);
+      return;
+    case "logger-warn":
+      logger.set({ errors: [toParsedLogError(throwable)] });
+      logger.warn(message);
+      return;
+  }
+}
+
+/** Build a representative throwable for the requested test scenario. */
+export function createTestingThrowable(input: FailureScenario): string | Error {
+  const message = `[test_${input.throwable.replaceAll("-", "_")}] ${input.marker}`;
+
+  switch (input.throwable) {
+    case "string":
+      return message;
+    case "error":
+      return new Error(message);
+    case "custom-error":
+      return new TestingCustomError(input.marker, message);
+    case "error-with-detail":
+      return Object.assign(new Error(message), { detail: { bar: 123 } });
+  }
+}
 
 function getTestingEventContext(ctx: { rawRequest: Request }): Record<string, unknown> {
   const posthogEgressOverride = ctx.rawRequest.headers.get("x-replace-posthog-egress");
