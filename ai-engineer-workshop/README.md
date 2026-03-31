@@ -29,7 +29,7 @@ Demonstrates a tiny event-driven LLM loop with [TanStack AI](https://tanstack.co
 
 **Run the subscriber** (needs network + API key):
 
-Run this from the package root `ai-engineer-workshop/jonas`, not from inside `02-basic-llm-loop/`.
+Use cwd `ai-engineer-workshop/jonas` (not the monorepo root, and not inside `02-basic-llm-loop/`). That directory is still under the `ai-engineer-workshop/` path in repo `doppler.yaml`, so Doppler resolves the `ai-engineer-workshop` project the same way as if you had `cd`’d from the repo root.
 
 ```bash
 cd ai-engineer-workshop/jonas
@@ -41,7 +41,7 @@ That script prints:
 - the exact browser URL to open
 - a JSON event you can paste into the stream page input
 
-If `STREAM_PATH` is not set, it generates a fresh stream path like `/jonas/02-basic-llm/a1b2c3` for that run.
+If `STREAM_PATH` is not set in the **process environment**, it generates a fresh stream path like `/jonas/02/a1b2c3d4` for that run. (A value exported in your shell still counts — `printenv STREAM_PATH`. The `ai-engineer-workshop` Doppler config does not set it.)
 
 So the whole demo can be:
 
@@ -51,7 +51,7 @@ So the whole demo can be:
 
 ```json
 {
-  "path": "/jonas/02-basic-llm/<random-short-string>",
+  "path": "/jonas/02/<random-short-string>",
   "type": "https://events.iterate.com/agent/input-item-added",
   "payload": {
     "item": {
@@ -65,4 +65,4 @@ So the whole demo can be:
 4. Submit it and literally watch it happen in the stream feed: the input event lands, the subscriber sees it, and the LLM appends output chunk events back into the same stream.
 5. Keep posting more `input-item-added` events into that same stream if you want a back-and-forth conversation. The subscriber now rebuilds the prior turns from the stream and sends that history back to the LLM on each new user message.
 
-Optional env: `BASE_URL`, `STREAM_PATH` (otherwise defaults to `/jonas/02-basic-llm/<random-short-string>`), `OPENAI_MODEL` (must be a supported OpenAI chat model name; default `gpt-4o-mini`).
+Optional env: `BASE_URL`, `STREAM_PATH` (otherwise defaults to `/jonas/02/<random-hex>`), `OPENAI_MODEL` (must be a supported OpenAI chat model name; default `gpt-4o-mini`).

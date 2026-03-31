@@ -3,7 +3,9 @@
  * https://github.com/tanstack/ai/blob/main/docs/guides/streaming.md
  * https://github.com/tanstack/ai/blob/main/docs/reference/functions/streamToText.md
  *
- * Run from `ai-engineer-workshop/jonas`:
+ * Run with cwd `ai-engineer-workshop/jonas` (not the monorepo root — that is fine; repo `doppler.yaml`
+ * still maps this folder to the `ai-engineer-workshop` Doppler project):
+ *
  *   doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm tsx 02-basic-llm-loop/run-llm-subscriber.ts
  */
 import { randomBytes } from "node:crypto";
@@ -12,8 +14,7 @@ import { createOpenaiChat } from "@tanstack/ai-openai";
 import { createEventsClient } from "../../lib/sdk.ts";
 
 const BASE_URL = process.env.BASE_URL || "https://events.iterate.com";
-const STREAM_PATH =
-  process.env.STREAM_PATH || `/jonas/02-basic-llm/${randomBytes(3).toString("hex")}`;
+const STREAM_PATH = process.env.STREAM_PATH || `/jonas/02/${randomBytes(4).toString("hex")}`;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = (process.env.OPENAI_MODEL || "gpt-4o-mini") as Parameters<
   typeof createOpenaiChat
