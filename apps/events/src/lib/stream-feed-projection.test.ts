@@ -110,7 +110,6 @@ describe("projectWireToFeed", () => {
         offset: "2",
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "content",
             id: "chunk-1",
@@ -126,7 +125,6 @@ describe("projectWireToFeed", () => {
         offset: "3",
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "content",
             id: "chunk-2",
@@ -142,7 +140,6 @@ describe("projectWireToFeed", () => {
         offset: "4",
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "done",
             id: "chunk-3",
@@ -191,7 +188,6 @@ describe("projectWireToFeed", () => {
         offset: "2",
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "content",
             id: "chunk-1",
@@ -233,7 +229,6 @@ describe("projectWireToFeed", () => {
         offset: "2",
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "content",
             id: "chunk-1",
@@ -249,7 +244,6 @@ describe("projectWireToFeed", () => {
         offset: "3",
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "done",
             id: "chunk-2",
@@ -263,7 +257,6 @@ describe("projectWireToFeed", () => {
         offset: "4",
         type: "https://events.iterate.com/agent/input-item-added",
         payload: {
-          sourceOffset: "1",
           item: {
             role: "assistant",
             content: "Hello",
@@ -302,7 +295,6 @@ describe("projectWireToFeed", () => {
         offset: "2",
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "tool_call",
             id: "c1",
@@ -321,7 +313,6 @@ describe("projectWireToFeed", () => {
         offset: "3",
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "tool_result",
             id: "c2",
@@ -336,7 +327,6 @@ describe("projectWireToFeed", () => {
         offset: "4",
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "done",
             id: "c3",
@@ -373,7 +363,6 @@ describe("projectWireToFeed", () => {
         offset: "2",
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "RUN_ERROR",
             error: "boom",
