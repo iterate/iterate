@@ -1,5 +1,6 @@
 import http from "node:http";
 import { once } from "node:events";
+import { fileURLToPath } from "node:url";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
@@ -26,14 +27,15 @@ test("captures a trpc procedure error", async () => {
     },
   });
   expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
-    api_key: <api-key>
+    "api_key: <api-key>
     event: $exception
     distinct_id: anonymous
     properties:
       $exception_list:
         - type: NonErrorThrowable
-          value: "oRPC Error unknown <origin>/api/orpc/testing/throwTrpcError:
-            [test_trpc_error] trpc-<marker>"
+          value: "oRPC Error unknown
+            <origin>/api/orpc/testing/throwTrpcError:
+            [test_trpc_error] <marker>"
           mechanism:
             handled: true
             synthetic: false
@@ -123,7 +125,7 @@ test("captures a trpc procedure error", async () => {
       user:
         id: anonymous
         email: unknown
-    timestamp: <timestamp>
+    timestamp: <timestamp>"
   `);
 });
 
@@ -147,13 +149,13 @@ test("captures a hono endpoint error", async () => {
     },
   });
   expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
-    api_key: <api-key>
+    "api_key: <api-key>
     event: $exception
     distinct_id: anonymous
     properties:
       $exception_list:
         - type: Error
-          value: "[test_hono_error] hono-<marker>"
+          value: "[test_hono_error] <marker>"
           mechanism:
             handled: true
             synthetic: false
@@ -239,11 +241,11 @@ test("captures a hono endpoint error", async () => {
         status: 500
         duration: <duration-ms>
         waitUntil: false
-        url: <origin>/api/testing/throw-hono-error?marker=hono-<marker>
+        url: <origin>/api/testing/throw-hono-error?marker=<marker>
       user:
         id: anonymous
         email: unknown
-    timestamp: <timestamp>
+    timestamp: <timestamp>"
   `);
 });
 
@@ -268,13 +270,13 @@ test("captures a waitUntil error", async () => {
     },
   });
   expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
-    api_key: <api-key>
+    "api_key: <api-key>
     event: $exception
     distinct_id: anonymous
     properties:
       $exception_list:
         - type: Error
-          value: "[test_wait_until_error] wait-until-<marker>"
+          value: "[test_wait_until_error] <marker>"
           mechanism:
             handled: true
             synthetic: false
@@ -302,7 +304,7 @@ test("captures a waitUntil error", async () => {
       user:
         id: anonymous
         email: unknown
-    timestamp: <timestamp>
+    timestamp: <timestamp>"
   `);
 });
 
@@ -326,7 +328,7 @@ test("captures the raw request log for a trpc procedure error", async () => {
     },
   });
   expect(normalize(captured, { marker })).toMatchInlineSnapshot(`
-    meta:
+    "meta:
       id: <log-id>
       start: <timestamp>
       end: <timestamp>
@@ -347,11 +349,11 @@ test("captures the raw request log for a trpc procedure error", async () => {
       id: anonymous
       email: unknown
     egress:
-      https://eu.i.posthog.com: <origin>
+      <origin> <origin>
     name: Error
-    message: "[test_trpc_error_log] trpc-<marker>"
+    message: "[test_trpc_error_log] <marker>"
     stack: >-
-      Error: [test_trpc_error_log] trpc-<marker>
+      Error: [test_trpc_error_log] <marker>
           at Object.handler (<repo>/apps/os/backend/orpc/routers/testing.ts:<line-number>:<column-number>)
           at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
           at runWithSpan (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
@@ -364,11 +366,13 @@ test("captures the raw request log for a trpc procedure error", async () => {
           at <repo>/.../node_modules/.vite/...:<line-number>:<column-number>
     errors:
       - name: NonErrorThrowable
-        message: "oRPC Error unknown <origin>/api/orpc/testing/throwTrpcError:
-          [test_trpc_error_log] trpc-<marker>"
+        message: "oRPC Error unknown
+          <origin>/api/orpc/testing/throwTrpcError:
+          [test_trpc_error_log] <marker>"
         stack: >-
-          Error: oRPC Error unknown <origin>/api/orpc/testing/throwTrpcError:
-          [test_trpc_error_log] trpc-<marker>
+          Error: oRPC Error unknown
+          <origin>/api/orpc/testing/throwTrpcError:
+          [test_trpc_error_log] <marker>
               at toParsedError (<repo>/apps/os/backend/logging/logger.ts:<line-number>:<column-number>)
               at Object.error (<repo>/apps/os/backend/logging/logger.ts:<line-number>:<column-number>)
               at <repo>/apps/os/backend/worker.ts:<line-number>:<column-number>
@@ -380,8 +384,9 @@ test("captures the raw request log for a trpc procedure error", async () => {
               at dispatch (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
               at dispatch (<repo>/.../node_modules/.vite/...:<line-number>:<column-number>)
     messages:
-      - "[ERROR] 0s: oRPC Error unknown <origin>/api/orpc/testing/throwTrpcError:
-        [test_trpc_error_log] trpc-<marker>"
+      - "[ERROR] 0s: oRPC Error unknown
+        <origin>/api/orpc/testing/throwTrpcError:
+        [test_trpc_error_log] <marker>""
   `);
 });
 
@@ -407,7 +412,7 @@ test("captures the raw waitUntil child log", async () => {
     },
   });
   expect(normalize(captured, { marker })).toMatchInlineSnapshot(`
-    meta:
+    "meta:
       id: <log-id>
       start: <timestamp>
       end: <timestamp>
@@ -432,7 +437,7 @@ test("captures the raw waitUntil child log", async () => {
         id: anonymous
         email: unknown
       egress:
-        https://eu.i.posthog.com: <origin>
+        <origin> <origin>
     service: os
     environment: <environment>
     request:
@@ -443,27 +448,27 @@ test("captures the raw waitUntil child log", async () => {
       waitUntil: true
       parentRequestId: <request-id>
     egress:
-      https://eu.i.posthog.com: <origin>
+      <origin> <origin>
     user:
       id: anonymous
       email: unknown
     errors:
       - name: Error
-        message: "[test_wait_until_log] wait-until-<marker>"
-        stack: |-
-          Error: [test_wait_until_log] wait-until-<marker>
+        message: "[test_wait_until_log] <marker>"
+        stack: >-
+          Error: [test_wait_until_log] <marker>
               at <repo>/apps/os/backend/orpc/routers/testing.ts:<line-number>:<column-number>
       - name: Error
-        message: "[test_wait_until_log] wait-until-<marker>"
-        stack: |-
-          Error: [test_wait_until_log] wait-until-<marker>
+        message: "[test_wait_until_log] <marker>"
+        stack: >-
+          Error: [test_wait_until_log] <marker>
               at <repo>/apps/os/backend/orpc/routers/testing.ts:<line-number>:<column-number>
     messages:
-      - "[ERROR] 0s: Error: [test_wait_until_log] wait-until-<marker>"
+      - "[ERROR] 0s: Error: [test_wait_until_log] <marker>"
       - "[INFO] 0s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid>
         path=/api/orpc/testing/throwWaitUntilError#waitUntil errorCount=1"
       - "[INFO] 0s: PostHog log exception sent requestId=<uuid>:waitUntil:<uuid>"
-      - "[ERROR] 0s: [test_wait_until_log] wait-until-<marker>"
+      - "[ERROR] 0s: [test_wait_until_log] <marker>""
   `);
 });
 
@@ -480,9 +485,7 @@ test("does not capture PostHog for successful outbox consumer flow", async () =>
       { timeout: 1_000 },
     )
     .toBe(false);
-  expect(normalize(integration.capture.requests)).toMatchInlineSnapshot(`
-    []
-  `);
+  expect(normalize(integration.capture.requests)).toMatchInlineSnapshot(`"[]"`);
 });
 
 test("captures an outbox consumer error", async () => {
@@ -501,13 +504,13 @@ test("captures an outbox consumer error", async () => {
     },
   });
   expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
-    api_key: <api-key>
+    "api_key: <api-key>
     event: $exception
     distinct_id: system:outbox
     properties:
       $exception_list:
         - type: Error
-          value: "[test_outbox_consumer_error] outbox-fail-<marker>"
+          value: "[test_outbox_consumer_error] <marker>"
           mechanism:
             handled: true
             synthetic: false
@@ -597,7 +600,7 @@ test("captures an outbox consumer error", async () => {
       user:
         id: system:outbox
         email: outbox@system
-    timestamp: <timestamp>
+    timestamp: <timestamp>"
   `);
 });
 
@@ -617,7 +620,7 @@ test("captures a malformed outbox job error", async () => {
     },
   });
   expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
-    api_key: <api-key>
+    "api_key: <api-key>
     event: $exception
     distinct_id: system:outbox
     properties:
@@ -734,7 +737,7 @@ test("captures a malformed outbox job error", async () => {
         causation: null
         processingResults: []
         status: failed
-    timestamp: <timestamp>
+    timestamp: <timestamp>"
   `);
 });
 
@@ -756,15 +759,15 @@ test("captures a missing consumer error", async () => {
     },
   });
   expect(normalize(captured.body, { marker })).toMatchInlineSnapshot(`
-    api_key: <api-key>
+    "api_key: <api-key>
     event: $exception
     distinct_id: system:outbox
     properties:
       $exception_list:
-        - type: OutboxDLQ:missing-consumer-<marker>>
+        - type: OutboxDLQ:missing-consumer-<marker>
           value: "Error: [outbox] no consumer found for
-            event=testing:missing-consumer:missing-consumer-<marker>>
-            consumer=missing-consumer-<marker>>"
+            event=testing:missing-consumer:<marker>
+            consumer=missing-consumer-<marker>"
           mechanism:
             handled: true
             synthetic: false
@@ -846,7 +849,7 @@ test("captures a missing consumer error", async () => {
       request:
         id: <request-id>
         method: OUTBOX
-        path: outbox/missing-consumer-<marker>>
+        path: outbox/missing-consumer-<marker>
         status: 500
         duration: <duration-ms>
         waitUntil: false
@@ -854,19 +857,19 @@ test("captures a missing consumer error", async () => {
         id: system:outbox
         email: outbox@system
       outbox:
-        consumerName: missing-consumer-<marker>>
+        consumerName: missing-consumer-<marker>
         jobId: <job-id>
         attempt: 1
-        eventName: testing:missing-consumer:missing-consumer-<marker>>
+        eventName: testing:missing-consumer:<marker>
         eventId: 999999
         causation: null
         processingResults:
           - "#1 error: Error: [outbox] no consumer found for
-            event=testing:missing-consumer:missing-consumer-<marker>>
-            consumer=missing-consumer-<marker>>. retry: false. reason: Error marked
+            event=testing:missing-consumer:<marker>
+            consumer=missing-consumer-<marker>. retry: false. reason: Error marked
             non-retryable."
         status: failed
-    timestamp: <timestamp>
+    timestamp: <timestamp>"
   `);
 });
 
@@ -1013,72 +1016,68 @@ async function createPostHogIntegration(): Promise<PostHogIntegrationContext> {
 }
 
 function normalize(value: unknown, params: { marker?: string } = {}): string {
-  const yaml = YAML.stringify(normalizeSnapshotValue(value));
-  const withMarker = params.marker ? yaml.replaceAll(params.marker, "<marker>") : yaml;
+  const yaml = YAML.stringify(
+    value,
+    function replacer(this: Record<string, unknown>, key, rawValue) {
+      if (key === "api_key") return "<api-key>";
+      if (key === "timestamp" || key === "start" || key === "end") return "<timestamp>";
+      if (key === "lineno") return "<line-number>";
+      if (key === "colno") return "<column-number>";
+      if (key === "duration" || key === "durationMs") return "<duration-ms>";
+      if (key === "jobId") return "<job-id>";
+      if (key === "parentRequestId") return "<request-id>";
+      if (key === "cfRay") return "<cf-ray>";
+      if (key === "$environment" || key === "environment") return "<environment>";
 
-  return withMarker
-    .replaceAll(process.cwd(), "<repo>")
-    .replaceAll(/https?:\/\/[^/\s]+/g, "<origin>")
-    .replaceAll(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "<timestamp>")
-    .replaceAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
-    .replaceAll(/\boutbox:[^:\s]+:\d+\b/g, "outbox:<consumer>:<job-id>")
-    .replaceAll(/\bmissing-consumer-[^"' ):\n]+\b/g, "missing-consumer-<marker>")
-    .replace(/<repo>\/[^ :)\n"]+(?::\d+:\d+)?/g, (match) => normalizeRepoPath(match));
-}
+      if (key === "id") {
+        if ("path" in this && "method" in this) return "<request-id>";
+        if ("start" in this) return "<log-id>";
+      }
 
-function normalizeRepoPath(value: string): string {
-  const [, path, line, column] = value.match(/^(<repo>\/[^ :)\n"]+?)(?::(\d+):(\d+))?$/) ?? [];
-  if (!path) return value;
+      if (typeof rawValue !== "string") return rawValue;
 
-  const nodeModulesIndex = path.indexOf("/node_modules/");
-  const normalizedPath =
-    nodeModulesIndex >= 0
-      ? `<repo>/.../node_modules/${path.slice(nodeModulesIndex + "/node_modules/".length).split("/")[0] ?? "unknown"}/...`
-      : path;
+      const normalizedPath = rawValue
+        .replaceAll(repoRoot, "<repo>")
+        .replace(/<repo>\/[^ :)\n"]+(?::\d+:\d+)?/g, (match) => {
+          const [, path, line, column] =
+            match.match(/^(<repo>\/[^ :)\n"]+?)(?::(\d+):(\d+))?$/) ?? [];
+          if (!path) return match;
 
-  if (!line || !column) return normalizedPath;
-  return `${normalizedPath}:<line-number>:<column-number>`;
-}
+          const nodeModulesIndex = path.indexOf("/node_modules/");
+          const collapsedPath =
+            nodeModulesIndex >= 0
+              ? `<repo>/.../node_modules/${path.slice(nodeModulesIndex + "/node_modules/".length).split("/")[0] ?? "unknown"}/...`
+              : path;
 
-function normalizeSnapshotValue(value: unknown, path: string[] = []): unknown {
-  const key = path[path.length - 1];
+          if (!line || !column) return collapsedPath;
+          return `${collapsedPath}:<line-number>:<column-number>`;
+        });
 
-  if (key === "api_key") return "<api-key>";
-  if (key === "timestamp") return "<timestamp>";
-  if (key === "start") return "<timestamp>";
-  if (key === "end") return "<timestamp>";
-  if (key === "lineno") return "<line-number>";
-  if (key === "colno") return "<column-number>";
-  if (key === "duration") return "<duration-ms>";
-  if (key === "durationMs") return "<duration-ms>";
-  if (key === "jobId") return "<job-id>";
-  if (key === "id" && path.at(-2) === "request") return "<request-id>";
-  if (key === "id" && path.at(-2) === "meta") return "<log-id>";
-  if (key === "parentRequestId") return "<request-id>";
-  if (key === "cfRay") return "<cf-ray>";
-  if (key === "$environment" || key === "environment") return "<environment>";
+      let normalizedString = normalizedPath
+        .replaceAll(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "<timestamp>")
+        .replaceAll(/\boutbox:[^:\s]+:\d+\b/g, "outbox:<consumer>:<job-id>");
 
-  if (Array.isArray(value)) {
-    return value.map((entry, index) => normalizeSnapshotValue(entry, [...path, String(index)]));
-  }
+      if (params.marker) {
+        normalizedString = normalizedString.replaceAll(params.marker, "<marker>");
+      }
 
-  if (typeof value === "object" && value !== null) {
-    return Object.fromEntries(
-      Object.entries(value).map(([entryKey, entryValue]) => [
-        entryKey,
-        normalizeSnapshotValue(entryValue, [...path, entryKey]),
-      ]),
-    );
-  }
-
-  if (typeof value !== "string") return value;
-
-  return value.replaceAll(
-    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
-    "<uuid>",
+      return normalizedString
+        .replaceAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
+        .replaceAll("missing-consumer-missing-consumer-<marker>", "missing-consumer-<marker>")
+        .replaceAll(
+          "testing:missing-consumer:missing-consumer-<marker>",
+          "testing:missing-consumer:<marker>",
+        );
+    },
   );
+
+  return yaml
+    .replaceAll(repoRoot, "<repo>")
+    .replaceAll(/https?:\/\/[^/\s]+/g, "<origin>")
+    .trimEnd();
 }
 
+const repoRoot = fileURLToPath(new URL("../../..", import.meta.url)).replace(/\/$/, "");
 const integrationBaseUrl = process.env.APP_URL || "http://local.iterate.com:5173";
 
 async function fetchWithManualRedirect(input: string | URL, init: RequestInit): Promise<Response> {
