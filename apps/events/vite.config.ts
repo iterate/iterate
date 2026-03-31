@@ -5,6 +5,8 @@ import viteReact from "@vitejs/plugin-react";
 import alchemy from "alchemy/cloudflare/tanstack-start";
 import { defineConfig } from "vite";
 
+const host = process.env.HOST ?? "::";
+
 export default defineConfig({
   build: {
     sourcemap: true,
@@ -13,7 +15,8 @@ export default defineConfig({
     tsconfigPaths: true,
   },
   server: {
-    host: process.env.HOST ?? "127.0.0.1",
+    // Bind dual-stack by default so both localhost (::1) and 127.0.0.1 work.
+    host,
     port: process.env.PORT ? Number(process.env.PORT) : 5173,
   },
   plugins: [
