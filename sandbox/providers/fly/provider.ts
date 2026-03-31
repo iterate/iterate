@@ -15,6 +15,8 @@ const FLY_API_BASE = "https://api.machines.dev";
 const FLY_GRAPHQL_BASE = "https://api.fly.io/graphql";
 const WAIT_TIMEOUT_SECONDS = 300;
 const MAX_WAIT_TIMEOUT_SECONDS = 60;
+const WAIT_RETRY_DELAY_MS = 1_000;
+const WAIT_NOT_FOUND_GRACE_SECONDS = 45;
 const DEFAULT_WEB_INTERNAL_PORT = 8080;
 const DEFAULT_SERVICE_PORTS: number[] = [];
 const DEFAULT_FLY_ORG = "iterate";
@@ -115,6 +117,10 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function sanitizeFlyAppName(value: string): string {
   return sanitizeNamePart(value).slice(0, MAX_CANONICAL_MACHINE_NAME_LENGTH).replace(/-+$/, "");
 }
@@ -211,12 +217,56 @@ async function waitForState(params: {
         method: "GET",
         path: `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/wait?state=${encodeURIComponent(state)}&timeout=${stepTimeoutSeconds}`,
       });
+      logFlyWaitEvent({
+        level: "log",
+        event: "wait-succeeded",
+        appName,
+        machineId,
+        state,
+        extra: { elapsedSeconds },
+      });
       return;
     } catch (error) {
-      const message = String(error).toLowerCase();
-      if (!message.includes("deadline_exceeded") && !message.includes("(408)")) {
-        throw error;
+      if (isTransientFlyError(error)) {
+        continue;
       }
+
+      if (isMachineNotFoundError(error)) {
+        const machine = await getMachineForDebug({ env, appName, machineId });
+        const machineState = machine ? (asString(machine.state) ?? "unknown") : "missing";
+        logFlyWaitEvent({
+          level: "warn",
+          event: "wait-machine-not-found",
+          appName,
+          machineId,
+          state,
+          extra: {
+            elapsedSeconds,
+            remainingSeconds,
+            machineVisible: Boolean(machine),
+            machineState,
+          },
+        });
+
+        if (elapsedSeconds < WAIT_NOT_FOUND_GRACE_SECONDS) {
+          await sleep(WAIT_RETRY_DELAY_MS);
+          continue;
+        }
+
+        throw new Error(
+          `Fly machine ${machineId} disappeared while waiting for '${state}' on app ${appName} after ${elapsedSeconds}s (visible=${Boolean(machine)} state=${machineState})`,
+        );
+      }
+
+      logFlyWaitEvent({
+        level: "warn",
+        event: "wait-failed",
+        appName,
+        machineId,
+        state,
+        extra: { elapsedSeconds, error: String(error) },
+      });
+      throw error;
     }
   }
 }
@@ -292,6 +342,53 @@ function isGraphQlNotFoundError(error: unknown): boolean {
 function isMachineStillActiveError(error: unknown): boolean {
   const message = String(error).toLowerCase();
   return message.includes("failed_precondition") && message.includes("still active");
+}
+
+function isMachineNotFoundError(error: unknown): boolean {
+  const message = String(error).toLowerCase();
+  return message.includes("(404)") && message.includes("machine not found");
+}
+
+function logFlyWaitEvent(params: {
+  level: "log" | "warn";
+  event: string;
+  appName: string;
+  machineId: string;
+  state: string;
+  extra?: Record<string, string | number | boolean | undefined>;
+}): void {
+  const { level, event, appName, machineId, state, extra } = params;
+  const detail = new URLSearchParams(
+    Object.entries({
+      event,
+      app: appName,
+      machine: machineId,
+      state,
+      ...(extra ?? {}),
+    }).flatMap(([key, value]) => (value === undefined ? [] : [[key, String(value)]])),
+  ).toString();
+  console[level](`[fly-provider] ${detail}`);
+}
+
+async function getMachineForDebug(params: {
+  env: FlyEnv;
+  appName: string;
+  machineId: string;
+}): Promise<Record<string, unknown> | null> {
+  const { env, appName, machineId } = params;
+  try {
+    const payload = await flyApi<unknown>({
+      env,
+      method: "GET",
+      path: `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}`,
+    });
+    return asRecord(payload);
+  } catch (error) {
+    if (isMachineNotFoundError(error)) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function ensureFlyAppExists(params: { env: FlyEnv; appName: string }): Promise<void> {
@@ -654,6 +751,17 @@ export class FlyProvider extends SandboxProvider {
     });
 
     const machineId = resolveMachineId(createPayload);
+    logFlyWaitEvent({
+      level: "log",
+      event: "machine-created",
+      appName,
+      machineId,
+      state: "created",
+      extra: {
+        snapshotId,
+        reportedState: asString(asRecord(createPayload).state) ?? "unknown",
+      },
+    });
     await waitForState({ env: this.env, appName, machineId, state: "started" });
 
     return new FlySandbox({
