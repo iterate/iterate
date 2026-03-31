@@ -84,7 +84,7 @@ describe("resources API", () => {
     expect(response.ok).toBe(false);
   });
 
-  test("adds resources, redacts public reads, and preserves authenticated reads", async () => {
+  test("keeps resource reads authenticated", async () => {
     const type = uniqueType();
     const create = await callApi<{
       type: string;
@@ -106,26 +106,7 @@ describe("resources API", () => {
     const publicList = await appFetch(
       `https://semaphore.example/api/resources?type=${encodeURIComponent(type)}`,
     );
-    const publicListJson = (await publicList.json()) as Array<{
-      type: string;
-      slug: string;
-      data: Record<string, unknown>;
-    }>;
-
-    expect(publicList.ok).toBe(true);
-    expect(publicListJson).toEqual([
-      {
-        type,
-        slug: "alpha",
-        data: { token: "[redacted]" },
-        leaseState: "available",
-        leasedUntil: null,
-        lastAcquiredAt: null,
-        lastReleasedAt: null,
-        createdAt: expect.any(String),
-        updatedAt: expect.any(String),
-      },
-    ]);
+    expect(publicList.ok).toBe(false);
 
     const list = await callApi<
       Array<{ type: string; slug: string; data: Record<string, unknown> }>
@@ -151,15 +132,7 @@ describe("resources API", () => {
     const publicFound = await appFetch(
       `https://semaphore.example/api/resources/${encodeURIComponent(type)}/alpha`,
     );
-    const publicFoundJson = (await publicFound.json()) as {
-      slug: string;
-      data: Record<string, unknown>;
-    };
-    expect(publicFound.ok).toBe(true);
-    expect(publicFoundJson).toMatchObject({
-      slug: "alpha",
-      data: { token: "[redacted]" },
-    });
+    expect(publicFound.ok).toBe(false);
 
     const found = await callApi<{ slug: string; data: Record<string, unknown> }>({
       path: `/api/resources/${encodeURIComponent(type)}/alpha`,

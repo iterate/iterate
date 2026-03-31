@@ -1,22 +1,73 @@
-import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { orpc } from "~/orpc/client.ts";
+import { createServerFn } from "@tanstack/react-start";
+import { FindResourceInput, type SemaphoreResourceRecord } from "@iterate-com/semaphore-contract";
+import { findResourceByKey } from "~/lib/resource-store.ts";
+
+type SerializableJsonValue =
+  | boolean
+  | null
+  | number
+  | string
+  | SerializableJsonValue[]
+  | { [key: string]: SerializableJsonValue };
+
+type SerializableSemaphoreResource = Omit<SemaphoreResourceRecord, "data"> & {
+  data: Record<string, SerializableJsonValue>;
+};
+
+function toSerializableJsonValue(value: unknown): SerializableJsonValue {
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "number" ||
+    typeof value === "string"
+  ) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(toSerializableJsonValue);
+  }
+
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entryValue]) => [key, toSerializableJsonValue(entryValue)]),
+    );
+  }
+
+  throw new Error("Semaphore resource data must be JSON-serializable");
+}
+
+function serializeResource(resource: SemaphoreResourceRecord): SerializableSemaphoreResource {
+  return {
+    ...resource,
+    data: Object.fromEntries(
+      Object.entries(resource.data).map(([key, value]) => [key, toSerializableJsonValue(value)]),
+    ),
+  };
+}
+
+const loadResource = createServerFn({ method: "GET" })
+  .inputValidator(FindResourceInput)
+  .handler(async ({ context, data }) => {
+    const resource = await findResourceByKey(context.db, data);
+    if (!resource) {
+      throw new Error(`No resource exists for ${data.type}/${data.slug}.`);
+    }
+
+    return serializeResource(resource);
+  });
 
 export const Route = createFileRoute("/_app/resources/$type/$slug")({
   component: ResourceDetailPage,
-  loader: ({ params }) => ({ breadcrumb: `${params.type}/${params.slug}` }),
+  loader: async ({ params }) => ({
+    breadcrumb: `${params.type}/${params.slug}`,
+    resource: await loadResource({ data: params }),
+  }),
 });
 
 function ResourceDetailPage() {
-  const { type, slug } = Route.useParams();
-  const { data } = useQuery({
-    ...orpc.resources.find.queryOptions({ input: { type, slug } }),
-    staleTime: 15_000,
-  });
-
-  if (!data) {
-    return null;
-  }
+  const { resource: data } = Route.useLoaderData();
 
   return (
     <section className="space-y-4">

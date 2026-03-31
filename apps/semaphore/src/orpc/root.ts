@@ -13,9 +13,6 @@ import {
 } from "~/lib/resource-store.ts";
 import { os } from "~/orpc/orpc.ts";
 
-const REDACTED_VALUE = "[redacted]";
-const SENSITIVE_DATA_KEY_PATTERN = /(token|secret|password|api[-_]?key|auth)/i;
-
 function readBearerToken(headerValue: string | null): string | null {
   if (!headerValue) return null;
   const match = /^bearer\s+(.+)$/i.exec(headerValue);
@@ -80,36 +77,6 @@ function getCoordinator(env: AppContext["env"], type: string) {
   return env.RESOURCE_COORDINATOR.getByName(type);
 }
 
-function redactPublicData(value: unknown, key?: string): unknown {
-  if (key && SENSITIVE_DATA_KEY_PATTERN.test(key)) {
-    return REDACTED_VALUE;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactPublicData(entry));
-  }
-
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-
-  return Object.fromEntries(
-    Object.entries(value).map(([entryKey, entryValue]) => [
-      entryKey,
-      redactPublicData(entryValue, entryKey),
-    ]),
-  );
-}
-
-function sanitizePublicResource<TResource extends { data: Record<string, unknown> }>(
-  resource: TResource,
-): TResource {
-  return {
-    ...resource,
-    data: redactPublicData(resource.data) as TResource["data"],
-  };
-}
-
 const addResourceProcedure = os.resources.add
   .use(authProcedure)
   .handler(async ({ context, input }) => {
@@ -147,29 +114,32 @@ const deleteResourceProcedure = os.resources.delete
     }
   });
 
-const listResourcesProcedure = os.resources.list.handler(async ({ context, input }) => {
-  try {
-    const resources = await listResourcesFromDb(context.env.DB, { type: input.type });
-    return hasValidBearerToken(context) ? resources : resources.map(sanitizePublicResource);
-  } catch (error) {
-    return mapResourceError(error);
-  }
-});
-
-const findResourceProcedure = os.resources.find.handler(async ({ context, input }) => {
-  try {
-    const resource = await findResourceByKey(context.env.DB, input);
-    if (!resource) {
-      throw new ORPCError("NOT_FOUND", {
-        message: `No resource exists for ${input.type}/${input.slug}.`,
-      });
+const listResourcesProcedure = os.resources.list
+  .use(authProcedure)
+  .handler(async ({ context, input }) => {
+    try {
+      return await listResourcesFromDb(context.env.DB, { type: input.type });
+    } catch (error) {
+      return mapResourceError(error);
     }
+  });
 
-    return hasValidBearerToken(context) ? resource : sanitizePublicResource(resource);
-  } catch (error) {
-    return mapResourceError(error);
-  }
-});
+const findResourceProcedure = os.resources.find
+  .use(authProcedure)
+  .handler(async ({ context, input }) => {
+    try {
+      const resource = await findResourceByKey(context.env.DB, input);
+      if (!resource) {
+        throw new ORPCError("NOT_FOUND", {
+          message: `No resource exists for ${input.type}/${input.slug}.`,
+        });
+      }
+
+      return resource;
+    } catch (error) {
+      return mapResourceError(error);
+    }
+  });
 
 const acquireResourceProcedure = os.resources.acquire
   .use(authProcedure)

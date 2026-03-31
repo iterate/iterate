@@ -1,8 +1,59 @@
-import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { orpc } from "~/orpc/client.ts";
+import { createServerFn } from "@tanstack/react-start";
+import type { SemaphoreResourceRecord } from "@iterate-com/semaphore-contract";
+import { listResourcesFromDb } from "~/lib/resource-store.ts";
+
+type SerializableJsonValue =
+  | boolean
+  | null
+  | number
+  | string
+  | SerializableJsonValue[]
+  | { [key: string]: SerializableJsonValue };
+
+type SerializableSemaphoreResource = Omit<SemaphoreResourceRecord, "data"> & {
+  data: Record<string, SerializableJsonValue>;
+};
+
+function toSerializableJsonValue(value: unknown): SerializableJsonValue {
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "number" ||
+    typeof value === "string"
+  ) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(toSerializableJsonValue);
+  }
+
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entryValue]) => [key, toSerializableJsonValue(entryValue)]),
+    );
+  }
+
+  throw new Error("Semaphore resource data must be JSON-serializable");
+}
+
+function serializeResource(resource: SemaphoreResourceRecord): SerializableSemaphoreResource {
+  return {
+    ...resource,
+    data: Object.fromEntries(
+      Object.entries(resource.data).map(([key, value]) => [key, toSerializableJsonValue(value)]),
+    ),
+  };
+}
+
+const loadResources = createServerFn({ method: "GET" }).handler(async ({ context }) => {
+  const resources = await listResourcesFromDb(context.db);
+  return resources.map(serializeResource);
+});
 
 export const Route = createFileRoute("/_app/resources/")({
+  loader: () => loadResources(),
   component: ResourcesIndexPage,
   staticData: {
     breadcrumb: "All",
@@ -10,20 +61,17 @@ export const Route = createFileRoute("/_app/resources/")({
 });
 
 function ResourcesIndexPage() {
-  const { data } = useQuery({
-    ...orpc.resources.list.queryOptions({ input: {} }),
-    staleTime: 15_000,
-  });
+  const data = Route.useLoaderData();
 
   return (
     <section className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Unauthenticated inventory view of the semaphore database. Lease mutations still require the
-        bearer token; the dashboard only shows current state.
+        Public dashboard view backed by server-side reads. The `/api/resources*` endpoints require
+        the bearer token.
       </p>
 
       <div className="space-y-3">
-        {data?.map((resource) => (
+        {data.map((resource) => (
           <a
             key={`${resource.type}:${resource.slug}`}
             href={`/resources/${encodeURIComponent(resource.type)}/${encodeURIComponent(resource.slug)}/`}
@@ -47,7 +95,7 @@ function ResourcesIndexPage() {
         ))}
       </div>
 
-      {data && data.length === 0 ? (
+      {data.length === 0 ? (
         <p className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
           No resources are currently registered.
         </p>
