@@ -16,9 +16,32 @@ const AlchemyEnv = z.object({
     .regex(/^[\w-]+$/, "ALCHEMY_STAGE must contain only letters, numbers, underscores, or hyphens"),
   CLOUDFLARE_API_TOKEN: z.string().trim().min(1, "CLOUDFLARE_API_TOKEN is required"),
   CLOUDFLARE_ACCOUNT_ID: z.string().trim().min(1, "CLOUDFLARE_ACCOUNT_ID is required"),
+  WORKER_ROUTES: z
+    .string()
+    .optional()
+    .transform((value) =>
+      (value ?? "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    )
+    .pipe(
+      z.array(
+        z
+          .string()
+          .min(1)
+          .refine(
+            (hostname) => !hostname.includes("/") && !hostname.includes("://"),
+            "WORKER_ROUTES entries must be hostnames without scheme or path",
+          ),
+      ),
+    ),
 });
 
 const env = AlchemyEnv.parse(process.env);
+if (!env.ALCHEMY_LOCAL && env.WORKER_ROUTES.length === 0) {
+  throw new Error("WORKER_ROUTES is required when deploying. Set it in Doppler.");
+}
 const compiledAppConfig = parseAppConfigFromEnv({
   configSchema: AppConfig,
   prefix: "APP_CONFIG_",
@@ -41,6 +64,7 @@ const app = await alchemy(APP_NAME, {
 });
 
 const workerName = `${APP_NAME}-${app.stage}`;
+const primaryUrl = env.WORKER_ROUTES[0] ? `https://${env.WORKER_ROUTES[0]}` : undefined;
 
 const db = await D1Database("example-db", {
   name: `${workerName}-db`,
@@ -58,6 +82,10 @@ export const worker = await TanStackStart(APP_NAME, {
   wrangler: {
     main: "./src/entry.workerd.ts",
   },
+  routes: env.WORKER_ROUTES.map((hostname) => ({
+    pattern: `${hostname}/*`,
+    adopt: true,
+  })),
   observability: {
     enabled: true,
     headSamplingRate: 1,
@@ -79,6 +107,13 @@ export const worker = await TanStackStart(APP_NAME, {
   },
 });
 
-console.log({ url: worker.url });
+console.dir(
+  {
+    config: compiledAppConfig,
+    url: primaryUrl ?? worker.url,
+    workersDevUrl: worker.url,
+  },
+  { depth: null },
+);
 
 await app.finalize();
