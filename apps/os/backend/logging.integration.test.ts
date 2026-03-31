@@ -34,9 +34,7 @@ test("captures a trpc procedure error", async () => {
     properties:
       $exception_list:
         - type: NonErrorThrowable
-          value: "oRPC Error unknown
-            <origin>/api/orpc/testing/throwTrpcError:
-            [test_trpc_error] <marker>"
+          value: "Error: [test_trpc_error] <marker>"
           mechanism:
             handled: true
             synthetic: false
@@ -345,7 +343,7 @@ test("captures the raw request log for a trpc procedure error", async () => {
       hostname: local.iterate.com
       traceparent: null
       cfRay: <cf-ray>
-      timezone: Asia/Singapore
+      timezone: <timezone>
     user:
       id: <id>
       email: unknown
@@ -367,13 +365,9 @@ test("captures the raw request log for a trpc procedure error", async () => {
           at <repo>/.../node_modules/.vite/...
     errors:
       - name: NonErrorThrowable
-        message: "oRPC Error unknown
-          <origin>/api/orpc/testing/throwTrpcError:
-          [test_trpc_error_log] <marker>"
+        message: "Error: [test_trpc_error_log] <marker>"
         stack: >-
-          Error: oRPC Error unknown
-          <origin>/api/orpc/testing/throwTrpcError:
-          [test_trpc_error_log] <marker>
+          Error: Error: [test_trpc_error_log] <marker>
               at toParsedError (<repo>/apps/os/backend/logging/logger.ts:<lineno>:<colno>)
               at Object.error (<repo>/apps/os/backend/logging/logger.ts:<lineno>:<colno>)
               at <repo>/apps/os/backend/worker.ts:<lineno>:<colno>
@@ -385,9 +379,7 @@ test("captures the raw request log for a trpc procedure error", async () => {
               at dispatch (<repo>/.../node_modules/.vite/...)
               at dispatch (<repo>/.../node_modules/.vite/...)
     messages:
-      - "[ERROR] 0s: oRPC Error unknown
-        <origin>/api/orpc/testing/throwTrpcError:
-        [test_trpc_error_log] <marker>""
+      - "[ERROR] 0s: Error: [test_trpc_error_log] <marker>""
   `);
 });
 
@@ -432,7 +424,7 @@ test("captures the raw waitUntil child log", async () => {
         hostname: local.iterate.com
         traceparent: null
         cfRay: <cf-ray>
-        timezone: Asia/Singapore
+        timezone: <timezone>
       user:
         id: <id>
         email: unknown
@@ -934,10 +926,7 @@ test("returns a clean 400 and logs invalid orpc input", async () => {
     egress:
       <origin> <origin>
     messages:
-      - "[WARN] 0s: oRPC Error 400
-        <origin>/api/orpc/testing/emitSuccessfulOutboxEvent:
-        Input validation failed (message: Invalid input: expected string, received
-        number)""
+      - "[WARN] 0s: ✖ Invalid input: expected string, received number → at message""
   `);
 });
 

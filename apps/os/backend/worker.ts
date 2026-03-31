@@ -7,7 +7,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { RPCHandler } from "@orpc/server/fetch";
-import { onError } from "@orpc/server";
+import { onError, ORPCError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { createRouterClient } from "@orpc/server";
 import { sql } from "drizzle-orm";
@@ -19,6 +19,7 @@ import {
 import dedent from "dedent";
 import type { CloudflareEnv } from "../env.ts";
 import { isNonProd } from "../env.ts";
+import * as standardSchema from "./standard-schema/index.ts";
 import { getDb } from "./db/client.ts";
 import { getAuth } from "./auth/auth.ts";
 import { appRouter } from "./orpc/root.ts";
@@ -100,50 +101,6 @@ const getLogKeepExpression = () => {
   return jsonata(expr);
 };
 const logKeepExpression = getLogKeepExpression();
-
-function formatORPCValidationIssues(error: unknown): string | undefined {
-  if (
-    typeof error !== "object" ||
-    error === null ||
-    !("data" in error) ||
-    typeof error.data !== "object" ||
-    error.data === null ||
-    !("issues" in error.data) ||
-    !Array.isArray(error.data.issues)
-  ) {
-    return undefined;
-  }
-
-  const issues = error.data.issues
-    .map((issue) => {
-      if (typeof issue !== "object" || issue === null) return undefined;
-      const message =
-        "message" in issue && typeof issue.message === "string" ? issue.message : undefined;
-      const path =
-        "path" in issue && Array.isArray(issue.path)
-          ? issue.path.filter((part: unknown): part is string => typeof part === "string").join(".")
-          : "";
-      if (!message) return undefined;
-      return path ? `${path}: ${message}` : message;
-    })
-    .filter((issue): issue is string => Boolean(issue));
-
-  if (issues.length === 0) return undefined;
-  return issues.join("; ");
-}
-
-function formatORPCLogMessage(
-  error: unknown,
-  params: { request: { url: string | URL } },
-  status?: number,
-): string {
-  const base = `oRPC Error ${status ?? "unknown"} ${String(params.request.url)}: ${String(
-    (error as { message?: unknown })?.message ?? error,
-  )}`;
-  const validationIssues = formatORPCValidationIssues(error);
-  if (!validationIssues) return base;
-  return `${base} (${validationIssues})`;
-}
 
 logger.globalExitHandlers = [];
 logger.globalExitHandlers.push(recordBufferedLog);
@@ -479,37 +436,19 @@ app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
 // oRPC endpoint for client-facing API (app router)
 const appOrpcHandler = new RPCHandler(appRouter, {
   interceptors: [
-    onError((error, params) => {
-      const maybeStatus =
-        typeof error === "object" &&
-        error !== null &&
-        "status" in error &&
-        typeof (error as { status?: unknown }).status === "number"
-          ? (error as { status: number }).status
-          : undefined;
-      const errorDetails =
-        error instanceof Error
-          ? {
-              name: error.name,
-              message: error.message,
-              stack: error.stack ?? "stack unavailable",
-            }
-          : {
-              name: "NonErrorThrowable",
-              message: String(error),
-              stack: new Error(String(error)).stack ?? "stack unavailable",
-            };
-      const message = formatORPCLogMessage(error, params, maybeStatus);
-      if (!maybeStatus || maybeStatus >= 500) {
-        logger.error(message, errorDetails);
-      } else {
-        logger.set({
-          request: {
-            status: maybeStatus,
-          },
-        });
-        logger.warn(message);
-      }
+    onError((maybeError) => {
+      const error = maybeError instanceof Error ? maybeError : new Error(String(maybeError));
+      if (maybeError !== error) error.name = "NonErrorThrowable";
+      const pretty = standardSchema.prettifyStandardSchemaError(error.cause);
+      const maybeStatus = (error as Partial<ORPCError<never, never>>).status;
+      const message = pretty ?? String(error);
+      const effectiveStatus = maybeStatus ?? 999;
+      logger.set({ request: { status: effectiveStatus } });
+
+      const errorDetails = { name: error.name, message: error.message, stack: error.stack || "" };
+
+      if (effectiveStatus >= 500) logger.error(message, errorDetails);
+      else logger.warn(message);
     }),
   ],
 });
@@ -545,36 +484,19 @@ app.route("", egressProxyApp);
 // oRPC handler for daemon→worker communication (API key auth, separate context)
 const daemonOrpcHandler = new RPCHandler(workerRouter, {
   interceptors: [
-    onError((error, params) => {
-      const maybeStatus =
-        typeof error === "object" &&
-        error !== null &&
-        "status" in error &&
-        typeof (error as { status?: unknown }).status === "number"
-          ? (error as { status: number }).status
-          : undefined;
-      const errorDetails =
-        error instanceof Error
-          ? {
-              name: error.name,
-              message: error.message,
-              stack: error.stack ?? "stack unavailable",
-            }
-          : {
-              name: "NonErrorThrowable",
-              message: String(error),
-              stack: new Error(String(error)).stack ?? "stack unavailable",
-            };
-      const message = formatORPCLogMessage(error, params, maybeStatus);
-      if (!maybeStatus || maybeStatus >= 500) {
-        logger.error(message, errorDetails, error);
-      } else {
-        logger.set({
-          status: maybeStatus,
-          url: params.request.url,
-        });
-        logger.warn(message);
-      }
+    onError((maybeError) => {
+      const error = maybeError instanceof Error ? maybeError : new Error(String(maybeError));
+      if (maybeError !== error) error.name = "NonErrorThrowable";
+      const pretty = standardSchema.prettifyStandardSchemaError(error.cause);
+      const maybeStatus = (error as Partial<ORPCError<never, never>>).status;
+      const message = pretty ?? String(error);
+      const effectiveStatus = maybeStatus ?? 999;
+      logger.set({ request: { status: effectiveStatus } });
+
+      const errorDetails = { name: error.name, message: error.message, stack: error.stack || "" };
+
+      if (effectiveStatus >= 500) logger.error(message, errorDetails);
+      else logger.warn(message);
     }),
   ],
   plugins: [new RequestHeadersPlugin()],
