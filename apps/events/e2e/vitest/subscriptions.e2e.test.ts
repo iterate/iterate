@@ -229,6 +229,55 @@ describe.sequential("subscription e2e", () => {
   );
 
   test(
+    "removing a subscription before its scheduled retry suppresses the retry",
+    async () => {
+      /**
+       * The retry timer lives in reduced state, not a hidden queue. Removing the
+       * slug before `nextDeliveryAt` should therefore prevent the second attempt
+       * altogether.
+       */
+      await using hook = await useWebhookSink({ pathname: "/remove-before-retry" });
+      hook.replySequence([
+        () => new HttpResponse("nope", { status: 500 }),
+        () => HttpResponse.json({ ok: true }),
+      ]);
+
+      const path = app.newStreamPath();
+      await app.appendEvents({
+        path,
+        events: [
+          app.subscriptionSet({
+            path,
+            slug: "alpha",
+            url: hook.endpointUrl,
+            startFrom: "head",
+          }),
+          app.userEvent({ path, payload: { value: 1 } }),
+        ],
+      });
+
+      await waitForStreamState({
+        app,
+        streamPath: path,
+        predicate: (state) => subscriptionCursor(state, "alpha")?.retries === 1,
+      });
+
+      await app.appendEvents({
+        path,
+        events: [app.subscriptionRemoved({ path, slug: "alpha" })],
+      });
+
+      await delay(1_000);
+
+      expect(hook.deliveries()).toHaveLength(1);
+      expect(await app.getState(path)).toMatchObject({
+        subscriptions: {},
+      });
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "tail subscriptions do not backfill older events",
     async () => {
       await using hook = await useWebhookSink({ pathname: "/tail" });

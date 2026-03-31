@@ -43,12 +43,13 @@ const bodyPreviewTimeoutMs = 250;
 
 /**
  * One stream per Durable Object: append-only event log in SQLite, one reduced
- * projection kept in memory and storage, and one DO alarm derived from that
- * reduced subscription state.
+ * projection in memory/storage, and one DO alarm derived from the minimum
+ * `subscriptions[slug].cursor.nextDeliveryAt`.
  *
- * Raw history and SSE keep internal subscription bookkeeping events visible.
- * Only the server-managed webhook delivery loop filters those events out, or it
- * would feed its own cursor-management events back into subscribers.
+ * The important fence in this file is that internal `subscription.*` events
+ * stay visible in raw history and SSE, but the alarm-driven webhook delivery
+ * loop must never forward them to webhook consumers or it would feed its own
+ * bookkeeping back into subscribers.
  *
  * Durable Object docs:
  * - https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/
@@ -124,7 +125,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       );
     });
 
-    this.state = structuredClone(nextState);
+    this.state = nextState;
     await this.updateAlarm();
 
     for (const event of insertedEvents) {
@@ -432,6 +433,12 @@ export class StreamDurableObject extends DurableObject<Env> {
     return Offset.parse((BigInt(prevOffset) + 1n).toString().padStart(width, "0"));
   }
 
+  /**
+   * One Durable Object gets one alarm slot. We recompute it from reduced state
+   * after every append/alarm pass rather than persisting a second schedule
+   * table:
+   * https://developers.cloudflare.com/durable-objects/api/alarms/
+   */
   private async updateAlarm() {
     const nextAlarmAt = getNextAlarmAt(this.state);
     if (nextAlarmAt == null) {

@@ -10,10 +10,11 @@ const iterateEventUriPrefix = "https://events.iterate.com/" as const;
 export const STREAM_CREATED_TYPE = `${iterateEventUriPrefix}events/stream/created` as const;
 export const STREAM_METADATA_UPDATED_TYPE =
   `${iterateEventUriPrefix}events/stream/metadata-updated` as const;
-// `subscription.set` and `subscription.removed` are user-appendable control
-// events. The delivery/cursor event types below are internal bookkeeping from
-// the stream Durable Object; they remain visible in raw history and SSE, but
-// callers should treat them as implementation-owned.
+// `subscription.set` and `subscription.removed` are the control events callers
+// normally append themselves. The delivery/cursor event types below are
+// Durable-Object-authored bookkeeping: they remain visible in raw history and
+// SSE, but callers should treat them as implementation-owned and not synthesize
+// them directly.
 export const SUBSCRIPTION_SET_TYPE = `${iterateEventUriPrefix}events/subscription/set` as const;
 export const SUBSCRIPTION_REMOVED_TYPE =
   `${iterateEventUriPrefix}events/subscription/removed` as const;
@@ -146,7 +147,7 @@ export const eventsContract = oc.router({
       path: "/streams/{+path}",
       successDescription: "Events appended successfully and returned",
       description:
-        "Appends events to a stream in order. Offsets are assigned by the stream itself. Events with an existing idempotencyKey return the stored event instead of creating a duplicate. Callers normally author control events like `subscription.set` and `subscription.removed`; delivery outcome events are stream-owned bookkeeping.",
+        "Appends events to a stream in order. Offsets are assigned by the stream itself. Events with an existing idempotencyKey return the stored event instead of creating a duplicate. Callers normally author control events like `subscription.set` and `subscription.removed`; delivery/cursor events are stream-owned bookkeeping that remain visible in raw history.",
       tags: ["Streams"],
     })
     .input(AppendInput)
@@ -180,7 +181,7 @@ export const eventsContract = oc.router({
       method: "GET",
       path: "/stream-state/{+streamPath}",
       description:
-        "Returns the latest reduced projection for a stream, including metadata, generated offsets, and the current subscription map keyed by slug.",
+        "Returns the latest reduced projection for a stream, including metadata, generated offsets, and the current subscription map keyed by slug with delivery cursor, retry, and last-error state.",
       tags: ["Streams"],
     })
     .input(
