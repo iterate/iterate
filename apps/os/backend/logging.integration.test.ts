@@ -376,7 +376,7 @@ test("captures the raw request log for an orpc procedure error", async () => {
     errors:
       - name: Error
         message: "[test_error] <marker>"
-        stack: >-
+        stack: |-
           Error: [test_error] <marker>
               at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
@@ -558,22 +558,21 @@ test("captures the raw waitUntil child log", async () => {
     errors:
       - name: Error
         message: "[test_error] <marker>"
-        stack: >-
+        stack: |-
           Error: [test_error] <marker>
               at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
       - name: Error
         message: "[test_error] <marker>"
-        stack: >-
+        stack: |-
           Error: [test_error] <marker>
               at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
     messages:
       - "[ERROR] <elapsed>s: Error: [test_error] <marker>"
-      - "[INFO] <elapsed>s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid>
-        path=/api/orpc/testing/emitWaitUntilFailure#waitUntil errorCount=1"
+      - "[INFO] <elapsed>s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid> path=/api/orpc/testing/emitWaitUntilFailure#waitUntil errorCount=1"
       - "[INFO] <elapsed>s: PostHog log exception sent requestId=<uuid>:waitUntil:<uuid>"
       - "[ERROR] <elapsed>s: [test_error] <marker>""
   `);
@@ -645,7 +644,7 @@ test("captures custom error properties in a waitUntil log", async () => {
     errors:
       - name: Error
         message: "[test_custom_error] <marker>"
-        stack: >-
+        stack: |-
           Error: [test_custom_error] <marker>
               at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
@@ -653,7 +652,7 @@ test("captures custom error properties in a waitUntil log", async () => {
         exampleField: <marker>
       - name: Error
         message: "[test_custom_error] <marker>"
-        stack: >-
+        stack: |-
           Error: [test_custom_error] <marker>
               at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
@@ -661,8 +660,7 @@ test("captures custom error properties in a waitUntil log", async () => {
         exampleField: <marker>
     messages:
       - "[ERROR] <elapsed>s: Error: [test_custom_error] <marker>"
-      - "[INFO] <elapsed>s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid>
-        path=/api/orpc/testing/emitWaitUntilFailure#waitUntil errorCount=1"
+      - "[INFO] <elapsed>s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid> path=/api/orpc/testing/emitWaitUntilFailure#waitUntil errorCount=1"
       - "[INFO] <elapsed>s: PostHog log exception sent requestId=<uuid>:waitUntil:<uuid>"
       - "[ERROR] <elapsed>s: [test_custom_error] <marker>""
   `);
@@ -852,8 +850,7 @@ test("captures assigned detail in an outbox log", async () => {
         <origin> <origin>
       messages:
         - "[INFO] <elapsed>s: [outbox] adding to pgmq:rpc:testing.emitOutboxFailure"
-        - "[INFO] <elapsed>s: [outbox] Path: rpc:testing.emitOutboxFailure. Consumers: 1.
-          Filtered: testingFailureConsumer"
+        - "[INFO] <elapsed>s: [outbox] Path: rpc:testing.emitOutboxFailure. Consumers: 1. Filtered: testingFailureConsumer"
         - "[INFO] <elapsed>s: [outbox] processing 1 messages"
         - "[INFO] <elapsed>s: [outbox] START msg_id=<job-id> consumer=testingFailureConsumer"
     request:
@@ -877,7 +874,7 @@ test("captures assigned detail in an outbox log", async () => {
     errors:
       - name: Error
         message: "[test_error_with_detail] <marker>"
-        stack: >-
+        stack: |-
           Error: [test_error_with_detail] <marker>
               at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
@@ -918,9 +915,8 @@ test("captures a malformed outbox job error", async () => {
     properties:
       $exception_list:
         - type: OutboxDLQ:invalid-consumer-job
-          value: >-
-            Error: [outbox] invalid message: ✖ Invalid input: expected string,
-            received undefined
+          value: |-
+            Error: [outbox] invalid message: ✖ Invalid input: expected string, received undefined
               → at message.event_name
             ✖ Invalid input: expected string, received undefined
               → at message.consumer_name
@@ -1057,9 +1053,7 @@ test("captures a missing consumer error", async () => {
     properties:
       $exception_list:
         - type: OutboxDLQ:missing-consumer-<marker>
-          value: "Error: [outbox] no consumer found for
-            event=testing:missing-consumer:<marker>
-            consumer=missing-consumer-<marker>"
+          value: "Error: [outbox] no consumer found for event=testing:missing-consumer:<marker> consumer=missing-consumer-<marker>"
           mechanism:
             handled: true
             synthetic: false
@@ -1156,10 +1150,7 @@ test("captures a missing consumer error", async () => {
         eventId: <event-id>
         causation: null
         processingResults:
-          - "#1 error: Error: [outbox] no consumer found for
-            event=testing:missing-consumer:<marker>
-            consumer=missing-consumer-<marker>. retry: false. reason: Error marked
-            non-retryable."
+          - "#1 error: Error: [outbox] no consumer found for event=testing:missing-consumer:<marker> consumer=missing-consumer-<marker>. retry: false. reason: Error marked non-retryable."
         status: failed
     timestamp: <timestamp>"
   `);
@@ -1381,21 +1372,25 @@ async function createLoggingFixture(): Promise<LoggingFixture> {
 }
 
 function normalize(value: unknown, params: { marker?: string } = {}): string {
-  const yaml = YAML.stringify(value, function replacer(this: any, key, rawValue) {
-    const normalizeableKeys = `id,api_key,timestamp,start,end,lineno,colno,duration,durationMs,jobId,eventId,parentRequestId,cfRay,timezone,environment,$environment`;
-    if (normalizeableKeys.split(",").includes(key))
-      return `<${key.replace(/[A-Z]/g, (letter: string) => `-${letter.toLowerCase()}`)}>`;
-    if (typeof rawValue !== "string") return rawValue;
-    return rawValue
-      .replaceAll(repoRoot, "<repo>")
-      .replaceAll(params.marker || randomUUID(), "<marker>")
-      .replaceAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
-      .replace(/<repo>\/[^ :)\n"]+(?::\d+:\d+)?/g, (path) => {
-        if (path.includes(":")) path = `${path.split(":")[0]}:<lineno>:<colno>`;
-        if (!path.includes("/node_modules/")) return path;
-        return `<repo>/.../node_modules/${path.split("/node_modules/")[1].split("/")[0]}/...`;
-      });
-  });
+  const yaml = YAML.stringify(
+    value,
+    function replacer(this: any, key, rawValue) {
+      const normalizeableKeys = `id,api_key,timestamp,start,end,lineno,colno,duration,durationMs,jobId,eventId,parentRequestId,cfRay,timezone,environment,$environment`;
+      if (normalizeableKeys.split(",").includes(key))
+        return `<${key.replace(/[A-Z]/g, (letter: string) => `-${letter.toLowerCase()}`)}>`;
+      if (typeof rawValue !== "string") return rawValue;
+      return rawValue
+        .replaceAll(repoRoot, "<repo>")
+        .replaceAll(params.marker || randomUUID(), "<marker>")
+        .replaceAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
+        .replace(/<repo>\/[^ :)\n"]+(?::\d+:\d+)?/g, (path) => {
+          if (path.includes(":")) path = `${path.split(":")[0]}:<lineno>:<colno>`;
+          if (!path.includes("/node_modules/")) return path;
+          return `<repo>/.../node_modules/${path.split("/node_modules/")[1].split("/")[0]}/...`;
+        });
+    },
+    { lineWidth: 0 },
+  );
 
   return yaml
     .replaceAll(repoRoot, "<repo>")
