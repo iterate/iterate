@@ -7,6 +7,8 @@
     "~/*": "./src/*"
   },
   "scripts": {
+    "alchemy:up": "tsx ./alchemy.run.ts",
+    "alchemy:down": "tsx ./alchemy.run.ts --destroy",
     "dev": "doppler run -- tsx ./alchemy.run.ts",
     "build": "doppler run -- pnpm exec vite build",
     "deploy": "doppler run --config prd -- tsx ./alchemy.run.ts",

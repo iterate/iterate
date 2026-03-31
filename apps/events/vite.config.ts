@@ -5,7 +5,9 @@ import viteReact from "@vitejs/plugin-react";
 import alchemy from "alchemy/cloudflare/tanstack-start";
 import { defineConfig } from "vite";
 
+// Bind dual-stack by default so both localhost (::1) and 127.0.0.1 work.
 const host = process.env.HOST ?? "::";
+const port = process.env.PORT ? Number(process.env.PORT) : 5173;
 
 export default defineConfig({
   build: {
@@ -15,13 +17,13 @@ export default defineConfig({
     tsconfigPaths: true,
   },
   server: {
-    // Bind dual-stack by default so both localhost (::1) and 127.0.0.1 work.
     host,
-    port: process.env.PORT ? Number(process.env.PORT) : 5173,
+    port,
   },
   plugins: [
     devtools(), // must be first
-    // Thin Cloudflare plugin that picks up `.alchemy/local/wrangler.jsonc` from `alchemy.run.ts`
+    // Just a thinly wrapped cloudflare plugin that picks up the
+    // .alchemy/local/wrangler.jsonc that alchemy.run.ts made
     alchemy(),
     tanstackStart(),
     viteReact(),

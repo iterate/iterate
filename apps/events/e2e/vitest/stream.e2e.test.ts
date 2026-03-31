@@ -123,6 +123,23 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "empty idempotencyKey is rejected",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await expect(
+        app.client.append({
+          path,
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { value: 1 },
+          idempotencyKey: "",
+        }),
+      ).rejects.toThrow(/idempotency/i);
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "different idempotency keys create distinct events",
     async () => {
       const path = uniqueStreamPath();

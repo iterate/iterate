@@ -56,7 +56,7 @@ export const EventInput = z.object({
   metadata: JSONObject.optional(),
   // When a stream already has an event with this key, append returns that
   // stored event instead of creating a second one.
-  idempotencyKey: z.string().optional(),
+  idempotencyKey: z.string().trim().min(1).optional(),
 });
 export type EventInput = z.infer<typeof EventInput>;
 
