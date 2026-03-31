@@ -153,6 +153,34 @@ importers:
         specifier: ^4.1.13
         version: 4.3.6
 
+  ai-engineer-workshop/jonas:
+    dependencies:
+      '@iterate-com/events-contract':
+        specifier: workspace:*
+        version: link:../../apps/events-contract
+      '@orpc/client':
+        specifier: 1.13.13
+        version: 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/contract':
+        specifier: 1.13.13
+        version: 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/openapi-client':
+        specifier: 1.13.13
+        version: 1.13.13(@opentelemetry/api@1.9.0)
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.3.3
+      tsx:
+        specifier: ^4.20.3
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   apps/daemon:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
@@ -23403,7 +23431,7 @@ snapshots:
 
   '@types/better-sqlite3@7.6.13':
     dependencies:
-      '@types/node': 22.19.13
+      '@types/node': 25.3.3
 
   '@types/chai@5.2.3':
     dependencies:
@@ -23666,7 +23694,7 @@ snapshots:
 
   '@types/ws@8.18.1':
     dependencies:
-      '@types/node': 22.19.13
+      '@types/node': 25.3.3
 
   '@types/yargs-parser@21.0.3': {}
 
