@@ -8,6 +8,7 @@
  */
 import { createEventsClient } from "../../lib/sdk.ts";
 import { INPUT_ITEM_ADDED_TYPE, type InputItemAddedPayload } from "./event-types.ts";
+import { toJSONObject } from "./json-object.ts";
 
 const BASE_URL = process.env.BASE_URL || "https://events.iterate.com";
 const STREAM_PATH = process.env.STREAM_PATH || "/jonas/basic-llm-loop";
@@ -29,7 +30,7 @@ const result = await client.append({
     {
       path: STREAM_PATH,
       type: INPUT_ITEM_ADDED_TYPE,
-      payload: payload as unknown as Record<string, unknown>,
+      payload: toJSONObject(payload),
     },
   ],
 });

@@ -19,3 +19,5 @@ setup:
     path: apps/semaphore/
   - project: test
     path: apps/test/
+  - project: ai-engineer-workshop
+    path: ai-engineer-workshop/

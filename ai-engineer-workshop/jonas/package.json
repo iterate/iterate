@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@iterate-com/events-contract": "workspace:*",
     "@tanstack/ai": "^0.2.2",
     "@tanstack/ai-openai": "^0.2.1"
   },

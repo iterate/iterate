@@ -8,25 +8,38 @@
  *   doppler run --project ai-engineer-workshop --config dev_jonas -- node 02-basic-llm-loop/run-llm-subscriber.ts
  */
 import { chat } from "@tanstack/ai";
-import { openaiText } from "@tanstack/ai-openai";
+import { createOpenaiChat, OPENAI_CHAT_MODELS } from "@tanstack/ai-openai";
 import { createEventsClient } from "../../lib/sdk.ts";
 import {
-  INPUT_ITEM_ADDED_TYPE,
   isInputItemAddedType,
   OUTPUT_ITEM_ADDED_TYPE,
   type InputItemAddedPayload,
   type OutputItemAddedPayload,
 } from "./event-types.ts";
+import { toJSONObject } from "./json-object.ts";
 
 const BASE_URL = process.env.BASE_URL || "https://events.iterate.com";
 const STREAM_PATH = process.env.STREAM_PATH || "/jonas/basic-llm-loop";
-const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+
+type OpenAIModel = (typeof OPENAI_CHAT_MODELS)[number];
+
+function resolveOpenAIModel(): OpenAIModel {
+  const raw = process.env.OPENAI_MODEL;
+  if (raw && (OPENAI_CHAT_MODELS as readonly string[]).includes(raw)) {
+    return raw as OpenAIModel;
+  }
+  return "gpt-4o-mini";
+}
+
+const apiKey = process.env.OPENAI_API_KEY;
+if (!apiKey) {
+  throw new Error(
+    "OPENAI_API_KEY is required (e.g. doppler run --project ai-engineer-workshop ...)",
+  );
+}
 
 const client = createEventsClient(BASE_URL);
-
-function chunkToJson(chunk: unknown): unknown {
-  return JSON.parse(JSON.stringify(chunk)) as unknown;
-}
+const textAdapter = createOpenaiChat(resolveOpenAIModel(), apiKey);
 
 const processedInputOffsets = new Set<string>();
 
@@ -39,14 +52,15 @@ async function handleInputEvent(sourceOffset: string, payload: unknown) {
   }
 
   const stream = chat({
-    adapter: openaiText(MODEL),
+    adapter: textAdapter,
     messages: [{ role: "user", content }],
+    maxTokens: 64,
   });
 
   for await (const chunk of stream) {
     const out: OutputItemAddedPayload = {
       sourceOffset,
-      chunk: chunkToJson(chunk),
+      chunk: toJSONObject(chunk),
     };
     await client.append({
       path: STREAM_PATH,
@@ -54,11 +68,12 @@ async function handleInputEvent(sourceOffset: string, payload: unknown) {
         {
           path: STREAM_PATH,
           type: OUTPUT_ITEM_ADDED_TYPE,
-          payload: out as unknown as Record<string, unknown>,
+          payload: toJSONObject(out),
         },
       ],
     });
   }
+  console.error(`[llm-subscriber] done sourceOffset=${sourceOffset}`);
 }
 
 const liveStream = await client.stream(
@@ -96,7 +111,7 @@ for await (const event of liveStream) {
         {
           path: STREAM_PATH,
           type: OUTPUT_ITEM_ADDED_TYPE,
-          payload: errOut as unknown as Record<string, unknown>,
+          payload: toJSONObject(errOut),
         },
       ],
     });
