@@ -7,7 +7,8 @@ import { posthogSourcemaps } from "@iterate-com/shared/posthog/vite-plugin";
 import { defineConfig } from "vite";
 import manifest from "./src/app.ts";
 
-const host = process.env.HOST ?? "localhost";
+// Bind dual-stack by default so both localhost (::1) and 127.0.0.1 work.
+const host = process.env.HOST ?? "::";
 const port = process.env.PORT ? Number(process.env.PORT) : 5173;
 
 export default defineConfig({
