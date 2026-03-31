@@ -71,7 +71,7 @@ curl -sS -N "$BASE_URL/api/streams/$STREAM_RPATH"
         "stderr": "",
         "stdout": "{"created":true,"events":[{"path":"<streamPath>","type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":"0000000000000001","createdAt":"<ts>"}]}
       ---
-      {"path":"<streamPath>","lastOffset":"0000000000000001","eventCount":1,"metadata":{}}
+      {"path":"<streamPath>","lastOffset":"0000000000000001","eventCount":1,"metadata":{},"subscriptions":{}}
       ---
       : 
 

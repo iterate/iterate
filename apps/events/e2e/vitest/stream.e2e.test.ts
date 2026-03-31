@@ -6,7 +6,6 @@ import {
   STREAM_METADATA_UPDATED_TYPE,
   StreamPath,
   type Event,
-  type StreamState,
 } from "@iterate-com/events-contract";
 import {
   collectAsyncIterableUntilIdle,
@@ -363,6 +362,7 @@ describe.sequential("events stream e2e", () => {
         lastOffset: null,
         eventCount: 0,
         metadata: {},
+        subscriptions: {},
       });
     },
     testTimeoutMs,
@@ -410,7 +410,8 @@ describe.sequential("events stream e2e", () => {
         metadata: {
           owner: "second",
         },
-      } satisfies StreamState);
+        subscriptions: {},
+      });
     },
     testTimeoutMs,
   );

@@ -10,6 +10,15 @@ const iterateEventUriPrefix = "https://events.iterate.com/" as const;
 export const STREAM_CREATED_TYPE = `${iterateEventUriPrefix}events/stream/created` as const;
 export const STREAM_METADATA_UPDATED_TYPE =
   `${iterateEventUriPrefix}events/stream/metadata-updated` as const;
+export const SUBSCRIPTION_SET_TYPE = `${iterateEventUriPrefix}events/subscription/set` as const;
+export const SUBSCRIPTION_REMOVED_TYPE =
+  `${iterateEventUriPrefix}events/subscription/removed` as const;
+export const SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE =
+  `${iterateEventUriPrefix}events/subscription/delivery-succeeded` as const;
+export const SUBSCRIPTION_DELIVERY_FAILED_TYPE =
+  `${iterateEventUriPrefix}events/subscription/delivery-failed` as const;
+export const SUBSCRIPTION_CURSOR_UPDATED_TYPE =
+  `${iterateEventUriPrefix}events/subscription/cursor-updated` as const;
 
 /** Event type identifier (URI, URN, reverse-DNS, etc.) — not limited to iterate.com URLs. */
 export const EventType = z.string().trim().min(1).max(2048);
@@ -76,6 +85,88 @@ export const StreamMetadataUpdatedPayload = z.object({
 });
 export type StreamMetadataUpdatedPayload = z.infer<typeof StreamMetadataUpdatedPayload>;
 
+const HeaderMap = z.record(z.string(), z.string());
+
+const SubscriptionCursorError = z.object({
+  message: z.string(),
+  statusCode: z.number().int().nullable(),
+  bodyPreview: z.string().nullable(),
+  at: createdAt,
+});
+
+const SubscriptionCursor = z.object({
+  lastAcknowledgedOffset: Offset.nullable(),
+  nextDeliveryAt: createdAt.nullable(),
+  retries: z.number().int().nonnegative(),
+  lastError: SubscriptionCursorError.nullable(),
+});
+
+export const SubscriptionSetPayload = z.object({
+  slug: z.string().trim().min(1),
+  subscription: z.object({
+    type: z.literal("webhook"),
+    url: z.url(),
+    headers: HeaderMap.optional().default({}),
+    startFrom: z.union([
+      z.literal("head"),
+      z.literal("tail"),
+      z.object({
+        afterOffset: Offset.nullable(),
+      }),
+    ]),
+  }),
+});
+export type SubscriptionSetPayload = z.infer<typeof SubscriptionSetPayload>;
+
+export const SubscriptionRemovedPayload = z.object({
+  slug: z.string().trim().min(1),
+});
+export type SubscriptionRemovedPayload = z.infer<typeof SubscriptionRemovedPayload>;
+
+export const SubscriptionDeliverySucceededPayload = z.object({
+  slug: z.string().trim().min(1),
+  deliveryRevision: z.number().int().nonnegative(),
+  deliveredEventOffset: Offset,
+  observedLastOffset: Offset.nullable(),
+  response: z.object({
+    statusCode: z.number().int(),
+    bodyPreview: z.string().nullable(),
+  }),
+  cursor: SubscriptionCursor.extend({
+    lastAcknowledgedOffset: Offset,
+    lastError: z.null(),
+  }),
+});
+export type SubscriptionDeliverySucceededPayload = z.infer<
+  typeof SubscriptionDeliverySucceededPayload
+>;
+
+export const SubscriptionDeliveryFailedPayload = z.object({
+  slug: z.string().trim().min(1),
+  deliveryRevision: z.number().int().nonnegative(),
+  deliveredEventOffset: Offset,
+  observedLastOffset: Offset.nullable(),
+  response: z.object({
+    statusCode: z.number().int().nullable(),
+    bodyPreview: z.string().nullable(),
+    message: z.string(),
+  }),
+  cursor: SubscriptionCursor.extend({
+    nextDeliveryAt: createdAt,
+    lastError: SubscriptionCursorError,
+  }),
+});
+export type SubscriptionDeliveryFailedPayload = z.infer<typeof SubscriptionDeliveryFailedPayload>;
+
+export const SubscriptionCursorUpdatedPayload = z.object({
+  slug: z.string().trim().min(1),
+  deliveryRevision: z.number().int().nonnegative(),
+  observedLastOffset: Offset.nullable(),
+  reason: z.enum(["caught-up"]),
+  cursor: SubscriptionCursor,
+});
+export type SubscriptionCursorUpdatedPayload = z.infer<typeof SubscriptionCursorUpdatedPayload>;
+
 const AppendInput = z.intersection(
   z.object({
     path: StreamPath,
@@ -87,14 +178,6 @@ const AppendInput = z.intersection(
     }),
   ]),
 );
-
-export const StreamState = z.object({
-  path: StreamPath.nullable(),
-  lastOffset: Offset.nullable(),
-  eventCount: z.number().int().nonnegative(),
-  metadata: JSONObject,
-});
-export type StreamState = z.infer<typeof StreamState>;
 
 const SecretSummary = z.object({
   id: z.string(),
@@ -159,7 +242,7 @@ export const eventsContract = oc.router({
         streamPath: StreamPath,
       }),
     )
-    .output(StreamState),
+    .output(z.json()),
   listStreams: oc
     .route({
       operationId: "listStreams",

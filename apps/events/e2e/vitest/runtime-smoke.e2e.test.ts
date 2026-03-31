@@ -6,11 +6,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
 import { describe, expect, test } from "vitest";
-import {
-  STREAM_METADATA_UPDATED_TYPE,
-  type StreamPath,
-  type StreamState,
-} from "@iterate-com/events-contract";
+import { STREAM_METADATA_UPDATED_TYPE, type StreamPath } from "@iterate-com/events-contract";
 import { AppConfig } from "../../src/app.ts";
 import {
   collectAsyncIterableUntilIdle,
@@ -37,7 +33,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       });
 
       expect(res.ok).toBe(true);
-      expect(await res.text()).toContain("Append event");
+      expect(await res.text()).toContain("Create stream");
     },
     testTimeoutMs,
   );
@@ -99,7 +95,8 @@ describeRuntimeSmoke("events runtime smoke", () => {
         lastOffset: expectedOffset(1),
         eventCount: 1,
         metadata: {},
-      } satisfies StreamState);
+        subscriptions: {},
+      });
 
       const controller = new AbortController();
       const liveStream = await app.client.stream(

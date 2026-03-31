@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { STREAM_CREATED_TYPE, StreamPath, type Event } from "@iterate-com/events-contract";
+import { STREAM_CREATED_TYPE, Offset, StreamPath, type Event } from "@iterate-com/events-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   SidebarGroup,
@@ -14,6 +14,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Plus } from "lucide-react";
+import { z } from "zod";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 import { ROOT_STREAM_PATH } from "~/lib/utils.ts";
@@ -21,6 +22,9 @@ import { orpc, orpcClient } from "~/orpc/client.ts";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
 
 const DEFAULT_NEW_STREAM_PATH = "/some-stream";
+const streamStateSummarySchema = z.object({
+  lastOffset: Offset.nullable(),
+});
 
 export function StreamsSidebar() {
   const queryClient = useQueryClient();
@@ -42,6 +46,7 @@ export function StreamsSidebar() {
 
   const rootStateQuery = useQuery({
     ...orpc.getState.queryOptions({ input: { streamPath: ROOT_STREAM_PATH } }),
+    select: (state) => streamStateSummarySchema.parse(state),
     staleTime: 30_000,
   });
 

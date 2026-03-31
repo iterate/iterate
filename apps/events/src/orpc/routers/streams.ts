@@ -43,7 +43,10 @@ export const streamsRouter = {
   }),
   getState: os.getState.handler(async ({ context, input }) => {
     const streamStub = context.env.STREAM.getByName(input.streamPath);
-    return streamStub.getState();
+    // oRPC validates this as `z.json()`. Durable Object RPC can carry hidden
+    // runtime metadata on returned objects, so round-trip through JSON here and
+    // keep the HTTP contract strictly JSON-shaped.
+    return JSON.parse(JSON.stringify(await streamStub.getState()));
   }),
   listStreams: os.listStreams.handler(async ({ context }) => {
     const rootStreamStub = context.env.STREAM.getByName(ROOT_STREAM_PATH);

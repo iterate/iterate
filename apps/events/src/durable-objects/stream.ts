@@ -1,27 +1,94 @@
 import { DurableObject } from "cloudflare:workers";
+import { z } from "zod";
 import {
   Event,
+  EventInput,
+  JSONObject,
   Offset,
-  StreamPath,
   StreamMetadataUpdatedPayload,
-  StreamState,
+  StreamPath,
   STREAM_CREATED_TYPE,
   STREAM_METADATA_UPDATED_TYPE,
-  type EventInput,
+  SUBSCRIPTION_CURSOR_UPDATED_TYPE,
+  SUBSCRIPTION_DELIVERY_FAILED_TYPE,
+  SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE,
+  SUBSCRIPTION_REMOVED_TYPE,
+  SUBSCRIPTION_SET_TYPE,
+  SubscriptionCursorUpdatedPayload,
+  SubscriptionDeliveryFailedPayload,
+  SubscriptionDeliverySucceededPayload,
+  SubscriptionRemovedPayload,
+  SubscriptionSetPayload,
 } from "@iterate-com/events-contract";
 import { ROOT_STREAM_PATH, getParentPath } from "~/lib/utils.ts";
 
 const INITIAL_OFFSET_WIDTH = 16;
 const textEncoder = new TextEncoder();
+const createdAt = z.iso.datetime({ offset: true });
+
+/**
+ * These tiny fixed retry delays are a deliberate v0 fence. They keep the retry
+ * story easy to reason about while we prove the event-sourced scheduler shape:
+ * subscription state owns `nextDeliveryAt`, and the single DO alarm is derived
+ * from `min(nextDeliveryAt)` across subscriptions.
+ *
+ * Durable Object alarms:
+ * https://developers.cloudflare.com/durable-objects/api/alarms/
+ *
+ * Agents scheduling prior art:
+ * https://developers.cloudflare.com/agents/api-reference/schedule-tasks/
+ * https://developers.cloudflare.com/agents/api-reference/retries/
+ */
+const retryDelayMs = [250, 1_000, 5_000] as const;
+const maxBodyPreviewLength = 200;
+const webhookTimeoutMs = 2_000;
+
+const subscriptionCursorErrorSchema = z.object({
+  message: z.string(),
+  statusCode: z.number().int().nullable(),
+  bodyPreview: z.string().nullable(),
+  at: createdAt,
+});
+
+const subscriptionCursorSchema = z.object({
+  lastAcknowledgedOffset: Offset.nullable(),
+  nextDeliveryAt: createdAt.nullable(),
+  retries: z.number().int().nonnegative(),
+  lastError: subscriptionCursorErrorSchema.nullable(),
+});
+
+const subscriptionStateSchema = z.object({
+  type: z.literal("webhook"),
+  url: z.url(),
+  headers: z.record(z.string(), z.string()),
+  revision: z.number().int().nonnegative(),
+  cursor: subscriptionCursorSchema,
+});
+
+/**
+ * `getState()` stays implementation-shaped JSON. The concrete reduced-state
+ * schema lives with the DO because this actor owns the projection and persists
+ * it locally.
+ */
+export const streamStateSchema = z.object({
+  path: StreamPath.nullable(),
+  lastOffset: Offset.nullable(),
+  eventCount: z.number().int().nonnegative(),
+  metadata: JSONObject,
+  subscriptions: z.record(z.string(), subscriptionStateSchema).default({}),
+});
+
+export type StreamState = z.infer<typeof streamStateSchema>;
+export type SubscriptionState = z.infer<typeof subscriptionStateSchema>;
 
 /**
  * One stream per Durable Object: append-only event log in SQLite, a reduced
  * projection kept in memory and storage, and newline-delimited fanout for live
  * readers.
  *
- * The matching router in `~/orpc/routers/streams.ts` stamps a validated `path`
- * onto every append because we still do not treat `ctx.id.name` as
- * constructor-safe enough for this projection.
+ * Raw history and SSE keep internal subscription bookkeeping events visible.
+ * Only the server-managed webhook delivery loop filters those events out, or it
+ * would feed its own cursor-management events back into subscribers.
  *
  * Durable Object docs:
  * - https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/
@@ -29,20 +96,15 @@ const textEncoder = new TextEncoder();
  * - https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/
  */
 export class StreamDurableObject extends DurableObject<Env> {
-  private state: StreamState = {
-    path: null,
-    lastOffset: null,
-    eventCount: 0,
-    metadata: {},
-  };
+  private state: StreamState = createEmptyStreamState();
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
-    // Cloudflare recommends `blockConcurrencyWhile()` in the constructor for
-    // schema setup and state hydration so requests never observe a half-initialized
-    // actor: https://developers.cloudflare.com/durable-objects/api/state/
+    // Cloudflare recommends `blockConcurrencyWhile()` for schema setup and
+    // state hydration so requests never observe a half-initialized object:
+    // https://developers.cloudflare.com/durable-objects/api/state/
     void this.ctx.blockConcurrencyWhile(async () => {
       this.initializeStorage();
       this.state = this.loadState();
@@ -103,6 +165,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
 
     this.state = structuredClone(nextState);
+    await this.updateAlarm(nextState);
 
     for (const event of insertedEvents) {
       this.publish(event);
@@ -117,6 +180,49 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   async getState(): Promise<StreamState> {
     return structuredClone(this.state);
+  }
+
+  /**
+   * Keep the whole delivery pass awaited inside `alarm()`. Cloudflare only
+   * retries alarms on uncaught handler failures, so detached background work
+   * would escape the raw retry semantics:
+   * https://developers.cloudflare.com/durable-objects/api/alarms/
+   */
+  async alarm() {
+    const path = this.state.path;
+    if (path == null) {
+      return;
+    }
+
+    const dueSubscriptions = getDueSubscriptions({ now: Date.now(), state: this.state });
+    if (dueSubscriptions.length === 0) {
+      await this.updateAlarm(this.state);
+      return;
+    }
+
+    const outcomeEvents = (
+      await Promise.all(
+        dueSubscriptions.map(async ([slug, subscription]) => {
+          const events = await this.history({
+            afterOffset: subscription.cursor.lastAcknowledgedOffset ?? undefined,
+          });
+
+          return this.deliverSubscriptionEvent({
+            events,
+            path,
+            slug,
+            subscription,
+          });
+        }),
+      )
+    ).filter((event): event is EventInput => event != null);
+
+    if (outcomeEvents.length === 0) {
+      await this.updateAlarm(this.state);
+      return;
+    }
+
+    await this.append({ events: outcomeEvents });
   }
 
   /**
@@ -218,12 +324,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     if (persistedStateRow == null) {
       if (eventRowCount === 0) {
-        return {
-          path: null,
-          lastOffset: null,
-          eventCount: 0,
-          metadata: {},
-        } satisfies StreamState;
+        return createEmptyStreamState();
       }
 
       throw new Error(
@@ -231,7 +332,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       );
     }
 
-    const persistedState = StreamState.parse(JSON.parse(persistedStateRow.json));
+    const persistedState = streamStateSchema.parse(JSON.parse(persistedStateRow.json));
     if (persistedState.eventCount !== eventRowCount) {
       throw new Error(
         `Persisted reduced_state eventCount ${persistedState.eventCount} does not match ${eventRowCount} event rows.`,
@@ -367,6 +468,150 @@ export class StreamDurableObject extends DurableObject<Env> {
     return Offset.parse((BigInt(prevOffset) + 1n).toString().padStart(width, "0"));
   }
 
+  private async updateAlarm(state: StreamState) {
+    const nextAlarmAt = getNextAlarmAt(state);
+    if (nextAlarmAt == null) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+
+    await this.ctx.storage.setAlarm(nextAlarmAt);
+  }
+
+  private async deliverSubscriptionEvent(args: {
+    events: Event[];
+    path: string;
+    slug: string;
+    subscription: SubscriptionState;
+  }) {
+    const deliverableEvents = getDeliverableEvents(args.events);
+    const nextEvent = deliverableEvents[0];
+    if (!nextEvent) {
+      return EventInput.parse({
+        path: args.path,
+        type: SUBSCRIPTION_CURSOR_UPDATED_TYPE,
+        payload: {
+          slug: args.slug,
+          deliveryRevision: args.subscription.revision,
+          observedLastOffset:
+            args.events.at(-1)?.offset ?? args.subscription.cursor.lastAcknowledgedOffset,
+          reason: "caught-up",
+          cursor: {
+            ...args.subscription.cursor,
+            nextDeliveryAt: null,
+          },
+        },
+      });
+    }
+
+    const attemptedAt = new Date().toISOString();
+    const observedLastOffset =
+      args.events.at(-1)?.offset ?? args.subscription.cursor.lastAcknowledgedOffset;
+
+    let response: Response;
+    try {
+      response = await postWebhookWithTimeout({
+        timeoutMs: webhookTimeoutMs,
+        url: args.subscription.url,
+        init: {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...args.subscription.headers,
+          },
+          body: JSON.stringify({
+            subscriptionSlug: args.slug,
+            event: nextEvent,
+          }),
+        },
+      });
+    } catch (error) {
+      const message = readErrorMessage(error, webhookTimeoutMs);
+      const retries = args.subscription.cursor.retries + 1;
+
+      return EventInput.parse({
+        path: args.path,
+        type: SUBSCRIPTION_DELIVERY_FAILED_TYPE,
+        payload: {
+          slug: args.slug,
+          deliveryRevision: args.subscription.revision,
+          deliveredEventOffset: nextEvent.offset,
+          observedLastOffset,
+          response: {
+            statusCode: null,
+            bodyPreview: null,
+            message,
+          },
+          cursor: {
+            lastAcknowledgedOffset: args.subscription.cursor.lastAcknowledgedOffset,
+            nextDeliveryAt: computeNextRetryAt({ now: Date.now(), retries }),
+            retries,
+            lastError: {
+              message,
+              statusCode: null,
+              bodyPreview: null,
+              at: attemptedAt,
+            },
+          },
+        },
+      });
+    }
+
+    const bodyPreview = truncateBodyPreview(await safeReadResponseText(response));
+    if (!response.ok) {
+      const message = `Webhook failed with ${response.status}`;
+      const retries = args.subscription.cursor.retries + 1;
+
+      return EventInput.parse({
+        path: args.path,
+        type: SUBSCRIPTION_DELIVERY_FAILED_TYPE,
+        payload: {
+          slug: args.slug,
+          deliveryRevision: args.subscription.revision,
+          deliveredEventOffset: nextEvent.offset,
+          observedLastOffset,
+          response: {
+            statusCode: response.status,
+            bodyPreview,
+            message,
+          },
+          cursor: {
+            lastAcknowledgedOffset: args.subscription.cursor.lastAcknowledgedOffset,
+            nextDeliveryAt: computeNextRetryAt({ now: Date.now(), retries }),
+            retries,
+            lastError: {
+              message,
+              statusCode: response.status,
+              bodyPreview,
+              at: attemptedAt,
+            },
+          },
+        },
+      });
+    }
+
+    return EventInput.parse({
+      path: args.path,
+      type: SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE,
+      payload: {
+        slug: args.slug,
+        deliveryRevision: args.subscription.revision,
+        deliveredEventOffset: nextEvent.offset,
+        observedLastOffset,
+        response: {
+          statusCode: response.status,
+          bodyPreview,
+        },
+        cursor: {
+          lastAcknowledgedOffset: nextEvent.offset,
+          nextDeliveryAt: deliverableEvents[1] == null ? null : attemptedAt,
+          retries: 0,
+          lastError: null,
+        },
+      },
+    });
+  }
+
   private propagateStreamCreated(firstEvent: Event) {
     if (this.state.path == null) {
       throw new Error(
@@ -437,35 +682,236 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 }
 
-function encodeEventLine(event: Event) {
-  return textEncoder.encode(`${JSON.stringify(event)}\n`);
+export function createEmptyStreamState(): StreamState {
+  return {
+    path: null,
+    lastOffset: null,
+    eventCount: 0,
+    metadata: {},
+    subscriptions: {},
+  } satisfies StreamState;
 }
 
 /**
- * Pure reducer for the persisted stream projection. Replay and append share the
- * same rules so state cannot drift based on which code path produced it.
- * `STREAM_METADATA_UPDATED` replaces metadata rather than deep-merging it.
+ * Replay and append share the same reducer so state cannot drift based on which
+ * code path produced it.
  */
-function reduceStreamState(args: { state: StreamState; event: Event }): StreamState {
+export function reduceStreamState(args: { state: StreamState; event: Event }): StreamState {
   const { state, event } = args;
   const path = state.path ?? event.path;
   if (state.path != null && state.path !== event.path) {
     throw new Error(`Stream path mismatch. Expected ${state.path}, received ${event.path}.`);
   }
 
-  const nextState: StreamState = {
-    path,
-    lastOffset: event.offset,
-    eventCount: state.eventCount + 1,
-    metadata: { ...state.metadata },
-  };
+  const nextState = structuredClone(state);
+  nextState.path = path;
+  nextState.lastOffset = event.offset;
+  nextState.eventCount = state.eventCount + 1;
 
   switch (event.type) {
     case STREAM_METADATA_UPDATED_TYPE:
       nextState.metadata = StreamMetadataUpdatedPayload.parse(event.payload).metadata;
       return nextState;
-    case STREAM_CREATED_TYPE:
-    default:
+    case SUBSCRIPTION_SET_TYPE: {
+      const payload = SubscriptionSetPayload.parse(event.payload);
+      const currentSubscription = nextState.subscriptions[payload.slug];
+      nextState.subscriptions[payload.slug] = {
+        type: payload.subscription.type,
+        url: payload.subscription.url,
+        headers: payload.subscription.headers ?? {},
+        revision: (currentSubscription?.revision ?? 0) + 1,
+        cursor: makeCursorFromStartFrom({
+          createdAt: event.createdAt,
+          eventOffset: event.offset,
+          startFrom: payload.subscription.startFrom,
+        }),
+      };
       return nextState;
+    }
+    case SUBSCRIPTION_REMOVED_TYPE: {
+      const payload = SubscriptionRemovedPayload.parse(event.payload);
+      delete nextState.subscriptions[payload.slug];
+      return nextState;
+    }
+    case SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE: {
+      const payload = SubscriptionDeliverySucceededPayload.parse(event.payload);
+      const subscription = nextState.subscriptions[payload.slug];
+      if (!subscription || payload.deliveryRevision !== subscription.revision) {
+        return nextState;
+      }
+
+      subscription.cursor = payload.cursor;
+      if (
+        payload.cursor.nextDeliveryAt == null &&
+        state.lastOffset !== payload.observedLastOffset
+      ) {
+        subscription.cursor.nextDeliveryAt = event.createdAt;
+      }
+      return nextState;
+    }
+    case SUBSCRIPTION_DELIVERY_FAILED_TYPE: {
+      const payload = SubscriptionDeliveryFailedPayload.parse(event.payload);
+      const subscription = nextState.subscriptions[payload.slug];
+      if (!subscription || payload.deliveryRevision !== subscription.revision) {
+        return nextState;
+      }
+
+      subscription.cursor = payload.cursor;
+      return nextState;
+    }
+    case SUBSCRIPTION_CURSOR_UPDATED_TYPE: {
+      const payload = SubscriptionCursorUpdatedPayload.parse(event.payload);
+      const subscription = nextState.subscriptions[payload.slug];
+      if (!subscription || payload.deliveryRevision !== subscription.revision) {
+        return nextState;
+      }
+
+      subscription.cursor = payload.cursor;
+      if (
+        payload.cursor.nextDeliveryAt == null &&
+        state.lastOffset !== payload.observedLastOffset
+      ) {
+        subscription.cursor.nextDeliveryAt = event.createdAt;
+      }
+      return nextState;
+    }
+    default: {
+      if (!isInternalSubscriptionEventType(event.type)) {
+        for (const subscription of Object.values(nextState.subscriptions)) {
+          if (subscription.cursor.nextDeliveryAt == null) {
+            subscription.cursor.nextDeliveryAt = event.createdAt;
+          }
+        }
+      }
+
+      return nextState;
+    }
   }
+}
+
+function encodeEventLine(event: Event) {
+  return textEncoder.encode(`${JSON.stringify(event)}\n`);
+}
+
+function makeCursorFromStartFrom(args: {
+  createdAt: string;
+  eventOffset: string;
+  startFrom: SubscriptionSetPayload["subscription"]["startFrom"];
+}): SubscriptionState["cursor"] {
+  if (args.startFrom === "head") {
+    return {
+      lastAcknowledgedOffset: null,
+      nextDeliveryAt: args.createdAt,
+      retries: 0,
+      lastError: null,
+    } satisfies SubscriptionState["cursor"];
+  }
+
+  if (args.startFrom === "tail") {
+    return {
+      lastAcknowledgedOffset: args.eventOffset,
+      nextDeliveryAt: null,
+      retries: 0,
+      lastError: null,
+    } satisfies SubscriptionState["cursor"];
+  }
+
+  return {
+    lastAcknowledgedOffset: args.startFrom.afterOffset,
+    nextDeliveryAt: args.createdAt,
+    retries: 0,
+    lastError: null,
+  } satisfies SubscriptionState["cursor"];
+}
+
+/**
+ * Internal subscription events stay visible in raw history and SSE, but the
+ * server-managed delivery loop must never forward them to webhook consumers.
+ */
+export function isInternalSubscriptionEventType(type: string) {
+  return (
+    type === SUBSCRIPTION_SET_TYPE ||
+    type === SUBSCRIPTION_REMOVED_TYPE ||
+    type === SUBSCRIPTION_CURSOR_UPDATED_TYPE ||
+    type === SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE ||
+    type === SUBSCRIPTION_DELIVERY_FAILED_TYPE
+  );
+}
+
+export function getRetryDelayMs(retries: number) {
+  return retryDelayMs[Math.min(Math.max(retries, 1), retryDelayMs.length) - 1]!;
+}
+
+export function computeNextRetryAt(args: { now: number; retries: number }) {
+  return new Date(args.now + getRetryDelayMs(args.retries)).toISOString();
+}
+
+export function getNextAlarmAt(state: StreamState) {
+  const dueAt = Object.values(state.subscriptions)
+    .flatMap((subscription) =>
+      subscription.cursor.nextDeliveryAt == null
+        ? []
+        : [Date.parse(subscription.cursor.nextDeliveryAt)],
+    )
+    .sort((left, right) => left - right)[0];
+
+  return dueAt ?? null;
+}
+
+function getDueSubscriptions(args: { now: number; state: StreamState }) {
+  return Object.entries(args.state.subscriptions).filter(([, subscription]) => {
+    if (subscription.cursor.nextDeliveryAt == null) {
+      return false;
+    }
+
+    return Date.parse(subscription.cursor.nextDeliveryAt) <= args.now;
+  });
+}
+
+export function getDeliverableEvents(events: Event[]) {
+  return events.filter((event) => !isInternalSubscriptionEventType(event.type));
+}
+
+async function postWebhookWithTimeout(args: { url: string; init: RequestInit; timeoutMs: number }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(new Error(`Webhook request timed out after ${args.timeoutMs}ms`));
+  }, args.timeoutMs);
+
+  try {
+    return await fetch(args.url, {
+      ...args.init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function safeReadResponseText(response: Response) {
+  try {
+    return await response.text();
+  } catch {
+    return "";
+  }
+}
+
+function truncateBodyPreview(body: string) {
+  if (body.length <= maxBodyPreviewLength) {
+    return body || null;
+  }
+
+  return `${body.slice(0, maxBodyPreviewLength)}...`;
+}
+
+function readErrorMessage(error: unknown, timeoutMs: number) {
+  if (error instanceof Error) {
+    if (error.name === "AbortError") {
+      return `Webhook request timed out after ${timeoutMs}ms`;
+    }
+
+    return error.message;
+  }
+
+  return String(error);
 }
