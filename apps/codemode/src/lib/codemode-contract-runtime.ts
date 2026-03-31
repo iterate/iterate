@@ -143,6 +143,8 @@ function resolveOpenApiSource(
   const runtimeSource: RuntimeOpenApiSource = { ...source };
   const normalizedUrl = trimTrailingSlash(source.url);
   const eventsOpenApiUrl = `${trimTrailingSlash(config.codemodeApis.eventsBaseUrl)}/api/openapi.json`;
+  const semaphoreOpenApiUrl = `${trimTrailingSlash(config.codemodeApis.semaphoreBaseUrl)}/api/openapi.json`;
+  const ingressOpenApiUrl = `${trimTrailingSlash(config.codemodeApis.ingressProxyBaseUrl)}/api/openapi.json`;
 
   if (
     normalizedUrl === eventsOpenApiUrl ||
@@ -152,6 +154,26 @@ function resolveOpenApiSource(
       appendStreamEvents: "append",
       streamEvents: "stream",
       getStreamState: "getState",
+    };
+  }
+
+  if (
+    normalizedUrl === semaphoreOpenApiUrl ||
+    (source.namespace === "semaphore" && normalizedUrl.endsWith("/api/openapi.json"))
+  ) {
+    runtimeSource.headers = {
+      ...source.headers,
+      Authorization: `Bearer ${config.codemodeApis.semaphoreApiToken.exposeSecret()}`,
+    };
+  }
+
+  if (
+    normalizedUrl === ingressOpenApiUrl ||
+    (source.namespace === "ingressProxy" && normalizedUrl.endsWith("/api/openapi.json"))
+  ) {
+    runtimeSource.headers = {
+      ...source.headers,
+      Authorization: `Bearer ${config.codemodeApis.ingressProxyApiToken.exposeSecret()}`,
     };
   }
 

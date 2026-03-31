@@ -703,11 +703,15 @@ async function buildProcedureFromOperation(options: {
   const baseUrl = resolveServerBaseUrl(options.document, options.sourceUrl, options.baseUrl);
   const defaultInvoke = async (input: unknown) => {
     const normalizedInput = inputPlan.normalize(input);
-    const url = new URL(trimLeadingSlash(options.path), `${trimTrailingSlash(baseUrl)}/`);
-
+    let resolvedPath = options.path;
     for (const [key, value] of Object.entries(normalizeInputObject(normalizedInput.path))) {
-      url.pathname = url.pathname.replaceAll(`{${key}}`, encodePathParameter(value));
+      const encodedValue = encodePathParameter(value);
+      resolvedPath = resolvedPath
+        .replaceAll(`{${key}}`, encodedValue)
+        .replaceAll(`{+${key}}`, encodedValue);
     }
+
+    const url = new URL(trimLeadingSlash(resolvedPath), `${trimTrailingSlash(baseUrl)}/`);
 
     appendQueryParams(url, normalizedInput.query);
 

@@ -6,9 +6,8 @@ import type * as schema from "~/db/schema.ts";
 export interface AppContext {
   manifest: typeof manifest;
   config: AppConfig;
+  env: Env;
   db: BaseSQLiteDatabase<"sync" | "async", unknown, typeof schema>;
-  loader: WorkerLoader;
-  outbound: Fetcher;
   log: SharedRequestLogger;
   rawRequest?: Request;
 }

@@ -1,6 +1,6 @@
 import alchemy from "alchemy";
 import { D1Database, TanStackStart, Worker, WorkerLoader } from "alchemy/cloudflare";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
 
@@ -48,8 +48,11 @@ const compiledAppConfig = parseAppConfigFromEnv({
   prefix: "APP_CONFIG_",
   env: process.env,
 });
-
-if (env.ALCHEMY_LOCAL) delete process.env.CI;
+const rawAppConfig = compileRawAppConfigFromEnv({
+  configSchema: AppConfig,
+  prefix: "APP_CONFIG_",
+  env: process.env,
+});
 
 const app = await alchemy(APP_NAME, {
   stage: env.ALCHEMY_STAGE,
@@ -93,13 +96,7 @@ export const worker = await TanStackStart(APP_NAME, {
   adopt: true,
   compatibilityFlags: ["global_fetch_strictly_public"],
   bindings: {
-    APP_CONFIG: JSON.stringify(compiledAppConfig, null, 2),
-    APP_CONFIG_CODEMODE_APIS__SEMAPHORE_API_TOKEN: alchemy.secret(
-      compiledAppConfig.codemodeApis.semaphoreApiToken.exposeSecret(),
-    ),
-    APP_CONFIG_CODEMODE_APIS__INGRESS_PROXY_API_TOKEN: alchemy.secret(
-      compiledAppConfig.codemodeApis.ingressProxyApiToken.exposeSecret(),
-    ),
+    APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
     DB: db,
     LOADER: WorkerLoader(),
     OUTBOUND: outboundWorker,
@@ -132,6 +129,13 @@ export const worker = await TanStackStart(APP_NAME, {
   },
 });
 
-console.log({ url: primaryUrl ?? worker.url, workersDevUrl: worker.url });
+console.dir(
+  {
+    config: compiledAppConfig,
+    url: primaryUrl ?? worker.url,
+    workersDevUrl: worker.url,
+  },
+  { depth: null },
+);
 
 await app.finalize();

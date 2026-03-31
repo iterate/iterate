@@ -12,7 +12,6 @@ const config = parseAppConfigFromEnv({
   prefix: "APP_CONFIG_",
   env: workerEnv,
 });
-const db = drizzleWorkerd(workerEnv.DB, { schema });
 
 export default {
   async fetch(request: Request, env: Env, cfCtx: ExecutionContext) {
@@ -24,12 +23,12 @@ export default {
         executionCtx: cfCtx,
       },
       async ({ log }) => {
+        const db = drizzleWorkerd(env.DB, { schema });
         const context: AppContext = {
           manifest,
           config,
+          env,
           db,
-          loader: env.LOADER,
-          outbound: env.OUTBOUND,
           log,
           rawRequest: request,
         };

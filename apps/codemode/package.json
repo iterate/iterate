@@ -7,9 +7,12 @@
     "~/*": "./src/*"
   },
   "scripts": {
-    "dev": "doppler run -- tsx ./alchemy.run.ts",
-    "build": "doppler run -- pnpm exec vite build --config vite.cf.config.ts",
-    "deploy": "doppler run --config prd -- tsx ./alchemy.run.ts",
+    "alchemy:up": "tsx ./alchemy.run.ts",
+    "alchemy:down": "tsx ./alchemy.run.ts --destroy",
+    "dev": "doppler run --project codemode -- tsx ./alchemy.run.ts",
+    "build": "doppler run --project codemode -- pnpm exec vite build --config vite.cf.config.ts",
+    "deploy": "doppler run --project codemode --config prd -- pnpm alchemy:up",
+    "destroy": "doppler run --project codemode --config prd -- pnpm alchemy:down",
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck"
   },

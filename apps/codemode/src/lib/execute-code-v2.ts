@@ -28,12 +28,9 @@ export async function executeCodemodeFunction(options: {
   outbound: Fetcher;
   sources?: CodemodeSource[];
 }): Promise<CodemodeExecutionResult> {
-  const outboundFetch = (input: URL | string | Request, init?: RequestInit) =>
-    options.outbound.fetch(input, init);
   const contractContext = await buildCodemodeContextFromSources({
     config: options.config,
     sources: options.sources,
-    fetch: outboundFetch,
     includeTypes: false,
   });
   const executor = new DynamicWorkerExecutor({

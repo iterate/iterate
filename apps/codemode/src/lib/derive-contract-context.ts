@@ -79,25 +79,29 @@ function getClientProcedure(
   client: ClientTree,
   path: string[],
 ): (input: unknown) => Promise<unknown> {
-  let current: unknown = client;
+  return async (input: unknown) => {
+    let current: unknown = client;
+    let owner: unknown = undefined;
 
-  for (const segment of path) {
-    if ((typeof current !== "object" && typeof current !== "function") || current === null) {
-      throw new Error(`Missing client procedure at ${path.join(".")}`);
+    for (const segment of path) {
+      if ((typeof current !== "object" && typeof current !== "function") || current === null) {
+        throw new Error(`Missing client procedure at ${path.join(".")}`);
+      }
+
+      owner = current;
+      current = Reflect.get(current as object, segment);
+
+      if (current === undefined) {
+        throw new Error(`Missing client procedure at ${path.join(".")}`);
+      }
     }
 
-    current = Reflect.get(current as object, segment);
-
-    if (current === undefined) {
-      throw new Error(`Missing client procedure at ${path.join(".")}`);
+    if (typeof current !== "function") {
+      throw new Error(`Client path ${path.join(".")} is not callable`);
     }
-  }
 
-  if (typeof current !== "function") {
-    throw new Error(`Client path ${path.join(".")} is not callable`);
-  }
-
-  return current as (input: unknown) => Promise<unknown>;
+    return Reflect.apply(current, owner, [input]);
+  };
 }
 
 function collectProcedures(

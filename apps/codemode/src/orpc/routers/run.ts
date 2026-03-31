@@ -24,8 +24,8 @@ export const runRouter = {
   runV2: os.runV2.handler(async ({ context, input }) => {
     const execution = await executeCodemodeFunction({
       code: input.code,
-      loader: context.loader,
-      outbound: context.outbound,
+      loader: context.env.LOADER,
+      outbound: context.env.OUTBOUND,
       config: context.config,
       sources: input.sources,
     });
@@ -46,7 +46,6 @@ export const runRouter = {
     const runtimeContext = await buildCodemodeContextFromSources({
       config: context.config,
       sources: input.sources,
-      fetch: (request, init) => context.outbound.fetch(request, init),
     });
 
     return runtimeContext.ctxTypes;

@@ -1,7 +1,10 @@
 import {
+  AGENTUTIL_GEOCODE_OPENAPI_SOURCE,
+  AGENTUTIL_WEATHER_OPENAPI_SOURCE,
   DEFAULT_CODEMODE_SOURCES,
   EVENTS_OPENAPI_SOURCE,
   EXAMPLE_OPENAPI_SOURCE,
+  INGRESS_PROXY_OPENAPI_SOURCE,
   PETSTORE_OPENAPI_SOURCE,
   WEATHER_OPENAPI_SOURCE,
   type CodemodeUiSource,
@@ -19,20 +22,20 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
   {
     id: "service-overview",
     title: "Service Overview",
-    description:
-      "Ping example, count streams, inspect semaphore inventory, and list ingress routes.",
+    description: "Ping example, count streams, inspect ingress routes, and sample Petstore data.",
     sources: DEFAULT_CODEMODE_SOURCES,
     code: `async ({ ctx }) => {
   const ping = await ctx.example.ping({});
   const streams = await ctx.events.listStreams({});
-  const resources = await ctx.semaphore.resources.list({});
   const routes = await ctx.ingressProxy.routes.list({ limit: 5, offset: 0 });
+  const pets = await ctx.petstore.findPetsByStatus({ status: "available" });
 
   return {
     ping,
     streamCount: streams.length,
-    semaphoreResources: resources.length,
     ingressRoutes: routes.total,
+    petCount: Array.isArray(pets) ? pets.length : null,
+    firstPetName: Array.isArray(pets) ? (pets[0]?.name ?? null) : null,
   };
 };`,
   },
@@ -89,56 +92,49 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
   },
   {
     id: "lease-and-route",
-    title: "Lease And Route",
-    description: "Lease a tunnel from semaphore and build an ingress route from it.",
-    sources: DEFAULT_CODEMODE_SOURCES,
+    title: "Route Weather Snapshot",
+    description: "Combine ingress route inventory with live California weather alerts.",
+    sources: [INGRESS_PROXY_OPENAPI_SOURCE, WEATHER_OPENAPI_SOURCE],
     code: `async ({ ctx }) => {
-  const lease = await ctx.semaphore.resources.acquire({
-    type: "cloudflare-tunnel",
-    leaseMs: 60_000,
-    waitMs: 0,
+  const routes = await ctx.ingressProxy.routes.list({ limit: 10, offset: 0 });
+  const alerts = await ctx.weather.alerts_active({
+    area: "CA",
   });
 
-  const route = await ctx.ingressProxy.routes.upsert({
-    rootHost: \`\${lease.slug}.demo.ingress.iterate.com\`,
-    targetUrl: \`https://\${lease.slug}.internal.iterate.com\`,
-    metadata: {
-      source: "codemode",
-      leaseSlug: lease.slug,
-    },
-  });
+  const features = Array.isArray(alerts?.features) ? alerts.features : [];
 
-  return { lease, route };
+  return {
+    ingressRoutes: routes.total,
+    sampleRoute: routes.routes[0]
+      ? {
+          rootHost: routes.routes[0].rootHost,
+          targetUrl: routes.routes[0].targetUrl,
+        }
+      : null,
+    alertCount: features.length,
+    headline: features[0]?.properties?.headline ?? null,
+  };
 };`,
   },
   {
     id: "inventory-cross-check",
-    title: "Cross-Check Inventory",
-    description: "Compare leased semaphore tunnel resources against ingress route metadata.",
-    sources: DEFAULT_CODEMODE_SOURCES,
+    title: "Ingress And Events Snapshot",
+    description:
+      "Cross-check ingress routes against recent event streams and summarize both sides.",
+    sources: [EVENTS_OPENAPI_SOURCE, INGRESS_PROXY_OPENAPI_SOURCE],
     code: `async ({ ctx }) => {
-  const resources = await ctx.semaphore.resources.list({
-    type: "cloudflare-tunnel",
-  });
+  const streams = await ctx.events.listStreams({});
   const routes = await ctx.ingressProxy.routes.list({ limit: 100, offset: 0 });
 
-  const leasedSlugs = new Set(
-    resources
-      .filter((resource) => resource.leaseState === "leased")
-      .map((resource) => resource.slug),
-  );
-
-  return routes.routes.map((route) => ({
-    rootHost: route.rootHost,
-    targetUrl: route.targetUrl,
-    leaseSlug:
-      typeof route.metadata.leaseSlug === "string" ? route.metadata.leaseSlug : null,
-    leaseState:
-      typeof route.metadata.leaseSlug === "string" &&
-      leasedSlugs.has(route.metadata.leaseSlug)
-        ? "leased"
-        : "not-leased",
-  }));
+  return {
+    streamCount: streams.length,
+    routeCount: routes.total,
+    recentStreams: streams.slice(0, 5).map((stream) => stream.path),
+    sampleRoutes: routes.routes.slice(0, 5).map((route) => ({
+      rootHost: route.rootHost,
+      targetUrl: route.targetUrl,
+    })),
+  };
 };`,
   },
   {
@@ -170,6 +166,68 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
     headline: Array.isArray(alerts?.features)
       ? (alerts.features[0]?.properties?.headline ?? null)
       : null,
+  };
+};`,
+  },
+  {
+    id: "weather-alert-journal",
+    title: "Weather Alert Journal",
+    description:
+      "Pull Weather.gov alerts and persist a summary event into the internal events app.",
+    sources: [WEATHER_OPENAPI_SOURCE, EVENTS_OPENAPI_SOURCE],
+    code: `async ({ ctx }) => {
+  const alerts = await ctx.weather.alerts_active({
+    area: "CA",
+  });
+
+  const features = Array.isArray(alerts?.features) ? alerts.features : [];
+  const headline = features[0]?.properties?.headline ?? null;
+
+  await ctx.events.append({
+    path: "/codemode/demo/weather-alerts",
+    type: "com.iterate.codemode/weather-alert-snapshot",
+    payload: {
+      capturedAt: new Date().toISOString(),
+      state: "CA",
+      alertCount: features.length,
+      headline,
+    },
+  });
+
+  return {
+    alertCount: features.length,
+    headline,
+  };
+};`,
+  },
+  {
+    id: "geocode-weather-brief",
+    title: "Geocode Weather Brief",
+    description: "Resolve a place, then fetch current weather for the returned coordinates.",
+    sources: [AGENTUTIL_GEOCODE_OPENAPI_SOURCE, AGENTUTIL_WEATHER_OPENAPI_SOURCE],
+    code: `async ({ ctx }) => {
+  const geocode = await ctx.geocode.forwardGeocode({
+    address: "Golden Gate Bridge, San Francisco",
+    limit: 1,
+  });
+
+  const place = geocode.results?.[0];
+  if (!place?.lat || !place?.lon) {
+    return null;
+  }
+
+  const weather = await ctx.agentWeather.getCurrentWeather({
+    lat: place.lat,
+    lon: place.lon,
+  });
+
+  return {
+    place: place.display_name ?? null,
+    coordinates: {
+      lat: place.lat,
+      lon: place.lon,
+    },
+    current: weather.current ?? null,
   };
 };`,
   },

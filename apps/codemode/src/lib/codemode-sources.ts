@@ -48,6 +48,18 @@ export const EVENTS_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
   url: "https://events.iterate.com/api/openapi.json",
 };
 
+export const SEMAPHORE_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
+  type: "openapi",
+  namespace: "semaphore",
+  url: "https://semaphore.iterate.com/api/openapi.json",
+};
+
+export const INGRESS_PROXY_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
+  type: "openapi",
+  namespace: "ingressProxy",
+  url: "https://ingress.iterate.com/api/openapi.json",
+};
+
 export const WEATHER_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
   type: "openapi",
   namespace: "weather",
@@ -59,12 +71,29 @@ export const WEATHER_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
   },
 };
 
+export const AGENTUTIL_GEOCODE_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
+  type: "openapi",
+  namespace: "geocode",
+  url: "https://geocode.agentutil.net/openapi.json",
+};
+
+export const AGENTUTIL_TIME_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
+  type: "openapi",
+  namespace: "time",
+  url: "https://time.agentutil.net/openapi.json",
+};
+
+export const AGENTUTIL_WEATHER_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
+  type: "openapi",
+  namespace: "agentWeather",
+  url: "https://weather.agentutil.net/openapi.json",
+};
+
 export const DEFAULT_CODEMODE_SOURCES: CodemodeUiSource[] = [
-  PETSTORE_OPENAPI_SOURCE,
   EXAMPLE_OPENAPI_SOURCE,
   EVENTS_OPENAPI_SOURCE,
-  { type: "orpc-contract", service: "semaphore" },
-  { type: "orpc-contract", service: "ingressProxy" },
+  INGRESS_PROXY_OPENAPI_SOURCE,
+  PETSTORE_OPENAPI_SOURCE,
 ];
 
 export const CODEMODE_SOURCE_PRESETS: CodemodeSourcePreset[] = [
@@ -87,10 +116,40 @@ export const CODEMODE_SOURCE_PRESETS: CodemodeSourcePreset[] = [
     source: EVENTS_OPENAPI_SOURCE,
   },
   {
+    id: "semaphore-openapi",
+    title: "Semaphore OpenAPI",
+    description: "Use semaphore via its public OpenAPI document with host-managed auth.",
+    source: SEMAPHORE_OPENAPI_SOURCE,
+  },
+  {
+    id: "ingress-openapi",
+    title: "Ingress Proxy OpenAPI",
+    description: "Use ingress-proxy via its public OpenAPI document with host-managed auth.",
+    source: INGRESS_PROXY_OPENAPI_SOURCE,
+  },
+  {
     id: "weather-openapi",
     title: "Weather.gov OpenAPI",
     description: "Public NOAA weather alerts and forecast endpoints via OpenAPI.",
     source: WEATHER_OPENAPI_SOURCE,
+  },
+  {
+    id: "agentutil-geocode-openapi",
+    title: "AgentUtil Geocode",
+    description: "Public geocoding OpenAPI. Small, clean, and good for mash-ups.",
+    source: AGENTUTIL_GEOCODE_OPENAPI_SOURCE,
+  },
+  {
+    id: "agentutil-time-openapi",
+    title: "AgentUtil Time",
+    description: "Public time/timezone OpenAPI. Useful, but quota-limited.",
+    source: AGENTUTIL_TIME_OPENAPI_SOURCE,
+  },
+  {
+    id: "agentutil-weather-openapi",
+    title: "AgentUtil Weather",
+    description: "Public weather OpenAPI with a small free quota. Good for lightweight demos.",
+    source: AGENTUTIL_WEATHER_OPENAPI_SOURCE,
   },
   {
     id: "example-contract",
