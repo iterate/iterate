@@ -118,7 +118,7 @@ describe("semaphore worker e2e", () => {
         "--",
         "sh",
         "-c",
-        `ALCHEMY_LOCAL=true ALCHEMY_STAGE=${stage} APP_CONFIG='{"sharedApiSecret":"test-token"}' tsx ./alchemy.run.ts`,
+        `ALCHEMY_LOCAL=true ALCHEMY_STAGE=${stage} APP_CONFIG='{"sharedApiSecret":"test-token","posthog":{"apiKey":"phc_test"}}' tsx ./alchemy.run.ts`,
       ],
       {
         cwd: new URL(".", import.meta.url).pathname,
