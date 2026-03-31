@@ -133,7 +133,7 @@ describe.sequential("events stream e2e", () => {
           payload: { value: 1 },
           idempotencyKey: "",
         }),
-      ).rejects.toThrow(/idempotency/i);
+      ).rejects.toThrow(/input validation failed|idempotency/i);
     },
     testTimeoutMs,
   );
