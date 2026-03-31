@@ -31,6 +31,9 @@ const adapter = createOpenaiChat(OPENAI_MODEL, OPENAI_API_KEY);
 printInstructions({ baseUrl: BASE_URL, streamPath: STREAM_PATH });
 
 const { resumeOffset, messages } = await loadConversation({ client, streamPath: STREAM_PATH });
+console.error(
+  `[llm-subscriber] loaded messages=${messages.length} resumeOffset=${resumeOffset ?? "<start>"}`,
+);
 const stream = await client.stream(
   {
     path: STREAM_PATH,
@@ -97,11 +100,29 @@ function printInstructions({ baseUrl, streamPath }: { baseUrl: string; streamPat
   console.error("Open this in your browser and watch events appear live:");
   console.error(new URL(`/streams${streamPath}`, baseUrl).toString());
   console.error("");
+  console.error("Recommended: append a user event with curl:");
+  console.error("");
   console.error(
-    "Keep posting more user messages into that same stream to continue the conversation.",
+    [
+      `curl -X POST "${new URL(`/api/streams${streamPath}`, baseUrl).toString()}" \\`,
+      '  -H "content-type: application/json" \\',
+      `  --data '${JSON.stringify(
+        {
+          type: INPUT_ITEM_ADDED_TYPE,
+          payload: {
+            item: {
+              role: "user",
+              content: "Say hello in one short sentence.",
+            },
+          },
+        },
+        null,
+        2,
+      )}'`,
+    ].join("\n"),
   );
   console.error("");
-  console.error("Paste this JSON into the stream page input and submit it:");
+  console.error("Browser alternative: paste this into the stream page input and submit it:");
   console.error(
     JSON.stringify(
       {
@@ -168,7 +189,9 @@ async function loadConversation({
       : messageEvents.slice(0, messageEvents.indexOf(firstIncompleteUserMessage));
 
   return {
-    resumeOffset: firstIncompleteUserMessage?.offsetBeforeInput ?? lastOffset,
+    resumeOffset: firstIncompleteUserMessage
+      ? firstIncompleteUserMessage.offsetBeforeInput
+      : lastOffset,
     messages: completedMessageEvents.map((messageEvent) => messageEvent.item),
   };
 }
