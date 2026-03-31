@@ -105,6 +105,7 @@ function OrgLayout() {
     id: p.id,
     name: p.name,
     slug: p.slug,
+    jonasLand: p.jonasLand,
   }));
 
   return (

@@ -155,6 +155,7 @@ export const projectRouter = {
         name: z.string().min(1).max(100),
         slug: z.string().min(1).max(50).optional(), // Optional: defaults to org slug if first project
         sandboxProvider: z.enum(PROJECT_SANDBOX_PROVIDER).optional(),
+        jonasLand: z.boolean().default(false),
       }),
     )
     .handler(async ({ context: ctx, input }) => {
@@ -191,6 +192,7 @@ export const projectRouter = {
         .values({
           name: input.name,
           slug,
+          jonasLand: input.jonasLand,
           organizationId: ctx.organization.id,
           sandboxProvider,
         })

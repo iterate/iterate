@@ -44,7 +44,12 @@ export const makeOrpcClient = createIsomorphicFn()
       }),
   )
   .client(
-    (): OrpcClient => createORPCClient(new RPCLink({ url: `${window.location.origin}/api/orpc` })),
+    (): OrpcClient =>
+      createORPCClient(
+        new RPCLink({
+          url: `${window.location.origin}/api/orpc`,
+        }),
+      ),
   );
 
 export const orpcClient = makeOrpcClient();

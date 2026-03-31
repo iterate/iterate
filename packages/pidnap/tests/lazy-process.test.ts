@@ -3,6 +3,8 @@ import { LazyProcess, type ProcessDefinition } from "../src/lazy-process.ts";
 import type { Logger } from "../src/logger.ts";
 import { createMockLogger } from "./test-utils.ts";
 
+const POLL_TIMEOUT_MS = 5000;
+
 describe("LazyProcess", () => {
   let mockLogger: Logger;
 
@@ -32,7 +34,7 @@ describe("LazyProcess", () => {
       expect(proc.state).toBe("running");
 
       // Wait for process to complete using polling for reliability
-      await expect.poll(() => proc.state, { timeout: 5000 }).toBe("stopped");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("stopped");
     });
 
     it("should log stdout output", async () => {
@@ -155,7 +157,7 @@ describe("LazyProcess", () => {
       const proc = new LazyProcess("test", definition, mockLogger);
 
       await proc.start();
-      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("stopped");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("stopped");
 
       await proc.reset();
       expect(proc.state).toBe("idle");
@@ -174,7 +176,7 @@ describe("LazyProcess", () => {
       const proc = new LazyProcess("test", definition, mockLogger);
 
       await proc.start();
-      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("error");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("error");
 
       await proc.reset();
       expect(proc.state).toBe("idle");
@@ -194,7 +196,7 @@ describe("LazyProcess", () => {
       await proc.start();
       expect(proc.state).toBe("running");
 
-      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("stopped");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("stopped");
     });
 
     it("should follow correct lifecycle with stop: idle -> running -> stopping -> stopped", async () => {

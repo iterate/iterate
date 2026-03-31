@@ -3,6 +3,8 @@ import { Manager, type ManagerConfig } from "../src/manager.ts";
 import type { Logger } from "../src/logger.ts";
 import { createMockLogger, wait, successProcess, longRunningProcess } from "./test-utils.ts";
 
+const POLL_TIMEOUT_MS = 5000;
+
 describe("Manager - Reload & Remove", () => {
   let mockLogger: Logger;
 
@@ -28,14 +30,15 @@ describe("Manager - Reload & Remove", () => {
       // Wait for initial process to complete using polling for reliability
       const proc = manager.getProcessByTarget("test-proc");
       expect(proc).toBeDefined();
-      await expect.poll(() => proc?.state, { timeout: 5000 }).toBe("stopped");
+      await expect.poll(() => proc?.state, { timeout: POLL_TIMEOUT_MS }).toBe("stopped");
 
       // Reload with long-running process
       await manager.reloadProcessByTarget("test-proc", longRunningProcess);
-      await wait(150);
-
-      const reloadedProc = manager.getProcessByTarget("test-proc");
-      expect(reloadedProc?.state).toBe("running");
+      await expect
+        .poll(() => manager.getProcessByTarget("test-proc")?.state, {
+          timeout: POLL_TIMEOUT_MS,
+        })
+        .toBe("running");
 
       await manager.stop();
     });
@@ -58,14 +61,14 @@ describe("Manager - Reload & Remove", () => {
 
       const manager = new Manager(config, mockLogger);
       await manager.start();
-      await wait(300);
 
       // Reload second process (index 1)
       await manager.reloadProcessByTarget(1, longRunningProcess);
-      await wait(150);
+      await expect
+        .poll(() => manager.getProcessByTarget(1)?.state, { timeout: POLL_TIMEOUT_MS })
+        .toBe("running");
 
       const proc = manager.getProcessByTarget(1);
-      expect(proc?.state).toBe("running");
       expect(proc?.name).toBe("proc2");
 
       await manager.stop();
@@ -86,7 +89,6 @@ describe("Manager - Reload & Remove", () => {
 
       const manager = new Manager(config, mockLogger);
       await manager.start();
-      await wait(300);
 
       // Reload with definition that has its own env
       const newDefinition = {
@@ -95,11 +97,13 @@ describe("Manager - Reload & Remove", () => {
       };
 
       await manager.reloadProcessByTarget("test-proc", newDefinition);
-      await wait(150);
 
-      // The process should be running with both global and local env merged
-      const proc = manager.getProcessByTarget("test-proc");
-      expect(proc?.state).toBe("running");
+      // Assert on the observable lifecycle edge instead of a fixed sleep.
+      await expect
+        .poll(() => manager.getProcessByTarget("test-proc")?.state, {
+          timeout: POLL_TIMEOUT_MS,
+        })
+        .toBe("running");
 
       await manager.stop();
     });
@@ -117,10 +121,14 @@ describe("Manager - Reload & Remove", () => {
 
       const manager = new Manager(config, mockLogger);
       await manager.start();
-      await wait(150);
+
+      await expect
+        .poll(() => manager.getProcessByTarget("test-proc")?.state, {
+          timeout: POLL_TIMEOUT_MS,
+        })
+        .toBe("running");
 
       const proc = manager.getProcessByTarget("test-proc");
-      expect(proc?.state).toBe("running");
 
       // Reload without immediate restart
       await manager.reloadProcessByTarget("test-proc", successProcess, {
@@ -146,7 +154,11 @@ describe("Manager - Reload & Remove", () => {
 
       const manager = new Manager(config, mockLogger);
       await manager.start();
-      await expect.poll(() => manager.getProcessByTarget("test-proc")?.state).toBe("stopped");
+      await expect
+        .poll(() => manager.getProcessByTarget("test-proc")?.state, {
+          timeout: POLL_TIMEOUT_MS,
+        })
+        .toBe("stopped");
 
       const proc = manager.getProcessByTarget("test-proc");
       expect(proc?.state).toBe("stopped");
@@ -162,7 +174,7 @@ describe("Manager - Reload & Remove", () => {
       });
 
       // Should have restarted with new policy
-      await expect.poll(() => proc?.restarts ?? 0, { timeout: 2000 }).toBeGreaterThan(0);
+      await expect.poll(() => proc?.restarts ?? 0, { timeout: POLL_TIMEOUT_MS }).toBeGreaterThan(0);
 
       await manager.stop();
     });

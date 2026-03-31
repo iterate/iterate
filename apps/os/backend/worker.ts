@@ -47,6 +47,8 @@ import { queuer } from "./outbox/outbox-queuer.ts";
 import * as workerConfig from "./worker-config.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
+import { ProjectDurableObject } from "./durable-objects/project.ts";
+import { DeploymentDurableObject } from "./durable-objects/deployment.ts";
 import type { Variables } from "./types.ts";
 import { getOtelConfig, initializeOtel, withExtractedTraceContext } from "./utils/otel-init.ts";
 import {
@@ -455,6 +457,7 @@ const appOrpcHandler = new RPCHandler(appRouter, {
     }),
   ],
 });
+
 app.all("/api/orpc/*", async (c, next) => {
   // Skip if this is the daemon-facing endpoint (handled below)
   if (c.req.path.startsWith("/api/orpc-daemon/")) return next();
@@ -608,4 +611,4 @@ export default class extends WorkerEntrypoint {
   }
 }
 
-export { RealtimePusher, ApprovalCoordinator };
+export { RealtimePusher, ApprovalCoordinator, ProjectDurableObject, DeploymentDurableObject };

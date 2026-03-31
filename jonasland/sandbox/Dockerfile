@@ -267,6 +267,7 @@ WORKDIR $ITERATE_REPO
 
 # Dependency-manifest layer (source changes should not invalidate this).
 COPY --chown=iterate:iterate package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY --chown=iterate:iterate patches ./patches
 RUN ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "amd64" ]; then PNPM_ARCH="x64"; else PNPM_ARCH="arm64"; fi && \
     pnpm fetch --config.platform=linux --config.arch="$PNPM_ARCH" --config.libc=glibc
