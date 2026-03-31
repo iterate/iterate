@@ -5,6 +5,8 @@ import {
   EVENTS_OPENAPI_SOURCE,
   EXAMPLE_OPENAPI_SOURCE,
   INGRESS_PROXY_OPENAPI_SOURCE,
+  NAGER_OPENAPI_SOURCE,
+  OPEN_LIBRARY_OPENAPI_SOURCE,
   PETSTORE_OPENAPI_SOURCE,
   WEATHER_OPENAPI_SOURCE,
   type CodemodeUiSource,
@@ -248,6 +250,62 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
         winner: race.Results?.[0]?.Driver?.familyName ?? null,
       }
     : null;
+};`,
+  },
+  {
+    id: "holiday-weather-brief",
+    title: "Holiday Weather Brief",
+    description:
+      "Mix a public holiday feed with live California alerts for a quick planning brief.",
+    sources: [NAGER_OPENAPI_SOURCE, WEATHER_OPENAPI_SOURCE],
+    code: `async ({ ctx }) => {
+  const holidays = await ctx.nager.nextPublicHolidays({
+    countryCode: "GB",
+  });
+  const alerts = await ctx.weather.alerts_active({
+    area: "CA",
+  });
+
+  const nextHoliday = Array.isArray(holidays) ? (holidays[0] ?? null) : null;
+  const features = Array.isArray(alerts?.features) ? alerts.features : [];
+
+  return {
+    nextHoliday: nextHoliday
+      ? {
+          name: nextHoliday.localName,
+          date: nextHoliday.date,
+        }
+      : null,
+    californiaAlertCount: features.length,
+    californiaHeadline: features[0]?.properties?.headline ?? null,
+  };
+};`,
+  },
+  {
+    id: "openlibrary-weather-mashup",
+    title: "Storm Reading List",
+    description:
+      "Search Open Library and pair the result with the latest California alert headline.",
+    sources: [OPEN_LIBRARY_OPENAPI_SOURCE, WEATHER_OPENAPI_SOURCE],
+    code: `async ({ ctx }) => {
+  const books = await ctx.openlibrary.search({
+    q: "storm survival",
+  });
+  const alerts = await ctx.weather.alerts_active({
+    area: "CA",
+  });
+
+  const docs = Array.isArray(books?.docs) ? books.docs : [];
+  const features = Array.isArray(alerts?.features) ? alerts.features : [];
+
+  return {
+    headline: features[0]?.properties?.headline ?? null,
+    topBooks: docs.slice(0, 3).map((book) => ({
+      title: book.title ?? null,
+      author: Array.isArray(book.author_name) ? (book.author_name[0] ?? null) : null,
+      year: book.first_publish_year ?? null,
+    })),
+  };
 };`,
   },
   {

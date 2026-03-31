@@ -322,9 +322,10 @@ function collectAllProcedures(registry: ContractRegistry): ProcedureDescriptor[]
 
 export function deriveContractContext(
   registry: ContractRegistry,
-  options?: { providerName?: string },
+  options?: { providerName?: string; includeTypes?: boolean },
 ): DerivedContractContext {
   const providerName = options?.providerName ?? "rpc";
+  const includeTypes = options?.includeTypes !== false;
   const procedures = collectAllProcedures(registry);
   const procedureTree = buildProcedureTree(procedures);
   const valueProcedures = procedures.filter((procedure) => procedure.kind === "value");
@@ -352,40 +353,44 @@ export function deriveContractContext(
   }
 
   return {
-    declarations: [
-      "// Generated from selected oRPC contracts via @cloudflare/codemode",
-      ...(valueProcedures.length > 0
-        ? [
-            generateTypesFromJsonSchema(buildToolDescriptors(valueProcedures)).replace(
-              "declare const codemode:",
-              `declare const ${providerName}:`,
-            ),
-          ]
-        : []),
-      ...(streamProcedures.length > 0
-        ? ["", buildStreamTypeDefinitions(streamProcedures, `${providerName}_stream`)]
-        : []),
-    ],
+    declarations: includeTypes
+      ? [
+          "// Generated from selected oRPC contracts via @cloudflare/codemode",
+          ...(valueProcedures.length > 0
+            ? [
+                generateTypesFromJsonSchema(buildToolDescriptors(valueProcedures)).replace(
+                  "declare const codemode:",
+                  `declare const ${providerName}:`,
+                ),
+              ]
+            : []),
+          ...(streamProcedures.length > 0
+            ? ["", buildStreamTypeDefinitions(streamProcedures, `${providerName}_stream`)]
+            : []),
+        ]
+      : [],
     providers,
     ctxExpression: emitRuntimeTree(procedureTree, procedures, providerName),
     ctxTypeExpression: emitTypeTree(procedureTree, procedures, providerName),
     sandboxPrelude: `const ctx = ${emitRuntimeTree(procedureTree, procedures, providerName)};`,
-    ctxTypes: [
-      "// Generated from selected oRPC contracts via @cloudflare/codemode",
-      ...(valueProcedures.length > 0
-        ? [
-            generateTypesFromJsonSchema(buildToolDescriptors(valueProcedures)).replace(
-              "declare const codemode:",
-              `declare const ${providerName}:`,
-            ),
-          ]
-        : []),
-      ...(streamProcedures.length > 0
-        ? ["", buildStreamTypeDefinitions(streamProcedures, `${providerName}_stream`)]
-        : []),
-      "",
-      `declare const ctx: ${emitTypeTree(procedureTree, procedures, providerName)};`,
-      "",
-    ].join("\n"),
+    ctxTypes: includeTypes
+      ? [
+          "// Generated from selected oRPC contracts via @cloudflare/codemode",
+          ...(valueProcedures.length > 0
+            ? [
+                generateTypesFromJsonSchema(buildToolDescriptors(valueProcedures)).replace(
+                  "declare const codemode:",
+                  `declare const ${providerName}:`,
+                ),
+              ]
+            : []),
+          ...(streamProcedures.length > 0
+            ? ["", buildStreamTypeDefinitions(streamProcedures, `${providerName}_stream`)]
+            : []),
+          "",
+          `declare const ctx: ${emitTypeTree(procedureTree, procedures, providerName)};`,
+          "",
+        ].join("\n")
+      : "",
   };
 }

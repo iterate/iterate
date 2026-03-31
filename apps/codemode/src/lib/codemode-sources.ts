@@ -1,27 +1,11 @@
-import { CodemodeContractSourceService } from "@iterate-com/codemode-contract";
-import { z } from "zod";
+import {
+  CodemodeSource,
+  type CodemodeOpenApiSource as CodemodeUiOpenApiSource,
+  type CodemodeSource as CodemodeUiSource,
+} from "@iterate-com/codemode-contract";
 import YAML from "yaml";
 
-export const CodemodeUiOpenApiSource = z.object({
-  type: z.literal("openapi"),
-  url: z.string().trim().url(),
-  baseUrl: z.string().trim().url().optional(),
-  namespace: z.string().trim().min(1).optional(),
-  headers: z.record(z.string(), z.string()).optional(),
-});
-
-export const CodemodeUiOrpcContractSource = z.object({
-  type: z.literal("orpc-contract"),
-  service: CodemodeContractSourceService,
-});
-
-export const CodemodeUiSource = z.discriminatedUnion("type", [
-  CodemodeUiOpenApiSource,
-  CodemodeUiOrpcContractSource,
-]);
-
-export type CodemodeUiSource = z.infer<typeof CodemodeUiSource>;
-export type CodemodeUiOpenApiSource = z.infer<typeof CodemodeUiOpenApiSource>;
+export type { CodemodeUiOpenApiSource, CodemodeUiSource };
 
 export interface CodemodeSourcePreset {
   id: string;
@@ -89,6 +73,21 @@ export const AGENTUTIL_WEATHER_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
   url: "https://weather.agentutil.net/openapi.json",
 };
 
+export const NAGER_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
+  type: "openapi",
+  namespace: "nager",
+  url: "https://date.nager.at/openapi/v4.json",
+};
+
+export const OPEN_LIBRARY_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
+  type: "openapi",
+  namespace: "openlibrary",
+  url: "https://openlibrary.org/static/openapi.json",
+  headers: {
+    "user-agent": "iterate-codemode (jonas@iterate.com)",
+  },
+};
+
 export const DEFAULT_CODEMODE_SOURCES: CodemodeUiSource[] = [
   EXAMPLE_OPENAPI_SOURCE,
   EVENTS_OPENAPI_SOURCE,
@@ -114,12 +113,6 @@ export const CODEMODE_SOURCE_PRESETS: CodemodeSourcePreset[] = [
     title: "Events OpenAPI",
     description: "Use the live events app OpenAPI document as a ctx source.",
     source: EVENTS_OPENAPI_SOURCE,
-  },
-  {
-    id: "semaphore-openapi",
-    title: "Semaphore OpenAPI",
-    description: "Use semaphore via its public OpenAPI document with host-managed auth.",
-    source: SEMAPHORE_OPENAPI_SOURCE,
   },
   {
     id: "ingress-openapi",
@@ -164,12 +157,6 @@ export const CODEMODE_SOURCE_PRESETS: CodemodeSourcePreset[] = [
     source: { type: "orpc-contract", service: "events" },
   },
   {
-    id: "semaphore-contract",
-    title: "Semaphore oRPC Contract",
-    description: "Use the vendored semaphore contract and its typed client.",
-    source: { type: "orpc-contract", service: "semaphore" },
-  },
-  {
     id: "ingress-contract",
     title: "Ingress Proxy oRPC Contract",
     description: "Use the vendored ingress proxy contract and its typed client.",
@@ -178,7 +165,7 @@ export const CODEMODE_SOURCE_PRESETS: CodemodeSourcePreset[] = [
 ];
 
 export function normalizeCodemodeSources(sources: CodemodeUiSource[]) {
-  const parsed = CodemodeUiSource.array().parse(sources);
+  const parsed = CodemodeSource.array().parse(sources);
   const seen = new Set<string>();
   const unique: CodemodeUiSource[] = [];
 
@@ -197,7 +184,7 @@ export function formatCodemodeSourcesYaml(sources: CodemodeUiSource[]) {
 }
 
 export function parseCodemodeSourcesYaml(yamlText: string) {
-  return normalizeCodemodeSources(CodemodeUiSource.array().parse(YAML.parse(yamlText)));
+  return normalizeCodemodeSources(CodemodeSource.array().parse(YAML.parse(yamlText)));
 }
 
 export const DEFAULT_CODEMODE_SOURCES_YAML = formatCodemodeSourcesYaml(DEFAULT_CODEMODE_SOURCES);

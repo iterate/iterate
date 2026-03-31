@@ -145,6 +145,8 @@ function resolveOpenApiSource(
   const eventsOpenApiUrl = `${trimTrailingSlash(config.codemodeApis.eventsBaseUrl)}/api/openapi.json`;
   const semaphoreOpenApiUrl = `${trimTrailingSlash(config.codemodeApis.semaphoreBaseUrl)}/api/openapi.json`;
   const ingressOpenApiUrl = `${trimTrailingSlash(config.codemodeApis.ingressProxyBaseUrl)}/api/openapi.json`;
+  const nagerOpenApiUrl = "https://date.nager.at/openapi/v4.json";
+  const openLibraryOpenApiUrl = "https://openlibrary.org/static/openapi.json";
 
   if (
     normalizedUrl === eventsOpenApiUrl ||
@@ -174,6 +176,40 @@ function resolveOpenApiSource(
     runtimeSource.headers = {
       ...source.headers,
       Authorization: `Bearer ${config.codemodeApis.ingressProxyApiToken.exposeSecret()}`,
+    };
+  }
+
+  if (
+    normalizedUrl === nagerOpenApiUrl ||
+    (source.namespace === "nager" && normalizedUrl.endsWith("/openapi/v4.json"))
+  ) {
+    runtimeSource.operationAliases = {
+      ...runtimeSource.operationAliases,
+      "get.api.v4.PublicHolidays.year.countryCode": "publicHolidays",
+      "get.api.v4.IsTodayPublicHoliday.countryCode": "isTodayPublicHoliday",
+      "get.api.v4.NextPublicHolidays.countryCode": "nextPublicHolidays",
+      "get.api.v4.NextPublicHolidaysWorldwide": "nextPublicHolidaysWorldwide",
+      "get.api.v4.Version": "version",
+    };
+  }
+
+  if (
+    normalizedUrl === openLibraryOpenApiUrl ||
+    (source.namespace === "openlibrary" && normalizedUrl.endsWith("/static/openapi.json"))
+  ) {
+    runtimeSource.operationAliases = {
+      ...runtimeSource.operationAliases,
+      read_api_books_api_books_get: "books",
+      read_api_volumes_brief_api_volumes_brief__key_type___value__json_get: "volumesBrief",
+      read_authors_authors__olid__json_get: "author",
+      read_authors_works_authors__olid__works_json_get: "authorWorks",
+      read_books_books__olid__get: "book",
+      read_covers_key_type_value_size_jpeg_covers__key_type___value___size__jpg_get: "cover",
+      read_isbn_isbn__isbn__get: "isbn",
+      read_search_json_search_json_get: "search",
+      read_search_authors_json_search_authors_json_get: "searchAuthors",
+      read_subjects_subjects__subject__json_get: "subject",
+      read_works_works__olid__get: "work",
     };
   }
 
@@ -250,6 +286,7 @@ export async function buildCodemodeContextFromSources(options: {
     contexts.push(
       deriveContractContext(selectedContractRegistry, {
         providerName: "contract",
+        includeTypes: options.includeTypes,
       }),
     );
   }
