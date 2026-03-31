@@ -53,6 +53,10 @@ export const EventInput = z.object({
   path: StreamPath,
   type: EventType,
   payload: JSONObject,
+  metadata: JSONObject.optional(),
+  // When a stream already has an event with this key, append returns that
+  // stored event instead of creating a second one.
+  idempotencyKey: z.string().trim().min(1).optional(),
 });
 export type EventInput = z.infer<typeof EventInput>;
 
@@ -113,7 +117,7 @@ export const eventsContract = oc.router({
       path: "/streams/{+path}",
       successDescription: "Events appended successfully and returned",
       description:
-        "Appends events to a stream in order. Offsets are assigned by the stream itself.",
+        "Appends events to a stream in order. Offsets are assigned by the stream itself. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
       tags: ["Streams"],
     })
     .input(AppendInput)

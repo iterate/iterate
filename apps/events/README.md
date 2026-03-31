@@ -7,7 +7,7 @@ Cloudflare-only: TanStack Start + oRPC + Drizzle on D1, Alchemy + Vite.
 - **API:** oRPC at `/api`; optional WebSocket oRPC at `/api/orpc-ws`
 - **Frontend:** TanStack Start + Router + Query
 - **DB:** Drizzle + D1 (`src/entry.workerd.ts`). The **Secrets** UI stores values in D1 **as plaintext** (demo only — not a production secret manager).
-- **Secrets:** Doppler project `events` (see repo `doppler.yaml`). `DOPPLER_CONFIG` is injected by `doppler run`, and `_shared` defines `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. Today we use `dev`, personal dev configs like `dev_jonas`, and `prd` only. Local: `doppler setup --project events --config dev_jonas` (or `dev_misha` / `dev_rahul`). Deploy uses `--config prd`.
+- **Secrets:** Doppler project `events` (see repo `doppler.yaml`). `DOPPLER_CONFIG` is injected by `doppler run`, and `_shared` defines `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. Today we use `dev`, personal dev configs like `dev_jonas`, and `prd` only. Local: `doppler setup --project events --config dev_jonas` (or `dev_misha` / `dev_rahul`). Deploy uses `--config prd`. Non-local Alchemy state is stored in Cloudflare, so Doppler also needs `ALCHEMY_STATE_TOKEN`.
 
 ## Key files
 
@@ -20,9 +20,11 @@ Cloudflare-only: TanStack Start + oRPC + Drizzle on D1, Alchemy + Vite.
 ## Scripts
 
 ```bash
-pnpm dev     # doppler + Alchemy local (Vite); optional PORT= for fixed port; Ctrl+C to stop
-pnpm build   # production client/server bundle
-pnpm deploy  # `doppler run --config prd` — `_shared` resolves `ALCHEMY_STAGE=prd`, `ALCHEMY_LOCAL=false`, etc.
+pnpm dev           # doppler + Alchemy local (Vite); optional PORT= for fixed port; Ctrl+C to stop
+pnpm build         # production client/server bundle
+pnpm deploy        # `doppler run --config prd` + run `alchemy.run.ts` for stage `prd`
+pnpm alchemy:up    # run `alchemy.run.ts`; caller supplies env
+pnpm alchemy:down  # run `alchemy.run.ts --destroy`; caller supplies env
 ```
 
 ## Contract
