@@ -217,6 +217,75 @@ describe("projectWireToFeed", () => {
     });
   });
 
+  test("prefers finalized assistant messages over reconstructed chunk text", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: "1",
+        type: "https://events.iterate.com/agent/input-item-added",
+        payload: {
+          item: {
+            role: "user",
+            content: "Hi",
+          },
+        },
+      }),
+      createEvent({
+        offset: "2",
+        type: "https://events.iterate.com/agent/output-item-added",
+        payload: {
+          sourceOffset: "1",
+          chunk: {
+            type: "content",
+            id: "chunk-1",
+            model: "gpt-4o-mini",
+            timestamp: 1,
+            delta: "Hello",
+            content: "Hello",
+            role: "assistant",
+          },
+        },
+      }),
+      createEvent({
+        offset: "3",
+        type: "https://events.iterate.com/agent/output-item-added",
+        payload: {
+          sourceOffset: "1",
+          chunk: {
+            type: "done",
+            id: "chunk-2",
+            model: "gpt-4o-mini",
+            timestamp: 2,
+            finishReason: "stop",
+          },
+        },
+      }),
+      createEvent({
+        offset: "4",
+        type: "https://events.iterate.com/agent/input-item-added",
+        payload: {
+          sourceOffset: "1",
+          item: {
+            role: "assistant",
+            content: "Hello",
+          },
+        },
+      }),
+    ]);
+
+    const assistantMessages = feed.filter(
+      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
+        item.kind === "message" && item.role === "assistant",
+    );
+
+    expect(assistantMessages).toHaveLength(1);
+    expect(assistantMessages[0]).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "Hello" }],
+    });
+    expect("streamStatus" in assistantMessages[0]).toBe(false);
+  });
+
   test("projects tool_call and tool_result chunks into tool feed items", () => {
     const feed = projectWireToFeed([
       createEvent({

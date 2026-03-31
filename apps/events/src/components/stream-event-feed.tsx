@@ -464,7 +464,7 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
     case "grouped-event":
       return `group-${item.eventType}-${item.firstTimestamp}-${item.lastTimestamp}-${item.count}`;
     case "message":
-      return `message-${item.role}-${item.timestamp}-${item.streamStatus ?? "na"}-${index}`;
+      return `message-${item.role}-${item.timestamp}-${index}`;
     case "tool":
       return `tool-${item.toolCallId}-${item.startTimestamp}`;
     case "error":

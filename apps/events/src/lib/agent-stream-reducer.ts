@@ -15,6 +15,7 @@ type AgentInputMessage = Omit<TextModelMessage, "role"> & { role: AgentMessageRo
 
 type InputItemAddedPayload = {
   item: AgentInputMessage;
+  sourceOffset?: string;
 };
 
 type RunErrorChunk = {
@@ -33,6 +34,8 @@ type AgentTurn = {
   inputText: string;
   inputTimestamp: number;
   outputChunks: StreamChunk[];
+  latestOutputOffset?: string;
+  hasFinalAssistantMessage?: boolean;
   outputError?: {
     title: string;
     message: string;
@@ -68,12 +71,30 @@ export function buildAgentSemanticInsertions(
 ): Map<string, StreamFeedItem[]> {
   const insertionsByOffset = new Map<string, StreamFeedItem[]>();
   const turnsByOffset = new Map<string, AgentTurn>();
+  const pendingTurns: AgentTurn[] = [];
   const turns: AgentTurn[] = [];
 
   for (const event of events) {
     if (event.type === INPUT_ITEM_ADDED_TYPE) {
       const payload = parseInputItemAddedPayload(event.payload);
       if (!payload) {
+        continue;
+      }
+
+      appendInsertion(insertionsByOffset, event.offset, {
+        kind: "message",
+        role: payload.item.role,
+        content: [{ type: "text", text: payload.item.content }],
+        timestamp: getTimestamp(event.createdAt),
+      });
+
+      if (payload.item.role !== "user") {
+        const turn =
+          (payload.sourceOffset ? turnsByOffset.get(payload.sourceOffset) : undefined) ??
+          pendingTurns.find((candidate) => candidate.hasFinalAssistantMessage !== true);
+        if (turn) {
+          turn.hasFinalAssistantMessage = true;
+        }
         continue;
       }
 
@@ -86,13 +107,8 @@ export function buildAgentSemanticInsertions(
       };
 
       turns.push(turn);
+      pendingTurns.push(turn);
       turnsByOffset.set(event.offset, turn);
-      appendInsertion(insertionsByOffset, event.offset, {
-        kind: "message",
-        role: payload.item.role,
-        content: [{ type: "text", text: payload.item.content }],
-        timestamp: getTimestamp(event.createdAt),
-      });
       continue;
     }
 
@@ -110,6 +126,7 @@ export function buildAgentSemanticInsertions(
       continue;
     }
 
+    turn.latestOutputOffset = event.offset;
     turn.outputTimestamp ??= getTimestamp(event.createdAt);
 
     if (isRunErrorChunk(payload.chunk)) {
@@ -144,8 +161,9 @@ export function buildAgentSemanticInsertions(
       continue;
     }
 
+    const insertionOffset = turn.latestOutputOffset ?? turn.sourceOffset;
     for (const item of buildAgentOutputFeedItems(turn)) {
-      appendInsertion(insertionsByOffset, turn.sourceOffset, item);
+      appendInsertion(insertionsByOffset, insertionOffset, item);
     }
   }
 
@@ -167,7 +185,7 @@ function buildAgentOutputFeedItems(turn: AgentTurn): StreamFeedItem[] {
   const hasAssistantContentChunk = turn.outputChunks.some((c) => c.type === "content");
   const showAssistantRow = assistantText.length > 0 || (!complete && hasAssistantContentChunk);
 
-  if (showAssistantRow) {
+  if (!turn.hasFinalAssistantMessage && showAssistantRow) {
     items.push({
       kind: "message",
       role: "assistant",
@@ -340,6 +358,7 @@ function parseInputItemAddedPayload(payload: unknown): InputItemAddedPayload | n
       role,
       content,
     },
+    sourceOffset: typeof payload.sourceOffset === "string" ? payload.sourceOffset : undefined,
   };
 }
 

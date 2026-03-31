@@ -19,7 +19,7 @@ With the caveat that the stream processors are all _pulling_ from the streams. T
 
 ## 02 — Basic LLM loop (`jonas/02-basic-llm-loop`)
 
-Demonstrates a tiny event-driven LLM loop with [TanStack AI](https://tanstack.com/ai): one subscriber watches a stream for `https://events.iterate.com/agent/input-item-added`, runs `chat()`, and appends each streamed chunk back as `https://events.iterate.com/agent/output-item-added`.
+Demonstrates a tiny event-driven LLM loop with [TanStack AI](https://tanstack.com/ai): one subscriber watches a stream for `https://events.iterate.com/agent/input-item-added`, runs `chat()`, appends each streamed chunk back as `https://events.iterate.com/agent/output-item-added`, and then appends the completed assistant reply as another `input-item-added` event.
 
 **Prerequisites**
 
@@ -62,7 +62,7 @@ So the whole demo can be:
 }
 ```
 
-4. Submit it and literally watch it happen in the stream feed: the input event lands, the subscriber sees it, and the LLM appends output chunk events back into the same stream.
-5. Keep posting more `input-item-added` events into that same stream if you want a back-and-forth conversation. The subscriber now rebuilds the prior turns from the stream and sends that history back to the LLM on each new user message.
+4. Submit it and literally watch it happen in the stream feed: the input event lands, the subscriber sees it, the LLM appends raw output chunk events back into the same stream, and then it appends one finalized assistant message event.
+5. Keep posting more `input-item-added` events into that same stream if you want a back-and-forth conversation. The subscriber rebuilds history from those finalized message events and only uses the raw chunk events for live rendering/debugging.
 
 Optional env: `BASE_URL`, `STREAM_PATH` (otherwise defaults to `/jonas/02/<random-hex>`), `OPENAI_MODEL` (must be a supported OpenAI chat model name; default `gpt-4o-mini`).

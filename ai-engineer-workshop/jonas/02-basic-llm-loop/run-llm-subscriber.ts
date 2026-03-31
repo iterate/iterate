@@ -30,11 +30,11 @@ const adapter = createOpenaiChat(OPENAI_MODEL, OPENAI_API_KEY);
 
 printInstructions({ baseUrl: BASE_URL, streamPath: STREAM_PATH });
 
-const { lastOffset, messages } = await loadConversation({ client, streamPath: STREAM_PATH });
+const { resumeOffset, messages } = await loadConversation({ client, streamPath: STREAM_PATH });
 const stream = await client.stream(
   {
     path: STREAM_PATH,
-    offset: lastOffset,
+    offset: resumeOffset,
     live: true,
   },
   {},
@@ -43,7 +43,15 @@ const stream = await client.stream(
 for await (const event of stream) {
   if (event.type !== INPUT_ITEM_ADDED_TYPE) continue;
 
-  const item = (event.payload as unknown as { item: ModelMessage<string> }).item;
+  const payload = parseInputItemAddedPayload(event.payload);
+  if (!payload) {
+    console.error(`[llm-subscriber] skipping malformed input offset=${event.offset}`);
+    continue;
+  }
+
+  const item = payload.item;
+  if (item.role !== "user") continue;
+
   const chunks: StreamChunk[] = [];
   messages.push(item);
 
@@ -64,8 +72,21 @@ for await (const event of stream) {
     });
   }
 
-  const assistant = await streamChunksToText(chunks);
-  if (assistant) messages.push({ role: "assistant", content: assistant });
+  const assistant = streamChunksComplete(chunks) ? await streamChunksToText(chunks) : "";
+  if (assistant) {
+    const assistantItem: ModelMessage<string> = { role: "assistant", content: assistant };
+    await client.append({
+      path: STREAM_PATH,
+      events: [
+        {
+          path: STREAM_PATH,
+          type: INPUT_ITEM_ADDED_TYPE,
+          payload: JSON.parse(JSON.stringify({ sourceOffset: event.offset, item: assistantItem })),
+        },
+      ],
+    });
+    messages.push(assistantItem);
+  }
 
   console.error(`[llm-subscriber] done sourceOffset=${event.offset}`);
 }
@@ -107,40 +128,56 @@ async function loadConversation({
   client: ReturnType<typeof createEventsClient>;
   streamPath: string;
 }) {
-  const inputs: Array<{ offset: string; item: ModelMessage<string> }> = [];
-  const chunksByOffset = new Map<string, StreamChunk[]>();
+  const messageEvents: Array<{
+    eventOffset: string;
+    offsetBeforeInput?: string;
+    item: ModelMessage<string>;
+    sourceOffset?: string;
+  }> = [];
+  const userMessageEvents: Array<(typeof messageEvents)[number]> = [];
+  const respondedUserOffsets = new Set<string>();
   let lastOffset: string | undefined;
+  let previousOffset: string | undefined;
 
   for await (const event of await client.stream({ path: streamPath }, {})) {
     lastOffset = event.offset;
 
     if (event.type === INPUT_ITEM_ADDED_TYPE) {
-      inputs.push({
-        offset: event.offset,
-        item: (event.payload as unknown as { item: ModelMessage<string> }).item,
-      });
+      const payload = parseInputItemAddedPayload(event.payload);
+      if (payload) {
+        const messageEvent = {
+          eventOffset: event.offset,
+          offsetBeforeInput: previousOffset,
+          item: payload.item,
+          sourceOffset: payload.sourceOffset,
+        };
+        messageEvents.push(messageEvent);
+
+        if (payload.item.role === "user") {
+          userMessageEvents.push(messageEvent);
+        }
+
+        if (payload.item.role === "assistant" && payload.sourceOffset) {
+          respondedUserOffsets.add(payload.sourceOffset);
+        }
+      }
     }
 
-    if (event.type === OUTPUT_ITEM_ADDED_TYPE) {
-      const { sourceOffset, chunk } = event.payload as unknown as {
-        sourceOffset: string;
-        chunk: StreamChunk;
-      };
-      const chunks = chunksByOffset.get(sourceOffset) || [];
-      chunks.push(chunk);
-      chunksByOffset.set(sourceOffset, chunks);
-    }
+    previousOffset = event.offset;
   }
 
-  const messages: ModelMessage<string>[] = [];
+  const firstIncompleteUserMessage = userMessageEvents.find(
+    (messageEvent) => !respondedUserOffsets.has(messageEvent.eventOffset),
+  );
+  const completedMessageEvents =
+    firstIncompleteUserMessage == null
+      ? messageEvents
+      : messageEvents.slice(0, messageEvents.indexOf(firstIncompleteUserMessage));
 
-  for (const input of inputs) {
-    messages.push(input.item);
-    const assistant = await streamChunksToText(chunksByOffset.get(input.offset) || []);
-    if (assistant) messages.push({ role: "assistant", content: assistant });
-  }
-
-  return { lastOffset, messages };
+  return {
+    resumeOffset: firstIncompleteUserMessage?.offsetBeforeInput ?? lastOffset,
+    messages: completedMessageEvents.map((messageEvent) => messageEvent.item),
+  };
 }
 
 async function streamChunksToText(chunks: readonly StreamChunk[]) {
@@ -149,4 +186,37 @@ async function streamChunksToText(chunks: readonly StreamChunk[]) {
       for (const chunk of chunks) yield chunk;
     })(),
   );
+}
+
+function streamChunksComplete(chunks: readonly StreamChunk[]) {
+  return chunks.some((chunk) => chunk.type === "done");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isAgentMessageRole(value: unknown): value is "user" | "assistant" {
+  return value === "user" || value === "assistant";
+}
+
+function parseInputItemAddedPayload(
+  payload: unknown,
+): { item: ModelMessage<string>; sourceOffset?: string } | null {
+  if (!isRecord(payload) || !isRecord(payload.item)) {
+    return null;
+  }
+
+  const { role, content } = payload.item;
+  if (!isAgentMessageRole(role) || typeof content !== "string" || content.length === 0) {
+    return null;
+  }
+
+  return {
+    item: {
+      role,
+      content,
+    },
+    sourceOffset: typeof payload.sourceOffset === "string" ? payload.sourceOffset : undefined,
+  };
 }
