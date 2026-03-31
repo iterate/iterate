@@ -14,6 +14,7 @@
     "start": "doppler run -- iterate --local-router ./scripts/router.ts local-router start",
     "cf:dev": "doppler run -- tsx ./alchemy.run.ts",
     "cf:deploy": "doppler run --config prd -- tsx ./alchemy.run.ts",
+    "cf:destroy": "doppler run --config prd -- tsx ./alchemy.run.ts --destroy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",

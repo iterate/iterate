@@ -1,5 +1,6 @@
-import alchemy from "alchemy";
+import alchemy, { type Scope } from "alchemy";
 import { D1Database, TanStackStart } from "alchemy/cloudflare";
+import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
@@ -49,6 +50,8 @@ const AlchemyEnv = z.object({
 });
 
 const env = AlchemyEnv.parse(process.env);
+const stateStore = (scope: Scope) =>
+  scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
 if (!env.ALCHEMY_LOCAL && env.WORKER_ROUTES.length === 0) {
   throw new Error("WORKER_ROUTES is required when deploying. Set it in Doppler.");
 }
@@ -63,13 +66,11 @@ const rawAppConfig = compileRawAppConfigFromEnv({
   prefix: "APP_CONFIG_",
   env: process.env,
 });
-
-if (env.ALCHEMY_LOCAL) delete process.env.CI;
-
 const app = await alchemy(APP_NAME, {
   stage: env.ALCHEMY_STAGE,
   local: env.ALCHEMY_LOCAL,
   password: env.ALCHEMY_PASSWORD,
+  stateStore,
 });
 
 const workerName = `${APP_NAME}-${app.stage}`;

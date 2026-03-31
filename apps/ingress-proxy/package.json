@@ -15,7 +15,7 @@
     "test:e2e": "node -e \"if (!process.env.INGRESS_PROXY_BASE_URL) { console.error('INGRESS_PROXY_BASE_URL is required for ingress-proxy e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",
     "test:quick": "pnpm test:e2e",
     "test:watch": "node -e \"if (!process.env.INGRESS_PROXY_BASE_URL) { console.error('INGRESS_PROXY_BASE_URL is required for ingress-proxy e2e tests'); process.exit(1); }\" && vitest --config ./e2e/vitest.config.ts",
-    "destroy": "doppler run --config prd -- tsx ./alchemy.run.ts cli --destroy",
+    "destroy": "doppler run --config prd -- tsx ./alchemy.run.ts --destroy",
     "db:rebuild": "rm -f .local.db && sqlite3 .local.db '' && find sql/migrations -name '*.sql' -print | sort | while read -r file; do sqlite3 .local.db < \"$file\"; done && sqlite3 .local.db '.schema --indent' > sql/schema.sql",
     "db:types": "tsx ./scripts/generate-queries.ts --force",
     "db:types:stale": "tsx ./scripts/generate-queries.ts --if-stale",
