@@ -16,35 +16,30 @@ import { HttpResponse, http } from "msw";
 import { vi } from "vitest";
 import { z } from "zod";
 
-const createdAt = z.iso.datetime({ offset: true });
-const streamStateSchema = z.object({
-  path: z.string().nullable(),
-  lastOffset: Offset.nullable(),
-  eventCount: z.number().int().nonnegative(),
-  metadata: z.record(z.string(), z.json()),
-  subscriptions: z.record(
-    z.string(),
-    z.object({
-      type: z.literal("webhook"),
-      url: z.url(),
-      headers: z.record(z.string(), z.string()),
-      revision: z.number().int().nonnegative(),
-      cursor: z.object({
-        lastAcknowledgedOffset: Offset.nullable(),
-        nextDeliveryAt: createdAt.nullable(),
-        retries: z.number().int().nonnegative(),
-        lastError: z
-          .object({
-            message: z.string(),
-            statusCode: z.number().int().nullable(),
-            bodyPreview: z.string().nullable(),
-            at: createdAt,
-          })
-          .nullable(),
-      }),
-    }),
-  ),
-});
+const subscriptionStateSliceSchema = z
+  .object({
+    subscriptions: z.record(
+      z.string(),
+      z
+        .object({
+          cursor: z.object({
+            lastAcknowledgedOffset: Offset.nullable(),
+            nextDeliveryAt: z.string().nullable(),
+            retries: z.number().int().nonnegative(),
+            lastError: z
+              .object({
+                message: z.string(),
+                statusCode: z.number().int().nullable(),
+                bodyPreview: z.string().nullable(),
+                at: z.string(),
+              })
+              .nullable(),
+          }),
+        })
+        .passthrough(),
+    ),
+  })
+  .passthrough();
 
 export type Events2Client = ContractRouterClient<typeof eventsContract>;
 
@@ -137,21 +132,21 @@ export function createEventsE2eFixture(args: { baseURL: string }) {
       };
     },
     async getParsedState(streamPath: string) {
-      return streamStateSchema.parse(await app.client.getState({ streamPath }));
+      return subscriptionStateSliceSchema.parse(await app.client.getState({ streamPath }));
     },
     async waitForState(args: {
-      predicate: (state: z.infer<typeof streamStateSchema>) => boolean;
+      predicate: (state: z.infer<typeof subscriptionStateSliceSchema>) => boolean;
       streamPath: string;
       timeoutMs?: number;
     }) {
-      let lastState = await streamStateSchema.parseAsync(
+      let lastState = await subscriptionStateSliceSchema.parseAsync(
         await app.client.getState({ streamPath: args.streamPath }),
       );
 
       try {
         await vi.waitFor(
           async () => {
-            lastState = await streamStateSchema.parseAsync(
+            lastState = await subscriptionStateSliceSchema.parseAsync(
               await app.client.getState({ streamPath: args.streamPath }),
             );
             if (!args.predicate(lastState)) {

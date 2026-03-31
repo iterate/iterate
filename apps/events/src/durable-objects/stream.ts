@@ -14,9 +14,6 @@ import {
   SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE,
   SUBSCRIPTION_REMOVED_TYPE,
   SUBSCRIPTION_SET_TYPE,
-  SubscriptionCursorUpdatedPayload,
-  SubscriptionDeliveryFailedPayload,
-  SubscriptionDeliverySucceededPayload,
   SubscriptionRemovedPayload,
   SubscriptionSetPayload,
 } from "@iterate-com/events-contract";
@@ -42,44 +39,6 @@ const createdAt = z.iso.datetime({ offset: true });
 const retryDelayMs = [250, 1_000, 5_000] as const;
 const maxBodyPreviewLength = 200;
 const webhookTimeoutMs = 2_000;
-
-const subscriptionCursorErrorSchema = z.object({
-  message: z.string(),
-  statusCode: z.number().int().nullable(),
-  bodyPreview: z.string().nullable(),
-  at: createdAt,
-});
-
-const subscriptionCursorSchema = z.object({
-  lastAcknowledgedOffset: Offset.nullable(),
-  nextDeliveryAt: createdAt.nullable(),
-  retries: z.number().int().nonnegative(),
-  lastError: subscriptionCursorErrorSchema.nullable(),
-});
-
-const subscriptionStateSchema = z.object({
-  type: z.literal("webhook"),
-  url: z.url(),
-  headers: z.record(z.string(), z.string()),
-  revision: z.number().int().nonnegative(),
-  cursor: subscriptionCursorSchema,
-});
-
-/**
- * `getState()` stays implementation-shaped JSON. The concrete reduced-state
- * schema lives with the DO because this actor owns the projection and persists
- * it locally.
- */
-export const streamStateSchema = z.object({
-  path: StreamPath.nullable(),
-  lastOffset: Offset.nullable(),
-  eventCount: z.number().int().nonnegative(),
-  metadata: JSONObject,
-  subscriptions: z.record(z.string(), subscriptionStateSchema).default({}),
-});
-
-export type StreamState = z.infer<typeof streamStateSchema>;
-export type SubscriptionState = z.infer<typeof subscriptionStateSchema>;
 
 /**
  * One stream per Durable Object: append-only event log in SQLite, a reduced
@@ -487,6 +446,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     const deliverableEvents = getDeliverableEvents(args.events);
     const nextEvent = deliverableEvents[0];
     if (!nextEvent) {
+      // Clearing `nextDeliveryAt` is still event-sourced. A caught-up pass emits
+      // an internal cursor event instead of mutating hidden scheduler state.
       return EventInput.parse({
         path: args.path,
         type: SUBSCRIPTION_CURSOR_UPDATED_TYPE,
@@ -527,66 +488,36 @@ export class StreamDurableObject extends DurableObject<Env> {
       });
     } catch (error) {
       const message = readErrorMessage(error, webhookTimeoutMs);
-      const retries = args.subscription.cursor.retries + 1;
-
-      return EventInput.parse({
+      return makeDeliveryFailedEvent({
+        attemptedAt,
+        bodyPreview: null,
+        deliveredEventOffset: nextEvent.offset,
+        deliveryRevision: args.subscription.revision,
+        lastAcknowledgedOffset: args.subscription.cursor.lastAcknowledgedOffset,
+        message,
+        observedLastOffset,
         path: args.path,
-        type: SUBSCRIPTION_DELIVERY_FAILED_TYPE,
-        payload: {
-          slug: args.slug,
-          deliveryRevision: args.subscription.revision,
-          deliveredEventOffset: nextEvent.offset,
-          observedLastOffset,
-          response: {
-            statusCode: null,
-            bodyPreview: null,
-            message,
-          },
-          cursor: {
-            lastAcknowledgedOffset: args.subscription.cursor.lastAcknowledgedOffset,
-            nextDeliveryAt: computeNextRetryAt({ now: Date.now(), retries }),
-            retries,
-            lastError: {
-              message,
-              statusCode: null,
-              bodyPreview: null,
-              at: attemptedAt,
-            },
-          },
-        },
+        retries: args.subscription.cursor.retries + 1,
+        slug: args.slug,
+        statusCode: null,
       });
     }
 
     const bodyPreview = truncateBodyPreview(await safeReadResponseText(response));
     if (!response.ok) {
       const message = `Webhook failed with ${response.status}`;
-      const retries = args.subscription.cursor.retries + 1;
-
-      return EventInput.parse({
+      return makeDeliveryFailedEvent({
+        attemptedAt,
+        bodyPreview,
+        deliveredEventOffset: nextEvent.offset,
+        deliveryRevision: args.subscription.revision,
+        lastAcknowledgedOffset: args.subscription.cursor.lastAcknowledgedOffset,
+        message,
+        observedLastOffset,
         path: args.path,
-        type: SUBSCRIPTION_DELIVERY_FAILED_TYPE,
-        payload: {
-          slug: args.slug,
-          deliveryRevision: args.subscription.revision,
-          deliveredEventOffset: nextEvent.offset,
-          observedLastOffset,
-          response: {
-            statusCode: response.status,
-            bodyPreview,
-            message,
-          },
-          cursor: {
-            lastAcknowledgedOffset: args.subscription.cursor.lastAcknowledgedOffset,
-            nextDeliveryAt: computeNextRetryAt({ now: Date.now(), retries }),
-            retries,
-            lastError: {
-              message,
-              statusCode: response.status,
-              bodyPreview,
-              at: attemptedAt,
-            },
-          },
-        },
+        retries: args.subscription.cursor.retries + 1,
+        slug: args.slug,
+        statusCode: response.status,
       });
     }
 
@@ -682,6 +613,83 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 }
 
+const subscriptionCursorErrorSchema = z.object({
+  message: z.string(),
+  statusCode: z.number().int().nullable(),
+  bodyPreview: z.string().nullable(),
+  at: createdAt,
+});
+
+const subscriptionCursorSchema = z.object({
+  lastAcknowledgedOffset: Offset.nullable(),
+  nextDeliveryAt: createdAt.nullable(),
+  retries: z.number().int().nonnegative(),
+  lastError: subscriptionCursorErrorSchema.nullable(),
+});
+
+const subscriptionStateSchema = z.object({
+  type: z.literal("webhook"),
+  url: z.url(),
+  headers: z.record(z.string(), z.string()),
+  revision: z.number().int().nonnegative(),
+  cursor: subscriptionCursorSchema,
+});
+
+const subscriptionDeliverySucceededPayloadSchema = z.object({
+  slug: z.string().trim().min(1),
+  deliveryRevision: z.number().int().nonnegative(),
+  deliveredEventOffset: Offset,
+  observedLastOffset: Offset.nullable(),
+  response: z.object({
+    statusCode: z.number().int(),
+    bodyPreview: z.string().nullable(),
+  }),
+  cursor: subscriptionCursorSchema.extend({
+    lastAcknowledgedOffset: Offset,
+    lastError: z.null(),
+  }),
+});
+
+const subscriptionDeliveryFailedPayloadSchema = z.object({
+  slug: z.string().trim().min(1),
+  deliveryRevision: z.number().int().nonnegative(),
+  deliveredEventOffset: Offset,
+  observedLastOffset: Offset.nullable(),
+  response: z.object({
+    statusCode: z.number().int().nullable(),
+    bodyPreview: z.string().nullable(),
+    message: z.string(),
+  }),
+  cursor: subscriptionCursorSchema.extend({
+    nextDeliveryAt: createdAt,
+    lastError: subscriptionCursorErrorSchema,
+  }),
+});
+
+const subscriptionCursorUpdatedPayloadSchema = z.object({
+  slug: z.string().trim().min(1),
+  deliveryRevision: z.number().int().nonnegative(),
+  observedLastOffset: Offset.nullable(),
+  reason: z.enum(["caught-up"]),
+  cursor: subscriptionCursorSchema,
+});
+
+/**
+ * `getState()` stays implementation-shaped JSON. The reduced projection lives
+ * with the Durable Object because this actor owns both the append-only log and
+ * the derived scheduler state.
+ */
+const streamStateSchema = z.object({
+  path: StreamPath.nullable(),
+  lastOffset: Offset.nullable(),
+  eventCount: z.number().int().nonnegative(),
+  metadata: JSONObject,
+  subscriptions: z.record(z.string(), subscriptionStateSchema).default({}),
+});
+
+type StreamState = z.infer<typeof streamStateSchema>;
+type SubscriptionState = z.infer<typeof subscriptionStateSchema>;
+
 export function createEmptyStreamState(): StreamState {
   return {
     path: null,
@@ -734,13 +742,18 @@ export function reduceStreamState(args: { state: StreamState; event: Event }): S
       return nextState;
     }
     case SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE: {
-      const payload = SubscriptionDeliverySucceededPayload.parse(event.payload);
+      const payload = subscriptionDeliverySucceededPayloadSchema.parse(event.payload);
       const subscription = nextState.subscriptions[payload.slug];
+      // Outcome events are tied to one subscription revision. If the slug was
+      // removed or rewound while the webhook call was in flight, the stale
+      // outcome must not overwrite the newer cursor.
       if (!subscription || payload.deliveryRevision !== subscription.revision) {
         return nextState;
       }
 
       subscription.cursor = payload.cursor;
+      // If the stream advanced during the attempt, clearing `nextDeliveryAt`
+      // would strand newer user events. Re-arm and rescan instead.
       if (
         payload.cursor.nextDeliveryAt == null &&
         state.lastOffset !== payload.observedLastOffset
@@ -750,7 +763,7 @@ export function reduceStreamState(args: { state: StreamState; event: Event }): S
       return nextState;
     }
     case SUBSCRIPTION_DELIVERY_FAILED_TYPE: {
-      const payload = SubscriptionDeliveryFailedPayload.parse(event.payload);
+      const payload = subscriptionDeliveryFailedPayloadSchema.parse(event.payload);
       const subscription = nextState.subscriptions[payload.slug];
       if (!subscription || payload.deliveryRevision !== subscription.revision) {
         return nextState;
@@ -760,8 +773,10 @@ export function reduceStreamState(args: { state: StreamState; event: Event }): S
       return nextState;
     }
     case SUBSCRIPTION_CURSOR_UPDATED_TYPE: {
-      const payload = SubscriptionCursorUpdatedPayload.parse(event.payload);
+      const payload = subscriptionCursorUpdatedPayloadSchema.parse(event.payload);
       const subscription = nextState.subscriptions[payload.slug];
+      // `subscription.cursor-updated(reason: "caught-up")` keeps quiescing in
+      // the event log instead of hiding it as mutable scheduler state.
       if (!subscription || payload.deliveryRevision !== subscription.revision) {
         return nextState;
       }
@@ -838,15 +853,15 @@ export function isInternalSubscriptionEventType(type: string) {
   );
 }
 
-export function getRetryDelayMs(retries: number) {
+function getRetryDelayMs(retries: number) {
   return retryDelayMs[Math.min(Math.max(retries, 1), retryDelayMs.length) - 1]!;
 }
 
-export function computeNextRetryAt(args: { now: number; retries: number }) {
+function computeNextRetryAt(args: { now: number; retries: number }) {
   return new Date(args.now + getRetryDelayMs(args.retries)).toISOString();
 }
 
-export function getNextAlarmAt(state: StreamState) {
+function getNextAlarmAt(state: StreamState) {
   const dueAt = Object.values(state.subscriptions)
     .flatMap((subscription) =>
       subscription.cursor.nextDeliveryAt == null
@@ -868,8 +883,49 @@ function getDueSubscriptions(args: { now: number; state: StreamState }) {
   });
 }
 
-export function getDeliverableEvents(events: Event[]) {
+function getDeliverableEvents(events: Event[]) {
   return events.filter((event) => !isInternalSubscriptionEventType(event.type));
+}
+
+function makeDeliveryFailedEvent(args: {
+  attemptedAt: string;
+  bodyPreview: string | null;
+  deliveredEventOffset: string;
+  deliveryRevision: number;
+  lastAcknowledgedOffset: string | null;
+  message: string;
+  observedLastOffset: string | null;
+  path: string;
+  retries: number;
+  slug: string;
+  statusCode: number | null;
+}) {
+  return EventInput.parse({
+    path: args.path,
+    type: SUBSCRIPTION_DELIVERY_FAILED_TYPE,
+    payload: {
+      slug: args.slug,
+      deliveryRevision: args.deliveryRevision,
+      deliveredEventOffset: args.deliveredEventOffset,
+      observedLastOffset: args.observedLastOffset,
+      response: {
+        statusCode: args.statusCode,
+        bodyPreview: args.bodyPreview,
+        message: args.message,
+      },
+      cursor: {
+        lastAcknowledgedOffset: args.lastAcknowledgedOffset,
+        nextDeliveryAt: computeNextRetryAt({ now: Date.now(), retries: args.retries }),
+        retries: args.retries,
+        lastError: {
+          message: args.message,
+          statusCode: args.statusCode,
+          bodyPreview: args.bodyPreview,
+          at: args.attemptedAt,
+        },
+      },
+    },
+  });
 }
 
 async function postWebhookWithTimeout(args: { url: string; init: RequestInit; timeoutMs: number }) {

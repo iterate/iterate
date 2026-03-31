@@ -87,20 +87,6 @@ export type StreamMetadataUpdatedPayload = z.infer<typeof StreamMetadataUpdatedP
 
 const HeaderMap = z.record(z.string(), z.string());
 
-const SubscriptionCursorError = z.object({
-  message: z.string(),
-  statusCode: z.number().int().nullable(),
-  bodyPreview: z.string().nullable(),
-  at: createdAt,
-});
-
-const SubscriptionCursor = z.object({
-  lastAcknowledgedOffset: Offset.nullable(),
-  nextDeliveryAt: createdAt.nullable(),
-  retries: z.number().int().nonnegative(),
-  lastError: SubscriptionCursorError.nullable(),
-});
-
 export const SubscriptionSetPayload = z.object({
   slug: z.string().trim().min(1),
   subscription: z.object({
@@ -122,50 +108,6 @@ export const SubscriptionRemovedPayload = z.object({
   slug: z.string().trim().min(1),
 });
 export type SubscriptionRemovedPayload = z.infer<typeof SubscriptionRemovedPayload>;
-
-export const SubscriptionDeliverySucceededPayload = z.object({
-  slug: z.string().trim().min(1),
-  deliveryRevision: z.number().int().nonnegative(),
-  deliveredEventOffset: Offset,
-  observedLastOffset: Offset.nullable(),
-  response: z.object({
-    statusCode: z.number().int(),
-    bodyPreview: z.string().nullable(),
-  }),
-  cursor: SubscriptionCursor.extend({
-    lastAcknowledgedOffset: Offset,
-    lastError: z.null(),
-  }),
-});
-export type SubscriptionDeliverySucceededPayload = z.infer<
-  typeof SubscriptionDeliverySucceededPayload
->;
-
-export const SubscriptionDeliveryFailedPayload = z.object({
-  slug: z.string().trim().min(1),
-  deliveryRevision: z.number().int().nonnegative(),
-  deliveredEventOffset: Offset,
-  observedLastOffset: Offset.nullable(),
-  response: z.object({
-    statusCode: z.number().int().nullable(),
-    bodyPreview: z.string().nullable(),
-    message: z.string(),
-  }),
-  cursor: SubscriptionCursor.extend({
-    nextDeliveryAt: createdAt,
-    lastError: SubscriptionCursorError,
-  }),
-});
-export type SubscriptionDeliveryFailedPayload = z.infer<typeof SubscriptionDeliveryFailedPayload>;
-
-export const SubscriptionCursorUpdatedPayload = z.object({
-  slug: z.string().trim().min(1),
-  deliveryRevision: z.number().int().nonnegative(),
-  observedLastOffset: Offset.nullable(),
-  reason: z.enum(["caught-up"]),
-  cursor: SubscriptionCursor,
-});
-export type SubscriptionCursorUpdatedPayload = z.infer<typeof SubscriptionCursorUpdatedPayload>;
 
 const AppendInput = z.intersection(
   z.object({

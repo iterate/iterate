@@ -2,9 +2,16 @@
  * These cases pin the subtle delivery races that are easy to reintroduce while
  * changing the subscription scheduler. Keep them short and black-box.
  */
+import { setTimeout as delay } from "node:timers/promises";
 import { HttpResponse, http } from "msw";
 import { describe, expect, test, vi } from "vitest";
-import { createEventsE2eFixture, requireEventsBaseUrl, useWebhookSink } from "../helpers.ts";
+import { SUBSCRIPTION_CURSOR_UPDATED_TYPE } from "@iterate-com/events-contract";
+import {
+  collectAsyncIterableUntilIdle,
+  createEventsE2eFixture,
+  requireEventsBaseUrl,
+  useWebhookSink,
+} from "../helpers.ts";
 
 const app = createEventsE2eFixture({
   baseURL: requireEventsBaseUrl(),
@@ -42,8 +49,14 @@ describe.sequential("subscription edge cases", () => {
         predicate: (currentState) =>
           currentState.subscriptions.alpha?.cursor.nextDeliveryAt === null,
       });
+      const history = await collectAsyncIterableUntilIdle({
+        iterable: await app.client.stream({ path, live: false }),
+        idleMs: 250,
+      });
 
       expect(hook.deliveries()).toHaveLength(0);
+      expect(history.map((event) => event.type)).toContain(SUBSCRIPTION_CURSOR_UPDATED_TYPE);
+      expect(hook.eventTypes()).not.toContain(SUBSCRIPTION_CURSOR_UPDATED_TYPE);
       expect(state.subscriptions.alpha?.cursor.nextDeliveryAt).toBeNull();
     },
     testTimeoutMs,
@@ -178,6 +191,62 @@ describe.sequential("subscription edge cases", () => {
       } finally {
         releaseReplayResponse.resolve(HttpResponse.json({ ok: true }));
       }
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "removing a subscription during an in-flight delivery should leave it removed after the stale outcome lands",
+    async () => {
+      /**
+       * A held-open webhook request can still finish after `subscription.removed`
+       * has been appended, but its stale outcome must not resurrect the slug.
+       */
+      const releaseResponse = createGate<Response>();
+      let startedRequests = 0;
+
+      await using hook = await useWebhookSink({ pathname: "/removed" });
+      hook.use(
+        http.post(hook.endpointUrl, async () => {
+          startedRequests += 1;
+          return releaseResponse.promise;
+        }),
+      );
+
+      const path = app.newStreamPath("/subscriptions-edge");
+      await app.client.append({
+        path,
+        events: [
+          app.subscriptionSet({
+            path,
+            slug: "alpha",
+            url: hook.endpointUrl,
+            startFrom: "head",
+          }),
+          app.userEvent({ path, payload: { value: 1 } }),
+        ],
+      });
+
+      await waitFor(() => {
+        expect(startedRequests).toBe(1);
+      });
+
+      await app.client.append({
+        path,
+        events: [app.subscriptionRemoved({ path, slug: "alpha" })],
+      });
+
+      releaseResponse.resolve(HttpResponse.json({ ok: true }));
+      await delay(250);
+
+      const state = await app.waitForState({
+        streamPath: path,
+        timeoutMs: 1_500,
+        predicate: (currentState) => currentState.subscriptions.alpha == null,
+      });
+
+      expect(state.subscriptions.alpha).toBeUndefined();
+      expect(hook.deliveries()).toHaveLength(1);
     },
     testTimeoutMs,
   );

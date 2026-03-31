@@ -3,9 +3,11 @@
  * and `getState()`, so the same assertions can run against local or deployed
  * workers.
  */
-import { HttpResponse } from "msw";
+import { setTimeout as delay } from "node:timers/promises";
+import { HttpResponse, http } from "msw";
 import { describe, expect, test } from "vitest";
 import {
+  SUBSCRIPTION_CURSOR_UPDATED_TYPE,
   SUBSCRIPTION_DELIVERY_FAILED_TYPE,
   SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE,
   SUBSCRIPTION_SET_TYPE,
@@ -196,11 +198,68 @@ describe.sequential("subscription e2e", () => {
         "https://events.iterate.com/events/example/value-recorded",
       ]);
       expect(alpha.eventTypes()).not.toContain(SUBSCRIPTION_SET_TYPE);
+      expect(alpha.eventTypes()).not.toContain(SUBSCRIPTION_CURSOR_UPDATED_TYPE);
       expect(alpha.eventTypes()).not.toContain(SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE);
       expect(alpha.eventTypes()).not.toContain(SUBSCRIPTION_DELIVERY_FAILED_TYPE);
       expect(beta.eventTypes()).not.toContain(SUBSCRIPTION_SET_TYPE);
+      expect(beta.eventTypes()).not.toContain(SUBSCRIPTION_CURSOR_UPDATED_TYPE);
       expect(beta.eventTypes()).not.toContain(SUBSCRIPTION_DELIVERY_SUCCEEDED_TYPE);
       expect(beta.eventTypes()).not.toContain(SUBSCRIPTION_DELIVERY_FAILED_TYPE);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "a timed-out subscriber does not block a healthy subscriber",
+    async () => {
+      await using slow = await useWebhookSink({ pathname: "/slow" });
+      await using fast = await useWebhookSink({ pathname: "/fast" });
+
+      slow.use(
+        http.post(slow.endpointUrl, async () => {
+          await delay(5_000);
+          return HttpResponse.json({ ok: true });
+        }),
+      );
+      fast.replyJson(200, { ok: true });
+
+      const path = app.newStreamPath();
+      await app.client.append({
+        path,
+        events: [
+          app.subscriptionSet({
+            path,
+            slug: "slow",
+            url: slow.endpointUrl,
+            startFrom: "head",
+          }),
+          app.subscriptionSet({
+            path,
+            slug: "fast",
+            url: fast.endpointUrl,
+            startFrom: "head",
+          }),
+          app.userEvent({ path, payload: { value: 1 } }),
+        ],
+      });
+
+      const startedAtMs = Date.now();
+      const [fastDelivery] = await fast.waitForCount({ count: 1, timeoutMs: 1_500 });
+      expect(fastDelivery?.payload?.event.offset).toBe(app.expectedOffset(3));
+      expect(fastDelivery!.startedAtMs - startedAtMs).toBeLessThan(1_800);
+
+      const slowState = await app.waitForState({
+        streamPath: path,
+        timeoutMs: 4_000,
+        predicate: (state) => state.subscriptions.slow?.cursor.retries === 1,
+      });
+
+      expect(slowState.subscriptions.fast?.cursor.lastAcknowledgedOffset).toBe(
+        app.expectedOffset(3),
+      );
+      expect(slowState.subscriptions.slow?.cursor.lastAcknowledgedOffset).toBeNull();
+      expect(slowState.subscriptions.slow?.cursor.lastError?.message).toContain("timed out");
+      expect(slowState.subscriptions.slow?.cursor.nextDeliveryAt).toEqual(expect.any(String));
     },
     testTimeoutMs,
   );

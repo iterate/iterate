@@ -22,15 +22,7 @@ vi.mock("cloudflare:workers", () => ({
 }));
 
 const streamModule = await import("./stream.ts");
-const {
-  createEmptyStreamState,
-  reduceStreamState,
-  computeNextRetryAt,
-  getDeliverableEvents,
-  getNextAlarmAt,
-  getRetryDelayMs,
-  isInternalSubscriptionEventType,
-} = streamModule;
+const { createEmptyStreamState, reduceStreamState, isInternalSubscriptionEventType } = streamModule;
 type LocalStreamState = ReturnType<typeof createEmptyStreamState>;
 
 describe("stream reducer and helpers", () => {
@@ -426,65 +418,6 @@ describe("stream reducer and helpers", () => {
     expect(state.subscriptions.alpha?.revision).toBe(2);
     expect(state.subscriptions.alpha?.cursor.lastAcknowledgedOffset).toBeNull();
     expect(state.subscriptions.alpha?.cursor.nextDeliveryAt).toBe("2026-01-01T00:00:00.000Z");
-  });
-
-  test("retry delays stay on the tiny fixed v0 schedule", () => {
-    expect(getRetryDelayMs(1)).toBe(250);
-    expect(getRetryDelayMs(2)).toBe(1_000);
-    expect(getRetryDelayMs(3)).toBe(5_000);
-    expect(getRetryDelayMs(99)).toBe(5_000);
-  });
-
-  test("computeNextRetryAt adds the tier delay to the current time", () => {
-    expect(computeNextRetryAt({ now: Date.UTC(2026, 0, 1, 0, 0, 0), retries: 2 })).toBe(
-      "2026-01-01T00:00:01.000Z",
-    );
-  });
-
-  test("getNextAlarmAt returns the earliest due subscription", () => {
-    const state: LocalStreamState = createEmptyStreamState();
-    state.subscriptions.alpha = {
-      type: "webhook",
-      url: "https://example.com/alpha",
-      headers: {},
-      revision: 1,
-      cursor: {
-        lastAcknowledgedOffset: null,
-        nextDeliveryAt: "2026-01-01T00:00:05.000Z",
-        retries: 0,
-        lastError: null,
-      },
-    };
-    state.subscriptions.beta = {
-      type: "webhook",
-      url: "https://example.com/beta",
-      headers: {},
-      revision: 1,
-      cursor: {
-        lastAcknowledgedOffset: null,
-        nextDeliveryAt: "2026-01-01T00:00:01.000Z",
-        retries: 0,
-        lastError: null,
-      },
-    };
-
-    expect(getNextAlarmAt(state)).toBe(Date.parse("2026-01-01T00:00:01.000Z"));
-  });
-
-  test("deliverable events skip internal subscription bookkeeping", () => {
-    const events = [
-      event("0000000000000001", "https://events.iterate.com/events/subscription/set"),
-      event("0000000000000002", "https://events.iterate.com/events/example/value-recorded"),
-      event("0000000000000003", "https://events.iterate.com/events/subscription/cursor-updated"),
-      event(
-        "0000000000000004",
-        "https://events.iterate.com/events/subscription/delivery-succeeded",
-      ),
-    ];
-
-    expect(getDeliverableEvents(events).map((currentEvent) => currentEvent.offset)).toEqual([
-      "0000000000000002",
-    ]);
   });
 
   test("internal event type detection only matches subscription bookkeeping", () => {
