@@ -475,34 +475,24 @@ export const registerConsumers = () => {
           ref: params.payload.ref,
         });
       } catch (e: unknown) {
-        if (isMissingSandboxError(e)) {
-          logger.set({
-            machineId: machine.id,
-            externalId: machine.externalId,
-            eventId: params.eventId,
-          });
-          logger.warn("Skipping iterate pull for missing sandbox");
-          return `skipped: sandbox for machine ${machine.id} no longer exists (${machine.externalId})`;
-        }
-
-        // The daemon may be mid-restart (from a prior pull) or the sandbox
-        // proxy may return a non-oRPC response (HTML error page, 502, etc.).
-        // The oRPC client surfaces these as ORPCError with codes like
-        // BAD_GATEWAY, MALFORMED_ORPC_ERROR_RESPONSE, or INTERNAL_SERVER_ERROR.
-        // Retrying is wasteful — the next push to main will fan-out a fresh
-        // attempt.
-        if (e instanceof ORPCError) {
-          logger.set({
-            machineId: machine.id,
-            orpcCode: e.code,
-            orpcStatus: e.status,
-            eventId: params.eventId,
-          });
-          logger.warn("Skipping iterate pull: daemon returned oRPC error");
-          return `skipped: machine ${machine.id} daemon oRPC error ${e.code} (status ${e.status})`;
-        }
-
-        throw e;
+        // All errors are non-retryable: the next push to main will fan-out a
+        // fresh attempt, so retrying this specific event is wasteful.
+        // Known error families:
+        //   - isMissingSandboxError: sandbox was deleted
+        //   - ORPCError: daemon mid-restart, proxy 502, HTML error page, etc.
+        //   - TypeError/DOMException: fetch network failures, DNS, timeouts
+        //   - DaytonaError/DaytonaRateLimitError: provider API errors
+        const errorName = e instanceof Error ? e.name : String(e);
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        logger.set({
+          machineId: machine.id,
+          externalId: machine.externalId,
+          eventId: params.eventId,
+          errorName,
+          errorMessage,
+        });
+        logger.warn("Skipping iterate pull due to error");
+        return `skipped: machine ${machine.id} error ${errorName}: ${errorMessage}`;
       }
 
       logger.set({
