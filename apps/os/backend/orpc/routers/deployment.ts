@@ -65,6 +65,7 @@ export const deploymentRouter = {
     )
     .handler(async ({ context, input }) => {
       return getProjectDo(context).createDeployment({
+        projectId: context.project.id,
         name: input.name,
         primaryIngressHost: `${context.project.slug}.jonasland.local`,
       });

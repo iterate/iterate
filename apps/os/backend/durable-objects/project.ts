@@ -69,6 +69,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   async createDeployment(input: {
+    projectId: string;
     name: string;
     primaryIngressHost: string;
   }): Promise<ProjectDeploymentSummary[]> {
@@ -79,6 +80,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
     const deployment = await this.deploymentDo(deploymentId).initialize({
       deploymentId,
+      projectId: input.projectId,
       name: input.name,
       createdAt,
       ingressHost: `${deploymentId}.jonasland.local`,

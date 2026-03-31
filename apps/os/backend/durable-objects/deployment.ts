@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import type { ProjectDurableObject } from "./project.ts";
 
 export type DeploymentState =
   | "created"
@@ -30,23 +31,22 @@ type LogWaiter = {
   finish: (log: DeploymentLog | null) => void;
 };
 
-type StateWaiter = {
-  states: DeploymentState[];
-  finish: (deployment: DeploymentSummary | null) => void;
+type Env = {
+  PROJECT_DURABLE_OBJECT: DurableObjectNamespace<ProjectDurableObject>;
 };
 
-export class DeploymentDurableObject extends DurableObject<Record<string, never>> {
+export class DeploymentDurableObject extends DurableObject<Env> {
   private initialized: Promise<void>;
   private logWaiters = new Set<LogWaiter>();
-  private stateWaiters = new Set<StateWaiter>();
 
-  constructor(ctx: DurableObjectState, env: Record<string, never>) {
+  constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
     this.initialized = this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS deployment (
           id TEXT PRIMARY KEY,
+          project_id TEXT,
           name TEXT NOT NULL,
           state TEXT NOT NULL,
           created_at TEXT NOT NULL,
@@ -55,6 +55,9 @@ export class DeploymentDurableObject extends DurableObject<Record<string, never>
           ingress_host TEXT NOT NULL
         )
       `);
+      try {
+        this.ctx.storage.sql.exec(`ALTER TABLE deployment ADD COLUMN project_id TEXT`);
+      } catch {}
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS deployment_logs (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,6 +71,7 @@ export class DeploymentDurableObject extends DurableObject<Record<string, never>
 
   async initialize(input: {
     deploymentId: string;
+    projectId: string;
     name: string;
     createdAt: string;
     ingressHost: string;
@@ -83,6 +87,7 @@ export class DeploymentDurableObject extends DurableObject<Record<string, never>
       `
         INSERT INTO deployment (
           id,
+          project_id,
           name,
           state,
           created_at,
@@ -90,9 +95,10 @@ export class DeploymentDurableObject extends DurableObject<Record<string, never>
           destroyed_at,
           ingress_host
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `,
       input.deploymentId,
+      input.projectId,
       input.name,
       "created",
       input.createdAt,
@@ -165,31 +171,16 @@ export class DeploymentDurableObject extends DurableObject<Record<string, never>
     }
 
     if (deployment.state === "starting" || deployment.state === "running") {
-      return deployment.state === "running"
-        ? deployment
-        : this.waitForState({ states: ["running"], timeoutMs: 5_000 });
+      return deployment;
     }
 
-    const now = new Date().toISOString();
-    this.ctx.storage.sql.exec(
-      `
-        UPDATE deployment
-        SET state = ?, updated_at = ?
-        WHERE id = ?
-      `,
-      "starting",
-      now,
-      deployment.id,
-    );
+    this.persistState(deployment.id, "starting");
     this.insertLog("info", `Starting deployment on ${deployment.ingressHost}`);
     this.insertLog("info", "Booting runtime");
     this.insertLog("info", `Binding ingress host ${deployment.ingressHost}`);
     await this.scheduleAlarm(400);
 
-    return this.waitForState({
-      states: ["running"],
-      timeoutMs: 5_000,
-    });
+    return this.mustReadDeployment();
   }
 
   async stop(): Promise<DeploymentSummary> {
@@ -205,30 +196,14 @@ export class DeploymentDurableObject extends DurableObject<Record<string, never>
     }
 
     if (deployment.state === "stopping") {
-      return this.waitForState({
-        states: ["stopped"],
-        timeoutMs: 5_000,
-      });
+      return deployment;
     }
 
-    const now = new Date().toISOString();
-    this.ctx.storage.sql.exec(
-      `
-        UPDATE deployment
-        SET state = ?, updated_at = ?
-        WHERE id = ?
-      `,
-      "stopping",
-      now,
-      deployment.id,
-    );
+    this.persistState(deployment.id, "stopping");
     this.insertLog("warn", "Stopping deployment");
     await this.scheduleAlarm(400);
 
-    return this.waitForState({
-      states: ["stopped"],
-      timeoutMs: 5_000,
-    });
+    return this.mustReadDeployment();
   }
 
   async destroy(): Promise<DeploymentSummary> {
@@ -292,36 +267,6 @@ export class DeploymentDurableObject extends DurableObject<Record<string, never>
     });
   }
 
-  async waitForState(input: { states: DeploymentState[]; timeoutMs?: number }) {
-    await this.initialized;
-
-    const deployment = this.mustReadDeployment();
-    if (input.states.includes(deployment.state)) {
-      return deployment;
-    }
-
-    return new Promise<DeploymentSummary>((resolve, reject) => {
-      const waiter: StateWaiter = {
-        states: input.states,
-        finish: (nextDeployment) => {
-          clearTimeout(timeoutId);
-          this.stateWaiters.delete(waiter);
-          if (!nextDeployment) {
-            reject(new Error(`Timed out waiting for deployment state: ${input.states.join(", ")}`));
-            return;
-          }
-          resolve(nextDeployment);
-        },
-      };
-
-      const timeoutId = setTimeout(() => {
-        waiter.finish(null);
-      }, input.timeoutMs ?? 30_000);
-
-      this.stateWaiters.add(waiter);
-    });
-  }
-
   async alarm() {
     await this.initialized;
 
@@ -331,7 +276,7 @@ export class DeploymentDurableObject extends DurableObject<Record<string, never>
     }
 
     if (deployment.state === "starting") {
-      this.setState(deployment.id, "running");
+      await this.setStateAndSyncProject(deployment.id, "running");
       this.insertLog("info", "Deployment is now running");
       await this.scheduleAlarm(2_000);
       return;
@@ -343,7 +288,7 @@ export class DeploymentDurableObject extends DurableObject<Record<string, never>
     }
 
     if (deployment.state === "stopping") {
-      this.setState(deployment.id, "stopped");
+      await this.setStateAndSyncProject(deployment.id, "stopped");
       this.insertLog("warn", "Deployment stopped");
     }
   }
@@ -489,7 +434,7 @@ export class DeploymentDurableObject extends DurableObject<Record<string, never>
     }
   }
 
-  private setState(deploymentId: string, state: DeploymentState) {
+  private persistState(deploymentId: string, state: DeploymentState) {
     this.ctx.storage.sql.exec(
       `
         UPDATE deployment
@@ -500,19 +445,36 @@ export class DeploymentDurableObject extends DurableObject<Record<string, never>
       new Date().toISOString(),
       deploymentId,
     );
-    this.resolveStateWaiters();
+  }
+
+  private async setStateAndSyncProject(deploymentId: string, state: DeploymentState) {
+    this.persistState(deploymentId, state);
+
+    const projectId = this.readProjectId();
+    if (!projectId) {
+      return;
+    }
+
+    await this.env.PROJECT_DURABLE_OBJECT.getByName(`project:${projectId}`).syncDeployment(
+      this.mustReadDeployment(),
+    );
   }
 
   private async scheduleAlarm(delayMs: number) {
     await this.ctx.storage.setAlarm(Date.now() + delayMs);
   }
 
-  private resolveStateWaiters() {
-    const deployment = this.mustReadDeployment();
-    for (const waiter of [...this.stateWaiters]) {
-      if (waiter.states.includes(deployment.state)) {
-        waiter.finish(deployment);
-      }
-    }
+  private readProjectId() {
+    return (
+      this.ctx.storage.sql
+        .exec<{ project_id: string | null }>(
+          `
+            SELECT project_id
+            FROM deployment
+            LIMIT 1
+          `,
+        )
+        .toArray()[0]?.project_id ?? null
+    );
   }
 }
