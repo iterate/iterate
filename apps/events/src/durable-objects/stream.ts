@@ -14,6 +14,15 @@ import { ROOT_STREAM_PATH, getParentPath } from "~/lib/utils.ts";
 const INITIAL_OFFSET_WIDTH = 16;
 const textEncoder = new TextEncoder();
 
+type StoredEventRow = {
+  offset: string;
+  type: string;
+  payloadJson: string;
+  metadataJson: string | null;
+  idempotencyKey: string | null;
+  createdAt: string;
+};
+
 /**
  * One stream per Durable Object: append-only event log in SQLite, a reduced
  * projection kept in memory and storage, and newline-delimited fanout for live
@@ -50,8 +59,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Appends validated events, assigns offsets inside the actor, and commits both
-   * the event log and reduced projection in one SQLite transaction.
+   * Appends validated events inside one transaction.
+   *
+   * Per-event idempotency is stream-local: when an input includes an
+   * `idempotencyKey` that already exists in this stream, we return the stored
+   * event instead of creating a second row or advancing offsets/state.
    */
   async append(args: { events: EventInput[] }) {
     if (args.events.length === 0) {
@@ -59,35 +71,26 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     const created = this.state.eventCount === 0;
-    const createdAt = new Date().toISOString();
     let nextState = structuredClone(this.state);
     const events: Event[] = [];
-
-    for (const inputEvent of args.events) {
-      const event = Event.parse({
-        path: inputEvent.path,
-        offset: this.nextOffset({ prevOffset: nextState.lastOffset }),
-        type: inputEvent.type,
-        payload: inputEvent.payload,
-        createdAt,
-      });
-      nextState = reduceStreamState({
-        state: nextState,
-        event,
-      });
-      events.push(event);
-    }
+    const insertedEvents: Event[] = [];
 
     this.ctx.storage.transactionSync(() => {
-      for (const event of events) {
-        this.ctx.storage.sql.exec(
-          `INSERT INTO events (offset, type, payload, created_at)
-           VALUES (?, ?, json(?), ?)`,
-          event.offset,
-          event.type,
-          JSON.stringify(event.payload),
-          event.createdAt,
-        );
+      for (const inputEvent of args.events) {
+        const appendedEvent = this.appendEventSync({
+          inputEvent,
+          prevOffset: nextState.lastOffset,
+        });
+
+        events.push(appendedEvent.event);
+
+        if (appendedEvent.inserted) {
+          nextState = reduceStreamState({
+            state: nextState,
+            event: appendedEvent.event,
+          });
+          insertedEvents.push(appendedEvent.event);
+        }
       }
 
       this.ctx.storage.sql.exec(
@@ -100,12 +103,12 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     this.state = structuredClone(nextState);
 
-    for (const event of events) {
+    for (const event of insertedEvents) {
       this.publish(event);
     }
 
-    if (created) {
-      this.propagateStreamCreated(events[0]!);
+    if (created && insertedEvents[0] != null) {
+      this.propagateStreamCreated(insertedEvents[0]);
     }
 
     return { created, events };
@@ -137,26 +140,21 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     const path = this.state.path;
     return this.ctx.storage.sql
-      .exec<{
-        offset: Event["offset"];
-        type: Event["type"];
-        payload: string;
-        created_at: Event["createdAt"];
-      }>(
-        `SELECT offset, type, payload, created_at
+      .exec<StoredEventRow>(
+        `SELECT
+           offset,
+           type,
+           payload AS payloadJson,
+           metadata AS metadataJson,
+           idempotency_key AS idempotencyKey,
+           created_at AS createdAt
          FROM events
          WHERE offset > ?
          ORDER BY offset ASC`,
         args.afterOffset ?? "",
       )
       .toArray()
-      .map((row) => ({
-        path,
-        offset: row.offset,
-        type: row.type,
-        payload: JSON.parse(row.payload),
-        createdAt: row.created_at,
-      }));
+      .map((row) => this.readStoredEvent({ path, row }));
   }
 
   /**
@@ -203,6 +201,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         offset TEXT PRIMARY KEY,
         type TEXT NOT NULL,
         payload TEXT NOT NULL CHECK(json_valid(payload)),
+        metadata TEXT CHECK(metadata IS NULL OR (json_valid(metadata) AND json_type(metadata) = 'object')),
+        idempotency_key TEXT UNIQUE,
         created_at TEXT NOT NULL
       )
     `);
@@ -258,6 +258,83 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     return structuredClone(persistedState);
+  }
+
+  /**
+   * Returns the stored event for duplicate idempotency keys; otherwise inserts a
+   * fresh event row using the caller-provided previous offset.
+   *
+   * This cannot read `this.state.lastOffset` directly because a single append
+   * call can insert multiple new events, and each later event must see the
+   * offset produced earlier in the same batch.
+   */
+  private appendEventSync(args: { inputEvent: EventInput; prevOffset: string | null }) {
+    const { inputEvent, prevOffset } = args;
+
+    if (inputEvent.idempotencyKey != null) {
+      const row = this.ctx.storage.sql
+        .exec<StoredEventRow>(
+          `SELECT
+             offset,
+             type,
+             payload AS payloadJson,
+             metadata AS metadataJson,
+             idempotency_key AS idempotencyKey,
+             created_at AS createdAt
+           FROM events
+           WHERE idempotency_key = ?
+           LIMIT 1`,
+          inputEvent.idempotencyKey,
+        )
+        .next().value;
+
+      if (row != null) {
+        return {
+          event: this.readStoredEvent({ path: inputEvent.path, row }),
+          inserted: false,
+        };
+      }
+    }
+
+    const event = Event.parse({
+      path: inputEvent.path,
+      offset: this.nextOffset({ prevOffset }),
+      type: inputEvent.type,
+      payload: inputEvent.payload,
+      metadata: inputEvent.metadata,
+      idempotencyKey: inputEvent.idempotencyKey,
+      createdAt: new Date().toISOString(),
+    });
+
+    this.ctx.storage.sql.exec(
+      `INSERT INTO events (offset, type, payload, metadata, idempotency_key, created_at)
+       VALUES (?, ?, json(?), ?, ?, ?)`,
+      event.offset,
+      event.type,
+      JSON.stringify(event.payload),
+      event.metadata === undefined ? null : JSON.stringify(event.metadata),
+      event.idempotencyKey ?? null,
+      event.createdAt,
+    );
+
+    return {
+      event,
+      inserted: true,
+    };
+  }
+
+  private readStoredEvent(args: { path: StreamPath; row: StoredEventRow }) {
+    const { path, row } = args;
+
+    return Event.parse({
+      path,
+      offset: row.offset,
+      type: row.type,
+      payload: JSON.parse(row.payloadJson),
+      ...(row.metadataJson == null ? {} : { metadata: JSON.parse(row.metadataJson) }),
+      ...(row.idempotencyKey == null ? {} : { idempotencyKey: row.idempotencyKey }),
+      createdAt: row.createdAt,
+    });
   }
 
   private nextOffset(args: { prevOffset: string | null }) {

@@ -51,6 +51,163 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "event metadata round-trips through append and replay",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { value: 42 },
+        metadata: {
+          actor: "e2e",
+          attempts: 1,
+          tags: ["round-trip"],
+        },
+      });
+
+      const events = await collectStreamEvents(app, { path });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        path,
+        offset: expectedOffset(1),
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { value: 42 },
+        metadata: {
+          actor: "e2e",
+          attempts: 1,
+          tags: ["round-trip"],
+        },
+        createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+      });
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "duplicate idempotencyKey returns the stored event instead of creating a second row",
+    async () => {
+      const path = uniqueStreamPath();
+      const idempotencyKey = `idem-${randomUUID()}`;
+
+      const first = await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { value: 1 },
+        metadata: {
+          source: "first-call",
+        },
+        idempotencyKey,
+      });
+
+      const second = await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { value: 999 },
+        metadata: {
+          source: "second-call",
+        },
+        idempotencyKey,
+      });
+
+      expect(first.created).toBe(true);
+      expect(second.created).toBe(false);
+      expect(second.events).toEqual(first.events);
+
+      const events = await collectStreamEvents(app, { path });
+
+      expect(events).toEqual(first.events);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "different idempotency keys create distinct events",
+    async () => {
+      const path = uniqueStreamPath();
+
+      const first = await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { step: 1 },
+        idempotencyKey: `idem-${randomUUID()}`,
+      });
+
+      const second = await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { step: 2 },
+        idempotencyKey: `idem-${randomUUID()}`,
+      });
+
+      expect(first.events[0]?.offset).toEqual(expectedOffset(1));
+      expect(second.events[0]?.offset).toEqual(expectedOffset(2));
+
+      const events = await collectStreamEvents(app, { path });
+
+      expect(events.map((event) => event.payload)).toEqual([{ step: 1 }, { step: 2 }]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "batch append applies idempotency per event",
+    async () => {
+      const path = uniqueStreamPath();
+      const existingKey = `idem-${randomUUID()}`;
+      const batchKey = `idem-${randomUUID()}`;
+
+      const existing = await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { step: "existing" },
+        idempotencyKey: existingKey,
+      });
+
+      const batch = await app.client.append({
+        path,
+        events: [
+          {
+            path,
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { step: "ignored-duplicate" },
+            idempotencyKey: existingKey,
+          },
+          {
+            path,
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { step: "new-in-batch" },
+            idempotencyKey: batchKey,
+          },
+          {
+            path,
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { step: "ignored-same-batch-duplicate" },
+            idempotencyKey: batchKey,
+          },
+        ],
+      });
+
+      expect(batch.created).toBe(false);
+      expect(batch.events).toHaveLength(3);
+      expect(batch.events[0]).toEqual(existing.events[0]);
+      expect(batch.events[1]?.offset).toEqual(expectedOffset(2));
+      expect(batch.events[1]?.payload).toEqual({ step: "new-in-batch" });
+      expect(batch.events[2]).toEqual(batch.events[1]);
+
+      const events = await collectStreamEvents(app, { path });
+
+      expect(events.map((event) => event.offset)).toEqual([expectedOffset(1), expectedOffset(2)]);
+      expect(events.map((event) => event.payload)).toEqual([
+        { step: "existing" },
+        { step: "new-in-batch" },
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "url-encoded slashes in path params resolve to nested stream paths",
     async () => {
       const path = StreamPath.parse(`/e2e/${randomUUID().slice(0, 6)}/${randomUUID().slice(0, 6)}`);
@@ -353,6 +510,75 @@ describe.sequential("events stream e2e", () => {
 
       expect(String(error)).toContain("Input validation failed");
       expect(JSON.stringify(error)).toContain("events");
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "append rejects array metadata",
+    async () => {
+      const path = uniqueStreamPath();
+
+      const response = await app.fetch(`/api/streams${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { value: 1 },
+          metadata: ["not", "an", "object"],
+        }),
+      });
+
+      expect(response.ok).toBe(false);
+      expect(await response.text()).toContain("metadata");
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "append rejects scalar metadata",
+    async () => {
+      const path = uniqueStreamPath();
+
+      const response = await app.fetch(`/api/streams${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { value: 1 },
+          metadata: "not-an-object",
+        }),
+      });
+
+      expect(response.ok).toBe(false);
+      expect(await response.text()).toContain("metadata");
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "append rejects null metadata",
+    async () => {
+      const path = uniqueStreamPath();
+
+      const response = await app.fetch(`/api/streams${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { value: 1 },
+          metadata: null,
+        }),
+      });
+
+      expect(response.ok).toBe(false);
+      expect(await response.text()).toContain("metadata");
     },
     testTimeoutMs,
   );
