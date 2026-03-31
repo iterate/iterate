@@ -152,6 +152,54 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "duplicate idempotencyKey does not publish a second live event",
+    async () => {
+      const path = uniqueStreamPath();
+      const idempotencyKey = `idem-${randomUUID()}`;
+
+      const first = await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { step: "initial" },
+        idempotencyKey,
+      });
+
+      const controller = new AbortController();
+      const stream = await app.client.stream(
+        {
+          path,
+          offset: first.events[0]?.offset,
+          live: true,
+        },
+        { signal: controller.signal },
+      );
+      const iterator = stream[Symbol.asyncIterator]();
+
+      try {
+        const duplicate = await app.client.append({
+          path,
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: "duplicate" },
+          idempotencyKey,
+        });
+
+        expect(duplicate.events).toEqual(first.events);
+
+        const next = await Promise.race([
+          iterator.next().then((result) => ({ kind: "next" as const, result })),
+          delay(historyIdleTimeoutMs).then(() => ({ kind: "idle" as const })),
+        ]);
+
+        expect(next).toEqual({ kind: "idle" });
+      } finally {
+        controller.abort();
+        await iterator.return?.();
+      }
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "batch append applies idempotency per event",
     async () => {
       const path = uniqueStreamPath();
