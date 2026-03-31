@@ -11,9 +11,21 @@ import type {
   StreamFeedItem,
   StreamRendererMode,
 } from "~/lib/stream-feed-types.ts";
+import { buildAgentSemanticInsertions } from "~/lib/agent-stream-reducer.ts";
+
+/**
+ * Raw + Pretty groups consecutive wire rows of the same `eventType`. Very large
+ * cap so normal streams stay one group per run; only pathological runs flush early.
+ */
+export const MAX_SAME_TYPE_RAW_GROUP = 50_000;
 
 export function projectWireToFeed(events: readonly Event[]): StreamFeedItem[] {
-  return events.flatMap((event) => projectEventToFeed(event));
+  const insertionsByOffset = buildSemanticInsertions(events);
+
+  return events.flatMap((event) => {
+    const eventFeedItem = toEventFeedItem(event);
+    return [eventFeedItem, ...(insertionsByOffset.get(event.offset) ?? [])];
+  });
 }
 
 export function toEventFeedItem(event: Event): EventFeedItem {
@@ -62,6 +74,10 @@ export function buildDisplayFeed(
     if (item.kind === "event") {
       if (currentGroup[0]?.eventType === item.eventType) {
         currentGroup.push(item);
+        if (currentGroup.length >= MAX_SAME_TYPE_RAW_GROUP) {
+          flushCurrentGroup(displayFeed, currentGroup);
+          currentGroup = [];
+        }
         continue;
       }
 
@@ -118,6 +134,49 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
   }
 
   return null;
+}
+
+function mergeInsertions(
+  target: Map<string, StreamFeedItem[]>,
+  addition: ReadonlyMap<string, StreamFeedItem[]>,
+) {
+  for (const [offset, items] of addition) {
+    const existing = target.get(offset);
+    if (existing) {
+      existing.push(...items);
+    } else {
+      target.set(offset, [...items]);
+    }
+  }
+}
+
+function buildSemanticInsertions(events: readonly Event[]) {
+  const insertionsByOffset = new Map<string, StreamFeedItem[]>();
+
+  for (const event of events) {
+    const semanticItem = toSemanticFeedItem(event);
+    if (semanticItem) {
+      appendInsertion(insertionsByOffset, event.offset, semanticItem);
+    }
+  }
+
+  mergeInsertions(insertionsByOffset, buildAgentSemanticInsertions(events));
+
+  return insertionsByOffset;
+}
+
+function appendInsertion(
+  insertionsByOffset: Map<string, StreamFeedItem[]>,
+  offset: string,
+  item: StreamFeedItem,
+) {
+  const existing = insertionsByOffset.get(offset);
+  if (existing) {
+    existing.push(item);
+    return;
+  }
+
+  insertionsByOffset.set(offset, [item]);
 }
 
 export function createGroupedOrSingleEvent(

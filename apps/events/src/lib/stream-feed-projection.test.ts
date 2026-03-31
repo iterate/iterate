@@ -93,6 +93,302 @@ describe("projectWireToFeed", () => {
 
     expect(getEventFeedItems(feed).map((item) => item.kind)).toEqual(["event"]);
   });
+
+  test("projects agent input and output events into a chat-style timeline", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: "1",
+        type: "https://events.iterate.com/agent/input-item-added",
+        payload: {
+          item: {
+            role: "user",
+            content: "Hello there",
+          },
+        },
+      }),
+      createEvent({
+        offset: "2",
+        type: "https://events.iterate.com/agent/output-item-added",
+        payload: {
+          sourceOffset: "1",
+          chunk: {
+            type: "content",
+            id: "chunk-1",
+            model: "gpt-4o-mini",
+            timestamp: 1,
+            delta: "Hello",
+            content: "Hello",
+            role: "assistant",
+          },
+        },
+      }),
+      createEvent({
+        offset: "3",
+        type: "https://events.iterate.com/agent/output-item-added",
+        payload: {
+          sourceOffset: "1",
+          chunk: {
+            type: "content",
+            id: "chunk-2",
+            model: "gpt-4o-mini",
+            timestamp: 2,
+            delta: " back",
+            content: "Hello back",
+            role: "assistant",
+          },
+        },
+      }),
+      createEvent({
+        offset: "4",
+        type: "https://events.iterate.com/agent/output-item-added",
+        payload: {
+          sourceOffset: "1",
+          chunk: {
+            type: "done",
+            id: "chunk-3",
+            model: "gpt-4o-mini",
+            timestamp: 3,
+            finishReason: "stop",
+          },
+        },
+      }),
+    ]);
+
+    expect(feed.map((item) => item.kind)).toEqual([
+      "event",
+      "message",
+      "event",
+      "event",
+      "event",
+      "message",
+    ]);
+    expect(feed[1]).toMatchObject({
+      kind: "message",
+      role: "user",
+      content: [{ type: "text", text: "Hello there" }],
+    });
+    expect(feed[5]).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "Hello back" }],
+      streamStatus: "complete",
+    });
+  });
+
+  test("marks assistant replies as streaming until a done chunk arrives", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: "1",
+        type: "https://events.iterate.com/agent/input-item-added",
+        payload: {
+          item: {
+            role: "user",
+            content: "Hi",
+          },
+        },
+      }),
+      createEvent({
+        offset: "2",
+        type: "https://events.iterate.com/agent/output-item-added",
+        payload: {
+          sourceOffset: "1",
+          chunk: {
+            type: "content",
+            id: "chunk-1",
+            model: "gpt-4o-mini",
+            timestamp: 1,
+            delta: "Partial",
+            content: "Partial",
+            role: "assistant",
+          },
+        },
+      }),
+    ]);
+
+    const assistant = feed.find(
+      (item): item is Extract<StreamFeedItem, { kind: "message" }> =>
+        item.kind === "message" && item.role === "assistant",
+    );
+    expect(assistant).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "Partial" }],
+      streamStatus: "streaming",
+    });
+  });
+
+  test("prefers finalized assistant messages over reconstructed chunk text", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: "1",
+        type: "https://events.iterate.com/agent/input-item-added",
+        payload: {
+          item: {
+            role: "user",
+            content: "Hi",
+          },
+        },
+      }),
+      createEvent({
+        offset: "2",
+        type: "https://events.iterate.com/agent/output-item-added",
+        payload: {
+          sourceOffset: "1",
+          chunk: {
+            type: "content",
+            id: "chunk-1",
+            model: "gpt-4o-mini",
+            timestamp: 1,
+            delta: "Hello",
+            content: "Hello",
+            role: "assistant",
+          },
+        },
+      }),
+      createEvent({
+        offset: "3",
+        type: "https://events.iterate.com/agent/output-item-added",
+        payload: {
+          sourceOffset: "1",
+          chunk: {
+            type: "done",
+            id: "chunk-2",
+            model: "gpt-4o-mini",
+            timestamp: 2,
+            finishReason: "stop",
+          },
+        },
+      }),
+      createEvent({
+        offset: "4",
+        type: "https://events.iterate.com/agent/input-item-added",
+        payload: {
+          sourceOffset: "1",
+          item: {
+            role: "assistant",
+            content: "Hello",
+          },
+        },
+      }),
+    ]);
+
+    const assistantMessages = feed.filter(
+      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
+        item.kind === "message" && item.role === "assistant",
+    );
+
+    expect(assistantMessages).toHaveLength(1);
+    expect(assistantMessages[0]).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "Hello" }],
+    });
+    expect("streamStatus" in assistantMessages[0]).toBe(false);
+  });
+
+  test("projects tool_call and tool_result chunks into tool feed items", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: "1",
+        type: "https://events.iterate.com/agent/input-item-added",
+        payload: {
+          item: {
+            role: "user",
+            content: "Use a tool",
+          },
+        },
+      }),
+      createEvent({
+        offset: "2",
+        type: "https://events.iterate.com/agent/output-item-added",
+        payload: {
+          sourceOffset: "1",
+          chunk: {
+            type: "tool_call",
+            id: "c1",
+            model: "gpt-4o-mini",
+            timestamp: 1,
+            index: 0,
+            toolCall: {
+              id: "call_1",
+              type: "function",
+              function: { name: "demo_tool", arguments: '{"x":1}' },
+            },
+          },
+        },
+      }),
+      createEvent({
+        offset: "3",
+        type: "https://events.iterate.com/agent/output-item-added",
+        payload: {
+          sourceOffset: "1",
+          chunk: {
+            type: "tool_result",
+            id: "c2",
+            model: "gpt-4o-mini",
+            timestamp: 2,
+            toolCallId: "call_1",
+            content: '{"ok":true}',
+          },
+        },
+      }),
+      createEvent({
+        offset: "4",
+        type: "https://events.iterate.com/agent/output-item-added",
+        payload: {
+          sourceOffset: "1",
+          chunk: {
+            type: "done",
+            id: "c3",
+            model: "gpt-4o-mini",
+            timestamp: 3,
+            finishReason: "stop",
+          },
+        },
+      }),
+    ]);
+
+    const toolItem = feed.find((item) => item.kind === "tool");
+    expect(toolItem).toMatchObject({
+      kind: "tool",
+      toolName: "demo_tool",
+      toolCallId: "call_1",
+      state: "completed",
+    });
+  });
+
+  test("adds an error item for failed agent output events", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: "1",
+        type: "https://events.iterate.com/agent/input-item-added",
+        payload: {
+          item: {
+            role: "user",
+            content: "Break please",
+          },
+        },
+      }),
+      createEvent({
+        offset: "2",
+        type: "https://events.iterate.com/agent/output-item-added",
+        payload: {
+          sourceOffset: "1",
+          chunk: {
+            type: "RUN_ERROR",
+            error: "boom",
+          },
+        },
+      }),
+    ]);
+
+    expect(feed.map((item) => item.kind)).toEqual(["event", "message", "event", "error"]);
+    expect(feed[3]).toMatchObject({
+      kind: "error",
+      message: "Agent run failed",
+      context: "boom",
+    });
+  });
 });
 
 describe("toSemanticFeedItem", () => {

@@ -3,6 +3,7 @@ import {
   BookOpenIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  CopyIcon,
   FolderPlusIcon,
   Settings2Icon,
 } from "lucide-react";
@@ -12,6 +13,13 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@iterate-com/ui/components/ai-elements/conversation";
+import {
+  Message,
+  MessageAction,
+  MessageActions,
+  MessageContent,
+  MessageResponse,
+} from "@iterate-com/ui/components/ai-elements/message";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
@@ -24,9 +32,13 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
+import { toast } from "@iterate-com/ui/components/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
+import { StreamErrorAlert } from "~/components/stream-error-alert.tsx";
+import { StreamToolCard } from "~/components/stream-tool-card.tsx";
 import { getEventTypePageByType } from "~/lib/event-type-pages.ts";
 import { getAdjacentEventOffset, getEventFeedItems } from "~/lib/stream-feed-projection.ts";
+import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import type {
   EventFeedItem,
   GroupedEventFeedItem,
@@ -55,6 +67,7 @@ export function StreamEventFeed({
 }) {
   const eventFeedItems = useMemo(() => getEventFeedItems(feed), [feed]);
   const rawEvents = eventFeedItems.map((item) => item.raw);
+  const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
 
   const items = displayFeed ?? [];
 
@@ -93,8 +106,8 @@ export function StreamEventFeed({
               ) : rendererMode === "pretty" && feed.length > 0 ? (
                 <ConversationEmptyState
                   className="min-h-[240px] rounded-lg border bg-card text-sm text-muted-foreground"
-                  title="No semantic renderers for these events yet"
-                  description="Use Raw + Pretty to inspect the underlying stream until more event types get dedicated pretty views."
+                  title="No semantic cards for this stream yet"
+                  description={`${feedSummary.rawEvents} raw event${feedSummary.rawEvents === 1 ? "" : "s"} in the log · ${feedSummary.semanticItems} semantic item${feedSummary.semanticItems === 1 ? "" : "s"}. Use Raw + Pretty to see wire rows next to projections, or Raw for a full dump.`}
                 />
               ) : (
                 <ConversationEmptyState
@@ -139,28 +152,11 @@ function StreamFeedItemRenderer({
     case "grouped-event":
       return <GroupedEventLine group={item} onOpenEventOffsetChange={onOpenEventOffsetChange} />;
     case "message":
-      return (
-        <div className="rounded-lg border bg-card p-4 text-sm">
-          <div className="text-xs text-muted-foreground">{item.role}</div>
-          <div>{item.content.map((block) => block.text).join("")}</div>
-        </div>
-      );
+      return <ChatMessageCard item={item} />;
     case "tool":
-      return (
-        <div className="rounded-lg border bg-card p-4 text-sm">
-          <div className="font-medium">{item.toolName}</div>
-          <div className="text-xs text-muted-foreground">{item.state}</div>
-        </div>
-      );
+      return <StreamToolCard item={item} />;
     case "error":
-      return (
-        <div className="rounded-lg border border-destructive/30 bg-card p-4 text-sm">
-          <div className="font-medium text-destructive">{item.message}</div>
-          {item.context ? (
-            <div className="text-xs text-muted-foreground">{item.context}</div>
-          ) : null}
-        </div>
-      );
+      return <StreamErrorAlert item={item} />;
     case "stream-created":
       return <StreamCreatedCard item={item} />;
     case "stream-metadata-updated":
@@ -189,6 +185,56 @@ function StreamCreatedCard({ item }: { item: StreamCreatedFeedItem }) {
         </div>
       </div>
     </article>
+  );
+}
+
+function ChatMessageCard({ item }: { item: Extract<StreamFeedItem, { kind: "message" }> }) {
+  const content = item.content.map((block) => block.text).join("");
+  const showStreaming = item.role === "assistant" && item.streamStatus === "streaming";
+  const showCopyAction = content.length > 0;
+
+  return (
+    <Message from={item.role}>
+      <MessageContent className="gap-1.5">
+        <div
+          className={`mb-1 flex w-full min-w-0 items-start gap-2 ${
+            showCopyAction
+              ? "justify-between"
+              : item.role === "user"
+                ? "justify-end"
+                : "justify-start"
+          }`}
+        >
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+            <span>{formatTime(item.timestamp)}</span>
+            {showStreaming ? (
+              <>
+                <span>·</span>
+                <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                  <Spinner className="size-3" />
+                  Streaming
+                </span>
+              </>
+            ) : null}
+          </div>
+          {showCopyAction ? (
+            <MessageActions className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
+              <MessageAction
+                tooltip="Copy message text"
+                label="Copy message text"
+                onClick={() => {
+                  void navigator.clipboard.writeText(content);
+                  toast.success("Copied");
+                }}
+              >
+                <CopyIcon className="size-3.5" />
+              </MessageAction>
+            </MessageActions>
+          ) : null}
+        </div>
+        <MessageResponse>{content.length > 0 ? content : showStreaming ? "…" : ""}</MessageResponse>
+      </MessageContent>
+    </Message>
   );
 }
 

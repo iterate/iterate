@@ -2,10 +2,12 @@ import { createContext, useContext, useMemo, useState, type PropsWithChildren } 
 import { ChevronDownIcon, InfoIcon } from "lucide-react";
 import { useLocation } from "@tanstack/react-router";
 import { type StreamPath } from "@iterate-com/events-contract";
+import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -14,10 +16,12 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { streamPathFromPathname } from "~/lib/stream-links.ts";
 import { streamRendererModeOptions, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
+import type { StreamFeedSummary } from "~/lib/stream-feed-summary.ts";
 
 type StreamHeaderControls = {
   rendererMode: StreamRendererMode;
   onRendererModeChange?: (mode: StreamRendererMode) => void;
+  feedSummary?: StreamFeedSummary;
 };
 
 type StreamsChromeContextValue = {
@@ -84,6 +88,25 @@ export function StreamsHeaderAction() {
 
   return (
     <div className="flex items-center gap-2">
+      {headerControls.feedSummary ? (
+        <div
+          className="hidden items-center gap-1.5 text-muted-foreground lg:flex"
+          aria-label="Stream item counts"
+        >
+          <Badge
+            variant="outline"
+            className="px-1.5 font-mono text-[10px] font-normal tabular-nums"
+          >
+            Raw {headerControls.feedSummary.rawEvents}
+          </Badge>
+          <Badge
+            variant="outline"
+            className="px-1.5 font-mono text-[10px] font-normal tabular-nums"
+          >
+            Semantic {headerControls.feedSummary.semanticItems}
+          </Badge>
+        </div>
+      ) : null}
       {/* shadcn/ui's Dropdown Menu radio group is a better fit than Select here
           because the options need short explanations, not just terse labels.
           First-party docs: https://github.com/shadcn-ui/ui/blob/main/apps/v4/content/docs/components/base/dropdown-menu.mdx */}
@@ -101,26 +124,28 @@ export function StreamsHeaderAction() {
           <ChevronDownIcon className="size-4 text-muted-foreground" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-80">
-          <DropdownMenuLabel>Renderer mode</DropdownMenuLabel>
-          <DropdownMenuRadioGroup
-            value={headerControls.rendererMode}
-            onValueChange={(value) =>
-              headerControls.onRendererModeChange?.(value as StreamRendererMode)
-            }
-          >
-            {streamRendererModeOptions.map((option) => (
-              <DropdownMenuRadioItem
-                key={option.value}
-                value={option.value}
-                className="items-start py-2"
-              >
-                <div className="flex min-w-0 flex-col gap-0.5 pr-4">
-                  <span>{option.label}</span>
-                  <span className="text-xs text-muted-foreground">{option.description}</span>
-                </div>
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>Renderer mode</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={headerControls.rendererMode}
+              onValueChange={(value) =>
+                headerControls.onRendererModeChange?.(value as StreamRendererMode)
+              }
+            >
+              {streamRendererModeOptions.map((option) => (
+                <DropdownMenuRadioItem
+                  key={option.value}
+                  value={option.value}
+                  className="items-start py-2"
+                >
+                  <div className="flex min-w-0 flex-col gap-0.5 pr-4">
+                    <span>{option.label}</span>
+                    <span className="text-xs text-muted-foreground">{option.description}</span>
+                  </div>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuGroup>
         </DropdownMenuContent>
       </DropdownMenu>
 

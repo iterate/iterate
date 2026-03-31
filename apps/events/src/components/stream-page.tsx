@@ -33,6 +33,7 @@ import { StreamEventFeed } from "~/components/stream-event-feed.tsx";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
 import { eventTypePages, getEventTypePageByType } from "~/lib/event-type-pages.ts";
 import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projection.ts";
+import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { DEFAULT_STREAM_RENDERER_MODE, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
 import { formatClientError } from "~/lib/format-client-error.ts";
 import { ROOT_STREAM_PATH } from "~/lib/utils.ts";
@@ -79,6 +80,7 @@ export function StreamPage({
   });
   const feed = useMemo(() => projectWireToFeed(events), [events]);
   const displayFeed = useMemo(() => buildDisplayFeed(feed, rendererMode), [feed, rendererMode]);
+  const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
 
   useEffect(() => {
     setAppendInputJson(createEventInputTemplate({ streamPath, type: selectedTemplateType }));
@@ -91,12 +93,13 @@ export function StreamPage({
     setHeaderControls({
       rendererMode,
       onRendererModeChange,
+      feedSummary,
     });
 
     return () => {
       setHeaderControls(null);
     };
-  }, [onRendererModeChange, rendererMode, setHeaderControls]);
+  }, [feedSummary, onRendererModeChange, rendererMode, setHeaderControls]);
 
   const appendEvent = useMutation(
     orpc.append.mutationOptions({

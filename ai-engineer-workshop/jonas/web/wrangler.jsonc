@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "jonas-workshop-web",
+  "main": "./cloudflare-worker.js",
+  "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
+  "compatibility_date": "2026-03-31",
+  "assets": {
+    "directory": "./.output/public",
+    "binding": "ASSETS",
+    "html_handling": "none",
+    "run_worker_first": true,
+  },
+  // Add one of these once you pick a hostname:
+  // "routes": [{ "pattern": "workshop.example.com", "custom_domain": true }]
+  // "routes": [{ "pattern": "example.com/workshop/*", "zone_name": "example.com" }]
+}
