@@ -193,11 +193,11 @@ test.describe("organization invites", () => {
     await toast.success(page, `Joined ${orgName}`).waitFor();
 
     // Now leave the org from user settings
-    const orgCard = page.locator("div.border.rounded-lg").filter({ hasText: orgName });
     await page.goto("/user/settings");
-    await orgCard.waitFor();
+    await page.getByText("Organizations", { exact: true }).waitFor();
 
     // Click leave button on the org card (LogOut icon button)
+    const orgCard = page.locator("div.border.rounded-lg").filter({ hasText: orgName });
     await orgCard.locator("button").click();
 
     // Confirm in dialog

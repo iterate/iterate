@@ -11,11 +11,15 @@
     "test:e2e": "vitest run --config ./vitest.node.config.ts",
     "test:e2e-live": "vitest run --config ./vitest.live.config.ts",
     "test:all": "pnpm run test:workers && pnpm run test:e2e",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:rebuild": "rm -f .local.db && sqlite3 .local.db '' && find migrations -name '*.sql' -print | sort | while read -r file; do sqlite3 .local.db < \"$file\"; done",
+    "db:types": "pnpm run db:rebuild && tsx ./scripts/generate-queries.ts --force",
+    "db:types:stale": "tsx ./scripts/generate-queries.ts --if-stale",
+    "db:watch": "pnpm run db:rebuild && tsx ./scripts/generate-queries.ts --watch"
   },
   "dependencies": {
     "@iterate-com/semaphore-contract": "workspace:*",
-    "@orpc/server": "^1.13.4",
+    "@orpc/server": "1.13.13",
     "alchemy": "^0.83.0",
     "hono": "^4.11.3",
     "zod": "^4.1.12"
@@ -26,6 +30,7 @@
     "@types/node": "^24.10.1",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
+    "typesql-cli": "github:iterate/typesql#5687eb2",
     "vitest": "3.2.4",
     "wrangler": "^4.64.0"
   }

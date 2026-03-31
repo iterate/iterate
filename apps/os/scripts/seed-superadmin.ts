@@ -12,7 +12,7 @@ import { hashPassword } from "better-auth/crypto";
 import { sql } from "drizzle-orm";
 import * as schema from "../backend/db/schema.ts";
 
-export async function seedSuperadmin() {
+async function main() {
   const databaseUrl = process.env.PSCALE_DATABASE_URL || process.env.DATABASE_URL;
   const encryptionSecret = process.env.ENCRYPTION_SECRET;
   const password = process.env.SERVICE_AUTH_TOKEN;
@@ -73,7 +73,7 @@ export async function seedSuperadmin() {
 
 // look for --run so we can import values from this file without running it immediately
 if (process.argv.includes("--run")) {
-  seedSuperadmin().catch((err) => {
+  main().catch((err) => {
     console.error("Failed to seed superadmin:", err);
     process.exit(1);
   });

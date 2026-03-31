@@ -15,15 +15,25 @@ import {
   type SemaphoreLeaseRecord,
   type SemaphoreResourceRecord,
 } from "@iterate-com/semaphore-contract";
+import {
+  deleteResourceByTypeAndSlug,
+  insertResourceRow,
+  selectResourceByTypeAndSlug,
+  selectResourcePresenceByType,
+  selectResources,
+  selectResourcesByType,
+  updateResourceAvailable,
+  updateResourceLeased,
+} from "./sql/queries.ts";
 
 type ResourceRow = {
   type: string;
   slug: string;
   data: string;
-  lease_state: "available" | "leased";
-  leased_until: number | null;
-  last_acquired_at: number | null;
-  last_released_at: number | null;
+  lease_state: string;
+  leased_until?: number | null;
+  last_acquired_at?: number | null;
+  last_released_at?: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -97,10 +107,10 @@ function rowToResourceRecord(row: ResourceRow): SemaphoreResourceRecord {
     type: row.type,
     slug: row.slug,
     data: parseData(row.data),
-    leaseState: row.lease_state,
-    leasedUntil: row.leased_until,
-    lastAcquiredAt: row.last_acquired_at,
-    lastReleasedAt: row.last_released_at,
+    leaseState: z.enum(["available", "leased"]).parse(row.lease_state),
+    leasedUntil: row.leased_until ?? null,
+    lastAcquiredAt: row.last_acquired_at ?? null,
+    lastReleasedAt: row.last_released_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -112,17 +122,10 @@ async function listResourcesFromDb(
   db: D1Database,
   params: { type?: string } = {},
 ): Promise<SemaphoreResourceRecord[]> {
-  const statement = params.type
-    ? db
-        .prepare(
-          "SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at FROM resources WHERE type = ? ORDER BY created_at ASC, slug ASC",
-        )
-        .bind(params.type)
-    : db.prepare(
-        "SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at FROM resources ORDER BY type ASC, created_at ASC, slug ASC",
-      );
-  const result = await statement.all<ResourceRow>();
-  return (result.results ?? []).map(rowToResourceRecord);
+  const rows = params.type
+    ? await selectResourcesByType(db, { type: params.type })
+    : await selectResources(db);
+  return rows.map(rowToResourceRecord);
 }
 
 async function insertResource(
@@ -133,17 +136,16 @@ async function insertResource(
     data: SemaphoreJsonObject;
   },
 ): Promise<SemaphoreResourceRecord> {
-  await db
-    .prepare("INSERT INTO resources (type, slug, data) VALUES (?, ?, ?)")
-    .bind(resource.type, resource.slug, JSON.stringify(resource.data))
-    .run();
+  await insertResourceRow(db, {
+    type: resource.type,
+    slug: resource.slug,
+    data: JSON.stringify(resource.data),
+  });
 
-  const row = await db
-    .prepare(
-      "SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at FROM resources WHERE type = ? AND slug = ?",
-    )
-    .bind(resource.type, resource.slug)
-    .first<ResourceRow>();
+  const row = await selectResourceByTypeAndSlug(db, {
+    type: resource.type,
+    slug: resource.slug,
+  });
 
   if (!row) {
     throw new Error("Inserted resource row not found");
@@ -159,11 +161,8 @@ async function deleteResourceFromDb(
     slug: string;
   },
 ): Promise<boolean> {
-  const result = await db
-    .prepare("DELETE FROM resources WHERE type = ? AND slug = ?")
-    .bind(key.type, key.slug)
-    .run();
-  return (result.meta.changes ?? 0) > 0;
+  const result = await deleteResourceByTypeAndSlug(db, key);
+  return (result.changes ?? 0) > 0;
 }
 
 async function selectInventoryByType(
@@ -174,10 +173,7 @@ async function selectInventoryByType(
 }
 
 async function hasInventoryForType(db: D1Database, type: string): Promise<boolean> {
-  const result = await db
-    .prepare("SELECT 1 AS present FROM resources WHERE type = ? LIMIT 1")
-    .bind(type)
-    .first<{ present: number }>();
+  const result = await selectResourcePresenceByType(db, { type });
   return Boolean(result?.present);
 }
 
@@ -190,13 +186,18 @@ async function markResourceLeasedInDb(
     lastAcquiredAt: number;
   },
 ): Promise<boolean> {
-  const result = await db
-    .prepare(
-      "UPDATE resources SET lease_state = 'leased', leased_until = ?, last_acquired_at = ?, updated_at = CURRENT_TIMESTAMP WHERE type = ? AND slug = ?",
-    )
-    .bind(params.leasedUntil, params.lastAcquiredAt, params.type, params.slug)
-    .run();
-  return (result.meta.changes ?? 0) > 0;
+  const result = await updateResourceLeased(
+    db,
+    {
+      leasedUntil: params.leasedUntil,
+      lastAcquiredAt: params.lastAcquiredAt,
+    },
+    {
+      type: params.type,
+      slug: params.slug,
+    },
+  );
+  return (result.changes ?? 0) > 0;
 }
 
 async function markResourceAvailableInDb(
@@ -207,12 +208,16 @@ async function markResourceAvailableInDb(
     lastReleasedAt: number | null;
   },
 ): Promise<void> {
-  await db
-    .prepare(
-      "UPDATE resources SET lease_state = 'available', leased_until = NULL, last_released_at = COALESCE(?, last_released_at), updated_at = CURRENT_TIMESTAMP WHERE type = ? AND slug = ?",
-    )
-    .bind(params.lastReleasedAt, params.type, params.slug)
-    .run();
+  await updateResourceAvailable(
+    db,
+    {
+      lastReleasedAt: params.lastReleasedAt,
+    },
+    {
+      type: params.type,
+      slug: params.slug,
+    },
+  );
 }
 
 export class ResourceCoordinator extends DurableObject<RawSemaphoreEnv> {

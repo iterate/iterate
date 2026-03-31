@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
@@ -7,18 +9,44 @@ import { NodeSDK } from "@opentelemetry/sdk-node";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink, type RPCLinkOptions } from "@orpc/client/fetch";
-import { type LinkWebsocketClientOptions } from "@orpc/client/websocket";
+import {
+  RPCLink as WebSocketRPCLink,
+  type LinkWebsocketClientOptions,
+} from "@orpc/client/websocket";
 import {
   inferRPCMethodFromContractRouter,
   type AnyContractRouter,
   type ContractRouterClient,
 } from "@orpc/contract";
-import { oc } from "@orpc/contract";
+import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { ORPCInstrumentation } from "@orpc/otel";
 import { onError } from "@orpc/server";
-import { createRequestLogger, initLogger, log as rootLog, type RequestLogger } from "evlog";
-import { createOTLPDrain } from "evlog/otlp";
+import {
+  createRequestLogger,
+  initLogger,
+  log as rootLog,
+  type Log,
+  type RequestLogger,
+} from "evlog";
+import { initWorkersLogger } from "evlog/workers";
+import { sendBatchToOTLP } from "evlog/otlp";
+import type { DrainContext } from "evlog";
+import type { Plugin } from "vite";
 import { z } from "zod/v4";
+import { createSlug } from "./create-slug.ts";
+import {
+  ServiceDebugOutput,
+  ServiceHealthOutput,
+  ServiceSqlInput,
+  ServiceSqlResult,
+  ServiceSqlResultHeader,
+  createServiceSubRouterContract,
+  type ServiceManifestLike,
+  type ServiceManifestWithEntryPoint,
+  type SqlResultSet,
+} from "./service-contract.ts";
+import { useTmpDir } from "./test-helpers/index.ts";
+import type { UseTmpDirFixture } from "./test-helpers/index.ts";
 
 type RuntimeGlobal = typeof globalThis & {
   __jonaslandOtelInitialized?: boolean;
@@ -26,90 +54,119 @@ type RuntimeGlobal = typeof globalThis & {
 
 const runtimeGlobal = globalThis as RuntimeGlobal;
 
-export type ServiceRequestLogFields = Record<string, unknown>;
-export type ServiceRequestLogger = RequestLogger<ServiceRequestLogFields>;
+type ServiceRequestLogFields = Record<string, unknown>;
+type ServiceRequestLogger = RequestLogger<ServiceRequestLogFields>;
 
-export interface ServiceContext {
+interface ServiceContext {
   requestId: string;
   serviceName: string;
   log: ServiceRequestLogger;
 }
 
-export interface ServiceInitialContext {
+interface ServiceInitialContext {
   requestId?: string;
   log?: ServiceRequestLogger;
 }
 
-export const ServiceHealthOutput = z.object({
-  ok: z.literal(true),
-  service: z.string(),
-  version: z.string(),
-});
+type ServiceSubRouterBuilder = {
+  service: {
+    health: {
+      handler: (
+        handler: (args: {
+          context: ServiceContext;
+        }) => Promise<z.infer<typeof ServiceHealthOutput>>,
+      ) => unknown;
+    };
+    sql: {
+      handler: (
+        handler: (args: {
+          input: ServiceSqlInput;
+          context: ServiceContext;
+        }) => Promise<ServiceSqlResult>,
+      ) => unknown;
+    };
+    debug: {
+      handler: (
+        handler: (args: { context: ServiceContext }) => Promise<ServiceDebugOutput>,
+      ) => unknown;
+    };
+  };
+};
 
-export const ServiceSqlInput = z.object({
-  statement: z.string().min(1),
-});
+export function createServiceSubRouterHandlers<TBuilder extends ServiceSubRouterBuilder>(
+  builder: TBuilder,
+  options: {
+    manifest: {
+      name: string;
+      version: string;
+    };
+    executeSql: (statement: string) => Promise<SqlResultSet>;
+    logPrefix?: string;
+  },
+) {
+  const logPrefix = options.logPrefix ?? "service";
 
-export const ServiceSqlResultHeader = z.object({
-  name: z.string(),
-  displayName: z.string(),
-  originalType: z.string().nullable(),
-  type: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
-});
+  const health = builder.service.health.handler(async ({ context }) => {
+    infoFromContext(context, `${logPrefix}.health`, {
+      service: options.manifest.name,
+      request_id: context.requestId,
+    });
 
-export const ServiceSqlResult = z.object({
-  rows: z.array(z.record(z.string(), z.unknown())),
-  headers: z.array(ServiceSqlResultHeader),
-  stat: z.object({
-    rowsAffected: z.number().int(),
-    rowsRead: z.number().int().nullable(),
-    rowsWritten: z.number().int().nullable(),
-    queryDurationMs: z.number().int().nullable(),
-  }),
-  lastInsertRowid: z.number().int().optional(),
-});
+    return {
+      ok: true,
+      service: options.manifest.name,
+      version: options.manifest.version,
+    };
+  });
 
-export type ServiceSqlInput = z.infer<typeof ServiceSqlInput>;
-export type ServiceSqlResult = z.infer<typeof ServiceSqlResult>;
+  const sql = builder.service.sql.handler(async ({ input, context }) => {
+    const startedAt = Date.now();
+    const result = transformSqlResultSet(await options.executeSql(input.statement));
 
-export interface SqlResultSet {
-  columns: string[];
-  columnTypes: Array<string | null>;
-  rows: unknown[][];
-  rowsAffected?: number;
-  lastInsertRowid?: number | bigint | null;
-}
+    infoFromContext(context, `${logPrefix}.sql`, {
+      service: options.manifest.name,
+      request_id: context.requestId,
+      duration_ms: Date.now() - startedAt,
+      rows: result.rows.length,
+      rows_affected: result.stat.rowsAffected,
+    });
 
-export function createServiceSubRouterContract(options?: {
-  tag?: string;
-  healthSummary?: string;
-  sqlSummary?: string;
-}) {
-  const tag = options?.tag ?? "service";
+    return result;
+  });
 
-  return {
-    service: {
-      health: oc
-        .route({
-          method: "GET",
-          path: "/service/health",
-          summary: options?.healthSummary ?? "Service health metadata",
-          tags: [tag],
-        })
-        .input(z.object({}).optional().default({}))
-        .output(ServiceHealthOutput),
+  const debug = builder.service.debug.handler(async ({ context }) => {
+    infoFromContext(context, `${logPrefix}.debug`, {
+      service: options.manifest.name,
+      request_id: context.requestId,
+    });
+    const env: Record<string, string | null> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      env[key] = value ?? null;
+    }
+    const memoryUsage = process.memoryUsage();
+    return {
+      pid: process.pid,
+      ppid: process.ppid,
+      uptimeSec: process.uptime(),
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      hostname: hostname(),
+      cwd: process.cwd(),
+      execPath: process.execPath,
+      argv: process.argv,
+      env,
+      memoryUsage: {
+        rss: memoryUsage.rss,
+        heapTotal: memoryUsage.heapTotal,
+        heapUsed: memoryUsage.heapUsed,
+        external: memoryUsage.external,
+        arrayBuffers: memoryUsage.arrayBuffers,
+      },
+    };
+  });
 
-      sql: oc
-        .route({
-          method: "POST",
-          path: "/service/sql",
-          summary: options?.sqlSummary ?? "Execute SQL against service database",
-          tags: [tag],
-        })
-        .input(ServiceSqlInput)
-        .output(ServiceSqlResult),
-    },
-  } as const;
+  return { health, sql, debug };
 }
 
 function resolveTraceExporterUrl() {
@@ -188,6 +245,22 @@ export function initializeServiceOtel(serviceName: string): void {
   process.once("SIGINT", shutdown);
 }
 
+function createSilentOTLPDrain(endpoint: string): (ctx: DrainContext) => Promise<void> {
+  let logged = false;
+  return async (ctx: DrainContext) => {
+    try {
+      await sendBatchToOTLP([ctx.event], { endpoint });
+    } catch {
+      if (!logged) {
+        logged = true;
+        console.warn(
+          `[evlog/otlp] OTLP endpoint ${endpoint} unreachable, suppressing further errors`,
+        );
+      }
+    }
+  };
+}
+
 export function initializeServiceEvlog(serviceName: string): void {
   const drainEndpoint = resolveEvlogDrainEndpoint();
 
@@ -200,7 +273,24 @@ export function initializeServiceEvlog(serviceName: string): void {
     pretty: process.env.NODE_ENV !== "production",
     ...(drainEndpoint
       ? {
-          drain: createOTLPDrain({ endpoint: drainEndpoint }),
+          drain: createSilentOTLPDrain(drainEndpoint),
+        }
+      : {}),
+  });
+}
+
+export function initializeServiceWorkersEvlog(serviceName: string): void {
+  const drainEndpoint = resolveEvlogDrainEndpoint();
+
+  initWorkersLogger({
+    env: {
+      service: serviceName,
+      environment: process.env.NODE_ENV ?? "development",
+      version: process.env.npm_package_version || "0.0.0",
+    },
+    ...(drainEndpoint
+      ? {
+          drain: createSilentOTLPDrain(drainEndpoint),
         }
       : {}),
   });
@@ -214,6 +304,46 @@ export function createServiceRequestLogger(options: {
   requestId?: string;
 }): ServiceRequestLogger {
   return createRequestLogger<ServiceRequestLogFields>(options);
+}
+
+export function createServiceContextMiddleware(serviceName: string) {
+  const middleware = async ({
+    context,
+    next,
+  }: {
+    context: ServiceInitialContext;
+    next: (options: { context: ServiceContext }) => Promise<unknown>;
+  }) => {
+    const requestId = context.requestId || randomUUID();
+    const requestLog =
+      context.log ||
+      createServiceRequestLogger({
+        requestId,
+        method: "oRPC",
+        path: "unknown",
+      });
+
+    requestLog.set({
+      requestId,
+      service: serviceName,
+      ...currentSpanFields(),
+    });
+
+    return next({
+      context: {
+        ...context,
+        requestId,
+        serviceName,
+        log: requestLog,
+      },
+    });
+  };
+
+  Object.defineProperty(middleware, "name", {
+    value: "serviceContextMiddleware",
+  });
+
+  return middleware;
 }
 
 export function infoFromContext(
@@ -366,7 +496,9 @@ export function transformSqlResultSet(raw: SqlResultSet): ServiceSqlResult {
   };
 }
 
-export const transformLibsqlResultSet = transformSqlResultSet;
+export function transformLibsqlResultSet(raw: SqlResultSet): ServiceSqlResult {
+  return transformSqlResultSet(raw);
+}
 
 export function createHealthzHandler() {
   return (c: { text: (body: string) => Response }) => c.text("ok");
@@ -431,14 +563,88 @@ export function extractIncomingTraceContext<TContext>(
   return extract(carrier);
 }
 
+export function createBrowserErrorBridgePlugin(params: {
+  eventName: string;
+  logEventName: string;
+  logger: Pick<Log, "error">;
+}): Plugin {
+  return {
+    name: `${params.logEventName}-browser-error-bridge`,
+    configureServer(server) {
+      server.ws.on(params.eventName, (payload) => {
+        params.logger.error({
+          event: params.logEventName,
+          payload,
+        });
+      });
+    },
+    transformIndexHtml() {
+      return [
+        {
+          tag: "script",
+          attrs: { type: "module" },
+          injectTo: "body",
+          children: `
+            if (import.meta.hot) {
+              const normalizeErrorData = (value) => {
+                if (value instanceof Error) {
+                  return { name: value.name, message: value.message, stack: value.stack ?? null };
+                }
+                if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null) {
+                  return value;
+                }
+                try {
+                  return JSON.parse(JSON.stringify(value));
+                } catch {
+                  return String(value);
+                }
+              };
+              const send = (kind, data) => {
+                import.meta.hot.send("${params.eventName}", {
+                  kind,
+                  data,
+                  href: location.href,
+                  userAgent: navigator.userAgent,
+                  timestamp: new Date().toISOString(),
+                });
+              };
+              const originalConsoleError = console.error.bind(console);
+              console.error = (...args) => {
+                send("console.error", { args: args.map(normalizeErrorData) });
+                originalConsoleError(...args);
+              };
+              window.addEventListener("error", (event) => {
+                send("window.error", {
+                  message: event.message,
+                  filename: event.filename,
+                  lineno: event.lineno,
+                  colno: event.colno,
+                  error: normalizeErrorData(event.error),
+                });
+              });
+              window.addEventListener("unhandledrejection", (event) => {
+                send("window.unhandledrejection", {
+                  reason: normalizeErrorData(event.reason),
+                });
+              });
+            }
+          `,
+        },
+      ];
+    },
+  };
+}
+
 export interface ServiceClientEnv {
   ITERATE_PROJECT_BASE_URL?: string;
 }
 
-export interface ServiceManifestLike<TContract extends AnyContractRouter = AnyContractRouter> {
-  slug: string;
-  port: number;
-  orpcContract: TContract;
+export function localHostForService(params: { slug: string }): string {
+  const normalized = params.slug.trim().toLowerCase();
+  const base = normalized.endsWith("-service")
+    ? normalized.slice(0, -"-service".length)
+    : normalized;
+  return `${base}.iterate.localhost`;
 }
 
 export type RpcWebSocket = LinkWebsocketClientOptions["websocket"];
@@ -446,16 +652,40 @@ export type RpcWebSocket = LinkWebsocketClientOptions["websocket"];
 export interface CreateOrpcRpcServiceClientOptions<TContract extends AnyContractRouter> {
   env: ServiceClientEnv;
   manifest: ServiceManifestLike<TContract>;
+  preferSameOrigin?: boolean;
   url?: string;
   headers?: RPCLinkOptions<any>["headers"];
   fetch?: RPCLinkOptions<any>["fetch"];
 }
 
+export interface CreateOrpcOpenApiServiceClientOptions<TContract extends AnyContractRouter> {
+  env: ServiceClientEnv;
+  manifest: ServiceManifestLike<TContract>;
+  preferSameOrigin?: boolean;
+  url?: string;
+  headers?: Record<string, string>;
+  fetch?: (request: Request, init?: RequestInit) => Promise<Response>;
+}
+
+export interface CreateOrpcRpcWebSocketServiceClientOptions<TContract extends AnyContractRouter> {
+  websocket: RpcWebSocket;
+  manifest: ServiceManifestLike<TContract>;
+}
+
 export function resolveServiceBaseUrl(params: {
   env: ServiceClientEnv;
   manifest: ServiceManifestLike;
+  preferSameOrigin?: boolean;
 }) {
   const candidate = params.env.ITERATE_PROJECT_BASE_URL?.trim();
+
+  if (params.preferSameOrigin && candidate) {
+    const parsed = new URL(candidate);
+    parsed.pathname = "/";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  }
 
   if (!candidate) {
     return `http://127.0.0.1:${params.manifest.port}/`;
@@ -473,8 +703,30 @@ export function resolveServiceBaseUrl(params: {
 export function resolveServiceOrpcUrl(params: {
   env: ServiceClientEnv;
   manifest: ServiceManifestLike;
+  preferSameOrigin?: boolean;
 }) {
   return new URL("/orpc", resolveServiceBaseUrl(params)).toString();
+}
+
+export function resolveServiceOpenApiBaseUrl(params: {
+  env: ServiceClientEnv;
+  manifest: ServiceManifestLike;
+  preferSameOrigin?: boolean;
+}) {
+  return new URL("/api", resolveServiceBaseUrl(params)).toString();
+}
+
+export function resolveServiceOrpcWebSocketUrl(params: {
+  env: ServiceClientEnv;
+  manifest: ServiceManifestLike;
+  preferSameOrigin?: boolean;
+}) {
+  const url = new URL(resolveServiceBaseUrl(params));
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/orpc/ws/";
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }
 
 export function createOrpcRpcServiceClient<TContract extends AnyContractRouter>(
@@ -489,3 +741,168 @@ export function createOrpcRpcServiceClient<TContract extends AnyContractRouter>(
 
   return createORPCClient(link);
 }
+
+export function createOrpcOpenApiServiceClient<TContract extends AnyContractRouter>(
+  options: CreateOrpcOpenApiServiceClientOptions<TContract>,
+): ContractRouterClient<TContract> {
+  const link = new OpenAPILink(options.manifest.orpcContract, {
+    url: options.url ?? resolveServiceOpenApiBaseUrl(options),
+    ...(options.headers ? { headers: options.headers } : {}),
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+  });
+
+  return createORPCClient(link);
+}
+
+export function createOrpcRpcWebSocketServiceClient<TContract extends AnyContractRouter>(
+  options: CreateOrpcRpcWebSocketServiceClientOptions<TContract>,
+): ContractRouterClient<TContract> {
+  const link = new WebSocketRPCLink({ websocket: options.websocket });
+  return createORPCClient(link);
+}
+
+export async function registerServiceWithRegistry(params: {
+  manifest: ServiceManifestLike & { slug: string };
+  port: number;
+  metadata?: Record<string, string | undefined>;
+  tags?: string[];
+}): Promise<void> {
+  const registryUrl = "http://registry.iterate.localhost";
+  const { createDaemonClient } = await import("@iterate-com/daemon-v2-contract");
+  const registryClient = createDaemonClient({ url: registryUrl });
+  const host = localHostForService({ slug: params.manifest.slug });
+  const target = `127.0.0.1:${String(params.port)}`;
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      const result = await registryClient.routes.upsert({
+        host,
+        target,
+        ...(params.metadata
+          ? {
+              metadata: Object.fromEntries(
+                Object.entries(params.metadata).filter(
+                  (entry): entry is [string, string] => typeof entry[1] === "string",
+                ),
+              ),
+            }
+          : {}),
+        ...(params.tags ? { tags: params.tags } : {}),
+      });
+
+      serviceLog.info({
+        event: "service.registry.registered",
+        host,
+        target,
+        route_count: result.routeCount,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  }
+
+  serviceLog.warn({
+    event: "service.registry.register_failed",
+    host,
+    message: lastError instanceof Error ? lastError.message : String(lastError),
+  });
+}
+
+export function createLocalServiceOrpcClient<TContract extends AnyContractRouter>(params: {
+  manifest: ServiceManifestLike<TContract>;
+  headers?: Record<string, string>;
+}): ContractRouterClient<TContract> {
+  const url = `http://${localHostForService({ slug: params.manifest.slug })}/api`;
+  const link = new OpenAPILink(params.manifest.orpcContract, {
+    url,
+    ...(params.headers ? { headers: params.headers } : {}),
+  });
+  return createORPCClient(link);
+}
+
+export interface PidnapServiceConfig {
+  processSlug: string;
+  definition: {
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+  };
+  tags: string[];
+  restartImmediately: boolean;
+  healthCheck: {
+    url: string;
+    intervalMs: number;
+  };
+}
+
+export function serviceManifestToPidnapConfig(params: {
+  manifest: ServiceManifestWithEntryPoint;
+  env?: Record<string, string>;
+}): PidnapServiceConfig;
+export function serviceManifestToPidnapConfig(params: {
+  manifests: ServiceManifestWithEntryPoint[];
+  env?: Record<string, string>;
+}): PidnapServiceConfig[];
+export function serviceManifestToPidnapConfig(params: {
+  manifest?: ServiceManifestWithEntryPoint;
+  manifests?: ServiceManifestWithEntryPoint[];
+  env?: Record<string, string>;
+}): PidnapServiceConfig | PidnapServiceConfig[] {
+  if (params.manifests) {
+    return params.manifests.map((manifest) =>
+      serviceManifestToPidnapConfig({ manifest, env: params.env }),
+    );
+  }
+  const manifest = params.manifest!;
+  const host = localHostForService({ slug: manifest.slug });
+  return {
+    processSlug: manifest.slug,
+    definition: {
+      command: "tsx",
+      args: [manifest.serverEntryPoint],
+      env: { PORT: String(manifest.port), ...params.env },
+    },
+    tags: ["on-demand"],
+    restartImmediately: true,
+    healthCheck: {
+      url: `http://${host}/api/__iterate/health`,
+      intervalMs: 2_000,
+    },
+  };
+}
+
+export { createSlug };
+export { proxyPosthogRequest } from "../posthog/posthog.ts";
+export { stripAnsi } from "./strip-ansi.ts";
+export {
+  ServiceDebugOutput,
+  ServiceHealthOutput,
+  ServiceSqlInput,
+  ServiceSqlResult,
+  ServiceSqlResultHeader,
+  createServiceSubRouterContract,
+};
+export { useTmpDir };
+export type {
+  ServiceContext,
+  ServiceInitialContext,
+  ServiceManifestLike,
+  ServiceManifestWithEntryPoint,
+  ServiceRequestLogFields,
+  ServiceRequestLogger,
+  SqlResultSet,
+  UseTmpDirFixture,
+};
+
+export {
+  createServiceOpenAPIHandler,
+  createSimpleServiceRouter,
+  applyServiceMiddleware,
+  applyOpenAPIRoute,
+  type ServiceAppVariables,
+  type ServiceAppEnv,
+} from "./service-server.ts";
+export { type AppContext, type AppManifest } from "../apps/types.ts";

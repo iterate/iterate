@@ -48,10 +48,10 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.0.0",
-    "@orpc/client": "^1.13.4",
-    "@orpc/server": "^1.13.4",
+    "@orpc/client": "1.13.13",
+    "@orpc/server": "1.13.13",
     "better-auth": "1.4.3",
-    "trpc-cli": "0.14.0",
+    "trpc-cli": "0.12.4",
     "zod": "4.1.12"
   },
   "devDependencies": {

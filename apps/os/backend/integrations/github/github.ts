@@ -740,7 +740,7 @@ githubApp.post("/webhook", async (c) => {
       trackWebhookEvent(env, {
         distinctId: `github:${repoFullName}`,
         event: "github:webhook_received",
-        properties: summarizeGitHubWebhookForPostHog(payload, xGithubEvent),
+        properties: { ...payload, _event_type: xGithubEvent },
         groups,
       });
     })().catch((err) => {
@@ -786,70 +786,6 @@ githubApp.post("/webhook", async (c) => {
 
   return c.json({ received: true });
 });
-
-// ── PostHog webhook summary ────────────────────────────────────────
-
-const MAX_STRING_LENGTH = 500;
-const MAX_POSTHOG_PAYLOAD_BYTES = 900_000; // stay under PostHog's ~1MB limit
-
-/**
- * Summarize a GitHub webhook payload for PostHog tracking.
- *
- * Keeps all top-level primitives and second-level primitives (flattened as
- * `key.subkey`). Arrays are replaced with their length. Deeply nested objects
- * and long strings are truncated so the total serialized size stays under
- * PostHog's ~1MB event limit.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw GitHub webhook payload is untyped
-function summarizeGitHubWebhookForPostHog(
-  payload: any,
-  eventType?: string,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = { _event_type: eventType };
-
-  for (const [key, value] of Object.entries(payload)) {
-    if (value === null || value === undefined) continue;
-
-    if (Array.isArray(value)) {
-      out[`${key}_count`] = value.length;
-    } else if (typeof value === "object") {
-      // Flatten second-level primitives
-      for (const [subKey, subValue] of Object.entries(value as Record<string, unknown>)) {
-        if (subValue === null || subValue === undefined) continue;
-        if (typeof subValue === "string") {
-          out[`${key}.${subKey}`] =
-            subValue.length > MAX_STRING_LENGTH ? subValue.slice(0, MAX_STRING_LENGTH) : subValue;
-        } else if (typeof subValue !== "object") {
-          out[`${key}.${subKey}`] = subValue;
-        }
-        // Skip deeply nested objects/arrays
-      }
-    } else if (typeof value === "string") {
-      out[key] = value.length > MAX_STRING_LENGTH ? value.slice(0, MAX_STRING_LENGTH) : value;
-    } else {
-      out[key] = value;
-    }
-  }
-
-  // Final safety: if the serialized payload is still too large, fall back to
-  // a minimal hand-picked summary.
-  const serialized = JSON.stringify(out);
-  if (new TextEncoder().encode(serialized).byteLength > MAX_POSTHOG_PAYLOAD_BYTES) {
-    return {
-      _event_type: eventType,
-      _truncated: true,
-      action: payload.action,
-      "sender.login": payload.sender?.login,
-      "repository.full_name": payload.repository?.full_name,
-      pr_number: payload.pull_request?.number ?? payload.number,
-      issue_number: payload.issue?.number,
-      ref: payload.ref,
-      "installation.id": payload.installation?.id,
-    };
-  }
-
-  return out;
-}
 
 // ── Signature Verification ─────────────────────────────────────────
 

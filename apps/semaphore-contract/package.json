@@ -10,8 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@orpc/client": "^1.13.4",
-    "@orpc/contract": "^1.13.5",
+    "@orpc/client": "1.13.13",
+    "@orpc/contract": "1.13.13",
     "zod": "^4.1.12"
   },
   "devDependencies": {

@@ -75,8 +75,8 @@ describe("LazyProcess", () => {
 
       await proc.start();
 
-      // Wait for process to exit
-      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("error");
+      // Wait for process to exit (generous timeout: parallel `pnpm test` can starve the exit handler)
+      await expect.poll(() => proc.state, { timeout: 8000 }).toBe("error");
 
       // Logger now uses withPrefix, so check the child logger was called
       expect(mockLogger.withPrefix).toHaveBeenCalled();
