@@ -95,8 +95,8 @@ function RootErrorComponent(props: { error: unknown; reset: () => void }) {
     <DefaultErrorComponent
       {...props}
       secondaryAction={
-        <Link to="/runs/new" className="text-sm text-primary hover:underline">
-          Go to new snippet
+        <Link to="/runs-v2-new" className="text-sm text-primary hover:underline">
+          Go to codemode
         </Link>
       }
     />

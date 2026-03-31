@@ -1,8 +1,27 @@
 import { desc, eq } from "drizzle-orm";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { CodemodeRunnerKind } from "@iterate-com/codemode-contract";
 import { codemodeRunsTable } from "~/db/schema.ts";
-import { summarizeCodeSnippet, summarizeResult } from "~/lib/run-preview.ts";
+import { summarizeCodeSnippet, summarizeError, summarizeResult } from "~/lib/run-preview.ts";
+
+const StoredRun = z.object({
+  id: z.string(),
+  runnerKind: CodemodeRunnerKind,
+  codeSnippet: z.string(),
+  result: z.string(),
+  logsJson: z.string(),
+  error: z.string().nullable(),
+});
+
+function parseRun(row: unknown) {
+  const parsed = StoredRun.parse(row);
+
+  return {
+    ...parsed,
+    logs: z.array(z.string()).parse(JSON.parse(parsed.logsJson)),
+  };
+}
 
 export const runsQueryKey = ["codemode-runs"] as const;
 
@@ -12,11 +31,15 @@ export const listRuns = createServerFn({ method: "GET" }).handler(async ({ conte
     .from(codemodeRunsTable)
     .orderBy(desc(codemodeRunsTable.id));
 
-  return rows.map((row) => ({
-    ...row,
-    codePreview: summarizeCodeSnippet(row.codeSnippet),
-    resultPreview: summarizeResult(row.result),
-  }));
+  return rows.map((row) => {
+    const run = parseRun(row);
+
+    return {
+      ...run,
+      codePreview: summarizeCodeSnippet(run.codeSnippet),
+      resultPreview: summarizeError(run.error) ?? summarizeResult(run.result),
+    };
+  });
 });
 
 export const getRun = createServerFn({ method: "GET" })
@@ -32,8 +55,10 @@ export const getRun = createServerFn({ method: "GET" })
       throw new Error(`Run ${data.id} not found`);
     }
 
+    const parsedRun = parseRun(run);
+
     return {
-      run,
-      breadcrumb: summarizeCodeSnippet(run.codeSnippet),
+      run: parsedRun,
+      breadcrumb: summarizeCodeSnippet(parsedRun.codeSnippet),
     };
   });

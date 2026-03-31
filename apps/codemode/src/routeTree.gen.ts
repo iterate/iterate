@@ -12,8 +12,8 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
+import { Route as AppRunsV2NewRouteImport } from './routes/_app/runs-v2-new'
 import { Route as AppRunsRouteImport } from './routes/_app/runs'
-import { Route as AppRunsNewRouteImport } from './routes/_app/runs/new'
 import { Route as AppRunsRunIdRouteImport } from './routes/_app/runs/$runId'
 
 const AppRoute = AppRouteImport.update({
@@ -30,15 +30,15 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppRunsV2NewRoute = AppRunsV2NewRouteImport.update({
+  id: '/runs-v2-new',
+  path: '/runs-v2-new',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppRunsRoute = AppRunsRouteImport.update({
   id: '/runs',
   path: '/runs',
   getParentRoute: () => AppRoute,
-} as any)
-const AppRunsNewRoute = AppRunsNewRouteImport.update({
-  id: '/new',
-  path: '/new',
-  getParentRoute: () => AppRunsRoute,
 } as any)
 const AppRunsRunIdRoute = AppRunsRunIdRouteImport.update({
   id: '/$runId',
@@ -49,39 +49,39 @@ const AppRunsRunIdRoute = AppRunsRunIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/runs': typeof AppRunsRouteWithChildren
+  '/runs-v2-new': typeof AppRunsV2NewRoute
   '/api/$': typeof ApiSplatRoute
   '/runs/$runId': typeof AppRunsRunIdRoute
-  '/runs/new': typeof AppRunsNewRoute
 }
 export interface FileRoutesByTo {
   '/runs': typeof AppRunsRouteWithChildren
+  '/runs-v2-new': typeof AppRunsV2NewRoute
   '/api/$': typeof ApiSplatRoute
   '/': typeof AppIndexRoute
   '/runs/$runId': typeof AppRunsRunIdRoute
-  '/runs/new': typeof AppRunsNewRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/_app/runs': typeof AppRunsRouteWithChildren
+  '/_app/runs-v2-new': typeof AppRunsV2NewRoute
   '/api/$': typeof ApiSplatRoute
   '/_app/': typeof AppIndexRoute
   '/_app/runs/$runId': typeof AppRunsRunIdRoute
-  '/_app/runs/new': typeof AppRunsNewRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/runs' | '/api/$' | '/runs/$runId' | '/runs/new'
+  fullPaths: '/' | '/runs' | '/runs-v2-new' | '/api/$' | '/runs/$runId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/runs' | '/api/$' | '/' | '/runs/$runId' | '/runs/new'
+  to: '/runs' | '/runs-v2-new' | '/api/$' | '/' | '/runs/$runId'
   id:
     | '__root__'
     | '/_app'
     | '/_app/runs'
+    | '/_app/runs-v2-new'
     | '/api/$'
     | '/_app/'
     | '/_app/runs/$runId'
-    | '/_app/runs/new'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -112,19 +112,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/runs-v2-new': {
+      id: '/_app/runs-v2-new'
+      path: '/runs-v2-new'
+      fullPath: '/runs-v2-new'
+      preLoaderRoute: typeof AppRunsV2NewRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/runs': {
       id: '/_app/runs'
       path: '/runs'
       fullPath: '/runs'
       preLoaderRoute: typeof AppRunsRouteImport
       parentRoute: typeof AppRoute
-    }
-    '/_app/runs/new': {
-      id: '/_app/runs/new'
-      path: '/new'
-      fullPath: '/runs/new'
-      preLoaderRoute: typeof AppRunsNewRouteImport
-      parentRoute: typeof AppRunsRoute
     }
     '/_app/runs/$runId': {
       id: '/_app/runs/$runId'
@@ -138,12 +138,10 @@ declare module '@tanstack/react-router' {
 
 interface AppRunsRouteChildren {
   AppRunsRunIdRoute: typeof AppRunsRunIdRoute
-  AppRunsNewRoute: typeof AppRunsNewRoute
 }
 
 const AppRunsRouteChildren: AppRunsRouteChildren = {
   AppRunsRunIdRoute: AppRunsRunIdRoute,
-  AppRunsNewRoute: AppRunsNewRoute,
 }
 
 const AppRunsRouteWithChildren =
@@ -151,11 +149,13 @@ const AppRunsRouteWithChildren =
 
 interface AppRouteChildren {
   AppRunsRoute: typeof AppRunsRouteWithChildren
+  AppRunsV2NewRoute: typeof AppRunsV2NewRoute
   AppIndexRoute: typeof AppIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppRunsRoute: AppRunsRouteWithChildren,
+  AppRunsV2NewRoute: AppRunsV2NewRoute,
   AppIndexRoute: AppIndexRoute,
 }
 

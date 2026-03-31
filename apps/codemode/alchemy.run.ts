@@ -68,8 +68,15 @@ const db = await D1Database("codemode-db", {
 export const worker = await TanStackStart(APP_NAME, {
   name: workerName,
   adopt: true,
+  compatibilityFlags: ["global_fetch_strictly_public"],
   bindings: {
     APP_CONFIG: JSON.stringify(compiledAppConfig, null, 2),
+    APP_CONFIG_CODEMODE_APIS__SEMAPHORE_API_TOKEN: alchemy.secret(
+      compiledAppConfig.codemodeApis.semaphoreApiToken.exposeSecret(),
+    ),
+    APP_CONFIG_CODEMODE_APIS__INGRESS_PROXY_API_TOKEN: alchemy.secret(
+      compiledAppConfig.codemodeApis.ingressProxyApiToken.exposeSecret(),
+    ),
     DB: db,
     LOADER: WorkerLoader(),
   },

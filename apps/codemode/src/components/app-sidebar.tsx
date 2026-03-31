@@ -26,7 +26,7 @@ export function AppSidebar() {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link to="/runs/new" />}>
+            <SidebarMenuButton size="lg" render={<Link to="/runs-v2-new" />}>
               <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary font-semibold text-primary-foreground">
                 C
               </div>
@@ -41,23 +41,28 @@ export function AppSidebar() {
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Snippets</SidebarGroupLabel>
-          <SidebarGroupAction render={<Link to="/runs/new" />} title="New Snippet">
+          <SidebarGroupLabel>Run</SidebarGroupLabel>
+          <SidebarGroupAction render={<Link to="/runs-v2-new" />} title="New Run">
             <Plus />
-            <span className="sr-only">New Snippet</span>
+            <span className="sr-only">New Run</span>
           </SidebarGroupAction>
 
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
-                render={<Link to="/runs/new" />}
-                isActive={Boolean(matchRoute({ to: "/runs/new" }))}
+                render={<Link to="/runs-v2-new" />}
+                isActive={Boolean(matchRoute({ to: "/runs-v2-new" }))}
               >
                 <Plus className="size-4 shrink-0" />
-                <span>New</span>
+                <span>New Run</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroup>
 
+        <SidebarGroup>
+          <SidebarGroupLabel>History</SidebarGroupLabel>
+          <SidebarMenu>
             {runsQuery.data?.map((run) => (
               <SidebarMenuItem key={run.id}>
                 <SidebarMenuButton

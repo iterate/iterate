@@ -14,6 +14,11 @@ export function summarizeResult(result: string) {
   return truncate(result.replace(/\s+/g, " ").trim() || "No result");
 }
 
+export function summarizeError(error: string | null) {
+  if (!error) return null;
+  return truncate(error.replace(/\s+/g, " ").trim());
+}
+
 function truncate(value: string) {
   return value.length > MAX_PREVIEW_LENGTH ? `${value.slice(0, MAX_PREVIEW_LENGTH - 1)}...` : value;
 }

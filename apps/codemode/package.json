@@ -14,7 +14,12 @@
     "test": "pnpm typecheck"
   },
   "dependencies": {
+    "@cloudflare/codemode": "^0.3.2",
     "@iterate-com/codemode-contract": "workspace:*",
+    "@iterate-com/events-contract": "workspace:*",
+    "@iterate-com/example-contract": "workspace:*",
+    "@iterate-com/ingress-proxy-contract": "workspace:*",
+    "@iterate-com/semaphore-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@orpc/client": "1.13.13",
