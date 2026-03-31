@@ -20,7 +20,6 @@ import { getDefaultProjectSandboxProvider } from "../../utils/sandbox-providers.
 import { isNonProd, waitUntil } from "../../../env.ts";
 import { queuer } from "../../outbox/outbox-queuer.ts";
 import { logger } from "../../logging/index.ts";
-import { toParsedLogError } from "../../logging/request-log.ts";
 import { clearBufferedLogEvents, getBufferedLogEvents } from "../../logging/index.ts";
 
 /** Generate a DiceBear avatar URL using a hash of the email as seed */
@@ -36,7 +35,7 @@ function generateDefaultAvatar(email: string): string {
 
 const ThrowableKind = z.enum(["string", "error", "custom-error", "error-with-detail"]);
 
-const FailureMechanism = z.enum(["throw", "logger-error", "logger-warn"]);
+const FailureMechanism = z.enum(["throw", "logger-error", "logger-warn", "logger-info"]);
 
 export const FailureScenario = z.object({
   marker: z.string(),
@@ -396,6 +395,7 @@ class TestingCustomError extends Error {
 
   constructor(exampleField: string, message: string) {
     super(message);
+    this.name = "TestingCustomError";
     this.exampleField = exampleField;
   }
 }
@@ -403,7 +403,7 @@ class TestingCustomError extends Error {
 /** Emit one synthetic failure shape for logging integration coverage. */
 export function runTestingFailureScenario(input: FailureScenario): void {
   const throwable = createTestingThrowable(input);
-  const message = throwable instanceof Error ? throwable.message : String(throwable);
+  const message = String(throwable);
 
   switch (input.mechanism) {
     case "throw":
@@ -412,8 +412,10 @@ export function runTestingFailureScenario(input: FailureScenario): void {
       logger.error(message, throwable);
       return;
     case "logger-warn":
-      logger.set({ errors: [toParsedLogError(throwable)] });
       logger.warn(message);
+      return;
+    case "logger-info":
+      logger.info(message);
       return;
   }
 }

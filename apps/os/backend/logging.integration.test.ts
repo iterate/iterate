@@ -357,7 +357,7 @@ test("captures the raw request log for an orpc procedure error", async () => {
       end: <end>
       durationMs: <duration-ms>
     service: os
-    environment: dev-misha
+    environment: <environment>
     request:
       path: /api/orpc/testing/emitRequestFailure
       status: 500
@@ -393,9 +393,9 @@ test("captures the raw request log for an orpc procedure error", async () => {
   `);
 });
 
-test("captures detail for an inline logger.warn", async () => {
+test("captures a plain inline logger.warn", async () => {
   await using fixture = await createLoggingFixture();
-  const marker = `warn-detail-${crypto.randomUUID()}`;
+  const marker = `warn-${crypto.randomUUID()}`;
   await fixture.client.testing.emitRequestFailure({
     mechanism: "logger-warn",
     throwable: "error-with-detail",
@@ -421,7 +421,7 @@ test("captures detail for an inline logger.warn", async () => {
       end: <end>
       durationMs: <duration-ms>
     service: os
-    environment: dev-misha
+    environment: <environment>
     request:
       path: /api/orpc/testing/emitRequestFailure
       status: 200
@@ -437,27 +437,59 @@ test("captures detail for an inline logger.warn", async () => {
       email: unknown
     egress:
       <origin> <origin>
-    errors:
-      - name: Error
-        message: "[test_error_with_detail] <marker>"
-        stack: >-
-          Error: [test_error_with_detail] <marker>
-              at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
-              at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
-              at Object.handler (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
-              at <repo>/.../node_modules/.vite/...
-              at runWithSpan (<repo>/.../node_modules/.vite/...)
-              at next (<repo>/.../node_modules/.vite/...)
-              at next (<repo>/.../node_modules/.vite/...)
-              at <repo>/.../node_modules/.vite/...
-              at next (<repo>/.../node_modules/.vite/...)
-              at <repo>/.../node_modules/.vite/...
-        detail:
-          bar: 123
-          marker: <marker>
     messages:
-      - "[WARN] <elapsed>s: [test_error_with_detail] <marker>""
+      - "[WARN] <elapsed>s: Error: [test_error_with_detail] <marker>""
   `);
+});
+
+test("captures a plain inline logger.info", async () => {
+  await using fixture = await createLoggingFixture();
+  const marker = `info-${crypto.randomUUID()}`;
+  await fixture.client.testing.emitRequestFailure({
+    mechanism: "logger-info",
+    throwable: "string",
+    marker,
+  });
+
+  const captured = await fixture.logs.waitForLog({
+    predicate: (log: any) => log.request?.id === fixture.lastRequestId(),
+  });
+
+  expect(captured).toMatchObject({
+    request: {
+      id: fixture.lastRequestId(),
+      path: "/api/orpc/testing/emitRequestFailure",
+      method: "POST",
+      status: 200,
+    },
+  });
+  expect(normalize(captured, { marker })).toMatchInlineSnapshot(`
+    "meta:
+      id: <id>
+      start: <start>
+      end: <end>
+      durationMs: <duration-ms>
+    service: os
+    environment: <environment>
+    request:
+      path: /api/orpc/testing/emitRequestFailure
+      status: 200
+      method: POST
+      id: <id>
+      url: <origin>/api/orpc/testing/emitRequestFailure
+      hostname: local.iterate.com
+      traceparent: null
+      cfRay: <cf-ray>
+      timezone: <timezone>
+    user:
+      id: <id>
+      email: unknown
+    egress:
+      <origin> <origin>
+    messages:
+      - "[INFO] <elapsed>s: [test_string] <marker>""
+  `);
+  expect(normalize(fixture.posthog.requests)).toMatchInlineSnapshot(`"[]"`);
 });
 
 test("captures the raw waitUntil child log", async () => {
@@ -493,7 +525,7 @@ test("captures the raw waitUntil child log", async () => {
         id: <id>
         start: <start>
       service: os
-      environment: dev-misha
+      environment: <environment>
       request:
         path: /api/orpc/testing/emitWaitUntilFailure
         status: -1
@@ -510,7 +542,7 @@ test("captures the raw waitUntil child log", async () => {
       egress:
         <origin> <origin>
     service: os
-    environment: dev-misha
+    environment: <environment>
     request:
       id: <id>
       method: POST
@@ -580,7 +612,7 @@ test("captures custom error properties in a waitUntil log", async () => {
         id: <id>
         start: <start>
       service: os
-      environment: dev-misha
+      environment: <environment>
       request:
         path: /api/orpc/testing/emitWaitUntilFailure
         status: -1
@@ -597,7 +629,7 @@ test("captures custom error properties in a waitUntil log", async () => {
       egress:
         <origin> <origin>
     service: os
-    environment: dev-misha
+    environment: <environment>
     request:
       id: <id>
       method: POST
@@ -611,26 +643,24 @@ test("captures custom error properties in a waitUntil log", async () => {
       id: <id>
       email: unknown
     errors:
-      - name: TestingCustomError
+      - name: Error
         message: "[test_custom_error] <marker>"
         stack: >-
-          TestingCustomError: [test_custom_error] <marker>
+          Error: [test_custom_error] <marker>
               at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
-        exampleGroup: testing-example
         exampleField: <marker>
-      - name: TestingCustomError
+      - name: Error
         message: "[test_custom_error] <marker>"
         stack: >-
-          TestingCustomError: [test_custom_error] <marker>
+          Error: [test_custom_error] <marker>
               at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
-        exampleGroup: testing-example
         exampleField: <marker>
     messages:
-      - "[ERROR] <elapsed>s: TestingCustomError: [test_custom_error] <marker>"
+      - "[ERROR] <elapsed>s: Error: [test_custom_error] <marker>"
       - "[INFO] <elapsed>s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid>
         path=/api/orpc/testing/emitWaitUntilFailure#waitUntil errorCount=1"
       - "[INFO] <elapsed>s: PostHog log exception sent requestId=<uuid>:waitUntil:<uuid>"
@@ -804,7 +834,7 @@ test("captures assigned detail in an outbox log", async () => {
         id: <id>
         start: <start>
       service: os
-      environment: dev-misha
+      environment: <environment>
       request:
         path: /api/orpc/testing/emitOutboxFailure
         status: -1
@@ -861,7 +891,6 @@ test("captures assigned detail in an outbox log", async () => {
               at <repo>/apps/os/backend/outbox/outbox-logging.ts:<lineno>:<colno>
         detail:
           bar: 123
-          marker: <marker>
     messages:
       - "[ERROR] <elapsed>s: Error: [test_error_with_detail] <marker>""
   `);
@@ -1182,7 +1211,7 @@ test("returns a clean 400 and logs invalid orpc input", async () => {
       end: <end>
       durationMs: <duration-ms>
     service: os
-    environment: dev-misha
+    environment: <environment>
     request:
       path: /api/orpc/testing/emitSuccessfulOutboxEvent
       status: 400
@@ -1353,7 +1382,7 @@ async function createLoggingFixture(): Promise<LoggingFixture> {
 
 function normalize(value: unknown, params: { marker?: string } = {}): string {
   const yaml = YAML.stringify(value, function replacer(this: any, key, rawValue) {
-    const normalizeableKeys = `id,api_key,timestamp,start,end,lineno,colno,duration,durationMs,jobId,eventId,parentRequestId,cfRay,timezone,$environment`;
+    const normalizeableKeys = `id,api_key,timestamp,start,end,lineno,colno,duration,durationMs,jobId,eventId,parentRequestId,cfRay,timezone,environment,$environment`;
     if (normalizeableKeys.split(",").includes(key))
       return `<${key.replace(/[A-Z]/g, (letter: string) => `-${letter.toLowerCase()}`)}>`;
     if (typeof rawValue !== "string") return rawValue;
