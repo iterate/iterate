@@ -1,8 +1,10 @@
-import { desc, eq } from "drizzle-orm";
-import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { CodemodeRunnerKind, CodemodeSource } from "@iterate-com/codemode-contract";
-import { codemodeRunsTable } from "~/db/schema.ts";
+import {
+  CodemodeRunRecord,
+  CodemodeRunSummary,
+  CodemodeRunnerKind,
+  CodemodeSource,
+} from "@iterate-com/codemode-contract";
 import { summarizeCodeSnippet, summarizeError, summarizeResult } from "~/lib/run-preview.ts";
 
 const StoredRun = z.object({
@@ -15,59 +17,35 @@ const StoredRun = z.object({
   error: z.string().nullable(),
 });
 
-function parseRun(row: unknown) {
+export const LIST_RUNS_INPUT = {
+  limit: 30,
+  offset: 0,
+} as const;
+
+export function parseCodemodeRunRecord(row: unknown) {
   const parsed = StoredRun.parse(row);
-  const logs = z.array(z.string()).parse(JSON.parse(parsed.logsJson));
-  const outputParts = [...logs];
 
-  if (parsed.result.trim().length > 0) {
-    outputParts.push(parsed.result);
-  }
-
-  return {
-    ...parsed,
+  return CodemodeRunRecord.parse({
+    id: parsed.id,
+    runnerKind: parsed.runnerKind,
+    codeSnippet: parsed.codeSnippet,
     sources: CodemodeSource.array().parse(JSON.parse(parsed.sourcesJson)),
-    result: outputParts.join("\n"),
-  };
+    result: parsed.result,
+    logs: z.array(z.string()).parse(JSON.parse(parsed.logsJson)),
+    error: parsed.error,
+  });
 }
 
-export const runsQueryKey = ["codemode-runs"] as const;
+export function summarizeCodemodeRun(run: z.infer<typeof CodemodeRunRecord>) {
+  const outputParts = [...run.logs];
 
-export const listRuns = createServerFn({ method: "GET" }).handler(async ({ context }) => {
-  const rows = await context.db
-    .select()
-    .from(codemodeRunsTable)
-    .orderBy(desc(codemodeRunsTable.id))
-    .limit(30);
+  if (run.result.trim().length > 0) {
+    outputParts.push(run.result);
+  }
 
-  return rows.map((row) => {
-    const run = parseRun(row);
-
-    return {
-      ...run,
-      codePreview: summarizeCodeSnippet(run.codeSnippet),
-      resultPreview: summarizeError(run.error) ?? summarizeResult(run.result),
-    };
+  return CodemodeRunSummary.parse({
+    id: run.id,
+    codePreview: summarizeCodeSnippet(run.codeSnippet),
+    resultPreview: summarizeError(run.error) ?? summarizeResult(outputParts.join("\n")),
   });
-});
-
-export const getRun = createServerFn({ method: "GET" })
-  .inputValidator(z.object({ id: z.string().min(1) }))
-  .handler(async ({ context, data }) => {
-    const [run] = await context.db
-      .select()
-      .from(codemodeRunsTable)
-      .where(eq(codemodeRunsTable.id, data.id))
-      .limit(1);
-
-    if (!run) {
-      throw new Error(`Run ${data.id} not found`);
-    }
-
-    const parsedRun = parseRun(run);
-
-    return {
-      run: parsedRun,
-      breadcrumb: summarizeCodeSnippet(parsedRun.codeSnippet),
-    };
-  });
+}

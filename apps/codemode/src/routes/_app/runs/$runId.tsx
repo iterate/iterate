@@ -4,17 +4,29 @@ import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { buildCodemodeNewRunSearch } from "~/lib/codemode-links.ts";
 import { formatCodemodeSourcesYaml } from "~/lib/codemode-sources.ts";
-import { getRun } from "~/lib/runs.ts";
+import { summarizeCodeSnippet } from "~/lib/run-preview.ts";
+import { orpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/runs/$runId")({
-  loader: ({ params }) => getRun({ data: { id: params.runId } }),
+  loader: async ({ context, params }) => {
+    const run = await context.queryClient.ensureQueryData({
+      ...orpc.runs.find.queryOptions({ input: { id: params.runId } }),
+      staleTime: 30_000,
+    });
+
+    return {
+      breadcrumb: summarizeCodeSnippet(run.codeSnippet),
+      run,
+    };
+  },
   component: RunDetailPage,
 });
 
 function RunDetailPage() {
   const { run } = Route.useLoaderData();
   const isSuccess = run.error === null;
-  const output = run.result.trim();
+  const result = run.result.trim();
+  const logs = run.logs.join("\n").trim();
   const resultLanguage = detectCodeLanguage(run.result);
   const sourcesYaml = formatCodemodeSourcesYaml(run.sources);
 
@@ -72,12 +84,19 @@ function RunDetailPage() {
           </p>
         </div>
 
-        {output ? (
+        {result ? (
           <SourceCodeBlock code={run.result} language={resultLanguage} className="min-h-[20rem]" />
         ) : (
           <p className="text-sm text-muted-foreground">No output.</p>
         )}
       </div>
+
+      {logs ? (
+        <div className="space-y-2 border-t pt-6">
+          <p className="text-sm font-medium">Logs</p>
+          <SourceCodeBlock code={logs} language="text" className="min-h-40" />
+        </div>
+      ) : null}
 
       <div className="space-y-2 border-t pt-6">
         <p className="text-sm font-medium">Code</p>

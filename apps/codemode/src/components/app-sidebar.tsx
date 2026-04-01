@@ -12,13 +12,14 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@iterate-com/ui/components/sidebar";
-import { listRuns, runsQueryKey } from "~/lib/runs.ts";
+import { LIST_RUNS_INPUT } from "~/lib/runs.ts";
+import { orpc } from "~/orpc/client.ts";
 
 export function AppSidebar() {
   const matchRoute = useMatchRoute();
   const runsQuery = useQuery({
-    queryKey: runsQueryKey,
-    queryFn: () => listRuns(),
+    ...orpc.runs.list.queryOptions({ input: LIST_RUNS_INPUT }),
+    staleTime: 30_000,
   });
 
   return (
@@ -81,7 +82,7 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupLabel>History</SidebarGroupLabel>
           <SidebarMenu>
-            {runsQuery.data?.map((run) => (
+            {runsQuery.data?.runs.map((run) => (
               <SidebarMenuItem key={run.id}>
                 <SidebarMenuButton
                   render={<Link to="/runs/$runId" params={{ runId: run.id }} />}
@@ -99,7 +100,7 @@ export function AppSidebar() {
               </SidebarMenuItem>
             ))}
 
-            {runsQuery.data && runsQuery.data.length === 0 ? (
+            {runsQuery.data && runsQuery.data.runs.length === 0 ? (
               <SidebarMenuItem>
                 <span className="px-2 py-1 text-xs text-muted-foreground">No runs yet</span>
               </SidebarMenuItem>

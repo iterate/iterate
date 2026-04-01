@@ -1,9 +1,11 @@
+import { desc, eq, sql } from "drizzle-orm";
 import type { CodemodeRun } from "@iterate-com/codemode-contract";
 import { ORPCError } from "@orpc/server";
 import type { AppContext } from "~/context.ts";
 import { codemodeRunsTable } from "~/db/schema.ts";
 import { buildCodemodeContextFromSources } from "~/lib/codemode-contract-runtime.ts";
 import { executeCodemodeFunction } from "~/lib/execute-code-v2.ts";
+import { parseCodemodeRunRecord, summarizeCodemodeRun } from "~/lib/runs.ts";
 import { os } from "~/orpc/orpc.ts";
 
 function createRunId() {
@@ -63,6 +65,40 @@ export const runRouter = {
     } catch (error) {
       throw toCodemodeRequestError(error);
     }
+  }),
+  runs: os.runs.router({
+    list: os.runs.list.handler(async ({ context, input }) => {
+      const rows = await context.db
+        .select()
+        .from(codemodeRunsTable)
+        .orderBy(desc(codemodeRunsTable.id))
+        .limit(input.limit)
+        .offset(input.offset);
+
+      const [{ count }] = await context.db
+        .select({ count: sql<number>`count(*)` })
+        .from(codemodeRunsTable);
+
+      return {
+        runs: rows.map((row) => summarizeCodemodeRun(parseCodemodeRunRecord(row))),
+        total: Number(count ?? 0),
+      };
+    }),
+    find: os.runs.find.handler(async ({ context, input }) => {
+      const [run] = await context.db
+        .select()
+        .from(codemodeRunsTable)
+        .where(eq(codemodeRunsTable.id, input.id))
+        .limit(1);
+
+      if (!run) {
+        throw new ORPCError("NOT_FOUND", {
+          message: `Run ${input.id} not found`,
+        });
+      }
+
+      return parseCodemodeRunRecord(run);
+    }),
   }),
   ctxTypeDefinition: os.ctxTypeDefinition.handler(async ({ context, input }) => {
     try {

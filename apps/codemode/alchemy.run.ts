@@ -54,19 +54,6 @@ const rawAppConfig = compileRawAppConfigFromEnv({
   env: process.env,
 });
 
-const DEFAULT_CODEMODE_SECRETS = [
-  {
-    key: "demo.echo",
-    value: "super-secret-inline-proof",
-    description: "Harmless seeded secret for inline OpenAPI echo demos",
-  },
-  {
-    key: "demo.inline.bearer",
-    value: "seeded-inline-bearer-token",
-    description: "Harmless seeded bearer token for header injection demos",
-  },
-] as const;
-
 const app = await alchemy(APP_NAME, {
   stage: env.ALCHEMY_STAGE,
   local: env.ALCHEMY_LOCAL,
@@ -128,50 +115,6 @@ export const worker = await TanStackStart(APP_NAME, {
     command: "pnpm exec vite dev --config vite.cf.config.ts",
   },
 });
-
-async function seedCodemodeSecrets(baseUrl: string) {
-  const listResponse = await fetch(`${baseUrl}/api/secrets?limit=100&offset=0`);
-  if (!listResponse.ok) {
-    throw new Error(`Failed to list codemode secrets: ${listResponse.status}`);
-  }
-
-  const listJson = (await listResponse.json()) as {
-    secrets?: Array<{ key?: string }>;
-  };
-  const existingKeys = new Set(
-    Array.isArray(listJson.secrets)
-      ? listJson.secrets.flatMap((secret) => (typeof secret.key === "string" ? [secret.key] : []))
-      : [],
-  );
-
-  for (const secret of DEFAULT_CODEMODE_SECRETS) {
-    if (existingKeys.has(secret.key)) {
-      continue;
-    }
-
-    const createResponse = await fetch(`${baseUrl}/api/secrets`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(secret),
-    });
-
-    if (!createResponse.ok) {
-      throw new Error(
-        `Failed to seed codemode secret ${secret.key}: ${createResponse.status} ${await createResponse.text()}`,
-      );
-    }
-  }
-}
-
-if (!env.ALCHEMY_LOCAL) {
-  const seedBaseUrl = primaryUrl ?? worker.url;
-  if (!seedBaseUrl) {
-    throw new Error("No codemode worker URL available for secret seeding");
-  }
-  await seedCodemodeSecrets(seedBaseUrl);
-}
 
 console.dir(
   {

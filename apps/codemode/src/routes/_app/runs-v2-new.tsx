@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, createFileRoute, redirect } from "@tanstack/react-router";
+import { Link, createFileRoute } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight, Eye, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@iterate-com/ui/components/button";
@@ -25,8 +25,7 @@ import {
 } from "~/lib/codemode-sources.ts";
 import { CodemodeNewRunSearch, resolveCodemodeEditorCode } from "~/lib/codemode-links.ts";
 import { CODEMODE_V2_STARTER } from "~/lib/codemode-v2.ts";
-import { runsQueryKey } from "~/lib/runs.ts";
-import { orpcClient } from "~/orpc/client.ts";
+import { orpc, orpcClient } from "~/orpc/client.ts";
 
 const RunFunctionForm = z.object({
   code: z.string().trim().min(1, "Code is required"),
@@ -37,18 +36,6 @@ export const Route = createFileRoute("/_app/runs-v2-new")({
     breadcrumb: "Codemode",
   },
   validateSearch: CodemodeNewRunSearch,
-  beforeLoad: ({ search }) => {
-    if (!search.sources) {
-      throw redirect({
-        to: "/runs-v2-new",
-        search: {
-          code: search.code,
-          sources: DEFAULT_CODEMODE_SOURCES_YAML,
-        },
-        replace: true,
-      });
-    }
-  },
   component: NewRunPage,
 });
 
@@ -58,25 +45,11 @@ function NewRunPage() {
   const queryClient = useQueryClient();
   const [isCtxSheetOpen, setIsCtxSheetOpen] = useState(false);
   const [isSourcesOpen, setIsSourcesOpen] = useState(true);
-  const [sourcesYaml, setSourcesYaml] = useState(search.sources ?? DEFAULT_CODEMODE_SOURCES_YAML);
+  const [sourcesYaml, setSourcesYaml] = useState(
+    () => search.sources ?? DEFAULT_CODEMODE_SOURCES_YAML,
+  );
   const parsedSources = parseSourcesYamlSafely(sourcesYaml);
   const selectedSources = parsedSources.ok ? parsedSources.sources : DEFAULT_CODEMODE_SOURCES;
-
-  useEffect(() => {
-    setSourcesYaml(search.sources ?? DEFAULT_CODEMODE_SOURCES_YAML);
-  }, [search.sources]);
-
-  const syncSources = (nextSources: CodemodeUiSource[]) => {
-    const nextYaml = formatCodemodeSourcesYaml(nextSources);
-    setSourcesYaml(nextYaml);
-    void navigate({
-      search: (previous) => ({
-        ...previous,
-        sources: nextYaml,
-      }),
-      replace: true,
-    });
-  };
 
   const ctxTypeDefinitionQuery = useQuery({
     queryKey: ["codemode-ctx-type-definition", selectedSources],
@@ -114,35 +87,20 @@ function NewRunPage() {
         sources: parsedSources.sources,
       });
 
-      await queryClient.invalidateQueries({ queryKey: runsQueryKey });
+      await queryClient.invalidateQueries({
+        queryKey: orpc.runs.list.key(),
+      });
       await navigate({ to: "/runs/$runId", params: { runId: run.id } });
     },
   });
 
-  useEffect(() => {
-    form.setFieldValue("code", resolveCodemodeEditorCode(search.code));
-  }, [form, search.code]);
-
   const applySourcesYaml = (nextYaml: string) => {
     setSourcesYaml(nextYaml);
-
-    const parsed = parseSourcesYamlSafely(nextYaml);
-    if (!parsed.ok) {
-      return;
-    }
-
-    void navigate({
-      search: (previous) => ({
-        ...previous,
-        sources: nextYaml,
-      }),
-      replace: true,
-    });
   };
 
   const appendPreset = (source: CodemodeUiSource) => {
     const nextSources = [...selectedSources, source];
-    syncSources(nextSources);
+    setSourcesYaml(formatCodemodeSourcesYaml(nextSources));
     toast.success(`Added ${readSourceTitle(source)}`);
   };
 
@@ -165,7 +123,7 @@ function NewRunPage() {
           <Button
             type="button"
             variant="outline"
-            onClick={() => syncSources(DEFAULT_CODEMODE_SOURCES)}
+            onClick={() => setSourcesYaml(DEFAULT_CODEMODE_SOURCES_YAML)}
           >
             Reset sources
           </Button>
@@ -177,13 +135,6 @@ function NewRunPage() {
             variant="outline"
             onClick={() => {
               form.setFieldValue("code", CODEMODE_V2_STARTER);
-              void navigate({
-                search: (previous) => ({
-                  ...previous,
-                  code: undefined,
-                }),
-                replace: true,
-              });
             }}
           >
             Reset starter

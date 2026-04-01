@@ -66,6 +66,25 @@ export const CodemodeRun = z.object({
   result: z.string(),
   error: z.string().nullable(),
 });
+export type CodemodeRun = z.infer<typeof CodemodeRun>;
+
+export const CodemodeRunRecord = z.object({
+  id: z.string(),
+  runnerKind: CodemodeRunnerKind,
+  codeSnippet: z.string(),
+  sources: z.array(CodemodeSource),
+  result: z.string(),
+  logs: z.array(z.string()),
+  error: z.string().nullable(),
+});
+export type CodemodeRunRecord = z.infer<typeof CodemodeRunRecord>;
+
+export const CodemodeRunSummary = z.object({
+  id: z.string(),
+  codePreview: z.string(),
+  resultPreview: z.string(),
+});
+export type CodemodeRunSummary = z.infer<typeof CodemodeRunSummary>;
 
 export const codemodeContract = oc.router({
   common: commonContract,
@@ -151,6 +170,40 @@ export const codemodeContract = oc.router({
       }),
     )
     .output(CodemodeRun),
+  runs: oc.router({
+    list: oc
+      .route({
+        method: "GET",
+        path: "/runs",
+        summary: "List codemode runs",
+        tags: ["codemode"],
+      })
+      .input(
+        z.object({
+          limit: z.coerce.number().int().min(1).max(100).default(30),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
+      )
+      .output(
+        z.object({
+          runs: z.array(CodemodeRunSummary),
+          total: z.number().int().nonnegative(),
+        }),
+      ),
+    find: oc
+      .route({
+        method: "GET",
+        path: "/runs/{id}",
+        summary: "Find a codemode run by id",
+        tags: ["codemode"],
+      })
+      .input(
+        z.object({
+          id: z.string().trim().min(1),
+        }),
+      )
+      .output(CodemodeRunRecord),
+  }),
   ctxTypeDefinition: oc
     .route({
       method: "POST",
@@ -165,5 +218,3 @@ export const codemodeContract = oc.router({
     )
     .output(z.string()),
 });
-
-export type CodemodeRun = z.infer<typeof CodemodeRun>;
