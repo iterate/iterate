@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { getNextAppendEventOffset, getNextEventOffset } from "@iterate-com/shared/events/offset";
 import {
-  AppendEventInput,
   Event,
+  type EventInput,
   Offset,
   StreamPath,
   StreamMetadataUpdatedPayload,
@@ -126,13 +126,12 @@ export class StreamDurableObject extends DurableObject<Env> {
    * - https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/
    * - https://developers.cloudflare.com/durable-objects/api/storage-api/
    */
-  async append(args: { events: AppendEventInput[] }) {
+  async append(args: { events: EventInput[] }) {
     if (args.events.length === 0) {
       throw new Error("At least one event is required.");
     }
 
-    const prevState = assertInitializedState(structuredClone(this.state));
-    let state: StreamState = structuredClone(prevState);
+    let state: StreamState = assertInitializedState(structuredClone(this.state));
     const events: Event[] = [];
     const insertedEvents: Event[] = [];
     const plannedEventsByIdempotencyKey = new Map<string, Event>();
@@ -355,11 +354,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     return structuredClone(persistedState);
   }
 
-  private buildInsertedEvent(args: {
-    path: StreamPath;
-    inputEvent: AppendEventInput;
-    offset: string;
-  }) {
+  private buildInsertedEvent(args: { path: StreamPath; inputEvent: EventInput; offset: string }) {
     const { path, inputEvent, offset } = args;
 
     return Event.parse({

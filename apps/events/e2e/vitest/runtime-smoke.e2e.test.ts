@@ -7,7 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
 import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import { describe, expect, test } from "vitest";
-import { type StreamPath, type StreamState } from "@iterate-com/events-contract";
+import { type StreamPath } from "@iterate-com/events-contract";
 import { AppConfig } from "../../src/app.ts";
 import {
   collectAsyncIterableUntilIdle,
@@ -103,7 +103,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         lastOffset: expectedOffset(1),
         eventCount: 2,
         metadata: {},
-      } satisfies StreamState);
+      });
 
       const controller = new AbortController();
       const liveStream = await app.client.stream(

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AppendEventInput,
   type Event,
+  EventInput,
   type EventType,
   type JSONObject,
   type StreamPath,
@@ -109,10 +109,10 @@ export function StreamPage({
   const selectedTemplatePage = getEventTypePageByType(selectedTemplateType);
 
   const submitAppend = async (inputText = appendInputJson) => {
-    let event: AppendEventInput;
+    let event: EventInput;
 
     try {
-      event = AppendEventInput.parse(parseJSONObject(inputText));
+      event = EventInput.parse(parseJSONObject(inputText));
     } catch (error) {
       toast.error(formatClientError(error));
       return;

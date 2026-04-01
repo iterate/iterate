@@ -44,6 +44,10 @@ export function StreamsSidebar() {
     ...orpc.getState.queryOptions({ input: { streamPath: ROOT_STREAM_PATH } }),
     staleTime: 30_000,
   });
+  const rootLastOffset =
+    typeof rootStateQuery.data?.lastOffset === "string"
+      ? rootStateQuery.data.lastOffset
+      : undefined;
 
   useEffect(() => {
     if (
@@ -62,7 +66,7 @@ export function StreamsSidebar() {
       const stream = await orpcClient.stream(
         {
           path: ROOT_STREAM_PATH,
-          offset: rootStateQuery.data?.lastOffset ?? undefined,
+          offset: rootLastOffset,
           live: true,
         },
         { signal: controller.signal },
@@ -100,9 +104,9 @@ export function StreamsSidebar() {
     };
   }, [
     queryClient,
-    rootStateQuery.data?.lastOffset,
     rootStateQuery.isError,
     rootStateQuery.isPending,
+    rootLastOffset,
     selectedStreamPath,
   ]);
 

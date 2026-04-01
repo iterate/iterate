@@ -63,7 +63,7 @@ export const streamsRouter = {
       discovered.set(parsedPath.data, event.createdAt);
     }
 
-    if (rootState.initialized && !discovered.has(ROOT_STREAM_PATH)) {
+    if (rootState.initialized === true && !discovered.has(ROOT_STREAM_PATH)) {
       discovered.set(ROOT_STREAM_PATH, events[0]?.createdAt ?? new Date(0).toISOString());
     }
 

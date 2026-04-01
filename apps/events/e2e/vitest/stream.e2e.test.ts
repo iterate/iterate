@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
-import { StreamPath, type Event, type StreamState } from "@iterate-com/events-contract";
+import { StreamPath, type Event } from "@iterate-com/events-contract";
 import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import {
   collectAsyncIterableUntilIdle,
@@ -374,7 +374,7 @@ describe.sequential("events stream e2e", () => {
         lastOffset: expectedStoredOffset(0),
         eventCount: 1,
         metadata: {},
-      } satisfies StreamState);
+      });
       expect(await collectStreamEvents(app, { path })).toEqual([]);
       expect(await collectAllStreamEvents(app, { path })).toMatchObject([
         {
@@ -503,7 +503,7 @@ describe.sequential("events stream e2e", () => {
         lastOffset: expectedStoredOffset(0),
         eventCount: 1,
         metadata: {},
-      } satisfies StreamState);
+      });
       expect(await collectStreamEvents(app, { path })).toEqual([]);
       expect(await collectAllStreamEvents(app, { path })).toMatchObject([
         {
@@ -654,7 +654,7 @@ describe.sequential("events stream e2e", () => {
         metadata: {
           owner: "second",
         },
-      } satisfies StreamState);
+      });
     },
     testTimeoutMs,
   );

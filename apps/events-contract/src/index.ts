@@ -52,7 +52,7 @@ export const Offset = z.string().trim().min(1);
 export const JSONObject = z.record(z.string(), z.json());
 export type JSONObject = z.infer<typeof JSONObject>;
 
-const appendEventShape = {
+export const EventInput = z.object({
   type: EventType,
   payload: JSONObject,
   metadata: JSONObject.optional(),
@@ -62,19 +62,15 @@ const appendEventShape = {
   // Optional optimistic concurrency guard. When supplied, it must equal the
   // next offset this stream would generate for a newly inserted event.
   offset: Offset.optional(),
-} satisfies z.ZodRawShape;
+});
+export type EventInput = z.infer<typeof EventInput>;
 
-export const AppendEventInput = z.object(appendEventShape);
-export type AppendEventInput = z.infer<typeof AppendEventInput>;
-
-const eventShape = {
-  ...appendEventShape,
+export const Event = z.object({
+  ...EventInput.shape,
   path: StreamPath,
   offset: Offset,
   createdAt,
-} satisfies z.ZodRawShape;
-
-export const Event = z.object(eventShape);
+});
 export type Event = z.infer<typeof Event>;
 
 export const StreamCreatedPayload = z.object({
@@ -91,17 +87,6 @@ export const ErrorOccurredPayload = z.object({
   message: z.string().trim().min(1),
 });
 export type ErrorOccurredPayload = z.infer<typeof ErrorOccurredPayload>;
-
-const AppendInput = z.union([
-  z.object({
-    path: StreamPath,
-    ...appendEventShape,
-  }),
-  z.object({
-    path: StreamPath,
-    events: z.array(AppendEventInput).min(1),
-  }),
-]);
 
 export const StreamState = z.object({
   initialized: z.boolean(),
@@ -139,7 +124,18 @@ export const eventsContract = oc.router({
         "Appends events to a stream in order. A newly initialized stream first stores its own synthetic stream-created event at offset 0, so the first caller-appended event uses offset 1. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
       tags: ["Streams"],
     })
-    .input(AppendInput)
+    .input(
+      z.union([
+        z.object({
+          path: StreamPath,
+          ...EventInput.shape,
+        }),
+        z.object({
+          path: StreamPath,
+          events: z.array(EventInput).min(1),
+        }),
+      ]),
+    )
     .output(
       z.object({
         events: z.array(Event),
