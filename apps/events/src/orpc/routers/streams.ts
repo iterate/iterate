@@ -24,7 +24,11 @@ export const streamsRouter = {
     }
 
     const streamStub = context.env.STREAM.getByName(input.path);
-    return streamStub.destroy({ path: input.path });
+    const result = await streamStub.destroy();
+    return {
+      ...result,
+      path: input.path,
+    };
   }),
   stream: os.stream.handler(async function* ({ context, input, signal }) {
     const streamStub = context.env.STREAM.getByName(input.path);

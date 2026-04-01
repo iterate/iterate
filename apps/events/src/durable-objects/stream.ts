@@ -35,7 +35,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     eventCount: 0,
     metadata: {},
   };
-  private storageInitialized = false;
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -62,7 +61,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error("At least one event is required.");
     }
 
-    this.ensureStorageInitialized();
+    this.initializeStorage();
 
     const created = this.state.eventCount === 0;
     let nextState = structuredClone(this.state);
@@ -118,21 +117,32 @@ export class StreamDurableObject extends DurableObject<Env> {
     return { created, events };
   }
 
-  async destroy(args: { path: StreamPath }) {
-    if (this.state.path != null && this.state.path !== args.path) {
-      throw new Error(`Stream path mismatch. Expected ${this.state.path}, received ${args.path}.`);
+  // Cloudflare's supported way to wipe one Durable Object's persisted data is
+  // `deleteAll()` on its storage, rather than an explicit instance-destruction API:
+  // https://developers.cloudflare.com/durable-objects/api/storage-api/
+  // https://developers.cloudflare.com/durable-objects/best-practices/access-durable-objects-storage/
+  async destroy() {
+    const deleted = this.state.eventCount > 0;
+
+    for (const subscriber of this.subscribers) {
+      try {
+        subscriber.close();
+      } catch {
+        // Ignore already-closed streams; we only need best-effort teardown.
+      }
     }
 
-    const deleted = this.state.eventCount > 0;
-    await deleteAlarmIfPresent(this.ctx.storage);
+    this.subscribers.clear();
     await this.ctx.storage.deleteAll();
-    this.storageInitialized = false;
-    this.state = emptyStreamState();
-    this.closeSubscribers();
+    this.state = {
+      path: null,
+      lastOffset: null,
+      eventCount: 0,
+      metadata: {},
+    };
 
     return {
       ok: true as const,
-      path: args.path,
       deleted,
     };
   }
@@ -223,7 +233,6 @@ export class StreamDurableObject extends DurableObject<Env> {
         json TEXT NOT NULL CHECK(json_valid(json))
       )
     `);
-    this.storageInitialized = true;
   }
 
   /**
@@ -241,7 +250,12 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     if (persistedStateRow == null) {
       if (eventRowCount === 0) {
-        return emptyStreamState();
+        return {
+          path: null,
+          lastOffset: null,
+          eventCount: 0,
+          metadata: {},
+        } satisfies StreamState;
       }
 
       throw new Error(
@@ -265,14 +279,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     return structuredClone(persistedState);
-  }
-
-  private ensureStorageInitialized() {
-    if (this.storageInitialized) {
-      return;
-    }
-
-    this.initializeStorage();
   }
 
   /**
@@ -461,33 +467,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
     }
   }
-
-  private closeSubscribers() {
-    for (const subscriber of this.subscribers) {
-      try {
-        subscriber.close();
-      } catch {
-        // Ignore already-closed streams; we only need best-effort teardown.
-      }
-    }
-
-    this.subscribers.clear();
-  }
-}
-
-function emptyStreamState(): StreamState {
-  return {
-    path: null,
-    lastOffset: null,
-    eventCount: 0,
-    metadata: {},
-  } satisfies StreamState;
-}
-
-async function deleteAlarmIfPresent(
-  storage: DurableObjectStorage & { deleteAlarm?: () => Promise<void> },
-) {
-  await storage.deleteAlarm?.();
 }
 
 function encodeEventLine(event: Event) {
