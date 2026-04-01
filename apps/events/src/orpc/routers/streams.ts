@@ -5,18 +5,8 @@ import { os } from "~/orpc/orpc.ts";
 
 export const streamsRouter = {
   append: os.append.handler(async ({ context, input }) => {
-    // We would rather let the Durable Object read its own name from `ctx.id.name`,
-    // but that is still not reliable enough in constructors today. Until Cloudflare
-    // makes that robust, the router stamps the validated path onto every event so
-    // the DO can reduce and persist a trustworthy `state.path` on its own.
-    const events = ("events" in input ? input.events : [input]).map((event) => ({
-      ...event,
-      path: input.path,
-    }));
-
-    // Durable Object RPC is always async from the caller side, even if the method
-    // body itself only performs synchronous SQLite work.
-    const streamStub = context.env.STREAM.getByName(input.path);
+    const events = "events" in input ? input.events : [input];
+    const streamStub = await getInitializedStreamStub(context.env, input.path);
     const result = await streamStub.append({ events });
 
     if (result.kind === "offset-precondition-failed") {
@@ -55,8 +45,9 @@ export const streamsRouter = {
     return streamStub.getState();
   }),
   listStreams: os.listStreams.handler(async ({ context }) => {
-    const rootStreamStub = context.env.STREAM.getByName(ROOT_STREAM_PATH);
+    const rootStreamStub = await getInitializedStreamStub(context.env, ROOT_STREAM_PATH);
     const events = await rootStreamStub.history();
+    const rootState = await rootStreamStub.getState();
     const discovered = new Map<StreamPath, string>();
 
     for (const event of events) {
@@ -72,13 +63,18 @@ export const streamsRouter = {
       discovered.set(parsedPath.data, event.createdAt);
     }
 
-    // `/` is the discovery stream itself, so it will not discover itself via a
-    // `STREAM_CREATED` payload. Add it explicitly so the UI can always navigate
-    // to the root stream as a first-class system stream.
-    discovered.set(ROOT_STREAM_PATH, events[0]?.createdAt ?? new Date(0).toISOString());
+    if (rootState.initialized && !discovered.has(ROOT_STREAM_PATH)) {
+      discovered.set(ROOT_STREAM_PATH, events[0]?.createdAt ?? new Date(0).toISOString());
+    }
 
     return [...discovered.entries()]
       .map(([path, createdAt]) => ({ path, createdAt }))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }),
 };
+
+async function getInitializedStreamStub(env: Env, path: StreamPath) {
+  const streamStub = env.STREAM.getByName(path);
+  await streamStub.initialize({ path });
+  return streamStub;
+}

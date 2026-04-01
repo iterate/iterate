@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { getNextEventOffset } from "./offset.ts";
+import { getNextAppendEventOffset, getNextEventOffset } from "./offset.ts";
 
 describe("getNextEventOffset", () => {
-  test("returns the first canonical offset when there is no previous offset", () => {
-    expect(getNextEventOffset(null)).toBe("0000000000000001");
+  test("returns the first stored offset when there is no previous offset", () => {
+    expect(getNextEventOffset(null)).toBe("0000000000000000");
   });
 
   test("increments canonical offsets while preserving width", () => {
@@ -17,5 +17,25 @@ describe("getNextEventOffset", () => {
 
   test("rejects non-numeric offsets", () => {
     expect(() => getNextEventOffset("banana")).toThrow(/non-numeric/i);
+  });
+});
+
+describe("getNextAppendEventOffset", () => {
+  test("returns 1 for the first caller-appended event on an untouched stream", () => {
+    expect(
+      getNextAppendEventOffset({
+        initialized: false,
+        lastOffset: null,
+      }),
+    ).toBe("0000000000000001");
+  });
+
+  test("returns the next stored offset for initialized streams", () => {
+    expect(
+      getNextAppendEventOffset({
+        initialized: true,
+        lastOffset: "0000000000000000",
+      }),
+    ).toBe("0000000000000001");
   });
 });

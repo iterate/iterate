@@ -64,12 +64,8 @@ const appendEventShape = {
 export const AppendEventInput = z.object(appendEventShape);
 export type AppendEventInput = z.infer<typeof AppendEventInput>;
 
-export const EventInput = AppendEventInput.extend({
+export const Event = AppendEventInput.extend({
   path: StreamPath,
-});
-export type EventInput = z.infer<typeof EventInput>;
-
-export const Event = EventInput.extend({
   offset: Offset,
   createdAt,
 });
@@ -98,6 +94,7 @@ const AppendInput = z.intersection(
 );
 
 export const StreamState = z.object({
+  initialized: z.boolean(),
   path: StreamPath.nullable(),
   lastOffset: Offset.nullable(),
   eventCount: z.number().int().nonnegative(),
@@ -126,7 +123,7 @@ export const eventsContract = oc.router({
       path: "/streams/{+path}",
       successDescription: "Events appended successfully and returned",
       description:
-        "Appends events to a stream in order. Offsets are assigned by the stream itself unless a caller supplies the exact next offset the stream would generate. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
+        "Appends events to a stream in order. A newly initialized stream first stores its own synthetic stream-created event at offset 0, so the first caller-appended event uses offset 1. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
       tags: ["Streams"],
     })
     .input(AppendInput)
@@ -159,7 +156,7 @@ export const eventsContract = oc.router({
       method: "GET",
       path: "/stream-state/{+streamPath}",
       description:
-        "Returns the latest reduced projection for a stream, including metadata and generated offsets.",
+        "Returns the latest reduced projection for a stream, including whether it has been initialized, metadata, and generated offsets.",
       tags: ["Streams"],
     })
     .input(

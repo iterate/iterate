@@ -88,17 +88,24 @@ describeRuntimeSmoke("events runtime smoke", () => {
         idleMs: historyIdleTimeoutMs,
       });
 
-      expect(events).toHaveLength(1);
+      expect(events).toHaveLength(2);
       expect(events[0]).toMatchObject({
+        path,
+        type: "https://events.iterate.com/events/stream/created",
+        offset: expectedStoredOffset(0),
+        payload: { path },
+      });
+      expect(events[1]).toMatchObject({
         path,
         offset: expectedOffset(1),
         payload: { smoke: true },
       });
 
       expect(await app.client.getState({ streamPath: path })).toEqual({
+        initialized: true,
         path,
         lastOffset: expectedOffset(1),
-        eventCount: 1,
+        eventCount: 2,
         metadata: {},
       } satisfies StreamState);
 
@@ -148,14 +155,18 @@ describeRuntimeSmoke("events runtime smoke", () => {
 });
 
 function expectedOffset(value: number) {
+  return expectedStoredOffset(value);
+}
+
+function expectedStoredOffset(value: number) {
   let offset: string | null = null;
 
-  for (let index = 0; index < value; index += 1) {
+  for (let index = 0; index <= value; index += 1) {
     offset = getNextEventOffset(offset);
   }
 
   if (offset == null) {
-    throw new Error("expectedOffset requires a positive integer.");
+    throw new Error("expectedStoredOffset requires a non-negative integer.");
   }
 
   return offset;

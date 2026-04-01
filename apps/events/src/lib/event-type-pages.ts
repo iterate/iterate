@@ -20,12 +20,14 @@ export const streamCreatedPage = {
   href: "/stream-created/",
   title: "Stream Created",
   type: STREAM_CREATED_TYPE,
-  summary: "Internal meta event emitted when a stream path is first created by an append.",
+  summary:
+    "Internal meta event emitted when a stream initializes itself and when descendant stream creation is propagated upward.",
   payloadExample: {
     path: "/demo/stream",
   },
   details: [
-    "The stream appends this automatically the first time a path is written to.",
+    "Every initialized stream writes its own self-created event at offset 0 before any caller-appended events.",
+    "The same event type also appears on parent streams to advertise newly created descendants.",
     "It is useful for stream discovery and lightweight operational tooling.",
   ],
 } satisfies EventTypePageDefinition;

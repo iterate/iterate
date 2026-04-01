@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
-import { getNextEventOffset } from "@iterate-com/shared/events/offset";
+import { getNextAppendEventOffset, getNextEventOffset } from "@iterate-com/shared/events/offset";
 import {
+  AppendEventInput,
   Event,
   Offset,
   StreamPath,
@@ -8,7 +9,6 @@ import {
   StreamState,
   STREAM_CREATED_TYPE,
   STREAM_METADATA_UPDATED_TYPE,
-  type EventInput,
 } from "@iterate-com/events-contract";
 import { ROOT_STREAM_PATH, getParentPath } from "~/lib/utils.ts";
 const textEncoder = new TextEncoder();
@@ -18,9 +18,15 @@ const textEncoder = new TextEncoder();
  * projection kept in memory and storage, and newline-delimited fanout for live
  * readers.
  *
- * The matching router in `~/orpc/routers/streams.ts` stamps a validated `path`
- * onto every append because we still do not treat `ctx.id.name` as
- * constructor-safe enough for this projection.
+ * Each stream must be initialized exactly once with its canonical path. That
+ * initialization writes a synthetic self `STREAM_CREATED` event at offset `0`,
+ * so every initialized stream starts with the invariant:
+ * - event `0` is always `STREAM_CREATED` for that stream's own path
+ * - caller-appended events begin at offset `1`
+ *
+ * Later `STREAM_CREATED` events can also appear in a stream as propagated child
+ * discovery events. Those propagate upward one level at a time in the "after"
+ * sections of `initialize()` and `append()`.
  *
  * Durable Object docs:
  * - https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/
@@ -29,6 +35,7 @@ const textEncoder = new TextEncoder();
  */
 export class StreamDurableObject extends DurableObject<Env> {
   private state: StreamState = {
+    initialized: false,
     path: null,
     lastOffset: null,
     eventCount: 0,
@@ -49,6 +56,62 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
+   * Initializes this stream's identity exactly once. The first successful call
+   * commits the synthetic self-created event at offset `0`; later same-path
+   * calls are no-ops.
+   */
+  async initialize(args: { path: StreamPath }) {
+    const currentState = structuredClone(this.state);
+
+    if (currentState.initialized) {
+      assertSameStreamPath({
+        expected: requireStreamPath(assertInitializedState(currentState)),
+        actual: args.path,
+      });
+      return;
+    }
+
+    if (
+      currentState.eventCount !== 0 ||
+      currentState.lastOffset != null ||
+      currentState.path != null
+    ) {
+      throw new Error("Uninitialized stream durable object has inconsistent reduced state.");
+    }
+
+    const initializedState = createInitializedState({
+      previousState: currentState,
+      path: args.path,
+    });
+    const selfCreatedEvent = this.buildInsertedEvent({
+      path: args.path,
+      inputEvent: {
+        type: STREAM_CREATED_TYPE,
+        payload: {
+          path: args.path,
+        },
+      },
+      offset: Offset.parse(getNextEventOffset(null)),
+    });
+    const nextState = reduceStreamState({
+      state: initializedState,
+      event: selfCreatedEvent,
+    });
+
+    this.ctx.storage.transactionSync(() => {
+      this.insertEventRowSync(selfCreatedEvent);
+      this.writeReducedStateSync(nextState);
+    });
+
+    this.state = structuredClone(nextState);
+    this.publish(selfCreatedEvent);
+
+    if (selfCreatedEvent.type === STREAM_CREATED_TYPE) {
+      this.propagateStreamCreatedUpOneLevel(selfCreatedEvent);
+    }
+  }
+
+  /**
    * Appends a batch in three explicit phases:
    * 1. before append: resolve idempotency, run pre-append checks, and plan rows
    * 2. atomic append: write planned rows and reduced_state inside one transaction
@@ -65,13 +128,13 @@ export class StreamDurableObject extends DurableObject<Env> {
    * - https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/
    * - https://developers.cloudflare.com/durable-objects/api/storage-api/
    */
-  async append(args: { events: EventInput[] }) {
+  async append(args: { events: AppendEventInput[] }) {
     if (args.events.length === 0) {
       throw new Error("At least one event is required.");
     }
 
-    const prevState = structuredClone(this.state);
-    let state = structuredClone(prevState);
+    const prevState = assertInitializedState(structuredClone(this.state));
+    let state: StreamState = structuredClone(prevState);
     const events: Event[] = [];
     const insertedEvents: Event[] = [];
     const plannedEventsByIdempotencyKey = new Map<string, Event>();
@@ -83,7 +146,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           ? null
           : (plannedEventsByIdempotencyKey.get(inputEvent.idempotencyKey) ??
             this.getEventByIdempotencyKey({
-              path: inputEvent.path,
+              path: requireStreamPath(state),
               idempotencyKey: inputEvent.idempotencyKey,
             }));
 
@@ -92,7 +155,12 @@ export class StreamDurableObject extends DurableObject<Env> {
         continue;
       }
 
-      const nextOffset = Offset.parse(getNextEventOffset(state.lastOffset));
+      const nextOffset = Offset.parse(
+        getNextAppendEventOffset({
+          initialized: state.initialized,
+          lastOffset: state.lastOffset,
+        }),
+      );
 
       // Future pre-append checks belong here, before the transaction begins.
       if (inputEvent.offset != null && inputEvent.offset !== nextOffset) {
@@ -103,6 +171,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       const insertedEvent = this.buildInsertedEvent({
+        path: requireStreamPath(state),
         inputEvent,
         offset: nextOffset,
       });
@@ -133,10 +202,9 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     for (const event of insertedEvents) {
       this.publish(event);
-    }
-
-    if (prevState.eventCount === 0 && insertedEvents[0] != null) {
-      this.propagateStreamCreated(insertedEvents[0]);
+      if (event.type === STREAM_CREATED_TYPE) {
+        this.propagateStreamCreatedUpOneLevel(event);
+      }
     }
 
     return {
@@ -159,17 +227,11 @@ export class StreamDurableObject extends DurableObject<Env> {
    * killing the whole live subscription.
    */
   async history(args: { afterOffset?: string } = {}): Promise<Event[]> {
-    if (this.state.path == null) {
-      if (this.state.eventCount === 0) {
-        return [];
-      }
-
-      throw new Error(
-        "Stream durable object cannot read events before its reduced path is initialized.",
-      );
+    if (!this.state.initialized) {
+      return [];
     }
 
-    const path = this.state.path;
+    const path = requireStreamPath(assertInitializedState(this.state));
     return this.listEventsAfterOffset({
       path,
       afterOffset: args.afterOffset ?? "",
@@ -249,6 +311,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (persistedStateRow == null) {
       if (eventRowCount === 0) {
         return {
+          initialized: false,
           path: null,
           lastOffset: null,
           eventCount: 0,
@@ -261,29 +324,48 @@ export class StreamDurableObject extends DurableObject<Env> {
       );
     }
 
-    const persistedState = StreamState.parse(JSON.parse(persistedStateRow.json));
+    const persistedState = StreamState.parse(
+      normalizePersistedState({
+        rawState: JSON.parse(persistedStateRow.json),
+        eventRowCount,
+      }),
+    );
     if (persistedState.eventCount !== eventRowCount) {
       throw new Error(
         `Persisted reduced_state eventCount ${persistedState.eventCount} does not match ${eventRowCount} event rows.`,
       );
     }
 
-    if (persistedState.eventCount > 0 && persistedState.path == null) {
-      throw new Error("Persisted reduced_state is missing a path even though events exist.");
+    if (!persistedState.initialized) {
+      if (eventRowCount > 0 || persistedState.path != null || persistedState.lastOffset != null) {
+        throw new Error("Uninitialized reduced_state cannot point at a path or existing events.");
+      }
+
+      return structuredClone(persistedState);
     }
 
-    if (persistedState.eventCount > 0 && persistedState.lastOffset == null) {
-      throw new Error("Persisted reduced_state is missing lastOffset even though events exist.");
+    if (persistedState.path == null) {
+      throw new Error("Persisted reduced_state is missing a path even though it is initialized.");
+    }
+
+    if (persistedState.lastOffset == null) {
+      throw new Error(
+        "Persisted reduced_state is missing lastOffset even though it is initialized.",
+      );
     }
 
     return structuredClone(persistedState);
   }
 
-  private buildInsertedEvent(args: { inputEvent: EventInput; offset: string }) {
-    const { inputEvent, offset } = args;
+  private buildInsertedEvent(args: {
+    path: StreamPath;
+    inputEvent: AppendEventInput;
+    offset: string;
+  }) {
+    const { path, inputEvent, offset } = args;
 
     return Event.parse({
-      path: inputEvent.path,
+      path,
       offset,
       type: inputEvent.type,
       payload: inputEvent.payload,
@@ -382,61 +464,45 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  private propagateStreamCreated(firstEvent: Event) {
-    if (this.state.path == null) {
-      throw new Error(
-        "Stream durable object cannot propagate before its reduced path is initialized.",
-      );
-    }
-
-    const createdPath = this.state.path;
-    if (createdPath === ROOT_STREAM_PATH) {
+  private propagateStreamCreatedUpOneLevel(event: Event) {
+    const parentPath = getParentPath(event.path);
+    if (parentPath == null || event.path === ROOT_STREAM_PATH) {
       return;
     }
 
-    const parentPaths: StreamPath[] = [];
-    let parentPath = getParentPath(createdPath);
-    while (parentPath != null) {
-      parentPaths.push(parentPath);
-      parentPath = getParentPath(parentPath);
-    }
-
     console.info("[stream-do] propagating stream-created", {
-      createdPath,
-      parentPaths,
-      firstOffset: firstEvent.offset,
+      streamPath: event.path,
+      parentPath,
+      propagatedPath:
+        typeof event.payload.path === "string"
+          ? event.payload.path
+          : "<invalid-stream-created-payload>",
+      offset: event.offset,
     });
 
-    // Parent discovery is helpful but not required for the child append to commit,
-    // so we fan out in the background and only log failures.
-    void Promise.allSettled(
-      parentPaths.map((parentPath) => {
-        const events: EventInput[] = [
-          {
-            path: parentPath,
-            type: STREAM_CREATED_TYPE,
-            payload: {
-              path: createdPath,
+    // Parent discovery is helpful but not required for the child append to
+    // commit, so we fan out in the background and only log failures.
+    const streamStub = this.env.STREAM.getByName(parentPath);
+    void streamStub
+      .initialize({ path: parentPath })
+      .then(() =>
+        streamStub.append({
+          events: [
+            {
+              type: STREAM_CREATED_TYPE,
+              payload: event.payload,
+              ...(event.metadata == null ? {} : { metadata: event.metadata }),
             },
-          },
-        ];
-
-        const streamStub = this.env.STREAM.getByName(parentPath);
-        return streamStub.append({ events });
-      }),
-    ).then((results) => {
-      for (const [index, result] of results.entries()) {
-        if (result.status === "fulfilled") {
-          continue;
-        }
-
+          ],
+        }),
+      )
+      .catch((error) => {
         console.error("[stream-do] failed to propagate stream-created", {
-          createdPath,
-          parentPath: parentPaths[index],
-          error: result.reason,
+          streamPath: event.path,
+          parentPath,
+          error,
         });
-      }
-    });
+      });
   }
 
   private publish(event: Event) {
@@ -456,20 +522,79 @@ function encodeEventLine(event: Event) {
   return textEncoder.encode(`${JSON.stringify(event)}\n`);
 }
 
+function normalizePersistedState(args: { rawState: unknown; eventRowCount: number }) {
+  if (args.rawState == null || typeof args.rawState !== "object") {
+    return args.rawState;
+  }
+
+  const rawState = args.rawState as Record<string, unknown>;
+  if (typeof rawState.initialized === "boolean") {
+    return rawState;
+  }
+
+  return {
+    ...rawState,
+    initialized: args.eventRowCount > 0 || rawState.path != null || rawState.lastOffset != null,
+  };
+}
+
+function assertInitializedState(state: StreamState) {
+  if (!state.initialized) {
+    throw new Error("Stream durable object is not initialized.");
+  }
+
+  return state as StreamState & {
+    initialized: true;
+  };
+}
+
+function requireStreamPath(state: StreamState) {
+  if (state.path == null) {
+    throw new Error("Initialized stream durable object is missing path.");
+  }
+
+  return state.path;
+}
+
+function assertSameStreamPath(args: { expected: StreamPath; actual: StreamPath }) {
+  if (args.expected !== args.actual) {
+    throw new Error(`Stream path mismatch. Expected ${args.expected}, received ${args.actual}.`);
+  }
+}
+
+function createInitializedState(args: {
+  previousState: StreamState;
+  path: StreamPath;
+}): StreamState {
+  if (args.previousState.initialized) {
+    return args.previousState;
+  }
+
+  return {
+    initialized: true,
+    path: args.path,
+    lastOffset: null,
+    eventCount: 0,
+    metadata: { ...args.previousState.metadata },
+  };
+}
+
 /**
  * Pure reducer for the persisted stream projection. Replay and append share the
  * same rules so state cannot drift based on which code path produced it.
  * `STREAM_METADATA_UPDATED` replaces metadata rather than deep-merging it.
  */
 function reduceStreamState(args: { state: StreamState; event: Event }): StreamState {
-  const { state, event } = args;
-  const path = state.path ?? event.path;
-  if (state.path != null && state.path !== event.path) {
-    throw new Error(`Stream path mismatch. Expected ${state.path}, received ${event.path}.`);
-  }
+  const { event } = args;
+  const state = assertInitializedState(args.state);
+  assertSameStreamPath({
+    expected: requireStreamPath(state),
+    actual: event.path,
+  });
 
   const nextState: StreamState = {
-    path,
+    initialized: true,
+    path: requireStreamPath(state),
     lastOffset: event.offset,
     eventCount: state.eventCount + 1,
     metadata: { ...state.metadata },
