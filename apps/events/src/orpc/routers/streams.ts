@@ -1,16 +1,11 @@
 import { ORPCError } from "@orpc/server";
-import {
-  type Event,
-  StreamPath,
-  childStreamCreatedEventType,
-  streamInitializedEventType,
-} from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/events-contract";
 import {
   getInitializedStreamStub,
-  StreamAppendInputError,
+  getStreamStub,
   StreamOffsetPreconditionError,
 } from "~/lib/stream-helpers.ts";
-import { ROOT_STREAM_PATH, decodeEventStream } from "~/lib/utils.ts";
+import { decodeEventStream } from "~/lib/utils.ts";
 import { os } from "~/orpc/orpc.ts";
 
 export const streamsRouter = {
@@ -34,17 +29,12 @@ export const streamsRouter = {
         });
       }
 
-      if (
-        error instanceof StreamAppendInputError ||
-        (error instanceof Error && error.name === "StreamAppendInputError")
-      ) {
-        throw new ORPCError("BAD_REQUEST", {
-          message: error instanceof Error ? error.message : "Invalid stream append input.",
-        });
-      }
-
       throw error;
     }
+  }),
+  destroy: os.destroy.handler(async ({ input }) => {
+    const streamStub = getStreamStub(input.path);
+    return streamStub.destroy();
   }),
   stream: os.stream.handler(async function* ({ input, signal }) {
     const streamStub = await getInitializedStreamStub({ path: input.path });
@@ -75,45 +65,22 @@ export const streamsRouter = {
     return streamStub.getState();
   }),
   listStreams: os.listStreams.handler(async () => {
-    const rootStreamStub = await getInitializedStreamStub({ path: ROOT_STREAM_PATH });
+    const rootStreamStub = await getInitializedStreamStub({ path: "/" });
     const events = await rootStreamStub.history();
-    const rootState = await rootStreamStub.getState();
-    const discovered = new Map<StreamPath, string>();
+    const discovered: Record<StreamPath, string> = {
+      "/": new Date().toISOString(),
+    };
 
     for (const event of events) {
-      if (event.type !== childStreamCreatedEventType) {
-        continue;
+      if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
+        discovered[event.streamPath] = event.createdAt;
+      } else if (event.type === "https://events.iterate.com/events/stream/initialized") {
+        discovered["/"] = event.createdAt;
       }
-
-      const childPath = getChildStreamCreatedEventPath(event);
-      if (discovered.has(childPath)) {
-        continue;
-      }
-
-      discovered.set(childPath, event.createdAt);
     }
 
-    if (rootState.initialized === true && !discovered.has(ROOT_STREAM_PATH)) {
-      const rootInitializedEvent = events.find(
-        (event) => event.path === ROOT_STREAM_PATH && event.type === streamInitializedEventType,
-      );
-      if (rootInitializedEvent == null) {
-        throw new Error("Initialized root stream is missing its self stream-initialized event.");
-      }
-
-      discovered.set(ROOT_STREAM_PATH, rootInitializedEvent.createdAt);
-    }
-
-    return [...discovered.entries()]
-      .map(([path, createdAt]) => ({ path, createdAt }))
+    return Object.entries(discovered)
+      .map(([path, createdAt]) => ({ path: path as StreamPath, createdAt }))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }),
 };
-
-function getChildStreamCreatedEventPath(event: Event) {
-  if (event.type !== childStreamCreatedEventType) {
-    throw new Error(`Expected ${childStreamCreatedEventType}, received ${event.type}.`);
-  }
-
-  return (event.payload as { path: StreamPath }).path;
-}

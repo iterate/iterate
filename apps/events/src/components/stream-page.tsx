@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  childStreamCreatedEventType,
   type Event,
   EventInput,
   type JSONObject,
@@ -29,7 +28,6 @@ import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projectio
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { DEFAULT_STREAM_RENDERER_MODE, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
 import { formatClientError } from "~/lib/format-client-error.ts";
-import { ROOT_STREAM_PATH } from "~/lib/utils.ts";
 import { orpc } from "~/orpc/client.ts";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
 
@@ -59,7 +57,10 @@ export function StreamPage({
     streamPath,
     onEvent: useCallback(
       (event: Event) => {
-        if (streamPath === ROOT_STREAM_PATH && event.type === childStreamCreatedEventType) {
+        if (
+          streamPath === "/" &&
+          event.type === "https://events.iterate.com/events/stream/child-stream-created"
+        ) {
           void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
         }
       },

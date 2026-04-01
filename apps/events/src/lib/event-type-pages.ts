@@ -1,10 +1,4 @@
-import {
-  errorOccurredEventType,
-  streamInitializedEventType,
-  streamMetadataUpdatedEventType,
-  type EventType,
-  type JSONObject,
-} from "@iterate-com/events-contract";
+import { type EventType, type JSONObject } from "@iterate-com/events-contract";
 
 export type EventTypePageDefinition = {
   readonly slug: string;
@@ -20,7 +14,7 @@ export const streamInitializedPage = {
   slug: "stream-initialized",
   href: "/stream-initialized/",
   title: "Stream Initialized",
-  type: streamInitializedEventType,
+  type: "https://events.iterate.com/events/stream/initialized",
   summary: "Internal meta event emitted exactly once when a stream initializes itself.",
   payloadExample: {
     path: "/demo/stream",
@@ -36,7 +30,7 @@ export const streamMetadataUpdatedPage = {
   slug: "stream-metadata-updated",
   href: "/stream-metadata-updated/",
   title: "Stream Metadata Updated",
-  type: streamMetadataUpdatedEventType,
+  type: "https://events.iterate.com/events/stream/metadata-updated",
   summary: "Internal metadata event that replaces the reduced metadata snapshot for a stream.",
   payloadExample: {
     metadata: {
@@ -50,11 +44,27 @@ export const streamMetadataUpdatedPage = {
   ],
 } satisfies EventTypePageDefinition;
 
+export const childStreamCreatedPage = {
+  slug: "child-stream-created",
+  href: "/child-stream-created/",
+  title: "Child Stream Created",
+  type: "https://events.iterate.com/events/stream/child-stream-created",
+  summary:
+    "Built-in event propagated to a parent stream when a new child stream is initialized beneath it.",
+  payloadExample: {
+    path: "/demo/stream/child",
+  },
+  details: [
+    "When a nested stream initializes, the system appends this event to each ancestor stream in the path hierarchy.",
+    "Only the first append to a child stream triggers propagation — subsequent appends do not repeat it.",
+  ],
+} satisfies EventTypePageDefinition;
+
 export const errorOccurredPage = {
   slug: "error-occurred",
   href: "/error-occurred/",
   title: "Error Occurred",
-  type: errorOccurredEventType,
+  type: "https://events.iterate.com/events/stream/error-occurred",
   summary: "Built-in error event for recording failures directly in a stream.",
   payloadExample: {
     message: "Failed to fetch remote state",
@@ -82,6 +92,7 @@ export const manualEventAppendedPage = {
 } satisfies EventTypePageDefinition;
 
 export const eventTypePages = [
+  childStreamCreatedPage,
   errorOccurredPage,
   manualEventAppendedPage,
   streamInitializedPage,

@@ -7,11 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
 import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import { describe, expect, test } from "vitest";
-import {
-  streamInitializedEventType,
-  streamMetadataUpdatedEventType,
-  type StreamPath,
-} from "@iterate-com/events-contract";
+import { type StreamPath } from "@iterate-com/events-contract";
 import { AppConfig } from "../../src/app.ts";
 import {
   collectAsyncIterableUntilIdle,
@@ -87,11 +83,10 @@ describeRuntimeSmoke("events runtime smoke", () => {
         idleMs: historyIdleTimeoutMs,
       });
       expect(rootEvents[0]).toMatchObject({
-        path: "/",
-        type: streamInitializedEventType,
+        streamPath: "/",
+        type: "https://events.iterate.com/events/stream/initialized",
       });
       expect(await app.client.getState({ path: "/" })).toMatchObject({
-        initialized: true,
         path: "/",
         metadata: {},
       });
@@ -106,19 +101,18 @@ describeRuntimeSmoke("events runtime smoke", () => {
 
       expect(events).toHaveLength(2);
       expect(events[0]).toMatchObject({
-        path,
-        type: streamInitializedEventType,
+        streamPath: path,
+        type: "https://events.iterate.com/events/stream/initialized",
         offset: expectedStoredOffset(0),
         payload: { path },
       });
       expect(events[1]).toMatchObject({
-        path,
+        streamPath: path,
         offset: expectedOffset(1),
         payload: { smoke: true },
       });
 
       expect(await app.client.getState({ path })).toEqual({
-        initialized: true,
         path,
         lastOffset: expectedOffset(1),
         eventCount: 2,
@@ -127,12 +121,13 @@ describeRuntimeSmoke("events runtime smoke", () => {
 
       const rootHistoryResponse = await app.fetch("/api/streams/%2F");
       expect(rootHistoryResponse.status).toBe(200);
-      expect(await rootHistoryResponse.text()).toContain(streamInitializedEventType);
+      expect(await rootHistoryResponse.text()).toContain(
+        "https://events.iterate.com/events/stream/initialized",
+      );
 
       const rootStateResponse = await app.fetch("/api/__state/%2F");
       expect(rootStateResponse.status).toBe(200);
       expect(await rootStateResponse.json()).toMatchObject({
-        initialized: true,
         path: "/",
       });
 
@@ -151,7 +146,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         setTimeout(() => {
           void app.client.append({
             path,
-            type: streamMetadataUpdatedEventType,
+            type: "https://events.iterate.com/events/stream/metadata-updated",
             payload: {
               metadata: {
                 live: true,
@@ -169,7 +164,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
 
         expect(next.done).toBe(false);
         expect(next.value).toMatchObject({
-          path,
+          streamPath: path,
           offset: expectedOffset(2),
         });
       } finally {

@@ -2,9 +2,8 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import {
-  childStreamCreatedEventType,
-  streamInitializedEventType,
-  streamMetadataUpdatedEventType,
+  ChildStreamCreatedEvent,
+  StreamInitializedEvent,
   StreamPath,
   type Event,
 } from "@iterate-com/events-contract";
@@ -37,7 +36,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(result.event).toMatchObject({
-        path,
+        streamPath: path,
         offset: expectedOffset(1),
         type: "https://events.iterate.com/events/example/value-recorded",
         payload: { value: 42 },
@@ -45,7 +44,7 @@ describe.sequential("events stream e2e", () => {
 
       expect(await collectStreamEvents(app, { path })).toEqual([
         {
-          path,
+          streamPath: path,
           offset: expectedOffset(1),
           type: "https://events.iterate.com/events/example/value-recorded",
           payload: { value: 42 },
@@ -54,13 +53,13 @@ describe.sequential("events stream e2e", () => {
       ]);
       expect(await collectAllStreamEvents(app, { path })).toMatchObject([
         {
-          path,
+          streamPath: path,
           offset: expectedStoredOffset(0),
-          type: streamInitializedEventType,
+          type: "https://events.iterate.com/events/stream/initialized",
           payload: { path },
         },
         {
-          path,
+          streamPath: path,
           offset: expectedOffset(1),
           type: "https://events.iterate.com/events/example/value-recorded",
           payload: { value: 42 },
@@ -90,7 +89,7 @@ describe.sequential("events stream e2e", () => {
 
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
-        path,
+        streamPath: path,
         offset: expectedOffset(1),
         type: "https://events.iterate.com/events/example/value-recorded",
         payload: { value: 42 },
@@ -166,7 +165,7 @@ describe.sequential("events stream e2e", () => {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          type: childStreamCreatedEventType,
+          type: "https://events.iterate.com/events/stream/child-stream-created",
           payload: { path: childPath },
         }),
       });
@@ -177,7 +176,7 @@ describe.sequential("events stream e2e", () => {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          type: streamInitializedEventType,
+          type: "https://events.iterate.com/events/stream/initialized",
           payload: { path },
         }),
       });
@@ -186,8 +185,8 @@ describe.sequential("events stream e2e", () => {
       await expect(childCreatedResponse.json()).resolves.toMatchObject({
         result: {
           event: {
-            path,
-            type: childStreamCreatedEventType,
+            streamPath: path,
+            type: "https://events.iterate.com/events/stream/child-stream-created",
             payload: { path: childPath },
           },
         },
@@ -215,7 +214,6 @@ describe.sequential("events stream e2e", () => {
       ).rejects.toThrow(/next generated offset/i);
 
       expect(await app.client.getState({ path })).toEqual({
-        initialized: true,
         path,
         lastOffset: expectedStoredOffset(0),
         eventCount: 1,
@@ -224,9 +222,9 @@ describe.sequential("events stream e2e", () => {
       expect(await collectStreamEvents(app, { path })).toEqual([]);
       expect(await collectAllStreamEvents(app, { path })).toMatchObject([
         {
-          path,
+          streamPath: path,
           offset: expectedStoredOffset(0),
-          type: streamInitializedEventType,
+          type: "https://events.iterate.com/events/stream/initialized",
           payload: { path },
         },
       ]);
@@ -315,7 +313,6 @@ describe.sequential("events stream e2e", () => {
       const path = uniqueStreamPath();
 
       expect(await app.client.getState({ path })).toEqual({
-        initialized: true,
         path,
         lastOffset: expectedStoredOffset(0),
         eventCount: 1,
@@ -334,14 +331,15 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(await app.client.getState({ path: "/" })).toMatchObject({
-        initialized: true,
         path: "/",
         metadata: {},
       });
 
       const escapedRootHistoryResponse = await app.fetch("/api/streams/%2F");
       expect(escapedRootHistoryResponse.status).toBe(200);
-      expect(await escapedRootHistoryResponse.text()).toContain(streamInitializedEventType);
+      expect(await escapedRootHistoryResponse.text()).toContain(
+        "https://events.iterate.com/events/stream/initialized",
+      );
 
       const escapedRootStateResponse = await app.fetch("/api/__state/%2F");
       expect(escapedRootStateResponse.status).toBe(200);
@@ -349,8 +347,8 @@ describe.sequential("events stream e2e", () => {
         await app.client.getState({ path: "/" }),
       );
       expect(rootHistory[0]).toMatchObject({
-        path: "/",
-        type: streamInitializedEventType,
+        streamPath: "/",
+        type: "https://events.iterate.com/events/stream/initialized",
       });
     },
     testTimeoutMs,
@@ -368,7 +366,7 @@ describe.sequential("events stream e2e", () => {
       });
       await app.client.append({
         path,
-        type: streamMetadataUpdatedEventType,
+        type: "https://events.iterate.com/events/stream/metadata-updated",
         payload: {
           metadata: {
             owner: "first",
@@ -378,7 +376,7 @@ describe.sequential("events stream e2e", () => {
       });
       await app.client.append({
         path,
-        type: streamMetadataUpdatedEventType,
+        type: "https://events.iterate.com/events/stream/metadata-updated",
         payload: {
           metadata: {
             owner: "second",
@@ -387,7 +385,6 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(await app.client.getState({ path })).toEqual({
-        initialized: true,
         path,
         lastOffset: expectedOffset(3),
         eventCount: 4,
@@ -466,6 +463,155 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "destroy wipes an existing stream and returns pre-destruction state",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { step: 1 },
+      });
+      await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/stream/metadata-updated",
+        payload: { metadata: { owner: "destroy-me" } },
+      });
+
+      const stateBeforeDestroy = await app.client.getState({ path });
+
+      const result = await app.client.destroy({ path });
+      expect(result).toEqual({
+        destroyed: true,
+        finalState: stateBeforeDestroy,
+      });
+
+      expect(await collectStreamEvents(app, { path })).toEqual([]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroy on untouched stream returns null finalState",
+    async () => {
+      const path = uniqueStreamPath();
+
+      expect(await app.client.destroy({ path })).toEqual({
+        destroyed: true,
+        finalState: null,
+      });
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "append after destroy re-initializes the stream from offset 0",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { beforeDestroy: true },
+      });
+
+      await app.client.destroy({ path });
+
+      const result = await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { afterDestroy: true },
+      });
+
+      expect(result.event).toMatchObject({
+        streamPath: path,
+        offset: expectedOffset(1),
+        payload: { afterDestroy: true },
+      });
+
+      expect(await collectAllStreamEvents(app, { path })).toMatchObject([
+        {
+          streamPath: path,
+          offset: expectedStoredOffset(0),
+          type: "https://events.iterate.com/events/stream/initialized",
+          payload: { path },
+        },
+        {
+          streamPath: path,
+          offset: expectedOffset(1),
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { afterDestroy: true },
+        },
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroy only wipes the targeted stream",
+    async () => {
+      const pathA = uniqueStreamPath();
+      const pathB = uniqueStreamPath();
+
+      await app.client.append({
+        path: pathA,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { label: "A" },
+      });
+      await app.client.append({
+        path: pathB,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { label: "B" },
+      });
+
+      await app.client.destroy({ path: pathA });
+
+      expect(await collectStreamEvents(app, { path: pathA })).toEqual([]);
+      expect(await collectStreamEvents(app, { path: pathB })).toEqual([
+        expect.objectContaining({
+          streamPath: pathB,
+          payload: { label: "B" },
+        }),
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroy does not remove stale discovery entries from listStreams",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { listed: true },
+      });
+
+      await waitForStream(app, path);
+      await app.client.destroy({ path });
+
+      const streams = await app.client.listStreams({});
+      expect(streams.some((stream) => stream.path === path)).toBe(true);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroy allows wiping the root stream",
+    async () => {
+      const stateBeforeDestroy = await app.client.getState({ path: "/" });
+
+      const result = await app.client.destroy({ path: "/" });
+      expect(result).toEqual({
+        destroyed: true,
+        finalState: stateBeforeDestroy,
+      });
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "first append to a nested stream initializes the chain and propagates child-stream-created events upward",
     async () => {
       const top = randomUUID().slice(0, 6);
@@ -491,7 +637,7 @@ describe.sequential("events stream e2e", () => {
 
       expect(await collectStreamEvents(app, { path })).toMatchObject([
         {
-          path,
+          streamPath: path,
           offset: expectedOffset(1),
           payload: { propagated: true },
         },
@@ -499,13 +645,13 @@ describe.sequential("events stream e2e", () => {
 
       expect(await collectAllStreamEvents(app, { path })).toMatchObject([
         {
-          path,
+          streamPath: path,
           offset: expectedStoredOffset(0),
-          type: streamInitializedEventType,
+          type: "https://events.iterate.com/events/stream/initialized",
           payload: { path },
         },
         {
-          path,
+          streamPath: path,
           offset: expectedOffset(1),
           type: "https://events.iterate.com/events/example/value-recorded",
           payload: { propagated: true },
@@ -515,7 +661,10 @@ describe.sequential("events stream e2e", () => {
       const parentEvents = await collectAllStreamEvents(app, { path: parentPath });
       expect(
         parentEvents
-          .filter((event) => event.type === childStreamCreatedEventType)
+          .filter(
+            (event) =>
+              event.type === "https://events.iterate.com/events/stream/child-stream-created",
+          )
           .map((event) => getPayloadPath(event)),
       ).toEqual([path]);
 
@@ -523,8 +672,8 @@ describe.sequential("events stream e2e", () => {
       const rootPropagatedPaths = rootEvents
         .filter(
           (event) =>
-            event.type === childStreamCreatedEventType &&
-            event.path === "/" &&
+            event.type === "https://events.iterate.com/events/stream/child-stream-created" &&
+            event.streamPath === "/" &&
             typeof getPayloadPath(event) === "string" &&
             propagatedPaths.includes(getPayloadPath(event) as StreamPath),
         )
@@ -557,11 +706,13 @@ describe.sequential("events stream e2e", () => {
         await collectAllStreamEvents(app, { path: parentPath })
       ).filter(
         (event) =>
-          event.type === childStreamCreatedEventType && getPayloadPath(event) === childPath,
+          event.type === "https://events.iterate.com/events/stream/child-stream-created" &&
+          getPayloadPath(event) === childPath,
       );
       const rootInitializedBefore = (await collectAllStreamEvents(app, { path: "/" })).filter(
         (event) =>
-          event.type === childStreamCreatedEventType && getPayloadPath(event) === childPath,
+          event.type === "https://events.iterate.com/events/stream/child-stream-created" &&
+          getPayloadPath(event) === childPath,
       );
 
       await app.client.append({
@@ -573,13 +724,15 @@ describe.sequential("events stream e2e", () => {
       expect(
         (await collectAllStreamEvents(app, { path: parentPath })).filter(
           (event) =>
-            event.type === childStreamCreatedEventType && getPayloadPath(event) === childPath,
+            event.type === "https://events.iterate.com/events/stream/child-stream-created" &&
+            getPayloadPath(event) === childPath,
         ),
       ).toHaveLength(parentInitializedBefore.length);
       expect(
         (await collectAllStreamEvents(app, { path: "/" })).filter(
           (event) =>
-            event.type === childStreamCreatedEventType && getPayloadPath(event) === childPath,
+            event.type === "https://events.iterate.com/events/stream/child-stream-created" &&
+            getPayloadPath(event) === childPath,
         ),
       ).toHaveLength(rootInitializedBefore.length);
     },
@@ -637,7 +790,7 @@ describe.sequential("events stream e2e", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
         event: {
-          path,
+          streamPath: path,
           offset: expectedOffset(1),
           payload: { via: "http" },
         },
@@ -726,15 +879,15 @@ describe.sequential("events stream e2e", () => {
 
         expect(first.done).toBe(false);
         expect(first.value).toMatchObject({
-          path,
+          streamPath: path,
           offset: expectedStoredOffset(0),
-          type: streamInitializedEventType,
+          type: "https://events.iterate.com/events/stream/initialized",
           payload: { path },
         });
 
         expect(second.done).toBe(false);
         expect(second.value).toMatchObject({
-          path,
+          streamPath: path,
           offset: expectedOffset(1),
           payload: { live: true },
         });
@@ -792,8 +945,8 @@ async function collectStreamEvents(
   return events.filter(
     (event) =>
       !(
-        event.type === streamInitializedEventType &&
-        event.path === options.path &&
+        event.type === "https://events.iterate.com/events/stream/initialized" &&
+        event.streamPath === options.path &&
         getPayloadPath(event) === options.path
       ),
   );
@@ -853,7 +1006,10 @@ async function waitForEvent(
 }
 
 function isChildStreamCreatedForPath(event: Event, path: StreamPath) {
-  return event.type === childStreamCreatedEventType && getPayloadPath(event) === path;
+  return (
+    event.type === "https://events.iterate.com/events/stream/child-stream-created" &&
+    getPayloadPath(event) === path
+  );
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number) {
@@ -866,7 +1022,10 @@ async function withTimeout<T>(promise: Promise<T>, ms: number) {
 }
 
 function getPayloadPath(event: Event) {
-  if (event.type === streamInitializedEventType || event.type === childStreamCreatedEventType) {
+  if (
+    event.type === "https://events.iterate.com/events/stream/initialized" ||
+    event.type === "https://events.iterate.com/events/stream/child-stream-created"
+  ) {
     return getPathPayload(event);
   }
 
@@ -874,9 +1033,13 @@ function getPayloadPath(event: Event) {
 }
 
 function getPathPayload(event: Event) {
-  if (event.type !== streamInitializedEventType && event.type !== childStreamCreatedEventType) {
-    throw new Error(`Expected a path payload event, received ${event.type}.`);
+  if (event.type === "https://events.iterate.com/events/stream/initialized") {
+    return StreamInitializedEvent.parse(event).payload.path;
   }
 
-  return event.payload.path;
+  if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
+    return ChildStreamCreatedEvent.parse(event).payload.path;
+  }
+
+  throw new Error(`Expected a path payload event, received ${event.type}.`);
 }

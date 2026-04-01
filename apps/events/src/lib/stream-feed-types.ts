@@ -69,7 +69,7 @@ export interface ErrorFeedItem {
 
 export interface EventFeedItem {
   kind: "event";
-  path: StreamPath;
+  streamPath: StreamPath;
   offset: string;
   createdAt: string;
   eventType: string;

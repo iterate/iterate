@@ -1,22 +1,16 @@
 import { DurableObject } from "cloudflare:workers";
 import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import {
-  childStreamCreatedEventType,
-  Event,
-  EventInput,
+  type DestroyStreamResult,
+  type Event,
+  Event as EventSchema,
+  type EventInput,
+  EventInput as EventInputSchema,
   Offset,
-  streamInitializedEventType,
-  streamMetadataUpdatedEventType,
   StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
-import {
-  getParentStreamBinding,
-  StreamAppendInputError,
-  StreamOffsetPreconditionError,
-} from "~/lib/stream-helpers.ts";
-const textEncoder = new TextEncoder();
-
+import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 /**
  * One stream per Durable Object: append-only event log in SQLite, a reduced
  * projection kept in memory and storage, and newline-delimited fanout for live
@@ -38,53 +32,97 @@ const textEncoder = new TextEncoder();
  * - https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/
  */
 export class StreamDurableObject extends DurableObject<Env> {
-  private state: StreamState = {
-    initialized: false,
-    path: null,
-    lastOffset: null,
-    eventCount: 0,
-    metadata: {},
-  };
+  private _state: StreamState | null = null;
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
 
+  private get state(): StreamState {
+    if (this._state == null) {
+      throw new Error(
+        "Stream durable object state was accessed before initialize({ path }) completed. Callers must use getInitializedStreamStub().",
+      );
+    }
+
+    return this._state;
+  }
+
+  // Cloudflare recommends `blockConcurrencyWhile()` in the constructor for
+  // schema setup and state hydration so requests never observe a half-initialized
+  // actor: https://developers.cloudflare.com/durable-objects/api/state/
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
-    // Cloudflare recommends `blockConcurrencyWhile()` in the constructor for
-    // schema setup and state hydration so requests never observe a half-initialized
-    // actor: https://developers.cloudflare.com/durable-objects/api/state/
     void this.ctx.blockConcurrencyWhile(async () => {
-      this.initializeStorage();
-      this.state = this.loadState();
+      this.ctx.storage.sql.exec(`
+        CREATE TABLE IF NOT EXISTS events (
+          offset TEXT PRIMARY KEY,
+          type TEXT NOT NULL,
+          payload TEXT NOT NULL CHECK(json_valid(payload)),
+          metadata TEXT CHECK(metadata IS NULL OR (json_valid(metadata) AND json_type(metadata) = 'object')),
+          idempotency_key TEXT UNIQUE,
+          created_at TEXT NOT NULL
+        )
+      `);
+      this.ctx.storage.sql.exec(`
+        CREATE TABLE IF NOT EXISTS reduced_state (
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+          json TEXT NOT NULL CHECK(json_valid(json))
+        )
+      `);
+
+      // Pull reduced state out of the database - we always keep it in memory
+      // (we don't ever want all events in memory, because there might be LOTS of them)
+      const persistedStateRow = this.ctx.storage.sql
+        .exec<{ json: string }>("SELECT json FROM reduced_state WHERE singleton = 1")
+        .next().value;
+
+      if (persistedStateRow != null) {
+        const parsed = StreamState.safeParse(JSON.parse(persistedStateRow.json));
+        if (parsed.success) {
+          this._state = parsed.data;
+        } else {
+          // Deliberately not crashing — throwing from the DO constructor makes
+          // the object permanently unaddressable and much harder to debug.
+          console.error(
+            "[stream-do] persisted reduced_state failed StreamState validation, leaving _state null so initialize() can re-derive it",
+            { error: parsed.error, raw: persistedStateRow.json },
+          );
+        }
+      }
     });
   }
 
   /**
-   * Initializes this stream's identity exactly once. The first successful call
-   * commits the synthetic self-initialized event at offset `0`; later same-path
+   * Ensures this stream exists. On the very first call, commits a synthetic
+   * `stream-initialized` event at offset `0` through `append()`. Subsequent
    * calls are no-ops.
+   *
+   * Think of this like the durable object constructor. We take arguments like { path }
+   * and set the initial state
+   *
+   * All external callers go through `getInitializedStreamStub()` in
+   * `~/lib/stream-helpers.ts`, which calls this before returning the stub.
    */
   initialize(args: { path: StreamPath }) {
-    const currentState = structuredClone(this.state);
-
-    if (currentState.initialized) {
-      const currentPath = currentState.path;
-      if (currentPath == null) {
-        throw new Error("Initialized stream durable object is missing path.");
-      }
-
-      if (currentPath !== args.path) {
-        throw new Error(`Stream path mismatch. Expected ${currentPath}, received ${args.path}.`);
-      }
+    if (this._state != null) {
       return;
     }
 
-    return this.append({
-      type: streamInitializedEventType,
-      payload: {
-        path: args.path,
-      },
-    });
+    this._state = {
+      path: args.path,
+      lastOffset: null,
+      eventCount: 0,
+      metadata: {},
+    };
+
+    try {
+      this.append({
+        type: "https://events.iterate.com/events/stream/initialized",
+        payload: { path: args.path },
+      });
+    } catch (error) {
+      this._state = null;
+      throw error;
+    }
   }
 
   /**
@@ -97,69 +135,116 @@ export class StreamDurableObject extends DurableObject<Env> {
    * `idempotencyKey` that already exists in this stream, we return the stored
    * event instead of creating a second row or advancing offsets/state.
    */
-  async append(inputEvent: EventInput) {
-    const parsedInputEvent = EventInput.parse(inputEvent);
-    const currentState = structuredClone(this.state);
-    const isStreamInitializedEvent = isStreamInitializedEventInput(parsedInputEvent);
+  append(inputEvent: EventInput): Event {
+    const parsedInputEvent = EventInputSchema.parse(inputEvent);
 
-    if (!isStreamInitializedEvent && !currentState.initialized) {
-      throw new Error("Stream durable object is not initialized.");
+    if (parsedInputEvent.idempotencyKey != null) {
+      const existingEvent = this.getEventByIdempotencyKey(parsedInputEvent.idempotencyKey);
+      if (existingEvent != null) {
+        return existingEvent;
+      }
     }
 
-    const path = currentState.initialized
-      ? (() => {
-          if (currentState.path == null) {
-            throw new Error("Initialized stream durable object is missing path.");
-          }
+    const nextOffset = Offset.parse(getNextEventOffset(this.state.lastOffset));
 
-          return currentState.path;
-        })()
-      : getStreamInitializedInputPath(parsedInputEvent);
-
-    const existingEvent =
-      parsedInputEvent.idempotencyKey == null
-        ? null
-        : this.getEventByIdempotencyKey({
-            path,
-            idempotencyKey: parsedInputEvent.idempotencyKey,
-          });
-
-    if (existingEvent != null) {
-      return existingEvent;
-    }
-
-    const nextOffset = Offset.parse(getNextEventOffset(currentState.lastOffset));
-
-    // Future pre-append checks belong here, before the transaction begins.
     if (parsedInputEvent.offset != null && parsedInputEvent.offset !== nextOffset) {
       throw new StreamOffsetPreconditionError(
         `Client-supplied offset ${parsedInputEvent.offset} does not match next generated offset ${nextOffset}.`,
       );
     }
 
-    const event = this.buildInsertedEvent({
-      path,
-      inputEvent: parsedInputEvent,
+    const event = EventSchema.parse({
+      ...parsedInputEvent,
+      streamPath: this.state.path,
       offset: nextOffset,
+      createdAt: new Date().toISOString(),
     });
-    const nextState = reduceStreamState({
-      state: currentState,
-      event,
-    });
+
+    const nextState = reduceStreamState({ state: this.state, event });
 
     this.ctx.storage.transactionSync(() => {
-      this.insertEventRowSync(event);
-      this.writeReducedStateSync(nextState);
+      this.ctx.storage.sql.exec(
+        `INSERT INTO events (offset, type, payload, metadata, idempotency_key, created_at)
+         VALUES (?, ?, json(?), ?, ?, ?)`,
+        event.offset,
+        event.type,
+        JSON.stringify(event.payload),
+        event.metadata === undefined ? null : JSON.stringify(event.metadata),
+        event.idempotencyKey ?? null,
+        event.createdAt,
+      );
+      this.ctx.storage.sql.exec(
+        `INSERT INTO reduced_state (singleton, json)
+         VALUES (1, json(?))
+         ON CONFLICT(singleton) DO UPDATE SET json = excluded.json`,
+        JSON.stringify(nextState),
+      );
     });
 
-    this.state = structuredClone(nextState);
+    this._state = nextState;
+
     this.publish(event);
-    this.afterAppend(event);
+
+    switch (event.type) {
+      case "https://events.iterate.com/events/stream/initialized": {
+        void this.getParent().then((parent) =>
+          parent?.append({
+            type: "https://events.iterate.com/events/stream/child-stream-created",
+            payload: { path: event.streamPath },
+            ...(event.metadata == null ? {} : { metadata: event.metadata }),
+          }),
+        );
+        break;
+      }
+      case "https://events.iterate.com/events/stream/child-stream-created": {
+        void this.getParent().then((parent) => parent?.append(event));
+        break;
+      }
+    }
     return event;
   }
 
-  async getState(): Promise<StreamState> {
-    return structuredClone(this.state);
+  getState(): StreamState {
+    return this.state;
+  }
+
+  // Cloudflare's supported way to wipe a Durable Object's persisted data is
+  // `deleteAll()` on its storage rather than an explicit instance-destruction API:
+  // https://developers.cloudflare.com/durable-objects/api/storage-api/
+  // https://developers.cloudflare.com/durable-objects/best-practices/access-durable-objects-storage/
+  async destroy(): Promise<DestroyStreamResult> {
+    const stateBeforeDelete = structuredClone(this._state);
+
+    for (const subscriber of this.subscribers) {
+      try {
+        subscriber.close();
+      } catch {}
+    }
+    this.subscribers.clear();
+
+    await this.ctx.storage.deleteAll();
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS events (
+        offset TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        payload TEXT NOT NULL CHECK(json_valid(payload)),
+        metadata TEXT CHECK(metadata IS NULL OR (json_valid(metadata) AND json_type(metadata) = 'object')),
+        idempotency_key TEXT UNIQUE,
+        created_at TEXT NOT NULL
+      )
+    `);
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS reduced_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        json TEXT NOT NULL CHECK(json_valid(json))
+      )
+    `);
+    this._state = null;
+
+    return {
+      destroyed: true,
+      finalState: stateBeforeDelete,
+    };
   }
 
   /**
@@ -171,35 +256,31 @@ export class StreamDurableObject extends DurableObject<Env> {
    * newline-delimited JSON objects, but it skips malformed lines instead of
    * killing the whole live subscription.
    */
-  async history(args: { afterOffset?: string } = {}): Promise<Event[]> {
-    if (!this.state.initialized) {
-      return [];
-    }
+  history(args: { afterOffset?: string } = {}): Event[] {
+    const afterOffset = args.afterOffset ?? "";
 
-    const path = this.state.path;
-    if (path == null) {
-      throw new Error("Initialized stream durable object is missing path.");
-    }
-
-    return this.listEventsAfterOffset({
-      path,
-      afterOffset: args.afterOffset ?? "",
-    });
+    return this.ctx.storage.sql
+      .exec<SqliteEventRow>(
+        `SELECT * FROM events WHERE offset > ? ORDER BY offset ASC`,
+        afterOffset,
+      )
+      .toArray()
+      .flatMap((row) => {
+        const event = this.parseEventRow(row);
+        return event ? [event] : [];
+      });
   }
 
   /**
    * Returns newline-delimited JSON so backlog and live events share the same
    * framing as `decodeEventStream()` in `~/lib/utils.ts`.
    */
-  async stream(
-    args: { afterOffset?: string; live?: boolean } = {},
-  ): Promise<ReadableStream<Uint8Array>> {
-    const backlogPromise = this.history(args);
+  stream(args: { afterOffset?: string; live?: boolean } = {}): ReadableStream<Uint8Array> {
+    const backlog = this.history(args);
     let subscriber: ReadableStreamDefaultController<Uint8Array> | undefined;
 
     return new ReadableStream<Uint8Array>({
-      start: async (controller) => {
-        const backlog = await backlogPromise;
+      start: (controller) => {
         for (const event of backlog) {
           controller.enqueue(encodeEventLine(event));
         }
@@ -220,181 +301,33 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  /**
-   * `events` is the append-only log; `reduced_state` is the fast projection we
-   * can return from `getState()` without replaying the whole stream on every
-   * request.
-   */
-  private initializeStorage() {
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS events (
-        offset TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        payload TEXT NOT NULL CHECK(json_valid(payload)),
-        metadata TEXT CHECK(metadata IS NULL OR (json_valid(metadata) AND json_type(metadata) = 'object')),
-        idempotency_key TEXT UNIQUE,
-        created_at TEXT NOT NULL
-      )
-    `);
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS reduced_state (
-        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-        json TEXT NOT NULL CHECK(json_valid(json))
-      )
-    `);
-  }
-
-  /**
-   * Hydrates in-memory state from the reduced projection and cross-checks it
-   * against the append-only log so corruption fails fast instead of silently
-   * leaking inconsistent reads.
-   */
-  private loadState() {
-    const eventRowCount =
-      this.ctx.storage.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM events").one()
-        ?.count ?? 0;
-    const persistedStateRow = this.ctx.storage.sql
-      .exec<{ json: string }>("SELECT json FROM reduced_state WHERE singleton = 1")
-      .next().value;
-
-    if (persistedStateRow == null) {
-      if (eventRowCount === 0) {
-        return {
-          initialized: false,
-          path: null,
-          lastOffset: null,
-          eventCount: 0,
-          metadata: {},
-        } satisfies StreamState;
-      }
-
-      throw new Error(
-        "Stream durable object is missing reduced_state even though events exist. This object is in a broken state.",
-      );
-    }
-
-    const persistedState = StreamState.parse(JSON.parse(persistedStateRow.json));
-    if (persistedState.eventCount !== eventRowCount) {
-      throw new Error(
-        `Persisted reduced_state eventCount ${persistedState.eventCount} does not match ${eventRowCount} event rows.`,
-      );
-    }
-
-    if (!persistedState.initialized) {
-      if (eventRowCount > 0 || persistedState.path != null || persistedState.lastOffset != null) {
-        throw new Error("Uninitialized reduced_state cannot point at a path or existing events.");
-      }
-
-      return structuredClone(persistedState);
-    }
-
-    if (persistedState.path == null) {
-      throw new Error("Persisted reduced_state is missing a path even though it is initialized.");
-    }
-
-    if (persistedState.lastOffset == null) {
-      throw new Error(
-        "Persisted reduced_state is missing lastOffset even though it is initialized.",
-      );
-    }
-
-    return structuredClone(persistedState);
-  }
-
-  private buildInsertedEvent(args: { path: StreamPath; inputEvent: EventInput; offset: string }) {
-    const { path, inputEvent, offset } = args;
-
-    return Event.parse({
-      path,
-      offset,
-      type: inputEvent.type,
-      payload: inputEvent.payload,
-      metadata: inputEvent.metadata,
-      idempotencyKey: inputEvent.idempotencyKey,
-      createdAt: new Date().toISOString(),
-    });
-  }
-
-  private insertEventRowSync(event: Event) {
-    this.ctx.storage.sql.exec(
-      `INSERT INTO events (offset, type, payload, metadata, idempotency_key, created_at)
-       VALUES (?, ?, json(?), ?, ?, ?)`,
-      event.offset,
-      event.type,
-      JSON.stringify(event.payload),
-      event.metadata === undefined ? null : JSON.stringify(event.metadata),
-      event.idempotencyKey ?? null,
-      event.createdAt,
-    );
-  }
-
-  private writeReducedStateSync(state: StreamState) {
-    this.ctx.storage.sql.exec(
-      `INSERT INTO reduced_state (singleton, json)
-       VALUES (1, json(?))
-       ON CONFLICT(singleton) DO UPDATE SET json = excluded.json`,
-      JSON.stringify(state),
-    );
-  }
-
-  private listEventsAfterOffset(args: { path: StreamPath; afterOffset: string }) {
-    const { path, afterOffset } = args;
-
-    return this.ctx.storage.sql
-      .exec<{
-        offset: string;
-        type: string;
-        payload: string;
-        metadata: string | null;
-        idempotency_key: string | null;
-        created_at: string;
-      }>(
-        `SELECT offset, type, payload, metadata, idempotency_key, created_at
-        FROM events
-        WHERE offset > ?
-        ORDER BY offset ASC`,
-        afterOffset,
-      )
-      .toArray()
-      .map((row) =>
-        Event.parse({
-          path,
-          offset: row.offset,
-          type: row.type,
-          payload: JSON.parse(row.payload),
-          ...(row.metadata == null ? {} : { metadata: JSON.parse(row.metadata) }),
-          ...(row.idempotency_key == null ? {} : { idempotencyKey: row.idempotency_key }),
-          createdAt: row.created_at,
-        }),
-      );
-  }
-
-  private getEventByIdempotencyKey(args: { path: StreamPath; idempotencyKey: string }) {
-    const { path, idempotencyKey } = args;
-
+  private getEventByIdempotencyKey(idempotencyKey: string) {
     const row = this.ctx.storage.sql
-      .exec<{
-        offset: string;
-        type: string;
-        payload: string;
-        metadata: string | null;
-        idempotency_key: string | null;
-        created_at: string;
-      }>(
-        `SELECT offset, type, payload, metadata, idempotency_key, created_at
-         FROM events
-         WHERE idempotency_key = ?
-         LIMIT 1`,
+      .exec<SqliteEventRow>(
+        `SELECT * FROM events WHERE idempotency_key = ? LIMIT 1`,
         idempotencyKey,
       )
       .next().value;
 
+    return this.parseEventRow(row);
+  }
+
+  private async getParent() {
+    const path = this.state.path;
+    if (path === "/") {
+      return null;
+    }
+    const lastSlashIndex = path.lastIndexOf("/");
+    const parentPath = lastSlashIndex === 0 ? "/" : StreamPath.parse(path.slice(0, lastSlashIndex));
+    return getInitializedStreamStub({ path: parentPath });
+  }
+
+  private parseEventRow(row: SqliteEventRow | null | undefined): Event | null {
     if (row == null) {
       return null;
     }
-
-    return Event.parse({
-      path,
+    return EventSchema.parse({
+      streamPath: this.state.path,
       offset: row.offset,
       type: row.type,
       payload: JSON.parse(row.payload),
@@ -402,66 +335,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       ...(row.idempotency_key == null ? {} : { idempotencyKey: row.idempotency_key }),
       createdAt: row.created_at,
     });
-  }
-
-  private afterAppend(event: Event) {
-    switch (event.type) {
-      case streamInitializedEventType:
-        this.propagateChildStreamCreated({
-          streamPath: event.path,
-          childPath: getStreamInitializedEventPath(event),
-          metadata: event.metadata,
-        });
-        return;
-      case childStreamCreatedEventType:
-        this.propagateChildStreamCreated({
-          streamPath: event.path,
-          childPath: getChildStreamCreatedEventPath(event),
-          metadata: event.metadata,
-        });
-        return;
-      default:
-        return;
-    }
-  }
-
-  private propagateChildStreamCreated(args: {
-    streamPath: StreamPath;
-    childPath: StreamPath;
-    metadata?: Event["metadata"];
-  }) {
-    const parent = getParentStreamBinding(this.env, args.streamPath);
-    if (parent == null) {
-      return;
-    }
-
-    console.info("[stream-do] propagating child-stream-created", {
-      streamPath: args.streamPath,
-      parentPath: parent.parentPath,
-      childPath: args.childPath,
-    });
-
-    // Child discovery helps the parent/root indexes stay fresh, but the child
-    // append has already committed, so propagation failures are logged only.
-    void Promise.resolve(parent.streamStub)
-      .then(async (streamStub) => {
-        await streamStub.initialize({ path: parent.parentPath });
-        return streamStub.append({
-          type: childStreamCreatedEventType,
-          payload: {
-            path: args.childPath,
-          },
-          ...(args.metadata == null ? {} : { metadata: args.metadata }),
-        });
-      })
-      .catch((error) => {
-        console.error("[stream-do] failed to propagate child-stream-created", {
-          streamPath: args.streamPath,
-          parentPath: parent.parentPath,
-          childPath: args.childPath,
-          error,
-        });
-      });
   }
 
   private publish(event: Event) {
@@ -477,113 +350,54 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 }
 
+const textEncoder = new TextEncoder();
+
 function encodeEventLine(event: Event) {
   return textEncoder.encode(`${JSON.stringify(event)}\n`);
 }
 
-function isStreamInitializedEventInput(event: EventInput): event is EventInput & {
-  type: typeof streamInitializedEventType;
-  payload: { path: StreamPath };
-} {
-  return event.type === streamInitializedEventType;
-}
-
-function getStreamInitializedInputPath(event: EventInput) {
-  if (event.type !== streamInitializedEventType) {
-    throw new Error(`Expected ${streamInitializedEventType}, received ${event.type}.`);
-  }
-
-  return (event.payload as { path: StreamPath }).path;
-}
-
-function getStreamInitializedEventPath(event: Event) {
-  if (event.type !== streamInitializedEventType) {
-    throw new Error(`Expected ${streamInitializedEventType}, received ${event.type}.`);
-  }
-
-  return (event.payload as { path: StreamPath }).path;
-}
-
-function getChildStreamCreatedEventPath(event: Event) {
-  if (event.type !== childStreamCreatedEventType) {
-    throw new Error(`Expected ${childStreamCreatedEventType}, received ${event.type}.`);
-  }
-
-  return (event.payload as { path: StreamPath }).path;
-}
-
-function getStreamMetadataUpdatedEventMetadata(event: Event) {
-  if (event.type !== streamMetadataUpdatedEventType) {
-    throw new Error(`Expected ${streamMetadataUpdatedEventType}, received ${event.type}.`);
-  }
-
-  return (event.payload as { metadata: StreamState["metadata"] }).metadata;
-}
+type SqliteEventRow = {
+  offset: string;
+  type: string;
+  payload: string;
+  metadata: string | null;
+  idempotency_key: string | null;
+  created_at: string;
+};
 
 /**
  * Pure reducer for the persisted stream projection. Replay and append share the
  * same rules so state cannot drift based on which code path produced it.
- * `stream-initialized` is self-only and may happen once. `stream-metadata-updated`
- * replaces the metadata snapshot. Other events preserve metadata and simply
- * advance offsets/event counts.
+ *
+ * `initialize()` sets the initial state (with `lastOffset: null`), then appends
+ * the synthetic `stream-initialized` event through the normal `append()` path.
+ * After that, `stream-metadata-updated` replaces the metadata snapshot and all
+ * other events simply advance offsets/event counts.
  */
 function reduceStreamState(args: { state: StreamState; event: Event }): StreamState {
   const { state, event } = args;
 
+  if (state.path !== event.streamPath) {
+    throw new Error(`Stream path mismatch. Expected ${state.path}, received ${event.streamPath}.`);
+  }
+
   switch (event.type) {
-    case streamInitializedEventType: {
-      if (state.initialized) {
-        throw new StreamAppendInputError("stream-initialized may only be appended once.");
-      }
-
-      const initializedPath = getStreamInitializedEventPath(event);
-      if (event.path !== initializedPath) {
-        throw new Error(
-          `Uninitialized stream durable object expected self initialization for ${initializedPath}, received event for ${event.path}.`,
-        );
-      }
-
+    case "https://events.iterate.com/events/stream/metadata-updated": {
       return {
-        initialized: true,
-        path: event.path,
+        path: state.path,
+        lastOffset: event.offset,
+        eventCount: state.eventCount + 1,
+        metadata: event.payload.metadata,
+      };
+    }
+
+    default: {
+      return {
+        path: state.path,
         lastOffset: event.offset,
         eventCount: state.eventCount + 1,
         metadata: { ...state.metadata },
       };
     }
-    default:
-      break;
-  }
-
-  if (!state.initialized) {
-    throw new Error("Stream durable object is not initialized.");
-  }
-
-  const streamPath = state.path;
-  if (streamPath == null) {
-    throw new Error("Initialized stream durable object is missing path.");
-  }
-
-  if (streamPath !== event.path) {
-    throw new Error(`Stream path mismatch. Expected ${streamPath}, received ${event.path}.`);
-  }
-
-  switch (event.type) {
-    case streamMetadataUpdatedEventType:
-      return {
-        initialized: true,
-        path: streamPath,
-        lastOffset: event.offset,
-        eventCount: state.eventCount + 1,
-        metadata: getStreamMetadataUpdatedEventMetadata(event),
-      };
-    default:
-      return {
-        initialized: true,
-        path: streamPath,
-        lastOffset: event.offset,
-        eventCount: state.eventCount + 1,
-        metadata: { ...state.metadata },
-      };
   }
 }

@@ -59,7 +59,7 @@ function createStream(chunks: string[]) {
 
 function createEvent(overrides: Partial<Event> = {}): Event {
   return {
-    path: "/demo",
+    streamPath: "/demo",
     type: "https://events.iterate.com/manual-event-appended",
     payload: {},
     offset: "1",

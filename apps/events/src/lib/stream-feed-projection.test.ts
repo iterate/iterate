@@ -1,9 +1,5 @@
 import { describe, expect, test } from "vitest";
-import {
-  childStreamCreatedEventType,
-  streamMetadataUpdatedEventType,
-  type Event,
-} from "@iterate-com/events-contract";
+import { type Event } from "@iterate-com/events-contract";
 import {
   buildDisplayFeed,
   createGroupedOrSingleEvent,
@@ -19,7 +15,7 @@ import type { EventFeedItem, StreamFeedItem } from "~/lib/stream-feed-types.ts";
 describe("toEventFeedItem", () => {
   test("maps contract events to feed events", () => {
     const event = createEvent({
-      path: "/demo",
+      streamPath: "/demo",
       type: "https://events.iterate.com/demo/created",
       offset: "5",
       createdAt: "2026-03-30T12:34:56.000Z",
@@ -28,7 +24,7 @@ describe("toEventFeedItem", () => {
 
     expect(toEventFeedItem(event)).toEqual({
       kind: "event",
-      path: "/demo",
+      streamPath: "/demo",
       offset: "5",
       createdAt: "2026-03-30T12:34:56.000Z",
       eventType: "https://events.iterate.com/demo/created",
@@ -51,8 +47,8 @@ describe("projectWireToFeed", () => {
   test("adds a semantic child-stream item after child-stream-created events", () => {
     const feed = projectEventToFeed(
       createEvent({
-        path: "/",
-        type: childStreamCreatedEventType,
+        streamPath: "/",
+        type: "https://events.iterate.com/events/stream/child-stream-created",
         payload: { path: "/child-stream" },
       }),
     );
@@ -68,8 +64,8 @@ describe("projectWireToFeed", () => {
   test("adds a semantic metadata item after metadata-updated events", () => {
     const feed = projectEventToFeed(
       createEvent({
-        path: "/demo",
-        type: streamMetadataUpdatedEventType,
+        streamPath: "/demo",
+        type: "https://events.iterate.com/events/stream/metadata-updated",
         payload: { metadata: { owner: "jonas" } },
       }),
     );
@@ -85,8 +81,8 @@ describe("projectWireToFeed", () => {
   test("extracts only raw event rows from a mixed feed", () => {
     const feed = projectWireToFeed([
       createEvent({
-        path: "/",
-        type: childStreamCreatedEventType,
+        streamPath: "/",
+        type: "https://events.iterate.com/events/stream/child-stream-created",
         payload: { path: "/child-stream" },
       }),
     ]);
@@ -442,15 +438,15 @@ describe("buildDisplayFeed", () => {
   test("keeps semantic stream lifecycle rows in pretty mode", () => {
     const feed = projectWireToFeed([
       createEvent({
-        path: "/",
+        streamPath: "/",
         offset: "1",
-        type: childStreamCreatedEventType,
+        type: "https://events.iterate.com/events/stream/child-stream-created",
         payload: { path: "/created" },
       }),
       createEvent({
-        path: "/created",
+        streamPath: "/created",
         offset: "2",
-        type: streamMetadataUpdatedEventType,
+        type: "https://events.iterate.com/events/stream/metadata-updated",
         payload: { metadata: { color: "blue" } },
       }),
     ]);
@@ -478,7 +474,7 @@ describe("getAdjacentEventOffset", () => {
         createEvent({ offset: "2", type: "https://events.iterate.com/demo/b" }),
         createEvent({
           offset: "3",
-          type: childStreamCreatedEventType,
+          type: "https://events.iterate.com/events/stream/child-stream-created",
           payload: { path: "/child" },
         }),
       ]),
@@ -493,7 +489,7 @@ describe("getAdjacentEventOffset", () => {
 
 function createEvent(overrides: Partial<Event> = {}): Event {
   return {
-    path: "/demo",
+    streamPath: "/demo",
     type: "https://events.iterate.com/manual-event-appended",
     payload: {},
     offset: "1",

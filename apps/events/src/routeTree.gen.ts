@@ -14,6 +14,7 @@ import { Route as StreamInitializedRouteImport } from './routes/stream-initializ
 import { Route as ManualEventAppendedRouteImport } from './routes/manual-event-appended'
 import { Route as ErrorOccurredRouteImport } from './routes/error-occurred'
 import { Route as DocsRouteImport } from './routes/docs'
+import { Route as ChildStreamCreatedRouteImport } from './routes/child-stream-created'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
@@ -48,6 +49,11 @@ const ErrorOccurredRoute = ErrorOccurredRouteImport.update({
 const DocsRoute = DocsRouteImport.update({
   id: '/docs',
   path: '/docs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ChildStreamCreatedRoute = ChildStreamCreatedRouteImport.update({
+  id: '/child-stream-created',
+  path: '/child-stream-created',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppRoute = AppRouteImport.update({
@@ -102,6 +108,7 @@ const AppSecretsSecretIdRoute = AppSecretsSecretIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/error-occurred': typeof ErrorOccurredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
@@ -118,6 +125,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/error-occurred': typeof ErrorOccurredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
@@ -134,6 +142,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
+  '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/error-occurred': typeof ErrorOccurredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
@@ -152,6 +161,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/child-stream-created'
     | '/docs'
     | '/error-occurred'
     | '/manual-event-appended'
@@ -168,6 +178,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/child-stream-created'
     | '/docs'
     | '/error-occurred'
     | '/manual-event-appended'
@@ -183,6 +194,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/_app'
+    | '/child-stream-created'
     | '/docs'
     | '/error-occurred'
     | '/manual-event-appended'
@@ -201,6 +213,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
+  ChildStreamCreatedRoute: typeof ChildStreamCreatedRoute
   DocsRoute: typeof DocsRoute
   ErrorOccurredRoute: typeof ErrorOccurredRoute
   ManualEventAppendedRoute: typeof ManualEventAppendedRoute
@@ -245,6 +258,13 @@ declare module '@tanstack/react-router' {
       path: '/docs'
       fullPath: '/docs'
       preLoaderRoute: typeof DocsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/child-stream-created': {
+      id: '/child-stream-created'
+      path: '/child-stream-created'
+      fullPath: '/child-stream-created'
+      preLoaderRoute: typeof ChildStreamCreatedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app': {
@@ -363,6 +383,7 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
+  ChildStreamCreatedRoute: ChildStreamCreatedRoute,
   DocsRoute: DocsRoute,
   ErrorOccurredRoute: ErrorOccurredRoute,
   ManualEventAppendedRoute: ManualEventAppendedRoute,
@@ -374,12 +395,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}
