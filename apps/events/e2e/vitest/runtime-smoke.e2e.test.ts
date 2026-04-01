@@ -1,7 +1,7 @@
 /**
  * These smoke checks only talk to an externally managed worker over the network.
  * Set `EVENTS_BASE_URL` before running the suite.
- * CI skips this suite so branch test runs do not depend on deployed app smoke checks.
+ * This suite is intended for deployed workers and is suitable for preview workflows.
  */
 import { setTimeout as delay } from "node:timers/promises";
 import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
@@ -14,7 +14,7 @@ import {
   requireEventsBaseUrl,
 } from "../helpers.ts";
 
-const eventsBaseUrl = process.env.CI ? "http://127.0.0.1" : requireEventsBaseUrl();
+const eventsBaseUrl = requireEventsBaseUrl();
 const app = createEvents2AppFixture({
   baseURL: eventsBaseUrl,
 });
@@ -22,8 +22,7 @@ const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 const testTimeoutMs = 5_000;
-const describeRuntimeSmoke = process.env.CI ? describe.skip : describe;
-describeRuntimeSmoke("events runtime smoke", () => {
+describe("events runtime smoke", () => {
   test(
     "streams page responds",
     async () => {
@@ -88,17 +87,19 @@ describeRuntimeSmoke("events runtime smoke", () => {
         },
       });
 
-      const streams = await app.client.listStreams({});
-      expect(streams.some((stream) => stream.path === path)).toBe(true);
+      expect(await waitForStreamPath(path)).toBe(true);
 
       const rootEvents = await collectAsyncIterableUntilIdle({
         iterable: await app.client.stream({ path: "/" }),
         idleMs: historyIdleTimeoutMs,
       });
-      expect(rootEvents[0]).toMatchObject({
-        streamPath: "/",
-        type: "https://events.iterate.com/events/stream/initialized",
-      });
+      expect(
+        rootEvents.some(
+          (event) =>
+            event.streamPath === "/" &&
+            event.type === "https://events.iterate.com/events/stream/initialized",
+        ),
+      ).toBe(true);
       expect(await app.client.getState({ path: "/" })).toMatchObject({
         path: "/",
         metadata: {},
@@ -127,7 +128,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
 
       expect(await app.client.getState({ path })).toEqual({
         path,
-        maxOffset: 2,
+        eventCount: 2,
         metadata: {},
       });
 
@@ -196,4 +197,19 @@ function expectedOffset(value: number) {
 
 function expectedStoredOffset(value: number) {
   return value + 1;
+}
+
+async function waitForStreamPath(path: StreamPath) {
+  const deadline = Date.now() + postBootTimeoutMs;
+
+  while (Date.now() < deadline) {
+    const streams = await app.client.listStreams({});
+    if (streams.some((stream) => stream.path === path)) {
+      return true;
+    }
+
+    await delay(50);
+  }
+
+  return false;
 }

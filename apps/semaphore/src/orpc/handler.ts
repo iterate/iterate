@@ -10,7 +10,7 @@ export const orpcOpenApiHandler = new OpenAPIHandler(appRouter, {
   plugins: [
     new CORSPlugin({ origin: "*" }),
     new EvlogHandlerPlugin<AppContext>(),
-    createOpenApiReferencePluginForApp(manifest, ["Resources"], {
+    createOpenApiReferencePluginForApp(manifest, ["Resources", "Preview Environments"], {
       defaultOpenFirstTag: true,
     }),
   ],
