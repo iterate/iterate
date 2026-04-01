@@ -281,10 +281,7 @@ function pickSuccessResponse(operation: OpenApiOperation) {
   return successKey ? responses[successKey] : undefined;
 }
 
-function inferProcedureKind(
-  operation: OpenApiOperation,
-  response: OpenApiResponse | undefined,
-): ProcedureKind {
+function inferProcedureKind(response: OpenApiResponse | undefined): ProcedureKind {
   if (response?.content?.["text/event-stream"]) {
     return "stream";
   }
@@ -325,7 +322,7 @@ function inferStreamYieldSchema(response: OpenApiResponse | undefined): JsonSche
   return { type: "string" };
 }
 
-function inferOutputSchema(operation: OpenApiOperation, response: OpenApiResponse | undefined) {
+function inferOutputSchema(response: OpenApiResponse | undefined) {
   if (!response) {
     return undefined;
   }
@@ -358,9 +355,6 @@ function parseOperationInputSchema(operation: OpenApiOperation) {
   );
   const queryNames = new Set(
     queryParameters.flatMap((parameter) => (parameter.name ? [parameter.name] : [])),
-  );
-  const headerNames = new Set(
-    headerParameters.flatMap((parameter) => (parameter.name ? [parameter.name] : [])),
   );
   const bodyPropertyNames = new Set(
     isBodyPropertySchema(bodySchema) ? Object.keys(bodySchema.properties ?? {}) : [],
@@ -698,8 +692,8 @@ async function buildProcedureFromOperation(options: {
     options.operation.summary ??
     `${options.method.toUpperCase()} ${options.path}`;
   const inputPlan = parseOperationInputSchema(options.operation);
-  const outputSchema = inferOutputSchema(options.operation, response);
-  const kind = inferProcedureKind(options.operation, response);
+  const outputSchema = inferOutputSchema(response);
+  const kind = inferProcedureKind(response);
   const baseUrl = resolveServerBaseUrl(options.document, options.sourceUrl, options.baseUrl);
   const defaultInvoke = async (input: unknown) => {
     const normalizedInput = inputPlan.normalize(input);

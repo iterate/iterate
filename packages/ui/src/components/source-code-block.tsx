@@ -31,6 +31,7 @@ function CodeMirror({ value, extensions, editable, onChange }: CodeMirrorProps) 
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
+  const initialValueRef = useRef(value);
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -44,7 +45,7 @@ function CodeMirror({ value, extensions, editable, onChange }: CodeMirrorProps) 
     viewRef.current?.destroy();
 
     const view = new EditorView({
-      doc: value,
+      doc: initialValueRef.current,
       extensions: [
         extensions,
         EditorView.editable.of(editable),

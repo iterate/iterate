@@ -23,7 +23,7 @@ import {
   parseCodemodeSourcesYaml,
   type CodemodeUiSource,
 } from "~/lib/codemode-sources.ts";
-import { CodemodeNewRunSearchSchema, resolveCodemodeEditorCode } from "~/lib/codemode-links.ts";
+import { CodemodeNewRunSearch, resolveCodemodeEditorCode } from "~/lib/codemode-links.ts";
 import { CODEMODE_V2_STARTER } from "~/lib/codemode-v2.ts";
 import { runsQueryKey } from "~/lib/runs.ts";
 import { orpcClient } from "~/orpc/client.ts";
@@ -36,7 +36,7 @@ export const Route = createFileRoute("/_app/runs-v2-new")({
   staticData: {
     breadcrumb: "Codemode",
   },
-  validateSearch: CodemodeNewRunSearchSchema,
+  validateSearch: CodemodeNewRunSearch,
   beforeLoad: ({ search }) => {
     if (!search.sources) {
       throw redirect({

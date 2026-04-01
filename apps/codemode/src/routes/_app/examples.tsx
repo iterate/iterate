@@ -1,4 +1,3 @@
-import { useNavigate } from "@tanstack/react-router";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { Copy, Search } from "lucide-react";
 import { toast } from "sonner";
@@ -9,7 +8,7 @@ import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import {
   buildCodemodeNewRunHref,
   buildCodemodeNewRunSearch,
-  CodemodeExamplesSearchSchema,
+  CodemodeExamplesSearch,
 } from "~/lib/codemode-links.ts";
 import { formatCodemodeSourcesYaml } from "~/lib/codemode-sources.ts";
 import { CODEMODE_EXAMPLES } from "~/lib/codemode-v2.ts";
@@ -18,7 +17,7 @@ export const Route = createFileRoute("/_app/examples")({
   staticData: {
     breadcrumb: "Examples",
   },
-  validateSearch: CodemodeExamplesSearchSchema,
+  validateSearch: CodemodeExamplesSearch,
   component: ExamplesPage,
 });
 

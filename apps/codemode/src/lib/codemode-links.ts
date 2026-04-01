@@ -3,12 +3,12 @@ import { z } from "zod";
 import { formatCodemodeSourcesYaml } from "~/lib/codemode-sources.ts";
 import { CODEMODE_V2_STARTER } from "~/lib/codemode-v2.ts";
 
-export const CodemodeNewRunSearchSchema = z.object({
+export const CodemodeNewRunSearch = z.object({
   code: z.string().optional(),
   sources: z.string().optional(),
 });
 
-export const CodemodeExamplesSearchSchema = z.object({
+export const CodemodeExamplesSearch = z.object({
   q: z.string().optional(),
 });
 
