@@ -3,7 +3,6 @@ import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { useQuery } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
 import type { AppConfig } from "~/app.ts";
@@ -11,16 +10,11 @@ import { orpc, orpcClient } from "~/orpc/client.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
 
-const loadRequestHost = createServerFn({ method: "GET" }).handler(async ({ context }) => {
-  return context.rawRequest?.headers.get("host") ?? "";
-});
-
 export const Route = createFileRoute("/_app/debug")({
   staticData: {
     breadcrumb: "Debug",
   },
   loader: async () => ({
-    requestHost: await loadRequestHost(),
     ping: await orpcClient.ping({}),
   }),
   component: DebugPage,
@@ -28,7 +22,7 @@ export const Route = createFileRoute("/_app/debug")({
 
 function DebugPage() {
   const publicConfig = useConfig<PublicConfig>();
-  const { ping, requestHost } = Route.useLoaderData();
+  const { ping } = Route.useLoaderData();
   const [showPirateSecret, setShowPirateSecret] = useState(false);
   const { data: pirateSecretData, isPending: pirateSecretPending } = useQuery({
     ...orpc.pirateSecret.queryOptions({ input: {} }),
@@ -90,8 +84,6 @@ function DebugPage() {
 
   return (
     <div className="space-y-8 p-4">
-      <PreviewBanner requestHost={requestHost} />
-
       <section className="space-y-3">
         <div className="space-y-1">
           <h2 className="text-sm font-semibold">Runtime deps demo</h2>
@@ -228,50 +220,4 @@ function DebugPage() {
       </section>
     </div>
   );
-}
-
-function PreviewBanner(props: { requestHost: string }) {
-  const banner = resolvePreviewBanner(props.requestHost);
-
-  return (
-    <section className={`rounded-xl border px-4 py-3 ${banner.className}`}>
-      <p className="text-sm font-semibold">{banner.title}</p>
-      <p className="text-sm opacity-80">{banner.description}</p>
-      <p className="mt-1 font-mono text-xs opacity-70">{props.requestHost}</p>
-    </section>
-  );
-}
-
-function resolvePreviewBanner(requestHost: string) {
-  const slotNumber = Number(/^.+-preview-(\d+)(?:\..+)?$/.exec(requestHost)?.[1] ?? "0");
-
-  if (slotNumber === 1) {
-    return {
-      className: "border-amber-500/40 bg-amber-50 text-amber-950",
-      title: "Preview Signal One",
-      description: "Warm-up copy variant for the first claimed example preview.",
-    };
-  }
-
-  if (slotNumber === 2) {
-    return {
-      className: "border-sky-500/40 bg-sky-50 text-sky-950",
-      title: "Preview Signal Two",
-      description: "Cooler copy variant for the second claimed example preview.",
-    };
-  }
-
-  if (slotNumber === 3) {
-    return {
-      className: "border-emerald-500/40 bg-emerald-50 text-emerald-950",
-      title: "Preview Signal Three",
-      description: "Green-room copy variant for the third claimed example preview.",
-    };
-  }
-
-  return {
-    className: "border-neutral-300 bg-card text-foreground",
-    title: "Standard Debug Surface",
-    description: "Route-level diagnostics for the example app.",
-  };
 }

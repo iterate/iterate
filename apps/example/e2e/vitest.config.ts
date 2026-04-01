@@ -6,6 +6,7 @@ export default defineConfig({
     fileParallelism: false,
     hookTimeout: 120_000,
     include: ["./e2e/vitest/**/*.test.ts"],
+    passWithNoTests: true,
     testTimeout: 120_000,
   },
 });
