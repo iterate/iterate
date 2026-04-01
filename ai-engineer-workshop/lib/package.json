@@ -52,6 +52,7 @@
     "@orpc/client": "1.13.13",
     "@orpc/contract": "1.13.13",
     "@orpc/openapi-client": "1.13.13",
+    "@orpc/server": "1.13.13",
     "trpc-cli": "0.14.0",
     "zod": "^4.3.6"
   },
