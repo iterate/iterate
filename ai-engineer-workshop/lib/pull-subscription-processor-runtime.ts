@@ -104,7 +104,7 @@ export class PullSubscriptionProcessorRuntime<State> {
 
 function isAbortError(error: unknown) {
   return (
-    error instanceof DOMException ||
+    (error instanceof DOMException && error.name === "AbortError") ||
     (error instanceof Error && error.name === "AbortError") ||
     (typeof error === "object" && error != null && "name" in error && error.name === "AbortError")
   );

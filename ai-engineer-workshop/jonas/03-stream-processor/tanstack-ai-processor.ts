@@ -120,7 +120,7 @@ ${new URL(`/streams${streamPath}`, baseUrl)}
 Paste this JSON into the stream page input and submit it:
 {
   "type": "tanstack-ai-message-added",
-  "payload": { "role": "user", "content": "Say hello in one short sentence." },
+  "payload": { "role": "user", "content": "Say hello in one short sentence." }
 }
 `);
 
