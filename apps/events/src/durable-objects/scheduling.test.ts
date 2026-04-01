@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { SCHEDULE_ADDED_TYPE } from "~/durable-objects/scheduling-types.ts";
 import type {
   TestScheduleStreamDurableObject,
   TestStartupScheduleExplicitFalseStreamDurableObject,
@@ -24,6 +25,36 @@ type TestEnv = {
 const testEnv = env as unknown as TestEnv;
 
 describe("schedule operations", () => {
+  it("should repoint the stored alarm when a schedule control event is appended directly", async () => {
+    const streamStub = testEnv.TEST_SCHEDULE_STREAM.getByName("public-schedule-append-test");
+    const path = "/public-schedule-append-test";
+    const scheduleId = "public-schedule-append-id";
+    const time = Math.floor(Date.now() / 1000) + 60;
+
+    await streamStub.append({
+      events: [
+        {
+          path,
+          type: SCHEDULE_ADDED_TYPE,
+          payload: {
+            scheduleId,
+            callback: "testCallback",
+            payloadJson: null,
+            scheduleType: "delayed",
+            time,
+            delayInSeconds: 60,
+          },
+        },
+      ],
+    });
+
+    expect(await streamStub.getStoredAlarm()).toBe(time * 1000);
+
+    const schedule = await streamStub.getScheduleById(scheduleId);
+    expect(schedule?.id).toBe(scheduleId);
+    expect(schedule?.callback).toBe("testCallback");
+  });
+
   describe("cancelSchedule", () => {
     it("should return false when cancelling a non-existent schedule", async () => {
       const streamStub = testEnv.TEST_SCHEDULE_STREAM.getByName("cancel-nonexistent-test");

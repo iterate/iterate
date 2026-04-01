@@ -452,6 +452,18 @@ export async function runScheduleAlarm(args: SchedulingAlarmDeps): Promise<void>
   await scheduleNextAlarmFromTable(args.ctx);
 }
 
+export function isScheduleControlEventType(type: string): boolean {
+  switch (type) {
+    case SCHEDULE_ADDED_TYPE:
+    case SCHEDULE_CANCELLED_TYPE:
+    case SCHEDULE_EXECUTION_STARTED_TYPE:
+    case SCHEDULE_EXECUTION_FINISHED_TYPE:
+      return true;
+    default:
+      return false;
+  }
+}
+
 export function reduceSchedulingState(args: {
   event: Event;
   schedules: ScheduleProjectionState;

@@ -16,10 +16,12 @@ import {
   getSchedulesFromStorage,
   hydrateReducedStreamState,
   hydrateScheduleProjectionIfNeeded,
+  isScheduleControlEventType,
   projectPublicStreamState,
   reduceSchedulingState,
   runScheduleAlarm,
   scheduleEveryOnStream,
+  scheduleNextAlarmFromTable,
   scheduleOnStream,
 } from "~/durable-objects/scheduling.ts";
 import {
@@ -154,6 +156,14 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
 
     this.state = structuredClone(nextState);
+
+    // Public oRPC append can carry internal schedule control events. When it
+    // does, the append path needs to repoint the single DO alarm just like the
+    // private scheduler helpers do, otherwise the event log and schedule table
+    // would advance without the wake-up mechanism following them.
+    if (insertedEvents.some((event) => isScheduleControlEventType(event.type))) {
+      await scheduleNextAlarmFromTable(this.ctx);
+    }
 
     for (const event of insertedEvents) {
       this.publish(event);
