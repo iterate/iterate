@@ -180,6 +180,14 @@ export class StreamDurableObject extends DurableObject<Env> {
    * `events` is the append-only log; `reduced_state` is the fast projection we
    * can return from `getState()` without replaying the whole stream on every
    * request.
+   *
+   * This rollout is intentionally destructive: old stream Durable Objects with
+   * text-backed offsets must be deleted before deploy rather than migrated in
+   * place.
+   *
+   * SQLite / DO docs:
+   * - https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/
+   * - https://www.sqlite.org/autoinc.html
    */
   private initializeStorage() {
     this.ctx.storage.sql.exec(`
@@ -198,6 +206,21 @@ export class StreamDurableObject extends DurableObject<Env> {
         json TEXT NOT NULL CHECK(json_valid(json))
       )
     `);
+
+    const offsetColumn = this.ctx.storage.sql
+      .exec<{ name: string; type: string; pk: number }>("PRAGMA table_info(events)")
+      .toArray()
+      .find((column) => column.name === "offset");
+
+    if (offsetColumn == null) {
+      throw new Error("Stream durable object schema is missing the events.offset column.");
+    }
+
+    if (offsetColumn.type.toUpperCase() !== "INTEGER" || offsetColumn.pk !== 1) {
+      throw new Error(
+        "Stream durable object expects events.offset to be INTEGER PRIMARY KEY. Delete old stream durable objects before deploying this build.",
+      );
+    }
   }
 
   /**
@@ -250,6 +273,10 @@ export class StreamDurableObject extends DurableObject<Env> {
    * Inserts a fresh event row and lets SQLite allocate the next integer offset.
    * The returned row becomes the source of truth for the event we reduce and
    * publish, so batch appends still observe contiguous offsets in commit order.
+   *
+   * SQLite / DO docs:
+   * - https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/
+   * - https://www.sqlite.org/lang_returning.html
    */
 <<<<<<< HEAD
   private insertEventSync(args: { inputEvent: EventInputOutput }) {
