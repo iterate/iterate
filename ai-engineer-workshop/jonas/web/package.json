@@ -9,8 +9,8 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "deploy": "npm run build && wrangler deploy",
-    "deploy:dry-run": "npm run build && wrangler deploy --dry-run",
+    "deploy": "pnpm build && wrangler deploy",
+    "deploy:dry-run": "pnpm build && wrangler deploy --dry-run",
     "preview": "vite preview",
     "start": "node .output/server/index.mjs",
     "typecheck": "tsc --noEmit"

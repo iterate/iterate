@@ -4,7 +4,8 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-https://events.iterate.com}"
-STREAM_PATH="${STREAM_PATH:-/jonas/hello-world}"
+WORKSHOP_PATH_PREFIX="${WORKSHOP_PATH_PREFIX:-/$(id -un)}"
+STREAM_PATH="${STREAM_PATH:-${WORKSHOP_PATH_PREFIX}/hello-world}"
 EVENT_TYPE="${EVENT_TYPE:-hello-world}"
 MESSAGE="${1:-hello world}"
 

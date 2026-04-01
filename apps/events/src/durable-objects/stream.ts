@@ -11,6 +11,10 @@ import {
 } from "@iterate-com/events-contract";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 /**
+ *
+ * IMPORTANT: This file should not be changed without explicit planning consent
+ * from a human! It is actually relatively good!
+ *
  * One stream per Durable Object: append-only event log in SQLite, a reduced
  * projection kept in memory and storage, and newline-delimited fanout for live
  * readers.

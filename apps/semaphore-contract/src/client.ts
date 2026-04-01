@@ -41,17 +41,19 @@ export function resolveSemaphoreOrpcUrl(options: {
 
 export function createSemaphoreClient(options: CreateSemaphoreClientOptions): SemaphoreClient {
   const url = resolveSemaphoreOrpcUrl(options);
+  const authFetch: SemaphoreFetch = async (input, init) => {
+    const headers = new Headers(init?.headers);
+    headers.set("Authorization", `Bearer ${options.apiKey}`);
+
+    return (options.fetch ?? fetch)(input, {
+      ...init,
+      headers,
+    });
+  };
 
   const link = new OpenAPILink(semaphoreContract, {
     url,
-    headers: {
-      Authorization: `Bearer ${options.apiKey}`,
-    },
-    ...(options.fetch
-      ? {
-          fetch: (input: URL | string | Request, init?: RequestInit) => options.fetch!(input, init),
-        }
-      : {}),
+    fetch: authFetch,
   });
 
   return createORPCClient(link);

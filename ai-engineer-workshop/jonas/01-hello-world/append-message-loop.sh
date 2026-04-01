@@ -4,8 +4,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+WORKSHOP_PATH_PREFIX="${WORKSHOP_PATH_PREFIX:-/$(id -un)}"
 
-printf 'Appending to %s\n' "${STREAM_PATH:-/jonas/hello-world}"
+printf 'Appending to %s\n' "${STREAM_PATH:-${WORKSHOP_PATH_PREFIX}/hello-world}"
 printf 'Press Ctrl+C to stop.\n'
 
 while true; do
@@ -20,7 +21,8 @@ while true; do
   fi
 
   BASE_URL="${BASE_URL:-https://events.iterate.com}" \
-  STREAM_PATH="${STREAM_PATH:-/jonas/hello-world}" \
+  WORKSHOP_PATH_PREFIX="$WORKSHOP_PATH_PREFIX" \
+  STREAM_PATH="${STREAM_PATH:-${WORKSHOP_PATH_PREFIX}/hello-world}" \
   EVENT_TYPE="${EVENT_TYPE:-hello-world}" \
     "$SCRIPT_DIR/append-hello-world.sh" "$message"
 done
