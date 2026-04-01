@@ -94,7 +94,7 @@ export type StreamMetadataUpdatedPayload = z.infer<typeof StreamMetadataUpdatedP
 export const ErrorOccurredPayload = z.object({ message: z.string().trim().min(1) });
 export type ErrorOccurredPayload = z.infer<typeof ErrorOccurredPayload>;
 
-export const StreamInitializedEventInput = z.object({
+const StreamInitializedEventInput = z.object({
   type: z.literal(streamInitializedEventType),
   payload: StreamInitializedPayload,
   metadata: JSONObject.optional(),
@@ -105,21 +105,21 @@ export const StreamInitializedEventInput = z.object({
   // next offset this stream would generate for a newly inserted event.
   offset: Offset.optional(),
 });
-export const ChildStreamCreatedEventInput = z.object({
+const ChildStreamCreatedEventInput = z.object({
   type: z.literal(childStreamCreatedEventType),
   payload: ChildStreamCreatedPayload,
   metadata: JSONObject.optional(),
   idempotencyKey: z.string().trim().min(1).optional(),
   offset: Offset.optional(),
 });
-export const StreamMetadataUpdatedEventInput = z.object({
+const StreamMetadataUpdatedEventInput = z.object({
   type: z.literal(streamMetadataUpdatedEventType),
   payload: StreamMetadataUpdatedPayload,
   metadata: JSONObject.optional(),
   idempotencyKey: z.string().trim().min(1).optional(),
   offset: Offset.optional(),
 });
-export const ErrorOccurredEventInput = z.object({
+const ErrorOccurredEventInput = z.object({
   type: z.literal(errorOccurredEventType),
   payload: ErrorOccurredPayload,
   metadata: JSONObject.optional(),
@@ -143,22 +143,22 @@ export const EventInput = z.union([
 ]);
 export type EventInput = z.infer<typeof EventInput>;
 
-export const StreamInitializedEvent = StreamInitializedEventInput.extend({
+const StreamInitializedEvent = StreamInitializedEventInput.extend({
   path: StreamPath,
   offset: Offset,
   createdAt,
 });
-export const ChildStreamCreatedEvent = ChildStreamCreatedEventInput.extend({
+const ChildStreamCreatedEvent = ChildStreamCreatedEventInput.extend({
   path: StreamPath,
   offset: Offset,
   createdAt,
 });
-export const StreamMetadataUpdatedEvent = StreamMetadataUpdatedEventInput.extend({
+const StreamMetadataUpdatedEvent = StreamMetadataUpdatedEventInput.extend({
   path: StreamPath,
   offset: Offset,
   createdAt,
 });
-export const ErrorOccurredEvent = ErrorOccurredEventInput.extend({
+const ErrorOccurredEvent = ErrorOccurredEventInput.extend({
   path: StreamPath,
   offset: Offset,
   createdAt,
@@ -200,8 +200,6 @@ const Secret = SecretSummary.extend({
 });
 const PathMungingDescription =
   "For curl ergonomics, nested stream paths accept either raw nested segments or percent-escaped slash forms. Both resolve to the same canonical stream path.";
-const StreamHistoryPathDescription = `${PathMungingDescription} For example, \`GET /api/streams/team/inbox\`, \`GET /api/streams/team%2Finbox\`, and \`GET /api/streams/%2Fteam%2Finbox\` all target the same stream. The root stream is addressed canonically as \`GET /api/streams/%2F\`.`;
-const StreamStatePathDescription = `${PathMungingDescription} For example, \`GET /api/__state/team/inbox\`, \`GET /api/__state/team%2Finbox\`, and \`GET /api/__state/%2Fteam%2Finbox\` all target the same stream state. The root stream state is addressed canonically as \`GET /api/__state/%2F\`.`;
 
 export const eventsContract = oc.router({
   common: commonContract,
@@ -226,7 +224,7 @@ export const eventsContract = oc.router({
       operationId: "streamEvents",
       method: "GET",
       path: "/streams/{+path}",
-      description: `Reads historical events from a stream and can keep the connection open for live events. ${StreamHistoryPathDescription}`,
+      description: `Reads historical events from a stream and can keep the connection open for live events. ${PathMungingDescription} For example, \`GET /api/streams/team/inbox\`, \`GET /api/streams/team%2Finbox\`, and \`GET /api/streams/%2Fteam%2Finbox\` all target the same stream. The root stream is addressed canonically as \`GET /api/streams/%2F\`.`,
       tags: ["Streams"],
     })
     .input(
@@ -244,7 +242,7 @@ export const eventsContract = oc.router({
       operationId: "getStreamState",
       method: "GET",
       path: "/__state/{+path}",
-      description: `Returns the latest reduced projection for a stream, including whether it has been initialized, metadata, and generated offsets. ${StreamStatePathDescription}`,
+      description: `Returns the latest reduced projection for a stream, including whether it has been initialized, metadata, and generated offsets. ${PathMungingDescription} For example, \`GET /api/__state/team/inbox\`, \`GET /api/__state/team%2Finbox\`, and \`GET /api/__state/%2Fteam%2Finbox\` all target the same stream state. The root stream state is addressed canonically as \`GET /api/__state/%2F\`.`,
       tags: ["Streams"],
     })
     .input(

@@ -15,7 +15,7 @@ export class StreamOffsetPreconditionError extends Error {
   }
 }
 
-export function getStreamStub(env: Env, path: StreamPath) {
+function getStreamStub(env: Env, path: StreamPath) {
   return env.STREAM.getByName(path);
 }
 

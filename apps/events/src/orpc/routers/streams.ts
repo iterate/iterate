@@ -3,6 +3,7 @@ import {
   ChildStreamCreatedPayload,
   StreamPath,
   childStreamCreatedEventType,
+  streamInitializedEventType,
 } from "@iterate-com/events-contract";
 import {
   getInitializedStreamStub,
@@ -91,7 +92,14 @@ export const streamsRouter = {
     }
 
     if (rootState.initialized === true && !discovered.has(ROOT_STREAM_PATH)) {
-      discovered.set(ROOT_STREAM_PATH, events[0]?.createdAt ?? new Date().toISOString());
+      const rootInitializedEvent = events.find(
+        (event) => event.path === ROOT_STREAM_PATH && event.type === streamInitializedEventType,
+      );
+      if (rootInitializedEvent == null) {
+        throw new Error("Initialized root stream is missing its self stream-initialized event.");
+      }
+
+      discovered.set(ROOT_STREAM_PATH, rootInitializedEvent.createdAt);
     }
 
     return [...discovered.entries()]
