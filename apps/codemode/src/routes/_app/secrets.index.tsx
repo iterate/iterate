@@ -18,7 +18,7 @@ export const Route = createFileRoute("/_app/secrets/")({
   component: SecretsIndexPage,
 });
 
-const CreateSecretFormSchema = z.object({
+const CreateSecretForm = z.object({
   key: z.string().trim().min(1, "Secret key is required"),
   value: z.string().min(1, "Secret value is required"),
   description: z.string(),
@@ -54,8 +54,8 @@ function SecretsIndexPage() {
       description: "",
     },
     validators: {
-      onChange: CreateSecretFormSchema,
-      onSubmit: CreateSecretFormSchema,
+      onChange: CreateSecretForm,
+      onSubmit: CreateSecretForm,
     },
     onSubmit: async ({ value }) => {
       await createSecretMutation.mutateAsync({
