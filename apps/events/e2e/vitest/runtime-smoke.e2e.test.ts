@@ -58,7 +58,10 @@ describeRuntimeSmoke("events runtime smoke", () => {
 
       expect(body.paths).toHaveProperty("/streams");
       expect(body.paths).toHaveProperty("/streams/{path}");
-      expect(body.paths).toHaveProperty("/stream-state/{streamPath}");
+      expect(body.paths).toHaveProperty("/streams/__list");
+      expect(body.paths).toHaveProperty("/__state");
+      expect(body.paths).toHaveProperty("/__state/{streamPath}");
+      expect(body.paths).not.toHaveProperty("/stream-state/{streamPath}");
     },
     testTimeoutMs,
   );
@@ -76,6 +79,18 @@ describeRuntimeSmoke("events runtime smoke", () => {
 
       const streams = await app.client.listStreams({});
       expect(streams.some((stream) => stream.path === path)).toBe(true);
+
+      const rootEvents = await collectAsyncIterableUntilIdle({
+        iterable: await app.client.rootStream({}),
+        idleMs: historyIdleTimeoutMs,
+      });
+      expect(rootEvents[0]).toMatchObject({
+        path: "/",
+        type: STREAM_INITIALIZED_EVENT_TYPE,
+      });
+      expect(await app.client.rootState({})).toEqual(
+        await app.client.getState({ streamPath: "/" }),
+      );
 
       const events = await collectAsyncIterableUntilIdle({
         iterable: await app.client.stream({
@@ -104,6 +119,17 @@ describeRuntimeSmoke("events runtime smoke", () => {
         lastOffset: expectedOffset(1),
         eventCount: 2,
         metadata: {},
+      });
+
+      const rootHistoryResponse = await app.fetch("/api/streams");
+      expect(rootHistoryResponse.status).toBe(200);
+      expect(await rootHistoryResponse.text()).toContain(STREAM_INITIALIZED_EVENT_TYPE);
+
+      const rootStateResponse = await app.fetch("/api/__state/");
+      expect(rootStateResponse.status).toBe(200);
+      expect(await rootStateResponse.json()).toMatchObject({
+        initialized: true,
+        path: "/",
       });
 
       const controller = new AbortController();

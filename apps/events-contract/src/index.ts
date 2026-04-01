@@ -3,6 +3,7 @@ import { commonContract } from "@iterate-com/shared/apps/common-router-contract"
 import { z } from "zod";
 
 const streamPathPattern = /^\/(?:[a-z0-9_-]+(?:\/[a-z0-9_-]+)*)?$/;
+const reservedStreamSegmentPrefix = "__";
 const createdAt = z.iso.datetime({ offset: true });
 type BuiltInEventType =
   | "https://events.iterate.com/events/stream/initialized"
@@ -29,18 +30,35 @@ export const EventType = z
 // other malformed inputs because that would hide real misunderstandings.
 // https://orpc.dev/docs/openapi/routing
 // https://github.com/colinhacks/zod/blob/main/packages/docs-v3/README.md#preprocess
-export const StreamPath = z.preprocess((value) => {
-  if (typeof value !== "string") {
-    return value;
-  }
+export const StreamPath = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") {
+      return value;
+    }
 
-  try {
-    const decoded = decodeURIComponent(value);
-    return decoded.startsWith("/") ? decoded : `/${decoded}`;
-  } catch {
-    return value;
-  }
-}, z.string().max(1023).regex(streamPathPattern));
+    try {
+      const decoded = decodeURIComponent(value);
+      return decoded.startsWith("/") ? decoded : `/${decoded}`;
+    } catch {
+      return value;
+    }
+  },
+  z
+    .string()
+    .max(1023)
+    .regex(streamPathPattern)
+    .refine(
+      (value) =>
+        value === "/" ||
+        value
+          .slice(1)
+          .split("/")
+          .every((segment) => !segment.startsWith(reservedStreamSegmentPrefix)),
+      {
+        message: `Stream path segments must not start with "${reservedStreamSegmentPrefix}".`,
+      },
+    ),
+);
 export type StreamPath = z.infer<typeof StreamPath>;
 export const Offset = z.string().trim().min(1);
 // Keep public payload/state shapes JSON-only so Cloudflare Durable Object RPC
@@ -106,6 +124,10 @@ const secretShape = {
 } satisfies z.ZodRawShape;
 
 const Secret = z.object(secretShape);
+const PathMungingDescription =
+  "For curl ergonomics, nested stream paths accept either raw nested segments or percent-escaped slash forms. Both resolve to the same canonical stream path.";
+const StreamHistoryPathDescription = `${PathMungingDescription} For example, \`GET /api/streams/team/inbox\`, \`GET /api/streams/team%2Finbox\`, and \`GET /api/streams/%2Fteam%2Finbox\` all target the same stream.`;
+const StreamStatePathDescription = `${PathMungingDescription} For example, \`GET /api/__state/team/inbox\`, \`GET /api/__state/team%2Finbox\`, and \`GET /api/__state/%2Fteam%2Finbox\` all target the same stream state.`;
 
 export const eventsContract = oc.router({
   common: commonContract,
@@ -135,7 +157,7 @@ export const eventsContract = oc.router({
       operationId: "streamEvents",
       method: "GET",
       path: "/streams/{+path}",
-      description: "Reads historical events and can keep the connection open for live events.",
+      description: `Reads historical events from a non-root stream and can keep the connection open for live events. ${StreamHistoryPathDescription}`,
       tags: ["Streams"],
     })
     .input(
@@ -148,13 +170,31 @@ export const eventsContract = oc.router({
     // https://orpc.dev/docs/event-iterator
     // https://orpc.dev/docs/client/event-iterator
     .output(eventIterator(Event)),
+  rootStream: oc
+    .route({
+      operationId: "streamRootEvents",
+      method: "GET",
+      path: "/streams",
+      description:
+        "Reads historical events from the root (`/`) stream and can keep the connection open for live events. `GET /api/streams` is the curl-friendly shorthand for the root stream, and `GET /api/streams/%2F` also works.",
+      tags: ["Streams"],
+    })
+    .input(
+      z
+        .strictObject({
+          offset: Offset.optional(),
+          live: z.coerce.boolean().optional(),
+        })
+        .optional()
+        .default({}),
+    )
+    .output(eventIterator(Event)),
   getState: oc
     .route({
       operationId: "getStreamState",
       method: "GET",
-      path: "/stream-state/{+streamPath}",
-      description:
-        "Returns the latest reduced projection for a stream, including whether it has been initialized, metadata, and generated offsets.",
+      path: "/__state/{+streamPath}",
+      description: `Returns the latest reduced projection for a non-root stream, including whether it has been initialized, metadata, and generated offsets. ${StreamStatePathDescription}`,
       tags: ["Streams"],
     })
     .input(
@@ -163,12 +203,24 @@ export const eventsContract = oc.router({
       }),
     )
     .output(StreamState),
+  rootState: oc
+    .route({
+      operationId: "getRootStreamState",
+      method: "GET",
+      path: "/__state",
+      description:
+        "Returns the latest reduced projection for the root (`/`) stream. `GET /api/__state` is the curl-friendly shorthand for root state, and `GET /api/__state/%2F` also works.",
+      tags: ["Streams"],
+    })
+    .input(z.strictObject({}).optional().default({}))
+    .output(StreamState),
   listStreams: oc
     .route({
       operationId: "listStreams",
       method: "GET",
-      path: "/streams",
-      description: "Returns stream paths discovered from the root stream.",
+      path: "/streams/__list",
+      description:
+        "Returns stream paths discovered from the root stream. This lives at `/api/streams/__list` because `/api/streams` is reserved for root stream history.",
       tags: ["Streams"],
     })
     .input(z.strictObject({}).optional().default({}))

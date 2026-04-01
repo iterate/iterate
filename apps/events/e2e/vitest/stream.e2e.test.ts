@@ -276,6 +276,45 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "root stream and root state have dedicated endpoints while escaped root paths still work",
+    async () => {
+      const rootHistory = await collectAsyncIterableUntilIdle({
+        iterable: await app.client.rootStream({}),
+        idleMs: historyIdleTimeoutMs,
+      });
+      const escapedRootHistory = await collectAsyncIterableUntilIdle({
+        iterable: await app.client.stream({ path: "/" }),
+        idleMs: historyIdleTimeoutMs,
+      });
+
+      expect(rootHistory).toEqual(escapedRootHistory);
+      expect(await app.client.rootState({})).toEqual(
+        await app.client.getState({ streamPath: "/" }),
+      );
+
+      const rootHistoryResponse = await app.fetch("/api/streams");
+      const rootHistoryWithSlashResponse = await app.fetch("/api/streams/");
+      const escapedRootHistoryResponse = await app.fetch("/api/streams/%2F");
+      const rootHistoryBody = await rootHistoryResponse.text();
+
+      expect(rootHistoryResponse.status).toBe(200);
+      expect(await rootHistoryWithSlashResponse.text()).toEqual(rootHistoryBody);
+      expect(await escapedRootHistoryResponse.text()).toEqual(rootHistoryBody);
+
+      const rootStateResponse = await app.fetch("/api/__state");
+      const rootStateWithSlashResponse = await app.fetch("/api/__state/");
+      const escapedRootStateResponse = await app.fetch("/api/__state/%2F");
+      const rootStateBody = await rootStateResponse.json();
+
+      expect(rootStateResponse.status).toBe(200);
+      expect(await rootStateWithSlashResponse.json()).toEqual(rootStateBody);
+      expect(await escapedRootStateResponse.json()).toEqual(rootStateBody);
+      expect(rootStateBody).toEqual(await app.client.rootState({}));
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "metadata update events replace reduced metadata",
     async () => {
       const path = uniqueStreamPath();
@@ -319,6 +358,33 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "history and state accept both raw nested segments and escaped path forms over HTTP",
+    async () => {
+      const path = StreamPath.parse(`/e2e/${randomUUID().slice(0, 6)}/${randomUUID().slice(0, 6)}`);
+      const routePath = routePathFor(path);
+
+      await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { encoded: true },
+      });
+
+      const rawHistoryResponse = await app.fetch(`/api/streams${path}`);
+      const escapedHistoryResponse = await app.fetch(`/api/streams/${routePath}`);
+
+      expect(rawHistoryResponse.status).toBe(200);
+      expect(await escapedHistoryResponse.text()).toEqual(await rawHistoryResponse.text());
+
+      const rawStateResponse = await app.fetch(`/api/__state${path}`);
+      const escapedStateResponse = await app.fetch(`/api/__state/${routePath}`);
+
+      expect(rawStateResponse.status).toBe(200);
+      expect(await escapedStateResponse.json()).toEqual(await rawStateResponse.json());
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "listStreams reads discovered paths from the root stream",
     async () => {
       const path = uniqueStreamPath();
@@ -331,6 +397,18 @@ describe.sequential("events stream e2e", () => {
 
       const stream = await waitForStream(app, path);
       expect(stream.createdAt).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/));
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "listStreams is exposed at /api/streams/__list",
+    async () => {
+      const streams = await app.client.listStreams({});
+      const response = await app.fetch("/api/streams/__list");
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(streams);
     },
     testTimeoutMs,
   );
@@ -554,6 +632,32 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "reserved __ path segments are rejected for append, history, and state",
+    async () => {
+      const appendResponse = await app.fetch("/api/streams/e2e/__reserved", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { invalid: true },
+        }),
+      });
+      const historyResponse = await app.fetch("/api/streams/e2e/__reserved");
+      const stateResponse = await app.fetch("/api/__state/e2e/__reserved");
+
+      expect(appendResponse.status).toBeGreaterThanOrEqual(400);
+      expect(await appendResponse.text()).toContain("must not start");
+      expect(historyResponse.status).toBeGreaterThanOrEqual(400);
+      expect(await historyResponse.text()).toContain("must not start");
+      expect(stateResponse.status).toBeGreaterThanOrEqual(400);
+      expect(await stateResponse.text()).toContain("must not start");
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "live stream receives events appended after subscription",
     async () => {
       const path = uniqueStreamPath();
@@ -604,6 +708,10 @@ describe.sequential("events stream e2e", () => {
 
 function uniqueStreamPath() {
   return StreamPath.parse(`/e2e/${randomUUID().slice(0, 8)}`);
+}
+
+function routePathFor(path: StreamPath) {
+  return path === "/" ? "%2F" : path.slice(1).replaceAll("/", "%2F");
 }
 
 function expectedOffset(value: number) {

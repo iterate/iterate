@@ -1,17 +1,25 @@
 /**
  * Same curls as below, runnable in a terminal after:
  *   export BASE_URL="http://127.0.0.1:5174"
- *   export STREAM_RPATH="e2e-curl%2Fxxxxxxxx"   # path segment: no leading slash, slashes → %2F
+ *   export STREAM_CURL_PATH="e2e-curl/xxxxxxxx"
+ *   export STREAM_RPATH="e2e-curl%2Fxxxxxxxx"   # same path with slashes → %2F
  *
- *   curl -sS -X POST "$BASE_URL/api/streams/$STREAM_RPATH" \
+ *   curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \
  *     -H 'content-type: application/json' \
  *     -d '{"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true}}'
  *   echo
  *   echo '---'
- *   curl -sS "$BASE_URL/api/stream-state/$STREAM_RPATH"
+ *   curl -sS "$BASE_URL/api/__state/$STREAM_CURL_PATH"
  *   echo
  *   echo '---'
- *   curl -sS -N "$BASE_URL/api/streams/$STREAM_RPATH"
+ *   curl -sS "$BASE_URL/api/__state/$STREAM_RPATH"
+ *   echo
+ *   echo '---'
+ *   curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH"
+ *   echo
+ *   echo '---'
+ *   curl -sS "$BASE_URL/api/streams" >/dev/null
+ *   curl -sS "$BASE_URL/api/__state/" >/dev/null
  *
  * Test run: `EVENTS_BASE_URL` matches `BASE_URL` (no trailing slash).
  */
@@ -21,7 +29,7 @@ import { x } from "tinyexec";
 import { describe, expect, test } from "vitest";
 
 describe("events curl smoke", () => {
-  test("append, stream-state, history stream (shell + snapshot)", async () => {
+  test("append, state, history stream, and root endpoints (shell + snapshot)", async () => {
     const baseURL = process.env.EVENTS_BASE_URL?.trim().replace(/\/+$/, "");
     if (!baseURL) {
       throw new Error(
@@ -30,20 +38,29 @@ describe("events curl smoke", () => {
     }
 
     const streamPath = StreamPath.parse(`/e2e-curl/${randomUUID().slice(0, 8)}`);
+    const streamCurlPath = streamPath.slice(1);
     const streamRpath = streamPath === "/" ? "%2F" : streamPath.slice(1).replaceAll("/", "%2F");
 
     const script = `
 set -euo pipefail
 
-curl -sS -X POST "$BASE_URL/api/streams/$STREAM_RPATH" \\
+curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \\
   -H 'content-type: application/json' \\
   -d '{"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true}}'
 echo
 echo '---'
-curl -sS "$BASE_URL/api/stream-state/$STREAM_RPATH"
+curl -sS "$BASE_URL/api/__state/$STREAM_CURL_PATH"
 echo
 echo '---'
-curl -sS -N "$BASE_URL/api/streams/$STREAM_RPATH"
+curl -sS "$BASE_URL/api/__state/$STREAM_RPATH"
+echo
+echo '---'
+curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH"
+echo
+echo '---'
+curl -sS "$BASE_URL/api/streams" >/dev/null
+curl -sS "$BASE_URL/api/__state/" >/dev/null
+curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
 `;
 
     const result = await x("sh", ["-c", script], {
@@ -53,6 +70,7 @@ curl -sS -N "$BASE_URL/api/streams/$STREAM_RPATH"
         env: {
           ...process.env,
           BASE_URL: baseURL,
+          STREAM_CURL_PATH: streamCurlPath,
           STREAM_RPATH: streamRpath,
         },
       },
@@ -73,14 +91,17 @@ curl -sS -N "$BASE_URL/api/streams/$STREAM_RPATH"
       ---
       {"initialized":true,"path":"<streamPath>","lastOffset":"0000000000000001","eventCount":2,"metadata":{}}
       ---
+      {"initialized":true,"path":"<streamPath>","lastOffset":"0000000000000001","eventCount":2,"metadata":{}}
+      ---
       : 
 
       event: message
-      data: {"type":"https://events.iterate.com/events/stream/initialized","payload":{"path":"<streamPath>"},"offset":"0000000000000000","path":"<streamPath>","createdAt":"<ts>"}
+      data: {"type":"https://events.iterate.com/events/stream/initialized","payload":{"path":"<streamPath>"},"idempotencyKey":"stream-initialized","offset":"0000000000000000","path":"<streamPath>","createdAt":"<ts>"}
 
       event: message
       data: {"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":"0000000000000001","path":"<streamPath>","createdAt":"<ts>"}
 
+      ---
       ",
       }
     `);
