@@ -68,6 +68,8 @@ export const EventInput = z.object({
   idempotencyKey: z.string().trim().min(1).optional(),
 });
 export type EventInput = z.input<typeof EventInput>;
+/** Validated shape after `EventInput` parsing (Durable Object and internal callers). */
+export type EventInputOutput = z.output<typeof EventInput>;
 
 export const Event = EventInput.extend({
   offset: Offset,

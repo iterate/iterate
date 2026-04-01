@@ -7,7 +7,7 @@ import {
   StreamState,
   STREAM_CREATED_TYPE,
   STREAM_METADATA_UPDATED_TYPE,
-  type EventInput,
+  type EventInputOutput,
 } from "@iterate-com/events-contract";
 import { ROOT_STREAM_PATH, getParentPath } from "~/lib/utils.ts";
 
@@ -56,7 +56,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * `idempotencyKey` that already exists in this stream, we return the stored
    * event instead of creating a second row or advancing offsets/state.
    */
-  async append(args: { events: EventInput[] }) {
+  async append(args: { events: EventInputOutput[] }) {
     if (args.events.length === 0) {
       throw new Error("At least one event is required.");
     }
@@ -256,7 +256,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * call can insert multiple new events, and each later event must see the
    * offset produced earlier in the same batch.
    */
-  private insertEventSync(args: { inputEvent: EventInput; prevOffset: string | null }) {
+  private insertEventSync(args: { inputEvent: EventInputOutput; prevOffset: string | null }) {
     const { inputEvent, prevOffset } = args;
 
     const event = Event.parse({
@@ -396,7 +396,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // so we fan out in the background and only log failures.
     void Promise.allSettled(
       parentPaths.map((parentPath) => {
-        const events: EventInput[] = [
+        const events: EventInputOutput[] = [
           {
             path: parentPath,
             type: STREAM_CREATED_TYPE,
