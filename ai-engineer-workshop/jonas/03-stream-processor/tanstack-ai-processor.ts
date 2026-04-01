@@ -4,17 +4,19 @@
  * Uses TanStack AI's `chat()` to stream chunks and accumulates the assistant
  * response directly — no StreamProcessor needed for this text-only case.
  *
- * Run with cwd `ai-engineer-workshop/jonas`:
- *
- *   doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm tsx 03-stream-processor/tanstack-ai-processor.ts
+ * Run with `pnpm workshop run` and select this script.
+ * Override `BASE_URL`, `WORKSHOP_PATH_PREFIX`, `STREAM_PATH`, or `OPENAI_MODEL` if needed.
  */
 import { randomBytes } from "node:crypto";
 import { chat, type ModelMessage, type StreamChunk } from "@tanstack/ai";
 import { openaiText, OPENAI_CHAT_MODELS } from "@tanstack/ai-openai";
 import { z } from "zod";
-import { createEventsClient } from "../../lib/sdk.ts";
-import { PullSubscriptionProcessorRuntime } from "../../lib/pull-subscription-processor-runtime.ts";
-import { defineProcessor } from "../../lib/stream-process.ts";
+import {
+  createEventsClient,
+  defineProcessor,
+  type JSONObject,
+  PullSubscriptionProcessorRuntime,
+} from "ai-engineer-workshop";
 
 type TextModelMessage = ModelMessage<string | null>;
 
@@ -34,8 +36,6 @@ const AgentEvent = z.discriminatedUnion("type", [
   }),
 ]);
 
-const BASE_URL = process.env.BASE_URL || "https://events.iterate.com";
-const STREAM_PATH = process.env.STREAM_PATH || `/jonas/03/${randomBytes(4).toString("hex")}`;
 const OPENAI_MODEL = z.enum(OPENAI_CHAT_MODELS).parse(process.env.OPENAI_MODEL ?? "gpt-4o-mini");
 
 const tanstackAi = openaiText(OPENAI_MODEL);
@@ -87,7 +87,7 @@ const agentProcessor = defineProcessor<AgentState>({
     let assistantContent = "";
 
     for await (const chunk of chunkStream) {
-      await append({ type: "tanstack-ai-chunk-added", payload: chunk });
+      await append({ type: "tanstack-ai-chunk-added", payload: toJsonObject(chunk) });
 
       if (chunk.type === "content") {
         assistantContent = chunk.content;
@@ -105,11 +105,17 @@ const agentProcessor = defineProcessor<AgentState>({
   },
 });
 
-console.log(`\
-Watching ${STREAM_PATH}
+export default async function tanstackAiProcessor(pathPrefix: string) {
+  const baseUrl = process.env.BASE_URL || "https://events.iterate.com";
+  const streamPath =
+    process.env.STREAM_PATH ||
+    `${normalizePathPrefix(pathPrefix)}/03/${randomBytes(4).toString("hex")}`;
+
+  console.log(`\
+Watching ${streamPath}
 
 Open this in your browser and watch events appear live:
-${new URL(`/streams${STREAM_PATH}`, BASE_URL)}
+${new URL(`/streams${streamPath}`, baseUrl)}
 
 Paste this JSON into the stream page input and submit it:
 {
@@ -118,8 +124,21 @@ Paste this JSON into the stream page input and submit it:
 }
 `);
 
-await new PullSubscriptionProcessorRuntime({
-  eventsClient: createEventsClient(BASE_URL),
-  processor: agentProcessor,
-  streamPath: STREAM_PATH,
-}).run();
+  await new PullSubscriptionProcessorRuntime({
+    eventsClient: createEventsClient(baseUrl),
+    processor: agentProcessor,
+    streamPath,
+  }).run();
+}
+
+function normalizePathPrefix(pathPrefix: string) {
+  return pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
+}
+
+function toJsonObject(value: unknown): JSONObject {
+  const json = JSON.parse(JSON.stringify(value));
+  if (json == null || typeof json !== "object" || Array.isArray(json)) {
+    throw new Error("Expected a JSON object payload");
+  }
+  return json as JSONObject;
+}

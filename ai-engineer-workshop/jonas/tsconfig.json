@@ -9,7 +9,11 @@
     "allowImportingTsExtensions": true,
     "moduleResolution": "bundler",
     "skipLibCheck": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "paths": {
+      "ai-engineer-workshop": ["../lib/sdk.ts"]
+    }
   },
-  "include": ["**/*.ts", "../lib/**/*.ts"]
+  "include": ["**/*.ts"],
+  "exclude": ["web"]
 }

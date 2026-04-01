@@ -3,19 +3,22 @@
  *
  * `user-prompt` events trigger pi. Every pi AgentEvent is appended back into
  * the stream so the log becomes a full transcript of the run.
+ *
+ * Run with `pnpm workshop run` and select this script.
+ * Override `BASE_URL`, `WORKSHOP_PATH_PREFIX`, `STREAM_PATH`, `PI_PROVIDER`, or `PI_MODEL` if needed.
  */
 import { randomBytes } from "node:crypto";
 import { Agent, type AgentEvent, type AgentTool } from "@mariozechner/pi-agent-core";
 import { getEnvApiKey, getModels, registerBuiltInApiProviders, Type } from "@mariozechner/pi-ai";
 import { z } from "zod";
-import { createEventsClient } from "../../lib/sdk.ts";
-import { PullSubscriptionProcessorRuntime } from "../../lib/pull-subscription-processor-runtime.ts";
-import { defineProcessor } from "../../lib/stream-process.ts";
+import {
+  createEventsClient,
+  defineProcessor,
+  type JSONObject,
+  PullSubscriptionProcessorRuntime,
+} from "ai-engineer-workshop";
 
 registerBuiltInApiProviders();
-
-const BASE_URL = process.env.BASE_URL || "https://events.iterate.com";
-const STREAM_PATH = process.env.STREAM_PATH || `/jonas/04/${randomBytes(4).toString("hex")}`;
 
 const PI_PROVIDER = z
   .enum(["openai", "anthropic", "google"])
@@ -160,14 +163,20 @@ const processor = defineProcessor({
   },
 });
 
-console.log(`\
+export default async function piAgentProcessor(pathPrefix: string) {
+  const baseUrl = process.env.BASE_URL || "https://events.iterate.com";
+  const streamPath =
+    process.env.STREAM_PATH ||
+    `${normalizePathPrefix(pathPrefix)}/04/${randomBytes(4).toString("hex")}`;
+
+  console.log(`\
 Pi Agent Processor
   provider: ${PI_PROVIDER}
   model:    ${PI_MODEL}
-  stream:   ${STREAM_PATH}
+  stream:   ${streamPath}
 
 Open in browser:
-  ${new URL(`/streams${STREAM_PATH}`, BASE_URL)}
+  ${new URL(`/streams${streamPath}`, baseUrl)}
 
 Paste this JSON into the stream page to trigger:
 ${JSON.stringify(
@@ -180,18 +189,32 @@ ${JSON.stringify(
 )}
 `);
 
-await new PullSubscriptionProcessorRuntime({
-  eventsClient: createEventsClient(BASE_URL),
-  processor,
-  streamPath: STREAM_PATH,
-}).run();
+  await new PullSubscriptionProcessorRuntime({
+    eventsClient: createEventsClient(baseUrl),
+    processor,
+    streamPath,
+  }).run();
+}
 
-function serializePiEvent(event: AgentEvent): Record<string, unknown> {
+function serializePiEvent(event: AgentEvent): JSONObject {
   const { type: _type, ...rest } = event;
-  return JSON.parse(
-    JSON.stringify(rest, (_key, value) => {
-      if (value instanceof Set) return [...value];
-      return value;
-    }),
-  );
+  return toJsonObject(rest, (_key, value) => {
+    if (value instanceof Set) return [...value];
+    return value;
+  });
+}
+
+function normalizePathPrefix(pathPrefix: string) {
+  return pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
+}
+
+function toJsonObject(
+  value: unknown,
+  replacer?: (key: string, value: unknown) => unknown,
+): JSONObject {
+  const json = JSON.parse(JSON.stringify(value, replacer));
+  if (json == null || typeof json !== "object" || Array.isArray(json)) {
+    throw new Error("Expected a JSON object payload");
+  }
+  return json as JSONObject;
 }

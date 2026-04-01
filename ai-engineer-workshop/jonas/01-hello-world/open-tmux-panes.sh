@@ -10,14 +10,15 @@ fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BASE_URL="${BASE_URL:-https://events.iterate.com}"
-STREAM_PATH="${STREAM_PATH:-/jonas/hello-world}"
+WORKSHOP_PATH_PREFIX="${WORKSHOP_PATH_PREFIX:-/$(id -un)}"
+STREAM_PATH="${STREAM_PATH:-${WORKSHOP_PATH_PREFIX}/hello-world}"
 SESSION_NAME="${TMUX_SESSION_NAME:-hello-world-$(date +%s)}"
 
 tmux new-session -d -s "$SESSION_NAME" \
-  "cd \"$SCRIPT_DIR\" && BASE_URL=\"$BASE_URL\" STREAM_PATH=\"$STREAM_PATH\" ./stream-events.sh"
+  "cd \"$SCRIPT_DIR\" && BASE_URL=\"$BASE_URL\" WORKSHOP_PATH_PREFIX=\"$WORKSHOP_PATH_PREFIX\" STREAM_PATH=\"$STREAM_PATH\" ./stream-events.sh"
 
 tmux split-window -h -t "$SESSION_NAME":0 \
-  "cd \"$SCRIPT_DIR\" && BASE_URL=\"$BASE_URL\" STREAM_PATH=\"$STREAM_PATH\" ./append-message-loop.sh"
+  "cd \"$SCRIPT_DIR\" && BASE_URL=\"$BASE_URL\" WORKSHOP_PATH_PREFIX=\"$WORKSHOP_PATH_PREFIX\" STREAM_PATH=\"$STREAM_PATH\" ./append-message-loop.sh"
 
 tmux select-layout -t "$SESSION_NAME":0 even-horizontal
 

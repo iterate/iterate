@@ -5,6 +5,9 @@ import { eventsContract } from "./contract.ts";
 
 export { eventsContract } from "./contract.ts";
 export type { Event, EventInput, EventType, JSONObject, Offset, StreamPath } from "./contract.ts";
+export { PullSubscriptionProcessorRuntime } from "./pull-subscription-processor-runtime.ts";
+export { defineProcessor } from "./stream-process.ts";
+export type { StreamProcessor } from "./stream-process.ts";
 
 export function createEventsClient(baseUrl: string) {
   return createORPCClient(

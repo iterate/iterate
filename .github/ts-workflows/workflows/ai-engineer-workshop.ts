@@ -10,6 +10,13 @@ export default workflow({
         ".github/ts-workflows/workflows/ai-engineer-workshop.ts",
       ],
     },
+    push: {
+      branches: ["main"],
+      paths: [
+        "ai-engineer-workshop/lib/**",
+        ".github/ts-workflows/workflows/ai-engineer-workshop.ts",
+      ],
+    },
     workflow_dispatch: {},
   },
   jobs: {

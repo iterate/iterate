@@ -5,16 +5,18 @@
  * so you can watch the full lifecycle in the browser: response.created, text
  * deltas, output_item.done, response.completed.
  *
- * Run with cwd `ai-engineer-workshop/jonas`:
- *
- *   doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm tsx 05-openai-agent/openai-agent-processor.ts
+ * Run with `pnpm workshop run` and select this script.
+ * Override `BASE_URL`, `WORKSHOP_PATH_PREFIX`, or `STREAM_PATH` if needed.
  */
 import { randomBytes } from "node:crypto";
 import OpenAI from "openai";
 import type { ResponseInput, ResponseStreamEvent } from "openai/resources/responses/responses";
-import { createEventsClient } from "../../lib/sdk.ts";
-import { PullSubscriptionProcessorRuntime } from "../../lib/pull-subscription-processor-runtime.ts";
-import { defineProcessor } from "../../lib/stream-process.ts";
+import {
+  createEventsClient,
+  defineProcessor,
+  type JSONObject,
+  PullSubscriptionProcessorRuntime,
+} from "ai-engineer-workshop";
 
 const MODEL = "gpt-4o-mini";
 
@@ -24,9 +26,6 @@ type AgentState = {
 };
 
 const openai = new OpenAI();
-
-const BASE_URL = process.env.BASE_URL || "https://events.iterate.com";
-const STREAM_PATH = process.env.STREAM_PATH || `/jonas/05/${randomBytes(4).toString("hex")}`;
 
 const agentProcessor = defineProcessor<AgentState>({
   initialState: {
@@ -71,21 +70,24 @@ const agentProcessor = defineProcessor<AgentState>({
     });
 
     for await (const streamEvent of stream) {
-      await append({
-        type: "openai-stream-event",
-        payload: streamEvent as unknown as Record<string, unknown>,
-      });
+      await append({ type: "openai-stream-event", payload: toJsonObject(streamEvent) });
     }
 
     console.log(`Done offset=${event.offset}`);
   },
 });
 
-console.log(`\
-Watching ${STREAM_PATH}
+export default async function openAiAgentProcessor(pathPrefix: string) {
+  const baseUrl = process.env.BASE_URL || "https://events.iterate.com";
+  const streamPath =
+    process.env.STREAM_PATH ||
+    `${normalizePathPrefix(pathPrefix)}/05/${randomBytes(4).toString("hex")}`;
+
+  console.log(`\
+Watching ${streamPath}
 
 Open this in your browser and watch events appear live:
-${new URL(`/streams${STREAM_PATH}`, BASE_URL)}
+${new URL(`/streams${streamPath}`, baseUrl)}
 
 Paste this JSON into the stream page input and submit it:
 {
@@ -94,8 +96,21 @@ Paste this JSON into the stream page input and submit it:
 }
 `);
 
-await new PullSubscriptionProcessorRuntime({
-  eventsClient: createEventsClient(BASE_URL),
-  processor: agentProcessor,
-  streamPath: STREAM_PATH,
-}).run();
+  await new PullSubscriptionProcessorRuntime({
+    eventsClient: createEventsClient(baseUrl),
+    processor: agentProcessor,
+    streamPath,
+  }).run();
+}
+
+function normalizePathPrefix(pathPrefix: string) {
+  return pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
+}
+
+function toJsonObject(value: unknown): JSONObject {
+  const json = JSON.parse(JSON.stringify(value));
+  if (json == null || typeof json !== "object" || Array.isArray(json)) {
+    throw new Error("Expected a JSON object payload");
+  }
+  return json as JSONObject;
+}
