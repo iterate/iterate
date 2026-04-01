@@ -86,6 +86,7 @@ export const worker = await TanStackStart(APP_NAME, {
     STREAM: stream,
     APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
   },
+  compatibilityFlags: ["enable_request_signal"],
   wrangler: {
     main: "./src/entry.workerd.ts",
   },

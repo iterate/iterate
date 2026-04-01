@@ -58,10 +58,10 @@ describeRuntimeSmoke("events runtime smoke", () => {
 
       expect(body.paths).toHaveProperty("/streams");
       expect(body.paths).toHaveProperty("/streams/{path}");
-      expect(body.paths).toHaveProperty("/streams/__list");
-      expect(body.paths).toHaveProperty("/__state");
-      expect(body.paths).toHaveProperty("/__state/{streamPath}");
+      expect(body.paths).toHaveProperty("/__state/{path}");
       expect(body.paths).not.toHaveProperty("/stream-state/{streamPath}");
+      expect(body.paths).not.toHaveProperty("/streams/__list");
+      expect(body.paths).not.toHaveProperty("/__state");
     },
     testTimeoutMs,
   );
@@ -81,16 +81,18 @@ describeRuntimeSmoke("events runtime smoke", () => {
       expect(streams.some((stream) => stream.path === path)).toBe(true);
 
       const rootEvents = await collectAsyncIterableUntilIdle({
-        iterable: await app.client.rootStream({}),
+        iterable: await app.client.stream({ path: "/" }),
         idleMs: historyIdleTimeoutMs,
       });
       expect(rootEvents[0]).toMatchObject({
         path: "/",
         type: STREAM_INITIALIZED_EVENT_TYPE,
       });
-      expect(await app.client.rootState({})).toEqual(
-        await app.client.getState({ streamPath: "/" }),
-      );
+      expect(await app.client.getState({ path: "/" })).toMatchObject({
+        initialized: true,
+        path: "/",
+        metadata: {},
+      });
 
       const events = await collectAsyncIterableUntilIdle({
         iterable: await app.client.stream({
@@ -113,7 +115,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         payload: { smoke: true },
       });
 
-      expect(await app.client.getState({ streamPath: path })).toEqual({
+      expect(await app.client.getState({ path })).toEqual({
         initialized: true,
         path,
         lastOffset: expectedOffset(1),
@@ -121,11 +123,11 @@ describeRuntimeSmoke("events runtime smoke", () => {
         metadata: {},
       });
 
-      const rootHistoryResponse = await app.fetch("/api/streams");
+      const rootHistoryResponse = await app.fetch("/api/streams/%2F");
       expect(rootHistoryResponse.status).toBe(200);
       expect(await rootHistoryResponse.text()).toContain(STREAM_INITIALIZED_EVENT_TYPE);
 
-      const rootStateResponse = await app.fetch("/api/__state/");
+      const rootStateResponse = await app.fetch("/api/__state/%2F");
       expect(rootStateResponse.status).toBe(200);
       expect(await rootStateResponse.json()).toMatchObject({
         initialized: true,

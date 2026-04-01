@@ -202,7 +202,7 @@ describe.sequential("events stream e2e", () => {
         }),
       ).rejects.toThrow(/next generated offset/i);
 
-      expect(await app.client.getState({ streamPath: path })).toEqual({
+      expect(await app.client.getState({ path })).toEqual({
         initialized: true,
         path,
         lastOffset: expectedStoredOffset(0),
@@ -298,15 +298,15 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "getState returns an empty projection for untouched streams",
+    "getState initializes untouched streams before returning state",
     async () => {
       const path = uniqueStreamPath();
 
-      expect(await app.client.getState({ streamPath: path })).toEqual({
-        initialized: false,
-        path: null,
-        lastOffset: null,
-        eventCount: 0,
+      expect(await app.client.getState({ path })).toEqual({
+        initialized: true,
+        path,
+        lastOffset: expectedStoredOffset(0),
+        eventCount: 1,
         metadata: {},
       });
     },
@@ -314,40 +314,32 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "root stream and root state have dedicated endpoints while escaped root paths still work",
+    "root uses the same stream and state procedures as every other path",
     async () => {
       const rootHistory = await collectAsyncIterableUntilIdle({
-        iterable: await app.client.rootStream({}),
-        idleMs: historyIdleTimeoutMs,
-      });
-      const escapedRootHistory = await collectAsyncIterableUntilIdle({
         iterable: await app.client.stream({ path: "/" }),
         idleMs: historyIdleTimeoutMs,
       });
 
-      expect(rootHistory).toEqual(escapedRootHistory);
-      expect(await app.client.rootState({})).toEqual(
-        await app.client.getState({ streamPath: "/" }),
-      );
+      expect(await app.client.getState({ path: "/" })).toMatchObject({
+        initialized: true,
+        path: "/",
+        metadata: {},
+      });
 
-      const rootHistoryResponse = await app.fetch("/api/streams");
-      const rootHistoryWithSlashResponse = await app.fetch("/api/streams/");
       const escapedRootHistoryResponse = await app.fetch("/api/streams/%2F");
-      const rootHistoryBody = await rootHistoryResponse.text();
+      expect(escapedRootHistoryResponse.status).toBe(200);
+      expect(await escapedRootHistoryResponse.text()).toContain(STREAM_INITIALIZED_EVENT_TYPE);
 
-      expect(rootHistoryResponse.status).toBe(200);
-      expect(await rootHistoryWithSlashResponse.text()).toEqual(rootHistoryBody);
-      expect(await escapedRootHistoryResponse.text()).toEqual(rootHistoryBody);
-
-      const rootStateResponse = await app.fetch("/api/__state");
-      const rootStateWithSlashResponse = await app.fetch("/api/__state/");
       const escapedRootStateResponse = await app.fetch("/api/__state/%2F");
-      const rootStateBody = await rootStateResponse.json();
-
-      expect(rootStateResponse.status).toBe(200);
-      expect(await rootStateWithSlashResponse.json()).toEqual(rootStateBody);
-      expect(await escapedRootStateResponse.json()).toEqual(rootStateBody);
-      expect(rootStateBody).toEqual(await app.client.rootState({}));
+      expect(escapedRootStateResponse.status).toBe(200);
+      expect(await escapedRootStateResponse.json()).toEqual(
+        await app.client.getState({ path: "/" }),
+      );
+      expect(rootHistory[0]).toMatchObject({
+        path: "/",
+        type: STREAM_INITIALIZED_EVENT_TYPE,
+      });
     },
     testTimeoutMs,
   );
@@ -382,7 +374,7 @@ describe.sequential("events stream e2e", () => {
         },
       });
 
-      expect(await app.client.getState({ streamPath: path })).toEqual({
+      expect(await app.client.getState({ path })).toEqual({
         initialized: true,
         path,
         lastOffset: expectedOffset(3),
@@ -440,10 +432,10 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "listStreams is exposed at /api/streams/__list",
+    "listStreams is exposed at /api/streams",
     async () => {
       const streams = await app.client.listStreams({});
-      const response = await app.fetch("/api/streams/__list");
+      const response = await app.fetch("/api/streams");
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual(streams);
@@ -670,7 +662,7 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "reserved __ path segments are rejected for append, history, and state",
+    "__ path segments are valid stream path segments now that root uses the normal procedures",
     async () => {
       const appendResponse = await app.fetch("/api/streams/e2e/__reserved", {
         method: "POST",
@@ -685,12 +677,9 @@ describe.sequential("events stream e2e", () => {
       const historyResponse = await app.fetch("/api/streams/e2e/__reserved");
       const stateResponse = await app.fetch("/api/__state/e2e/__reserved");
 
-      expect(appendResponse.status).toBeGreaterThanOrEqual(400);
-      expect(await appendResponse.text()).toContain("must not start");
-      expect(historyResponse.status).toBeGreaterThanOrEqual(400);
-      expect(await historyResponse.text()).toContain("must not start");
-      expect(stateResponse.status).toBeGreaterThanOrEqual(400);
-      expect(await stateResponse.text()).toContain("must not start");
+      expect(appendResponse.status).toBe(200);
+      expect(historyResponse.status).toBe(200);
+      expect(stateResponse.status).toBe(200);
     },
     testTimeoutMs,
   );

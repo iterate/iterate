@@ -41,7 +41,7 @@ export function StreamsSidebar() {
   });
 
   const rootStateQuery = useQuery({
-    ...orpc.getState.queryOptions({ input: { streamPath: ROOT_STREAM_PATH } }),
+    ...orpc.getState.queryOptions({ input: { path: ROOT_STREAM_PATH } }),
     staleTime: 30_000,
   });
   const rootLastOffset =

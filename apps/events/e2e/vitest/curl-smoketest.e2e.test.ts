@@ -19,7 +19,7 @@
  *   echo
  *   echo '---'
  *   curl -sS "$BASE_URL/api/streams" >/dev/null
- *   curl -sS "$BASE_URL/api/__state/" >/dev/null
+ *   curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
  *
  * Test run: `EVENTS_BASE_URL` matches `BASE_URL` (no trailing slash).
  */
@@ -59,7 +59,6 @@ curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH"
 echo
 echo '---'
 curl -sS "$BASE_URL/api/streams" >/dev/null
-curl -sS "$BASE_URL/api/__state/" >/dev/null
 curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
 `;
 

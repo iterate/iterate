@@ -51,7 +51,7 @@ export function StreamPage({
   const [appendInputJson, setAppendInputJson] = useState("");
 
   const streamStateQuery = useQuery({
-    ...orpc.getState.queryOptions({ input: { streamPath } }),
+    ...orpc.getState.queryOptions({ input: { path: streamPath } }),
     staleTime: 5_000,
   });
 
