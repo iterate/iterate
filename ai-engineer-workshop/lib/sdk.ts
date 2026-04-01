@@ -1,7 +1,10 @@
 import type { ContractRouterClient } from "@orpc/contract";
 import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import { eventsContract } from "@iterate-com/events-contract";
+import { eventsContract } from "./contract.ts";
+
+export { eventsContract } from "./contract.ts";
+export type { Event, EventInput, EventType, JSONObject, Offset, StreamPath } from "./contract.ts";
 
 export function createEventsClient(baseUrl: string) {
   return createORPCClient(
