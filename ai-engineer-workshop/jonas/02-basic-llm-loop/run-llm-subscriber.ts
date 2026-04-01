@@ -31,6 +31,9 @@ const adapter = createOpenaiChat(OPENAI_MODEL, OPENAI_API_KEY);
 printInstructions({ baseUrl: BASE_URL, streamPath: STREAM_PATH });
 
 const { resumeOffset, messages } = await loadConversation({ client, streamPath: STREAM_PATH });
+console.error(
+  `[llm-subscriber] loaded messages=${messages.length} resumeOffset=${resumeOffset ?? "<start>"}`,
+);
 const stream = await client.stream(
   {
     path: STREAM_PATH,
@@ -66,7 +69,7 @@ for await (const event of stream) {
         {
           path: STREAM_PATH,
           type: OUTPUT_ITEM_ADDED_TYPE,
-          payload: JSON.parse(JSON.stringify({ sourceOffset: event.offset, chunk })),
+          payload: JSON.parse(JSON.stringify({ chunk })),
         },
       ],
     });
@@ -81,14 +84,14 @@ for await (const event of stream) {
         {
           path: STREAM_PATH,
           type: INPUT_ITEM_ADDED_TYPE,
-          payload: JSON.parse(JSON.stringify({ sourceOffset: event.offset, item: assistantItem })),
+          payload: JSON.parse(JSON.stringify({ item: assistantItem })),
         },
       ],
     });
     messages.push(assistantItem);
   }
 
-  console.error(`[llm-subscriber] done sourceOffset=${event.offset}`);
+  console.error(`[llm-subscriber] done input offset=${event.offset}`);
 }
 
 function printInstructions({ baseUrl, streamPath }: { baseUrl: string; streamPath: string }) {
@@ -97,11 +100,29 @@ function printInstructions({ baseUrl, streamPath }: { baseUrl: string; streamPat
   console.error("Open this in your browser and watch events appear live:");
   console.error(new URL(`/streams${streamPath}`, baseUrl).toString());
   console.error("");
+  console.error("Recommended: append a user event with curl:");
+  console.error("");
   console.error(
-    "Keep posting more user messages into that same stream to continue the conversation.",
+    [
+      `curl -X POST "${new URL(`/api/streams${streamPath}`, baseUrl).toString()}" \\`,
+      '  -H "content-type: application/json" \\',
+      `  --data '${JSON.stringify(
+        {
+          type: INPUT_ITEM_ADDED_TYPE,
+          payload: {
+            item: {
+              role: "user",
+              content: "Say hello in one short sentence.",
+            },
+          },
+        },
+        null,
+        2,
+      )}'`,
+    ].join("\n"),
   );
   console.error("");
-  console.error("Paste this JSON into the stream page input and submit it:");
+  console.error("Browser alternative: paste this into the stream page input and submit it:");
   console.error(
     JSON.stringify(
       {
@@ -132,10 +153,8 @@ async function loadConversation({
     eventOffset: string;
     offsetBeforeInput?: string;
     item: ModelMessage<string>;
-    sourceOffset?: string;
   }> = [];
-  const userMessageEvents: Array<(typeof messageEvents)[number]> = [];
-  const respondedUserOffsets = new Set<string>();
+  const pendingUserMessageEvents: Array<(typeof messageEvents)[number]> = [];
   let lastOffset: string | undefined;
   let previousOffset: string | undefined;
 
@@ -149,16 +168,13 @@ async function loadConversation({
           eventOffset: event.offset,
           offsetBeforeInput: previousOffset,
           item: payload.item,
-          sourceOffset: payload.sourceOffset,
         };
         messageEvents.push(messageEvent);
 
         if (payload.item.role === "user") {
-          userMessageEvents.push(messageEvent);
-        }
-
-        if (payload.item.role === "assistant" && payload.sourceOffset) {
-          respondedUserOffsets.add(payload.sourceOffset);
+          pendingUserMessageEvents.push(messageEvent);
+        } else if (payload.item.role === "assistant") {
+          pendingUserMessageEvents.shift();
         }
       }
     }
@@ -166,16 +182,16 @@ async function loadConversation({
     previousOffset = event.offset;
   }
 
-  const firstIncompleteUserMessage = userMessageEvents.find(
-    (messageEvent) => !respondedUserOffsets.has(messageEvent.eventOffset),
-  );
+  const firstIncompleteUserMessage = pendingUserMessageEvents[0];
   const completedMessageEvents =
     firstIncompleteUserMessage == null
       ? messageEvents
       : messageEvents.slice(0, messageEvents.indexOf(firstIncompleteUserMessage));
 
   return {
-    resumeOffset: firstIncompleteUserMessage?.offsetBeforeInput ?? lastOffset,
+    resumeOffset: firstIncompleteUserMessage
+      ? firstIncompleteUserMessage.offsetBeforeInput
+      : lastOffset,
     messages: completedMessageEvents.map((messageEvent) => messageEvent.item),
   };
 }
@@ -200,9 +216,7 @@ function isAgentMessageRole(value: unknown): value is "user" | "assistant" {
   return value === "user" || value === "assistant";
 }
 
-function parseInputItemAddedPayload(
-  payload: unknown,
-): { item: ModelMessage<string>; sourceOffset?: string } | null {
+function parseInputItemAddedPayload(payload: unknown): { item: ModelMessage<string> } | null {
   if (!isRecord(payload) || !isRecord(payload.item)) {
     return null;
   }
@@ -217,6 +231,5 @@ function parseInputItemAddedPayload(
       role,
       content,
     },
-    sourceOffset: typeof payload.sourceOffset === "string" ? payload.sourceOffset : undefined,
   };
 }
