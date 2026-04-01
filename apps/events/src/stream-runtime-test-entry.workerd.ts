@@ -1,4 +1,4 @@
-import { StreamPath, type EventInput } from "@iterate-com/events-contract";
+import { EventInput, StreamPath, type EventInputOutput } from "@iterate-com/events-contract";
 import { StreamDurableObject } from "~/durable-objects/stream.ts";
 
 export default {
@@ -10,9 +10,11 @@ export default {
     }
 
     if (url.pathname === "/append" && request.method === "POST") {
-      const body = (await request.json()) as { path: string; events: EventInput[] };
-      const stream = env.STREAM.getByName(StreamPath.parse(body.path));
-      const appended = await stream.append({ events: body.events });
+      const body = (await request.json()) as { path: unknown; events: unknown[] };
+      const path = StreamPath.parse(body.path);
+      const events: EventInputOutput[] = body.events.map((event) => EventInput.parse(event));
+      const stream = env.STREAM.getByName(path);
+      const appended = await stream.append({ events });
       return Response.json(appended);
     }
 

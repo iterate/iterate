@@ -278,7 +278,6 @@ export class StreamDurableObject extends DurableObject<Env> {
    * - https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/
    * - https://www.sqlite.org/lang_returning.html
    */
-<<<<<<< HEAD
   private insertEventSync(args: { inputEvent: EventInputOutput }) {
     const { inputEvent } = args;
     const createdAt = new Date().toISOString();
