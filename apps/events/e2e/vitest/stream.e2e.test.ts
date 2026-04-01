@@ -415,7 +415,7 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "destroy reports deleted false for an untouched stream",
+    "destroy returns an empty final state for an untouched stream",
     async () => {
       const path = uniqueStreamPath();
 
