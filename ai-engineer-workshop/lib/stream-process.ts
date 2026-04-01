@@ -1,4 +1,4 @@
-import type { Event, EventInput } from "@iterate-com/events-contract";
+import type { Event, EventInput } from "./contract.ts";
 
 type AppendEvent = Omit<EventInput, "path">;
 

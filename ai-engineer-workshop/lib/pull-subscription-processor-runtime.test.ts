@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Event, EventInput, JSONObject } from "@iterate-com/events-contract";
+import type { Event, EventInput, JSONObject } from "./contract.ts";
 import { PullSubscriptionProcessorRuntime } from "./pull-subscription-processor-runtime.ts";
 import { defineProcessor } from "./stream-process.ts";
 

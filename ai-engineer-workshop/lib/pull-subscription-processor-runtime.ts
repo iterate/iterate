@@ -1,4 +1,4 @@
-import type { Event, EventInput, StreamPath } from "@iterate-com/events-contract";
+import type { Event, EventInput, StreamPath } from "./contract.ts";
 import type { StreamProcessor } from "./stream-process.ts";
 
 type PullSubscriptionEventsClient = {
