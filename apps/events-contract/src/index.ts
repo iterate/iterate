@@ -181,7 +181,7 @@ export const eventsContract = oc.router({
       method: "GET",
       path: "/stream-state/{+streamPath}",
       description:
-        "Returns the latest reduced projection for a stream, including metadata, generated offsets, and the current subscription map keyed by slug with delivery cursor, retry, and last-error state.",
+        "Returns the latest reduced projection for a stream, including metadata, generated offsets, and the current subscription map keyed by slug with delivery cursor, retry, and last-error state. This is intentionally implementation-shaped JSON rather than a frozen public state schema.",
       tags: ["Streams"],
     })
     .input(

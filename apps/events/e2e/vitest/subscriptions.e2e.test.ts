@@ -1,7 +1,7 @@
 /**
- * These are black-box subscription checks. They only inspect network traffic
- * and `getState()`, so the same assertions can run against local or deployed
- * workers.
+ * These are black-box subscription checks. They only inspect public surfaces:
+ * webhook traffic, stream history/SSE, and `getState()`, so the same
+ * assertions can run against local or deployed workers.
  */
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";

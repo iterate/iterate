@@ -161,29 +161,52 @@ export class StreamDurableObject extends DurableObject<Env> {
     // schedule. We deliberately diverge here because each subscription owns an
     // independent webhook target and cursor, so parallel delivery avoids
     // head-of-line blocking between unrelated subscribers.
-    const outcomeEvents = (
-      await Promise.all(
-        dueSubscriptions.map(async ([slug, subscription]) => {
-          const events = await this.history({
-            afterOffset: subscription.cursor.lastAcknowledgedOffset ?? undefined,
-          });
+    const results = await Promise.allSettled(
+      dueSubscriptions.map(async ([slug, subscription]) => {
+        const events = await this.history({
+          afterOffset: subscription.cursor.lastAcknowledgedOffset ?? undefined,
+        });
 
-          return this.deliverSubscriptionEvent({
-            events,
-            path,
-            slug,
-            subscription,
-          });
-        }),
-      )
-    ).filter((event): event is EventInput => event != null);
+        return this.attemptWebhookDelivery({
+          events,
+          path,
+          slug,
+          subscription,
+        });
+      }),
+    );
+    const outcomeEvents = results.flatMap((result) => {
+      if (result.status !== "fulfilled" || result.value == null) {
+        return [];
+      }
+
+      return [result.value];
+    });
 
     if (outcomeEvents.length === 0) {
+      const firstFailure = results.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (firstFailure) {
+        throw firstFailure.reason;
+      }
+
       await this.updateAlarm();
       return;
     }
 
+    // This stream is intentionally at-least-once for outbound delivery. If the
+    // webhook side effects succeed and this append then fails, a later alarm
+    // retry can redeliver the same event. We accept that fence to keep delivery
+    // state fully event-sourced instead of mutating hidden scheduler state.
     await this.append({ events: outcomeEvents });
+
+    const firstFailure = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (firstFailure) {
+      throw firstFailure.reason;
+    }
   }
 
   /**
@@ -368,17 +391,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         afterOffset,
       )
       .toArray()
-      .map((row) =>
-        Event.parse({
-          path,
-          offset: row.offset,
-          type: row.type,
-          payload: JSON.parse(row.payload),
-          ...(row.metadata == null ? {} : { metadata: JSON.parse(row.metadata) }),
-          ...(row.idempotency_key == null ? {} : { idempotencyKey: row.idempotency_key }),
-          createdAt: row.created_at,
-        }),
-      );
+      .map((row) => parseStoredEventRow({ path, row }));
   }
 
   private getEventByIdempotencyKey(args: { path: StreamPath; idempotencyKey: string }) {
@@ -405,15 +418,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       return null;
     }
 
-    return Event.parse({
-      path,
-      offset: row.offset,
-      type: row.type,
-      payload: JSON.parse(row.payload),
-      ...(row.metadata == null ? {} : { metadata: JSON.parse(row.metadata) }),
-      ...(row.idempotency_key == null ? {} : { idempotencyKey: row.idempotency_key }),
-      createdAt: row.created_at,
-    });
+    return parseStoredEventRow({ path, row });
   }
 
   private nextOffset(args: { prevOffset: string | null }) {
@@ -449,7 +454,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(nextAlarmAt);
   }
 
-  private async deliverSubscriptionEvent(args: {
+  private async attemptWebhookDelivery(args: {
     events: Event[];
     path: string;
     slug: string;
@@ -726,6 +731,15 @@ type StreamState = z.infer<typeof streamStateSchema>;
 type SubscriptionState = z.infer<typeof subscriptionStateSchema>;
 type SubscriptionAttempted = z.infer<typeof subscriptionAttemptedSchema>;
 
+type StoredEventRow = {
+  offset: string;
+  type: string;
+  payload: string;
+  metadata: string | null;
+  idempotency_key: string | null;
+  created_at: string;
+};
+
 export function createEmptyStreamState(): StreamState {
   return {
     path: null,
@@ -734,6 +748,20 @@ export function createEmptyStreamState(): StreamState {
     metadata: {},
     subscriptions: {},
   } satisfies StreamState;
+}
+
+function parseStoredEventRow(args: { path: StreamPath; row: StoredEventRow }) {
+  const { path, row } = args;
+
+  return Event.parse({
+    path,
+    offset: row.offset,
+    type: row.type,
+    payload: JSON.parse(row.payload),
+    ...(row.metadata == null ? {} : { metadata: JSON.parse(row.metadata) }),
+    ...(row.idempotency_key == null ? {} : { idempotencyKey: row.idempotency_key }),
+    createdAt: row.created_at,
+  });
 }
 
 /**
