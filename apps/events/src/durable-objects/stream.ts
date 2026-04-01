@@ -12,7 +12,6 @@ import {
 import { getInitializedStreamStub } from "~/lib/stream-stub.ts";
 import { ROOT_STREAM_PATH, getParentPath } from "~/lib/utils.ts";
 const textEncoder = new TextEncoder();
-const STREAM_INITIALIZED_EVENT_TYPE = "https://events.iterate.com/events/stream/initialized";
 
 /**
  * One stream per Durable Object: append-only event log in SQLite, a reduced
@@ -72,16 +71,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       return;
     }
 
-    if (
-      currentState.eventCount !== 0 ||
-      currentState.lastOffset != null ||
-      currentState.path != null
-    ) {
-      throw new Error("Uninitialized stream durable object has inconsistent reduced state.");
-    }
-
     return this.append({
-      type: STREAM_INITIALIZED_EVENT_TYPE,
+      type: "https://events.iterate.com/events/stream/initialized",
       payload: {
         path: args.path,
       },
@@ -100,7 +91,8 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   async append(inputEvent: EventInput) {
     const currentState = structuredClone(this.state);
-    const isStreamInitializedEvent = inputEvent.type === STREAM_INITIALIZED_EVENT_TYPE;
+    const isStreamInitializedEvent =
+      inputEvent.type === "https://events.iterate.com/events/stream/initialized";
 
     if (!isStreamInitializedEvent && !currentState.initialized) {
       throw new Error("Stream durable object is not initialized.");
@@ -153,7 +145,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.state = structuredClone(nextState);
     this.publish(event);
 
-    if (event.type === STREAM_INITIALIZED_EVENT_TYPE) {
+    if (event.type === "https://events.iterate.com/events/stream/initialized") {
       this.propagateStreamInitializedUpOneLevel(event);
     }
 
@@ -432,7 +424,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     void getInitializedStreamStub(this.env, resolvedParentPath)
       .then((streamStub) =>
         streamStub.append({
-          type: STREAM_INITIALIZED_EVENT_TYPE,
+          type: "https://events.iterate.com/events/stream/initialized",
           payload: event.payload,
           ...(event.metadata == null ? {} : { metadata: event.metadata }),
         }),
@@ -506,7 +498,7 @@ function reduceStreamState(args: { state: StreamState; event: Event }): StreamSt
   const { event } = args;
   const { state } = args;
 
-  if (event.type === STREAM_INITIALIZED_EVENT_TYPE) {
+  if (event.type === "https://events.iterate.com/events/stream/initialized") {
     if (!state.initialized) {
       const payload = StreamInitializedPayload.parse(event.payload);
       if (event.path !== payload.path) {
