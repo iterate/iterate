@@ -104,6 +104,45 @@ function trimLeadingSlash(value: string) {
   return value.replace(/^\/+/, "");
 }
 
+async function readResponseErrorMessage(response: Response) {
+  const contentType = response.headers.get("content-type") ?? "";
+
+  try {
+    if (isJsonLikeContentType(contentType)) {
+      const json = (await response.clone().json()) as {
+        message?: unknown;
+        code?: unknown;
+        error?: unknown;
+      };
+
+      const message =
+        typeof json.message === "string"
+          ? json.message
+          : typeof json.error === "string"
+            ? json.error
+            : null;
+      const code = typeof json.code === "string" ? json.code : null;
+
+      if (message && code) {
+        return `${code}: ${message}`;
+      }
+
+      if (message) {
+        return message;
+      }
+    }
+
+    const text = await response.clone().text();
+    if (text.trim().length > 0) {
+      return text.trim();
+    }
+  } catch {
+    // noop
+  }
+
+  return null;
+}
+
 /**
  * Adapted from @cloudflare/codemode's OpenAPI MCP helper so large public specs
  * with internal $refs can be traversed without exploding the runtime.
@@ -733,7 +772,12 @@ async function buildProcedureFromOperation(options: {
 
     const response = await (options.fetch ?? fetch)(url, requestInit);
     if (!response.ok) {
-      throw new Error(`${options.method.toUpperCase()} ${url} failed with ${response.status}`);
+      const message = await readResponseErrorMessage(response);
+      throw new Error(
+        message
+          ? `${options.method.toUpperCase()} ${url} failed with ${response.status}: ${message}`
+          : `${options.method.toUpperCase()} ${url} failed with ${response.status}`,
+      );
     }
 
     if (kind === "stream") {
@@ -989,7 +1033,12 @@ async function loadOpenApiDocument(
     headers: source.headers,
   });
   if (!response.ok) {
-    throw new Error(`Failed to fetch OpenAPI document ${source.url}: ${response.status}`);
+    const message = await readResponseErrorMessage(response);
+    throw new Error(
+      message
+        ? `Failed to fetch OpenAPI document ${source.url}: ${response.status} (${message})`
+        : `Failed to fetch OpenAPI document ${source.url}: ${response.status}`,
+    );
   }
 
   const json = (await response.json()) as OpenApiDocument;

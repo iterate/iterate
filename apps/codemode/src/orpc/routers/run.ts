@@ -1,4 +1,5 @@
 import type { CodemodeRun } from "@iterate-com/codemode-contract";
+import { ORPCError } from "@orpc/server";
 import type { AppContext } from "~/context.ts";
 import { codemodeRunsTable } from "~/db/schema.ts";
 import { buildCodemodeContextFromSources } from "~/lib/codemode-contract-runtime.ts";
@@ -22,35 +23,59 @@ async function saveRun(context: AppContext, run: CodemodeRun) {
   });
 }
 
+function toCodemodeRequestError(error: unknown) {
+  if (error instanceof ORPCError) {
+    return error;
+  }
+
+  if (error instanceof Error) {
+    return new ORPCError("BAD_REQUEST", {
+      message: error.message,
+    });
+  }
+
+  return new ORPCError("INTERNAL_SERVER_ERROR", {
+    message: "Internal server error",
+  });
+}
+
 export const runRouter = {
   runV2: os.runV2.handler(async ({ context, input }) => {
-    const execution = await executeCodemodeFunction({
-      code: input.code,
-      loader: context.env.LOADER,
-      outbound: context.env.OUTBOUND,
-      config: context.config,
-      sources: input.sources,
-    });
-    const run: CodemodeRun = {
-      id: createRunId(),
-      runnerKind: "deterministic-v2",
-      code: input.code,
-      sources: input.sources,
-      result: execution.result,
-      error: execution.error,
-    };
+    try {
+      const execution = await executeCodemodeFunction({
+        code: input.code,
+        loader: context.env.LOADER,
+        outbound: context.env.OUTBOUND,
+        config: context.config,
+        sources: input.sources,
+      });
+      const run: CodemodeRun = {
+        id: createRunId(),
+        runnerKind: "deterministic-v2",
+        code: input.code,
+        sources: input.sources,
+        result: execution.result,
+        error: execution.error,
+      };
 
-    await saveRun(context, run);
+      await saveRun(context, run);
 
-    return run;
+      return run;
+    } catch (error) {
+      throw toCodemodeRequestError(error);
+    }
   }),
   ctxTypeDefinition: os.ctxTypeDefinition.handler(async ({ context, input }) => {
-    const runtimeContext = await buildCodemodeContextFromSources({
-      config: context.config,
-      sources: input.sources,
-      fetch: createCodemodeOutboundFetch(context.env.OUTBOUND),
-    });
+    try {
+      const runtimeContext = await buildCodemodeContextFromSources({
+        config: context.config,
+        sources: input.sources,
+        fetch: createCodemodeOutboundFetch(context.env.OUTBOUND),
+      });
 
-    return runtimeContext.ctxTypes;
+      return runtimeContext.ctxTypes;
+    } catch (error) {
+      throw toCodemodeRequestError(error);
+    }
   }),
 };
