@@ -44,12 +44,15 @@
     "prepack": "pnpm build"
   },
   "dependencies": {
+    "@clack/prompts": "^1.1.0",
     "@orpc/client": "1.13.13",
     "@orpc/contract": "1.13.13",
     "@orpc/openapi-client": "1.13.13",
+    "trpc-cli": "0.14.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/node": "25.5.0",
     "typescript": "^5.9.3"
   }
 }
