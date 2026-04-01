@@ -11,7 +11,7 @@ module.exports = ({ dependencies: { fs, path } }) => {
       return [filename, fileContent];
     });
   return (
-    "function getFiles() {\n" +
+    "export function getFiles() {\n" +
     "  // prettier-ignore\n" +
     "  return " +
     JSON.stringify(Object.fromEntries(entries), null, 2).replaceAll("\n", "\n  ") +
