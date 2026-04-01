@@ -6,7 +6,10 @@ import type { StreamDurableObject } from "~/durable-objects/stream.ts";
 // this override in sync with `StreamDurableObject` while avoiding the much
 // larger generated stub type. This is the same containment strategy Cloudflare
 // maintainers have suggested for awkward env bindings in upstream threads.
-type StreamRpcStub = Pick<StreamDurableObject, "append" | "history" | "stream" | "getState">;
+type StreamRpcStub = Pick<
+  StreamDurableObject,
+  "append" | "destroy" | "history" | "stream" | "getState"
+>;
 type BaseEnv = typeof worker.Env;
 
 // `typeof worker.Env` gives `STREAM` the full generated

@@ -127,6 +127,26 @@ export const eventsContract = oc.router({
         events: z.array(Event),
       }),
     ),
+  destroy: oc
+    .route({
+      operationId: "destroyStream",
+      method: "DELETE",
+      path: "/streams/{+path}",
+      description: "Deletes all persisted data for a stream durable object.",
+      tags: ["Streams"],
+    })
+    .input(
+      z.object({
+        path: StreamPath,
+      }),
+    )
+    .output(
+      z.object({
+        ok: z.literal(true),
+        path: StreamPath,
+        deleted: z.boolean(),
+      }),
+    ),
   stream: oc
     .route({
       operationId: "streamEvents",

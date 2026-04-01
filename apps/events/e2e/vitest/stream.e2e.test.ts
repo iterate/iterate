@@ -369,6 +369,143 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "destroy wipes an existing stream and resets its projection",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await app.client.append({
+        path,
+        events: [
+          {
+            path,
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { step: 1 },
+          },
+          {
+            path,
+            type: STREAM_METADATA_UPDATED_TYPE,
+            payload: {
+              metadata: {
+                owner: "destroy-me",
+              },
+            },
+          },
+        ],
+      });
+
+      expect(await app.client.destroy({ path })).toEqual({
+        ok: true,
+        path,
+        deleted: true,
+      });
+
+      expect(await collectStreamEvents(app, { path })).toEqual([]);
+      expect(await app.client.getState({ streamPath: path })).toEqual({
+        path: null,
+        lastOffset: null,
+        eventCount: 0,
+        metadata: {},
+      });
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroy reports deleted false for an untouched stream",
+    async () => {
+      const path = uniqueStreamPath();
+
+      expect(await app.client.destroy({ path })).toEqual({
+        ok: true,
+        path,
+        deleted: false,
+      });
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroyed streams can be recreated from offset one",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { beforeDestroy: true },
+      });
+
+      await app.client.destroy({ path });
+
+      const recreated = await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { afterDestroy: true },
+      });
+
+      expect(recreated.created).toBe(true);
+      expect(recreated.events[0]).toMatchObject({
+        path,
+        offset: expectedOffset(1),
+        payload: { afterDestroy: true },
+      });
+      expect(await collectStreamEvents(app, { path })).toEqual(recreated.events);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroy only wipes the targeted stream",
+    async () => {
+      const pathA = uniqueStreamPath();
+      const pathB = uniqueStreamPath();
+
+      await app.client.append({
+        path: pathA,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { label: "A" },
+      });
+      await app.client.append({
+        path: pathB,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { label: "B" },
+      });
+
+      await app.client.destroy({ path: pathA });
+
+      expect(await collectStreamEvents(app, { path: pathA })).toEqual([]);
+      expect(await collectStreamEvents(app, { path: pathB })).toEqual([
+        expect.objectContaining({
+          path: pathB,
+          payload: { label: "B" },
+        }),
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroy does not remove stale discovery entries from listStreams",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { listed: true },
+      });
+
+      await waitForStream(app, path);
+      await app.client.destroy({ path });
+
+      const streams = await app.client.listStreams({});
+
+      expect(streams.some((stream) => stream.path === path)).toBe(true);
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "metadata update events replace reduced metadata",
     async () => {
       const path = uniqueStreamPath();
@@ -439,6 +576,14 @@ describe.sequential("events stream e2e", () => {
       const streams = await app.client.listStreams({});
 
       expect(streams.some((stream) => stream.path === "/")).toBe(true);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroy rejects the root stream",
+    async () => {
+      await expect(app.client.destroy({ path: "/" })).rejects.toThrow(/root stream/i);
     },
     testTimeoutMs,
   );

@@ -35,6 +35,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     eventCount: 0,
     metadata: {},
   };
+  private storageInitialized = false;
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -60,6 +61,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (args.events.length === 0) {
       throw new Error("At least one event is required.");
     }
+
+    this.ensureStorageInitialized();
 
     const created = this.state.eventCount === 0;
     let nextState = structuredClone(this.state);
@@ -113,6 +116,25 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     return { created, events };
+  }
+
+  async destroy(args: { path: StreamPath }) {
+    if (this.state.path != null && this.state.path !== args.path) {
+      throw new Error(`Stream path mismatch. Expected ${this.state.path}, received ${args.path}.`);
+    }
+
+    const deleted = this.state.eventCount > 0;
+    await deleteAlarmIfPresent(this.ctx.storage);
+    await this.ctx.storage.deleteAll();
+    this.storageInitialized = false;
+    this.state = emptyStreamState();
+    this.closeSubscribers();
+
+    return {
+      ok: true as const,
+      path: args.path,
+      deleted,
+    };
   }
 
   async getState(): Promise<StreamState> {
@@ -201,6 +223,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         json TEXT NOT NULL CHECK(json_valid(json))
       )
     `);
+    this.storageInitialized = true;
   }
 
   /**
@@ -218,12 +241,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     if (persistedStateRow == null) {
       if (eventRowCount === 0) {
-        return {
-          path: null,
-          lastOffset: null,
-          eventCount: 0,
-          metadata: {},
-        } satisfies StreamState;
+        return emptyStreamState();
       }
 
       throw new Error(
@@ -247,6 +265,14 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     return structuredClone(persistedState);
+  }
+
+  private ensureStorageInitialized() {
+    if (this.storageInitialized) {
+      return;
+    }
+
+    this.initializeStorage();
   }
 
   /**
@@ -435,6 +461,33 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
     }
   }
+
+  private closeSubscribers() {
+    for (const subscriber of this.subscribers) {
+      try {
+        subscriber.close();
+      } catch {
+        // Ignore already-closed streams; we only need best-effort teardown.
+      }
+    }
+
+    this.subscribers.clear();
+  }
+}
+
+function emptyStreamState(): StreamState {
+  return {
+    path: null,
+    lastOffset: null,
+    eventCount: 0,
+    metadata: {},
+  } satisfies StreamState;
+}
+
+async function deleteAlarmIfPresent(
+  storage: DurableObjectStorage & { deleteAlarm?: () => Promise<void> },
+) {
+  await storage.deleteAlarm?.();
 }
 
 function encodeEventLine(event: Event) {
