@@ -17,7 +17,7 @@ describe("toEventFeedItem", () => {
     const event = createEvent({
       streamPath: "/demo",
       type: "https://events.iterate.com/demo/created",
-      offset: "5",
+      offset: 5,
       createdAt: "2026-03-30T12:34:56.000Z",
       payload: { ok: true },
     });
@@ -25,7 +25,7 @@ describe("toEventFeedItem", () => {
     expect(toEventFeedItem(event)).toEqual({
       kind: "event",
       streamPath: "/demo",
-      offset: "5",
+      offset: 5,
       createdAt: "2026-03-30T12:34:56.000Z",
       eventType: "https://events.iterate.com/demo/created",
       timestamp: Date.parse("2026-03-30T12:34:56.000Z"),
@@ -37,8 +37,8 @@ describe("toEventFeedItem", () => {
 describe("projectWireToFeed", () => {
   test("projects every event into the feed timeline", () => {
     const events = [
-      createEvent({ offset: "1", type: "https://events.iterate.com/demo/one" }),
-      createEvent({ offset: "2", type: "https://events.iterate.com/demo/two" }),
+      createEvent({ offset: 1, type: "https://events.iterate.com/demo/one" }),
+      createEvent({ offset: 2, type: "https://events.iterate.com/demo/two" }),
     ];
 
     expect(projectWireToFeed(events).map((item) => item.kind)).toEqual(["event", "event"]);
@@ -93,7 +93,7 @@ describe("projectWireToFeed", () => {
   test("projects agent input and output events into a chat-style timeline", () => {
     const feed = projectWireToFeed([
       createEvent({
-        offset: "1",
+        offset: 1,
         type: "https://events.iterate.com/agent/input-item-added",
         payload: {
           item: {
@@ -103,7 +103,7 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "2",
+        offset: 2,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
           chunk: {
@@ -118,7 +118,7 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "3",
+        offset: 3,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
           chunk: {
@@ -133,7 +133,7 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "4",
+        offset: 4,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
           chunk: {
@@ -171,7 +171,7 @@ describe("projectWireToFeed", () => {
   test("marks assistant replies as streaming until a done chunk arrives", () => {
     const feed = projectWireToFeed([
       createEvent({
-        offset: "1",
+        offset: 1,
         type: "https://events.iterate.com/agent/input-item-added",
         payload: {
           item: {
@@ -181,7 +181,7 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "2",
+        offset: 2,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
           chunk: {
@@ -212,7 +212,7 @@ describe("projectWireToFeed", () => {
   test("prefers finalized assistant messages over reconstructed chunk text", () => {
     const feed = projectWireToFeed([
       createEvent({
-        offset: "1",
+        offset: 1,
         type: "https://events.iterate.com/agent/input-item-added",
         payload: {
           item: {
@@ -222,7 +222,7 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "2",
+        offset: 2,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
           chunk: {
@@ -237,7 +237,7 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "3",
+        offset: 3,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
           chunk: {
@@ -250,7 +250,7 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "4",
+        offset: 4,
         type: "https://events.iterate.com/agent/input-item-added",
         payload: {
           item: {
@@ -278,7 +278,7 @@ describe("projectWireToFeed", () => {
   test("projects tool_call and tool_result chunks into tool feed items", () => {
     const feed = projectWireToFeed([
       createEvent({
-        offset: "1",
+        offset: 1,
         type: "https://events.iterate.com/agent/input-item-added",
         payload: {
           item: {
@@ -288,7 +288,7 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "2",
+        offset: 2,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
           chunk: {
@@ -306,7 +306,7 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "3",
+        offset: 3,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
           chunk: {
@@ -320,7 +320,7 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "4",
+        offset: 4,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
           chunk: {
@@ -346,7 +346,7 @@ describe("projectWireToFeed", () => {
   test("adds an error item for failed agent output events", () => {
     const feed = projectWireToFeed([
       createEvent({
-        offset: "1",
+        offset: 1,
         type: "https://events.iterate.com/agent/input-item-added",
         payload: {
           item: {
@@ -356,7 +356,7 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "2",
+        offset: 2,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
           chunk: {
@@ -385,9 +385,9 @@ describe("toSemanticFeedItem", () => {
 describe("buildDisplayFeed", () => {
   test("groups consecutive events of the same type in raw-pretty mode", () => {
     const feed = projectWireToFeed([
-      createEvent({ offset: "1", type: "https://events.iterate.com/demo/a" }),
-      createEvent({ offset: "2", type: "https://events.iterate.com/demo/a" }),
-      createEvent({ offset: "3", type: "https://events.iterate.com/demo/b" }),
+      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 2, type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 3, type: "https://events.iterate.com/demo/b" }),
     ]);
     const eventFeed = feed.filter((item): item is EventFeedItem => item.kind === "event");
 
@@ -399,9 +399,9 @@ describe("buildDisplayFeed", () => {
 
   test("flushes an event group when a non-event item appears", () => {
     const eventFeed = projectWireToFeed([
-      createEvent({ offset: "1", type: "https://events.iterate.com/demo/a" }),
-      createEvent({ offset: "2", type: "https://events.iterate.com/demo/a" }),
-      createEvent({ offset: "3", type: "https://events.iterate.com/demo/b" }),
+      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 2, type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 3, type: "https://events.iterate.com/demo/b" }),
     ]).filter((item): item is EventFeedItem => item.kind === "event");
 
     const message: StreamFeedItem = {
@@ -422,7 +422,7 @@ describe("buildDisplayFeed", () => {
 
   test("drops raw event rows in pretty mode", () => {
     const feed = projectWireToFeed([
-      createEvent({ offset: "1", type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
     ]);
 
     const message: StreamFeedItem = {
@@ -439,13 +439,13 @@ describe("buildDisplayFeed", () => {
     const feed = projectWireToFeed([
       createEvent({
         streamPath: "/",
-        offset: "1",
+        offset: 1,
         type: "https://events.iterate.com/events/stream/child-stream-created",
         payload: { path: "/created" },
       }),
       createEvent({
         streamPath: "/created",
-        offset: "2",
+        offset: 2,
         type: "https://events.iterate.com/events/stream/metadata-updated",
         payload: { metadata: { color: "blue" } },
       }),
@@ -459,7 +459,7 @@ describe("buildDisplayFeed", () => {
 
   test("returns null in raw mode", () => {
     const feed = projectWireToFeed([
-      createEvent({ offset: "1", type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
     ]);
 
     expect(buildDisplayFeed(feed, "raw")).toBeNull();
@@ -470,20 +470,20 @@ describe("getAdjacentEventOffset", () => {
   test("returns previous and next offsets within the raw event list", () => {
     const events = getEventFeedItems(
       projectWireToFeed([
-        createEvent({ offset: "1", type: "https://events.iterate.com/demo/a" }),
-        createEvent({ offset: "2", type: "https://events.iterate.com/demo/b" }),
+        createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
+        createEvent({ offset: 2, type: "https://events.iterate.com/demo/b" }),
         createEvent({
-          offset: "3",
+          offset: 3,
           type: "https://events.iterate.com/events/stream/child-stream-created",
           payload: { path: "/child" },
         }),
       ]),
     );
 
-    expect(getAdjacentEventOffset(events, "2", "previous")).toBe("1");
-    expect(getAdjacentEventOffset(events, "2", "next")).toBe("3");
-    expect(getAdjacentEventOffset(events, "1", "previous")).toBeUndefined();
-    expect(getAdjacentEventOffset(events, "3", "next")).toBeUndefined();
+    expect(getAdjacentEventOffset(events, 2, "previous")).toBe(1);
+    expect(getAdjacentEventOffset(events, 2, "next")).toBe(3);
+    expect(getAdjacentEventOffset(events, 1, "previous")).toBeUndefined();
+    expect(getAdjacentEventOffset(events, 3, "next")).toBeUndefined();
   });
 });
 
@@ -492,7 +492,7 @@ function createEvent(overrides: Partial<Event> = {}): Event {
     streamPath: "/demo",
     type: "https://events.iterate.com/manual-event-appended",
     payload: {},
-    offset: "1",
+    offset: 1,
     createdAt: "2026-03-30T00:00:00.000Z",
     ...overrides,
   };

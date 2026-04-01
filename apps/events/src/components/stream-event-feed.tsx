@@ -62,8 +62,8 @@ export function StreamEventFeed({
   rendererMode: StreamRendererMode;
   emptyLabel: string;
   isPending?: boolean;
-  openEventOffset?: string;
-  onOpenEventOffsetChange?: (offset?: string) => void;
+  openEventOffset?: number;
+  onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   const eventFeedItems = useMemo(() => getEventFeedItems(feed), [feed]);
   const rawEvents = eventFeedItems.map((item) => item.raw);
@@ -144,7 +144,7 @@ function StreamFeedItemRenderer({
   onOpenEventOffsetChange,
 }: {
   item: StreamFeedItem;
-  onOpenEventOffsetChange?: (offset?: string) => void;
+  onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   switch (item.kind) {
     case "event":
@@ -265,7 +265,7 @@ function EventLine({
   onOpenEventOffsetChange,
 }: {
   event: EventFeedItem;
-  onOpenEventOffsetChange?: (offset?: string) => void;
+  onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   return (
     <div className="flex justify-end">
@@ -288,7 +288,7 @@ function GroupedEventLine({
   onOpenEventOffsetChange,
 }: {
   group: GroupedEventFeedItem;
-  onOpenEventOffsetChange?: (offset?: string) => void;
+  onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   return (
     <div className="flex justify-end">
@@ -318,8 +318,8 @@ function EventInspectorSheet({
   onOpenEventOffsetChange,
 }: {
   events: readonly EventFeedItem[];
-  openEventOffset?: string;
-  onOpenEventOffsetChange?: (offset?: string) => void;
+  openEventOffset?: number;
+  onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   const selectedEvent = useMemo(
     () => events.find((event) => event.offset === openEventOffset),
@@ -410,7 +410,7 @@ function EventInspectorSheet({
           </div>
           {selectedEvent ? (
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <Identifier value={selectedEvent.offset} textClassName="text-xs" />
+              <Identifier value={String(selectedEvent.offset)} textClassName="text-xs" />
               <span>Use left and right arrow keys to move between events.</span>
             </div>
           ) : null}

@@ -27,12 +27,12 @@ type OutputItemAddedPayload = {
 };
 
 type AgentTurn = {
-  inputOffset: string;
+  inputOffset: number;
   inputRole: AgentMessageRole;
   inputText: string;
   inputTimestamp: number;
   outputChunks: StreamChunk[];
-  latestOutputOffset?: string;
+  latestOutputOffset?: number;
   hasFinalAssistantMessage?: boolean;
   outputError?: {
     title: string;
@@ -47,8 +47,8 @@ function getTimestamp(createdAt: string) {
 }
 
 function appendInsertion(
-  insertionsByOffset: Map<string, StreamFeedItem[]>,
-  offset: string,
+  insertionsByOffset: Map<number, StreamFeedItem[]>,
+  offset: number,
   item: StreamFeedItem,
 ) {
   const existing = insertionsByOffset.get(offset);
@@ -66,8 +66,8 @@ function appendInsertion(
  */
 export function buildAgentSemanticInsertions(
   events: readonly Event[],
-): Map<string, StreamFeedItem[]> {
-  const insertionsByOffset = new Map<string, StreamFeedItem[]>();
+): Map<number, StreamFeedItem[]> {
+  const insertionsByOffset = new Map<number, StreamFeedItem[]>();
   const pendingTurns: AgentTurn[] = [];
   const turns: AgentTurn[] = [];
 

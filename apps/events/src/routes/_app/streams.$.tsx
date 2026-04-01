@@ -24,7 +24,7 @@ function StreamsDetailPage() {
   const { event, renderer } = Route.useSearch();
   const navigate = Route.useNavigate();
   const updateEventOffset = useCallback(
-    (nextEventOffset?: string) => {
+    (nextEventOffset?: number) => {
       // Search state is the source of truth for the open event sheet, which is
       // why Prev/Next and deep links all update `event=<offset>` rather than
       // using a local `useState`.

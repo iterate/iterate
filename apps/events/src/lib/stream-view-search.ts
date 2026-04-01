@@ -14,12 +14,12 @@ import {
 //   https://github.com/tanstack/router/blob/main/docs/router/how-to/navigate-with-search-params.md
 const StreamViewSearch = z.object({
   renderer: z.enum(streamRendererModes).optional(),
-  event: z.string().min(1).optional(),
+  event: z.coerce.number().int().positive().optional(),
 });
 
 type StreamViewSearch = {
   renderer: StreamRendererMode;
-  event: string | undefined;
+  event: number | undefined;
 };
 
 export const defaultStreamViewSearch: StreamViewSearch = {

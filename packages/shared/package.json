@@ -14,7 +14,6 @@
     "./apps/common-router-contract": "./src/apps/common-router-contract.ts",
     "./apps/orpc": "./src/apps/orpc.ts",
     "./apps/middleware/require-header": "./src/apps/middleware/require-header.ts",
-    "./events/offset": "./src/events/offset.ts",
     "./request-logging": "./src/request-logging.ts",
     "./typeid": "./src/typeid.ts",
     "./zod-helpers": "./src/zod-helpers.ts",

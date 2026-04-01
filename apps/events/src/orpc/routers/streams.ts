@@ -1,5 +1,12 @@
 import { ORPCError } from "@orpc/server";
-import { StreamPath } from "@iterate-com/events-contract";
+import {
+  type ChildStreamCreatedEvent,
+  type EventInput,
+  GenericEventInput,
+  type JSONObject,
+  type StreamPath,
+} from "@iterate-com/events-contract";
+import jsonata from "jsonata";
 import {
   getInitializedStreamStub,
   getStreamStub,
@@ -10,7 +17,15 @@ import { os } from "~/orpc/orpc.ts";
 
 export const streamsRouter = {
   append: os.append.handler(async ({ input }) => {
-    const { path, ...event } = input;
+    const path = input.params.path;
+    const event: EventInput =
+      input.query.jsonataTransform == null
+        ? (input.body as EventInput)
+        : await transformAppendBody({
+            body: input.body as JSONObject,
+            jsonataTransform: input.query.jsonataTransform,
+          });
+
     const streamStub = await getInitializedStreamStub({ path });
     try {
       const appendedEvent = await streamStub.append(event);
@@ -73,7 +88,8 @@ export const streamsRouter = {
 
     for (const event of events) {
       if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
-        discovered[event.streamPath] = event.createdAt;
+        const childEvent = event as ChildStreamCreatedEvent;
+        discovered[childEvent.payload.path] = childEvent.createdAt;
       } else if (event.type === "https://events.iterate.com/events/stream/initialized") {
         discovered["/"] = event.createdAt;
       }
@@ -84,3 +100,50 @@ export const streamsRouter = {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }),
 };
+
+async function transformAppendBody(args: { body: JSONObject; jsonataTransform: string }) {
+  const transformed = await evaluateJsonataTransform(args);
+  const parsed = GenericEventInput.safeParse(transformed);
+
+  if (!parsed.success) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: "jsonataTransform must produce a valid single event body.",
+      data: {
+        issues: parsed.error.issues.map((issue) => ({
+          path: issue.path,
+          message: issue.message,
+        })),
+      },
+    });
+  }
+
+  return parsed.data;
+}
+
+async function evaluateJsonataTransform(args: { body: JSONObject; jsonataTransform: string }) {
+  try {
+    const expression = jsonata(args.jsonataTransform);
+    return await expression.evaluate(args.body);
+  } catch (error) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: `invalid_jsonata_transform: ${getErrorMessage(error)}`,
+    });
+  }
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+
+  return String(error);
+}

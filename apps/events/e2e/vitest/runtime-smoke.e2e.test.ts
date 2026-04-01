@@ -5,7 +5,6 @@
  */
 import { setTimeout as delay } from "node:timers/promises";
 import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
-import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import { describe, expect, test } from "vitest";
 import { type StreamPath } from "@iterate-com/events-contract";
 import { AppConfig } from "../../src/app.ts";
@@ -54,12 +53,24 @@ describeRuntimeSmoke("events runtime smoke", () => {
         paths?: Record<string, unknown>;
       };
 
-      expect(body.paths).toHaveProperty("/streams");
-      expect(body.paths).toHaveProperty("/streams/{path}");
-      expect(body.paths).toHaveProperty("/__state/{path}");
-      expect(body.paths).not.toHaveProperty("/stream-state/{streamPath}");
-      expect(body.paths).not.toHaveProperty("/streams/__list");
-      expect(body.paths).not.toHaveProperty("/__state");
+      const paths = body.paths ?? {};
+
+      expect(paths).toHaveProperty("/streams");
+      expect(paths).toHaveProperty("/streams/{path}");
+      expect(paths).toHaveProperty("/__state/{path}");
+      expect(paths).not.toHaveProperty("/stream-state/{streamPath}");
+      expect(paths).not.toHaveProperty("/streams/__list");
+      expect(paths).not.toHaveProperty("/__state");
+      expect(paths["/streams/{path}"]).toMatchObject({
+        post: {
+          parameters: expect.arrayContaining([
+            expect.objectContaining({
+              in: "query",
+              name: "jsonataTransform",
+            }),
+          ]),
+        },
+      });
     },
     testTimeoutMs,
   );
@@ -70,9 +81,11 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const path: StreamPath = `/smoke/${Date.now().toString(36)}`;
 
       await app.client.append({
-        path,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { smoke: true },
+        params: { path },
+        body: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { smoke: true },
+        },
       });
 
       const streams = await app.client.listStreams({});
@@ -114,7 +127,6 @@ describeRuntimeSmoke("events runtime smoke", () => {
 
       expect(await app.client.getState({ path })).toEqual({
         path,
-        lastOffset: expectedOffset(1),
         eventCount: 2,
         metadata: {},
       });
@@ -145,11 +157,13 @@ describeRuntimeSmoke("events runtime smoke", () => {
       try {
         setTimeout(() => {
           void app.client.append({
-            path,
-            type: "https://events.iterate.com/events/stream/metadata-updated",
-            payload: {
-              metadata: {
-                live: true,
+            params: { path },
+            body: {
+              type: "https://events.iterate.com/events/stream/metadata-updated",
+              payload: {
+                metadata: {
+                  live: true,
+                },
               },
             },
           });
@@ -177,19 +191,9 @@ describeRuntimeSmoke("events runtime smoke", () => {
 });
 
 function expectedOffset(value: number) {
-  return expectedStoredOffset(value);
+  return value + 1;
 }
 
 function expectedStoredOffset(value: number) {
-  let offset: string | null = null;
-
-  for (let index = 0; index <= value; index += 1) {
-    offset = getNextEventOffset(offset);
-  }
-
-  if (offset == null) {
-    throw new Error("expectedStoredOffset requires a non-negative integer.");
-  }
-
-  return offset;
+  return value + 1;
 }

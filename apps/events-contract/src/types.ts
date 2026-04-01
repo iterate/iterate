@@ -31,7 +31,8 @@ export const StreamPath = z.preprocess(
 );
 export type StreamPath = z.infer<typeof StreamPath>;
 
-export const Offset = z.string().trim().min(1);
+export const Offset = z.coerce.number().int().positive();
+export type Offset = z.infer<typeof Offset>;
 
 // Keep public payload/state shapes JSON-only so Cloudflare Durable Object RPC
 // can prove they are serializable. `Record<string, unknown>` made the generated
@@ -130,27 +131,14 @@ export type EventType = BuiltInEventInput["type"] | (z.infer<typeof EventTypeSch
 export type GenericEventInput = WithAutocompleteEventType<z.infer<typeof GenericEventInput>>;
 export type GenericEvent = WithAutocompleteEventType<z.infer<typeof GenericEvent>>;
 
-export const EventInput = z.discriminatedUnion("type", [
-  StreamInitializedEventInput,
-  ChildStreamCreatedEventInput,
-  StreamMetadataUpdatedEventInput,
-  ErrorOccurredEventInput,
-  GenericEventInput,
-]);
+export const EventInput = z.union([BuiltInEventInput, GenericEventInput]);
 export type EventInput = BuiltInEventInput | GenericEventInput;
 
-export const Event = z.discriminatedUnion("type", [
-  StreamInitializedEvent,
-  ChildStreamCreatedEvent,
-  StreamMetadataUpdatedEvent,
-  ErrorOccurredEvent,
-  GenericEvent,
-]);
+export const Event = z.union([BuiltInEvent, GenericEvent]);
 export type Event = BuiltInEvent | GenericEvent;
 
 export const StreamState = z.object({
   path: StreamPath,
-  lastOffset: Offset.nullable(),
   eventCount: z.number().int().nonnegative(),
   metadata: JSONObject,
 });

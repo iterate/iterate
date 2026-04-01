@@ -6,7 +6,7 @@ import {
   DestroyStreamResult,
   Event,
   EventInput,
-  Offset,
+  JSONObject,
   StreamPath,
   StreamState,
 } from "./types.ts";
@@ -35,12 +35,26 @@ export const eventsContract = oc.router({
       operationId: "appendStreamEvents",
       method: "POST",
       path: "/streams/{+path}",
+      inputStructure: "detailed",
       successDescription: "Event appended successfully and returned",
       description:
-        "Appends one event to a stream. A newly initialized stream first stores its own synthetic stream-initialized event at offset 0, so the first caller-appended event uses offset 1. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
+        "Appends one event to a stream. Offsets are assigned by the stream itself. Events with an existing idempotencyKey return the stored event instead of creating a duplicate. When `jsonataTransform` is present, the raw JSON request body is transformed into a single event body before append.",
       tags: ["Streams"],
     })
-    .input(z.intersection(z.object({ path: StreamPath }), EventInput))
+    .input(
+      z.union([
+        z.object({
+          params: z.object({ path: StreamPath }),
+          query: z.object({ jsonataTransform: z.undefined().optional() }).optional().default({}),
+          body: EventInput,
+        }),
+        z.object({
+          params: z.object({ path: StreamPath }),
+          query: z.object({ jsonataTransform: z.string().trim().min(1) }),
+          body: JSONObject,
+        }),
+      ]),
+    )
     .output(
       z.object({
         event: Event,
@@ -67,7 +81,7 @@ export const eventsContract = oc.router({
     .input(
       z.object({
         path: StreamPath,
-        offset: Offset.optional(),
+        offset: z.coerce.number().int().positive().optional(),
         live: z.coerce.boolean().optional(),
       }),
     )

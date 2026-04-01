@@ -1,12 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
-import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import {
   type DestroyStreamResult,
   type Event,
   Event as EventSchema,
   type EventInput,
   EventInput as EventInputSchema,
-  Offset,
   type StreamMetadataUpdatedEvent,
   StreamPath,
   StreamState,
@@ -18,10 +16,10 @@ import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/s
  * readers.
  *
  * Each stream must be initialized exactly once with its canonical path. That
- * initialization writes a synthetic self `stream-initialized` event at offset `0`,
+ * initialization writes a synthetic `stream-initialized` event at offset 1,
  * so every initialized stream starts with the invariant:
- * - event `0` is always `stream-initialized` for that stream's own path
- * - caller-appended events begin at offset `1`
+ * - event at offset 1 is always `stream-initialized` for that stream's own path
+ * - caller-appended events begin at offset 2
  *
  * Child discovery is a separate built-in event. After a stream commits its own
  * self-init event, it appends `child-stream-created` to its parent. Parents then
@@ -55,7 +53,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     void this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS events (
-          offset TEXT PRIMARY KEY,
+          offset INTEGER PRIMARY KEY,
           type TEXT NOT NULL,
           payload TEXT NOT NULL CHECK(json_valid(payload)),
           metadata TEXT CHECK(metadata IS NULL OR (json_valid(metadata) AND json_type(metadata) = 'object')),
@@ -94,11 +92,11 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /**
    * Ensures this stream exists. On the very first call, commits a synthetic
-   * `stream-initialized` event at offset `0` through `append()`. Subsequent
+   * `stream-initialized` event at offset 1 through `append()`. Subsequent
    * calls are no-ops.
    *
    * Think of this like the durable object constructor. We take arguments like { path }
-   * and set the initial state
+   * and set the initial state.
    *
    * All external callers go through `getInitializedStreamStub()` in
    * `~/lib/stream-helpers.ts`, which calls this before returning the stub.
@@ -110,7 +108,6 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     this._state = {
       path: args.path,
-      lastOffset: null,
       eventCount: 0,
       metadata: {},
     };
@@ -146,7 +143,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
     }
 
-    const nextOffset = Offset.parse(getNextEventOffset(this.state.lastOffset));
+    const nextOffset = this.state.eventCount + 1;
 
     if (parsedInputEvent.offset != null && parsedInputEvent.offset !== nextOffset) {
       throw new StreamOffsetPreconditionError(
@@ -188,17 +185,19 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     switch (event.type) {
       case "https://events.iterate.com/events/stream/initialized": {
-        void this.getParent().then((parent) =>
-          parent?.append({
-            type: "https://events.iterate.com/events/stream/child-stream-created",
-            payload: { path: event.streamPath },
-            ...(event.metadata == null ? {} : { metadata: event.metadata }),
-          }),
-        );
+        this.appendToParent({
+          type: "https://events.iterate.com/events/stream/child-stream-created",
+          payload: { path: event.streamPath },
+          metadata: event.metadata,
+        });
         break;
       }
       case "https://events.iterate.com/events/stream/child-stream-created": {
-        void this.getParent().then((parent) => parent?.append(event));
+        this.appendToParent({
+          type: event.type,
+          payload: event.payload,
+          metadata: event.metadata,
+        });
         break;
       }
     }
@@ -242,8 +241,8 @@ export class StreamDurableObject extends DurableObject<Env> {
    * newline-delimited JSON objects, but it skips malformed lines instead of
    * killing the whole live subscription.
    */
-  history(args: { afterOffset?: string } = {}): Event[] {
-    const afterOffset = args.afterOffset ?? "";
+  history(args: { afterOffset?: number } = {}): Event[] {
+    const afterOffset = args.afterOffset ?? 0;
 
     return this.ctx.storage.sql
       .exec<SqliteEventRow>(
@@ -261,7 +260,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * Returns newline-delimited JSON so backlog and live events share the same
    * framing as `decodeEventStream()` in `~/lib/utils.ts`.
    */
-  stream(args: { afterOffset?: string; live?: boolean } = {}): ReadableStream<Uint8Array> {
+  stream(args: { afterOffset?: number; live?: boolean } = {}): ReadableStream<Uint8Array> {
     const backlog = this.history(args);
     let subscriber: ReadableStreamDefaultController<Uint8Array> | undefined;
 
@@ -298,6 +297,18 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.parseEventRow(row);
   }
 
+  private appendToParent(eventInput: EventInput) {
+    void this.getParent()
+      .then((parent) => parent?.append(eventInput))
+      .catch((error) => {
+        console.error("[stream-do] failed to propagate event to parent stream", {
+          path: this.state.path,
+          eventType: eventInput.type,
+          error,
+        });
+      });
+  }
+
   private async getParent() {
     const path = this.state.path;
     if (path === "/") {
@@ -317,8 +328,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       offset: row.offset,
       type: row.type,
       payload: JSON.parse(row.payload),
-      ...(row.metadata == null ? {} : { metadata: JSON.parse(row.metadata) }),
-      ...(row.idempotency_key == null ? {} : { idempotencyKey: row.idempotency_key }),
+      metadata: row.metadata == null ? undefined : JSON.parse(row.metadata),
+      idempotencyKey: row.idempotency_key ?? undefined,
       createdAt: row.created_at,
     });
   }
@@ -343,7 +354,7 @@ function encodeEventLine(event: Event) {
 }
 
 type SqliteEventRow = {
-  offset: string;
+  offset: number;
   type: string;
   payload: string;
   metadata: string | null;
@@ -355,10 +366,10 @@ type SqliteEventRow = {
  * Pure reducer for the persisted stream projection. Replay and append share the
  * same rules so state cannot drift based on which code path produced it.
  *
- * `initialize()` sets the initial state (with `lastOffset: null`), then appends
+ * `initialize()` sets the initial state (with `eventCount: 0`), then appends
  * the synthetic `stream-initialized` event through the normal `append()` path.
  * After that, `stream-metadata-updated` replaces the metadata snapshot and all
- * other events simply advance offsets/event counts.
+ * other events simply advance the event count.
  */
 function reduceStreamState(args: { state: StreamState; event: Event }): StreamState {
   const { state, event } = args;
@@ -369,26 +380,21 @@ function reduceStreamState(args: { state: StreamState; event: Event }): StreamSt
     );
   }
 
+  state.eventCount++;
+
   switch (event.type) {
     case "https://events.iterate.com/events/stream/metadata-updated": {
       // TODO: Talk to Misha about how to express "built-in event or generic event"
       // without breaking payload narrowing here.
       const metadataUpdatedEvent = event as StreamMetadataUpdatedEvent;
       return {
-        path: state.path,
-        lastOffset: event.offset,
-        eventCount: state.eventCount + 1,
+        ...state,
         metadata: metadataUpdatedEvent.payload.metadata,
       };
     }
 
     default: {
-      return {
-        path: state.path,
-        lastOffset: event.offset,
-        eventCount: state.eventCount + 1,
-        metadata: { ...state.metadata },
-      };
+      return state;
     }
   }
 }
