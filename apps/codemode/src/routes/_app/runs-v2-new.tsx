@@ -260,7 +260,8 @@ function NewRunPage() {
                 <div>
                   <FieldLabel htmlFor="sources-yaml">Sources YAML</FieldLabel>
                   <FieldDescription>
-                    Edit the <code>sources[]</code> structure directly.
+                    Edit the <code>sources[]</code> structure directly. Headers can include{" "}
+                    <code>getIterateSecret(&#123; secretKey: &quot;...&quot; &#125;)</code>.
                   </FieldDescription>
                 </div>
 

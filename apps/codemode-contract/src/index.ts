@@ -34,6 +34,20 @@ export const CodemodeSource = z.discriminatedUnion("type", [
 ]);
 export type CodemodeSource = z.infer<typeof CodemodeSource>;
 
+export const CodemodeSecretRecord = z.object({
+  id: z.string(),
+  key: z.string(),
+  description: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type CodemodeSecretRecord = z.infer<typeof CodemodeSecretRecord>;
+
+export const CodemodeSecretDetail = CodemodeSecretRecord.extend({
+  value: z.string(),
+});
+export type CodemodeSecretDetail = z.infer<typeof CodemodeSecretDetail>;
+
 export const CodemodeRun = z.object({
   id: z.string(),
   runnerKind: CodemodeRunnerKind,
@@ -45,11 +59,79 @@ export const CodemodeRun = z.object({
 
 export const codemodeContract = oc.router({
   common: commonContract,
+  secrets: oc.router({
+    create: oc
+      .route({
+        method: "POST",
+        path: "/secrets",
+        summary: "Create a codemode secret",
+        tags: ["codemode"],
+      })
+      .input(
+        z.object({
+          key: z.string().trim().min(1, "Secret key is required"),
+          value: z.string().min(1, "Secret value is required"),
+          description: z.string().trim().optional(),
+        }),
+      )
+      .output(CodemodeSecretRecord),
+    list: oc
+      .route({
+        method: "GET",
+        path: "/secrets",
+        summary: "List codemode secrets",
+        tags: ["codemode"],
+      })
+      .input(
+        z.object({
+          limit: z.coerce.number().int().min(1).max(100).default(20),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
+      )
+      .output(
+        z.object({
+          secrets: z.array(CodemodeSecretRecord),
+          total: z.number().int().nonnegative(),
+        }),
+      ),
+    find: oc
+      .route({
+        method: "GET",
+        path: "/secrets/{id}",
+        summary: "Find a codemode secret by id",
+        tags: ["codemode"],
+      })
+      .input(
+        z.object({
+          id: z.string().trim().min(1),
+        }),
+      )
+      .output(CodemodeSecretDetail),
+    remove: oc
+      .route({
+        method: "DELETE",
+        path: "/secrets/{id}",
+        summary: "Delete a codemode secret",
+        tags: ["codemode"],
+      })
+      .input(
+        z.object({
+          id: z.string().trim().min(1),
+        }),
+      )
+      .output(
+        z.object({
+          ok: z.literal(true),
+          id: z.string(),
+          deleted: z.boolean(),
+        }),
+      ),
+  }),
   runV2: oc
     .route({
       method: "POST",
       path: "/run/v2",
-      summary: "Execute a deterministic codemode function with typed API context",
+      summary: "Execute a codemode function with typed API context",
       tags: ["codemode"],
     })
     .input(

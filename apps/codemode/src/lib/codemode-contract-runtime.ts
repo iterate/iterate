@@ -164,8 +164,10 @@ function resolveOpenApiSource(
     (source.namespace === "semaphore" && normalizedUrl.endsWith("/api/openapi.json"))
   ) {
     runtimeSource.headers = {
+      Authorization:
+        source.headers?.Authorization ??
+        `Bearer ${config.codemodeApis.semaphoreApiToken.exposeSecret()}`,
       ...source.headers,
-      Authorization: `Bearer ${config.codemodeApis.semaphoreApiToken.exposeSecret()}`,
     };
   }
 
@@ -174,8 +176,10 @@ function resolveOpenApiSource(
     (source.namespace === "ingressProxy" && normalizedUrl.endsWith("/api/openapi.json"))
   ) {
     runtimeSource.headers = {
+      Authorization:
+        source.headers?.Authorization ??
+        `Bearer ${config.codemodeApis.ingressProxyApiToken.exposeSecret()}`,
       ...source.headers,
-      Authorization: `Bearer ${config.codemodeApis.ingressProxyApiToken.exposeSecret()}`,
     };
   }
 

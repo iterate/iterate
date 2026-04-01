@@ -2,7 +2,6 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { buildCodemodeNewRunSearch } from "~/lib/codemode-links.ts";
 import { formatCodemodeSourcesYaml } from "~/lib/codemode-sources.ts";
 import { getRun } from "~/lib/runs.ts";

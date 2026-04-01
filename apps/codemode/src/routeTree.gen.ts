@@ -12,9 +12,12 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
+import { Route as AppSecretsRouteImport } from './routes/_app/secrets'
 import { Route as AppRunsV2NewRouteImport } from './routes/_app/runs-v2-new'
 import { Route as AppRunsRouteImport } from './routes/_app/runs'
 import { Route as AppExamplesRouteImport } from './routes/_app/examples'
+import { Route as AppSecretsIndexRouteImport } from './routes/_app/secrets.index'
+import { Route as AppSecretsSecretIdRouteImport } from './routes/_app/secrets.$secretId'
 import { Route as AppRunsRunIdRouteImport } from './routes/_app/runs/$runId'
 
 const AppRoute = AppRouteImport.update({
@@ -31,6 +34,11 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppSecretsRoute = AppSecretsRouteImport.update({
+  id: '/secrets',
+  path: '/secrets',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppRunsV2NewRoute = AppRunsV2NewRouteImport.update({
   id: '/runs-v2-new',
   path: '/runs-v2-new',
@@ -46,6 +54,16 @@ const AppExamplesRoute = AppExamplesRouteImport.update({
   path: '/examples',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSecretsIndexRoute = AppSecretsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppSecretsRoute,
+} as any)
+const AppSecretsSecretIdRoute = AppSecretsSecretIdRouteImport.update({
+  id: '/$secretId',
+  path: '/$secretId',
+  getParentRoute: () => AppSecretsRoute,
+} as any)
 const AppRunsRunIdRoute = AppRunsRunIdRouteImport.update({
   id: '/$runId',
   path: '/$runId',
@@ -57,8 +75,11 @@ export interface FileRoutesByFullPath {
   '/examples': typeof AppExamplesRoute
   '/runs': typeof AppRunsRouteWithChildren
   '/runs-v2-new': typeof AppRunsV2NewRoute
+  '/secrets': typeof AppSecretsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/runs/$runId': typeof AppRunsRunIdRoute
+  '/secrets/$secretId': typeof AppSecretsSecretIdRoute
+  '/secrets/': typeof AppSecretsIndexRoute
 }
 export interface FileRoutesByTo {
   '/examples': typeof AppExamplesRoute
@@ -67,6 +88,8 @@ export interface FileRoutesByTo {
   '/api/$': typeof ApiSplatRoute
   '/': typeof AppIndexRoute
   '/runs/$runId': typeof AppRunsRunIdRoute
+  '/secrets/$secretId': typeof AppSecretsSecretIdRoute
+  '/secrets': typeof AppSecretsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -74,9 +97,12 @@ export interface FileRoutesById {
   '/_app/examples': typeof AppExamplesRoute
   '/_app/runs': typeof AppRunsRouteWithChildren
   '/_app/runs-v2-new': typeof AppRunsV2NewRoute
+  '/_app/secrets': typeof AppSecretsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/_app/': typeof AppIndexRoute
   '/_app/runs/$runId': typeof AppRunsRunIdRoute
+  '/_app/secrets/$secretId': typeof AppSecretsSecretIdRoute
+  '/_app/secrets/': typeof AppSecretsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -85,19 +111,33 @@ export interface FileRouteTypes {
     | '/examples'
     | '/runs'
     | '/runs-v2-new'
+    | '/secrets'
     | '/api/$'
     | '/runs/$runId'
+    | '/secrets/$secretId'
+    | '/secrets/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/examples' | '/runs' | '/runs-v2-new' | '/api/$' | '/' | '/runs/$runId'
+  to:
+    | '/examples'
+    | '/runs'
+    | '/runs-v2-new'
+    | '/api/$'
+    | '/'
+    | '/runs/$runId'
+    | '/secrets/$secretId'
+    | '/secrets'
   id:
     | '__root__'
     | '/_app'
     | '/_app/examples'
     | '/_app/runs'
     | '/_app/runs-v2-new'
+    | '/_app/secrets'
     | '/api/$'
     | '/_app/'
     | '/_app/runs/$runId'
+    | '/_app/secrets/$secretId'
+    | '/_app/secrets/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -128,6 +168,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/secrets': {
+      id: '/_app/secrets'
+      path: '/secrets'
+      fullPath: '/secrets'
+      preLoaderRoute: typeof AppSecretsRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/runs-v2-new': {
       id: '/_app/runs-v2-new'
       path: '/runs-v2-new'
@@ -148,6 +195,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/examples'
       preLoaderRoute: typeof AppExamplesRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/_app/secrets/': {
+      id: '/_app/secrets/'
+      path: '/'
+      fullPath: '/secrets/'
+      preLoaderRoute: typeof AppSecretsIndexRouteImport
+      parentRoute: typeof AppSecretsRoute
+    }
+    '/_app/secrets/$secretId': {
+      id: '/_app/secrets/$secretId'
+      path: '/$secretId'
+      fullPath: '/secrets/$secretId'
+      preLoaderRoute: typeof AppSecretsSecretIdRouteImport
+      parentRoute: typeof AppSecretsRoute
     }
     '/_app/runs/$runId': {
       id: '/_app/runs/$runId'
@@ -170,10 +231,25 @@ const AppRunsRouteChildren: AppRunsRouteChildren = {
 const AppRunsRouteWithChildren =
   AppRunsRoute._addFileChildren(AppRunsRouteChildren)
 
+interface AppSecretsRouteChildren {
+  AppSecretsSecretIdRoute: typeof AppSecretsSecretIdRoute
+  AppSecretsIndexRoute: typeof AppSecretsIndexRoute
+}
+
+const AppSecretsRouteChildren: AppSecretsRouteChildren = {
+  AppSecretsSecretIdRoute: AppSecretsSecretIdRoute,
+  AppSecretsIndexRoute: AppSecretsIndexRoute,
+}
+
+const AppSecretsRouteWithChildren = AppSecretsRoute._addFileChildren(
+  AppSecretsRouteChildren,
+)
+
 interface AppRouteChildren {
   AppExamplesRoute: typeof AppExamplesRoute
   AppRunsRoute: typeof AppRunsRouteWithChildren
   AppRunsV2NewRoute: typeof AppRunsV2NewRoute
+  AppSecretsRoute: typeof AppSecretsRouteWithChildren
   AppIndexRoute: typeof AppIndexRoute
 }
 
@@ -181,6 +257,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppExamplesRoute: AppExamplesRoute,
   AppRunsRoute: AppRunsRouteWithChildren,
   AppRunsV2NewRoute: AppRunsV2NewRoute,
+  AppSecretsRoute: AppSecretsRouteWithChildren,
   AppIndexRoute: AppIndexRoute,
 }
 

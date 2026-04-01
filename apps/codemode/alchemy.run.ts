@@ -72,23 +72,10 @@ const outboundWorker = await Worker("codemode-outbound", {
   name: `${workerName}-outbound`,
   adopt: true,
   compatibilityFlags: ["global_fetch_strictly_public"],
-  script: `
-export default {
-  async fetch(request) {
-    const startedAt = Date.now();
-    console.log("[codemode-outbound]", request.method, request.url);
-    const response = await fetch(request);
-    console.log(
-      "[codemode-outbound]",
-      request.method,
-      request.url,
-      response.status,
-      Date.now() - startedAt + "ms",
-    );
-    return response;
+  bindings: {
+    DB: db,
   },
-};
-  `,
+  entrypoint: "./src/outbound-worker.ts",
 });
 
 export const worker = await TanStackStart(APP_NAME, {

@@ -2,6 +2,7 @@ import type { CodemodeRun } from "@iterate-com/codemode-contract";
 import type { AppContext } from "~/context.ts";
 import { codemodeRunsTable } from "~/db/schema.ts";
 import { buildCodemodeContextFromSources } from "~/lib/codemode-contract-runtime.ts";
+import { createCodemodeOutboundFetch } from "~/lib/codemode-outbound-fetch.ts";
 import { executeCodemodeFunction } from "~/lib/execute-code-v2.ts";
 import { os } from "~/orpc/orpc.ts";
 
@@ -47,6 +48,7 @@ export const runRouter = {
     const runtimeContext = await buildCodemodeContextFromSources({
       config: context.config,
       sources: input.sources,
+      fetch: createCodemodeOutboundFetch(context.env.OUTBOUND),
     });
 
     return runtimeContext.ctxTypes;
