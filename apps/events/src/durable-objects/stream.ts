@@ -51,22 +51,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     super(ctx, env);
 
     void this.ctx.blockConcurrencyWhile(async () => {
-      this.ctx.storage.sql.exec(`
-        CREATE TABLE IF NOT EXISTS events (
-          offset INTEGER PRIMARY KEY,
-          type TEXT NOT NULL,
-          payload TEXT NOT NULL CHECK(json_valid(payload)),
-          metadata TEXT CHECK(metadata IS NULL OR (json_valid(metadata) AND json_type(metadata) = 'object')),
-          idempotency_key TEXT UNIQUE,
-          created_at TEXT NOT NULL
-        )
-      `);
-      this.ctx.storage.sql.exec(`
-        CREATE TABLE IF NOT EXISTS reduced_state (
-          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-          json TEXT NOT NULL CHECK(json_valid(json))
-        )
-      `);
+      this.ensureSchema();
 
       // Pull reduced state out of the database - we always keep it in memory
       // (we don't ever want all events in memory, because there might be LOTS of them)
@@ -106,6 +91,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       return;
     }
 
+    // Re-create tables if they were wiped by destroy() → deleteAll().
+    // The constructor's blockConcurrencyWhile only runs once per DO lifetime.
+    this.ensureSchema();
+
     this._state = {
       path: args.path,
       eventCount: 0,
@@ -141,6 +130,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       if (existingEvent != null) {
         return existingEvent;
       }
+    }
+
+    if (
+      parsedInputEvent.type === "https://events.iterate.com/events/stream/initialized" &&
+      this.state.eventCount > 0
+    ) {
+      throw new Error("stream-initialized may only be appended once");
     }
 
     const nextOffset = this.state.eventCount + 1;
@@ -284,6 +280,25 @@ export class StreamDurableObject extends DurableObject<Env> {
         }
       },
     });
+  }
+
+  private ensureSchema() {
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS events (
+        offset INTEGER PRIMARY KEY,
+        type TEXT NOT NULL,
+        payload TEXT NOT NULL CHECK(json_valid(payload)),
+        metadata TEXT CHECK(metadata IS NULL OR (json_valid(metadata) AND json_type(metadata) = 'object')),
+        idempotency_key TEXT UNIQUE,
+        created_at TEXT NOT NULL
+      )
+    `);
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS reduced_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        json TEXT NOT NULL CHECK(json_valid(json))
+      )
+    `);
   }
 
   private getEventByIdempotencyKey(idempotencyKey: string) {

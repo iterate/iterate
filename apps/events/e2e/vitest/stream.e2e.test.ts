@@ -192,12 +192,10 @@ describe.sequential("events stream e2e", () => {
 
       expect(childCreatedResponse.status).toBe(200);
       await expect(childCreatedResponse.json()).resolves.toMatchObject({
-        result: {
-          event: {
-            streamPath: path,
-            type: "https://events.iterate.com/events/stream/child-stream-created",
-            payload: { path: childPath },
-          },
+        event: {
+          streamPath: path,
+          type: "https://events.iterate.com/events/stream/child-stream-created",
+          payload: { path: childPath },
         },
       });
       expect(initializedResponse.status).toBe(400);

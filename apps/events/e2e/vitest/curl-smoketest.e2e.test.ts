@@ -86,7 +86,7 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
     }).toMatchInlineSnapshot(`
       {
         "stderr": "",
-        "stdout": "{"event":{"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":2,"path":"<streamPath>","createdAt":"<ts>"}}
+        "stdout": "{"event":{"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":2,"streamPath":"<streamPath>","createdAt":"<ts>"}}
       ---
       {"path":"<streamPath>","eventCount":2,"metadata":{}}
       ---
@@ -95,10 +95,12 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
       : 
 
       event: message
-      data: {"type":"https://events.iterate.com/events/stream/initialized","payload":{"path":"<streamPath>"},"offset":1,"path":"<streamPath>","createdAt":"<ts>"}
+      data: {"type":"https://events.iterate.com/events/stream/initialized","payload":{"path":"<streamPath>"},"offset":1,"streamPath":"<streamPath>","createdAt":"<ts>"}
 
       event: message
-      data: {"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":2,"path":"<streamPath>","createdAt":"<ts>"}
+      data: {"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":2,"streamPath":"<streamPath>","createdAt":"<ts>"}
+
+
       ---
       ",
       }

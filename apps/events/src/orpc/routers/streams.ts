@@ -35,13 +35,23 @@ export const streamsRouter = {
     } catch (error) {
       // TODO: Replace this exception mapping with a result-style flow.
       // See apps/events/tasks/better-error-handling.md.
+      // The instanceof/name checks handle direct calls. The message check
+      // handles DO RPC where the error class is lost during serialization.
       if (
         error instanceof StreamOffsetPreconditionError ||
-        (error instanceof Error && error.name === "StreamOffsetPreconditionError")
+        (error instanceof Error && error.name === "StreamOffsetPreconditionError") ||
+        (error instanceof Error && /does not match next generated offset/i.test(error.message))
       ) {
         throw new ORPCError("PRECONDITION_FAILED", {
           message: error instanceof Error ? error.message : "Offset precondition failed.",
         });
+      }
+
+      if (
+        error instanceof Error &&
+        error.message === "stream-initialized may only be appended once"
+      ) {
+        throw new ORPCError("BAD_REQUEST", { message: error.message });
       }
 
       throw error;
