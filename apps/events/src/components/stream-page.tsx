@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  EventInput,
+  AppendEventInput,
   type Event,
   type EventType,
   type JSONObject,
@@ -58,9 +58,7 @@ export function StreamPage({
   const queryClient = useQueryClient();
   const { closeMetadata, metadataOpen, setHeaderControls } = useStreamsChrome();
   const [selectedTemplateType, setSelectedTemplateType] = useState<EventType>(DEFAULT_EVENT_TYPE);
-  const [appendInputJson, setAppendInputJson] = useState(() =>
-    createEventInputTemplate({ streamPath, type: DEFAULT_EVENT_TYPE }),
-  );
+  const [appendInputJson, setAppendInputJson] = useState("");
 
   const streamStateQuery = useQuery({
     ...orpc.getState.queryOptions({ input: { streamPath } }),
@@ -81,10 +79,6 @@ export function StreamPage({
   const feed = useMemo(() => projectWireToFeed(events), [events]);
   const displayFeed = useMemo(() => buildDisplayFeed(feed, rendererMode), [feed, rendererMode]);
   const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
-
-  useEffect(() => {
-    setAppendInputJson(createEventInputTemplate({ streamPath, type: selectedTemplateType }));
-  }, [selectedTemplateType, streamPath]);
 
   useEffect(() => {
     // The header lives in the parent `_app` layout, outside the concrete stream
@@ -113,17 +107,17 @@ export function StreamPage({
   const selectedTemplatePage = getEventTypePageByType(selectedTemplateType);
 
   const submitAppend = async (inputText = appendInputJson) => {
-    let event: EventInput;
+    let event: AppendEventInput;
 
     try {
-      event = EventInput.parse(parseJSONObject(inputText));
+      event = AppendEventInput.parse(parseJSONObject(inputText));
     } catch (error) {
       toast.error(formatClientError(error));
       return;
     }
 
     const request = appendEvent.mutateAsync({
-      path: event.path,
+      path: streamPath,
       events: [event],
     });
 
@@ -191,7 +185,11 @@ export function StreamPage({
               value={appendInputJson}
               onChange={(event) => setAppendInputJson(event.currentTarget.value)}
               className="min-h-36 max-h-[45vh] font-mono text-xs leading-5"
-              placeholder='{"path":"/demo","type":"https://events.iterate.com/manual-event-appended","payload":{"message":"hello"}}'
+              placeholder={
+                selectedTemplatePage
+                  ? `Enter JSON for ${selectedTemplatePage.title.toLowerCase()}`
+                  : "Enter event JSON"
+              }
               spellCheck={false}
             />
           </PromptInputBody>
@@ -227,24 +225,6 @@ export function StreamPage({
   );
 }
 
-function createEventInputTemplate({
-  streamPath,
-  type,
-}: {
-  streamPath: StreamPath;
-  type: EventType;
-}) {
-  return JSON.stringify(
-    {
-      path: streamPath,
-      type,
-      payload: clonePayloadTemplate(getEventTypePageByType(type)?.payloadExample),
-    } satisfies EventInput,
-    null,
-    2,
-  );
-}
-
 function parseJSONObject(value: string) {
   const parsed = JSON.parse(value) as unknown;
 
@@ -253,12 +233,4 @@ function parseJSONObject(value: string) {
   }
 
   return parsed as JSONObject;
-}
-
-function clonePayloadTemplate(payload: Record<string, unknown> | undefined) {
-  if (!payload) {
-    return {} as JSONObject;
-  }
-
-  return JSON.parse(JSON.stringify(payload)) as JSONObject;
 }

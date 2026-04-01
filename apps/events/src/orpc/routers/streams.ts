@@ -1,3 +1,4 @@
+import { ORPCError } from "@orpc/server";
 import { STREAM_CREATED_TYPE, StreamPath } from "@iterate-com/events-contract";
 import { ROOT_STREAM_PATH, decodeEventStream } from "~/lib/utils.ts";
 import { os } from "~/orpc/orpc.ts";
@@ -16,7 +17,15 @@ export const streamsRouter = {
     // Durable Object RPC is always async from the caller side, even if the method
     // body itself only performs synchronous SQLite work.
     const streamStub = context.env.STREAM.getByName(input.path);
-    return streamStub.append({ events });
+    const result = await streamStub.append({ events });
+
+    if (result.kind === "offset-precondition-failed") {
+      throw new ORPCError("PRECONDITION_FAILED", { message: result.message });
+    }
+
+    return {
+      events: result.events,
+    };
   }),
   stream: os.stream.handler(async function* ({ context, input, signal }) {
     const streamStub = context.env.STREAM.getByName(input.path);

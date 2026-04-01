@@ -37,7 +37,6 @@ export const router = {
         path: resolved.streamPath,
         events: [
           {
-            path: resolved.streamPath,
             type: HELLO_WORLD_TYPE,
             payload: {
               message: "hello world",

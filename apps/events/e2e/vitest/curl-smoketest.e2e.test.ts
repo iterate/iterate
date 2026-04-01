@@ -69,14 +69,14 @@ curl -sS -N "$BASE_URL/api/streams/$STREAM_RPATH"
     }).toMatchInlineSnapshot(`
       {
         "stderr": "",
-        "stdout": "{"created":true,"events":[{"path":"<streamPath>","type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":"0000000000000001","createdAt":"<ts>"}]}
+        "stdout": "{"events":[{"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":"0000000000000001","path":"<streamPath>","createdAt":"<ts>"}]}
       ---
       {"path":"<streamPath>","lastOffset":"0000000000000001","eventCount":1,"metadata":{}}
       ---
       : 
 
       event: message
-      data: {"path":"<streamPath>","type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":"0000000000000001","createdAt":"<ts>"}
+      data: {"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":"0000000000000001","path":"<streamPath>","createdAt":"<ts>"}
 
       ",
       }

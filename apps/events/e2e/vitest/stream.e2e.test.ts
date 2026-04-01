@@ -8,6 +8,7 @@ import {
   type Event,
   type StreamState,
 } from "@iterate-com/events-contract";
+import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
@@ -111,8 +112,6 @@ describe.sequential("events stream e2e", () => {
         idempotencyKey,
       });
 
-      expect(first.created).toBe(true);
-      expect(second.created).toBe(false);
       expect(second.events).toEqual(first.events);
 
       const events = await collectStreamEvents(app, { path });
@@ -134,7 +133,7 @@ describe.sequential("events stream e2e", () => {
           payload: { value: 1 },
           idempotencyKey: "",
         }),
-      ).rejects.toThrow(/idempotency/i);
+      ).rejects.toThrow(/input validation failed/i);
     },
     testTimeoutMs,
   );
@@ -234,19 +233,16 @@ describe.sequential("events stream e2e", () => {
         path,
         events: [
           {
-            path,
             type: "https://events.iterate.com/events/example/value-recorded",
             payload: { step: "ignored-duplicate" },
             idempotencyKey: existingKey,
           },
           {
-            path,
             type: "https://events.iterate.com/events/example/value-recorded",
             payload: { step: "new-in-batch" },
             idempotencyKey: batchKey,
           },
           {
-            path,
             type: "https://events.iterate.com/events/example/value-recorded",
             payload: { step: "ignored-same-batch-duplicate" },
             idempotencyKey: batchKey,
@@ -254,7 +250,6 @@ describe.sequential("events stream e2e", () => {
         ],
       });
 
-      expect(batch.created).toBe(false);
       expect(batch.events).toHaveLength(3);
       expect(batch.events[0]).toEqual(existing.events[0]);
       expect(batch.events[1]?.offset).toEqual(expectedOffset(2));
@@ -291,7 +286,6 @@ describe.sequential("events stream e2e", () => {
 
       expect(appendResponse.status).toBe(200);
       expect(await appendResponse.json()).toMatchObject({
-        created: true,
         events: [
           {
             path,
@@ -320,17 +314,14 @@ describe.sequential("events stream e2e", () => {
         path,
         events: [
           {
-            path,
             type: "https://events.iterate.com/events/example/value-recorded",
             payload: { value: 1 },
           },
           {
-            path,
             type: "https://events.iterate.com/events/example/value-recorded",
             payload: { value: 2 },
           },
           {
-            path,
             type: "https://events.iterate.com/events/example/value-recorded",
             payload: { value: 3 },
           },
@@ -349,6 +340,232 @@ describe.sequential("events stream e2e", () => {
         { value: 2 },
         { value: 3 },
       ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "append rejects the wrong first offset and leaves the stream untouched",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await expect(
+        app.client.append({
+          path,
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: 1 },
+          offset: expectedOffset(2),
+        }),
+      ).rejects.toThrow(/next generated offset/i);
+
+      expect(await app.client.getState({ streamPath: path })).toEqual({
+        path: null,
+        lastOffset: null,
+        eventCount: 0,
+        metadata: {},
+      } satisfies StreamState);
+      expect(await collectStreamEvents(app, { path })).toEqual([]);
+      expect((await app.client.listStreams({})).some((stream) => stream.path === path)).toBe(false);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "append accepts the exact next offset when supplied",
+    async () => {
+      const path = uniqueStreamPath();
+
+      const first = await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { step: 1 },
+        offset: expectedOffset(1),
+      });
+
+      const second = await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { step: 2 },
+        offset: expectedOffset(2),
+      });
+
+      expect(first.events[0]?.offset).toEqual(expectedOffset(1));
+      expect(second.events[0]?.offset).toEqual(expectedOffset(2));
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "batch append accepts a full supplied offset chain",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await app.client.append({
+        path,
+        events: [
+          {
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { step: 1 },
+            offset: expectedOffset(1),
+          },
+          {
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { step: 2 },
+            offset: expectedOffset(2),
+          },
+          {
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { step: 3 },
+            offset: expectedOffset(3),
+          },
+        ],
+      });
+
+      const events = await collectStreamEvents(app, { path });
+
+      expect(events.map((event) => event.offset)).toEqual([
+        expectedOffset(1),
+        expectedOffset(2),
+        expectedOffset(3),
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "append rejects a supplied offset that does not match the next generated offset",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { step: 1 },
+      });
+
+      await expect(
+        app.client.append({
+          path,
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: 2 },
+          offset: expectedOffset(1),
+        }),
+      ).rejects.toThrow(/next generated offset/i);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "batch append fails atomically when a later supplied offset is wrong",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await expect(
+        app.client.append({
+          path,
+          events: [
+            {
+              type: "https://events.iterate.com/events/example/value-recorded",
+              payload: { step: 1 },
+              offset: expectedOffset(1),
+            },
+            {
+              type: "https://events.iterate.com/events/example/value-recorded",
+              payload: { step: 2 },
+              offset: expectedOffset(9),
+            },
+          ],
+        }),
+      ).rejects.toThrow(/next generated offset/i);
+
+      expect(await app.client.getState({ streamPath: path })).toEqual({
+        path: null,
+        lastOffset: null,
+        eventCount: 0,
+        metadata: {},
+      } satisfies StreamState);
+      expect(await collectStreamEvents(app, { path })).toEqual([]);
+      expect((await app.client.listStreams({})).some((stream) => stream.path === path)).toBe(false);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "idempotent retry with a stale supplied offset returns the stored event and stays quiet",
+    async () => {
+      const path = uniqueStreamPath();
+      const idempotencyKey = `idem-${randomUUID()}`;
+
+      const first = await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { step: 1 },
+        idempotencyKey,
+        offset: expectedOffset(1),
+      });
+
+      const controller = new AbortController();
+      const stream = await app.client.stream(
+        {
+          path,
+          offset: first.events[0]?.offset,
+          live: true,
+        },
+        { signal: controller.signal },
+      );
+      const iterator = stream[Symbol.asyncIterator]();
+
+      try {
+        const duplicate = await app.client.append({
+          path,
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: "duplicate" },
+          idempotencyKey,
+          offset: expectedOffset(1),
+        });
+
+        expect(duplicate.events).toEqual(first.events);
+
+        const next = await Promise.race([
+          iterator.next().then((result) => ({ kind: "next" as const, result })),
+          delay(historyIdleTimeoutMs).then(() => ({ kind: "idle" as const })),
+        ]);
+
+        expect(next).toEqual({ kind: "idle" });
+      } finally {
+        controller.abort();
+        await iterator.return?.();
+      }
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "failed guarded append does not advance resume boundaries",
+    async () => {
+      const path = uniqueStreamPath();
+
+      const first = await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { step: 1 },
+      });
+
+      await expect(
+        app.client.append({
+          path,
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: 2 },
+          offset: expectedOffset(1),
+        }),
+      ).rejects.toThrow(/next generated offset/i);
+
+      const resumed = await collectStreamEvents(app, {
+        path,
+        offset: first.events[0]?.offset,
+      });
+
+      expect(resumed).toEqual([]);
     },
     testTimeoutMs,
   );
@@ -377,12 +594,10 @@ describe.sequential("events stream e2e", () => {
         path,
         events: [
           {
-            path,
             type: "https://events.iterate.com/events/example/value-recorded",
             payload: { step: 1 },
           },
           {
-            path,
             type: STREAM_METADATA_UPDATED_TYPE,
             payload: {
               metadata: {
@@ -392,7 +607,6 @@ describe.sequential("events stream e2e", () => {
             },
           },
           {
-            path,
             type: STREAM_METADATA_UPDATED_TYPE,
             payload: {
               metadata: {
@@ -534,17 +748,14 @@ describe.sequential("events stream e2e", () => {
         path,
         events: [
           {
-            path,
             type: "https://events.iterate.com/events/example/value-recorded",
             payload: { step: 1 },
           },
           {
-            path,
             type: "https://events.iterate.com/events/example/value-recorded",
             payload: { step: 2 },
           },
           {
-            path,
             type: "https://events.iterate.com/events/example/value-recorded",
             payload: { step: 3 },
           },
@@ -575,6 +786,66 @@ describe.sequential("events stream e2e", () => {
 
       expect(String(error)).toContain("Input validation failed");
       expect(JSON.stringify(error)).toContain("events");
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "http append accepts offset without an event-local path",
+    async () => {
+      const path = uniqueStreamPath();
+
+      const response = await app.fetch(`/api/streams${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { via: "http" },
+          offset: expectedOffset(1),
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        events: [
+          {
+            path,
+            offset: expectedOffset(1),
+            payload: { via: "http" },
+          },
+        ],
+      });
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "http append with a stale supplied offset returns a precondition failure",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { step: 1 },
+      });
+
+      const response = await app.fetch(`/api/streams${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: 2 },
+          offset: expectedOffset(1),
+        }),
+      });
+
+      expect(response.status).toBe(412);
+      expect(await response.text()).toContain("does not match next generated offset");
     },
     testTimeoutMs,
   );
@@ -686,6 +957,52 @@ describe.sequential("events stream e2e", () => {
     },
     testTimeoutMs,
   );
+
+  test(
+    "rejected guarded append does not publish a live event",
+    async () => {
+      const path = uniqueStreamPath();
+
+      const first = await app.client.append({
+        path,
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: { step: "initial" },
+      });
+
+      const controller = new AbortController();
+      const stream = await app.client.stream(
+        {
+          path,
+          offset: first.events[0]?.offset,
+          live: true,
+        },
+        { signal: controller.signal },
+      );
+      const iterator = stream[Symbol.asyncIterator]();
+
+      try {
+        await expect(
+          app.client.append({
+            path,
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { step: "rejected" },
+            offset: expectedOffset(1),
+          }),
+        ).rejects.toThrow(/next generated offset/i);
+
+        const next = await Promise.race([
+          iterator.next().then((result) => ({ kind: "next" as const, result })),
+          delay(historyIdleTimeoutMs).then(() => ({ kind: "idle" as const })),
+        ]);
+
+        expect(next).toEqual({ kind: "idle" });
+      } finally {
+        controller.abort();
+        await iterator.return?.();
+      }
+    },
+    testTimeoutMs,
+  );
 });
 
 function uniqueStreamPath() {
@@ -693,7 +1010,17 @@ function uniqueStreamPath() {
 }
 
 function expectedOffset(value: number) {
-  return String(value).padStart(16, "0");
+  let offset: string | null = null;
+
+  for (let index = 0; index < value; index += 1) {
+    offset = getNextEventOffset(offset);
+  }
+
+  if (offset == null) {
+    throw new Error("expectedOffset requires a positive integer.");
+  }
+
+  return offset;
 }
 
 async function collectStreamEvents(

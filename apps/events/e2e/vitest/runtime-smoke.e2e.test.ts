@@ -5,6 +5,7 @@
  */
 import { setTimeout as delay } from "node:timers/promises";
 import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
+import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import { describe, expect, test } from "vitest";
 import {
   STREAM_METADATA_UPDATED_TYPE,
@@ -37,7 +38,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       });
 
       expect(res.ok).toBe(true);
-      expect(await res.text()).toContain("Append event");
+      expect(await res.text()).toContain("Create stream");
     },
     testTimeoutMs,
   );
@@ -147,5 +148,15 @@ describeRuntimeSmoke("events runtime smoke", () => {
 });
 
 function expectedOffset(value: number) {
-  return String(value).padStart(16, "0");
+  let offset: string | null = null;
+
+  for (let index = 0; index < value; index += 1) {
+    offset = getNextEventOffset(offset);
+  }
+
+  if (offset == null) {
+    throw new Error("expectedOffset requires a positive integer.");
+  }
+
+  return offset;
 }

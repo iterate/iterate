@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import {
   Event,
   Offset,
@@ -10,8 +11,6 @@ import {
   type EventInput,
 } from "@iterate-com/events-contract";
 import { ROOT_STREAM_PATH, getParentPath } from "~/lib/utils.ts";
-
-const INITIAL_OFFSET_WIDTH = 16;
 const textEncoder = new TextEncoder();
 
 /**
@@ -50,69 +49,100 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Appends validated events inside one transaction.
+   * Appends a batch in three explicit phases:
+   * 1. before append: resolve idempotency, run pre-append checks, and plan rows
+   * 2. atomic append: write planned rows and reduced_state inside one transaction
+   * 3. after append: publish committed rows and trigger post-commit side effects
    *
    * Per-event idempotency is stream-local: when an input includes an
    * `idempotencyKey` that already exists in this stream, we return the stored
    * event instead of creating a second row or advancing offsets/state.
+   *
+   * Durable Objects are single-threaded per object instance, and Cloudflare
+   * documents that synchronous writes with no intervening `await` are atomic.
+   * That lets us preflight the batch first, then keep the transaction focused
+   * on writes only:
+   * - https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/
+   * - https://developers.cloudflare.com/durable-objects/api/storage-api/
    */
   async append(args: { events: EventInput[] }) {
     if (args.events.length === 0) {
       throw new Error("At least one event is required.");
     }
 
-    const created = this.state.eventCount === 0;
-    let nextState = structuredClone(this.state);
+    const prevState = structuredClone(this.state);
+    let state = structuredClone(prevState);
     const events: Event[] = [];
     const insertedEvents: Event[] = [];
+    const plannedEventsByIdempotencyKey = new Map<string, Event>();
 
-    this.ctx.storage.transactionSync(() => {
-      for (const inputEvent of args.events) {
-        const existingEvent =
-          inputEvent.idempotencyKey == null
-            ? null
-            : this.getEventByIdempotencyKey({
-                path: inputEvent.path,
-                idempotencyKey: inputEvent.idempotencyKey,
-              });
+    // Before append: plan the batch and run checks before any writes happen.
+    for (const inputEvent of args.events) {
+      const existingEvent =
+        inputEvent.idempotencyKey == null
+          ? null
+          : (plannedEventsByIdempotencyKey.get(inputEvent.idempotencyKey) ??
+            this.getEventByIdempotencyKey({
+              path: inputEvent.path,
+              idempotencyKey: inputEvent.idempotencyKey,
+            }));
 
-        if (existingEvent != null) {
-          events.push(existingEvent);
-          continue;
-        }
-
-        const insertedEvent = this.insertEventSync({
-          inputEvent,
-          prevOffset: nextState.lastOffset,
-        });
-
-        events.push(insertedEvent);
-        nextState = reduceStreamState({
-          state: nextState,
-          event: insertedEvent,
-        });
-        insertedEvents.push(insertedEvent);
+      if (existingEvent != null) {
+        events.push(existingEvent);
+        continue;
       }
 
-      this.ctx.storage.sql.exec(
-        `INSERT INTO reduced_state (singleton, json)
-         VALUES (1, json(?))
-         ON CONFLICT(singleton) DO UPDATE SET json = excluded.json`,
-        JSON.stringify(nextState),
-      );
+      const nextOffset = Offset.parse(getNextEventOffset(state.lastOffset));
+
+      // Future pre-append checks belong here, before the transaction begins.
+      if (inputEvent.offset != null && inputEvent.offset !== nextOffset) {
+        return {
+          kind: "offset-precondition-failed" as const,
+          message: `Client-supplied offset ${inputEvent.offset} does not match next generated offset ${nextOffset}.`,
+        };
+      }
+
+      const insertedEvent = this.buildInsertedEvent({
+        inputEvent,
+        offset: nextOffset,
+      });
+
+      events.push(insertedEvent);
+      insertedEvents.push(insertedEvent);
+      state = reduceStreamState({
+        state,
+        event: insertedEvent,
+      });
+
+      if (insertedEvent.idempotencyKey != null) {
+        plannedEventsByIdempotencyKey.set(insertedEvent.idempotencyKey, insertedEvent);
+      }
+    }
+
+    // Atomic append: writes only. Any throw here should be a real failure.
+    this.ctx.storage.transactionSync(() => {
+      for (const insertedEvent of insertedEvents) {
+        this.insertEventRowSync(insertedEvent);
+      }
+
+      this.writeReducedStateSync(state);
     });
 
-    this.state = structuredClone(nextState);
+    // After append: only committed side effects belong below this line.
+    this.state = structuredClone(state);
 
     for (const event of insertedEvents) {
       this.publish(event);
     }
 
-    if (created && insertedEvents[0] != null) {
+    if (prevState.eventCount === 0 && insertedEvents[0] != null) {
       this.propagateStreamCreated(insertedEvents[0]);
     }
 
-    return { created, events };
+    return {
+      kind: "ok" as const,
+      events,
+    };
   }
 
   async getState(): Promise<StreamState> {
@@ -249,26 +279,21 @@ export class StreamDurableObject extends DurableObject<Env> {
     return structuredClone(persistedState);
   }
 
-  /**
-   * Inserts a fresh event row using the caller-provided previous offset.
-   *
-   * This cannot read `this.state.lastOffset` directly because a single append
-   * call can insert multiple new events, and each later event must see the
-   * offset produced earlier in the same batch.
-   */
-  private insertEventSync(args: { inputEvent: EventInput; prevOffset: string | null }) {
-    const { inputEvent, prevOffset } = args;
+  private buildInsertedEvent(args: { inputEvent: EventInput; offset: string }) {
+    const { inputEvent, offset } = args;
 
-    const event = Event.parse({
+    return Event.parse({
       path: inputEvent.path,
-      offset: this.nextOffset({ prevOffset }),
+      offset,
       type: inputEvent.type,
       payload: inputEvent.payload,
       metadata: inputEvent.metadata,
       idempotencyKey: inputEvent.idempotencyKey,
       createdAt: new Date().toISOString(),
     });
+  }
 
+  private insertEventRowSync(event: Event) {
     this.ctx.storage.sql.exec(
       `INSERT INTO events (offset, type, payload, metadata, idempotency_key, created_at)
        VALUES (?, ?, json(?), ?, ?, ?)`,
@@ -279,8 +304,15 @@ export class StreamDurableObject extends DurableObject<Env> {
       event.idempotencyKey ?? null,
       event.createdAt,
     );
+  }
 
-    return event;
+  private writeReducedStateSync(state: StreamState) {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO reduced_state (singleton, json)
+       VALUES (1, json(?))
+       ON CONFLICT(singleton) DO UPDATE SET json = excluded.json`,
+      JSON.stringify(state),
+    );
   }
 
   private listEventsAfterOffset(args: { path: StreamPath; afterOffset: string }) {
@@ -348,23 +380,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       ...(row.idempotency_key == null ? {} : { idempotencyKey: row.idempotency_key }),
       createdAt: row.created_at,
     });
-  }
-
-  private nextOffset(args: { prevOffset: string | null }) {
-    const { prevOffset } = args;
-
-    // Offsets are fixed-width decimal strings so plain lexicographic ordering in
-    // SQLite matches append order.
-    if (prevOffset == null) {
-      return Offset.parse("1".padStart(INITIAL_OFFSET_WIDTH, "0"));
-    }
-
-    if (!/^\d+$/.test(prevOffset)) {
-      throw new Error(`Cannot generate the next offset after non-numeric offset ${prevOffset}.`);
-    }
-
-    const width = Math.max(prevOffset.length, INITIAL_OFFSET_WIDTH);
-    return Offset.parse((BigInt(prevOffset) + 1n).toString().padStart(width, "0"));
   }
 
   private propagateStreamCreated(firstEvent: Event) {

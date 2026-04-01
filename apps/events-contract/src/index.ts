@@ -49,14 +49,23 @@ export const Offset = z.string().trim().min(1);
 export const JSONObject = z.record(z.string(), z.json());
 export type JSONObject = z.infer<typeof JSONObject>;
 
-export const EventInput = z.object({
-  path: StreamPath,
+const appendEventShape = {
   type: EventType,
   payload: JSONObject,
   metadata: JSONObject.optional(),
   // When a stream already has an event with this key, append returns that
   // stored event instead of creating a second one.
   idempotencyKey: z.string().trim().min(1).optional(),
+  // Optional optimistic concurrency guard. When supplied, it must equal the
+  // next offset this stream would generate for a newly inserted event.
+  offset: Offset.optional(),
+} satisfies z.ZodRawShape;
+
+export const AppendEventInput = z.object(appendEventShape);
+export type AppendEventInput = z.infer<typeof AppendEventInput>;
+
+export const EventInput = AppendEventInput.extend({
+  path: StreamPath,
 });
 export type EventInput = z.infer<typeof EventInput>;
 
@@ -81,9 +90,9 @@ const AppendInput = z.intersection(
     path: StreamPath,
   }),
   z.union([
-    EventInput,
+    AppendEventInput,
     z.object({
-      events: z.array(EventInput).min(1),
+      events: z.array(AppendEventInput).min(1),
     }),
   ]),
 );
@@ -117,13 +126,12 @@ export const eventsContract = oc.router({
       path: "/streams/{+path}",
       successDescription: "Events appended successfully and returned",
       description:
-        "Appends events to a stream in order. Offsets are assigned by the stream itself. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
+        "Appends events to a stream in order. Offsets are assigned by the stream itself unless a caller supplies the exact next offset the stream would generate. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
       tags: ["Streams"],
     })
     .input(AppendInput)
     .output(
       z.object({
-        created: z.boolean(),
         events: z.array(Event),
       }),
     ),
