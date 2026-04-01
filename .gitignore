@@ -58,6 +58,7 @@ opensrc/
 
 # opencode sessions
 session-ses*.md
+_code-review*.md
 
 # local lint-staged config
 lint-staged.local.cjs

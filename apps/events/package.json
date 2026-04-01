@@ -41,6 +41,7 @@
     "@tanstack/react-router-devtools": "1.166.11",
     "@tanstack/react-router-ssr-query": "^1.166.2",
     "@tanstack/react-start": "1.167.5",
+    "cron-schedule": "^5.0.4",
     "crossws": "^0.4.4",
     "drizzle-orm": "^0.45.1",
     "jsonata": "^2.1.0",
@@ -52,6 +53,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.29.1",
+    "@cloudflare/vitest-pool-workers": "^0.14.0",
     "@cloudflare/workers-types": "^4.20260317.1",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/devtools-vite": "^0.6.0",
@@ -66,7 +68,7 @@
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
-    "vitest": "4.0.15",
+    "vitest": "4.1.0-beta.6",
     "wrangler": "^4.75.0"
   }
 }

@@ -6,7 +6,15 @@ import { drizzle as drizzleWorkerd } from "drizzle-orm/d1";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import * as schema from "~/db/schema.ts";
+import { createSchedulingTestDurableObjects } from "~/durable-objects/scheduling.ts";
 import { StreamDurableObject } from "~/durable-objects/stream.ts";
+
+const {
+  TestScheduleStreamDurableObject,
+  TestStartupScheduleExplicitFalseStreamDurableObject,
+  TestStartupScheduleNoWarnStreamDurableObject,
+  TestStartupScheduleWarnStreamDurableObject,
+} = createSchedulingTestDurableObjects(StreamDurableObject);
 
 const config = parseAppConfigFromEnv({
   configSchema: AppConfig,
@@ -40,4 +48,10 @@ export default {
   },
 };
 
-export { StreamDurableObject };
+export {
+  StreamDurableObject,
+  TestScheduleStreamDurableObject,
+  TestStartupScheduleExplicitFalseStreamDurableObject,
+  TestStartupScheduleNoWarnStreamDurableObject,
+  TestStartupScheduleWarnStreamDurableObject,
+};
