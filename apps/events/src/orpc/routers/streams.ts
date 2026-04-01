@@ -1,6 +1,6 @@
 import { ORPCError } from "@orpc/server";
 import {
-  ChildStreamCreatedPayload,
+  type Event,
   StreamPath,
   childStreamCreatedEventType,
   streamInitializedEventType,
@@ -14,15 +14,17 @@ import { ROOT_STREAM_PATH, decodeEventStream } from "~/lib/utils.ts";
 import { os } from "~/orpc/orpc.ts";
 
 export const streamsRouter = {
-  append: os.append.handler(async ({ context, input }) => {
+  append: os.append.handler(async ({ input }) => {
     const { path, ...event } = input;
-    const streamStub = await getInitializedStreamStub(context.env, path);
+    const streamStub = await getInitializedStreamStub({ path });
     try {
       const appendedEvent = await streamStub.append(event);
       return {
         event: appendedEvent,
       };
     } catch (error) {
+      // TODO: Replace this exception mapping with a result-style flow.
+      // See apps/events/tasks/better-error-handling.md.
       if (
         error instanceof StreamOffsetPreconditionError ||
         (error instanceof Error && error.name === "StreamOffsetPreconditionError")
@@ -44,8 +46,8 @@ export const streamsRouter = {
       throw error;
     }
   }),
-  stream: os.stream.handler(async function* ({ context, input, signal }) {
-    const streamStub = await getInitializedStreamStub(context.env, input.path);
+  stream: os.stream.handler(async function* ({ input, signal }) {
+    const streamStub = await getInitializedStreamStub({ path: input.path });
 
     if (!input.live) {
       const events = await streamStub.history({
@@ -68,12 +70,12 @@ export const streamsRouter = {
       yield event;
     }
   }),
-  getState: os.getState.handler(async ({ context, input }) => {
-    const streamStub = await getInitializedStreamStub(context.env, input.path);
+  getState: os.getState.handler(async ({ input }) => {
+    const streamStub = await getInitializedStreamStub({ path: input.path });
     return streamStub.getState();
   }),
-  listStreams: os.listStreams.handler(async ({ context }) => {
-    const rootStreamStub = await getInitializedStreamStub(context.env, ROOT_STREAM_PATH);
+  listStreams: os.listStreams.handler(async () => {
+    const rootStreamStub = await getInitializedStreamStub({ path: ROOT_STREAM_PATH });
     const events = await rootStreamStub.history();
     const rootState = await rootStreamStub.getState();
     const discovered = new Map<StreamPath, string>();
@@ -83,12 +85,12 @@ export const streamsRouter = {
         continue;
       }
 
-      const payload = ChildStreamCreatedPayload.safeParse(event.payload);
-      if (!payload.success || discovered.has(payload.data.path)) {
+      const childPath = getChildStreamCreatedEventPath(event);
+      if (discovered.has(childPath)) {
         continue;
       }
 
-      discovered.set(payload.data.path, event.createdAt);
+      discovered.set(childPath, event.createdAt);
     }
 
     if (rootState.initialized === true && !discovered.has(ROOT_STREAM_PATH)) {
@@ -107,3 +109,11 @@ export const streamsRouter = {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }),
 };
+
+function getChildStreamCreatedEventPath(event: Event) {
+  if (event.type !== childStreamCreatedEventType) {
+    throw new Error(`Expected ${childStreamCreatedEventType}, received ${event.type}.`);
+  }
+
+  return (event.payload as { path: StreamPath }).path;
+}

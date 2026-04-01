@@ -1,9 +1,9 @@
 import {
   childStreamCreatedEventType,
-  ChildStreamCreatedPayload,
   streamMetadataUpdatedEventType,
-  StreamMetadataUpdatedPayload,
   type Event,
+  type JSONObject,
+  type StreamPath,
 } from "@iterate-com/events-contract";
 import type {
   EventFeedItem,
@@ -106,31 +106,23 @@ function flushCurrentGroup(displayFeed: StreamFeedItem[], currentGroup: readonly
 
 export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
   if (event.type === childStreamCreatedEventType) {
-    const payload = ChildStreamCreatedPayload.safeParse(event.payload);
-
-    if (payload.success) {
-      return {
-        kind: "child-stream-created",
-        parentPath: event.path,
-        createdPath: payload.data.path,
-        timestamp: getTimestamp(event.createdAt),
-        raw: event,
-      };
-    }
+    return {
+      kind: "child-stream-created",
+      parentPath: event.path,
+      createdPath: getChildStreamCreatedEventPath(event),
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
   }
 
   if (event.type === streamMetadataUpdatedEventType) {
-    const payload = StreamMetadataUpdatedPayload.safeParse(event.payload);
-
-    if (payload.success) {
-      return {
-        kind: "stream-metadata-updated",
-        path: event.path,
-        metadata: payload.data.metadata,
-        timestamp: getTimestamp(event.createdAt),
-        raw: event,
-      };
-    }
+    return {
+      kind: "stream-metadata-updated",
+      path: event.path,
+      metadata: getStreamMetadataUpdatedEventMetadata(event),
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
   }
 
   return null;
@@ -177,6 +169,22 @@ function appendInsertion(
   }
 
   insertionsByOffset.set(offset, [item]);
+}
+
+function getChildStreamCreatedEventPath(event: Event) {
+  if (event.type !== childStreamCreatedEventType) {
+    throw new Error(`Expected ${childStreamCreatedEventType}, received ${event.type}.`);
+  }
+
+  return (event.payload as { path: StreamPath }).path;
+}
+
+function getStreamMetadataUpdatedEventMetadata(event: Event) {
+  if (event.type !== streamMetadataUpdatedEventType) {
+    throw new Error(`Expected ${streamMetadataUpdatedEventType}, received ${event.type}.`);
+  }
+
+  return (event.payload as { metadata: JSONObject }).metadata;
 }
 
 export function createGroupedOrSingleEvent(

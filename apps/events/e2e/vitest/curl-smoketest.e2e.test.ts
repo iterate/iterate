@@ -95,7 +95,7 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
       : 
 
       event: message
-      data: {"type":"https://events.iterate.com/events/stream/initialized","payload":{"path":"<streamPath>"},"idempotencyKey":"stream-initialized","offset":"0000000000000000","path":"<streamPath>","createdAt":"<ts>"}
+      data: {"type":"https://events.iterate.com/events/stream/initialized","payload":{"path":"<streamPath>"},"offset":"0000000000000000","path":"<streamPath>","createdAt":"<ts>"}
 
       event: message
       data: {"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":"0000000000000001","path":"<streamPath>","createdAt":"<ts>"}

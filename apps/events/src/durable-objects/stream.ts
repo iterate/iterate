@@ -2,16 +2,12 @@ import { DurableObject } from "cloudflare:workers";
 import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import {
   childStreamCreatedEventType,
-  ChildStreamCreatedPayload,
   Event,
   EventInput,
   Offset,
-  reservedInitializationIdempotencyKey,
   streamInitializedEventType,
   streamMetadataUpdatedEventType,
   StreamPath,
-  StreamInitializedPayload,
-  StreamMetadataUpdatedPayload,
   StreamState,
 } from "@iterate-com/events-contract";
 import {
@@ -88,7 +84,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       payload: {
         path: args.path,
       },
-      idempotencyKey: reservedInitializationIdempotencyKey,
     });
   }
 
@@ -105,19 +100,10 @@ export class StreamDurableObject extends DurableObject<Env> {
   async append(inputEvent: EventInput) {
     const parsedInputEvent = EventInput.parse(inputEvent);
     const currentState = structuredClone(this.state);
-    const isStreamInitializedEvent = parsedInputEvent.type === streamInitializedEventType;
+    const isStreamInitializedEvent = isStreamInitializedEventInput(parsedInputEvent);
 
     if (!isStreamInitializedEvent && !currentState.initialized) {
       throw new Error("Stream durable object is not initialized.");
-    }
-
-    if (
-      currentState.initialized &&
-      parsedInputEvent.idempotencyKey === reservedInitializationIdempotencyKey
-    ) {
-      throw new StreamAppendInputError(
-        `"${reservedInitializationIdempotencyKey}" is reserved for internal stream initialization.`,
-      );
     }
 
     const path = currentState.initialized
@@ -128,7 +114,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
           return currentState.path;
         })()
-      : StreamInitializedPayload.parse(parsedInputEvent.payload).path;
+      : getStreamInitializedInputPath(parsedInputEvent);
 
     const existingEvent =
       parsedInputEvent.idempotencyKey == null
@@ -423,14 +409,14 @@ export class StreamDurableObject extends DurableObject<Env> {
       case streamInitializedEventType:
         this.propagateChildStreamCreated({
           streamPath: event.path,
-          childPath: event.path,
+          childPath: getStreamInitializedEventPath(event),
           metadata: event.metadata,
         });
         return;
       case childStreamCreatedEventType:
         this.propagateChildStreamCreated({
           streamPath: event.path,
-          childPath: ChildStreamCreatedPayload.parse(event.payload).path,
+          childPath: getChildStreamCreatedEventPath(event),
           metadata: event.metadata,
         });
         return;
@@ -495,6 +481,44 @@ function encodeEventLine(event: Event) {
   return textEncoder.encode(`${JSON.stringify(event)}\n`);
 }
 
+function isStreamInitializedEventInput(
+  event: EventInput,
+): event is Extract<EventInput, { type: typeof streamInitializedEventType }> {
+  return event.type === streamInitializedEventType;
+}
+
+function getStreamInitializedInputPath(event: EventInput) {
+  if (event.type !== streamInitializedEventType) {
+    throw new Error(`Expected ${streamInitializedEventType}, received ${event.type}.`);
+  }
+
+  return (event.payload as { path: StreamPath }).path;
+}
+
+function getStreamInitializedEventPath(event: Event) {
+  if (event.type !== streamInitializedEventType) {
+    throw new Error(`Expected ${streamInitializedEventType}, received ${event.type}.`);
+  }
+
+  return (event.payload as { path: StreamPath }).path;
+}
+
+function getChildStreamCreatedEventPath(event: Event) {
+  if (event.type !== childStreamCreatedEventType) {
+    throw new Error(`Expected ${childStreamCreatedEventType}, received ${event.type}.`);
+  }
+
+  return (event.payload as { path: StreamPath }).path;
+}
+
+function getStreamMetadataUpdatedEventMetadata(event: Event) {
+  if (event.type !== streamMetadataUpdatedEventType) {
+    throw new Error(`Expected ${streamMetadataUpdatedEventType}, received ${event.type}.`);
+  }
+
+  return (event.payload as { metadata: StreamState["metadata"] }).metadata;
+}
+
 /**
  * Pure reducer for the persisted stream projection. Replay and append share the
  * same rules so state cannot drift based on which code path produced it.
@@ -508,15 +532,13 @@ function reduceStreamState(args: { state: StreamState; event: Event }): StreamSt
   switch (event.type) {
     case streamInitializedEventType: {
       if (state.initialized) {
-        throw new StreamAppendInputError(
-          "stream-initialized is internal-only and cannot be appended directly.",
-        );
+        throw new StreamAppendInputError("stream-initialized may only be appended once.");
       }
 
-      const payload = StreamInitializedPayload.parse(event.payload);
-      if (event.path !== payload.path) {
+      const initializedPath = getStreamInitializedEventPath(event);
+      if (event.path !== initializedPath) {
         throw new Error(
-          `Uninitialized stream durable object expected self initialization for ${payload.path}, received event for ${event.path}.`,
+          `Uninitialized stream durable object expected self initialization for ${initializedPath}, received event for ${event.path}.`,
         );
       }
 
@@ -552,7 +574,7 @@ function reduceStreamState(args: { state: StreamState; event: Event }): StreamSt
         path: streamPath,
         lastOffset: event.offset,
         eventCount: state.eventCount + 1,
-        metadata: StreamMetadataUpdatedPayload.parse(event.payload).metadata,
+        metadata: getStreamMetadataUpdatedEventMetadata(event),
       };
     default:
       return {

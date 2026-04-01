@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import {
-  ChildStreamCreatedPayload,
   childStreamCreatedEventType,
-  reservedInitializationIdempotencyKey,
-  StreamInitializedPayload,
   streamInitializedEventType,
   streamMetadataUpdatedEventType,
   StreamPath,
@@ -158,38 +155,46 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "public append rejects stream-initialized and its reserved idempotency key",
+    "public append allows child-stream-created and rejects only a second stream-initialized",
     async () => {
       const path = uniqueStreamPath();
+      const childPath = StreamPath.parse(`${path}/child`);
 
-      const initializedResponse = await app.fetch(`/api/streams/${path.slice(1)}`, {
+      const childCreatedResponse = await app.fetch(`/api/streams/${routePathFor(path)}`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          type: "https://events.iterate.com/events/stream/initialized",
+          type: childStreamCreatedEventType,
+          payload: { path: childPath },
+        }),
+      });
+
+      const initializedResponse = await app.fetch(`/api/streams/${routePathFor(path)}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: streamInitializedEventType,
           payload: { path },
         }),
       });
 
-      const reservedIdempotencyResponse = await app.fetch(`/api/streams/${path.slice(1)}`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
+      expect(childCreatedResponse.status).toBe(200);
+      await expect(childCreatedResponse.json()).resolves.toMatchObject({
+        result: {
+          event: {
+            path,
+            type: childStreamCreatedEventType,
+            payload: { path: childPath },
+          },
         },
-        body: JSON.stringify({
-          type: "https://events.iterate.com/events/example/value-recorded",
-          payload: { value: 1 },
-          idempotencyKey: reservedInitializationIdempotencyKey,
-        }),
       });
-
       expect(initializedResponse.status).toBe(400);
-      expect(await initializedResponse.text()).toContain("stream-initialized is internal-only");
-      expect(reservedIdempotencyResponse.status).toBe(400);
-      expect(await reservedIdempotencyResponse.text()).toContain(
-        "reserved for internal stream initialization",
+      expect(await initializedResponse.text()).toContain(
+        "stream-initialized may only be appended once",
       );
     },
     testTimeoutMs,
@@ -861,10 +866,17 @@ async function withTimeout<T>(promise: Promise<T>, ms: number) {
 }
 
 function getPayloadPath(event: Event) {
-  const pathPayload =
-    event.type === streamInitializedEventType
-      ? StreamInitializedPayload.safeParse(event.payload)
-      : ChildStreamCreatedPayload.safeParse(event.payload);
+  if (event.type === streamInitializedEventType || event.type === childStreamCreatedEventType) {
+    return getPathPayload(event);
+  }
 
-  return pathPayload.success ? pathPayload.data.path : undefined;
+  return undefined;
+}
+
+function getPathPayload(event: Event) {
+  if (event.type !== streamInitializedEventType && event.type !== childStreamCreatedEventType) {
+    throw new Error(`Expected a path payload event, received ${event.type}.`);
+  }
+
+  return event.payload.path;
 }
