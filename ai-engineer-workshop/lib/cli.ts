@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import * as fs from "fs/promises";
-import * as fsSync from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
 import { os } from "@orpc/server";
@@ -11,19 +10,19 @@ import { getFiles } from "./files.ts";
 
 const files = getFiles();
 const scripts = await getScripts();
+const username = process.env.WORKSHOP_USERNAME || execSync("id -un").toString().trim();
 
 const router = os.router({
   run: os
     .input(
       z.object({
         script: scripts.length ? z.enum(scripts.map(({ file }) => file)) : z.string(),
-        username: z.string().describe("your name!").default(execSync("id -un").toString().trim()),
       }),
     )
     .handler(async ({ input }) => {
       const script = scripts.find(({ file }) => file === input.script);
       if (!script) throw new Error(`Script ${input.script} not found`);
-      await script._module.default(input.username);
+      await script._module.default(username);
     }),
   appendHelloWorld: getProcedure("01-hello-world/append-hello-world.ts"),
   openTmuxPanes: getProcedure("01-hello-world/open-tmux-panes.sh"),
