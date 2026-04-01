@@ -1,7 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   Event,
-  Offset,
   StreamPath,
   StreamMetadataUpdatedPayload,
   StreamState,
