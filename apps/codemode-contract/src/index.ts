@@ -38,6 +38,7 @@ export const CodemodeRun = z.object({
   id: z.string(),
   runnerKind: CodemodeRunnerKind,
   code: z.string(),
+  sources: z.array(CodemodeSource),
   result: z.string(),
   logs: z.array(z.string()),
   error: z.string().nullable(),

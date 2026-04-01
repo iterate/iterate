@@ -1,6 +1,6 @@
 import { Link, useMatchRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, TerminalSquareIcon } from "lucide-react";
+import { BookOpenText, Plus, TerminalSquareIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -55,6 +55,15 @@ export function AppSidebar() {
               >
                 <Plus className="size-4 shrink-0" />
                 <span>New Run</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                render={<Link to="/examples" />}
+                isActive={Boolean(matchRoute({ to: "/examples" }))}
+              >
+                <BookOpenText className="size-4 shrink-0" />
+                <span>Examples</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>

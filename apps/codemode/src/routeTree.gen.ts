@@ -14,6 +14,7 @@ import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppRunsV2NewRouteImport } from './routes/_app/runs-v2-new'
 import { Route as AppRunsRouteImport } from './routes/_app/runs'
+import { Route as AppExamplesRouteImport } from './routes/_app/examples'
 import { Route as AppRunsRunIdRouteImport } from './routes/_app/runs/$runId'
 
 const AppRoute = AppRouteImport.update({
@@ -40,6 +41,11 @@ const AppRunsRoute = AppRunsRouteImport.update({
   path: '/runs',
   getParentRoute: () => AppRoute,
 } as any)
+const AppExamplesRoute = AppExamplesRouteImport.update({
+  id: '/examples',
+  path: '/examples',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppRunsRunIdRoute = AppRunsRunIdRouteImport.update({
   id: '/$runId',
   path: '/$runId',
@@ -48,12 +54,14 @@ const AppRunsRunIdRoute = AppRunsRunIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
+  '/examples': typeof AppExamplesRoute
   '/runs': typeof AppRunsRouteWithChildren
   '/runs-v2-new': typeof AppRunsV2NewRoute
   '/api/$': typeof ApiSplatRoute
   '/runs/$runId': typeof AppRunsRunIdRoute
 }
 export interface FileRoutesByTo {
+  '/examples': typeof AppExamplesRoute
   '/runs': typeof AppRunsRouteWithChildren
   '/runs-v2-new': typeof AppRunsV2NewRoute
   '/api/$': typeof ApiSplatRoute
@@ -63,6 +71,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
+  '/_app/examples': typeof AppExamplesRoute
   '/_app/runs': typeof AppRunsRouteWithChildren
   '/_app/runs-v2-new': typeof AppRunsV2NewRoute
   '/api/$': typeof ApiSplatRoute
@@ -71,12 +80,19 @@ export interface FileRoutesById {
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/runs' | '/runs-v2-new' | '/api/$' | '/runs/$runId'
+  fullPaths:
+    | '/'
+    | '/examples'
+    | '/runs'
+    | '/runs-v2-new'
+    | '/api/$'
+    | '/runs/$runId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/runs' | '/runs-v2-new' | '/api/$' | '/' | '/runs/$runId'
+  to: '/examples' | '/runs' | '/runs-v2-new' | '/api/$' | '/' | '/runs/$runId'
   id:
     | '__root__'
     | '/_app'
+    | '/_app/examples'
     | '/_app/runs'
     | '/_app/runs-v2-new'
     | '/api/$'
@@ -126,6 +142,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRunsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/examples': {
+      id: '/_app/examples'
+      path: '/examples'
+      fullPath: '/examples'
+      preLoaderRoute: typeof AppExamplesRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/runs/$runId': {
       id: '/_app/runs/$runId'
       path: '/$runId'
@@ -148,12 +171,14 @@ const AppRunsRouteWithChildren =
   AppRunsRoute._addFileChildren(AppRunsRouteChildren)
 
 interface AppRouteChildren {
+  AppExamplesRoute: typeof AppExamplesRoute
   AppRunsRoute: typeof AppRunsRouteWithChildren
   AppRunsV2NewRoute: typeof AppRunsV2NewRoute
   AppIndexRoute: typeof AppIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppExamplesRoute: AppExamplesRoute,
   AppRunsRoute: AppRunsRouteWithChildren,
   AppRunsV2NewRoute: AppRunsV2NewRoute,
   AppIndexRoute: AppIndexRoute,

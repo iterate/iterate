@@ -1,5 +1,7 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
+import { buildCodemodeNewRunSearch } from "~/lib/codemode-links.ts";
+import { formatCodemodeSourcesYaml } from "~/lib/codemode-sources.ts";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { getRun } from "~/lib/runs.ts";
 
@@ -13,6 +15,7 @@ function RunDetailPage() {
   const resultLanguage = detectCodeLanguage(run.result);
   const errorLanguage = detectCodeLanguage(run.error ?? "");
   const logs = run.logs.join("\n");
+  const sourcesYaml = formatCodemodeSourcesYaml(run.sources);
 
   return (
     <section className="w-full space-y-6 p-4">
@@ -22,12 +25,33 @@ function RunDetailPage() {
           <p className="text-sm text-muted-foreground">Run ID: {run.id}</p>
         </div>
 
-        <Button render={<Link to="/runs-v2-new" />}>New</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            render={
+              <Link
+                to="/runs-v2-new"
+                search={buildCodemodeNewRunSearch({
+                  code: run.codeSnippet,
+                  sources: run.sources,
+                })}
+              />
+            }
+          >
+            Re-run
+          </Button>
+          <Button render={<Link to="/runs-v2-new" />}>New</Button>
+        </div>
       </div>
 
       <div className="space-y-2 rounded-lg border bg-card p-4">
         <p className="text-sm font-medium">Code</p>
         <SourceCodeBlock code={run.codeSnippet} language="typescript" className="min-h-[20rem]" />
+      </div>
+
+      <div className="space-y-2 rounded-lg border bg-card p-4">
+        <p className="text-sm font-medium">Sources</p>
+        <SourceCodeBlock code={sourcesYaml} language="text" className="min-h-40" />
       </div>
 
       {run.error ? (

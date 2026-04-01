@@ -1,7 +1,7 @@
 import { desc, eq } from "drizzle-orm";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { CodemodeRunnerKind } from "@iterate-com/codemode-contract";
+import { CodemodeRunnerKind, CodemodeSource } from "@iterate-com/codemode-contract";
 import { codemodeRunsTable } from "~/db/schema.ts";
 import { summarizeCodeSnippet, summarizeError, summarizeResult } from "~/lib/run-preview.ts";
 
@@ -9,6 +9,7 @@ const StoredRun = z.object({
   id: z.string(),
   runnerKind: CodemodeRunnerKind,
   codeSnippet: z.string(),
+  sourcesJson: z.string(),
   result: z.string(),
   logsJson: z.string(),
   error: z.string().nullable(),
@@ -19,6 +20,7 @@ function parseRun(row: unknown) {
 
   return {
     ...parsed,
+    sources: CodemodeSource.array().parse(JSON.parse(parsed.sourcesJson)),
     logs: z.array(z.string()).parse(JSON.parse(parsed.logsJson)),
   };
 }

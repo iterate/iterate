@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, redirect } from "@tanstack/react-router";
-import { ChevronLeft, ChevronRight, Copy, Eye, Sparkles, Wand2 } from "lucide-react";
+import { Link, createFileRoute, redirect } from "@tanstack/react-router";
+import { ChevronLeft, ChevronRight, Eye, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@iterate-com/ui/components/field";
@@ -23,7 +23,8 @@ import {
   parseCodemodeSourcesYaml,
   type CodemodeUiSource,
 } from "~/lib/codemode-sources.ts";
-import { CODEMODE_EXAMPLES, CODEMODE_V2_STARTER } from "~/lib/codemode-v2.ts";
+import { CodemodeNewRunSearchSchema, resolveCodemodeEditorCode } from "~/lib/codemode-links.ts";
+import { CODEMODE_V2_STARTER } from "~/lib/codemode-v2.ts";
 import { runsQueryKey } from "~/lib/runs.ts";
 import { orpcClient } from "~/orpc/client.ts";
 
@@ -31,20 +32,17 @@ const RunFunctionForm = z.object({
   code: z.string().trim().min(1, "Code is required"),
 });
 
-const SearchSchema = z.object({
-  sources: z.string().optional(),
-});
-
 export const Route = createFileRoute("/_app/runs-v2-new")({
   staticData: {
     breadcrumb: "Codemode",
   },
-  validateSearch: SearchSchema,
+  validateSearch: CodemodeNewRunSearchSchema,
   beforeLoad: ({ search }) => {
     if (!search.sources) {
       throw redirect({
         to: "/runs-v2-new",
         search: {
+          code: search.code,
           sources: DEFAULT_CODEMODE_SOURCES_YAML,
         },
         replace: true,
@@ -99,7 +97,7 @@ function NewRunPage() {
 
   const form = useForm({
     defaultValues: {
-      code: CODEMODE_V2_STARTER,
+      code: resolveCodemodeEditorCode(search.code),
     },
     validators: {
       onChange: RunFunctionForm,
@@ -120,6 +118,10 @@ function NewRunPage() {
       await navigate({ to: "/runs/$runId", params: { runId: run.id } });
     },
   });
+
+  useEffect(() => {
+    form.setFieldValue("code", resolveCodemodeEditorCode(search.code));
+  }, [form, search.code]);
 
   const applySourcesYaml = (nextYaml: string) => {
     setSourcesYaml(nextYaml);
@@ -167,10 +169,22 @@ function NewRunPage() {
           >
             Reset sources
           </Button>
+          <Button type="button" variant="outline" render={<Link to="/examples" />}>
+            Examples
+          </Button>
           <Button
             type="button"
             variant="outline"
-            onClick={() => form.setFieldValue("code", CODEMODE_V2_STARTER)}
+            onClick={() => {
+              form.setFieldValue("code", CODEMODE_V2_STARTER);
+              void navigate({
+                search: (previous) => ({
+                  ...previous,
+                  code: undefined,
+                }),
+                replace: true,
+              });
+            }}
           >
             Reset starter
           </Button>
@@ -287,72 +301,15 @@ function NewRunPage() {
         </div>
       </form>
 
-      <div className="space-y-3">
-        <div className="space-y-1">
-          <p className="text-sm font-medium">Examples</p>
-          <p className="text-sm text-muted-foreground">
-            Each example is a pair: the sources YAML and the TypeScript snippet.
-          </p>
-        </div>
-
-        <div className="space-y-4">
-          {CODEMODE_EXAMPLES.map((example) => (
-            <article
-              key={example.id}
-              className="space-y-3 border-t pt-4 first:border-t-0 first:pt-0"
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="space-y-1">
-                  <p className="text-sm font-medium">{example.title}</p>
-                  <p className="text-sm text-muted-foreground">{example.description}</p>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => {
-                      form.setFieldValue("code", example.code);
-                      syncSources(example.sources);
-                      toast.success(`Loaded "${example.title}"`);
-                    }}
-                  >
-                    <Wand2 className="size-4" />
-                    Use example
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={() => void copySnippet(example.code, example.title)}
-                  >
-                    <Copy className="size-4" />
-                    Copy code
-                  </Button>
-                </div>
-              </div>
-
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1.75fr)]">
-                <div className="space-y-1">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Sources YAML
-                  </p>
-                  <SourceCodeBlock
-                    code={formatCodemodeSourcesYaml(example.sources)}
-                    language="text"
-                    className="min-h-52"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Code
-                  </p>
-                  <SourceCodeBlock code={example.code} language="typescript" className="min-h-52" />
-                </div>
-              </div>
-            </article>
-          ))}
+      <div className="rounded-lg border bg-card p-4">
+        <p className="text-sm font-medium">Need a starting point?</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Browse the examples page for filterable deep links into pre-populated codemode forms.
+        </p>
+        <div className="mt-3">
+          <Button type="button" variant="outline" render={<Link to="/examples" />}>
+            Browse examples
+          </Button>
         </div>
       </div>
 
@@ -405,16 +362,6 @@ function readSourceTitle(source: CodemodeUiSource) {
 
   return source.namespace?.trim() || source.url;
 }
-
-async function copySnippet(code: string, title: string) {
-  try {
-    await navigator.clipboard.writeText(code);
-    toast.success(`Copied "${title}"`);
-  } catch {
-    toast.error(`Failed to copy "${title}"`);
-  }
-}
-
 function readErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
