@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   CloudflarePreviewCommentEntry,
   type CloudflarePreviewCommentEntry as CloudflarePreviewCommentEntryType,
+  clearCloudflarePreviewDestroyPayload,
   readCloudflarePreviewCommentState,
   upsertCloudflarePreviewCommentEntry,
 } from "./cloudflare-preview-comment.ts";
@@ -413,14 +414,25 @@ async function cleanupPreviewForPullRequest(
     workingDirectory: params.workingDirectory,
   });
 
-  const nextEntry = CloudflarePreviewCommentEntry.parse({
-    ...existingEntry,
-    appDisplayName: params.appDisplayName,
-    appSlug: params.appSlug,
-    message: destroyResult.message,
-    status: destroyResult.ok ? "released" : "cleanup-failed",
-    updatedAt: new Date().toISOString(),
-  });
+  const nextEntry = CloudflarePreviewCommentEntry.parse(
+    destroyResult.ok
+      ? {
+          ...clearCloudflarePreviewDestroyPayload(existingEntry),
+          appDisplayName: params.appDisplayName,
+          appSlug: params.appSlug,
+          message: destroyResult.message,
+          status: "released",
+          updatedAt: new Date().toISOString(),
+        }
+      : {
+          ...existingEntry,
+          appDisplayName: params.appDisplayName,
+          appSlug: params.appSlug,
+          message: destroyResult.message,
+          status: "cleanup-failed",
+          updatedAt: new Date().toISOString(),
+        },
+  );
   await upsertCloudflarePreviewCommentEntry({
     entry: nextEntry,
     githubToken: params.githubToken,
@@ -452,12 +464,18 @@ async function createPreviewEnvironment(
     workingDirectory: string;
   },
 ): Promise<PreviewSyncResult> {
+  let lease: {
+    expiresAt: number;
+    leaseId: string;
+    slug: string;
+  } | null = null;
+
   try {
     const semaphore = params.createPreviewSemaphoreResourceClient({
       semaphoreApiToken: params.semaphoreApiToken,
       semaphoreBaseUrl: params.semaphoreBaseUrl,
     });
-    const lease = await semaphore.acquire({
+    lease = await semaphore.acquire({
       type: params.previewResourceType,
       leaseMs: params.leaseMs,
       waitMs: params.waitMs,
@@ -548,6 +566,22 @@ async function createPreviewEnvironment(
       ok: true,
     };
   } catch (error) {
+    if (lease) {
+      try {
+        const semaphore = params.createPreviewSemaphoreResourceClient({
+          semaphoreApiToken: params.semaphoreApiToken,
+          semaphoreBaseUrl: params.semaphoreBaseUrl,
+        });
+        await semaphore.release({
+          type: params.previewResourceType,
+          slug: lease.slug,
+          leaseId: lease.leaseId,
+        });
+      } catch {
+        // best-effort cleanup for failures before the normal preview payload is recorded
+      }
+    }
+
     return {
       entry: CloudflarePreviewCommentEntry.parse({
         appDisplayName: params.appDisplayName,

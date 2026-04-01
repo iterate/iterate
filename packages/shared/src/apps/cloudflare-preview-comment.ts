@@ -49,19 +49,36 @@ export async function readCloudflarePreviewCommentState(params: {
     auth: params.githubToken,
   });
   const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  const comments = await octokit.rest.issues.listComments({
+  const comments = await octokit.paginate(octokit.rest.issues.listComments, {
     owner,
     repo,
     issue_number: params.pullRequestNumber,
     per_page: 100,
   });
-  const existingComment = comments.data.find((comment: { body?: string | null }) =>
-    comment.body?.includes(cloudflarePreviewCommentMarker),
-  );
+  const existingComment = [...comments]
+    .reverse()
+    .find((comment: { body?: string | null }) =>
+      comment.body?.includes(cloudflarePreviewCommentMarker),
+    );
 
   return {
     commentId: existingComment?.id ?? null,
     state: parseCloudflarePreviewCommentState(existingComment?.body ?? ""),
+  };
+}
+
+export function clearCloudflarePreviewDestroyPayload(
+  entry: CloudflarePreviewCommentEntry,
+): CloudflarePreviewCommentEntry {
+  return {
+    ...entry,
+    leasedUntil: null,
+    previewEnvironmentAlchemyStageName: null,
+    previewEnvironmentDopplerConfigName: null,
+    previewEnvironmentIdentifier: null,
+    previewEnvironmentSemaphoreLeaseId: null,
+    previewEnvironmentSlug: null,
+    previewEnvironmentType: null,
   };
 }
 
