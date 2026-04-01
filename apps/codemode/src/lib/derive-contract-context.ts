@@ -1,11 +1,11 @@
+import { getEventIteratorSchemaDetails } from "@orpc/contract";
+import { z } from "zod";
 import {
   generateTypesFromJsonSchema,
   jsonSchemaToType,
   sanitizeToolName,
   type JsonSchemaToolDescriptors,
 } from "~/lib/codemode/index.ts";
-import { getEventIteratorSchemaDetails } from "@orpc/contract";
-import { z } from "zod";
 
 type ProcedureSchema = unknown;
 
