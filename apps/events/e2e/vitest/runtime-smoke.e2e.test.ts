@@ -37,7 +37,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       });
 
       expect(res.ok).toBe(true);
-      expect(await res.text()).toContain("Append event");
+      expect(await res.text()).toContain("Create stream");
     },
     testTimeoutMs,
   );

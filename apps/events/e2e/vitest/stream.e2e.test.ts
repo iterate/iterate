@@ -127,14 +127,17 @@ describe.sequential("events stream e2e", () => {
     async () => {
       const path = uniqueStreamPath();
 
-      await expect(
-        app.client.append({
+      const error = await app.client
+        .append({
           path,
           type: "https://events.iterate.com/events/example/value-recorded",
           payload: { value: 1 },
           idempotencyKey: "",
-        }),
-      ).rejects.toThrow(/idempotency/i);
+        })
+        .catch((caught) => caught);
+
+      expect(String(error)).toContain("Input validation failed");
+      expect(JSON.stringify(error)).toContain("idempotencyKey");
     },
     testTimeoutMs,
   );
@@ -650,8 +653,9 @@ describe.sequential("events stream e2e", () => {
   test(
     "existing parent still ladders child stream-created events up to root",
     async () => {
-      const parentPath = StreamPath.parse("/banana");
-      const childPath = StreamPath.parse("/banana/banana");
+      const segment = randomUUID().slice(0, 6);
+      const parentPath = StreamPath.parse(`/banana-${segment}`);
+      const childPath = StreamPath.parse(`/banana-${segment}/banana`);
 
       await app.client.append({
         path: parentPath,
