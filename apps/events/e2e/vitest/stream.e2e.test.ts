@@ -151,6 +151,44 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "public append rejects stream-initialized and its reserved idempotency key",
+    async () => {
+      const path = uniqueStreamPath();
+
+      const initializedResponse = await app.fetch(`/api/streams/${path.slice(1)}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/stream/initialized",
+          payload: { path },
+        }),
+      });
+
+      const reservedIdempotencyResponse = await app.fetch(`/api/streams/${path.slice(1)}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { value: 1 },
+          idempotencyKey: "stream-initialized",
+        }),
+      });
+
+      expect(initializedResponse.status).toBe(400);
+      expect(await initializedResponse.text()).toContain("stream-initialized is internal-only");
+      expect(reservedIdempotencyResponse.status).toBe(400);
+      expect(await reservedIdempotencyResponse.text()).toContain(
+        "reserved for internal stream initialization",
+      );
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "append rejects the wrong first user offset and leaves only the synthetic self-initialized event",
     async () => {
       const path = uniqueStreamPath();

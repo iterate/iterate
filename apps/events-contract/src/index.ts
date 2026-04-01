@@ -124,6 +124,8 @@ const secretShape = {
 } satisfies z.ZodRawShape;
 
 const Secret = z.object(secretShape);
+const internalStreamInitializedEventType = "https://events.iterate.com/events/stream/initialized";
+const reservedInitializationIdempotencyKey = "stream-initialized";
 const PathMungingDescription =
   "For curl ergonomics, nested stream paths accept either raw nested segments or percent-escaped slash forms. Both resolve to the same canonical stream path.";
 const StreamHistoryPathDescription = `${PathMungingDescription} For example, \`GET /api/streams/team/inbox\`, \`GET /api/streams/team%2Finbox\`, and \`GET /api/streams/%2Fteam%2Finbox\` all target the same stream.`;
@@ -142,10 +144,28 @@ export const eventsContract = oc.router({
       tags: ["Streams"],
     })
     .input(
-      z.object({
-        path: StreamPath,
-        ...EventInput.shape,
-      }),
+      z
+        .object({
+          path: StreamPath,
+          ...EventInput.shape,
+        })
+        .superRefine((value, context) => {
+          if (value.type === internalStreamInitializedEventType) {
+            context.addIssue({
+              code: "custom",
+              path: ["type"],
+              message: "stream-initialized is internal-only and cannot be appended directly.",
+            });
+          }
+
+          if (value.idempotencyKey === reservedInitializationIdempotencyKey) {
+            context.addIssue({
+              code: "custom",
+              path: ["idempotencyKey"],
+              message: `"${reservedInitializationIdempotencyKey}" is reserved for internal stream initialization.`,
+            });
+          }
+        }),
     )
     .output(
       z.object({
