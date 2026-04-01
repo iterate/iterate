@@ -4,8 +4,12 @@
   "type": "module",
   "dependencies": {
     "@iterate-com/events-contract": "workspace:*",
+    "@mariozechner/pi-agent-core": "^0.64.0",
+    "@mariozechner/pi-ai": "^0.64.0",
     "@tanstack/ai": "^0.2.2",
-    "@tanstack/ai-openai": "^0.2.1"
+    "@tanstack/ai-openai": "^0.2.1",
+    "openai": "^5.19.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",

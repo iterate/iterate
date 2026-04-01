@@ -66,3 +66,57 @@ So the whole demo can be:
 5. Keep posting more `input-item-added` events into that same stream if you want a back-and-forth conversation. The subscriber rebuilds history from those finalized message events and only uses the raw chunk events for live rendering/debugging.
 
 Optional env: `BASE_URL`, `STREAM_PATH` (otherwise defaults to `/jonas/02/<random-hex>`), `OPENAI_MODEL` (must be a supported OpenAI chat model name; default `gpt-4o-mini`).
+
+## 03 — Stream Processor (`jonas/03-stream-processor`)
+
+Tiny version of the agent loop pattern:
+
+- `stream-process.ts` is the minimal processor abstraction
+- `pull-subscription-processor-runtime.ts` does the pull-subscription plumbing for one stream
+- `run-llm-processor.ts` is the actual "agent loop" file you iterate on
+
+Run it from `ai-engineer-workshop/jonas`:
+
+```bash
+doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm tsx 03-stream-processor/run-llm-processor.ts
+```
+
+It watches one stream for `message`, streams chunk events back as `chunk`, then appends the finalized assistant reply as another `message`.
+
+Unlike `02`, this version uses a much thinner event shape around TanStack AI:
+
+- `message` events contain a TanStack AI `ModelMessage`
+- `chunk` events contain a TanStack AI `StreamChunk`
+- reduced processor state holds `conversationHistory` plus `llmRequestInProgress`
+
+Optional env: `BASE_URL`, `STREAM_PATH` (otherwise defaults to `/jonas/03/<random-hex>`), `OPENAI_MODEL` (default `gpt-4o-mini`).
+
+## 05 — OpenAI Agent (`jonas/05-openai-agent`)
+
+Simplest possible agent loop using the native OpenAI Responses API (`openai` SDK) in streaming mode. No TanStack AI — just `client.responses.create({ stream: true })` with a hardcoded model (`gpt-4o-mini`).
+
+Two event types in the stream:
+
+- `user-message` — user sends a message (payload: `{ content: string }`)
+- `openai-stream-event` — every SSE event from OpenAI forwarded verbatim (payload is a `ResponseStreamEvent`)
+
+Processor state is just `history: ResponseInput` (the SDK's own type for the `input` parameter) plus a `requestInProgress` flag. On each `user-message`, the processor calls the Responses API, streams all events back into the iterate stream, and appends completed output items to history for multi-turn context.
+
+Run it from `ai-engineer-workshop/jonas`:
+
+```bash
+doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm tsx 05-openai-agent/openai-agent-processor.ts
+```
+
+Then open the printed URL and paste:
+
+```json
+{
+  "type": "user-message",
+  "payload": { "content": "Say hello in one short sentence." }
+}
+```
+
+Watch the raw OpenAI lifecycle events appear in real time: `response.created`, `response.output_text.delta` (text deltas), `response.output_item.done`, `response.completed`.
+
+Optional env: `BASE_URL`, `STREAM_PATH` (otherwise defaults to `/jonas/05/<random-hex>`).

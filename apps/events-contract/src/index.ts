@@ -41,13 +41,22 @@ export const StreamPath = z.preprocess((value) => {
 export type StreamPath = z.infer<typeof StreamPath>;
 export const Offset = z.string().trim().min(1);
 // Keep public payload/state shapes JSON-only so Cloudflare Durable Object RPC
-// can prove they are serializable. `Record<string, unknown>` made the generated
-// stub methods collapse to `never`, while bare `z.json()` would also allow
-// top-level arrays/scalars/null. We want "JSON object with JSON values". For
-// background on the `never` failure mode, see
-// https://github.com/cloudflare/workerd/issues/2003.
-export const JSONObject = z.record(z.string(), z.json());
-export type JSONObject = z.infer<typeof JSONObject>;
+// can prove they are serializable. We still want callers to hand in normal JS
+// objects, so this Zod 4 codec accepts a broad record input shape and encodes
+// it into a canonical "JSON object with JSON values" output shape via a JSON
+// round-trip. Codecs are the documented Zod 4 tool for different input/output
+// schemas: https://zod.dev/api?id=codecs
+//
+// We intentionally keep the OUTPUT schema as an object-only JSON shape because
+// bare `z.json()` would allow top-level arrays/scalars/null, and earlier
+// `Record<string, unknown>` experiments made generated DO RPC stubs collapse to
+// `never`: https://github.com/cloudflare/workerd/issues/2003
+const JsonObjectSchema = z.object({}).catchall(z.json());
+export const JSONObject = z.codec(z.record(z.string(), z.any()), JsonObjectSchema, {
+  decode: (value) => JSON.parse(JSON.stringify(value)),
+  encode: (value) => value,
+});
+export type JSONObject = z.output<typeof JSONObject>;
 
 export const EventInput = z.object({
   path: StreamPath,
@@ -58,13 +67,13 @@ export const EventInput = z.object({
   // stored event instead of creating a second one.
   idempotencyKey: z.string().trim().min(1).optional(),
 });
-export type EventInput = z.infer<typeof EventInput>;
+export type EventInput = z.input<typeof EventInput>;
 
 export const Event = EventInput.extend({
   offset: Offset,
   createdAt,
 });
-export type Event = z.infer<typeof Event>;
+export type Event = z.output<typeof Event>;
 
 export const StreamCreatedPayload = z.object({
   path: StreamPath,
