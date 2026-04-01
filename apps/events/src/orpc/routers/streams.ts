@@ -1,20 +1,21 @@
 import { ORPCError } from "@orpc/server";
 import { StreamPath } from "@iterate-com/events-contract";
+import { getInitializedStreamStub } from "~/lib/stream-stub.ts";
 import { ROOT_STREAM_PATH, decodeEventStream } from "~/lib/utils.ts";
 import { os } from "~/orpc/orpc.ts";
 
 export const streamsRouter = {
   append: os.append.handler(async ({ context, input }) => {
-    const events = "events" in input ? input.events : [input];
-    const streamStub = await getInitializedStreamStub(context.env, input.path);
-    const result = await streamStub.append({ events });
+    const { path, ...event } = input;
+    const streamStub = await getInitializedStreamStub(context.env, path);
+    const result = await streamStub.append(event);
 
     if (result.kind === "offset-precondition-failed") {
       throw new ORPCError("PRECONDITION_FAILED", { message: result.message });
     }
 
     return {
-      events: result.events,
+      event: result.event,
     };
   }),
   stream: os.stream.handler(async function* ({ context, input, signal }) {
@@ -51,7 +52,7 @@ export const streamsRouter = {
     const discovered = new Map<StreamPath, string>();
 
     for (const event of events) {
-      if (event.type !== "https://events.iterate.com/events/stream/created") {
+      if (event.type !== "https://events.iterate.com/events/stream/initialized") {
         continue;
       }
 
@@ -72,9 +73,3 @@ export const streamsRouter = {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }),
 };
-
-async function getInitializedStreamStub(env: Env, path: StreamPath) {
-  const streamStub = env.STREAM.getByName(path);
-  await streamStub.initialize({ path });
-  return streamStub;
-}

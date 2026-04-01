@@ -65,13 +65,8 @@ for await (const event of stream) {
 
     await client.append({
       path: STREAM_PATH,
-      events: [
-        {
-          path: STREAM_PATH,
-          type: OUTPUT_ITEM_ADDED_TYPE,
-          payload: JSON.parse(JSON.stringify({ chunk })),
-        },
-      ],
+      type: OUTPUT_ITEM_ADDED_TYPE,
+      payload: JSON.parse(JSON.stringify({ chunk })),
     });
   }
 
@@ -80,13 +75,8 @@ for await (const event of stream) {
     const assistantItem: ModelMessage<string> = { role: "assistant", content: assistant };
     await client.append({
       path: STREAM_PATH,
-      events: [
-        {
-          path: STREAM_PATH,
-          type: INPUT_ITEM_ADDED_TYPE,
-          payload: JSON.parse(JSON.stringify({ item: assistantItem })),
-        },
-      ],
+      type: INPUT_ITEM_ADDED_TYPE,
+      payload: JSON.parse(JSON.stringify({ item: assistantItem })),
     });
     messages.push(assistantItem);
   }

@@ -5,7 +5,7 @@ import { z } from "zod";
 const streamPathPattern = /^\/(?:[a-z0-9_-]+(?:\/[a-z0-9_-]+)*)?$/;
 const createdAt = z.iso.datetime({ offset: true });
 type BuiltInEventType =
-  | "https://events.iterate.com/events/stream/created"
+  | "https://events.iterate.com/events/stream/initialized"
   | "https://events.iterate.com/events/stream/metadata-updated"
   | "https://events.iterate.com/events/error-occurred";
 
@@ -73,20 +73,15 @@ export const Event = z.object({
 });
 export type Event = z.infer<typeof Event>;
 
-export const StreamCreatedPayload = z.object({
+export const StreamInitializedPayload = z.object({
   path: StreamPath,
 });
-export type StreamCreatedPayload = z.infer<typeof StreamCreatedPayload>;
+export type StreamInitializedPayload = z.infer<typeof StreamInitializedPayload>;
 
 export const StreamMetadataUpdatedPayload = z.object({
   metadata: JSONObject,
 });
 export type StreamMetadataUpdatedPayload = z.infer<typeof StreamMetadataUpdatedPayload>;
-
-export const ErrorOccurredPayload = z.object({
-  message: z.string().trim().min(1),
-});
-export type ErrorOccurredPayload = z.infer<typeof ErrorOccurredPayload>;
 
 export const StreamState = z.object({
   initialized: z.boolean(),
@@ -119,26 +114,20 @@ export const eventsContract = oc.router({
       operationId: "appendStreamEvents",
       method: "POST",
       path: "/streams/{+path}",
-      successDescription: "Events appended successfully and returned",
+      successDescription: "Event appended successfully and returned",
       description:
-        "Appends events to a stream in order. A newly initialized stream first stores its own synthetic stream-created event at offset 0, so the first caller-appended event uses offset 1. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
+        "Appends one event to a stream. A newly initialized stream first stores its own synthetic stream-initialized event at offset 0, so the first caller-appended event uses offset 1. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
       tags: ["Streams"],
     })
     .input(
-      z.union([
-        z.object({
-          path: StreamPath,
-          ...EventInput.shape,
-        }),
-        z.object({
-          path: StreamPath,
-          events: z.array(EventInput).min(1),
-        }),
-      ]),
+      z.object({
+        path: StreamPath,
+        ...EventInput.shape,
+      }),
     )
     .output(
       z.object({
-        events: z.array(Event),
+        event: Event,
       }),
     ),
   stream: oc

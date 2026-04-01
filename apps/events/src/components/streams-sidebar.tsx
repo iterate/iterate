@@ -83,7 +83,7 @@ export function StreamsSidebar() {
           return;
         }
 
-        if (event.type !== "https://events.iterate.com/events/stream/created") {
+        if (event.type !== "https://events.iterate.com/events/stream/initialized") {
           continue;
         }
 

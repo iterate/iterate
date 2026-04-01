@@ -16,13 +16,8 @@ const client = createEventsClient(BASE_URL);
 
 const result = await client.append({
   path: STREAM_PATH,
-  events: [
-    {
-      path: STREAM_PATH,
-      type: "hello-world",
-      payload: { message: "hello world" },
-    },
-  ],
+  type: "hello-world",
+  payload: { message: "hello world" },
 });
 
 console.log(JSON.stringify(result, null, 2));

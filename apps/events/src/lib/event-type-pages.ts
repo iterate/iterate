@@ -10,18 +10,18 @@ export type EventTypePageDefinition = {
   readonly details?: readonly string[];
 };
 
-export const streamCreatedPage = {
-  slug: "stream-created",
-  href: "/stream-created/",
-  title: "Stream Created",
-  type: "https://events.iterate.com/events/stream/created",
+export const streamInitializedPage = {
+  slug: "stream-initialized",
+  href: "/stream-initialized/",
+  title: "Stream Initialized",
+  type: "https://events.iterate.com/events/stream/initialized",
   summary:
-    "Internal meta event emitted when a stream initializes itself and when descendant stream creation is propagated upward.",
+    "Internal meta event emitted when a stream initializes itself and when descendant stream initialization is propagated upward.",
   payloadExample: {
     path: "/demo/stream",
   },
   details: [
-    "Every initialized stream writes its own self-created event at offset 0 before any caller-appended events.",
+    "Every initialized stream writes its own self-initialized event at offset 0 before any caller-appended events.",
     "The same event type also appears on parent streams to advertise newly created descendants.",
     "It is useful for stream discovery and lightweight operational tooling.",
   ],
@@ -79,7 +79,7 @@ export const manualEventAppendedPage = {
 export const eventTypePages = [
   errorOccurredPage,
   manualEventAppendedPage,
-  streamCreatedPage,
+  streamInitializedPage,
   streamMetadataUpdatedPage,
 ] as const satisfies readonly EventTypePageDefinition[];
 

@@ -70,7 +70,7 @@ export function StreamPage({
       (event: Event) => {
         if (
           streamPath === ROOT_STREAM_PATH &&
-          event.type === "https://events.iterate.com/events/stream/created"
+          event.type === "https://events.iterate.com/events/stream/initialized"
         ) {
           void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
         }
@@ -120,7 +120,7 @@ export function StreamPage({
 
     const request = appendEvent.mutateAsync({
       path: streamPath,
-      events: [event],
+      ...event,
     });
 
     void toast.promise(request, {

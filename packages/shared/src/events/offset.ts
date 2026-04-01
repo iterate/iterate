@@ -19,7 +19,7 @@ export function getNextEventOffset(offset: string | null) {
 
 /**
  * The next offset a caller may guard against when appending a real event.
- * An untouched stream reserves offset 0 for its synthetic self-created event,
+ * An untouched stream reserves offset 0 for its synthetic self-initialized event,
  * so the first caller-appended event starts at offset 1.
  */
 export function getNextAppendEventOffset(args: {

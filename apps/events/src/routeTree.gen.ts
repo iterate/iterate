@@ -10,7 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as StreamMetadataUpdatedRouteImport } from './routes/stream-metadata-updated'
-import { Route as StreamCreatedRouteImport } from './routes/stream-created'
+import { Route as StreamInitializedRouteImport } from './routes/stream-initialized'
 import { Route as ManualEventAppendedRouteImport } from './routes/manual-event-appended'
 import { Route as ErrorOccurredRouteImport } from './routes/error-occurred'
 import { Route as DocsRouteImport } from './routes/docs'
@@ -30,9 +30,9 @@ const StreamMetadataUpdatedRoute = StreamMetadataUpdatedRouteImport.update({
   path: '/stream-metadata-updated',
   getParentRoute: () => rootRouteImport,
 } as any)
-const StreamCreatedRoute = StreamCreatedRouteImport.update({
-  id: '/stream-created',
-  path: '/stream-created',
+const StreamInitializedRoute = StreamInitializedRouteImport.update({
+  id: '/stream-initialized',
+  path: '/stream-initialized',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ManualEventAppendedRoute = ManualEventAppendedRouteImport.update({
@@ -105,7 +105,7 @@ export interface FileRoutesByFullPath {
   '/docs': typeof DocsRoute
   '/error-occurred': typeof ErrorOccurredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
-  '/stream-created': typeof StreamCreatedRoute
+  '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/secrets': typeof AppSecretsRouteWithChildren
   '/streams': typeof AppStreamsRouteWithChildren
@@ -121,7 +121,7 @@ export interface FileRoutesByTo {
   '/docs': typeof DocsRoute
   '/error-occurred': typeof ErrorOccurredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
-  '/stream-created': typeof StreamCreatedRoute
+  '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/api/$': typeof ApiSplatRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
@@ -137,7 +137,7 @@ export interface FileRoutesById {
   '/docs': typeof DocsRoute
   '/error-occurred': typeof ErrorOccurredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
-  '/stream-created': typeof StreamCreatedRoute
+  '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/_app/secrets': typeof AppSecretsRouteWithChildren
   '/_app/streams': typeof AppStreamsRouteWithChildren
@@ -155,7 +155,7 @@ export interface FileRouteTypes {
     | '/docs'
     | '/error-occurred'
     | '/manual-event-appended'
-    | '/stream-created'
+    | '/stream-initialized'
     | '/stream-metadata-updated'
     | '/secrets'
     | '/streams'
@@ -171,7 +171,7 @@ export interface FileRouteTypes {
     | '/docs'
     | '/error-occurred'
     | '/manual-event-appended'
-    | '/stream-created'
+    | '/stream-initialized'
     | '/stream-metadata-updated'
     | '/api/$'
     | '/posthog-proxy/$'
@@ -186,7 +186,7 @@ export interface FileRouteTypes {
     | '/docs'
     | '/error-occurred'
     | '/manual-event-appended'
-    | '/stream-created'
+    | '/stream-initialized'
     | '/stream-metadata-updated'
     | '/_app/secrets'
     | '/_app/streams'
@@ -204,7 +204,7 @@ export interface RootRouteChildren {
   DocsRoute: typeof DocsRoute
   ErrorOccurredRoute: typeof ErrorOccurredRoute
   ManualEventAppendedRoute: typeof ManualEventAppendedRoute
-  StreamCreatedRoute: typeof StreamCreatedRoute
+  StreamInitializedRoute: typeof StreamInitializedRoute
   StreamMetadataUpdatedRoute: typeof StreamMetadataUpdatedRoute
   ApiSplatRoute: typeof ApiSplatRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
@@ -219,11 +219,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof StreamMetadataUpdatedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/stream-created': {
-      id: '/stream-created'
-      path: '/stream-created'
-      fullPath: '/stream-created'
-      preLoaderRoute: typeof StreamCreatedRouteImport
+    '/stream-initialized': {
+      id: '/stream-initialized'
+      path: '/stream-initialized'
+      fullPath: '/stream-initialized'
+      preLoaderRoute: typeof StreamInitializedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/manual-event-appended': {
@@ -366,7 +366,7 @@ const rootRouteChildren: RootRouteChildren = {
   DocsRoute: DocsRoute,
   ErrorOccurredRoute: ErrorOccurredRoute,
   ManualEventAppendedRoute: ManualEventAppendedRoute,
-  StreamCreatedRoute: StreamCreatedRoute,
+  StreamInitializedRoute: StreamInitializedRoute,
   StreamMetadataUpdatedRoute: StreamMetadataUpdatedRoute,
   ApiSplatRoute: ApiSplatRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,

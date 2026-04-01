@@ -1,5 +1,5 @@
 import {
-  StreamCreatedPayload,
+  StreamInitializedPayload,
   StreamMetadataUpdatedPayload,
   type Event,
 } from "@iterate-com/events-contract";
@@ -103,12 +103,12 @@ function flushCurrentGroup(displayFeed: StreamFeedItem[], currentGroup: readonly
 }
 
 export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
-  if (event.type === "https://events.iterate.com/events/stream/created") {
-    const payload = StreamCreatedPayload.safeParse(event.payload);
+  if (event.type === "https://events.iterate.com/events/stream/initialized") {
+    const payload = StreamInitializedPayload.safeParse(event.payload);
 
     if (payload.success) {
       return {
-        kind: "stream-created",
+        kind: "stream-initialized",
         parentPath: event.path,
         createdPath: payload.data.path,
         timestamp: getTimestamp(event.createdAt),

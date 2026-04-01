@@ -24,6 +24,7 @@ const historyIdleTimeoutMs = 250;
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 const testTimeoutMs = 5_000;
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe;
+const STREAM_INITIALIZED_EVENT_TYPE = "https://events.iterate.com/events/stream/initialized";
 
 describeRuntimeSmoke("events runtime smoke", () => {
   test(
@@ -87,7 +88,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       expect(events).toHaveLength(2);
       expect(events[0]).toMatchObject({
         path,
-        type: "https://events.iterate.com/events/stream/created",
+        type: STREAM_INITIALIZED_EVENT_TYPE,
         offset: expectedStoredOffset(0),
         payload: { path },
       });

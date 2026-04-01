@@ -35,14 +35,10 @@ export const router = {
 
       return await client.append({
         path: resolved.streamPath,
-        events: [
-          {
-            type: HELLO_WORLD_TYPE,
-            payload: {
-              message: "hello world",
-            },
-          },
-        ],
+        type: HELLO_WORLD_TYPE,
+        payload: {
+          message: "hello world",
+        },
       });
     }),
 };
