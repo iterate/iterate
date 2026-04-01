@@ -1,28 +1,33 @@
 #!/usr/bin/env node
-import * as fs from "fs/promises";
-import * as path from "path";
-import { execSync } from "child_process";
+import { execSync } from "node:child_process";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { os } from "@orpc/server";
-import { z } from "zod";
-import { createCli, yamlTableConsoleLogger } from "trpc-cli";
 import * as prompts from "@clack/prompts";
+import { createCli, yamlTableConsoleLogger } from "trpc-cli";
+import { z } from "zod";
 import { getFiles } from "./files.ts";
 
 const files = getFiles();
 const scripts = await getScripts();
-const username = process.env.WORKSHOP_USERNAME || execSync("id -un").toString().trim();
+const defaultPathPrefix =
+  process.env.WORKSHOP_PATH_PREFIX || `/${execSync("id -un").toString().trim()}`;
 
 const router = os.router({
   run: os
     .input(
       z.object({
         script: scripts.length ? z.enum(scripts.map(({ file }) => file)) : z.string(),
+        pathPrefix: z
+          .string()
+          .default(defaultPathPrefix)
+          .describe("stream path prefix, e.g. /jonas"),
       }),
     )
     .handler(async ({ input }) => {
       const script = scripts.find(({ file }) => file === input.script);
       if (!script) throw new Error(`Script ${input.script} not found`);
-      await script._module.default(username);
+      await script._module.default(normalizePathPrefix(input.pathPrefix));
     }),
   appendHelloWorld: getProcedure("01-hello-world/append-hello-world.ts"),
   openTmuxPanes: getProcedure("01-hello-world/open-tmux-panes.sh"),
@@ -59,19 +64,15 @@ async function getScripts() {
 function getProcedure(key: keyof typeof files) {
   const value = files[key];
   const schema = z.object({
-    name: z.string().describe("your name!"),
     path: z.string().describe("path to write the file to").default(key),
   });
   return os.input(schema).handler(async ({ input }) => {
     await fs.mkdir(path.dirname(input.path), { recursive: true });
-    await fs.writeFile(input.path, replaceName(value, input.name));
+    await fs.writeFile(input.path, value);
     return { success: true, path: input.path };
   });
 }
 
-function replaceName(text: string, name: string) {
-  return text
-    .replaceAll("yourname", name)
-    .replaceAll("jonas", name)
-    .replaceAll("../../lib/sdk.ts", "ai-engineer-workshop");
+function normalizePathPrefix(pathPrefix: string) {
+  return pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
 }
