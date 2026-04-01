@@ -15,6 +15,7 @@ export const AppConfig = BaseAppConfig.extend({
   posthog: z.object({
     apiKey: publicValue(z.string().trim().min(1)),
   }),
+  sharedApiSecret: redacted(z.string().trim().min(1)),
 });
 
 export type AppConfig = typeof AppConfig._output;

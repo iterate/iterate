@@ -1,4 +1,4 @@
-export type CloudflareAppSlug = "example" | "events" | "semaphore" | "ingress-proxy";
+export type CloudflareAppSlug = "codemode" | "example" | "events" | "semaphore" | "ingress-proxy";
 
 export type CloudflareApp = {
   slug: CloudflareAppSlug;
@@ -18,6 +18,13 @@ const commonPaths = [
 ];
 
 export const cloudflareApps = {
+  codemode: {
+    slug: "codemode",
+    displayName: "Codemode",
+    appPath: "apps/codemode",
+    dopplerProject: "codemode",
+    paths: ["apps/codemode/**", "apps/codemode-contract/**", ...commonPaths],
+  },
   example: {
     slug: "example",
     displayName: "Example",
