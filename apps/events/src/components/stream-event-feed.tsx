@@ -40,9 +40,9 @@ import { getEventTypePageByType } from "~/lib/event-type-pages.ts";
 import { getAdjacentEventOffset, getEventFeedItems } from "~/lib/stream-feed-projection.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import type {
+  ChildStreamCreatedFeedItem,
   EventFeedItem,
   GroupedEventFeedItem,
-  StreamInitializedFeedItem,
   StreamFeedItem,
   StreamMetadataUpdatedFeedItem,
   StreamRendererMode,
@@ -157,8 +157,8 @@ function StreamFeedItemRenderer({
       return <StreamToolCard item={item} />;
     case "error":
       return <StreamErrorAlert item={item} />;
-    case "stream-initialized":
-      return <StreamInitializedCard item={item} />;
+    case "child-stream-created":
+      return <ChildStreamCreatedCard item={item} />;
     case "stream-metadata-updated":
       return <StreamMetadataUpdatedCard item={item} />;
     default:
@@ -166,14 +166,14 @@ function StreamFeedItemRenderer({
   }
 }
 
-function StreamInitializedCard({ item }: { item: StreamInitializedFeedItem }) {
+function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) {
   return (
     <article className="max-w-md rounded-lg border bg-card p-4 shadow-sm">
       <div className="space-y-2">
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
             <FolderPlusIcon className="size-3.5" />
-            <span>Child stream initialized</span>
+            <span>Child stream created</span>
           </div>
           <p className="font-mono text-sm">{item.createdPath}</p>
         </div>
@@ -469,8 +469,8 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `tool-${item.toolCallId}-${item.startTimestamp}`;
     case "error":
       return `error-${item.timestamp}-${index}`;
-    case "stream-initialized":
-      return `stream-initialized-${item.createdPath}-${item.timestamp}-${index}`;
+    case "child-stream-created":
+      return `child-stream-created-${item.createdPath}-${item.timestamp}-${index}`;
     case "stream-metadata-updated":
       return `stream-metadata-${item.path}-${item.timestamp}-${index}`;
     default:

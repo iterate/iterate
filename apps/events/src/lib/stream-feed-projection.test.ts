@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { type Event } from "@iterate-com/events-contract";
+import {
+  childStreamCreatedEventType,
+  streamMetadataUpdatedEventType,
+  type Event,
+} from "@iterate-com/events-contract";
 import {
   buildDisplayFeed,
   createGroupedOrSingleEvent,
@@ -44,18 +48,18 @@ describe("projectWireToFeed", () => {
     expect(projectWireToFeed(events).map((item) => item.kind)).toEqual(["event", "event"]);
   });
 
-  test("adds a semantic child-stream item after stream-initialized events", () => {
+  test("adds a semantic child-stream item after child-stream-created events", () => {
     const feed = projectEventToFeed(
       createEvent({
         path: "/",
-        type: "https://events.iterate.com/events/stream/initialized",
+        type: childStreamCreatedEventType,
         payload: { path: "/child-stream" },
       }),
     );
 
-    expect(feed.map((item) => item.kind)).toEqual(["event", "stream-initialized"]);
+    expect(feed.map((item) => item.kind)).toEqual(["event", "child-stream-created"]);
     expect(feed[1]).toMatchObject({
-      kind: "stream-initialized",
+      kind: "child-stream-created",
       parentPath: "/",
       createdPath: "/child-stream",
     });
@@ -65,7 +69,7 @@ describe("projectWireToFeed", () => {
     const feed = projectEventToFeed(
       createEvent({
         path: "/demo",
-        type: "https://events.iterate.com/events/stream/metadata-updated",
+        type: streamMetadataUpdatedEventType,
         payload: { metadata: { owner: "jonas" } },
       }),
     );
@@ -82,7 +86,7 @@ describe("projectWireToFeed", () => {
     const feed = projectWireToFeed([
       createEvent({
         path: "/",
-        type: "https://events.iterate.com/events/stream/initialized",
+        type: childStreamCreatedEventType,
         payload: { path: "/child-stream" },
       }),
     ]);
@@ -440,19 +444,19 @@ describe("buildDisplayFeed", () => {
       createEvent({
         path: "/",
         offset: "1",
-        type: "https://events.iterate.com/events/stream/initialized",
+        type: childStreamCreatedEventType,
         payload: { path: "/created" },
       }),
       createEvent({
         path: "/created",
         offset: "2",
-        type: "https://events.iterate.com/events/stream/metadata-updated",
+        type: streamMetadataUpdatedEventType,
         payload: { metadata: { color: "blue" } },
       }),
     ]);
 
     expect(buildDisplayFeed(feed, "pretty")?.map((item) => item.kind)).toEqual([
-      "stream-initialized",
+      "child-stream-created",
       "stream-metadata-updated",
     ]);
   });
@@ -474,7 +478,7 @@ describe("getAdjacentEventOffset", () => {
         createEvent({ offset: "2", type: "https://events.iterate.com/demo/b" }),
         createEvent({
           offset: "3",
-          type: "https://events.iterate.com/events/stream/initialized",
+          type: childStreamCreatedEventType,
           payload: { path: "/child" },
         }),
       ]),
