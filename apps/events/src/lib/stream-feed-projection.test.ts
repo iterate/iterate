@@ -1,9 +1,5 @@
 import { describe, expect, test } from "vitest";
-import {
-  STREAM_CREATED_TYPE,
-  STREAM_METADATA_UPDATED_TYPE,
-  type Event,
-} from "@iterate-com/events-contract";
+import { type Event } from "@iterate-com/events-contract";
 import {
   buildDisplayFeed,
   createGroupedOrSingleEvent,
@@ -52,7 +48,7 @@ describe("projectWireToFeed", () => {
     const feed = projectEventToFeed(
       createEvent({
         path: "/",
-        type: STREAM_CREATED_TYPE,
+        type: "https://events.iterate.com/events/stream/created",
         payload: { path: "/child-stream" },
       }),
     );
@@ -69,7 +65,7 @@ describe("projectWireToFeed", () => {
     const feed = projectEventToFeed(
       createEvent({
         path: "/demo",
-        type: STREAM_METADATA_UPDATED_TYPE,
+        type: "https://events.iterate.com/events/stream/metadata-updated",
         payload: { metadata: { owner: "jonas" } },
       }),
     );
@@ -86,7 +82,7 @@ describe("projectWireToFeed", () => {
     const feed = projectWireToFeed([
       createEvent({
         path: "/",
-        type: STREAM_CREATED_TYPE,
+        type: "https://events.iterate.com/events/stream/created",
         payload: { path: "/child-stream" },
       }),
     ]);
@@ -444,13 +440,13 @@ describe("buildDisplayFeed", () => {
       createEvent({
         path: "/",
         offset: "1",
-        type: STREAM_CREATED_TYPE,
+        type: "https://events.iterate.com/events/stream/created",
         payload: { path: "/created" },
       }),
       createEvent({
         path: "/created",
         offset: "2",
-        type: STREAM_METADATA_UPDATED_TYPE,
+        type: "https://events.iterate.com/events/stream/metadata-updated",
         payload: { metadata: { color: "blue" } },
       }),
     ]);
@@ -476,7 +472,11 @@ describe("getAdjacentEventOffset", () => {
       projectWireToFeed([
         createEvent({ offset: "1", type: "https://events.iterate.com/demo/a" }),
         createEvent({ offset: "2", type: "https://events.iterate.com/demo/b" }),
-        createEvent({ offset: "3", type: STREAM_CREATED_TYPE, payload: { path: "/child" } }),
+        createEvent({
+          offset: "3",
+          type: "https://events.iterate.com/events/stream/created",
+          payload: { path: "/child" },
+        }),
       ]),
     );
 

@@ -7,11 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
 import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import { describe, expect, test } from "vitest";
-import {
-  STREAM_METADATA_UPDATED_TYPE,
-  type StreamPath,
-  type StreamState,
-} from "@iterate-com/events-contract";
+import { type StreamPath, type StreamState } from "@iterate-com/events-contract";
 import { AppConfig } from "../../src/app.ts";
 import {
   collectAsyncIterableUntilIdle,
@@ -124,7 +120,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         setTimeout(() => {
           void app.client.append({
             path,
-            type: STREAM_METADATA_UPDATED_TYPE,
+            type: "https://events.iterate.com/events/stream/metadata-updated",
             payload: {
               metadata: {
                 live: true,

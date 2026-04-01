@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { STREAM_CREATED_TYPE, StreamPath } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/events-contract";
 import { ROOT_STREAM_PATH, decodeEventStream } from "~/lib/utils.ts";
 import { os } from "~/orpc/orpc.ts";
 
@@ -51,7 +51,7 @@ export const streamsRouter = {
     const discovered = new Map<StreamPath, string>();
 
     for (const event of events) {
-      if (event.type !== STREAM_CREATED_TYPE) {
+      if (event.type !== "https://events.iterate.com/events/stream/created") {
         continue;
       }
 

@@ -5,7 +5,6 @@ import {
   type Event,
   type EventType,
   type JSONObject,
-  STREAM_CREATED_TYPE,
   type StreamPath,
 } from "@iterate-com/events-contract";
 import {
@@ -69,7 +68,10 @@ export function StreamPage({
     streamPath,
     onEvent: useCallback(
       (event: Event) => {
-        if (streamPath === ROOT_STREAM_PATH && event.type === STREAM_CREATED_TYPE) {
+        if (
+          streamPath === ROOT_STREAM_PATH &&
+          event.type === "https://events.iterate.com/events/stream/created"
+        ) {
           void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
         }
       },

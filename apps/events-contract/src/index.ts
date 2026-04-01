@@ -4,16 +4,19 @@ import { z } from "zod";
 
 const streamPathPattern = /^\/(?:[a-z0-9_-]+(?:\/[a-z0-9_-]+)*)?$/;
 const createdAt = z.iso.datetime({ offset: true });
-
-const iterateEventUriPrefix = "https://events.iterate.com/" as const;
-
-export const STREAM_CREATED_TYPE = `${iterateEventUriPrefix}events/stream/created` as const;
-export const STREAM_METADATA_UPDATED_TYPE =
-  `${iterateEventUriPrefix}events/stream/metadata-updated` as const;
+type BuiltInEventType =
+  | "https://events.iterate.com/events/stream/created"
+  | "https://events.iterate.com/events/stream/metadata-updated"
+  | "https://events.iterate.com/events/error-occurred";
 
 /** Event type identifier (URI, URN, reverse-DNS, etc.) — not limited to iterate.com URLs. */
-export const EventType = z.string().trim().min(1).max(2048);
-export type EventType = z.infer<typeof EventType>;
+export type EventType = BuiltInEventType | (string & {});
+export const EventType = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2048)
+  .pipe(z.custom<EventType>((value) => typeof value === "string"));
 
 // `StreamPath` is the canonical parser for stream identifiers, including values
 // that come from HTTP route params. It normalizes only the two cases we expect
@@ -64,11 +67,14 @@ const appendEventShape = {
 export const AppendEventInput = z.object(appendEventShape);
 export type AppendEventInput = z.infer<typeof AppendEventInput>;
 
-export const Event = AppendEventInput.extend({
+const eventShape = {
+  ...appendEventShape,
   path: StreamPath,
   offset: Offset,
   createdAt,
-});
+} satisfies z.ZodRawShape;
+
+export const Event = z.object(eventShape);
 export type Event = z.infer<typeof Event>;
 
 export const StreamCreatedPayload = z.object({
@@ -81,17 +87,21 @@ export const StreamMetadataUpdatedPayload = z.object({
 });
 export type StreamMetadataUpdatedPayload = z.infer<typeof StreamMetadataUpdatedPayload>;
 
-const AppendInput = z.intersection(
+export const ErrorOccurredPayload = z.object({
+  message: z.string().trim().min(1),
+});
+export type ErrorOccurredPayload = z.infer<typeof ErrorOccurredPayload>;
+
+const AppendInput = z.union([
   z.object({
     path: StreamPath,
+    ...appendEventShape,
   }),
-  z.union([
-    AppendEventInput,
-    z.object({
-      events: z.array(AppendEventInput).min(1),
-    }),
-  ]),
-);
+  z.object({
+    path: StreamPath,
+    events: z.array(AppendEventInput).min(1),
+  }),
+]);
 
 export const StreamState = z.object({
   initialized: z.boolean(),
@@ -110,9 +120,12 @@ const SecretSummary = z.object({
   updatedAt: z.string(),
 });
 
-const Secret = SecretSummary.extend({
+const secretShape = {
+  ...SecretSummary.shape,
   value: z.string(),
-});
+} satisfies z.ZodRawShape;
+
+const Secret = z.object(secretShape);
 
 export const eventsContract = oc.router({
   common: commonContract,

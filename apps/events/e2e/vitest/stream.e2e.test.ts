@@ -1,13 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
-import {
-  STREAM_CREATED_TYPE,
-  STREAM_METADATA_UPDATED_TYPE,
-  StreamPath,
-  type Event,
-  type StreamState,
-} from "@iterate-com/events-contract";
+import { StreamPath, type Event, type StreamState } from "@iterate-com/events-contract";
 import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import {
   collectAsyncIterableUntilIdle,
@@ -52,7 +46,7 @@ describe.sequential("events stream e2e", () => {
         {
           path,
           offset: expectedStoredOffset(0),
-          type: STREAM_CREATED_TYPE,
+          type: "https://events.iterate.com/events/stream/created",
           payload: { path },
         },
         {
@@ -386,7 +380,7 @@ describe.sequential("events stream e2e", () => {
         {
           path,
           offset: expectedStoredOffset(0),
-          type: STREAM_CREATED_TYPE,
+          type: "https://events.iterate.com/events/stream/created",
           payload: { path },
         },
       ]);
@@ -515,7 +509,7 @@ describe.sequential("events stream e2e", () => {
         {
           path,
           offset: expectedStoredOffset(0),
-          type: STREAM_CREATED_TYPE,
+          type: "https://events.iterate.com/events/stream/created",
           payload: { path },
         },
       ]);
@@ -633,7 +627,7 @@ describe.sequential("events stream e2e", () => {
             payload: { step: 1 },
           },
           {
-            type: STREAM_METADATA_UPDATED_TYPE,
+            type: "https://events.iterate.com/events/stream/metadata-updated",
             payload: {
               metadata: {
                 owner: "first",
@@ -642,7 +636,7 @@ describe.sequential("events stream e2e", () => {
             },
           },
           {
-            type: STREAM_METADATA_UPDATED_TYPE,
+            type: "https://events.iterate.com/events/stream/metadata-updated",
             payload: {
               metadata: {
                 owner: "second",
@@ -729,7 +723,7 @@ describe.sequential("events stream e2e", () => {
         {
           path,
           offset: expectedStoredOffset(0),
-          type: STREAM_CREATED_TYPE,
+          type: "https://events.iterate.com/events/stream/created",
           payload: { path },
         },
         {
@@ -743,7 +737,7 @@ describe.sequential("events stream e2e", () => {
       const parentEvents = await collectAllStreamEvents(app, { path: parentPath });
       expect(
         parentEvents
-          .filter((event) => event.type === STREAM_CREATED_TYPE)
+          .filter((event) => event.type === "https://events.iterate.com/events/stream/created")
           .map((event) => event.payload.path),
       ).toEqual([parentPath, path]);
 
@@ -751,7 +745,7 @@ describe.sequential("events stream e2e", () => {
       const rootPropagatedPaths = rootEvents
         .filter(
           (event) =>
-            event.type === STREAM_CREATED_TYPE &&
+            event.type === "https://events.iterate.com/events/stream/created" &&
             event.path === "/" &&
             typeof event.payload.path === "string" &&
             propagatedPaths.includes(event.payload.path as StreamPath),
@@ -782,10 +776,14 @@ describe.sequential("events stream e2e", () => {
       await waitForEvent(app, "/", (event) => isCreatedForPath(event, childPath));
 
       const parentCreatedBefore = (await collectAllStreamEvents(app, { path: parentPath })).filter(
-        (event) => event.type === STREAM_CREATED_TYPE && event.payload.path === childPath,
+        (event) =>
+          event.type === "https://events.iterate.com/events/stream/created" &&
+          event.payload.path === childPath,
       );
       const rootCreatedBefore = (await collectAllStreamEvents(app, { path: "/" })).filter(
-        (event) => event.type === STREAM_CREATED_TYPE && event.payload.path === childPath,
+        (event) =>
+          event.type === "https://events.iterate.com/events/stream/created" &&
+          event.payload.path === childPath,
       );
 
       await app.client.append({
@@ -796,12 +794,16 @@ describe.sequential("events stream e2e", () => {
 
       expect(
         (await collectAllStreamEvents(app, { path: parentPath })).filter(
-          (event) => event.type === STREAM_CREATED_TYPE && event.payload.path === childPath,
+          (event) =>
+            event.type === "https://events.iterate.com/events/stream/created" &&
+            event.payload.path === childPath,
         ),
       ).toHaveLength(parentCreatedBefore.length);
       expect(
         (await collectAllStreamEvents(app, { path: "/" })).filter(
-          (event) => event.type === STREAM_CREATED_TYPE && event.payload.path === childPath,
+          (event) =>
+            event.type === "https://events.iterate.com/events/stream/created" &&
+            event.payload.path === childPath,
         ),
       ).toHaveLength(rootCreatedBefore.length);
     },
@@ -1044,7 +1046,7 @@ describe.sequential("events stream e2e", () => {
         expect(first.value).toMatchObject({
           path,
           offset: expectedStoredOffset(0),
-          type: STREAM_CREATED_TYPE,
+          type: "https://events.iterate.com/events/stream/created",
           payload: { path },
         });
 
@@ -1150,7 +1152,7 @@ async function collectStreamEvents(
   return events.filter(
     (event) =>
       !(
-        event.type === STREAM_CREATED_TYPE &&
+        event.type === "https://events.iterate.com/events/stream/created" &&
         event.path === options.path &&
         event.payload.path === options.path
       ),
@@ -1212,7 +1214,7 @@ async function waitForEvent(
 
 function isCreatedForPath(event: Event, path: StreamPath) {
   return (
-    event.type === STREAM_CREATED_TYPE &&
+    event.type === "https://events.iterate.com/events/stream/created" &&
     typeof event.payload.path === "string" &&
     event.payload.path === path
   );

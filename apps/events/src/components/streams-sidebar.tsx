@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { STREAM_CREATED_TYPE, StreamPath, type Event } from "@iterate-com/events-contract";
+import { StreamPath, type Event } from "@iterate-com/events-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   SidebarGroup,
@@ -79,7 +79,7 @@ export function StreamsSidebar() {
           return;
         }
 
-        if (event.type !== STREAM_CREATED_TYPE) {
+        if (event.type !== "https://events.iterate.com/events/stream/created") {
           continue;
         }
 

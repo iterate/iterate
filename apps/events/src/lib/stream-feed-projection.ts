@@ -1,8 +1,6 @@
 import {
   StreamCreatedPayload,
   StreamMetadataUpdatedPayload,
-  STREAM_CREATED_TYPE,
-  STREAM_METADATA_UPDATED_TYPE,
   type Event,
 } from "@iterate-com/events-contract";
 import type {
@@ -105,7 +103,7 @@ function flushCurrentGroup(displayFeed: StreamFeedItem[], currentGroup: readonly
 }
 
 export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
-  if (event.type === STREAM_CREATED_TYPE) {
+  if (event.type === "https://events.iterate.com/events/stream/created") {
     const payload = StreamCreatedPayload.safeParse(event.payload);
 
     if (payload.success) {
@@ -119,7 +117,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     }
   }
 
-  if (event.type === STREAM_METADATA_UPDATED_TYPE) {
+  if (event.type === "https://events.iterate.com/events/stream/metadata-updated") {
     const payload = StreamMetadataUpdatedPayload.safeParse(event.payload);
 
     if (payload.success) {

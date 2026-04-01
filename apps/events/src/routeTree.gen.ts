@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as StreamMetadataUpdatedRouteImport } from './routes/stream-metadata-updated'
 import { Route as StreamCreatedRouteImport } from './routes/stream-created'
 import { Route as ManualEventAppendedRouteImport } from './routes/manual-event-appended'
+import { Route as ErrorOccurredRouteImport } from './routes/error-occurred'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
@@ -37,6 +38,11 @@ const StreamCreatedRoute = StreamCreatedRouteImport.update({
 const ManualEventAppendedRoute = ManualEventAppendedRouteImport.update({
   id: '/manual-event-appended',
   path: '/manual-event-appended',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ErrorOccurredRoute = ErrorOccurredRouteImport.update({
+  id: '/error-occurred',
+  path: '/error-occurred',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DocsRoute = DocsRouteImport.update({
@@ -97,6 +103,7 @@ const AppSecretsSecretIdRoute = AppSecretsSecretIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/docs': typeof DocsRoute
+  '/error-occurred': typeof ErrorOccurredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
   '/stream-created': typeof StreamCreatedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
@@ -112,6 +119,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/docs': typeof DocsRoute
+  '/error-occurred': typeof ErrorOccurredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
   '/stream-created': typeof StreamCreatedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
@@ -127,6 +135,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
   '/docs': typeof DocsRoute
+  '/error-occurred': typeof ErrorOccurredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
   '/stream-created': typeof StreamCreatedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
@@ -144,6 +153,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/docs'
+    | '/error-occurred'
     | '/manual-event-appended'
     | '/stream-created'
     | '/stream-metadata-updated'
@@ -159,6 +169,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/docs'
+    | '/error-occurred'
     | '/manual-event-appended'
     | '/stream-created'
     | '/stream-metadata-updated'
@@ -173,6 +184,7 @@ export interface FileRouteTypes {
     | '/'
     | '/_app'
     | '/docs'
+    | '/error-occurred'
     | '/manual-event-appended'
     | '/stream-created'
     | '/stream-metadata-updated'
@@ -190,6 +202,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
   DocsRoute: typeof DocsRoute
+  ErrorOccurredRoute: typeof ErrorOccurredRoute
   ManualEventAppendedRoute: typeof ManualEventAppendedRoute
   StreamCreatedRoute: typeof StreamCreatedRoute
   StreamMetadataUpdatedRoute: typeof StreamMetadataUpdatedRoute
@@ -218,6 +231,13 @@ declare module '@tanstack/react-router' {
       path: '/manual-event-appended'
       fullPath: '/manual-event-appended'
       preLoaderRoute: typeof ManualEventAppendedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/error-occurred': {
+      id: '/error-occurred'
+      path: '/error-occurred'
+      fullPath: '/error-occurred'
+      preLoaderRoute: typeof ErrorOccurredRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/docs': {
@@ -344,6 +364,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
   DocsRoute: DocsRoute,
+  ErrorOccurredRoute: ErrorOccurredRoute,
   ManualEventAppendedRoute: ManualEventAppendedRoute,
   StreamCreatedRoute: StreamCreatedRoute,
   StreamMetadataUpdatedRoute: StreamMetadataUpdatedRoute,

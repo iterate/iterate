@@ -7,8 +7,6 @@ import {
   StreamPath,
   StreamMetadataUpdatedPayload,
   StreamState,
-  STREAM_CREATED_TYPE,
-  STREAM_METADATA_UPDATED_TYPE,
 } from "@iterate-com/events-contract";
 import { ROOT_STREAM_PATH, getParentPath } from "~/lib/utils.ts";
 const textEncoder = new TextEncoder();
@@ -86,7 +84,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     const selfCreatedEvent = this.buildInsertedEvent({
       path: args.path,
       inputEvent: {
-        type: STREAM_CREATED_TYPE,
+        type: "https://events.iterate.com/events/stream/created",
         payload: {
           path: args.path,
         },
@@ -106,7 +104,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.state = structuredClone(nextState);
     this.publish(selfCreatedEvent);
 
-    if (selfCreatedEvent.type === STREAM_CREATED_TYPE) {
+    if (selfCreatedEvent.type === "https://events.iterate.com/events/stream/created") {
       this.propagateStreamCreatedUpOneLevel(selfCreatedEvent);
     }
   }
@@ -202,7 +200,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     for (const event of insertedEvents) {
       this.publish(event);
-      if (event.type === STREAM_CREATED_TYPE) {
+      if (event.type === "https://events.iterate.com/events/stream/created") {
         this.propagateStreamCreatedUpOneLevel(event);
       }
     }
@@ -489,7 +487,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         streamStub.append({
           events: [
             {
-              type: STREAM_CREATED_TYPE,
+              type: "https://events.iterate.com/events/stream/created",
               payload: event.payload,
               ...(event.metadata == null ? {} : { metadata: event.metadata }),
             },
@@ -601,10 +599,10 @@ function reduceStreamState(args: { state: StreamState; event: Event }): StreamSt
   };
 
   switch (event.type) {
-    case STREAM_METADATA_UPDATED_TYPE:
+    case "https://events.iterate.com/events/stream/metadata-updated":
       nextState.metadata = StreamMetadataUpdatedPayload.parse(event.payload).metadata;
       return nextState;
-    case STREAM_CREATED_TYPE:
+    case "https://events.iterate.com/events/stream/created":
     default:
       return nextState;
   }

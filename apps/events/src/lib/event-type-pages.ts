@@ -1,9 +1,4 @@
-import {
-  STREAM_CREATED_TYPE,
-  STREAM_METADATA_UPDATED_TYPE,
-  type JSONObject,
-  type EventType,
-} from "@iterate-com/events-contract";
+import { type JSONObject, type EventType } from "@iterate-com/events-contract";
 
 export type EventTypePageDefinition = {
   readonly slug: string;
@@ -19,7 +14,7 @@ export const streamCreatedPage = {
   slug: "stream-created",
   href: "/stream-created/",
   title: "Stream Created",
-  type: STREAM_CREATED_TYPE,
+  type: "https://events.iterate.com/events/stream/created",
   summary:
     "Internal meta event emitted when a stream initializes itself and when descendant stream creation is propagated upward.",
   payloadExample: {
@@ -36,7 +31,7 @@ export const streamMetadataUpdatedPage = {
   slug: "stream-metadata-updated",
   href: "/stream-metadata-updated/",
   title: "Stream Metadata Updated",
-  type: STREAM_METADATA_UPDATED_TYPE,
+  type: "https://events.iterate.com/events/stream/metadata-updated",
   summary: "Internal metadata event that replaces the reduced metadata snapshot for a stream.",
   payloadExample: {
     metadata: {
@@ -47,6 +42,21 @@ export const streamMetadataUpdatedPage = {
   details: [
     "The reducer treats this payload as a full metadata replacement rather than a patch merge.",
     "Use it when stream-level metadata should change without inventing a separate mutation API.",
+  ],
+} satisfies EventTypePageDefinition;
+
+export const errorOccurredPage = {
+  slug: "error-occurred",
+  href: "/error-occurred/",
+  title: "Error Occurred",
+  type: "https://events.iterate.com/events/error-occurred",
+  summary: "Built-in error event for recording failures directly in a stream.",
+  payloadExample: {
+    message: "Failed to fetch remote state",
+  },
+  details: [
+    "Use this when a stream should record an operational failure as an event instead of only logging it.",
+    "The built-in payload shape only requires a human-readable message.",
   ],
 } satisfies EventTypePageDefinition;
 
@@ -67,6 +77,7 @@ export const manualEventAppendedPage = {
 } satisfies EventTypePageDefinition;
 
 export const eventTypePages = [
+  errorOccurredPage,
   manualEventAppendedPage,
   streamCreatedPage,
   streamMetadataUpdatedPage,
