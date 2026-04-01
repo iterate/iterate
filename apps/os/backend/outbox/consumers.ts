@@ -656,7 +656,24 @@ export const registerConsumers = () => {
         payload: { machineId, projectId },
       });
 
-      await writeSentinel();
+      try {
+        await writeSentinel();
+      } catch (e: unknown) {
+        // Sentinel write is best-effort: setup was already pushed successfully.
+        // If this fails (daemon 502, timeout, etc.) the only consequence is a
+        // redundant re-push on the next daemon-status-reported event, which is
+        // idempotent.
+        const errorName = e instanceof Error ? e.name : String(e);
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        logger.set({
+          machineId: machine.id,
+          externalId: machine.externalId,
+          eventId: params.eventId,
+          errorName,
+          errorMessage,
+        });
+        logger.warn("pushMachineSetup: sentinel write failed, setup was still pushed");
+      }
 
       return `setup pushed to ${machineId}`;
     },
