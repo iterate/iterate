@@ -116,7 +116,7 @@ export type Schedule = {
   | { type: "interval"; intervalSeconds?: number }
 );
 
-export const ScheduleRowState = z.object({
+export const ScheduleRow = z.object({
   id: z.string().trim().min(1),
   callback: z.string().trim().min(1),
   payload: z.string().nullable(),
@@ -130,9 +130,9 @@ export const ScheduleRowState = z.object({
   retry_options: z.string().nullable(),
   created_at: z.number().int().nonnegative(),
 });
-export type ScheduleRow = z.infer<typeof ScheduleRowState>;
+export type ScheduleRow = z.infer<typeof ScheduleRow>;
 
-export const ScheduleProjectionState = z.record(z.string(), ScheduleRowState).default({});
+export const ScheduleProjectionState = z.record(z.string(), ScheduleRow).default({});
 export type ScheduleProjectionState = z.infer<typeof ScheduleProjectionState>;
 
 export const ReducedStreamState = PublicStreamStateSchema.extend({

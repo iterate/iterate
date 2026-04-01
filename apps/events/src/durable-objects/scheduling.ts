@@ -7,7 +7,6 @@ import type {
   ScheduleCriteria,
   ScheduleLookupArgs,
   ScheduleProjectionState,
-  ScheduleRow,
   SchedulingAlarmDeps,
   SchedulingMutationDeps,
 } from "~/durable-objects/scheduling-types.ts";
@@ -25,7 +24,7 @@ import {
   ScheduleCancelledPayload,
   ScheduleExecutionFinishedPayload,
   ScheduleExecutionStartedPayload,
-  ScheduleRowState,
+  ScheduleRow,
   StreamPath,
 } from "~/durable-objects/scheduling-types.ts";
 
@@ -615,7 +614,7 @@ export function readScheduleProjectionStateFromTable(
     )
     .toArray();
 
-  return Object.fromEntries(rows.map((row: ScheduleRow) => [row.id, ScheduleRowState.parse(row)]));
+  return Object.fromEntries(rows.map((row: ScheduleRow) => [row.id, ScheduleRow.parse(row)]));
 }
 
 export async function scheduleNextAlarmFromTable(ctx: DurableObjectState): Promise<void> {
