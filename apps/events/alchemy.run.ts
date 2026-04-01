@@ -86,6 +86,11 @@ export const worker = await TanStackStart(APP_NAME, {
     STREAM: stream,
     APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
   },
+  // `packages/shared/src/apps/logging/orpc-plugin.ts` inspects `request.signal`
+  // so aborted client requests do not log as real handler failures. Cloudflare
+  // gates that API behind this compatibility flag:
+  // https://developers.cloudflare.com/workers/runtime-apis/request/
+  compatibilityFlags: ["enable_request_signal"],
   wrangler: {
     main: "./src/entry.workerd.ts",
   },

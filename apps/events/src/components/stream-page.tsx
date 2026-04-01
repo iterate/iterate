@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  EventInput,
   type Event,
+  EventInput,
   type EventType,
   type JSONObject,
-  STREAM_CREATED_TYPE,
   type StreamPath,
 } from "@iterate-com/events-contract";
 import {
@@ -36,11 +35,10 @@ import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projectio
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { DEFAULT_STREAM_RENDERER_MODE, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
 import { formatClientError } from "~/lib/format-client-error.ts";
-import { ROOT_STREAM_PATH } from "~/lib/utils.ts";
 import { orpc } from "~/orpc/client.ts";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
 
-const DEFAULT_EVENT_TYPE = "https://events.iterate.com/manual-event-appended";
+const DEFAULT_EVENT_TYPE: EventType = "https://events.iterate.com/manual-event-appended";
 
 export function StreamPage({
   streamPath,
@@ -51,19 +49,19 @@ export function StreamPage({
 }: {
   streamPath: StreamPath;
   rendererMode?: StreamRendererMode;
-  openEventOffset?: string;
-  onOpenEventOffsetChange?: (offset?: string) => void;
+  openEventOffset?: number;
+  onOpenEventOffsetChange?: (offset?: number) => void;
   onRendererModeChange?: (mode: StreamRendererMode) => void;
 }) {
   const queryClient = useQueryClient();
   const { closeMetadata, metadataOpen, setHeaderControls } = useStreamsChrome();
   const [selectedTemplateType, setSelectedTemplateType] = useState<EventType>(DEFAULT_EVENT_TYPE);
   const [appendInputJson, setAppendInputJson] = useState(() =>
-    createEventInputTemplate({ streamPath, type: DEFAULT_EVENT_TYPE }),
+    createEventInputTemplate(DEFAULT_EVENT_TYPE),
   );
 
   const streamStateQuery = useQuery({
-    ...orpc.getState.queryOptions({ input: { streamPath } }),
+    ...orpc.getState.queryOptions({ input: { path: streamPath } }),
     staleTime: 5_000,
   });
 
@@ -71,7 +69,10 @@ export function StreamPage({
     streamPath,
     onEvent: useCallback(
       (event: Event) => {
-        if (streamPath === ROOT_STREAM_PATH && event.type === STREAM_CREATED_TYPE) {
+        if (
+          streamPath === "/" &&
+          event.type === "https://events.iterate.com/events/stream/child-stream-created"
+        ) {
           void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
         }
       },
@@ -83,8 +84,8 @@ export function StreamPage({
   const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
 
   useEffect(() => {
-    setAppendInputJson(createEventInputTemplate({ streamPath, type: selectedTemplateType }));
-  }, [selectedTemplateType, streamPath]);
+    setAppendInputJson(createEventInputTemplate(selectedTemplateType));
+  }, [selectedTemplateType]);
 
   useEffect(() => {
     // The header lives in the parent `_app` layout, outside the concrete stream
@@ -109,9 +110,6 @@ export function StreamPage({
       },
     }),
   );
-
-  const selectedTemplatePage = getEventTypePageByType(selectedTemplateType);
-
   const submitAppend = async (inputText = appendInputJson) => {
     let event: EventInput;
 
@@ -123,8 +121,8 @@ export function StreamPage({
     }
 
     const request = appendEvent.mutateAsync({
-      path: event.path,
-      events: [event],
+      params: { path: streamPath },
+      body: event,
     });
 
     void toast.promise(request, {
@@ -191,7 +189,7 @@ export function StreamPage({
               value={appendInputJson}
               onChange={(event) => setAppendInputJson(event.currentTarget.value)}
               className="min-h-36 max-h-[45vh] font-mono text-xs leading-5"
-              placeholder='{"path":"/demo","type":"https://events.iterate.com/manual-event-appended","payload":{"message":"hello"}}'
+              placeholder="Enter event JSON"
               spellCheck={false}
             />
           </PromptInputBody>
@@ -204,7 +202,9 @@ export function StreamPage({
                 }}
               >
                 <PromptInputSelectTrigger className="h-8 max-w-full min-w-0 text-xs sm:max-w-[18rem]">
-                  <span className="truncate">{selectedTemplatePage?.title ?? "Event type"}</span>
+                  <span className="truncate">
+                    {getEventTypePageByType(selectedTemplateType)?.title ?? "Event type"}
+                  </span>
                 </PromptInputSelectTrigger>
                 <PromptInputSelectContent align="start">
                   {eventTypePages.map((page) => (
@@ -227,18 +227,14 @@ export function StreamPage({
   );
 }
 
-function createEventInputTemplate({
-  streamPath,
-  type,
-}: {
-  streamPath: StreamPath;
-  type: EventType;
-}) {
+function createEventInputTemplate(type: EventType) {
+  const page = getEventTypePageByType(type);
   return JSON.stringify(
     {
-      path: streamPath,
       type,
-      payload: clonePayloadTemplate(getEventTypePageByType(type)?.payloadExample),
+      payload: page?.payloadExample
+        ? (JSON.parse(JSON.stringify(page.payloadExample)) as JSONObject)
+        : {},
     } satisfies EventInput,
     null,
     2,
@@ -253,12 +249,4 @@ function parseJSONObject(value: string) {
   }
 
   return parsed as JSONObject;
-}
-
-function clonePayloadTemplate(payload: Record<string, unknown> | undefined) {
-  if (!payload) {
-    return {} as JSONObject;
-  }
-
-  return JSON.parse(JSON.stringify(payload)) as JSONObject;
 }

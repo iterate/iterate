@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { STREAM_CREATED_TYPE, StreamPath, type Event } from "@iterate-com/events-contract";
+import { StreamPath, type Event } from "@iterate-com/events-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   SidebarGroup,
@@ -16,7 +16,6 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { Plus } from "lucide-react";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
-import { ROOT_STREAM_PATH } from "~/lib/utils.ts";
 import { orpc, orpcClient } from "~/orpc/client.ts";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
 
@@ -41,16 +40,13 @@ export function StreamsSidebar() {
   });
 
   const rootStateQuery = useQuery({
-    ...orpc.getState.queryOptions({ input: { streamPath: ROOT_STREAM_PATH } }),
+    ...orpc.getState.queryOptions({ input: { path: "/" } }),
     staleTime: 30_000,
   });
+  const rootLastOffset = rootStateQuery.data?.eventCount ?? undefined;
 
   useEffect(() => {
-    if (
-      selectedStreamPath === ROOT_STREAM_PATH ||
-      rootStateQuery.isPending ||
-      rootStateQuery.isError
-    ) {
+    if (selectedStreamPath === "/" || rootStateQuery.isPending || rootStateQuery.isError) {
       return;
     }
 
@@ -61,8 +57,8 @@ export function StreamsSidebar() {
     void (async () => {
       const stream = await orpcClient.stream(
         {
-          path: ROOT_STREAM_PATH,
-          offset: rootStateQuery.data?.lastOffset ?? undefined,
+          path: "/",
+          offset: rootLastOffset,
           live: true,
         },
         { signal: controller.signal },
@@ -79,7 +75,7 @@ export function StreamsSidebar() {
           return;
         }
 
-        if (event.type !== STREAM_CREATED_TYPE) {
+        if (event.type !== "https://events.iterate.com/events/stream/child-stream-created") {
           continue;
         }
 
@@ -100,9 +96,9 @@ export function StreamsSidebar() {
     };
   }, [
     queryClient,
-    rootStateQuery.data?.lastOffset,
     rootStateQuery.isError,
     rootStateQuery.isPending,
+    rootLastOffset,
     selectedStreamPath,
   ]);
 
@@ -144,7 +140,7 @@ export function StreamsSidebar() {
       return;
     }
 
-    if (parsed.data === ROOT_STREAM_PATH) {
+    if (parsed.data === "/") {
       toast.error("Pick a path under a non-root stream.");
       return;
     }
@@ -174,7 +170,7 @@ export function StreamsSidebar() {
                 <SidebarMenuItem key={stream.path}>
                   <SidebarMenuButton
                     render={
-                      stream.path === ROOT_STREAM_PATH ? (
+                      stream.path === "/" ? (
                         <Link
                           to="/streams/"
                           search={{

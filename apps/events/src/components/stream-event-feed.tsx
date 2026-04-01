@@ -40,9 +40,9 @@ import { getEventTypePageByType } from "~/lib/event-type-pages.ts";
 import { getAdjacentEventOffset, getEventFeedItems } from "~/lib/stream-feed-projection.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import type {
+  ChildStreamCreatedFeedItem,
   EventFeedItem,
   GroupedEventFeedItem,
-  StreamCreatedFeedItem,
   StreamFeedItem,
   StreamMetadataUpdatedFeedItem,
   StreamRendererMode,
@@ -62,8 +62,8 @@ export function StreamEventFeed({
   rendererMode: StreamRendererMode;
   emptyLabel: string;
   isPending?: boolean;
-  openEventOffset?: string;
-  onOpenEventOffsetChange?: (offset?: string) => void;
+  openEventOffset?: number;
+  onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   const eventFeedItems = useMemo(() => getEventFeedItems(feed), [feed]);
   const rawEvents = eventFeedItems.map((item) => item.raw);
@@ -144,7 +144,7 @@ function StreamFeedItemRenderer({
   onOpenEventOffsetChange,
 }: {
   item: StreamFeedItem;
-  onOpenEventOffsetChange?: (offset?: string) => void;
+  onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   switch (item.kind) {
     case "event":
@@ -157,8 +157,8 @@ function StreamFeedItemRenderer({
       return <StreamToolCard item={item} />;
     case "error":
       return <StreamErrorAlert item={item} />;
-    case "stream-created":
-      return <StreamCreatedCard item={item} />;
+    case "child-stream-created":
+      return <ChildStreamCreatedCard item={item} />;
     case "stream-metadata-updated":
       return <StreamMetadataUpdatedCard item={item} />;
     default:
@@ -166,7 +166,7 @@ function StreamFeedItemRenderer({
   }
 }
 
-function StreamCreatedCard({ item }: { item: StreamCreatedFeedItem }) {
+function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) {
   return (
     <article className="max-w-md rounded-lg border bg-card p-4 shadow-sm">
       <div className="space-y-2">
@@ -265,7 +265,7 @@ function EventLine({
   onOpenEventOffsetChange,
 }: {
   event: EventFeedItem;
-  onOpenEventOffsetChange?: (offset?: string) => void;
+  onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   return (
     <div className="flex justify-end">
@@ -288,7 +288,7 @@ function GroupedEventLine({
   onOpenEventOffsetChange,
 }: {
   group: GroupedEventFeedItem;
-  onOpenEventOffsetChange?: (offset?: string) => void;
+  onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   return (
     <div className="flex justify-end">
@@ -318,8 +318,8 @@ function EventInspectorSheet({
   onOpenEventOffsetChange,
 }: {
   events: readonly EventFeedItem[];
-  openEventOffset?: string;
-  onOpenEventOffsetChange?: (offset?: string) => void;
+  openEventOffset?: number;
+  onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   const selectedEvent = useMemo(
     () => events.find((event) => event.offset === openEventOffset),
@@ -410,7 +410,7 @@ function EventInspectorSheet({
           </div>
           {selectedEvent ? (
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <Identifier value={selectedEvent.offset} textClassName="text-xs" />
+              <Identifier value={String(selectedEvent.offset)} textClassName="text-xs" />
               <span>Use left and right arrow keys to move between events.</span>
             </div>
           ) : null}
@@ -469,8 +469,8 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `tool-${item.toolCallId}-${item.startTimestamp}`;
     case "error":
       return `error-${item.timestamp}-${index}`;
-    case "stream-created":
-      return `stream-created-${item.createdPath}-${item.timestamp}-${index}`;
+    case "child-stream-created":
+      return `child-stream-created-${item.createdPath}-${item.timestamp}-${index}`;
     case "stream-metadata-updated":
       return `stream-metadata-${item.path}-${item.timestamp}-${index}`;
     default:

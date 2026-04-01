@@ -1,7 +1,6 @@
 import { useCallback } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { StreamPage } from "~/components/stream-page.tsx";
-import { ROOT_STREAM_PATH } from "~/lib/utils.ts";
 import { validateStreamViewSearch } from "~/lib/stream-view-search.ts";
 
 export const Route = createFileRoute("/_app/streams/")({
@@ -9,7 +8,7 @@ export const Route = createFileRoute("/_app/streams/")({
   // the header controls work the same way on `/streams/` and `/streams/$`.
   validateSearch: validateStreamViewSearch,
   loader: () => ({
-    breadcrumb: ROOT_STREAM_PATH,
+    breadcrumb: "/",
   }),
   component: StreamsIndexPage,
 });
@@ -18,7 +17,7 @@ function StreamsIndexPage() {
   const { event, renderer } = Route.useSearch();
   const navigate = Route.useNavigate();
   const updateEventOffset = useCallback(
-    (nextEventOffset?: string) => {
+    (nextEventOffset?: number) => {
       // TanStack Router's functional `search` updater preserves sibling view
       // state while only changing the event currently shown in the sheet.
       void navigate({
@@ -48,7 +47,7 @@ function StreamsIndexPage() {
 
   return (
     <StreamPage
-      streamPath={ROOT_STREAM_PATH}
+      streamPath="/"
       rendererMode={renderer}
       openEventOffset={event}
       onOpenEventOffsetChange={updateEventOffset}

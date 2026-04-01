@@ -69,8 +69,8 @@ export interface ErrorFeedItem {
 
 export interface EventFeedItem {
   kind: "event";
-  path: StreamPath;
-  offset: string;
+  streamPath: StreamPath;
+  offset: number;
   createdAt: string;
   eventType: string;
   timestamp: number;
@@ -86,8 +86,8 @@ export interface GroupedEventFeedItem {
   lastTimestamp: number;
 }
 
-export interface StreamCreatedFeedItem {
-  kind: "stream-created";
+export interface ChildStreamCreatedFeedItem {
+  kind: "child-stream-created";
   parentPath: StreamPath;
   createdPath: StreamPath;
   timestamp: number;
@@ -108,5 +108,5 @@ export type StreamFeedItem =
   | ErrorFeedItem
   | EventFeedItem
   | GroupedEventFeedItem
-  | StreamCreatedFeedItem
+  | ChildStreamCreatedFeedItem
   | StreamMetadataUpdatedFeedItem;

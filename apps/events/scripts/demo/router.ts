@@ -34,16 +34,13 @@ export const router = {
       ) as ContractRouterClient<typeof eventsContract>;
 
       return await client.append({
-        path: resolved.streamPath,
-        events: [
-          {
-            path: resolved.streamPath,
-            type: HELLO_WORLD_TYPE,
-            payload: {
-              message: "hello world",
-            },
+        params: { path: resolved.streamPath },
+        body: {
+          type: HELLO_WORLD_TYPE,
+          payload: {
+            message: "hello world",
           },
-        ],
+        },
       });
     }),
 };

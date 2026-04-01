@@ -1,25 +1,69 @@
-import { STREAM_CREATED_TYPE, StreamPath } from "@iterate-com/events-contract";
-import { ROOT_STREAM_PATH, decodeEventStream } from "~/lib/utils.ts";
+import { ORPCError } from "@orpc/server";
+import {
+  type ChildStreamCreatedEvent,
+  type EventInput,
+  GenericEventInput,
+  type JSONObject,
+  type StreamPath,
+} from "@iterate-com/events-contract";
+import jsonata from "jsonata";
+import {
+  getInitializedStreamStub,
+  getStreamStub,
+  StreamOffsetPreconditionError,
+} from "~/lib/stream-helpers.ts";
+import { decodeEventStream } from "~/lib/utils.ts";
 import { os } from "~/orpc/orpc.ts";
 
 export const streamsRouter = {
-  append: os.append.handler(async ({ context, input }) => {
-    // We would rather let the Durable Object read its own name from `ctx.id.name`,
-    // but that is still not reliable enough in constructors today. Until Cloudflare
-    // makes that robust, the router stamps the validated path onto every event so
-    // the DO can reduce and persist a trustworthy `state.path` on its own.
-    const events = ("events" in input ? input.events : [input]).map((event) => ({
-      ...event,
-      path: input.path,
-    }));
+  append: os.append.handler(async ({ input }) => {
+    const path = input.params.path;
+    const event: EventInput =
+      input.query.jsonataTransform == null
+        ? (input.body as EventInput)
+        : await transformAppendBody({
+            body: input.body as JSONObject,
+            jsonataTransform: input.query.jsonataTransform,
+          });
 
-    // Durable Object RPC is always async from the caller side, even if the method
-    // body itself only performs synchronous SQLite work.
-    const streamStub = context.env.STREAM.getByName(input.path);
-    return streamStub.append({ events });
+    const streamStub = await getInitializedStreamStub({ path });
+    try {
+      const appendedEvent = await streamStub.append(event);
+      return {
+        event: appendedEvent,
+      };
+    } catch (error) {
+      // TODO: Replace this exception mapping with a result-style flow.
+      // See apps/events/tasks/better-error-handling.md.
+      // The instanceof/name checks handle direct calls. The message check
+      // handles DO RPC where the error class is lost during serialization.
+      if (
+        error instanceof StreamOffsetPreconditionError ||
+        (error instanceof Error && error.name === "StreamOffsetPreconditionError") ||
+        (error instanceof Error && /does not match next generated offset/i.test(error.message))
+      ) {
+        throw new ORPCError("PRECONDITION_FAILED", {
+          message: error instanceof Error ? error.message : "Offset precondition failed.",
+        });
+      }
+
+      if (
+        error instanceof Error &&
+        error.message === "stream-initialized may only be appended once"
+      ) {
+        throw new ORPCError("BAD_REQUEST", { message: error.message });
+      }
+
+      throw error;
+    }
   }),
-  stream: os.stream.handler(async function* ({ context, input, signal }) {
-    const streamStub = context.env.STREAM.getByName(input.path);
+  destroy: os.destroy.handler(async ({ input }) => {
+    const streamStub = getStreamStub(input.path);
+    return streamStub.destroy();
+  }),
+  stream: os.stream.handler(async function* ({ input, signal }) {
+    const streamStub = await getInitializedStreamStub({ path: input.path });
+
     if (!input.live) {
       const events = await streamStub.history({
         afterOffset: input.offset,
@@ -41,35 +85,75 @@ export const streamsRouter = {
       yield event;
     }
   }),
-  getState: os.getState.handler(async ({ context, input }) => {
-    const streamStub = context.env.STREAM.getByName(input.streamPath);
+  getState: os.getState.handler(async ({ input }) => {
+    const streamStub = await getInitializedStreamStub({ path: input.path });
     return streamStub.getState();
   }),
-  listStreams: os.listStreams.handler(async ({ context }) => {
-    const rootStreamStub = context.env.STREAM.getByName(ROOT_STREAM_PATH);
+  listStreams: os.listStreams.handler(async () => {
+    const rootStreamStub = await getInitializedStreamStub({ path: "/" });
     const events = await rootStreamStub.history();
-    const discovered = new Map<StreamPath, string>();
+    const discovered: Record<StreamPath, string> = {
+      "/": new Date().toISOString(),
+    };
 
     for (const event of events) {
-      if (event.type !== STREAM_CREATED_TYPE) {
-        continue;
+      if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
+        const childEvent = event as ChildStreamCreatedEvent;
+        discovered[childEvent.payload.path] = childEvent.createdAt;
+      } else if (event.type === "https://events.iterate.com/events/stream/initialized") {
+        discovered["/"] = event.createdAt;
       }
-
-      const parsedPath = StreamPath.safeParse(event.payload.path);
-      if (!parsedPath.success || discovered.has(parsedPath.data)) {
-        continue;
-      }
-
-      discovered.set(parsedPath.data, event.createdAt);
     }
 
-    // `/` is the discovery stream itself, so it will not discover itself via a
-    // `STREAM_CREATED` payload. Add it explicitly so the UI can always navigate
-    // to the root stream as a first-class system stream.
-    discovered.set(ROOT_STREAM_PATH, events[0]?.createdAt ?? new Date(0).toISOString());
-
-    return [...discovered.entries()]
-      .map(([path, createdAt]) => ({ path, createdAt }))
+    return Object.entries(discovered)
+      .map(([path, createdAt]) => ({ path: path as StreamPath, createdAt }))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }),
 };
+
+async function transformAppendBody(args: { body: JSONObject; jsonataTransform: string }) {
+  const transformed = await evaluateJsonataTransform(args);
+  const parsed = GenericEventInput.safeParse(transformed);
+
+  if (!parsed.success) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: "jsonataTransform must produce a valid single event body.",
+      data: {
+        issues: parsed.error.issues.map((issue) => ({
+          path: issue.path,
+          message: issue.message,
+        })),
+      },
+    });
+  }
+
+  return parsed.data;
+}
+
+async function evaluateJsonataTransform(args: { body: JSONObject; jsonataTransform: string }) {
+  try {
+    const expression = jsonata(args.jsonataTransform);
+    return await expression.evaluate(args.body);
+  } catch (error) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: `invalid_jsonata_transform: ${getErrorMessage(error)}`,
+    });
+  }
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+
+  return String(error);
+}

@@ -1,8 +1,6 @@
 import {
-  StreamCreatedPayload,
-  StreamMetadataUpdatedPayload,
-  STREAM_CREATED_TYPE,
-  STREAM_METADATA_UPDATED_TYPE,
+  ChildStreamCreatedEvent,
+  StreamMetadataUpdatedEvent,
   type Event,
 } from "@iterate-com/events-contract";
 import type {
@@ -17,7 +15,7 @@ import { buildAgentSemanticInsertions } from "~/lib/agent-stream-reducer.ts";
  * Raw + Pretty groups consecutive wire rows of the same `eventType`. Very large
  * cap so normal streams stay one group per run; only pathological runs flush early.
  */
-export const MAX_SAME_TYPE_RAW_GROUP = 50_000;
+const MAX_SAME_TYPE_RAW_GROUP = 50_000;
 
 export function projectWireToFeed(events: readonly Event[]): StreamFeedItem[] {
   const insertionsByOffset = buildSemanticInsertions(events);
@@ -31,7 +29,7 @@ export function projectWireToFeed(events: readonly Event[]): StreamFeedItem[] {
 export function toEventFeedItem(event: Event): EventFeedItem {
   return {
     kind: "event",
-    path: event.path,
+    streamPath: event.streamPath,
     offset: event.offset,
     createdAt: event.createdAt,
     eventType: event.type,
@@ -105,40 +103,32 @@ function flushCurrentGroup(displayFeed: StreamFeedItem[], currentGroup: readonly
 }
 
 export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
-  if (event.type === STREAM_CREATED_TYPE) {
-    const payload = StreamCreatedPayload.safeParse(event.payload);
-
-    if (payload.success) {
-      return {
-        kind: "stream-created",
-        parentPath: event.path,
-        createdPath: payload.data.path,
-        timestamp: getTimestamp(event.createdAt),
-        raw: event,
-      };
-    }
+  if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
+    return {
+      kind: "child-stream-created",
+      parentPath: event.streamPath,
+      createdPath: getChildStreamCreatedEventPath(event),
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
   }
 
-  if (event.type === STREAM_METADATA_UPDATED_TYPE) {
-    const payload = StreamMetadataUpdatedPayload.safeParse(event.payload);
-
-    if (payload.success) {
-      return {
-        kind: "stream-metadata-updated",
-        path: event.path,
-        metadata: payload.data.metadata,
-        timestamp: getTimestamp(event.createdAt),
-        raw: event,
-      };
-    }
+  if (event.type === "https://events.iterate.com/events/stream/metadata-updated") {
+    return {
+      kind: "stream-metadata-updated",
+      path: event.streamPath,
+      metadata: getStreamMetadataUpdatedEventMetadata(event),
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
   }
 
   return null;
 }
 
 function mergeInsertions(
-  target: Map<string, StreamFeedItem[]>,
-  addition: ReadonlyMap<string, StreamFeedItem[]>,
+  target: Map<number, StreamFeedItem[]>,
+  addition: ReadonlyMap<number, StreamFeedItem[]>,
 ) {
   for (const [offset, items] of addition) {
     const existing = target.get(offset);
@@ -151,7 +141,7 @@ function mergeInsertions(
 }
 
 function buildSemanticInsertions(events: readonly Event[]) {
-  const insertionsByOffset = new Map<string, StreamFeedItem[]>();
+  const insertionsByOffset = new Map<number, StreamFeedItem[]>();
 
   for (const event of events) {
     const semanticItem = toSemanticFeedItem(event);
@@ -166,8 +156,8 @@ function buildSemanticInsertions(events: readonly Event[]) {
 }
 
 function appendInsertion(
-  insertionsByOffset: Map<string, StreamFeedItem[]>,
-  offset: string,
+  insertionsByOffset: Map<number, StreamFeedItem[]>,
+  offset: number,
   item: StreamFeedItem,
 ) {
   const existing = insertionsByOffset.get(offset);
@@ -177,6 +167,14 @@ function appendInsertion(
   }
 
   insertionsByOffset.set(offset, [item]);
+}
+
+function getChildStreamCreatedEventPath(event: Event) {
+  return ChildStreamCreatedEvent.parse(event).payload.path;
+}
+
+function getStreamMetadataUpdatedEventMetadata(event: Event) {
+  return StreamMetadataUpdatedEvent.parse(event).payload.metadata;
 }
 
 export function createGroupedOrSingleEvent(
@@ -202,7 +200,7 @@ export function createGroupedOrSingleEvent(
 
 export function getAdjacentEventOffset(
   events: readonly EventFeedItem[],
-  currentOffset: string | undefined,
+  currentOffset: number | undefined,
   direction: "previous" | "next",
 ) {
   if (currentOffset == null) {
