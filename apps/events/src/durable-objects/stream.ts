@@ -61,8 +61,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error("At least one event is required.");
     }
 
-    this.initializeStorage();
-
     const created = this.state.eventCount === 0;
     let nextState = structuredClone(this.state);
     const events: Event[] = [];
@@ -122,7 +120,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   // https://developers.cloudflare.com/durable-objects/api/storage-api/
   // https://developers.cloudflare.com/durable-objects/best-practices/access-durable-objects-storage/
   async destroy() {
-    const deleted = this.state.eventCount > 0;
+    const stateBeforeDelete = structuredClone(this.state);
 
     for (const subscriber of this.subscribers) {
       try {
@@ -134,17 +132,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     this.subscribers.clear();
     await this.ctx.storage.deleteAll();
-    this.state = {
-      path: null,
-      lastOffset: null,
-      eventCount: 0,
-      metadata: {},
-    };
-
-    return {
-      ok: true as const,
-      deleted,
-    };
+    return stateBeforeDelete;
   }
 
   async getState(): Promise<StreamState> {

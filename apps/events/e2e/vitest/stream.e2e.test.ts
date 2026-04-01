@@ -394,9 +394,12 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(await app.client.destroy({ path })).toEqual({
-        ok: true,
         path,
-        deleted: true,
+        lastOffset: expectedOffset(2),
+        eventCount: 2,
+        metadata: {
+          owner: "destroy-me",
+        },
       });
 
       expect(await collectStreamEvents(app, { path })).toEqual([]);
@@ -416,9 +419,10 @@ describe.sequential("events stream e2e", () => {
       const path = uniqueStreamPath();
 
       expect(await app.client.destroy({ path })).toEqual({
-        ok: true,
-        path,
-        deleted: false,
+        path: null,
+        lastOffset: null,
+        eventCount: 0,
+        metadata: {},
       });
     },
     testTimeoutMs,

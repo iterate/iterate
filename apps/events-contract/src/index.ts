@@ -140,13 +140,7 @@ export const eventsContract = oc.router({
         path: StreamPath,
       }),
     )
-    .output(
-      z.object({
-        ok: z.literal(true),
-        path: StreamPath,
-        deleted: z.boolean(),
-      }),
-    ),
+    .output(StreamState),
   stream: oc
     .route({
       operationId: "streamEvents",
