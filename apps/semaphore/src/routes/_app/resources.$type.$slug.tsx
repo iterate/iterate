@@ -1,17 +1,13 @@
 import { useEffect, useState, useTransition } from "react";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import type {
-  PreviewEnvironmentRecord,
-  SemaphoreLeaseRecord,
-  SemaphoreResourceRecord,
+import {
+  FindResourceInput,
+  type SemaphoreLeaseRecord,
+  type SemaphoreResourceRecord,
 } from "@iterate-com/semaphore-contract";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
-import {
-  getPreviewEnvironmentRecord,
-  isPreviewEnvironmentType,
-} from "~/lib/preview-environments.ts";
 import { findResourceByKey } from "~/lib/resource-store.ts";
 
 const operatorTokenStorageKey = "semaphore-operator-token";
@@ -62,24 +58,14 @@ function serializeResource(resource: SemaphoreResourceRecord): SerializableSemap
 }
 
 const loadResource = createServerFn({ method: "GET" })
-  .inputValidator(
-    z.object({
-      type: z.string().trim().min(1),
-      slug: z.string().trim().min(1),
-    }),
-  )
+  .inputValidator(FindResourceInput)
   .handler(async ({ context, data }) => {
     const resource = await findResourceByKey(context.db, data);
     if (!resource) {
       throw new Error(`No resource exists for ${data.type}/${data.slug}.`);
     }
 
-    return {
-      resource: serializeResource(resource),
-      previewEnvironment: isPreviewEnvironmentType(resource.type)
-        ? await getPreviewEnvironmentRecord(context, resource.slug)
-        : null,
-    };
+    return serializeResource(resource);
   });
 
 const mutateResourceLease = createServerFn({ method: "POST" })
@@ -95,12 +81,6 @@ const mutateResourceLease = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     if (data.operatorToken !== context.config.sharedApiSecret.exposeSecret()) {
       throw new Error("Missing or invalid operator token.");
-    }
-
-    if (isPreviewEnvironmentType(data.type)) {
-      throw new Error(
-        "Preview environments are workflow-managed. Tear them down through the cleanup workflow before releasing them in Semaphore.",
-      );
     }
 
     const coordinator = context.env.RESOURCE_COORDINATOR.getByName(data.type);
@@ -163,13 +143,13 @@ export const Route = createFileRoute("/_app/resources/$type/$slug")({
   component: ResourceDetailPage,
   loader: async ({ params }) => ({
     breadcrumb: `${params.type}/${params.slug}`,
-    ...(await loadResource({ data: params })),
+    resource: await loadResource({ data: params }),
   }),
 });
 
 function ResourceDetailPage() {
   const router = useRouter();
-  const { previewEnvironment, resource } = Route.useLoaderData();
+  const { resource } = Route.useLoaderData();
   const [operatorToken, setOperatorToken] = useState("");
   const [leaseMs, setLeaseMs] = useState(String(defaultLeaseMs));
   const [isPending, startTransition] = useTransition();
@@ -186,8 +166,6 @@ function ResourceDetailPage() {
 
     window.localStorage.removeItem(operatorTokenStorageKey);
   }, [operatorToken]);
-
-  const isWorkflowManagedPreview = previewEnvironment !== null;
 
   function runResourceLeaseAction(action: "acquire" | "release") {
     startTransition(async () => {
@@ -243,44 +221,11 @@ function ResourceDetailPage() {
         </dl>
       </div>
 
-      {previewEnvironment ? (
-        <div className="rounded-lg border bg-card p-4">
-          <div className="space-y-3 text-sm">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                Preview Environment
-              </p>
-              <p className="mt-1 font-medium">{previewEnvironment.previewEnvironmentIdentifier}</p>
-            </div>
-            <div className="space-y-1 text-muted-foreground">
-              <p>{previewEnvironment.previewEnvironmentWorkersDevHostname}</p>
-              <p>
-                {previewEnvironment.previewEnvironmentDopplerConfigName} ·{" "}
-                {previewEnvironment.previewEnvironmentAlchemyStageName}
-              </p>
-              {previewEnvironment.previewEnvironmentLeaseOwner ? (
-                <p>
-                  PR #{previewEnvironment.previewEnvironmentLeaseOwner.pullRequestNumber} ·{" "}
-                  {previewEnvironment.previewEnvironmentLeaseOwner.pullRequestHeadRefName} ·{" "}
-                  {previewEnvironment.previewEnvironmentLeaseOwner.pullRequestHeadSha.slice(0, 7)}
-                </p>
-              ) : (
-                <p>Not currently assigned to a pull request.</p>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Preview environments are workflow-managed. Release them only after the matching
-              Cloudflare deployment has been torn down.
-            </p>
-          </div>
-        </div>
-      ) : null}
-
       <div className="rounded-lg border bg-card p-4">
         <div className="mb-4 space-y-1">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Operator Actions</p>
           <p className="text-sm text-muted-foreground">
-            Paste the shared API token to acquire or release non-preview resources from the UI.
+            Paste the shared API token to acquire or release resources from the UI.
           </p>
         </div>
 
@@ -314,7 +259,7 @@ function ResourceDetailPage() {
           <div className="flex gap-3">
             <button
               type="button"
-              disabled={isPending || isWorkflowManagedPreview || operatorToken.length === 0}
+              disabled={isPending || operatorToken.length === 0}
               onClick={() => runResourceLeaseAction("acquire")}
               className="rounded-md border px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -322,7 +267,7 @@ function ResourceDetailPage() {
             </button>
             <button
               type="button"
-              disabled={isPending || isWorkflowManagedPreview || operatorToken.length === 0}
+              disabled={isPending || operatorToken.length === 0}
               onClick={() => runResourceLeaseAction("release")}
               className="rounded-md border px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
             >
