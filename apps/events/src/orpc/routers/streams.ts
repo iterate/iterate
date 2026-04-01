@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { StreamPath } from "@iterate-com/events-contract";
+import { type Event, StreamPath } from "@iterate-com/events-contract";
 import { ROOT_STREAM_PATH, decodeEventStream } from "~/lib/utils.ts";
 import { os } from "~/orpc/orpc.ts";
 
@@ -20,48 +20,14 @@ export const streamsRouter = {
   }),
   stream: os.stream.handler(async function* ({ context, input, signal }) {
     const streamStub = context.env.STREAM.getByName(input.path);
-    if (!input.live) {
-      const events = await streamStub.history({
-        afterOffset: input.offset,
-      });
-
-      for (const event of events) {
-        yield event;
-      }
-
-      return;
-    }
-
-    const stream = await streamStub.stream({
-      afterOffset: input.offset,
-      live: input.live,
-    });
-
-    for await (const event of decodeEventStream(stream, signal)) {
+    for await (const event of yieldStreamEvents({ streamStub, input, signal })) {
       yield event;
     }
   }),
   rootStream: os.rootStream.handler(async function* ({ context, input, signal }) {
     const streamStub = context.env.STREAM.getByName(ROOT_STREAM_PATH);
     await streamStub.initialize({ path: ROOT_STREAM_PATH });
-    if (!input.live) {
-      const events = await streamStub.history({
-        afterOffset: input.offset,
-      });
-
-      for (const event of events) {
-        yield event;
-      }
-
-      return;
-    }
-
-    const stream = await streamStub.stream({
-      afterOffset: input.offset,
-      live: input.live,
-    });
-
-    for await (const event of decodeEventStream(stream, signal)) {
+    for await (const event of yieldStreamEvents({ streamStub, input, signal })) {
       yield event;
     }
   }),
@@ -103,3 +69,37 @@ export const streamsRouter = {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }),
 };
+
+async function* yieldStreamEvents({
+  streamStub,
+  input,
+  signal,
+}: {
+  streamStub: {
+    history(input: { afterOffset?: string }): Promise<Event[]>;
+    stream(input: { afterOffset?: string; live?: boolean }): Promise<ReadableStream<Uint8Array>>;
+  };
+  input: { offset?: string; live?: boolean };
+  signal?: AbortSignal;
+}) {
+  if (!input.live) {
+    const events = await streamStub.history({
+      afterOffset: input.offset,
+    });
+
+    for (const event of events) {
+      yield event;
+    }
+
+    return;
+  }
+
+  const stream = await streamStub.stream({
+    afterOffset: input.offset,
+    live: input.live,
+  });
+
+  for await (const event of decodeEventStream(stream, signal)) {
+    yield event;
+  }
+}

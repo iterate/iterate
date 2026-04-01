@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type Event,
   EventInput,
-  type EventType,
   type JSONObject,
   type StreamPath,
 } from "@iterate-com/events-contract";
@@ -11,10 +10,6 @@ import {
   PromptInput,
   PromptInputBody,
   PromptInputFooter,
-  PromptInputSelect,
-  PromptInputSelectContent,
-  PromptInputSelectItem,
-  PromptInputSelectTrigger,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
@@ -30,7 +25,6 @@ import {
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamEventFeed } from "~/components/stream-event-feed.tsx";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
-import { eventTypePages, getEventTypePageByType } from "~/lib/event-type-pages.ts";
 import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projection.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { DEFAULT_STREAM_RENDERER_MODE, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
@@ -38,8 +32,6 @@ import { formatClientError } from "~/lib/format-client-error.ts";
 import { ROOT_STREAM_PATH } from "~/lib/utils.ts";
 import { orpc } from "~/orpc/client.ts";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
-
-const DEFAULT_EVENT_TYPE = "https://events.iterate.com/manual-event-appended";
 
 export function StreamPage({
   streamPath,
@@ -56,7 +48,6 @@ export function StreamPage({
 }) {
   const queryClient = useQueryClient();
   const { closeMetadata, metadataOpen, setHeaderControls } = useStreamsChrome();
-  const [selectedTemplateType, setSelectedTemplateType] = useState<EventType>(DEFAULT_EVENT_TYPE);
   const [appendInputJson, setAppendInputJson] = useState("");
 
   const streamStateQuery = useQuery({
@@ -105,9 +96,6 @@ export function StreamPage({
       },
     }),
   );
-
-  const selectedTemplatePage = getEventTypePageByType(selectedTemplateType);
-
   const submitAppend = async (inputText = appendInputJson) => {
     let event: EventInput;
 
@@ -187,34 +175,12 @@ export function StreamPage({
               value={appendInputJson}
               onChange={(event) => setAppendInputJson(event.currentTarget.value)}
               className="min-h-36 max-h-[45vh] font-mono text-xs leading-5"
-              placeholder={
-                selectedTemplatePage
-                  ? `Enter JSON for ${selectedTemplatePage.title.toLowerCase()}`
-                  : "Enter event JSON"
-              }
+              placeholder="Enter event JSON"
               spellCheck={false}
             />
           </PromptInputBody>
           <PromptInputFooter className="items-center justify-between gap-2 border-t p-2.5">
-            <PromptInputTools className="min-w-0 flex-1">
-              <PromptInputSelect
-                value={selectedTemplateType}
-                onValueChange={(value) => {
-                  setSelectedTemplateType(value as EventType);
-                }}
-              >
-                <PromptInputSelectTrigger className="h-8 max-w-full min-w-0 text-xs sm:max-w-[18rem]">
-                  <span className="truncate">{selectedTemplatePage?.title ?? "Event type"}</span>
-                </PromptInputSelectTrigger>
-                <PromptInputSelectContent align="start">
-                  {eventTypePages.map((page) => (
-                    <PromptInputSelectItem key={page.type} value={page.type}>
-                      {page.title}
-                    </PromptInputSelectItem>
-                  ))}
-                </PromptInputSelectContent>
-              </PromptInputSelect>
-            </PromptInputTools>
+            <PromptInputTools className="min-w-0 flex-1" />
             <PromptInputSubmit
               className="shrink-0"
               disabled={appendEvent.isPending || !appendInputJson.trim()}

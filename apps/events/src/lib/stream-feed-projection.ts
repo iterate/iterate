@@ -15,7 +15,7 @@ import { buildAgentSemanticInsertions } from "~/lib/agent-stream-reducer.ts";
  * Raw + Pretty groups consecutive wire rows of the same `eventType`. Very large
  * cap so normal streams stay one group per run; only pathological runs flush early.
  */
-export const MAX_SAME_TYPE_RAW_GROUP = 50_000;
+const MAX_SAME_TYPE_RAW_GROUP = 50_000;
 
 export function projectWireToFeed(events: readonly Event[]): StreamFeedItem[] {
   const insertionsByOffset = buildSemanticInsertions(events);
