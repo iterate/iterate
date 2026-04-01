@@ -10,6 +10,9 @@ jobs:
     strategy:
       matrix:
         include:
+          - appDisplayName: Codemode
+            appPath: apps/codemode
+            appSlug: codemode
           - appDisplayName: Example
             appPath: apps/example
             appSlug: example

@@ -1,6 +1,6 @@
 # Cloudflare Preview Environments
 
-Preview environments for `example`, `events`, `semaphore`, and `ingress-proxy` are ordinary Semaphore resource pools plus app-local script commands.
+Preview environments for `codemode`, `example`, `events`, `semaphore`, and `ingress-proxy` are ordinary Semaphore resource pools plus app-local script commands.
 
 ## Naming
 

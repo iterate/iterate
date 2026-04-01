@@ -6,6 +6,10 @@ const DEFAULT_SEMAPHORE_BASE_URL = "https://semaphore.iterate.com";
 
 const previewPools = [
   {
+    appSlug: "codemode",
+    type: "codemode-preview-environment",
+  },
+  {
     appSlug: "example",
     type: "example-preview-environment",
   },
