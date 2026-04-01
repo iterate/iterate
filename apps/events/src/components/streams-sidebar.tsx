@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { StreamPath, type Event } from "@iterate-com/events-contract";
+import { childStreamCreatedEventType, StreamPath, type Event } from "@iterate-com/events-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   SidebarGroup,
@@ -83,7 +83,7 @@ export function StreamsSidebar() {
           return;
         }
 
-        if (event.type !== "https://events.iterate.com/events/stream/initialized") {
+        if (event.type !== childStreamCreatedEventType) {
           continue;
         }
 

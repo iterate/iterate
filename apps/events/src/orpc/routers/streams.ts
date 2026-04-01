@@ -1,5 +1,14 @@
 import { ORPCError } from "@orpc/server";
-import { StreamPath } from "@iterate-com/events-contract";
+import {
+  ChildStreamCreatedPayload,
+  StreamPath,
+  childStreamCreatedEventType,
+} from "@iterate-com/events-contract";
+import {
+  getInitializedStreamStub,
+  StreamAppendInputError,
+  StreamOffsetPreconditionError,
+} from "~/lib/stream-helpers.ts";
 import { ROOT_STREAM_PATH, decodeEventStream } from "~/lib/utils.ts";
 import { os } from "~/orpc/orpc.ts";
 
@@ -7,15 +16,32 @@ export const streamsRouter = {
   append: os.append.handler(async ({ context, input }) => {
     const { path, ...event } = input;
     const streamStub = await getInitializedStreamStub(context.env, path);
-    const result = await streamStub.append(event);
+    try {
+      const appendedEvent = await streamStub.append(event);
+      return {
+        event: appendedEvent,
+      };
+    } catch (error) {
+      if (
+        error instanceof StreamOffsetPreconditionError ||
+        (error instanceof Error && error.name === "StreamOffsetPreconditionError")
+      ) {
+        throw new ORPCError("PRECONDITION_FAILED", {
+          message: error instanceof Error ? error.message : "Offset precondition failed.",
+        });
+      }
 
-    if (result.kind === "offset-precondition-failed") {
-      throw new ORPCError("PRECONDITION_FAILED", { message: result.message });
+      if (
+        error instanceof StreamAppendInputError ||
+        (error instanceof Error && error.name === "StreamAppendInputError")
+      ) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: error instanceof Error ? error.message : "Invalid stream append input.",
+        });
+      }
+
+      throw error;
     }
-
-    return {
-      event: result.event,
-    };
   }),
   stream: os.stream.handler(async function* ({ context, input, signal }) {
     const streamStub = await getInitializedStreamStub(context.env, input.path);
@@ -52,20 +78,20 @@ export const streamsRouter = {
     const discovered = new Map<StreamPath, string>();
 
     for (const event of events) {
-      if (event.type !== "https://events.iterate.com/events/stream/initialized") {
+      if (event.type !== childStreamCreatedEventType) {
         continue;
       }
 
-      const parsedPath = StreamPath.safeParse(event.payload.path);
-      if (!parsedPath.success || discovered.has(parsedPath.data)) {
+      const payload = ChildStreamCreatedPayload.safeParse(event.payload);
+      if (!payload.success || discovered.has(payload.data.path)) {
         continue;
       }
 
-      discovered.set(parsedPath.data, event.createdAt);
+      discovered.set(payload.data.path, event.createdAt);
     }
 
     if (rootState.initialized === true && !discovered.has(ROOT_STREAM_PATH)) {
-      discovered.set(ROOT_STREAM_PATH, events[0]?.createdAt ?? new Date(0).toISOString());
+      discovered.set(ROOT_STREAM_PATH, events[0]?.createdAt ?? new Date().toISOString());
     }
 
     return [...discovered.entries()]
@@ -73,9 +99,3 @@ export const streamsRouter = {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }),
 };
-
-async function getInitializedStreamStub(env: Env, path: StreamPath) {
-  const streamStub = env.STREAM.getByName(path);
-  await streamStub.initialize({ path });
-  return streamStub;
-}

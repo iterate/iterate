@@ -1,15 +1,24 @@
 import { DurableObject } from "cloudflare:workers";
 import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import {
+  childStreamCreatedEventType,
+  ChildStreamCreatedPayload,
   Event,
-  type EventInput,
+  EventInput,
   Offset,
+  reservedInitializationIdempotencyKey,
+  streamInitializedEventType,
+  streamMetadataUpdatedEventType,
   StreamPath,
   StreamInitializedPayload,
   StreamMetadataUpdatedPayload,
   StreamState,
 } from "@iterate-com/events-contract";
-import { ROOT_STREAM_PATH, getParentPath } from "~/lib/utils.ts";
+import {
+  getParentStreamBinding,
+  StreamAppendInputError,
+  StreamOffsetPreconditionError,
+} from "~/lib/stream-helpers.ts";
 const textEncoder = new TextEncoder();
 
 /**
@@ -23,9 +32,9 @@ const textEncoder = new TextEncoder();
  * - event `0` is always `stream-initialized` for that stream's own path
  * - caller-appended events begin at offset `1`
  *
- * Later `stream-initialized` events can also appear in a stream as propagated child
- * discovery events. Those propagate upward one level at a time in the "after"
- * sections of `initialize()` and `append()`.
+ * Child discovery is a separate built-in event. After a stream commits its own
+ * self-init event, it appends `child-stream-created` to its parent. Parents then
+ * propagate that same child discovery event upward one level at a time.
  *
  * Durable Object docs:
  * - https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/
@@ -63,7 +72,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     const currentState = structuredClone(this.state);
 
     if (currentState.initialized) {
-      const currentPath = getInitializedStreamPath(currentState);
+      const currentPath = currentState.path;
+      if (currentPath == null) {
+        throw new Error("Initialized stream durable object is missing path.");
+      }
+
       if (currentPath !== args.path) {
         throw new Error(`Stream path mismatch. Expected ${currentPath}, received ${args.path}.`);
       }
@@ -71,11 +84,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     return this.append({
-      type: "https://events.iterate.com/events/stream/initialized",
+      type: streamInitializedEventType,
       payload: {
         path: args.path,
       },
-      idempotencyKey: "stream-initialized",
+      idempotencyKey: reservedInitializationIdempotencyKey,
     });
   }
 
@@ -90,46 +103,57 @@ export class StreamDurableObject extends DurableObject<Env> {
    * event instead of creating a second row or advancing offsets/state.
    */
   async append(inputEvent: EventInput) {
+    const parsedInputEvent = EventInput.parse(inputEvent);
     const currentState = structuredClone(this.state);
-    const isStreamInitializedEvent =
-      inputEvent.type === "https://events.iterate.com/events/stream/initialized";
+    const isStreamInitializedEvent = parsedInputEvent.type === streamInitializedEventType;
 
     if (!isStreamInitializedEvent && !currentState.initialized) {
       throw new Error("Stream durable object is not initialized.");
     }
 
+    if (
+      currentState.initialized &&
+      parsedInputEvent.idempotencyKey === reservedInitializationIdempotencyKey
+    ) {
+      throw new StreamAppendInputError(
+        `"${reservedInitializationIdempotencyKey}" is reserved for internal stream initialization.`,
+      );
+    }
+
     const path = currentState.initialized
-      ? getInitializedStreamPath(currentState)
-      : StreamInitializedPayload.parse(inputEvent.payload).path;
+      ? (() => {
+          if (currentState.path == null) {
+            throw new Error("Initialized stream durable object is missing path.");
+          }
+
+          return currentState.path;
+        })()
+      : StreamInitializedPayload.parse(parsedInputEvent.payload).path;
 
     const existingEvent =
-      inputEvent.idempotencyKey == null
+      parsedInputEvent.idempotencyKey == null
         ? null
         : this.getEventByIdempotencyKey({
             path,
-            idempotencyKey: inputEvent.idempotencyKey,
+            idempotencyKey: parsedInputEvent.idempotencyKey,
           });
 
     if (existingEvent != null) {
-      return {
-        kind: "ok" as const,
-        event: existingEvent,
-      };
+      return existingEvent;
     }
 
     const nextOffset = Offset.parse(getNextEventOffset(currentState.lastOffset));
 
     // Future pre-append checks belong here, before the transaction begins.
-    if (inputEvent.offset != null && inputEvent.offset !== nextOffset) {
-      return {
-        kind: "offset-precondition-failed" as const,
-        message: `Client-supplied offset ${inputEvent.offset} does not match next generated offset ${nextOffset}.`,
-      };
+    if (parsedInputEvent.offset != null && parsedInputEvent.offset !== nextOffset) {
+      throw new StreamOffsetPreconditionError(
+        `Client-supplied offset ${parsedInputEvent.offset} does not match next generated offset ${nextOffset}.`,
+      );
     }
 
     const event = this.buildInsertedEvent({
       path,
-      inputEvent,
+      inputEvent: parsedInputEvent,
       offset: nextOffset,
     });
     const nextState = reduceStreamState({
@@ -144,15 +168,8 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     this.state = structuredClone(nextState);
     this.publish(event);
-
-    if (event.type === "https://events.iterate.com/events/stream/initialized") {
-      this.propagateStreamInitializedUpOneLevel(event);
-    }
-
-    return {
-      kind: "ok" as const,
-      event,
-    };
+    this.afterAppend(event);
+    return event;
   }
 
   async getState(): Promise<StreamState> {
@@ -173,7 +190,11 @@ export class StreamDurableObject extends DurableObject<Env> {
       return [];
     }
 
-    const path = getInitializedStreamPath(this.state);
+    const path = this.state.path;
+    if (path == null) {
+      throw new Error("Initialized stream durable object is missing path.");
+    }
+
     return this.listEventsAfterOffset({
       path,
       afterOffset: args.afterOffset ?? "",
@@ -397,38 +418,61 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  private propagateStreamInitializedUpOneLevel(event: Event) {
-    const parentPath = getParentPath(event.path);
-    if (parentPath == null || event.path === ROOT_STREAM_PATH) {
+  private afterAppend(event: Event) {
+    switch (event.type) {
+      case streamInitializedEventType:
+        this.propagateChildStreamCreated({
+          streamPath: event.path,
+          childPath: event.path,
+          metadata: event.metadata,
+        });
+        return;
+      case childStreamCreatedEventType:
+        this.propagateChildStreamCreated({
+          streamPath: event.path,
+          childPath: ChildStreamCreatedPayload.parse(event.payload).path,
+          metadata: event.metadata,
+        });
+        return;
+      default:
+        return;
+    }
+  }
+
+  private propagateChildStreamCreated(args: {
+    streamPath: StreamPath;
+    childPath: StreamPath;
+    metadata?: Event["metadata"];
+  }) {
+    const parent = getParentStreamBinding(this.env, args.streamPath);
+    if (parent == null) {
       return;
     }
-    const resolvedParentPath = parentPath;
 
-    console.info("[stream-do] propagating stream-initialized", {
-      streamPath: event.path,
-      parentPath: resolvedParentPath,
-      propagatedPath:
-        typeof event.payload.path === "string"
-          ? event.payload.path
-          : "<invalid-stream-initialized-payload>",
-      offset: event.offset,
+    console.info("[stream-do] propagating child-stream-created", {
+      streamPath: args.streamPath,
+      parentPath: parent.parentPath,
+      childPath: args.childPath,
     });
 
-    // Parent discovery is helpful but not required for the child append to
-    // commit, so we fan out in the background and only log failures.
-    void Promise.resolve(this.env.STREAM.getByName(resolvedParentPath))
+    // Child discovery helps the parent/root indexes stay fresh, but the child
+    // append has already committed, so propagation failures are logged only.
+    void Promise.resolve(parent.streamStub)
       .then(async (streamStub) => {
-        await streamStub.initialize({ path: resolvedParentPath });
+        await streamStub.initialize({ path: parent.parentPath });
         return streamStub.append({
-          type: "https://events.iterate.com/events/stream/initialized",
-          payload: event.payload,
-          ...(event.metadata == null ? {} : { metadata: event.metadata }),
+          type: childStreamCreatedEventType,
+          payload: {
+            path: args.childPath,
+          },
+          ...(args.metadata == null ? {} : { metadata: args.metadata }),
         });
       })
       .catch((error) => {
-        console.error("[stream-do] failed to propagate stream-initialized", {
-          streamPath: event.path,
-          parentPath: resolvedParentPath,
+        console.error("[stream-do] failed to propagate child-stream-created", {
+          streamPath: args.streamPath,
+          parentPath: parent.parentPath,
+          childPath: args.childPath,
           error,
         });
       });
@@ -451,29 +495,24 @@ function encodeEventLine(event: Event) {
   return textEncoder.encode(`${JSON.stringify(event)}\n`);
 }
 
-function getInitializedStreamPath(state: StreamState) {
-  if (!state.initialized) {
-    throw new Error("Stream durable object is not initialized.");
-  }
-
-  if (state.path == null) {
-    throw new Error("Initialized stream durable object is missing path.");
-  }
-
-  return state.path;
-}
-
 /**
  * Pure reducer for the persisted stream projection. Replay and append share the
  * same rules so state cannot drift based on which code path produced it.
- * `STREAM_METADATA_UPDATED` replaces metadata rather than deep-merging it.
+ * `stream-initialized` is self-only and may happen once. `stream-metadata-updated`
+ * replaces the metadata snapshot. Other events preserve metadata and simply
+ * advance offsets/event counts.
  */
 function reduceStreamState(args: { state: StreamState; event: Event }): StreamState {
-  const { event } = args;
-  const { state } = args;
+  const { state, event } = args;
 
-  if (event.type === "https://events.iterate.com/events/stream/initialized") {
-    if (!state.initialized) {
+  switch (event.type) {
+    case streamInitializedEventType: {
+      if (state.initialized) {
+        throw new StreamAppendInputError(
+          "stream-initialized is internal-only and cannot be appended directly.",
+        );
+      }
+
       const payload = StreamInitializedPayload.parse(event.payload);
       if (event.path !== payload.path) {
         throw new Error(
@@ -489,23 +528,25 @@ function reduceStreamState(args: { state: StreamState; event: Event }): StreamSt
         metadata: { ...state.metadata },
       };
     }
-
-    return {
-      initialized: true,
-      path: getInitializedStreamPath(state),
-      lastOffset: event.offset,
-      eventCount: state.eventCount + 1,
-      metadata: { ...state.metadata },
-    };
+    default:
+      break;
   }
 
-  const streamPath = getInitializedStreamPath(state);
+  if (!state.initialized) {
+    throw new Error("Stream durable object is not initialized.");
+  }
+
+  const streamPath = state.path;
+  if (streamPath == null) {
+    throw new Error("Initialized stream durable object is missing path.");
+  }
+
   if (streamPath !== event.path) {
     throw new Error(`Stream path mismatch. Expected ${streamPath}, received ${event.path}.`);
   }
 
   switch (event.type) {
-    case "https://events.iterate.com/events/stream/metadata-updated":
+    case streamMetadataUpdatedEventType:
       return {
         initialized: true,
         path: streamPath,

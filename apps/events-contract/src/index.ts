@@ -4,19 +4,43 @@ import { z } from "zod";
 
 const streamPathPattern = /^\/(?:[a-z0-9_-]+(?:\/[a-z0-9_-]+)*)?$/;
 const createdAt = z.iso.datetime({ offset: true });
-type BuiltInEventType =
-  | "https://events.iterate.com/events/stream/initialized"
-  | "https://events.iterate.com/events/stream/metadata-updated"
-  | "https://events.iterate.com/events/error-occurred";
+
+export const streamInitializedEventType = "https://events.iterate.com/events/stream/initialized";
+export const childStreamCreatedEventType =
+  "https://events.iterate.com/events/stream/child-stream-created";
+export const streamMetadataUpdatedEventType =
+  "https://events.iterate.com/events/stream/metadata-updated";
+export const errorOccurredEventType = "https://events.iterate.com/events/error-occurred";
+export const reservedInitializationIdempotencyKey = "stream-initialized";
+
+const builtInEventTypes = [
+  streamInitializedEventType,
+  childStreamCreatedEventType,
+  streamMetadataUpdatedEventType,
+  errorOccurredEventType,
+] as const;
+type BuiltInEventType = (typeof builtInEventTypes)[number];
+const builtInEventTypeSet = new Set<string>(builtInEventTypes);
 
 /** Event type identifier (URI, URN, reverse-DNS, etc.) — not limited to iterate.com URLs. */
 export type EventType = BuiltInEventType | (string & {});
-export const EventType = z
+const genericEventType = z
   .string()
   .trim()
   .min(1)
   .max(2048)
+  .refine(
+    (value) => !builtInEventTypeSet.has(value),
+    "Built-in event types use dedicated payload schemas.",
+  )
   .pipe(z.custom<EventType>((value) => typeof value === "string"));
+export const EventType = z.union([
+  z.literal(streamInitializedEventType),
+  z.literal(childStreamCreatedEventType),
+  z.literal(streamMetadataUpdatedEventType),
+  z.literal(errorOccurredEventType),
+  genericEventType,
+]);
 
 // `StreamPath` is the canonical parser for stream identifiers, including values
 // that come from HTTP route params. It normalizes only the two cases we expect
@@ -52,9 +76,27 @@ export const Offset = z.string().trim().min(1);
 export const JSONObject = z.record(z.string(), z.json());
 export type JSONObject = z.infer<typeof JSONObject>;
 
-export const EventInput = z.object({
-  type: EventType,
-  payload: JSONObject,
+export const StreamInitializedPayload = z.object({
+  path: StreamPath,
+});
+export type StreamInitializedPayload = z.infer<typeof StreamInitializedPayload>;
+
+export const ChildStreamCreatedPayload = z.object({
+  path: StreamPath,
+});
+export type ChildStreamCreatedPayload = z.infer<typeof ChildStreamCreatedPayload>;
+
+export const StreamMetadataUpdatedPayload = z.object({
+  metadata: JSONObject,
+});
+export type StreamMetadataUpdatedPayload = z.infer<typeof StreamMetadataUpdatedPayload>;
+
+export const ErrorOccurredPayload = z.object({ message: z.string().trim().min(1) });
+export type ErrorOccurredPayload = z.infer<typeof ErrorOccurredPayload>;
+
+export const StreamInitializedEventInput = z.object({
+  type: z.literal(streamInitializedEventType),
+  payload: StreamInitializedPayload,
   metadata: JSONObject.optional(),
   // When a stream already has an event with this key, append returns that
   // stored event instead of creating a second one.
@@ -63,25 +105,78 @@ export const EventInput = z.object({
   // next offset this stream would generate for a newly inserted event.
   offset: Offset.optional(),
 });
+export const ChildStreamCreatedEventInput = z.object({
+  type: z.literal(childStreamCreatedEventType),
+  payload: ChildStreamCreatedPayload,
+  metadata: JSONObject.optional(),
+  idempotencyKey: z.string().trim().min(1).optional(),
+  offset: Offset.optional(),
+});
+export const StreamMetadataUpdatedEventInput = z.object({
+  type: z.literal(streamMetadataUpdatedEventType),
+  payload: StreamMetadataUpdatedPayload,
+  metadata: JSONObject.optional(),
+  idempotencyKey: z.string().trim().min(1).optional(),
+  offset: Offset.optional(),
+});
+export const ErrorOccurredEventInput = z.object({
+  type: z.literal(errorOccurredEventType),
+  payload: ErrorOccurredPayload,
+  metadata: JSONObject.optional(),
+  idempotencyKey: z.string().trim().min(1).optional(),
+  offset: Offset.optional(),
+});
+const GenericEventInput = z.object({
+  type: genericEventType,
+  payload: JSONObject,
+  metadata: JSONObject.optional(),
+  idempotencyKey: z.string().trim().min(1).optional(),
+  offset: Offset.optional(),
+});
+
+export const EventInput = z.union([
+  StreamInitializedEventInput,
+  ChildStreamCreatedEventInput,
+  StreamMetadataUpdatedEventInput,
+  ErrorOccurredEventInput,
+  GenericEventInput,
+]);
 export type EventInput = z.infer<typeof EventInput>;
 
-export const Event = z.object({
-  ...EventInput.shape,
+export const StreamInitializedEvent = StreamInitializedEventInput.extend({
   path: StreamPath,
   offset: Offset,
   createdAt,
 });
-export type Event = z.infer<typeof Event>;
-
-export const StreamInitializedPayload = z.object({
+export const ChildStreamCreatedEvent = ChildStreamCreatedEventInput.extend({
   path: StreamPath,
+  offset: Offset,
+  createdAt,
 });
-export type StreamInitializedPayload = z.infer<typeof StreamInitializedPayload>;
+export const StreamMetadataUpdatedEvent = StreamMetadataUpdatedEventInput.extend({
+  path: StreamPath,
+  offset: Offset,
+  createdAt,
+});
+export const ErrorOccurredEvent = ErrorOccurredEventInput.extend({
+  path: StreamPath,
+  offset: Offset,
+  createdAt,
+});
+const GenericEvent = GenericEventInput.extend({
+  path: StreamPath,
+  offset: Offset,
+  createdAt,
+});
 
-export const StreamMetadataUpdatedPayload = z.object({
-  metadata: JSONObject,
-});
-export type StreamMetadataUpdatedPayload = z.infer<typeof StreamMetadataUpdatedPayload>;
+export const Event = z.union([
+  StreamInitializedEvent,
+  ChildStreamCreatedEvent,
+  StreamMetadataUpdatedEvent,
+  ErrorOccurredEvent,
+  GenericEvent,
+]);
+export type Event = z.infer<typeof Event>;
 
 export const StreamState = z.object({
   initialized: z.boolean(),
@@ -100,14 +195,9 @@ const SecretSummary = z.object({
   updatedAt: z.string(),
 });
 
-const secretShape = {
-  ...SecretSummary.shape,
+const Secret = SecretSummary.extend({
   value: z.string(),
-} satisfies z.ZodRawShape;
-
-const Secret = z.object(secretShape);
-const internalStreamInitializedEventType = "https://events.iterate.com/events/stream/initialized";
-const reservedInitializationIdempotencyKey = "stream-initialized";
+});
 const PathMungingDescription =
   "For curl ergonomics, nested stream paths accept either raw nested segments or percent-escaped slash forms. Both resolve to the same canonical stream path.";
 const StreamHistoryPathDescription = `${PathMungingDescription} For example, \`GET /api/streams/team/inbox\`, \`GET /api/streams/team%2Finbox\`, and \`GET /api/streams/%2Fteam%2Finbox\` all target the same stream. The root stream is addressed canonically as \`GET /api/streams/%2F\`.`;
@@ -125,30 +215,7 @@ export const eventsContract = oc.router({
         "Appends one event to a stream. A newly initialized stream first stores its own synthetic stream-initialized event at offset 0, so the first caller-appended event uses offset 1. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
       tags: ["Streams"],
     })
-    .input(
-      z
-        .object({
-          path: StreamPath,
-          ...EventInput.shape,
-        })
-        .superRefine((value, context) => {
-          if (value.type === internalStreamInitializedEventType) {
-            context.addIssue({
-              code: "custom",
-              path: ["type"],
-              message: "stream-initialized is internal-only and cannot be appended directly.",
-            });
-          }
-
-          if (value.idempotencyKey === reservedInitializationIdempotencyKey) {
-            context.addIssue({
-              code: "custom",
-              path: ["idempotencyKey"],
-              message: `"${reservedInitializationIdempotencyKey}" is reserved for internal stream initialization.`,
-            });
-          }
-        }),
-    )
+    .input(z.intersection(z.object({ path: StreamPath }), EventInput))
     .output(
       z.object({
         event: Event,

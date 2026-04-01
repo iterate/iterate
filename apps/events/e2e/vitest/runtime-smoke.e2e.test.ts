@@ -7,7 +7,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
 import { getNextEventOffset } from "@iterate-com/shared/events/offset";
 import { describe, expect, test } from "vitest";
-import { type StreamPath } from "@iterate-com/events-contract";
+import {
+  streamInitializedEventType,
+  streamMetadataUpdatedEventType,
+  type StreamPath,
+} from "@iterate-com/events-contract";
 import { AppConfig } from "../../src/app.ts";
 import {
   collectAsyncIterableUntilIdle,
@@ -24,8 +28,6 @@ const historyIdleTimeoutMs = 250;
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 const testTimeoutMs = 5_000;
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe;
-const STREAM_INITIALIZED_EVENT_TYPE = "https://events.iterate.com/events/stream/initialized";
-
 describeRuntimeSmoke("events runtime smoke", () => {
   test(
     "streams page responds",
@@ -86,7 +88,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       });
       expect(rootEvents[0]).toMatchObject({
         path: "/",
-        type: STREAM_INITIALIZED_EVENT_TYPE,
+        type: streamInitializedEventType,
       });
       expect(await app.client.getState({ path: "/" })).toMatchObject({
         initialized: true,
@@ -105,7 +107,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       expect(events).toHaveLength(2);
       expect(events[0]).toMatchObject({
         path,
-        type: STREAM_INITIALIZED_EVENT_TYPE,
+        type: streamInitializedEventType,
         offset: expectedStoredOffset(0),
         payload: { path },
       });
@@ -125,7 +127,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
 
       const rootHistoryResponse = await app.fetch("/api/streams/%2F");
       expect(rootHistoryResponse.status).toBe(200);
-      expect(await rootHistoryResponse.text()).toContain(STREAM_INITIALIZED_EVENT_TYPE);
+      expect(await rootHistoryResponse.text()).toContain(streamInitializedEventType);
 
       const rootStateResponse = await app.fetch("/api/__state/%2F");
       expect(rootStateResponse.status).toBe(200);
@@ -149,7 +151,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         setTimeout(() => {
           void app.client.append({
             path,
-            type: "https://events.iterate.com/events/stream/metadata-updated",
+            type: streamMetadataUpdatedEventType,
             payload: {
               metadata: {
                 live: true,

@@ -1,4 +1,10 @@
-import { type JSONObject, type EventType } from "@iterate-com/events-contract";
+import {
+  errorOccurredEventType,
+  streamInitializedEventType,
+  streamMetadataUpdatedEventType,
+  type EventType,
+  type JSONObject,
+} from "@iterate-com/events-contract";
 
 export type EventTypePageDefinition = {
   readonly slug: string;
@@ -14,16 +20,15 @@ export const streamInitializedPage = {
   slug: "stream-initialized",
   href: "/stream-initialized/",
   title: "Stream Initialized",
-  type: "https://events.iterate.com/events/stream/initialized",
-  summary:
-    "Internal meta event emitted when a stream initializes itself and when descendant stream initialization is propagated upward.",
+  type: streamInitializedEventType,
+  summary: "Internal meta event emitted exactly once when a stream initializes itself.",
   payloadExample: {
     path: "/demo/stream",
   },
   details: [
     "Every initialized stream writes its own self-initialized event at offset 0 before any caller-appended events.",
-    "The same event type also appears on parent streams to advertise newly created descendants.",
-    "It is useful for stream discovery and lightweight operational tooling.",
+    "Parent/root discovery uses a separate built-in child-stream-created event.",
+    "It is useful for reasoning about a stream's own lifecycle and offset invariants.",
   ],
 } satisfies EventTypePageDefinition;
 
@@ -31,7 +36,7 @@ export const streamMetadataUpdatedPage = {
   slug: "stream-metadata-updated",
   href: "/stream-metadata-updated/",
   title: "Stream Metadata Updated",
-  type: "https://events.iterate.com/events/stream/metadata-updated",
+  type: streamMetadataUpdatedEventType,
   summary: "Internal metadata event that replaces the reduced metadata snapshot for a stream.",
   payloadExample: {
     metadata: {
@@ -49,7 +54,7 @@ export const errorOccurredPage = {
   slug: "error-occurred",
   href: "/error-occurred/",
   title: "Error Occurred",
-  type: "https://events.iterate.com/events/error-occurred",
+  type: errorOccurredEventType,
   summary: "Built-in error event for recording failures directly in a stream.",
   payloadExample: {
     message: "Failed to fetch remote state",

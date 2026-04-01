@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  childStreamCreatedEventType,
   type Event,
   EventInput,
   type JSONObject,
@@ -59,10 +60,7 @@ export function StreamPage({
     streamPath,
     onEvent: useCallback(
       (event: Event) => {
-        if (
-          streamPath === ROOT_STREAM_PATH &&
-          event.type === "https://events.iterate.com/events/stream/initialized"
-        ) {
+        if (streamPath === ROOT_STREAM_PATH && event.type === childStreamCreatedEventType) {
           void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
         }
       },
