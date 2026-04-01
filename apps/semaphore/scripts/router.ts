@@ -1,52 +1,21 @@
 import { os } from "@orpc/server";
-import { SeedTunnelPoolInput, seedTunnelPool } from "./seed-cloudflare-tunnel-pool.ts";
+import { createCloudflarePreviewScriptRouter } from "@iterate-com/shared/apps/cloudflare-preview";
+import { createSemaphoreClient } from "@iterate-com/semaphore-contract";
 import {
-  PreviewEnvironmentCreateScriptInput,
-  PreviewEnvironmentDestroyScriptInput,
-  PreviewEnvironmentEnsureInventoryScriptInput,
-  PreviewEnvironmentListScriptInput,
-  createPreviewEnvironmentViaOrpc,
-  destroyPreviewEnvironmentViaOrpc,
-  ensurePreviewInventoryViaOrpc,
-  listPreviewEnvironmentsViaOrpc,
-} from "./preview-environments.ts";
-
-const previewRouter = os.router({
-  create: os
-    .input(PreviewEnvironmentCreateScriptInput)
-    .meta({
-      description: "Create or renew a preview environment lease through the Semaphore API",
-    })
-    .handler(async ({ input }) => {
-      return createPreviewEnvironmentViaOrpc(input);
-    }),
-  destroy: os
-    .input(PreviewEnvironmentDestroyScriptInput)
-    .meta({
-      description: "Release a preview environment through the Semaphore API",
-    })
-    .handler(async ({ input }) => {
-      return destroyPreviewEnvironmentViaOrpc(input);
-    }),
-  list: os
-    .input(PreviewEnvironmentListScriptInput)
-    .meta({
-      description: "List preview environments through the Semaphore API",
-    })
-    .handler(async ({ input }) => {
-      return listPreviewEnvironmentsViaOrpc(input);
-    }),
-  ensureInventory: os
-    .input(PreviewEnvironmentEnsureInventoryScriptInput)
-    .meta({
-      description: "Ensure preview environment inventory exists through the Semaphore API",
-    })
-    .handler(async ({ input }) => {
-      return ensurePreviewInventoryViaOrpc(input);
-    }),
-});
+  SeedCloudflarePreviewEnvironmentPoolInput,
+  seedCloudflarePreviewEnvironmentPool,
+} from "./seed-cloudflare-preview-environment-pool.ts";
+import { SeedTunnelPoolInput, seedTunnelPool } from "./seed-cloudflare-tunnel-pool.ts";
 
 export const router = os.router({
+  "seed-cloudflare-preview-environment-pool": os
+    .input(SeedCloudflarePreviewEnvironmentPoolInput)
+    .meta({
+      description: "Seed Cloudflare preview environment resources into semaphore",
+    })
+    .handler(async ({ input }) => {
+      return await seedCloudflarePreviewEnvironmentPool(input);
+    }),
   "seed-cloudflare-tunnel-pool": os
     .input(SeedTunnelPoolInput)
     .meta({
@@ -56,5 +25,25 @@ export const router = os.router({
     .handler(async ({ input }) => {
       return await seedTunnelPool(input);
     }),
-  preview: previewRouter,
+  ...createCloudflarePreviewScriptRouter({
+    appDisplayName: "Semaphore",
+    appSlug: "semaphore",
+    createPreviewSemaphoreResourceClient: ({ semaphoreApiToken, semaphoreBaseUrl }) => {
+      const semaphore = createSemaphoreClient({
+        apiKey: semaphoreApiToken,
+        baseURL: semaphoreBaseUrl,
+      });
+      return {
+        acquire: ({ leaseMs, type, waitMs }) =>
+          semaphore.resources.acquire({ leaseMs, type, waitMs }),
+        release: ({ leaseId, slug, type }) => semaphore.resources.release({ leaseId, slug, type }),
+      };
+    },
+    dopplerProject: "semaphore",
+    env: process.env,
+    previewResourceType: "semaphore-preview-environment",
+    previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
+    previewTestCommandArgs: ["pnpm", "test:e2e"],
+    workingDirectory: process.cwd(),
+  }),
 });

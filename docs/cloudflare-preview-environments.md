@@ -1,36 +1,37 @@
 # Cloudflare Preview Environments
 
-Preview environments for `example`, `events`, `semaphore`, and `ingress-proxy` are pooled resources leased by production Semaphore.
+Preview environments for `example`, `events`, `semaphore`, and `ingress-proxy` are ordinary Semaphore resource pools plus app-local script commands.
 
 ## Naming
 
-- `previewEnvironmentType`: app-specific pool name like `example-preview-environment`
-- `previewEnvironmentIdentifier`: deployed worker identity like `example-preview-1`
-- `previewEnvironmentAlchemyStageName`: slot stage like `preview-1`
-- `previewEnvironmentDopplerConfigName`: Doppler branch config like `stg_1`
-- `previewEnvironmentWorkersDevHostname`: workers.dev host like `example-preview-1.iterate.workers.dev`
+- resource type: app-specific pool name like `example-preview-environment`
+- resource slug: worker identity like `example-preview-1`
+- Alchemy stage: slot stage like `preview-1`
+- Doppler config: branch config like `stg_1`
+- workers.dev hostname: `example-preview-1.iterate.workers.dev`
 
-The identifier is the important name to pass around. It is what the deployed worker ends up being called.
+The resource slug is the canonical preview environment identifier. Every other name is derived from it.
 
 ## Source Of Truth
 
-- Semaphore `resources` stores the static pool inventory
-- Semaphore `preview_assignments` stores active PR ownership and lease bookkeeping
-- The sticky GitHub PR comment is only a UI projection of Semaphore state
+- Semaphore `resources` stores the static preview pool inventory and generic leases
+- the sticky GitHub PR comment stores the current per-app preview entry for that PR
+- there is no preview-specific database state in Semaphore
 
 ## Lifecycle
 
-1. A PR workflow for an affected app calls `preview.create` on production Semaphore.
-2. Semaphore reuses the current PR assignment when possible, otherwise claims a free slot from the app-specific pool.
-3. On every PR push, the app workflow tears the preview down and recreates it from scratch before testing.
-4. The app deploys with Doppler config `stg_N` and Alchemy stage `preview-N`.
-5. The app runs its network preview tests against the deployed workers.dev URL.
-6. On PR close, the app workflow runs `pnpm alchemy:down`.
-7. After teardown succeeds, the workflow calls `preview.destroy` with the exact `previewEnvironmentSemaphoreLeaseId` to release the lease and clear the assignment.
+1. A PR workflow for an affected app runs the app-local `preview-sync-pr` script.
+2. That script reads the sticky PR comment. If the app already has a recorded preview, it destroys it first.
+3. The script acquires a fresh generic Semaphore lease from the app-specific preview pool.
+4. It derives `stg_N`, `preview-N`, and the public URL from the leased slug.
+5. It deploys with `pnpm alchemy:up`, runs the app’s network preview tests against the live URL, and updates the sticky PR comment.
+6. On PR close, the cleanup workflow runs each app’s local `preview-cleanup-pr` script.
+7. That script reads the same comment entry, runs `pnpm alchemy:down`, releases the generic Semaphore lease, and updates the comment.
 
 ## Operational Notes
 
-- `preview.create` no longer seeds inventory implicitly. Run `preview.ensureInventory` before turning the workflows on.
+- Preview inventory is provisioned explicitly with `apps/semaphore` `seed-cloudflare-preview-environment-pool`.
 - Doppler `stg_N` configs are also an explicit rollout precondition.
-- UI release for preview environments should stay teardown-aware. Releasing a lease without `alchemy:down` leaves Cloudflare resources behind.
-- Expired leases are reclaimable in Semaphore, but v1 does not auto-run teardown on lease expiry.
+- CI workflows only invoke app-local script-router commands; they do not parse or render preview comment state directly.
+- Shared helpers for naming, comment state, and preview orchestration live in `packages/shared/src/apps`.
+- Preview leases are deliberately long-lived in v1 and are released explicitly on cleanup.

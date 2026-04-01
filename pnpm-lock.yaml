@@ -1006,6 +1006,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^4.20260317.1
         version: 4.20260317.1
+      '@iterate-com/semaphore-contract':
+        specifier: workspace:*
+        version: link:../semaphore-contract
       '@tailwindcss/vite':
         specifier: ^4.1.18
         version: 4.2.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
@@ -1033,6 +1036,9 @@ importers:
       esbuild:
         specifier: ^0.27.4
         version: 0.27.4
+      iterate:
+        specifier: workspace:*
+        version: link:../../packages/iterate
       tinyexec:
         specifier: ^1.0.2
         version: 1.0.2
@@ -1170,6 +1176,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^4.20260317.1
         version: 4.20260317.1
+      '@iterate-com/semaphore-contract':
+        specifier: workspace:*
+        version: link:../semaphore-contract
       '@tailwindcss/vite':
         specifier: ^4.1.18
         version: 4.2.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
@@ -1469,6 +1478,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^4.20260317.1
         version: 4.20260317.1
+      '@iterate-com/semaphore-contract':
+        specifier: workspace:*
+        version: link:../semaphore-contract
       '@tailwindcss/vite':
         specifier: ^4.1.18
         version: 4.2.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
@@ -1493,6 +1505,9 @@ importers:
       esbuild:
         specifier: ^0.27.4
         version: 0.27.4
+      iterate:
+        specifier: workspace:*
+        version: link:../../packages/iterate
       tinyexec:
         specifier: ^1.0.2
         version: 1.0.2
@@ -2483,6 +2498,9 @@ importers:
       '@iterate-com/ingress-proxy-contract':
         specifier: workspace:*
         version: link:../../apps/ingress-proxy-contract
+      '@octokit/rest':
+        specifier: ^22.0.0
+        version: 22.0.1
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0

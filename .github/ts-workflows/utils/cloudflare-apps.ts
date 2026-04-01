@@ -6,19 +6,15 @@ export type CloudflareApp = {
   appPath: `apps/${string}`;
   dopplerProject: string;
   paths: string[];
-  previewTest: {
-    command: string;
-    baseUrlEnvVar: string;
-  };
 };
 
 const commonPaths = [
-  "packages/shared/src/apps/common-router-contract.ts",
   ".github/ts-workflows/utils/cloudflare-app-workflow.ts",
   ".github/ts-workflows/utils/cloudflare-apps.ts",
-  ".github/ts-workflows/utils/cloudflare-preview-comment.ts",
   ".github/ts-workflows/workflows/cleanup-cloudflare-previews.ts",
-  "apps/semaphore/scripts/preview-workflow.ts",
+  "apps/semaphore-contract/**",
+  "packages/shared/src/apps/cloudflare-preview-comment.ts",
+  "packages/shared/src/apps/cloudflare-preview.ts",
 ];
 
 export const cloudflareApps = {
@@ -28,10 +24,6 @@ export const cloudflareApps = {
     appPath: "apps/example",
     dopplerProject: "example",
     paths: ["apps/example/**", "apps/example-contract/**", ...commonPaths],
-    previewTest: {
-      command: "pnpm test:e2e",
-      baseUrlEnvVar: "EXAMPLE_BASE_URL",
-    },
   },
   events: {
     slug: "events",
@@ -39,10 +31,6 @@ export const cloudflareApps = {
     appPath: "apps/events",
     dopplerProject: "events",
     paths: ["apps/events/**", "apps/events-contract/**", ...commonPaths],
-    previewTest: {
-      command: "pnpm test:e2e",
-      baseUrlEnvVar: "EVENTS_BASE_URL",
-    },
   },
   semaphore: {
     slug: "semaphore",
@@ -50,10 +38,6 @@ export const cloudflareApps = {
     appPath: "apps/semaphore",
     dopplerProject: "semaphore",
     paths: ["apps/semaphore/**", "apps/semaphore-contract/**", ...commonPaths],
-    previewTest: {
-      command: "pnpm test:e2e",
-      baseUrlEnvVar: "SEMAPHORE_BASE_URL",
-    },
   },
   "ingress-proxy": {
     slug: "ingress-proxy",
@@ -61,9 +45,5 @@ export const cloudflareApps = {
     appPath: "apps/ingress-proxy",
     dopplerProject: "ingress-proxy",
     paths: ["apps/ingress-proxy/**", "apps/ingress-proxy-contract/**", ...commonPaths],
-    previewTest: {
-      command: "pnpm test:e2e",
-      baseUrlEnvVar: "INGRESS_PROXY_BASE_URL",
-    },
   },
 } satisfies Record<CloudflareAppSlug, CloudflareApp>;

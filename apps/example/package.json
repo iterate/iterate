@@ -59,6 +59,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.29.1",
     "@cloudflare/workers-types": "^4.20260317.1",
+    "@iterate-com/semaphore-contract": "workspace:*",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/devtools-vite": "^0.6.0",
     "@types/better-sqlite3": "^7.6.13",
