@@ -481,9 +481,10 @@ function encodeEventLine(event: Event) {
   return textEncoder.encode(`${JSON.stringify(event)}\n`);
 }
 
-function isStreamInitializedEventInput(
-  event: EventInput,
-): event is Extract<EventInput, { type: typeof streamInitializedEventType }> {
+function isStreamInitializedEventInput(event: EventInput): event is EventInput & {
+  type: typeof streamInitializedEventType;
+  payload: { path: StreamPath };
+} {
   return event.type === streamInitializedEventType;
 }
 

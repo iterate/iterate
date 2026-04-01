@@ -46,103 +46,27 @@ export const streamMetadataUpdatedEventType =
   "https://events.iterate.com/events/stream/metadata-updated";
 export const errorOccurredEventType = "https://events.iterate.com/events/error-occurred";
 
-const builtInEventTypeSet = new Set<string>([
-  streamInitializedEventType,
-  childStreamCreatedEventType,
-  streamMetadataUpdatedEventType,
-  errorOccurredEventType,
-]);
-const genericEventType = z
-  .string()
-  .trim()
-  .min(1)
-  .max(2048)
-  .refine(
-    (value) => !builtInEventTypeSet.has(value),
-    "Built-in event types use dedicated payload schemas.",
-  );
-
-const GenericEventInput = z.object({
-  type: genericEventType,
+const eventFields = {
+  type: z.string().trim().min(1).max(2048),
   payload: JSONObject,
   metadata: JSONObject.optional(),
   idempotencyKey: z.string().trim().min(1).optional(),
+};
+
+export const EventInput = z.object({
+  ...eventFields,
   offset: Offset.optional(),
 });
-const StreamInitializedEventInput = z.object({
-  ...GenericEventInput.shape,
-  type: z.literal(streamInitializedEventType),
-  payload: z.object({
-    path: StreamPath,
-  }),
-});
-const ChildStreamCreatedEventInput = z.object({
-  ...GenericEventInput.shape,
-  type: z.literal(childStreamCreatedEventType),
-  payload: z.object({
-    path: StreamPath,
-  }),
-});
-const StreamMetadataUpdatedEventInput = z.object({
-  ...GenericEventInput.shape,
-  type: z.literal(streamMetadataUpdatedEventType),
-  payload: z.object({
-    metadata: JSONObject,
-  }),
-});
-const ErrorOccurredEventInput = z.object({
-  ...GenericEventInput.shape,
-  type: z.literal(errorOccurredEventType),
-  payload: z.object({
-    message: z.string().trim().min(1),
-  }),
-});
-
-export const EventInput = z.union([
-  StreamInitializedEventInput,
-  ChildStreamCreatedEventInput,
-  StreamMetadataUpdatedEventInput,
-  ErrorOccurredEventInput,
-  GenericEventInput,
-]);
 export type EventInput = z.infer<typeof EventInput>;
 
-const GenericEvent = z.object({
+export const Event = z.object({
   path: StreamPath,
-  ...GenericEventInput.shape,
+  ...eventFields,
   offset: Offset,
   createdAt,
 });
-const StreamInitializedEvent = z.object({
-  ...GenericEvent.shape,
-  type: StreamInitializedEventInput.shape.type,
-  payload: StreamInitializedEventInput.shape.payload,
-});
-const ChildStreamCreatedEvent = z.object({
-  ...GenericEvent.shape,
-  type: ChildStreamCreatedEventInput.shape.type,
-  payload: ChildStreamCreatedEventInput.shape.payload,
-});
-const StreamMetadataUpdatedEvent = z.object({
-  ...GenericEvent.shape,
-  type: StreamMetadataUpdatedEventInput.shape.type,
-  payload: StreamMetadataUpdatedEventInput.shape.payload,
-});
-const ErrorOccurredEvent = z.object({
-  ...GenericEvent.shape,
-  type: ErrorOccurredEventInput.shape.type,
-  payload: ErrorOccurredEventInput.shape.payload,
-});
-
-export const Event = z.union([
-  StreamInitializedEvent,
-  ChildStreamCreatedEvent,
-  StreamMetadataUpdatedEvent,
-  ErrorOccurredEvent,
-  GenericEvent,
-]);
 export type Event = z.infer<typeof Event>;
-export type EventType = string;
+export type EventType = Event["type"];
 
 export const StreamState = z.object({
   initialized: z.boolean(),
