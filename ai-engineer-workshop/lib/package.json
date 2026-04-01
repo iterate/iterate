@@ -1,11 +1,55 @@
 {
-  "name": "ai-engineer-workshop-lib",
-  "private": true,
+  "name": "ai-engineer-workshop",
+  "version": "0.0.1",
+  "description": "Tiny ORPC client helpers for the Iterate events workshop",
+  "license": "AGPL-3.0-only",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate.git",
+    "directory": "ai-engineer-workshop/lib"
+  },
+  "homepage": "https://github.com/iterate/iterate/tree/main/ai-engineer-workshop/lib",
+  "bugs": {
+    "url": "https://github.com/iterate/iterate/issues"
+  },
+  "keywords": [
+    "iterate",
+    "events",
+    "workshop"
+  ],
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": "./sdk.ts",
+    "./contract": "./contract.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "import": "./dist/sdk.js",
+        "types": "./dist/sdk.d.ts"
+      },
+      "./contract": {
+        "import": "./dist/contract.js",
+        "types": "./dist/contract.d.ts"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "pnpm build"
+  },
   "dependencies": {
-    "@iterate-com/events-contract": "workspace:*",
     "@orpc/client": "1.13.13",
     "@orpc/contract": "1.13.13",
-    "@orpc/openapi-client": "1.13.13"
+    "@orpc/openapi-client": "1.13.13",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   }
 }

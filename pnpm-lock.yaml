@@ -174,9 +174,6 @@ importers:
 
   ai-engineer-workshop/lib:
     dependencies:
-      '@iterate-com/events-contract':
-        specifier: workspace:*
-        version: link:../../apps/events-contract
       '@orpc/client':
         specifier: 1.13.13
         version: 1.13.13(@opentelemetry/api@1.9.0)
@@ -186,6 +183,13 @@ importers:
       '@orpc/openapi-client':
         specifier: 1.13.13
         version: 1.13.13(@opentelemetry/api@1.9.0)
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
   apps/daemon:
     dependencies:
