@@ -47,7 +47,7 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
     id: "echo-secret-header",
     title: "Echo Secret Header",
     description:
-      "Create a secret first, then watch Postman Echo reflect the injected header value back.",
+      "Watch Postman Echo reflect a seeded codemode secret back through an inline OpenAPI source.",
     sources: [
       {
         ...POSTMAN_ECHO_INLINE_OPENAPI_SOURCE,
@@ -61,7 +61,7 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
 
   return {
     reflectedSecretHeader: echoed.headers?.["x-demo-secret"] ?? null,
-    note: "Create demo.echo in codemode secrets first.",
+    expected: "super-secret-inline-proof",
   };
 };`,
   },
