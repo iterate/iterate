@@ -11,9 +11,11 @@ module.exports = ({ dependencies: { fs, path } }) => {
       return [filename, fileContent];
     });
   return (
-    "// prettier-ignore\n" +
-    "const files = " +
-    JSON.stringify(Object.fromEntries(entries), null, 2) +
-    ";"
+    "function getFiles() {\n" +
+    "  // prettier-ignore\n" +
+    "  return " +
+    JSON.stringify(Object.fromEntries(entries), null, 2).replaceAll("\n", "\n  ") +
+    ";\n" +
+    "}"
   );
 };

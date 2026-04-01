@@ -21,6 +21,10 @@
   "files": [
     "dist"
   ],
+  "bin": {
+    "ai-engineer-workshop": "./dist/cli.js",
+    "workshop": "./dist/cli.js"
+  },
   "exports": {
     ".": "./sdk.ts",
     "./contract": "./contract.ts"
