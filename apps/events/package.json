@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck && vitest run src",
     "test:e2e": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest run --dir e2e/vitest",
+    "test:e2e:preview": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest run e2e/vitest/runtime-smoke.e2e.test.ts e2e/vitest/curl-smoketest.e2e.test.ts",
     "test:quick": "pnpm test:e2e",
     "test:watch": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest --dir e2e/vitest"
   },
@@ -62,6 +63,7 @@
     "alchemy": "^0.83.3",
     "drizzle-kit": "^0.31.1",
     "esbuild": "^0.27.4",
+    "iterate": "workspace:*",
     "tinyexec": "^1.0.2",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",

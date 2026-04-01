@@ -93,7 +93,7 @@ export async function githubScript(
     ...(handler.name && { name: handler.name, id: handler.name }),
     uses: "actions/github-script@v7",
     with: {
-      ...options,
+      ...Object.fromEntries(Object.entries(options).filter(([key]) => key !== "params")),
       script,
     },
   };

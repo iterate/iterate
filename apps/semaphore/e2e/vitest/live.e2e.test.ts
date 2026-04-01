@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createSemaphoreClient } from "@iterate-com/semaphore-contract";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import {
   createSemaphoreAppFixture,
@@ -12,16 +13,41 @@ function uniqueType() {
   return `live-e2e-${randomUUID().slice(0, 8)}`;
 }
 
+function uniquePullRequestNumber() {
+  return Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 8), 16);
+}
+
 const app = createSemaphoreAppFixture({
   apiKey: requireSemaphoreApiToken(),
   baseURL: requireSemaphoreBaseUrl(),
 });
 
+const semaphore = createSemaphoreClient({
+  apiKey: app.apiKey,
+  baseURL: app.baseURL,
+});
+
 describe.sequential("live semaphore E2E", () => {
   const leasedResources: Array<{ type: string; slug: string; leaseId: string }> = [];
   const createdResources: Array<{ type: string; slug: string }> = [];
+  const leasedPreviewEnvironments: Array<{
+    previewEnvironmentIdentifier: string;
+    previewEnvironmentSemaphoreLeaseId: string;
+  }> = [];
 
   async function cleanup() {
+    for (const previewEnvironment of leasedPreviewEnvironments.splice(0).reverse()) {
+      try {
+        await semaphore.preview.destroy({
+          previewEnvironmentIdentifier: previewEnvironment.previewEnvironmentIdentifier,
+          previewEnvironmentSemaphoreLeaseId: previewEnvironment.previewEnvironmentSemaphoreLeaseId,
+          destroyReason: "vitest-cleanup",
+        });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+
     for (const lease of leasedResources.splice(0).reverse()) {
       try {
         await app.apiFetch("/api/resources/release", {
@@ -61,6 +87,26 @@ describe.sequential("live semaphore E2E", () => {
 
   afterAll(async () => {
     await cleanup();
+  });
+
+  test("rejects unauthenticated reads and mutations", async () => {
+    const type = uniqueType();
+
+    const list = await app.fetch(`/api/resources?type=${encodeURIComponent(type)}`);
+    expect(list.ok).toBe(false);
+
+    const create = await app.fetch("/api/resources", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type,
+        slug: "alpha",
+        data: { token: "secret-alpha" },
+      }),
+    });
+    expect(create.ok).toBe(false);
   });
 
   test("can add, list, acquire, release, and delete resources", async () => {
@@ -236,6 +282,166 @@ describe.sequential("live semaphore E2E", () => {
     leasedResources.push({ type, slug: waitingLease.slug, leaseId: waitingLease.leaseId });
     expect(waitingLease.slug).toBe("only");
   }, 120_000);
+
+  test("can create, reuse, list, and destroy preview environments", async () => {
+    const pullRequestNumber = uniquePullRequestNumber();
+
+    const ensured = await semaphore.preview.ensureInventory({});
+    expect(ensured.upsertedCount).toBeGreaterThanOrEqual(40);
+
+    const created = await semaphore.preview.create({
+      previewEnvironmentAppSlug: "semaphore",
+      repositoryFullName: "iterate/iterate",
+      pullRequestNumber,
+      pullRequestHeadRefName: `feature/${pullRequestNumber}`,
+      pullRequestHeadSha: randomUUID().replaceAll("-", ""),
+      workflowRunUrl: "https://github.com/iterate/iterate/actions/runs/1",
+      leaseMs: 60_000,
+    });
+
+    expect(created.previewEnvironmentIdentifier).toMatch(/^semaphore-preview-\d+$/);
+    expect(created.previewEnvironmentDopplerConfigName).toMatch(/^stg_\d+$/);
+    expect(created.previewEnvironmentAlchemyStageName).toMatch(/^preview-\d+$/);
+    expect(created.previewEnvironmentSemaphoreLeaseId).toEqual(expect.any(String));
+    leasedPreviewEnvironments.push({
+      previewEnvironmentIdentifier: created.previewEnvironmentIdentifier,
+      previewEnvironmentSemaphoreLeaseId: created.previewEnvironmentSemaphoreLeaseId!,
+    });
+
+    const renewed = await semaphore.preview.create({
+      previewEnvironmentAppSlug: "semaphore",
+      repositoryFullName: "iterate/iterate",
+      pullRequestNumber,
+      pullRequestHeadRefName: `feature/${pullRequestNumber}`,
+      pullRequestHeadSha: randomUUID().replaceAll("-", ""),
+      workflowRunUrl: "https://github.com/iterate/iterate/actions/runs/2",
+      leaseMs: 60_000,
+    });
+
+    expect(renewed.previewEnvironmentIdentifier).toBe(created.previewEnvironmentIdentifier);
+    expect(renewed.previewEnvironmentSemaphoreLeaseId).toBe(
+      created.previewEnvironmentSemaphoreLeaseId,
+    );
+
+    const listed = await semaphore.preview.list({
+      repositoryFullName: "iterate/iterate",
+      pullRequestNumber,
+      previewEnvironmentAppSlug: "semaphore",
+    });
+
+    expect(listed).toEqual([
+      expect.objectContaining({
+        previewEnvironmentIdentifier: created.previewEnvironmentIdentifier,
+        previewEnvironmentLeaseOwner: expect.objectContaining({
+          pullRequestNumber,
+        }),
+      }),
+    ]);
+
+    const destroyed = await semaphore.preview.destroy({
+      previewEnvironmentIdentifier: created.previewEnvironmentIdentifier,
+      previewEnvironmentSemaphoreLeaseId: created.previewEnvironmentSemaphoreLeaseId!,
+      destroyReason: "test-cleanup",
+    });
+
+    expect(destroyed).toEqual({ destroyed: true });
+    leasedPreviewEnvironments.splice(
+      leasedPreviewEnvironments.findIndex(
+        (previewEnvironment) =>
+          previewEnvironment.previewEnvironmentIdentifier ===
+            created.previewEnvironmentIdentifier &&
+          previewEnvironment.previewEnvironmentSemaphoreLeaseId ===
+            created.previewEnvironmentSemaphoreLeaseId,
+      ),
+      1,
+    );
+
+    const releasedPreview = await semaphore.preview.get({
+      previewEnvironmentIdentifier: created.previewEnvironmentIdentifier,
+    });
+    expect(releasedPreview.previewEnvironmentSemaphoreLeaseId).toBeNull();
+    expect(releasedPreview.previewEnvironmentLeaseOwner).toBeNull();
+    expect(releasedPreview.leaseState).toBe("available");
+  }, 120_000);
+
+  test("does not destroy a preview when the SemaphoreLeaseId is stale", async () => {
+    const firstPullRequestNumber = uniquePullRequestNumber();
+    const secondPullRequestNumber = uniquePullRequestNumber();
+
+    await semaphore.preview.ensureInventory({});
+
+    const first = await semaphore.preview.create({
+      previewEnvironmentAppSlug: "semaphore",
+      repositoryFullName: "iterate/iterate",
+      pullRequestNumber: firstPullRequestNumber,
+      pullRequestHeadRefName: `feature/${firstPullRequestNumber}`,
+      pullRequestHeadSha: randomUUID().replaceAll("-", ""),
+      workflowRunUrl: "https://github.com/iterate/iterate/actions/runs/3",
+      leaseMs: 10,
+    });
+
+    expect(first.previewEnvironmentSemaphoreLeaseId).toEqual(expect.any(String));
+    await sleep(25);
+
+    const replacement = await semaphore.preview.create({
+      previewEnvironmentAppSlug: "semaphore",
+      repositoryFullName: "iterate/iterate",
+      pullRequestNumber: secondPullRequestNumber,
+      pullRequestHeadRefName: `feature/${secondPullRequestNumber}`,
+      pullRequestHeadSha: randomUUID().replaceAll("-", ""),
+      workflowRunUrl: "https://github.com/iterate/iterate/actions/runs/4",
+      leaseMs: 60_000,
+      previewEnvironmentIdentifier: first.previewEnvironmentIdentifier,
+    });
+
+    expect(replacement.previewEnvironmentSemaphoreLeaseId).toEqual(expect.any(String));
+    expect(replacement.previewEnvironmentSemaphoreLeaseId).not.toBe(
+      first.previewEnvironmentSemaphoreLeaseId,
+    );
+    leasedPreviewEnvironments.push({
+      previewEnvironmentIdentifier: replacement.previewEnvironmentIdentifier,
+      previewEnvironmentSemaphoreLeaseId: replacement.previewEnvironmentSemaphoreLeaseId!,
+    });
+
+    const destroyed = await semaphore.preview.destroy({
+      previewEnvironmentIdentifier: first.previewEnvironmentIdentifier,
+      previewEnvironmentSemaphoreLeaseId: first.previewEnvironmentSemaphoreLeaseId!,
+      destroyReason: "stale-cleanup",
+    });
+
+    expect(destroyed).toEqual({ destroyed: false });
+
+    const current = await semaphore.preview.get({
+      previewEnvironmentIdentifier: replacement.previewEnvironmentIdentifier,
+    });
+
+    expect(current.previewEnvironmentSemaphoreLeaseId).toBe(
+      replacement.previewEnvironmentSemaphoreLeaseId,
+    );
+    expect(current.previewEnvironmentLeaseOwner).toMatchObject({
+      pullRequestNumber: secondPullRequestNumber,
+    });
+  }, 120_000);
+
+  test("supports the contract client against the live worker", async () => {
+    const type = uniqueType();
+    const created = await semaphore.resources.add({
+      type,
+      slug: "client-alpha",
+      data: { token: "secret-client" },
+    });
+    createdResources.push({ type, slug: created.slug });
+
+    expect(created.slug).toBe("client-alpha");
+
+    const listed = await semaphore.resources.list({ type });
+    expect(listed).toEqual([
+      expect.objectContaining({
+        slug: "client-alpha",
+        data: { token: "secret-client" },
+      }),
+    ]);
+  });
 });
 
 async function apiJson<T>(pathname: string, init: RequestInit) {
