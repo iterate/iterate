@@ -7,6 +7,7 @@ import {
   type EventInput,
   EventInput as EventInputSchema,
   Offset,
+  type StreamMetadataUpdatedEvent,
   StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
@@ -153,12 +154,12 @@ export class StreamDurableObject extends DurableObject<Env> {
       );
     }
 
-    const event = EventSchema.parse({
+    const event = {
       ...parsedInputEvent,
       streamPath: this.state.path,
       offset: nextOffset,
       createdAt: new Date().toISOString(),
-    });
+    };
 
     const nextState = reduceStreamState({ state: this.state, event });
 
@@ -223,22 +224,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.subscribers.clear();
 
     await this.ctx.storage.deleteAll();
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS events (
-        offset TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        payload TEXT NOT NULL CHECK(json_valid(payload)),
-        metadata TEXT CHECK(metadata IS NULL OR (json_valid(metadata) AND json_type(metadata) = 'object')),
-        idempotency_key TEXT UNIQUE,
-        created_at TEXT NOT NULL
-      )
-    `);
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS reduced_state (
-        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-        json TEXT NOT NULL CHECK(json_valid(json))
-      )
-    `);
+
     this._state = null;
 
     return {
@@ -378,16 +364,21 @@ function reduceStreamState(args: { state: StreamState; event: Event }): StreamSt
   const { state, event } = args;
 
   if (state.path !== event.streamPath) {
-    throw new Error(`Stream path mismatch. Expected ${state.path}, received ${event.streamPath}.`);
+    throw new Error(
+      `This should never happen. Somebody is trying to append an event to the wrong stream. Stream has path ${state.path}, but the event has path ${event.streamPath}.`,
+    );
   }
 
   switch (event.type) {
     case "https://events.iterate.com/events/stream/metadata-updated": {
+      // TODO: Talk to Misha about how to express "built-in event or generic event"
+      // without breaking payload narrowing here.
+      const metadataUpdatedEvent = event as StreamMetadataUpdatedEvent;
       return {
         path: state.path,
         lastOffset: event.offset,
         eventCount: state.eventCount + 1,
-        metadata: event.payload.metadata,
+        metadata: metadataUpdatedEvent.payload.metadata,
       };
     }
 
