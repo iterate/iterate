@@ -40,7 +40,7 @@ describe.sequential("events stream e2e", () => {
       expect(events).toEqual([
         {
           path,
-          offset: expectedOffset(1),
+          offset: 1,
           type: "https://events.iterate.com/events/example/value-recorded",
           payload: { value: 42 },
           createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
@@ -71,7 +71,7 @@ describe.sequential("events stream e2e", () => {
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
         path,
-        offset: expectedOffset(1),
+        offset: 1,
         type: "https://events.iterate.com/events/example/value-recorded",
         payload: { value: 42 },
         metadata: {
@@ -158,8 +158,8 @@ describe.sequential("events stream e2e", () => {
         idempotencyKey: `idem-${randomUUID()}`,
       });
 
-      expect(first.events[0]?.offset).toEqual(expectedOffset(1));
-      expect(second.events[0]?.offset).toEqual(expectedOffset(2));
+      expect(first.events[0]?.offset).toEqual(1);
+      expect(second.events[0]?.offset).toEqual(2);
 
       const events = await collectStreamEvents(app, { path });
 
@@ -257,13 +257,13 @@ describe.sequential("events stream e2e", () => {
       expect(batch.created).toBe(false);
       expect(batch.events).toHaveLength(3);
       expect(batch.events[0]).toEqual(existing.events[0]);
-      expect(batch.events[1]?.offset).toEqual(expectedOffset(2));
+      expect(batch.events[1]?.offset).toEqual(2);
       expect(batch.events[1]?.payload).toEqual({ step: "new-in-batch" });
       expect(batch.events[2]).toEqual(batch.events[1]);
 
       const events = await collectStreamEvents(app, { path });
 
-      expect(events.map((event) => event.offset)).toEqual([expectedOffset(1), expectedOffset(2)]);
+      expect(events.map((event) => event.offset)).toEqual([1, 2]);
       expect(events.map((event) => event.payload)).toEqual([
         { step: "existing" },
         { step: "new-in-batch" },
@@ -339,11 +339,7 @@ describe.sequential("events stream e2e", () => {
 
       const events = await collectStreamEvents(app, { path });
 
-      expect(events.map((event) => event.offset)).toEqual([
-        expectedOffset(1),
-        expectedOffset(2),
-        expectedOffset(3),
-      ]);
+      expect(events.map((event) => event.offset)).toEqual([1, 2, 3]);
       expect(events.map((event) => event.payload)).toEqual([
         { value: 1 },
         { value: 2 },
@@ -405,7 +401,7 @@ describe.sequential("events stream e2e", () => {
 
       expect(await app.client.getState({ streamPath: path })).toEqual({
         path,
-        lastOffset: expectedOffset(3),
+        lastOffset: 3,
         eventCount: 3,
         metadata: {
           owner: "second",
@@ -553,7 +549,7 @@ describe.sequential("events stream e2e", () => {
 
       const resumed = await collectStreamEvents(app, {
         path,
-        offset: expectedOffset(1),
+        offset: 1,
       });
 
       expect(resumed.map((event) => event.payload)).toEqual([{ step: 2 }, { step: 3 }]);
@@ -676,7 +672,7 @@ describe.sequential("events stream e2e", () => {
         expect(next.done).toBe(false);
         expect(next.value).toMatchObject({
           path,
-          offset: expectedOffset(1),
+          offset: 1,
           payload: { live: true },
         });
       } finally {
@@ -692,15 +688,11 @@ function uniqueStreamPath() {
   return StreamPath.parse(`/e2e/${randomUUID().slice(0, 8)}`);
 }
 
-function expectedOffset(value: number) {
-  return String(value).padStart(16, "0");
-}
-
 async function collectStreamEvents(
   appFixture: Events2AppFixture,
   options: {
     path: StreamPath;
-    offset?: string;
+    offset?: number;
   },
 ) {
   return await collectAsyncIterableUntilIdle({

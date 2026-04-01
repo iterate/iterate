@@ -39,7 +39,8 @@ export const StreamPath = z.preprocess((value) => {
   }
 }, z.string().max(1023).regex(streamPathPattern));
 export type StreamPath = z.infer<typeof StreamPath>;
-export const Offset = z.string().trim().min(1);
+export const Offset = z.number().int().positive();
+export type Offset = z.infer<typeof Offset>;
 // Keep public payload/state shapes JSON-only so Cloudflare Durable Object RPC
 // can prove they are serializable. We still want callers to hand in normal JS
 // objects, so this Zod 4 codec accepts a broad record input shape and encodes
@@ -149,7 +150,7 @@ export const eventsContract = oc.router({
     .input(
       z.object({
         path: StreamPath,
-        offset: Offset.optional(),
+        offset: z.coerce.number().int().positive().optional(),
         live: z.coerce.boolean().optional(),
       }),
     )

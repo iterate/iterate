@@ -90,13 +90,13 @@ describeRuntimeSmoke("events runtime smoke", () => {
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
         path,
-        offset: expectedOffset(1),
+        offset: 1,
         payload: { smoke: true },
       });
 
       expect(await app.client.getState({ streamPath: path })).toEqual({
         path,
-        lastOffset: expectedOffset(1),
+        lastOffset: 1,
         eventCount: 1,
         metadata: {},
       } satisfies StreamState);
@@ -105,7 +105,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const liveStream = await app.client.stream(
         {
           path,
-          offset: expectedOffset(1),
+          offset: 1,
           live: true,
         },
         { signal: controller.signal },
@@ -135,7 +135,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         expect(next.done).toBe(false);
         expect(next.value).toMatchObject({
           path,
-          offset: expectedOffset(2),
+          offset: 2,
         });
       } finally {
         controller.abort();
@@ -145,7 +145,3 @@ describeRuntimeSmoke("events runtime smoke", () => {
     testTimeoutMs,
   );
 });
-
-function expectedOffset(value: number) {
-  return String(value).padStart(16, "0");
-}

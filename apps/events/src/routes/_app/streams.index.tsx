@@ -18,7 +18,7 @@ function StreamsIndexPage() {
   const { event, renderer } = Route.useSearch();
   const navigate = Route.useNavigate();
   const updateEventOffset = useCallback(
-    (nextEventOffset?: string) => {
+    (nextEventOffset?: number) => {
       // TanStack Router's functional `search` updater preserves sibling view
       // state while only changing the event currently shown in the sheet.
       void navigate({

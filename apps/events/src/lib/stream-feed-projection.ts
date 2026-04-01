@@ -137,8 +137,8 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
 }
 
 function mergeInsertions(
-  target: Map<string, StreamFeedItem[]>,
-  addition: ReadonlyMap<string, StreamFeedItem[]>,
+  target: Map<number, StreamFeedItem[]>,
+  addition: ReadonlyMap<number, StreamFeedItem[]>,
 ) {
   for (const [offset, items] of addition) {
     const existing = target.get(offset);
@@ -151,7 +151,7 @@ function mergeInsertions(
 }
 
 function buildSemanticInsertions(events: readonly Event[]) {
-  const insertionsByOffset = new Map<string, StreamFeedItem[]>();
+  const insertionsByOffset = new Map<number, StreamFeedItem[]>();
 
   for (const event of events) {
     const semanticItem = toSemanticFeedItem(event);
@@ -166,8 +166,8 @@ function buildSemanticInsertions(events: readonly Event[]) {
 }
 
 function appendInsertion(
-  insertionsByOffset: Map<string, StreamFeedItem[]>,
-  offset: string,
+  insertionsByOffset: Map<number, StreamFeedItem[]>,
+  offset: number,
   item: StreamFeedItem,
 ) {
   const existing = insertionsByOffset.get(offset);
@@ -202,7 +202,7 @@ export function createGroupedOrSingleEvent(
 
 export function getAdjacentEventOffset(
   events: readonly EventFeedItem[],
-  currentOffset: string | undefined,
+  currentOffset: number | undefined,
   direction: "previous" | "next",
 ) {
   if (currentOffset == null) {

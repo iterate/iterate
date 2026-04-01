@@ -51,8 +51,8 @@ export function StreamPage({
 }: {
   streamPath: StreamPath;
   rendererMode?: StreamRendererMode;
-  openEventOffset?: string;
-  onOpenEventOffsetChange?: (offset?: string) => void;
+  openEventOffset?: number;
+  onOpenEventOffsetChange?: (offset?: number) => void;
   onRendererModeChange?: (mode: StreamRendererMode) => void;
 }) {
   const queryClient = useQueryClient();

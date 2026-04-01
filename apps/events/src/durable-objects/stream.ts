@@ -11,7 +11,6 @@ import {
 } from "@iterate-com/events-contract";
 import { ROOT_STREAM_PATH, getParentPath } from "~/lib/utils.ts";
 
-const INITIAL_OFFSET_WIDTH = 16;
 const textEncoder = new TextEncoder();
 
 /**
@@ -83,7 +82,6 @@ export class StreamDurableObject extends DurableObject<Env> {
 
         const insertedEvent = this.insertEventSync({
           inputEvent,
-          prevOffset: nextState.lastOffset,
         });
 
         events.push(insertedEvent);
@@ -128,7 +126,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * newline-delimited JSON objects, but it skips malformed lines instead of
    * killing the whole live subscription.
    */
-  async history(args: { afterOffset?: string } = {}): Promise<Event[]> {
+  async history(args: { afterOffset?: number } = {}): Promise<Event[]> {
     if (this.state.path == null) {
       if (this.state.eventCount === 0) {
         return [];
@@ -142,7 +140,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     const path = this.state.path;
     return this.listEventsAfterOffset({
       path,
-      afterOffset: args.afterOffset ?? "",
+      afterOffset: args.afterOffset ?? 0,
     });
   }
 
@@ -151,7 +149,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * framing as `decodeEventStream()` in `~/lib/utils.ts`.
    */
   async stream(
-    args: { afterOffset?: string; live?: boolean } = {},
+    args: { afterOffset?: number; live?: boolean } = {},
   ): Promise<ReadableStream<Uint8Array>> {
     const backlogPromise = this.history(args);
     let subscriber: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -187,7 +185,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   private initializeStorage() {
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS events (
-        offset TEXT PRIMARY KEY,
+        offset INTEGER PRIMARY KEY,
         type TEXT NOT NULL,
         payload TEXT NOT NULL CHECK(json_valid(payload)),
         metadata TEXT CHECK(metadata IS NULL OR (json_valid(metadata) AND json_type(metadata) = 'object')),
@@ -250,45 +248,56 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Inserts a fresh event row using the caller-provided previous offset.
-   *
-   * This cannot read `this.state.lastOffset` directly because a single append
-   * call can insert multiple new events, and each later event must see the
-   * offset produced earlier in the same batch.
+   * Inserts a fresh event row and lets SQLite allocate the next integer offset.
+   * The returned row becomes the source of truth for the event we reduce and
+   * publish, so batch appends still observe contiguous offsets in commit order.
    */
-  private insertEventSync(args: { inputEvent: EventInputOutput; prevOffset: string | null }) {
-    const { inputEvent, prevOffset } = args;
+<<<<<<< HEAD
+  private insertEventSync(args: { inputEvent: EventInputOutput }) {
+    const { inputEvent } = args;
+    const createdAt = new Date().toISOString();
 
-    const event = Event.parse({
+    const row = this.ctx.storage.sql
+      .exec<{
+        offset: number;
+        type: string;
+        payload: string;
+        metadata: string | null;
+        idempotency_key: string | null;
+        created_at: string;
+      }>(
+        `INSERT INTO events (type, payload, metadata, idempotency_key, created_at)
+         VALUES (?, json(?), ?, ?, ?)
+         RETURNING offset, type, payload, metadata, idempotency_key, created_at`,
+        inputEvent.type,
+        JSON.stringify(inputEvent.payload),
+        inputEvent.metadata === undefined ? null : JSON.stringify(inputEvent.metadata),
+        inputEvent.idempotencyKey ?? null,
+        createdAt,
+      )
+      .one();
+
+    if (row == null) {
+      throw new Error("Insert succeeded without returning a stored event row.");
+    }
+
+    return Event.parse({
       path: inputEvent.path,
-      offset: this.nextOffset({ prevOffset }),
-      type: inputEvent.type,
-      payload: inputEvent.payload,
-      metadata: inputEvent.metadata,
-      idempotencyKey: inputEvent.idempotencyKey,
-      createdAt: new Date().toISOString(),
+      offset: row.offset,
+      type: row.type,
+      payload: JSON.parse(row.payload),
+      ...(row.metadata == null ? {} : { metadata: JSON.parse(row.metadata) }),
+      ...(row.idempotency_key == null ? {} : { idempotencyKey: row.idempotency_key }),
+      createdAt: row.created_at,
     });
-
-    this.ctx.storage.sql.exec(
-      `INSERT INTO events (offset, type, payload, metadata, idempotency_key, created_at)
-       VALUES (?, ?, json(?), ?, ?, ?)`,
-      event.offset,
-      event.type,
-      JSON.stringify(event.payload),
-      event.metadata === undefined ? null : JSON.stringify(event.metadata),
-      event.idempotencyKey ?? null,
-      event.createdAt,
-    );
-
-    return event;
   }
 
-  private listEventsAfterOffset(args: { path: StreamPath; afterOffset: string }) {
+  private listEventsAfterOffset(args: { path: StreamPath; afterOffset: number }) {
     const { path, afterOffset } = args;
 
     return this.ctx.storage.sql
       .exec<{
-        offset: string;
+        offset: number;
         type: string;
         payload: string;
         metadata: string | null;
@@ -320,7 +329,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     const row = this.ctx.storage.sql
       .exec<{
-        offset: string;
+        offset: number;
         type: string;
         payload: string;
         metadata: string | null;
@@ -349,24 +358,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       createdAt: row.created_at,
     });
   }
-
-  private nextOffset(args: { prevOffset: string | null }) {
-    const { prevOffset } = args;
-
-    // Offsets are fixed-width decimal strings so plain lexicographic ordering in
-    // SQLite matches append order.
-    if (prevOffset == null) {
-      return Offset.parse("1".padStart(INITIAL_OFFSET_WIDTH, "0"));
-    }
-
-    if (!/^\d+$/.test(prevOffset)) {
-      throw new Error(`Cannot generate the next offset after non-numeric offset ${prevOffset}.`);
-    }
-
-    const width = Math.max(prevOffset.length, INITIAL_OFFSET_WIDTH);
-    return Offset.parse((BigInt(prevOffset) + 1n).toString().padStart(width, "0"));
-  }
-
   private propagateStreamCreated(firstEvent: Event) {
     if (this.state.path == null) {
       throw new Error(
