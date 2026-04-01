@@ -6,7 +6,6 @@ import { buildCodemodeWrapperSource } from "~/lib/codemode-v2.ts";
 
 export interface CodemodeExecutionResult {
   result: string;
-  logs: string[];
   error: string | null;
 }
 
@@ -45,9 +44,13 @@ export async function executeCodemodeFunction(options: {
     contractContext.providers,
   );
 
+  const outputParts = [...(response.logs ?? [])];
+  if (typeof response.result !== "undefined") {
+    outputParts.push(stringifyUnknown(response.result));
+  }
+
   return {
-    result: stringifyUnknown(response.result),
-    logs: response.logs ?? [],
+    result: outputParts.join("\n"),
     error: response.error ?? null,
   };
 }

@@ -16,7 +16,7 @@ async function saveRun(context: AppContext, run: CodemodeRun) {
     codeSnippet: run.code,
     sourcesJson: JSON.stringify(run.sources),
     result: run.result,
-    logsJson: JSON.stringify(run.logs),
+    logsJson: JSON.stringify([]),
     error: run.error,
   });
 }
@@ -36,7 +36,6 @@ export const runRouter = {
       code: input.code,
       sources: input.sources,
       result: execution.result,
-      logs: execution.logs,
       error: execution.error,
     };
 

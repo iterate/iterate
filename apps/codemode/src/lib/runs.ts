@@ -17,11 +17,17 @@ const StoredRun = z.object({
 
 function parseRun(row: unknown) {
   const parsed = StoredRun.parse(row);
+  const logs = z.array(z.string()).parse(JSON.parse(parsed.logsJson));
+  const outputParts = [...logs];
+
+  if (parsed.result.trim().length > 0) {
+    outputParts.push(parsed.result);
+  }
 
   return {
     ...parsed,
     sources: CodemodeSource.array().parse(JSON.parse(parsed.sourcesJson)),
-    logs: z.array(z.string()).parse(JSON.parse(parsed.logsJson)),
+    result: outputParts.join("\n"),
   };
 }
 
