@@ -88,6 +88,12 @@ export const OPEN_LIBRARY_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
   },
 };
 
+export const USGS_WATER_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
+  type: "openapi",
+  namespace: "usgs",
+  url: "https://api.waterdata.usgs.gov/ogcapi/v0/openapi",
+};
+
 export const DEFAULT_CODEMODE_SOURCES: CodemodeUiSource[] = [
   EXAMPLE_OPENAPI_SOURCE,
   EVENTS_OPENAPI_SOURCE,
@@ -143,6 +149,24 @@ export const CODEMODE_SOURCE_PRESETS: CodemodeSourcePreset[] = [
     title: "AgentUtil Weather",
     description: "Public weather OpenAPI with a small free quota. Good for lightweight demos.",
     source: AGENTUTIL_WEATHER_OPENAPI_SOURCE,
+  },
+  {
+    id: "nager-openapi",
+    title: "Nager.Date",
+    description: "Public holiday OpenAPI with useful country and worldwide calendar endpoints.",
+    source: NAGER_OPENAPI_SOURCE,
+  },
+  {
+    id: "openlibrary-openapi",
+    title: "Open Library",
+    description: "Public books and search OpenAPI. Good for fun data mash-ups.",
+    source: OPEN_LIBRARY_OPENAPI_SOURCE,
+  },
+  {
+    id: "usgs-water-openapi",
+    title: "USGS Water Data",
+    description: "Public OGC/OpenAPI for water data, collections, and geographic features.",
+    source: USGS_WATER_OPENAPI_SOURCE,
   },
   {
     id: "example-contract",

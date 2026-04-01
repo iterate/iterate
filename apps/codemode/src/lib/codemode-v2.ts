@@ -8,6 +8,7 @@ import {
   NAGER_OPENAPI_SOURCE,
   OPEN_LIBRARY_OPENAPI_SOURCE,
   PETSTORE_OPENAPI_SOURCE,
+  USGS_WATER_OPENAPI_SOURCE,
   WEATHER_OPENAPI_SOURCE,
   type CodemodeUiSource,
 } from "~/lib/codemode-sources.ts";
@@ -305,6 +306,64 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
       author: Array.isArray(book.author_name) ? (book.author_name[0] ?? null) : null,
       year: book.first_publish_year ?? null,
     })),
+  };
+};`,
+  },
+  {
+    id: "holiday-reading-list",
+    title: "Holiday Reading List",
+    description: "Combine upcoming UK holidays with a themed Open Library search.",
+    sources: [NAGER_OPENAPI_SOURCE, OPEN_LIBRARY_OPENAPI_SOURCE],
+    code: `async ({ ctx }) => {
+  const holidays = await ctx.nager.nextPublicHolidays({
+    countryCode: "GB",
+  });
+  const books = await ctx.openlibrary.search({
+    q: "storm survival",
+  });
+
+  const nextHoliday = Array.isArray(holidays) ? (holidays[0] ?? null) : null;
+  const docs = Array.isArray(books?.docs) ? books.docs : [];
+
+  return {
+    nextHoliday: nextHoliday
+      ? {
+          name: nextHoliday.localName,
+          date: nextHoliday.date,
+        }
+      : null,
+    suggestions: docs.slice(0, 3).map((book) => ({
+      title: book.title ?? null,
+      author: Array.isArray(book.author_name) ? (book.author_name[0] ?? null) : null,
+    })),
+  };
+};`,
+  },
+  {
+    id: "weather-water-catalog",
+    title: "Weather And Water Catalog",
+    description: "Pair live California alerts with a quick USGS Water Data overview.",
+    sources: [WEATHER_OPENAPI_SOURCE, USGS_WATER_OPENAPI_SOURCE],
+    code: `async ({ ctx }) => {
+  const alerts = await ctx.weather.alerts_active({
+    area: "CA",
+  });
+  const landing = await ctx.usgs.getLandingPage({
+    f: "json",
+  });
+  const collections = await ctx.usgs.getCollections({
+    f: "json",
+  });
+
+  const features = Array.isArray(alerts?.features) ? alerts.features : [];
+
+  return {
+    californiaAlertCount: features.length,
+    californiaHeadline: features[0]?.properties?.headline ?? null,
+    usgsTitle: landing?.title ?? null,
+    usgsCollectionCount: Array.isArray(collections?.collections)
+      ? collections.collections.length
+      : null,
   };
 };`,
   },
