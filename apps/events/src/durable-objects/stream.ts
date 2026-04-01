@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  DestroyStreamResult,
   Event,
   Offset,
   StreamPath,
@@ -120,8 +121,6 @@ export class StreamDurableObject extends DurableObject<Env> {
   // https://developers.cloudflare.com/durable-objects/api/storage-api/
   // https://developers.cloudflare.com/durable-objects/best-practices/access-durable-objects-storage/
   async destroy() {
-    const stateBeforeDelete = structuredClone(this.state);
-
     for (const subscriber of this.subscribers) {
       try {
         subscriber.close();
@@ -132,7 +131,18 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     this.subscribers.clear();
     await this.ctx.storage.deleteAll();
-    return stateBeforeDelete;
+    this.initializeStorage();
+    this.state = {
+      path: null,
+      lastOffset: null,
+      eventCount: 0,
+      metadata: {},
+    };
+
+    return {
+      destroyed: true,
+      finalState: structuredClone(this.state),
+    } satisfies DestroyStreamResult;
   }
 
   async getState(): Promise<StreamState> {

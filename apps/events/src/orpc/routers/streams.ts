@@ -19,10 +19,6 @@ export const streamsRouter = {
     return streamStub.append({ events });
   }),
   destroy: os.destroy.handler(async ({ context, input }) => {
-    if (input.path === ROOT_STREAM_PATH) {
-      throw new Error("The root stream cannot be destroyed.");
-    }
-
     const streamStub = context.env.STREAM.getByName(input.path);
     return await streamStub.destroy();
   }),

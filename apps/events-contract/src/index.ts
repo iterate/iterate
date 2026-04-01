@@ -96,6 +96,12 @@ export const StreamState = z.object({
 });
 export type StreamState = z.infer<typeof StreamState>;
 
+export const DestroyStreamResult = z.object({
+  destroyed: z.literal(true),
+  finalState: StreamState,
+});
+export type DestroyStreamResult = z.infer<typeof DestroyStreamResult>;
+
 const SecretSummary = z.object({
   id: z.string(),
   name: z.string(),
@@ -140,7 +146,7 @@ export const eventsContract = oc.router({
         path: StreamPath,
       }),
     )
-    .output(StreamState),
+    .output(DestroyStreamResult),
   stream: oc
     .route({
       operationId: "streamEvents",

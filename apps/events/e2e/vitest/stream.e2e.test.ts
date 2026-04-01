@@ -394,11 +394,12 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(await app.client.destroy({ path })).toEqual({
-        path,
-        lastOffset: expectedOffset(2),
-        eventCount: 2,
-        metadata: {
-          owner: "destroy-me",
+        destroyed: true,
+        finalState: {
+          path: null,
+          lastOffset: null,
+          eventCount: 0,
+          metadata: {},
         },
       });
 
@@ -419,17 +420,20 @@ describe.sequential("events stream e2e", () => {
       const path = uniqueStreamPath();
 
       expect(await app.client.destroy({ path })).toEqual({
-        path: null,
-        lastOffset: null,
-        eventCount: 0,
-        metadata: {},
+        destroyed: true,
+        finalState: {
+          path: null,
+          lastOffset: null,
+          eventCount: 0,
+          metadata: {},
+        },
       });
     },
     testTimeoutMs,
   );
 
   test(
-    "destroyed streams can be recreated from offset one",
+    "append immediately after destroy recreates the stream from offset one",
     async () => {
       const path = uniqueStreamPath();
 
@@ -440,6 +444,12 @@ describe.sequential("events stream e2e", () => {
       });
 
       await app.client.destroy({ path });
+      expect(await app.client.getState({ streamPath: path })).toEqual({
+        path: null,
+        lastOffset: null,
+        eventCount: 0,
+        metadata: {},
+      });
 
       const recreated = await app.client.append({
         path,
@@ -454,6 +464,12 @@ describe.sequential("events stream e2e", () => {
         payload: { afterDestroy: true },
       });
       expect(await collectStreamEvents(app, { path })).toEqual(recreated.events);
+      expect(await app.client.getState({ streamPath: path })).toEqual({
+        path,
+        lastOffset: expectedOffset(1),
+        eventCount: 1,
+        metadata: {},
+      });
     },
     testTimeoutMs,
   );
@@ -585,9 +601,23 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "destroy rejects the root stream",
+    "destroy allows wiping the root stream",
     async () => {
-      await expect(app.client.destroy({ path: "/" })).rejects.toThrow(/root stream/i);
+      expect(await app.client.destroy({ path: "/" })).toEqual({
+        destroyed: true,
+        finalState: {
+          path: null,
+          lastOffset: null,
+          eventCount: 0,
+          metadata: {},
+        },
+      });
+      expect(await app.client.getState({ streamPath: "/" })).toEqual({
+        path: null,
+        lastOffset: null,
+        eventCount: 0,
+        metadata: {},
+      });
     },
     testTimeoutMs,
   );
