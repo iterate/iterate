@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as fs from "fs/promises";
+import * as fsSync from "fs";
 import * as path from "path";
 import { os } from "@orpc/server";
 import { z } from "zod";
@@ -10,6 +11,20 @@ import { getFiles } from "./files.ts";
 const files = getFiles();
 
 const router = os.router({
+  run: os
+    .input(
+      z.object({
+        script: z.enum(
+          fsSync.globSync("**/*.{js,ts,sh}", {
+            cwd: process.cwd(),
+            exclude: ["dist", "node_modules"],
+          }),
+        ),
+      }),
+    )
+    .handler(async ({ input }) => {
+      await import(path.join(process.cwd(), input.script));
+    }),
   appendHelloWorld: getProcedure("01-hello-world/append-hello-world.ts"),
   openTmuxPanes: getProcedure("01-hello-world/open-tmux-panes.sh"),
   streamEvents: getProcedure("01-hello-world/stream-events.sh"),
