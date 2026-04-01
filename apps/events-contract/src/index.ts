@@ -76,7 +76,7 @@ export const StreamMetadataUpdatedPayload = z.object({
 });
 export type StreamMetadataUpdatedPayload = z.infer<typeof StreamMetadataUpdatedPayload>;
 
-const AppendInput = z.intersection(
+export const AppendInput = z.intersection(
   z.object({
     path: StreamPath,
   }),

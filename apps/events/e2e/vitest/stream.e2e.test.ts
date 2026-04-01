@@ -312,6 +312,104 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "jsonataTransform turns a webhook payload into an appended event",
+    async () => {
+      const path = uniqueStreamPath();
+      const response = await app.fetch(
+        `/api/streams${path}?jsonataTransform=${encodeURIComponent(
+          '{"type":"slack.event_callback","payload":$,"metadata":{"source":"slack","team_id":team_id}}',
+        )}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            token: "slack-token",
+            team_id: "T123",
+            type: "event_callback",
+            event: {
+              type: "app_mention",
+              text: "hello",
+            },
+          }),
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        created: true,
+        events: [
+          {
+            path,
+            type: "slack.event_callback",
+            payload: {
+              token: "slack-token",
+              team_id: "T123",
+              type: "event_callback",
+              event: {
+                type: "app_mention",
+                text: "hello",
+              },
+            },
+            metadata: {
+              source: "slack",
+              team_id: "T123",
+            },
+          },
+        ],
+      });
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "jsonataTransform rejects invalid expressions",
+    async () => {
+      const path = uniqueStreamPath();
+      const response = await app.fetch(
+        `/api/streams${path}?jsonataTransform=${encodeURIComponent(")")}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            value: 1,
+          }),
+        },
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain("invalid_jsonata_transform");
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "jsonataTransform rejects transformed payloads that are not valid events",
+    async () => {
+      const path = uniqueStreamPath();
+      const response = await app.fetch(
+        `/api/streams${path}?jsonataTransform=${encodeURIComponent('{"payload":$}')}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            value: 1,
+          }),
+        },
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain("type");
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "append multiple assigns generated offsets in order",
     async () => {
       const path = uniqueStreamPath();
