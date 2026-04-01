@@ -1,12 +1,12 @@
 import type { CodemodeSource } from "@iterate-com/codemode-contract";
 import type { AppConfig } from "~/app.ts";
-import { DynamicWorkerExecutor } from "~/lib/codemode/index.ts";
+import { DynamicWorkerExecutor } from "~/lib/codemode/executor.ts";
 import { buildCodemodeContextFromSources } from "~/lib/codemode-contract-runtime.ts";
-import { createCodemodeOutboundFetch } from "~/lib/codemode-outbound-fetch.ts";
 import { buildCodemodeWrapperSource } from "~/lib/codemode-v2.ts";
 
 export interface CodemodeExecutionResult {
   result: string;
+  logs: string[];
   error: string | null;
 }
 
@@ -28,12 +28,14 @@ export async function executeCodemodeFunction(options: {
   outbound: Fetcher;
   sources?: CodemodeSource[];
 }): Promise<CodemodeExecutionResult> {
-  const outboundFetch = createCodemodeOutboundFetch(options.outbound);
   const contractContext = await buildCodemodeContextFromSources({
     config: options.config,
     sources: options.sources,
     includeTypes: false,
-    fetch: outboundFetch,
+    fetch: (input, init) =>
+      options.outbound.fetch(
+        input instanceof Request ? new Request(input, init) : new Request(input, init),
+      ),
   });
   const executor = new DynamicWorkerExecutor({
     loader: options.loader,
@@ -47,13 +49,9 @@ export async function executeCodemodeFunction(options: {
     contractContext.providers,
   );
 
-  const outputParts = [...(response.logs ?? [])];
-  if (typeof response.result !== "undefined") {
-    outputParts.push(stringifyUnknown(response.result));
-  }
-
   return {
-    result: outputParts.join("\n"),
+    result: typeof response.result === "undefined" ? "" : stringifyUnknown(response.result),
+    logs: response.logs ?? [],
     error: response.error ?? null,
   };
 }

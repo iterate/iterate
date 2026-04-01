@@ -1,11 +1,12 @@
 import { getEventIteratorSchemaDetails } from "@orpc/contract";
-import { z } from "zod";
 import {
   generateTypesFromJsonSchema,
   jsonSchemaToType,
   sanitizeToolName,
   type JsonSchemaToolDescriptors,
-} from "~/lib/codemode/index.ts";
+} from "@cloudflare/codemode";
+import { z } from "zod";
+import { buildCtxTreeExpressions } from "~/lib/codemode-ctx-tree.ts";
 
 type ProcedureSchema = unknown;
 
@@ -51,11 +52,6 @@ type ProcedureDescriptor = {
   invoke: (input: unknown) => Promise<unknown>;
 };
 
-type ProcedureTreeNode = {
-  children: Map<string, ProcedureTreeNode>;
-  rpcToolName?: string;
-};
-
 export interface DerivedContractContext {
   ctxTypes: string;
   providers: DerivedProvider[];
@@ -67,12 +63,6 @@ export interface DerivedContractContext {
 
 function isProcedure(value: unknown): value is ContractProcedure {
   return typeof value === "object" && value !== null && "~orpc" in value;
-}
-
-function createTreeNode(): ProcedureTreeNode {
-  return {
-    children: new Map(),
-  };
 }
 
 function getClientProcedure(
@@ -157,82 +147,6 @@ function collectProcedures(
   }
 
   return procedures;
-}
-
-function buildProcedureTree(procedures: ProcedureDescriptor[]): ProcedureTreeNode {
-  const root = createTreeNode();
-
-  for (const procedure of procedures) {
-    let current = root;
-
-    for (const segment of procedure.runtimePath) {
-      let child = current.children.get(segment);
-      if (!child) {
-        child = createTreeNode();
-        current.children.set(segment, child);
-      }
-      current = child;
-    }
-
-    current.rpcToolName = procedure.rpcToolName;
-  }
-
-  return root;
-}
-
-function findProcedure(procedures: ProcedureDescriptor[], rpcToolName: string) {
-  return procedures.find((procedure) => procedure.rpcToolName === rpcToolName);
-}
-
-function emitRuntimeTree(
-  node: ProcedureTreeNode,
-  procedures: ProcedureDescriptor[],
-  providerName: string,
-): string {
-  const entries: string[] = [];
-
-  for (const [segment, child] of node.children) {
-    if (child.rpcToolName) {
-      const procedure = findProcedure(procedures, child.rpcToolName);
-      const rootProviderName =
-        procedure?.kind === "stream" ? `${providerName}_stream` : providerName;
-      entries.push(
-        `${JSON.stringify(segment)}: (input) => ${rootProviderName}.${child.rpcToolName}(input ?? {})`,
-      );
-      continue;
-    }
-
-    entries.push(`${JSON.stringify(segment)}: ${emitRuntimeTree(child, procedures, providerName)}`);
-  }
-
-  return `{ ${entries.join(", ")} }`;
-}
-
-function emitTypeTree(
-  node: ProcedureTreeNode,
-  procedures: ProcedureDescriptor[],
-  providerName: string,
-): string {
-  const lines: string[] = ["{"];
-
-  for (const [segment, child] of node.children) {
-    if (child.rpcToolName) {
-      const procedure = findProcedure(procedures, child.rpcToolName);
-      const rootProviderName =
-        procedure?.kind === "stream" ? `${providerName}_stream` : providerName;
-      lines.push(`  ${JSON.stringify(segment)}: typeof ${rootProviderName}.${child.rpcToolName};`);
-      continue;
-    }
-
-    const nested = emitTypeTree(child, procedures, providerName)
-      .split("\n")
-      .map((line, index) => (index === 0 ? line : `  ${line}`))
-      .join("\n");
-    lines.push(`  ${JSON.stringify(segment)}: ${nested};`);
-  }
-
-  lines.push("}");
-  return lines.join("\n");
 }
 
 function buildToolDescriptors(procedures: ProcedureDescriptor[]): JsonSchemaToolDescriptors {
@@ -327,10 +241,10 @@ export function deriveContractContext(
   const providerName = options?.providerName ?? "rpc";
   const includeTypes = options?.includeTypes !== false;
   const procedures = collectAllProcedures(registry);
-  const procedureTree = buildProcedureTree(procedures);
   const valueProcedures = procedures.filter((procedure) => procedure.kind === "value");
   const streamProcedures = procedures.filter((procedure) => procedure.kind === "stream");
   const providers: DerivedProvider[] = [];
+  const { ctxExpression, ctxTypeExpression } = buildCtxTreeExpressions(procedures, providerName);
 
   if (valueProcedures.length > 0) {
     providers.push({
@@ -370,9 +284,9 @@ export function deriveContractContext(
         ]
       : [],
     providers,
-    ctxExpression: emitRuntimeTree(procedureTree, procedures, providerName),
-    ctxTypeExpression: emitTypeTree(procedureTree, procedures, providerName),
-    sandboxPrelude: `const ctx = ${emitRuntimeTree(procedureTree, procedures, providerName)};`,
+    ctxExpression,
+    ctxTypeExpression,
+    sandboxPrelude: `const ctx = ${ctxExpression};`,
     ctxTypes: includeTypes
       ? [
           "// Generated from selected oRPC contracts via @cloudflare/codemode",
@@ -388,7 +302,7 @@ export function deriveContractContext(
             ? ["", buildStreamTypeDefinitions(streamProcedures, `${providerName}_stream`)]
             : []),
           "",
-          `declare const ctx: ${emitTypeTree(procedureTree, procedures, providerName)};`,
+          `declare const ctx: ${ctxTypeExpression};`,
           "",
         ].join("\n")
       : "",

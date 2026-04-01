@@ -1,17 +1,17 @@
+import { useState, type ReactNode } from "react";
 import { Outlet, createFileRoute } from "@tanstack/react-router";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { AppSidebar } from "../components/app-sidebar.tsx";
 import { HeaderActionsProvider } from "../components/header-actions.tsx";
 import { PathBreadcrumbs } from "../components/path-breadcrumbs.tsx";
-import { useHeaderActions } from "../hooks/use-header-actions.ts";
 
 export const Route = createFileRoute("/_app")({
   component: AppLayout,
 });
 
 function AppLayout() {
-  const [headerActions, setHeaderActions] = useHeaderActions();
+  const [headerActions, setHeaderActions] = useState<ReactNode>(null);
 
   return (
     <SidebarProvider defaultOpen={false}>

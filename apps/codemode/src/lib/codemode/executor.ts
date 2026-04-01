@@ -1,6 +1,5 @@
 import { RpcTarget } from "cloudflare:workers";
-import { sanitizeToolName } from "~/lib/codemode/json-schema-types.ts";
-import { normalizeCode } from "~/lib/codemode/normalize.ts";
+import { normalizeCode, sanitizeToolName } from "@cloudflare/codemode";
 
 export interface ExecuteResult {
   result: unknown;

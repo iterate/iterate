@@ -2,15 +2,17 @@ import type {
   CodemodeInlineOpenApiSource as PublicCodemodeInlineOpenApiSource,
   CodemodeOpenApiSource as PublicCodemodeOpenApiSource,
 } from "@iterate-com/codemode-contract";
-import YAML from "yaml";
 import {
   generateTypesFromJsonSchema,
   jsonSchemaToType,
   sanitizeToolName,
-  type JsonSchema,
   type JsonSchemaToolDescriptors,
-} from "~/lib/codemode/json-schema-types.ts";
+} from "@cloudflare/codemode";
+import YAML from "yaml";
+import { buildCtxTreeExpressions } from "~/lib/codemode-ctx-tree.ts";
 import type { DerivedContractContext, DerivedProvider } from "~/lib/derive-contract-context.ts";
+
+type JsonSchema = boolean | Parameters<typeof jsonSchemaToType>[0];
 
 interface OpenApiServer {
   url?: string;
@@ -89,18 +91,7 @@ type OpenApiProcedure = {
   invoke: (input: unknown) => Promise<unknown>;
 };
 
-type ProcedureTreeNode = {
-  children: Map<string, ProcedureTreeNode>;
-  rpcToolName?: string;
-};
-
 const HTTP_METHODS = ["get", "post", "put", "delete", "patch", "options", "head"] as const;
-
-function createTreeNode(): ProcedureTreeNode {
-  return {
-    children: new Map(),
-  };
-}
 
 function trimTrailingSlash(value: string) {
   return value.replace(/\/+$/, "");
@@ -260,6 +251,28 @@ function parseOpenApiJsonSchema(value: unknown): JsonSchema {
   if (typeof value === "boolean") return value;
   if (typeof value === "object" && value !== null) return value as Record<string, unknown>;
   return {};
+}
+
+function renderJsonSchemaType(schema: JsonSchema, typeName: string) {
+  if (schema === true) {
+    return `type ${typeName} = unknown;`;
+  }
+
+  if (schema === false) {
+    return `type ${typeName} = never;`;
+  }
+
+  return jsonSchemaToType(schema, typeName);
+}
+
+function toToolDescriptorSchema(
+  schema: JsonSchema,
+): JsonSchemaToolDescriptors[string]["inputSchema"] {
+  if (schema === true || schema === false) {
+    return {};
+  }
+
+  return schema;
 }
 
 function buildParameterGroupSchema(parameters: OpenApiParameter[]) {
@@ -825,88 +838,16 @@ async function buildProcedureFromOperation(options: {
   };
 }
 
-function buildProcedureTree(procedures: OpenApiProcedure[]) {
-  const root = createTreeNode();
-
-  for (const procedure of procedures) {
-    let current = root;
-
-    for (const segment of procedure.runtimePath) {
-      let child = current.children.get(segment);
-      if (!child) {
-        child = createTreeNode();
-        current.children.set(segment, child);
-      }
-      current = child;
-    }
-
-    current.rpcToolName = procedure.rpcToolName;
-  }
-
-  return root;
-}
-
-function findProcedure(procedures: OpenApiProcedure[], rpcToolName: string) {
-  return procedures.find((procedure) => procedure.rpcToolName === rpcToolName);
-}
-
-function emitRuntimeTree(
-  node: ProcedureTreeNode,
-  procedures: OpenApiProcedure[],
-  providerName: string,
-): string {
-  const entries: string[] = [];
-
-  for (const [segment, child] of node.children) {
-    if (child.rpcToolName) {
-      const procedure = findProcedure(procedures, child.rpcToolName);
-      const rootName = procedure?.kind === "stream" ? `${providerName}_stream` : providerName;
-      entries.push(
-        `${JSON.stringify(segment)}: (input) => ${rootName}.${child.rpcToolName}(input ?? {})`,
-      );
-      continue;
-    }
-
-    entries.push(`${JSON.stringify(segment)}: ${emitRuntimeTree(child, procedures, providerName)}`);
-  }
-
-  return `{ ${entries.join(", ")} }`;
-}
-
-function emitTypeTree(
-  node: ProcedureTreeNode,
-  procedures: OpenApiProcedure[],
-  providerName: string,
-): string {
-  const lines: string[] = ["{"];
-
-  for (const [segment, child] of node.children) {
-    if (child.rpcToolName) {
-      const procedure = findProcedure(procedures, child.rpcToolName);
-      const rootName = procedure?.kind === "stream" ? `${providerName}_stream` : providerName;
-      lines.push(`  ${JSON.stringify(segment)}: typeof ${rootName}.${child.rpcToolName};`);
-      continue;
-    }
-
-    const nested = emitTypeTree(child, procedures, providerName)
-      .split("\n")
-      .map((line, index) => (index === 0 ? line : `  ${line}`))
-      .join("\n");
-    lines.push(`  ${JSON.stringify(segment)}: ${nested};`);
-  }
-
-  lines.push("}");
-  return lines.join("\n");
-}
-
 function buildValueToolDescriptors(procedures: OpenApiProcedure[]): JsonSchemaToolDescriptors {
   return Object.fromEntries(
     procedures.map((procedure) => [
       procedure.rpcToolName,
       {
         description: procedure.description,
-        inputSchema: procedure.inputSchema,
-        ...(procedure.outputSchema ? { outputSchema: procedure.outputSchema } : {}),
+        inputSchema: toToolDescriptorSchema(procedure.inputSchema),
+        ...(procedure.outputSchema
+          ? { outputSchema: toToolDescriptorSchema(procedure.outputSchema) }
+          : {}),
       },
     ]),
   );
@@ -953,7 +894,7 @@ function buildFallbackValueTypeDefinitions(procedures: OpenApiProcedure[], provi
       declarations.push(
         compactInput
           ? `type ${inputTypeName} = unknown;`
-          : jsonSchemaToType(procedure.inputSchema, inputTypeName),
+          : renderJsonSchemaType(procedure.inputSchema, inputTypeName),
       );
     } catch {
       declarations.push(`type ${inputTypeName} = unknown;`);
@@ -963,7 +904,7 @@ function buildFallbackValueTypeDefinitions(procedures: OpenApiProcedure[], provi
       declarations.push(
         compactOutput || !procedure.outputSchema
           ? `type ${outputTypeName} = unknown;`
-          : jsonSchemaToType(procedure.outputSchema, outputTypeName),
+          : renderJsonSchemaType(procedure.outputSchema, outputTypeName),
       );
     } catch {
       declarations.push(`type ${outputTypeName} = unknown;`);
@@ -996,12 +937,12 @@ function buildStreamTypeDefinitions(procedures: OpenApiProcedure[], providerName
     declarations.push(
       compactInput
         ? `type ${inputTypeName} = unknown;`
-        : jsonSchemaToType(procedure.inputSchema, inputTypeName),
+        : renderJsonSchemaType(procedure.inputSchema, inputTypeName),
     );
     declarations.push(
       compactYield || !procedure.outputSchema
         ? `type ${yieldTypeName} = unknown;`
-        : jsonSchemaToType(procedure.outputSchema, yieldTypeName),
+        : renderJsonSchemaType(procedure.outputSchema, yieldTypeName),
     );
     providerLines.push(
       `  ${JSON.stringify(procedure.rpcToolName)}: (input: ${inputTypeName}) => Promise<AsyncIterable<${yieldTypeName}>>;`,
@@ -1121,10 +1062,10 @@ export async function buildOpenApiCodemodeContext(
     }
   }
 
-  const procedureTree = buildProcedureTree(procedures);
   const valueProcedures = procedures.filter((procedure) => procedure.kind === "value");
   const streamProcedures = procedures.filter((procedure) => procedure.kind === "stream");
   const providers: DerivedProvider[] = [];
+  const { ctxExpression, ctxTypeExpression } = buildCtxTreeExpressions(procedures, providerName);
 
   if (valueProcedures.length > 0) {
     providers.push({
@@ -1157,21 +1098,13 @@ export async function buildOpenApiCodemodeContext(
   const context: DerivedContractContext = {
     declarations,
     providers,
-    ctxExpression: emitRuntimeTree(procedureTree, procedures, providerName),
-    ctxTypeExpression:
-      options?.includeTypes === false
-        ? "{}"
-        : emitTypeTree(procedureTree, procedures, providerName),
-    sandboxPrelude: `const ctx = ${emitRuntimeTree(procedureTree, procedures, providerName)};`,
+    ctxExpression,
+    ctxTypeExpression: options?.includeTypes === false ? "{}" : ctxTypeExpression,
+    sandboxPrelude: `const ctx = ${ctxExpression};`,
     ctxTypes:
       options?.includeTypes === false
         ? "declare const ctx: {};"
-        : [
-            ...declarations,
-            "",
-            `declare const ctx: ${emitTypeTree(procedureTree, procedures, providerName)};`,
-            "",
-          ].join("\n"),
+        : [...declarations, "", `declare const ctx: ${ctxTypeExpression};`, ""].join("\n"),
   };
 
   return context;
