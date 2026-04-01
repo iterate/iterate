@@ -3,7 +3,7 @@ import { commonContract } from "@iterate-com/shared/apps/common-router-contract"
 import { z } from "zod";
 
 export const SEMAPHORE_KEY_PATTERN = /^(?=.*[a-z])[a-z0-9-]+$/;
-export const MAX_LEASE_MS = 60 * 60 * 1000;
+export const MAX_LEASE_MS = 30 * 24 * 60 * 60 * 1000;
 export const MAX_WAIT_MS = 5 * 60 * 1000;
 
 export const semaphoreKeySchema = z
@@ -59,43 +59,6 @@ export const semaphoreWaitMsSchema = z
   .max(MAX_WAIT_MS, `waitMs must be <= ${MAX_WAIT_MS}`);
 export const SemaphoreLeaseState = z.enum(["available", "leased"]);
 
-export const previewEnvironmentAppSlugSchema = z.enum([
-  "example",
-  "events",
-  "semaphore",
-  "ingress-proxy",
-]);
-
-export const previewEnvironmentTypeSchema = z.enum([
-  "example-preview-environment",
-  "events-preview-environment",
-  "semaphore-preview-environment",
-  "ingress-proxy-preview-environment",
-]);
-
-export const previewEnvironmentIdentifierSchema = z
-  .string()
-  .trim()
-  .toLowerCase()
-  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "must be a lowercase kebab-case identifier");
-
-export const PreviewEnvironmentResourceData = z.object({
-  kind: z.literal("preview-environment"),
-  previewEnvironmentAppSlug: previewEnvironmentAppSlugSchema,
-  previewEnvironmentIdentifier: previewEnvironmentIdentifierSchema,
-  previewEnvironmentDopplerConfigName: z.string().trim().min(1),
-  previewEnvironmentAlchemyStageName: z.string().trim().min(1),
-  previewEnvironmentWorkersDevHostname: z.string().trim().min(1),
-});
-
-export const PreviewEnvironmentLeaseOwner = z.object({
-  repositoryFullName: z.string().trim().min(1),
-  pullRequestNumber: z.number().int().positive(),
-  pullRequestHeadRefName: z.string().trim().min(1),
-  pullRequestHeadSha: z.string().trim().min(1),
-  workflowRunUrl: z.string().trim().url(),
-});
-
 export const SemaphoreResourceRecord = z.object({
   type: semaphoreTypeSchema,
   slug: semaphoreSlugSchema,
@@ -114,23 +77,6 @@ export const SemaphoreLeaseRecord = z.object({
   data: semaphoreDataSchema,
   leaseId: z.string().uuid(),
   expiresAt: z.number().int().positive(),
-});
-
-export const PreviewEnvironmentRecord = z.object({
-  previewEnvironmentType: previewEnvironmentTypeSchema,
-  previewEnvironmentIdentifier: previewEnvironmentIdentifierSchema,
-  previewEnvironmentAppSlug: previewEnvironmentAppSlugSchema,
-  previewEnvironmentDopplerConfigName: z.string().trim().min(1),
-  previewEnvironmentAlchemyStageName: z.string().trim().min(1),
-  previewEnvironmentWorkersDevHostname: z.string().trim().min(1),
-  leaseState: SemaphoreLeaseState,
-  leasedUntil: z.number().int().positive().nullable(),
-  previewEnvironmentSemaphoreLeaseId: z.string().uuid().nullable(),
-  previewEnvironmentLeaseOwner: PreviewEnvironmentLeaseOwner.nullable(),
-  lastAcquiredAt: z.number().int().positive().nullable(),
-  lastReleasedAt: z.number().int().positive().nullable(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
 });
 
 export const AddResourceInput = z.object({
@@ -165,55 +111,12 @@ export const ReleaseResourceInput = z.object({
   leaseId: z.string().uuid(),
 });
 
-export const PreviewEnvironmentCreateInput = z.object({
-  previewEnvironmentAppSlug: previewEnvironmentAppSlugSchema,
-  repositoryFullName: z.string().trim().min(1),
-  pullRequestNumber: z.number().int().positive(),
-  pullRequestHeadRefName: z.string().trim().min(1),
-  pullRequestHeadSha: z.string().trim().min(1),
-  workflowRunUrl: z.string().trim().url(),
-  leaseMs: semaphoreLeaseMsSchema,
-  waitMs: semaphoreWaitMsSchema.optional(),
-  previewEnvironmentIdentifier: previewEnvironmentIdentifierSchema.optional(),
-});
-
-export const PreviewEnvironmentDestroyInput = z.object({
-  previewEnvironmentIdentifier: previewEnvironmentIdentifierSchema,
-  previewEnvironmentSemaphoreLeaseId: z.string().uuid(),
-  destroyReason: z.string().trim().min(1),
-});
-
-export const PreviewEnvironmentGetInput = z.object({
-  previewEnvironmentIdentifier: previewEnvironmentIdentifierSchema,
-});
-
-export const PreviewEnvironmentListInput = z.object({
-  repositoryFullName: z.string().trim().min(1).optional(),
-  pullRequestNumber: z.coerce.number().int().positive().optional(),
-  previewEnvironmentAppSlug: previewEnvironmentAppSlugSchema.optional(),
-  expiredOnly: z.coerce.boolean().optional(),
-});
-
-export const PreviewEnvironmentEnsureInventoryInput = z
-  .object({
-    slotsPerApp: z.coerce.number().int().positive().max(100).optional(),
-  })
-  .default({});
-
 export const DeleteResourceResult = z.object({
   deleted: z.boolean(),
 });
 
 export const ReleaseResourceResult = z.object({
   released: z.boolean(),
-});
-
-export const PreviewEnvironmentDestroyResult = z.object({
-  destroyed: z.boolean(),
-});
-
-export const PreviewEnvironmentEnsureInventoryResult = z.object({
-  upsertedCount: z.number().int().nonnegative(),
 });
 
 export const semaphoreContract = oc.router({
@@ -273,52 +176,7 @@ export const semaphoreContract = oc.router({
       .input(ReleaseResourceInput)
       .output(ReleaseResourceResult),
   }),
-  preview: oc.router({
-    create: oc
-      .route({
-        method: "POST",
-        path: "/preview/create",
-        tags: ["Preview Environments"],
-      })
-      .input(PreviewEnvironmentCreateInput)
-      .output(PreviewEnvironmentRecord),
-    destroy: oc
-      .route({
-        method: "POST",
-        path: "/preview/destroy",
-        tags: ["Preview Environments"],
-      })
-      .input(PreviewEnvironmentDestroyInput)
-      .output(PreviewEnvironmentDestroyResult),
-    get: oc
-      .route({
-        method: "GET",
-        path: "/preview/{previewEnvironmentIdentifier}",
-        tags: ["Preview Environments"],
-      })
-      .input(PreviewEnvironmentGetInput)
-      .output(PreviewEnvironmentRecord),
-    list: oc
-      .route({
-        method: "GET",
-        path: "/preview",
-        tags: ["Preview Environments"],
-      })
-      .input(PreviewEnvironmentListInput)
-      .output(z.array(PreviewEnvironmentRecord)),
-    ensureInventory: oc
-      .route({
-        method: "POST",
-        path: "/preview/ensure-inventory",
-        tags: ["Preview Environments"],
-      })
-      .input(PreviewEnvironmentEnsureInventoryInput)
-      .output(PreviewEnvironmentEnsureInventoryResult),
-  }),
 });
 
 export type SemaphoreResourceRecord = z.infer<typeof SemaphoreResourceRecord>;
 export type SemaphoreLeaseRecord = z.infer<typeof SemaphoreLeaseRecord>;
-export type PreviewEnvironmentAppSlug = z.infer<typeof previewEnvironmentAppSlugSchema>;
-export type PreviewEnvironmentType = z.infer<typeof previewEnvironmentTypeSchema>;
-export type PreviewEnvironmentRecord = z.infer<typeof PreviewEnvironmentRecord>;

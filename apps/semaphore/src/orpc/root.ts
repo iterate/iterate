@@ -11,13 +11,6 @@ import {
   listResourcesFromDb,
   ResourceInputError,
 } from "~/lib/resource-store.ts";
-import {
-  createPreviewEnvironment,
-  destroyPreviewEnvironment,
-  ensurePreviewInventory,
-  getPreviewEnvironmentRecord,
-  listPreviewEnvironmentRecords,
-} from "~/lib/preview-environments.ts";
 import { os } from "~/orpc/orpc.ts";
 
 function readBearerToken(headerValue: string | null): string | null {
@@ -74,44 +67,6 @@ function mapResourceError(error: unknown): never {
   if (error instanceof Error && /UNIQUE constraint failed/i.test(error.message)) {
     throw new ORPCError("CONFLICT", {
       message: "Resource already exists for this type and slug.",
-    });
-  }
-
-  throw error;
-}
-
-function mapPreviewError(error: unknown): never {
-  if (error instanceof ORPCError) {
-    throw error;
-  }
-
-  if (isZodErrorLike(error)) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: error.issues[0]?.message ?? "Invalid preview request input.",
-    });
-  }
-
-  if (
-    error instanceof Error &&
-    error.message.includes("already assigned to another pull request")
-  ) {
-    throw new ORPCError("CONFLICT", {
-      message: error.message,
-    });
-  }
-
-  if (
-    error instanceof Error &&
-    error.message.includes("No preview environment is currently available")
-  ) {
-    throw new ORPCError("CONFLICT", {
-      message: error.message,
-    });
-  }
-
-  if (error instanceof Error && error.message.includes("was not found")) {
-    throw new ORPCError("NOT_FOUND", {
-      message: error.message,
     });
   }
 
@@ -237,66 +192,6 @@ const releaseResourceProcedure = os.resources.release
     }
   });
 
-const createPreviewEnvironmentProcedure = os.preview.create
-  .use(authProcedure)
-  .handler(async ({ context, input }) => {
-    try {
-      return await createPreviewEnvironment(context, input);
-    } catch (error) {
-      return mapPreviewError(error);
-    }
-  });
-
-const destroyPreviewEnvironmentProcedure = os.preview.destroy
-  .use(authProcedure)
-  .handler(async ({ context, input }) => {
-    try {
-      return await destroyPreviewEnvironment(context, input);
-    } catch (error) {
-      return mapPreviewError(error);
-    }
-  });
-
-const getPreviewEnvironmentProcedure = os.preview.get
-  .use(authProcedure)
-  .handler(async ({ context, input }) => {
-    try {
-      const previewEnvironment = await getPreviewEnvironmentRecord(
-        context,
-        input.previewEnvironmentIdentifier,
-      );
-      if (!previewEnvironment) {
-        throw new ORPCError("NOT_FOUND", {
-          message: `No preview environment exists for ${input.previewEnvironmentIdentifier}.`,
-        });
-      }
-
-      return previewEnvironment;
-    } catch (error) {
-      return mapPreviewError(error);
-    }
-  });
-
-const listPreviewEnvironmentProcedure = os.preview.list
-  .use(authProcedure)
-  .handler(async ({ context, input }) => {
-    try {
-      return await listPreviewEnvironmentRecords(context, input);
-    } catch (error) {
-      return mapPreviewError(error);
-    }
-  });
-
-const ensurePreviewInventoryProcedure = os.preview.ensureInventory
-  .use(authProcedure)
-  .handler(async ({ context, input }) => {
-    try {
-      return await ensurePreviewInventory(context, input);
-    } catch (error) {
-      return mapPreviewError(error);
-    }
-  });
-
 export const appRouter = os.router({
   common: os.common.router(
     createCommonRouter({
@@ -310,12 +205,5 @@ export const appRouter = os.router({
     find: findResourceProcedure,
     acquire: acquireResourceProcedure,
     release: releaseResourceProcedure,
-  }),
-  preview: os.preview.router({
-    create: createPreviewEnvironmentProcedure,
-    destroy: destroyPreviewEnvironmentProcedure,
-    get: getPreviewEnvironmentProcedure,
-    list: listPreviewEnvironmentProcedure,
-    ensureInventory: ensurePreviewInventoryProcedure,
   }),
 });
