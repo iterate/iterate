@@ -13,7 +13,6 @@ import {
   PromptInputFooter,
   PromptInputSubmit,
   PromptInputTextarea,
-  PromptInputTools,
 } from "@iterate-com/ui/components/ai-elements/prompt-input";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
@@ -178,9 +177,8 @@ export function StreamPage({
             />
           </PromptInputBody>
           <PromptInputFooter className="items-center justify-between gap-2 border-t p-2.5">
-            <PromptInputTools className="min-w-0 flex-1" />
             <PromptInputSubmit
-              className="shrink-0"
+              className="ml-auto shrink-0"
               disabled={appendEvent.isPending || !appendInputJson.trim()}
               status={appendEvent.isPending ? "submitted" : "ready"}
             />
