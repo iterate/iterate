@@ -1,4 +1,8 @@
-import type { CodemodeOpenApiSource as PublicCodemodeOpenApiSource } from "@iterate-com/codemode-contract";
+import type {
+  CodemodeInlineOpenApiSource as PublicCodemodeInlineOpenApiSource,
+  CodemodeOpenApiSource as PublicCodemodeOpenApiSource,
+} from "@iterate-com/codemode-contract";
+import YAML from "yaml";
 import {
   generateTypesFromJsonSchema,
   jsonSchemaToType,
@@ -62,7 +66,9 @@ interface OpenApiInputPlan {
   normalize: (input: unknown) => NormalizedOperationInput;
 }
 
-export type CodemodeOpenApiSource = PublicCodemodeOpenApiSource & {
+type CodemodeOpenApiSourceBase = PublicCodemodeOpenApiSource | PublicCodemodeInlineOpenApiSource;
+
+export type CodemodeOpenApiSource = CodemodeOpenApiSourceBase & {
   operationAliases?: Record<string, string>;
 };
 
@@ -102,6 +108,14 @@ function trimTrailingSlash(value: string) {
 
 function trimLeadingSlash(value: string) {
   return value.replace(/^\/+/, "");
+}
+
+function readSourceIdentifier(source: CodemodeOpenApiSource) {
+  if (source.type === "openapi") {
+    return source.url;
+  }
+
+  return source.baseUrl ?? source.namespace ?? "inline-openapi";
 }
 
 async function readResponseErrorMessage(response: Response) {
@@ -213,7 +227,11 @@ function deriveNamespace(document: OpenApiDocument, sourceUrl: string) {
     );
   }
 
-  return sanitizeToolName(new URL(sourceUrl).hostname.split(".")[0] ?? "openapi");
+  try {
+    return sanitizeToolName(new URL(sourceUrl).hostname.split(".")[0] ?? "openapi");
+  } catch {
+    return sanitizeToolName(sourceUrl.replace(/[^a-zA-Z0-9]+/g, "_") || "openapi");
+  }
 }
 
 function resolveServerBaseUrl(
@@ -1029,23 +1047,40 @@ async function loadOpenApiDocument(
   source: CodemodeOpenApiSource,
   options?: { fetch?: CodemodeOpenApiFetch },
 ) {
-  const response = await (options?.fetch ?? fetch)(source.url, {
-    headers: source.headers,
-  });
-  if (!response.ok) {
-    const message = await readResponseErrorMessage(response);
-    throw new Error(
-      message
-        ? `Failed to fetch OpenAPI document ${source.url}: ${response.status} (${message})`
-        : `Failed to fetch OpenAPI document ${source.url}: ${response.status}`,
-    );
+  let json: OpenApiDocument;
+
+  if (source.type === "openapi-inline") {
+    try {
+      json = YAML.parse(source.spec) as OpenApiDocument;
+    } catch (error) {
+      throw new Error(
+        `Failed to parse inline OpenAPI document${
+          source.namespace ? ` for ${source.namespace}` : ""
+        }: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  } else {
+    const response = await (options?.fetch ?? fetch)(source.url, {
+      headers: source.headers,
+    });
+    if (!response.ok) {
+      const message = await readResponseErrorMessage(response);
+      throw new Error(
+        message
+          ? `Failed to fetch OpenAPI document ${source.url}: ${response.status} (${message})`
+          : `Failed to fetch OpenAPI document ${source.url}: ${response.status}`,
+      );
+    }
+
+    json = (await response.json()) as OpenApiDocument;
   }
 
-  const json = (await response.json()) as OpenApiDocument;
   const resolved = resolveRefs(json, json) as OpenApiDocument;
+  const sourceIdentifier = readSourceIdentifier(source);
   return {
     document: resolved,
-    namespace: source.namespace ?? deriveNamespace(resolved, source.url),
+    namespace: source.namespace ?? deriveNamespace(resolved, sourceIdentifier),
+    sourceIdentifier,
   };
 }
 
@@ -1068,7 +1103,7 @@ export async function buildOpenApiCodemodeContext(
 
         const procedure = await buildProcedureFromOperation({
           namespace: loaded.namespace,
-          sourceUrl: source.url,
+          sourceUrl: loaded.sourceIdentifier,
           document: loaded.document,
           path,
           method,

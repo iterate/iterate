@@ -8,6 +8,7 @@ import {
   NAGER_OPENAPI_SOURCE,
   OPEN_LIBRARY_OPENAPI_SOURCE,
   PETSTORE_OPENAPI_SOURCE,
+  POSTMAN_ECHO_INLINE_OPENAPI_SOURCE,
   USGS_WATER_OPENAPI_SOURCE,
   WEATHER_OPENAPI_SOURCE,
   type CodemodeUiSource,
@@ -22,6 +23,48 @@ export interface CodemodeExampleSnippet {
 }
 
 export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
+  {
+    id: "postman-echo-inline",
+    title: "Inline Echo Debug",
+    description: "Use an inline OpenAPI spec to inspect echoed query params and request headers.",
+    sources: [POSTMAN_ECHO_INLINE_OPENAPI_SOURCE],
+    code: `async ({ ctx }) => {
+  const echoedQuery = await ctx.echo.get({
+    foo: "codemode",
+    bar: "inline-openapi",
+  });
+
+  const echoedHeaders = await ctx.echo.headers({});
+
+  return {
+    args: echoedQuery.args ?? null,
+    xForwardedProto: echoedHeaders.headers?.["x-forwarded-proto"] ?? null,
+    userAgent: echoedHeaders.headers?.["user-agent"] ?? null,
+  };
+};`,
+  },
+  {
+    id: "echo-secret-header",
+    title: "Echo Secret Header",
+    description:
+      "Create a secret first, then watch Postman Echo reflect the injected header value back.",
+    sources: [
+      {
+        ...POSTMAN_ECHO_INLINE_OPENAPI_SOURCE,
+        headers: {
+          "x-demo-secret": 'getIterateSecret({ secretKey: "demo.echo" })',
+        },
+      },
+    ],
+    code: `async ({ ctx }) => {
+  const echoed = await ctx.echo.headers({});
+
+  return {
+    reflectedSecretHeader: echoed.headers?.["x-demo-secret"] ?? null,
+    note: "Create demo.echo in codemode secrets first.",
+  };
+};`,
+  },
   {
     id: "service-overview",
     title: "Service Overview",

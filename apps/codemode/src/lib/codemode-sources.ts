@@ -1,11 +1,12 @@
 import {
   CodemodeSource,
+  type CodemodeInlineOpenApiSource as CodemodeUiInlineOpenApiSource,
   type CodemodeOpenApiSource as CodemodeUiOpenApiSource,
   type CodemodeSource as CodemodeUiSource,
 } from "@iterate-com/codemode-contract";
 import YAML from "yaml";
 
-export type { CodemodeUiOpenApiSource, CodemodeUiSource };
+export type { CodemodeUiInlineOpenApiSource, CodemodeUiOpenApiSource, CodemodeUiSource };
 
 export interface CodemodeSourcePreset {
   id: string;
@@ -94,6 +95,49 @@ export const USGS_WATER_OPENAPI_SOURCE: CodemodeUiOpenApiSource = {
   url: "https://api.waterdata.usgs.gov/ogcapi/v0/openapi",
 };
 
+export const POSTMAN_ECHO_INLINE_OPENAPI_SOURCE: CodemodeUiInlineOpenApiSource = {
+  type: "openapi-inline",
+  namespace: "echo",
+  baseUrl: "https://postman-echo.com",
+  spec: `openapi: 3.1.0
+info:
+  title: Postman Echo
+  version: 1.0.0
+servers:
+  - url: /
+paths:
+  /get:
+    get:
+      operationId: get
+      parameters:
+        - in: query
+          name: foo
+          schema:
+            type: string
+        - in: query
+          name: bar
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /headers:
+    get:
+      operationId: headers
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+`,
+};
+
 export const DEFAULT_CODEMODE_SOURCES: CodemodeUiSource[] = [
   EXAMPLE_OPENAPI_SOURCE,
   EVENTS_OPENAPI_SOURCE,
@@ -167,6 +211,12 @@ export const CODEMODE_SOURCE_PRESETS: CodemodeSourcePreset[] = [
     title: "USGS Water Data",
     description: "Public OGC/OpenAPI for water data, collections, and geographic features.",
     source: USGS_WATER_OPENAPI_SOURCE,
+  },
+  {
+    id: "postman-echo-inline-openapi",
+    title: "Postman Echo Inline",
+    description: "Inline OpenAPI spec pointed at Postman Echo for header and query debugging.",
+    source: POSTMAN_ECHO_INLINE_OPENAPI_SOURCE,
   },
   {
     id: "example-contract",

@@ -3,6 +3,7 @@ import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type {
   CodemodeContractSourceService,
+  CodemodeInlineOpenApiSource,
   CodemodeOpenApiSource,
   CodemodeSource,
 } from "@iterate-com/codemode-contract";
@@ -138,10 +139,14 @@ function createContractRegistry(
 
 function resolveOpenApiSource(
   config: AppConfig,
-  source: CodemodeOpenApiSource,
+  source: CodemodeOpenApiSource | CodemodeInlineOpenApiSource,
 ): RuntimeOpenApiSource {
   const runtimeSource: RuntimeOpenApiSource = { ...source };
-  const normalizedUrl = trimTrailingSlash(source.url);
+  const normalizedUrl =
+    source.type === "openapi"
+      ? trimTrailingSlash(source.url)
+      : trimTrailingSlash(source.baseUrl ?? "");
+  const normalizedBaseUrl = trimTrailingSlash(source.baseUrl ?? "");
   const eventsOpenApiUrl = `${trimTrailingSlash(config.codemodeApis.eventsBaseUrl)}/api/openapi.json`;
   const semaphoreOpenApiUrl = `${trimTrailingSlash(config.codemodeApis.semaphoreBaseUrl)}/api/openapi.json`;
   const ingressOpenApiUrl = `${trimTrailingSlash(config.codemodeApis.ingressProxyBaseUrl)}/api/openapi.json`;
@@ -150,6 +155,7 @@ function resolveOpenApiSource(
 
   if (
     normalizedUrl === eventsOpenApiUrl ||
+    normalizedBaseUrl === trimTrailingSlash(config.codemodeApis.eventsBaseUrl) ||
     (source.namespace === "events" && normalizedUrl.endsWith("/api/openapi.json"))
   ) {
     runtimeSource.operationAliases = {
@@ -161,6 +167,7 @@ function resolveOpenApiSource(
 
   if (
     normalizedUrl === semaphoreOpenApiUrl ||
+    normalizedBaseUrl === trimTrailingSlash(config.codemodeApis.semaphoreBaseUrl) ||
     (source.namespace === "semaphore" && normalizedUrl.endsWith("/api/openapi.json"))
   ) {
     runtimeSource.headers = {
@@ -173,6 +180,7 @@ function resolveOpenApiSource(
 
   if (
     normalizedUrl === ingressOpenApiUrl ||
+    normalizedBaseUrl === trimTrailingSlash(config.codemodeApis.ingressProxyBaseUrl) ||
     (source.namespace === "ingressProxy" && normalizedUrl.endsWith("/api/openapi.json"))
   ) {
     runtimeSource.headers = {
@@ -296,7 +304,10 @@ export async function buildCodemodeContextFromSources(options: {
   }
 
   const openApiSources = selectedSources
-    .filter((source): source is CodemodeOpenApiSource => source.type === "openapi")
+    .filter(
+      (source): source is CodemodeOpenApiSource | CodemodeInlineOpenApiSource =>
+        source.type === "openapi" || source.type === "openapi-inline",
+    )
     .map((source) => resolveOpenApiSource(options.config, source));
 
   if (openApiSources.length > 0) {

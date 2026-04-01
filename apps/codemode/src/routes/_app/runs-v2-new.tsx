@@ -361,6 +361,10 @@ function readSourceTitle(source: CodemodeUiSource) {
     return source.service;
   }
 
+  if (source.type === "openapi-inline") {
+    return source.namespace?.trim() || source.baseUrl || "inline-openapi";
+  }
+
   return source.namespace?.trim() || source.url;
 }
 function readErrorMessage(error: unknown) {

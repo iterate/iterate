@@ -22,6 +22,15 @@ export const CodemodeOpenApiSource = z.object({
 });
 export type CodemodeOpenApiSource = z.infer<typeof CodemodeOpenApiSource>;
 
+export const CodemodeInlineOpenApiSource = z.object({
+  type: z.literal("openapi-inline"),
+  spec: z.string().trim().min(1),
+  baseUrl: z.string().trim().url().optional(),
+  namespace: z.string().trim().min(1).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+});
+export type CodemodeInlineOpenApiSource = z.infer<typeof CodemodeInlineOpenApiSource>;
+
 export const CodemodeOrpcContractSource = z.object({
   type: z.literal("orpc-contract"),
   service: CodemodeContractSourceService,
@@ -30,6 +39,7 @@ export type CodemodeOrpcContractSource = z.infer<typeof CodemodeOrpcContractSour
 
 export const CodemodeSource = z.discriminatedUnion("type", [
   CodemodeOpenApiSource,
+  CodemodeInlineOpenApiSource,
   CodemodeOrpcContractSource,
 ]);
 export type CodemodeSource = z.infer<typeof CodemodeSource>;
