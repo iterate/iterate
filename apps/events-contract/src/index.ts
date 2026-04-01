@@ -60,6 +60,17 @@ export const EventInput = z.object({
 });
 export type EventInput = z.infer<typeof EventInput>;
 
+const EventAppendBody = EventInput.omit({
+  path: true,
+});
+
+const AppendRequestBody = z.union([
+  EventAppendBody,
+  z.object({
+    events: z.array(EventAppendBody).min(1),
+  }),
+]);
+
 export const Event = EventInput.extend({
   offset: Offset,
   createdAt,
@@ -76,17 +87,29 @@ export const StreamMetadataUpdatedPayload = z.object({
 });
 export type StreamMetadataUpdatedPayload = z.infer<typeof StreamMetadataUpdatedPayload>;
 
-export const AppendInput = z.intersection(
+const AppendInput = z.union([
   z.object({
-    path: StreamPath,
-  }),
-  z.union([
-    EventInput,
-    z.object({
-      events: z.array(EventInput).min(1),
+    params: z.object({
+      path: StreamPath,
     }),
-  ]),
-);
+    query: z
+      .object({
+        jsonataTransform: z.undefined().optional(),
+      })
+      .optional()
+      .default({}),
+    body: AppendRequestBody,
+  }),
+  z.object({
+    params: z.object({
+      path: StreamPath,
+    }),
+    query: z.object({
+      jsonataTransform: z.string().trim().min(1),
+    }),
+    body: JSONObject,
+  }),
+]);
 
 export const StreamState = z.object({
   path: StreamPath.nullable(),
@@ -115,9 +138,14 @@ export const eventsContract = oc.router({
       operationId: "appendStreamEvents",
       method: "POST",
       path: "/streams/{+path}",
+      // oRPC's detailed input structure keeps path params, query params, and
+      // the JSON body separate so `jsonataTransform` is part of the contract
+      // and OpenAPI spec instead of a file-route escape hatch.
+      // https://orpc.dev/docs/openapi/input-output-structure
+      inputStructure: "detailed",
       successDescription: "Events appended successfully and returned",
       description:
-        "Appends events to a stream in order. Offsets are assigned by the stream itself. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
+        "Appends events to a stream in order. Offsets are assigned by the stream itself. Events with an existing idempotencyKey return the stored event instead of creating a duplicate. When `jsonataTransform` is present, the raw JSON request body is transformed into a single event body before append.",
       tags: ["Streams"],
     })
     .input(AppendInput)

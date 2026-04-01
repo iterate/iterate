@@ -37,7 +37,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       });
 
       expect(res.ok).toBe(true);
-      expect(await res.text()).toContain("Append event");
+      expect(await res.text()).toContain("Create stream");
     },
     testTimeoutMs,
   );
@@ -57,10 +57,21 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const body = (await res.json()) as {
         paths?: Record<string, unknown>;
       };
+      const paths = body.paths ?? {};
 
-      expect(body.paths).toHaveProperty("/streams");
-      expect(body.paths).toHaveProperty("/streams/{path}");
-      expect(body.paths).toHaveProperty("/stream-state/{streamPath}");
+      expect(paths).toHaveProperty("/streams");
+      expect(paths).toHaveProperty("/streams/{path}");
+      expect(paths).toHaveProperty("/stream-state/{streamPath}");
+      expect(paths["/streams/{path}"]).toMatchObject({
+        post: {
+          parameters: expect.arrayContaining([
+            expect.objectContaining({
+              in: "query",
+              name: "jsonataTransform",
+            }),
+          ]),
+        },
+      });
     },
     testTimeoutMs,
   );
@@ -71,9 +82,13 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const path: StreamPath = `/smoke/${Date.now().toString(36)}`;
 
       await app.client.append({
-        path,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { smoke: true },
+        params: {
+          path,
+        },
+        body: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { smoke: true },
+        },
       });
 
       const streams = await app.client.listStreams({});
@@ -115,11 +130,15 @@ describeRuntimeSmoke("events runtime smoke", () => {
       try {
         setTimeout(() => {
           void app.client.append({
-            path,
-            type: STREAM_METADATA_UPDATED_TYPE,
-            payload: {
-              metadata: {
-                live: true,
+            params: {
+              path,
+            },
+            body: {
+              type: STREAM_METADATA_UPDATED_TYPE,
+              payload: {
+                metadata: {
+                  live: true,
+                },
               },
             },
           });

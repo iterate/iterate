@@ -123,8 +123,15 @@ export function StreamPage({
     }
 
     const request = appendEvent.mutateAsync({
-      path: event.path,
-      events: [event],
+      params: {
+        path: event.path,
+      },
+      body: {
+        type: event.type,
+        payload: event.payload,
+        metadata: event.metadata,
+        idempotencyKey: event.idempotencyKey,
+      },
     });
 
     void toast.promise(request, {
