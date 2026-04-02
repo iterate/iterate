@@ -1,4 +1,4 @@
-import { createSchedulingTestDurableObjects } from "~/durable-objects/scheduling.ts";
+import { createSchedulingTestDurableObjects } from "~/durable-objects/scheduling-test-harness.ts";
 import { StreamDurableObject } from "~/durable-objects/stream.ts";
 
 const {

@@ -399,53 +399,53 @@ export async function runScheduleAlarm(args: SchedulingAlarmDeps): Promise<void>
       );
     }
 
-    if (row.type === "interval") {
-      await args.append({
-        events: [
-          {
-            path: args.requireStreamPath(),
-            type: SCHEDULE_EXECUTION_STARTED_TYPE,
-            payload: {
-              scheduleId: row.id,
-              startedAt: now,
-            },
-          },
-        ],
-      });
-    }
-
-    let outcome: "succeeded" | "failed" = "succeeded";
     try {
+      if (row.type === "interval") {
+        await args.append({
+          events: [
+            {
+              path: args.requireStreamPath(),
+              type: SCHEDULE_EXECUTION_STARTED_TYPE,
+              payload: {
+                scheduleId: row.id,
+                startedAt: now,
+              },
+            },
+          ],
+        });
+      }
+
       await callback.call(
         args.instance,
         deserializeSchedulePayload(row.payload),
         rowToSchedule(row),
       );
+
+      await appendScheduleExecutionFinished({
+        append: args.append,
+        nextTime: getNextExecutionTime(row),
+        outcome: "succeeded",
+        path: args.requireStreamPath(),
+        scheduleId: row.id,
+      });
     } catch (error) {
-      outcome = "failed";
       console.error(`[stream-do] error executing callback "${row.callback}"`, error);
-    }
 
-    const nextTime =
-      row.type === "cron"
-        ? Math.floor(getNextCronTime(row.cron ?? "").getTime() / 1000)
-        : row.type === "interval"
-          ? Math.floor(Date.now() / 1000) + (row.intervalSeconds ?? 0)
-          : null;
-
-    await args.append({
-      events: [
-        {
+      try {
+        await appendScheduleExecutionFinished({
+          append: args.append,
+          nextTime: getSafeFailedNextTime({ now, row }),
+          outcome: "failed",
           path: args.requireStreamPath(),
-          type: SCHEDULE_EXECUTION_FINISHED_TYPE,
-          payload: {
-            scheduleId: row.id,
-            outcome,
-            nextTime,
-          },
-        },
-      ],
-    });
+          scheduleId: row.id,
+        });
+      } catch (appendError) {
+        console.error(`[stream-do] failed to record schedule failure "${row.callback}"`, {
+          appendError,
+          scheduleId: row.id,
+        });
+      }
+    }
   }
 
   await scheduleNextAlarmFromTable(args.ctx);
@@ -671,363 +671,6 @@ export async function scheduleNextAlarmFromTable(ctx: DurableObjectState): Promi
   await ctx.storage.setAlarm(nextTimeMs);
 }
 
-// Test-only scaffolding derived from
-// `packages/agents/src/tests/agents/schedule.ts`. We keep it here because the
-// copied suite depends on the same helpers, but production scheduling logic
-// intentionally stays above this section.
-type SchedulingTestSurface = {
-  cancelSchedule(id: string): Promise<boolean>;
-  ctx: DurableObjectState;
-  getSchedule(id: string): Schedule | undefined;
-  getSchedules(criteria?: ScheduleCriteria): Schedule[];
-  schedule<T = unknown>(
-    when: Date | number | string,
-    callback: PropertyKey,
-    payload?: T,
-    options?: { idempotent?: boolean },
-  ): Promise<Schedule>;
-  scheduleEvery<T = unknown>(
-    intervalSeconds: number,
-    callback: PropertyKey,
-    payload?: T,
-    options?: { _idempotent?: boolean },
-  ): Promise<Schedule>;
-  wasScheduleWarningEmitted(callback: string): boolean;
-};
-
-function asSchedulingTestSurface(value: object): SchedulingTestSurface {
-  // Test-only cast that lets the copied upstream helper classes talk to the
-  // minimal scheduling surface without pushing that helper-only shape into the
-  // production DO API.
-  return value as unknown as SchedulingTestSurface;
-}
-
-/**
- * Build the upstream-derived scheduling test durable objects against our
- * `StreamDurableObject` surface. If the Agents SDK test helper changes, diff it
- * against this factory and keep the names/behaviors aligned unless we have a
- * documented events-specific reason to diverge.
- */
-export function createSchedulingTestDurableObjects<TBase extends new (...args: any[]) => object>(
-  Base: TBase,
-) {
-  // The test harness below is a direct port of the Agents SDK schedule test
-  // agents. Keep helper names and semantics aligned with upstream so the copied
-  // test suite stays easy to diff. If upstream adds new schedule tests, update
-  // this harness first and only then adjust the copied test file.
-  class TestStartupScheduleWarnStreamDurableObject extends Base {
-    testCallback() {}
-
-    protected async onInitialize(): Promise<void> {
-      await asSchedulingTestSurface(this).schedule(60, "testCallback");
-    }
-
-    wasWarnedFor(callback: string) {
-      return asSchedulingTestSurface(this).wasScheduleWarningEmitted(callback);
-    }
-
-    async getScheduleCount(): Promise<number> {
-      const result = asSchedulingTestSurface(this).ctx.storage.sql.exec<{ count: number }>(
-        "SELECT COUNT(*) AS count FROM cf_agents_schedules",
-      );
-      return result.one()?.count ?? 0;
-    }
-  }
-
-  class TestStartupScheduleNoWarnStreamDurableObject extends Base {
-    testCallback() {}
-
-    protected async onInitialize(): Promise<void> {
-      await asSchedulingTestSurface(this).schedule(60, "testCallback", undefined, {
-        idempotent: true,
-      });
-    }
-
-    wasWarnedFor(callback: string) {
-      return asSchedulingTestSurface(this).wasScheduleWarningEmitted(callback);
-    }
-
-    async getScheduleCount(): Promise<number> {
-      const result = asSchedulingTestSurface(this).ctx.storage.sql.exec<{ count: number }>(
-        "SELECT COUNT(*) AS count FROM cf_agents_schedules",
-      );
-      return result.one()?.count ?? 0;
-    }
-  }
-
-  class TestStartupScheduleExplicitFalseStreamDurableObject extends Base {
-    testCallback() {}
-
-    protected async onInitialize(): Promise<void> {
-      await asSchedulingTestSurface(this).schedule(60, "testCallback", undefined, {
-        idempotent: false,
-      });
-    }
-
-    wasWarnedFor(callback: string) {
-      return asSchedulingTestSurface(this).wasScheduleWarningEmitted(callback);
-    }
-  }
-
-  class TestScheduleStreamDurableObject extends Base {
-    intervalCallbackCount = 0;
-    slowCallbackExecutionCount = 0;
-    slowCallbackStartTimes: number[] = [];
-    slowCallbackEndTimes: number[] = [];
-
-    testCallback() {}
-
-    intervalCallback() {
-      this.intervalCallbackCount++;
-    }
-
-    throwingCallback() {
-      throw new Error("Intentional test error");
-    }
-
-    async slowCallback() {
-      this.slowCallbackExecutionCount++;
-      this.slowCallbackStartTimes.push(Date.now());
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      this.slowCallbackEndTimes.push(Date.now());
-    }
-
-    secondIntervalCallback() {}
-
-    cronCallback() {}
-
-    async cancelScheduleById(id: string): Promise<boolean> {
-      return asSchedulingTestSurface(this).cancelSchedule(id);
-    }
-
-    async getScheduleById(id: string) {
-      return asSchedulingTestSurface(this).getSchedule(id);
-    }
-
-    async clearStoredAlarm(): Promise<void> {
-      await asSchedulingTestSurface(this).ctx.storage.deleteAlarm();
-    }
-
-    async setStoredAlarm(timeMs: number): Promise<void> {
-      await asSchedulingTestSurface(this).ctx.storage.setAlarm(timeMs);
-    }
-
-    async getStoredAlarm(): Promise<number | null> {
-      return asSchedulingTestSurface(this).ctx.storage.getAlarm();
-    }
-
-    async backdateSchedule(id: string, time: number): Promise<void> {
-      asSchedulingTestSurface(this).ctx.storage.sql.exec(
-        `UPDATE cf_agents_schedules SET time = ? WHERE id = ?`,
-        time,
-        id,
-      );
-    }
-
-    async createSchedule(delaySeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(delaySeconds, "testCallback");
-      return schedule.id;
-    }
-
-    async createIntervalSchedule(intervalSeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
-        intervalSeconds,
-        "intervalCallback",
-      );
-      return schedule.id;
-    }
-
-    async createIntervalScheduleAndReadAlarm(
-      intervalSeconds: number,
-    ): Promise<{ alarm: number | null; id: string }> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
-        intervalSeconds,
-        "intervalCallback",
-      );
-      const alarm = await asSchedulingTestSurface(this).ctx.storage.getAlarm();
-      return { alarm, id: schedule.id };
-    }
-
-    async createThrowingIntervalSchedule(intervalSeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
-        intervalSeconds,
-        "throwingCallback",
-      );
-      return schedule.id;
-    }
-
-    async getSchedulesByType(type: "scheduled" | "delayed" | "cron" | "interval") {
-      return asSchedulingTestSurface(this).getSchedules({ type });
-    }
-
-    async createSlowIntervalSchedule(intervalSeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
-        intervalSeconds,
-        "slowCallback",
-      );
-      return schedule.id;
-    }
-
-    async simulateHungSchedule(intervalSeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
-        intervalSeconds,
-        "intervalCallback",
-      );
-      asSchedulingTestSurface(this).ctx.storage.sql.exec(
-        `UPDATE cf_agents_schedules
-         SET running = 1, execution_started_at = ?
-         WHERE id = ?`,
-        Math.floor(Date.now() / 1000) - 60,
-        schedule.id,
-      );
-      return schedule.id;
-    }
-
-    async simulateLegacyHungSchedule(intervalSeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
-        intervalSeconds,
-        "intervalCallback",
-      );
-      asSchedulingTestSurface(this).ctx.storage.sql.exec(
-        `UPDATE cf_agents_schedules
-         SET running = 1, execution_started_at = NULL
-         WHERE id = ?`,
-        schedule.id,
-      );
-      return schedule.id;
-    }
-
-    async createCronSchedule(cronExpr: string): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(cronExpr, "cronCallback");
-      return schedule.id;
-    }
-
-    async createCronScheduleWithPayload(cronExpr: string, payload: string): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(
-        cronExpr,
-        "cronCallback",
-        payload,
-      );
-      return schedule.id;
-    }
-
-    async createCronScheduleNonIdempotent(cronExpr: string): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(
-        cronExpr,
-        "cronCallback",
-        undefined,
-        {
-          idempotent: false,
-        },
-      );
-      return schedule.id;
-    }
-
-    async createIdempotentDelayedSchedule(delaySeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(
-        delaySeconds,
-        "testCallback",
-        undefined,
-        {
-          idempotent: true,
-        },
-      );
-      return schedule.id;
-    }
-
-    async createIdempotentDelayedScheduleWithPayload(
-      delaySeconds: number,
-      payload: string,
-    ): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(
-        delaySeconds,
-        "testCallback",
-        payload,
-        {
-          idempotent: true,
-        },
-      );
-      return schedule.id;
-    }
-
-    async createIdempotentScheduledSchedule(dateMs: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(
-        new Date(dateMs),
-        "testCallback",
-        undefined,
-        {
-          idempotent: true,
-        },
-      );
-      return schedule.id;
-    }
-
-    async getScheduleCount(): Promise<number> {
-      const result = asSchedulingTestSurface(this).ctx.storage.sql.exec<{ count: number }>(
-        "SELECT COUNT(*) AS count FROM cf_agents_schedules",
-      );
-      return result.one()?.count ?? 0;
-    }
-
-    async getScheduleCountByTypeAndCallback(type: string, callback: string): Promise<number> {
-      const result = asSchedulingTestSurface(this).ctx.storage.sql.exec<{ count: number }>(
-        `SELECT COUNT(*) AS count
-         FROM cf_agents_schedules
-         WHERE type = ? AND callback = ?`,
-        type,
-        callback,
-      );
-      return result.one()?.count ?? 0;
-    }
-
-    async insertStaleDelayedRows(count: number, callback: string): Promise<void> {
-      const past = Math.floor(Date.now() / 1000) - 60;
-      for (let index = 0; index < count; index++) {
-        asSchedulingTestSurface(this).ctx.storage.sql.exec(
-          `INSERT INTO cf_agents_schedules (
-             id, callback, payload, type, delayInSeconds, time, running,
-             execution_started_at, retry_options, created_at
-           )
-           VALUES (?, ?, NULL, 'delayed', 60, ?, 0, NULL, NULL, ?)`,
-          `stale-${index}`,
-          callback,
-          past,
-          past - 60,
-        );
-      }
-
-      await asSchedulingTestSurface(this).ctx.storage.setAlarm(Date.now() + 1000);
-    }
-
-    async createIntervalScheduleWithPayload(
-      intervalSeconds: number,
-      payload: string,
-    ): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
-        intervalSeconds,
-        "intervalCallback",
-        payload,
-      );
-      return schedule.id;
-    }
-
-    async createSecondIntervalSchedule(intervalSeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
-        intervalSeconds,
-        "secondIntervalCallback",
-      );
-      return schedule.id;
-    }
-  }
-
-  return {
-    TestScheduleStreamDurableObject,
-    TestStartupScheduleExplicitFalseStreamDurableObject,
-    TestStartupScheduleNoWarnStreamDurableObject,
-    TestStartupScheduleWarnStreamDurableObject,
-  };
-}
-
 function getExistingScheduleRow(ctx: DurableObjectState, args: ScheduleLookupArgs) {
   const clauses = ["type = ?", "callback = ?", "payload IS ?"];
   const params: Array<string | number | null> = [args.type, args.callback, args.payloadJson];
@@ -1203,7 +846,7 @@ function rowToSchedule(row: ScheduleRow): Schedule {
 }
 
 function createScheduleId() {
-  return crypto.randomUUID().slice(0, 9);
+  return crypto.randomUUID().replaceAll("-", "").slice(0, 9);
 }
 
 function serializeSchedulePayload(payload: unknown) {
@@ -1216,4 +859,50 @@ function deserializeSchedulePayload(payload: string | null) {
 
 function getNextCronTime(cron: string) {
   return parseCronExpression(cron).getNextDate();
+}
+
+function getNextExecutionTime(row: ScheduleRow) {
+  switch (row.type) {
+    case "cron":
+      return Math.floor(getNextCronTime(row.cron ?? "").getTime() / 1000);
+    case "interval":
+      return Math.floor(Date.now() / 1000) + (row.intervalSeconds ?? 0);
+    default:
+      return null;
+  }
+}
+
+function getSafeFailedNextTime(args: { now: number; row: ScheduleRow }) {
+  switch (args.row.type) {
+    case "interval":
+      return args.now + (args.row.intervalSeconds ?? 0);
+    case "cron":
+      return args.row.cron == null
+        ? null
+        : Math.floor(getNextCronTime(args.row.cron).getTime() / 1000);
+    default:
+      return null;
+  }
+}
+
+async function appendScheduleExecutionFinished(args: {
+  append: SchedulingAlarmDeps["append"];
+  nextTime: number | null;
+  outcome: "succeeded" | "failed";
+  path: StreamPath;
+  scheduleId: string;
+}) {
+  await args.append({
+    events: [
+      {
+        path: args.path,
+        type: SCHEDULE_EXECUTION_FINISHED_TYPE,
+        payload: {
+          scheduleId: args.scheduleId,
+          outcome: args.outcome,
+          nextTime: args.nextTime,
+        },
+      },
+    ],
+  });
 }

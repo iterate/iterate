@@ -14,7 +14,7 @@ import type {
 //
 // Keep names, assertions, and coverage close to upstream so future SDK changes
 // are easy to diff. If upstream behavior changes, update the harness in
-// `scheduling.ts` first, then re-sync this file.
+// `scheduling-test-harness.ts` first, then re-sync this file.
 type TestEnv = {
   TEST_SCHEDULE_STREAM: DurableObjectNamespace<TestScheduleStreamDurableObject>;
   TEST_STARTUP_SCHEDULE_WARN_STREAM: DurableObjectNamespace<TestStartupScheduleWarnStreamDurableObject>;
@@ -95,6 +95,8 @@ describe("schedule operations", () => {
     it("should create an interval schedule with correct type", async () => {
       const streamStub = testEnv.TEST_SCHEDULE_STREAM.getByName("interval-create-test");
       const scheduleId = await streamStub.createIntervalSchedule(30);
+
+      expect(scheduleId.endsWith("-")).toBe(false);
 
       const result = await streamStub.getScheduleById(scheduleId);
       expect(result).toBeDefined();
@@ -539,6 +541,62 @@ describe("schedule operations", () => {
 
       const count = await streamStub.getScheduleCountByTypeAndCallback("delayed", "testCallback");
       expect(count).toBe(0);
+    });
+  });
+
+  describe("alarm() per-schedule isolation", () => {
+    it("should keep processing later due rows when a cron row has invalid next-time data", async () => {
+      const streamStub = testEnv.TEST_SCHEDULE_STREAM.getByName("alarm-invalid-cron-row-test");
+      const intervalId = await streamStub.createIntervalSchedule(30);
+
+      await runInDurableObject(streamStub, async (instance: TestScheduleStreamDurableObject) => {
+        instance.intervalCallbackCount = 0;
+
+        const past = Math.floor(Date.now() / 1000) - 1;
+        instance.ctx.storage.sql.exec(
+          `UPDATE cf_agents_schedules SET time = ? WHERE id = ?`,
+          past,
+          intervalId,
+        );
+        instance.ctx.storage.sql.exec(
+          `INSERT INTO cf_agents_schedules (
+             id, callback, payload, type, time, delayInSeconds, cron, intervalSeconds,
+             running, execution_started_at, retry_options, created_at
+           )
+           VALUES (?, ?, NULL, 'cron', ?, NULL, NULL, NULL, 0, NULL, NULL, ?)`,
+          "bad-cron-row",
+          "cronCallback",
+          past,
+          past - 60,
+        );
+      });
+
+      await runDurableObjectAlarm(streamStub);
+
+      const { badCronCount, intervalCallbackCount } = await runInDurableObject(
+        streamStub,
+        async (instance: TestScheduleStreamDurableObject) => {
+          const badCronCount =
+            instance.ctx.storage.sql
+              .exec<{ count: number }>(
+                `SELECT COUNT(*) AS count
+               FROM cf_agents_schedules
+               WHERE id = ?`,
+                "bad-cron-row",
+              )
+              .one()?.count ?? 0;
+
+          return {
+            badCronCount,
+            intervalCallbackCount: instance.intervalCallbackCount,
+          };
+        },
+      );
+
+      expect(intervalCallbackCount).toBeGreaterThan(0);
+      expect(badCronCount).toBe(0);
+
+      await streamStub.cancelScheduleById(intervalId);
     });
   });
 
