@@ -18,6 +18,7 @@ export default workflow({
   jobs: {
     cleanup: {
       strategy: {
+        "max-parallel": 1,
         matrix: {
           include: previewCleanupApps,
         },

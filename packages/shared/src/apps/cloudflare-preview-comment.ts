@@ -3,6 +3,7 @@ import { z } from "zod";
 
 export const cloudflarePreviewCommentMarker = "<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS -->";
 export const cloudflarePreviewCommentStateLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE";
+export const cloudflarePreviewCommentBotLogin = "github-actions[bot]";
 
 export const CloudflarePreviewCommentStatus = z.enum([
   "claim-failed",
@@ -40,6 +41,14 @@ export const CloudflarePreviewCommentState = z.record(
 export type CloudflarePreviewCommentEntry = z.infer<typeof CloudflarePreviewCommentEntry>;
 export type CloudflarePreviewCommentState = z.infer<typeof CloudflarePreviewCommentState>;
 
+type PreviewComment = {
+  body?: string | null;
+  id: number;
+  user?: {
+    login?: string | null;
+  } | null;
+};
+
 export async function readCloudflarePreviewCommentState(params: {
   githubToken: string;
   repositoryFullName: string;
@@ -55,11 +64,7 @@ export async function readCloudflarePreviewCommentState(params: {
     issue_number: params.pullRequestNumber,
     per_page: 100,
   });
-  const existingComment = [...comments]
-    .reverse()
-    .find((comment: { body?: string | null }) =>
-      comment.body?.includes(cloudflarePreviewCommentMarker),
-    );
+  const existingComment = findLatestManagedCloudflarePreviewComment(comments);
 
   return {
     commentId: existingComment?.id ?? null,
@@ -97,7 +102,6 @@ export async function upsertCloudflarePreviewCommentEntry(params: {
     repositoryFullName: params.repositoryFullName,
     pullRequestNumber: params.pullRequestNumber,
   });
-
   const nextState = {
     ...current.state,
     [params.entry.appSlug]: params.entry,
@@ -105,15 +109,43 @@ export async function upsertCloudflarePreviewCommentEntry(params: {
   const body = renderCloudflarePreviewCommentBody(nextState);
 
   if (current.commentId) {
+    try {
+      await octokit.rest.issues.updateComment({
+        owner,
+        repo,
+        comment_id: current.commentId,
+        body,
+      });
+      return {
+        commentId: current.commentId,
+        state: nextState,
+      };
+    } catch (error) {
+      if (!isCommentWriteAccessError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  const latestManaged = await readCloudflarePreviewCommentState({
+    githubToken: params.githubToken,
+    repositoryFullName: params.repositoryFullName,
+    pullRequestNumber: params.pullRequestNumber,
+  });
+  if (latestManaged.commentId) {
+    const refreshedState = {
+      ...latestManaged.state,
+      [params.entry.appSlug]: params.entry,
+    } satisfies CloudflarePreviewCommentState;
     await octokit.rest.issues.updateComment({
       owner,
       repo,
-      comment_id: current.commentId,
-      body,
+      comment_id: latestManaged.commentId,
+      body: renderCloudflarePreviewCommentBody(refreshedState),
     });
     return {
-      commentId: current.commentId,
-      state: nextState,
+      commentId: latestManaged.commentId,
+      state: refreshedState,
     };
   }
 
@@ -127,6 +159,16 @@ export async function upsertCloudflarePreviewCommentEntry(params: {
     commentId: created.data.id,
     state: nextState,
   };
+}
+
+export function findLatestManagedCloudflarePreviewComment(comments: PreviewComment[]) {
+  return [...comments]
+    .reverse()
+    .find(
+      (comment) =>
+        comment.body?.includes(cloudflarePreviewCommentMarker) &&
+        comment.user?.login === cloudflarePreviewCommentBotLogin,
+    );
 }
 
 export function parseCloudflarePreviewCommentState(body: string) {
@@ -231,4 +273,13 @@ function splitRepositoryFullName(repositoryFullName: string) {
   }
 
   return [owner, repo] as const;
+}
+
+function isCommentWriteAccessError(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    (error.status === 403 || error.status === 404)
+  );
 }

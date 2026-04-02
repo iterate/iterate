@@ -17,24 +17,12 @@ on:
     paths:
       - apps/codemode/**
       - apps/codemode-contract/**
-      - .github/ts-workflows/utils/cloudflare-app-workflow.ts
-      - .github/ts-workflows/utils/cloudflare-apps.ts
-      - .github/ts-workflows/workflows/cleanup-cloudflare-previews.ts
-      - apps/semaphore-contract/**
-      - packages/shared/src/apps/cloudflare-preview-comment.ts
-      - packages/shared/src/apps/cloudflare-preview.ts
   push:
     branches:
       - main
     paths:
       - apps/codemode/**
       - apps/codemode-contract/**
-      - .github/ts-workflows/utils/cloudflare-app-workflow.ts
-      - .github/ts-workflows/utils/cloudflare-apps.ts
-      - .github/ts-workflows/workflows/cleanup-cloudflare-previews.ts
-      - apps/semaphore-contract/**
-      - packages/shared/src/apps/cloudflare-preview-comment.ts
-      - packages/shared/src/apps/cloudflare-preview.ts
   workflow_dispatch:
     inputs:
       ref:
