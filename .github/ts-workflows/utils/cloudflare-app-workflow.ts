@@ -116,7 +116,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
               GITHUB_TOKEN: "${{ github.token }}",
               WORKFLOW_RUN_URL: "${{ needs.variables.outputs.run_url }}",
             },
-            run: `doppler run --project ${app.dopplerProject} --config stg -- pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr`,
+            run: "doppler run --project os --config prd -- pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr",
           },
         ],
       },
