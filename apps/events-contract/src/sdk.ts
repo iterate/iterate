@@ -9,9 +9,7 @@ export type { Event, EventInput, EventType, JSONObject, Offset, StreamPath } fro
 
 export type EventsClient = {
   append(input: { path: StreamPath; event: EventInput }): Promise<{
-    created: boolean;
     event: Event;
-    events: [Event];
   }>;
   stream(
     input: { path: StreamPath; offset?: Offset; live?: boolean },
@@ -28,16 +26,10 @@ export function createEventsClient(baseUrl: string): EventsClient {
 
   return {
     async append(input: { path: StreamPath; event: EventInput }) {
-      const result = await client.append({
+      return client.append({
         params: { path: input.path },
         body: input.event,
       });
-
-      return {
-        created: true,
-        event: result.event,
-        events: [result.event],
-      };
     },
     async stream(
       input: { path: StreamPath; offset?: Offset; live?: boolean },
@@ -67,9 +59,7 @@ export type StreamProcessor<State> = ReturnType<typeof defineProcessor<State>>;
 
 type PullSubscriptionEventsClient = {
   append: (input: { path: StreamPath; event: EventInput }) => Promise<{
-    created: boolean;
     event: Event;
-    events: Event[];
   }>;
   stream: (
     input: { path: StreamPath; offset?: number; live?: boolean },
