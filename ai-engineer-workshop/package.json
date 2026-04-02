@@ -1,9 +1,63 @@
 {
-  "name": "ai-engineer-workshop-root",
-  "private": true,
+  "name": "ai-engineer-workshop",
+  "version": "0.0.1",
+  "description": "CLI and lightweight SDK wrappers for the Iterate events workshop",
+  "license": "AGPL-3.0-only",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate.git",
+    "directory": "ai-engineer-workshop"
+  },
+  "homepage": "https://github.com/iterate/iterate/tree/main/ai-engineer-workshop",
+  "bugs": {
+    "url": "https://github.com/iterate/iterate/issues"
+  },
+  "keywords": [
+    "iterate",
+    "events",
+    "workshop"
+  ],
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "ai-engineer-workshop": "./dist/cli.js",
+    "workshop": "./dist/cli.js"
+  },
+  "exports": {
+    ".": "./sdk.ts",
+    "./contract": "./contract.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "import": "./dist/sdk.js",
+        "types": "./dist/sdk.d.ts"
+      },
+      "./contract": {
+        "import": "./dist/contract.js",
+        "types": "./dist/contract.d.ts"
+      }
+    }
+  },
   "scripts": {
-    "workshop": "node --import tsx ./lib/cli.ts",
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "workshop": "node --import tsx ./cli.ts",
     "w": "pnpm workshop"
+  },
+  "dependencies": {
+    "@orpc/client": "1.13.13",
+    "@orpc/contract": "1.13.13",
+    "@orpc/openapi-client": "1.13.13",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "25.5.0",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.3"
   }
 }
