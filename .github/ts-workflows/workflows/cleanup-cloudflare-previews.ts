@@ -6,6 +6,7 @@ const previewCleanupApps = Object.values(cloudflareApps).map((app) => ({
   appDisplayName: app.displayName,
   appPath: app.appPath,
   appSlug: app.slug,
+  dopplerProject: app.dopplerProject,
 }));
 
 export default workflow({
@@ -33,18 +34,14 @@ export default workflow({
         },
         {
           if: "github.event.pull_request.head.repo.fork != true",
-          name: "Setup Doppler for Semaphore",
-          run: "doppler setup --config prd --project semaphore",
+          name: "Setup Doppler",
+          run: "doppler setup --config stg --project ${{ matrix.dopplerProject }}",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
         },
         {
           if: "github.event.pull_request.head.repo.fork != true",
-          name: "Expose Semaphore API token",
-          run: 'echo "APP_CONFIG_SHARED_API_SECRET=$(doppler secrets get APP_CONFIG_SHARED_API_SECRET --plain)" >> $GITHUB_ENV',
-        },
-        {
           name: "Cleanup preview from app-local script",
           "working-directory": "${{ matrix.appPath }}",
           env: {
@@ -53,7 +50,7 @@ export default workflow({
             GITHUB_REPOSITORY: "${{ github.repository }}",
             GITHUB_TOKEN: "${{ github.token }}",
           },
-          run: "pnpm iterate --local-router ./scripts/router.ts local-router preview-cleanup-pr",
+          run: "doppler run -- pnpm iterate --local-router ./scripts/router.ts local-router preview-cleanup-pr",
         },
       ],
     },
