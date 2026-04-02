@@ -10,6 +10,10 @@ import {
 
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultPreviewLeaseMs = 60 * 60 * 1000;
+const defaultPreviewReadyTimeoutMs = 30_000;
+const defaultPreviewReadyUrlPath = "/api/__common/health";
+const defaultPreviewTestMaxAttempts = 2;
+const defaultPreviewTestRetryDelayMs = 5_000;
 
 export type PreviewSemaphoreResourceClient = {
   acquire: (input: { leaseMs: number; type: string; waitMs?: number }) => Promise<{
@@ -406,7 +410,23 @@ async function createPreviewEnvironment(
       };
     }
 
-    const testResult = await runCommand({
+    const readiness = await waitForHttpReadiness({
+      signal: params.signal,
+      timeoutMs: defaultPreviewReadyTimeoutMs,
+      url: new URL(defaultPreviewReadyUrlPath, previewEnvironment.publicUrl),
+    });
+    if (!readiness.ok) {
+      return {
+        entry: CloudflarePreviewCommentEntry.parse({
+          ...baseEntry,
+          message: readiness.message,
+          status: "deploy-failed",
+        }),
+        ok: false,
+      };
+    }
+
+    const testResult = await runCommandWithRetries({
       args: [
         "run",
         "--project",
@@ -420,6 +440,8 @@ async function createPreviewEnvironment(
       ],
       command: "doppler",
       environment: params.env,
+      maxAttempts: defaultPreviewTestMaxAttempts,
+      retryDelayMs: defaultPreviewTestRetryDelayMs,
       signal: params.signal,
       workingDirectory: params.workingDirectory,
     });
@@ -626,6 +648,77 @@ async function runCommand(params: {
         stdout: Buffer.concat(stdoutChunks).toString("utf8"),
       });
     });
+  });
+}
+
+async function runCommandWithRetries(
+  params: Parameters<typeof runCommand>[0] & {
+    maxAttempts: number;
+    retryDelayMs: number;
+  },
+) {
+  let attempt = 1;
+  let lastResult = await runCommand(params);
+
+  while (attempt < params.maxAttempts && lastResult.exitCode !== 0) {
+    console.error(
+      `Command failed on attempt ${attempt}/${params.maxAttempts}. Retrying in ${params.retryDelayMs}ms...`,
+    );
+    await sleep(params.retryDelayMs, params.signal);
+    attempt += 1;
+    lastResult = await runCommand(params);
+  }
+
+  return lastResult;
+}
+
+async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: number; url: URL }) {
+  const deadline = Date.now() + params.timeoutMs;
+  let lastFailure = "No response received yet.";
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(params.url, {
+        method: "GET",
+        redirect: "follow",
+        signal: params.signal,
+      });
+      if (response.ok) {
+        return { ok: true as const };
+      }
+
+      lastFailure = `Readiness check returned ${response.status} for ${params.url.toString()}.`;
+    } catch (error) {
+      lastFailure = formatPreviewErrorMessage(error);
+    }
+
+    await sleep(1_000, params.signal);
+  }
+
+  return {
+    message: `Timed out waiting for preview readiness at ${params.url.toString()}. ${lastFailure}`,
+    ok: false as const,
+  };
+}
+
+async function sleep(ms: number, signal?: AbortSignal) {
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(resolve, ms);
+    if (!signal) {
+      return;
+    }
+
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(signal.reason ?? new Error("Aborted"));
+    };
+
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
