@@ -17,12 +17,18 @@ export type EventsClient = {
   ): Promise<AsyncIterable<Event>>;
 };
 
-export function createEventsClient(baseUrl: string): EventsClient {
-  const client = createORPCClient(
+export type EventsORPCClient = ContractRouterClient<typeof eventsContract>;
+
+export function createEventsORPCClient(baseUrl: string): EventsORPCClient {
+  return createORPCClient(
     new OpenAPILink(eventsContract, {
       url: new URL("/api", baseUrl).toString(),
     }),
-  ) as ContractRouterClient<typeof eventsContract>;
+  ) as EventsORPCClient;
+}
+
+export function createEventsClient(baseUrl: string): EventsClient {
+  const client = createEventsORPCClient(baseUrl);
 
   return {
     async append(input: { path: StreamPath; event: EventInput }) {
