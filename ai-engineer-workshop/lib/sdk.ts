@@ -1,3 +1,6 @@
+import { execSync } from "node:child_process";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { ContractRouterClient } from "@orpc/contract";
 import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
@@ -12,12 +15,6 @@ import {
 export { eventsContract } from "./contract.ts";
 export type { Event, EventInput, EventType, JSONObject, Offset, StreamPath } from "./contract.ts";
 export { PullSubscriptionProcessorRuntime } from "./pull-subscription-processor-runtime.ts";
-export {
-  getDefaultWorkshopPathPrefix,
-  isMainModule,
-  normalizePathPrefix,
-  runWorkshopMain,
-} from "./run-script.ts";
 export { defineProcessor } from "./stream-process.ts";
 export type { StreamProcessor } from "./stream-process.ts";
 
@@ -60,4 +57,33 @@ export function createEventsClient(baseUrl: string): EventsClient {
       return client.stream(input, options);
     },
   };
+}
+
+function getDefaultWorkshopPathPrefix() {
+  return normalizePathPrefix(
+    process.env.WORKSHOP_PATH_PREFIX || `/${execSync("id -un").toString().trim()}`,
+  );
+}
+
+function isMainModule(importMetaUrl: string) {
+  if (!process.argv[1]) {
+    return false;
+  }
+
+  return importMetaUrl === pathToFileURL(resolve(process.argv[1])).href;
+}
+
+export function runWorkshopMain(importMetaUrl: string, run: (pathPrefix: string) => Promise<void>) {
+  if (!isMainModule(importMetaUrl)) {
+    return;
+  }
+
+  void run(getDefaultWorkshopPathPrefix()).catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
+export function normalizePathPrefix(pathPrefix: string) {
+  return pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
 }

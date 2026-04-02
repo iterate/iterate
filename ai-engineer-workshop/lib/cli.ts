@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { os } from "@orpc/server";
@@ -6,39 +7,39 @@ import * as prompts from "@clack/prompts";
 import { createCli, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod";
 import { getFiles } from "./files.ts";
-import { getDefaultWorkshopPathPrefix, normalizePathPrefix } from "./run-script.ts";
+import { normalizePathPrefix } from "./sdk.ts";
 
-await main();
+const files = getFiles();
+const scripts = await getScripts();
+const defaultPathPrefix =
+  process.env.WORKSHOP_PATH_PREFIX || `/${execSync("id -un").toString().trim()}`;
 
-async function main() {
-  const files = getFiles();
-  const scripts = await getScripts();
-  const router = os.router({
-    run: os
-      .input(
-        z.object({
-          script: scripts.length ? z.enum(scripts.map(({ file }) => file)) : z.string(),
-          pathPrefix: z
-            .string()
-            .default(getDefaultWorkshopPathPrefix())
-            .describe("stream path prefix, e.g. /jonas"),
-        }),
-      )
-      .handler(async ({ input }) => {
-        const script = scripts.find(({ file }) => file === input.script);
-        if (!script) throw new Error(`Script ${input.script} not found`);
-        await script.module.default(normalizePathPrefix(input.pathPrefix));
+const router = os.router({
+  run: os
+    .input(
+      z.object({
+        script: scripts.length ? z.enum(scripts.map(({ file }) => file)) : z.string(),
+        pathPrefix: z
+          .string()
+          .default(defaultPathPrefix)
+          .describe("stream path prefix, e.g. /jonas"),
       }),
-    appendHelloWorld: getProcedure(files, "01-hello-world/append-hello-world.ts"),
-    openTmuxPanes: getProcedure(files, "01-hello-world/open-tmux-panes.sh"),
-    streamEvents: getProcedure(files, "01-hello-world/stream-events.sh"),
-    subscribeHelloWorld: getProcedure(files, "01-hello-world/subscribe-hello-world.ts"),
-    runLlmSubscriber: getProcedure(files, "02-basic-llm-loop/run-llm-subscriber.ts"),
-  });
+    )
+    .handler(async ({ input }) => {
+      const script = scripts.find(({ file }) => file === input.script);
+      if (!script) throw new Error(`Script ${input.script} not found`);
+      await script._module.default(normalizePathPrefix(input.pathPrefix));
+    }),
+  appendHelloWorld: getProcedure("01-hello-world/append-hello-world.ts"),
+  openTmuxPanes: getProcedure("01-hello-world/open-tmux-panes.sh"),
+  streamEvents: getProcedure("01-hello-world/stream-events.sh"),
+  subscribeHelloWorld: getProcedure("01-hello-world/subscribe-hello-world.ts"),
+  runLlmSubscriber: getProcedure("02-basic-llm-loop/run-llm-subscriber.ts"),
+});
 
-  const cli = createCli({ router });
-  await cli.run({ prompts, logger: yamlTableConsoleLogger });
-}
+const cli = createCli({ router });
+
+await cli.run({ prompts, logger: yamlTableConsoleLogger });
 
 async function getScripts() {
   const files = await Array.fromAsync(
@@ -53,16 +54,16 @@ async function getScripts() {
       const filepath = path.join(process.cwd(), file);
       const content = await fs.readFile(filepath, "utf8");
       if (!content.includes("export default")) {
-        return { file, module: {} };
+        return { file, filepath, _module: {} };
       }
-      const module = await import(filepath).catch(() => ({}));
-      return { file, module };
+      const _module = await import(filepath).catch(() => ({}));
+      return { file, filepath, _module };
     }),
   );
-  return withInfo.filter(({ module }) => typeof module?.default === "function");
+  return withInfo.filter(({ _module }) => typeof _module?.default === "function");
 }
 
-function getProcedure(files: ReturnType<typeof getFiles>, key: keyof ReturnType<typeof getFiles>) {
+function getProcedure(key: keyof typeof files) {
   const value = files[key];
   const schema = z.object({
     path: z.string().describe("path to write the file to").default(key),
