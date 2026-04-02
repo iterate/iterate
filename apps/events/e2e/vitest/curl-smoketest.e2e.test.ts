@@ -62,7 +62,7 @@ curl -sS "$BASE_URL/api/streams" >/dev/null
 curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
 `;
 
-    const result = await x("sh", ["-c", script], {
+    const result = await x("bash", ["-lc", script], {
       throwOnError: false,
       nodeOptions: {
         stdio: "pipe",
