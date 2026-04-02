@@ -9,7 +9,7 @@ import {
 } from "./comment.ts";
 
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
-const defaultPreviewLeaseMs = 30 * 24 * 60 * 60 * 1000;
+const defaultPreviewLeaseMs = 60 * 60 * 1000;
 
 export type PreviewSemaphoreResourceClient = {
   acquire: (input: { leaseMs: number; type: string; waitMs?: number }) => Promise<{
@@ -462,7 +462,7 @@ async function createPreviewEnvironment(
       entry: CloudflarePreviewCommentEntry.parse({
         appDisplayName: params.appDisplayName,
         appSlug: params.appSlug,
-        message: error instanceof Error ? error.message : String(error),
+        message: formatPreviewErrorMessage(error),
         runUrl: params.workflowRunUrl,
         shortSha: params.pullRequestHeadSha.slice(0, 7),
         status: "claim-failed",
@@ -687,18 +687,6 @@ function requiredUrlWithEnvDefault(
   return defaultValue ? schema.default(defaultValue) : schema;
 }
 
-function optionalUrlWithEnvDefault(
-  env: NodeJS.ProcessEnv,
-  key: string,
-  options: {
-    defaultValue?: string;
-  } = {},
-) {
-  const schema = z.string().trim().url();
-  const defaultValue = env[key]?.trim() || options.defaultValue;
-  return defaultValue ? schema.default(defaultValue) : schema.optional();
-}
-
 function requiredNumberWithEnvDefault(
   env: NodeJS.ProcessEnv,
   key: string,
@@ -765,4 +753,12 @@ function requireValue<T>(value: T | undefined, message: string) {
   }
 
   return value;
+}
+
+function formatPreviewErrorMessage(error: unknown) {
+  if (error instanceof z.ZodError) {
+    return `${error.message}: ${JSON.stringify(error.issues)}`;
+  }
+
+  return error instanceof Error ? error.message : String(error);
 }

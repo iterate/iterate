@@ -2,7 +2,7 @@ import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 
 export const cloudflarePreviewCommentStateLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE";
-export const cloudflarePreviewCommentBotLogin = "github-actions[bot]";
+export const cloudflarePreviewCommentBotLogins = new Set(["github-actions[bot]", "iterate-bot"]);
 
 export function cloudflarePreviewCommentMarker(appSlug: string) {
   return `<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS:${appSlug} -->`;
@@ -176,7 +176,8 @@ export function findLatestManagedCloudflarePreviewComment(
     .reverse()
     .find(
       (comment) =>
-        comment.body?.includes(marker) && comment.user?.login === cloudflarePreviewCommentBotLogin,
+        comment.body?.includes(marker) &&
+        Boolean(comment.user?.login && cloudflarePreviewCommentBotLogins.has(comment.user.login)),
     );
 }
 
