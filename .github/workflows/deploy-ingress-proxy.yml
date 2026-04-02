@@ -5,6 +5,7 @@ permissions:
   contents: read
   deployments: write
   issues: write
+  pull-requests: write
 concurrency:
   group: ingress-proxy-${{ github.event.pull_request.number || github.ref_name || inputs.stage || 'prd' }}
   cancel-in-progress: true
@@ -86,7 +87,8 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+          SEMAPHORE_BASE_URL: https://semaphore.iterate.com
           WORKFLOW_RUN_URL: ${{ needs.variables.outputs.run_url }}
         run: pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr
       - if: github.event.pull_request.head.repo.fork != true
@@ -101,9 +103,10 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+          SEMAPHORE_BASE_URL: https://semaphore.iterate.com
           WORKFLOW_RUN_URL: ${{ needs.variables.outputs.run_url }}
-        run: doppler run --project os --config prd -- pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr
+        run: doppler run --project semaphore --config prd -- pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr
   deploy:
     needs:
       - variables

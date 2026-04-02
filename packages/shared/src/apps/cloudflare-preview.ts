@@ -84,7 +84,10 @@ export function createCloudflarePreviewScriptRouter(
         description: `Read the shared sticky GitHub preview comment for ${options.appDisplayName}`,
       })
       .handler(async ({ input }) => {
-        return readCloudflarePreviewCommentState(input);
+        return readCloudflarePreviewCommentState({
+          ...input,
+          appSlug: options.appSlug,
+        });
       }),
     "preview-comment-upsert": os
       .input(previewCommentUpsertInput)
@@ -260,12 +263,16 @@ async function syncPreviewForPullRequest(
       status: "fork-unavailable",
       updatedAt: new Date().toISOString(),
     });
-    await upsertCloudflarePreviewCommentEntry({
-      entry,
-      githubToken: params.githubToken,
-      repositoryFullName: params.repositoryFullName,
-      pullRequestNumber: params.pullRequestNumber,
-    });
+    try {
+      await upsertCloudflarePreviewCommentEntry({
+        entry,
+        githubToken: params.githubToken,
+        repositoryFullName: params.repositoryFullName,
+        pullRequestNumber: params.pullRequestNumber,
+      });
+    } catch {
+      // Fork PRs do not create preview resources, so a denied comment write should not fail the job.
+    }
     return {
       entry,
       ok: true,
@@ -273,6 +280,7 @@ async function syncPreviewForPullRequest(
   }
 
   const current = await readCloudflarePreviewCommentState({
+    appSlug: params.appSlug,
     githubToken: params.githubToken,
     repositoryFullName: params.repositoryFullName,
     pullRequestNumber: params.pullRequestNumber,
@@ -377,6 +385,7 @@ async function cleanupPreviewForPullRequest(
   },
 ) {
   const current = await readCloudflarePreviewCommentState({
+    appSlug: params.appSlug,
     githubToken: params.githubToken,
     repositoryFullName: params.repositoryFullName,
     pullRequestNumber: params.pullRequestNumber,
