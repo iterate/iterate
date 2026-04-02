@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clearCloudflarePreviewDestroyPayload,
+  cloudflarePreviewCommentMarker,
   CloudflarePreviewCommentEntry,
   findLatestManagedCloudflarePreviewComment,
   parseCloudflarePreviewCommentState,
@@ -26,11 +27,14 @@ describe("cloudflare preview comment helpers", () => {
       updatedAt: "2026-04-02T10:00:00.000Z",
     });
 
-    const body = renderCloudflarePreviewCommentBody({
-      example: entry,
-    });
+    const body = renderCloudflarePreviewCommentBody(
+      {
+        example: entry,
+      },
+      "example",
+    );
 
-    expect(parseCloudflarePreviewCommentState(body)).toEqual({
+    expect(parseCloudflarePreviewCommentState(body, "example")).toEqual({
       example: entry,
     });
     expect(body).toContain("### Example");
@@ -69,23 +73,50 @@ describe("cloudflare preview comment helpers", () => {
   });
 
   it("ignores human-authored preview comments when selecting managed state", () => {
-    const managed = findLatestManagedCloudflarePreviewComment([
-      {
-        body: "<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS -->\nold",
-        id: 1,
-        user: {
-          login: "github-actions[bot]",
+    const managed = findLatestManagedCloudflarePreviewComment(
+      [
+        {
+          body: `${cloudflarePreviewCommentMarker("example")}\nold`,
+          id: 1,
+          user: {
+            login: "github-actions[bot]",
+          },
         },
-      },
-      {
-        body: "<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS -->\nnewer but human",
-        id: 2,
-        user: {
-          login: "jonastemplestein",
+        {
+          body: `${cloudflarePreviewCommentMarker("example")}\nnewer but human`,
+          id: 2,
+          user: {
+            login: "jonastemplestein",
+          },
         },
-      },
-    ]);
+      ],
+      "example",
+    );
 
     expect(managed?.id).toBe(1);
+  });
+
+  it("selects the managed comment for the requested app only", () => {
+    const managed = findLatestManagedCloudflarePreviewComment(
+      [
+        {
+          body: `${cloudflarePreviewCommentMarker("events")}\nevents`,
+          id: 1,
+          user: {
+            login: "github-actions[bot]",
+          },
+        },
+        {
+          body: `${cloudflarePreviewCommentMarker("example")}\nexample`,
+          id: 2,
+          user: {
+            login: "github-actions[bot]",
+          },
+        },
+      ],
+      "example",
+    );
+
+    expect(managed?.id).toBe(2);
   });
 });

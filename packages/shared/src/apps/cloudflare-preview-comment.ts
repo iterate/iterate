@@ -1,9 +1,12 @@
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 
-export const cloudflarePreviewCommentMarker = "<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS -->";
 export const cloudflarePreviewCommentStateLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE";
 export const cloudflarePreviewCommentBotLogin = "github-actions[bot]";
+
+export function cloudflarePreviewCommentMarker(appSlug: string) {
+  return `<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS:${appSlug} -->`;
+}
 
 export const CloudflarePreviewCommentStatus = z.enum([
   "claim-failed",
@@ -50,6 +53,7 @@ type PreviewComment = {
 };
 
 export async function readCloudflarePreviewCommentState(params: {
+  appSlug: string;
   githubToken: string;
   repositoryFullName: string;
   pullRequestNumber: number;
@@ -64,11 +68,11 @@ export async function readCloudflarePreviewCommentState(params: {
     issue_number: params.pullRequestNumber,
     per_page: 100,
   });
-  const existingComment = findLatestManagedCloudflarePreviewComment(comments);
+  const existingComment = findLatestManagedCloudflarePreviewComment(comments, params.appSlug);
 
   return {
     commentId: existingComment?.id ?? null,
-    state: parseCloudflarePreviewCommentState(existingComment?.body ?? ""),
+    state: parseCloudflarePreviewCommentState(existingComment?.body ?? "", params.appSlug),
   };
 }
 
@@ -101,12 +105,13 @@ export async function upsertCloudflarePreviewCommentEntry(params: {
     githubToken: params.githubToken,
     repositoryFullName: params.repositoryFullName,
     pullRequestNumber: params.pullRequestNumber,
+    appSlug: params.entry.appSlug,
   });
   const nextState = {
     ...current.state,
     [params.entry.appSlug]: params.entry,
   } satisfies CloudflarePreviewCommentState;
-  const body = renderCloudflarePreviewCommentBody(nextState);
+  const body = renderCloudflarePreviewCommentBody(nextState, params.entry.appSlug);
 
   if (current.commentId) {
     try {
@@ -131,6 +136,7 @@ export async function upsertCloudflarePreviewCommentEntry(params: {
     githubToken: params.githubToken,
     repositoryFullName: params.repositoryFullName,
     pullRequestNumber: params.pullRequestNumber,
+    appSlug: params.entry.appSlug,
   });
   if (latestManaged.commentId) {
     const refreshedState = {
@@ -141,7 +147,7 @@ export async function upsertCloudflarePreviewCommentEntry(params: {
       owner,
       repo,
       comment_id: latestManaged.commentId,
-      body: renderCloudflarePreviewCommentBody(refreshedState),
+      body: renderCloudflarePreviewCommentBody(refreshedState, params.entry.appSlug),
     });
     return {
       commentId: latestManaged.commentId,
@@ -161,19 +167,22 @@ export async function upsertCloudflarePreviewCommentEntry(params: {
   };
 }
 
-export function findLatestManagedCloudflarePreviewComment(comments: PreviewComment[]) {
+export function findLatestManagedCloudflarePreviewComment(
+  comments: PreviewComment[],
+  appSlug: string,
+) {
+  const marker = cloudflarePreviewCommentMarker(appSlug);
   return [...comments]
     .reverse()
     .find(
       (comment) =>
-        comment.body?.includes(cloudflarePreviewCommentMarker) &&
-        comment.user?.login === cloudflarePreviewCommentBotLogin,
+        comment.body?.includes(marker) && comment.user?.login === cloudflarePreviewCommentBotLogin,
     );
 }
 
-export function parseCloudflarePreviewCommentState(body: string) {
+export function parseCloudflarePreviewCommentState(body: string, appSlug: string) {
   const current = markdownAnnotator(
-    body || cloudflarePreviewCommentMarker,
+    body || cloudflarePreviewCommentMarker(appSlug),
     cloudflarePreviewCommentStateLabel,
   ).current;
   if (!current) {
@@ -183,7 +192,10 @@ export function parseCloudflarePreviewCommentState(body: string) {
   return CloudflarePreviewCommentState.parse(JSON.parse(current));
 }
 
-export function renderCloudflarePreviewCommentBody(state: CloudflarePreviewCommentState) {
+export function renderCloudflarePreviewCommentBody(
+  state: CloudflarePreviewCommentState,
+  appSlug: string,
+) {
   const rows = Object.values(state)
     .sort((left, right) => left.appDisplayName.localeCompare(right.appDisplayName))
     .map((entry) =>
@@ -212,7 +224,7 @@ export function renderCloudflarePreviewCommentBody(state: CloudflarePreviewComme
     .join("\n\n");
 
   const withState = markdownAnnotator(
-    `${cloudflarePreviewCommentMarker}\n## Preview Environments`,
+    `${cloudflarePreviewCommentMarker(appSlug)}\n## Preview Environments`,
     cloudflarePreviewCommentStateLabel,
   ).update(JSON.stringify(state, null, 2));
 

@@ -10,6 +10,11 @@ const previewCleanupApps = Object.values(cloudflareApps).map((app) => ({
 
 export default workflow({
   name: "Cleanup Cloudflare Previews",
+  permissions: {
+    contents: "read",
+    issues: "write",
+    "pull-requests": "write",
+  },
   on: {
     pull_request: {
       types: ["closed"],
@@ -18,6 +23,7 @@ export default workflow({
   jobs: {
     cleanup: {
       strategy: {
+        "fail-fast": false,
         "max-parallel": 1,
         matrix: {
           include: previewCleanupApps,
@@ -40,9 +46,10 @@ export default workflow({
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             GITHUB_PR_NUMBER: "${{ github.event.pull_request.number }}",
             GITHUB_REPOSITORY: "${{ github.repository }}",
-            GITHUB_TOKEN: "${{ github.token }}",
+            GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
+            SEMAPHORE_BASE_URL: "https://semaphore.iterate.com",
           },
-          run: "doppler run --project os --config prd -- pnpm iterate --local-router ./scripts/router.ts local-router preview-cleanup-pr",
+          run: "doppler run --project semaphore --config prd -- pnpm iterate --local-router ./scripts/router.ts local-router preview-cleanup-pr",
         },
       ],
     },
