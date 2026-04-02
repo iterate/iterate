@@ -44,7 +44,7 @@ export const cloudflarePreviewApps = {
     paths: ["apps/semaphore/**", "apps/semaphore-contract/**"],
     previewResourceType: "semaphore-preview-environment",
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e"],
+    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   "ingress-proxy": {
     slug: "ingress-proxy",
