@@ -2,7 +2,9 @@
 
 This directory is the publishable workshop package.
 
-It intentionally does not contain workshop scripts anymore.
+It intentionally does not contain the main workshop script collection anymore.
+The real scripts live in the separate workshop repo, while this package keeps a
+few tiny local examples and a scratch `script.ts` for experimentation.
 
 - `sdk.ts` re-exports the shared events SDK from `apps/events-contract/src/sdk.ts`
 - `contract.ts` re-exports the shared contract from `apps/events-contract/src/index.ts`
