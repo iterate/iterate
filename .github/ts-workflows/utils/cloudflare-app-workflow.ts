@@ -83,18 +83,32 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
           },
           {
             if: "github.event.pull_request.head.repo.fork != true",
-            name: "Setup Doppler for Semaphore",
-            run: "doppler setup --config prd --project semaphore",
+            name: "Setup Doppler",
+            run: `doppler setup --config stg --project ${app.dopplerProject}`,
             env: {
               DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             },
           },
           {
-            if: "github.event.pull_request.head.repo.fork != true",
-            name: "Expose Semaphore API token",
-            run: 'echo "APP_CONFIG_SHARED_API_SECRET=$(doppler secrets get APP_CONFIG_SHARED_API_SECRET --plain)" >> $GITHUB_ENV',
+            if: "github.event.pull_request.head.repo.fork == true",
+            name: `Sync ${app.displayName} preview`,
+            "working-directory": app.appPath,
+            env: {
+              GITHUB_HEAD_REF: "${{ github.event.pull_request.head.ref }}",
+              GITHUB_PR_IS_FORK:
+                "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}",
+              GITHUB_PR_NUMBER: "${{ github.event.pull_request.number }}",
+              GITHUB_REPOSITORY: "${{ github.repository }}",
+              GITHUB_RUN_ID: "${{ github.run_id }}",
+              GITHUB_SERVER_URL: "${{ github.server_url }}",
+              GITHUB_SHA: "${{ github.event.pull_request.head.sha }}",
+              GITHUB_TOKEN: "${{ github.token }}",
+              WORKFLOW_RUN_URL: "${{ needs.variables.outputs.run_url }}",
+            },
+            run: "pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr",
           },
           {
+            if: "github.event.pull_request.head.repo.fork != true",
             name: `Sync ${app.displayName} preview`,
             "working-directory": app.appPath,
             env: {
@@ -110,7 +124,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
               GITHUB_TOKEN: "${{ github.token }}",
               WORKFLOW_RUN_URL: "${{ needs.variables.outputs.run_url }}",
             },
-            run: "pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr",
+            run: "doppler run -- pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr",
           },
         ],
       },
