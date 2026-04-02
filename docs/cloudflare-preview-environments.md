@@ -1,6 +1,6 @@
 # Cloudflare Preview Environments
 
-Preview environments for `codemode`, `example`, `events`, `semaphore`, and `ingress-proxy` are ordinary Semaphore resource pools plus one repo-root preview router.
+Preview environments for `example`, `events`, `semaphore`, and `ingress-proxy` are ordinary Semaphore resource pools plus one repo-root preview router.
 
 ## Naming
 
@@ -36,6 +36,8 @@ The resource slug is the canonical preview environment identifier. Every other n
 - The app manifest for paths, Doppler project names, preview pool types, and test commands lives in `scripts/preview/apps.ts`.
 - The preview router and procedures live in `scripts/preview/router.ts` and `scripts/preview/preview.ts`.
 - Preview leases are deliberately long-lived in v1 and are released explicitly on cleanup.
+- `events` preview runs the deployed-worker smoke suites rather than the slowest stream propagation suite, which remains available under the full app e2e command.
+- `ingress-proxy` preview runs the management API e2e suite only. The full custom-host proxy suite still needs a routed hostname topology rather than an isolated `workers.dev` preview URL.
 - Use `doppler run --project os --config prd -- pnpm preview status` from the repo root to inspect live preview pool inventory and lease state.
 - Manual lifecycle:
   `doppler run --project os --config prd -- pnpm preview sync --app example`

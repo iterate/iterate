@@ -34,7 +34,7 @@ export const cloudflarePreviewApps = {
     paths: ["apps/events/**", "apps/events-contract/**"],
     previewResourceType: "events-preview-environment",
     previewTestBaseUrlEnvVar: "EVENTS_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e"],
+    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   semaphore: {
     slug: "semaphore",
@@ -54,6 +54,6 @@ export const cloudflarePreviewApps = {
     paths: ["apps/ingress-proxy/**", "apps/ingress-proxy-contract/**"],
     previewResourceType: "ingress-proxy-preview-environment",
     previewTestBaseUrlEnvVar: "INGRESS_PROXY_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e"],
+    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
 } satisfies Record<CloudflarePreviewAppSlug, CloudflarePreviewApp>;
