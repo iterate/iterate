@@ -20,7 +20,7 @@ async function main() {
 
   const [command] = positionals;
   if (values.help || command == null) {
-    await printUsage(command == null ? 1 : 0);
+    await printUsage(values.help ? 0 : 1);
     return;
   }
 
@@ -77,14 +77,21 @@ async function resolveScriptPath(script: string) {
 }
 
 async function getScripts() {
-  const files: string[] = [];
+  const files = new Set<string>();
   for await (const file of fs.glob("**/[0-9][0-9]-*/*.{js,ts}", {
     cwd: process.cwd(),
     exclude: ["dist/**", "node_modules/**", "web/**"],
   })) {
-    files.push(file);
+    files.add(file);
   }
-  return files;
+
+  for (const file of ["script.ts", "script.js"]) {
+    if (await fileExists(path.resolve(process.cwd(), file))) {
+      files.add(file);
+    }
+  }
+
+  return [...files].sort();
 }
 
 async function fileExists(filepath: string) {
