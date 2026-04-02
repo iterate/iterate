@@ -1,5 +1,5 @@
 import { workflow } from "@jlarky/gha-ts/workflow-types";
-import type { CloudflareApp } from "./cloudflare-apps.ts";
+import type { CloudflarePreviewApp as CloudflareApp } from "../../../scripts/preview/apps.ts";
 import * as utils from "./index.ts";
 
 declare const appDisplayName: string;
@@ -85,8 +85,8 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
           {
             if: "github.event.pull_request.head.repo.fork == true",
             name: `Sync ${app.displayName} preview`,
-            "working-directory": app.appPath,
             env: {
+              APP: app.slug,
               GITHUB_HEAD_REF: "${{ github.event.pull_request.head.ref }}",
               GITHUB_PR_IS_FORK:
                 "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}",
@@ -99,13 +99,13 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
               SEMAPHORE_BASE_URL: "https://semaphore.iterate.com",
               WORKFLOW_RUN_URL: "${{ needs.variables.outputs.run_url }}",
             },
-            run: "pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr",
+            run: 'pnpm preview sync --app "$APP"',
           },
           {
             if: "github.event.pull_request.head.repo.fork != true",
             name: `Sync ${app.displayName} preview`,
-            "working-directory": app.appPath,
             env: {
+              APP: app.slug,
               DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
               GITHUB_HEAD_REF: "${{ github.event.pull_request.head.ref }}",
               GITHUB_PR_IS_FORK:
@@ -119,7 +119,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
               SEMAPHORE_BASE_URL: "https://semaphore.iterate.com",
               WORKFLOW_RUN_URL: "${{ needs.variables.outputs.run_url }}",
             },
-            run: "doppler run --project semaphore --config prd -- pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr",
+            run: 'doppler run --project semaphore --config prd -- pnpm preview sync --app "$APP"',
           },
         ],
       },

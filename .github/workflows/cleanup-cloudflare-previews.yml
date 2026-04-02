@@ -17,19 +17,14 @@ jobs:
       matrix:
         include:
           - appDisplayName: Codemode
-            appPath: apps/codemode
             appSlug: codemode
           - appDisplayName: Example
-            appPath: apps/example
             appSlug: example
           - appDisplayName: Events
-            appPath: apps/events
             appSlug: events
           - appDisplayName: Semaphore
-            appPath: apps/semaphore
             appSlug: semaphore
           - appDisplayName: Ingress Proxy
-            appPath: apps/ingress-proxy
             appSlug: ingress-proxy
     runs-on: ubuntu-24.04
     steps:
@@ -52,12 +47,12 @@ jobs:
           doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
         if: github.event.pull_request.head.repo.fork != true
       - if: github.event.pull_request.head.repo.fork != true
-        name: Cleanup preview from app-local script
-        working-directory: ${{ matrix.appPath }}
+        name: Cleanup preview from repo preview router
         env:
+          APP: ${{ matrix.appSlug }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
           SEMAPHORE_BASE_URL: https://semaphore.iterate.com
-        run: doppler run --project semaphore --config prd -- pnpm iterate --local-router ./scripts/router.ts local-router preview-cleanup-pr
+        run: doppler run --project semaphore --config prd -- pnpm preview cleanup --app "$APP"

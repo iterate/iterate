@@ -6,7 +6,7 @@ import {
   findLatestManagedCloudflarePreviewComment,
   parseCloudflarePreviewCommentState,
   renderCloudflarePreviewCommentBody,
-} from "./cloudflare-preview-comment.ts";
+} from "./comment.ts";
 
 describe("cloudflare preview comment helpers", () => {
   it("round-trips rendered preview comment state", () => {

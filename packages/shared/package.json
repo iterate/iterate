@@ -12,8 +12,6 @@
     "./apps/types": "./src/apps/types.ts",
     "./apps/common-router": "./src/apps/common-router.ts",
     "./apps/common-router-contract": "./src/apps/common-router-contract.ts",
-    "./apps/cloudflare-preview": "./src/apps/cloudflare-preview.ts",
-    "./apps/cloudflare-preview-comment": "./src/apps/cloudflare-preview-comment.ts",
     "./apps/orpc": "./src/apps/orpc.ts",
     "./apps/middleware/require-header": "./src/apps/middleware/require-header.ts",
     "./request-logging": "./src/request-logging.ts",
