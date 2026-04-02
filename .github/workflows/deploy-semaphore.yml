@@ -87,11 +87,6 @@ jobs:
           for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
           doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
         if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Setup Doppler
-        run: doppler setup --config stg --project semaphore
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - if: github.event.pull_request.head.repo.fork == true
         name: Sync Semaphore preview
         working-directory: apps/semaphore
@@ -120,7 +115,7 @@ jobs:
           GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_TOKEN: ${{ github.token }}
           WORKFLOW_RUN_URL: ${{ needs.variables.outputs.run_url }}
-        run: doppler run -- pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr
+        run: doppler run --project semaphore --config stg -- pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr
   deploy:
     needs:
       - variables

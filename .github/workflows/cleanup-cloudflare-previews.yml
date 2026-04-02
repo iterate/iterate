@@ -51,11 +51,6 @@ jobs:
           doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
         if: github.event.pull_request.head.repo.fork != true
       - if: github.event.pull_request.head.repo.fork != true
-        name: Setup Doppler
-        run: doppler setup --config stg --project ${{ matrix.dopplerProject }}
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - if: github.event.pull_request.head.repo.fork != true
         name: Cleanup preview from app-local script
         working-directory: ${{ matrix.appPath }}
         env:
@@ -63,4 +58,4 @@ jobs:
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: doppler run -- pnpm iterate --local-router ./scripts/router.ts local-router preview-cleanup-pr
+        run: doppler run --project ${{ matrix.dopplerProject }} --config stg -- pnpm iterate --local-router ./scripts/router.ts local-router preview-cleanup-pr
