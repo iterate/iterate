@@ -17,13 +17,11 @@ on:
       - synchronize
     paths:
       - apps/events/**
-      - apps/events-contract/**
   push:
     branches:
       - main
     paths:
       - apps/events/**
-      - apps/events-contract/**
   workflow_dispatch:
     inputs:
       ref:

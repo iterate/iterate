@@ -17,13 +17,11 @@ on:
       - synchronize
     paths:
       - apps/ingress-proxy/**
-      - apps/ingress-proxy-contract/**
   push:
     branches:
       - main
     paths:
       - apps/ingress-proxy/**
-      - apps/ingress-proxy-contract/**
   workflow_dispatch:
     inputs:
       ref:

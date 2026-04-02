@@ -17,13 +17,11 @@ on:
       - synchronize
     paths:
       - apps/example/**
-      - apps/example-contract/**
   push:
     branches:
       - main
     paths:
       - apps/example/**
-      - apps/example-contract/**
   workflow_dispatch:
     inputs:
       ref:

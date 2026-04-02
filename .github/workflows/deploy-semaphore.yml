@@ -17,13 +17,11 @@ on:
       - synchronize
     paths:
       - apps/semaphore/**
-      - apps/semaphore-contract/**
   push:
     branches:
       - main
     paths:
       - apps/semaphore/**
-      - apps/semaphore-contract/**
   workflow_dispatch:
     inputs:
       ref:
