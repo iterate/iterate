@@ -7,6 +7,11 @@
     "types": ["node"],
     "strict": true,
     "allowImportingTsExtensions": true,
+    "baseUrl": ".",
+    "paths": {
+      "ai-engineer-workshop": ["./sdk.ts"],
+      "ai-engineer-workshop/contract": ["./contract.ts"]
+    },
     "noEmit": false,
     "declaration": true,
     "declarationMap": true,
@@ -14,6 +19,6 @@
     "outDir": "dist",
     "skipLibCheck": true
   },
-  "include": ["*.ts"],
+  "include": ["*.ts", "examples/**/*.ts"],
   "exclude": ["dist"]
 }

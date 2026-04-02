@@ -7,6 +7,7 @@ It intentionally does not contain workshop scripts anymore.
 - `sdk.ts` re-exports the shared events SDK from `apps/events-contract/src/sdk.ts`
 - `contract.ts` re-exports the shared contract from `apps/events-contract/src/index.ts`
 - `cli.ts` runs workshop scripts from the current working directory
+- `examples/` contains a few tiny runnable scripts for local messing around inside this repo
 
 Local development:
 
@@ -15,6 +16,27 @@ cd ai-engineer-workshop
 pnpm install
 pnpm w --help
 pnpm build
+```
+
+If you want to experiment from inside this repo, put scripts in:
+
+- `ai-engineer-workshop/script.ts` for a single scratch file
+- `ai-engineer-workshop/examples/...` for a few longer-lived examples
+
+Those example files can import exactly the same way as the separate workshop repo:
+
+```ts
+import { createEventsClient, normalizePathPrefix, runWorkshopMain } from "ai-engineer-workshop";
+```
+
+That works because this directory is itself the `ai-engineer-workshop` package root, so package self-reference resolves correctly from files inside it.
+
+Examples are discoverable via:
+
+```bash
+cd ai-engineer-workshop
+pnpm w --help
+pnpm w run --script examples/01-hello-world/append-hello-world.ts
 ```
 
 Published preview packages are built directly from this folder via `pkg.pr.new`.
