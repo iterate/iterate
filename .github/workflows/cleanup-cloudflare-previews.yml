@@ -16,8 +16,6 @@ jobs:
       max-parallel: 1
       matrix:
         include:
-          - appDisplayName: Codemode
-            appSlug: codemode
           - appDisplayName: Example
             appSlug: example
           - appDisplayName: Events
