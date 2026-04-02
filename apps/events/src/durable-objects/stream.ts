@@ -101,7 +101,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     this._state = {
       path: args.path,
-      eventCount: 0,
+      maxOffset: 0,
       metadata: {},
     };
 
@@ -138,12 +138,12 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     if (
       parsedInputEvent.type === "https://events.iterate.com/events/stream/initialized" &&
-      this.state.eventCount > 0
+      this.state.maxOffset > 0
     ) {
       throw new Error("stream-initialized may only be appended once");
     }
 
-    const nextOffset = this.state.eventCount + 1;
+    const nextOffset = this.state.maxOffset + 1;
 
     if (parsedInputEvent.offset != null && parsedInputEvent.offset !== nextOffset) {
       throw new StreamOffsetPreconditionError(
@@ -385,10 +385,10 @@ type SqliteEventRow = {
  * Pure reducer for the persisted stream projection. Replay and append share the
  * same rules so state cannot drift based on which code path produced it.
  *
- * `initialize()` sets the initial state (with `eventCount: 0`), then appends
+ * `initialize()` sets the initial state (with `maxOffset: 0`), then appends
  * the synthetic `stream-initialized` event through the normal `append()` path.
  * After that, `stream-metadata-updated` replaces the metadata snapshot and all
- * other events simply advance the event count.
+ * other events simply advance the max offset.
  */
 function reduceStreamState(args: { state: StreamState; event: Event }): StreamState {
   const { state, event } = args;
@@ -399,7 +399,7 @@ function reduceStreamState(args: { state: StreamState; event: Event }): StreamSt
     );
   }
 
-  state.eventCount++;
+  state.maxOffset++;
 
   switch (event.type) {
     case "https://events.iterate.com/events/stream/metadata-updated": {

@@ -224,7 +224,7 @@ describe.sequential("events stream e2e", () => {
 
       expect(await app.client.getState({ path })).toEqual({
         path,
-        eventCount: 1,
+        maxOffset: 1,
         metadata: {},
       });
       expect(await collectStreamEvents(app, { path })).toEqual([]);
@@ -330,7 +330,7 @@ describe.sequential("events stream e2e", () => {
 
       expect(await app.client.getState({ path })).toEqual({
         path,
-        eventCount: 1,
+        maxOffset: 1,
         metadata: {},
       });
     },
@@ -407,7 +407,7 @@ describe.sequential("events stream e2e", () => {
 
       expect(await app.client.getState({ path })).toEqual({
         path,
-        eventCount: 4,
+        maxOffset: 4,
         metadata: {
           owner: "second",
         },

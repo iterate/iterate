@@ -88,9 +88,9 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
         "stderr": "",
         "stdout": "{"event":{"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":2,"streamPath":"<streamPath>","createdAt":"<ts>"}}
       ---
-      {"path":"<streamPath>","eventCount":2,"metadata":{}}
+      {"path":"<streamPath>","maxOffset":2,"metadata":{}}
       ---
-      {"path":"<streamPath>","eventCount":2,"metadata":{}}
+      {"path":"<streamPath>","maxOffset":2,"metadata":{}}
       ---
       : 
 
