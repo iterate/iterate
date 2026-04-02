@@ -1,13 +1,45 @@
-import type { Event, EventInput, StreamPath } from "./contract.ts";
-import type { StreamProcessor } from "./stream-process.ts";
+import type { ContractRouterClient } from "@orpc/contract";
+import { createORPCClient } from "@orpc/client";
+import { OpenAPILink } from "@orpc/openapi-client/fetch";
+import { eventsContract } from "./orpc-contract.ts";
+import type { Event, EventInput, EventType, JSONObject, StreamPath } from "./types.ts";
+
+export { eventsContract } from "./orpc-contract.ts";
+export type { Event, EventInput, EventType, JSONObject, StreamPath } from "./types.ts";
+
+export type EventsORPCClient = ContractRouterClient<typeof eventsContract>;
+
+export function createEventsClient(baseUrl: string): EventsORPCClient {
+  return createORPCClient(
+    new OpenAPILink(eventsContract, {
+      url: new URL("/api", baseUrl).toString(),
+    }),
+  ) as EventsORPCClient;
+}
+
+type AppendEvent = Omit<EventInput, "path">;
+
+export function defineProcessor<State>(processor: {
+  initialState: State;
+  reduce: (state: State, event: Event) => State | void;
+  onEvent?: (args: {
+    append: (event: AppendEvent) => Promise<void>;
+    event: Event;
+    state: State;
+    prevState: State;
+  }) => Promise<void>;
+}) {
+  return processor;
+}
+
+export type StreamProcessor<State> = ReturnType<typeof defineProcessor<State>>;
 
 type PullSubscriptionEventsClient = {
-  append: (input: { path: StreamPath; events: EventInput[] }) => Promise<{
-    created: boolean;
-    events: Event[];
+  append: (input: { params: { path: StreamPath }; body: EventInput }) => Promise<{
+    event: Event;
   }>;
   stream: (
-    input: { path: StreamPath; offset?: string; live?: boolean },
+    input: { path: StreamPath; offset?: number; live?: boolean },
     options: { signal?: AbortSignal },
   ) => Promise<AsyncIterable<Event>>;
 };
@@ -36,7 +68,7 @@ export class PullSubscriptionProcessorRuntime<State> {
 
   async run() {
     const historyStream = await this.#eventsClient.stream({ path: this.#streamPath }, {});
-    let lastOffset: string | undefined;
+    let lastOffset: number | undefined;
 
     for await (const event of historyStream) {
       lastOffset = event.offset;
@@ -56,15 +88,10 @@ export class PullSubscriptionProcessorRuntime<State> {
       },
     );
 
-    const append = async (event: Omit<EventInput, "path">) => {
+    const append = async (event: AppendEvent) => {
       await this.#eventsClient.append({
-        path: this.#streamPath,
-        events: [
-          {
-            ...event,
-            path: this.#streamPath,
-          },
-        ],
+        params: { path: this.#streamPath },
+        body: event,
       });
     };
 

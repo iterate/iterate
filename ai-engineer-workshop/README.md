@@ -1,122 +1,66 @@
 # AI engineer workshop
 
-I was thinking the contents of this folder could maybe become a repo everyone plays in where
+This directory is the publishable workshop package.
 
-- each student (and each of us) have our own folder
-- each student folder (or their subfolders) are npm packages
-- they can import a lightweight sdk that is exported from apps/events directly. it includes
-  - orpc client
-  - shared components to make nice web UI renderers
-  - any helper libraries e.g. to help people create a "stream processor" or to "discover all streams that start with /jonas/ and subscribe to them"
+It intentionally does not contain the main workshop script collection anymore.
+The real scripts live in the separate workshop repo, while this package keeps a
+few tiny local examples and a scratch `script.ts` for experimentation.
 
-Something like that anyway :D The stuff in 01-hello-world is mostly vibe-slop
+- `sdk.ts` re-exports the shared events SDK from `apps/events-contract/src/sdk.ts`
+- `contract.ts` re-exports the shared contract from `apps/events-contract/src/index.ts`
+- `cli.ts` runs workshop scripts from the current working directory
+- `examples/` contains a few tiny runnable scripts for local messing around inside this repo
 
-I think it might actually maybe be nice to structure the workshop "exercises" or "demos" or whatever using a trpc-cli based cli after all. You could have `pnpm cli` list out the available demonstrations to run and collect inputs etc - not sure it's worth the effort, though
-
-With what we have here, we should already be able to make a basic codemode agent, for example
-
-With the caveat that the stream processors are all _pulling_ from the streams. Tomorrow I'll make it possible for the streams to also _push_ to the processors that are deployed as serverless workers and then things really get interesting
-
-## 02 — Basic LLM loop (`jonas/02-basic-llm-loop`)
-
-Demonstrates a tiny event-driven LLM loop with [TanStack AI](https://tanstack.com/ai): one subscriber watches a stream for `https://events.iterate.com/agent/input-item-added`, runs `chat()`, appends each streamed chunk back as `https://events.iterate.com/agent/output-item-added`, and then appends the completed assistant reply as another `input-item-added` event.
-
-**Prerequisites**
-
-- `pnpm install` from the repo root
-- Doppler project `ai-engineer-workshop` set up (see repo `doppler.yaml`) with `OPENAI_API_KEY` (copied from the `os` project or your own)
-- From `ai-engineer-workshop/`: `doppler setup --project ai-engineer-workshop --config dev_jonas` (or your personal dev config)
-
-**Run the subscriber** (needs network + API key):
-
-Use cwd `ai-engineer-workshop/jonas` (not the monorepo root, and not inside `02-basic-llm-loop/`). That directory is still under the `ai-engineer-workshop/` path in repo `doppler.yaml`, so Doppler resolves the `ai-engineer-workshop` project the same way as if you had `cd`’d from the repo root.
+Local development:
 
 ```bash
-cd ai-engineer-workshop/jonas
-doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm tsx 02-basic-llm-loop/run-llm-subscriber.ts
+cd ai-engineer-workshop
+pnpm install
+pnpm w --help
+pnpm build
 ```
 
-That script prints:
+If you want to experiment from inside this repo, put scripts in:
 
-- the exact browser URL to open
-- a JSON event you can paste into the stream page input
+- `ai-engineer-workshop/script.ts` for a single scratch file
+- `ai-engineer-workshop/examples/...` for a few longer-lived examples
 
-If `STREAM_PATH` is not set in the **process environment**, it generates a fresh stream path like `/jonas/02/a1b2c3d4` for that run. (A value exported in your shell still counts — `printenv STREAM_PATH`. The `ai-engineer-workshop` Doppler config does not set it.)
+Those example files can import exactly the same way as the separate workshop repo:
 
-So the whole demo can be:
-
-1. Start the subscriber in one terminal.
-2. Open the URL printed by the script in your browser.
-3. Paste an event like this into the input at the bottom of the page:
-
-```json
-{
-  "path": "/jonas/02/<random-short-string>",
-  "type": "https://events.iterate.com/agent/input-item-added",
-  "payload": {
-    "item": {
-      "role": "user",
-      "content": "Say hello in one short sentence."
-    }
-  }
-}
+```ts
+import { createEventsClient, normalizePathPrefix, runWorkshopMain } from "ai-engineer-workshop";
 ```
 
-4. Submit it and literally watch it happen in the stream feed: the input event lands, the subscriber sees it, the LLM appends raw output chunk events back into the same stream, and then it appends one finalized assistant message event.
-5. Keep posting more `input-item-added` events into that same stream if you want a back-and-forth conversation. The subscriber rebuilds history from those finalized message events and only uses the raw chunk events for live rendering/debugging.
+`createEventsClient()` now returns the raw oRPC client, so append calls use the
+contract shape directly:
 
-Optional env: `BASE_URL`, `STREAM_PATH` (otherwise defaults to `/jonas/02/<random-hex>`), `OPENAI_MODEL` (must be a supported OpenAI chat model name; default `gpt-4o-mini`).
+```ts
+await client.append({
+  params: { path: streamPath },
+  body: {
+    type: "hello-world",
+    payload: { message: "hello world" },
+  },
+});
+```
 
-## 03 — Stream Processor (`jonas/03-stream-processor`)
+That works because this directory is itself the `ai-engineer-workshop` package root, so package self-reference resolves correctly from files inside it.
 
-Tiny version of the agent loop pattern:
-
-- `stream-process.ts` is the minimal processor abstraction
-- `pull-subscription-processor-runtime.ts` does the pull-subscription plumbing for one stream
-- `run-llm-processor.ts` is the actual "agent loop" file you iterate on
-
-Run it from `ai-engineer-workshop/jonas`:
+Examples are discoverable via:
 
 ```bash
-doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm tsx 03-stream-processor/run-llm-processor.ts
+cd ai-engineer-workshop
+pnpm w --help
+pnpm w run --script examples/01-hello-world/append-hello-world.ts
 ```
 
-It watches one stream for `message`, streams chunk events back as `chunk`, then appends the finalized assistant reply as another `message`.
+Published preview packages are built directly from this folder via `pkg.pr.new`.
 
-Unlike `02`, this version uses a much thinner event shape around TanStack AI:
+The separate scripts repo lives at:
 
-- `message` events contain a TanStack AI `ModelMessage`
-- `chunk` events contain a TanStack AI `StreamChunk`
-- reduced processor state holds `conversationHistory` plus `llmRequestInProgress`
+`/Users/jonastemplestein/src/github.com/iterate/ai-engineer-workshop`
 
-Optional env: `BASE_URL`, `STREAM_PATH` (otherwise defaults to `/jonas/03/<random-hex>`), `OPENAI_MODEL` (default `gpt-4o-mini`).
+That repo can either:
 
-## 05 — OpenAI Agent (`jonas/05-openai-agent`)
-
-Simplest possible agent loop using the native OpenAI Responses API (`openai` SDK) in streaming mode. No TanStack AI — just `client.responses.create({ stream: true })` with a hardcoded model (`gpt-4o-mini`).
-
-Two event types in the stream:
-
-- `user-message` — user sends a message (payload: `{ content: string }`)
-- `openai-stream-event` — every SSE event from OpenAI forwarded verbatim (payload is a `ResponseStreamEvent`)
-
-Processor state is just `history: ResponseInput` (the SDK's own type for the `input` parameter) plus a `requestInProgress` flag. On each `user-message`, the processor calls the Responses API, streams all events back into the iterate stream, and appends completed output items to history for multi-turn context.
-
-Run it from `ai-engineer-workshop/jonas`:
-
-```bash
-doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm tsx 05-openai-agent/openai-agent-processor.ts
-```
-
-Then open the printed URL and paste:
-
-```json
-{
-  "type": "user-message",
-  "payload": { "content": "Say hello in one short sentence." }
-}
-```
-
-Watch the raw OpenAI lifecycle events appear in real time: `response.created`, `response.output_text.delta` (text deltas), `response.output_item.done`, `response.completed`.
-
-Optional env: `BASE_URL`, `STREAM_PATH` (otherwise defaults to `/jonas/05/<random-hex>`).
+- depend on a `pkg.pr.new` preview of this package
+- or override `ai-engineer-workshop` to a local link pointing at this folder during development

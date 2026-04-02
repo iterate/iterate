@@ -1,15 +1,15 @@
 {
   "name": "ai-engineer-workshop",
   "version": "0.0.1",
-  "description": "Tiny ORPC client helpers for the Iterate events workshop",
+  "description": "CLI and lightweight SDK wrappers for the Iterate events workshop",
   "license": "AGPL-3.0-only",
   "type": "module",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/iterate/iterate.git",
-    "directory": "ai-engineer-workshop/lib"
+    "directory": "ai-engineer-workshop"
   },
-  "homepage": "https://github.com/iterate/iterate/tree/main/ai-engineer-workshop/lib",
+  "homepage": "https://github.com/iterate/iterate/tree/main/ai-engineer-workshop",
   "bugs": {
     "url": "https://github.com/iterate/iterate/issues"
   },
@@ -43,20 +43,21 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "workshop": "node --import tsx ./cli.ts",
+    "w": "pnpm workshop"
   },
   "dependencies": {
-    "@clack/prompts": "^1.1.0",
     "@orpc/client": "1.13.13",
     "@orpc/contract": "1.13.13",
     "@orpc/openapi-client": "1.13.13",
-    "@orpc/server": "1.13.13",
-    "trpc-cli": "0.14.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "25.5.0",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.3",
     "typescript": "^5.9.3"
   }
 }

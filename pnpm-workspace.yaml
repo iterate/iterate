@@ -1,4 +1,5 @@
 packages:
+  - ai-engineer-workshop
   - ai-engineer-workshop/*
   - jonasland
   - apps/ingress-proxy
