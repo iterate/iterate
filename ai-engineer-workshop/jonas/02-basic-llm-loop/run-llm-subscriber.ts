@@ -9,7 +9,7 @@
 import { randomBytes } from "node:crypto";
 import { chat, streamToText, type ModelMessage, type StreamChunk } from "@tanstack/ai";
 import { createOpenaiChat } from "@tanstack/ai-openai";
-import { createEventsClient } from "ai-engineer-workshop";
+import { createEventsClient, normalizePathPrefix, runWorkshopMain } from "ai-engineer-workshop";
 
 const INPUT_ITEM_ADDED_TYPE = "https://events.iterate.com/agent/input-item-added" as const;
 const OUTPUT_ITEM_ADDED_TYPE = "https://events.iterate.com/agent/output-item-added" as const;
@@ -67,13 +67,10 @@ export default async function runLlmSubscriber(pathPrefix: string) {
 
       await client.append({
         path: streamPath,
-        events: [
-          {
-            path: streamPath,
-            type: OUTPUT_ITEM_ADDED_TYPE,
-            payload: JSON.parse(JSON.stringify({ chunk })),
-          },
-        ],
+        event: {
+          type: OUTPUT_ITEM_ADDED_TYPE,
+          payload: JSON.parse(JSON.stringify({ chunk })),
+        },
       });
     }
 
@@ -82,13 +79,10 @@ export default async function runLlmSubscriber(pathPrefix: string) {
       const assistantItem: ModelMessage<string> = { role: "assistant", content: assistant };
       await client.append({
         path: streamPath,
-        events: [
-          {
-            path: streamPath,
-            type: INPUT_ITEM_ADDED_TYPE,
-            payload: JSON.parse(JSON.stringify({ item: assistantItem })),
-          },
-        ],
+        event: {
+          type: INPUT_ITEM_ADDED_TYPE,
+          payload: JSON.parse(JSON.stringify({ item: assistantItem })),
+        },
       });
       messages.push(assistantItem);
     }
@@ -129,7 +123,6 @@ function printInstructions({ baseUrl, streamPath }: { baseUrl: string; streamPat
   console.error(
     JSON.stringify(
       {
-        path: streamPath,
         type: INPUT_ITEM_ADDED_TYPE,
         payload: {
           item: {
@@ -153,13 +146,13 @@ async function loadConversation({
   streamPath: string;
 }) {
   const messageEvents: Array<{
-    eventOffset: string;
-    offsetBeforeInput?: string;
+    eventOffset: number;
+    offsetBeforeInput?: number;
     item: ModelMessage<string>;
   }> = [];
   const pendingUserMessageEvents: Array<(typeof messageEvents)[number]> = [];
-  let lastOffset: string | undefined;
-  let previousOffset: string | undefined;
+  let lastOffset: number | undefined;
+  let previousOffset: number | undefined;
 
   for await (const event of await client.stream({ path: streamPath }, {})) {
     lastOffset = event.offset;
@@ -237,6 +230,4 @@ function parseInputItemAddedPayload(payload: unknown): { item: ModelMessage<stri
   };
 }
 
-function normalizePathPrefix(pathPrefix: string) {
-  return pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
-}
+runWorkshopMain(import.meta.url, runLlmSubscriber);

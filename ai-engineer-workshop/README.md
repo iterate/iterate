@@ -29,11 +29,18 @@ Demonstrates a tiny event-driven LLM loop with [TanStack AI](https://tanstack.co
 
 **Run the subscriber** (needs network + API key):
 
-Use cwd `ai-engineer-workshop/jonas` (not the monorepo root, and not inside `02-basic-llm-loop/`). That directory is still under the `ai-engineer-workshop/` path in repo `doppler.yaml`, so Doppler resolves the `ai-engineer-workshop` project the same way as if you had `cd`’d from the repo root.
+Use cwd `ai-engineer-workshop/jonas` or `ai-engineer-workshop/`.
 
 ```bash
 cd ai-engineer-workshop/jonas
-doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm tsx 02-basic-llm-loop/run-llm-subscriber.ts
+doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm workshop run --script 02-basic-llm-loop/run-llm-subscriber.ts
+```
+
+From `ai-engineer-workshop/`:
+
+```bash
+cd ai-engineer-workshop
+doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm workshop run --script jonas/02-basic-llm-loop/run-llm-subscriber.ts
 ```
 
 That script prints:
@@ -51,7 +58,6 @@ So the whole demo can be:
 
 ```json
 {
-  "path": "/jonas/02/<random-short-string>",
   "type": "https://events.iterate.com/agent/input-item-added",
   "payload": {
     "item": {
@@ -73,12 +79,12 @@ Tiny version of the agent loop pattern:
 
 - `stream-process.ts` is the minimal processor abstraction
 - `pull-subscription-processor-runtime.ts` does the pull-subscription plumbing for one stream
-- `run-llm-processor.ts` is the actual "agent loop" file you iterate on
+- `tanstack-ai-processor.ts` is the actual "agent loop" file you iterate on
 
 Run it from `ai-engineer-workshop/jonas`:
 
 ```bash
-doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm tsx 03-stream-processor/run-llm-processor.ts
+doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm workshop run --script 03-stream-processor/tanstack-ai-processor.ts
 ```
 
 It watches one stream for `message`, streams chunk events back as `chunk`, then appends the finalized assistant reply as another `message`.
@@ -105,7 +111,7 @@ Processor state is just `history: ResponseInput` (the SDK's own type for the `in
 Run it from `ai-engineer-workshop/jonas`:
 
 ```bash
-doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm tsx 05-openai-agent/openai-agent-processor.ts
+doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm workshop run --script 05-openai-agent/openai-agent-processor.ts
 ```
 
 Then open the printed URL and paste:

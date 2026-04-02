@@ -1,0 +1,8 @@
+{
+  "name": "ai-engineer-workshop-root",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "workshop": "node --import tsx ./lib/cli.ts"
+  }
+}

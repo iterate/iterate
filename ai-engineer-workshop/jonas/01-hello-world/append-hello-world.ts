@@ -6,6 +6,7 @@
  * Override `BASE_URL`, `WORKSHOP_PATH_PREFIX`, or `STREAM_PATH` if needed.
  */
 import { createEventsClient } from "ai-engineer-workshop";
+import { normalizePathPrefix, runWorkshopMain } from "ai-engineer-workshop";
 
 export default async function appendHelloWorld(pathPrefix: string) {
   const baseUrl = process.env.BASE_URL || "https://events.iterate.com";
@@ -15,18 +16,13 @@ export default async function appendHelloWorld(pathPrefix: string) {
 
   const result = await client.append({
     path: streamPath,
-    events: [
-      {
-        path: streamPath,
-        type: "hello-world",
-        payload: { message: "hello world" },
-      },
-    ],
+    event: {
+      type: "hello-world",
+      payload: { message: "hello world" },
+    },
   });
 
   console.log(JSON.stringify(result, null, 2));
 }
 
-function normalizePathPrefix(pathPrefix: string) {
-  return pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
-}
+runWorkshopMain(import.meta.url, appendHelloWorld);

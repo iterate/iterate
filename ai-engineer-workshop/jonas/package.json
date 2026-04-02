@@ -2,6 +2,9 @@
   "name": "ai-engineer-workshop-jonas",
   "private": true,
   "type": "module",
+  "scripts": {
+    "workshop": "node --import tsx ../lib/cli.ts"
+  },
   "dependencies": {
     "ai-engineer-workshop": "workspace:*",
     "@iterate-com/events-contract": "workspace:*",

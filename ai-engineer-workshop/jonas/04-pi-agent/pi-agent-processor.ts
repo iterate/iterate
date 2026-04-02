@@ -14,25 +14,13 @@ import { z } from "zod";
 import {
   createEventsClient,
   defineProcessor,
+  normalizePathPrefix,
   type JSONObject,
   PullSubscriptionProcessorRuntime,
+  runWorkshopMain,
 } from "ai-engineer-workshop";
 
 registerBuiltInApiProviders();
-
-const PI_PROVIDER = z
-  .enum(["openai", "anthropic", "google"])
-  .parse(process.env.PI_PROVIDER ?? "openai");
-const PI_MODEL = process.env.PI_MODEL ?? "gpt-4o-mini";
-
-const models = getModels(PI_PROVIDER);
-const model = models.find((candidate) => candidate.id === PI_MODEL);
-if (!model) {
-  const available = models.map((candidate) => candidate.id);
-  throw new Error(
-    `Model "${PI_MODEL}" not found for provider "${PI_PROVIDER}". Available: ${available.join(", ")}`,
-  );
-}
 
 const FetchParams = Type.Object({
   url: Type.String({ description: "The URL to fetch" }),
@@ -106,73 +94,24 @@ const fetchTool: AgentTool<typeof FetchParams> = {
   },
 };
 
-const agent = new Agent({
-  initialState: {
-    systemPrompt:
-      "You are a helpful assistant with access to the internet via a fetch tool. " +
-      "Use it when asked to look something up, call an API, or retrieve web content. " +
-      "Keep responses concise.",
-    model,
-    thinkingLevel: "off",
-    tools: [fetchTool],
-  },
-  getApiKey: getEnvApiKey,
-});
-
 const UserPromptPayload = z.object({
   content: z.string().min(1),
 });
 
-const processor = defineProcessor({
-  initialState: { agentRunning: false },
-
-  reduce: (_state, event) => {
-    if (event.type === "agent_start" || event.type === "agent_end") {
-      return { agentRunning: event.type === "agent_start" };
-    }
-  },
-
-  onEvent: async ({ append, event, prevState }) => {
-    if (event.type !== "user-prompt" || prevState.agentRunning) return;
-
-    const prompt = UserPromptPayload.safeParse(event.payload);
-    if (!prompt.success) return;
-
-    console.log(`User prompt at offset=${event.offset}`);
-
-    // Pi emits synchronously, but `append()` is async, so serialize writes to
-    // keep the stream log in the same order pi produced the events.
-    let flushing = Promise.resolve();
-    const unsubscribe = agent.subscribe((piEvent: AgentEvent) => {
-      flushing = flushing.then(() =>
-        append({
-          type: piEvent.type,
-          payload: serializePiEvent(piEvent),
-        }),
-      );
-    });
-
-    try {
-      await agent.prompt(prompt.data.content);
-      await flushing;
-    } finally {
-      unsubscribe();
-    }
-
-    console.log(`Done offset=${event.offset}`);
-  },
-});
-
 export default async function piAgentProcessor(pathPrefix: string) {
   const baseUrl = process.env.BASE_URL || "https://events.iterate.com";
+  const provider = z
+    .enum(["openai", "anthropic", "google"])
+    .parse(process.env.PI_PROVIDER ?? "openai");
+  const modelId = process.env.PI_MODEL ?? "gpt-4o-mini";
   const streamPath =
     process.env.STREAM_PATH ||
     `${normalizePathPrefix(pathPrefix)}/04/${randomBytes(4).toString("hex")}`;
 
   console.log(`\
 Pi Agent Processor
-  provider: ${PI_PROVIDER}
-  model:    ${PI_MODEL}
+  provider: ${provider}
+  model:    ${modelId}
   stream:   ${streamPath}
 
 Open in browser:
@@ -191,7 +130,7 @@ ${JSON.stringify(
 
   await new PullSubscriptionProcessorRuntime({
     eventsClient: createEventsClient(baseUrl),
-    processor,
+    processor: createProcessor(createPiAgent({ provider, modelId })),
     streamPath,
   }).run();
 }
@@ -204,10 +143,6 @@ function serializePiEvent(event: AgentEvent): JSONObject {
   });
 }
 
-function normalizePathPrefix(pathPrefix: string) {
-  return pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
-}
-
 function toJsonObject(
   value: unknown,
   replacer?: (key: string, value: unknown) => unknown,
@@ -218,3 +153,77 @@ function toJsonObject(
   }
   return json as JSONObject;
 }
+
+function createPiAgent({
+  provider,
+  modelId,
+}: {
+  provider: "openai" | "anthropic" | "google";
+  modelId: string;
+}) {
+  const models = getModels(provider);
+  const model = models.find((candidate) => candidate.id === modelId);
+  if (!model) {
+    const available = models.map((candidate) => candidate.id);
+    throw new Error(
+      `Model "${modelId}" not found for provider "${provider}". Available: ${available.join(", ")}`,
+    );
+  }
+
+  return new Agent({
+    initialState: {
+      systemPrompt:
+        "You are a helpful assistant with access to the internet via a fetch tool. " +
+        "Use it when asked to look something up, call an API, or retrieve web content. " +
+        "Keep responses concise.",
+      model,
+      thinkingLevel: "off",
+      tools: [fetchTool],
+    },
+    getApiKey: getEnvApiKey,
+  });
+}
+
+function createProcessor(agent: Agent) {
+  return defineProcessor({
+    initialState: { agentRunning: false },
+
+    reduce: (_state, event) => {
+      if (event.type === "agent_start" || event.type === "agent_end") {
+        return { agentRunning: event.type === "agent_start" };
+      }
+    },
+
+    onEvent: async ({ append, event, prevState }) => {
+      if (event.type !== "user-prompt" || prevState.agentRunning) return;
+
+      const prompt = UserPromptPayload.safeParse(event.payload);
+      if (!prompt.success) return;
+
+      console.log(`User prompt at offset=${event.offset}`);
+
+      // Pi emits synchronously, but `append()` is async, so serialize writes to
+      // keep the stream log in the same order pi produced the events.
+      let flushing = Promise.resolve();
+      const unsubscribe = agent.subscribe((piEvent: AgentEvent) => {
+        flushing = flushing.then(() =>
+          append({
+            type: piEvent.type,
+            payload: serializePiEvent(piEvent),
+          }),
+        );
+      });
+
+      try {
+        await agent.prompt(prompt.data.content);
+        await flushing;
+      } finally {
+        unsubscribe();
+      }
+
+      console.log(`Done offset=${event.offset}`);
+    },
+  });
+}
+
+runWorkshopMain(import.meta.url, piAgentProcessor);

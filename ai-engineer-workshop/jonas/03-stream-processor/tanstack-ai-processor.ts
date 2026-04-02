@@ -14,8 +14,10 @@ import { z } from "zod";
 import {
   createEventsClient,
   defineProcessor,
+  normalizePathPrefix,
   type JSONObject,
   PullSubscriptionProcessorRuntime,
+  runWorkshopMain,
 } from "ai-engineer-workshop";
 
 type TextModelMessage = ModelMessage<string | null>;
@@ -36,77 +38,9 @@ const AgentEvent = z.discriminatedUnion("type", [
   }),
 ]);
 
-const OPENAI_MODEL = z.enum(OPENAI_CHAT_MODELS).parse(process.env.OPENAI_MODEL ?? "gpt-4o-mini");
-
-const tanstackAi = openaiText(OPENAI_MODEL);
-
-const agentProcessor = defineProcessor<AgentState>({
-  initialState: {
-    conversationHistory: [],
-    llmRequestInProgress: false,
-  },
-  reduce: (state, event) => {
-    const { success, data: tanstackAiEvent } = AgentEvent.safeParse(event);
-
-    if (!success) {
-      console.log(`Ignoring event of type ${event.type}`);
-      return state;
-    }
-
-    switch (tanstackAiEvent.type) {
-      case "tanstack-ai-message-added":
-        return {
-          conversationHistory: [...state.conversationHistory, tanstackAiEvent.payload],
-          llmRequestInProgress: tanstackAiEvent.payload.role === "user",
-        };
-    }
-  },
-
-  onEvent: async ({ append, event, state, prevState }) => {
-    const { success, data: tanstackAiEvent } = AgentEvent.safeParse(event);
-
-    if (!success || tanstackAiEvent.type !== "tanstack-ai-message-added") {
-      return;
-    }
-
-    if (tanstackAiEvent.payload.role !== "user" || prevState.llmRequestInProgress) {
-      return;
-    }
-
-    console.log(
-      `Input offset=${event.offset} previousInProgress=${prevState.llmRequestInProgress}`,
-    );
-
-    const chunkStream = chat({
-      adapter: tanstackAi,
-      messages: state.conversationHistory,
-    });
-
-    // Each "content" chunk carries the full accumulated text so far (not just
-    // the delta), so the last content chunk contains the complete response.
-    let assistantContent = "";
-
-    for await (const chunk of chunkStream) {
-      await append({ type: "tanstack-ai-chunk-added", payload: toJsonObject(chunk) });
-
-      if (chunk.type === "content") {
-        assistantContent = chunk.content;
-      }
-    }
-
-    if (assistantContent) {
-      await append({
-        type: "tanstack-ai-message-added",
-        payload: { role: "assistant", content: assistantContent },
-      });
-    }
-
-    console.log(`Done offset=${event.offset}`);
-  },
-});
-
 export default async function tanstackAiProcessor(pathPrefix: string) {
   const baseUrl = process.env.BASE_URL || "https://events.iterate.com";
+  const openaiModel = z.enum(OPENAI_CHAT_MODELS).parse(process.env.OPENAI_MODEL ?? "gpt-4o-mini");
   const streamPath =
     process.env.STREAM_PATH ||
     `${normalizePathPrefix(pathPrefix)}/03/${randomBytes(4).toString("hex")}`;
@@ -126,13 +60,9 @@ Paste this JSON into the stream page input and submit it:
 
   await new PullSubscriptionProcessorRuntime({
     eventsClient: createEventsClient(baseUrl),
-    processor: agentProcessor,
+    processor: createAgentProcessor(openaiText(openaiModel)),
     streamPath,
   }).run();
-}
-
-function normalizePathPrefix(pathPrefix: string) {
-  return pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
 }
 
 function toJsonObject(value: unknown): JSONObject {
@@ -142,3 +72,72 @@ function toJsonObject(value: unknown): JSONObject {
   }
   return json as JSONObject;
 }
+
+function createAgentProcessor(adapter: ReturnType<typeof openaiText>) {
+  return defineProcessor<AgentState>({
+    initialState: {
+      conversationHistory: [],
+      llmRequestInProgress: false,
+    },
+    reduce: (state, event) => {
+      const { success, data: tanstackAiEvent } = AgentEvent.safeParse(event);
+
+      if (!success) {
+        console.log(`Ignoring event of type ${event.type}`);
+        return state;
+      }
+
+      switch (tanstackAiEvent.type) {
+        case "tanstack-ai-message-added":
+          return {
+            conversationHistory: [...state.conversationHistory, tanstackAiEvent.payload],
+            llmRequestInProgress: tanstackAiEvent.payload.role === "user",
+          };
+      }
+    },
+
+    onEvent: async ({ append, event, state, prevState }) => {
+      const { success, data: tanstackAiEvent } = AgentEvent.safeParse(event);
+
+      if (!success || tanstackAiEvent.type !== "tanstack-ai-message-added") {
+        return;
+      }
+
+      if (tanstackAiEvent.payload.role !== "user" || prevState.llmRequestInProgress) {
+        return;
+      }
+
+      console.log(
+        `Input offset=${event.offset} previousInProgress=${prevState.llmRequestInProgress}`,
+      );
+
+      const chunkStream = chat({
+        adapter,
+        messages: state.conversationHistory,
+      });
+
+      // Each "content" chunk carries the full accumulated text so far (not just
+      // the delta), so the last content chunk contains the complete response.
+      let assistantContent = "";
+
+      for await (const chunk of chunkStream) {
+        await append({ type: "tanstack-ai-chunk-added", payload: toJsonObject(chunk) });
+
+        if (chunk.type === "content") {
+          assistantContent = chunk.content;
+        }
+      }
+
+      if (assistantContent) {
+        await append({
+          type: "tanstack-ai-message-added",
+          payload: { role: "assistant", content: assistantContent },
+        });
+      }
+
+      console.log(`Done offset=${event.offset}`);
+    },
+  });
+}
+
+runWorkshopMain(import.meta.url, tanstackAiProcessor);

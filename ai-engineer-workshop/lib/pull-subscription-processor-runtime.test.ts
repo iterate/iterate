@@ -11,7 +11,7 @@ test("catch-up reduces history without calling onEvent", async () => {
     eventsClient: createFakeEventsClient({
       historyEvents: [
         makeEvent({
-          offset: "0001",
+          offset: 1,
           type: "message",
           payload: { role: "assistant", content: "history" },
         }),
@@ -22,7 +22,7 @@ test("catch-up reduces history without calling onEvent", async () => {
       initialState: { count: 0 },
       reduce: (state, event) => (event.type !== "message" ? state : { count: state.count + 1 }),
       onEvent: async ({ event }) => {
-        seenOnEvent.push(event.offset);
+        seenOnEvent.push(String(event.offset));
       },
     }),
     streamPath: "/test",
@@ -42,7 +42,7 @@ test("onEvent receives prevState while state holds the reduced next state", asyn
       historyEvents: [],
       liveEvents: [
         makeEvent({
-          offset: "0001",
+          offset: 1,
           type: "message",
           payload: { role: "user", content: "hello" },
         }),
@@ -73,12 +73,12 @@ test("async onEvent serializes live events and preserves ordering", async () => 
       historyEvents: [],
       liveEvents: [
         makeEvent({
-          offset: "0001",
+          offset: 1,
           type: "message",
           payload: { role: "user", content: "first" },
         }),
         makeEvent({
-          offset: "0002",
+          offset: 2,
           type: "message",
           payload: { role: "user", content: "second" },
         }),
@@ -97,7 +97,7 @@ test("async onEvent serializes live events and preserves ordering", async () => 
       onEvent: async ({ event, state, prevState }) => {
         steps.push(`onEvent:start:${event.offset}:${prevState.count}->${state.count}`);
 
-        if (event.offset === "0001") {
+        if (event.offset === 1) {
           await new Promise<void>((resolve) => {
             releaseFirstEvent = resolve;
           });
@@ -114,18 +114,18 @@ test("async onEvent serializes live events and preserves ordering", async () => 
   await waitForMicrotasks();
   await waitForMicrotasks();
 
-  assert.deepEqual(steps, ["reduce:0001", "onEvent:start:0001:0->1"]);
+  assert.deepEqual(steps, ["reduce:1", "onEvent:start:1:0->1"]);
 
   releaseFirstEvent?.();
   await runPromise;
 
   assert.deepEqual(steps, [
-    "reduce:0001",
-    "onEvent:start:0001:0->1",
-    "onEvent:end:0001",
-    "reduce:0002",
-    "onEvent:start:0002:1->2",
-    "onEvent:end:0002",
+    "reduce:1",
+    "onEvent:start:1:0->1",
+    "onEvent:end:1",
+    "reduce:2",
+    "onEvent:start:2:1->2",
+    "onEvent:end:2",
   ]);
 });
 
@@ -135,7 +135,7 @@ test("self-appended events are processed after the triggering onEvent completes"
 
   liveQueue.push(
     makeEvent({
-      offset: "0001",
+      offset: 1,
       type: "message",
       payload: { role: "user", content: "start" },
     }),
@@ -144,33 +144,28 @@ test("self-appended events are processed after the triggering onEvent completes"
 
   const runtime = new PullSubscriptionProcessorRuntime({
     eventsClient: {
-      append: async ({ events, path }) => {
-        const [firstEvent] = events;
-        if (!firstEvent) {
-          return { created: true, events: [] };
-        }
-
+      append: async ({ event, path }) => {
         const appendedEvent = makeEvent({
-          offset: "0002",
-          path,
-          payload: firstEvent.payload,
-          type: firstEvent.type,
+          offset: 2,
+          streamPath: path,
+          payload: event.payload,
+          type: event.type,
         });
         liveQueue.push(appendedEvent);
 
-        return { created: true, events: [appendedEvent] };
+        return { created: true, event: appendedEvent, events: [appendedEvent] };
       },
       stream: async (input, options) =>
         input.live ? liveQueue.stream(options.signal) : arrayStream([]),
     },
     processor: defineProcessor({
-      initialState: { seen: [] as string[] },
+      initialState: { seen: [] as number[] },
       reduce: (state, event) =>
         event.type !== "message" ? state : { seen: [...state.seen, event.offset] },
       onEvent: async ({ append, event }) => {
         order.push(`start:${event.offset}`);
 
-        if (event.offset === "0001") {
+        if (event.offset === 1) {
           await append({
             type: "message",
             payload: { role: "assistant", content: "follow-up" },
@@ -185,15 +180,18 @@ test("self-appended events are processed after the triggering onEvent completes"
 
   await runtime.run();
 
-  assert.deepEqual(order, ["start:0001", "end:0001", "start:0002", "end:0002"]);
-  assert.deepEqual(runtime.getState(), { seen: ["0001", "0002"] });
+  assert.deepEqual(order, ["start:1", "end:1", "start:2", "end:2"]);
+  assert.deepEqual(runtime.getState(), { seen: [1, 2] });
 });
 
 test("stop aborts a waiting live stream cleanly", async () => {
   const liveQueue = createLiveQueue();
   const runtime = new PullSubscriptionProcessorRuntime({
     eventsClient: {
-      append: async () => ({ created: true, events: [] }),
+      append: async () => {
+        const event = makeEvent({ offset: 1 });
+        return { created: true, event, events: [event] };
+      },
       stream: async (input, options) =>
         input.live ? liveQueue.stream(options.signal) : arrayStream([]),
     },
@@ -218,36 +216,36 @@ test("live boundary does not process the last catch-up event twice", async () =>
     eventsClient: createFakeEventsClient({
       historyEvents: [
         makeEvent({
-          offset: "0001",
+          offset: 1,
           type: "message",
           payload: { role: "assistant", content: "history" },
         }),
       ],
       liveEvents: [
         makeEvent({
-          offset: "0001",
+          offset: 1,
           type: "message",
           payload: { role: "assistant", content: "duplicate-boundary" },
         }),
         makeEvent({
-          offset: "0002",
+          offset: 2,
           type: "message",
           payload: { role: "user", content: "live" },
         }),
       ],
     }),
     processor: defineProcessor({
-      initialState: { offsets: [] as string[] },
+      initialState: { offsets: [] as number[] },
       reduce: (state, event) =>
         event.type !== "message" ? state : { offsets: [...state.offsets, event.offset] },
       onEvent: async ({ event }) => {
-        seenOffsets.push(event.offset);
+        seenOffsets.push(String(event.offset));
       },
     }),
     streamPath: "/test",
   }).run();
 
-  assert.deepEqual(seenOffsets, ["0002"]);
+  assert.deepEqual(seenOffsets, ["2"]);
 });
 
 function createFakeEventsClient({
@@ -258,17 +256,20 @@ function createFakeEventsClient({
   liveEvents: readonly Event[];
 }) {
   return {
-    append: async ({ events, path }: { events: EventInput[]; path: string }) => ({
-      created: true,
-      events: events.map((event, index) =>
-        makeEvent({
-          offset: `append-${index + 1}`,
-          path,
-          payload: event.payload,
-          type: event.type,
-        }),
-      ),
-    }),
+    append: async ({ event, path }: { event: EventInput; path: string }) => {
+      const appendedEvent = makeEvent({
+        offset: 10,
+        streamPath: path,
+        payload: event.payload,
+        type: event.type,
+      });
+
+      return {
+        created: true,
+        event: appendedEvent,
+        events: [appendedEvent],
+      };
+    },
     stream: async (input: { live?: boolean }) =>
       input.live ? arrayStream(liveEvents) : arrayStream(historyEvents),
   };
@@ -276,18 +277,18 @@ function createFakeEventsClient({
 
 function makeEvent({
   offset,
-  path = "/test",
+  streamPath = "/test",
   payload = { ok: true },
   type = "test",
 }: {
-  offset: string;
-  path?: string;
+  offset: number;
+  streamPath?: string;
   payload?: JSONObject;
   type?: string;
 }): Event {
   return {
     offset,
-    path,
+    streamPath,
     payload,
     type,
     createdAt: new Date().toISOString(),

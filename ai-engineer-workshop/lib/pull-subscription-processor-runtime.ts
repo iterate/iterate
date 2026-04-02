@@ -2,12 +2,13 @@ import type { Event, EventInput, StreamPath } from "./contract.ts";
 import type { StreamProcessor } from "./stream-process.ts";
 
 type PullSubscriptionEventsClient = {
-  append: (input: { path: StreamPath; events: EventInput[] }) => Promise<{
+  append: (input: { path: StreamPath; event: EventInput }) => Promise<{
     created: boolean;
+    event: Event;
     events: Event[];
   }>;
   stream: (
-    input: { path: StreamPath; offset?: string; live?: boolean },
+    input: { path: StreamPath; offset?: number; live?: boolean },
     options: { signal?: AbortSignal },
   ) => Promise<AsyncIterable<Event>>;
 };
@@ -36,7 +37,7 @@ export class PullSubscriptionProcessorRuntime<State> {
 
   async run() {
     const historyStream = await this.#eventsClient.stream({ path: this.#streamPath }, {});
-    let lastOffset: string | undefined;
+    let lastOffset: number | undefined;
 
     for await (const event of historyStream) {
       lastOffset = event.offset;
@@ -59,12 +60,7 @@ export class PullSubscriptionProcessorRuntime<State> {
     const append = async (event: Omit<EventInput, "path">) => {
       await this.#eventsClient.append({
         path: this.#streamPath,
-        events: [
-          {
-            ...event,
-            path: this.#streamPath,
-          },
-        ],
+        event,
       });
     };
 
