@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   clearCloudflarePreviewDestroyPayload,
   CloudflarePreviewCommentEntry,
+  findLatestManagedCloudflarePreviewComment,
   parseCloudflarePreviewCommentState,
   renderCloudflarePreviewCommentBody,
 } from "./cloudflare-preview-comment.ts";
@@ -65,5 +66,26 @@ describe("cloudflare preview comment helpers", () => {
       previewEnvironmentSlug: null,
       previewEnvironmentType: null,
     });
+  });
+
+  it("ignores human-authored preview comments when selecting managed state", () => {
+    const managed = findLatestManagedCloudflarePreviewComment([
+      {
+        body: "<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS -->\nold",
+        id: 1,
+        user: {
+          login: "github-actions[bot]",
+        },
+      },
+      {
+        body: "<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS -->\nnewer but human",
+        id: 2,
+        user: {
+          login: "jonastemplestein",
+        },
+      },
+    ]);
+
+    expect(managed?.id).toBe(1);
   });
 });

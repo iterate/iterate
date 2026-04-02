@@ -8,6 +8,7 @@ on:
 jobs:
   cleanup:
     strategy:
+      max-parallel: 1
       matrix:
         include:
           - appDisplayName: Codemode
