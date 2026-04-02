@@ -82,14 +82,6 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
             if: "github.event.pull_request.head.repo.fork != true",
           },
           {
-            if: "github.event.pull_request.head.repo.fork != true",
-            name: "Setup Doppler",
-            run: `doppler setup --config stg --project ${app.dopplerProject}`,
-            env: {
-              DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            },
-          },
-          {
             if: "github.event.pull_request.head.repo.fork == true",
             name: `Sync ${app.displayName} preview`,
             "working-directory": app.appPath,
@@ -124,7 +116,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
               GITHUB_TOKEN: "${{ github.token }}",
               WORKFLOW_RUN_URL: "${{ needs.variables.outputs.run_url }}",
             },
-            run: "doppler run -- pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr",
+            run: `doppler run --project ${app.dopplerProject} --config stg -- pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr`,
           },
         ],
       },
