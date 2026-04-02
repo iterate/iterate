@@ -158,13 +158,8 @@ export async function scheduleOnStream<T = unknown>(args: {
 
   if (existing == null) {
     await deps.append({
-      events: [
-        {
-          path: deps.requireStreamPath(),
-          type: SCHEDULE_ADDED_TYPE,
-          payload: addedPayload,
-        },
-      ],
+      type: SCHEDULE_ADDED_TYPE,
+      payload: addedPayload,
     });
   }
 
@@ -213,20 +208,15 @@ export async function scheduleEveryOnStream<T = unknown>(args: {
 
   if (existing == null) {
     await deps.append({
-      events: [
-        {
-          path: deps.requireStreamPath(),
-          type: SCHEDULE_ADDED_TYPE,
-          payload: {
-            scheduleId: createScheduleId(),
-            callback: callbackName,
-            payloadJson,
-            scheduleType: "interval",
-            time: Math.floor(Date.now() / 1000) + Math.floor(intervalSeconds),
-            intervalSeconds,
-          },
-        },
-      ],
+      type: SCHEDULE_ADDED_TYPE,
+      payload: {
+        scheduleId: createScheduleId(),
+        callback: callbackName,
+        payloadJson,
+        scheduleType: "interval",
+        time: Math.floor(Date.now() / 1000) + Math.floor(intervalSeconds),
+        intervalSeconds,
+      },
     });
   }
 
@@ -304,26 +294,18 @@ export function getSchedulesFromStorage(
 
 export async function cancelScheduleOnStream(args: {
   ctx: DurableObjectState;
-  append(args: {
-    events: Array<{ path: StreamPath; payload: { scheduleId: string }; type: string }>;
-  }): Promise<unknown>;
+  append: SchedulingMutationDeps["append"];
   id: string;
-  requireStreamPath(): StreamPath;
 }): Promise<boolean> {
   if (getScheduleFromStorage(args.ctx, args.id) == null) {
     return false;
   }
 
   await args.append({
-    events: [
-      {
-        path: args.requireStreamPath(),
-        type: SCHEDULE_CANCELLED_TYPE,
-        payload: {
-          scheduleId: args.id,
-        },
-      },
-    ],
+    type: SCHEDULE_CANCELLED_TYPE,
+    payload: {
+      scheduleId: args.id,
+    },
   });
 
   await scheduleNextAlarmFromTable(args.ctx);
@@ -402,16 +384,11 @@ export async function runScheduleAlarm(args: SchedulingAlarmDeps): Promise<void>
     try {
       if (row.type === "interval") {
         await args.append({
-          events: [
-            {
-              path: args.requireStreamPath(),
-              type: SCHEDULE_EXECUTION_STARTED_TYPE,
-              payload: {
-                scheduleId: row.id,
-                startedAt: now,
-              },
-            },
-          ],
+          type: SCHEDULE_EXECUTION_STARTED_TYPE,
+          payload: {
+            scheduleId: row.id,
+            startedAt: now,
+          },
         });
       }
 
@@ -425,7 +402,6 @@ export async function runScheduleAlarm(args: SchedulingAlarmDeps): Promise<void>
         append: args.append,
         nextTime: getNextExecutionTime(row),
         outcome: "succeeded",
-        path: args.requireStreamPath(),
         scheduleId: row.id,
       });
     } catch (error) {
@@ -436,7 +412,6 @@ export async function runScheduleAlarm(args: SchedulingAlarmDeps): Promise<void>
           append: args.append,
           nextTime: getSafeFailedNextTime({ now, row }),
           outcome: "failed",
-          path: args.requireStreamPath(),
           scheduleId: row.id,
         });
       } catch (appendError) {
@@ -597,8 +572,7 @@ export function hydrateReducedStreamState(args: {
 export function projectPublicStreamState(state: ReducedStreamState): PublicStreamState {
   return {
     path: state.path,
-    lastOffset: state.lastOffset,
-    eventCount: state.eventCount,
+    maxOffset: state.maxOffset,
     metadata: state.metadata,
   };
 }
@@ -876,10 +850,17 @@ function getSafeFailedNextTime(args: { now: number; row: ScheduleRow }) {
   switch (args.row.type) {
     case "interval":
       return args.now + (args.row.intervalSeconds ?? 0);
-    case "cron":
-      return args.row.cron == null
-        ? null
-        : Math.floor(getNextCronTime(args.row.cron).getTime() / 1000);
+    case "cron": {
+      if (args.row.cron == null) {
+        return null;
+      }
+
+      try {
+        return Math.floor(getNextCronTime(args.row.cron).getTime() / 1000);
+      } catch {
+        return null;
+      }
+    }
     default:
       return null;
   }
@@ -889,20 +870,14 @@ async function appendScheduleExecutionFinished(args: {
   append: SchedulingAlarmDeps["append"];
   nextTime: number | null;
   outcome: "succeeded" | "failed";
-  path: StreamPath;
   scheduleId: string;
 }) {
   await args.append({
-    events: [
-      {
-        path: args.path,
-        type: SCHEDULE_EXECUTION_FINISHED_TYPE,
-        payload: {
-          scheduleId: args.scheduleId,
-          outcome: args.outcome,
-          nextTime: args.nextTime,
-        },
-      },
-    ],
+    type: SCHEDULE_EXECUTION_FINISHED_TYPE,
+    payload: {
+      scheduleId: args.scheduleId,
+      outcome: args.outcome,
+      nextTime: args.nextTime,
+    },
   });
 }

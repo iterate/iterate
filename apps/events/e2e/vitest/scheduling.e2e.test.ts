@@ -42,26 +42,23 @@ describeDeployedScheduling("events scheduling e2e", () => {
       const scheduledTime = Math.floor(Date.now() / 1000) + scheduleDelaySeconds;
 
       await app.client.append({
-        path,
-        type: SCHEDULE_ADDED_TYPE,
-        payload: {
-          scheduleId,
-          callback: "append",
-          payloadJson: JSON.stringify({
-            events: [
-              {
-                path,
-                type: markerType,
-                payload: {
-                  scheduleId,
-                  source: "alarm",
-                },
+        params: { path },
+        body: {
+          type: SCHEDULE_ADDED_TYPE,
+          payload: {
+            scheduleId,
+            callback: "append",
+            payloadJson: JSON.stringify({
+              type: markerType,
+              payload: {
+                scheduleId,
+                source: "alarm",
               },
-            ],
-          }),
-          scheduleType: "delayed",
-          time: scheduledTime,
-          delayInSeconds: scheduleDelaySeconds,
+            }),
+            scheduleType: "delayed",
+            time: scheduledTime,
+            delayInSeconds: scheduleDelaySeconds,
+          },
         },
       });
 
@@ -101,9 +98,9 @@ describeDeployedScheduling("events scheduling e2e", () => {
         SCHEDULE_EXECUTION_FINISHED_TYPE,
       ]);
 
-      expect(await app.client.getState({ streamPath: path })).toMatchObject({
+      expect(await app.client.getState({ path })).toMatchObject({
         path,
-        eventCount: 3,
+        maxOffset: 4,
       });
     },
     waitForAlarmTimeoutMs + settleAfterFireMs + 15_000,
@@ -111,13 +108,22 @@ describeDeployedScheduling("events scheduling e2e", () => {
 });
 
 async function readHistory(path: StreamPath) {
-  return collectAsyncIterableUntilIdle({
+  const events = await collectAsyncIterableUntilIdle({
     iterable: await app.client.stream({
       path,
       live: false,
     }),
     idleMs: historyIdleTimeoutMs,
   });
+
+  return events.filter(
+    (event) =>
+      !(
+        event.type === "https://events.iterate.com/events/stream/initialized" &&
+        event.streamPath === path &&
+        getPayloadPath(event) === path
+      ),
+  );
 }
 
 async function waitForHistoryMatch(args: {
@@ -141,4 +147,17 @@ async function waitForHistoryMatch(args: {
 
 function uniqueStreamPath() {
   return StreamPath.parse(`/e2e-scheduling/${randomUUID().slice(0, 8)}`);
+}
+
+function getPayloadPath(event: { payload: unknown }) {
+  if (
+    typeof event.payload === "object" &&
+    event.payload !== null &&
+    "path" in event.payload &&
+    typeof event.payload.path === "string"
+  ) {
+    return event.payload.path;
+  }
+
+  return undefined;
 }

@@ -3,6 +3,7 @@ import type { Schedule, ScheduleCriteria } from "~/durable-objects/scheduling-ty
 type SchedulingTestSurface = {
   cancelSchedule(id: string): Promise<boolean>;
   ctx: DurableObjectState;
+  ensureInitializedForCurrentName(): Promise<void>;
   getSchedule(id: string): Schedule | undefined;
   getSchedules(criteria?: ScheduleCriteria): Schedule[];
   schedule<T = unknown>(
@@ -37,6 +38,7 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
     testCallback() {}
 
     protected async onInitialize(): Promise<void> {
+      await asSchedulingTestSurface(this).ensureInitializedForCurrentName();
       await asSchedulingTestSurface(this).schedule(60, "testCallback");
     }
 
@@ -56,6 +58,7 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
     testCallback() {}
 
     protected async onInitialize(): Promise<void> {
+      await asSchedulingTestSurface(this).ensureInitializedForCurrentName();
       await asSchedulingTestSurface(this).schedule(60, "testCallback", undefined, {
         idempotent: true,
       });
@@ -77,6 +80,7 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
     testCallback() {}
 
     protected async onInitialize(): Promise<void> {
+      await asSchedulingTestSurface(this).ensureInitializedForCurrentName();
       await asSchedulingTestSurface(this).schedule(60, "testCallback", undefined, {
         idempotent: false,
       });

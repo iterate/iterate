@@ -31,21 +31,17 @@ describe("schedule operations", () => {
     const scheduleId = "public-schedule-append-id";
     const time = Math.floor(Date.now() / 1000) + 60;
 
+    await streamStub.initialize({ path });
     await streamStub.append({
-      events: [
-        {
-          path,
-          type: SCHEDULE_ADDED_TYPE,
-          payload: {
-            scheduleId,
-            callback: "testCallback",
-            payloadJson: null,
-            scheduleType: "delayed",
-            time,
-            delayInSeconds: 60,
-          },
-        },
-      ],
+      type: SCHEDULE_ADDED_TYPE,
+      payload: {
+        scheduleId,
+        callback: "testCallback",
+        payloadJson: null,
+        scheduleType: "delayed",
+        time,
+        delayInSeconds: 60,
+      },
     });
 
     expect(await streamStub.getStoredAlarm()).toBe(time * 1000);
@@ -545,7 +541,7 @@ describe("schedule operations", () => {
   });
 
   describe("alarm() per-schedule isolation", () => {
-    it("should keep processing later due rows when a cron row has invalid next-time data", async () => {
+    it("should keep processing later due rows when a cron row has an invalid expression", async () => {
       const streamStub = testEnv.TEST_SCHEDULE_STREAM.getByName("alarm-invalid-cron-row-test");
       const intervalId = await streamStub.createIntervalSchedule(30);
 
@@ -563,10 +559,11 @@ describe("schedule operations", () => {
              id, callback, payload, type, time, delayInSeconds, cron, intervalSeconds,
              running, execution_started_at, retry_options, created_at
            )
-           VALUES (?, ?, NULL, 'cron', ?, NULL, NULL, NULL, 0, NULL, NULL, ?)`,
+           VALUES (?, ?, NULL, 'cron', ?, NULL, ?, NULL, 0, NULL, NULL, ?)`,
           "bad-cron-row",
           "cronCallback",
           past,
+          "definitely not valid cron",
           past - 60,
         );
       });

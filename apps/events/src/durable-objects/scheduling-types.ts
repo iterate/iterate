@@ -1,8 +1,6 @@
 import {
   Event,
   EventInput,
-  Offset,
-  StreamMetadataUpdatedPayload,
   StreamPath,
   StreamState as PublicStreamStateSchema,
   type StreamState as PublicStreamStateValue,
@@ -158,20 +156,18 @@ export type ScheduleLookupArgs = {
 };
 
 export type SchedulingMutationDeps = {
-  append(args: { events: EventInput[] }): Promise<unknown>;
+  append(event: EventInput): Promise<unknown> | unknown;
   ctx: DurableObjectState;
   isInitializing: boolean;
-  requireStreamPath(): StreamPath;
   validateScheduleCallback(callback: PropertyKey): string;
   warnedScheduleInOnStart: Set<string>;
 };
 
 export type SchedulingAlarmDeps = {
-  append(args: { events: EventInput[] }): Promise<unknown>;
+  append(event: EventInput): Promise<unknown> | unknown;
   ctx: DurableObjectState;
   instance: object;
-  requireStreamPath(): StreamPath;
 };
 
 export type PublicStreamState = PublicStreamStateValue;
-export { Event, Offset, StreamMetadataUpdatedPayload, StreamPath };
+export { Event, StreamPath };
