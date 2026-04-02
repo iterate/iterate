@@ -2,48 +2,19 @@ import type { ContractRouterClient } from "@orpc/contract";
 import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { eventsContract } from "./orpc-contract.ts";
-import type { Event, EventInput, EventType, JSONObject, Offset, StreamPath } from "./types.ts";
+import type { Event, EventInput, EventType, JSONObject, StreamPath } from "./types.ts";
 
 export { eventsContract } from "./orpc-contract.ts";
-export type { Event, EventInput, EventType, JSONObject, Offset, StreamPath } from "./types.ts";
-
-export type EventsClient = {
-  append(input: { path: StreamPath; event: EventInput }): Promise<{
-    event: Event;
-  }>;
-  stream(
-    input: { path: StreamPath; offset?: Offset; live?: boolean },
-    options: { signal?: AbortSignal },
-  ): Promise<AsyncIterable<Event>>;
-};
+export type { Event, EventInput, EventType, JSONObject, StreamPath } from "./types.ts";
 
 export type EventsORPCClient = ContractRouterClient<typeof eventsContract>;
 
-export function createEventsORPCClient(baseUrl: string): EventsORPCClient {
+export function createEventsClient(baseUrl: string): EventsORPCClient {
   return createORPCClient(
     new OpenAPILink(eventsContract, {
       url: new URL("/api", baseUrl).toString(),
     }),
   ) as EventsORPCClient;
-}
-
-export function createEventsClient(baseUrl: string): EventsClient {
-  const client = createEventsORPCClient(baseUrl);
-
-  return {
-    async append(input: { path: StreamPath; event: EventInput }) {
-      return client.append({
-        params: { path: input.path },
-        body: input.event,
-      });
-    },
-    async stream(
-      input: { path: StreamPath; offset?: Offset; live?: boolean },
-      options: { signal?: AbortSignal },
-    ) {
-      return client.stream(input, options);
-    },
-  };
 }
 
 type AppendEvent = Omit<EventInput, "path">;
@@ -64,7 +35,7 @@ export function defineProcessor<State>(processor: {
 export type StreamProcessor<State> = ReturnType<typeof defineProcessor<State>>;
 
 type PullSubscriptionEventsClient = {
-  append: (input: { path: StreamPath; event: EventInput }) => Promise<{
+  append: (input: { params: { path: StreamPath }; body: EventInput }) => Promise<{
     event: Event;
   }>;
   stream: (
@@ -119,8 +90,8 @@ export class PullSubscriptionProcessorRuntime<State> {
 
     const append = async (event: AppendEvent) => {
       await this.#eventsClient.append({
-        path: this.#streamPath,
-        event,
+        params: { path: this.#streamPath },
+        body: event,
       });
     };
 

@@ -31,6 +31,19 @@ Those example files can import exactly the same way as the separate workshop rep
 import { createEventsClient, normalizePathPrefix, runWorkshopMain } from "ai-engineer-workshop";
 ```
 
+`createEventsClient()` now returns the raw oRPC client, so append calls use the
+contract shape directly:
+
+```ts
+await client.append({
+  params: { path: streamPath },
+  body: {
+    type: "hello-world",
+    payload: { message: "hello world" },
+  },
+});
+```
+
 That works because this directory is itself the `ai-engineer-workshop` package root, so package self-reference resolves correctly from files inside it.
 
 Examples are discoverable via:
