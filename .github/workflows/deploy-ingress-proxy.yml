@@ -78,8 +78,8 @@ jobs:
         if: github.event.pull_request.head.repo.fork != true
       - if: github.event.pull_request.head.repo.fork == true
         name: Sync Ingress Proxy preview
-        working-directory: apps/ingress-proxy
         env:
+          APP: ingress-proxy
           GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           GITHUB_PR_IS_FORK: ${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -90,11 +90,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
           SEMAPHORE_BASE_URL: https://semaphore.iterate.com
           WORKFLOW_RUN_URL: ${{ needs.variables.outputs.run_url }}
-        run: pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr
+        run: pnpm preview sync --app "$APP"
       - if: github.event.pull_request.head.repo.fork != true
         name: Sync Ingress Proxy preview
-        working-directory: apps/ingress-proxy
         env:
+          APP: ingress-proxy
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           GITHUB_PR_IS_FORK: ${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}
@@ -106,7 +106,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
           SEMAPHORE_BASE_URL: https://semaphore.iterate.com
           WORKFLOW_RUN_URL: ${{ needs.variables.outputs.run_url }}
-        run: doppler run --project semaphore --config prd -- pnpm iterate --local-router ./scripts/router.ts local-router preview-sync-pr
+        run: doppler run --project semaphore --config prd -- pnpm preview sync --app "$APP"
   deploy:
     needs:
       - variables

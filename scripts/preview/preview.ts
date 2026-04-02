@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { os } from "@orpc/server";
 import { z } from "zod";
 import {
   CloudflarePreviewCommentEntry,
@@ -7,12 +6,12 @@ import {
   clearCloudflarePreviewDestroyPayload,
   readCloudflarePreviewCommentState,
   upsertCloudflarePreviewCommentEntry,
-} from "./cloudflare-preview-comment.ts";
+} from "./comment.ts";
 
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultPreviewLeaseMs = 30 * 24 * 60 * 60 * 1000;
 
-type PreviewSemaphoreResourceClient = {
+export type PreviewSemaphoreResourceClient = {
   acquire: (input: { leaseMs: number; type: string; waitMs?: number }) => Promise<{
     expiresAt: number;
     leaseId: string;
@@ -27,114 +26,6 @@ type PreviewSyncResult = {
   entry: CloudflarePreviewCommentEntryType;
   ok: boolean;
 };
-
-type CreateCloudflarePreviewScriptRouterOptions = {
-  appDisplayName: string;
-  appSlug: string;
-  createPreviewSemaphoreResourceClient: (input: {
-    semaphoreApiToken: string;
-    semaphoreBaseUrl: string;
-  }) => PreviewSemaphoreResourceClient;
-  dopplerProject: string;
-  env: NodeJS.ProcessEnv;
-  previewResourceType: string;
-  previewTestBaseUrlEnvVar: string;
-  previewTestCommandArgs: readonly [string, ...string[]];
-  workingDirectory: string;
-};
-
-export function createCloudflarePreviewScriptRouter(
-  options: CreateCloudflarePreviewScriptRouterOptions,
-) {
-  const previewCreateInput = createPreviewCreateInputSchema(options.env);
-  const previewDestroyInput = createPreviewDestroyInputSchema(options.env);
-  const previewSyncPrInput = createPreviewSyncPrInputSchema(options.env);
-  const previewCleanupPrInput = createPreviewCleanupPrInputSchema(options.env);
-  const previewCommentReadInput = createPreviewCommentReadInputSchema(options.env);
-  const previewCommentUpsertInput = createPreviewCommentUpsertInputSchema(options.env);
-
-  return {
-    "preview-create": os
-      .input(previewCreateInput)
-      .meta({
-        description: `Acquire, deploy, and test a ${options.appDisplayName} preview environment`,
-      })
-      .handler(async ({ input, signal }) => {
-        return createPreviewEnvironment({
-          ...input,
-          signal,
-          ...options,
-        });
-      }),
-    "preview-destroy": os
-      .input(previewDestroyInput)
-      .meta({
-        description: `Tear down and release a ${options.appDisplayName} preview environment`,
-      })
-      .handler(async ({ input, signal }) => {
-        return destroyPreviewEnvironment({
-          ...input,
-          signal,
-          ...options,
-        });
-      }),
-    "preview-comment-read": os
-      .input(previewCommentReadInput)
-      .meta({
-        description: `Read the shared sticky GitHub preview comment for ${options.appDisplayName}`,
-      })
-      .handler(async ({ input }) => {
-        return readCloudflarePreviewCommentState({
-          ...input,
-          appSlug: options.appSlug,
-        });
-      }),
-    "preview-comment-upsert": os
-      .input(previewCommentUpsertInput)
-      .meta({
-        description: `Upsert the ${options.appDisplayName} entry in the shared sticky GitHub preview comment`,
-      })
-      .handler(async ({ input }) => {
-        return upsertCloudflarePreviewCommentEntry(input);
-      }),
-    "preview-sync-pr": os
-      .input(previewSyncPrInput)
-      .meta({
-        description: `Recreate the ${options.appDisplayName} preview for the current pull request and update the sticky GitHub comment`,
-      })
-      .handler(async ({ input, signal }) => {
-        const result = await syncPreviewForPullRequest({
-          ...input,
-          signal,
-          ...options,
-        });
-        if (!result.ok) {
-          throw new Error(
-            result.entry.message ?? `Failed to sync ${options.appDisplayName} preview.`,
-          );
-        }
-        return result;
-      }),
-    "preview-cleanup-pr": os
-      .input(previewCleanupPrInput)
-      .meta({
-        description: `Clean up the ${options.appDisplayName} preview recorded on the sticky GitHub comment`,
-      })
-      .handler(async ({ input, signal }) => {
-        const result = await cleanupPreviewForPullRequest({
-          ...input,
-          signal,
-          ...options,
-        });
-        if (!result.ok) {
-          throw new Error(
-            result.entry?.message ?? `Failed to clean up ${options.appDisplayName} preview.`,
-          );
-        }
-        return result;
-      }),
-  };
-}
 
 function createPreviewCreateInputSchema(env: NodeJS.ProcessEnv) {
   return z.object({
@@ -183,7 +74,7 @@ function createPreviewDestroyInputSchema(env: NodeJS.ProcessEnv) {
   });
 }
 
-function createPreviewSyncPrInputSchema(env: NodeJS.ProcessEnv) {
+export function createCloudflarePreviewSyncInputSchema(env: NodeJS.ProcessEnv) {
   return z.object({
     githubToken: requiredStringWithEnvDefault(env, "GITHUB_TOKEN"),
     pullRequestHeadRefName: requiredStringWithEnvDefault(env, "GITHUB_HEAD_REF"),
@@ -207,7 +98,7 @@ function createPreviewSyncPrInputSchema(env: NodeJS.ProcessEnv) {
   });
 }
 
-function createPreviewCleanupPrInputSchema(env: NodeJS.ProcessEnv) {
+export function createCloudflarePreviewCleanupInputSchema(env: NodeJS.ProcessEnv) {
   return z.object({
     githubToken: requiredStringWithEnvDefault(env, "GITHUB_TOKEN"),
     pullRequestNumber: requiredNumberWithEnvDefault(env, "GITHUB_PR_NUMBER"),
@@ -219,25 +110,8 @@ function createPreviewCleanupPrInputSchema(env: NodeJS.ProcessEnv) {
   });
 }
 
-function createPreviewCommentReadInputSchema(env: NodeJS.ProcessEnv) {
-  return z.object({
-    githubToken: requiredStringWithEnvDefault(env, "GITHUB_TOKEN"),
-    pullRequestNumber: requiredNumberWithEnvDefault(env, "GITHUB_PR_NUMBER"),
-    repositoryFullName: requiredStringWithEnvDefault(env, "GITHUB_REPOSITORY"),
-  });
-}
-
-function createPreviewCommentUpsertInputSchema(env: NodeJS.ProcessEnv) {
-  return z.object({
-    entry: CloudflarePreviewCommentEntry,
-    githubToken: requiredStringWithEnvDefault(env, "GITHUB_TOKEN"),
-    pullRequestNumber: requiredNumberWithEnvDefault(env, "GITHUB_PR_NUMBER"),
-    repositoryFullName: requiredStringWithEnvDefault(env, "GITHUB_REPOSITORY"),
-  });
-}
-
-async function syncPreviewForPullRequest(
-  params: z.infer<ReturnType<typeof createPreviewSyncPrInputSchema>> & {
+export async function syncCloudflarePreviewForPullRequest(
+  params: z.infer<ReturnType<typeof createCloudflarePreviewSyncInputSchema>> & {
     appDisplayName: string;
     appSlug: string;
     createPreviewSemaphoreResourceClient: (input: {
@@ -367,8 +241,8 @@ async function syncPreviewForPullRequest(
   return createResult;
 }
 
-async function cleanupPreviewForPullRequest(
-  params: z.infer<ReturnType<typeof createPreviewCleanupPrInputSchema>> & {
+export async function cleanupCloudflarePreviewForPullRequest(
+  params: z.infer<ReturnType<typeof createCloudflarePreviewCleanupInputSchema>> & {
     appDisplayName: string;
     appSlug: string;
     createPreviewSemaphoreResourceClient: (input: {

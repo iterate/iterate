@@ -1,6 +1,4 @@
 import { os } from "@orpc/server";
-import { createSemaphoreClient } from "@iterate-com/semaphore-contract";
-import { createCloudflarePreviewScriptRouter } from "@iterate-com/shared/apps/cloudflare-preview";
 import { z } from "zod";
 import { runBuiltServer } from "./start.ts";
 
@@ -38,25 +36,4 @@ export const router = os.router({
         port: input.port,
       };
     }),
-  ...createCloudflarePreviewScriptRouter({
-    appDisplayName: "Example",
-    appSlug: "example",
-    createPreviewSemaphoreResourceClient: ({ semaphoreApiToken, semaphoreBaseUrl }) => {
-      const semaphore = createSemaphoreClient({
-        apiKey: semaphoreApiToken,
-        baseURL: semaphoreBaseUrl,
-      });
-      return {
-        acquire: ({ leaseMs, type, waitMs }) =>
-          semaphore.resources.acquire({ leaseMs, type, waitMs }),
-        release: ({ leaseId, slug, type }) => semaphore.resources.release({ leaseId, slug, type }),
-      };
-    },
-    dopplerProject: "example",
-    env: process.env,
-    previewResourceType: "example-preview-environment",
-    previewTestBaseUrlEnvVar: "EXAMPLE_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e"],
-    workingDirectory: process.cwd(),
-  }),
 });
