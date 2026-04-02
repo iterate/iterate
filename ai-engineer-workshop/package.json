@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "workshop": "node --import tsx ./lib/cli.ts"
+    "workshop": "node --import tsx ./lib/cli.ts",
+    "w": "pnpm workshop"
   }
 }

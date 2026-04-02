@@ -7,7 +7,6 @@
   },
   "dependencies": {
     "ai-engineer-workshop": "workspace:*",
-    "@iterate-com/events-contract": "workspace:*",
     "@mariozechner/pi-agent-core": "^0.64.0",
     "@mariozechner/pi-ai": "^0.64.0",
     "@tanstack/ai": "^0.2.2",

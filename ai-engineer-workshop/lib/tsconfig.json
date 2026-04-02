@@ -14,7 +14,6 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "dist",
-    "rootDir": ".",
     "skipLibCheck": true
   },
   "include": ["*.ts"],
