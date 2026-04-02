@@ -6,7 +6,6 @@ const previewCleanupApps = Object.values(cloudflareApps).map((app) => ({
   appDisplayName: app.displayName,
   appPath: app.appPath,
   appSlug: app.slug,
-  dopplerProject: app.dopplerProject,
 }));
 
 export default workflow({
@@ -42,7 +41,7 @@ export default workflow({
             GITHUB_REPOSITORY: "${{ github.repository }}",
             GITHUB_TOKEN: "${{ github.token }}",
           },
-          run: "doppler run --project ${{ matrix.dopplerProject }} --config stg -- pnpm iterate --local-router ./scripts/router.ts local-router preview-cleanup-pr",
+          run: "doppler run --project os --config prd -- pnpm iterate --local-router ./scripts/router.ts local-router preview-cleanup-pr",
         },
       ],
     },

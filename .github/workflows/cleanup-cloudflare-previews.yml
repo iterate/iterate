@@ -13,23 +13,18 @@ jobs:
           - appDisplayName: Codemode
             appPath: apps/codemode
             appSlug: codemode
-            dopplerProject: codemode
           - appDisplayName: Example
             appPath: apps/example
             appSlug: example
-            dopplerProject: example
           - appDisplayName: Events
             appPath: apps/events
             appSlug: events
-            dopplerProject: events
           - appDisplayName: Semaphore
             appPath: apps/semaphore
             appSlug: semaphore
-            dopplerProject: semaphore
           - appDisplayName: Ingress Proxy
             appPath: apps/ingress-proxy
             appSlug: ingress-proxy
-            dopplerProject: ingress-proxy
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
@@ -58,4 +53,4 @@ jobs:
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: doppler run --project ${{ matrix.dopplerProject }} --config stg -- pnpm iterate --local-router ./scripts/router.ts local-router preview-cleanup-pr
+        run: doppler run --project os --config prd -- pnpm iterate --local-router ./scripts/router.ts local-router preview-cleanup-pr
