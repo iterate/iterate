@@ -139,7 +139,7 @@ export type Event = BuiltInEvent | GenericEvent;
 
 export const StreamState = z.object({
   path: StreamPath,
-  eventCount: z.number().int().nonnegative(),
+  maxOffset: z.number().int().nonnegative(),
   metadata: JSONObject,
 });
 export type StreamState = z.infer<typeof StreamState>;
