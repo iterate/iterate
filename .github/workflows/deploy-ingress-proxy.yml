@@ -104,9 +104,8 @@ jobs:
           GITHUB_SERVER_URL: ${{ github.server_url }}
           GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          SEMAPHORE_BASE_URL: https://semaphore.iterate.com
           WORKFLOW_RUN_URL: ${{ needs.variables.outputs.run_url }}
-        run: doppler run --project semaphore --config prd -- pnpm preview sync --app "$APP"
+        run: doppler run --project os --config prd -- pnpm preview sync --app "$APP"
   deploy:
     needs:
       - variables

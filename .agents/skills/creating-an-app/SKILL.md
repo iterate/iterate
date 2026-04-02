@@ -40,8 +40,8 @@ The shared app manifest is the source of truth for:
 Preview deploys do not live in app-local routers anymore. They run through the repo preview router:
 
 ```bash
-doppler run --project semaphore --config prd -- pnpm preview sync --app <slug>
-doppler run --project semaphore --config prd -- pnpm preview cleanup --app <slug>
+doppler run --project os --config prd -- pnpm preview sync --app <slug>
+doppler run --project os --config prd -- pnpm preview cleanup --app <slug>
 ```
 
 Workflow rules:

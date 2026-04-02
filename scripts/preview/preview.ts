@@ -34,9 +34,7 @@ function createPreviewCreateInputSchema(env: NodeJS.ProcessEnv) {
     pullRequestNumber: requiredNumberWithEnvDefault(env, "GITHUB_PR_NUMBER"),
     repositoryFullName: requiredStringWithEnvDefault(env, "GITHUB_REPOSITORY"),
     semaphoreApiToken: semaphoreApiTokenWithEnvDefault(env),
-    semaphoreBaseUrl: requiredUrlWithEnvDefault(env, "SEMAPHORE_BASE_URL", {
-      defaultValue: defaultSemaphoreBaseUrl,
-    }),
+    semaphoreBaseUrl: z.string().trim().url().default(defaultSemaphoreBaseUrl),
     waitMs: optionalNumberWithEnvDefault(env, "PREVIEW_WAIT_MS"),
     workflowRunUrl: requiredUrlWithEnvDefault(env, "WORKFLOW_RUN_URL", {
       defaultValue: makeDefaultWorkflowRunUrl(env),
@@ -68,9 +66,7 @@ function createPreviewDestroyInputSchema(env: NodeJS.ProcessEnv) {
     previewEnvironmentSlug: requiredStringWithEnvDefault(env, "PREVIEW_ENVIRONMENT_SLUG"),
     previewEnvironmentType: requiredStringWithEnvDefault(env, "PREVIEW_ENVIRONMENT_TYPE"),
     semaphoreApiToken: semaphoreApiTokenWithEnvDefault(env),
-    semaphoreBaseUrl: requiredUrlWithEnvDefault(env, "SEMAPHORE_BASE_URL", {
-      defaultValue: defaultSemaphoreBaseUrl,
-    }),
+    semaphoreBaseUrl: z.string().trim().url().default(defaultSemaphoreBaseUrl),
   });
 }
 
@@ -82,9 +78,7 @@ export function createCloudflarePreviewSyncInputSchema(env: NodeJS.ProcessEnv) {
     pullRequestNumber: requiredNumberWithEnvDefault(env, "GITHUB_PR_NUMBER"),
     repositoryFullName: requiredStringWithEnvDefault(env, "GITHUB_REPOSITORY"),
     semaphoreApiToken: optionalSemaphoreApiTokenWithEnvDefault(env),
-    semaphoreBaseUrl: optionalUrlWithEnvDefault(env, "SEMAPHORE_BASE_URL", {
-      defaultValue: defaultSemaphoreBaseUrl,
-    }),
+    semaphoreBaseUrl: z.string().trim().url().default(defaultSemaphoreBaseUrl),
     workflowRunUrl: requiredUrlWithEnvDefault(env, "WORKFLOW_RUN_URL", {
       defaultValue: makeDefaultWorkflowRunUrl(env),
     }),
@@ -104,9 +98,7 @@ export function createCloudflarePreviewCleanupInputSchema(env: NodeJS.ProcessEnv
     pullRequestNumber: requiredNumberWithEnvDefault(env, "GITHUB_PR_NUMBER"),
     repositoryFullName: requiredStringWithEnvDefault(env, "GITHUB_REPOSITORY"),
     semaphoreApiToken: optionalSemaphoreApiTokenWithEnvDefault(env),
-    semaphoreBaseUrl: optionalUrlWithEnvDefault(env, "SEMAPHORE_BASE_URL", {
-      defaultValue: defaultSemaphoreBaseUrl,
-    }),
+    semaphoreBaseUrl: z.string().trim().url().default(defaultSemaphoreBaseUrl),
   });
 }
 

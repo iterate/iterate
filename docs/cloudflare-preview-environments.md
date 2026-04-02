@@ -36,7 +36,7 @@ The resource slug is the canonical preview environment identifier. Every other n
 - The app manifest for paths, Doppler project names, preview pool types, and test commands lives in `scripts/preview/apps.ts`.
 - The preview router and procedures live in `scripts/preview/router.ts` and `scripts/preview/preview.ts`.
 - Preview leases are deliberately long-lived in v1 and are released explicitly on cleanup.
-- Use `doppler run --project semaphore --config prd -- pnpm preview status` from the repo root to inspect live preview pool inventory and lease state.
+- Use `doppler run --project os --config prd -- pnpm preview status` from the repo root to inspect live preview pool inventory and lease state.
 - Manual lifecycle:
-  `doppler run --project semaphore --config prd -- pnpm preview sync --app example`
-  `doppler run --project semaphore --config prd -- pnpm preview cleanup --app example`
+  `doppler run --project os --config prd -- pnpm preview sync --app example`
+  `doppler run --project os --config prd -- pnpm preview cleanup --app example`

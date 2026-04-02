@@ -54,5 +54,4 @@ jobs:
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          SEMAPHORE_BASE_URL: https://semaphore.iterate.com
-        run: doppler run --project semaphore --config prd -- pnpm preview cleanup --app "$APP"
+        run: doppler run --project os --config prd -- pnpm preview cleanup --app "$APP"

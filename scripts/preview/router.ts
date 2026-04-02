@@ -19,11 +19,7 @@ function createPreviewStatusInputSchema(env: NodeJS.ProcessEnv) {
     semaphoreApiToken: semaphoreApiToken
       ? z.string().trim().min(1).default(semaphoreApiToken)
       : z.string().trim().min(1),
-    semaphoreBaseUrl: z
-      .string()
-      .trim()
-      .url()
-      .default(env.SEMAPHORE_BASE_URL?.trim() || "https://semaphore.iterate.com"),
+    semaphoreBaseUrl: z.string().trim().url().default("https://semaphore.iterate.com"),
   });
 }
 
