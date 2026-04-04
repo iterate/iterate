@@ -91,6 +91,7 @@ function DebugPage() {
             The terminal route uses a runtime-injected PTY dep in Node and a not-implemented
             fallback in Cloudflare.
           </p>
+          <p className="text-xs text-muted-foreground">Child preview proof branch variant.</p>
         </div>
         <Button size="sm" nativeButton={false} render={<Link to="/terminal" />}>
           Open web terminal
