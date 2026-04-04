@@ -186,14 +186,28 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     switch (event.type) {
       case "https://events.iterate.com/events/stream/initialized": {
-        this.appendToAncestorStreams({
-          path: event.streamPath,
-          eventInput: {
-            type: "https://events.iterate.com/events/stream/child-stream-created",
-            payload: { path: event.streamPath },
-            metadata: event.metadata,
-          },
-        });
+        const ancestorPaths = getAncestorStreamPaths(event.streamPath);
+        const eventInput = {
+          type: "https://events.iterate.com/events/stream/child-stream-created",
+          payload: { path: event.streamPath },
+          metadata: event.metadata,
+        } satisfies EventInput & { payload: { path: StreamPath } };
+
+        if (ancestorPaths.length > 0) {
+          void Promise.all(
+            ancestorPaths.map(async (path) => {
+              const stream = await getInitializedStreamStub({ path });
+              await stream.append(eventInput);
+            }),
+          ).catch((error) => {
+            console.error("[stream-do] failed to propagate event to ancestor streams", {
+              path: event.streamPath,
+              ancestorPaths,
+              eventType: eventInput.type,
+              error,
+            });
+          });
+        }
         break;
       }
     }
@@ -310,30 +324,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       .next().value;
 
     return this.parseEventRow(row);
-  }
-
-  private appendToAncestorStreams(args: {
-    path: StreamPath;
-    eventInput: EventInput & { payload: { path: StreamPath } };
-  }) {
-    const ancestorPaths = getAncestorStreamPaths(args.path);
-    if (ancestorPaths.length === 0) {
-      return;
-    }
-
-    void Promise.all(
-      ancestorPaths.map(async (path) => {
-        const stream = await getInitializedStreamStub({ path });
-        await stream.append(args.eventInput);
-      }),
-    ).catch((error) => {
-      console.error("[stream-do] failed to propagate event to ancestor streams", {
-        path: args.path,
-        ancestorPaths,
-        eventType: args.eventInput.type,
-        error,
-      });
-    });
   }
 
   private parseEventRow(row: SqliteEventRow | null | undefined): Event | null {
