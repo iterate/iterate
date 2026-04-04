@@ -243,7 +243,6 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   history(args: { afterOffset?: number } = {}): Event[] {
     if (this._state == null) {
-      this.ensureSchema();
       return [];
     }
 
