@@ -9,8 +9,8 @@ import {
 } from "@iterate-com/events-contract";
 import jsonata from "jsonata";
 import {
-  getRawStreamStub,
   getStreamStub,
+  getStreamStubWithoutInitializing,
   StreamOffsetPreconditionError,
 } from "~/lib/stream-helpers.ts";
 import { decodeEventStream } from "~/lib/utils.ts";
@@ -96,7 +96,7 @@ export const streamsRouter = {
     return streamStub.getState();
   }),
   listStreams: os.listStreams.handler(async () => {
-    const rootStreamStub = getRawStreamStub("/");
+    const rootStreamStub = getStreamStubWithoutInitializing("/");
     const events = await rootStreamStub.history();
     const discovered = new Map<StreamPath, string>();
 
@@ -142,15 +142,15 @@ async function destroyStreamTree(args: {
     const childPaths = await listDiscoveredChildPaths(args.path);
 
     for (const childPath of childPaths) {
-      await getRawStreamStub(childPath).destroy();
+      await getStreamStubWithoutInitializing(childPath).destroy();
     }
   }
 
-  return await getRawStreamStub(args.path).destroy();
+  return await getStreamStubWithoutInitializing(args.path).destroy();
 }
 
 async function listDiscoveredChildPaths(path: StreamPath) {
-  const events = await getRawStreamStub(path).history();
+  const events = await getStreamStubWithoutInitializing(path).history();
   const discovered = new Set<StreamPath>();
 
   for (const event of events) {

@@ -8,7 +8,7 @@ export class StreamOffsetPreconditionError extends Error {
   }
 }
 
-export function getRawStreamStub(path: StreamPath) {
+export function getStreamStubWithoutInitializing(path: StreamPath) {
   return workerEnv.STREAM.getByName(path);
 }
 
@@ -19,7 +19,7 @@ export function getRawStreamStub(path: StreamPath) {
  * throw from the `state` getter inside the durable object.
  */
 export async function getStreamStub(path: StreamPath) {
-  const streamStub = getRawStreamStub(path);
+  const streamStub = getStreamStubWithoutInitializing(path);
   await streamStub.initialize({ path });
   return streamStub;
 }
