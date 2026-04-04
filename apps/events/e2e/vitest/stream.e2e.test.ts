@@ -62,7 +62,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: {},
+          payload: { path },
         },
         {
           streamPath: path,
@@ -253,7 +253,7 @@ describe.sequential("events stream e2e", () => {
         },
         body: JSON.stringify({
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: {},
+          payload: { path },
         }),
       });
 
@@ -479,7 +479,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: {},
+          payload: { path },
         },
       ]);
     },
@@ -886,7 +886,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: {},
+          payload: { path },
         },
         {
           streamPath: path,
@@ -1257,7 +1257,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: {},
+          payload: { path },
         });
 
         expect(second.done).toBe(false);

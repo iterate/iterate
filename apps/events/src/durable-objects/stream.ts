@@ -163,7 +163,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     try {
       this.append({
         type: "https://events.iterate.com/events/stream/initialized",
-        payload: {},
+        payload: { path: args.path },
       });
     } catch (error) {
       this._state = null;
@@ -367,9 +367,19 @@ export class StreamDurableObject extends DurableObject<Env> {
         event,
         state: getProcessorState(this.state, processor.slug),
       });
-      if (result instanceof Promise) {
-        void result;
+
+      if (result == null) {
+        continue;
       }
+
+      void result.catch((error) => {
+        console.error("[stream-do] processor afterAppend failed", {
+          path: this.state.path,
+          processor: processor.slug,
+          eventType: event.type,
+          error,
+        });
+      });
     }
   }
 

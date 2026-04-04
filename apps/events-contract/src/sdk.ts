@@ -35,7 +35,7 @@ export function defineProcessor<State>(processor: {
 export type StreamProcessor<State> = ReturnType<typeof defineProcessor<State>>;
 
 type PullSubscriptionEventsClient = {
-  append: (input: { params: { path: StreamPath }; body: EventInput }) => Promise<{
+  append: (input: { path: StreamPath; event: EventInput }) => Promise<{
     event: Event;
   }>;
   stream: (
@@ -90,8 +90,8 @@ export class PullSubscriptionProcessorRuntime<State> {
 
     const append = async (event: AppendEvent) => {
       await this.#eventsClient.append({
-        params: { path: this.#streamPath },
-        body: event,
+        path: this.#streamPath,
+        event,
       });
     };
 

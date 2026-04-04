@@ -23,7 +23,9 @@ export const streamInitializedPage = {
   title: "Stream Initialized",
   type: "https://events.iterate.com/events/stream/initialized",
   summary: "Internal meta event emitted exactly once when a stream initializes itself.",
-  payloadExample: {},
+  payloadExample: {
+    path: "/demo/stream",
+  },
   details: [
     "Every initialized stream writes its own self-initialized event at offset 1 before any caller-appended events.",
     "Parent/root discovery uses a separate built-in child-stream-created event.",

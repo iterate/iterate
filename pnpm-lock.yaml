@@ -1072,7 +1072,13 @@ importers:
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@orpc/client':
+        specifier: 1.13.13
+        version: 1.13.13(@opentelemetry/api@1.9.0)
       '@orpc/contract':
+        specifier: 1.13.13
+        version: 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/openapi-client':
         specifier: 1.13.13
         version: 1.13.13(@opentelemetry/api@1.9.0)
       zod:
@@ -22629,7 +22635,7 @@ snapshots:
     dependencies:
       '@slack/logger': 4.0.0
       '@slack/types': 2.20.0
-      '@types/node': 25.3.3
+      '@types/node': 25.5.0
       '@types/retry': 0.12.0
       axios: 1.13.6
       eventemitter3: 5.0.4

@@ -14,7 +14,7 @@ export type Processor<TState = Record<string, unknown>> = {
     append: (event: EventInput) => Event;
     event: Event;
     state: TState;
-  }): void | Promise<void>;
+  }): Promise<void>;
 };
 
 /**

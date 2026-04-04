@@ -88,14 +88,14 @@ describe("circuitBreaker", () => {
     });
   });
 
-  test("afterAppend auto-appends a pause event when 100 events arrive in under one second", () => {
+  test("afterAppend auto-appends a pause event when 100 events arrive in under one second", async () => {
     const appended: EventInput[] = [];
     const base = Date.parse("2026-04-02T12:00:00.000Z");
     const recentEventTimestamps = Array.from({ length: 100 }, (_, index) =>
       new Date(base + index * 9).toISOString(),
     );
 
-    circuitBreakerProcessor.afterAppend?.({
+    await circuitBreakerProcessor.afterAppend?.({
       append: (event) => {
         appended.push(event);
         return createEvent({
@@ -124,13 +124,13 @@ describe("circuitBreaker", () => {
     ]);
   });
 
-  test("afterAppend lets append errors escape (caller handles them)", () => {
+  test("afterAppend rejects when append fails", async () => {
     const base = Date.parse("2026-04-02T12:00:00.000Z");
     const recentEventTimestamps = Array.from({ length: 100 }, (_, index) =>
       new Date(base + index * 9).toISOString(),
     );
 
-    expect(() =>
+    await expect(
       circuitBreakerProcessor.afterAppend?.({
         append: () => {
           throw new Error("sqlite write failed");
@@ -143,7 +143,7 @@ describe("circuitBreaker", () => {
           recentEventTimestamps,
         },
       }),
-    ).toThrow("sqlite write failed");
+    ).rejects.toThrow("sqlite write failed");
   });
 });
 

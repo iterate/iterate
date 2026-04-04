@@ -202,10 +202,10 @@ const streamInitializedEvent = AppendInput.parse({
   path: examplePath,
   event: {
     type: "https://events.iterate.com/events/stream/initialized",
-    payload: {},
+    payload: { path: examplePath },
   },
 });
 
-assert.deepEqual(streamInitializedEvent.event.payload, {});
+assert.deepEqual(streamInitializedEvent.event.payload, { path: examplePath });
 
 console.log("events-contract append client typing and runtime normalization checks passed");

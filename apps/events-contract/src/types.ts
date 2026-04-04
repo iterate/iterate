@@ -24,7 +24,9 @@ export { JSONObject, Offset, StreamPath };
 
 export const StreamInitializedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/initialized"),
-  payload: z.strictObject({}),
+  payload: z.strictObject({
+    path: StreamPath,
+  }),
 });
 export const StreamInitializedEvent = GenericEventBase.extend(
   StreamInitializedEventInput.pick({ type: true, payload: true }).shape,

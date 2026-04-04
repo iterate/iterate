@@ -57,7 +57,7 @@ export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerStat
     };
   },
 
-  afterAppend({ append, state }) {
+  async afterAppend({ append, state }) {
     if (state.paused || state.recentEventTimestamps.length < 100) return;
 
     const first = Date.parse(state.recentEventTimestamps[0]);

@@ -108,7 +108,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         streamPath: path,
         type: "https://events.iterate.com/events/stream/initialized",
         offset: expectedStoredOffset(0),
-        payload: {},
+        payload: { path },
       });
       expect(events[1]).toMatchObject({
         streamPath: path,
