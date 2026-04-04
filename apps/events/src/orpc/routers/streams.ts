@@ -153,7 +153,9 @@ async function destroyStreamTree(args: {
   destroyChildren?: boolean;
 }) {
   if (args.destroyChildren) {
-    const childPaths = (await listDiscoveredStreams({ projectSlug: args.projectSlug, path: args.path }))
+    const childPaths = (
+      await listDiscoveredStreams({ projectSlug: args.projectSlug, path: args.path })
+    )
       .map((stream) => stream.path)
       .filter((path) => path !== args.path)
       .sort((left, right) => right.length - left.length);
