@@ -46,12 +46,20 @@ function StreamsIndexPage() {
   );
 
   return (
-    <StreamPage
-      streamPath="/"
-      rendererMode={renderer}
-      openEventOffset={event}
-      onOpenEventOffsetChange={updateEventOffset}
-      onRendererModeChange={updateRenderer}
-    />
+    <div className="space-y-4">
+      <section className="rounded-xl border bg-card px-4 py-3">
+        <p className="text-sm font-medium">Root stream</p>
+        <p className="text-sm text-muted-foreground">
+          Inspect the top-level event history before drilling into child streams.
+        </p>
+      </section>
+      <StreamPage
+        streamPath="/"
+        rendererMode={renderer}
+        openEventOffset={event}
+        onOpenEventOffsetChange={updateEventOffset}
+        onRendererModeChange={updateRenderer}
+      />
+    </div>
   );
 }
