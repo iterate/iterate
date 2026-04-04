@@ -54,13 +54,13 @@ function createOpenApiClient(httpBaseUrl: string): ContractRouterClient<typeof d
 
 async function assertTypedClientHealth(httpBaseUrl: string) {
   const client = createOpenApiClient(httpBaseUrl);
-  const body = await client.common.health({});
+  const body = await client.__internal.health({});
   expect(body.ok).toBe(true);
 }
 
 async function assertPublicConfigOverride(httpBaseUrl: string) {
   const client = createOpenApiClient(httpBaseUrl);
-  const config = PublicConfigSchema.parse(await client.common.publicConfig({}));
+  const config = PublicConfigSchema.parse(await client.__internal.publicConfig({}));
   expect(config.posthog.apiKey).toBe(expectedPosthogApiKey);
 }
 
@@ -71,7 +71,7 @@ async function assertOrpcWebSocket(httpBaseUrl: string) {
   );
 
   try {
-    const body = await client.common.health({});
+    const body = await client.__internal.health({});
     expect(body.ok).toBe(true);
   } finally {
     websocket.close();

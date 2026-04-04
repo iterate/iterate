@@ -35,7 +35,7 @@ export function StreamsSidebar() {
       : defaultStreamViewSearch.renderer;
 
   const streamsQuery = useQuery({
-    ...orpc.listStreams.queryOptions({ input: {} }),
+    ...orpc.listStreams.queryOptions({ input: { path: "/" } }),
     staleTime: 30_000,
   });
 
@@ -43,7 +43,7 @@ export function StreamsSidebar() {
     ...orpc.getState.queryOptions({ input: { path: "/" } }),
     staleTime: 30_000,
   });
-  const rootLastOffset = rootStateQuery.data?.maxOffset ?? undefined;
+  const rootLastOffset = rootStateQuery.data?.eventCount ?? undefined;
 
   useEffect(() => {
     if (selectedStreamPath === "/" || rootStateQuery.isPending || rootStateQuery.isError) {

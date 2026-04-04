@@ -1,29 +1,31 @@
+import type { EventInput } from "@iterate-com/events-contract";
+import {
+  cancelScheduleOnStream,
+  getScheduleFromStorage,
+  getSchedulesFromStorage,
+  scheduleEveryOnStream,
+  scheduleOnStream,
+} from "~/durable-objects/processors/scheduling/index.ts";
 import type { Schedule, ScheduleCriteria } from "~/durable-objects/scheduling-types.ts";
+import type { SchedulingMutationDeps } from "~/durable-objects/processors/scheduling/types.ts";
 
 type SchedulingTestSurface = {
-  cancelSchedule(id: string): Promise<boolean>;
+  append(event: EventInput): Promise<unknown>;
   ctx: DurableObjectState;
   ensureInitializedForCurrentName(): Promise<void>;
-  getSchedule(id: string): Schedule | undefined;
-  getSchedules(criteria?: ScheduleCriteria): Schedule[];
-  initialize(args: { path: string }): Promise<void> | void;
-  schedule<T = unknown>(
-    when: Date | number | string,
-    callback: PropertyKey,
-    payload?: T,
-    options?: { idempotent?: boolean },
-  ): Promise<Schedule>;
-  scheduleEvery<T = unknown>(
-    intervalSeconds: number,
-    callback: PropertyKey,
-    payload?: T,
-    options?: { _idempotent?: boolean },
-  ): Promise<Schedule>;
+  getSchedulingMutationDeps(): SchedulingMutationDeps;
+  initialize(args: { path: string; projectSlug: string }): Promise<void> | void;
   wasScheduleWarningEmitted(callback: string): boolean;
 };
 
 function asSchedulingTestSurface(value: object): SchedulingTestSurface {
   return value as unknown as SchedulingTestSurface;
+}
+
+async function getSchedulingMutationDeps(value: object) {
+  const surface = asSchedulingTestSurface(value);
+  await surface.ensureInitializedForCurrentName();
+  return surface.getSchedulingMutationDeps();
 }
 
 /**
@@ -47,7 +49,7 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
         return;
       }
 
-      await surface.initialize({ path: "/__test" });
+      await surface.initialize({ projectSlug: "test", path: "/__test" });
     }
   }
 
@@ -55,8 +57,11 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
     testCallback() {}
 
     protected async onInitialize(): Promise<void> {
-      await asSchedulingTestSurface(this).ensureInitializedForCurrentName();
-      await asSchedulingTestSurface(this).schedule(60, "testCallback");
+      await scheduleOnStream({
+        when: 60,
+        callback: "testCallback",
+        deps: await getSchedulingMutationDeps(this),
+      });
     }
 
     wasWarnedFor(callback: string) {
@@ -75,9 +80,13 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
     testCallback() {}
 
     protected async onInitialize(): Promise<void> {
-      await asSchedulingTestSurface(this).ensureInitializedForCurrentName();
-      await asSchedulingTestSurface(this).schedule(60, "testCallback", undefined, {
-        idempotent: true,
+      await scheduleOnStream({
+        when: 60,
+        callback: "testCallback",
+        deps: await getSchedulingMutationDeps(this),
+        options: {
+          idempotent: true,
+        },
       });
     }
 
@@ -97,9 +106,13 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
     testCallback() {}
 
     protected async onInitialize(): Promise<void> {
-      await asSchedulingTestSurface(this).ensureInitializedForCurrentName();
-      await asSchedulingTestSurface(this).schedule(60, "testCallback", undefined, {
-        idempotent: false,
+      await scheduleOnStream({
+        when: 60,
+        callback: "testCallback",
+        deps: await getSchedulingMutationDeps(this),
+        options: {
+          idempotent: false,
+        },
       });
     }
 
@@ -136,11 +149,15 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
     cronCallback() {}
 
     async cancelScheduleById(id: string): Promise<boolean> {
-      return asSchedulingTestSurface(this).cancelSchedule(id);
+      return cancelScheduleOnStream({
+        id,
+        append: asSchedulingTestSurface(this).append.bind(this),
+        ctx: asSchedulingTestSurface(this).ctx,
+      });
     }
 
     async getScheduleById(id: string) {
-      return asSchedulingTestSurface(this).getSchedule(id);
+      return getScheduleFromStorage(asSchedulingTestSurface(this).ctx, id);
     }
 
     async clearStoredAlarm(): Promise<void> {
@@ -164,54 +181,63 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
     }
 
     async createSchedule(delaySeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(delaySeconds, "testCallback");
+      const schedule = await scheduleOnStream({
+        when: delaySeconds,
+        callback: "testCallback",
+        deps: await getSchedulingMutationDeps(this),
+      });
       return schedule.id;
     }
 
     async createIntervalSchedule(intervalSeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
+      const schedule = await scheduleEveryOnStream({
         intervalSeconds,
-        "intervalCallback",
-      );
+        callback: "intervalCallback",
+        deps: await getSchedulingMutationDeps(this),
+      });
       return schedule.id;
     }
 
     async createIntervalScheduleAndReadAlarm(
       intervalSeconds: number,
     ): Promise<{ alarm: number | null; id: string }> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
+      const schedule = await scheduleEveryOnStream({
         intervalSeconds,
-        "intervalCallback",
-      );
+        callback: "intervalCallback",
+        deps: await getSchedulingMutationDeps(this),
+      });
       const alarm = await asSchedulingTestSurface(this).ctx.storage.getAlarm();
       return { alarm, id: schedule.id };
     }
 
     async createThrowingIntervalSchedule(intervalSeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
+      const schedule = await scheduleEveryOnStream({
         intervalSeconds,
-        "throwingCallback",
-      );
+        callback: "throwingCallback",
+        deps: await getSchedulingMutationDeps(this),
+      });
       return schedule.id;
     }
 
     async getSchedulesByType(type: "scheduled" | "delayed" | "cron" | "interval") {
-      return asSchedulingTestSurface(this).getSchedules({ type });
+      return getSchedulesFromStorage(asSchedulingTestSurface(this).ctx, { type });
     }
 
     async createSlowIntervalSchedule(intervalSeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
+      const schedule = await scheduleEveryOnStream({
         intervalSeconds,
-        "slowCallback",
-      );
+        callback: "slowCallback",
+        deps: await getSchedulingMutationDeps(this),
+      });
       return schedule.id;
     }
 
     async simulateHungSchedule(intervalSeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
+      const schedule = await scheduleEveryOnStream({
         intervalSeconds,
-        "intervalCallback",
-      );
+        callback: "intervalCallback",
+        deps: await getSchedulingMutationDeps(this),
+      });
       asSchedulingTestSurface(this).ctx.storage.sql.exec(
         `UPDATE cf_agents_schedules
          SET running = 1, execution_started_at = ?
@@ -223,10 +249,11 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
     }
 
     async simulateLegacyHungSchedule(intervalSeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
+      const schedule = await scheduleEveryOnStream({
         intervalSeconds,
-        "intervalCallback",
-      );
+        callback: "intervalCallback",
+        deps: await getSchedulingMutationDeps(this),
+      });
       asSchedulingTestSurface(this).ctx.storage.sql.exec(
         `UPDATE cf_agents_schedules
          SET running = 1, execution_started_at = NULL
@@ -237,40 +264,45 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
     }
 
     async createCronSchedule(cronExpr: string): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(cronExpr, "cronCallback");
+      const schedule = await scheduleOnStream({
+        when: cronExpr,
+        callback: "cronCallback",
+        deps: await getSchedulingMutationDeps(this),
+      });
       return schedule.id;
     }
 
     async createCronScheduleWithPayload(cronExpr: string, payload: string): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(
-        cronExpr,
-        "cronCallback",
+      const schedule = await scheduleOnStream({
+        when: cronExpr,
+        callback: "cronCallback",
+        deps: await getSchedulingMutationDeps(this),
         payload,
-      );
+      });
       return schedule.id;
     }
 
     async createCronScheduleNonIdempotent(cronExpr: string): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(
-        cronExpr,
-        "cronCallback",
-        undefined,
-        {
+      const schedule = await scheduleOnStream({
+        when: cronExpr,
+        callback: "cronCallback",
+        deps: await getSchedulingMutationDeps(this),
+        options: {
           idempotent: false,
         },
-      );
+      });
       return schedule.id;
     }
 
     async createIdempotentDelayedSchedule(delaySeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(
-        delaySeconds,
-        "testCallback",
-        undefined,
-        {
+      const schedule = await scheduleOnStream({
+        when: delaySeconds,
+        callback: "testCallback",
+        deps: await getSchedulingMutationDeps(this),
+        options: {
           idempotent: true,
         },
-      );
+      });
       return schedule.id;
     }
 
@@ -278,26 +310,27 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
       delaySeconds: number,
       payload: string,
     ): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(
-        delaySeconds,
-        "testCallback",
+      const schedule = await scheduleOnStream({
+        when: delaySeconds,
+        callback: "testCallback",
+        deps: await getSchedulingMutationDeps(this),
         payload,
-        {
+        options: {
           idempotent: true,
         },
-      );
+      });
       return schedule.id;
     }
 
     async createIdempotentScheduledSchedule(dateMs: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).schedule(
-        new Date(dateMs),
-        "testCallback",
-        undefined,
-        {
+      const schedule = await scheduleOnStream({
+        when: new Date(dateMs),
+        callback: "testCallback",
+        deps: await getSchedulingMutationDeps(this),
+        options: {
           idempotent: true,
         },
-      );
+      });
       return schedule.id;
     }
 
@@ -342,19 +375,21 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
       intervalSeconds: number,
       payload: string,
     ): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
+      const schedule = await scheduleEveryOnStream({
         intervalSeconds,
-        "intervalCallback",
+        callback: "intervalCallback",
+        deps: await getSchedulingMutationDeps(this),
         payload,
-      );
+      });
       return schedule.id;
     }
 
     async createSecondIntervalSchedule(intervalSeconds: number): Promise<string> {
-      const schedule = await asSchedulingTestSurface(this).scheduleEvery(
+      const schedule = await scheduleEveryOnStream({
         intervalSeconds,
-        "secondIntervalCallback",
-      );
+        callback: "secondIntervalCallback",
+        deps: await getSchedulingMutationDeps(this),
+      });
       return schedule.id;
     }
   }

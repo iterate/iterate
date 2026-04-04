@@ -47,7 +47,13 @@ export const getSetupRepo = ({ ref }: { ref?: string } = {}) =>
 /** checkout, setup pnpm, setup node, install dependencies */
 export const setupRepo = getSetupRepo();
 
-type DopplerConfigName = `dev_${string}` | "dev" | "stg" | "prd" | `\${{ ${string} }}`;
+type DopplerConfigName =
+  | `dev_${string}`
+  | `stg_${string}`
+  | "dev"
+  | "stg"
+  | "prd"
+  | `\${{ ${string} }}`;
 type DopplerProjectName = string;
 
 export const installDopplerCli = {

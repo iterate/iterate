@@ -125,7 +125,7 @@ async function assertTypedClientPing(httpBaseUrl: string) {
 
 async function assertPublicConfigOverride(httpBaseUrl: string) {
   const client = createOpenApiClient(httpBaseUrl);
-  const config = PublicConfigSchema.parse(await client.common.publicConfig({}));
+  const config = PublicConfigSchema.parse(await client.__internal.publicConfig({}));
   expect(config.posthog.apiKey).toBe(expectedPosthogApiKey);
 }
 

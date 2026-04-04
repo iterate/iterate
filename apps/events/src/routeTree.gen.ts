@@ -9,9 +9,13 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as StreamResumedRouteImport } from './routes/stream-resumed'
+import { Route as StreamPausedRouteImport } from './routes/stream-paused'
 import { Route as StreamMetadataUpdatedRouteImport } from './routes/stream-metadata-updated'
 import { Route as StreamInitializedRouteImport } from './routes/stream-initialized'
+import { Route as StreamDurableObjectConstructedRouteImport } from './routes/stream-durable-object-constructed'
 import { Route as ManualEventAppendedRouteImport } from './routes/manual-event-appended'
+import { Route as JsonataTransformerConfiguredRouteImport } from './routes/jsonata-transformer-configured'
 import { Route as ErrorOccurredRouteImport } from './routes/error-occurred'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as ChildStreamCreatedRouteImport } from './routes/child-stream-created'
@@ -23,9 +27,20 @@ import { Route as AppStreamsRouteImport } from './routes/_app/streams'
 import { Route as AppSecretsRouteImport } from './routes/_app/secrets'
 import { Route as AppStreamsIndexRouteImport } from './routes/_app/streams.index'
 import { Route as AppSecretsIndexRouteImport } from './routes/_app/secrets.index'
+import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppStreamsSplatRouteImport } from './routes/_app/streams.$'
 import { Route as AppSecretsSecretIdRouteImport } from './routes/_app/secrets.$secretId'
 
+const StreamResumedRoute = StreamResumedRouteImport.update({
+  id: '/stream-resumed',
+  path: '/stream-resumed',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StreamPausedRoute = StreamPausedRouteImport.update({
+  id: '/stream-paused',
+  path: '/stream-paused',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const StreamMetadataUpdatedRoute = StreamMetadataUpdatedRouteImport.update({
   id: '/stream-metadata-updated',
   path: '/stream-metadata-updated',
@@ -36,11 +51,23 @@ const StreamInitializedRoute = StreamInitializedRouteImport.update({
   path: '/stream-initialized',
   getParentRoute: () => rootRouteImport,
 } as any)
+const StreamDurableObjectConstructedRoute =
+  StreamDurableObjectConstructedRouteImport.update({
+    id: '/stream-durable-object-constructed',
+    path: '/stream-durable-object-constructed',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ManualEventAppendedRoute = ManualEventAppendedRouteImport.update({
   id: '/manual-event-appended',
   path: '/manual-event-appended',
   getParentRoute: () => rootRouteImport,
 } as any)
+const JsonataTransformerConfiguredRoute =
+  JsonataTransformerConfiguredRouteImport.update({
+    id: '/jsonata-transformer-configured',
+    path: '/jsonata-transformer-configured',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ErrorOccurredRoute = ErrorOccurredRouteImport.update({
   id: '/error-occurred',
   path: '/error-occurred',
@@ -95,6 +122,11 @@ const AppSecretsIndexRoute = AppSecretsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppSecretsRoute,
 } as any)
+const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
+  id: '/api/orpc/$',
+  path: '/api/orpc/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppStreamsSplatRoute = AppStreamsSplatRouteImport.update({
   id: '/$',
   path: '/$',
@@ -111,15 +143,20 @@ export interface FileRoutesByFullPath {
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/error-occurred': typeof ErrorOccurredRoute
+  '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
+  '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
   '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
+  '/stream-paused': typeof StreamPausedRoute
+  '/stream-resumed': typeof StreamResumedRoute
   '/secrets': typeof AppSecretsRouteWithChildren
   '/streams': typeof AppStreamsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/secrets/$secretId': typeof AppSecretsSecretIdRoute
   '/streams/$': typeof AppStreamsSplatRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/secrets/': typeof AppSecretsIndexRoute
   '/streams/': typeof AppStreamsIndexRoute
 }
@@ -128,13 +165,18 @@ export interface FileRoutesByTo {
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/error-occurred': typeof ErrorOccurredRoute
+  '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
+  '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
   '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
+  '/stream-paused': typeof StreamPausedRoute
+  '/stream-resumed': typeof StreamResumedRoute
   '/api/$': typeof ApiSplatRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/secrets/$secretId': typeof AppSecretsSecretIdRoute
   '/streams/$': typeof AppStreamsSplatRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/secrets': typeof AppSecretsIndexRoute
   '/streams': typeof AppStreamsIndexRoute
 }
@@ -145,15 +187,20 @@ export interface FileRoutesById {
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/error-occurred': typeof ErrorOccurredRoute
+  '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
+  '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
   '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
+  '/stream-paused': typeof StreamPausedRoute
+  '/stream-resumed': typeof StreamResumedRoute
   '/_app/secrets': typeof AppSecretsRouteWithChildren
   '/_app/streams': typeof AppStreamsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/_app/secrets/$secretId': typeof AppSecretsSecretIdRoute
   '/_app/streams/$': typeof AppStreamsSplatRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/secrets/': typeof AppSecretsIndexRoute
   '/_app/streams/': typeof AppStreamsIndexRoute
 }
@@ -164,15 +211,20 @@ export interface FileRouteTypes {
     | '/child-stream-created'
     | '/docs'
     | '/error-occurred'
+    | '/jsonata-transformer-configured'
     | '/manual-event-appended'
+    | '/stream-durable-object-constructed'
     | '/stream-initialized'
     | '/stream-metadata-updated'
+    | '/stream-paused'
+    | '/stream-resumed'
     | '/secrets'
     | '/streams'
     | '/api/$'
     | '/posthog-proxy/$'
     | '/secrets/$secretId'
     | '/streams/$'
+    | '/api/orpc/$'
     | '/secrets/'
     | '/streams/'
   fileRoutesByTo: FileRoutesByTo
@@ -181,13 +233,18 @@ export interface FileRouteTypes {
     | '/child-stream-created'
     | '/docs'
     | '/error-occurred'
+    | '/jsonata-transformer-configured'
     | '/manual-event-appended'
+    | '/stream-durable-object-constructed'
     | '/stream-initialized'
     | '/stream-metadata-updated'
+    | '/stream-paused'
+    | '/stream-resumed'
     | '/api/$'
     | '/posthog-proxy/$'
     | '/secrets/$secretId'
     | '/streams/$'
+    | '/api/orpc/$'
     | '/secrets'
     | '/streams'
   id:
@@ -197,15 +254,20 @@ export interface FileRouteTypes {
     | '/child-stream-created'
     | '/docs'
     | '/error-occurred'
+    | '/jsonata-transformer-configured'
     | '/manual-event-appended'
+    | '/stream-durable-object-constructed'
     | '/stream-initialized'
     | '/stream-metadata-updated'
+    | '/stream-paused'
+    | '/stream-resumed'
     | '/_app/secrets'
     | '/_app/streams'
     | '/api/$'
     | '/posthog-proxy/$'
     | '/_app/secrets/$secretId'
     | '/_app/streams/$'
+    | '/api/orpc/$'
     | '/_app/secrets/'
     | '/_app/streams/'
   fileRoutesById: FileRoutesById
@@ -216,15 +278,34 @@ export interface RootRouteChildren {
   ChildStreamCreatedRoute: typeof ChildStreamCreatedRoute
   DocsRoute: typeof DocsRoute
   ErrorOccurredRoute: typeof ErrorOccurredRoute
+  JsonataTransformerConfiguredRoute: typeof JsonataTransformerConfiguredRoute
   ManualEventAppendedRoute: typeof ManualEventAppendedRoute
+  StreamDurableObjectConstructedRoute: typeof StreamDurableObjectConstructedRoute
   StreamInitializedRoute: typeof StreamInitializedRoute
   StreamMetadataUpdatedRoute: typeof StreamMetadataUpdatedRoute
+  StreamPausedRoute: typeof StreamPausedRoute
+  StreamResumedRoute: typeof StreamResumedRoute
   ApiSplatRoute: typeof ApiSplatRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
+  ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/stream-resumed': {
+      id: '/stream-resumed'
+      path: '/stream-resumed'
+      fullPath: '/stream-resumed'
+      preLoaderRoute: typeof StreamResumedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/stream-paused': {
+      id: '/stream-paused'
+      path: '/stream-paused'
+      fullPath: '/stream-paused'
+      preLoaderRoute: typeof StreamPausedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/stream-metadata-updated': {
       id: '/stream-metadata-updated'
       path: '/stream-metadata-updated'
@@ -239,11 +320,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof StreamInitializedRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/stream-durable-object-constructed': {
+      id: '/stream-durable-object-constructed'
+      path: '/stream-durable-object-constructed'
+      fullPath: '/stream-durable-object-constructed'
+      preLoaderRoute: typeof StreamDurableObjectConstructedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/manual-event-appended': {
       id: '/manual-event-appended'
       path: '/manual-event-appended'
       fullPath: '/manual-event-appended'
       preLoaderRoute: typeof ManualEventAppendedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/jsonata-transformer-configured': {
+      id: '/jsonata-transformer-configured'
+      path: '/jsonata-transformer-configured'
+      fullPath: '/jsonata-transformer-configured'
+      preLoaderRoute: typeof JsonataTransformerConfiguredRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/error-occurred': {
@@ -323,6 +418,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSecretsIndexRouteImport
       parentRoute: typeof AppSecretsRoute
     }
+    '/api/orpc/$': {
+      id: '/api/orpc/$'
+      path: '/api/orpc/$'
+      fullPath: '/api/orpc/$'
+      preLoaderRoute: typeof ApiOrpcSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app/streams/$': {
       id: '/_app/streams/$'
       path: '/$'
@@ -386,11 +488,16 @@ const rootRouteChildren: RootRouteChildren = {
   ChildStreamCreatedRoute: ChildStreamCreatedRoute,
   DocsRoute: DocsRoute,
   ErrorOccurredRoute: ErrorOccurredRoute,
+  JsonataTransformerConfiguredRoute: JsonataTransformerConfiguredRoute,
   ManualEventAppendedRoute: ManualEventAppendedRoute,
+  StreamDurableObjectConstructedRoute: StreamDurableObjectConstructedRoute,
   StreamInitializedRoute: StreamInitializedRoute,
   StreamMetadataUpdatedRoute: StreamMetadataUpdatedRoute,
+  StreamPausedRoute: StreamPausedRoute,
+  StreamResumedRoute: StreamResumedRoute,
   ApiSplatRoute: ApiSplatRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
+  ApiOrpcSplatRoute: ApiOrpcSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -43,9 +43,6 @@ const AlchemyEnv = z.object({
 const env = AlchemyEnv.parse(process.env);
 const stateStore = (scope: Scope) =>
   scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
-if (!env.ALCHEMY_LOCAL && env.WORKER_ROUTES.length === 0) {
-  throw new Error("WORKER_ROUTES is required when deploying. Set it in Doppler.");
-}
 const primaryUrl = env.WORKER_ROUTES[0] ? `https://${env.WORKER_ROUTES[0]}` : undefined;
 const compiledAppConfig = parseAppConfigFromEnv({
   configSchema: AppConfig,
@@ -57,6 +54,8 @@ const rawAppConfig = compileRawAppConfigFromEnv({
   prefix: "APP_CONFIG_",
   env: process.env,
 });
+
+if (env.ALCHEMY_LOCAL) delete process.env.CI;
 
 const app = await alchemy(APP_NAME, {
   stage: env.ALCHEMY_STAGE,

@@ -1,59 +1,50 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  type ChildStreamCreatedEvent,
   type DestroyStreamResult,
   type Event,
   Event as EventSchema,
   type EventInput,
   EventInput as EventInputSchema,
+  type ProjectSlug,
   type StreamMetadataUpdatedEvent,
   StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
 import {
-  applyScheduleProjectionEventSync,
-  cancelScheduleOnStream,
-  getScheduleFromStorage,
-  getSchedulesFromStorage,
-  hydrateReducedStreamState,
-  hydrateScheduleProjectionIfNeeded,
-  isScheduleControlEventType,
-  projectPublicStreamState,
-  reduceSchedulingState,
-  runScheduleAlarm,
-  scheduleEveryOnStream,
-  scheduleNextAlarmFromTable,
-  scheduleOnStream,
-} from "~/durable-objects/scheduling.ts";
+  applyBuiltinProcessorProjectionSync,
+  createBuiltinProcessorInitialState,
+  ensureBuiltinProcessorSchema,
+  hydrateBuiltinProcessors,
+  reduceBuiltinProcessorState,
+  runBuiltinProcessorAlarm,
+  runBuiltinProcessorAfterAppend,
+  runBuiltinProcessorAfterCommit,
+  runBuiltinProcessorBeforeAppend,
+} from "~/durable-objects/processors/runtime.ts";
+import type { SchedulingMutationDeps } from "~/durable-objects/processors/scheduling/types.ts";
 import {
+  hydrateReducedStreamState,
+  projectPublicStreamState,
   type ReducedStreamState,
-  type Schedule,
-  type ScheduleCriteria,
-  ScheduleTypeConstraint,
-} from "~/durable-objects/scheduling-types.ts";
+} from "~/durable-objects/reduced-stream-state.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
+import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
+
 /**
- *
- * IMPORTANT: This file should not be changed without explicit planning consent
- * from a human! It is actually relatively good!
- *
- * One stream per Durable Object: append-only event log in SQLite, a reduced
- * projection kept in memory and storage, and newline-delimited fanout for live
+ * One stream per Durable Object: an append-only event log persisted in SQLite,
+ * with a reduced in-memory projection and newline-delimited fanout for live
  * readers.
  *
- * Each stream must be initialized exactly once with its canonical path. That
- * initialization writes a synthetic `stream-initialized` event at offset 1,
- * so every initialized stream starts with the invariant:
- * - event at offset 1 is always `stream-initialized` for that stream's own path
- * - caller-appended events begin at offset 2
+ * The stream core only owns structural invariants:
+ * - initialization and durable storage
+ * - offset sequencing and idempotency
+ * - public history / live fanout
+ * - parent-tree propagation
  *
- * Child discovery is a separate built-in event. After a stream commits its own
- * self-init event, it appends `child-stream-created` to its parent. Parents then
- * propagate that same child discovery event upward one level at a time.
- *
- * Durable Object docs:
- * - https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/
- * - https://developers.cloudflare.com/durable-objects/api/state/
- * - https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/
+ * Builtin processors own pluggable behavior layered on top of that core. They
+ * may veto appends, reduce internal state, mirror query-optimized tables, and
+ * react to alarms.
  */
 export class StreamDurableObject extends DurableObject<Env> {
   private _state: ReducedStreamState | null = null;
@@ -64,24 +55,19 @@ export class StreamDurableObject extends DurableObject<Env> {
   private get state(): ReducedStreamState {
     if (this._state == null) {
       throw new Error(
-        "Stream durable object state was accessed before initialize({ path }) completed. Callers must use getInitializedStreamStub().",
+        "Stream durable object state was accessed before initialize({ projectSlug, path }) completed. Callers must use getInitializedStreamStub().",
       );
     }
 
     return this._state;
   }
 
-  // Cloudflare recommends `blockConcurrencyWhile()` in the constructor for
-  // schema setup and state hydration so requests never observe a half-initialized
-  // actor: https://developers.cloudflare.com/durable-objects/api/state/
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
     void this.ctx.blockConcurrencyWhile(async () => {
       this.ensureSchema();
 
-      // Pull reduced state out of the database - we always keep it in memory
-      // (we don't ever want all events in memory, because there might be LOTS of them)
       const persistedStateRow = this.ctx.storage.sql
         .exec<{ json: string }>("SELECT json FROM reduced_state WHERE singleton = 1")
         .next().value;
@@ -93,20 +79,34 @@ export class StreamDurableObject extends DurableObject<Env> {
             ctx: this.ctx,
           });
         } catch (error) {
-          // Deliberately not crashing — throwing from the DO constructor makes
-          // the object permanently unaddressable and much harder to debug.
           console.error(
-            "[stream-do] persisted reduced_state failed StreamState validation, leaving _state null so initialize() can re-derive it",
+            "[stream-do] persisted reduced_state failed validation, leaving _state null so initialize() can re-derive it",
             { error, raw: persistedStateRow.json },
           );
         }
       }
 
       if (this._state != null) {
-        hydrateScheduleProjectionIfNeeded({
+        hydrateBuiltinProcessors({
           ctx: this.ctx,
           reducedState: this._state,
         });
+
+        try {
+          await this.append({
+            type: "https://events.iterate.com/events/stream/durable-object-constructed",
+            payload: {},
+          });
+        } catch (error) {
+          console.error(
+            "[stream-do] failed to append durable-object-constructed after rehydration",
+            {
+              path: this._state.path,
+              error,
+            },
+          );
+          throw error;
+        }
       }
 
       try {
@@ -119,37 +119,29 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   protected async onInitialize(): Promise<void> {}
 
-  /**
-   * Ensures this stream exists. On the very first call, commits a synthetic
-   * `stream-initialized` event at offset 1 through `append()`. Subsequent
-   * calls are no-ops.
-   *
-   * Think of this like the durable object constructor. We take arguments like { path }
-   * and set the initial state.
-   *
-   * All external callers go through `getInitializedStreamStub()` in
-   * `~/lib/stream-helpers.ts`, which calls this before returning the stub.
-   */
-  async initialize(args: { path: StreamPath }) {
+  async initialize(args: { projectSlug?: ProjectSlug; path: StreamPath }) {
     if (this._state != null) {
       return;
     }
 
-    // Re-create tables if they were wiped by destroy() → deleteAll().
-    // The constructor's blockConcurrencyWhile only runs once per DO lifetime.
     this.ensureSchema();
+    const projectSlug =
+      args.projectSlug ?? this.getProjectSlugFromCurrentName() ?? ("test" as ProjectSlug);
 
     this._state = {
+      projectSlug,
       path: args.path,
-      maxOffset: 0,
+      eventCount: 0,
+      childPaths: [],
       metadata: {},
+      processors: createBuiltinProcessorInitialState(),
       cf_agents_schedules: {},
     };
 
     try {
       await this.append({
         type: "https://events.iterate.com/events/stream/initialized",
-        payload: { path: args.path },
+        payload: { projectSlug, path: args.path },
       });
     } catch (error) {
       this._state = null;
@@ -157,16 +149,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  /**
-   * Appends one event in three explicit phases:
-   * 1. before append: resolve idempotency and run pre-append checks
-   * 2. atomic append: write the row and reduced_state inside one transaction
-   * 3. after append: publish the committed row and trigger post-commit side effects
-   *
-   * Per-event idempotency is stream-local: when an input includes an
-   * `idempotencyKey` that already exists in this stream, we return the stored
-   * event instead of creating a second row or advancing offsets/state.
-   */
   async append(inputEvent: EventInput): Promise<Event> {
     const parsedInputEvent = EventInputSchema.parse(inputEvent);
 
@@ -177,24 +159,11 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
     }
 
-    if (
-      parsedInputEvent.type === "https://events.iterate.com/events/stream/initialized" &&
-      this.state.maxOffset > 0
-    ) {
-      throw new Error("stream-initialized may only be appended once");
-    }
-
-    const nextOffset = this.state.maxOffset + 1;
-
-    if (parsedInputEvent.offset != null && parsedInputEvent.offset !== nextOffset) {
-      throw new StreamOffsetPreconditionError(
-        `Client-supplied offset ${parsedInputEvent.offset} does not match next generated offset ${nextOffset}.`,
-      );
-    }
+    const nextOffset = this.beforeAppend(parsedInputEvent);
 
     const event = {
-      ...parsedInputEvent,
       streamPath: this.state.path,
+      ...parsedInputEvent,
       offset: nextOffset,
       createdAt: new Date().toISOString(),
     };
@@ -218,7 +187,7 @@ export class StreamDurableObject extends DurableObject<Env> {
          ON CONFLICT(singleton) DO UPDATE SET json = excluded.json`,
         JSON.stringify(nextState),
       );
-      applyScheduleProjectionEventSync({
+      applyBuiltinProcessorProjectionSync({
         ctx: this.ctx,
         event,
       });
@@ -226,43 +195,50 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     this._state = nextState;
 
-    if (isScheduleControlEventType(event.type)) {
-      await scheduleNextAlarmFromTable(this.ctx);
-    }
+    await runBuiltinProcessorAfterCommit({
+      append: this.append.bind(this),
+      ctx: this.ctx,
+      event,
+      instance: this,
+      state: this.state,
+    });
 
     this.publish(event);
+    this.propagateToAncestors(event);
+    runBuiltinProcessorAfterAppend({
+      append: this.append.bind(this),
+      ctx: this.ctx,
+      event,
+      instance: this,
+      state: this.state,
+    });
 
-    switch (event.type) {
-      case "https://events.iterate.com/events/stream/initialized": {
-        this.appendToParent({
-          type: "https://events.iterate.com/events/stream/child-stream-created",
-          payload: { path: event.streamPath },
-          metadata: event.metadata,
-        });
-        break;
-      }
-      case "https://events.iterate.com/events/stream/child-stream-created": {
-        this.appendToParent({
-          type: event.type,
-          payload: event.payload,
-          metadata: event.metadata,
-        });
-        break;
-      }
-    }
     return event;
   }
 
   getState(): StreamState {
-    return projectPublicStreamState(this.state);
+    return projectPublicStreamState(this.state)!;
   }
 
-  // Cloudflare's supported way to wipe a Durable Object's persisted data is
-  // `deleteAll()` on its storage rather than an explicit instance-destruction API:
-  // https://developers.cloudflare.com/durable-objects/api/storage-api/
-  // https://developers.cloudflare.com/durable-objects/best-practices/access-durable-objects-storage/
-  async destroy(): Promise<DestroyStreamResult> {
+  async destroy(args: { destroyChildren?: boolean } = {}): Promise<DestroyStreamResult> {
+    const childEntries: DestroyStreamResult["finalStateByPath"] = args.destroyChildren
+      ? await Promise.all(
+          [...this.state.childPaths].sort().map(async (path) => {
+            const stub = await getInitializedStreamStub({
+              projectSlug: this.state.projectSlug,
+              path,
+            });
+            return stub.destroy({ destroyChildren: true });
+          }),
+        ).then((results) =>
+          results.reduce<DestroyStreamResult["finalStateByPath"]>(
+            (acc, { finalStateByPath }) => ({ ...acc, ...finalStateByPath }),
+            {},
+          ),
+        )
+      : {};
     const stateBeforeDelete = structuredClone(this._state);
+    const path = stateBeforeDelete?.path;
 
     for (const subscriber of this.subscribers) {
       try {
@@ -275,21 +251,19 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     this._state = null;
 
+    const finalStateByPath: DestroyStreamResult["finalStateByPath"] = {
+      ...childEntries,
+      ...(path == null
+        ? {}
+        : { [path]: { finalState: projectPublicStreamState(stateBeforeDelete) } }),
+    };
+
     return {
-      destroyed: true,
-      finalState: stateBeforeDelete == null ? null : projectPublicStreamState(stateBeforeDelete),
+      destroyedStreamCount: Object.keys(finalStateByPath).length,
+      finalStateByPath,
     };
   }
 
-  /**
-   * Reconstruct canonical events from trusted SQLite rows.
-   *
-   * We validate aggressively on append and trust stored rows on read so an older
-   * row does not start throwing `Event.parse()` exceptions on every history or
-   * live-stream read. The NDJSON consumer in `decodeEventStream()` still expects
-   * newline-delimited JSON objects, but it skips malformed lines instead of
-   * killing the whole live subscription.
-   */
   history(args: { afterOffset?: number } = {}): Event[] {
     const afterOffset = args.afterOffset ?? 0;
 
@@ -305,10 +279,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       });
   }
 
-  /**
-   * Returns newline-delimited JSON so backlog and live events share the same
-   * framing as `decodeEventStream()` in `~/lib/utils.ts`.
-   */
   stream(args: { afterOffset?: number; live?: boolean } = {}): ReadableStream<Uint8Array> {
     const backlog = this.history(args);
     let subscriber: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -335,78 +305,100 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  async schedule<T = unknown>(
-    when: Date | number | string,
-    callback: keyof this | string,
-    payload?: T,
-    options?: { idempotent?: boolean },
-  ): Promise<Schedule> {
-    await this.ensureInitializedForCurrentName();
-
-    return scheduleOnStream({
-      when,
-      callback,
-      payload,
-      options,
-      deps: {
-        append: this.append.bind(this),
-        ctx: this.ctx,
-        isInitializing: this.isInitializing,
-        validateScheduleCallback: this.validateScheduleCallback.bind(this),
-        warnedScheduleInOnStart: this._warnedScheduleInOnStart,
-      },
-    });
-  }
-
-  async scheduleEvery<T = unknown>(
-    intervalSeconds: number,
-    callback: keyof this | string,
-    payload?: T,
-    options?: { _idempotent?: boolean },
-  ): Promise<Schedule> {
-    await this.ensureInitializedForCurrentName();
-
-    return scheduleEveryOnStream({
-      intervalSeconds,
-      callback,
-      payload,
-      options,
-      deps: {
-        append: this.append.bind(this),
-        ctx: this.ctx,
-        isInitializing: this.isInitializing,
-        validateScheduleCallback: this.validateScheduleCallback.bind(this),
-        warnedScheduleInOnStart: this._warnedScheduleInOnStart,
-      },
-    });
-  }
-
-  getSchedule(id: string): Schedule | undefined {
-    return getScheduleFromStorage(this.ctx, id);
-  }
-
-  getSchedules(criteria: ScheduleCriteria = {}): Schedule[] {
-    return getSchedulesFromStorage(this.ctx, criteria);
-  }
-
-  async cancelSchedule(id: string): Promise<boolean> {
-    await this.ensureInitializedForCurrentName();
-
-    return cancelScheduleOnStream({
-      id,
-      append: this.append.bind(this),
-      ctx: this.ctx,
-    });
-  }
-
   async alarm() {
     await this.ensureInitializedForCurrentName();
 
-    await runScheduleAlarm({
+    await runBuiltinProcessorAlarm({
       append: this.append.bind(this),
       ctx: this.ctx,
       instance: this,
+      state: this.state,
     });
+  }
+
+  protected async ensureInitializedForCurrentName() {
+    if (this._state != null) {
+      return;
+    }
+
+    const rawName = Reflect.get(this.ctx.id as object, "name");
+    if (typeof rawName !== "string") {
+      throw new Error("Unable to derive stream durable object name");
+    }
+
+    const separatorIndex = rawName.indexOf("::");
+    if (separatorIndex < 0) {
+      throw new Error(`Malformed stream durable object name "${rawName}"`);
+    }
+
+    const projectSlug = rawName.slice(0, separatorIndex) as ProjectSlug;
+    const path = StreamPath.parse(rawName.slice(separatorIndex + 2));
+    await this.initialize({ projectSlug, path });
+  }
+
+  protected wasScheduleWarningEmitted(callback: string) {
+    return this._warnedScheduleInOnStart.has(callback);
+  }
+
+  protected getSchedulingMutationDeps(): SchedulingMutationDeps {
+    return {
+      append: this.append.bind(this),
+      ctx: this.ctx,
+      isInitializing: this.isInitializing,
+      validateScheduleCallback: this.validateScheduleCallback.bind(this),
+      warnedScheduleInOnStart: this._warnedScheduleInOnStart,
+    };
+  }
+
+  protected validateScheduleCallback(callback: PropertyKey) {
+    if (typeof callback !== "string") {
+      throw new Error("Callback must be a string");
+    }
+
+    if (typeof Reflect.get(this, callback) !== "function") {
+      throw new Error(`this.${callback} is not a function`);
+    }
+
+    return callback;
+  }
+
+  private beforeAppend(input: EventInput): number {
+    if (
+      input.type === "https://events.iterate.com/events/stream/initialized" &&
+      this.state.eventCount > 0
+    ) {
+      throw new Error("stream-initialized may only be appended once");
+    }
+
+    const nextOffset = this.state.eventCount + 1;
+
+    if (input.offset != null && input.offset !== nextOffset) {
+      throw new StreamOffsetPreconditionError(
+        `Client-supplied offset ${input.offset} does not match next generated offset ${nextOffset}.`,
+      );
+    }
+
+    runBuiltinProcessorBeforeAppend({
+      event: input,
+      instance: this,
+      state: this.state,
+    });
+
+    return nextOffset;
+  }
+
+  private getProjectSlugFromCurrentName(): ProjectSlug | null {
+    const rawName = Reflect.get(this.ctx.id as object, "name");
+    if (typeof rawName !== "string") {
+      return null;
+    }
+
+    const separatorIndex = rawName.indexOf("::");
+    if (separatorIndex < 0) {
+      return null;
+    }
+
+    return rawName.slice(0, separatorIndex) as ProjectSlug;
   }
 
   private ensureSchema() {
@@ -426,22 +418,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         json TEXT NOT NULL CHECK(json_valid(json))
       )
     `);
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS cf_agents_schedules (
-        id TEXT PRIMARY KEY,
-        callback TEXT NOT NULL,
-        payload TEXT CHECK(payload IS NULL OR json_valid(payload)),
-        type TEXT NOT NULL CHECK(type IN (${ScheduleTypeConstraint})),
-        time INTEGER NOT NULL,
-        delayInSeconds INTEGER,
-        cron TEXT,
-        intervalSeconds INTEGER,
-        running INTEGER NOT NULL DEFAULT 0,
-        execution_started_at INTEGER,
-        retry_options TEXT,
-        created_at INTEGER NOT NULL
-      )
-    `);
+    ensureBuiltinProcessorSchema(this.ctx);
   }
 
   private getEventByIdempotencyKey(idempotencyKey: string) {
@@ -455,32 +432,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.parseEventRow(row);
   }
 
-  private appendToParent(eventInput: EventInput) {
-    void this.getParent()
-      .then((parent) => parent?.append(eventInput))
-      .catch((error) => {
-        console.error("[stream-do] failed to propagate event to parent stream", {
-          path: this.state.path,
-          eventType: eventInput.type,
-          error,
-        });
-      });
-  }
-
-  private async getParent() {
-    const path = this.state.path;
-    if (path === "/") {
-      return null;
-    }
-    const lastSlashIndex = path.lastIndexOf("/");
-    const parentPath = lastSlashIndex === 0 ? "/" : StreamPath.parse(path.slice(0, lastSlashIndex));
-    return getInitializedStreamStub({ path: parentPath });
-  }
-
   private parseEventRow(row: SqliteEventRow | null | undefined): Event | null {
     if (row == null) {
       return null;
     }
+
     return EventSchema.parse({
       streamPath: this.state.path,
       offset: row.offset,
@@ -504,30 +460,33 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  protected async ensureInitializedForCurrentName() {
-    if (this._state != null) {
+  private propagateToAncestors(event: Event) {
+    if (event.type !== "https://events.iterate.com/events/stream/initialized") {
       return;
     }
 
-    const rawName = Reflect.get(this.ctx.id as object, "name");
-    const path = StreamPath.parse(rawName);
-    await this.initialize({ path });
-  }
+    const ancestorPaths = getAncestorStreamPaths(event.streamPath);
 
-  protected wasScheduleWarningEmitted(callback: string) {
-    return this._warnedScheduleInOnStart.has(callback);
-  }
-
-  private validateScheduleCallback(callback: PropertyKey) {
-    if (typeof callback !== "string") {
-      throw new Error("Callback must be a string");
-    }
-
-    if (typeof Reflect.get(this, callback) !== "function") {
-      throw new Error(`this.${callback} is not a function`);
-    }
-
-    return callback;
+    void Promise.all(
+      ancestorPaths.map(async (path) => {
+        const stream = await getInitializedStreamStub({
+          projectSlug: this.state.projectSlug,
+          path,
+        });
+        await stream.append({
+          type: "https://events.iterate.com/events/stream/child-stream-created",
+          payload: { childPath: event.streamPath },
+          metadata: event.metadata,
+        });
+      }),
+    ).catch((error) => {
+      console.error("[stream-do] failed to propagate event to ancestor streams", {
+        path: event.streamPath,
+        ancestorPaths,
+        eventType: "https://events.iterate.com/events/stream/child-stream-created",
+        error,
+      });
+    });
   }
 }
 
@@ -546,15 +505,6 @@ type SqliteEventRow = {
   created_at: string;
 };
 
-/**
- * Pure reducer for the persisted stream projection. Replay and append share the
- * same rules so state cannot drift based on which code path produced it.
- *
- * `initialize()` sets the initial state (with `maxOffset: 0`), then appends
- * the synthetic `stream-initialized` event through the normal `append()` path.
- * After that, `stream-metadata-updated` replaces the metadata snapshot and all
- * other events simply advance the max offset.
- */
 function reduceStreamState(args: { state: ReducedStreamState; event: Event }): ReducedStreamState {
   const { state, event } = args;
 
@@ -564,28 +514,54 @@ function reduceStreamState(args: { state: ReducedStreamState; event: Event }): R
     );
   }
 
-  const nextState: ReducedStreamState = {
-    ...state,
-    maxOffset: state.maxOffset + 1,
-    cf_agents_schedules: reduceSchedulingState({
-      event,
-      schedules: state.cf_agents_schedules,
-    }),
+  let nextState: ReducedStreamState = {
+    ...structuredClone(state),
+    eventCount: state.eventCount + 1,
   };
 
   switch (event.type) {
     case "https://events.iterate.com/events/stream/metadata-updated": {
-      // TODO: Talk to Misha about how to express "built-in event or generic event"
-      // without breaking payload narrowing here.
       const metadataUpdatedEvent = event as StreamMetadataUpdatedEvent;
-      return {
-        ...nextState,
-        metadata: metadataUpdatedEvent.payload.metadata,
-      };
+      nextState = { ...nextState, metadata: metadataUpdatedEvent.payload.metadata };
+      break;
     }
-
-    default: {
-      return nextState;
+    case "https://events.iterate.com/events/stream/child-stream-created": {
+      const childPath = getImmediateChildPath({
+        parentPath: state.path,
+        childPath: (event as ChildStreamCreatedEvent).payload.childPath,
+      });
+      if (childPath != null && !nextState.childPaths.includes(childPath)) {
+        nextState = { ...nextState, childPaths: [...nextState.childPaths, childPath] };
+      }
+      break;
     }
   }
+
+  return reduceBuiltinProcessorState({
+    event,
+    state: nextState,
+  });
+}
+
+function getImmediateChildPath(args: {
+  parentPath: StreamPath;
+  childPath: StreamPath;
+}): StreamPath | null {
+  if (args.childPath === args.parentPath) {
+    return null;
+  }
+
+  if (args.parentPath === "/") {
+    const [firstSegment] = args.childPath.split("/").filter(Boolean);
+    return firstSegment == null ? null : StreamPath.parse(`/${firstSegment}`);
+  }
+
+  const parentPrefix = `${args.parentPath}/`;
+  if (!args.childPath.startsWith(parentPrefix)) {
+    return null;
+  }
+
+  const remainingPath = args.childPath.slice(parentPrefix.length);
+  const [firstSegment] = remainingPath.split("/");
+  return firstSegment == null ? null : StreamPath.parse(`${args.parentPath}/${firstSegment}`);
 }

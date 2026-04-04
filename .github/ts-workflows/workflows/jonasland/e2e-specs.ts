@@ -24,7 +24,6 @@ export default workflow({
   jobs: {
     "build-image": {
       uses: "./.github/workflows/jonasland-sandbox-image.yml",
-      // @ts-expect-error - reusable workflow supports secrets: inherit
       secrets: "inherit",
       with: {
         ref: checkoutRefExpression,
