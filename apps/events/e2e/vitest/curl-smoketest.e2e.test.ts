@@ -81,6 +81,7 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
       stdout: result.stdout
         .replaceAll("\r\n", "\n")
         .replaceAll(streamPath, "<streamPath>")
+        .replaceAll("\n: \n", "\n:\n")
         .replace(/\d{4}-\d{2}-\d{2}T[0-9:.]+Z/g, "<ts>"),
       stderr: result.stderr,
     }).toMatchInlineSnapshot(`
@@ -112,7 +113,7 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
         "metadata": {}
       }
       ---
-      : 
+      :
 
       event: message
       data: {"type":"https://events.iterate.com/events/stream/initialized","payload":{"namespace":"public","path":"<streamPath>"},"offset":1,"streamPath":"<streamPath>","createdAt":"<ts>"}
