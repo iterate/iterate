@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
 import * as prompts from "@clack/prompts";
 import { createORPCClient } from "@orpc/client";
@@ -98,6 +99,7 @@ let configFlagOverride: string | undefined;
  * procedures instead of teaching every command about iterate-specific flags.
  *
  * Usage examples:
+ * - `iterate --local-router ./scripts/preview/router.ts local-router preview sync`
  * - `iterate --config dev doctor`
  */
 const consumeCliStringFlag = (flagName: string): string | undefined => {
@@ -110,6 +112,30 @@ const consumeCliStringFlag = (flagName: string): string | undefined => {
   }
   process.argv.splice(flagIndex + 2, 2);
   return value;
+};
+
+/**
+ * Temporary compatibility for root-owned preview commands.
+ * App CLIs should use packages/shared/src/apps/cli.ts instead of iterate --local-router,
+ * but preview still depends on this mounted-router flow for now.
+ */
+const loadLocalRouter = async (routerPath: string) => {
+  const fullPath = resolve(process.cwd(), routerPath);
+  const importedModule = (await import(pathToFileURL(fullPath).href)) as {
+    router?: import("@orpc/server").Router<any, any>;
+  };
+  const router = importedModule.router;
+  if (router == null) {
+    throw new Error(
+      `Local router module ${JSON.stringify(routerPath)} must export a named "router" value.`,
+    );
+  }
+  if (typeof router !== "object") {
+    throw new Error(
+      `Local router module ${JSON.stringify(routerPath)} exported a router mount, but it is not an object.`,
+    );
+  }
+  return router;
 };
 
 /**
@@ -845,6 +871,7 @@ const launcherProcedures = {
 export const getCli = async () => {
   // Parse custom top-level flags early, before trpc-cli sees the args.
   configFlagOverride = consumeCliStringFlag("--config");
+  const localRouterPath = consumeCliStringFlag("--local-router");
 
   const resolved = resolveConfig(process.cwd());
 
@@ -856,6 +883,11 @@ export const getCli = async () => {
   };
 
   const routers: Record<string, import("@orpc/server").Router<any, any>>[] = [launcherProcedures];
+
+  if (localRouterPath) {
+    const localRouter = await loadLocalRouter(localRouterPath);
+    routers.push({ "local-router": localRouter });
+  }
 
   if (resolved instanceof Error) {
     const procedure = errorProcedure(`Invalid config`)(resolved);
