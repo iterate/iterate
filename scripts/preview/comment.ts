@@ -24,6 +24,7 @@ export const CloudflarePreviewCommentEntry = z.object({
   status: CloudflarePreviewCommentStatus,
   updatedAt: z.string().trim().min(1),
   leasedUntil: z.number().int().positive().nullable().optional(),
+  headSha: z.string().trim().min(1).nullable().optional(),
   message: z.string().trim().min(1).nullable().optional(),
   previewEnvironmentAlchemyStageName: z.string().trim().min(1).nullable().optional(),
   previewEnvironmentDopplerConfigName: z.string().trim().min(1).nullable().optional(),

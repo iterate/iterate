@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import {
   CloudflarePreviewCommentEntry,
@@ -27,8 +28,9 @@ export type PreviewSemaphoreResourceClient = {
 };
 
 type PreviewSyncResult = {
-  entry: CloudflarePreviewCommentEntryType;
+  entry: CloudflarePreviewCommentEntryType | null;
   ok: boolean;
+  skipped?: boolean;
 };
 
 function createPreviewCreateInputSchema(env: NodeJS.ProcessEnv) {
@@ -79,6 +81,7 @@ export function createCloudflarePreviewSyncInputSchema(env: NodeJS.ProcessEnv) {
     githubToken: requiredStringWithEnvDefault(env, "GITHUB_TOKEN"),
     pullRequestHeadRefName: requiredStringWithEnvDefault(env, "GITHUB_HEAD_REF"),
     pullRequestHeadSha: requiredStringWithEnvDefault(env, "GITHUB_SHA"),
+    pullRequestBaseSha: requiredStringWithEnvDefault(env, "GITHUB_PR_BASE_SHA"),
     pullRequestNumber: requiredNumberWithEnvDefault(env, "GITHUB_PR_NUMBER"),
     repositoryFullName: requiredStringWithEnvDefault(env, "GITHUB_REPOSITORY"),
     semaphoreApiToken: optionalSemaphoreApiTokenWithEnvDefault(env),
@@ -116,6 +119,7 @@ export async function syncCloudflarePreviewForPullRequest(
     }) => PreviewSemaphoreResourceClient;
     dopplerProject: string;
     env: NodeJS.ProcessEnv;
+    paths: readonly string[];
     previewResourceType: string;
     previewTestBaseUrlEnvVar: string;
     previewTestCommandArgs: readonly [string, ...string[]];
@@ -127,6 +131,7 @@ export async function syncCloudflarePreviewForPullRequest(
     const entry = CloudflarePreviewCommentEntry.parse({
       appDisplayName: params.appDisplayName,
       appSlug: params.appSlug,
+      headSha: params.pullRequestHeadSha,
       message: "Preview environments are unavailable for fork pull requests.",
       runUrl: params.workflowRunUrl,
       shortSha: params.pullRequestHeadSha.slice(0, 7),
@@ -156,6 +161,23 @@ export async function syncCloudflarePreviewForPullRequest(
     pullRequestNumber: params.pullRequestNumber,
   });
   const previousEntry = current.state[params.appSlug];
+  const syncDecision = await shouldSyncPreviewEnvironment({
+    appPaths: params.paths,
+    githubToken: params.githubToken,
+    pullRequestNumber: params.pullRequestNumber,
+    pullRequestBaseSha: params.pullRequestBaseSha,
+    pullRequestHeadSha: params.pullRequestHeadSha,
+    previousEntry,
+    repositoryFullName: params.repositoryFullName,
+  });
+  if (!syncDecision.shouldSync) {
+    return {
+      entry: previousEntry ?? null,
+      ok: true,
+      skipped: true,
+    };
+  }
+
   if (hasPreviewDestroyPayload(previousEntry)) {
     const cleanupResult = await destroyPreviewEnvironment({
       appDisplayName: params.appDisplayName,
@@ -228,12 +250,47 @@ export async function syncCloudflarePreviewForPullRequest(
     workflowRunUrl: params.workflowRunUrl,
     workingDirectory: params.workingDirectory,
   });
-  await upsertCloudflarePreviewCommentEntry({
-    entry: createResult.entry,
-    githubToken: params.githubToken,
-    repositoryFullName: params.repositoryFullName,
-    pullRequestNumber: params.pullRequestNumber,
-  });
+  try {
+    await upsertCloudflarePreviewCommentEntry({
+      entry: createResult.entry!,
+      githubToken: params.githubToken,
+      repositoryFullName: params.repositoryFullName,
+      pullRequestNumber: params.pullRequestNumber,
+    });
+  } catch (error) {
+    if (createResult.entry && hasPreviewDestroyPayload(createResult.entry)) {
+      try {
+        await destroyPreviewEnvironment({
+          appDisplayName: params.appDisplayName,
+          appSlug: params.appSlug,
+          createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
+          dopplerProject: params.dopplerProject,
+          env: params.env,
+          previewEnvironmentAlchemyStageName: createResult.entry.previewEnvironmentAlchemyStageName,
+          previewEnvironmentDopplerConfigName:
+            createResult.entry.previewEnvironmentDopplerConfigName,
+          previewEnvironmentIdentifier: createResult.entry.previewEnvironmentIdentifier,
+          previewEnvironmentSemaphoreLeaseId: createResult.entry.previewEnvironmentSemaphoreLeaseId,
+          previewEnvironmentSlug: createResult.entry.previewEnvironmentSlug,
+          previewEnvironmentType: createResult.entry.previewEnvironmentType,
+          previewResourceType: params.previewResourceType,
+          previewTestBaseUrlEnvVar: params.previewTestBaseUrlEnvVar,
+          previewTestCommandArgs: params.previewTestCommandArgs,
+          semaphoreApiToken: requireValue(
+            params.semaphoreApiToken ?? params.env.APP_CONFIG_SHARED_API_SECRET?.trim(),
+            "SEMAPHORE_API_TOKEN is required to clean up an unrecorded preview.",
+          ),
+          semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
+          signal: params.signal,
+          workingDirectory: params.workingDirectory,
+        });
+      } catch {
+        // best-effort cleanup when the PR comment cannot be updated
+      }
+    }
+
+    throw error;
+  }
   return createResult;
 }
 
@@ -367,6 +424,7 @@ async function createPreviewEnvironment(
     const baseEntry = {
       appDisplayName: params.appDisplayName,
       appSlug: params.appSlug,
+      headSha: params.pullRequestHeadSha,
       leasedUntil: lease.expiresAt,
       previewEnvironmentAlchemyStageName: previewEnvironment.previewEnvironmentAlchemyStageName,
       previewEnvironmentDopplerConfigName: previewEnvironment.previewEnvironmentDopplerConfigName,
@@ -484,6 +542,7 @@ async function createPreviewEnvironment(
       entry: CloudflarePreviewCommentEntry.parse({
         appDisplayName: params.appDisplayName,
         appSlug: params.appSlug,
+        headSha: params.pullRequestHeadSha,
         message: formatPreviewErrorMessage(error),
         runUrl: params.workflowRunUrl,
         shortSha: params.pullRequestHeadSha.slice(0, 7),
@@ -531,12 +590,10 @@ async function destroyPreviewEnvironment(
     signal: params.signal,
     workingDirectory: params.workingDirectory,
   });
-  if (destroyResult.exitCode !== 0) {
-    return {
-      message: commandFailureMessage(destroyResult, "Preview teardown failed."),
-      ok: false,
-    };
-  }
+  const destroyMessage =
+    destroyResult.exitCode === 0
+      ? null
+      : commandFailureMessage(destroyResult, "Preview teardown failed.");
 
   try {
     const semaphore = params.createPreviewSemaphoreResourceClient({
@@ -549,14 +606,18 @@ async function destroyPreviewEnvironment(
       leaseId: params.previewEnvironmentSemaphoreLeaseId,
     });
     return {
-      message: released.released
-        ? "Preview environment released."
-        : "Preview deployment was torn down. The Semaphore lease was already gone.",
-      ok: true,
+      message: joinPreviewMessages(
+        destroyMessage,
+        released.released ? "Preview environment released." : "Semaphore lease was already gone.",
+      ),
+      ok: destroyResult.exitCode === 0,
     };
   } catch (error) {
     return {
-      message: error instanceof Error ? error.message : String(error),
+      message: joinPreviewMessages(
+        destroyMessage,
+        error instanceof Error ? error.message : String(error),
+      ),
       ok: false,
     };
   }
@@ -701,6 +762,109 @@ async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: n
   };
 }
 
+async function shouldSyncPreviewEnvironment(params: {
+  appPaths: readonly string[];
+  githubToken: string;
+  pullRequestNumber: number;
+  pullRequestBaseSha: string;
+  pullRequestHeadSha: string;
+  previousEntry: CloudflarePreviewCommentEntryType | undefined;
+  repositoryFullName: string;
+}) {
+  const compareBaseSha = (await resolvePreviousPreviewHeadSha(params)) ?? params.pullRequestBaseSha;
+  if (!compareBaseSha || compareBaseSha === params.pullRequestHeadSha) {
+    return { shouldSync: false as const };
+  }
+
+  const octokit = new Octokit({ auth: params.githubToken });
+  const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
+  const comparison = await octokit.rest.repos.compareCommitsWithBasehead({
+    owner,
+    repo,
+    basehead: `${compareBaseSha}...${params.pullRequestHeadSha}`,
+  });
+  const changedFiles =
+    comparison.data.files?.flatMap((file) => (file.filename ? [file.filename] : [])) ?? [];
+
+  return {
+    shouldSync: changedFiles.some((filename) => matchesPreviewPath(filename, params.appPaths)),
+  };
+}
+
+async function resolvePreviousPreviewHeadSha(params: {
+  githubToken: string;
+  pullRequestNumber: number;
+  previousEntry: CloudflarePreviewCommentEntryType | undefined;
+  repositoryFullName: string;
+}) {
+  if (params.previousEntry?.headSha) {
+    return params.previousEntry.headSha;
+  }
+
+  const octokit = new Octokit({ auth: params.githubToken });
+  const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
+  const workflowRunId = parseWorkflowRunId(params.previousEntry?.runUrl ?? null);
+  if (workflowRunId !== null) {
+    try {
+      const workflowRun = await octokit.rest.actions.getWorkflowRun({
+        owner,
+        repo,
+        run_id: workflowRunId,
+      });
+      const headSha = workflowRun.data.head_sha?.trim();
+      if (headSha) {
+        return headSha;
+      }
+    } catch {
+      // Fall back to commit-prefix lookup.
+    }
+  }
+
+  const shortSha = params.previousEntry?.shortSha?.trim();
+  if (!shortSha) {
+    return null;
+  }
+
+  const commits = await octokit.paginate(octokit.rest.pulls.listCommits, {
+    owner,
+    pull_number: params.pullRequestNumber,
+    repo,
+    per_page: 100,
+  });
+  const matchingCommit = commits.find((commit) => commit.sha.startsWith(shortSha));
+  return matchingCommit?.sha ?? null;
+}
+
+function parseWorkflowRunId(runUrl: string | null) {
+  if (!runUrl) {
+    return null;
+  }
+
+  const match = /\/actions\/runs\/(\d+)(?:\/|$)/.exec(runUrl);
+  return match ? Number(match[1]) : null;
+}
+
+function matchesPreviewPath(filename: string, patterns: readonly string[]) {
+  return patterns.some((pattern) => {
+    if (pattern.endsWith("/**")) {
+      return filename.startsWith(pattern.slice(0, -2));
+    }
+
+    return filename === pattern;
+  });
+}
+
+function splitRepositoryFullName(repositoryFullName: string) {
+  const parts = repositoryFullName.split("/");
+  if (parts.length !== 2) {
+    throw new Error(
+      `Expected repository full name to look like owner/repo. Got: ${repositoryFullName}`,
+    );
+  }
+
+  return parts as [string, string];
+}
+
 async function sleep(ms: number, signal?: AbortSignal) {
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(resolve, ms);
@@ -733,7 +897,20 @@ function commandFailureMessage(
     .filter((value) => typeof value === "string" && value.trim().length > 0)
     .join("\n")
     .trim();
-  return text || fallback;
+  if (!text) {
+    return fallback;
+  }
+
+  const maxLength = 4_000;
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `…(truncated)\n${text.slice(-maxLength)}`;
+}
+
+function joinPreviewMessages(...parts: Array<string | null | undefined>) {
+  return parts.filter((part) => typeof part === "string" && part.trim().length > 0).join("\n");
 }
 
 function makeDefaultWorkflowRunUrl(env: NodeJS.ProcessEnv) {
