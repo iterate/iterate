@@ -1,5 +1,5 @@
 import { oc } from "@orpc/contract";
-import { commonContract } from "@iterate-com/shared/apps/common-router-contract";
+import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { z } from "zod";
 
 export const SEMAPHORE_KEY_PATTERN = /^(?=.*[a-z])[a-z0-9-]+$/;
@@ -120,7 +120,7 @@ export const ReleaseResourceResult = z.object({
 });
 
 export const semaphoreContract = oc.router({
-  common: commonContract,
+  __internal: internalContract,
   resources: oc.router({
     add: oc
       .route({

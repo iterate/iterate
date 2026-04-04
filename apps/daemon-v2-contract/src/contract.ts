@@ -1,5 +1,5 @@
 import { oc } from "@orpc/contract";
-import { commonContract } from "@iterate-com/shared/apps/common-router-contract";
+import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { z } from "zod";
 
 const RouteMetadata = z.record(z.string(), z.string());
@@ -166,7 +166,7 @@ const StartupInitializeInput = z
 const StartupInitializeOutput = StartupSeedOutput;
 
 export const daemonV2Contract = oc.router({
-  common: commonContract,
+  __internal: internalContract,
   getPublicURL: oc
     .route({
       method: "POST",

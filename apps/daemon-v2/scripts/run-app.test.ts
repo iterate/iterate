@@ -44,7 +44,7 @@ async function createFakeAppScript() {
       "const port = Number(process.env.PORT || 0);",
       "let healthAttempts = 0;",
       "const server = createServer((request, response) => {",
-      '  if (request.url === "/api/__common/health") {',
+      '  if (request.url === "/api/__internal/health") {',
       "    healthAttempts += 1;",
       "    if (healthAttempts < 2) {",
       '      response.writeHead(503, { "content-type": "application/json" });',
@@ -88,7 +88,7 @@ describe("run-app", () => {
         "--tag",
         "openapi",
         "--health-check",
-        "/api/__common/health",
+        "/api/__internal/health",
         "--",
         "sh",
         "-lc",
@@ -101,7 +101,7 @@ describe("run-app", () => {
       args: ["-lc", 'pnpm dev -- --host "$HOST" --port "$PORT"'],
       host: undefined,
       port: undefined,
-      healthCheck: "/api/__common/health",
+      healthCheck: "/api/__internal/health",
       tags: ["openapi"],
       registryBaseUrl: undefined,
     });
@@ -118,7 +118,7 @@ describe("run-app", () => {
         connectHost: "127.0.0.1",
         port: 3210,
       }),
-    ).toBe("http://127.0.0.1:3210/api/__common/health");
+    ).toBe("http://127.0.0.1:3210/api/__internal/health");
 
     expect(
       resolveHealthCheckUrl({

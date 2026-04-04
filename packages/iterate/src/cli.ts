@@ -96,10 +96,10 @@ let configFlagOverride: string | undefined;
 /**
  * We strip host-level flags before handing argv to `trpc-cli`,
  * That keeps router-local help/validation focused on the mounted
- * procedures instead of teaching every local router about iterate-specific flags.
+ * procedures instead of teaching every command about iterate-specific flags.
  *
  * Usage examples:
- * - `iterate --local-router ./jonasland/scripts/mounted-router.ts jonasland example hello`
+ * - `iterate --local-router ./scripts/preview/router.ts local-router preview sync`
  * - `iterate --config dev doctor`
  */
 const consumeCliStringFlag = (flagName: string): string | undefined => {
@@ -115,20 +115,9 @@ const consumeCliStringFlag = (flagName: string): string | undefined => {
 };
 
 /**
- * `trpc-cli` already has a built-in "load a router from a filepath" flow in its own
- * bin entrypoint, but it's not exported:
- * - README: https://github.com/mmkal/trpc-cli#using-existing-routers
- * So I put a small version here for now
- *
- *
- * Usage example:
- * - `iterate --local-router ./scripts/router.ts local-router --help`
- *
- * # ./scripts/router.ts
- * export const router = os.router({
- *   deployment: deploymentRouter,
- *   image: imageRouter,
- * })
+ * Temporary compatibility for root-owned preview commands.
+ * App CLIs should use packages/shared/src/apps/cli.ts instead of iterate --local-router,
+ * but preview still depends on this mounted-router flow for now.
  */
 const loadLocalRouter = async (routerPath: string) => {
   const fullPath = resolve(process.cwd(), routerPath);
@@ -880,9 +869,9 @@ const launcherProcedures = {
 };
 
 export const getCli = async () => {
-  const localRouterPath = consumeCliStringFlag("--local-router");
   // Parse custom top-level flags early, before trpc-cli sees the args.
   configFlagOverride = consumeCliStringFlag("--config");
+  const localRouterPath = consumeCliStringFlag("--local-router");
 
   const resolved = resolveConfig(process.cwd());
 
@@ -894,6 +883,11 @@ export const getCli = async () => {
   };
 
   const routers: Record<string, import("@orpc/server").Router<any, any>>[] = [launcherProcedures];
+
+  if (localRouterPath) {
+    const localRouter = await loadLocalRouter(localRouterPath);
+    routers.push({ "local-router": localRouter });
+  }
 
   if (resolved instanceof Error) {
     const procedure = errorProcedure(`Invalid config`)(resolved);
@@ -926,16 +920,6 @@ export const getCli = async () => {
         daemon: errorProcedure(message)(daemonProcedures.reason),
       });
     }
-  }
-
-  if (localRouterPath) {
-    // Keep local-router commands under a fixed prefix so they compose cleanly with the
-    // built-in iterate command tree instead of colliding with launcher, os, or daemon
-    // procedures:
-    // `iterate --local-router ./scripts/router.ts local-router ...`
-    routers.push({
-      localRouter: await loadLocalRouter(localRouterPath),
-    });
   }
 
   const router = Object.assign({}, ...routers);
