@@ -62,7 +62,7 @@ curl -sS "$BASE_URL/api/streams" >/dev/null
 curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
 `;
 
-    const result = await x("bash", ["-lc", script], {
+    const result = await x("sh", ["-c", script], {
       throwOnError: false,
       nodeOptions: {
         stdio: "pipe",
@@ -84,44 +84,72 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
         .replace(/\d{4}-\d{2}-\d{2}T[0-9:.]+Z/g, "<ts>"),
       stderr: result.stderr,
     }).toMatchInlineSnapshot(`
-            {
-              "stderr": "",
-              "stdout": "{
+      {
+        "stderr": "",
+        "stdout": "{
         "event": {
+          "streamPath": "<streamPath>",
           "type": "https://events.iterate.com/events/example/value-recorded",
           "payload": {
             "curl": true
           },
           "offset": 2,
-          "streamPath": "<streamPath>",
           "createdAt": "<ts>"
         }
       }
-            ---
-            {
+      ---
+      {
         "path": "<streamPath>",
-        "maxOffset": 2,
-        "metadata": {}
+        "eventCount": 2,
+        "metadata": {},
+        "processors": {
+          "circuit-breaker": {
+            "paused": false,
+            "pauseReason": null,
+            "pausedAt": null,
+            "recentEventTimestamps": [
+              "<ts>",
+              "<ts>"
+            ]
+          },
+          "jsonata-transformer": {
+            "transformersBySlug": {}
+          }
+        }
       }
-            ---
-            {
+      ---
+      {
         "path": "<streamPath>",
-        "maxOffset": 2,
-        "metadata": {}
+        "eventCount": 2,
+        "metadata": {},
+        "processors": {
+          "circuit-breaker": {
+            "paused": false,
+            "pauseReason": null,
+            "pausedAt": null,
+            "recentEventTimestamps": [
+              "<ts>",
+              "<ts>"
+            ]
+          },
+          "jsonata-transformer": {
+            "transformersBySlug": {}
+          }
+        }
       }
-            ---
-            : 
+      ---
+      : 
 
-            event: message
-            data: {"type":"https://events.iterate.com/events/stream/initialized","payload":{"path":"<streamPath>"},"offset":1,"streamPath":"<streamPath>","createdAt":"<ts>"}
+      event: message
+      data: {"streamPath":"<streamPath>","type":"https://events.iterate.com/events/stream/initialized","payload":{},"offset":1,"createdAt":"<ts>"}
 
-            event: message
-            data: {"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":2,"streamPath":"<streamPath>","createdAt":"<ts>"}
+      event: message
+      data: {"streamPath":"<streamPath>","type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":2,"createdAt":"<ts>"}
 
 
-            ---
-            ",
-            }
+      ---
+      ",
+      }
     `);
   }, 15_000);
 });
