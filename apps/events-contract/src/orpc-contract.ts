@@ -65,10 +65,16 @@ export const eventsContract = oc.router({
       operationId: "destroyStream",
       method: "DELETE",
       path: "/streams/{+path}",
-      description: "Deletes all persisted data for a stream durable object.",
+      description:
+        "Deletes all persisted data for a stream durable object. When `destroyChildren=true`, also destroys descendant streams discovered from that stream's history.",
       tags: ["Streams"],
     })
-    .input(z.object({ path: StreamPath }))
+    .input(
+      z.object({
+        path: StreamPath,
+        destroyChildren: z.union([z.boolean(), z.stringbool()]).optional(),
+      }),
+    )
     .output(DestroyStreamResult),
   stream: oc
     .route({
