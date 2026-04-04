@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type Event,
-  EventInput,
+  type EventInput,
   type JSONObject,
   type StreamPath,
 } from "@iterate-com/events-contract";
@@ -126,7 +126,7 @@ export function StreamPage({
     }),
   );
   const submitAppend = async (inputText = appendInputJson) => {
-    let event: ReturnType<typeof EventInput.parse>;
+    let event: EventInput;
 
     try {
       event = parseAppendEventInput(inputText);
@@ -301,5 +301,7 @@ function parseJSONObject(value: string) {
 }
 
 function parseAppendEventInput(value: string) {
-  return EventInput.parse(parseJSONObject(value));
+  // Only require syntactically valid JSON here. The append endpoint will
+  // normalize invalid event shapes into invalid-event-appended server-side.
+  return parseJSONObject(value) as EventInput;
 }
