@@ -37,6 +37,10 @@ const app = createEvents2AppFixture({
 });
 const testTimeoutMs = 5_000;
 
+const typeOnlyEvent = {
+  type: "https://events.iterate.com/events/example/no-payload",
+} satisfies JSONObject;
+
 const validEvent = {
   type: "https://events.iterate.com/events/example/value-recorded",
   payload: {
@@ -126,6 +130,18 @@ const nestedPathCases = [
 ] satisfies readonly PathCase[];
 
 const payloadCases = [
+  {
+    label: "type-only bare event body (no payload field)",
+    body: typeOnlyEvent,
+    expectedStatus: 200,
+    expectedResponse: (canonicalPath) => ({
+      event: {
+        streamPath: canonicalPath,
+        type: typeOnlyEvent.type,
+        payload: {},
+      },
+    }),
+  },
   {
     label: "valid bare event body",
     body: validEvent,

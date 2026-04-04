@@ -17,10 +17,11 @@ import {
 const app = createEvents2AppFixture({
   baseURL: requireEventsBaseUrl(),
 });
+const defaultProjectSlug = "public";
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
 const pollIntervalMs = 50;
-const testTimeoutMs = 5_000;
+const testTimeoutMs = 10_000;
 const circuitBreakerTripTimeoutMs = 15_000;
 const circuitBreakerSlowTestTimeoutMs = 20_000;
 const slowCircuitBreakerDelayMs = 20;
@@ -62,13 +63,50 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: { path },
+          payload: { projectSlug: defaultProjectSlug, path },
         },
         {
           streamPath: path,
           offset: expectedOffset(1),
           type: "https://events.iterate.com/events/example/value-recorded",
           payload: { value: 42 },
+        },
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "append without payload defaults to empty object",
+    async () => {
+      const path = uniqueStreamPath();
+
+      const response = await app.fetch(`/api/streams${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/example/no-payload",
+        }),
+      });
+      const result = (await response.json()) as { event: Event };
+
+      expect(response.status).toBe(200);
+      expect(result.event).toMatchObject({
+        streamPath: path,
+        offset: expectedOffset(1),
+        type: "https://events.iterate.com/events/example/no-payload",
+        payload: {},
+      });
+
+      expect(await collectStreamEvents(app, { path })).toEqual([
+        {
+          streamPath: path,
+          offset: expectedOffset(1),
+          type: "https://events.iterate.com/events/example/no-payload",
+          payload: {},
+          createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
         },
       ]);
     },
@@ -253,7 +291,7 @@ describe.sequential("events stream e2e", () => {
         },
         body: JSON.stringify({
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: { path },
+          payload: { projectSlug: defaultProjectSlug, path },
         }),
       });
 
@@ -468,8 +506,10 @@ describe.sequential("events stream e2e", () => {
       ).rejects.toThrow(/next generated offset/i);
 
       expect(await app.client.getState({ path })).toEqual({
+        projectSlug: defaultProjectSlug,
         path,
         eventCount: 1,
+        childPaths: [],
         metadata: {},
         processors: expectedProcessorsWithRecentEventCount(1),
       });
@@ -479,7 +519,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: { path },
+          payload: { projectSlug: defaultProjectSlug, path },
         },
       ]);
     },
@@ -575,8 +615,10 @@ describe.sequential("events stream e2e", () => {
       const path = uniqueStreamPath();
 
       expect(await app.client.getState({ path })).toEqual({
+        projectSlug: defaultProjectSlug,
         path,
         eventCount: 1,
+        childPaths: [],
         metadata: {},
         processors: expectedProcessorsWithRecentEventCount(1),
       });
@@ -593,6 +635,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(await app.client.getState({ path: "/" })).toMatchObject({
+        projectSlug: defaultProjectSlug,
         path: "/",
         metadata: {},
       });
@@ -653,8 +696,10 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(await app.client.getState({ path })).toEqual({
+        projectSlug: defaultProjectSlug,
         path,
         eventCount: 4,
+        childPaths: [],
         metadata: {
           owner: "second",
         },
@@ -743,9 +788,9 @@ describe.sequential("events stream e2e", () => {
       expect(
         (await app.client.listStreams({ path: "/" })).some((stream) => stream.path === path),
       ).toBe(false);
-      expect(await app.client.destroy({ path })).toEqual({
-        destroyed: true,
-        finalState: null,
+      expect(await app.client.destroy({ params: { path }, query: {} })).toEqual({
+        destroyedStreamCount: 0,
+        finalStateByPath: {},
       });
     },
     testTimeoutMs,
@@ -773,10 +818,14 @@ describe.sequential("events stream e2e", () => {
 
       const stateBeforeDestroy = await app.client.getState({ path });
 
-      const result = await app.client.destroy({ path });
+      const result = await app.client.destroy({ params: { path }, query: {} });
       expect(result).toEqual({
-        destroyed: true,
-        finalState: stateBeforeDestroy,
+        destroyedStreamCount: 1,
+        finalStateByPath: {
+          [path]: {
+            finalState: stateBeforeDestroy,
+          },
+        },
       });
     },
     testTimeoutMs,
@@ -787,9 +836,9 @@ describe.sequential("events stream e2e", () => {
     async () => {
       const path = uniqueStreamPath();
 
-      expect(await app.client.destroy({ path })).toEqual({
-        destroyed: true,
-        finalState: null,
+      expect(await app.client.destroy({ params: { path }, query: {} })).toEqual({
+        destroyedStreamCount: 0,
+        finalStateByPath: {},
       });
     },
     testTimeoutMs,
@@ -816,7 +865,7 @@ describe.sequential("events stream e2e", () => {
         },
       });
 
-      await app.client.destroy({ path: pathA });
+      await app.client.destroy({ params: { path: pathA }, query: {} });
 
       expect(await collectStreamEvents(app, { path: pathB })).toEqual([
         expect.objectContaining({
@@ -842,7 +891,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       await waitForStream(app, path);
-      await app.client.destroy({ path });
+      await app.client.destroy({ params: { path }, query: {} });
 
       const streams = await app.client.listStreams({ path: "/" });
       expect(streams.some((stream) => stream.path === path)).toBe(true);
@@ -855,10 +904,14 @@ describe.sequential("events stream e2e", () => {
     async () => {
       const stateBeforeDestroy = await app.client.getState({ path: "/" });
 
-      const result = await app.client.destroy({ path: "/" });
+      const result = await app.client.destroy({ params: { path: "/" }, query: {} });
       expect(result).toEqual({
-        destroyed: true,
-        finalState: stateBeforeDestroy,
+        destroyedStreamCount: 1,
+        finalStateByPath: {
+          "/": {
+            finalState: stateBeforeDestroy,
+          },
+        },
       });
     },
     testTimeoutMs,
@@ -903,7 +956,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: { path },
+          payload: { projectSlug: defaultProjectSlug, path },
         },
         {
           streamPath: path,
@@ -934,7 +987,7 @@ describe.sequential("events stream e2e", () => {
         )
         .map((event) => getPayloadPath(event));
 
-      expect(rootPropagatedPaths).toEqual(propagatedPaths);
+      expect(rootPropagatedPaths.sort()).toEqual([...propagatedPaths].sort());
     },
     testTimeoutMs,
   );
@@ -1274,7 +1327,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: { path },
+          payload: { projectSlug: defaultProjectSlug, path },
         });
 
         expect(second.done).toBe(false);

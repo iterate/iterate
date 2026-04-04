@@ -1,8 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  type ChildStreamCreatedEvent,
   type DestroyStreamResult,
   Event,
   EventInput,
+  type ProjectSlug,
   type StreamMetadataUpdatedEvent,
   StreamPath,
   StreamState,
@@ -10,6 +12,7 @@ import {
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
 import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
 import type { BuiltinProcessor } from "./define-processor.ts";
+import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 
 type ProcessorSlugKey = keyof StreamState["processors"];
@@ -79,7 +82,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   private get state(): StreamState {
     if (this._state == null) {
       throw new Error(
-        "Stream durable object state was accessed before initialize({ path }) completed. Callers must use getInitializedStreamStub().",
+        "Stream durable object state was accessed before initialize({ projectSlug, path }) completed. Callers must use getInitializedStreamStub().",
       );
     }
 
@@ -153,34 +156,35 @@ export class StreamDurableObject extends DurableObject<Env> {
    * calls are no-ops.
    *
    * Think of this like the durable object constructor. We take arguments like
-   * { path } and set the initial state.
+   * { projectSlug, path } and set the initial state.
    *
    * All external callers go through `getInitializedStreamStub()` in
    * `~/lib/stream-helpers.ts`, which calls this before returning the stub.
    */
-  initialize(args: { path: StreamPath }) {
+  initialize(args: { projectSlug: ProjectSlug; path: StreamPath }) {
     if (this._state != null) {
       return;
     }
 
     this.ensureSchema();
 
-    const processorState: Record<string, Record<string, unknown>> = {};
-    for (const processor of processors) {
-      processorState[processor.slug] = structuredClone(processor.initialState);
-    }
+    const processorState = Object.fromEntries(
+      processors.map((p) => [p.slug, structuredClone(p.initialState)]),
+    ) as StreamState["processors"];
 
     this._state = {
+      projectSlug: args.projectSlug,
       path: args.path,
       eventCount: 0,
+      childPaths: [],
       metadata: {},
       processors: processorState,
-    } as StreamState;
+    };
 
     try {
       this.append({
         type: "https://events.iterate.com/events/stream/initialized",
-        payload: { path: args.path },
+        payload: { projectSlug: args.projectSlug, path: args.path },
       });
     } catch (error) {
       this._state = null;
@@ -244,8 +248,8 @@ export class StreamDurableObject extends DurableObject<Env> {
          ON CONFLICT(singleton) DO UPDATE SET json = excluded.json`,
         JSON.stringify(nextState),
       );
-      this._state = nextState;
     });
+    this._state = nextState;
 
     this.afterAppend(event);
 
@@ -305,7 +309,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       );
     }
 
-    // --- Core stream state ---
     let nextState: StreamState = {
       ...structuredClone(this.state),
       eventCount: this.state.eventCount + 1,
@@ -313,14 +316,22 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     switch (event.type) {
       case "https://events.iterate.com/events/stream/metadata-updated": {
-        // TODO get type narrowing working properly here without cast
         const metadataUpdatedEvent = event as StreamMetadataUpdatedEvent;
         nextState = { ...nextState, metadata: metadataUpdatedEvent.payload.metadata };
         break;
       }
+      case "https://events.iterate.com/events/stream/child-stream-created": {
+        const childPath = getImmediateChildPath({
+          parentPath: this.state.path,
+          childPath: (event as ChildStreamCreatedEvent).payload.childPath,
+        });
+        if (childPath != null && !nextState.childPaths.includes(childPath)) {
+          nextState = { ...nextState, childPaths: [...nextState.childPaths, childPath] };
+        }
+        break;
+      }
     }
 
-    // --- Builtin processors ---
     for (const processor of processors) {
       if (processor.reduce) {
         const nextSlice = processor.reduce({
@@ -343,41 +354,42 @@ export class StreamDurableObject extends DurableObject<Env> {
    * 1. Subscriber fanout: push the committed event to all live pull-subscription
    *    readers connected via `stream()`.
    *
-   * 2. Core propagation: after `stream-initialized`, notify the parent stream
-   *    with `child-stream-created`. After `child-stream-created`, re-propagate
-   *    it one level up. This is a structural concern of the stream tree, not
-   *    something a pluggable processor should own.
+   * 2. Core propagation: after `stream-initialized`, notify every ancestor
+   *    stream with `child-stream-created` in parallel. This is a structural
+   *    concern of the stream tree, not something a pluggable processor should own.
    *
    * 3. Builtin processor afterAppend hooks: each processor may inspect the
    *    committed event and its own state slice, then optionally append derived
-   *    events back into this stream (e.g. circuit-breaker auto-pause, JSONata
-   *    transformer output).
+   *    events back into this stream.
    */
   private afterAppend(event: Event) {
-    // --- Subscriber fanout ---
     this.publish(event);
 
-    // --- Core: parent-tree propagation ---
-    switch (event.type) {
-      case "https://events.iterate.com/events/stream/initialized": {
-        this.appendToParent({
-          type: "https://events.iterate.com/events/stream/child-stream-created",
-          payload: { childPath: this.state.path },
-          metadata: event.metadata,
+    if (event.type === "https://events.iterate.com/events/stream/initialized") {
+      const ancestorPaths = getAncestorStreamPaths(event.streamPath);
+
+      void Promise.all(
+        ancestorPaths.map(async (path) => {
+          const stream = await getInitializedStreamStub({
+            projectSlug: this.state.projectSlug,
+            path,
+          });
+          await stream.append({
+            type: "https://events.iterate.com/events/stream/child-stream-created",
+            payload: { childPath: event.streamPath },
+            metadata: event.metadata,
+          });
+        }),
+      ).catch((error) => {
+        console.error("[stream-do] failed to propagate event to ancestor streams", {
+          path: event.streamPath,
+          ancestorPaths,
+          eventType: "https://events.iterate.com/events/stream/child-stream-created",
+          error,
         });
-        break;
-      }
-      case "https://events.iterate.com/events/stream/child-stream-created": {
-        this.appendToParent({
-          type: event.type,
-          payload: event.payload,
-          metadata: event.metadata,
-        });
-        break;
-      }
+      });
     }
 
-    // --- Builtin processor hooks ---
     for (const processor of processors) {
       const result = processor.afterAppend?.({
         append: (nextEvent) => this.append(nextEvent),
@@ -408,12 +420,25 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.state;
   }
 
-  // Cloudflare's supported way to wipe a Durable Object's persisted data is
-  // `deleteAll()` on its storage rather than an explicit instance-destruction API:
-  // https://developers.cloudflare.com/durable-objects/api/storage-api/
-  // https://developers.cloudflare.com/durable-objects/best-practices/access-durable-objects-storage/
-  async destroy(): Promise<DestroyStreamResult> {
+  async destroy(args: { destroyChildren?: boolean } = {}): Promise<DestroyStreamResult> {
+    const childEntries: DestroyStreamResult["finalStateByPath"] = args.destroyChildren
+      ? await Promise.all(
+          [...this.state.childPaths].sort().map(async (path) => {
+            const stub = await getInitializedStreamStub({
+              projectSlug: this.state.projectSlug,
+              path,
+            });
+            return stub.destroy({ destroyChildren: true });
+          }),
+        ).then((results) =>
+          results.reduce<DestroyStreamResult["finalStateByPath"]>(
+            (acc, { finalStateByPath }) => ({ ...acc, ...finalStateByPath }),
+            {},
+          ),
+        )
+      : {};
     const stateBeforeDelete = structuredClone(this._state);
+    const path = stateBeforeDelete?.path;
 
     for (const subscriber of this.subscribers) {
       try {
@@ -426,34 +451,21 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     this._state = null;
 
+    const finalStateByPath: DestroyStreamResult["finalStateByPath"] = {
+      ...childEntries,
+      ...(path == null ? {} : { [path]: { finalState: stateBeforeDelete } }),
+    };
+
     return {
-      destroyed: true,
-      finalState: stateBeforeDelete ?? null,
+      destroyedStreamCount: Object.keys(finalStateByPath).length,
+      finalStateByPath,
     };
   }
 
   // ---------------------------------------------------------------------------
   // Pull subscriptions
-  //
-  // These methods expose the event log for remote consumers that pull events
-  // over the network and then either enact external side effects or append
-  // derived events to this or other streams.
-  //
-  // Those consumers are conceptually Processors — they have the same
-  // reduce/afterAppend shape — but they are not BuiltinProcessors, because
-  // they do not run synchronously inside this Durable Object and cannot
-  // participate in the synchronous beforeAppend gate.
   // ---------------------------------------------------------------------------
 
-  /**
-   * Reconstruct canonical events from trusted SQLite rows.
-   *
-   * We validate aggressively on append and trust stored rows on read so an
-   * older row does not start throwing `Event.parse()` exceptions on every
-   * history or live-stream read. The NDJSON consumer in `decodeEventStream()`
-   * still expects newline-delimited JSON objects, but it skips malformed lines
-   * instead of killing the whole live subscription.
-   */
   history(args: { afterOffset?: number } = {}): Event[] {
     const afterOffset = args.afterOffset ?? 0;
 
@@ -469,10 +481,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       });
   }
 
-  /**
-   * Returns newline-delimited JSON so backlog and live events share the same
-   * framing as `decodeEventStream()` in `~/lib/utils.ts`.
-   */
   stream(args: { afterOffset?: number; live?: boolean } = {}): ReadableStream<Uint8Array> {
     const backlog = this.history(args);
     let subscriber: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -545,26 +553,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.parseEventRow(row);
   }
 
-  private appendToParent(eventInput: EventInput) {
-    const path = this.state.path;
-    if (path === "/") {
-      return;
-    }
-
-    const lastSlashIndex = path.lastIndexOf("/");
-    const parentPath = lastSlashIndex === 0 ? "/" : StreamPath.parse(path.slice(0, lastSlashIndex));
-
-    void getInitializedStreamStub({ path: parentPath })
-      .then((parent) => parent.append(eventInput))
-      .catch((error) => {
-        console.error("[stream-do] failed to propagate event to parent stream", {
-          path: this.state.path,
-          eventType: eventInput.type,
-          error,
-        });
-      });
-  }
-
   private parseEventRow(row: SqliteEventRow | null | undefined): Event | null {
     if (row == null) {
       return null;
@@ -585,6 +573,29 @@ const textEncoder = new TextEncoder();
 
 function encodeEventLine(event: Event) {
   return textEncoder.encode(`${JSON.stringify(event)}\n`);
+}
+
+function getImmediateChildPath(args: {
+  parentPath: StreamPath;
+  childPath: StreamPath;
+}): StreamPath | null {
+  if (args.childPath === args.parentPath) {
+    return null;
+  }
+
+  if (args.parentPath === "/") {
+    const [firstSegment] = args.childPath.split("/").filter(Boolean);
+    return firstSegment == null ? null : StreamPath.parse(`/${firstSegment}`);
+  }
+
+  const parentPrefix = `${args.parentPath}/`;
+  if (!args.childPath.startsWith(parentPrefix)) {
+    return null;
+  }
+
+  const remainingPath = args.childPath.slice(parentPrefix.length);
+  const [firstSegment] = remainingPath.split("/");
+  return firstSegment == null ? null : StreamPath.parse(`${args.parentPath}/${firstSegment}`);
 }
 
 type SqliteEventRow = {

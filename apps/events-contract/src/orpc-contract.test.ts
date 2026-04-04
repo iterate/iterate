@@ -27,7 +27,6 @@ type _appendArgsMatchPublicShape = Assert<
     AppendArgs
   >
 >;
-type _clientAppendArgsAcceptPublicShape = Assert<IsAssignable<AppendArgs, ClientAppendArgs>>;
 
 const builtInEvent: AppendArgs = {
   path: examplePath,
@@ -53,6 +52,13 @@ const genericEvent: AppendArgs = {
 
 void builtInEvent;
 void genericEvent;
+
+const clientBuiltInEvent: ClientAppendArgs = {
+  path: examplePath,
+  event: builtInEvent.event,
+};
+
+void clientBuiltInEvent;
 
 assert.equal(
   EventInput.safeParse({
@@ -202,11 +208,24 @@ const streamInitializedEvent = AppendInput.parse({
   path: examplePath,
   event: {
     type: "https://events.iterate.com/events/stream/initialized",
-    payload: { path: examplePath },
+    payload: { projectSlug: "public", path: examplePath },
   },
 });
 
-assert.deepEqual(streamInitializedEvent.event.payload, { path: examplePath });
+assert.deepEqual(streamInitializedEvent.event.payload, {
+  projectSlug: "public",
+  path: examplePath,
+});
+
+const streamDurableObjectConstructedEvent = AppendInput.parse({
+  path: examplePath,
+  event: {
+    type: "https://events.iterate.com/events/stream/durable-object-constructed",
+    payload: {},
+  },
+});
+
+assert.deepEqual(streamDurableObjectConstructedEvent.event.payload, {});
 
 const durableObjectConstructedEvent = AppendInput.parse({
   path: examplePath,

@@ -22,9 +22,13 @@ import {
 
 export { JSONObject, Offset, StreamPath };
 
+export const ProjectSlug = z.string().trim().min(1).max(255);
+export type ProjectSlug = z.infer<typeof ProjectSlug>;
+
 export const StreamInitializedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/initialized"),
   payload: z.strictObject({
+    projectSlug: ProjectSlug,
     path: StreamPath,
   }),
 });
@@ -168,15 +172,17 @@ export const ProcessorsState = z.object({
 });
 
 export const StreamState = z.object({
+  projectSlug: ProjectSlug,
   path: StreamPath,
   eventCount: z.number().int().nonnegative(),
+  childPaths: z.array(StreamPath).default([]),
   metadata: JSONObject,
   processors: ProcessorsState,
 });
 export type StreamState = z.infer<typeof StreamState>;
 
 export const DestroyStreamResult = z.object({
-  destroyed: z.literal(true),
-  finalState: StreamState.nullable(),
+  destroyedStreamCount: z.number().int().nonnegative(),
+  finalStateByPath: z.record(z.string(), z.object({ finalState: StreamState.nullable() })),
 });
 export type DestroyStreamResult = z.infer<typeof DestroyStreamResult>;

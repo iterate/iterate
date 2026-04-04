@@ -18,6 +18,10 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "@iterate-com/ui/components/ai-elements/prompt-input";
+import { Button } from "@iterate-com/ui/components/button";
+import { Checkbox } from "@iterate-com/ui/components/checkbox";
+import { Label } from "@iterate-com/ui/components/label";
+import { Separator } from "@iterate-com/ui/components/separator";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
   Sheet,
@@ -101,9 +105,21 @@ export function StreamPage({
     };
   }, [feedSummary, onRendererModeChange, rendererMode, setHeaderControls]);
 
+  const [destroyChildren, setDestroyChildren] = useState(true);
+
   const appendEvent = useMutation(
     orpc.append.mutationOptions({
       onSuccess: async () => {
+        void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
+        await queryClient.invalidateQueries({ queryKey: orpc.getState.key() });
+      },
+    }),
+  );
+
+  const destroyStream = useMutation(
+    orpc.destroy.mutationOptions({
+      onSuccess: async () => {
+        closeMetadata();
         void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
         await queryClient.invalidateQueries({ queryKey: orpc.getState.key() });
       },
@@ -172,6 +188,47 @@ export function StreamPage({
               showToggle
               showCopyButton
             />
+
+            <Separator className="my-6" />
+
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+              <h3 className="text-sm font-semibold text-destructive">Danger zone</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Permanently destroy this stream. This cannot be undone.
+              </p>
+
+              <div className="mt-4 flex items-center gap-2">
+                <Checkbox
+                  id="destroy-children"
+                  checked={destroyChildren}
+                  onCheckedChange={(checked) => setDestroyChildren(checked)}
+                />
+                <Label htmlFor="destroy-children" className="text-xs">
+                  Destroy child streams
+                </Label>
+              </div>
+
+              <Button
+                variant="destructive"
+                size="sm"
+                className="mt-4"
+                disabled={destroyStream.isPending}
+                onClick={() => {
+                  const request = destroyStream.mutateAsync({
+                    params: { path: streamPath },
+                    query: { destroyChildren },
+                  });
+                  void toast.promise(request, {
+                    loading: "Destroying stream…",
+                    success: (result) =>
+                      `Destroyed ${result.destroyedStreamCount} stream${result.destroyedStreamCount === 1 ? "" : "s"}`,
+                    error: (error) => formatClientError(error),
+                  });
+                }}
+              >
+                {destroyStream.isPending ? "Destroying…" : "Destroy stream"}
+              </Button>
+            </div>
           </div>
         </SheetContent>
       </Sheet>

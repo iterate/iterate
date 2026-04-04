@@ -9,11 +9,11 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as StreamDurableObjectConstructedRouteImport } from './routes/stream-durable-object-constructed'
 import { Route as StreamResumedRouteImport } from './routes/stream-resumed'
 import { Route as StreamPausedRouteImport } from './routes/stream-paused'
 import { Route as StreamMetadataUpdatedRouteImport } from './routes/stream-metadata-updated'
 import { Route as StreamInitializedRouteImport } from './routes/stream-initialized'
+import { Route as StreamDurableObjectConstructedRouteImport } from './routes/stream-durable-object-constructed'
 import { Route as ManualEventAppendedRouteImport } from './routes/manual-event-appended'
 import { Route as JsonataTransformerConfiguredRouteImport } from './routes/jsonata-transformer-configured'
 import { Route as ErrorOccurredRouteImport } from './routes/error-occurred'
@@ -31,12 +31,6 @@ import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppStreamsSplatRouteImport } from './routes/_app/streams.$'
 import { Route as AppSecretsSecretIdRouteImport } from './routes/_app/secrets.$secretId'
 
-const StreamDurableObjectConstructedRoute =
-  StreamDurableObjectConstructedRouteImport.update({
-    id: '/stream-durable-object-constructed',
-    path: '/stream-durable-object-constructed',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const StreamResumedRoute = StreamResumedRouteImport.update({
   id: '/stream-resumed',
   path: '/stream-resumed',
@@ -57,6 +51,12 @@ const StreamInitializedRoute = StreamInitializedRouteImport.update({
   path: '/stream-initialized',
   getParentRoute: () => rootRouteImport,
 } as any)
+const StreamDurableObjectConstructedRoute =
+  StreamDurableObjectConstructedRouteImport.update({
+    id: '/stream-durable-object-constructed',
+    path: '/stream-durable-object-constructed',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ManualEventAppendedRoute = ManualEventAppendedRouteImport.update({
   id: '/manual-event-appended',
   path: '/manual-event-appended',
@@ -320,18 +320,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof StreamInitializedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/manual-event-appended': {
-      id: '/manual-event-appended'
-      path: '/manual-event-appended'
-      fullPath: '/manual-event-appended'
-      preLoaderRoute: typeof ManualEventAppendedRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/stream-durable-object-constructed': {
       id: '/stream-durable-object-constructed'
       path: '/stream-durable-object-constructed'
       fullPath: '/stream-durable-object-constructed'
       preLoaderRoute: typeof StreamDurableObjectConstructedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/manual-event-appended': {
+      id: '/manual-event-appended'
+      path: '/manual-event-appended'
+      fullPath: '/manual-event-appended'
+      preLoaderRoute: typeof ManualEventAppendedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/jsonata-transformer-configured': {

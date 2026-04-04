@@ -56,7 +56,7 @@ describe("circuitBreaker", () => {
         state,
         event: {
           type: "https://events.iterate.com/events/stream/durable-object-constructed",
-          payload: { path: "/demo" },
+          payload: {},
         },
       }),
     ).not.toThrow();

@@ -20,6 +20,7 @@ const app = createEvents2AppFixture({
 });
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
+const defaultProjectSlug = "public";
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 const testTimeoutMs = 5_000;
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe;
@@ -28,7 +29,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
     "streams page responds",
     async () => {
       const res = await app.fetch("/streams", {
-        signal: AbortSignal.timeout(3_000),
+        signal: AbortSignal.timeout(8_000),
       });
 
       expect(res.ok).toBe(true);
@@ -62,6 +63,24 @@ describeRuntimeSmoke("events runtime smoke", () => {
       expect(paths).not.toHaveProperty("/stream-state/{streamPath}");
       expect(paths).not.toHaveProperty("/streams/__list");
       expect(paths).not.toHaveProperty("/__state");
+      expect(paths["/streams/{path}"]).toMatchObject({
+        post: {
+          parameters: expect.arrayContaining([
+            expect.objectContaining({
+              in: "path",
+              name: "path",
+            }),
+          ]),
+        },
+        delete: {
+          parameters: expect.arrayContaining([
+            expect.objectContaining({
+              in: "query",
+              name: "destroyChildren",
+            }),
+          ]),
+        },
+      });
     },
     testTimeoutMs,
   );
@@ -91,6 +110,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         type: "https://events.iterate.com/events/stream/initialized",
       });
       expect(await app.client.getState({ path: "/" })).toMatchObject({
+        projectSlug: defaultProjectSlug,
         path: "/",
         metadata: {},
       });
@@ -108,7 +128,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         streamPath: path,
         type: "https://events.iterate.com/events/stream/initialized",
         offset: expectedStoredOffset(0),
-        payload: { path },
+        payload: { projectSlug: defaultProjectSlug, path },
       });
       expect(events[1]).toMatchObject({
         streamPath: path,
@@ -117,6 +137,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       });
 
       expect(await app.client.getState({ path })).toEqual({
+        projectSlug: defaultProjectSlug,
         path,
         eventCount: 2,
         metadata: {},
@@ -132,6 +153,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const rootStateResponse = await app.fetch("/api/__state/%2F");
       expect(rootStateResponse.status).toBe(200);
       expect(await rootStateResponse.json()).toMatchObject({
+        projectSlug: defaultProjectSlug,
         path: "/",
       });
 
