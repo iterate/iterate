@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as StreamDurableObjectConstructedRouteImport } from './routes/stream-durable-object-constructed'
 import { Route as StreamResumedRouteImport } from './routes/stream-resumed'
 import { Route as StreamPausedRouteImport } from './routes/stream-paused'
 import { Route as StreamMetadataUpdatedRouteImport } from './routes/stream-metadata-updated'
@@ -29,6 +30,12 @@ import { Route as AppSecretsIndexRouteImport } from './routes/_app/secrets.index
 import { Route as AppStreamsSplatRouteImport } from './routes/_app/streams.$'
 import { Route as AppSecretsSecretIdRouteImport } from './routes/_app/secrets.$secretId'
 
+const StreamDurableObjectConstructedRoute =
+  StreamDurableObjectConstructedRouteImport.update({
+    id: '/stream-durable-object-constructed',
+    path: '/stream-durable-object-constructed',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const StreamResumedRoute = StreamResumedRouteImport.update({
   id: '/stream-resumed',
   path: '/stream-resumed',
@@ -132,6 +139,7 @@ export interface FileRoutesByFullPath {
   '/error-occurred': typeof ErrorOccurredRoute
   '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
+  '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
   '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/stream-paused': typeof StreamPausedRoute
@@ -152,6 +160,7 @@ export interface FileRoutesByTo {
   '/error-occurred': typeof ErrorOccurredRoute
   '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
+  '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
   '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/stream-paused': typeof StreamPausedRoute
@@ -172,6 +181,7 @@ export interface FileRoutesById {
   '/error-occurred': typeof ErrorOccurredRoute
   '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
+  '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
   '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/stream-paused': typeof StreamPausedRoute
@@ -194,6 +204,7 @@ export interface FileRouteTypes {
     | '/error-occurred'
     | '/jsonata-transformer-configured'
     | '/manual-event-appended'
+    | '/stream-durable-object-constructed'
     | '/stream-initialized'
     | '/stream-metadata-updated'
     | '/stream-paused'
@@ -214,6 +225,7 @@ export interface FileRouteTypes {
     | '/error-occurred'
     | '/jsonata-transformer-configured'
     | '/manual-event-appended'
+    | '/stream-durable-object-constructed'
     | '/stream-initialized'
     | '/stream-metadata-updated'
     | '/stream-paused'
@@ -233,6 +245,7 @@ export interface FileRouteTypes {
     | '/error-occurred'
     | '/jsonata-transformer-configured'
     | '/manual-event-appended'
+    | '/stream-durable-object-constructed'
     | '/stream-initialized'
     | '/stream-metadata-updated'
     | '/stream-paused'
@@ -255,6 +268,7 @@ export interface RootRouteChildren {
   ErrorOccurredRoute: typeof ErrorOccurredRoute
   JsonataTransformerConfiguredRoute: typeof JsonataTransformerConfiguredRoute
   ManualEventAppendedRoute: typeof ManualEventAppendedRoute
+  StreamDurableObjectConstructedRoute: typeof StreamDurableObjectConstructedRoute
   StreamInitializedRoute: typeof StreamInitializedRoute
   StreamMetadataUpdatedRoute: typeof StreamMetadataUpdatedRoute
   StreamPausedRoute: typeof StreamPausedRoute
@@ -298,6 +312,13 @@ declare module '@tanstack/react-router' {
       path: '/manual-event-appended'
       fullPath: '/manual-event-appended'
       preLoaderRoute: typeof ManualEventAppendedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/stream-durable-object-constructed': {
+      id: '/stream-durable-object-constructed'
+      path: '/stream-durable-object-constructed'
+      fullPath: '/stream-durable-object-constructed'
+      preLoaderRoute: typeof StreamDurableObjectConstructedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/jsonata-transformer-configured': {
@@ -449,6 +470,7 @@ const rootRouteChildren: RootRouteChildren = {
   ErrorOccurredRoute: ErrorOccurredRoute,
   JsonataTransformerConfiguredRoute: JsonataTransformerConfiguredRoute,
   ManualEventAppendedRoute: ManualEventAppendedRoute,
+  StreamDurableObjectConstructedRoute: StreamDurableObjectConstructedRoute,
   StreamInitializedRoute: StreamInitializedRoute,
   StreamMetadataUpdatedRoute: StreamMetadataUpdatedRoute,
   StreamPausedRoute: StreamPausedRoute,
