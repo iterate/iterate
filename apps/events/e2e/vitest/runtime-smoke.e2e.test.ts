@@ -138,6 +138,7 @@ describe("events runtime smoke", () => {
         path,
         maxOffset: 2,
         metadata: {},
+        children: [],
       });
 
       const rootHistoryResponse = await app.fetch("/api/streams/%2F");

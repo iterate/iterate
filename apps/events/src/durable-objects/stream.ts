@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  type ChildStreamCreatedEvent,
   type DestroyStreamResult,
   type Event,
   Event as EventSchema,
@@ -9,7 +10,8 @@ import {
   StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
-import { getStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
+import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
+import { StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 /**
  *
  * IMPORTANT: This file should not be changed without explicit planning consent
@@ -26,8 +28,8 @@ import { getStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpe
  * - caller-appended events begin at offset 2
  *
  * Child discovery is a separate built-in event. After a stream commits its own
- * self-init event, it appends `child-stream-created` to its parent. Parents then
- * propagate that same child discovery event upward one level at a time.
+ * self-init event, it appends `child-stream-created` to every ancestor stream
+ * in parallel.
  *
  * Durable Object docs:
  * - https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/
@@ -103,6 +105,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       path: args.path,
       maxOffset: 0,
       metadata: {},
+      children: [],
     };
 
     try {
@@ -183,24 +186,30 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     this.publish(event);
 
-    switch (event.type) {
-      case "https://events.iterate.com/events/stream/initialized": {
-        this.appendToParent({
-          type: "https://events.iterate.com/events/stream/child-stream-created",
-          payload: { path: event.streamPath },
-          metadata: event.metadata,
+    if (event.type === "https://events.iterate.com/events/stream/initialized") {
+      const ancestorPaths = getAncestorStreamPaths(event.streamPath);
+
+      if (ancestorPaths.length > 0) {
+        void Promise.all(
+          ancestorPaths.map(async (path) => {
+            const stream = await this.getInitializedStreamStub(path);
+            await stream.append({
+              type: "https://events.iterate.com/events/stream/child-stream-created",
+              payload: { path: event.streamPath },
+              metadata: event.metadata,
+            });
+          }),
+        ).catch((error) => {
+          console.error("[stream-do] failed to propagate event to ancestor streams", {
+            path: event.streamPath,
+            ancestorPaths,
+            eventType: "https://events.iterate.com/events/stream/child-stream-created",
+            error,
+          });
         });
-        break;
-      }
-      case "https://events.iterate.com/events/stream/child-stream-created": {
-        this.appendToParent({
-          type: event.type,
-          payload: event.payload,
-          metadata: event.metadata,
-        });
-        break;
       }
     }
+
     return event;
   }
 
@@ -212,23 +221,29 @@ export class StreamDurableObject extends DurableObject<Env> {
   // `deleteAll()` on its storage rather than an explicit instance-destruction API:
   // https://developers.cloudflare.com/durable-objects/api/storage-api/
   // https://developers.cloudflare.com/durable-objects/best-practices/access-durable-objects-storage/
-  async destroy(): Promise<DestroyStreamResult> {
-    const stateBeforeDelete = structuredClone(this._state);
+  async destroy(args: { destroyChildren?: boolean } = {}): Promise<DestroyStreamResult> {
+    const childEntries = args.destroyChildren ? await this.destroyChildStreams() : {};
 
-    for (const subscriber of this.subscribers) {
+    const path = this._state?.path;
+    const finalState = structuredClone(this._state);
+
+    for (const sub of this.subscribers) {
       try {
-        subscriber.close();
+        sub.close();
       } catch {}
     }
     this.subscribers.clear();
-
     await this.ctx.storage.deleteAll();
-
     this._state = null;
 
+    const finalStateByPath: DestroyStreamResult["finalStateByPath"] = {
+      ...childEntries,
+      ...(path != null ? { [path]: { finalState } } : {}),
+    };
+
     return {
-      destroyed: true,
-      finalState: stateBeforeDelete,
+      destroyedStreamCount: Object.keys(finalStateByPath).length,
+      finalStateByPath,
     };
   }
 
@@ -258,6 +273,12 @@ export class StreamDurableObject extends DurableObject<Env> {
         const event = this.parseEventRow(row);
         return event ? [event] : [];
       });
+  }
+
+  listChildren() {
+    return [...(this._state?.children ?? [])].sort((left, right) =>
+      right.createdAt.localeCompare(left.createdAt),
+    );
   }
 
   /**
@@ -290,6 +311,30 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  private async getInitializedStreamStub(path: StreamPath) {
+    const stub = this.env.STREAM.getByName(path);
+    await stub.initialize({ path });
+    return stub;
+  }
+
+  private async destroyChildStreams(): Promise<DestroyStreamResult["finalStateByPath"]> {
+    const childPaths = (this._state?.children ?? [])
+      .map(({ path }) => path)
+      .sort((a, b) => b.length - a.length);
+
+    const results = await Promise.all(
+      childPaths.map(async (path) => {
+        const stub = await this.getInitializedStreamStub(path);
+        return stub.destroy();
+      }),
+    );
+
+    return results.reduce<DestroyStreamResult["finalStateByPath"]>(
+      (acc, { finalStateByPath }) => ({ ...acc, ...finalStateByPath }),
+      {},
+    );
+  }
+
   private ensureSchema() {
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS events (
@@ -318,30 +363,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       .next().value;
 
     return this.parseEventRow(row);
-  }
-
-  private appendToParent(eventInput: EventInput) {
-    const path = this.state.path;
-
-    void this.getParent()
-      .then((parent) => parent?.append(eventInput))
-      .catch((error) => {
-        console.error("[stream-do] failed to propagate event to parent stream", {
-          path,
-          eventType: eventInput.type,
-          error,
-        });
-      });
-  }
-
-  private async getParent() {
-    const path = this.state.path;
-    if (path === "/") {
-      return null;
-    }
-    const lastSlashIndex = path.lastIndexOf("/");
-    const parentPath = lastSlashIndex === 0 ? "/" : StreamPath.parse(path.slice(0, lastSlashIndex));
-    return getStreamStub(parentPath);
   }
 
   private parseEventRow(row: SqliteEventRow | null | undefined): Event | null {
@@ -393,8 +414,9 @@ type SqliteEventRow = {
  *
  * `initialize()` sets the initial state (with `maxOffset: 0`), then appends
  * the synthetic `stream-initialized` event through the normal `append()` path.
- * After that, `stream-metadata-updated` replaces the metadata snapshot and all
- * other events simply advance the max offset.
+ * After that, `stream-metadata-updated` replaces the metadata snapshot,
+ * `child-stream-created` tracks discovered children, and all other events
+ * simply advance the max offset.
  */
 function reduceStreamState(args: { state: StreamState; event: Event }): StreamState {
   const { state, event } = args;
@@ -405,21 +427,27 @@ function reduceStreamState(args: { state: StreamState; event: Event }): StreamSt
     );
   }
 
-  state.maxOffset++;
+  const base = { ...state, maxOffset: state.maxOffset + 1 };
 
   switch (event.type) {
     case "https://events.iterate.com/events/stream/metadata-updated": {
       // TODO: Talk to Misha about how to express "built-in event or generic event"
       // without breaking payload narrowing here.
       const metadataUpdatedEvent = event as StreamMetadataUpdatedEvent;
+      return { ...base, metadata: metadataUpdatedEvent.payload.metadata };
+    }
+
+    case "https://events.iterate.com/events/stream/child-stream-created": {
+      const childEvent = event as ChildStreamCreatedEvent;
+      const alreadyTracked = base.children.some((c) => c.path === childEvent.payload.path);
+      if (alreadyTracked) return base;
       return {
-        ...state,
-        metadata: metadataUpdatedEvent.payload.metadata,
+        ...base,
+        children: [...base.children, { path: childEvent.payload.path, createdAt: event.createdAt }],
       };
     }
 
-    default: {
-      return state;
-    }
+    default:
+      return base;
   }
 }

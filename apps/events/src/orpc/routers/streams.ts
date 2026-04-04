@@ -1,11 +1,9 @@
 import { env as workerEnv } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import {
-  ChildStreamCreatedEvent,
   type EventInput,
   GenericEventInput,
   type JSONObject,
-  StreamInitializedEvent,
   type StreamPath,
 } from "@iterate-com/events-contract";
 import jsonata from "jsonata";
@@ -56,7 +54,9 @@ export const streamsRouter = {
     }
   }),
   destroy: os.destroy.handler(async ({ input }) => {
-    return await destroyStreamTree(input);
+    return await getStreamStubWithoutInitializing(input.params.path).destroy({
+      destroyChildren: input.query.destroyChildren,
+    });
   }),
   stream: os.stream.handler(async function* ({ input, signal }) {
     const streamStub = await getStreamStub(input.path);
@@ -87,7 +87,7 @@ export const streamsRouter = {
     return streamStub.getState();
   }),
   listStreams: os.listStreams.handler(async () => {
-    return await listDiscoveredStreams("/");
+    return await getStreamStubWithoutInitializing("/").listChildren();
   }),
 };
 
@@ -108,43 +108,6 @@ async function transformAppendBody(args: { body: JSONObject; jsonataTransform: s
   }
 
   return parsed.data;
-}
-
-async function destroyStreamTree(args: { path: StreamPath; destroyChildren?: boolean }) {
-  if (args.destroyChildren) {
-    const childPaths = (await listDiscoveredStreams(args.path))
-      .map((stream) => stream.path)
-      .filter((path) => path !== args.path)
-      .sort((left, right) => right.length - left.length);
-
-    for (const childPath of childPaths) {
-      await getStreamStubWithoutInitializing(childPath).destroy();
-    }
-  }
-
-  return await getStreamStubWithoutInitializing(args.path).destroy();
-}
-
-async function listDiscoveredStreams(path: StreamPath) {
-  const events = await getStreamStubWithoutInitializing(path).history();
-  const discovered = new Map<StreamPath, string>();
-
-  for (const event of events) {
-    const childEvent = ChildStreamCreatedEvent.safeParse(event);
-    if (childEvent.success) {
-      discovered.set(childEvent.data.payload.path, childEvent.data.createdAt);
-      continue;
-    }
-
-    const initializedEvent = StreamInitializedEvent.safeParse(event);
-    if (initializedEvent.success) {
-      discovered.set(initializedEvent.data.payload.path, initializedEvent.data.createdAt);
-    }
-  }
-
-  return Array.from(discovered, ([path, createdAt]) => ({ path, createdAt })).sort((left, right) =>
-    right.createdAt.localeCompare(left.createdAt),
-  );
 }
 
 async function evaluateJsonataTransform(args: { body: JSONObject; jsonataTransform: string }) {
