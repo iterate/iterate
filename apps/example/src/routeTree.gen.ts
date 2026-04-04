@@ -20,6 +20,7 @@ import { Route as AppTerminalRouteImport } from './routes/_app/terminal'
 import { Route as AppLogStreamRouteImport } from './routes/_app/log-stream'
 import { Route as AppDebugRouteImport } from './routes/_app/debug'
 import { Route as AppThingsIndexRouteImport } from './routes/_app/things.index'
+import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppThingsThingIdRouteImport } from './routes/_app/things.$thingId'
 
 const AppRoute = AppRouteImport.update({
@@ -76,6 +77,11 @@ const AppThingsIndexRoute = AppThingsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppThingsRoute,
 } as any)
+const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
+  id: '/api/orpc/$',
+  path: '/api/orpc/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppThingsThingIdRoute = AppThingsThingIdRouteImport.update({
   id: '/$thingId',
   path: '/$thingId',
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/api/pty': typeof ApiPtyRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/things/$thingId': typeof AppThingsThingIdRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/things/': typeof AppThingsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -105,6 +112,7 @@ export interface FileRoutesByTo {
   '/api/pty': typeof ApiPtyRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/things/$thingId': typeof AppThingsThingIdRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/things': typeof AppThingsIndexRoute
 }
 export interface FileRoutesById {
@@ -120,6 +128,7 @@ export interface FileRoutesById {
   '/api/pty': typeof ApiPtyRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/_app/things/$thingId': typeof AppThingsThingIdRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/things/': typeof AppThingsIndexRoute
 }
 export interface FileRouteTypes {
@@ -135,6 +144,7 @@ export interface FileRouteTypes {
     | '/api/pty'
     | '/posthog-proxy/$'
     | '/things/$thingId'
+    | '/api/orpc/$'
     | '/things/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -147,6 +157,7 @@ export interface FileRouteTypes {
     | '/api/pty'
     | '/posthog-proxy/$'
     | '/things/$thingId'
+    | '/api/orpc/$'
     | '/things'
   id:
     | '__root__'
@@ -161,6 +172,7 @@ export interface FileRouteTypes {
     | '/api/pty'
     | '/posthog-proxy/$'
     | '/_app/things/$thingId'
+    | '/api/orpc/$'
     | '/_app/things/'
   fileRoutesById: FileRoutesById
 }
@@ -171,6 +183,7 @@ export interface RootRouteChildren {
   ApiOrpcWsRoute: typeof ApiOrpcWsRoute
   ApiPtyRoute: typeof ApiPtyRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
+  ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -252,6 +265,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppThingsIndexRouteImport
       parentRoute: typeof AppThingsRoute
     }
+    '/api/orpc/$': {
+      id: '/api/orpc/$'
+      path: '/api/orpc/$'
+      fullPath: '/api/orpc/$'
+      preLoaderRoute: typeof ApiOrpcSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app/things/$thingId': {
       id: '/_app/things/$thingId'
       path: '/$thingId'
@@ -299,16 +319,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiOrpcWsRoute: ApiOrpcWsRoute,
   ApiPtyRoute: ApiPtyRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
+  ApiOrpcSplatRoute: ApiOrpcSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}

@@ -23,6 +23,7 @@ import { Route as AppStreamsRouteImport } from './routes/_app/streams'
 import { Route as AppSecretsRouteImport } from './routes/_app/secrets'
 import { Route as AppStreamsIndexRouteImport } from './routes/_app/streams.index'
 import { Route as AppSecretsIndexRouteImport } from './routes/_app/secrets.index'
+import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppStreamsSplatRouteImport } from './routes/_app/streams.$'
 import { Route as AppSecretsSecretIdRouteImport } from './routes/_app/secrets.$secretId'
 
@@ -95,6 +96,11 @@ const AppSecretsIndexRoute = AppSecretsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppSecretsRoute,
 } as any)
+const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
+  id: '/api/orpc/$',
+  path: '/api/orpc/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppStreamsSplatRoute = AppStreamsSplatRouteImport.update({
   id: '/$',
   path: '/$',
@@ -120,6 +126,7 @@ export interface FileRoutesByFullPath {
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/secrets/$secretId': typeof AppSecretsSecretIdRoute
   '/streams/$': typeof AppStreamsSplatRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/secrets/': typeof AppSecretsIndexRoute
   '/streams/': typeof AppStreamsIndexRoute
 }
@@ -135,6 +142,7 @@ export interface FileRoutesByTo {
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/secrets/$secretId': typeof AppSecretsSecretIdRoute
   '/streams/$': typeof AppStreamsSplatRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/secrets': typeof AppSecretsIndexRoute
   '/streams': typeof AppStreamsIndexRoute
 }
@@ -154,6 +162,7 @@ export interface FileRoutesById {
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/_app/secrets/$secretId': typeof AppSecretsSecretIdRoute
   '/_app/streams/$': typeof AppStreamsSplatRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/secrets/': typeof AppSecretsIndexRoute
   '/_app/streams/': typeof AppStreamsIndexRoute
 }
@@ -173,6 +182,7 @@ export interface FileRouteTypes {
     | '/posthog-proxy/$'
     | '/secrets/$secretId'
     | '/streams/$'
+    | '/api/orpc/$'
     | '/secrets/'
     | '/streams/'
   fileRoutesByTo: FileRoutesByTo
@@ -188,6 +198,7 @@ export interface FileRouteTypes {
     | '/posthog-proxy/$'
     | '/secrets/$secretId'
     | '/streams/$'
+    | '/api/orpc/$'
     | '/secrets'
     | '/streams'
   id:
@@ -206,6 +217,7 @@ export interface FileRouteTypes {
     | '/posthog-proxy/$'
     | '/_app/secrets/$secretId'
     | '/_app/streams/$'
+    | '/api/orpc/$'
     | '/_app/secrets/'
     | '/_app/streams/'
   fileRoutesById: FileRoutesById
@@ -221,6 +233,7 @@ export interface RootRouteChildren {
   StreamMetadataUpdatedRoute: typeof StreamMetadataUpdatedRoute
   ApiSplatRoute: typeof ApiSplatRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
+  ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -323,6 +336,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSecretsIndexRouteImport
       parentRoute: typeof AppSecretsRoute
     }
+    '/api/orpc/$': {
+      id: '/api/orpc/$'
+      path: '/api/orpc/$'
+      fullPath: '/api/orpc/$'
+      preLoaderRoute: typeof ApiOrpcSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app/streams/$': {
       id: '/_app/streams/$'
       path: '/$'
@@ -391,16 +411,8 @@ const rootRouteChildren: RootRouteChildren = {
   StreamMetadataUpdatedRoute: StreamMetadataUpdatedRoute,
   ApiSplatRoute: ApiSplatRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
+  ApiOrpcSplatRoute: ApiOrpcSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}

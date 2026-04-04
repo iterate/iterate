@@ -1,4 +1,6 @@
 import { implement, ORPCError } from "@orpc/server";
+import type { AnyRouter } from "trpc-cli";
+import { parseRouter } from "trpc-cli";
 import { z, type ZodTypeAny } from "zod";
 import { getPublicConfig } from "./config.ts";
 import { commonContract } from "./common-router-contract.ts";
@@ -6,6 +8,7 @@ import type { AppContext } from "./types.ts";
 
 export function createCommonRouter<TConfigSchema extends ZodTypeAny>(options: {
   appConfigSchema: TConfigSchema;
+  getTrpcCliProcedures?: () => unknown[];
 }) {
   const os = implement(commonContract).$context<AppContext<any, z.output<TConfigSchema>>>();
 
@@ -19,6 +22,17 @@ export function createCommonRouter<TConfigSchema extends ZodTypeAny>(options: {
       getPublicConfig(context.config, options.appConfigSchema),
     ),
     debug: os.debug.handler(() => createCommonDebugOutput()),
+    trpcCliProcedures: os.trpcCliProcedures.handler(() => {
+      if (!options.getTrpcCliProcedures) {
+        throw new ORPCError("NOT_IMPLEMENTED", {
+          message: "common.trpcCliProcedures is not implemented for this app yet",
+        });
+      }
+
+      return {
+        procedures: options.getTrpcCliProcedures(),
+      };
+    }),
     refreshRegistry: os.refreshRegistry.handler(() => {
       throw new ORPCError("NOT_IMPLEMENTED", {
         message: "common.refreshRegistry is not implemented for this app yet",
@@ -48,4 +62,8 @@ export function createCommonDebugOutput() {
     ),
     memoryUsage: process.memoryUsage(),
   };
+}
+
+export function parseTrpcCliProcedures(router: AnyRouter) {
+  return parseRouter({ router }).filter((entry) => entry[0] !== "common.trpcCliProcedures");
 }

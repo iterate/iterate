@@ -3,7 +3,11 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "bin": {
+    "iterate-app-cli": "./bin/iterate-app-cli.js"
+  },
   "exports": {
+    "./apps/cli": "./src/apps/cli.ts",
     "./apps/config": "./src/apps/config.ts",
     "./apps/logging/runtime": "./src/apps/logging/runtime.ts",
     "./apps/logging/types": "./src/apps/logging/types.ts",
@@ -82,6 +86,8 @@
     "p-wait-for": "^6.0.0",
     "pidnap": "workspace:*",
     "react": "^19.2.4",
+    "trpc-cli": "0.14.0",
+    "tsx": "^4.21.0",
     "tinyexec": "^1.0.2",
     "type-fest": "^5.5.0",
     "typeid-js": "^1.2.0",
