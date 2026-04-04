@@ -31,6 +31,9 @@ export const StreamPath = z.preprocess(
 );
 export type StreamPath = z.infer<typeof StreamPath>;
 
+export const StreamNamespace = z.string().trim().min(1).max(255);
+export type StreamNamespace = z.infer<typeof StreamNamespace>;
+
 export const Offset = z.coerce.number().int().positive();
 export type Offset = z.infer<typeof Offset>;
 
@@ -63,6 +66,7 @@ export const GenericEvent = z.object({
 export const StreamInitializedEventInput = GenericEventInput.extend({
   type: z.literal("https://events.iterate.com/events/stream/initialized"),
   payload: z.object({
+    namespace: StreamNamespace,
     path: StreamPath,
   }),
 });
@@ -138,6 +142,7 @@ export const Event = z.union([BuiltInEvent, GenericEvent]);
 export type Event = BuiltInEvent | GenericEvent;
 
 export const StreamState = z.object({
+  namespace: StreamNamespace,
   path: StreamPath,
   maxOffset: z.number().int().nonnegative(),
   metadata: JSONObject,

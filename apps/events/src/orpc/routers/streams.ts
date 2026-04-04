@@ -1,4 +1,3 @@
-import { env as workerEnv } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import {
   ChildStreamCreatedEvent,
@@ -6,15 +5,20 @@ import {
   GenericEventInput,
   type JSONObject,
   StreamInitializedEvent,
+  type StreamNamespace,
   type StreamPath,
 } from "@iterate-com/events-contract";
 import jsonata from "jsonata";
-import { getStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
+import {
+  getInitializedStreamStub,
+  getStreamStub,
+  StreamOffsetPreconditionError,
+} from "~/lib/stream-helpers.ts";
 import { decodeEventStream } from "~/lib/utils.ts";
-import { os } from "~/orpc/orpc.ts";
+import { os, withNamespace } from "~/orpc/orpc.ts";
 
 export const streamsRouter = {
-  append: os.append.handler(async ({ input }) => {
+  append: os.append.use(withNamespace).handler(async ({ input, context }) => {
     const path = input.params.path;
     const event: EventInput =
       input.query.jsonataTransform == null
@@ -24,7 +28,10 @@ export const streamsRouter = {
             jsonataTransform: input.query.jsonataTransform,
           });
 
-    const streamStub = await getStreamStub(path);
+    const streamStub = await getInitializedStreamStub({
+      namespace: context.namespace,
+      path,
+    });
     try {
       const appendedEvent = await streamStub.append(event);
       return {
@@ -55,11 +62,18 @@ export const streamsRouter = {
       throw error;
     }
   }),
-  destroy: os.destroy.handler(async ({ input }) => {
-    return await destroyStreamTree(input);
+  destroy: os.destroy.use(withNamespace).handler(async ({ input, context }) => {
+    return await destroyStreamTree({
+      namespace: context.namespace,
+      path: input.path,
+      destroyChildren: input.destroyChildren,
+    });
   }),
-  stream: os.stream.handler(async function* ({ input, signal }) {
-    const streamStub = await getStreamStub(input.path);
+  stream: os.stream.use(withNamespace).handler(async function* ({ input, signal, context }) {
+    const streamStub = await getInitializedStreamStub({
+      namespace: context.namespace,
+      path: input.path,
+    });
 
     if (!input.live) {
       const events = await streamStub.history({
@@ -82,12 +96,35 @@ export const streamsRouter = {
       yield event;
     }
   }),
-  getState: os.getState.handler(async ({ input }) => {
-    const streamStub = await getStreamStub(input.path);
+  getState: os.getState.use(withNamespace).handler(async ({ input, context }) => {
+    const streamStub = await getInitializedStreamStub({
+      namespace: context.namespace,
+      path: input.path,
+    });
     return streamStub.getState();
   }),
-  listStreams: os.listStreams.handler(async () => {
-    return await listDiscoveredStreams("/");
+  listStreams: os.listStreams.use(withNamespace).handler(async ({ context }) => {
+    const rootStreamStub = await getInitializedStreamStub({
+      namespace: context.namespace,
+      path: "/",
+    });
+    const events = await rootStreamStub.history();
+    const discovered: Record<StreamPath, string> = {
+      "/": new Date().toISOString(),
+    };
+
+    for (const event of events) {
+      if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
+        const childEvent = event as ChildStreamCreatedEvent;
+        discovered[childEvent.payload.path] = childEvent.createdAt;
+      } else if (event.type === "https://events.iterate.com/events/stream/initialized") {
+        discovered["/"] = event.createdAt;
+      }
+    }
+
+    return Object.entries(discovered)
+      .map(([path, createdAt]) => ({ path: path as StreamPath, createdAt }))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }),
 };
 
@@ -110,23 +147,27 @@ async function transformAppendBody(args: { body: JSONObject; jsonataTransform: s
   return parsed.data;
 }
 
-async function destroyStreamTree(args: { path: StreamPath; destroyChildren?: boolean }) {
+async function destroyStreamTree(args: {
+  namespace: StreamNamespace;
+  path: StreamPath;
+  destroyChildren?: boolean;
+}) {
   if (args.destroyChildren) {
-    const childPaths = (await listDiscoveredStreams(args.path))
+    const childPaths = (await listDiscoveredStreams({ namespace: args.namespace, path: args.path }))
       .map((stream) => stream.path)
       .filter((path) => path !== args.path)
       .sort((left, right) => right.length - left.length);
 
     for (const childPath of childPaths) {
-      await getStreamStubWithoutInitializing(childPath).destroy();
+      await getStreamStub({ namespace: args.namespace, path: childPath }).destroy();
     }
   }
 
-  return await getStreamStubWithoutInitializing(args.path).destroy();
+  return await getStreamStub({ namespace: args.namespace, path: args.path }).destroy();
 }
 
-async function listDiscoveredStreams(path: StreamPath) {
-  const events = await getStreamStubWithoutInitializing(path).history();
+async function listDiscoveredStreams(args: { namespace: StreamNamespace; path: StreamPath }) {
+  const events = await getStreamStub(args).history();
   const discovered = new Map<StreamPath, string>();
 
   for (const event of events) {
@@ -173,8 +214,4 @@ function getErrorMessage(error: unknown) {
   }
 
   return String(error);
-}
-
-function getStreamStubWithoutInitializing(path: StreamPath) {
-  return workerEnv.STREAM.getByName(path);
 }

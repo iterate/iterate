@@ -6,10 +6,12 @@ import {
   type EventInput,
   EventInput as EventInputSchema,
   type StreamMetadataUpdatedEvent,
-  StreamPath,
+  type StreamNamespace,
+  type StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
-import { getStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
+import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
+import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 /**
  *
  * IMPORTANT: This file should not be changed without explicit planning consent
@@ -26,8 +28,8 @@ import { getStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpe
  * - caller-appended events begin at offset 2
  *
  * Child discovery is a separate built-in event. After a stream commits its own
- * self-init event, it appends `child-stream-created` to its parent. Parents then
- * propagate that same child discovery event upward one level at a time.
+ * self-init event, it appends `child-stream-created` to every ancestor stream
+ * in parallel.
  *
  * Durable Object docs:
  * - https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/
@@ -41,7 +43,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   private get state(): StreamState {
     if (this._state == null) {
       throw new Error(
-        "Stream durable object state was accessed before initialize({ path }) completed. Callers must use getStreamStub().",
+        "Stream durable object state was accessed before initialize({ namespace, path }) completed. Callers must use getInitializedStreamStub().",
       );
     }
 
@@ -84,13 +86,14 @@ export class StreamDurableObject extends DurableObject<Env> {
    * `stream-initialized` event at offset 1 through `append()`. Subsequent
    * calls are no-ops.
    *
-   * Think of this like the durable object constructor. We take arguments like { path }
+   * Think of this like the durable object constructor. We take arguments like
+   * { namespace, path }
    * and set the initial state.
    *
-   * All external callers go through `getStreamStub()` in
+   * All external callers go through `getInitializedStreamStub()` in
    * `~/lib/stream-helpers.ts`, which calls this before returning the stub.
    */
-  initialize(args: { path: StreamPath }) {
+  initialize(args: { namespace: StreamNamespace; path: StreamPath }) {
     if (this._state != null) {
       return;
     }
@@ -100,6 +103,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.ensureSchema();
 
     this._state = {
+      namespace: args.namespace,
       path: args.path,
       maxOffset: 0,
       metadata: {},
@@ -108,7 +112,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     try {
       this.append({
         type: "https://events.iterate.com/events/stream/initialized",
-        payload: { path: args.path },
+        payload: { namespace: args.namespace, path: args.path },
       });
     } catch (error) {
       this._state = null;
@@ -185,19 +189,31 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     switch (event.type) {
       case "https://events.iterate.com/events/stream/initialized": {
-        this.appendToParent({
+        const ancestorPaths = getAncestorStreamPaths(event.streamPath);
+        const eventInput = {
           type: "https://events.iterate.com/events/stream/child-stream-created",
           payload: { path: event.streamPath },
           metadata: event.metadata,
-        });
-        break;
-      }
-      case "https://events.iterate.com/events/stream/child-stream-created": {
-        this.appendToParent({
-          type: event.type,
-          payload: event.payload,
-          metadata: event.metadata,
-        });
+        } satisfies EventInput & { payload: { path: StreamPath } };
+
+        if (ancestorPaths.length > 0) {
+          void Promise.all(
+            ancestorPaths.map(async (path) => {
+              const stream = await getInitializedStreamStub({
+                namespace: this.state.namespace,
+                path,
+              });
+              await stream.append(eventInput);
+            }),
+          ).catch((error) => {
+            console.error("[stream-do] failed to propagate event to ancestor streams", {
+              path: event.streamPath,
+              ancestorPaths,
+              eventType: eventInput.type,
+              error,
+            });
+          });
+        }
         break;
       }
     }
@@ -242,10 +258,6 @@ export class StreamDurableObject extends DurableObject<Env> {
    * killing the whole live subscription.
    */
   history(args: { afterOffset?: number } = {}): Event[] {
-    if (this._state == null) {
-      return [];
-    }
-
     const afterOffset = args.afterOffset ?? 0;
 
     return this.ctx.storage.sql
@@ -320,30 +332,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.parseEventRow(row);
   }
 
-  private appendToParent(eventInput: EventInput) {
-    const path = this.state.path;
-
-    void this.getParent()
-      .then((parent) => parent?.append(eventInput))
-      .catch((error) => {
-        console.error("[stream-do] failed to propagate event to parent stream", {
-          path,
-          eventType: eventInput.type,
-          error,
-        });
-      });
-  }
-
-  private async getParent() {
-    const path = this.state.path;
-    if (path === "/") {
-      return null;
-    }
-    const lastSlashIndex = path.lastIndexOf("/");
-    const parentPath = lastSlashIndex === 0 ? "/" : StreamPath.parse(path.slice(0, lastSlashIndex));
-    return getStreamStub(parentPath);
-  }
-
   private parseEventRow(row: SqliteEventRow | null | undefined): Event | null {
     if (row == null) {
       return null;
@@ -353,18 +341,18 @@ export class StreamDurableObject extends DurableObject<Env> {
       offset: row.offset,
       type: row.type,
       payload: JSON.parse(row.payload),
-      metadata: row.metadata == null ? undefined : JSON.parse(row.metadata),
+      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
       idempotencyKey: row.idempotency_key ?? undefined,
       createdAt: row.created_at,
     });
   }
 
   private publish(event: Event) {
-    const chunk = encodeEventLine(event);
+    const line = encodeEventLine(event);
 
     for (const subscriber of this.subscribers) {
       try {
-        subscriber.enqueue(chunk);
+        subscriber.enqueue(line);
       } catch {
         this.subscribers.delete(subscriber);
       }
@@ -372,10 +360,33 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 }
 
-const textEncoder = new TextEncoder();
+function reduceStreamState(args: { state: StreamState; event: Event }): StreamState {
+  const { state, event } = args;
+
+  if (event.type === "https://events.iterate.com/events/stream/initialized") {
+    return {
+      ...state,
+      maxOffset: event.offset,
+    };
+  }
+
+  if (event.type === "https://events.iterate.com/events/stream/metadata-updated") {
+    const metadataEvent = event as StreamMetadataUpdatedEvent;
+    return {
+      ...state,
+      maxOffset: event.offset,
+      metadata: metadataEvent.payload.metadata,
+    };
+  }
+
+  return {
+    ...state,
+    maxOffset: event.offset,
+  };
+}
 
 function encodeEventLine(event: Event) {
-  return textEncoder.encode(`${JSON.stringify(event)}\n`);
+  return new TextEncoder().encode(`event: message\ndata: ${JSON.stringify(event)}\n\n`);
 }
 
 type SqliteEventRow = {
@@ -386,40 +397,3 @@ type SqliteEventRow = {
   idempotency_key: string | null;
   created_at: string;
 };
-
-/**
- * Pure reducer for the persisted stream projection. Replay and append share the
- * same rules so state cannot drift based on which code path produced it.
- *
- * `initialize()` sets the initial state (with `maxOffset: 0`), then appends
- * the synthetic `stream-initialized` event through the normal `append()` path.
- * After that, `stream-metadata-updated` replaces the metadata snapshot and all
- * other events simply advance the max offset.
- */
-function reduceStreamState(args: { state: StreamState; event: Event }): StreamState {
-  const { state, event } = args;
-
-  if (state.path !== event.streamPath) {
-    throw new Error(
-      `This should never happen. Somebody is trying to append an event to the wrong stream. Stream has path ${state.path}, but the event has path ${event.streamPath}.`,
-    );
-  }
-
-  state.maxOffset++;
-
-  switch (event.type) {
-    case "https://events.iterate.com/events/stream/metadata-updated": {
-      // TODO: Talk to Misha about how to express "built-in event or generic event"
-      // without breaking payload narrowing here.
-      const metadataUpdatedEvent = event as StreamMetadataUpdatedEvent;
-      return {
-        ...state,
-        metadata: metadataUpdatedEvent.payload.metadata,
-      };
-    }
-
-    default: {
-      return state;
-    }
-  }
-}
