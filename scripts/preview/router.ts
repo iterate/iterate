@@ -70,16 +70,36 @@ async function runPreviewLifecycleForAllApps<Result>(params: {
   onFailure: (input: { appSlug: string; result: Result }) => boolean;
   verb: string;
 }) {
-  const results: Array<{ appSlug: string; result: Result }> = [];
+  const results: Array<
+    | { appSlug: string; status: "ok"; result: Result }
+    | { appSlug: string; errorMessage: string; status: "error" }
+  > = [];
 
   for (const app of Object.values(cloudflarePreviewApps)) {
-    results.push({
-      appSlug: app.slug,
-      result: await params.handler(app),
-    });
+    try {
+      results.push({
+        appSlug: app.slug,
+        result: await params.handler(app),
+        status: "ok",
+      });
+    } catch (error) {
+      results.push({
+        appSlug: app.slug,
+        errorMessage: getErrorMessage(error),
+        status: "error",
+      });
+    }
   }
 
-  const failed = results.filter(params.onFailure);
+  const failed = results.filter(
+    (result) =>
+      result.status === "error" ||
+      (result.status === "ok" &&
+        params.onFailure({
+          appSlug: result.appSlug,
+          result: result.result,
+        })),
+  );
   if (failed.length > 0) {
     throw new Error(
       `Failed to ${params.verb} previews for: ${failed.map(({ appSlug }) => appSlug).join(", ")}`,
@@ -242,3 +262,11 @@ export const router = os.router({
       }),
   }),
 });
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
