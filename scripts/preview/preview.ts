@@ -791,7 +791,7 @@ async function shouldSyncPreviewEnvironment(params: {
   previousEntry: CloudflarePreviewCommentEntryType | undefined;
   repositoryFullName: string;
 }) {
-  const compareBaseSha = await resolvePreviewCompareBaseSha(params);
+  const compareBaseSha = (await resolvePreviewCompareBaseSha(params)) ?? params.pullRequestBaseSha;
   if (!compareBaseSha || compareBaseSha === params.pullRequestHeadSha) {
     return { shouldSync: false as const };
   }
