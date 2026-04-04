@@ -1,7 +1,6 @@
 import { ORPCError } from "@orpc/server";
 import {
   type ChildStreamCreatedEvent,
-  type EventInput,
   type StreamPath,
   StreamPausedError,
 } from "@iterate-com/events-contract";

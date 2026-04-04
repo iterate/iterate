@@ -509,6 +509,7 @@ describe.sequential("events stream e2e", () => {
         projectSlug: defaultProjectSlug,
         path,
         eventCount: 1,
+        childPaths: [],
         metadata: {},
         processors: expectedProcessorsWithRecentEventCount(1),
       });
@@ -617,6 +618,7 @@ describe.sequential("events stream e2e", () => {
         projectSlug: defaultProjectSlug,
         path,
         eventCount: 1,
+        childPaths: [],
         metadata: {},
         processors: expectedProcessorsWithRecentEventCount(1),
       });
@@ -697,6 +699,7 @@ describe.sequential("events stream e2e", () => {
         projectSlug: defaultProjectSlug,
         path,
         eventCount: 4,
+        childPaths: [],
         metadata: {
           owner: "second",
         },

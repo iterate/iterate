@@ -168,18 +168,18 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     this.ensureSchema();
 
-    const processorState: Record<string, Record<string, unknown>> = {};
-    for (const processor of processors) {
-      processorState[processor.slug] = structuredClone(processor.initialState);
-    }
+    const processorState = Object.fromEntries(
+      processors.map((p) => [p.slug, structuredClone(p.initialState)]),
+    ) as StreamState["processors"];
 
     this._state = {
       projectSlug: args.projectSlug,
       path: args.path,
       eventCount: 0,
+      childPaths: [],
       metadata: {},
       processors: processorState,
-    } as StreamState;
+    };
 
     try {
       this.append({
@@ -320,6 +320,16 @@ export class StreamDurableObject extends DurableObject<Env> {
         nextState = { ...nextState, metadata: metadataUpdatedEvent.payload.metadata };
         break;
       }
+      case "https://events.iterate.com/events/stream/child-stream-created": {
+        const childPath = getImmediateChildPath({
+          parentPath: this.state.path,
+          childPath: (event as ChildStreamCreatedEvent).payload.childPath,
+        });
+        if (childPath != null && !nextState.childPaths.includes(childPath)) {
+          nextState = { ...nextState, childPaths: [...nextState.childPaths, childPath] };
+        }
+        break;
+      }
     }
 
     for (const processor of processors) {
@@ -358,28 +368,26 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (event.type === "https://events.iterate.com/events/stream/initialized") {
       const ancestorPaths = getAncestorStreamPaths(event.streamPath);
 
-      if (ancestorPaths.length > 0) {
-        void Promise.all(
-          ancestorPaths.map(async (path) => {
-            const stream = await getInitializedStreamStub({
-              projectSlug: this.state.projectSlug,
-              path,
-            });
-            await stream.append({
-              type: "https://events.iterate.com/events/stream/child-stream-created",
-              payload: { childPath: event.streamPath },
-              metadata: event.metadata,
-            });
-          }),
-        ).catch((error) => {
-          console.error("[stream-do] failed to propagate event to ancestor streams", {
-            path: event.streamPath,
-            ancestorPaths,
-            eventType: "https://events.iterate.com/events/stream/child-stream-created",
-            error,
+      void Promise.all(
+        ancestorPaths.map(async (path) => {
+          const stream = await getInitializedStreamStub({
+            projectSlug: this.state.projectSlug,
+            path,
           });
+          await stream.append({
+            type: "https://events.iterate.com/events/stream/child-stream-created",
+            payload: { childPath: event.streamPath },
+            metadata: event.metadata,
+          });
+        }),
+      ).catch((error) => {
+        console.error("[stream-do] failed to propagate event to ancestor streams", {
+          path: event.streamPath,
+          ancestorPaths,
+          eventType: "https://events.iterate.com/events/stream/child-stream-created",
+          error,
         });
-      }
+      });
     }
 
     for (const processor of processors) {
@@ -413,7 +421,22 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   async destroy(args: { destroyChildren?: boolean } = {}): Promise<DestroyStreamResult> {
-    const childEntries = args.destroyChildren ? await this.destroyChildStreams() : {};
+    const childEntries: DestroyStreamResult["finalStateByPath"] = args.destroyChildren
+      ? await Promise.all(
+          [...this.state.childPaths].sort().map(async (path) => {
+            const stub = await getInitializedStreamStub({
+              projectSlug: this.state.projectSlug,
+              path,
+            });
+            return stub.destroy({ destroyChildren: true });
+          }),
+        ).then((results) =>
+          results.reduce<DestroyStreamResult["finalStateByPath"]>(
+            (acc, { finalStateByPath }) => ({ ...acc, ...finalStateByPath }),
+            {},
+          ),
+        )
+      : {};
     const stateBeforeDelete = structuredClone(this._state);
     const path = stateBeforeDelete?.path;
 
@@ -528,47 +551,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       .next().value;
 
     return this.parseEventRow(row);
-  }
-
-  private async destroyChildStreams(): Promise<DestroyStreamResult["finalStateByPath"]> {
-    const childPaths = [...this.getImmediateDiscoveredChildPaths()].sort();
-
-    const results = await Promise.all(
-      childPaths.map(async (path) => {
-        const stub = await getInitializedStreamStub({
-          projectSlug: this.state.projectSlug,
-          path,
-        });
-        return stub.destroy({ destroyChildren: true });
-      }),
-    );
-
-    return results.reduce<DestroyStreamResult["finalStateByPath"]>(
-      (acc, { finalStateByPath }) => ({ ...acc, ...finalStateByPath }),
-      {},
-    );
-  }
-
-  private getImmediateDiscoveredChildPaths() {
-    const directChildren = new Set<StreamPath>();
-
-    for (const event of this.history()) {
-      if (event.type !== "https://events.iterate.com/events/stream/child-stream-created") {
-        continue;
-      }
-
-      const childPath = (event as ChildStreamCreatedEvent).payload.childPath;
-      const immediateChildPath = getImmediateChildPath({
-        parentPath: this.state.path,
-        childPath,
-      });
-
-      if (immediateChildPath != null) {
-        directChildren.add(immediateChildPath);
-      }
-    }
-
-    return directChildren;
   }
 
   private parseEventRow(row: SqliteEventRow | null | undefined): Event | null {

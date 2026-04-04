@@ -102,6 +102,7 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
         "projectSlug": "public",
         "path": "<streamPath>",
         "eventCount": 2,
+        "childPaths": [],
         "metadata": {},
         "processors": {
           "circuit-breaker": {
@@ -123,6 +124,7 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
         "projectSlug": "public",
         "path": "<streamPath>",
         "eventCount": 2,
+        "childPaths": [],
         "metadata": {},
         "processors": {
           "circuit-breaker": {

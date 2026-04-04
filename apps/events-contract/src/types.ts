@@ -175,6 +175,7 @@ export const StreamState = z.object({
   projectSlug: ProjectSlug,
   path: StreamPath,
   eventCount: z.number().int().nonnegative(),
+  childPaths: z.array(StreamPath).default([]),
   metadata: JSONObject,
   processors: ProcessorsState,
 });

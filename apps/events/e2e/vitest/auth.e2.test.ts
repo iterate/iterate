@@ -51,6 +51,7 @@ describe.sequential("events auth-adjacent e2e", () => {
         projectSlug: defaultProjectSlug,
         path,
         eventCount: 2,
+        childPaths: [],
         metadata: {},
         processors: expectedProcessorsWithRecentEventCount(2),
       });
@@ -58,6 +59,7 @@ describe.sequential("events auth-adjacent e2e", () => {
         projectSlug: "team-a",
         path,
         eventCount: 2,
+        childPaths: [],
         metadata: {},
         processors: expectedProcessorsWithRecentEventCount(2),
       });
