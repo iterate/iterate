@@ -19,6 +19,11 @@ import {
   JsonataTransformerConfiguredEventInput,
   JsonataTransformerConfiguredEvent,
 } from "./jsonata-transformer-types.ts";
+import {
+  DynamicWorkerState,
+  DynamicWorkerConfiguredEventInput,
+  DynamicWorkerConfiguredEvent,
+} from "./dynamic-worker-types.ts";
 
 export { JSONObject, Offset, StreamPath };
 
@@ -90,6 +95,7 @@ const builtInEventInputOptions = [
   ErrorOccurredEventInput,
   InvalidEventAppendedEventInput,
   JsonataTransformerConfiguredEventInput,
+  DynamicWorkerConfiguredEventInput,
   StreamPausedEventInput,
   StreamResumedEventInput,
 ] as const;
@@ -101,6 +107,7 @@ const builtInEventOptions = [
   ErrorOccurredEvent,
   InvalidEventAppendedEvent,
   JsonataTransformerConfiguredEvent,
+  DynamicWorkerConfiguredEvent,
   StreamPausedEvent,
   StreamResumedEvent,
 ] as const;
@@ -148,6 +155,7 @@ export type Event = BuiltInEvent | GenericEvent;
 
 export const ProcessorsState = z.object({
   "circuit-breaker": CircuitBreakerState,
+  "dynamic-worker": DynamicWorkerState,
   "jsonata-transformer": JsonataTransformerState,
 });
 

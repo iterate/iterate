@@ -8,14 +8,18 @@ import {
   StreamState,
 } from "@iterate-com/events-contract";
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
-import { dynamicWorkerPocModule, type DynamicWorkerAppendInput } from "./dynamic-processor.ts";
+import { dynamicWorkerProcessor, type DynamicWorkerAppendInput } from "./dynamic-processor.ts";
 import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
-import type { BuiltinProcessor } from "./define-processor.ts";
+import type { BuiltinProcessor, BuiltinProcessorRuntime } from "./define-processor.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 
 type ProcessorSlugKey = keyof StreamState["processors"];
 
-const processors: BuiltinProcessor[] = [circuitBreakerProcessor, jsonataTransformerProcessor];
+const processors: BuiltinProcessor[] = [
+  circuitBreakerProcessor,
+  dynamicWorkerProcessor,
+  jsonataTransformerProcessor,
+];
 
 function getProcessorState(state: StreamState, slug: string) {
   return state.processors[slug as ProcessorSlugKey];
@@ -23,10 +27,12 @@ function getProcessorState(state: StreamState, slug: string) {
 
 class DynamicWorkerStreamTarget extends RpcTarget {
   #stream: StreamDurableObject;
+  #afterOffset: number;
 
-  constructor(stream: StreamDurableObject) {
+  constructor(args: { stream: StreamDurableObject; afterOffset: number }) {
     super();
-    this.#stream = stream;
+    this.#stream = args.stream;
+    this.#afterOffset = args.afterOffset;
   }
 
   async append(input: DynamicWorkerAppendInput) {
@@ -40,7 +46,7 @@ class DynamicWorkerStreamTarget extends RpcTarget {
 
   async subscribe() {
     return this.#stream.stream({
-      afterOffset: this.#stream.state.eventCount,
+      afterOffset: this.#afterOffset,
       live: true,
     });
   }
@@ -101,7 +107,7 @@ class DynamicWorkerStreamTarget extends RpcTarget {
 export class StreamDurableObject extends DurableObject<Env> {
   private _state: StreamState | null = null;
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
-  private dynamicWorkerPocRun: Promise<void> | null = null;
+  private readonly processorRuntimes = new Map<string, BuiltinProcessorRuntime>();
 
   private get state(): StreamState {
     if (this._state == null) {
@@ -129,6 +135,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.initializeProcessorRuntimes();
 
     void this.ctx.blockConcurrencyWhile(async () => {
       this.ensureSchema();
@@ -145,7 +152,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       const parsed = StreamState.safeParse(rawState);
       if (parsed.success) {
         this._state = parsed.data;
-        this.ensureDynamicWorkerPocStarted();
         return;
       }
 
@@ -187,7 +193,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       metadata: {},
       processors: processorState,
     } as StreamState;
-    this.ensureDynamicWorkerPocStarted();
 
     try {
       this.append({
@@ -293,6 +298,11 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     for (const processor of processors) {
       processor.beforeAppend?.({
+        event: input,
+        state: getProcessorState(this.state, processor.slug),
+      });
+
+      this.processorRuntimes.get(processor.slug)?.beforeAppend?.({
         event: input,
         state: getProcessorState(this.state, processor.slug),
       });
@@ -409,33 +419,25 @@ export class StreamDurableObject extends DurableObject<Env> {
           error,
         });
       });
-    }
-  }
 
-  private ensureDynamicWorkerPocStarted() {
-    if (this.dynamicWorkerPocRun != null) {
-      return;
-    }
-
-    const entrypoint = this.env.LOADER.get(`dynamic-worker-poc:${this.ctx.id.toString()}`, () => ({
-      compatibilityDate: "2026-02-05",
-      mainModule: "dynamic-processor.js",
-      modules: {
-        "dynamic-processor.js": dynamicWorkerPocModule,
-      },
-      globalOutbound: null,
-    })).getEntrypoint() as unknown as {
-      run(stream: DynamicWorkerStreamTarget): Promise<void>;
-    };
-
-    this.dynamicWorkerPocRun = entrypoint.run(new DynamicWorkerStreamTarget(this));
-
-    void this.dynamicWorkerPocRun.catch((error) => {
-      console.error("[stream-do] dynamic worker POC failed", {
-        path: this._state?.path ?? null,
-        error,
+      const runtimeResult = this.processorRuntimes.get(processor.slug)?.afterAppend?.({
+        event,
+        state: getProcessorState(this.state, processor.slug),
       });
-    });
+
+      if (runtimeResult == null) {
+        continue;
+      }
+
+      void runtimeResult.catch((error) => {
+        console.error("[stream-do] processor runtime afterAppend failed", {
+          path: this.state.path,
+          processor: processor.slug,
+          eventType: event.type,
+          error,
+        });
+      });
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -616,6 +618,26 @@ export class StreamDurableObject extends DurableObject<Env> {
       idempotencyKey: row.idempotency_key ?? undefined,
       createdAt: row.created_at,
     } as Event;
+  }
+
+  private initializeProcessorRuntimes() {
+    for (const processor of processors) {
+      const runtime = processor.createRuntime?.({
+        append: (event) => this.append(event),
+        createStreamTarget: ({ afterOffset }) =>
+          new DynamicWorkerStreamTarget({
+            stream: this,
+            afterOffset,
+          }),
+        getPath: () => this.state.path,
+        loader: this.env.LOADER,
+        waitUntil: (promise) => this.ctx.waitUntil(promise),
+      });
+
+      if (runtime != null) {
+        this.processorRuntimes.set(processor.slug, runtime);
+      }
+    }
   }
 }
 

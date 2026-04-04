@@ -1,4 +1,5 @@
-import type { Event, EventInput } from "@iterate-com/events-contract";
+import type { Event, EventInput, StreamPath } from "@iterate-com/events-contract";
+import { RpcTarget } from "cloudflare:workers";
 
 /**
  * A Processor runs reduce/afterAppend hooks against its own slice of stream
@@ -17,6 +18,19 @@ export type Processor<TState = Record<string, unknown>> = {
   }): Promise<void>;
 };
 
+export type BuiltinProcessorContext = {
+  append: (event: EventInput) => Event;
+  createStreamTarget: (args: { afterOffset: number }) => RpcTarget;
+  getPath: () => StreamPath;
+  loader: WorkerLoader;
+  waitUntil: (promise: Promise<unknown>) => void;
+};
+
+export type BuiltinProcessorRuntime<TState = Record<string, unknown>> = {
+  beforeAppend?(args: { event: EventInput; state: TState }): void;
+  afterAppend?(args: { event: Event; state: TState }): Promise<void> | void;
+};
+
 /**
  * A BuiltinProcessor runs in-process inside the Durable Object, so it can
  * synchronously reject events via `beforeAppend` before they are committed.
@@ -25,6 +39,7 @@ export type Processor<TState = Record<string, unknown>> = {
  */
 export type BuiltinProcessor<TState = Record<string, unknown>> = Processor<TState> & {
   beforeAppend?(args: { event: EventInput; state: TState }): void;
+  createRuntime?(context: BuiltinProcessorContext): BuiltinProcessorRuntime<TState>;
 };
 
 export function defineProcessor<const TState>(factory: () => Processor<TState>): Processor<TState> {

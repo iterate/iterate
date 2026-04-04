@@ -112,6 +112,9 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
               "<ts>"
             ]
           },
+          "dynamic-worker": {
+            "workersBySlug": {}
+          },
           "jsonata-transformer": {
             "transformersBySlug": {}
           }
@@ -131,6 +134,9 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
               "<ts>",
               "<ts>"
             ]
+          },
+          "dynamic-worker": {
+            "workersBySlug": {}
           },
           "jsonata-transformer": {
             "transformersBySlug": {}
