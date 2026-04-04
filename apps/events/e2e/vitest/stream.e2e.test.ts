@@ -477,8 +477,9 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "root stream is explicitly listed as a known system stream",
+    "root stream is listed once it has been initialized",
     async () => {
+      await app.client.getState({ path: "/" });
       const streams = await app.client.listStreams({});
 
       expect(streams.some((stream) => stream.path === "/")).toBe(true);
@@ -564,6 +565,53 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "destroyChildren=true wipes the targeted stream and its discovered descendants",
+    async () => {
+      const parentPath = uniqueStreamPath();
+      const descendantPath = StreamPath.parse(`${parentPath}/child/grandchild`);
+      const siblingPath = uniqueStreamPath();
+
+      await app.client.append({
+        params: { path: descendantPath },
+        body: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { label: "descendant" },
+        },
+      });
+      await app.client.append({
+        params: { path: siblingPath },
+        body: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { label: "sibling" },
+        },
+      });
+
+      const result = await app.client.destroy({
+        path: parentPath,
+        destroyChildren: true,
+      });
+
+      expect(result).toMatchObject({
+        destroyed: true,
+        finalState: {
+          path: parentPath,
+        },
+      });
+      expect(await app.client.destroy({ path: descendantPath })).toEqual({
+        destroyed: true,
+        finalState: null,
+      });
+      expect(await collectStreamEvents(app, { path: siblingPath })).toEqual([
+        expect.objectContaining({
+          streamPath: siblingPath,
+          payload: { label: "sibling" },
+        }),
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "destroy does not remove stale discovery entries from listStreams",
     async () => {
       const path = uniqueStreamPath();
@@ -594,6 +642,55 @@ describe.sequential("events stream e2e", () => {
       expect(result).toEqual({
         destroyed: true,
         finalState: stateBeforeDestroy,
+      });
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "DELETE /api/streams/?destroyChildren=true wipes every discovered stream without recreating root",
+    async () => {
+      const pathA = uniqueStreamPath();
+      const pathB = StreamPath.parse(`${uniqueStreamPath()}/child`);
+
+      await app.client.append({
+        params: { path: pathA },
+        body: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { label: "A" },
+        },
+      });
+      await app.client.append({
+        params: { path: pathB },
+        body: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { label: "B" },
+        },
+      });
+
+      const response = await app.fetch("/api/streams/?destroyChildren=true", {
+        method: "DELETE",
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        destroyed: true,
+        finalState: {
+          path: "/",
+        },
+      });
+      expect(await app.client.listStreams({})).toEqual([]);
+      expect(await app.client.destroy({ path: "/" })).toEqual({
+        destroyed: true,
+        finalState: null,
+      });
+      expect(await app.client.destroy({ path: pathA })).toEqual({
+        destroyed: true,
+        finalState: null,
+      });
+      expect(await app.client.destroy({ path: pathB })).toEqual({
+        destroyed: true,
+        finalState: null,
       });
     },
     testTimeoutMs,

@@ -1,6 +1,7 @@
 import { ORPCError } from "@orpc/server";
 import {
   type ChildStreamCreatedEvent,
+  type DestroyStreamResult,
   type EventInput,
   GenericEventInput,
   type JSONObject,
@@ -58,8 +59,13 @@ export const streamsRouter = {
     }
   }),
   destroy: os.destroy.handler(async ({ input }) => {
-    const streamStub = getStreamStub(input.path);
-    return streamStub.destroy();
+    return await destroyStreamTree(input);
+  }),
+  destroyRoot: os.destroyRoot.handler(async ({ input }) => {
+    return await destroyStreamTree({
+      path: "/",
+      destroyChildren: input.destroyChildren,
+    });
   }),
   stream: os.stream.handler(async function* ({ input, signal }) {
     const streamStub = await getInitializedStreamStub({ path: input.path });
@@ -90,11 +96,9 @@ export const streamsRouter = {
     return streamStub.getState();
   }),
   listStreams: os.listStreams.handler(async () => {
-    const rootStreamStub = await getInitializedStreamStub({ path: "/" });
+    const rootStreamStub = getStreamStub("/");
     const events = await rootStreamStub.history();
-    const discovered: Record<StreamPath, string> = {
-      "/": new Date().toISOString(),
-    };
+    const discovered: Partial<Record<StreamPath, string>> = {};
 
     for (const event of events) {
       if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
@@ -106,7 +110,9 @@ export const streamsRouter = {
     }
 
     return Object.entries(discovered)
-      .map(([path, createdAt]) => ({ path: path as StreamPath, createdAt }))
+      .flatMap(([path, createdAt]) =>
+        createdAt == null ? [] : [{ path: path as StreamPath, createdAt }],
+      )
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }),
 };
@@ -128,6 +134,37 @@ async function transformAppendBody(args: { body: JSONObject; jsonataTransform: s
   }
 
   return parsed.data;
+}
+
+async function destroyStreamTree(args: {
+  path: StreamPath;
+  destroyChildren?: boolean;
+}): Promise<DestroyStreamResult> {
+  if (args.destroyChildren) {
+    const childPaths = await listDiscoveredChildPaths(args.path);
+
+    for (const childPath of childPaths) {
+      await getStreamStub(childPath).destroy();
+    }
+  }
+
+  return await getStreamStub(args.path).destroy();
+}
+
+async function listDiscoveredChildPaths(path: StreamPath) {
+  const events = await getStreamStub(path).history();
+  const discovered = new Set<StreamPath>();
+
+  for (const event of events) {
+    if (event.type !== "https://events.iterate.com/events/stream/child-stream-created") {
+      continue;
+    }
+
+    const childEvent = event as ChildStreamCreatedEvent;
+    discovered.add(childEvent.payload.path);
+  }
+
+  return Array.from(discovered).sort((left, right) => right.length - left.length);
 }
 
 async function evaluateJsonataTransform(args: { body: JSONObject; jsonataTransform: string }) {
