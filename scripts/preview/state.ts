@@ -5,7 +5,7 @@ import { splitRepositoryFullName } from "./repository-full-name.ts";
 
 const cloudflarePreviewSectionLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS";
 const cloudflarePreviewStateLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE";
-const cloudflarePreviewStatus = z.enum([
+const CloudflarePreviewStatus = z.enum([
   "claim-failed",
   "cleanup-failed",
   "deploy-failed",
@@ -18,7 +18,7 @@ const cloudflarePreviewStatus = z.enum([
 export const CloudflarePreviewEntry = z.object({
   appDisplayName: z.string().trim().min(1),
   appSlug: z.string().trim().min(1),
-  status: cloudflarePreviewStatus,
+  status: CloudflarePreviewStatus,
   updatedAt: z.string().trim().min(1),
   leasedUntil: z.number().int().positive().nullable().optional(),
   headSha: z.string().trim().min(1).nullable().optional(),
