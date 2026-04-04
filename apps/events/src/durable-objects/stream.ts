@@ -1,4 +1,4 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, RpcTarget } from "cloudflare:workers";
 import {
   type DestroyStreamResult,
   Event,
@@ -8,6 +8,11 @@ import {
   StreamState,
 } from "@iterate-com/events-contract";
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
+import {
+  dynamicWorkerPocModule,
+  shouldRunDynamicWorkerPoc,
+  type DynamicWorkerAppendInput,
+} from "./dynamic-processor.ts";
 import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
 import type { BuiltinProcessor } from "./define-processor.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
@@ -18,6 +23,24 @@ const processors: BuiltinProcessor[] = [circuitBreakerProcessor, jsonataTransfor
 
 function getProcessorState(state: StreamState, slug: string) {
   return state.processors[slug as ProcessorSlugKey];
+}
+
+class StreamAppender extends RpcTarget {
+  #stream: StreamDurableObject;
+
+  constructor(stream: StreamDurableObject) {
+    super();
+    this.#stream = stream;
+  }
+
+  async append(input: DynamicWorkerAppendInput) {
+    return this.#stream.append(
+      EventInput.parse({
+        ...input,
+        payload: input.payload ?? {},
+      }),
+    );
+  }
 }
 
 /**
@@ -381,6 +404,33 @@ export class StreamDurableObject extends DurableObject<Env> {
         });
       });
     }
+
+    void this.runDynamicWorkerPoc(event).catch((error) => {
+      console.error("[stream-do] dynamic worker POC failed", {
+        path: this.state.path,
+        eventType: event.type,
+        error,
+      });
+    });
+  }
+
+  private async runDynamicWorkerPoc(event: Event) {
+    if (!shouldRunDynamicWorkerPoc(event)) {
+      return;
+    }
+
+    const entrypoint = this.env.LOADER.get(null, () => ({
+      compatibilityDate: "2026-02-05",
+      mainModule: "dynamic-processor.js",
+      modules: {
+        "dynamic-processor.js": dynamicWorkerPocModule,
+      },
+      globalOutbound: null,
+    })).getEntrypoint() as unknown as {
+      run(stream: StreamAppender): Promise<void>;
+    };
+
+    await entrypoint.run(new StreamAppender(this));
   }
 
   // ---------------------------------------------------------------------------

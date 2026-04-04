@@ -1,5 +1,10 @@
 import alchemy, { type Scope } from "alchemy";
-import { D1Database, DurableObjectNamespace, TanStackStart } from "alchemy/cloudflare";
+import {
+  D1Database,
+  DurableObjectNamespace,
+  TanStackStart,
+  WorkerLoader,
+} from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { z } from "zod";
@@ -83,6 +88,7 @@ export const worker = await TanStackStart(APP_NAME, {
   bindings: {
     DB: db,
     STREAM: stream,
+    LOADER: WorkerLoader(),
     APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
   },
   // `packages/shared/src/apps/logging/orpc-plugin.ts` inspects `request.signal`
