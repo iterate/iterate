@@ -1,0 +1,188 @@
+/**
+ * Extra scheduler coverage over the public oRPC API only.
+ *
+ * The tests here avoid private Durable Object access and focus on repeated
+ * interval execution plus recovery after a long idle gap.
+ */
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { StreamPath, type EventType } from "@iterate-com/events-contract";
+import { describe, expect, test } from "vitest";
+import {
+  SCHEDULE_ADDED_TYPE,
+  SCHEDULE_EXECUTION_FINISHED_TYPE,
+  SCHEDULE_EXECUTION_STARTED_TYPE,
+} from "../../src/durable-objects/scheduling-types.ts";
+import {
+  collectAsyncIterableUntilIdle,
+  createEvents2AppFixture,
+  requireEventsBaseUrl,
+} from "../helpers.ts";
+
+const describeDeployedScheduling = process.env.CI ? describe.skip : describe;
+const eventsBaseUrl = process.env.CI ? "http://127.0.0.1" : requireEventsBaseUrl();
+const app = createEvents2AppFixture({
+  baseURL: eventsBaseUrl,
+});
+
+const historyIdleTimeoutMs = 250;
+const intervalFireDelayMs = 12_000;
+const idleGapDelayMs = 75_000;
+const durableObjectConstructedType =
+  "https://events.iterate.com/events/stream/durable-object-constructed";
+
+describeDeployedScheduling("events recurring/restart scheduling e2e", () => {
+  test("an interval schedule keeps emitting ordered callback and finished events", async () => {
+    const path = uniqueStreamPath("interval");
+    const scheduleId = `sched-${randomUUID()}`;
+    const markerType =
+      `https://events.iterate.com/events/example/interval-fired/${randomUUID()}` as EventType;
+
+    await app.client.append({
+      path,
+      event: {
+        type: SCHEDULE_ADDED_TYPE,
+        payload: {
+          scheduleId,
+          callback: "append",
+          payloadJson: JSON.stringify({
+            type: markerType,
+            payload: {
+              scheduleId,
+              source: "alarm",
+            },
+          }),
+          scheduleType: "interval",
+          time: Math.floor(Date.now() / 1000) + 1,
+          intervalSeconds: 1,
+        },
+      },
+    });
+
+    await delay(intervalFireDelayMs);
+
+    const events = await readHistory(path);
+    const types = events.map((event) => event.type);
+
+    expect(countTypes(types, markerType)).toBeGreaterThanOrEqual(2);
+    expect(countTypes(types, SCHEDULE_EXECUTION_STARTED_TYPE)).toBeGreaterThanOrEqual(2);
+    expect(countTypes(types, SCHEDULE_EXECUTION_FINISHED_TYPE)).toBeGreaterThanOrEqual(2);
+    expect(types.slice(0, 8)).toEqual([
+      SCHEDULE_ADDED_TYPE,
+      SCHEDULE_EXECUTION_STARTED_TYPE,
+      markerType,
+      SCHEDULE_EXECUTION_FINISHED_TYPE,
+      SCHEDULE_EXECUTION_STARTED_TYPE,
+      markerType,
+      SCHEDULE_EXECUTION_FINISHED_TYPE,
+      SCHEDULE_EXECUTION_STARTED_TYPE,
+    ]);
+
+    expect(events[2]?.payload).toEqual({
+      scheduleId,
+      source: "alarm",
+    });
+    expect(events[3]?.payload).toMatchObject({
+      scheduleId,
+      outcome: "succeeded",
+      nextTime: expect.any(Number),
+    });
+
+    const state = await app.client.getState({ path });
+    expect(state.path).toBe(path);
+    expect(state.childPaths).toEqual([]);
+    expect(state.eventCount).toBeGreaterThanOrEqual(8);
+  }, 45_000);
+
+  test("a delayed schedule still fires after the stream has been idle long enough to restart", async () => {
+    const path = uniqueStreamPath("idle-gap");
+    const scheduleId = `sched-${randomUUID()}`;
+    const markerType =
+      `https://events.iterate.com/events/example/delayed-idle/${randomUUID()}` as EventType;
+
+    await app.client.append({
+      path,
+      event: {
+        type: SCHEDULE_ADDED_TYPE,
+        payload: {
+          scheduleId,
+          callback: "append",
+          payloadJson: JSON.stringify({
+            type: markerType,
+            payload: {
+              scheduleId,
+              source: "alarm",
+            },
+          }),
+          scheduleType: "delayed",
+          time: Math.floor(Date.now() / 1000) + 70,
+          delayInSeconds: 70,
+        },
+      },
+    });
+
+    await delay(idleGapDelayMs);
+
+    const events = await readHistory(path);
+    expect(events.map((event) => event.type)).toEqual([
+      SCHEDULE_ADDED_TYPE,
+      markerType,
+      SCHEDULE_EXECUTION_FINISHED_TYPE,
+    ]);
+    expect(events[1]?.payload).toEqual({
+      scheduleId,
+      source: "alarm",
+    });
+    expect(events[2]?.payload).toMatchObject({
+      scheduleId,
+      outcome: "succeeded",
+      nextTime: null,
+    });
+
+    const state = await app.client.getState({ path });
+    expect(state.path).toBe(path);
+    expect(state.childPaths).toEqual([]);
+    expect(state.eventCount).toBeGreaterThanOrEqual(4);
+  }, 110_000);
+});
+
+async function readHistory(path: StreamPath) {
+  const events = await collectAsyncIterableUntilIdle({
+    iterable: await app.client.stream({
+      path,
+      live: false,
+    }),
+    idleMs: historyIdleTimeoutMs,
+  });
+
+  return events.filter(
+    (event) =>
+      !(
+        event.type === durableObjectConstructedType ||
+        (event.type === "https://events.iterate.com/events/stream/initialized" &&
+          event.streamPath === path &&
+          getPayloadPath(event) === path)
+      ),
+  );
+}
+
+function countTypes(types: string[], type: string) {
+  return types.filter((value) => value === type).length;
+}
+
+function uniqueStreamPath(scope: string) {
+  return StreamPath.parse(`/e2e-scheduling/${scope}-${randomUUID().slice(0, 8)}`);
+}
+
+function getPayloadPath(event: { payload: unknown }) {
+  if (
+    typeof event.payload === "object" &&
+    event.payload !== null &&
+    "path" in event.payload &&
+    typeof event.payload.path === "string"
+  ) {
+    return event.payload.path;
+  }
+
+  return undefined;
+}

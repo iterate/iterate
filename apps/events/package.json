@@ -20,7 +20,7 @@
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck && vitest run src",
     "test:e2e": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && sh -c 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run --config ./e2e/vitest.config.ts \"$@\"' --",
-    "test:e2e:preview": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest run e2e/vitest/runtime-smoke.e2e.test.ts e2e/vitest/curl-smoketest.e2e.test.ts",
+    "test:e2e:preview": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts e2e/vitest/runtime-smoke.e2e.test.ts e2e/vitest/curl-smoketest.e2e.test.ts",
     "test:quick": "pnpm test:e2e",
     "test:watch": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && sh -c 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest --config ./e2e/vitest.config.ts \"$@\"' --"
   },

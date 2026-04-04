@@ -42,8 +42,8 @@ describeDeployedScheduling("events scheduling e2e", () => {
       const scheduledTime = Math.floor(Date.now() / 1000) + scheduleDelaySeconds;
 
       await app.client.append({
-        params: { path },
-        body: {
+        path,
+        event: {
           type: SCHEDULE_ADDED_TYPE,
           payload: {
             scheduleId,
