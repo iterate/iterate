@@ -14,18 +14,12 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
     permissions: {
       contents: "read",
       deployments: "write",
-      issues: "write",
-      "pull-requests": "write",
     },
     concurrency: {
-      group: `${app.slug}-\${{ github.event.pull_request.number || github.ref_name || inputs.stage || 'prd' }}`,
+      group: `${app.slug}-\${{ github.ref_name || inputs.stage || 'prd' }}`,
       "cancel-in-progress": true,
     },
     on: {
-      pull_request: {
-        types: ["opened", "reopened", "synchronize"],
-        paths: app.paths,
-      },
       push: {
         branches: ["main"],
         paths: app.paths,
@@ -66,65 +60,6 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
               "echo \"stage=${{ github.event_name == 'push' && 'prd' || inputs.stage || 'prd' }}\" >> \"$GITHUB_OUTPUT\"",
               'echo "short_sha=${GIT_SHA:0:7}" >> "$GITHUB_OUTPUT"',
               'echo "run_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$GITHUB_OUTPUT"',
-            ].join("\n"),
-          },
-        ],
-      },
-      "preview-pr": {
-        needs: ["variables"],
-        if: "github.event_name == 'pull_request'",
-        ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
-        steps: [
-          ...utils.getSetupRepo({
-            ref: "${{ github.event.pull_request.head.sha || github.sha }}",
-          }),
-          {
-            ...utils.installDopplerCli,
-            if: "github.event.pull_request.head.repo.fork != true",
-          },
-          {
-            if: "github.event.pull_request.head.repo.fork == true",
-            name: `Sync ${app.displayName} preview`,
-            env: {
-              APP: app.slug,
-              GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
-              SEMAPHORE_BASE_URL: "https://semaphore.iterate.com",
-            },
-            run: [
-              "set -euo pipefail",
-              "pnpm preview sync \\",
-              '  --app "$APP" \\',
-              '  --github-token "$GITHUB_TOKEN" \\',
-              '  --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \\',
-              '  --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \\',
-              '  --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \\',
-              '  --pull-request-number "${{ github.event.pull_request.number }}" \\',
-              '  --repository-full-name "${{ github.repository }}" \\',
-              '  --workflow-run-url "${{ needs.variables.outputs.run_url }}" \\',
-              "  --is-fork \"${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}\" \\",
-              '  --semaphore-base-url "$SEMAPHORE_BASE_URL"',
-            ].join("\n"),
-          },
-          {
-            if: "github.event.pull_request.head.repo.fork != true",
-            name: `Sync ${app.displayName} preview`,
-            env: {
-              APP: app.slug,
-              DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-              GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
-            },
-            run: [
-              "set -euo pipefail",
-              "doppler run --project os --config prd -- pnpm preview sync \\",
-              '  --app "$APP" \\',
-              '  --github-token "$GITHUB_TOKEN" \\',
-              '  --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \\',
-              '  --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \\',
-              '  --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \\',
-              '  --pull-request-number "${{ github.event.pull_request.number }}" \\',
-              '  --repository-full-name "${{ github.repository }}" \\',
-              '  --workflow-run-url "${{ needs.variables.outputs.run_url }}" \\',
-              "  --is-fork \"${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}\"",
             ].join("\n"),
           },
         ],

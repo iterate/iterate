@@ -1,16 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   clearCloudflarePreviewDestroyPayload,
-  cloudflarePreviewCommentMarker,
-  CloudflarePreviewCommentEntry,
-  findLatestManagedCloudflarePreviewComment,
-  parseCloudflarePreviewCommentState,
-  renderCloudflarePreviewCommentBody,
-} from "./comment.ts";
+  CloudflarePreviewEntry,
+  parseCloudflarePreviewState,
+  renderCloudflarePreviewPullRequestBody,
+} from "./state.ts";
 
-describe("cloudflare preview comment helpers", () => {
-  it("round-trips rendered preview comment state", () => {
-    const entry = CloudflarePreviewCommentEntry.parse({
+describe("cloudflare preview state helpers", () => {
+  it("round-trips rendered preview state from the managed PR body section", () => {
+    const entry = CloudflarePreviewEntry.parse({
       appDisplayName: "Example",
       appSlug: "example",
       headSha: "abcdef0123456789",
@@ -28,22 +26,59 @@ describe("cloudflare preview comment helpers", () => {
       updatedAt: "2026-04-02T10:00:00.000Z",
     });
 
-    const body = renderCloudflarePreviewCommentBody(
+    const body = renderCloudflarePreviewPullRequestBody(
+      "## Summary\n\nExisting user-authored description.",
       {
         example: entry,
       },
-      "example",
     );
 
-    expect(parseCloudflarePreviewCommentState(body, "example")).toEqual({
+    expect(parseCloudflarePreviewState(body)).toEqual({
       example: entry,
     });
-    expect(body).toContain("### Example");
-    expect(body).toContain("Environment: `example-preview-1`");
+    expect(body).toContain("## Summary");
+    expect(body).toContain("## Preview Environments");
+    expect(body).toContain("Preview: https://example-preview-1.iterate.workers.dev");
+  });
+
+  it("updates only the managed block and preserves surrounding PR body content", () => {
+    const initialBody = [
+      "# User content",
+      "",
+      "Owned by humans.",
+      "",
+      "<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS -->",
+      "old section",
+      "<!-- /CLOUDFLARE_PREVIEW_ENVIRONMENTS -->",
+      "",
+      "Footer",
+    ].join("\n");
+
+    const body = renderCloudflarePreviewPullRequestBody(initialBody, {
+      events: CloudflarePreviewEntry.parse({
+        appDisplayName: "Events",
+        appSlug: "events",
+        message: "\u001b[31mAssertionError: expected 2 to be +0\u001b[39m",
+        runUrl: "https://github.com/iterate/iterate/actions/runs/456",
+        shortSha: "1234567",
+        status: "tests-failed",
+        updatedAt: "2026-04-02T10:00:00.000Z",
+      }),
+    });
+
+    expect(body).toContain("# User content");
+    expect(body).toContain("Footer");
+    expect(body).toContain("Summary: AssertionError: expected 2 to be +0");
+    expect(body).not.toContain("\u001b[31m");
+    expect(body).toContain("<details>");
+  });
+
+  it("returns empty state when the managed block is deleted", () => {
+    expect(parseCloudflarePreviewState("## Summary\n\nNo preview block here.")).toEqual({});
   });
 
   it("clears destroy payload fields after release", () => {
-    const entry = CloudflarePreviewCommentEntry.parse({
+    const entry = CloudflarePreviewEntry.parse({
       appDisplayName: "Semaphore",
       appSlug: "semaphore",
       leasedUntil: 1_700_000_000_000,
@@ -71,53 +106,5 @@ describe("cloudflare preview comment helpers", () => {
       previewEnvironmentSlug: null,
       previewEnvironmentType: null,
     });
-  });
-
-  it("ignores human-authored preview comments when selecting managed state", () => {
-    const managed = findLatestManagedCloudflarePreviewComment(
-      [
-        {
-          body: `${cloudflarePreviewCommentMarker("example")}\nold`,
-          id: 1,
-          user: {
-            login: "github-actions[bot]",
-          },
-        },
-        {
-          body: `${cloudflarePreviewCommentMarker("example")}\nnewer but human`,
-          id: 2,
-          user: {
-            login: "jonastemplestein",
-          },
-        },
-      ],
-      "example",
-    );
-
-    expect(managed?.id).toBe(1);
-  });
-
-  it("selects the managed comment for the requested app only", () => {
-    const managed = findLatestManagedCloudflarePreviewComment(
-      [
-        {
-          body: `${cloudflarePreviewCommentMarker("events")}\nevents`,
-          id: 1,
-          user: {
-            login: "github-actions[bot]",
-          },
-        },
-        {
-          body: `${cloudflarePreviewCommentMarker("example")}\nexample`,
-          id: 2,
-          user: {
-            login: "github-actions[bot]",
-          },
-        },
-      ],
-      "example",
-    );
-
-    expect(managed?.id).toBe(2);
   });
 });

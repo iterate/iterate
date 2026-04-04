@@ -46,7 +46,7 @@ export const router = os.router({
       .input(createCloudflarePreviewSyncInputSchema(env).extend({ app: CloudflarePreviewAppSlug }))
       .meta({
         description:
-          "Recreate an app preview for the current pull request and update the sticky GitHub comment",
+          "Recreate an app preview for the current pull request and update the managed PR preview section",
         default: true,
       })
       .handler(async ({ input, signal }) => {
@@ -77,7 +77,7 @@ export const router = os.router({
         createCloudflarePreviewCleanupInputSchema(env).extend({ app: CloudflarePreviewAppSlug }),
       )
       .meta({
-        description: "Clean up an app preview recorded on the sticky GitHub comment",
+        description: "Clean up an app preview recorded in the managed PR preview section",
       })
       .handler(async ({ input, signal }) => {
         const app = cloudflarePreviewApps[input.app];

@@ -1,13 +1,14 @@
 import { spawn } from "node:child_process";
 import { Octokit } from "@octokit/rest";
+import { stripAnsi } from "../../packages/shared/src/jonasland/strip-ansi.ts";
 import { z } from "zod";
 import {
-  CloudflarePreviewCommentEntry,
-  type CloudflarePreviewCommentEntry as CloudflarePreviewCommentEntryType,
+  CloudflarePreviewEntry,
+  type CloudflarePreviewEntry as CloudflarePreviewEntryType,
   clearCloudflarePreviewDestroyPayload,
-  readCloudflarePreviewCommentState,
-  upsertCloudflarePreviewCommentEntry,
-} from "./comment.ts";
+  readCloudflarePreviewState,
+  upsertCloudflarePreviewStateEntry,
+} from "./state.ts";
 import { splitRepositoryFullName } from "./repository-full-name.ts";
 
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
@@ -29,7 +30,7 @@ export type PreviewSemaphoreResourceClient = {
 };
 
 type PreviewSyncResult = {
-  entry: CloudflarePreviewCommentEntryType | null;
+  entry: CloudflarePreviewEntryType | null;
   ok: boolean;
   skipped?: boolean;
 };
@@ -129,7 +130,7 @@ export async function syncCloudflarePreviewForPullRequest(
   },
 ): Promise<PreviewSyncResult> {
   if (params.isFork) {
-    const entry = CloudflarePreviewCommentEntry.parse({
+    const entry = CloudflarePreviewEntry.parse({
       appDisplayName: params.appDisplayName,
       appSlug: params.appSlug,
       headSha: params.pullRequestHeadSha,
@@ -140,14 +141,14 @@ export async function syncCloudflarePreviewForPullRequest(
       updatedAt: new Date().toISOString(),
     });
     try {
-      await upsertCloudflarePreviewCommentEntry({
+      await upsertCloudflarePreviewStateEntry({
         entry,
         githubToken: params.githubToken,
         repositoryFullName: params.repositoryFullName,
         pullRequestNumber: params.pullRequestNumber,
       });
     } catch {
-      // Fork PRs do not create preview resources, so a denied comment write should not fail the job.
+      // Fork PRs do not create preview resources, so a denied PR-body write should not fail the job.
     }
     return {
       entry,
@@ -155,8 +156,7 @@ export async function syncCloudflarePreviewForPullRequest(
     };
   }
 
-  const current = await readCloudflarePreviewCommentState({
-    appSlug: params.appSlug,
+  const current = await readCloudflarePreviewState({
     githubToken: params.githubToken,
     repositoryFullName: params.repositoryFullName,
     pullRequestNumber: params.pullRequestNumber,
@@ -174,7 +174,7 @@ export async function syncCloudflarePreviewForPullRequest(
   if (!syncDecision.shouldSync) {
     const nextEntry =
       previousEntry && previousEntry.headSha !== params.pullRequestHeadSha
-        ? CloudflarePreviewCommentEntry.parse({
+        ? CloudflarePreviewEntry.parse({
             ...previousEntry,
             headSha: params.pullRequestHeadSha,
             runUrl: params.workflowRunUrl,
@@ -184,7 +184,7 @@ export async function syncCloudflarePreviewForPullRequest(
         : (previousEntry ?? null);
 
     if (nextEntry) {
-      await upsertCloudflarePreviewCommentEntry({
+      await upsertCloudflarePreviewStateEntry({
         entry: nextEntry,
         githubToken: params.githubToken,
         repositoryFullName: params.repositoryFullName,
@@ -233,15 +233,15 @@ export async function syncCloudflarePreviewForPullRequest(
         shortSha: params.pullRequestHeadSha.slice(0, 7),
         status: "cleanup-failed",
         updatedAt: new Date().toISOString(),
-      } satisfies CloudflarePreviewCommentEntryType;
-      await upsertCloudflarePreviewCommentEntry({
-        entry: CloudflarePreviewCommentEntry.parse(cleanupEntry),
+      } satisfies CloudflarePreviewEntryType;
+      await upsertCloudflarePreviewStateEntry({
+        entry: CloudflarePreviewEntry.parse(cleanupEntry),
         githubToken: params.githubToken,
         repositoryFullName: params.repositoryFullName,
         pullRequestNumber: params.pullRequestNumber,
       });
       return {
-        entry: CloudflarePreviewCommentEntry.parse(cleanupEntry),
+        entry: CloudflarePreviewEntry.parse(cleanupEntry),
         ok: false,
       };
     }
@@ -272,7 +272,7 @@ export async function syncCloudflarePreviewForPullRequest(
     workingDirectory: params.workingDirectory,
   });
   try {
-    await upsertCloudflarePreviewCommentEntry({
+    await upsertCloudflarePreviewStateEntry({
       entry: createResult.entry!,
       githubToken: params.githubToken,
       repositoryFullName: params.repositoryFullName,
@@ -306,7 +306,7 @@ export async function syncCloudflarePreviewForPullRequest(
           workingDirectory: params.workingDirectory,
         });
       } catch {
-        // best-effort cleanup when the PR comment cannot be updated
+        // best-effort cleanup when the PR body cannot be updated
       }
     }
 
@@ -332,8 +332,7 @@ export async function cleanupCloudflarePreviewForPullRequest(
     workingDirectory: string;
   },
 ) {
-  const current = await readCloudflarePreviewCommentState({
-    appSlug: params.appSlug,
+  const current = await readCloudflarePreviewState({
     githubToken: params.githubToken,
     repositoryFullName: params.repositoryFullName,
     pullRequestNumber: params.pullRequestNumber,
@@ -371,7 +370,7 @@ export async function cleanupCloudflarePreviewForPullRequest(
     workingDirectory: params.workingDirectory,
   });
 
-  const nextEntry = CloudflarePreviewCommentEntry.parse(
+  const nextEntry = CloudflarePreviewEntry.parse(
     destroyResult.ok
       ? {
           ...clearCloudflarePreviewDestroyPayload(existingEntry),
@@ -390,7 +389,7 @@ export async function cleanupCloudflarePreviewForPullRequest(
           updatedAt: new Date().toISOString(),
         },
   );
-  await upsertCloudflarePreviewCommentEntry({
+  await upsertCloudflarePreviewStateEntry({
     entry: nextEntry,
     githubToken: params.githubToken,
     repositoryFullName: params.repositoryFullName,
@@ -480,7 +479,7 @@ async function createPreviewEnvironment(
     });
     if (deployResult.exitCode !== 0) {
       return {
-        entry: CloudflarePreviewCommentEntry.parse({
+        entry: CloudflarePreviewEntry.parse({
           ...baseEntry,
           message: commandFailureMessage(deployResult, "Preview deployment failed."),
           status: "deploy-failed",
@@ -496,7 +495,7 @@ async function createPreviewEnvironment(
     });
     if (!readiness.ok) {
       return {
-        entry: CloudflarePreviewCommentEntry.parse({
+        entry: CloudflarePreviewEntry.parse({
           ...baseEntry,
           message: readiness.message,
           status: "deploy-failed",
@@ -526,7 +525,7 @@ async function createPreviewEnvironment(
     });
     if (testResult.exitCode !== 0) {
       return {
-        entry: CloudflarePreviewCommentEntry.parse({
+        entry: CloudflarePreviewEntry.parse({
           ...baseEntry,
           message: commandFailureMessage(testResult, "Preview tests failed after deploy."),
           status: "tests-failed",
@@ -536,7 +535,7 @@ async function createPreviewEnvironment(
     }
 
     return {
-      entry: CloudflarePreviewCommentEntry.parse({
+      entry: CloudflarePreviewEntry.parse({
         ...baseEntry,
         status: "deployed",
       }),
@@ -560,7 +559,7 @@ async function createPreviewEnvironment(
     }
 
     return {
-      entry: CloudflarePreviewCommentEntry.parse({
+      entry: CloudflarePreviewEntry.parse({
         appDisplayName: params.appDisplayName,
         appSlug: params.appSlug,
         headSha: params.pullRequestHeadSha,
@@ -681,8 +680,8 @@ function derivePreviewEnvironment(input: {
 }
 
 function hasPreviewDestroyPayload(
-  entry: CloudflarePreviewCommentEntryType | undefined,
-): entry is CloudflarePreviewCommentEntryType & {
+  entry: CloudflarePreviewEntryType | undefined,
+): entry is CloudflarePreviewEntryType & {
   previewEnvironmentAlchemyStageName: string;
   previewEnvironmentDopplerConfigName: string;
   previewEnvironmentIdentifier: string;
@@ -796,7 +795,7 @@ async function shouldSyncPreviewEnvironment(params: {
   pullRequestNumber: number;
   pullRequestBaseSha: string;
   pullRequestHeadSha: string;
-  previousEntry: CloudflarePreviewCommentEntryType | undefined;
+  previousEntry: CloudflarePreviewEntryType | undefined;
   repositoryFullName: string;
 }) {
   const compareBaseSha = await resolvePreviewCompareBaseSha(params);
@@ -824,7 +823,7 @@ async function resolvePreviewCompareBaseSha(params: {
   pullRequestNumber: number;
   pullRequestBaseSha: string;
   pullRequestHeadSha: string;
-  previousEntry: CloudflarePreviewCommentEntryType | undefined;
+  previousEntry: CloudflarePreviewEntryType | undefined;
   repositoryFullName: string;
 }) {
   const previousPullRequestHeadSha = await resolvePreviousPullRequestHeadSha(params);
@@ -939,10 +938,12 @@ function commandFailureMessage(
   },
   fallback: string,
 ) {
-  const text = [result.stderr, result.stdout]
-    .filter((value) => typeof value === "string" && value.trim().length > 0)
-    .join("\n")
-    .trim();
+  const text = sanitizePreviewOutput(
+    [result.stderr, result.stdout]
+      .filter((value) => typeof value === "string" && value.trim().length > 0)
+      .join("\n")
+      .trim(),
+  );
   if (!text) {
     return fallback;
   }
@@ -1073,8 +1074,15 @@ function requireValue<T>(value: T | undefined, message: string) {
 
 function formatPreviewErrorMessage(error: unknown) {
   if (error instanceof z.ZodError) {
-    return `${error.message}: ${JSON.stringify(error.issues)}`;
+    return sanitizePreviewOutput(`${error.message}: ${JSON.stringify(error.issues)}`);
   }
 
-  return error instanceof Error ? error.message : String(error);
+  return sanitizePreviewOutput(error instanceof Error ? error.message : String(error));
+}
+
+function sanitizePreviewOutput(value: string) {
+  return stripAnsi(value)
+    .replaceAll("\r\n", "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }

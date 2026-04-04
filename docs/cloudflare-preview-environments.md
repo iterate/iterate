@@ -15,27 +15,28 @@ The resource slug is the canonical preview environment identifier. Every other n
 ## Source Of Truth
 
 - Semaphore `resources` stores the static preview pool inventory and generic leases
-- the sticky GitHub PR comment stores the current per-app preview entry for that PR
+- the managed PR body preview section stores the current per-app preview entry for that PR
 - there is no preview-specific database state in Semaphore
 
 ## Lifecycle
 
-1. A PR workflow for an affected app runs the repo-local Iterate CLI against `./scripts/preview/router.ts`.
-2. The preview router reads the sticky PR comment. If the app already has a recorded preview, it destroys it first.
+1. A shared PR preview workflow runs the repo-local Iterate CLI against `./scripts/preview/router.ts`.
+2. The preview router reads the managed PR body preview section. If the app already has a recorded preview, it destroys it first.
 3. The preview procedures acquire a fresh generic Semaphore lease from the app-specific preview pool.
 4. It derives `stg_N`, `preview-N`, and the public URL from the leased slug.
-5. It deploys with `pnpm alchemy:up`, runs the app’s network preview tests against the live URL, and updates the sticky PR comment.
-6. On PR close, the cleanup workflow runs the same preview router with `preview cleanup`.
-7. The preview router reads the same comment entry, runs `pnpm alchemy:down`, releases the generic Semaphore lease, and updates the comment.
+5. It deploys with `pnpm alchemy:up`, runs the app’s network preview tests against the live URL, and updates the managed PR body preview section.
+6. On PR close, the same workflow runs `preview cleanup`.
+7. The preview router reads the same PR body entry, runs `pnpm alchemy:down`, releases the generic Semaphore lease, and updates the section.
 
 ## Operational Notes
 
 - Preview inventory is provisioned explicitly with `apps/semaphore` `seed-cloudflare-preview-environment-pool`.
 - Doppler `stg_N` configs are also an explicit rollout precondition.
-- CI workflows only invoke the shared preview local-router commands; they do not parse or render preview comment state directly.
+- CI workflows only invoke the shared preview local-router commands; they do not parse or render preview state directly.
 - The app manifest for paths, Doppler project names, preview pool types, and test commands lives in `scripts/preview/apps.ts`.
 - The preview router and procedures live in `scripts/preview/router.ts` and `scripts/preview/preview.ts`.
 - Preview leases are deliberately long-lived in v1 and are released explicitly on cleanup.
+- Deleting the managed PR body preview section is treated as state loss. A later sync can create a fresh preview while the previous environment may linger until cleanup or later slot reuse.
 - `events` preview runs the deployed-worker smoke suites rather than the slowest stream propagation suite, which remains available under the full app e2e command.
 - `semaphore` preview runs the deployed-worker auth, CRUD, and contract-client checks rather than the longest wait-path contention test, which remains available under the full app e2e command.
 - `ingress-proxy` preview runs the management API e2e suite only. The full custom-host proxy suite still needs a routed hostname topology rather than an isolated `workers.dev` preview URL.
