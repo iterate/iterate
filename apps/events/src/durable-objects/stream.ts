@@ -6,10 +6,11 @@ import {
   type EventInput,
   EventInput as EventInputSchema,
   type StreamMetadataUpdatedEvent,
-  StreamPath,
+  type StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
+import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 /**
  *
  * IMPORTANT: This file should not be changed without explicit planning consent
@@ -26,8 +27,8 @@ import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/s
  * - caller-appended events begin at offset 2
  *
  * Child discovery is a separate built-in event. After a stream commits its own
- * self-init event, it appends `child-stream-created` to its parent. Parents then
- * propagate that same child discovery event upward one level at a time.
+ * self-init event, it appends `child-stream-created` to every ancestor stream
+ * in parallel.
  *
  * Durable Object docs:
  * - https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/
@@ -185,19 +186,28 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     switch (event.type) {
       case "https://events.iterate.com/events/stream/initialized": {
-        this.appendToParent({
+        const ancestorPaths = getAncestorStreamPaths(event.streamPath);
+        const eventInput = {
           type: "https://events.iterate.com/events/stream/child-stream-created",
           payload: { path: event.streamPath },
           metadata: event.metadata,
-        });
-        break;
-      }
-      case "https://events.iterate.com/events/stream/child-stream-created": {
-        this.appendToParent({
-          type: event.type,
-          payload: event.payload,
-          metadata: event.metadata,
-        });
+        } satisfies EventInput & { payload: { path: StreamPath } };
+
+        if (ancestorPaths.length > 0) {
+          void Promise.all(
+            ancestorPaths.map(async (path) => {
+              const stream = await getInitializedStreamStub({ path });
+              await stream.append(eventInput);
+            }),
+          ).catch((error) => {
+            console.error("[stream-do] failed to propagate event to ancestor streams", {
+              path: event.streamPath,
+              ancestorPaths,
+              eventType: eventInput.type,
+              error,
+            });
+          });
+        }
         break;
       }
     }
@@ -314,28 +324,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       .next().value;
 
     return this.parseEventRow(row);
-  }
-
-  private appendToParent(eventInput: EventInput) {
-    void this.getParent()
-      .then((parent) => parent?.append(eventInput))
-      .catch((error) => {
-        console.error("[stream-do] failed to propagate event to parent stream", {
-          path: this.state.path,
-          eventType: eventInput.type,
-          error,
-        });
-      });
-  }
-
-  private async getParent() {
-    const path = this.state.path;
-    if (path === "/") {
-      return null;
-    }
-    const lastSlashIndex = path.lastIndexOf("/");
-    const parentPath = lastSlashIndex === 0 ? "/" : StreamPath.parse(path.slice(0, lastSlashIndex));
-    return getInitializedStreamStub({ path: parentPath });
   }
 
   private parseEventRow(row: SqliteEventRow | null | undefined): Event | null {
