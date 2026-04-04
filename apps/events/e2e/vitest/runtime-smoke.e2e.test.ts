@@ -71,17 +71,12 @@ describe("events runtime smoke", () => {
           ]),
         },
         delete: {
-          requestBody: {
-            content: {
-              "application/json": {
-                schema: {
-                  properties: expect.objectContaining({
-                    destroyChildren: expect.any(Object),
-                  }),
-                },
-              },
-            },
-          },
+          parameters: expect.arrayContaining([
+            expect.objectContaining({
+              in: "query",
+              name: "destroyChildren",
+            }),
+          ]),
         },
       });
     },
@@ -146,6 +141,7 @@ describe("events runtime smoke", () => {
         path,
         maxOffset: 2,
         metadata: {},
+        children: [],
       });
 
       const rootHistoryResponse = await app.fetch("/api/streams/%2F");

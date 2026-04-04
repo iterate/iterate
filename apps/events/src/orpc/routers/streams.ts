@@ -30,10 +30,6 @@ export const streamsRouter = {
         event: appendedEvent,
       };
     } catch (error) {
-      // TODO: Replace this exception mapping with a result-style flow.
-      // See apps/events/tasks/better-error-handling.md.
-      // The instanceof/name checks handle direct calls. The message check
-      // handles DO RPC where the error class is lost during serialization.
       if (
         error instanceof StreamOffsetPreconditionError ||
         (error instanceof Error && error.name === "StreamOffsetPreconditionError") ||
@@ -57,9 +53,9 @@ export const streamsRouter = {
   destroy: os.destroy.use(withProject).handler(async ({ input, context }) => {
     return await getStreamStub({
       projectSlug: context.projectSlug,
-      path: input.path,
+      path: input.params.path,
     }).destroy({
-      destroyChildren: input.destroyChildren ?? readDestroyChildrenQuery(context.rawRequest),
+      destroyChildren: input.query.destroyChildren ?? readDestroyChildrenQuery(context.rawRequest),
     });
   }),
   stream: os.stream.use(withProject).handler(async function* ({ input, signal, context }) {
@@ -100,7 +96,7 @@ export const streamsRouter = {
     return await getStreamStub({
       projectSlug: context.projectSlug,
       path: "/",
-    }).listDiscoveredStreams();
+    }).listChildren();
   }),
 };
 

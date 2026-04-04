@@ -103,14 +103,16 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
         "projectSlug": "public",
         "path": "<streamPath>",
         "maxOffset": 2,
-        "metadata": {}
+        "metadata": {},
+        "children": []
       }
       ---
       {
         "projectSlug": "public",
         "path": "<streamPath>",
         "maxOffset": 2,
-        "metadata": {}
+        "metadata": {},
+        "children": []
       }
       ---
       :

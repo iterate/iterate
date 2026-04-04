@@ -228,6 +228,7 @@ describe.sequential("events stream e2e", () => {
         path,
         maxOffset: 1,
         metadata: {},
+        children: [],
       });
       expect(await collectStreamEvents(app, { path })).toEqual([]);
       expect(await collectAllStreamEvents(app, { path })).toMatchObject([
@@ -335,6 +336,7 @@ describe.sequential("events stream e2e", () => {
         path,
         maxOffset: 1,
         metadata: {},
+        children: [],
       });
     },
     testTimeoutMs,
@@ -365,7 +367,7 @@ describe.sequential("events stream e2e", () => {
       expect(await escapedRootStateResponse.json()).toEqual(
         await app.client.getState({ path: "/" }),
       );
-      expect((await app.client.listStreams({})).some((stream) => stream.path === "/")).toBe(true);
+      expect((await app.client.listStreams({})).some((stream) => stream.path === "/")).toBe(false);
       expect(rootHistory[0]).toMatchObject({
         streamPath: "/",
         type: "https://events.iterate.com/events/stream/initialized",
@@ -417,6 +419,7 @@ describe.sequential("events stream e2e", () => {
         metadata: {
           owner: "second",
         },
+        children: [],
       });
     },
     testTimeoutMs,
@@ -504,10 +507,10 @@ describe.sequential("events stream e2e", () => {
 
       const stateBeforeDestroy = await app.client.getState({ path });
 
-      const result = await app.client.destroy({ path });
+      const result = await destroyStream({ path });
       expect(result).toEqual({
-        destroyed: true,
-        finalState: stateBeforeDestroy,
+        destroyedStreamCount: 1,
+        finalStateByPath: { [path]: { finalState: stateBeforeDestroy } },
       });
     },
     testTimeoutMs,
@@ -518,9 +521,9 @@ describe.sequential("events stream e2e", () => {
     async () => {
       const path = uniqueStreamPath();
 
-      expect(await app.client.destroy({ path })).toEqual({
-        destroyed: true,
-        finalState: null,
+      expect(await destroyStream({ path })).toEqual({
+        destroyedStreamCount: 0,
+        finalStateByPath: {},
       });
     },
     testTimeoutMs,
@@ -547,7 +550,7 @@ describe.sequential("events stream e2e", () => {
         },
       });
 
-      await app.client.destroy({ path: pathA });
+      await destroyStream({ path: pathA });
 
       expect(await collectStreamEvents(app, { path: pathB })).toEqual([
         expect.objectContaining({
@@ -581,20 +584,19 @@ describe.sequential("events stream e2e", () => {
         },
       });
 
-      const result = await app.client.destroy({
+      const result = await destroyStream({
         path: parentPath,
         destroyChildren: true,
       });
 
-      expect(result).toMatchObject({
-        destroyed: true,
-        finalState: {
-          path: parentPath,
-        },
+      expect(result.finalStateByPath[parentPath]).toMatchObject({
+        finalState: { path: parentPath },
       });
-      expect(await app.client.destroy({ path: descendantPath })).toEqual({
-        destroyed: true,
-        finalState: null,
+      expect(result.finalStateByPath[descendantPath]).toBeDefined();
+      expect(result.destroyedStreamCount).toBeGreaterThanOrEqual(2);
+      expect(await destroyStream({ path: descendantPath })).toEqual({
+        destroyedStreamCount: 0,
+        finalStateByPath: {},
       });
       expect(await collectStreamEvents(app, { path: siblingPath })).toEqual([
         expect.objectContaining({
@@ -629,10 +631,8 @@ describe.sequential("events stream e2e", () => {
 
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toMatchObject({
-        destroyed: true,
-        finalState: {
-          path: parentPath,
-        },
+        destroyedStreamCount: 1,
+        finalStateByPath: { [parentPath]: { finalState: { path: parentPath } } },
       });
       expect(await collectStreamEvents(app, { path: descendantPath })).toEqual([
         expect.objectContaining({
@@ -658,7 +658,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       await waitForStream(app, path);
-      await app.client.destroy({ path });
+      await destroyStream({ path });
 
       const streams = await app.client.listStreams({});
       expect(streams.some((stream) => stream.path === path)).toBe(true);
@@ -671,10 +671,10 @@ describe.sequential("events stream e2e", () => {
     async () => {
       const stateBeforeDestroy = await app.client.getState({ path: "/" });
 
-      const result = await app.client.destroy({ path: "/" });
+      const result = await destroyStream({ path: "/" });
       expect(result).toEqual({
-        destroyed: true,
-        finalState: stateBeforeDestroy,
+        destroyedStreamCount: 1,
+        finalStateByPath: { "/": { finalState: stateBeforeDestroy } },
       });
     },
     testTimeoutMs,
@@ -706,20 +706,26 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toMatchObject({
-        destroyed: true,
-        finalState: {
-          path: "/",
+      const json = await response.json();
+      expect(json).toMatchObject({
+        finalStateByPath: {
+          "/": { finalState: { path: "/" } },
         },
       });
+      expect(
+        (json as { finalStateByPath: Record<string, unknown> }).finalStateByPath[pathA],
+      ).toBeDefined();
+      expect(
+        (json as { finalStateByPath: Record<string, unknown> }).finalStateByPath[pathB],
+      ).toBeDefined();
       expect(await app.client.listStreams({})).toEqual([]);
-      expect(await app.client.destroy({ path: "/" })).toEqual({
-        destroyed: true,
-        finalState: null,
+      expect(await destroyStream({ path: "/" })).toEqual({
+        destroyedStreamCount: 0,
+        finalStateByPath: {},
       });
-      expect(await app.client.destroy({ path: pathB })).toEqual({
-        destroyed: true,
-        finalState: null,
+      expect(await destroyStream({ path: pathB })).toEqual({
+        destroyedStreamCount: 0,
+        finalStateByPath: {},
       });
     },
     testTimeoutMs,
@@ -1199,6 +1205,13 @@ async function waitForEvent(
   }
 
   throw new Error(`Timed out waiting for event in ${path}`);
+}
+
+async function destroyStream(args: { path: StreamPath; destroyChildren?: boolean }) {
+  return await app.client.destroy({
+    params: { path: args.path },
+    query: args.destroyChildren === undefined ? {} : { destroyChildren: args.destroyChildren },
+  });
 }
 
 function isChildStreamCreatedForPath(event: Event, path: StreamPath) {

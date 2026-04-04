@@ -52,12 +52,14 @@ describe.sequential("events auth-adjacent e2e", () => {
         path,
         maxOffset: 2,
         metadata: {},
+        children: [],
       });
       expect(await projectStateResponse.json()).toEqual({
         projectSlug: "team-a",
         path,
         maxOffset: 2,
         metadata: {},
+        children: [],
       });
 
       const defaultProjectHistoryResponse = await app.fetch(`/api/streams/${routePathFor(path)}`);
