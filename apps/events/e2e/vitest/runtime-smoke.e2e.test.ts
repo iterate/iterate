@@ -40,7 +40,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
   test(
     "public config and openapi docs are reachable",
     async () => {
-      const config = PublicConfigSchema.parse(await app.client.common.publicConfig({}));
+      const config = PublicConfigSchema.parse(await app.client.__internal.publicConfig({}));
       expect(config.iterateOauth.clientId).toEqual(expect.any(String));
       expect(config.posthog.apiKey).toEqual(expect.any(String));
 

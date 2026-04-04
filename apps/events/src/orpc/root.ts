@@ -1,16 +1,16 @@
-import { createAppRouterWithCommon } from "@iterate-com/shared/apps/common-router";
+import { createAppRouterWithInternal } from "@iterate-com/shared/apps/internal-router";
 import { AppConfig } from "~/app.ts";
 import { os } from "~/orpc/orpc.ts";
 import { secretsRouter } from "~/orpc/routers/secrets.ts";
 import { streamsRouter } from "~/orpc/routers/streams.ts";
 
-/** oRPC app router — shared `common`, streams, and secrets */
-export const appRouter = createAppRouterWithCommon({
+/** oRPC app router — shared `__internal`, streams, and secrets */
+export const appRouter = createAppRouterWithInternal({
   appConfigSchema: AppConfig,
-  createRouter: (commonRouter) =>
+  createRouter: (internalRouter) =>
     os.router({
       ...streamsRouter,
       ...secretsRouter,
-      common: os.common.router(commonRouter),
+      __internal: os.__internal.router(internalRouter),
     }),
 });

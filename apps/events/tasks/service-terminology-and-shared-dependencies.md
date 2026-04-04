@@ -16,10 +16,10 @@ This document inventories uses of the words **service** / **services** under `ap
 
 ### Related but distinct: common router / registry
 
-| Path                                                 | Role                                                                                                                    |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `packages/shared/src/apps/common-router-contract.ts` | `commonContract` includes **`updateServiceRegistry`** — naming is registry-oriented, not the `service-contract` module. |
-| `packages/shared/src/apps/common-router.ts`          | Default stub for `updateServiceRegistry` (“not implemented for this app yet”).                                          |
+| Path                                                   | Role                                                                                                                      |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `packages/shared/src/apps/internal-router-contract.ts` | `internalContract` includes **`updateServiceRegistry`** — naming is registry-oriented, not the `service-contract` module. |
+| `packages/shared/src/apps/internal-router.ts`          | Default stub for `updateServiceRegistry` (“not implemented for this app yet”).                                            |
 
 ### Logging
 
@@ -61,9 +61,9 @@ Examples: `createServiceSubRouterHandlers`, `resolveServiceBaseUrl` / `resolveSe
 
 **`serviceManifestToPidnapConfig`** is imported from the barrel by **`jonasland/e2e`** vitest networking specs (`02a`, `02c`, `02d`, etc.), not by `apps/*` packages.
 
-### `commonContract` / `updateServiceRegistry`
+### `internalContract` / `updateServiceRegistry`
 
-These apps’ contracts merge **`commonContract`** from `@iterate-com/shared/apps/common-router-contract`:
+These apps’ contracts merge **`internalContract`** from `@iterate-com/shared/apps/internal-router-contract`:
 
 - `apps/fake-os-contract`
 - `apps/events-contract`
@@ -122,7 +122,7 @@ Roughly **79 files** matched `service` (case-insensitive) under `apps/`. Not exh
 
 ## 4. Implications for **events** / **events-contract**
 
-- **events-contract** already depends on **`commonContract`** → includes **`updateServiceRegistry`** naming from shared (registry, not `service-contract.ts`).
+- **events-contract** already depends on **`internalContract`** → includes **`updateServiceRegistry`** naming from shared (registry, not `service-contract.ts`).
 - The **events** app code does **not** appear in the **direct** `service-contract` dependency chain; primary overlap is **shared common router** + **user-facing copy** (“stream service”).
 - If you rename or split “service” concepts repo-wide, **fake-os / fake-os-contract** and **daemon-v2** are the main app touchpoints for **`packages/shared`** service-platform APIs; **events** is mostly affected by **common-contract** procedure names and documentation tone.
 

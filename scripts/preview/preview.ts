@@ -13,7 +13,7 @@ import { splitRepositoryFullName } from "./repository-full-name.ts";
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultPreviewLeaseMs = 60 * 60 * 1000;
 const defaultPreviewReadyTimeoutMs = 30_000;
-const defaultPreviewReadyUrlPath = "/api/__common/health";
+const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewTestMaxAttempts = 2;
 const defaultPreviewTestRetryDelayMs = 5_000;
 

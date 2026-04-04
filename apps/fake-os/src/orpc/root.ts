@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { createCommonRouter } from "@iterate-com/shared/apps/common-router";
+import { createInternalRouter } from "@iterate-com/shared/apps/internal-router";
 import { Deployment } from "@iterate-com/shared/jonasland/deployment/deployment.ts";
 import {
   createDockerProvider,
@@ -23,8 +23,8 @@ import {
 import { deploymentRuntimeRegistry } from "~/deployments/deployment-runtime-registry.ts";
 
 export const appRouter = os.router({
-  common: os.common.router(
-    createCommonRouter({
+  __internal: os.__internal.router(
+    createInternalRouter({
       appConfigSchema: AppConfig,
     }),
   ),

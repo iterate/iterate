@@ -1,14 +1,14 @@
-import { createAppRouterWithCommon } from "@iterate-com/shared/apps/common-router";
+import { createAppRouterWithInternal } from "@iterate-com/shared/apps/internal-router";
 import { AppConfig } from "~/app.ts";
 import { os } from "~/orpc/orpc.ts";
 import { registryRouter } from "~/orpc/routers/registry.ts";
 
-/** oRPC app router — shared `common` plus daemon-v2 registry procedures */
-export const appRouter = createAppRouterWithCommon({
+/** oRPC app router — shared `__internal` plus daemon-v2 registry procedures */
+export const appRouter = createAppRouterWithInternal({
   appConfigSchema: AppConfig,
-  createRouter: (commonRouter) =>
+  createRouter: (internalRouter) =>
     os.router({
       ...registryRouter,
-      common: os.common.router(commonRouter),
+      __internal: os.__internal.router(internalRouter),
     }),
 });

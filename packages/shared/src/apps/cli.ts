@@ -9,7 +9,7 @@ import { os } from "@orpc/server";
 import { createCli, parseRouter, type AnyRouter } from "trpc-cli";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 
-const DEFAULT_DISCOVERY_PATH = "/__common/trpc-cli-procedures";
+const DEFAULT_DISCOVERY_PATH = "/__internal/trpc-cli-procedures";
 const DEFAULT_RPC_PATH = "/orpc/";
 const DEFAULT_LOCAL_ROUTER_PATHS = ["scripts/router.ts", "cli/router.ts"] as const;
 const REMOTE_GROUP_NAME = "rpc";

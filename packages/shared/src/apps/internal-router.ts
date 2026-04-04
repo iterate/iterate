@@ -3,14 +3,14 @@ import type { AnyRouter } from "trpc-cli";
 import { parseRouter } from "trpc-cli";
 import { z, type ZodTypeAny } from "zod";
 import { getPublicConfig } from "./config.ts";
-import { commonContract } from "./common-router-contract.ts";
+import { internalContract } from "./internal-router-contract.ts";
 import type { AppContext } from "./types.ts";
 
-export function createCommonRouter<TConfigSchema extends ZodTypeAny>(options: {
+export function createInternalRouter<TConfigSchema extends ZodTypeAny>(options: {
   appConfigSchema: TConfigSchema;
   getTrpcCliProcedures?: () => unknown[];
 }) {
-  const os = implement(commonContract).$context<AppContext<any, z.output<TConfigSchema>>>();
+  const os = implement(internalContract).$context<AppContext<any, z.output<TConfigSchema>>>();
 
   return os.router({
     health: os.health.handler(({ context }) => ({
@@ -21,11 +21,11 @@ export function createCommonRouter<TConfigSchema extends ZodTypeAny>(options: {
     publicConfig: os.publicConfig.handler(({ context }) =>
       getPublicConfig(context.config, options.appConfigSchema),
     ),
-    debug: os.debug.handler(() => createCommonDebugOutput()),
+    debug: os.debug.handler(() => createInternalDebugOutput()),
     trpcCliProcedures: os.trpcCliProcedures.handler(() => {
       if (!options.getTrpcCliProcedures) {
         throw new ORPCError("NOT_IMPLEMENTED", {
-          message: "common.trpcCliProcedures is not implemented for this app yet",
+          message: "__internal.trpcCliProcedures is not implemented for this app yet",
         });
       }
 
@@ -35,22 +35,22 @@ export function createCommonRouter<TConfigSchema extends ZodTypeAny>(options: {
     }),
     refreshRegistry: os.refreshRegistry.handler(() => {
       throw new ORPCError("NOT_IMPLEMENTED", {
-        message: "common.refreshRegistry is not implemented for this app yet",
+        message: "__internal.refreshRegistry is not implemented for this app yet",
       });
     }),
   });
 }
 
-export function createAppRouterWithCommon<
+export function createAppRouterWithInternal<
   TConfigSchema extends ZodTypeAny,
   TRouter extends AnyRouter,
 >(options: {
   appConfigSchema: TConfigSchema;
-  createRouter: (commonRouter: ReturnType<typeof createCommonRouter<TConfigSchema>>) => TRouter;
+  createRouter: (internalRouter: ReturnType<typeof createInternalRouter<TConfigSchema>>) => TRouter;
 }) {
   let appRouter: TRouter | undefined;
 
-  const commonRouter = createCommonRouter({
+  const internalRouter = createInternalRouter({
     appConfigSchema: options.appConfigSchema,
     getTrpcCliProcedures: () => {
       if (!appRouter) {
@@ -62,12 +62,12 @@ export function createAppRouterWithCommon<
   });
 
   appRouter = options.createRouter(
-    commonRouter as ReturnType<typeof createCommonRouter<TConfigSchema>>,
+    internalRouter as ReturnType<typeof createInternalRouter<TConfigSchema>>,
   );
   return appRouter;
 }
 
-export function createCommonDebugOutput() {
+export function createInternalDebugOutput() {
   if (typeof process === "undefined") {
     return { runtime: "workerd" };
   }
@@ -91,5 +91,5 @@ export function createCommonDebugOutput() {
 }
 
 export function parseTrpcCliProcedures(router: AnyRouter) {
-  return parseRouter({ router }).filter((entry) => entry[0] !== "common.trpcCliProcedures");
+  return parseRouter({ router }).filter((entry) => entry[0] !== "__internal.trpcCliProcedures");
 }
