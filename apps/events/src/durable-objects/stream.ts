@@ -6,11 +6,10 @@ import {
   type EventInput,
   EventInput as EventInputSchema,
   type StreamMetadataUpdatedEvent,
-  type StreamPath,
+  StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
-import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
-import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
+import { getStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 /**
  *
  * IMPORTANT: This file should not be changed without explicit planning consent
@@ -27,8 +26,8 @@ import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
  * - caller-appended events begin at offset 2
  *
  * Child discovery is a separate built-in event. After a stream commits its own
- * self-init event, it appends `child-stream-created` to every ancestor stream
- * in parallel.
+ * self-init event, it appends `child-stream-created` to its parent. Parents then
+ * propagate that same child discovery event upward one level at a time.
  *
  * Durable Object docs:
  * - https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/
@@ -42,7 +41,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   private get state(): StreamState {
     if (this._state == null) {
       throw new Error(
-        "Stream durable object state was accessed before initialize({ path }) completed. Callers must use getInitializedStreamStub().",
+        "Stream durable object state was accessed before initialize({ path }) completed. Callers must use getStreamStub().",
       );
     }
 
@@ -88,7 +87,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * Think of this like the durable object constructor. We take arguments like { path }
    * and set the initial state.
    *
-   * All external callers go through `getInitializedStreamStub()` in
+   * All external callers go through `getStreamStub()` in
    * `~/lib/stream-helpers.ts`, which calls this before returning the stub.
    */
   initialize(args: { path: StreamPath }) {
@@ -186,28 +185,19 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     switch (event.type) {
       case "https://events.iterate.com/events/stream/initialized": {
-        const ancestorPaths = getAncestorStreamPaths(event.streamPath);
-        const eventInput = {
+        this.appendToParent({
           type: "https://events.iterate.com/events/stream/child-stream-created",
           payload: { path: event.streamPath },
           metadata: event.metadata,
-        } satisfies EventInput & { payload: { path: StreamPath } };
-
-        if (ancestorPaths.length > 0) {
-          void Promise.all(
-            ancestorPaths.map(async (path) => {
-              const stream = await getInitializedStreamStub({ path });
-              await stream.append(eventInput);
-            }),
-          ).catch((error) => {
-            console.error("[stream-do] failed to propagate event to ancestor streams", {
-              path: event.streamPath,
-              ancestorPaths,
-              eventType: eventInput.type,
-              error,
-            });
-          });
-        }
+        });
+        break;
+      }
+      case "https://events.iterate.com/events/stream/child-stream-created": {
+        this.appendToParent({
+          type: event.type,
+          payload: event.payload,
+          metadata: event.metadata,
+        });
         break;
       }
     }
@@ -326,6 +316,27 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.parseEventRow(row);
   }
 
+  private appendToParent(eventInput: EventInput) {
+    void this.getParent()
+      .then((parent) => parent?.append(eventInput))
+      .catch((error) => {
+        console.error("[stream-do] failed to propagate event to parent stream", {
+          path: this.state.path,
+          eventType: eventInput.type,
+          error,
+        });
+      });
+  }
+
+  private async getParent() {
+    const path = this.state.path;
+    if (path === "/") {
+      return null;
+    }
+    const lastSlashIndex = path.lastIndexOf("/");
+    const parentPath = lastSlashIndex === 0 ? "/" : StreamPath.parse(path.slice(0, lastSlashIndex));
+    return getStreamStub(parentPath);
+  }
   private parseEventRow(row: SqliteEventRow | null | undefined): Event | null {
     if (row == null) {
       return null;
