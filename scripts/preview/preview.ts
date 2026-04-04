@@ -171,8 +171,28 @@ export async function syncCloudflarePreviewForPullRequest(
     repositoryFullName: params.repositoryFullName,
   });
   if (!syncDecision.shouldSync) {
+    const nextEntry =
+      previousEntry && previousEntry.headSha !== params.pullRequestHeadSha
+        ? CloudflarePreviewCommentEntry.parse({
+            ...previousEntry,
+            headSha: params.pullRequestHeadSha,
+            runUrl: params.workflowRunUrl,
+            shortSha: params.pullRequestHeadSha.slice(0, 7),
+            updatedAt: new Date().toISOString(),
+          })
+        : (previousEntry ?? null);
+
+    if (nextEntry) {
+      await upsertCloudflarePreviewCommentEntry({
+        entry: nextEntry,
+        githubToken: params.githubToken,
+        repositoryFullName: params.repositoryFullName,
+        pullRequestNumber: params.pullRequestNumber,
+      });
+    }
+
     return {
-      entry: previousEntry ?? null,
+      entry: nextEntry,
       ok: true,
       skipped: true,
     };
@@ -771,7 +791,7 @@ async function shouldSyncPreviewEnvironment(params: {
   previousEntry: CloudflarePreviewCommentEntryType | undefined;
   repositoryFullName: string;
 }) {
-  const compareBaseSha = (await resolvePreviousPreviewHeadSha(params)) ?? params.pullRequestBaseSha;
+  const compareBaseSha = await resolvePreviewCompareBaseSha(params);
   if (!compareBaseSha || compareBaseSha === params.pullRequestHeadSha) {
     return { shouldSync: false as const };
   }
@@ -791,12 +811,19 @@ async function shouldSyncPreviewEnvironment(params: {
   };
 }
 
-async function resolvePreviousPreviewHeadSha(params: {
+async function resolvePreviewCompareBaseSha(params: {
   githubToken: string;
   pullRequestNumber: number;
+  pullRequestBaseSha: string;
+  pullRequestHeadSha: string;
   previousEntry: CloudflarePreviewCommentEntryType | undefined;
   repositoryFullName: string;
 }) {
+  const previousPullRequestHeadSha = await resolvePreviousPullRequestHeadSha(params);
+  if (previousPullRequestHeadSha) {
+    return previousPullRequestHeadSha;
+  }
+
   if (params.previousEntry?.headSha) {
     return params.previousEntry.headSha;
   }
@@ -832,7 +859,29 @@ async function resolvePreviousPreviewHeadSha(params: {
     per_page: 100,
   });
   const matchingCommit = commits.find((commit) => commit.sha.startsWith(shortSha));
-  return matchingCommit?.sha ?? null;
+  return matchingCommit?.sha ?? params.pullRequestBaseSha;
+}
+
+async function resolvePreviousPullRequestHeadSha(params: {
+  githubToken: string;
+  pullRequestNumber: number;
+  pullRequestHeadSha: string;
+  repositoryFullName: string;
+}) {
+  const octokit = new Octokit({ auth: params.githubToken });
+  const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
+  const commits = await octokit.paginate(octokit.rest.pulls.listCommits, {
+    owner,
+    pull_number: params.pullRequestNumber,
+    repo,
+    per_page: 100,
+  });
+  const currentHeadIndex = commits.findIndex((commit) => commit.sha === params.pullRequestHeadSha);
+  if (currentHeadIndex <= 0) {
+    return null;
+  }
+
+  return commits[currentHeadIndex - 1]?.sha ?? null;
 }
 
 function parseWorkflowRunId(runUrl: string | null) {
