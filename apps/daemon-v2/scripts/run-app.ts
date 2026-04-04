@@ -9,7 +9,7 @@ import getPort from "get-port";
 import { z } from "zod";
 
 const DEFAULT_BIND_HOST = "0.0.0.0";
-const DEFAULT_HEALTH_CHECK_PATH = "/api/__common/health";
+const DEFAULT_HEALTH_CHECK_PATH = "/api/__internal/health";
 const DEFAULT_HEALTH_TIMEOUT_MS = 30_000;
 const DEFAULT_HEALTH_INTERVAL_MS = 300;
 const DEFAULT_REGISTRATION_TIMEOUT_MS = 30_000;

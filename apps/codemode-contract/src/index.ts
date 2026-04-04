@@ -1,5 +1,5 @@
 import { oc } from "@orpc/contract";
-import { commonContract } from "@iterate-com/shared/apps/common-router-contract";
+import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { z } from "zod";
 
 export const CodemodeRunnerKind = z.enum(["legacy", "deterministic-v2"]);
@@ -87,7 +87,7 @@ export const CodemodeRunSummary = z.object({
 export type CodemodeRunSummary = z.infer<typeof CodemodeRunSummary>;
 
 export const codemodeContract = oc.router({
-  common: commonContract,
+  __internal: internalContract,
   secrets: oc.router({
     create: oc
       .route({

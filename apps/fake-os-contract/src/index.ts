@@ -1,5 +1,5 @@
 import { eventIterator, oc } from "@orpc/contract";
-import { commonContract } from "@iterate-com/shared/apps/common-router-contract";
+import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 // Vetted shared surface for service sub-routers (allowlisted in eslint `contract-package-imports`).
 import { createServiceSubRouterContract } from "@iterate-com/shared/jonasland/service-contract";
 import type { ServiceManifestWithEntryPoint } from "@iterate-com/shared/jonasland/service-contract";
@@ -124,7 +124,7 @@ const serviceSubRouter = createServiceSubRouterContract({
 });
 
 export const fakeOsAppContract = oc.router({
-  common: commonContract,
+  __internal: internalContract,
   ...serviceSubRouter,
   deployments: {
     list: oc

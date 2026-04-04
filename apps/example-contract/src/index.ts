@@ -1,5 +1,5 @@
 import { eventIterator, oc } from "@orpc/contract";
-import { commonContract } from "@iterate-com/shared/apps/common-router-contract";
+import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { z } from "zod";
 
 const Thing = z.object({
@@ -91,12 +91,12 @@ export type RandomLogStreamRequest = z.infer<typeof RandomLogStreamRequest>;
  * server implementation to this contract, and `os.router({...})` in
  * `apps/example/src/api/router.ts` provides the actual handlers.
  *
- * The `common.*` subtree is the shared app-level operator/debug namespace that
- * all apps may expose under `/__common/*`, while the rest of this file is the
+ * The `__internal.*` subtree is the shared app-level operator/debug namespace that
+ * all apps may expose under `/__internal/*`, while the rest of this file is the
  * example app's own domain-specific surface.
  */
 export const exampleContract = oc.router({
-  common: commonContract,
+  __internal: internalContract,
   ping: oc
     .route({ method: "GET", path: "/ping", description: "Ping", tags: ["debug"] })
     .input(z.object({}).optional().default({}))

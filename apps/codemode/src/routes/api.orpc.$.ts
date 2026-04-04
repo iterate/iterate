@@ -1,0 +1,23 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { orpcRpcHandler } from "~/orpc/handler.ts";
+
+export const Route = createFileRoute("/api/orpc/$")({
+  server: {
+    handlers: {
+      ANY: async ({ context, request }) => {
+        try {
+          const { matched, response } = await orpcRpcHandler.handle(request, {
+            prefix: "/api/orpc",
+            context,
+          });
+
+          if (matched && response) return response;
+          return Response.json({ error: "not_found" }, { status: 404 });
+        } catch (error) {
+          console.error(error);
+          return Response.json({ error: "internal_server_error" }, { status: 500 });
+        }
+      },
+    },
+  },
+});

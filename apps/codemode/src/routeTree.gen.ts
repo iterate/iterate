@@ -17,6 +17,7 @@ import { Route as AppRunsV2NewRouteImport } from './routes/_app/runs-v2-new'
 import { Route as AppRunsRouteImport } from './routes/_app/runs'
 import { Route as AppExamplesRouteImport } from './routes/_app/examples'
 import { Route as AppSecretsIndexRouteImport } from './routes/_app/secrets.index'
+import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppSecretsSecretIdRouteImport } from './routes/_app/secrets.$secretId'
 import { Route as AppRunsRunIdRouteImport } from './routes/_app/runs/$runId'
 
@@ -59,6 +60,11 @@ const AppSecretsIndexRoute = AppSecretsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppSecretsRoute,
 } as any)
+const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
+  id: '/api/orpc/$',
+  path: '/api/orpc/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppSecretsSecretIdRoute = AppSecretsSecretIdRouteImport.update({
   id: '/$secretId',
   path: '/$secretId',
@@ -79,6 +85,7 @@ export interface FileRoutesByFullPath {
   '/api/$': typeof ApiSplatRoute
   '/runs/$runId': typeof AppRunsRunIdRoute
   '/secrets/$secretId': typeof AppSecretsSecretIdRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/secrets/': typeof AppSecretsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -89,6 +96,7 @@ export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
   '/runs/$runId': typeof AppRunsRunIdRoute
   '/secrets/$secretId': typeof AppSecretsSecretIdRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/secrets': typeof AppSecretsIndexRoute
 }
 export interface FileRoutesById {
@@ -102,6 +110,7 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/runs/$runId': typeof AppRunsRunIdRoute
   '/_app/secrets/$secretId': typeof AppSecretsSecretIdRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/secrets/': typeof AppSecretsIndexRoute
 }
 export interface FileRouteTypes {
@@ -115,6 +124,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/runs/$runId'
     | '/secrets/$secretId'
+    | '/api/orpc/$'
     | '/secrets/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -125,6 +135,7 @@ export interface FileRouteTypes {
     | '/'
     | '/runs/$runId'
     | '/secrets/$secretId'
+    | '/api/orpc/$'
     | '/secrets'
   id:
     | '__root__'
@@ -137,12 +148,14 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/_app/runs/$runId'
     | '/_app/secrets/$secretId'
+    | '/api/orpc/$'
     | '/_app/secrets/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   ApiSplatRoute: typeof ApiSplatRoute
+  ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -202,6 +215,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/secrets/'
       preLoaderRoute: typeof AppSecretsIndexRouteImport
       parentRoute: typeof AppSecretsRoute
+    }
+    '/api/orpc/$': {
+      id: '/api/orpc/$'
+      path: '/api/orpc/$'
+      fullPath: '/api/orpc/$'
+      preLoaderRoute: typeof ApiOrpcSplatRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_app/secrets/$secretId': {
       id: '/_app/secrets/$secretId'
@@ -266,16 +286,8 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   ApiSplatRoute: ApiSplatRoute,
+  ApiOrpcSplatRoute: ApiOrpcSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}
