@@ -735,6 +735,23 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "listStreams on an untouched path does not create or discover that stream",
+    async () => {
+      const path = uniqueStreamPath();
+
+      expect(await app.client.listStreams({ path })).toEqual([]);
+      expect(
+        (await app.client.listStreams({ path: "/" })).some((stream) => stream.path === path),
+      ).toBe(false);
+      expect(await app.client.destroy({ path })).toEqual({
+        destroyed: true,
+        finalState: null,
+      });
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "destroy wipes an existing stream and returns pre-destruction state",
     async () => {
       const path = uniqueStreamPath();

@@ -16,7 +16,7 @@ export const streamsRouter = {
     try {
       return { event: await streamStub.append(input.event) };
     } catch (error) {
-      throw toAppendOrpcError(error);
+      throw mapAppendOrpcError(error);
     }
   }),
   destroy: os.destroy.handler(async ({ input }) => {
@@ -52,11 +52,9 @@ export const streamsRouter = {
     return streamStub.getState();
   }),
   listStreams: os.listStreams.handler(async ({ input }) => {
-    const streamStub = await getInitializedStreamStub({ path: input.path });
+    const streamStub = getStreamStub(input.path);
     const events = await streamStub.history();
-    const discovered: Record<StreamPath, string> = {
-      [input.path]: new Date().toISOString(),
-    };
+    const discovered: Record<StreamPath, string> = {};
 
     for (const event of events) {
       if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
@@ -73,7 +71,7 @@ export const streamsRouter = {
   }),
 };
 
-function toAppendOrpcError(error: unknown) {
+function mapAppendOrpcError(error: unknown) {
   // TODO: Replace this exception mapping with a result-style flow.
   // See apps/events/tasks/better-error-handling.md.
   // The instanceof/name checks handle direct calls. The message check handles
@@ -103,5 +101,5 @@ function toAppendOrpcError(error: unknown) {
     });
   }
 
-  throw error;
+  return error;
 }
