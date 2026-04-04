@@ -107,13 +107,11 @@ test.describe("organization invites", () => {
     // Invitee logs in
     await login(page, inviteeEmail);
 
-    const inviteItem = page.locator(
-      `[data-testid="welcome-pending-invite"][data-org-name="${orgName}"]`,
-    );
-    await inviteItem.waitFor();
+    await page.getByText(orgName).waitFor();
 
     // Click decline (X button next to Accept)
-    await inviteItem.getByTestId("welcome-pending-invite-decline").click();
+    const inviteItem = page.locator("[data-slot='item']").filter({ hasText: orgName });
+    await inviteItem.getByRole("button").filter({ hasNotText: "Accept" }).click();
     await toast.success(page, "Invite declined").waitFor();
 
     // Invite should be gone, create org form still visible
@@ -157,13 +155,14 @@ test.describe("organization invites", () => {
     await page.goto("/user/settings");
 
     await page.getByRole("heading", { name: "Pending invites" }).waitFor();
-    const inviteCard = page.locator(
-      `[data-testid="settings-pending-invite"][data-org-name="${inviterOrgName}"]`,
-    );
-    await inviteCard.waitFor();
+    await page.getByText(inviterOrgName).waitFor();
 
     // Accept the invite - find the card in the Pending invites section
-    await inviteCard.getByTestId("settings-pending-invite-accept").click();
+    const pendingSection = page.locator("div").filter({ hasText: "Pending invites" }).first();
+    const inviteCard = pendingSection
+      .locator("div.border.rounded-lg")
+      .filter({ hasText: inviterOrgName });
+    await inviteCard.locator("button").first().click(); // Check icon button (accept)
     await toast.success(page, `Joined ${inviterOrgName}`).waitFor();
 
     // Should be redirected to the new org
@@ -194,12 +193,12 @@ test.describe("organization invites", () => {
     await toast.success(page, `Joined ${orgName}`).waitFor();
 
     // Now leave the org from user settings
+    const orgCard = page.locator("div.border.rounded-lg").filter({ hasText: orgName });
     await page.goto("/user/settings");
-    const orgCard = page.locator(`[data-testid="settings-membership"][data-org-name="${orgName}"]`);
     await orgCard.waitFor();
 
     // Click leave button on the org card (LogOut icon button)
-    await orgCard.getByTestId("settings-membership-leave").click();
+    await orgCard.locator("button").click();
 
     // Confirm in dialog
     await page.getByRole("dialog").getByRole("button", { name: "Leave" }).click();
