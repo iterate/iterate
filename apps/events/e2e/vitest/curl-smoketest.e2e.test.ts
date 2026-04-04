@@ -77,51 +77,42 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
 
     expect(result.exitCode).toBe(0);
 
-    expect({
-      stdout: result.stdout
-        .replaceAll("\r\n", "\n")
-        .replaceAll(streamPath, "<streamPath>")
-        .replace(/\d{4}-\d{2}-\d{2}T[0-9:.]+Z/g, "<ts>"),
-      stderr: result.stderr,
-    }).toMatchInlineSnapshot(`
-            {
-              "stderr": "",
-              "stdout": "{
-        "event": {
-          "type": "https://events.iterate.com/events/example/value-recorded",
-          "payload": {
-            "curl": true
-          },
-          "offset": 2,
-          "streamPath": "<streamPath>",
-          "createdAt": "<ts>"
-        }
-      }
-            ---
-            {
-        "path": "<streamPath>",
-        "maxOffset": 2,
-        "metadata": {}
-      }
-            ---
-            {
-        "path": "<streamPath>",
-        "maxOffset": 2,
-        "metadata": {}
-      }
-            ---
-            : 
+    const stdout = result.stdout
+      .replaceAll("\r\n", "\n")
+      .replaceAll(streamPath, "<streamPath>")
+      .replace(/\d{4}-\d{2}-\d{2}T[0-9:.]+Z/g, "<ts>")
+      .trimEnd();
 
-            event: message
-            data: {"type":"https://events.iterate.com/events/stream/initialized","payload":{"path":"<streamPath>"},"offset":1,"streamPath":"<streamPath>","createdAt":"<ts>"}
+    const [appendJson, encodedStateJson, slashEscapedStateJson, streamOutput, trailingOutput] =
+      stdout.split(/\n---(?:\n|$)/);
 
-            event: message
-            data: {"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":2,"streamPath":"<streamPath>","createdAt":"<ts>"}
-
-
-            ---
-            ",
-            }
-    `);
+    expect(result.stderr).toBe("");
+    expect(trailingOutput).toBe("");
+    expect(JSON.parse(appendJson)).toEqual({
+      event: {
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: {
+          curl: true,
+        },
+        offset: 2,
+        streamPath: "<streamPath>",
+        createdAt: "<ts>",
+      },
+    });
+    expect(JSON.parse(encodedStateJson)).toEqual({
+      path: "<streamPath>",
+      maxOffset: 2,
+      metadata: {},
+    });
+    expect(JSON.parse(slashEscapedStateJson)).toEqual({
+      path: "<streamPath>",
+      maxOffset: 2,
+      metadata: {},
+    });
+    expect(streamOutput.split("\n\n").filter((segment) => segment.length > 0)).toEqual([
+      ": ",
+      'event: message\ndata: {"type":"https://events.iterate.com/events/stream/initialized","payload":{"path":"<streamPath>"},"offset":1,"streamPath":"<streamPath>","createdAt":"<ts>"}',
+      'event: message\ndata: {"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":2,"streamPath":"<streamPath>","createdAt":"<ts>"}',
+    ]);
   }, 15_000);
 });

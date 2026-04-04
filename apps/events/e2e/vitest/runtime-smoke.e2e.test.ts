@@ -72,8 +72,8 @@ describe("events runtime smoke", () => {
         delete: {
           parameters: expect.arrayContaining([
             expect.objectContaining({
-              in: "query",
-              name: "destroyChildren",
+              in: "path",
+              name: "path",
             }),
           ]),
         },
