@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
@@ -9,17 +9,28 @@ import { os } from "@orpc/server";
 import { createCli, parseRouter, type AnyRouter } from "trpc-cli";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 
-const DEFAULT_CONFIG_PATH = "iterate-app-cli.config.ts";
 const DEFAULT_DISCOVERY_PATH = "/__common/trpc-cli-procedures";
 const DEFAULT_RPC_PATH = "/orpc/";
 const DEFAULT_LOCAL_ROUTER_PATHS = ["scripts/router.ts", "cli/router.ts"] as const;
 const REMOTE_GROUP_NAME = "rpc";
 
 type ParsedRouter = ReturnType<typeof parseRouter>;
+type IterateAppCliAuthMode = "shared-api-secret-bearer";
+export type IterateAppCliPackageConfig = {
+  remote?: {
+    baseUrlEnvVar?: string;
+    defaultBaseUrl?: string;
+    discoveryPath?: string;
+    rpcPath?: string;
+    auth?: IterateAppCliAuthMode;
+  };
+  localRouterPaths?: string[];
+};
 type PackageInfo = {
   name?: string;
   version?: string;
   description?: string;
+  iterateAppCli?: IterateAppCliPackageConfig;
 };
 
 export type ResolveHeadersArgs = {
@@ -29,12 +40,12 @@ export type ResolveHeadersArgs = {
   packageJson: PackageInfo;
 };
 
-export type IterateAppCliConfig = {
+type IterateAppCliConfig = {
   remote: {
     baseUrlEnvVar: string;
     defaultBaseUrl?: string;
-    discoveryPath?: string;
-    rpcPath?: string;
+    discoveryPath: string;
+    rpcPath: string;
     resolveHeaders?:
       | ((
           args: ResolveHeadersArgs,
@@ -47,16 +58,11 @@ export type IterateAppCliConfig = {
   localRouterPaths?: string[];
 };
 
-export function defineAppCliConfig(config: IterateAppCliConfig) {
-  return config;
-}
-
 export async function runAppCli() {
-  const configPath = consumeCliStringFlag("--config");
   const baseUrlFlag = consumeCliStringFlag("--base-url");
   const cwd = process.cwd();
-  const config = await loadCliConfig({ cwd, configPath });
   const packageJson = readPackageJson(cwd);
+  const config = resolveCliConfig({ cwd, packageJson });
   const localRouter = await loadLocalRouter({
     cwd,
     localRouterPaths: config.localRouterPaths ?? [...DEFAULT_LOCAL_ROUTER_PATHS],
@@ -98,30 +104,6 @@ export async function runAppCli() {
   });
 
   await cli.run();
-}
-
-async function loadCliConfig(params: { cwd: string; configPath?: string }) {
-  const configPath = resolve(params.cwd, params.configPath ?? DEFAULT_CONFIG_PATH);
-
-  if (!existsSync(configPath)) {
-    throw new Error(
-      `No app CLI config found at ${configPath}. Create ${DEFAULT_CONFIG_PATH} in the app root.`,
-    );
-  }
-
-  const imported = (await import(pathToFileURL(configPath).href)) as {
-    default?: IterateAppCliConfig;
-    config?: IterateAppCliConfig;
-  };
-  const config = imported.default ?? imported.config;
-
-  if (!config) {
-    throw new Error(
-      `App CLI config ${configPath} must export a default config or named "config" value.`,
-    );
-  }
-
-  return config;
 }
 
 async function loadLocalRouter(params: { cwd: string; localRouterPaths: string[] }) {
@@ -177,7 +159,7 @@ async function loadRemoteRouter(params: {
     const remoteRouter = proxifyOrpc(remoteProcedures.procedures, () => {
       const client = createORPCClient(
         new RPCLink({
-          url: joinApiPath(apiBaseUrl, params.config.remote.rpcPath ?? DEFAULT_RPC_PATH),
+          url: joinApiPath(apiBaseUrl, params.config.remote.rpcPath),
           fetch: async (request: URL | Request, init?: RequestInit) => {
             const headers = new Headers(
               request instanceof Request ? request.headers : init?.headers,
@@ -296,7 +278,7 @@ function firstNonFlagArgument(args: string[]) {
     }
 
     const next = args[index + 1];
-    if ((value === "--base-url" || value === "--config") && next && !next.startsWith("-")) {
+    if (value === "--base-url" && next && !next.startsWith("-")) {
       index += 1;
     }
   }
@@ -320,6 +302,95 @@ function consumeCliStringFlag(flagName: string): string | undefined {
 
   process.argv.splice(flagIndex + 2, 2);
   return value;
+}
+
+function resolveCliConfig(params: { cwd: string; packageJson: PackageInfo }): IterateAppCliConfig {
+  const slug = inferAppSlug({ cwd: params.cwd, packageJson: params.packageJson });
+  const envPrefix = slugToEnvPrefix(slug);
+  const packageConfig = params.packageJson.iterateAppCli;
+
+  return {
+    remote: {
+      baseUrlEnvVar: packageConfig?.remote?.baseUrlEnvVar ?? `${envPrefix}_BASE_URL`,
+      defaultBaseUrl: packageConfig?.remote?.defaultBaseUrl,
+      discoveryPath: packageConfig?.remote?.discoveryPath ?? DEFAULT_DISCOVERY_PATH,
+      rpcPath: packageConfig?.remote?.rpcPath ?? DEFAULT_RPC_PATH,
+      resolveHeaders: createRemoteHeadersResolver({
+        auth: packageConfig?.remote?.auth,
+        envPrefix,
+      }),
+    },
+    localRouterPaths: packageConfig?.localRouterPaths ?? [...DEFAULT_LOCAL_ROUTER_PATHS],
+  };
+}
+
+function inferAppSlug(params: { cwd: string; packageJson: PackageInfo }) {
+  const packageName = params.packageJson.name?.trim();
+  const scopedPackageMatch = /^@iterate-com\/(.+)$/.exec(packageName ?? "");
+
+  if (scopedPackageMatch?.[1]) {
+    return scopedPackageMatch[1];
+  }
+
+  const cwdBasename = basename(params.cwd);
+  if (cwdBasename) {
+    return cwdBasename;
+  }
+
+  throw new Error("Could not infer app slug for iterate-app-cli.");
+}
+
+function slugToEnvPrefix(slug: string) {
+  return slug
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase();
+}
+
+function createRemoteHeadersResolver(params: { auth?: IterateAppCliAuthMode; envPrefix: string }) {
+  if (params.auth === "shared-api-secret-bearer") {
+    return ({ env }: ResolveHeadersArgs) =>
+      resolveSharedApiSecretBearerHeaders({
+        env,
+        envPrefix: params.envPrefix,
+      });
+  }
+
+  return undefined;
+}
+
+function resolveSharedApiSecretBearerHeaders(params: {
+  env: NodeJS.ProcessEnv;
+  envPrefix: string;
+}) {
+  const token =
+    params.env[`${params.envPrefix}_API_KEY`]?.trim() ||
+    params.env[`${params.envPrefix}_API_TOKEN`]?.trim() ||
+    params.env.APP_CONFIG_SHARED_API_SECRET?.trim() ||
+    readSharedApiSecretFromAppConfig(params.env.APP_CONFIG);
+
+  if (!token) {
+    throw new Error(
+      `RPC commands require ${params.envPrefix}_API_KEY, ${params.envPrefix}_API_TOKEN, APP_CONFIG_SHARED_API_SECRET, or APP_CONFIG.sharedApiSecret.`,
+    );
+  }
+
+  return {
+    authorization: `Bearer ${token}`,
+  };
+}
+
+function readSharedApiSecretFromAppConfig(rawValue: string | undefined) {
+  if (!rawValue?.trim()) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as { sharedApiSecret?: unknown };
+    return typeof parsed.sharedApiSecret === "string" ? parsed.sharedApiSecret.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function errorProcedure(message: string) {

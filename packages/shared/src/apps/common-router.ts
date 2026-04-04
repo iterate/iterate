@@ -41,6 +41,32 @@ export function createCommonRouter<TConfigSchema extends ZodTypeAny>(options: {
   });
 }
 
+export function createAppRouterWithCommon<
+  TConfigSchema extends ZodTypeAny,
+  TRouter extends AnyRouter,
+>(options: {
+  appConfigSchema: TConfigSchema;
+  createRouter: (commonRouter: ReturnType<typeof createCommonRouter<TConfigSchema>>) => TRouter;
+}) {
+  let appRouter: TRouter | undefined;
+
+  const commonRouter = createCommonRouter({
+    appConfigSchema: options.appConfigSchema,
+    getTrpcCliProcedures: () => {
+      if (!appRouter) {
+        throw new Error("tRPC CLI procedures are not ready yet");
+      }
+
+      return parseTrpcCliProcedures(appRouter);
+    },
+  });
+
+  appRouter = options.createRouter(
+    commonRouter as ReturnType<typeof createCommonRouter<TConfigSchema>>,
+  );
+  return appRouter;
+}
+
 export function createCommonDebugOutput() {
   if (typeof process === "undefined") {
     return { runtime: "workerd" };

@@ -1,4 +1,4 @@
-import { createCommonRouter, parseTrpcCliProcedures } from "@iterate-com/shared/apps/common-router";
+import { createAppRouterWithCommon } from "@iterate-com/shared/apps/common-router";
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { AppConfig } from "~/app.ts";
@@ -77,17 +77,20 @@ function getCoordinator(env: AppContext["env"], type: string) {
   return env.RESOURCE_COORDINATOR.getByName(type);
 }
 
-let getTrpcCliProceduresImpl: (() => ReturnType<typeof parseTrpcCliProcedures>) | undefined;
-
-const commonRouter = createCommonRouter({
+export const appRouter = createAppRouterWithCommon({
   appConfigSchema: AppConfig,
-  getTrpcCliProcedures: () => {
-    if (!getTrpcCliProceduresImpl) {
-      throw new Error("tRPC CLI procedures are not ready yet");
-    }
-
-    return getTrpcCliProceduresImpl();
-  },
+  createRouter: (commonRouter) =>
+    os.router({
+      common: os.common.router(commonRouter),
+      resources: os.resources.router({
+        add: addResourceProcedure,
+        delete: deleteResourceProcedure,
+        list: listResourcesProcedure,
+        find: findResourceProcedure,
+        acquire: acquireResourceProcedure,
+        release: releaseResourceProcedure,
+      }),
+    }),
 });
 
 const addResourceProcedure = os.resources.add
@@ -204,16 +207,3 @@ const releaseResourceProcedure = os.resources.release
       return mapResourceError(error);
     }
   });
-
-export const appRouter = os.router({
-  common: os.common.router(commonRouter),
-  resources: os.resources.router({
-    add: addResourceProcedure,
-    delete: deleteResourceProcedure,
-    list: listResourcesProcedure,
-    find: findResourceProcedure,
-    acquire: acquireResourceProcedure,
-    release: releaseResourceProcedure,
-  }),
-});
-getTrpcCliProceduresImpl = () => parseTrpcCliProcedures(appRouter);

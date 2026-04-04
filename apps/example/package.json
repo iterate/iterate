@@ -24,6 +24,11 @@
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
     "test:watch": "vitest"
   },
+  "iterateAppCli": {
+    "remote": {
+      "defaultBaseUrl": "https://example.iterate.com"
+    }
+  },
   "dependencies": {
     "@iterate-com/example-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",

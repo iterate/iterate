@@ -24,6 +24,11 @@
     "test:quick": "pnpm test:e2e",
     "test:watch": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest --dir e2e/vitest"
   },
+  "iterateAppCli": {
+    "remote": {
+      "defaultBaseUrl": "https://events.iterate.com"
+    }
+  },
   "dependencies": {
     "@iterate-com/events-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",

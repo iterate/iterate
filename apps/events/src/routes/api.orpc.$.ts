@@ -13,7 +13,7 @@ export const Route = createFileRoute("/api/orpc/$")({
           },
         });
 
-        if (matched) return response;
+        if (matched && response) return response;
         return Response.json({ error: "not_found" }, { status: 404 });
       },
     },

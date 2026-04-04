@@ -29,6 +29,12 @@
     "db:types:stale": "tsx ./scripts/generate-queries.ts --if-stale",
     "db:watch": "pnpm run db:rebuild && tsx ./scripts/generate-queries.ts --watch"
   },
+  "iterateAppCli": {
+    "remote": {
+      "defaultBaseUrl": "https://semaphore.iterate.com",
+      "auth": "shared-api-secret-bearer"
+    }
+  },
   "dependencies": {
     "@iterate-com/semaphore-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
