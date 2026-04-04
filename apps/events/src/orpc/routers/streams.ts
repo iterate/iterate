@@ -58,12 +58,6 @@ export const streamsRouter = {
   destroy: os.destroy.handler(async ({ input }) => {
     return await destroyStreamTree(input);
   }),
-  destroyRoot: os.destroyRoot.handler(async ({ input }) => {
-    return await destroyStreamTree({
-      path: "/",
-      destroyChildren: input.destroyChildren,
-    });
-  }),
   stream: os.stream.handler(async function* ({ input, signal }) {
     const streamStub = await getStreamStub(input.path);
 

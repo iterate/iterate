@@ -76,24 +76,6 @@ export const eventsContract = oc.router({
       }),
     )
     .output(DestroyStreamResult),
-  destroyRoot: oc
-    .route({
-      operationId: "destroyRootStream",
-      method: "DELETE",
-      path: "/streams",
-      description:
-        "Deletes the root stream durable object. When `destroyChildren=true`, also destroys every discovered stream.",
-      tags: ["Streams"],
-    })
-    .input(
-      z
-        .object({
-          destroyChildren: z.coerce.boolean().optional(),
-        })
-        .optional()
-        .default({}),
-    )
-    .output(DestroyStreamResult),
   stream: oc
     .route({
       operationId: "streamEvents",

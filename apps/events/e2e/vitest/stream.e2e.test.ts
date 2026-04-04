@@ -638,7 +638,7 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "DELETE /api/streams/?destroyChildren=true wipes every discovered stream without recreating root",
+    "DELETE /api/streams/%2F?destroyChildren=true wipes every discovered stream without recreating root",
     async () => {
       const pathA = uniqueStreamPath();
       const pathB = StreamPath.parse(`${uniqueStreamPath()}/child`);
@@ -658,7 +658,7 @@ describe.sequential("events stream e2e", () => {
         },
       });
 
-      const response = await app.fetch("/api/streams/?destroyChildren=true", {
+      const response = await app.fetch("/api/streams/%2F?destroyChildren=true", {
         method: "DELETE",
       });
 
