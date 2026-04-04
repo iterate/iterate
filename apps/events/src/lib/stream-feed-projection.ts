@@ -170,7 +170,7 @@ function appendInsertion(
 }
 
 function getChildStreamCreatedEventPath(event: Event) {
-  return ChildStreamCreatedEvent.parse(event).payload.path;
+  return ChildStreamCreatedEvent.parse(event).payload.childPath;
 }
 
 function getStreamMetadataUpdatedEventMetadata(event: Event) {

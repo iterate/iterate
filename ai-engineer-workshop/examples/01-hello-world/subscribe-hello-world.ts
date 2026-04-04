@@ -17,8 +17,8 @@ export default async function subscribeHelloWorld(pathPrefix: string) {
   const iterator = stream[Symbol.asyncIterator]();
 
   const appendResult = await client.append({
-    params: { path: streamPath },
-    body: {
+    path: streamPath,
+    event: {
       type: "hello-world",
       payload: {
         message: `hello world ${new Date().toISOString()}`,

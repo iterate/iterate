@@ -49,7 +49,7 @@ describe("projectWireToFeed", () => {
       createEvent({
         streamPath: "/",
         type: "https://events.iterate.com/events/stream/child-stream-created",
-        payload: { path: "/child-stream" },
+        payload: { childPath: "/child-stream" },
       }),
     );
 
@@ -83,7 +83,7 @@ describe("projectWireToFeed", () => {
       createEvent({
         streamPath: "/",
         type: "https://events.iterate.com/events/stream/child-stream-created",
-        payload: { path: "/child-stream" },
+        payload: { childPath: "/child-stream" },
       }),
     ]);
 
@@ -441,7 +441,7 @@ describe("buildDisplayFeed", () => {
         streamPath: "/",
         offset: 1,
         type: "https://events.iterate.com/events/stream/child-stream-created",
-        payload: { path: "/created" },
+        payload: { childPath: "/created" },
       }),
       createEvent({
         streamPath: "/created",
@@ -475,7 +475,7 @@ describe("getAdjacentEventOffset", () => {
         createEvent({
           offset: 3,
           type: "https://events.iterate.com/events/stream/child-stream-created",
-          payload: { path: "/child" },
+          payload: { childPath: "/child" },
         }),
       ]),
     );
