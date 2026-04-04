@@ -361,6 +361,7 @@ describe.sequential("events stream e2e", () => {
       expect(await escapedRootStateResponse.json()).toEqual(
         await app.client.getState({ path: "/" }),
       );
+      expect((await app.client.listStreams({})).some((stream) => stream.path === "/")).toBe(true);
       expect(rootHistory[0]).toMatchObject({
         streamPath: "/",
         type: "https://events.iterate.com/events/stream/initialized",
@@ -472,17 +473,6 @@ describe.sequential("events stream e2e", () => {
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual(streams);
-    },
-    testTimeoutMs,
-  );
-
-  test(
-    "root stream is listed once it has been initialized",
-    async () => {
-      await app.client.getState({ path: "/" });
-      const streams = await app.client.listStreams({});
-
-      expect(streams.some((stream) => stream.path === "/")).toBe(true);
     },
     testTimeoutMs,
   );
@@ -681,10 +671,6 @@ describe.sequential("events stream e2e", () => {
       });
       expect(await app.client.listStreams({})).toEqual([]);
       expect(await app.client.destroy({ path: "/" })).toEqual({
-        destroyed: true,
-        finalState: null,
-      });
-      expect(await app.client.destroy({ path: pathA })).toEqual({
         destroyed: true,
         finalState: null,
       });

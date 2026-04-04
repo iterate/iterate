@@ -8,10 +8,6 @@ export class StreamOffsetPreconditionError extends Error {
   }
 }
 
-export function getStreamStubWithoutInitializing(path: StreamPath) {
-  return workerEnv.STREAM.getByName(path);
-}
-
 /**
  * Returns a stream stub that is guaranteed to have been initialized. All
  * stateful DO methods (append, history, stream, getState) assume initialization
@@ -19,7 +15,7 @@ export function getStreamStubWithoutInitializing(path: StreamPath) {
  * throw from the `state` getter inside the durable object.
  */
 export async function getStreamStub(path: StreamPath) {
-  const streamStub = getStreamStubWithoutInitializing(path);
+  const streamStub = workerEnv.STREAM.getByName(path);
   await streamStub.initialize({ path });
   return streamStub;
 }

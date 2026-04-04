@@ -1,3 +1,4 @@
+import { env as workerEnv } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import {
   ChildStreamCreatedEvent,
@@ -8,11 +9,7 @@ import {
   type StreamPath,
 } from "@iterate-com/events-contract";
 import jsonata from "jsonata";
-import {
-  getStreamStub,
-  getStreamStubWithoutInitializing,
-  StreamOffsetPreconditionError,
-} from "~/lib/stream-helpers.ts";
+import { getStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 import { decodeEventStream } from "~/lib/utils.ts";
 import { os } from "~/orpc/orpc.ts";
 
@@ -182,4 +179,8 @@ function getErrorMessage(error: unknown) {
   }
 
   return String(error);
+}
+
+function getStreamStubWithoutInitializing(path: StreamPath) {
+  return workerEnv.STREAM.getByName(path);
 }
