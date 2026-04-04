@@ -77,22 +77,6 @@ function getCoordinator(env: AppContext["env"], type: string) {
   return env.RESOURCE_COORDINATOR.getByName(type);
 }
 
-export const appRouter = createAppRouterWithCommon({
-  appConfigSchema: AppConfig,
-  createRouter: (commonRouter) =>
-    os.router({
-      common: os.common.router(commonRouter),
-      resources: os.resources.router({
-        add: addResourceProcedure,
-        delete: deleteResourceProcedure,
-        list: listResourcesProcedure,
-        find: findResourceProcedure,
-        acquire: acquireResourceProcedure,
-        release: releaseResourceProcedure,
-      }),
-    }),
-});
-
 const addResourceProcedure = os.resources.add
   .use(authProcedure)
   .handler(async ({ context, input }) => {
@@ -207,3 +191,19 @@ const releaseResourceProcedure = os.resources.release
       return mapResourceError(error);
     }
   });
+
+export const appRouter = createAppRouterWithCommon({
+  appConfigSchema: AppConfig,
+  createRouter: (commonRouter) =>
+    os.router({
+      common: os.common.router(commonRouter),
+      resources: os.resources.router({
+        add: addResourceProcedure,
+        delete: deleteResourceProcedure,
+        list: listResourcesProcedure,
+        find: findResourceProcedure,
+        acquire: acquireResourceProcedure,
+        release: releaseResourceProcedure,
+      }),
+    }),
+});
