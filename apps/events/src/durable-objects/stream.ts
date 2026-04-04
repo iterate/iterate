@@ -8,11 +8,7 @@ import {
   StreamState,
 } from "@iterate-com/events-contract";
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
-import {
-  dynamicWorkerPocModule,
-  shouldRunDynamicWorkerPoc,
-  type DynamicWorkerAppendInput,
-} from "./dynamic-processor.ts";
+import { dynamicWorkerPocModule, type DynamicWorkerAppendInput } from "./dynamic-processor.ts";
 import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
 import type { BuiltinProcessor } from "./define-processor.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
@@ -25,7 +21,7 @@ function getProcessorState(state: StreamState, slug: string) {
   return state.processors[slug as ProcessorSlugKey];
 }
 
-class StreamAppender extends RpcTarget {
+class DynamicWorkerStreamTarget extends RpcTarget {
   #stream: StreamDurableObject;
 
   constructor(stream: StreamDurableObject) {
@@ -40,6 +36,13 @@ class StreamAppender extends RpcTarget {
         payload: input.payload ?? {},
       }),
     );
+  }
+
+  async subscribe() {
+    return this.#stream.stream({
+      afterOffset: this.#stream.state.eventCount,
+      live: true,
+    });
   }
 }
 
@@ -98,6 +101,7 @@ class StreamAppender extends RpcTarget {
 export class StreamDurableObject extends DurableObject<Env> {
   private _state: StreamState | null = null;
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  private dynamicWorkerPocRun: Promise<void> | null = null;
 
   private get state(): StreamState {
     if (this._state == null) {
@@ -141,6 +145,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       const parsed = StreamState.safeParse(rawState);
       if (parsed.success) {
         this._state = parsed.data;
+        this.ensureDynamicWorkerPocStarted();
         return;
       }
 
@@ -182,6 +187,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       metadata: {},
       processors: processorState,
     } as StreamState;
+    this.ensureDynamicWorkerPocStarted();
 
     try {
       this.append({
@@ -404,22 +410,14 @@ export class StreamDurableObject extends DurableObject<Env> {
         });
       });
     }
-
-    void this.runDynamicWorkerPoc(event).catch((error) => {
-      console.error("[stream-do] dynamic worker POC failed", {
-        path: this.state.path,
-        eventType: event.type,
-        error,
-      });
-    });
   }
 
-  private async runDynamicWorkerPoc(event: Event) {
-    if (!shouldRunDynamicWorkerPoc(event)) {
+  private ensureDynamicWorkerPocStarted() {
+    if (this.dynamicWorkerPocRun != null) {
       return;
     }
 
-    const entrypoint = this.env.LOADER.get(null, () => ({
+    const entrypoint = this.env.LOADER.get(`dynamic-worker-poc:${this.ctx.id.toString()}`, () => ({
       compatibilityDate: "2026-02-05",
       mainModule: "dynamic-processor.js",
       modules: {
@@ -427,10 +425,17 @@ export class StreamDurableObject extends DurableObject<Env> {
       },
       globalOutbound: null,
     })).getEntrypoint() as unknown as {
-      run(stream: StreamAppender): Promise<void>;
+      run(stream: DynamicWorkerStreamTarget): Promise<void>;
     };
 
-    await entrypoint.run(new StreamAppender(this));
+    this.dynamicWorkerPocRun = entrypoint.run(new DynamicWorkerStreamTarget(this));
+
+    void this.dynamicWorkerPocRun.catch((error) => {
+      console.error("[stream-do] dynamic worker POC failed", {
+        path: this._state?.path ?? null,
+        error,
+      });
+    });
   }
 
   // ---------------------------------------------------------------------------
