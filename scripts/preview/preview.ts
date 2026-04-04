@@ -8,6 +8,7 @@ import {
   readCloudflarePreviewCommentState,
   upsertCloudflarePreviewCommentEntry,
 } from "./comment.ts";
+import { splitRepositoryFullName } from "./repository-full-name.ts";
 
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultPreviewLeaseMs = 60 * 60 * 1000;
@@ -615,6 +616,13 @@ async function destroyPreviewEnvironment(
       ? null
       : commandFailureMessage(destroyResult, "Preview teardown failed.");
 
+  if (destroyResult.exitCode !== 0) {
+    return {
+      message: destroyMessage ?? "Preview teardown failed.",
+      ok: false,
+    };
+  }
+
   try {
     const semaphore = params.createPreviewSemaphoreResourceClient({
       semaphoreApiToken: params.semaphoreApiToken,
@@ -849,7 +857,7 @@ async function resolvePreviewCompareBaseSha(params: {
 
   const shortSha = params.previousEntry?.shortSha?.trim();
   if (!shortSha) {
-    return null;
+    return params.pullRequestBaseSha;
   }
 
   const commits = await octokit.paginate(octokit.rest.pulls.listCommits, {
@@ -901,17 +909,6 @@ function matchesPreviewPath(filename: string, patterns: readonly string[]) {
 
     return filename === pattern;
   });
-}
-
-function splitRepositoryFullName(repositoryFullName: string) {
-  const parts = repositoryFullName.split("/");
-  if (parts.length !== 2) {
-    throw new Error(
-      `Expected repository full name to look like owner/repo. Got: ${repositoryFullName}`,
-    );
-  }
-
-  return parts as [string, string];
 }
 
 async function sleep(ms: number, signal?: AbortSignal) {

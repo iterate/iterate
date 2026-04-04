@@ -1,5 +1,6 @@
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
+import { splitRepositoryFullName } from "./repository-full-name.ts";
 
 export const cloudflarePreviewCommentStateLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE";
 export const cloudflarePreviewCommentBotLogins = new Set(["github-actions[bot]", "iterate-bot"]);
@@ -278,15 +279,6 @@ function renderStatusLabel(status: CloudflarePreviewCommentEntry["status"]) {
     case "fork-unavailable":
       return "unavailable for forks";
   }
-}
-
-function splitRepositoryFullName(repositoryFullName: string) {
-  const [owner, repo] = repositoryFullName.split("/");
-  if (!owner || !repo) {
-    throw new Error(`Invalid repositoryFullName: ${repositoryFullName}`);
-  }
-
-  return [owner, repo] as const;
 }
 
 function isCommentWriteAccessError(error: unknown) {
