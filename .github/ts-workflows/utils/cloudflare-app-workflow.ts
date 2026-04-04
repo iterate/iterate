@@ -54,7 +54,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
             id: "vars",
             name: "Resolve workflow variables",
             env: {
-              GIT_SHA: "${{ github.event.pull_request.head.sha || github.sha }}",
+              GIT_SHA: "${{ github.sha }}",
             },
             run: [
               "echo \"stage=${{ github.event_name == 'push' && 'prd' || inputs.stage || 'prd' }}\" >> \"$GITHUB_OUTPUT\"",

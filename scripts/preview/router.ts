@@ -11,10 +11,21 @@ import {
 } from "./preview.ts";
 
 const env = process.env;
+const previewBoundaryEnv = createPreviewBoundaryEnv(env);
+
+function createPreviewBoundaryEnv(env: NodeJS.ProcessEnv) {
+  return {
+    ...env,
+    SEMAPHORE_API_TOKEN: resolvePreviewSemaphoreApiToken(env),
+  };
+}
+
+function resolvePreviewSemaphoreApiToken(env: NodeJS.ProcessEnv) {
+  return env.SEMAPHORE_API_TOKEN?.trim() || env.APP_CONFIG_SHARED_API_SECRET?.trim();
+}
 
 function createPreviewStatusInputSchema(env: NodeJS.ProcessEnv) {
-  const semaphoreApiToken =
-    env.SEMAPHORE_API_TOKEN?.trim() || env.APP_CONFIG_SHARED_API_SECRET?.trim();
+  const semaphoreApiToken = resolvePreviewSemaphoreApiToken(env);
   return z.object({
     semaphoreApiToken: semaphoreApiToken
       ? z.string().trim().min(1).default(semaphoreApiToken)
@@ -40,10 +51,52 @@ function createPreviewSemaphoreClient(input: {
   };
 }
 
+function getPreviewAppRuntime(app: (typeof cloudflarePreviewApps)[CloudflarePreviewAppSlug]) {
+  return {
+    appDisplayName: app.displayName,
+    appSlug: app.slug,
+    commandEnvironment: env,
+    createPreviewSemaphoreResourceClient: createPreviewSemaphoreClient,
+    dopplerProject: app.dopplerProject,
+    previewResourceType: app.previewResourceType,
+    previewTestBaseUrlEnvVar: app.previewTestBaseUrlEnvVar,
+    previewTestCommandArgs: app.previewTestCommandArgs,
+    workingDirectory: resolve(process.cwd(), app.appPath),
+  };
+}
+
+async function runPreviewLifecycleForAllApps<Result>(params: {
+  handler: (app: (typeof cloudflarePreviewApps)[CloudflarePreviewAppSlug]) => Promise<Result>;
+  onFailure: (input: { appSlug: string; result: Result }) => boolean;
+  verb: string;
+}) {
+  const results: Array<{ appSlug: string; result: Result }> = [];
+
+  for (const app of Object.values(cloudflarePreviewApps)) {
+    results.push({
+      appSlug: app.slug,
+      result: await params.handler(app),
+    });
+  }
+
+  const failed = results.filter(params.onFailure);
+  if (failed.length > 0) {
+    throw new Error(
+      `Failed to ${params.verb} previews for: ${failed.map(({ appSlug }) => appSlug).join(", ")}`,
+    );
+  }
+
+  return { results };
+}
+
 export const router = os.router({
   preview: os.router({
     sync: os
-      .input(createCloudflarePreviewSyncInputSchema(env).extend({ app: CloudflarePreviewAppSlug }))
+      .input(
+        createCloudflarePreviewSyncInputSchema(previewBoundaryEnv).extend({
+          app: CloudflarePreviewAppSlug,
+        }),
+      )
       .meta({
         description:
           "Recreate an app preview for the current pull request and update the managed PR preview section",
@@ -53,17 +106,9 @@ export const router = os.router({
         const app = cloudflarePreviewApps[input.app];
         const result = await syncCloudflarePreviewForPullRequest({
           ...input,
-          appDisplayName: app.displayName,
-          appSlug: app.slug,
-          createPreviewSemaphoreResourceClient: createPreviewSemaphoreClient,
-          dopplerProject: app.dopplerProject,
-          env,
           paths: app.paths,
-          previewResourceType: app.previewResourceType,
-          previewTestBaseUrlEnvVar: app.previewTestBaseUrlEnvVar,
-          previewTestCommandArgs: app.previewTestCommandArgs,
           signal,
-          workingDirectory: resolve(process.cwd(), app.appPath),
+          ...getPreviewAppRuntime(app),
         });
 
         if (!result.ok) {
@@ -72,9 +117,30 @@ export const router = os.router({
 
         return result;
       }),
+    syncAll: os
+      .input(createCloudflarePreviewSyncInputSchema(previewBoundaryEnv))
+      .meta({
+        description:
+          "Recreate previews for all preview-managed apps on the current pull request and update the managed PR preview section",
+      })
+      .handler(async ({ input, signal }) =>
+        runPreviewLifecycleForAllApps({
+          handler: async (app) =>
+            syncCloudflarePreviewForPullRequest({
+              ...input,
+              paths: app.paths,
+              signal,
+              ...getPreviewAppRuntime(app),
+            }),
+          onFailure: ({ result }) => !result.ok,
+          verb: "sync",
+        }),
+      ),
     cleanup: os
       .input(
-        createCloudflarePreviewCleanupInputSchema(env).extend({ app: CloudflarePreviewAppSlug }),
+        createCloudflarePreviewCleanupInputSchema(previewBoundaryEnv).extend({
+          app: CloudflarePreviewAppSlug,
+        }),
       )
       .meta({
         description: "Clean up an app preview recorded in the managed PR preview section",
@@ -83,16 +149,8 @@ export const router = os.router({
         const app = cloudflarePreviewApps[input.app];
         const result = await cleanupCloudflarePreviewForPullRequest({
           ...input,
-          appDisplayName: app.displayName,
-          appSlug: app.slug,
-          createPreviewSemaphoreResourceClient: createPreviewSemaphoreClient,
-          dopplerProject: app.dopplerProject,
-          env,
-          previewResourceType: app.previewResourceType,
-          previewTestBaseUrlEnvVar: app.previewTestBaseUrlEnvVar,
-          previewTestCommandArgs: app.previewTestCommandArgs,
           signal,
-          workingDirectory: resolve(process.cwd(), app.appPath),
+          ...getPreviewAppRuntime(app),
         });
 
         if (!result.ok) {
@@ -103,8 +161,26 @@ export const router = os.router({
 
         return result;
       }),
+    cleanupAll: os
+      .input(createCloudflarePreviewCleanupInputSchema(previewBoundaryEnv))
+      .meta({
+        description:
+          "Clean up previews for all preview-managed apps recorded in the managed PR preview section",
+      })
+      .handler(async ({ input, signal }) =>
+        runPreviewLifecycleForAllApps({
+          handler: async (app) =>
+            cleanupCloudflarePreviewForPullRequest({
+              ...input,
+              signal,
+              ...getPreviewAppRuntime(app),
+            }),
+          onFailure: ({ result }) => !result.ok,
+          verb: "clean up",
+        }),
+      ),
     status: os
-      .input(createPreviewStatusInputSchema(env))
+      .input(createPreviewStatusInputSchema(previewBoundaryEnv))
       .meta({
         description: "Show preview pool inventory and lease state for all preview-enabled apps",
       })

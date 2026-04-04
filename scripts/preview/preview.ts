@@ -115,12 +115,12 @@ export async function syncCloudflarePreviewForPullRequest(
   params: z.infer<ReturnType<typeof createCloudflarePreviewSyncInputSchema>> & {
     appDisplayName: string;
     appSlug: string;
+    commandEnvironment: NodeJS.ProcessEnv;
     createPreviewSemaphoreResourceClient: (input: {
       semaphoreApiToken: string;
       semaphoreBaseUrl: string;
     }) => PreviewSemaphoreResourceClient;
     dopplerProject: string;
-    env: NodeJS.ProcessEnv;
     paths: readonly string[];
     previewResourceType: string;
     previewTestBaseUrlEnvVar: string;
@@ -201,22 +201,17 @@ export async function syncCloudflarePreviewForPullRequest(
 
   if (hasPreviewDestroyPayload(previousEntry)) {
     const cleanupResult = await destroyPreviewEnvironment({
-      appDisplayName: params.appDisplayName,
-      appSlug: params.appSlug,
+      commandEnvironment: params.commandEnvironment,
       createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
       dopplerProject: params.dopplerProject,
-      env: params.env,
       previewEnvironmentAlchemyStageName: previousEntry.previewEnvironmentAlchemyStageName,
       previewEnvironmentDopplerConfigName: previousEntry.previewEnvironmentDopplerConfigName,
       previewEnvironmentIdentifier: previousEntry.previewEnvironmentIdentifier,
       previewEnvironmentSemaphoreLeaseId: previousEntry.previewEnvironmentSemaphoreLeaseId,
       previewEnvironmentSlug: previousEntry.previewEnvironmentSlug,
       previewEnvironmentType: previousEntry.previewEnvironmentType,
-      previewResourceType: params.previewResourceType,
-      previewTestBaseUrlEnvVar: params.previewTestBaseUrlEnvVar,
-      previewTestCommandArgs: params.previewTestCommandArgs,
       semaphoreApiToken: requireValue(
-        params.semaphoreApiToken ?? params.env.APP_CONFIG_SHARED_API_SECRET?.trim(),
+        params.semaphoreApiToken,
         "SEMAPHORE_API_TOKEN is required to destroy an existing preview.",
       ),
       semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
@@ -250,9 +245,9 @@ export async function syncCloudflarePreviewForPullRequest(
   const createResult = await createPreviewEnvironment({
     appDisplayName: params.appDisplayName,
     appSlug: params.appSlug,
+    commandEnvironment: params.commandEnvironment,
     createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
     dopplerProject: params.dopplerProject,
-    env: params.env,
     leaseMs: params.leaseMs,
     previewResourceType: params.previewResourceType,
     previewTestBaseUrlEnvVar: params.previewTestBaseUrlEnvVar,
@@ -262,7 +257,7 @@ export async function syncCloudflarePreviewForPullRequest(
     pullRequestNumber: params.pullRequestNumber,
     repositoryFullName: params.repositoryFullName,
     semaphoreApiToken: requireValue(
-      params.semaphoreApiToken ?? params.env.APP_CONFIG_SHARED_API_SECRET?.trim(),
+      params.semaphoreApiToken,
       "SEMAPHORE_API_TOKEN is required to create a preview.",
     ),
     semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
@@ -282,11 +277,9 @@ export async function syncCloudflarePreviewForPullRequest(
     if (createResult.entry && hasPreviewDestroyPayload(createResult.entry)) {
       try {
         await destroyPreviewEnvironment({
-          appDisplayName: params.appDisplayName,
-          appSlug: params.appSlug,
+          commandEnvironment: params.commandEnvironment,
           createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
           dopplerProject: params.dopplerProject,
-          env: params.env,
           previewEnvironmentAlchemyStageName: createResult.entry.previewEnvironmentAlchemyStageName,
           previewEnvironmentDopplerConfigName:
             createResult.entry.previewEnvironmentDopplerConfigName,
@@ -294,11 +287,8 @@ export async function syncCloudflarePreviewForPullRequest(
           previewEnvironmentSemaphoreLeaseId: createResult.entry.previewEnvironmentSemaphoreLeaseId,
           previewEnvironmentSlug: createResult.entry.previewEnvironmentSlug,
           previewEnvironmentType: createResult.entry.previewEnvironmentType,
-          previewResourceType: params.previewResourceType,
-          previewTestBaseUrlEnvVar: params.previewTestBaseUrlEnvVar,
-          previewTestCommandArgs: params.previewTestCommandArgs,
           semaphoreApiToken: requireValue(
-            params.semaphoreApiToken ?? params.env.APP_CONFIG_SHARED_API_SECRET?.trim(),
+            params.semaphoreApiToken,
             "SEMAPHORE_API_TOKEN is required to clean up an unrecorded preview.",
           ),
           semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
@@ -319,15 +309,12 @@ export async function cleanupCloudflarePreviewForPullRequest(
   params: z.infer<ReturnType<typeof createCloudflarePreviewCleanupInputSchema>> & {
     appDisplayName: string;
     appSlug: string;
+    commandEnvironment: NodeJS.ProcessEnv;
     createPreviewSemaphoreResourceClient: (input: {
       semaphoreApiToken: string;
       semaphoreBaseUrl: string;
     }) => PreviewSemaphoreResourceClient;
     dopplerProject: string;
-    env: NodeJS.ProcessEnv;
-    previewResourceType: string;
-    previewTestBaseUrlEnvVar: string;
-    previewTestCommandArgs: readonly [string, ...string[]];
     signal?: AbortSignal;
     workingDirectory: string;
   },
@@ -347,22 +334,17 @@ export async function cleanupCloudflarePreviewForPullRequest(
   }
 
   const destroyResult = await destroyPreviewEnvironment({
-    appDisplayName: params.appDisplayName,
-    appSlug: params.appSlug,
+    commandEnvironment: params.commandEnvironment,
     createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
     dopplerProject: params.dopplerProject,
-    env: params.env,
     previewEnvironmentAlchemyStageName: existingEntry.previewEnvironmentAlchemyStageName,
     previewEnvironmentDopplerConfigName: existingEntry.previewEnvironmentDopplerConfigName,
     previewEnvironmentIdentifier: existingEntry.previewEnvironmentIdentifier,
     previewEnvironmentSemaphoreLeaseId: existingEntry.previewEnvironmentSemaphoreLeaseId,
     previewEnvironmentSlug: existingEntry.previewEnvironmentSlug,
     previewEnvironmentType: existingEntry.previewEnvironmentType,
-    previewResourceType: params.previewResourceType,
-    previewTestBaseUrlEnvVar: params.previewTestBaseUrlEnvVar,
-    previewTestCommandArgs: params.previewTestCommandArgs,
     semaphoreApiToken: requireValue(
-      params.semaphoreApiToken ?? params.env.APP_CONFIG_SHARED_API_SECRET?.trim(),
+      params.semaphoreApiToken,
       "SEMAPHORE_API_TOKEN is required to clean up previews.",
     ),
     semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
@@ -407,12 +389,12 @@ async function createPreviewEnvironment(
   params: z.infer<ReturnType<typeof createPreviewCreateInputSchema>> & {
     appDisplayName: string;
     appSlug: string;
+    commandEnvironment: NodeJS.ProcessEnv;
     createPreviewSemaphoreResourceClient: (input: {
       semaphoreApiToken: string;
       semaphoreBaseUrl: string;
     }) => PreviewSemaphoreResourceClient;
     dopplerProject: string;
-    env: NodeJS.ProcessEnv;
     previewResourceType: string;
     previewTestBaseUrlEnvVar: string;
     previewTestCommandArgs: readonly [string, ...string[]];
@@ -473,7 +455,7 @@ async function createPreviewEnvironment(
         "alchemy:up",
       ],
       command: "doppler",
-      environment: params.env,
+      environment: params.commandEnvironment,
       signal: params.signal,
       workingDirectory: params.workingDirectory,
     });
@@ -517,7 +499,7 @@ async function createPreviewEnvironment(
         ...params.previewTestCommandArgs,
       ],
       command: "doppler",
-      environment: params.env,
+      environment: params.commandEnvironment,
       maxAttempts: defaultPreviewTestMaxAttempts,
       retryDelayMs: defaultPreviewTestRetryDelayMs,
       signal: params.signal,
@@ -576,17 +558,12 @@ async function createPreviewEnvironment(
 
 async function destroyPreviewEnvironment(
   params: z.infer<ReturnType<typeof createPreviewDestroyInputSchema>> & {
-    appDisplayName: string;
-    appSlug: string;
+    commandEnvironment: NodeJS.ProcessEnv;
     createPreviewSemaphoreResourceClient: (input: {
       semaphoreApiToken: string;
       semaphoreBaseUrl: string;
     }) => PreviewSemaphoreResourceClient;
     dopplerProject: string;
-    env: NodeJS.ProcessEnv;
-    previewResourceType: string;
-    previewTestBaseUrlEnvVar: string;
-    previewTestCommandArgs: readonly [string, ...string[]];
     signal?: AbortSignal;
     workingDirectory: string;
   },
@@ -606,7 +583,7 @@ async function destroyPreviewEnvironment(
       "alchemy:down",
     ],
     command: "doppler",
-    environment: params.env,
+    environment: params.commandEnvironment,
     signal: params.signal,
     workingDirectory: params.workingDirectory,
   });
@@ -1043,25 +1020,11 @@ function requiredBooleanWithEnvDefault(
 }
 
 function semaphoreApiTokenWithEnvDefault(env: NodeJS.ProcessEnv) {
-  return requiredStringWithEnvDefault(
-    {
-      ...env,
-      SEMAPHORE_API_TOKEN:
-        env.SEMAPHORE_API_TOKEN?.trim() || env.APP_CONFIG_SHARED_API_SECRET?.trim(),
-    },
-    "SEMAPHORE_API_TOKEN",
-  );
+  return requiredStringWithEnvDefault(env, "SEMAPHORE_API_TOKEN");
 }
 
 function optionalSemaphoreApiTokenWithEnvDefault(env: NodeJS.ProcessEnv) {
-  return optionalStringWithEnvDefault(
-    {
-      ...env,
-      SEMAPHORE_API_TOKEN:
-        env.SEMAPHORE_API_TOKEN?.trim() || env.APP_CONFIG_SHARED_API_SECRET?.trim(),
-    },
-    "SEMAPHORE_API_TOKEN",
-  );
+  return optionalStringWithEnvDefault(env, "SEMAPHORE_API_TOKEN");
 }
 
 function requireValue<T>(value: T | undefined, message: string) {

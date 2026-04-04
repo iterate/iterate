@@ -58,7 +58,7 @@ describe("cloudflare preview state helpers", () => {
       events: CloudflarePreviewEntry.parse({
         appDisplayName: "Events",
         appSlug: "events",
-        message: "\u001b[31mAssertionError: expected 2 to be +0\u001b[39m",
+        message: "AssertionError: expected 2 to be +0",
         runUrl: "https://github.com/iterate/iterate/actions/runs/456",
         shortSha: "1234567",
         status: "tests-failed",
@@ -69,12 +69,23 @@ describe("cloudflare preview state helpers", () => {
     expect(body).toContain("# User content");
     expect(body).toContain("Footer");
     expect(body).toContain("Summary: AssertionError: expected 2 to be +0");
-    expect(body).not.toContain("\u001b[31m");
     expect(body).toContain("<details>");
   });
 
   it("returns empty state when the managed block is deleted", () => {
     expect(parseCloudflarePreviewState("## Summary\n\nNo preview block here.")).toEqual({});
+  });
+
+  it("returns empty state when the managed state block is malformed", () => {
+    const body = [
+      "## Preview Environments",
+      "",
+      "<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE -->",
+      "<!-- { not json } -->",
+      "<!-- /CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE -->",
+    ].join("\n");
+
+    expect(parseCloudflarePreviewState(body)).toEqual({});
   });
 
   it("clears destroy payload fields after release", () => {

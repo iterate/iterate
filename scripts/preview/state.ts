@@ -1,12 +1,11 @@
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
-import { stripAnsi } from "../../packages/shared/src/jonasland/strip-ansi.ts";
+import { markdownAnnotator } from "../../packages/shared/src/jonasland/markdown-annotator.ts";
 import { splitRepositoryFullName } from "./repository-full-name.ts";
 
 const cloudflarePreviewSectionLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS";
-export const cloudflarePreviewStateLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE";
-
-export const CloudflarePreviewStatus = z.enum([
+const cloudflarePreviewStateLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE";
+const cloudflarePreviewStatus = z.enum([
   "claim-failed",
   "cleanup-failed",
   "deploy-failed",
@@ -19,7 +18,7 @@ export const CloudflarePreviewStatus = z.enum([
 export const CloudflarePreviewEntry = z.object({
   appDisplayName: z.string().trim().min(1),
   appSlug: z.string().trim().min(1),
-  status: CloudflarePreviewStatus,
+  status: cloudflarePreviewStatus,
   updatedAt: z.string().trim().min(1),
   leasedUntil: z.number().int().positive().nullable().optional(),
   headSha: z.string().trim().min(1).nullable().optional(),
@@ -35,10 +34,8 @@ export const CloudflarePreviewEntry = z.object({
   shortSha: z.string().trim().min(1).nullable().optional(),
 });
 
-export const CloudflarePreviewState = z.record(z.string().trim().min(1), CloudflarePreviewEntry);
-
-export type CloudflarePreviewEntry = z.infer<typeof CloudflarePreviewEntry>;
-export type CloudflarePreviewState = z.infer<typeof CloudflarePreviewState>;
+type CloudflarePreviewEntry = z.infer<typeof CloudflarePreviewEntry>;
+type CloudflarePreviewState = Record<string, CloudflarePreviewEntry>;
 
 export async function readCloudflarePreviewState(params: {
   githubToken: string;
@@ -91,19 +88,28 @@ export function clearCloudflarePreviewDestroyPayload(
 }
 
 export function parseCloudflarePreviewState(body: string) {
-  const current = annotateMarkdownBlock(body, cloudflarePreviewStateLabel).current;
+  const current = markdownAnnotator(body, cloudflarePreviewStateLabel).current;
   if (!current) {
     return {};
   }
 
-  return CloudflarePreviewState.parse(JSON.parse(current));
+  try {
+    const parsed = JSON.parse(current);
+    return z.record(z.string().trim().min(1), CloudflarePreviewEntry).parse(parsed);
+  } catch (error) {
+    if (error instanceof SyntaxError || error instanceof z.ZodError) {
+      return {};
+    }
+
+    throw error;
+  }
 }
 
 export function renderCloudflarePreviewPullRequestBody(
   body: string,
   state: CloudflarePreviewState,
 ) {
-  return annotateMarkdownBlock(body, cloudflarePreviewSectionLabel).update(
+  return markdownAnnotator(body, cloudflarePreviewSectionLabel).update(
     renderCloudflarePreviewSection(state),
   );
 }
@@ -117,7 +123,7 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
   return [
     "## Preview Environments",
     "",
-    renderHiddenMarkdownBlock(cloudflarePreviewStateLabel, JSON.stringify(state, null, 2)),
+    markdownAnnotator("", cloudflarePreviewStateLabel).update(JSON.stringify(state, null, 2)),
     rows ? `\n${rows}` : "",
   ]
     .filter(Boolean)
@@ -126,8 +132,8 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
 
 function renderPreviewEntry(entry: CloudflarePreviewEntry) {
   const summary = summarizePreviewMessage(entry.message);
-  const details = sanitizePreviewMessage(entry.message);
-  const showFailureDetails = isFailureStatus(entry.status) && Boolean(details);
+  const details = readPreviewMessage(entry.message);
+  const showFailureDetails = entry.status !== "deployed" && entry.status !== "released" && details;
 
   return [
     `### ${entry.appDisplayName}`,
@@ -164,17 +170,17 @@ function renderPreviewEntry(entry: CloudflarePreviewEntry) {
     .join("\n");
 }
 
-function isFailureStatus(status: CloudflarePreviewEntry["status"]) {
-  return status !== "deployed" && status !== "released";
+function readPreviewMessage(message: string | null | undefined) {
+  return message?.trim() || null;
 }
 
 function summarizePreviewMessage(message: string | null | undefined) {
-  const sanitized = sanitizePreviewMessage(message);
-  if (!sanitized) {
+  const details = readPreviewMessage(message);
+  if (!details) {
     return null;
   }
 
-  const lines = sanitized
+  const lines = details
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
@@ -189,68 +195,7 @@ function summarizePreviewMessage(message: string | null | undefined) {
       ),
     ) ?? lines[0];
 
-  return truncateLine(interestingLine, 180);
-}
-
-function sanitizePreviewMessage(message: string | null | undefined) {
-  if (!message) {
-    return null;
-  }
-
-  const normalized = stripAnsi(message)
-    .replaceAll("\r\n", "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  return normalized.length > 0 ? normalized : null;
-}
-
-function truncateLine(line: string, maxLength: number) {
-  if (line.length <= maxLength) {
-    return line;
-  }
-
-  return `${line.slice(0, maxLength - 1)}…`;
-}
-
-function renderHiddenMarkdownBlock(label: string, contents: string) {
-  return `<!-- ${label} -->\n${contents}\n<!-- /${label} -->`;
-}
-
-function annotateMarkdownBlock(body: string, label: string) {
-  const startMarker = `<!-- ${label} -->`;
-  const endMarker = `<!-- /${label} -->`;
-  const lines = body.split("\n");
-  const startLine = lines.findIndex((line) => line.trim() === startMarker);
-  const endLine = lines.findIndex((line, index) => index > startLine && line.trim() === endMarker);
-
-  if (startLine === -1 || endLine === -1) {
-    return {
-      current: null,
-      update: (contents: string) => {
-        const trimmedBody = body.trim();
-        const block = renderHiddenMarkdownBlock(label, contents);
-
-        return trimmedBody ? `${trimmedBody}\n\n${block}` : block;
-      },
-    };
-  }
-
-  return {
-    current: lines.slice(startLine + 1, endLine).join("\n"),
-    update: (contents: string) =>
-      [
-        ...lines.slice(0, startLine),
-        startMarker,
-        contents,
-        endMarker,
-        ...lines.slice(endLine + 1),
-      ].join("\n"),
-  };
-}
-
-function escapeHtml(value: string) {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  return interestingLine.length <= 180 ? interestingLine : `${interestingLine.slice(0, 179)}…`;
 }
 
 function renderStatusLabel(status: CloudflarePreviewEntry["status"]) {
@@ -270,6 +215,10 @@ function renderStatusLabel(status: CloudflarePreviewEntry["status"]) {
     case "fork-unavailable":
       return "unavailable for forks";
   }
+}
+
+function escapeHtml(value: string) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 async function readPullRequestBody(params: {

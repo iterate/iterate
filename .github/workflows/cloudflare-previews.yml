@@ -21,19 +21,6 @@ on:
       - apps/ingress-proxy/**
 jobs:
   preview:
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        include:
-          - appDisplayName: Example
-            appSlug: example
-          - appDisplayName: Events
-            appSlug: events
-          - appDisplayName: Semaphore
-            appSlug: semaphore
-          - appDisplayName: Ingress Proxy
-            appSlug: ingress-proxy
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
@@ -55,54 +42,48 @@ jobs:
           doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
         if: github.event.pull_request.head.repo.fork != true
       - if: github.event.action != 'closed' && github.event.pull_request.head.repo.fork == true
-        name: Sync preview for forks
+        name: Sync previews for forks
         env:
-          APP: ${{ matrix.appSlug }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
           SEMAPHORE_BASE_URL: https://semaphore.iterate.com
           WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |-
           set -euo pipefail
-          pnpm preview sync \
-            --app "$APP" \
+          pnpm preview sync-all \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
             --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
             --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
             --pull-request-number "${{ github.event.pull_request.number }}" \
             --repository-full-name "${{ github.repository }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL" \
             --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
+            --workflow-run-url "$WORKFLOW_RUN_URL" \
             --semaphore-base-url "$SEMAPHORE_BASE_URL"
       - if: github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
-        name: Sync preview
+        name: Sync previews
         env:
-          APP: ${{ matrix.appSlug }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
           WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |-
           set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview sync \
-            --app "$APP" \
+          doppler run --project os --config prd -- pnpm preview sync-all \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
             --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
             --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
             --pull-request-number "${{ github.event.pull_request.number }}" \
             --repository-full-name "${{ github.repository }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL" \
-            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}"
+            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
+            --workflow-run-url "$WORKFLOW_RUN_URL"
       - if: github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true
-        name: Cleanup preview
+        name: Cleanup previews
         env:
-          APP: ${{ matrix.appSlug }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
         run: |-
           set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview cleanup \
-            --app "$APP" \
+          doppler run --project os --config prd -- pnpm preview cleanup-all \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number }}" \
             --repository-full-name "${{ github.repository }}"
