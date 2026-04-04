@@ -1,11 +1,9 @@
 import { ORPCError, implement } from "@orpc/server";
 import { eventsContract, ProjectSlug } from "@iterate-com/events-contract";
 import type { AppContext } from "~/context.ts";
+import { defaultProjectSlug, iterateProjectHeader } from "~/lib/project-slug.ts";
 
 export const os = implement(eventsContract).$context<AppContext>();
-
-const iterateProjectHeader = "x-iterate-project";
-const defaultProjectSlug = "public";
 
 // oRPC middleware is the boundary for request-derived context like headers, so
 // handlers can depend on validated context instead of reading Request globals:
