@@ -34,8 +34,8 @@ export const router = {
       ) as ContractRouterClient<typeof eventsContract>;
 
       return await client.append({
-        params: { path: resolved.streamPath },
-        body: {
+        path: resolved.streamPath,
+        event: {
           type: HELLO_WORLD_TYPE,
           payload: {
             message: "hello world",
