@@ -3,13 +3,37 @@ import { commonContract } from "@iterate-com/shared/apps/common-router-contract"
 import { z } from "zod";
 
 import {
+  BuiltInEventInput,
+  BuiltInEventType,
   DestroyStreamResult,
   Event,
   EventInput,
-  JSONObject,
+  GenericEventInput,
+  InvalidEventAppendedEventInput,
   StreamPath,
   StreamState,
 } from "./types.ts";
+
+const PathMungingDescription =
+  "For curl ergonomics, nested stream paths accept either raw nested segments or percent-escaped slash forms. Both resolve to the same canonical stream path.";
+
+const NormalizedAppendEventInput = EventInput.catch((ctx) =>
+  InvalidEventAppendedEventInput.parse({
+    type: "https://events.iterate.com/events/stream/invalid-event-appended",
+    payload: {
+      rawInput: toJsonValue(ctx.input),
+      error: prettifyAppendEventError({
+        input: ctx.input,
+        fallbackIssues: ctx.error.issues,
+      }),
+    },
+  }),
+);
+
+export const AppendInput = z.object({
+  path: StreamPath,
+  event: NormalizedAppendEventInput,
+});
 
 const SecretSummary = z.object({
   id: z.string(),
@@ -23,11 +47,6 @@ const Secret = SecretSummary.extend({
   value: z.string(),
 });
 
-const PathMungingDescription =
-  "For curl ergonomics, nested stream paths accept either raw nested segments or percent-escaped slash forms. Both resolve to the same canonical stream path.";
-
-const streamListEntryCreatedAt = z.iso.datetime({ offset: true });
-
 export const eventsContract = oc.router({
   common: commonContract,
   append: oc
@@ -35,26 +54,12 @@ export const eventsContract = oc.router({
       operationId: "appendStreamEvents",
       method: "POST",
       path: "/streams/{+path}",
-      inputStructure: "detailed",
       successDescription: "Event appended successfully and returned",
       description:
-        "Appends one event to a stream. Offsets are assigned by the stream itself. Events with an existing idempotencyKey return the stored event instead of creating a duplicate. When `jsonataTransform` is present, the raw JSON request body is transformed into a single event body before append.",
+        "Appends one event to a stream. Offsets are assigned by the stream itself. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
       tags: ["Streams"],
     })
-    .input(
-      z.union([
-        z.object({
-          params: z.object({ path: StreamPath }),
-          query: z.object({ jsonataTransform: z.undefined().optional() }).optional().default({}),
-          body: EventInput,
-        }),
-        z.object({
-          params: z.object({ path: StreamPath }),
-          query: z.object({ jsonataTransform: z.string().trim().min(1) }),
-          body: JSONObject,
-        }),
-      ]),
-    )
+    .input(AppendInput)
     .output(
       z.object({
         event: Event,
@@ -120,16 +125,21 @@ export const eventsContract = oc.router({
     .route({
       operationId: "listStreams",
       method: "GET",
-      path: "/streams",
-      description: "Returns stream paths discovered from the root stream.",
+      path: "/__list/{+path}",
+      description:
+        "Returns stream paths discovered from a given stream. Defaults to the root stream ('/').",
       tags: ["Streams"],
     })
-    .input(z.strictObject({}).optional().default({}))
+    .input(
+      z.object({
+        path: StreamPath,
+      }),
+    )
     .output(
       z.array(
         z.object({
           path: StreamPath,
-          createdAt: streamListEntryCreatedAt,
+          createdAt: z.iso.datetime({ offset: true }),
         }),
       ),
     ),
@@ -183,3 +193,52 @@ export const eventsContract = oc.router({
       .output(z.object({ ok: z.literal(true), id: z.string(), deleted: z.boolean() })),
   },
 });
+
+type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
+
+function prettifyAppendEventError(args: { input: unknown; fallbackIssues: z.ZodError["issues"] }) {
+  const specificResult = hasBuiltInEventType(args.input)
+    ? BuiltInEventInput.safeParse(args.input)
+    : GenericEventInput.safeParse(args.input);
+
+  if (!specificResult.success) {
+    return z.prettifyError(specificResult.error);
+  }
+
+  return z.prettifyError(new z.ZodError(args.fallbackIssues));
+}
+
+function hasBuiltInEventType(input: unknown) {
+  if (typeof input !== "object" || input == null || Array.isArray(input)) {
+    return false;
+  }
+
+  return BuiltInEventType.safeParse((input as Record<string, unknown>).type).success;
+}
+
+function toJsonValue(input: unknown): JsonValue {
+  if (input === undefined) {
+    return null;
+  }
+
+  if (
+    input === null ||
+    typeof input === "string" ||
+    typeof input === "number" ||
+    typeof input === "boolean"
+  ) {
+    return input;
+  }
+
+  if (Array.isArray(input)) {
+    return input.map((value) => toJsonValue(value));
+  }
+
+  if (typeof input === "object") {
+    return Object.fromEntries(
+      Object.entries(input).map(([key, value]) => [key, toJsonValue(value)]),
+    );
+  }
+
+  return null;
+}

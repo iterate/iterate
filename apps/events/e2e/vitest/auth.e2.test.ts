@@ -50,16 +50,16 @@ describe.sequential("events auth-adjacent e2e", () => {
       expect(await defaultProjectStateResponse.json()).toEqual({
         projectSlug: defaultProjectSlug,
         path,
-        maxOffset: 2,
+        eventCount: 2,
         metadata: {},
-        children: [],
+        processors: expectedProcessorsWithRecentEventCount(2),
       });
       expect(await projectStateResponse.json()).toEqual({
         projectSlug: "team-a",
         path,
-        maxOffset: 2,
+        eventCount: 2,
         metadata: {},
-        children: [],
+        processors: expectedProcessorsWithRecentEventCount(2),
       });
 
       const defaultProjectHistoryResponse = await app.fetch(`/api/streams/${routePathFor(path)}`);
@@ -113,4 +113,18 @@ function uniqueStreamPath() {
 
 function routePathFor(path: StreamPath) {
   return path === "/" ? "%2F" : path.slice(1).replaceAll("/", "%2F");
+}
+
+function expectedProcessorsWithRecentEventCount(count: number) {
+  return {
+    "circuit-breaker": {
+      paused: false,
+      pauseReason: null,
+      pausedAt: null,
+      recentEventTimestamps: Array.from({ length: count }, () => expect.any(String)),
+    },
+    "jsonata-transformer": {
+      transformersBySlug: {},
+    },
+  };
 }

@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type Event,
   EventInput,
-  type EventType,
   type JSONObject,
   type StreamPath,
 } from "@iterate-com/events-contract";
@@ -30,7 +29,7 @@ import {
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamEventFeed } from "~/components/stream-event-feed.tsx";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
-import { eventTypePages, getEventTypePageByType } from "~/lib/event-type-pages.ts";
+import { eventInputTemplates, getEventInputTemplateById } from "~/lib/event-type-pages.ts";
 import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projection.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { DEFAULT_STREAM_RENDERER_MODE, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
@@ -38,7 +37,7 @@ import { formatClientError } from "~/lib/format-client-error.ts";
 import { orpc } from "~/orpc/client.ts";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
 
-const DEFAULT_EVENT_TYPE: EventType = "https://events.iterate.com/manual-event-appended";
+const DEFAULT_EVENT_TEMPLATE_ID = "manual-event-appended:default";
 
 export function StreamPage({
   streamPath,
@@ -55,9 +54,9 @@ export function StreamPage({
 }) {
   const queryClient = useQueryClient();
   const { closeMetadata, metadataOpen, setHeaderControls } = useStreamsChrome();
-  const [selectedTemplateType, setSelectedTemplateType] = useState<EventType>(DEFAULT_EVENT_TYPE);
+  const [selectedTemplateId, setSelectedTemplateId] = useState(DEFAULT_EVENT_TEMPLATE_ID);
   const [appendInputJson, setAppendInputJson] = useState(() =>
-    createEventInputTemplate(DEFAULT_EVENT_TYPE),
+    createEventInputTemplate(DEFAULT_EVENT_TEMPLATE_ID),
   );
 
   const streamStateQuery = useQuery({
@@ -84,8 +83,8 @@ export function StreamPage({
   const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
 
   useEffect(() => {
-    setAppendInputJson(createEventInputTemplate(selectedTemplateType));
-  }, [selectedTemplateType]);
+    setAppendInputJson(createEventInputTemplate(selectedTemplateId));
+  }, [selectedTemplateId]);
 
   useEffect(() => {
     // The header lives in the parent `_app` layout, outside the concrete stream
@@ -111,18 +110,18 @@ export function StreamPage({
     }),
   );
   const submitAppend = async (inputText = appendInputJson) => {
-    let event: EventInput;
+    let event: ReturnType<typeof EventInput.parse>;
 
     try {
-      event = EventInput.parse(parseJSONObject(inputText));
+      event = parseAppendEventInput(inputText);
     } catch (error) {
       toast.error(formatClientError(error));
       return;
     }
 
     const request = appendEvent.mutateAsync({
-      params: { path: streamPath },
-      body: event,
+      path: streamPath,
+      event,
     });
 
     void toast.promise(request, {
@@ -196,20 +195,20 @@ export function StreamPage({
           <PromptInputFooter className="items-center justify-between gap-2 border-t p-2.5">
             <PromptInputTools className="min-w-0 flex-1">
               <PromptInputSelect
-                value={selectedTemplateType}
+                value={selectedTemplateId}
                 onValueChange={(value) => {
-                  setSelectedTemplateType(value as EventType);
+                  setSelectedTemplateId(value as string);
                 }}
               >
                 <PromptInputSelectTrigger className="h-8 max-w-full min-w-0 text-xs sm:max-w-[18rem]">
                   <span className="truncate">
-                    {getEventTypePageByType(selectedTemplateType)?.title ?? "Event type"}
+                    {getEventInputTemplateById(selectedTemplateId)?.label ?? "Event template"}
                   </span>
                 </PromptInputSelectTrigger>
                 <PromptInputSelectContent align="start">
-                  {eventTypePages.map((page) => (
-                    <PromptInputSelectItem key={page.type} value={page.type}>
-                      {page.title}
+                  {eventInputTemplates.map((template) => (
+                    <PromptInputSelectItem key={template.id} value={template.id}>
+                      {template.label}
                     </PromptInputSelectItem>
                   ))}
                 </PromptInputSelectContent>
@@ -227,18 +226,11 @@ export function StreamPage({
   );
 }
 
-function createEventInputTemplate(type: EventType) {
-  const page = getEventTypePageByType(type);
-  return JSON.stringify(
-    {
-      type,
-      payload: page?.payloadExample
-        ? (JSON.parse(JSON.stringify(page.payloadExample)) as JSONObject)
-        : {},
-    } satisfies EventInput,
-    null,
-    2,
-  );
+function createEventInputTemplate(templateId: string) {
+  const template =
+    getEventInputTemplateById(templateId) ?? getEventInputTemplateById(DEFAULT_EVENT_TEMPLATE_ID);
+
+  return JSON.stringify(JSON.parse(JSON.stringify(template?.event ?? {})) as JSONObject, null, 2);
 }
 
 function parseJSONObject(value: string) {
@@ -249,4 +241,8 @@ function parseJSONObject(value: string) {
   }
 
   return parsed as JSONObject;
+}
+
+function parseAppendEventInput(value: string) {
+  return EventInput.parse(parseJSONObject(value));
 }
