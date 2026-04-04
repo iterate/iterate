@@ -1,10 +1,10 @@
 import { ORPCError } from "@orpc/server";
 import {
   ChildStreamCreatedEvent,
-  type DestroyStreamResult,
   type EventInput,
   GenericEventInput,
   type JSONObject,
+  StreamInitializedEvent,
   type StreamPath,
 } from "@iterate-com/events-contract";
 import jsonata from "jsonata";
@@ -96,22 +96,7 @@ export const streamsRouter = {
     return streamStub.getState();
   }),
   listStreams: os.listStreams.handler(async () => {
-    const rootStreamStub = getStreamStubWithoutInitializing("/");
-    const events = await rootStreamStub.history();
-    const discovered = new Map<StreamPath, string>();
-
-    for (const event of events) {
-      const childEvent = ChildStreamCreatedEvent.safeParse(event);
-      if (childEvent.success) {
-        discovered.set(childEvent.data.payload.path, childEvent.data.createdAt);
-      } else if (event.type === "https://events.iterate.com/events/stream/initialized") {
-        discovered.set("/", event.createdAt);
-      }
-    }
-
-    return Array.from(discovered, ([path, createdAt]) => ({ path, createdAt })).sort(
-      (left, right) => right.createdAt.localeCompare(left.createdAt),
-    );
+    return await listDiscoveredStreams("/");
   }),
 };
 
@@ -134,12 +119,12 @@ async function transformAppendBody(args: { body: JSONObject; jsonataTransform: s
   return parsed.data;
 }
 
-async function destroyStreamTree(args: {
-  path: StreamPath;
-  destroyChildren?: boolean;
-}): Promise<DestroyStreamResult> {
+async function destroyStreamTree(args: { path: StreamPath; destroyChildren?: boolean }) {
   if (args.destroyChildren) {
-    const childPaths = await listDiscoveredChildPaths(args.path);
+    const childPaths = (await listDiscoveredStreams(args.path))
+      .map((stream) => stream.path)
+      .filter((path) => path !== args.path)
+      .sort((left, right) => right.length - left.length);
 
     for (const childPath of childPaths) {
       await getStreamStubWithoutInitializing(childPath).destroy();
@@ -149,18 +134,26 @@ async function destroyStreamTree(args: {
   return await getStreamStubWithoutInitializing(args.path).destroy();
 }
 
-async function listDiscoveredChildPaths(path: StreamPath) {
+async function listDiscoveredStreams(path: StreamPath) {
   const events = await getStreamStubWithoutInitializing(path).history();
-  const discovered = new Set<StreamPath>();
+  const discovered = new Map<StreamPath, string>();
 
   for (const event of events) {
     const childEvent = ChildStreamCreatedEvent.safeParse(event);
     if (childEvent.success) {
-      discovered.add(childEvent.data.payload.path);
+      discovered.set(childEvent.data.payload.path, childEvent.data.createdAt);
+      continue;
+    }
+
+    const initializedEvent = StreamInitializedEvent.safeParse(event);
+    if (initializedEvent.success) {
+      discovered.set(initializedEvent.data.payload.path, initializedEvent.data.createdAt);
     }
   }
 
-  return Array.from(discovered).sort((left, right) => right.length - left.length);
+  return Array.from(discovered, ([path, createdAt]) => ({ path, createdAt })).sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt),
+  );
 }
 
 async function evaluateJsonataTransform(args: { body: JSONObject; jsonataTransform: string }) {
