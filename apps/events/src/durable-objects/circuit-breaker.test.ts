@@ -23,7 +23,7 @@ describe("circuitBreaker", () => {
     });
   });
 
-  test("beforeAppend rejects new events while paused but still allows stream/resumed", () => {
+  test("beforeAppend rejects new events while paused but still allows stream/resumed and durable-object-constructed", () => {
     const state: CircuitBreakerState = {
       ...circuitBreakerProcessor.initialState,
       paused: true,
@@ -47,6 +47,16 @@ describe("circuitBreaker", () => {
         event: {
           type: "https://events.iterate.com/events/stream/resumed",
           payload: { reason: "operator override" },
+        },
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      circuitBreakerProcessor.beforeAppend?.({
+        state,
+        event: {
+          type: "https://events.iterate.com/events/stream/durable-object-constructed",
+          payload: { path: "/demo" },
         },
       }),
     ).not.toThrow();

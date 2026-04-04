@@ -34,6 +34,20 @@ export const StreamInitializedEvent = GenericEventBase.extend(
 export type StreamInitializedEventInput = z.infer<typeof StreamInitializedEventInput>;
 export type StreamInitializedEvent = z.infer<typeof StreamInitializedEvent>;
 
+export const StreamDurableObjectConstructedEventInput = GenericEventInputBase.extend({
+  type: z.literal("https://events.iterate.com/events/stream/durable-object-constructed"),
+  payload: z.strictObject({}),
+});
+export const StreamDurableObjectConstructedEvent = GenericEventBase.extend(
+  StreamDurableObjectConstructedEventInput.pick({ type: true, payload: true }).shape,
+);
+export type StreamDurableObjectConstructedEventInput = z.infer<
+  typeof StreamDurableObjectConstructedEventInput
+>;
+export type StreamDurableObjectConstructedEvent = z.infer<
+  typeof StreamDurableObjectConstructedEvent
+>;
+
 export const ChildStreamCreatedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/child-stream-created"),
   payload: z.strictObject({
@@ -85,6 +99,7 @@ export type InvalidEventAppendedEvent = z.infer<typeof InvalidEventAppendedEvent
 
 const builtInEventInputOptions = [
   StreamInitializedEventInput,
+  StreamDurableObjectConstructedEventInput,
   ChildStreamCreatedEventInput,
   StreamMetadataUpdatedEventInput,
   ErrorOccurredEventInput,
@@ -96,6 +111,7 @@ const builtInEventInputOptions = [
 
 const builtInEventOptions = [
   StreamInitializedEvent,
+  StreamDurableObjectConstructedEvent,
   ChildStreamCreatedEvent,
   StreamMetadataUpdatedEvent,
   ErrorOccurredEvent,

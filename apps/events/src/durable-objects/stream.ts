@@ -118,6 +118,23 @@ export class StreamDurableObject extends DurableObject<Env> {
       const parsed = StreamState.safeParse(rawState);
       if (parsed.success) {
         this._state = parsed.data;
+
+        try {
+          this.append({
+            type: "https://events.iterate.com/events/stream/durable-object-constructed",
+            payload: {},
+          });
+        } catch (error) {
+          console.error(
+            "[stream-do] failed to append durable-object-constructed after rehydration",
+            {
+              path: parsed.data.path,
+              error,
+            },
+          );
+          throw error;
+        }
+
         return;
       }
 
