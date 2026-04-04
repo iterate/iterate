@@ -602,6 +602,44 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "DELETE destroyChildren=false only wipes the targeted stream",
+    async () => {
+      const parentPath = uniqueStreamPath();
+      const descendantPath = StreamPath.parse(`${parentPath}/child`);
+
+      await app.client.append({
+        params: { path: descendantPath },
+        body: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { label: "descendant" },
+        },
+      });
+
+      const response = await app.fetch(
+        `/api/streams/${routePathFor(parentPath)}?destroyChildren=false`,
+        {
+          method: "DELETE",
+        },
+      );
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        destroyed: true,
+        finalState: {
+          path: parentPath,
+        },
+      });
+      expect(await collectStreamEvents(app, { path: descendantPath })).toEqual([
+        expect.objectContaining({
+          streamPath: descendantPath,
+          payload: { label: "descendant" },
+        }),
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "destroy does not remove stale discovery entries from listStreams",
     async () => {
       const path = uniqueStreamPath();

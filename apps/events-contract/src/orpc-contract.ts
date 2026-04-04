@@ -72,7 +72,7 @@ export const eventsContract = oc.router({
     .input(
       z.object({
         path: StreamPath,
-        destroyChildren: z.coerce.boolean().optional(),
+        destroyChildren: z.union([z.boolean(), z.stringbool()]).optional(),
       }),
     )
     .output(DestroyStreamResult),
