@@ -76,7 +76,17 @@ jobs:
     needs:
       - scope
     if: needs.scope.outputs.should_run == 'true'
+    name: Preview / ${{ matrix.app }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        app:
+          - example
+          - events
+          - semaphore
+          - ingress-proxy
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -97,14 +107,15 @@ jobs:
           doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
         if: github.event.pull_request.head.repo.fork != true
       - if: github.event.action != 'closed' && github.event.pull_request.head.repo.fork == true
-        name: Sync previews for forks
+        name: Sync ${{ matrix.app }} preview for forks
         env:
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
           SEMAPHORE_BASE_URL: https://semaphore.iterate.com
           WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |-
           set -euo pipefail
-          pnpm preview sync-all \
+          pnpm preview sync \
+            --app "${{ matrix.app }}" \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
             --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
@@ -115,14 +126,15 @@ jobs:
             --workflow-run-url "$WORKFLOW_RUN_URL" \
             --semaphore-base-url "$SEMAPHORE_BASE_URL"
       - if: github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
-        name: Sync previews
+        name: Sync ${{ matrix.app }} preview
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
           WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |-
           set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview sync-all \
+          doppler run --project os --config prd -- pnpm preview sync \
+            --app "${{ matrix.app }}" \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
             --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
@@ -132,13 +144,14 @@ jobs:
             --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
             --workflow-run-url "$WORKFLOW_RUN_URL"
       - if: github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true
-        name: Cleanup previews
+        name: Cleanup ${{ matrix.app }} preview
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
         run: |-
           set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview cleanup-all \
+          doppler run --project os --config prd -- pnpm preview cleanup \
+            --app "${{ matrix.app }}" \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number }}" \
             --repository-full-name "${{ github.repository }}"

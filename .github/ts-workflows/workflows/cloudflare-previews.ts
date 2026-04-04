@@ -3,21 +3,24 @@ import { cloudflarePreviewApps } from "../../../scripts/preview/apps.ts";
 import * as utils from "../utils/index.ts";
 
 const previewPaths = [...new Set(Object.values(cloudflarePreviewApps).flatMap((app) => app.paths))];
+const previewAppSlugs = Object.keys(cloudflarePreviewApps);
 
 function createPreviewCommand(input: {
+  app?: string;
   command: string;
   includePullRequestHead?: boolean;
   includeSemaphoreBaseUrl?: boolean;
   includeWorkflowRunUrl?: boolean;
   prefix?: string;
 }) {
-  const argumentsWithLineContinuations = addLineContinuations(
-    createCommonPreviewArguments({
+  const argumentsWithLineContinuations = addLineContinuations([
+    ...(input.app ? [`--app "${input.app}"`] : []),
+    ...createCommonPreviewArguments({
       includePullRequestHead: input.includePullRequestHead ?? false,
       includeSemaphoreBaseUrl: input.includeSemaphoreBaseUrl ?? false,
       includeWorkflowRunUrl: input.includeWorkflowRunUrl ?? false,
     }),
-  );
+  ]);
 
   return [
     "set -euo pipefail",
@@ -129,7 +132,15 @@ export default {
     preview: {
       needs: ["scope"],
       if: "needs.scope.outputs.should_run == 'true'",
+      name: "Preview / ${{ matrix.app }}",
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      strategy: {
+        "fail-fast": false,
+        "max-parallel": 1,
+        matrix: {
+          app: previewAppSlugs,
+        },
+      },
       steps: [
         ...utils.getSetupRepo({
           ref: "${{ github.event.pull_request.head.sha || github.sha }}",
@@ -140,7 +151,7 @@ export default {
         },
         {
           if: "github.event.action != 'closed' && github.event.pull_request.head.repo.fork == true",
-          name: "Sync previews for forks",
+          name: "Sync ${{ matrix.app }} preview for forks",
           env: {
             GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
             SEMAPHORE_BASE_URL: "https://semaphore.iterate.com",
@@ -148,7 +159,8 @@ export default {
               "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
           },
           run: createPreviewCommand({
-            command: "sync-all",
+            app: "${{ matrix.app }}",
+            command: "sync",
             includePullRequestHead: true,
             includeSemaphoreBaseUrl: true,
             includeWorkflowRunUrl: true,
@@ -156,7 +168,7 @@ export default {
         },
         {
           if: "github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true",
-          name: "Sync previews",
+          name: "Sync ${{ matrix.app }} preview",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
@@ -164,7 +176,8 @@ export default {
               "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
           },
           run: createPreviewCommand({
-            command: "sync-all",
+            app: "${{ matrix.app }}",
+            command: "sync",
             includePullRequestHead: true,
             includeWorkflowRunUrl: true,
             prefix: "doppler run --project os --config prd -- ",
@@ -172,13 +185,14 @@ export default {
         },
         {
           if: "github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true",
-          name: "Cleanup previews",
+          name: "Cleanup ${{ matrix.app }} preview",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
           },
           run: createPreviewCommand({
-            command: "cleanup-all",
+            app: "${{ matrix.app }}",
+            command: "cleanup",
             prefix: "doppler run --project os --config prd -- ",
           }),
         },
