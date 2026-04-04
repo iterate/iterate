@@ -1,16 +1,22 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  ChildStreamCreatedEvent,
   type DestroyStreamResult,
   type Event,
   Event as EventSchema,
   type EventInput,
   EventInput as EventInputSchema,
   type ProjectSlug,
+  StreamInitializedEvent,
   type StreamMetadataUpdatedEvent,
   type StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
-import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
+import {
+  getInitializedStreamStub,
+  getStreamStub,
+  StreamOffsetPreconditionError,
+} from "~/lib/stream-helpers.ts";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 /**
  *
@@ -228,7 +234,18 @@ export class StreamDurableObject extends DurableObject<Env> {
   // `deleteAll()` on its storage rather than an explicit instance-destruction API:
   // https://developers.cloudflare.com/durable-objects/api/storage-api/
   // https://developers.cloudflare.com/durable-objects/best-practices/access-durable-objects-storage/
-  async destroy(): Promise<DestroyStreamResult> {
+  async destroy(args: { destroyChildren?: boolean } = {}): Promise<DestroyStreamResult> {
+    if (args.destroyChildren && this._state != null) {
+      const childPaths = await this.collectDescendantPaths();
+
+      for (const childPath of childPaths) {
+        await getStreamStub({
+          projectSlug: this.state.projectSlug,
+          path: childPath,
+        }).destroy();
+      }
+    }
+
     const stateBeforeDelete = structuredClone(this._state);
 
     for (const subscriber of this.subscribers) {
@@ -274,6 +291,27 @@ export class StreamDurableObject extends DurableObject<Env> {
         const event = this.parseEventRow(row);
         return event ? [event] : [];
       });
+  }
+
+  listDiscoveredStreams() {
+    const discovered = new Map<StreamPath, string>();
+
+    for (const event of this.history()) {
+      const childEvent = ChildStreamCreatedEvent.safeParse(event);
+      if (childEvent.success) {
+        discovered.set(childEvent.data.payload.path, childEvent.data.createdAt);
+        continue;
+      }
+
+      const initializedEvent = StreamInitializedEvent.safeParse(event);
+      if (initializedEvent.success) {
+        discovered.set(initializedEvent.data.payload.path, initializedEvent.data.createdAt);
+      }
+    }
+
+    return Array.from(discovered, ([path, createdAt]) => ({ path, createdAt })).sort(
+      (left, right) => right.createdAt.localeCompare(left.createdAt),
+    );
   }
 
   /**
@@ -361,6 +399,34 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.subscribers.delete(subscriber);
       }
     }
+  }
+
+  private async collectDescendantPaths() {
+    if (this._state == null) {
+      return [];
+    }
+
+    const discovered = new Set<StreamPath>();
+
+    const visit = async (path: StreamPath) => {
+      const childStreams = await getStreamStub({
+        projectSlug: this.state.projectSlug,
+        path,
+      }).listDiscoveredStreams();
+
+      for (const childStream of childStreams) {
+        if (childStream.path === path || discovered.has(childStream.path)) {
+          continue;
+        }
+
+        discovered.add(childStream.path);
+        await visit(childStream.path);
+      }
+    };
+
+    await visit(this.state.path);
+
+    return Array.from(discovered).sort((left, right) => right.length - left.length);
   }
 }
 

@@ -8,7 +8,7 @@ import type { StreamDurableObject } from "~/durable-objects/stream.ts";
 // maintainers have suggested for awkward env bindings in upstream threads.
 type StreamRpcStub = Pick<
   StreamDurableObject,
-  "initialize" | "append" | "destroy" | "history" | "stream" | "getState"
+  "initialize" | "append" | "destroy" | "history" | "stream" | "getState" | "listDiscoveredStreams"
 >;
 type BaseEnv = typeof worker.Env;
 
