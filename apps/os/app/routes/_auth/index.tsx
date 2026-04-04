@@ -142,11 +142,7 @@ function IndexPage() {
               {pendingInvites.map((invite, index) => (
                 <div key={invite.id}>
                   {index > 0 && <ItemSeparator />}
-                  <Item
-                    variant="default"
-                    data-testid="welcome-pending-invite"
-                    data-org-name={invite.organization.name}
-                  >
+                  <Item variant="default">
                     <ItemMedia variant="icon">
                       <Building2 className="h-4 w-4" />
                     </ItemMedia>
@@ -159,7 +155,6 @@ function IndexPage() {
                     <ItemActions>
                       <Button
                         size="sm"
-                        data-testid="welcome-pending-invite-accept"
                         onClick={() => acceptInvite.mutate(invite.id)}
                         disabled={acceptInvite.isPending || declineInvite.isPending}
                       >
@@ -169,7 +164,6 @@ function IndexPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        data-testid="welcome-pending-invite-decline"
                         onClick={() => declineInvite.mutate(invite.id)}
                         disabled={acceptInvite.isPending || declineInvite.isPending}
                       >

@@ -105,8 +105,6 @@ function UserSettingsPage() {
               {pendingInvites.map((invite) => (
                 <div
                   key={invite.id}
-                  data-testid="settings-pending-invite"
-                  data-org-name={invite.organization.name}
                   className="flex items-center justify-between gap-4 p-4 border rounded-lg bg-card"
                 >
                   <div className="flex items-center gap-3 min-w-0">
@@ -121,7 +119,6 @@ function UserSettingsPage() {
                   <div className="flex gap-2 shrink-0">
                     <Button
                       size="sm"
-                      data-testid="settings-pending-invite-accept"
                       onClick={() => acceptInvite.mutate(invite.id)}
                       disabled={acceptInvite.isPending || declineInvite.isPending}
                     >
@@ -130,7 +127,6 @@ function UserSettingsPage() {
                     <Button
                       size="sm"
                       variant="outline"
-                      data-testid="settings-pending-invite-decline"
                       onClick={() => declineInvite.mutate(invite.id)}
                       disabled={acceptInvite.isPending || declineInvite.isPending}
                     >
@@ -262,21 +258,12 @@ function OrgMembershipCard({ membership }: { membership: Membership }) {
 
   return (
     <>
-      <div
-        data-testid="settings-membership"
-        data-org-name={membership.organization.name}
-        className="flex items-center justify-between gap-4 p-4 border rounded-lg bg-card"
-      >
+      <div className="flex items-center justify-between gap-4 p-4 border rounded-lg bg-card">
         <div className="min-w-0">
           <div className="font-medium truncate">{membership.organization.name}</div>
           <div className="text-sm text-muted-foreground">{membership.role}</div>
         </div>
-        <Button
-          size="sm"
-          variant="outline"
-          data-testid="settings-membership-leave"
-          onClick={() => setConfirmLeaveOpen(true)}
-        >
+        <Button size="sm" variant="outline" onClick={() => setConfirmLeaveOpen(true)}>
           <LogOut className="h-4 w-4" />
         </Button>
       </div>
