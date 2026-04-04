@@ -23,11 +23,10 @@ Cloudflare-only: TanStack Start + oRPC + raw D1 route registry, plus public-host
 ## Scripts
 
 ```bash
-pnpm dev          # doppler + Alchemy local (Vite); optional PORT= for fixed port; Ctrl+C to stop
-pnpm build        # production client/server bundle
-pnpm deploy       # `doppler run --config prd` — `_shared` resolves `ALCHEMY_STAGE=prd`
-pnpm test         # typecheck + unit tests under src/
-pnpm test:e2e     # requires `INGRESS_PROXY_BASE_URL`
+doppler run --config stg -- pnpm alchemy:up
+doppler run --config prd -- pnpm alchemy:up
+doppler run --config stg -- pnpm alchemy:down
+doppler run --config prd -- pnpm alchemy:down
 ```
 
 ## Contract

@@ -3,7 +3,7 @@ import { commonContract } from "@iterate-com/shared/apps/common-router-contract"
 import { z } from "zod";
 
 export const SEMAPHORE_KEY_PATTERN = /^(?=.*[a-z])[a-z0-9-]+$/;
-export const MAX_LEASE_MS = 60 * 60 * 1000;
+export const MAX_LEASE_MS = 30 * 24 * 60 * 60 * 1000;
 export const MAX_WAIT_MS = 5 * 60 * 1000;
 
 export const semaphoreKeySchema = z

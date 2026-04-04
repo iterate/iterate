@@ -28,11 +28,19 @@ pnpm dev          # doppler + Alchemy local (Vite); optional PORT= for fixed por
 pnpm build        # production client/server bundle
 pnpm deploy       # `doppler run --config prd` — `_shared` resolves `ALCHEMY_STAGE=prd`
 pnpm seed:tunnel-pool
-pnpm test         # typecheck only; worker-backed Vitest needs `pnpm test:workers`
-pnpm test:workers
+pnpm test         # typecheck only
 pnpm test:e2e     # requires `SEMAPHORE_BASE_URL`
 ```
 
 ## Contract
 
 [`apps/semaphore-contract`](../semaphore-contract) — `src/orpc/orpc.ts` implements it.
+
+## Deploy
+
+Use the raw lifecycle scripts with Doppler outside the package script:
+
+- `doppler run --config stg -- pnpm alchemy:up`
+- `doppler run --config prd -- pnpm alchemy:up`
+- `doppler run --config stg -- pnpm alchemy:down`
+- `doppler run --config prd -- pnpm alchemy:down`

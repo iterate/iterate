@@ -64,6 +64,7 @@
     "@opentelemetry/resources": "^2.1.0",
     "@opentelemetry/sdk-node": "^0.206.0",
     "@opentelemetry/semantic-conventions": "^1.38.0",
+    "@octokit/rest": "^22.0.0",
     "@orpc/client": "1.13.13",
     "@orpc/contract": "1.13.13",
     "@orpc/openapi": "1.13.13",

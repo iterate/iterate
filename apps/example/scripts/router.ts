@@ -6,7 +6,7 @@ const StartInput = z.object({
   port: z.coerce.number().int().min(0).max(65535).default(0),
 });
 
-export const router = {
+export const router = os.router({
   start: os
     .input(StartInput)
     .meta({
@@ -36,4 +36,4 @@ export const router = {
         port: input.port,
       };
     }),
-};
+});
