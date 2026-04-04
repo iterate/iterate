@@ -1,4 +1,4 @@
-import { createCommonRouter } from "@iterate-com/shared/apps/common-router";
+import { createAppRouterWithInternal } from "@iterate-com/shared/apps/internal-router";
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { AppConfig } from "~/app.ts";
@@ -192,18 +192,18 @@ const releaseResourceProcedure = os.resources.release
     }
   });
 
-export const appRouter = os.router({
-  common: os.common.router(
-    createCommonRouter({
-      appConfigSchema: AppConfig,
+export const appRouter = createAppRouterWithInternal({
+  appConfigSchema: AppConfig,
+  createRouter: (internalRouter) =>
+    os.router({
+      __internal: os.__internal.router(internalRouter),
+      resources: os.resources.router({
+        add: addResourceProcedure,
+        delete: deleteResourceProcedure,
+        list: listResourcesProcedure,
+        find: findResourceProcedure,
+        acquire: acquireResourceProcedure,
+        release: releaseResourceProcedure,
+      }),
     }),
-  ),
-  resources: os.resources.router({
-    add: addResourceProcedure,
-    delete: deleteResourceProcedure,
-    list: listResourcesProcedure,
-    find: findResourceProcedure,
-    acquire: acquireResourceProcedure,
-    release: releaseResourceProcedure,
-  }),
 });

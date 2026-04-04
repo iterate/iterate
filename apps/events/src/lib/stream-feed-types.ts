@@ -102,6 +102,34 @@ export interface StreamMetadataUpdatedFeedItem {
   raw: Event;
 }
 
+export interface StreamLifecycleFeedItem {
+  kind: "stream-lifecycle";
+  label: string;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface StreamPausedFeedItem {
+  kind: "stream-paused";
+  reason: string;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface StreamResumedFeedItem {
+  kind: "stream-resumed";
+  reason: string;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface StreamErrorOccurredFeedItem {
+  kind: "stream-error-occurred";
+  message: string;
+  timestamp: number;
+  raw: Event;
+}
+
 export type StreamFeedItem =
   | MessageFeedItem
   | ToolFeedItem
@@ -109,4 +137,8 @@ export type StreamFeedItem =
   | EventFeedItem
   | GroupedEventFeedItem
   | ChildStreamCreatedFeedItem
-  | StreamMetadataUpdatedFeedItem;
+  | StreamMetadataUpdatedFeedItem
+  | StreamLifecycleFeedItem
+  | StreamPausedFeedItem
+  | StreamResumedFeedItem
+  | StreamErrorOccurredFeedItem;

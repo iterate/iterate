@@ -15,6 +15,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppResourcesRouteImport } from './routes/_app/resources'
 import { Route as AppResourcesIndexRouteImport } from './routes/_app/resources.index'
+import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppResourcesTypeSlugRouteImport } from './routes/_app/resources.$type.$slug'
 
 const HealthRoute = HealthRouteImport.update({
@@ -46,6 +47,11 @@ const AppResourcesIndexRoute = AppResourcesIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppResourcesRoute,
 } as any)
+const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
+  id: '/api/orpc/$',
+  path: '/api/orpc/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppResourcesTypeSlugRoute = AppResourcesTypeSlugRouteImport.update({
   id: '/$type/$slug',
   path: '/$type/$slug',
@@ -57,6 +63,7 @@ export interface FileRoutesByFullPath {
   '/health': typeof HealthRoute
   '/resources': typeof AppResourcesRouteWithChildren
   '/api/$': typeof ApiSplatRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/resources/': typeof AppResourcesIndexRoute
   '/resources/$type/$slug': typeof AppResourcesTypeSlugRoute
 }
@@ -64,6 +71,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/health': typeof HealthRoute
   '/api/$': typeof ApiSplatRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/resources': typeof AppResourcesIndexRoute
   '/resources/$type/$slug': typeof AppResourcesTypeSlugRoute
 }
@@ -74,6 +82,7 @@ export interface FileRoutesById {
   '/health': typeof HealthRoute
   '/_app/resources': typeof AppResourcesRouteWithChildren
   '/api/$': typeof ApiSplatRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/resources/': typeof AppResourcesIndexRoute
   '/_app/resources/$type/$slug': typeof AppResourcesTypeSlugRoute
 }
@@ -84,10 +93,17 @@ export interface FileRouteTypes {
     | '/health'
     | '/resources'
     | '/api/$'
+    | '/api/orpc/$'
     | '/resources/'
     | '/resources/$type/$slug'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/health' | '/api/$' | '/resources' | '/resources/$type/$slug'
+  to:
+    | '/'
+    | '/health'
+    | '/api/$'
+    | '/api/orpc/$'
+    | '/resources'
+    | '/resources/$type/$slug'
   id:
     | '__root__'
     | '/'
@@ -95,6 +111,7 @@ export interface FileRouteTypes {
     | '/health'
     | '/_app/resources'
     | '/api/$'
+    | '/api/orpc/$'
     | '/_app/resources/'
     | '/_app/resources/$type/$slug'
   fileRoutesById: FileRoutesById
@@ -104,6 +121,7 @@ export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   HealthRoute: typeof HealthRoute
   ApiSplatRoute: typeof ApiSplatRoute
+  ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -150,6 +168,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppResourcesIndexRouteImport
       parentRoute: typeof AppResourcesRoute
     }
+    '/api/orpc/$': {
+      id: '/api/orpc/$'
+      path: '/api/orpc/$'
+      fullPath: '/api/orpc/$'
+      preLoaderRoute: typeof ApiOrpcSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app/resources/$type/$slug': {
       id: '/_app/resources/$type/$slug'
       path: '/$type/$slug'
@@ -189,16 +214,8 @@ const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   HealthRoute: HealthRoute,
   ApiSplatRoute: ApiSplatRoute,
+  ApiOrpcSplatRoute: ApiOrpcSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}

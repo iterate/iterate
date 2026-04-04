@@ -18,7 +18,7 @@
  *   curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH"
  *   echo
  *   echo '---'
- *   curl -sS "$BASE_URL/api/streams" >/dev/null
+ *   curl -sS "$BASE_URL/api/__list/%2F" >/dev/null
  *   curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
  *
  * Test run: `EVENTS_BASE_URL` matches `BASE_URL` (no trailing slash).
@@ -58,7 +58,7 @@ echo '---'
 curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH"
 echo
 echo '---'
-curl -sS "$BASE_URL/api/streams" >/dev/null
+curl -sS "$BASE_URL/api/__list/%2F" >/dev/null
 curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
 `;
 
@@ -99,20 +99,117 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
         createdAt: "<ts>",
       },
     });
-    expect(JSON.parse(encodedStateJson)).toEqual({
+    expect(JSON.parse(encodedStateJson)).toMatchObject({
+      projectSlug: "public",
       path: "<streamPath>",
-      maxOffset: 2,
+      eventCount: 2,
+      childPaths: [],
       metadata: {},
+      processors: {
+        "circuit-breaker": {
+          paused: false,
+          pauseReason: null,
+          pausedAt: null,
+          recentEventTimestamps: ["<ts>", "<ts>"],
+        },
+        "jsonata-transformer": {
+          transformersBySlug: {},
+        },
+      },
     });
-    expect(JSON.parse(slashEscapedStateJson)).toEqual({
+    expect(JSON.parse(slashEscapedStateJson)).toMatchObject({
+      projectSlug: "public",
       path: "<streamPath>",
-      maxOffset: 2,
+      eventCount: 2,
+      childPaths: [],
       metadata: {},
+      processors: {
+        "circuit-breaker": {
+          paused: false,
+          pauseReason: null,
+          pausedAt: null,
+          recentEventTimestamps: ["<ts>", "<ts>"],
+        },
+        "jsonata-transformer": {
+          transformersBySlug: {},
+        },
+      },
     });
-    expect(streamOutput.split("\n\n").filter((segment) => segment.length > 0)).toEqual([
-      ": ",
-      'event: message\ndata: {"type":"https://events.iterate.com/events/stream/initialized","payload":{"path":"<streamPath>"},"offset":1,"streamPath":"<streamPath>","createdAt":"<ts>"}',
-      'event: message\ndata: {"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":2,"streamPath":"<streamPath>","createdAt":"<ts>"}',
-    ]);
+    const streamMessages = streamOutput
+      .split("\n\n")
+      .filter((segment) => segment.length > 0)
+      .map((segment) => segment.trimEnd());
+    expect(streamMessages[0]).toBe(": ");
+    expect(parseSseMessage(streamMessages[1])).toEqual({
+      createdAt: "<ts>",
+      offset: 1,
+      payload: {
+        path: "<streamPath>",
+        projectSlug: "public",
+      },
+      streamPath: "<streamPath>",
+      type: "https://events.iterate.com/events/stream/initialized",
+    });
+    expect(parseSseMessage(streamMessages[2])).toEqual({
+      createdAt: "<ts>",
+      offset: 2,
+      payload: {
+        curl: true,
+      },
+      streamPath: "<streamPath>",
+      type: "https://events.iterate.com/events/example/value-recorded",
+    });
+  }, 15_000);
+
+  test("curl append with type-only body (no payload) defaults payload to empty object", async () => {
+    const baseURL = process.env.EVENTS_BASE_URL?.trim().replace(/\/+$/, "");
+    if (!baseURL) {
+      throw new Error(
+        "EVENTS_BASE_URL is required. Example: EVENTS_BASE_URL=http://127.0.0.1:5174 pnpm test:e2e",
+      );
+    }
+
+    const streamPath = StreamPath.parse(`/e2e-curl-nopayload/${randomUUID().slice(0, 8)}`);
+    const streamCurlPath = streamPath.slice(1);
+
+    const result = await x(
+      "bash",
+      [
+        "-lc",
+        `set -euo pipefail
+curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \
+  -H 'content-type: application/json' \
+  -d '{"type":"hello"}'`,
+      ],
+      {
+        throwOnError: false,
+        nodeOptions: {
+          stdio: "pipe",
+          env: {
+            ...process.env,
+            BASE_URL: baseURL,
+            STREAM_CURL_PATH: streamCurlPath,
+          },
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+
+    const body = JSON.parse(result.stdout);
+    expect(body).toMatchObject({
+      event: {
+        streamPath,
+        type: "hello",
+        payload: {},
+      },
+    });
   }, 15_000);
 });
+
+function parseSseMessage(segment: string) {
+  const [eventLine, dataLine] = segment.split("\n");
+  expect(eventLine).toBe("event: message");
+  expect(dataLine.startsWith("data: ")).toBe(true);
+  return JSON.parse(dataLine.slice("data: ".length));
+}

@@ -4,9 +4,9 @@ import { INTERNAL_OPENAPI_TAG } from "./openapi.ts";
 
 const EmptyInput = z.object({}).optional().default({});
 
-export const commonContract = oc.router({
+export const internalContract = oc.router({
   health: oc
-    .route({ method: "GET", path: "/__common/health", tags: [INTERNAL_OPENAPI_TAG] })
+    .route({ method: "GET", path: "/__internal/health", tags: [INTERNAL_OPENAPI_TAG] })
     .input(EmptyInput)
     .output(
       z.object({
@@ -16,15 +16,27 @@ export const commonContract = oc.router({
       }),
     ),
   publicConfig: oc
-    .route({ method: "GET", path: "/__common/public-config", tags: [INTERNAL_OPENAPI_TAG] })
+    .route({ method: "GET", path: "/__internal/public-config", tags: [INTERNAL_OPENAPI_TAG] })
     .input(EmptyInput)
     .output(z.record(z.string(), z.unknown())),
   debug: oc
-    .route({ method: "GET", path: "/__common/debug", tags: [INTERNAL_OPENAPI_TAG] })
+    .route({ method: "GET", path: "/__internal/debug", tags: [INTERNAL_OPENAPI_TAG] })
     .input(EmptyInput)
     .output(z.record(z.string(), z.unknown())),
+  trpcCliProcedures: oc
+    .route({
+      method: "GET",
+      path: "/__internal/trpc-cli-procedures",
+      tags: [INTERNAL_OPENAPI_TAG],
+    })
+    .input(EmptyInput)
+    .output(
+      z.object({
+        procedures: z.array(z.unknown()),
+      }),
+    ),
   refreshRegistry: oc
-    .route({ method: "POST", path: "/__common/refresh-registry", tags: [INTERNAL_OPENAPI_TAG] })
+    .route({ method: "POST", path: "/__internal/refresh-registry", tags: [INTERNAL_OPENAPI_TAG] })
     .input(
       z
         .object({

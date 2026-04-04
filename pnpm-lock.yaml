@@ -2579,6 +2579,12 @@ importers:
       tinyexec:
         specifier: ^1.0.2
         version: 1.0.2
+      trpc-cli:
+        specifier: 0.14.0
+        version: 0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       type-fest:
         specifier: ^5.5.0
         version: 5.5.0
@@ -22635,7 +22641,7 @@ snapshots:
     dependencies:
       '@slack/logger': 4.0.0
       '@slack/types': 2.20.0
-      '@types/node': 25.3.3
+      '@types/node': 25.5.0
       '@types/retry': 0.12.0
       axios: 1.13.6
       eventemitter3: 5.0.4

@@ -10,9 +10,9 @@
   ],
   "openapi": "3.1.1",
   "paths": {
-    "/__common/health": {
+    "/__internal/health": {
       "get": {
-        "operationId": "common.health",
+        "operationId": "__internal.health",
         "tags": ["(internal)"],
         "parameters": [],
         "responses": {
@@ -41,9 +41,9 @@
         }
       }
     },
-    "/__common/public-config": {
+    "/__internal/public-config": {
       "get": {
-        "operationId": "common.publicConfig",
+        "operationId": "__internal.publicConfig",
         "tags": ["(internal)"],
         "parameters": [],
         "responses": {
@@ -64,7 +64,7 @@
         }
       }
     },
-    "/__common/debug": {
+    "/__internal/debug": {
       "get": {
         "operationId": "common.debug",
         "tags": ["(internal)"],
@@ -87,9 +87,9 @@
         }
       }
     },
-    "/__common/refresh-registry": {
+    "/__internal/refresh-registry": {
       "post": {
-        "operationId": "common.refreshRegistry",
+        "operationId": "__internal.refreshRegistry",
         "tags": ["(internal)"],
         "requestBody": {
           "required": false,

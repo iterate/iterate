@@ -9,12 +9,13 @@
   "scripts": {
     "alchemy:up": "tsx ./alchemy.run.ts",
     "alchemy:down": "tsx ./alchemy.run.ts --destroy",
-    "cli": "doppler run -- iterate --local-router ./scripts/router.ts local-router",
+    "cli": "doppler run --project semaphore -- iterate-app-cli",
     "dev": "doppler run -- pnpm alchemy:up",
     "build": "doppler run -- pnpm exec vite build",
     "deploy": "doppler run --config prd -- pnpm alchemy:up",
-    "seed:preview-pool": "doppler run -- iterate --local-router ./scripts/router.ts local-router seed-cloudflare-preview-environment-pool",
-    "seed:tunnel-pool": "doppler run -- iterate --local-router ./scripts/router.ts local-router seed-cloudflare-tunnel-pool",
+    "rpc": "pnpm cli rpc",
+    "seed:preview-pool": "pnpm cli seed-cloudflare-preview-environment-pool",
+    "seed:tunnel-pool": "pnpm cli seed-cloudflare-tunnel-pool",
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck",
     "test:e2e": "node -e \"if (!process.env.SEMAPHORE_BASE_URL) { console.error('SEMAPHORE_BASE_URL is required for semaphore e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",
@@ -27,6 +28,12 @@
     "db:types": "pnpm run db:rebuild && tsx ./scripts/generate-queries.ts --force",
     "db:types:stale": "tsx ./scripts/generate-queries.ts --if-stale",
     "db:watch": "pnpm run db:rebuild && tsx ./scripts/generate-queries.ts --watch"
+  },
+  "iterateAppCli": {
+    "remote": {
+      "defaultBaseUrl": "https://semaphore.iterate.com",
+      "auth": "shared-api-secret-bearer"
+    }
   },
   "dependencies": {
     "@iterate-com/semaphore-contract": "workspace:*",
