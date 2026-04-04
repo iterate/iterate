@@ -20,7 +20,7 @@ const app = createEvents2AppFixture({
 });
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
-const defaultNamespace = "public";
+const defaultProjectSlug = "public";
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 const testTimeoutMs = 5_000;
 describe("events runtime smoke", () => {
@@ -110,7 +110,7 @@ describe("events runtime smoke", () => {
         ),
       ).toBe(true);
       expect(await app.client.getState({ path: "/" })).toMatchObject({
-        namespace: defaultNamespace,
+        projectSlug: defaultProjectSlug,
         path: "/",
         metadata: {},
       });
@@ -128,7 +128,7 @@ describe("events runtime smoke", () => {
         streamPath: path,
         type: "https://events.iterate.com/events/stream/initialized",
         offset: expectedStoredOffset(0),
-        payload: { namespace: defaultNamespace, path },
+        payload: { projectSlug: defaultProjectSlug, path },
       });
       expect(events[1]).toMatchObject({
         streamPath: path,
@@ -137,7 +137,7 @@ describe("events runtime smoke", () => {
       });
 
       expect(await app.client.getState({ path })).toEqual({
-        namespace: defaultNamespace,
+        projectSlug: defaultProjectSlug,
         path,
         maxOffset: 2,
         metadata: {},
@@ -152,7 +152,7 @@ describe("events runtime smoke", () => {
       const rootStateResponse = await app.fetch("/api/__state/%2F");
       expect(rootStateResponse.status).toBe(200);
       expect(await rootStateResponse.json()).toMatchObject({
-        namespace: defaultNamespace,
+        projectSlug: defaultProjectSlug,
         path: "/",
       });
 

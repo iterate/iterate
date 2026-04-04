@@ -17,7 +17,7 @@ export const streamInitializedPage = {
   type: "https://events.iterate.com/events/stream/initialized",
   summary: "Internal meta event emitted exactly once when a stream initializes itself.",
   payloadExample: {
-    namespace: "public",
+    projectSlug: "public",
     path: "/demo/stream",
   },
   details: [

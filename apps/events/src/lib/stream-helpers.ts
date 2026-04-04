@@ -1,5 +1,5 @@
 import { env as workerEnv } from "cloudflare:workers";
-import type { StreamNamespace, StreamPath } from "@iterate-com/events-contract";
+import type { ProjectSlug, StreamPath } from "@iterate-com/events-contract";
 
 export class StreamOffsetPreconditionError extends Error {
   constructor(message: string) {
@@ -11,14 +11,11 @@ export class StreamOffsetPreconditionError extends Error {
 // Durable Object names define global identity. Keep this explicit and stable
 // rather than relying on object key order in JSON.stringify():
 // https://developers.cloudflare.com/durable-objects/api/namespace/
-export function getStreamDurableObjectName(args: {
-  namespace: StreamNamespace;
-  path: StreamPath;
-}) {
-  return `${args.namespace}::${args.path}`;
+export function getStreamDurableObjectName(args: { projectSlug: ProjectSlug; path: StreamPath }) {
+  return `${args.projectSlug}::${args.path}`;
 }
 
-export function getStreamStub(args: { namespace: StreamNamespace; path: StreamPath }) {
+export function getStreamStub(args: { projectSlug: ProjectSlug; path: StreamPath }) {
   return workerEnv.STREAM.getByName(getStreamDurableObjectName(args));
 }
 
@@ -29,7 +26,7 @@ export function getStreamStub(args: { namespace: StreamNamespace; path: StreamPa
  * throw from the `state` getter inside the durable object.
  */
 export async function getInitializedStreamStub(args: {
-  namespace: StreamNamespace;
+  projectSlug: ProjectSlug;
   path: StreamPath;
 }) {
   const streamStub = getStreamStub(args);

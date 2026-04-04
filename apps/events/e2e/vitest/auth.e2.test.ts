@@ -6,16 +6,16 @@ import { createEvents2AppFixture, requireEventsBaseUrl } from "../helpers.ts";
 const app = createEvents2AppFixture({
   baseURL: requireEventsBaseUrl(),
 });
-const defaultNamespace = "public";
+const defaultProjectSlug = "public";
 const testTimeoutMs = 5_000;
 
 describe.sequential("events auth-adjacent e2e", () => {
   test(
-    "X-Iterate-Namespace isolates stream state and history for the same path",
+    "X-Iterate-Project isolates stream state and history for the same path",
     async () => {
       const path = uniqueStreamPath();
 
-      const publicAppendResponse = await app.fetch(`/api/streams/${routePathFor(path)}`, {
+      const defaultProjectAppendResponse = await app.fetch(`/api/streams/${routePathFor(path)}`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -25,11 +25,11 @@ describe.sequential("events auth-adjacent e2e", () => {
           payload: { scope: "public" },
         }),
       });
-      const namespacedAppendResponse = await app.fetch(`/api/streams/${routePathFor(path)}`, {
+      const projectAppendResponse = await app.fetch(`/api/streams/${routePathFor(path)}`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-iterate-namespace": "team-a",
+          "x-iterate-project": "team-a",
         },
         body: JSON.stringify({
           type: "https://events.iterate.com/events/example/value-recorded",
@@ -37,52 +37,52 @@ describe.sequential("events auth-adjacent e2e", () => {
         }),
       });
 
-      expect(publicAppendResponse.status).toBe(200);
-      expect(namespacedAppendResponse.status).toBe(200);
+      expect(defaultProjectAppendResponse.status).toBe(200);
+      expect(projectAppendResponse.status).toBe(200);
 
-      const publicStateResponse = await app.fetch(`/api/__state/${routePathFor(path)}`);
-      const namespacedStateResponse = await app.fetch(`/api/__state/${routePathFor(path)}`, {
+      const defaultProjectStateResponse = await app.fetch(`/api/__state/${routePathFor(path)}`);
+      const projectStateResponse = await app.fetch(`/api/__state/${routePathFor(path)}`, {
         headers: {
-          "x-iterate-namespace": "team-a",
+          "x-iterate-project": "team-a",
         },
       });
 
-      expect(await publicStateResponse.json()).toEqual({
-        namespace: defaultNamespace,
+      expect(await defaultProjectStateResponse.json()).toEqual({
+        projectSlug: defaultProjectSlug,
         path,
         maxOffset: 2,
         metadata: {},
       });
-      expect(await namespacedStateResponse.json()).toEqual({
-        namespace: "team-a",
+      expect(await projectStateResponse.json()).toEqual({
+        projectSlug: "team-a",
         path,
         maxOffset: 2,
         metadata: {},
       });
 
-      const publicHistoryResponse = await app.fetch(`/api/streams/${routePathFor(path)}`);
-      expect(publicHistoryResponse.status).toBe(200);
-      const publicHistoryText = await publicHistoryResponse.text();
-      expect(publicHistoryText).toContain('"namespace":"public"');
-      expect(publicHistoryText).toContain('"scope":"public"');
-      expect(publicHistoryText).not.toContain('"scope":"team-a"');
+      const defaultProjectHistoryResponse = await app.fetch(`/api/streams/${routePathFor(path)}`);
+      expect(defaultProjectHistoryResponse.status).toBe(200);
+      const defaultProjectHistoryText = await defaultProjectHistoryResponse.text();
+      expect(defaultProjectHistoryText).toContain('"projectSlug":"public"');
+      expect(defaultProjectHistoryText).toContain('"scope":"public"');
+      expect(defaultProjectHistoryText).not.toContain('"scope":"team-a"');
 
-      const namespacedHistoryResponse = await app.fetch(`/api/streams/${routePathFor(path)}`, {
+      const projectHistoryResponse = await app.fetch(`/api/streams/${routePathFor(path)}`, {
         headers: {
-          "x-iterate-namespace": "team-a",
+          "x-iterate-project": "team-a",
         },
       });
-      expect(namespacedHistoryResponse.status).toBe(200);
-      const namespacedHistoryText = await namespacedHistoryResponse.text();
-      expect(namespacedHistoryText).toContain('"namespace":"team-a"');
-      expect(namespacedHistoryText).toContain('"scope":"team-a"');
-      expect(namespacedHistoryText).not.toContain('"scope":"public"');
+      expect(projectHistoryResponse.status).toBe(200);
+      const projectHistoryText = await projectHistoryResponse.text();
+      expect(projectHistoryText).toContain('"projectSlug":"team-a"');
+      expect(projectHistoryText).toContain('"scope":"team-a"');
+      expect(projectHistoryText).not.toContain('"scope":"public"');
     },
     testTimeoutMs,
   );
 
   test(
-    "invalid X-Iterate-Namespace is rejected before stream handlers run",
+    "invalid X-Iterate-Project is rejected before stream handlers run",
     async () => {
       const path = uniqueStreamPath();
 
@@ -90,7 +90,7 @@ describe.sequential("events auth-adjacent e2e", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-iterate-namespace": "n".repeat(256),
+          "x-iterate-project": "p".repeat(256),
         },
         body: JSON.stringify({
           type: "https://events.iterate.com/events/example/value-recorded",
@@ -99,7 +99,7 @@ describe.sequential("events auth-adjacent e2e", () => {
       });
 
       expect(response.status).toBe(400);
-      expect(await response.text()).toContain("X-Iterate-Namespace must be a non-empty string");
+      expect(await response.text()).toContain("X-Iterate-Project must be a non-empty string");
     },
     testTimeoutMs,
   );

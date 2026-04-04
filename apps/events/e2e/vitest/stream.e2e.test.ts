@@ -21,7 +21,7 @@ const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
 const pollIntervalMs = 50;
 const testTimeoutMs = 5_000;
-const defaultNamespace = "public";
+const defaultProjectSlug = "public";
 
 describe.sequential("events stream e2e", () => {
   test(
@@ -58,7 +58,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: { namespace: defaultNamespace, path },
+          payload: { projectSlug: defaultProjectSlug, path },
         },
         {
           streamPath: path,
@@ -164,7 +164,7 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "public append allows child-stream-created and rejects only a second stream-initialized",
+    "default-project append allows child-stream-created and rejects only a second stream-initialized",
     async () => {
       const path = uniqueStreamPath();
       const childPath = StreamPath.parse(`${path}/child`);
@@ -187,7 +187,7 @@ describe.sequential("events stream e2e", () => {
         },
         body: JSON.stringify({
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: { namespace: defaultNamespace, path },
+          payload: { projectSlug: defaultProjectSlug, path },
         }),
       });
 
@@ -224,7 +224,7 @@ describe.sequential("events stream e2e", () => {
       ).rejects.toThrow(/next generated offset/i);
 
       expect(await app.client.getState({ path })).toEqual({
-        namespace: defaultNamespace,
+        projectSlug: defaultProjectSlug,
         path,
         maxOffset: 1,
         metadata: {},
@@ -235,7 +235,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: { namespace: defaultNamespace, path },
+          payload: { projectSlug: defaultProjectSlug, path },
         },
       ]);
     },
@@ -331,7 +331,7 @@ describe.sequential("events stream e2e", () => {
       const path = uniqueStreamPath();
 
       expect(await app.client.getState({ path })).toEqual({
-        namespace: defaultNamespace,
+        projectSlug: defaultProjectSlug,
         path,
         maxOffset: 1,
         metadata: {},
@@ -349,7 +349,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(await app.client.getState({ path: "/" })).toMatchObject({
-        namespace: defaultNamespace,
+        projectSlug: defaultProjectSlug,
         path: "/",
         metadata: {},
       });
@@ -411,7 +411,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(await app.client.getState({ path })).toEqual({
-        namespace: defaultNamespace,
+        projectSlug: defaultProjectSlug,
         path,
         maxOffset: 4,
         metadata: {
@@ -764,7 +764,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: { namespace: defaultNamespace, path },
+          payload: { projectSlug: defaultProjectSlug, path },
         },
         {
           streamPath: path,
@@ -1088,7 +1088,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "https://events.iterate.com/events/stream/initialized",
-          payload: { namespace: defaultNamespace, path },
+          payload: { projectSlug: defaultProjectSlug, path },
         });
 
         expect(second.done).toBe(false);

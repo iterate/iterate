@@ -100,14 +100,14 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
       }
       ---
       {
-        "namespace": "public",
+        "projectSlug": "public",
         "path": "<streamPath>",
         "maxOffset": 2,
         "metadata": {}
       }
       ---
       {
-        "namespace": "public",
+        "projectSlug": "public",
         "path": "<streamPath>",
         "maxOffset": 2,
         "metadata": {}
@@ -116,7 +116,7 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
       :
 
       event: message
-      data: {"type":"https://events.iterate.com/events/stream/initialized","payload":{"namespace":"public","path":"<streamPath>"},"offset":1,"streamPath":"<streamPath>","createdAt":"<ts>"}
+      data: {"type":"https://events.iterate.com/events/stream/initialized","payload":{"projectSlug":"public","path":"<streamPath>"},"offset":1,"streamPath":"<streamPath>","createdAt":"<ts>"}
 
       event: message
       data: {"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":2,"streamPath":"<streamPath>","createdAt":"<ts>"}

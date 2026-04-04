@@ -5,7 +5,7 @@ import {
   GenericEventInput,
   type JSONObject,
   StreamInitializedEvent,
-  type StreamNamespace,
+  type ProjectSlug,
   type StreamPath,
 } from "@iterate-com/events-contract";
 import jsonata from "jsonata";
@@ -15,10 +15,10 @@ import {
   StreamOffsetPreconditionError,
 } from "~/lib/stream-helpers.ts";
 import { decodeEventStream } from "~/lib/utils.ts";
-import { os, withNamespace } from "~/orpc/orpc.ts";
+import { os, withProject } from "~/orpc/orpc.ts";
 
 export const streamsRouter = {
-  append: os.append.use(withNamespace).handler(async ({ input, context }) => {
+  append: os.append.use(withProject).handler(async ({ input, context }) => {
     const path = input.params.path;
     const event: EventInput =
       input.query.jsonataTransform == null
@@ -29,7 +29,7 @@ export const streamsRouter = {
           });
 
     const streamStub = await getInitializedStreamStub({
-      namespace: context.namespace,
+      projectSlug: context.projectSlug,
       path,
     });
     try {
@@ -62,16 +62,16 @@ export const streamsRouter = {
       throw error;
     }
   }),
-  destroy: os.destroy.use(withNamespace).handler(async ({ input, context }) => {
+  destroy: os.destroy.use(withProject).handler(async ({ input, context }) => {
     return await destroyStreamTree({
-      namespace: context.namespace,
+      projectSlug: context.projectSlug,
       path: input.path,
       destroyChildren: input.destroyChildren,
     });
   }),
-  stream: os.stream.use(withNamespace).handler(async function* ({ input, signal, context }) {
+  stream: os.stream.use(withProject).handler(async function* ({ input, signal, context }) {
     const streamStub = await getInitializedStreamStub({
-      namespace: context.namespace,
+      projectSlug: context.projectSlug,
       path: input.path,
     });
 
@@ -96,16 +96,16 @@ export const streamsRouter = {
       yield event;
     }
   }),
-  getState: os.getState.use(withNamespace).handler(async ({ input, context }) => {
+  getState: os.getState.use(withProject).handler(async ({ input, context }) => {
     const streamStub = await getInitializedStreamStub({
-      namespace: context.namespace,
+      projectSlug: context.projectSlug,
       path: input.path,
     });
     return streamStub.getState();
   }),
-  listStreams: os.listStreams.use(withNamespace).handler(async ({ context }) => {
+  listStreams: os.listStreams.use(withProject).handler(async ({ context }) => {
     const rootStreamStub = await getInitializedStreamStub({
-      namespace: context.namespace,
+      projectSlug: context.projectSlug,
       path: "/",
     });
     const events = await rootStreamStub.history();
@@ -148,25 +148,25 @@ async function transformAppendBody(args: { body: JSONObject; jsonataTransform: s
 }
 
 async function destroyStreamTree(args: {
-  namespace: StreamNamespace;
+  projectSlug: ProjectSlug;
   path: StreamPath;
   destroyChildren?: boolean;
 }) {
   if (args.destroyChildren) {
-    const childPaths = (await listDiscoveredStreams({ namespace: args.namespace, path: args.path }))
+    const childPaths = (await listDiscoveredStreams({ projectSlug: args.projectSlug, path: args.path }))
       .map((stream) => stream.path)
       .filter((path) => path !== args.path)
       .sort((left, right) => right.length - left.length);
 
     for (const childPath of childPaths) {
-      await getStreamStub({ namespace: args.namespace, path: childPath }).destroy();
+      await getStreamStub({ projectSlug: args.projectSlug, path: childPath }).destroy();
     }
   }
 
-  return await getStreamStub({ namespace: args.namespace, path: args.path }).destroy();
+  return await getStreamStub({ projectSlug: args.projectSlug, path: args.path }).destroy();
 }
 
-async function listDiscoveredStreams(args: { namespace: StreamNamespace; path: StreamPath }) {
+async function listDiscoveredStreams(args: { projectSlug: ProjectSlug; path: StreamPath }) {
   const events = await getStreamStub(args).history();
   const discovered = new Map<StreamPath, string>();
 

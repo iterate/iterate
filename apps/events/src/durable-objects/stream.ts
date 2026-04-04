@@ -5,8 +5,8 @@ import {
   Event as EventSchema,
   type EventInput,
   EventInput as EventInputSchema,
+  type ProjectSlug,
   type StreamMetadataUpdatedEvent,
-  type StreamNamespace,
   type StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
@@ -43,7 +43,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   private get state(): StreamState {
     if (this._state == null) {
       throw new Error(
-        "Stream durable object state was accessed before initialize({ namespace, path }) completed. Callers must use getInitializedStreamStub().",
+        "Stream durable object state was accessed before initialize({ projectSlug, path }) completed. Callers must use getInitializedStreamStub().",
       );
     }
 
@@ -87,13 +87,13 @@ export class StreamDurableObject extends DurableObject<Env> {
    * calls are no-ops.
    *
    * Think of this like the durable object constructor. We take arguments like
-   * { namespace, path }
+   * { projectSlug, path }
    * and set the initial state.
    *
    * All external callers go through `getInitializedStreamStub()` in
    * `~/lib/stream-helpers.ts`, which calls this before returning the stub.
    */
-  initialize(args: { namespace: StreamNamespace; path: StreamPath }) {
+  initialize(args: { projectSlug: ProjectSlug; path: StreamPath }) {
     if (this._state != null) {
       return;
     }
@@ -103,7 +103,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.ensureSchema();
 
     this._state = {
-      namespace: args.namespace,
+      projectSlug: args.projectSlug,
       path: args.path,
       maxOffset: 0,
       metadata: {},
@@ -112,7 +112,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     try {
       this.append({
         type: "https://events.iterate.com/events/stream/initialized",
-        payload: { namespace: args.namespace, path: args.path },
+        payload: { projectSlug: args.projectSlug, path: args.path },
       });
     } catch (error) {
       this._state = null;
@@ -200,7 +200,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           void Promise.all(
             ancestorPaths.map(async (path) => {
               const stream = await getInitializedStreamStub({
-                namespace: this.state.namespace,
+                projectSlug: this.state.projectSlug,
                 path,
               });
               await stream.append(eventInput);
