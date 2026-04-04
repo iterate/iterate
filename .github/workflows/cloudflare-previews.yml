@@ -14,13 +14,68 @@ on:
       - reopened
       - synchronize
       - closed
-    paths:
-      - apps/example/**
-      - apps/events/**
-      - apps/semaphore/**
-      - apps/ingress-proxy/**
 jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    outputs:
+      should_run: ${{ steps.should_run_preview.outputs.result }}
+    steps:
+      - name: should_run_preview
+        id: should_run_preview
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            github.log = { ...console, debug: () => {} };
+            const vars = { github, context, core, glob, io, require };
+            const previewPaths = [
+              "apps/example/**",
+              "apps/events/**",
+              "apps/semaphore/**",
+              "apps/ingress-proxy/**",
+            ];
+            const __handler = async function should_run_preview({ context, github }) {
+              const pullRequest = context.payload.pull_request;
+              if (!pullRequest) {
+                return "false";
+              }
+
+              if (context.payload.action === "closed") {
+                return "true";
+              }
+
+              const files = [];
+              let page = 1;
+
+              while (true) {
+                const response = await github.rest.pulls.listFiles({
+                  owner: context.repo.owner,
+                  page,
+                  per_page: 100,
+                  pull_number: pullRequest.number,
+                  repo: context.repo.repo,
+                });
+
+                files.push(...response.data.map((file) => ({ filename: file.filename })));
+                if (response.data.length < 100) {
+                  break;
+                }
+
+                page += 1;
+              }
+
+              const matchesPreviewPath = (filename) =>
+                previewPaths.some((pattern) =>
+                  pattern.endsWith("/**") ? filename.startsWith(pattern.slice(0, -2)) : filename === pattern,
+                );
+
+              return files.some((file) => matchesPreviewPath(file.filename)) ? "true" : "false";
+            };
+            return __handler(vars);
   preview:
+    needs:
+      - scope
+    if: needs.scope.outputs.should_run == 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code

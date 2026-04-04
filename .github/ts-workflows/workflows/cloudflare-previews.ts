@@ -1,4 +1,4 @@
-import { workflow } from "@jlarky/gha-ts/workflow-types";
+import type { Workflow } from "@jlarky/gha-ts/workflow-types";
 import { cloudflarePreviewApps } from "../../../scripts/preview/apps.ts";
 import * as utils from "../utils/index.ts";
 
@@ -54,7 +54,7 @@ function createCommonPreviewArguments(input: {
   ];
 }
 
-export default workflow({
+export default {
   name: "Cloudflare Previews",
   permissions: {
     contents: "read",
@@ -67,11 +67,68 @@ export default workflow({
   on: {
     pull_request: {
       types: ["opened", "reopened", "synchronize", "closed"],
-      paths: previewPaths,
     },
   },
   jobs: {
+    scope: {
+      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      outputs: {
+        should_run: "${{ steps.should_run_preview.outputs.result }}",
+      },
+      steps: [
+        await utils.githubScript(
+          import.meta,
+          {
+            params: {
+              previewPaths,
+            },
+            "result-encoding": "string",
+          },
+          async function should_run_preview({ context, github }) {
+            const pullRequest = context.payload.pull_request;
+            if (!pullRequest) {
+              return "false";
+            }
+
+            if (context.payload.action === "closed") {
+              return "true";
+            }
+
+            const files: Array<{ filename: string }> = [];
+            let page = 1;
+
+            while (true) {
+              const response = await github.rest.pulls.listFiles({
+                owner: context.repo.owner,
+                page,
+                per_page: 100,
+                pull_number: pullRequest.number,
+                repo: context.repo.repo,
+              });
+
+              files.push(...response.data.map((file) => ({ filename: file.filename })));
+              if (response.data.length < 100) {
+                break;
+              }
+
+              page += 1;
+            }
+
+            const matchesPreviewPath = (filename: string) =>
+              previewPaths.some((pattern) =>
+                pattern.endsWith("/**")
+                  ? filename.startsWith(pattern.slice(0, -2))
+                  : filename === pattern,
+              );
+
+            return files.some((file) => matchesPreviewPath(file.filename)) ? "true" : "false";
+          },
+        ),
+      ],
+    },
     preview: {
+      needs: ["scope"],
+      if: "needs.scope.outputs.should_run == 'true'",
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         ...utils.getSetupRepo({
@@ -128,4 +185,4 @@ export default workflow({
       ],
     },
   },
-});
+} satisfies Workflow;
