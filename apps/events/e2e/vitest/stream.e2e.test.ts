@@ -10,6 +10,7 @@ import {
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
+  defaultE2EProjectSlug,
   requireEventsBaseUrl,
   type Events2AppFixture,
 } from "../helpers.ts";
@@ -17,7 +18,7 @@ import {
 const app = createEvents2AppFixture({
   baseURL: requireEventsBaseUrl(),
 });
-const defaultProjectSlug = "public";
+const defaultProjectSlug = defaultE2EProjectSlug;
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
 const pollIntervalMs = 50;

@@ -3,8 +3,10 @@ import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { eventsContract, type EventInput, type StreamPath } from "@iterate-com/events-contract";
+import { iterateProjectHeader } from "../src/lib/project-slug.ts";
 
 export type Events2Client = ContractRouterClient<typeof eventsContract>;
+export const defaultE2EProjectSlug = "test";
 
 export type Events2AppFixture = {
   baseURL: string;
@@ -28,9 +30,23 @@ export function requireEventsBaseUrl() {
 
 export function createEvents2AppFixture(args: { baseURL: string }): Events2AppFixture {
   const baseURL = args.baseURL.replace(/\/+$/, "");
+  const withProjectHeaders = (headersInit?: HeadersInit) => {
+    const headers = new Headers(headersInit);
+    if (!headers.has(iterateProjectHeader)) {
+      headers.set(iterateProjectHeader, defaultE2EProjectSlug);
+    }
+    return headers;
+  };
   const client = createORPCClient(
     new OpenAPILink(eventsContract, {
       url: new URL("/api", baseURL).toString(),
+      fetch: (request, init) => {
+        const requestInit = init as RequestInit | undefined;
+        const headers = withProjectHeaders(
+          request instanceof Request ? request.headers : requestInit?.headers,
+        );
+        return fetch(request, { ...requestInit, headers });
+      },
     }),
   ) as Events2Client;
 
@@ -45,7 +61,11 @@ export function createEvents2AppFixture(args: { baseURL: string }): Events2AppFi
         event: args.event,
       });
     },
-    fetch: (pathname, init) => fetch(new URL(pathname, baseURL), init),
+    fetch: (pathname, init) =>
+      fetch(new URL(pathname, baseURL), {
+        ...init,
+        headers: withProjectHeaders(init?.headers),
+      }),
   };
 }
 

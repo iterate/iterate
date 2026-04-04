@@ -1,18 +1,25 @@
-import { Link, useMatchRoute } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { Link, useLocation, useMatchRoute, useRouter, useSearch } from "@tanstack/react-router";
+import { ProjectSlug } from "@iterate-com/events-contract";
+import { Button } from "@iterate-com/ui/components/button";
 import {
   SidebarGroup,
   SidebarGroupContent,
+  SidebarInput,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
+import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamsSidebar } from "~/components/streams-sidebar.tsx";
+import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
+import { projectSlugSearchParam } from "~/lib/project-slug.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 
 export function AppSidebar() {
   return (
-    <SidebarShell header={<AppSidebarBrand />}>
+    <SidebarShell header={<AppSidebarBrand />} footer={<AppSidebarProjectSlugFooter />}>
       <AppSidebarNav />
       <StreamsSidebar />
     </SidebarShell>
@@ -25,12 +32,29 @@ const items = [
 ] as const;
 
 function AppSidebarBrand() {
+  const projectSlug = useCurrentProjectSlug();
+  const search = useSearch({ strict: false });
+  const currentRenderer =
+    "renderer" in search && typeof search.renderer === "string"
+      ? search.renderer
+      : defaultStreamViewSearch.renderer;
+
   return (
     <SidebarMenu>
       <SidebarMenuItem>
         <SidebarMenuButton
           size="lg"
-          render={<Link to="/streams/" search={defaultStreamViewSearch} />}
+          render={
+            <Link
+              to="/streams/"
+              search={(previous) => ({
+                ...previous,
+                projectSlug,
+                event: defaultStreamViewSearch.event,
+                renderer: currentRenderer,
+              })}
+            />
+          }
         >
           <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg font-semibold">
             Ev
@@ -47,6 +71,12 @@ function AppSidebarBrand() {
 
 function AppSidebarNav() {
   const matchRoute = useMatchRoute();
+  const projectSlug = useCurrentProjectSlug();
+  const search = useSearch({ strict: false });
+  const currentRenderer =
+    "renderer" in search && typeof search.renderer === "string"
+      ? search.renderer
+      : defaultStreamViewSearch.renderer;
 
   return (
     <SidebarGroup>
@@ -57,9 +87,17 @@ function AppSidebarNav() {
               <SidebarMenuButton
                 render={
                   item.to === "/streams/" ? (
-                    <Link to={item.to} search={defaultStreamViewSearch} />
+                    <Link
+                      to={item.to}
+                      search={(previous) => ({
+                        ...previous,
+                        projectSlug,
+                        event: defaultStreamViewSearch.event,
+                        renderer: currentRenderer,
+                      })}
+                    />
                   ) : (
-                    <Link to={item.to} />
+                    <Link to={item.to} search={(previous) => ({ ...previous, projectSlug })} />
                   )
                 }
                 isActive={Boolean(matchRoute({ to: item.to, fuzzy: true }))}
@@ -71,5 +109,54 @@ function AppSidebarNav() {
         </SidebarMenu>
       </SidebarGroupContent>
     </SidebarGroup>
+  );
+}
+
+function AppSidebarProjectSlugFooter() {
+  const router = useRouter();
+  const location = useLocation();
+  const projectSlug = useCurrentProjectSlug();
+  const [value, setValue] = useState(projectSlug);
+
+  useEffect(() => {
+    setValue(projectSlug);
+  }, [projectSlug]);
+
+  function submitProjectSlug() {
+    const parsed = ProjectSlug.safeParse(value.trim());
+    if (!parsed.success) {
+      toast.error("Project slug must be a non-empty string up to 255 characters.");
+      return;
+    }
+
+    const searchParams = new URLSearchParams(location.searchStr);
+    searchParams.set(projectSlugSearchParam, parsed.data);
+
+    void router.navigate({
+      href: `${location.pathname}?${searchParams.toString()}`,
+      replace: true,
+    });
+  }
+
+  return (
+    <form
+      className="space-y-2 p-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        submitProjectSlug();
+      }}
+    >
+      <div className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Project slug
+      </div>
+      <SidebarInput
+        value={value}
+        onChange={(event) => setValue(event.currentTarget.value)}
+        placeholder="public"
+      />
+      <Button type="submit" size="sm" className="w-full">
+        Apply
+      </Button>
+    </form>
   );
 }
