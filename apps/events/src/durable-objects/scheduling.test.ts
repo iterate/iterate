@@ -595,6 +595,60 @@ describe("schedule operations", () => {
 
       await streamStub.cancelScheduleById(intervalId);
     });
+
+    it("should retire rows whose callback does not exist and keep processing later due rows", async () => {
+      const streamStub = testEnv.TEST_SCHEDULE_STREAM.getByName("alarm-missing-callback-row-test");
+      const intervalId = await streamStub.createIntervalSchedule(30);
+
+      await runInDurableObject(streamStub, async (instance: TestScheduleStreamDurableObject) => {
+        instance.intervalCallbackCount = 0;
+
+        const past = Math.floor(Date.now() / 1000) - 1;
+        instance.ctx.storage.sql.exec(
+          `UPDATE cf_agents_schedules SET time = ? WHERE id = ?`,
+          past,
+          intervalId,
+        );
+        instance.ctx.storage.sql.exec(
+          `INSERT INTO cf_agents_schedules (
+             id, callback, payload, type, time, delayInSeconds, cron, intervalSeconds,
+             running, execution_started_at, retry_options, created_at
+           )
+           VALUES (?, ?, NULL, 'delayed', ?, 60, NULL, NULL, 0, NULL, NULL, ?)`,
+          "bad-callback-row",
+          "missingCallback",
+          past,
+          past - 60,
+        );
+      });
+
+      await runDurableObjectAlarm(streamStub);
+
+      const { badCallbackCount, intervalCallbackCount } = await runInDurableObject(
+        streamStub,
+        async (instance: TestScheduleStreamDurableObject) => {
+          const badCallbackCount =
+            instance.ctx.storage.sql
+              .exec<{ count: number }>(
+                `SELECT COUNT(*) AS count
+               FROM cf_agents_schedules
+               WHERE id = ?`,
+                "bad-callback-row",
+              )
+              .one()?.count ?? 0;
+
+          return {
+            badCallbackCount,
+            intervalCallbackCount: instance.intervalCallbackCount,
+          };
+        },
+      );
+
+      expect(intervalCallbackCount).toBeGreaterThan(0);
+      expect(badCallbackCount).toBe(0);
+
+      await streamStub.cancelScheduleById(intervalId);
+    });
   });
 
   describe("scheduleEvery idempotency", () => {

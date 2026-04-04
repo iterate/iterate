@@ -510,8 +510,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     const rawName = Reflect.get(this.ctx.id as object, "name");
-    const parsedPath = StreamPath.safeParse(rawName);
-    const path = parsedPath.success ? parsedPath.data : StreamPath.parse("/__test");
+    const path = StreamPath.parse(rawName);
     await this.initialize({ path });
   }
 

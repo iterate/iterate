@@ -6,6 +6,7 @@ type SchedulingTestSurface = {
   ensureInitializedForCurrentName(): Promise<void>;
   getSchedule(id: string): Schedule | undefined;
   getSchedules(criteria?: ScheduleCriteria): Schedule[];
+  initialize(args: { path: string }): Promise<void> | void;
   schedule<T = unknown>(
     when: Date | number | string,
     callback: PropertyKey,
@@ -34,7 +35,23 @@ function asSchedulingTestSurface(value: object): SchedulingTestSurface {
 export function createSchedulingTestDurableObjects<TBase extends new (...args: any[]) => object>(
   Base: TBase,
 ) {
-  class TestStartupScheduleWarnStreamDurableObject extends Base {
+  class SchedulingTestBase extends Base {
+    protected async ensureInitializedForCurrentName(): Promise<void> {
+      const surface = asSchedulingTestSurface(this);
+      const reducedStateCount =
+        surface.ctx.storage.sql
+          .exec<{ count: number }>("SELECT COUNT(*) AS count FROM reduced_state")
+          .one()?.count ?? 0;
+
+      if (reducedStateCount > 0) {
+        return;
+      }
+
+      await surface.initialize({ path: "/__test" });
+    }
+  }
+
+  class TestStartupScheduleWarnStreamDurableObject extends SchedulingTestBase {
     testCallback() {}
 
     protected async onInitialize(): Promise<void> {
@@ -54,7 +71,7 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
     }
   }
 
-  class TestStartupScheduleNoWarnStreamDurableObject extends Base {
+  class TestStartupScheduleNoWarnStreamDurableObject extends SchedulingTestBase {
     testCallback() {}
 
     protected async onInitialize(): Promise<void> {
@@ -76,7 +93,7 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
     }
   }
 
-  class TestStartupScheduleExplicitFalseStreamDurableObject extends Base {
+  class TestStartupScheduleExplicitFalseStreamDurableObject extends SchedulingTestBase {
     testCallback() {}
 
     protected async onInitialize(): Promise<void> {
@@ -91,7 +108,7 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
     }
   }
 
-  class TestScheduleStreamDurableObject extends Base {
+  class TestScheduleStreamDurableObject extends SchedulingTestBase {
     intervalCallbackCount = 0;
     slowCallbackExecutionCount = 0;
     slowCallbackStartTimes: number[] = [];

@@ -364,6 +364,21 @@ export async function runScheduleAlarm(args: SchedulingAlarmDeps): Promise<void>
         callback: row.callback,
         scheduleId: row.id,
       });
+
+      try {
+        await appendScheduleExecutionFinished({
+          append: args.append,
+          nextTime: null,
+          outcome: "failed",
+          scheduleId: row.id,
+        });
+      } catch (appendError) {
+        console.error(`[stream-do] failed to retire missing callback schedule "${row.callback}"`, {
+          appendError,
+          scheduleId: row.id,
+        });
+      }
+
       continue;
     }
 
