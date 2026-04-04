@@ -36,9 +36,7 @@ export type StreamInitializedEvent = z.infer<typeof StreamInitializedEvent>;
 
 export const StreamDurableObjectConstructedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/durable-object-constructed"),
-  payload: z.strictObject({
-    path: StreamPath,
-  }),
+  payload: z.strictObject({}),
 });
 export const StreamDurableObjectConstructedEvent = GenericEventBase.extend(
   StreamDurableObjectConstructedEventInput.pick({ type: true, payload: true }).shape,

@@ -212,10 +212,10 @@ const durableObjectConstructedEvent = AppendInput.parse({
   path: examplePath,
   event: {
     type: "https://events.iterate.com/events/stream/durable-object-constructed",
-    payload: { path: examplePath },
+    payload: {},
   },
 });
 
-assert.deepEqual(durableObjectConstructedEvent.event.payload, { path: examplePath });
+assert.deepEqual(durableObjectConstructedEvent.event.payload, {});
 
 console.log("events-contract append client typing and runtime normalization checks passed");

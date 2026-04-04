@@ -122,7 +122,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         try {
           this.append({
             type: "https://events.iterate.com/events/stream/durable-object-constructed",
-            payload: { path: parsed.data.path },
+            payload: {},
           });
         } catch (error) {
           console.error(
@@ -132,6 +132,7 @@ export class StreamDurableObject extends DurableObject<Env> {
               error,
             },
           );
+          throw error;
         }
 
         return;
