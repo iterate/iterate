@@ -3,9 +3,9 @@ import { EventTypePageView } from "~/components/event-type-page.tsx";
 import { streamDurableObjectConstructedPage } from "~/lib/event-type-pages.ts";
 
 export const Route = createFileRoute("/stream-durable-object-constructed")({
-  component: RouteComponent,
+  component: StreamDurableObjectConstructedPage,
 });
 
-function RouteComponent() {
+function StreamDurableObjectConstructedPage() {
   return <EventTypePageView page={streamDurableObjectConstructedPage} />;
 }

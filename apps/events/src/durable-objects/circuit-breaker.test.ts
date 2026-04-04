@@ -23,7 +23,7 @@ describe("circuitBreaker", () => {
     });
   });
 
-  test("beforeAppend rejects new events while paused but still allows stream/resumed", () => {
+  test("beforeAppend rejects new events while paused but still allows stream/resumed and durable-object-constructed", () => {
     const state: CircuitBreakerState = {
       ...circuitBreakerProcessor.initialState,
       paused: true,

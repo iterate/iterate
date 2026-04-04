@@ -9,6 +9,7 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "os": "cd apps/os && pnpm",
+    "events": "cd apps/events && pnpm",
     "daemon": "cd apps/daemon && pnpm",
     "sandbox": "cd sandbox && pnpm",
     "jonasland": "cd jonasland && pnpm",

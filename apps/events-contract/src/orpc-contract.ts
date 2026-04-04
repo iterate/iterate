@@ -1,5 +1,5 @@
 import { eventIterator, oc } from "@orpc/contract";
-import { commonContract } from "@iterate-com/shared/apps/common-router-contract";
+import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { z } from "zod";
 
 import {
@@ -48,7 +48,7 @@ const Secret = SecretSummary.extend({
 });
 
 export const eventsContract = oc.router({
-  common: commonContract,
+  __internal: internalContract,
   append: oc
     .route({
       operationId: "appendStreamEvents",

@@ -1,6 +1,9 @@
 import {
   ChildStreamCreatedEvent,
+  ErrorOccurredEvent,
   StreamMetadataUpdatedEvent,
+  StreamPausedEvent,
+  StreamResumedEvent,
   type Event,
 } from "@iterate-com/events-contract";
 import type {
@@ -118,6 +121,51 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
       kind: "stream-metadata-updated",
       path: event.streamPath,
       metadata: getStreamMetadataUpdatedEventMetadata(event),
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === "https://events.iterate.com/events/stream/initialized") {
+    return {
+      kind: "stream-lifecycle",
+      label: "Durable object initialized",
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === "https://events.iterate.com/events/stream/durable-object-constructed") {
+    return {
+      kind: "stream-lifecycle",
+      label: "Durable object woke up",
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === "https://events.iterate.com/events/stream/paused") {
+    return {
+      kind: "stream-paused",
+      reason: StreamPausedEvent.parse(event).payload.reason,
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === "https://events.iterate.com/events/stream/resumed") {
+    return {
+      kind: "stream-resumed",
+      reason: StreamResumedEvent.parse(event).payload.reason,
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === "https://events.iterate.com/events/stream/error-occurred") {
+    return {
+      kind: "stream-error-occurred",
+      message: ErrorOccurredEvent.parse(event).payload.message,
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };

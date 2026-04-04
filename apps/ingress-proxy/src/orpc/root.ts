@@ -1,4 +1,4 @@
-import { createCommonRouter } from "@iterate-com/shared/apps/common-router";
+import { createInternalRouter } from "@iterate-com/shared/apps/internal-router";
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { AppConfig } from "~/app.ts";
@@ -109,8 +109,8 @@ const routesRemove = os.routes.remove.use(authMiddleware).handler(async ({ conte
 });
 
 export const appRouter = os.router({
-  common: os.common.router(
-    createCommonRouter({
+  __internal: os.__internal.router(
+    createInternalRouter({
       appConfigSchema: AppConfig,
     }),
   ),

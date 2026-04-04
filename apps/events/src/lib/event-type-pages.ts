@@ -40,11 +40,12 @@ export const streamDurableObjectConstructedPage = {
   title: "Stream Durable Object Constructed",
   type: "https://events.iterate.com/events/stream/durable-object-constructed",
   summary:
-    "Internal meta event emitted when a previously initialized stream durable object is rehydrated in its constructor.",
+    "Internal meta event emitted when a previously initialized stream durable object wakes and reconstructs itself from persisted state.",
   payloadExample: {},
   details: [
-    "Fresh streams still begin with `stream/initialized`; this event is for later constructor wake-ups after persisted state is loaded.",
-    "It helps distinguish first-time initialization from later durable object reconstruction.",
+    "This only appears after the durable object constructor rehydrates an already initialized stream from SQLite state.",
+    "Fresh streams do not emit it on first initialize because there is no prior reduced state to rehydrate.",
+    "It is useful when debugging durable object cold starts, hibernation, and resume behavior.",
   ],
 } satisfies EventTypePageDefinition;
 

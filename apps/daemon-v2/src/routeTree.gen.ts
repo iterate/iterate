@@ -22,6 +22,7 @@ import { Route as AppDbRouteImport } from './routes/_app/db'
 import { Route as AppConfigRouteImport } from './routes/_app/config'
 import { Route as AppCaddyRouteImport } from './routes/_app/caddy'
 import { Route as AppRoutesIndexRouteImport } from './routes/_app/routes/index'
+import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppRoutesSlugRouteImport } from './routes/_app/routes/$slug'
 import { Route as AppRoutesSlugIndexRouteImport } from './routes/_app/routes/$slug/index'
 import { Route as AppRoutesSlugDocsRouteImport } from './routes/_app/routes/$slug/docs'
@@ -91,6 +92,11 @@ const AppRoutesIndexRoute = AppRoutesIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoutesRoute,
 } as any)
+const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
+  id: '/api/orpc/$',
+  path: '/api/orpc/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppRoutesSlugRoute = AppRoutesSlugRouteImport.update({
   id: '/$slug',
   path: '/$slug',
@@ -125,6 +131,7 @@ export interface FileRoutesByFullPath {
   '/api/pty': typeof ApiPtyRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/routes/$slug': typeof AppRoutesSlugRouteWithChildren
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/routes/': typeof AppRoutesIndexRoute
   '/routes/$slug/db': typeof AppRoutesSlugDbRoute
   '/routes/$slug/docs': typeof AppRoutesSlugDocsRoute
@@ -141,6 +148,7 @@ export interface FileRoutesByTo {
   '/api/pty': typeof ApiPtyRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/': typeof AppIndexRoute
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/routes': typeof AppRoutesIndexRoute
   '/routes/$slug/db': typeof AppRoutesSlugDbRoute
   '/routes/$slug/docs': typeof AppRoutesSlugDocsRoute
@@ -161,6 +169,7 @@ export interface FileRoutesById {
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/_app/': typeof AppIndexRoute
   '/_app/routes/$slug': typeof AppRoutesSlugRouteWithChildren
+  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/routes/': typeof AppRoutesIndexRoute
   '/_app/routes/$slug/db': typeof AppRoutesSlugDbRoute
   '/_app/routes/$slug/docs': typeof AppRoutesSlugDocsRoute
@@ -181,6 +190,7 @@ export interface FileRouteTypes {
     | '/api/pty'
     | '/posthog-proxy/$'
     | '/routes/$slug'
+    | '/api/orpc/$'
     | '/routes/'
     | '/routes/$slug/db'
     | '/routes/$slug/docs'
@@ -197,6 +207,7 @@ export interface FileRouteTypes {
     | '/api/pty'
     | '/posthog-proxy/$'
     | '/'
+    | '/api/orpc/$'
     | '/routes'
     | '/routes/$slug/db'
     | '/routes/$slug/docs'
@@ -216,6 +227,7 @@ export interface FileRouteTypes {
     | '/posthog-proxy/$'
     | '/_app/'
     | '/_app/routes/$slug'
+    | '/api/orpc/$'
     | '/_app/routes/'
     | '/_app/routes/$slug/db'
     | '/_app/routes/$slug/docs'
@@ -228,6 +240,7 @@ export interface RootRouteChildren {
   ApiOrpcWsRoute: typeof ApiOrpcWsRoute
   ApiPtyRoute: typeof ApiPtyRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
+  ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -323,6 +336,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRoutesIndexRouteImport
       parentRoute: typeof AppRoutesRoute
     }
+    '/api/orpc/$': {
+      id: '/api/orpc/$'
+      path: '/api/orpc/$'
+      fullPath: '/api/orpc/$'
+      preLoaderRoute: typeof ApiOrpcSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app/routes/$slug': {
       id: '/_app/routes/$slug'
       path: '/$slug'
@@ -412,16 +432,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiOrpcWsRoute: ApiOrpcWsRoute,
   ApiPtyRoute: ApiPtyRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
+  ApiOrpcSplatRoute: ApiOrpcSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}

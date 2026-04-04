@@ -86,5 +86,5 @@ function isBareStreamEventBody(value: unknown): value is Record<string, unknown>
     return false;
   }
 
-  return typeof objectValue.type === "string";
+  return true;
 }
