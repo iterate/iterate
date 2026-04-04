@@ -1,13 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import {
-  ChildStreamCreatedEvent,
-  type EventInput,
-  GenericEventInput,
-  type JSONObject,
-  StreamInitializedEvent,
-  type ProjectSlug,
-  type StreamPath,
-} from "@iterate-com/events-contract";
+import { type EventInput, GenericEventInput, type JSONObject } from "@iterate-com/events-contract";
 import jsonata from "jsonata";
 import {
   getInitializedStreamStub,
@@ -63,10 +55,11 @@ export const streamsRouter = {
     }
   }),
   destroy: os.destroy.use(withProject).handler(async ({ input, context }) => {
-    return await destroyStreamTree({
+    return await getStreamStub({
       projectSlug: context.projectSlug,
       path: input.path,
-      destroyChildren: input.destroyChildren,
+    }).destroy({
+      destroyChildren: input.destroyChildren ?? readDestroyChildrenQuery(context.rawRequest),
     });
   }),
   stream: os.stream.use(withProject).handler(async function* ({ input, signal, context }) {
@@ -104,27 +97,10 @@ export const streamsRouter = {
     return streamStub.getState();
   }),
   listStreams: os.listStreams.use(withProject).handler(async ({ context }) => {
-    const rootStreamStub = await getInitializedStreamStub({
+    return await getStreamStub({
       projectSlug: context.projectSlug,
       path: "/",
-    });
-    const events = await rootStreamStub.history();
-    const discovered: Record<StreamPath, string> = {
-      "/": new Date().toISOString(),
-    };
-
-    for (const event of events) {
-      if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
-        const childEvent = event as ChildStreamCreatedEvent;
-        discovered[childEvent.payload.path] = childEvent.createdAt;
-      } else if (event.type === "https://events.iterate.com/events/stream/initialized") {
-        discovered["/"] = event.createdAt;
-      }
-    }
-
-    return Object.entries(discovered)
-      .map(([path, createdAt]) => ({ path: path as StreamPath, createdAt }))
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    }).listDiscoveredStreams();
   }),
 };
 
@@ -145,49 +121,6 @@ async function transformAppendBody(args: { body: JSONObject; jsonataTransform: s
   }
 
   return parsed.data;
-}
-
-async function destroyStreamTree(args: {
-  projectSlug: ProjectSlug;
-  path: StreamPath;
-  destroyChildren?: boolean;
-}) {
-  if (args.destroyChildren) {
-    const childPaths = (
-      await listDiscoveredStreams({ projectSlug: args.projectSlug, path: args.path })
-    )
-      .map((stream) => stream.path)
-      .filter((path) => path !== args.path)
-      .sort((left, right) => right.length - left.length);
-
-    for (const childPath of childPaths) {
-      await getStreamStub({ projectSlug: args.projectSlug, path: childPath }).destroy();
-    }
-  }
-
-  return await getStreamStub({ projectSlug: args.projectSlug, path: args.path }).destroy();
-}
-
-async function listDiscoveredStreams(args: { projectSlug: ProjectSlug; path: StreamPath }) {
-  const events = await getStreamStub(args).history();
-  const discovered = new Map<StreamPath, string>();
-
-  for (const event of events) {
-    const childEvent = ChildStreamCreatedEvent.safeParse(event);
-    if (childEvent.success) {
-      discovered.set(childEvent.data.payload.path, childEvent.data.createdAt);
-      continue;
-    }
-
-    const initializedEvent = StreamInitializedEvent.safeParse(event);
-    if (initializedEvent.success) {
-      discovered.set(initializedEvent.data.payload.path, initializedEvent.data.createdAt);
-    }
-  }
-
-  return Array.from(discovered, ([path, createdAt]) => ({ path, createdAt })).sort((left, right) =>
-    right.createdAt.localeCompare(left.createdAt),
-  );
 }
 
 async function evaluateJsonataTransform(args: { body: JSONObject; jsonataTransform: string }) {
@@ -216,4 +149,23 @@ function getErrorMessage(error: unknown) {
   }
 
   return String(error);
+}
+
+function readDestroyChildrenQuery(request: Request | undefined) {
+  const rawValue =
+    request == null ? null : new URL(request.url).searchParams.get("destroyChildren");
+
+  if (rawValue == null) {
+    return undefined;
+  }
+
+  if (rawValue === "true") {
+    return true;
+  }
+
+  if (rawValue === "false") {
+    return false;
+  }
+
+  return undefined;
 }

@@ -71,12 +71,17 @@ describe("events runtime smoke", () => {
           ]),
         },
         delete: {
-          parameters: expect.arrayContaining([
-            expect.objectContaining({
-              in: "query",
-              name: "destroyChildren",
-            }),
-          ]),
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  properties: expect.objectContaining({
+                    destroyChildren: expect.any(Object),
+                  }),
+                },
+              },
+            },
+          },
         },
       });
     },

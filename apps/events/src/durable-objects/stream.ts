@@ -258,6 +258,10 @@ export class StreamDurableObject extends DurableObject<Env> {
    * killing the whole live subscription.
    */
   history(args: { afterOffset?: number } = {}): Event[] {
+    if (this._state == null) {
+      return [];
+    }
+
     const afterOffset = args.afterOffset ?? 0;
 
     return this.ctx.storage.sql
@@ -385,8 +389,10 @@ function reduceStreamState(args: { state: StreamState; event: Event }): StreamSt
   };
 }
 
+const textEncoder = new TextEncoder();
+
 function encodeEventLine(event: Event) {
-  return new TextEncoder().encode(`event: message\ndata: ${JSON.stringify(event)}\n\n`);
+  return textEncoder.encode(`${JSON.stringify(event)}\n`);
 }
 
 type SqliteEventRow = {
