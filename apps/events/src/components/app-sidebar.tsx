@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation, useMatchRoute, useRouter, useSearch } from "@tanstack/react-router";
+import { Link, useMatchRoute, useRouter, useSearch } from "@tanstack/react-router";
 import { ProjectSlug } from "@iterate-com/events-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -114,8 +114,8 @@ function AppSidebarNav() {
 
 function AppSidebarProjectSlugFooter() {
   const router = useRouter();
-  const location = useLocation();
   const projectSlug = useCurrentProjectSlug();
+  const search = useSearch({ strict: false });
   const [value, setValue] = useState(projectSlug);
 
   useEffect(() => {
@@ -129,11 +129,16 @@ function AppSidebarProjectSlugFooter() {
       return;
     }
 
-    const searchParams = new URLSearchParams(location.searchStr);
+    const searchParams = new URLSearchParams();
     searchParams.set(projectSlugSearchParam, parsed.data);
+    searchParams.set(
+      "renderer",
+      typeof search.renderer === "string" ? search.renderer : defaultStreamViewSearch.renderer,
+    );
+    searchParams.delete("event");
 
     void router.navigate({
-      href: `${location.pathname}?${searchParams.toString()}`,
+      href: `/streams/?${searchParams.toString()}`,
       replace: true,
     });
   }

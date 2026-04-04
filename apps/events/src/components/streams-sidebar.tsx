@@ -181,6 +181,56 @@ export function StreamsSidebar() {
     <SidebarGroup>
       <SidebarGroupLabel>Streams</SidebarGroupLabel>
       <SidebarGroupContent className="space-y-2">
+        {isCreatingStream ? (
+          <form
+            className="space-y-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitNewStreamPath();
+            }}
+          >
+            <SidebarInput
+              value={newStreamPathInput}
+              onChange={(event) => setNewStreamPathInput(event.currentTarget.value)}
+              onFocus={(event) => {
+                if (event.currentTarget.value === DEFAULT_NEW_STREAM_PATH) {
+                  event.currentTarget.select();
+                }
+              }}
+              placeholder="e.g. my-stream or team/inbox"
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  cancelCreateStream();
+                }
+              }}
+            />
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="flex-1"
+                onClick={cancelCreateStream}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" className="flex-1">
+                Open
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-9 w-full justify-start gap-2 px-2.5 font-normal"
+            onClick={openCreateStreamForm}
+          >
+            <Plus className="size-4 shrink-0" />
+            Create stream
+          </Button>
+        )}
+
         {!isLoadingStreams ? (
           <>
             <SidebarInput
@@ -231,56 +281,6 @@ export function StreamsSidebar() {
             </SidebarMenu>
           </>
         ) : null}
-
-        {isCreatingStream ? (
-          <form
-            className="space-y-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              submitNewStreamPath();
-            }}
-          >
-            <SidebarInput
-              value={newStreamPathInput}
-              onChange={(event) => setNewStreamPathInput(event.currentTarget.value)}
-              onFocus={(event) => {
-                if (event.currentTarget.value === DEFAULT_NEW_STREAM_PATH) {
-                  event.currentTarget.select();
-                }
-              }}
-              placeholder="e.g. my-stream or team/inbox"
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  cancelCreateStream();
-                }
-              }}
-            />
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="flex-1"
-                onClick={cancelCreateStream}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" size="sm" className="flex-1">
-                Open
-              </Button>
-            </div>
-          </form>
-        ) : (
-          <Button
-            type="button"
-            variant="ghost"
-            className="h-9 w-full justify-start gap-2 px-2.5 font-normal"
-            onClick={openCreateStreamForm}
-          >
-            <Plus className="size-4 shrink-0" />
-            Create stream
-          </Button>
-        )}
       </SidebarGroupContent>
     </SidebarGroup>
   );

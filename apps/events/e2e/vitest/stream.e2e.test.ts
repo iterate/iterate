@@ -781,6 +781,27 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
+    "listStreams includes / for a fresh project slug before root initialization",
+    async () => {
+      const projectSlug = `test-${randomUUID().slice(0, 8)}`;
+      const response = await app.fetch("/api/__list/%2F", {
+        headers: {
+          "x-iterate-project": projectSlug,
+        },
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual([
+        {
+          path: "/",
+          createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        },
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
     "listStreams on an untouched path does not create or discover that stream",
     async () => {
       const path = uniqueStreamPath();
