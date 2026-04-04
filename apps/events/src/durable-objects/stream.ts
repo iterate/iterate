@@ -242,6 +242,11 @@ export class StreamDurableObject extends DurableObject<Env> {
    * killing the whole live subscription.
    */
   history(args: { afterOffset?: number } = {}): Event[] {
+    if (this._state == null) {
+      this.ensureSchema();
+      return [];
+    }
+
     const afterOffset = args.afterOffset ?? 0;
 
     return this.ctx.storage.sql
@@ -317,11 +322,13 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   private appendToParent(eventInput: EventInput) {
+    const path = this.state.path;
+
     void this.getParent()
       .then((parent) => parent?.append(eventInput))
       .catch((error) => {
         console.error("[stream-do] failed to propagate event to parent stream", {
-          path: this.state.path,
+          path,
           eventType: eventInput.type,
           error,
         });
@@ -337,6 +344,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     const parentPath = lastSlashIndex === 0 ? "/" : StreamPath.parse(path.slice(0, lastSlashIndex));
     return getStreamStub(parentPath);
   }
+
   private parseEventRow(row: SqliteEventRow | null | undefined): Event | null {
     if (row == null) {
       return null;
