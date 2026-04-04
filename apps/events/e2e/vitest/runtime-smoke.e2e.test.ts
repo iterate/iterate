@@ -128,7 +128,7 @@ describe("events runtime smoke", () => {
 
       expect(await app.client.getState({ path })).toEqual({
         path,
-        eventCount: 2,
+        maxOffset: 2,
         metadata: {},
       });
 
