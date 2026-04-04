@@ -88,6 +88,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
             env: {
               APP: app.slug,
               GITHUB_HEAD_REF: "${{ github.event.pull_request.head.ref }}",
+              GITHUB_PR_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
               GITHUB_PR_IS_FORK:
                 "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}",
               GITHUB_PR_NUMBER: "${{ github.event.pull_request.number }}",
@@ -108,6 +109,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
               APP: app.slug,
               DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
               GITHUB_HEAD_REF: "${{ github.event.pull_request.head.ref }}",
+              GITHUB_PR_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
               GITHUB_PR_IS_FORK:
                 "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}",
               GITHUB_PR_NUMBER: "${{ github.event.pull_request.number }}",

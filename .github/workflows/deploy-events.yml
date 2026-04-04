@@ -79,6 +79,7 @@ jobs:
         env:
           APP: events
           GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          GITHUB_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GITHUB_PR_IS_FORK: ${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -95,6 +96,7 @@ jobs:
           APP: events
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          GITHUB_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GITHUB_PR_IS_FORK: ${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_REPOSITORY: ${{ github.repository }}

@@ -13,6 +13,7 @@ describe("cloudflare preview comment helpers", () => {
     const entry = CloudflarePreviewCommentEntry.parse({
       appDisplayName: "Example",
       appSlug: "example",
+      headSha: "abcdef0123456789",
       leasedUntil: 1_700_000_000_000,
       previewEnvironmentAlchemyStageName: "preview-1",
       previewEnvironmentDopplerConfigName: "stg_1",

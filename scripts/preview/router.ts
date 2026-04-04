@@ -87,6 +87,7 @@ export const router = os.router({
           createPreviewSemaphoreResourceClient: createPreviewSemaphoreClient,
           dopplerProject: app.dopplerProject,
           env,
+          paths: app.paths,
           previewResourceType: app.previewResourceType,
           previewTestBaseUrlEnvVar: app.previewTestBaseUrlEnvVar,
           previewTestCommandArgs: app.previewTestCommandArgs,
