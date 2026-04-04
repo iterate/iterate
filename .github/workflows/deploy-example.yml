@@ -78,57 +78,39 @@ jobs:
         name: Sync Example preview
         env:
           APP: example
-          GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          GITHUB_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GITHUB_PR_IS_FORK: ${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_SERVER_URL: ${{ github.server_url }}
-          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
           SEMAPHORE_BASE_URL: https://semaphore.iterate.com
-          WORKFLOW_RUN_URL: ${{ needs.variables.outputs.run_url }}
         run: |-
           set -euo pipefail
           pnpm preview sync \
             --app "$APP" \
             --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "$GITHUB_HEAD_REF" \
-            --pull-request-head-sha "$GITHUB_SHA" \
-            --pull-request-base-sha "$GITHUB_PR_BASE_SHA" \
-            --pull-request-number "$GITHUB_PR_NUMBER" \
-            --repository-full-name "$GITHUB_REPOSITORY" \
-            --workflow-run-url "$WORKFLOW_RUN_URL" \
-            --is-fork "$GITHUB_PR_IS_FORK" \
+            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
+            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
+            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
+            --pull-request-number "${{ github.event.pull_request.number }}" \
+            --repository-full-name "${{ github.repository }}" \
+            --workflow-run-url "${{ needs.variables.outputs.run_url }}" \
+            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
             --semaphore-base-url "$SEMAPHORE_BASE_URL"
       - if: github.event.pull_request.head.repo.fork != true
         name: Sync Example preview
         env:
           APP: example
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          GITHUB_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GITHUB_PR_IS_FORK: ${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_SERVER_URL: ${{ github.server_url }}
-          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ needs.variables.outputs.run_url }}
         run: |-
           set -euo pipefail
           doppler run --project os --config prd -- pnpm preview sync \
             --app "$APP" \
             --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "$GITHUB_HEAD_REF" \
-            --pull-request-head-sha "$GITHUB_SHA" \
-            --pull-request-base-sha "$GITHUB_PR_BASE_SHA" \
-            --pull-request-number "$GITHUB_PR_NUMBER" \
-            --repository-full-name "$GITHUB_REPOSITORY" \
-            --workflow-run-url "$WORKFLOW_RUN_URL" \
-            --is-fork "$GITHUB_PR_IS_FORK"
+            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
+            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
+            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
+            --pull-request-number "${{ github.event.pull_request.number }}" \
+            --repository-full-name "${{ github.repository }}" \
+            --workflow-run-url "${{ needs.variables.outputs.run_url }}" \
+            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}"
   deploy:
     needs:
       - variables

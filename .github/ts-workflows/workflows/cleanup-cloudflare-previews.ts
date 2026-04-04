@@ -43,8 +43,6 @@ export default workflow({
           env: {
             APP: "${{ matrix.appSlug }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            GITHUB_PR_NUMBER: "${{ github.event.pull_request.number }}",
-            GITHUB_REPOSITORY: "${{ github.repository }}",
             GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
           },
           run: [
@@ -52,8 +50,8 @@ export default workflow({
             "doppler run --project os --config prd -- pnpm preview cleanup \\",
             '  --app "$APP" \\',
             '  --github-token "$GITHUB_TOKEN" \\',
-            '  --pull-request-number "$GITHUB_PR_NUMBER" \\',
-            '  --repository-full-name "$GITHUB_REPOSITORY"',
+            '  --pull-request-number "${{ github.event.pull_request.number }}" \\',
+            '  --repository-full-name "${{ github.repository }}"',
           ].join("\n"),
         },
       ],
