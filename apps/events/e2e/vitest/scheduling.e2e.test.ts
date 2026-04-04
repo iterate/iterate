@@ -100,7 +100,8 @@ describeDeployedScheduling("events scheduling e2e", () => {
 
       expect(await app.client.getState({ path })).toMatchObject({
         path,
-        maxOffset: 4,
+        eventCount: 4,
+        childPaths: [],
       });
     },
     waitForAlarmTimeoutMs + settleAfterFireMs + 15_000,

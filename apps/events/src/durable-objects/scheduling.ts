@@ -1,1 +1,1 @@
-export * from "~/durable-objects/processors/scheduling/index.ts";
+export * from "./processors/scheduling/index.ts";

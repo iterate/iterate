@@ -140,6 +140,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         projectSlug: defaultProjectSlug,
         path,
         eventCount: 2,
+        childPaths: [],
         metadata: {},
         processors: expectedProcessorsWithRecentEventCount(2),
       });
