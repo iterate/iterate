@@ -6,6 +6,7 @@ import { splitRepositoryFullName } from "./repository-full-name.ts";
 const cloudflarePreviewSectionLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS";
 const cloudflarePreviewStateLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE";
 const CloudflarePreviewStatus = z.enum([
+  "awaiting-tests",
   "claim-failed",
   "cleanup-failed",
   "deploy-failed",
@@ -200,6 +201,8 @@ function summarizePreviewMessage(message: string | null | undefined) {
 
 function renderStatusLabel(status: CloudflarePreviewEntry["status"]) {
   switch (status) {
+    case "awaiting-tests":
+      return "awaiting tests";
     case "deployed":
       return "deployed";
     case "tests-failed":

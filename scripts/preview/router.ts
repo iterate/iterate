@@ -7,7 +7,10 @@ import {
   cleanupCloudflarePreviewForPullRequest,
   createCloudflarePreviewCleanupInputSchema,
   createCloudflarePreviewSyncInputSchema,
+  createCloudflarePreviewTestInputSchema,
+  deployCloudflarePreviewForPullRequest,
   syncCloudflarePreviewForPullRequest,
+  testCloudflarePreviewForPullRequest,
 } from "./preview.ts";
 
 const env = process.env;
@@ -133,6 +136,57 @@ export const router = os.router({
 
         if (!result.ok) {
           throw new Error(result.entry.message ?? `Failed to sync ${app.displayName} preview.`);
+        }
+
+        return result;
+      }),
+    deploy: os
+      .input(
+        createCloudflarePreviewSyncInputSchema(previewBoundaryEnv).extend({
+          app: CloudflarePreviewAppSlug,
+        }),
+      )
+      .meta({
+        description:
+          "Create or refresh an app preview for the current pull request without running preview e2e",
+      })
+      .handler(async ({ input, signal }) => {
+        const app = cloudflarePreviewApps[input.app];
+        const result = await deployCloudflarePreviewForPullRequest({
+          ...input,
+          paths: app.paths,
+          signal,
+          ...getPreviewAppRuntime(app),
+        });
+
+        if (!result.ok) {
+          throw new Error(result.entry?.message ?? `Failed to deploy ${app.displayName} preview.`);
+        }
+
+        return result;
+      }),
+    test: os
+      .input(
+        createCloudflarePreviewTestInputSchema(previewBoundaryEnv).extend({
+          app: CloudflarePreviewAppSlug,
+        }),
+      )
+      .meta({
+        description:
+          "Run preview e2e against an existing app preview recorded in the managed PR preview section",
+      })
+      .handler(async ({ input, signal }) => {
+        const app = cloudflarePreviewApps[input.app];
+        const result = await testCloudflarePreviewForPullRequest({
+          ...input,
+          signal,
+          ...getPreviewAppRuntime(app),
+        });
+
+        if (!result.ok) {
+          throw new Error(
+            result.entry?.message ?? `Failed to run ${app.displayName} preview tests.`,
+          );
         }
 
         return result;

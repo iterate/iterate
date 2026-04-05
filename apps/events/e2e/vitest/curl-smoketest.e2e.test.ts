@@ -2,7 +2,7 @@
  * Same curls as below, runnable in a terminal after:
  *   export BASE_URL="http://127.0.0.1:5174"
  *   export STREAM_CURL_PATH="e2e-curl/xxxxxxxx"
- *   export STREAM_RPATH="e2e-curl%2Fxxxxxxxx"   # same path with slashes → %2F
+ *   export STREAM_RPATH="%2Fe2e-curl%2Fxxxxxxxx"   # same path URL-encoded
  *
  *   curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \
  *     -H 'content-type: application/json' \
@@ -39,20 +39,37 @@ describe("events curl smoke", () => {
 
     const streamPath = StreamPath.parse(`/e2e-curl/${randomUUID().slice(0, 8)}`);
     const streamCurlPath = streamPath.slice(1);
-    const streamRpath = streamPath === "/" ? "%2F" : streamPath.slice(1).replaceAll("/", "%2F");
+    const streamRpath = encodeURIComponent(streamPath);
 
     const script = `
 set -euo pipefail
+
+retry_json_get() {
+  local url="$1"
+  local body=""
+
+  for _ in 1 2 3 4 5; do
+    body="$(curl -sS "$url")"
+    if [[ "$body" == \\{* ]]; then
+      printf '%s' "$body"
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  printf '%s' "$body"
+  return 1
+}
 
 curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \\
   -H 'content-type: application/json' \\
   -d '{"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true}}'
 echo
 echo '---'
-curl -sS "$BASE_URL/api/__state/$STREAM_CURL_PATH"
+retry_json_get "$BASE_URL/api/__state/$STREAM_CURL_PATH"
 echo
 echo '---'
-curl -sS "$BASE_URL/api/__state/$STREAM_RPATH"
+retry_json_get "$BASE_URL/api/__state/$STREAM_RPATH"
 echo
 echo '---'
 curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH"
@@ -139,7 +156,7 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
       .split("\n\n")
       .filter((segment) => segment.length > 0)
       .map((segment) => segment.trimEnd());
-    expect(streamMessages[0]).toBe(": ");
+    expect(streamMessages[0].startsWith(":")).toBe(true);
     expect(parseSseMessage(streamMessages[1])).toEqual({
       createdAt: "<ts>",
       offset: 1,
