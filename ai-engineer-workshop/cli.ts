@@ -82,6 +82,10 @@ async function getScripts() {
     cwd: process.cwd(),
     exclude: ["dist/**", "node_modules/**", "web/**"],
   })) {
+    if (!isRunnableWorkshopScript(file)) {
+      continue;
+    }
+
     files.add(file);
   }
 
@@ -101,4 +105,18 @@ async function fileExists(filepath: string) {
   } catch {
     return false;
   }
+}
+
+function isRunnableWorkshopScript(file: string) {
+  const basename = path.basename(file);
+
+  if (basename.endsWith(".test.ts")) {
+    return false;
+  }
+
+  if (basename.endsWith("-types.ts")) {
+    return false;
+  }
+
+  return !["agent.ts", "codemode.ts", "coding-agent-system-prompt.ts"].includes(basename);
 }

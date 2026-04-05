@@ -7,6 +7,7 @@ export {
   defineProcessor,
   type Processor,
 } from "../apps/events/src/durable-objects/define-processor.ts";
+export * from "./test-helpers.ts";
 
 export function getDefaultWorkshopPathPrefix() {
   return normalizePathPrefix(

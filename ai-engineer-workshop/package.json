@@ -45,6 +45,9 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm test:e2e",
+    "test:e2e": "vitest run --dir e2e/vitest",
+    "test:watch": "vitest --dir e2e/vitest",
     "workshop": "node --import tsx ./cli.ts",
     "w": "pnpm workshop"
   },
@@ -52,12 +55,14 @@
     "@orpc/client": "1.13.13",
     "@orpc/contract": "1.13.13",
     "@orpc/openapi-client": "1.13.13",
+    "openai": "^6.25.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "25.5.0",
     "tsup": "^8.5.0",
     "tsx": "^4.20.3",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "4.0.15"
   }
 }
