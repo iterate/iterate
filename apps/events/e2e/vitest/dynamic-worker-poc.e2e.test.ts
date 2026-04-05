@@ -18,8 +18,8 @@ const valueRecordedEventType = "https://events.iterate.com/events/example/value-
 const nextEventTimeoutMs = 10_000;
 const idleEventTimeoutMs = 500;
 const altPongDynamicWorkerScript = pingPongDynamicWorkerScript.replace(
-  'await stream.append({ type: "pong" });',
-  'await stream.append({ type: "alt-pong" });',
+  'await append({ type: "pong" });',
+  'await append({ type: "alt-pong" });',
 );
 
 describe("dynamic worker processor", () => {
@@ -87,10 +87,11 @@ describe("dynamic worker processor", () => {
             workersBySlug: {
               "ping-pong": {
                 compatibilityDate: "2026-02-05",
-                compatibilityFlags: ["rpc_params_dup_stubs"],
-                mainModule: "dynamic-worker.js",
+                compatibilityFlags: [],
+                mainModule: "worker.js",
                 modules: {
-                  "dynamic-worker.js": pingPongDynamicWorkerScript,
+                  "processor.js": pingPongDynamicWorkerScript,
+                  "worker.js": expect.any(String),
                 },
               },
             },
@@ -250,7 +251,7 @@ describe("dynamic worker processor", () => {
     }
   });
 
-  test("same slug configured twice before activation uses the latest config exactly once", async () => {
+  test("same slug configured twice hot-swaps to the latest runtime before the first matching event", async () => {
     const path = uniqueDynamicWorkerPath();
     const iterator = await openLiveIterator(path);
 
@@ -271,7 +272,7 @@ describe("dynamic worker processor", () => {
 
       await append(path, {
         type: valueRecordedEventType,
-        payload: { message: "use the latest ping config" },
+        payload: { message: "the latest ping config should win" },
       });
 
       await expectEvent(iterator, {
@@ -287,7 +288,7 @@ describe("dynamic worker processor", () => {
             workersBySlug: {
               "ping-pong": {
                 modules: {
-                  "dynamic-worker.js": altPongDynamicWorkerScript,
+                  "processor.js": altPongDynamicWorkerScript,
                 },
               },
             },
@@ -299,7 +300,7 @@ describe("dynamic worker processor", () => {
     }
   });
 
-  test("same slug reconfigured after activation keeps a single live runtime", async () => {
+  test("same slug reconfigured after activation cancels the old runtime and starts the new one", async () => {
     const path = uniqueDynamicWorkerPath();
     const iterator = await openLiveIterator(path);
 
@@ -328,11 +329,43 @@ describe("dynamic worker processor", () => {
 
       await append(path, {
         type: valueRecordedEventType,
-        payload: { message: "second ping should still yield one pong" },
+        payload: { message: "second ping should yield one alt-pong" },
       });
       await expectEvent(iterator, { streamPath: path, type: valueRecordedEventType });
-      await expectEvent(iterator, { streamPath: path, type: "pong" });
+      await expectEvent(iterator, { streamPath: path, type: "alt-pong" });
       await expectEventCount(path, 7);
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
+  test("same slug configured twice with identical code does not duplicate the live runtime", async () => {
+    const path = uniqueDynamicWorkerPath();
+    const iterator = await openLiveIterator(path);
+
+    try {
+      await expectInitialized(iterator, path);
+      await configureWorker({
+        path,
+        slug: "ping-pong",
+        script: pingPongDynamicWorkerScript,
+      });
+      await expectConfiguredEvent(iterator, path, "ping-pong");
+      await configureWorker({
+        path,
+        slug: "ping-pong",
+        script: pingPongDynamicWorkerScript,
+      });
+      await expectConfiguredEvent(iterator, path, "ping-pong");
+
+      await append(path, {
+        type: valueRecordedEventType,
+        payload: { message: "only one ping response please" },
+      });
+
+      await expectEvent(iterator, { streamPath: path, type: valueRecordedEventType });
+      await expectEvent(iterator, { streamPath: path, type: "pong" });
+      await expectEventCount(path, 5);
     } finally {
       await iterator.return?.();
     }
@@ -374,6 +407,45 @@ describe("dynamic worker processor", () => {
     }
   });
 
+  test("hot-swapping one slug leaves the other live runtime untouched", async () => {
+    const path = uniqueDynamicWorkerPath();
+    const iterator = await openLiveIterator(path);
+
+    try {
+      await expectInitialized(iterator, path);
+      await configureWorker({
+        path,
+        slug: "alpha",
+        script: pingPongDynamicWorkerScript,
+      });
+      await expectConfiguredEvent(iterator, path, "alpha");
+      await configureWorker({
+        path,
+        slug: "beta",
+        script: pingPongDynamicWorkerScript,
+      });
+      await expectConfiguredEvent(iterator, path, "beta");
+      await configureWorker({
+        path,
+        slug: "alpha",
+        script: altPongDynamicWorkerScript,
+      });
+      await expectConfiguredEvent(iterator, path, "alpha");
+
+      await append(path, {
+        type: valueRecordedEventType,
+        payload: { message: "fan out after one hot swap ping" },
+      });
+
+      await expectEvent(iterator, { streamPath: path, type: valueRecordedEventType });
+      await expectEvent(iterator, { streamPath: path, type: "pong" });
+      await expectEvent(iterator, { streamPath: path, type: "alt-pong" });
+      await expectEventCount(path, 7);
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
   test("module-based configuration works without the script shorthand", async () => {
     const path = uniqueDynamicWorkerPath();
     const iterator = await openLiveIterator(path);
@@ -384,9 +456,8 @@ describe("dynamic worker processor", () => {
         type: configuredEventType,
         payload: {
           slug: "modules-worker",
-          mainModule: "worker.js",
           modules: {
-            "worker.js": pingPongDynamicWorkerScript,
+            "processor.ts": pingPongDynamicWorkerScript,
           },
         },
       });
@@ -412,7 +483,8 @@ describe("dynamic worker processor", () => {
               "modules-worker": {
                 mainModule: "worker.js",
                 modules: {
-                  "worker.js": pingPongDynamicWorkerScript,
+                  "processor.js": pingPongDynamicWorkerScript,
+                  "worker.js": expect.any(String),
                 },
               },
             },

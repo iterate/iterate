@@ -20,7 +20,7 @@ export type Processor<TState = Record<string, unknown>> = {
 
 export type BuiltinProcessorContext = {
   append: (event: EventInput) => Event;
-  createStreamTarget: (args: { afterOffset: number }) => RpcTarget;
+  createStreamTarget: () => RpcTarget;
   getPath: () => StreamPath;
   loader: WorkerLoader;
   waitUntil: (promise: Promise<unknown>) => void;
@@ -29,6 +29,7 @@ export type BuiltinProcessorContext = {
 export type BuiltinProcessorRuntime<TState = Record<string, unknown>> = {
   beforeAppend?(args: { event: EventInput; state: TState }): void;
   afterAppend?(args: { event: Event; state: TState }): Promise<void> | void;
+  onStateLoaded?(args: { state: TState }): Promise<void> | void;
 };
 
 /**

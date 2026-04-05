@@ -16,78 +16,16 @@ export type DynamicWorkerAppendInput = {
 };
 
 const defaultDynamicWorkerCompatibilityDate = "2026-02-05";
-const defaultDynamicWorkerCompatibilityFlags = ["rpc_params_dup_stubs"];
-const defaultDynamicWorkerMainModule = "dynamic-worker.js";
+const defaultDynamicWorkerCompatibilityFlags: string[] = [];
+const defaultDynamicWorkerMainModule = "worker.js";
+const defaultDynamicWorkerProcessorModule = "processor.js";
 
 export const pingPongDynamicWorkerScript = `
-import { WorkerEntrypoint } from "cloudflare:workers";
-
-async function* decodeEventStream(stream) {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let finished = false;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        finished = true;
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-
-      while (true) {
-        const newlineIndex = buffer.indexOf("\\n");
-        if (newlineIndex === -1) {
-          break;
-        }
-
-        const line = buffer.slice(0, newlineIndex);
-        buffer = buffer.slice(newlineIndex + 1);
-
-        if (line.length === 0) {
-          continue;
-        }
-
-        const event = decodeEventLine(line);
-        if (event) {
-          yield event;
-        }
-      }
-    }
-
-    buffer += decoder.decode();
-    if (buffer.trim().length > 0) {
-      const event = decodeEventLine(buffer);
-      if (event) {
-        yield event;
-      }
-    }
-  } finally {
-    if (!finished) {
-      await reader.cancel();
-    }
-
-    reader.releaseLock();
-  }
-}
-
-function decodeEventLine(line) {
-  try {
-    const parsed = JSON.parse(line);
-    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
 function containsPing(event) {
+  if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured") {
+    return false;
+  }
+
   return /\\bping\\b/i.test(
     JSON.stringify({
       type: event.type,
@@ -97,22 +35,79 @@ function containsPing(event) {
   );
 }
 
-async function processEvents(stream, subscription) {
-  for await (const event of decodeEventStream(subscription)) {
+export default {
+  initialState: {},
+
+  reduce(state) {
+    return state;
+  },
+
+  async onEvent({ append, event }) {
     if (!containsPing(event)) {
-      continue;
+      return;
     }
 
-    await stream.append({ type: "pong" });
-  }
+    await append({ type: "pong" });
+  },
+};
+`.trim();
+
+const dynamicWorkerRuntimeModule = `
+import processor from "./processor.js";
+
+function createRemoteAsyncIterator(target) {
+  return {
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+
+    async next() {
+      return target.next();
+    },
+
+    async return() {
+      return target.return();
+    },
+  };
 }
 
-export default class extends WorkerEntrypoint {
-  async run(stream) {
-    const subscription = await stream.subscribe();
-    await processEvents(stream, subscription);
+async function replayProcessorState(stream, processor) {
+  let state = structuredClone(processor.initialState);
+  let lastOffset = 0;
+  const history = await stream.history({ afterOffset: 0 });
+
+  for (const event of history) {
+    lastOffset = event.offset;
+    state = processor.reduce(structuredClone(state), event) ?? state;
   }
+
+  return { lastOffset, state };
 }
+
+export default {
+  async run(stream) {
+    let { lastOffset, state } = await replayProcessorState(stream, processor);
+    const live = createRemoteAsyncIterator(await stream.subscribe({ afterOffset: lastOffset }));
+
+    for await (const event of live) {
+      if (event.offset === lastOffset) {
+        continue;
+      }
+
+      const prevState = state;
+      state = processor.reduce(structuredClone(state), event) ?? state;
+
+      await processor.onEvent?.({
+        append: (nextEvent) => stream.append(nextEvent),
+        event,
+        state,
+        prevState,
+      });
+
+      lastOffset = event.offset;
+    }
+  },
+};
 `.trim();
 
 export const dynamicWorkerProcessor = defineBuiltinProcessor<DynamicWorkerState>(() => ({
@@ -143,7 +138,6 @@ export const dynamicWorkerProcessor = defineBuiltinProcessor<DynamicWorkerState>
 export function normalizeDynamicWorkerConfig(input: {
   compatibilityDate?: string;
   compatibilityFlags?: string[];
-  mainModule?: string;
   modules?: Record<string, string>;
   script?: string;
 }): DynamicWorkerConfig {
@@ -151,9 +145,10 @@ export function normalizeDynamicWorkerConfig(input: {
     return {
       compatibilityDate: input.compatibilityDate ?? defaultDynamicWorkerCompatibilityDate,
       compatibilityFlags: input.compatibilityFlags ?? defaultDynamicWorkerCompatibilityFlags,
-      mainModule: input.mainModule ?? defaultDynamicWorkerMainModule,
+      mainModule: defaultDynamicWorkerMainModule,
       modules: {
-        [input.mainModule ?? defaultDynamicWorkerMainModule]: input.script,
+        [defaultDynamicWorkerProcessorModule]: input.script,
+        [defaultDynamicWorkerMainModule]: dynamicWorkerRuntimeModule,
       },
     };
   }
@@ -161,8 +156,11 @@ export function normalizeDynamicWorkerConfig(input: {
   return {
     compatibilityDate: input.compatibilityDate ?? defaultDynamicWorkerCompatibilityDate,
     compatibilityFlags: input.compatibilityFlags ?? defaultDynamicWorkerCompatibilityFlags,
-    mainModule: input.mainModule ?? defaultDynamicWorkerMainModule,
-    modules: input.modules ?? {},
+    mainModule: defaultDynamicWorkerMainModule,
+    modules: {
+      ...normalizeDynamicWorkerModules(input.modules ?? {}),
+      [defaultDynamicWorkerMainModule]: dynamicWorkerRuntimeModule,
+    },
   };
 }
 
@@ -171,85 +169,122 @@ function createDynamicWorkerRuntime(context: BuiltinProcessorContext) {
     string,
     {
       configKey: string;
+      stream: LocalDynamicWorkerTarget;
       run: Promise<void>;
+      stopping: boolean;
     }
   >();
 
-  return {
-    async afterAppend({ event, state }: { event: Event; state: DynamicWorkerState }) {
-      if (DynamicWorkerConfiguredEvent.safeParse(event).success) {
-        return;
-      }
+  async function ensureDynamicWorker(slug: string, config: DynamicWorkerConfig) {
+    const existing = runsBySlug.get(slug);
+    const configKey = JSON.stringify(config);
 
-      for (const [slug, config] of Object.entries(state.workersBySlug)) {
-        const existing = runsBySlug.get(slug);
-        const configKey = JSON.stringify(config);
+    if (existing?.configKey === configKey) {
+      return;
+    }
 
-        if (existing?.configKey === configKey) {
-          continue;
-        }
+    if (existing != null) {
+      existing.stopping = true;
+      await existing.stream.dispose();
+    }
 
-        if (existing != null) {
-          console.warn(
-            "[stream-do] dynamic worker config changed after startup; keeping existing runtime",
-            {
-              path: context.getPath(),
-              slug,
-            },
-          );
-          continue;
-        }
+    const stream = context.createStreamTarget() as unknown as LocalDynamicWorkerTarget;
+    const entrypoint = context.loader
+      .get(
+        `dynamic-worker:${context.getPath()}:${slug}:${hashDynamicWorkerConfig(configKey)}`,
+        () => ({
+          compatibilityDate: config.compatibilityDate,
+          compatibilityFlags: config.compatibilityFlags,
+          mainModule: config.mainModule,
+          modules: config.modules,
+          globalOutbound: null,
+        }),
+      )
+      .getEntrypoint() as unknown as {
+      run(stream: RpcDynamicWorkerTarget): Promise<void>;
+    };
+    const run = entrypoint.run(stream as RpcDynamicWorkerTarget);
+    const nextRun = {
+      configKey,
+      stream,
+      run,
+      stopping: false,
+    };
 
-        const entrypoint = context.loader
-          .get(`dynamic-worker:${context.getPath()}:${slug}`, () => ({
-            compatibilityDate: config.compatibilityDate,
-            compatibilityFlags: config.compatibilityFlags,
-            mainModule: config.mainModule,
-            modules: config.modules,
-            globalOutbound: null,
-          }))
-          .getEntrypoint() as unknown as {
-          run(stream: RpcDynamicWorkerTarget): Promise<void>;
-        };
-        const afterOffset = getInitialAfterOffset({
-          event,
-          slug,
-        });
-        const run = entrypoint.run(
-          context.createStreamTarget({
-            afterOffset: Math.max(0, afterOffset),
-          }) as unknown as RpcDynamicWorkerTarget,
-        );
+    runsBySlug.set(slug, nextRun);
+    context.waitUntil(run);
 
-        runsBySlug.set(slug, {
-          configKey,
-          run,
-        });
-        context.waitUntil(run);
-
-        void run.catch((error) => {
+    void run.then(
+      () => {
+        if (runsBySlug.get(slug) === nextRun) {
           runsBySlug.delete(slug);
-          console.error("[stream-do] dynamic worker failed", {
-            path: context.getPath(),
-            slug,
-            error,
-          });
+        }
+      },
+      (error) => {
+        if (runsBySlug.get(slug) === nextRun) {
+          runsBySlug.delete(slug);
+        }
+
+        if (nextRun.stopping) {
+          return;
+        }
+
+        console.error("[stream-do] dynamic worker failed", {
+          path: context.getPath(),
+          slug,
+          error,
         });
-      }
+      },
+    );
+  }
+
+  async function ensureConfiguredWorkers(state: DynamicWorkerState) {
+    for (const [slug, config] of Object.entries(state.workersBySlug)) {
+      await ensureDynamicWorker(slug, config);
+    }
+  }
+
+  return {
+    afterAppend({ state }: { event: Event; state: DynamicWorkerState }) {
+      return ensureConfiguredWorkers(state);
+    },
+    onStateLoaded({ state }: { state: DynamicWorkerState }) {
+      return ensureConfiguredWorkers(state);
     },
   };
 }
 
-function getInitialAfterOffset(args: { event: Event; slug: string }) {
-  const configured = DynamicWorkerConfiguredEvent.safeParse(args.event);
-  if (configured.success && configured.data.payload.slug === args.slug) {
-    return args.event.offset;
+function normalizeDynamicWorkerModules(modules: Record<string, string>) {
+  const normalized = { ...modules };
+  const processorModule = normalized["processor.ts"];
+
+  if (processorModule != null) {
+    delete normalized["processor.ts"];
+    normalized[defaultDynamicWorkerProcessorModule] = processorModule;
   }
 
-  return Math.max(0, args.event.offset - 1);
+  return normalized;
+}
+
+function hashDynamicWorkerConfig(value: string) {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash.toString(36);
 }
 
 type RpcDynamicWorkerTarget = {
   append(input: DynamicWorkerAppendInput): Promise<Event>;
-  subscribe(): Promise<ReadableStream<Uint8Array>>;
+  history(args?: { afterOffset?: number }): Promise<Event[]>;
+  subscribe(args?: { afterOffset?: number }): Promise<{
+    next(): Promise<{ done: boolean; value?: Event }>;
+    return(): Promise<{ done: boolean; value?: Event }>;
+  }>;
+};
+
+type LocalDynamicWorkerTarget = RpcDynamicWorkerTarget & {
+  dispose(): Promise<void>;
 };

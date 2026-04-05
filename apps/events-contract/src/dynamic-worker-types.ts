@@ -12,7 +12,6 @@ export const DynamicWorkerConfiguredEventInput = GenericEventInputBase.extend({
       compatibilityDate: z.string().trim().min(1).optional(),
       compatibilityFlags: z.array(z.string().trim().min(1)).optional(),
       script: z.string().trim().min(1).optional(),
-      mainModule: z.string().trim().min(1).optional(),
       modules: z.record(z.string(), z.string().trim().min(1)).optional(),
     })
     .superRefine((value, ctx) => {
@@ -35,22 +34,10 @@ export const DynamicWorkerConfiguredEventInput = GenericEventInputBase.extend({
         });
       }
 
-      if (hasModules && value.mainModule == null) {
+      if (hasModules && value.modules!["processor.ts"] == null) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "`mainModule` is required when `modules` is provided.",
-          path: ["mainModule"],
-        });
-      }
-
-      if (
-        value.mainModule != null &&
-        value.modules != null &&
-        !(value.mainModule in value.modules)
-      ) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "`modules` must contain the configured `mainModule` entry.",
+          message: "`modules` must contain a `processor.ts` entry.",
           path: ["modules"],
         });
       }
