@@ -442,10 +442,7 @@ class MockEventsClient {
 
 class SlowHistoryEventsClient {
   liveStreamStarted = false;
-  #historyStartedResolve?: () => void;
-  #historyStarted = new Promise<void>((resolve) => {
-    this.#historyStartedResolve = resolve;
-  });
+  historyStarted = createDeferred<void>();
   #path: StreamPathType;
 
   constructor(path: StreamPathType) {
@@ -478,24 +475,20 @@ class SlowHistoryEventsClient {
   }
 
   async waitForHistoryStart() {
-    await this.#historyStarted;
+    await this.historyStarted.promise;
   }
 
   async *#history(signal?: AbortSignal) {
     yield makeInitializedEvent({ streamPath: this.#path, offset: 1 });
-    this.#historyStartedResolve?.();
+    this.historyStarted.resolve();
     await waitUntilAbort(signal);
   }
 }
 
 class SlowPatternHistoryEventsClient extends MockEventsClient {
   childLiveStreamStarted = false;
-  #childHistoryStartedResolve?: () => void;
-  #childHistoryStarted = new Promise<void>((resolve) => {
-    this.#childHistoryStartedResolve = resolve;
-  });
+  childHistoryStarted = createDeferred<void>();
   #childPath: StreamPathType;
-  #rootPath: StreamPathType;
 
   constructor(rootPath: StreamPathType, childPath: StreamPathType) {
     super({
@@ -505,7 +498,6 @@ class SlowPatternHistoryEventsClient extends MockEventsClient {
       ],
       [childPath]: [],
     });
-    this.#rootPath = rootPath;
     this.#childPath = childPath;
   }
 
@@ -526,12 +518,12 @@ class SlowPatternHistoryEventsClient extends MockEventsClient {
   }
 
   async waitForChildHistoryStart() {
-    await this.#childHistoryStarted;
+    await this.childHistoryStarted.promise;
   }
 
   async *#childHistory(signal?: AbortSignal) {
     yield makeInitializedEvent({ streamPath: this.#childPath, offset: 1 });
-    this.#childHistoryStartedResolve?.();
+    this.childHistoryStarted.resolve();
     await waitUntilAbort(signal);
   }
 }
@@ -569,13 +561,21 @@ async function waitForLiveEvent(args: {
   });
 }
 
-async function* waitForever(signal?: AbortSignal): AsyncIterable<Event> {
-  while (true) {
-    await waitForLiveEvent({
-      signal,
-      onReady: () => {},
-    });
-  }
+function waitForever(signal?: AbortSignal): AsyncIterable<Event> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        async next() {
+          await waitForLiveEvent({
+            signal,
+            onReady: () => {},
+          });
+
+          return { done: false, value: undefined as never };
+        },
+      };
+    },
+  };
 }
 
 async function waitUntilAbort(signal?: AbortSignal) {
@@ -590,6 +590,15 @@ async function waitUntilAbort(signal?: AbortSignal) {
 
 function abortError() {
   return new DOMException("Aborted", "AbortError");
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+
+  return { promise, resolve };
 }
 
 function makeInitializedEvent(args: { streamPath: StreamPathType; offset: number }): Event {
