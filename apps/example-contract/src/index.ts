@@ -98,7 +98,7 @@ export type RandomLogStreamRequest = z.infer<typeof RandomLogStreamRequest>;
 export const exampleContract = oc.router({
   __internal: internalContract,
   ping: oc
-    .route({ method: "GET", path: "/ping", description: "Ping", tags: ["debug"] })
+    .route({ method: "GET", path: "/ping", description: "Ping", tags: ["/debug"] })
     .input(z.object({}).optional().default({}))
     .output(z.object({ message: z.string(), serverTime: z.string() })),
   pirateSecret: oc
@@ -106,7 +106,7 @@ export const exampleContract = oc.router({
       method: "GET",
       path: "/pirate-secret",
       description: "Reveal the configured pirate secret",
-      tags: ["debug"],
+      tags: ["/debug"],
     })
     .input(z.object({}).optional().default({}))
     .output(z.object({ secret: z.string() })),
@@ -116,7 +116,7 @@ export const exampleContract = oc.router({
         method: "POST",
         path: "/test/log-demo",
         description: "Emit staggered info, warn, and error server logs with structured payloads",
-        tags: ["debug", "test"],
+        tags: ["/debug", "/test"],
       })
       .input(z.object({ label: z.string().trim().min(1).default("frontend-button") }))
       .output(
@@ -132,7 +132,7 @@ export const exampleContract = oc.router({
         method: "POST",
         path: "/test/server-throw",
         description: "Throw a real server exception for stack trace testing",
-        tags: ["debug", "test"],
+        tags: ["/debug", "/test"],
       })
       .input(
         z.object({
@@ -145,7 +145,7 @@ export const exampleContract = oc.router({
         method: "POST",
         path: "/test/random-log-stream",
         description: "Stream random log lines with variable delays",
-        tags: ["debug", "test"],
+        tags: ["/debug", "/test"],
       })
       .input(RandomLogStreamRequest)
       // `eventIterator(...)` keeps the contract explicit on both server and
@@ -156,11 +156,11 @@ export const exampleContract = oc.router({
   },
   things: {
     create: oc
-      .route({ method: "POST", path: "/things", description: "Create a thing", tags: ["things"] })
+      .route({ method: "POST", path: "/things", description: "Create a thing", tags: ["/things"] })
       .input(z.object({ thing: z.string().min(1) }))
       .output(Thing),
     list: oc
-      .route({ method: "GET", path: "/things", description: "List things", tags: ["things"] })
+      .route({ method: "GET", path: "/things", description: "List things", tags: ["/things"] })
       .input(
         z.object({
           limit: z.coerce.number().int().min(1).max(100).optional().default(20),
@@ -173,7 +173,7 @@ export const exampleContract = oc.router({
         method: "GET",
         path: "/things/{id}",
         description: "Get thing by id",
-        tags: ["things"],
+        tags: ["/things"],
       })
       .input(z.object({ id: z.string() }))
       .output(Thing),
@@ -182,7 +182,7 @@ export const exampleContract = oc.router({
         method: "DELETE",
         path: "/things/{id}",
         description: "Delete thing",
-        tags: ["things"],
+        tags: ["/things"],
       })
       .input(z.object({ id: z.string() }))
       .output(z.object({ ok: z.literal(true), id: z.string(), deleted: z.boolean() })),
