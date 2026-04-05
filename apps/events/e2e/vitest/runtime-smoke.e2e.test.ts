@@ -58,10 +58,12 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const paths = body.paths ?? {};
 
       expect(paths).toHaveProperty("/streams/{path}");
-      expect(paths).toHaveProperty("/__state/{path}");
-      expect(paths).toHaveProperty("/__list/{path}");
+      expect(paths).toHaveProperty("/streams/__state/{path}");
+      expect(paths).toHaveProperty("/streams/__children/{path}");
       expect(paths).not.toHaveProperty("/streams");
       expect(paths).not.toHaveProperty("/stream-state/{streamPath}");
+      expect(paths).not.toHaveProperty("/__list/{path}");
+      expect(paths).not.toHaveProperty("/__state/{path}");
       expect(paths).not.toHaveProperty("/streams/__list");
       expect(paths).not.toHaveProperty("/__state");
       expect(paths["/streams/{path}"]).toMatchObject({
@@ -151,7 +153,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         "https://events.iterate.com/events/stream/initialized",
       );
 
-      const rootStateResponse = await app.fetch("/api/__state/%2F");
+      const rootStateResponse = await app.fetch("/api/streams/__state/%2F");
       expect(rootStateResponse.status).toBe(200);
       expect(await rootStateResponse.json()).toMatchObject({
         projectSlug: defaultProjectSlug,
@@ -231,7 +233,7 @@ async function waitForStream(path: StreamPath) {
   const deadline = Date.now() + postBootTimeoutMs;
 
   while (Date.now() < deadline) {
-    const streams = await app.client.listStreams({ path: "/" });
+    const streams = await app.client.listChildren({ path: "/" });
     const stream = streams.find((candidate) => candidate.path === path);
     if (stream) {
       return stream;

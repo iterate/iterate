@@ -71,7 +71,7 @@ export const streamsRouter = {
     return streamStub.getState();
   }),
 
-  listStreams: os.listStreams.use(withProject).handler(async ({ input, context }) => {
+  listChildren: os.listChildren.use(withProject).handler(async ({ input, context }) => {
     const streamStub = getStreamStub({
       projectSlug: context.projectSlug,
       path: input.path,

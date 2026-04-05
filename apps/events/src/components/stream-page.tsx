@@ -73,13 +73,13 @@ export function StreamPage({
     () => projectScopedQueryKey(streamStateOptions.queryKey, projectSlug),
     [projectSlug, streamStateOptions.queryKey],
   );
-  const listStreamsOptions = useMemo(
-    () => orpc.listStreams.queryOptions({ input: { path: "/" } }),
+  const listChildrenOptions = useMemo(
+    () => orpc.listChildren.queryOptions({ input: { path: "/" } }),
     [],
   );
-  const listStreamsQueryKey = useMemo(
-    () => projectScopedQueryKey(listStreamsOptions.queryKey, projectSlug),
-    [listStreamsOptions.queryKey, projectSlug],
+  const listChildrenQueryKey = useMemo(
+    () => projectScopedQueryKey(listChildrenOptions.queryKey, projectSlug),
+    [listChildrenOptions.queryKey, projectSlug],
   );
 
   const streamStateQuery = useQuery({
@@ -97,10 +97,10 @@ export function StreamPage({
           streamPath === "/" &&
           event.type === "https://events.iterate.com/events/stream/child-stream-created"
         ) {
-          void queryClient.invalidateQueries({ queryKey: listStreamsQueryKey });
+          void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
         }
       },
-      [listStreamsQueryKey, queryClient, streamPath],
+      [listChildrenQueryKey, queryClient, streamPath],
     ),
   });
   const feed = useMemo(() => projectWireToFeed(events), [events]);
@@ -131,7 +131,7 @@ export function StreamPage({
   const appendEvent = useMutation(
     orpc.append.mutationOptions({
       onSuccess: async () => {
-        void queryClient.invalidateQueries({ queryKey: listStreamsQueryKey });
+        void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
         await queryClient.invalidateQueries({ queryKey: streamStateQueryKey });
       },
     }),
@@ -141,7 +141,7 @@ export function StreamPage({
     orpc.destroy.mutationOptions({
       onSuccess: async () => {
         closeMetadata();
-        void queryClient.invalidateQueries({ queryKey: listStreamsQueryKey });
+        void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
         await queryClient.invalidateQueries({ queryKey: streamStateQueryKey });
       },
     }),

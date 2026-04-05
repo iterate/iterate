@@ -111,8 +111,8 @@ export const eventsContract = oc.router({
     .route({
       operationId: "getStreamState",
       method: "GET",
-      path: "/__state/{+path}",
-      description: `Returns the latest reduced projection for a stream, including whether it has been initialized, metadata, and generated offsets. ${PathMungingDescription} For example, \`GET /api/__state/team/inbox\`, \`GET /api/__state/team%2Finbox\`, and \`GET /api/__state/%2Fteam%2Finbox\` all target the same stream state. The root stream state is addressed canonically as \`GET /api/__state/%2F\`.`,
+      path: "/streams/__state/{+path}",
+      description: `Returns the latest reduced projection for a stream, including whether it has been initialized, metadata, and generated offsets. ${PathMungingDescription} For example, \`GET /api/streams/__state/team/inbox\`, \`GET /api/streams/__state/team%2Finbox\`, and \`GET /api/streams/__state/%2Fteam%2Finbox\` all target the same stream state. The root stream state is addressed canonically as \`GET /api/streams/__state/%2F\`.`,
       tags: ["/streams"],
     })
     .input(
@@ -121,13 +121,13 @@ export const eventsContract = oc.router({
       }),
     )
     .output(StreamState),
-  listStreams: oc
+  listChildren: oc
     .route({
-      operationId: "listStreams",
+      operationId: "listChildren",
       method: "GET",
-      path: "/__list/{+path}",
+      path: "/streams/__children/{+path}",
       description:
-        "Returns stream paths discovered from a given stream. Defaults to the root stream ('/').",
+        "Returns child stream paths discovered from a given stream. Defaults to the root stream ('/').",
       tags: ["/streams"],
     })
     .input(
