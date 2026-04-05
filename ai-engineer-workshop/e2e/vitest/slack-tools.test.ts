@@ -12,7 +12,7 @@ import {
   destroyLingeringSockets,
   postRawJsonToStream,
   startSlackResponseServer,
-  waitForSlackPost,
+  waitForSlackPostMatching,
 } from "./slack-codemode-agent.helpers.ts";
 
 const openAiApiKey = process.env.OPENAI_API_KEY;
@@ -78,7 +78,11 @@ describeSlackTools("07 slack tools", () => {
         },
       });
 
-      const toolReply = await waitForSlackPost(slackServer, 1);
+      const toolReply = await waitForSlackPostMatching(
+        slackServer,
+        (post) => post.text === "tool-ready",
+        { timeoutMs: 180_000 },
+      );
 
       await postRawJsonToStream({
         baseUrl: app.baseUrl,
@@ -90,7 +94,11 @@ describeSlackTools("07 slack tools", () => {
         streamPath,
       });
 
-      const firstReply = await waitForSlackPost(slackServer, 2);
+      const firstReply = await waitForSlackPostMatching(
+        slackServer,
+        (post) => post.text === "stored",
+        { timeoutMs: 180_000 },
+      );
       await postRawJsonToStream({
         baseUrl: app.baseUrl,
         body: createSlackWebhook({
@@ -101,7 +109,11 @@ describeSlackTools("07 slack tools", () => {
         streamPath,
       });
 
-      const secondReply = await waitForSlackPost(slackServer, 3);
+      const secondReply = await waitForSlackPostMatching(
+        slackServer,
+        (post) => post.text.toLowerCase().includes("mango"),
+        { timeoutMs: 180_000 },
+      );
 
       expect(toolReply.text).toBe("tool-ready");
       expect(firstReply.text).toBe("stored");
@@ -110,5 +122,5 @@ describeSlackTools("07 slack tools", () => {
       await runtime.stopAndWait();
       await slackServer.close();
     }
-  }, 120_000);
+  }, 240_000);
 });

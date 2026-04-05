@@ -87,40 +87,40 @@ pnpm w run --script examples/07-slack-tools/run-slack-tools.ts
 
 Pattern-processor example:
 
-- [examples/03-pattern-processor/jonas-ping-pong-processor.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/03-pattern-processor/jonas-ping-pong-processor.ts) watches `"/jonas/**/*"` and replies to every `ping` with a `pong`.
-- [examples/03-pattern-processor/prove-jonas-ping-pong.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/03-pattern-processor/prove-jonas-ping-pong.ts) runs against a real local `apps/events` worker and asserts only matching `/jonas/...` streams get a derived `pong`.
+- [`examples/03-pattern-processor/jonas-ping-pong-processor.ts`](./examples/03-pattern-processor/jonas-ping-pong-processor.ts) watches `"/jonas/**/*"` and replies to every `ping` with a `pong`.
+- [`examples/03-pattern-processor/prove-jonas-ping-pong.ts`](./examples/03-pattern-processor/prove-jonas-ping-pong.ts) runs against a real local `apps/events` worker and asserts only matching `/jonas/...` streams get a derived `pong`.
 
 LLM + codemode example:
 
-- [examples/04-llm-codemode/coding-agent-system-prompt.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/04-llm-codemode/coding-agent-system-prompt.ts) builds the coding-agent prompt. It tells the model its agent path, gives a tiny explanation of the events system, and includes concrete `fetch()` examples for reading streams, appending events, and sending `llm-input-added` to another agent.
-- [examples/04-llm-codemode/agent.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/04-llm-codemode/agent.ts) runs an OpenAI Responses API loop from `llm-input-added`, streams every OpenAI event back into the stream, cancels and restarts on newer input, and emits `codemode-block-added` when the assistant output contains `ts` blocks. Completion is recorded with `llm-request-completed`.
-- [examples/04-llm-codemode/agent-types.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/04-llm-codemode/agent-types.ts) holds the agent event contracts and the event-to-prompt mirroring helpers.
-- [examples/04-llm-codemode/codemode.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/04-llm-codemode/codemode.ts) is completely independent from the agent loop and only knows how to execute `codemode-block-added`. It writes `.codemode/<block-count>/code.ts`, compiles that file with `tsc`, runs the emitted JS, then appends `codemode-result-added`.
-- [examples/04-llm-codemode/codemode-types.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/04-llm-codemode/codemode-types.ts) holds the codemode event contracts.
-- [examples/04-llm-codemode/run-llm-codemode-loop.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/04-llm-codemode/run-llm-codemode-loop.ts) starts both processors against the same stream.
-- [e2e/vitest/codemode-agent.test.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/e2e/vitest/codemode-agent.test.ts) is the proper Vitest network proof. It covers the cancel-and-restart loop and a second case where one agent sends `llm-input-added` to another agent over the events API.
+- [`examples/04-llm-codemode/coding-agent-system-prompt.ts`](./examples/04-llm-codemode/coding-agent-system-prompt.ts) builds the coding-agent prompt. It tells the model its agent path, gives a tiny explanation of the events system, and includes concrete `fetch()` examples for reading streams, appending events, and sending `llm-input-added` to another agent.
+- [`examples/04-llm-codemode/agent.ts`](./examples/04-llm-codemode/agent.ts) runs an OpenAI Responses API loop from `llm-input-added`, streams every OpenAI event back into the stream, cancels and restarts on newer input, and emits `codemode-block-added` when the assistant output contains `ts` blocks. Completion is recorded with `llm-request-completed`.
+- [`examples/04-llm-codemode/agent-types.ts`](./examples/04-llm-codemode/agent-types.ts) holds the agent event contracts and the event-to-prompt mirroring helpers.
+- [`examples/04-llm-codemode/codemode.ts`](./examples/04-llm-codemode/codemode.ts) is completely independent from the agent loop and only knows how to execute `codemode-block-added`. It writes `.codemode/<block-count>/code.ts`, compiles that file with `tsc`, runs the emitted JS, then appends `codemode-result-added`.
+- [`examples/04-llm-codemode/codemode-types.ts`](./examples/04-llm-codemode/codemode-types.ts) holds the codemode event contracts.
+- [`examples/04-llm-codemode/run-llm-codemode-loop.ts`](./examples/04-llm-codemode/run-llm-codemode-loop.ts) starts both processors against the same stream.
+- [`e2e/vitest/codemode-agent.test.ts`](./e2e/vitest/codemode-agent.test.ts) is the proper Vitest network proof. It covers the cancel-and-restart loop and a second case where one agent sends `llm-input-added` to another agent over the events API.
 
 Slack codemode example:
 
-- [examples/05-slack-codemode/agent.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/05-slack-codemode/agent.ts) is the Slack-focused variant. It still uses the same LLM loop shape, but it mirrors `invalid-event-appended` into YAML prompt input and runs plain `gpt-5.4` with reasoning enabled.
-- [examples/05-slack-codemode/coding-agent-system-prompt.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/05-slack-codemode/coding-agent-system-prompt.ts) tells the model to respond to Slack by emitting one `ts` block that POSTs to `response_url`.
-- [examples/05-slack-codemode/codemode.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/05-slack-codemode/codemode.ts) keeps the codemode runner independent and writes artifacts under `.codemode/<stream-path>/<block-count>/`.
-- [examples/05-slack-codemode/run-slack-codemode-loop.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/05-slack-codemode/run-slack-codemode-loop.ts) starts the Slack variant and prints a raw webhook example you can POST straight into the stream.
-- [e2e/vitest/slack-codemode-agent.test.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/e2e/vitest/slack-codemode-agent.test.ts) proves the full flow against the deployed events service: raw Slack JSON becomes `invalid-event-appended`, the agent sees a YAML prompt, and two turns on the same stream produce a remembered Slack reply.
+- [`examples/05-slack-codemode/agent.ts`](./examples/05-slack-codemode/agent.ts) is the Slack-focused variant. It still uses the same LLM loop shape, but it mirrors `invalid-event-appended` into YAML prompt input and runs plain `gpt-5.4` with reasoning enabled.
+- [`examples/05-slack-codemode/coding-agent-system-prompt.ts`](./examples/05-slack-codemode/coding-agent-system-prompt.ts) tells the model to respond to Slack by emitting one `ts` block that POSTs to `response_url`.
+- [`examples/05-slack-codemode/codemode.ts`](./examples/05-slack-codemode/codemode.ts) keeps the codemode runner independent and writes artifacts under `.codemode/<stream-path>/<block-count>/`.
+- [`examples/05-slack-codemode/run-slack-codemode-loop.ts`](./examples/05-slack-codemode/run-slack-codemode-loop.ts) starts the Slack variant and prints a raw webhook example you can POST straight into the stream.
+- [`e2e/vitest/slack-codemode-agent.test.ts`](./e2e/vitest/slack-codemode-agent.test.ts) proves the full flow against the deployed events service: raw Slack JSON becomes `invalid-event-appended`, the agent sees a YAML prompt, and two turns on the same stream produce a remembered Slack reply.
 
 Workshop kernel examples:
 
-- [examples/06-slack-composition/slack-input.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/06-slack-composition/slack-input.ts), [examples/06-slack-composition/agent.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/06-slack-composition/agent.ts), and [examples/06-slack-composition/codemode.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/06-slack-composition/codemode.ts) are the small teaching version of the system: one processor normalizes raw Slack JSON, one turns stream events into LLM input and code blocks, and one runs those blocks.
-- [e2e/vitest/slack-composition.test.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/e2e/vitest/slack-composition.test.ts) proves the minimal chain: raw Slack webhook -> normalized event -> LLM input -> Slack reply.
-- [examples/07-slack-tools/codemode.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/07-slack-tools/codemode.ts) is the follow-on example where blocks export `default async function(ctx)` and a new `codemode-tool-added` event can extend `ctx.*`.
-- [examples/07-slack-tools/run-slack-tools.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/07-slack-tools/run-slack-tools.ts) registers a tiny `ctx.replyToSlack(...)` tool and also shows the real `@slack/web-api` package as the next step for `ctx.slackApi`.
-- [e2e/vitest/slack-tools.test.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/e2e/vitest/slack-tools.test.ts) proves both pieces separately: the tool works when called directly from codemode, and the agent can still keep context across two Slack turns on the same stream.
+- [`examples/06-slack-composition/slack-input.ts`](./examples/06-slack-composition/slack-input.ts), [`examples/06-slack-composition/agent.ts`](./examples/06-slack-composition/agent.ts), and [`examples/06-slack-composition/codemode.ts`](./examples/06-slack-composition/codemode.ts) are the small teaching version of the system: one processor normalizes raw Slack JSON, one turns stream events into LLM input and code blocks, and one runs those blocks.
+- [`e2e/vitest/slack-composition.test.ts`](./e2e/vitest/slack-composition.test.ts) proves the minimal chain: raw Slack webhook -> normalized event -> LLM input -> Slack reply.
+- [`examples/07-slack-tools/codemode.ts`](./examples/07-slack-tools/codemode.ts) is the follow-on example where blocks export `default async function(ctx)` and a new `codemode-tool-added` event can extend `ctx.*`.
+- [`examples/07-slack-tools/run-slack-tools.ts`](./examples/07-slack-tools/run-slack-tools.ts) registers a tiny `ctx.replyToSlack(...)` tool and also shows the real `@slack/web-api` package as the next step for `ctx.slackApi`.
+- [`e2e/vitest/slack-tools.test.ts`](./e2e/vitest/slack-tools.test.ts) proves both pieces separately: the tool works when called directly from codemode, and the agent can still keep context across two Slack turns on the same stream.
 
 Published preview packages are built directly from this folder via `pkg.pr.new`.
 
 The separate scripts repo lives at:
 
-`/Users/jonastemplestein/src/github.com/iterate/ai-engineer-workshop`
+a separate local checkout of `ai-engineer-workshop`
 
 That repo can either:
 

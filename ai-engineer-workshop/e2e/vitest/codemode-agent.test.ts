@@ -8,7 +8,6 @@ import {
   llmRequestCanceledType,
   llmRequestCompletedType,
   llmRequestStartedType,
-  openAiResponseEventAddedType,
 } from "../../examples/04-llm-codemode/agent-types.ts";
 import { createCodemodeProcessor } from "../../examples/04-llm-codemode/codemode.ts";
 import {
@@ -16,6 +15,7 @@ import {
   codemodeBlockAddedType,
   codemodeResultAddedType,
 } from "../../examples/04-llm-codemode/codemode-types.ts";
+import { destroyLingeringSockets } from "./slack-codemode-agent.helpers.ts";
 
 const openAiApiKey = process.env.OPENAI_API_KEY;
 const openAiModel = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
@@ -66,7 +66,7 @@ describeCodemodeAgent("codemode agent", () => {
       });
 
       await app.waitForEvent({
-        predicate: (event) => event.type === openAiResponseEventAddedType,
+        predicate: (event) => event.type === llmRequestStartedType,
         streamPath,
         timeoutMs: 30_000,
       });
@@ -234,23 +234,3 @@ describeCodemodeAgent("codemode agent", () => {
     }
   }, 90_000);
 });
-
-function destroyLingeringSockets() {
-  const handles = Reflect.get(process, "_getActiveHandles");
-  if (!Array.isArray(handles)) {
-    return;
-  }
-
-  for (const handle of handles) {
-    if (
-      typeof handle === "object" &&
-      handle != null &&
-      "constructor" in handle &&
-      handle.constructor?.name === "Socket" &&
-      "destroy" in handle &&
-      typeof handle.destroy === "function"
-    ) {
-      handle.destroy();
-    }
-  }
-}

@@ -284,6 +284,49 @@ async function testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly() {
   await runPromise;
 }
 
+async function testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase() {
+  const client = new SlowHistoryEventsClient(StreamPath.parse("/history"));
+  const runtime = new PullSubscriptionProcessorRuntime({
+    eventsClient: client,
+    processor: defineProcessor<{ seen: number }>(() => ({
+      slug: "history-stop",
+      initialState: { seen: 0 },
+      reduce: ({ event, state }) => (event.type === "tick" ? { seen: state.seen + 1 } : state),
+    })),
+    streamPath: StreamPath.parse("/history"),
+  });
+
+  const runPromise = runtime.run();
+
+  await client.waitForHistoryStart();
+  runtime.stop();
+  await runPromise;
+
+  assert.equal(client.liveStreamStarted, false);
+}
+
+async function testPatternRuntimeStopDuringHistoryWaitsForChildrenToExit() {
+  const rootPath = StreamPath.parse("/");
+  const childPath = StreamPath.parse("/team/history");
+  const client = new SlowPatternHistoryEventsClient(rootPath, childPath);
+  const runtime = new PullSubscriptionPatternProcessorRuntime({
+    eventsClient: client,
+    streamPattern: "/team/*",
+    processor: defineProcessor(() => ({
+      slug: "pattern-stop",
+      initialState: null,
+    })),
+  });
+
+  const runPromise = runtime.run();
+
+  await client.waitForChildHistoryStart();
+  runtime.stop();
+  await runPromise;
+
+  assert.equal(client.childLiveStreamStarted, false);
+}
+
 class MockEventsClient {
   appended: Array<{ path: StreamPathType; event: Event }> = [];
   #eventsByPath: Map<StreamPathType, Event[]>;
@@ -397,6 +440,102 @@ class MockEventsClient {
   }
 }
 
+class SlowHistoryEventsClient {
+  liveStreamStarted = false;
+  #historyStartedResolve?: () => void;
+  #historyStarted = new Promise<void>((resolve) => {
+    this.#historyStartedResolve = resolve;
+  });
+  #path: StreamPathType;
+
+  constructor(path: StreamPathType) {
+    this.#path = path;
+  }
+
+  async append(input: { path: StreamPathType; event: EventInput }) {
+    return {
+      event: makeEvent({
+        streamPath: input.path,
+        offset: 1,
+        type: input.event.type,
+        payload: input.event.payload ?? {},
+        metadata: input.event.metadata,
+        idempotencyKey: input.event.idempotencyKey,
+      }),
+    };
+  }
+
+  async stream(
+    input: { path: StreamPathType; offset?: number; live?: boolean },
+    options: { signal?: AbortSignal },
+  ) {
+    if (input.live) {
+      this.liveStreamStarted = true;
+      return waitForever(options.signal);
+    }
+
+    return this.#history(options.signal);
+  }
+
+  async waitForHistoryStart() {
+    await this.#historyStarted;
+  }
+
+  async *#history(signal?: AbortSignal) {
+    yield makeInitializedEvent({ streamPath: this.#path, offset: 1 });
+    this.#historyStartedResolve?.();
+    await waitUntilAbort(signal);
+  }
+}
+
+class SlowPatternHistoryEventsClient extends MockEventsClient {
+  childLiveStreamStarted = false;
+  #childHistoryStartedResolve?: () => void;
+  #childHistoryStarted = new Promise<void>((resolve) => {
+    this.#childHistoryStartedResolve = resolve;
+  });
+  #childPath: StreamPathType;
+  #rootPath: StreamPathType;
+
+  constructor(rootPath: StreamPathType, childPath: StreamPathType) {
+    super({
+      [rootPath]: [
+        makeInitializedEvent({ streamPath: rootPath, offset: 1 }),
+        makeChildStreamCreatedEvent({ offset: 2, childPath }),
+      ],
+      [childPath]: [],
+    });
+    this.#rootPath = rootPath;
+    this.#childPath = childPath;
+  }
+
+  override async stream(
+    input: { path: StreamPathType; offset?: number; live?: boolean },
+    options: { signal?: AbortSignal },
+  ) {
+    if (input.path === this.#childPath && input.live) {
+      this.childLiveStreamStarted = true;
+      return waitForever(options.signal);
+    }
+
+    if (input.path === this.#childPath && !input.live) {
+      return this.#childHistory(options.signal);
+    }
+
+    return super.stream(input, options);
+  }
+
+  async waitForChildHistoryStart() {
+    await this.#childHistoryStarted;
+  }
+
+  async *#childHistory(signal?: AbortSignal) {
+    yield makeInitializedEvent({ streamPath: this.#childPath, offset: 1 });
+    this.#childHistoryStartedResolve?.();
+    await waitUntilAbort(signal);
+  }
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000) {
   const startedAt = Date.now();
 
@@ -427,6 +566,25 @@ async function waitForLiveEvent(args: {
       args.signal?.removeEventListener("abort", onAbort);
       resolve();
     });
+  });
+}
+
+async function* waitForever(signal?: AbortSignal): AsyncIterable<Event> {
+  while (true) {
+    await waitForLiveEvent({
+      signal,
+      onReady: () => {},
+    });
+  }
+}
+
+async function waitUntilAbort(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw abortError();
+  }
+
+  await new Promise<never>((_, reject) => {
+    signal?.addEventListener("abort", () => reject(abortError()), { once: true });
   });
 }
 
@@ -487,3 +645,5 @@ function makeEvent(args: {
 
 await testSharedProcessorDefinitionKeepsPerRuntimeState();
 await testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly();
+await testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase();
+await testPatternRuntimeStopDuringHistoryWaitsForChildrenToExit();

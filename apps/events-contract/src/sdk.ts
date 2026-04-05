@@ -49,7 +49,7 @@ type PullSubscriptionEventsClient = {
 };
 
 export class PullSubscriptionProcessorRuntime<State> {
-  #controller?: AbortController;
+  #controller = new AbortController();
   #eventsClient: PullSubscriptionEventsClient;
   #processor: Processor<State>;
   #state: State;
@@ -71,27 +71,6 @@ export class PullSubscriptionProcessorRuntime<State> {
   }
 
   async run() {
-    const historyStream = await this.#eventsClient.stream({ path: this.#streamPath }, {});
-    let lastOffset: number | undefined;
-
-    for await (const event of historyStream) {
-      lastOffset = event.offset;
-      this.#reduce(event);
-    }
-
-    this.#controller = new AbortController();
-
-    const liveStream = await this.#eventsClient.stream(
-      {
-        path: this.#streamPath,
-        offset: lastOffset,
-        live: true,
-      },
-      {
-        signal: this.#controller.signal,
-      },
-    );
-
     const append = async (event: AppendEvent) => {
       const result = await this.#eventsClient.append({
         path: this.#streamPath,
@@ -101,6 +80,36 @@ export class PullSubscriptionProcessorRuntime<State> {
     };
 
     try {
+      const historyStream = await this.#eventsClient.stream(
+        { path: this.#streamPath },
+        { signal: this.#controller.signal },
+      );
+      let lastOffset: number | undefined;
+
+      for await (const event of historyStream) {
+        if (this.#controller.signal.aborted) {
+          return;
+        }
+
+        lastOffset = event.offset;
+        this.#reduce(event);
+      }
+
+      if (this.#controller.signal.aborted) {
+        return;
+      }
+
+      const liveStream = await this.#eventsClient.stream(
+        {
+          path: this.#streamPath,
+          offset: lastOffset,
+          live: true,
+        },
+        {
+          signal: this.#controller.signal,
+        },
+      );
+
       for await (const event of liveStream) {
         if (event.offset === lastOffset) {
           continue;
@@ -125,7 +134,7 @@ export class PullSubscriptionProcessorRuntime<State> {
   }
 
   stop() {
-    this.#controller?.abort();
+    this.#controller.abort();
   }
 
   getState() {
@@ -149,7 +158,7 @@ export class PullSubscriptionProcessorRuntime<State> {
 }
 
 export class PullSubscriptionPatternProcessorRuntime<State> {
-  #controller?: AbortController;
+  #controller = new AbortController();
   #eventsClient: PullSubscriptionEventsClient;
   #fatalError: unknown;
   #processor: Processor<State>;
@@ -172,38 +181,44 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
   }
 
   async run() {
-    this.#controller = new AbortController();
+    try {
+      const historyStream = await this.#eventsClient.stream(
+        { path: "/" },
+        { signal: this.#controller.signal },
+      );
+      let lastOffset: number | undefined;
 
-    const historyStream = await this.#eventsClient.stream({ path: "/" }, {});
-    let lastOffset: number | undefined;
+      for await (const event of historyStream) {
+        if (this.#controller.signal.aborted) {
+          break;
+        }
 
-    for await (const event of historyStream) {
-      if (this.#controller.signal.aborted) {
-        break;
+        lastOffset = event.offset;
+        this.#startRuntimeIfMatched(event);
       }
 
-      lastOffset = event.offset;
-      this.#startRuntimeIfMatched(event);
-    }
+      if (this.#fatalError != null || this.#controller.signal.aborted) {
+        this.stop();
+        await this.#waitForStreamRuntimes();
 
-    if (this.#fatalError != null) {
-      this.stop();
-      await this.#waitForStreamRuntimes();
-      throw this.#fatalError;
-    }
+        if (this.#fatalError != null) {
+          throw this.#fatalError;
+        }
 
-    const liveStream = await this.#eventsClient.stream(
-      {
-        path: "/",
-        offset: lastOffset,
-        live: true,
-      },
-      {
-        signal: this.#controller.signal,
-      },
-    );
+        return;
+      }
 
-    try {
+      const liveStream = await this.#eventsClient.stream(
+        {
+          path: "/",
+          offset: lastOffset,
+          live: true,
+        },
+        {
+          signal: this.#controller.signal,
+        },
+      );
+
       for await (const event of liveStream) {
         if (event.offset === lastOffset) {
           continue;
@@ -231,7 +246,7 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
   }
 
   stop() {
-    this.#controller?.abort();
+    this.#controller.abort();
 
     for (const runtime of this.#runtimeByStreamPath.values()) {
       runtime.stop();

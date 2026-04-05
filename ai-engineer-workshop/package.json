@@ -46,8 +46,8 @@
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm test:e2e",
-    "test:e2e": "vitest run --dir e2e/vitest",
-    "test:watch": "vitest --dir e2e/vitest",
+    "test:e2e": "vitest run --dir e2e/vitest --maxWorkers 1",
+    "test:watch": "vitest --dir e2e/vitest --maxWorkers 1",
     "workshop": "node --import tsx ./cli.ts",
     "w": "pnpm workshop"
   },

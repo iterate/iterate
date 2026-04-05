@@ -77,8 +77,9 @@ export async function postRawJsonToStream({
 export async function waitForSlackPost(
   server: Awaited<ReturnType<typeof startSlackResponseServer>>,
   count: number,
+  { timeoutMs = 120_000 }: { timeoutMs?: number } = {},
 ) {
-  const deadline = Date.now() + 120_000;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (server.posts.length >= count) {
       return server.posts[count - 1]!;
@@ -88,8 +89,25 @@ export async function waitForSlackPost(
   throw new Error(`Timed out waiting for Slack post ${count}`);
 }
 
+export async function waitForSlackPostMatching(
+  server: Awaited<ReturnType<typeof startSlackResponseServer>>,
+  predicate: (post: { text: string }) => boolean,
+  { timeoutMs = 120_000 }: { timeoutMs?: number } = {},
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const match = server.posts.find(predicate);
+    if (match != null) {
+      return match;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("Timed out waiting for matching Slack post");
+}
+
 export function destroyLingeringSockets() {
-  const handles = Reflect.get(process, "_getActiveHandles");
+  const getHandles = Reflect.get(process, "_getActiveHandles");
+  const handles = typeof getHandles === "function" ? getHandles.call(process) : undefined;
   if (!Array.isArray(handles)) {
     return;
   }
