@@ -5,7 +5,7 @@ import { jsonataTransformerProcessor } from "~/durable-objects/jsonata-transform
 import { schedulingProcessor } from "~/durable-objects/processors/scheduling/index.ts";
 import type { ReducedStreamState } from "~/durable-objects/reduced-stream-state.ts";
 
-type AppendFn = (event: EventInput) => Promise<Event>;
+type AppendFn = (event: EventInput) => Promise<Event> | Event;
 
 type ProcessorRuntimeArgs = {
   append: AppendFn;
@@ -110,9 +110,21 @@ export function reduceBuiltinProcessorState(args: {
   return nextState;
 }
 
-export async function runBuiltinProcessorAfterCommit(args: ProcessorRuntimeArgs) {
+export function runBuiltinProcessorAfterCommit(args: ProcessorRuntimeArgs) {
   for (const processor of streamProcessors) {
-    await processor.afterCommit?.(args);
+    const result = processor.afterCommit?.(args);
+    if (result == null) {
+      continue;
+    }
+
+    void Promise.resolve(result).catch((error) => {
+      console.error("[stream-do] processor afterCommit failed", {
+        path: args.state.path,
+        processor: processor.slug,
+        eventType: args.event.type,
+        error,
+      });
+    });
   }
 }
 

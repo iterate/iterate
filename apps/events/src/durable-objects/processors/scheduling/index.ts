@@ -24,7 +24,6 @@ import {
   ScheduleExecutionStartedPayload,
   ScheduleTypeConstraint,
   deserializeSchedulePayload,
-  readScheduleProjectionStateFromTable,
   rowToSchedule,
   serializeSchedulePayload,
 } from "~/durable-objects/processors/scheduling/types.ts";
@@ -472,11 +471,10 @@ export function reduceSchedulingState(args: {
   event: Event;
   schedules: ScheduleProjectionState;
 }): ScheduleProjectionState {
-  const nextSchedules = { ...args.schedules };
-
   switch (args.event.type) {
     case SCHEDULE_ADDED_TYPE: {
       const payload = ScheduleAddedPayload.parse(args.event.payload);
+      const nextSchedules = { ...args.schedules };
       nextSchedules[payload.scheduleId] = {
         id: payload.scheduleId,
         callback: payload.callback,
@@ -495,14 +493,16 @@ export function reduceSchedulingState(args: {
     }
     case SCHEDULE_CANCELLED_TYPE: {
       const payload = ScheduleCancelledPayload.parse(args.event.payload);
+      const nextSchedules = { ...args.schedules };
       delete nextSchedules[payload.scheduleId];
       return nextSchedules;
     }
     case SCHEDULE_EXECUTION_STARTED_TYPE: {
       const payload = ScheduleExecutionStartedPayload.parse(args.event.payload);
+      const nextSchedules = { ...args.schedules };
       const schedule = nextSchedules[payload.scheduleId];
       if (schedule == null) {
-        return nextSchedules;
+        return args.schedules;
       }
 
       nextSchedules[payload.scheduleId] = {
@@ -514,9 +514,10 @@ export function reduceSchedulingState(args: {
     }
     case SCHEDULE_EXECUTION_FINISHED_TYPE: {
       const payload = ScheduleExecutionFinishedPayload.parse(args.event.payload);
+      const nextSchedules = { ...args.schedules };
       const schedule = nextSchedules[payload.scheduleId];
       if (schedule == null) {
-        return nextSchedules;
+        return args.schedules;
       }
 
       if (payload.nextTime == null) {
@@ -533,7 +534,7 @@ export function reduceSchedulingState(args: {
       return nextSchedules;
     }
     default:
-      return nextSchedules;
+      return args.schedules;
   }
 }
 
@@ -752,7 +753,7 @@ function hydrateScheduleProjectionFromStateSync(
 }
 
 function createScheduleId() {
-  return crypto.randomUUID().replaceAll("-", "").slice(0, 9);
+  return crypto.randomUUID().replaceAll("-", "").slice(0, 16);
 }
 
 function getNextCronTime(cron: string) {
@@ -763,8 +764,10 @@ function getNextExecutionTime(row: ScheduleRow) {
   switch (row.type) {
     case "cron":
       return Math.floor(getNextCronTime(row.cron ?? "").getTime() / 1000);
-    case "interval":
-      return Math.floor(Date.now() / 1000) + (row.intervalSeconds ?? 0);
+    case "interval": {
+      const intervalSeconds = row.intervalSeconds;
+      return intervalSeconds == null ? null : Math.floor(Date.now() / 1000) + intervalSeconds;
+    }
     default:
       return null;
   }
@@ -773,7 +776,7 @@ function getNextExecutionTime(row: ScheduleRow) {
 function getSafeFailedNextTime(args: { now: number; row: ScheduleRow }) {
   switch (args.row.type) {
     case "interval":
-      return args.now + (args.row.intervalSeconds ?? 0);
+      return args.row.intervalSeconds == null ? null : args.now + args.row.intervalSeconds;
     case "cron": {
       if (args.row.cron == null) {
         return null;

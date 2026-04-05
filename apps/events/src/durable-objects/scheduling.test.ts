@@ -92,6 +92,7 @@ describe("schedule operations", () => {
       const streamStub = testEnv.TEST_SCHEDULE_STREAM.getByName("interval-create-test");
       const scheduleId = await streamStub.createIntervalSchedule(30);
 
+      expect(scheduleId).toMatch(/^[a-f0-9]{16}$/);
       expect(scheduleId.endsWith("-")).toBe(false);
 
       const result = await streamStub.getScheduleById(scheduleId);
@@ -147,6 +148,27 @@ describe("schedule operations", () => {
       expect(result?.type).toBe("interval");
 
       await streamStub.cancelScheduleById(scheduleId);
+    });
+
+    it("should retire a corrupted interval row with NULL intervalSeconds", async () => {
+      const streamStub = testEnv.TEST_SCHEDULE_STREAM.getByName("interval-null-interval-test");
+      const scheduleId = await streamStub.createThrowingIntervalSchedule(1);
+
+      await runInDurableObject(streamStub, async (instance: TestScheduleStreamDurableObject) => {
+        const past = Math.floor(Date.now() / 1000) - 1;
+        instance.ctx.storage.sql.exec(
+          `UPDATE cf_agents_schedules
+           SET intervalSeconds = NULL, time = ?
+           WHERE id = ?`,
+          past,
+          scheduleId,
+        );
+      });
+
+      await runDurableObjectAlarm(streamStub);
+
+      const result = await streamStub.getScheduleById(scheduleId);
+      expect(result).toBeUndefined();
     });
 
     it("should reset running flag to 0 after interval execution completes", async () => {

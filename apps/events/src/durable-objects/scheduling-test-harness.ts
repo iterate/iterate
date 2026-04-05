@@ -6,11 +6,10 @@ import {
   scheduleEveryOnStream,
   scheduleOnStream,
 } from "~/durable-objects/processors/scheduling/index.ts";
-import type { Schedule, ScheduleCriteria } from "~/durable-objects/scheduling-types.ts";
 import type { SchedulingMutationDeps } from "~/durable-objects/processors/scheduling/types.ts";
 
 type SchedulingTestSurface = {
-  append(event: EventInput): Promise<unknown>;
+  append(event: EventInput): Promise<unknown> | unknown;
   ctx: DurableObjectState;
   ensureInitializedForCurrentName(): Promise<void>;
   getSchedulingMutationDeps(): SchedulingMutationDeps;

@@ -36,6 +36,29 @@ import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
  * with a reduced in-memory projection and newline-delimited fanout for live
  * readers.
  *
+ * ## Append lifecycle
+ *
+ * Every event passes through three phases that intentionally mirror the hooks
+ * on `Processor` / `BuiltinProcessor` in `define-processor.ts`:
+ *
+ *   beforeAppend  →  reduce  →  afterAppend
+ *
+ * The stream core runs its own logic in each phase first (idempotency, offset
+ * guards, eventCount, parent propagation), then delegates to the registered
+ * builtin processors in the same phase. This is by design: the stream core is
+ * effectively the "zeroth" processor, but its state lives at the top level of
+ * StreamState (path, eventCount, metadata) rather than under
+ * `state.processors`, because it owns structural invariants that are not
+ * pluggable.
+ *
+ * ## Processor asymmetry
+ *
+ * The design intent is that most stream functionality should be implementable
+ * as a Processor: a pluggable unit with `reduce` and `afterAppend` hooks that
+ * can, in principle, run across a network boundary (reading the event stream
+ * remotely, then deciding whether to enact side effects or append derived
+ * events back).
+ *
  * The stream core only owns structural invariants:
  * - initialization and durable storage
  * - offset sequencing and idempotency
@@ -45,6 +68,25 @@ import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
  * Builtin processors own pluggable behavior layered on top of that core. They
  * may veto appends, reduce internal state, mirror query-optimized tables, and
  * react to alarms.
+ *
+ * The stream core itself has a handful of responsibilities that sit outside
+ * the processor model entirely: initialization, storage, offset sequencing,
+ * and parent-tree propagation. Those are structural invariants of the stream,
+ * not pluggable behavior.
+ *
+ * ## Pull subscriptions
+ *
+ * The `history()` and `stream()` methods expose the event log for pull-based
+ * consumption. A remote consumer reads events, then either enacts external
+ * side effects or appends derived events to this or other streams. Those
+ * consumers are conceptually Processors (not BuiltinProcessors), since they
+ * do not run synchronously inside this Durable Object.
+ *
+ * ## Cloudflare Durable Object docs
+ *
+ * - https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/
+ * - https://developers.cloudflare.com/durable-objects/api/state/
+ * - https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/
  */
 export class StreamDurableObject extends DurableObject<Env> {
   private _state: ReducedStreamState | null = null;
@@ -62,6 +104,16 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this._state;
   }
 
+  /**
+   * Hydrates in-memory state from persisted SQLite and ensures the schema
+   * exists. This is infrastructure-level bootstrapping, intentionally outside
+   * the processor model, because processors depend on a fully initialized
+   * stream to operate on.
+   *
+   * Cloudflare recommends `blockConcurrencyWhile()` in the constructor so
+   * requests never observe a half-initialized actor.
+   * https://developers.cloudflare.com/durable-objects/api/state/
+   */
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
@@ -79,6 +131,8 @@ export class StreamDurableObject extends DurableObject<Env> {
             ctx: this.ctx,
           });
         } catch (error) {
+          // Deliberately not crashing: throwing from the DO constructor makes
+          // the object permanently unaddressable and much harder to debug.
           console.error(
             "[stream-do] persisted reduced_state failed validation, leaving _state null so initialize() can re-derive it",
             { error, raw: persistedStateRow.json },
@@ -119,6 +173,17 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   protected async onInitialize(): Promise<void> {}
 
+  /**
+   * Ensures this stream exists. On the very first call, commits a synthetic
+   * `stream-initialized` event at offset 1 through `append()`. Subsequent
+   * calls are no-ops.
+   *
+   * Think of this like the durable object constructor. We take arguments like
+   * { projectSlug, path } and set the initial state.
+   *
+   * All external callers go through `getInitializedStreamStub()` in
+   * `~/lib/stream-helpers.ts`, which calls this before returning the stub.
+   */
   async initialize(args: { projectSlug?: ProjectSlug; path: StreamPath }) {
     if (this._state != null) {
       return;
@@ -149,7 +214,27 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  async append(inputEvent: EventInput): Promise<Event> {
+  // ---------------------------------------------------------------------------
+  // Append lifecycle
+  //
+  // The four methods below mirror the hook structure on BuiltinProcessor in
+  // define-processor.ts.
+  //
+  // In each phase the stream core runs its own privileged logic first, then
+  // delegates to the registered builtin processors. This symmetry is
+  // intentional: the stream core is effectively the "zeroth" processor, but
+  // its state lives at the top level of StreamState rather than under
+  // `state.processors`, because it owns structural invariants (path,
+  // eventCount, initialization, parent propagation) that are not pluggable.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Public entry point for appending an event. Handles idempotency up front,
+   * then orchestrates the three lifecycle phases and the atomic SQLite commit:
+   *
+   *   parse → idempotency check → beforeAppend → build event → reduce → commit → afterAppend
+   */
+  append(inputEvent: EventInput): Event {
     const parsedInputEvent = EventInputSchema.parse(inputEvent);
 
     if (parsedInputEvent.idempotencyKey != null) {
@@ -195,7 +280,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     this._state = nextState;
 
-    await runBuiltinProcessorAfterCommit({
+    runBuiltinProcessorAfterCommit({
       append: this.append.bind(this),
       ctx: this.ctx,
       event,
@@ -362,6 +447,17 @@ export class StreamDurableObject extends DurableObject<Env> {
     return callback;
   }
 
+  /**
+   * Validate-or-throw boundary. Enforces core invariants and runs builtin
+   * processor gates before any state mutation occurs:
+   *
+   * 1. Core invariants: stream-initialized uniqueness, offset precondition.
+   * 2. Builtin processor beforeAppend hooks (e.g. circuit-breaker rejection).
+   *
+   * Returns the next offset to use. Idempotency is handled by `append()`
+   * before this method is called. By the time we get here, the input is known
+   * to be a genuinely new event.
+   */
   private beforeAppend(input: EventInput): number {
     if (
       input.type === "https://events.iterate.com/events/stream/initialized" &&
@@ -448,6 +544,18 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  /**
+   * Post-commit side effects, in order:
+   *
+   * 1. Subscriber fanout: push the committed event to all live pull-subscription
+   *    readers connected via `stream()`.
+   * 2. Core propagation: after `stream-initialized`, notify every ancestor
+   *    stream with `child-stream-created` in parallel. This is a structural
+   *    concern of the stream tree, not something a pluggable processor should own.
+   * 3. Builtin processor hooks: processors may inspect the committed event and
+   *    their state, then optionally append derived events back into this stream
+   *    or schedule async alarm work.
+   */
   private publish(event: Event) {
     const chunk = encodeEventLine(event);
 
@@ -508,6 +616,10 @@ type SqliteEventRow = {
 function reduceStreamState(args: { state: ReducedStreamState; event: Event }): ReducedStreamState {
   const { state, event } = args;
 
+  /**
+   * Pure reduction: computes the next reduced stream state from the current
+   * state and the committed event, without performing any I/O.
+   */
   if (state.path !== event.streamPath) {
     throw new Error(
       `This should never happen. Somebody is trying to append an event to the wrong stream. Stream has path ${state.path}, but the event has path ${event.streamPath}.`,

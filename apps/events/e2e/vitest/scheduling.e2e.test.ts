@@ -30,6 +30,8 @@ const pollIntervalMs = 1_000;
 const scheduleDelaySeconds = 5;
 const settleAfterFireMs = 8_000;
 const waitForAlarmTimeoutMs = 90_000;
+const durableObjectConstructedType =
+  "https://events.iterate.com/events/stream/durable-object-constructed";
 
 describeDeployedScheduling("events scheduling e2e", () => {
   test(
@@ -120,9 +122,10 @@ async function readHistory(path: StreamPath) {
   return events.filter(
     (event) =>
       !(
-        event.type === "https://events.iterate.com/events/stream/initialized" &&
-        event.streamPath === path &&
-        getPayloadPath(event) === path
+        event.type === durableObjectConstructedType ||
+        (event.type === "https://events.iterate.com/events/stream/initialized" &&
+          event.streamPath === path &&
+          getPayloadPath(event) === path)
       ),
   );
 }
