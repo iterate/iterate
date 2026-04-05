@@ -20,6 +20,7 @@ export type Processor<TState = Record<string, unknown>> = {
 
 export type BuiltinProcessorContext = {
   append: (event: EventInput) => Event;
+  createLoopbackBinding: (args: { exportName: string; props?: unknown }) => Fetcher;
   createStreamTarget: () => RpcTarget;
   getPath: () => StreamPath;
   loader: WorkerLoader;

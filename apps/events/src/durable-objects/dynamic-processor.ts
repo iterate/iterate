@@ -1,6 +1,7 @@
 import {
   DynamicWorkerConfiguredEvent,
   type DynamicWorkerConfig,
+  type DynamicWorkerOutboundGateway,
   type DynamicWorkerState,
   type Event,
   type JSONObject,
@@ -19,6 +20,7 @@ const defaultDynamicWorkerCompatibilityDate = "2026-02-05";
 const defaultDynamicWorkerCompatibilityFlags: string[] = [];
 const defaultDynamicWorkerMainModule = "worker.js";
 const defaultDynamicWorkerProcessorModule = "processor.js";
+const defaultDynamicWorkerRuntimeConfigModule = "runtime-config.js";
 
 export const pingPongDynamicWorkerScript = `
 function containsPing(event) {
@@ -52,8 +54,60 @@ export default {
 };
 `.trim();
 
+export const httpbinEchoDynamicWorkerScript = `
+function containsPing(event) {
+  if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured") {
+    return false;
+  }
+
+  return /\\bping\\b/i.test(
+    JSON.stringify({
+      type: event.type,
+      payload: event.payload,
+      metadata: event.metadata ?? null,
+    }),
+  );
+}
+
+function normalizeHeaders(headers) {
+  return Object.fromEntries(
+    Object.entries(headers ?? {}).map(([key, value]) => [String(key).toLowerCase(), value]),
+  );
+}
+
+export default {
+  initialState: {},
+
+  reduce(state) {
+    return state;
+  },
+
+  async onEvent({ append, event }) {
+    if (!containsPing(event)) {
+      return;
+    }
+
+    const response = await fetch("https://httpbin.org/headers");
+    const responseJson = await response.json();
+
+    await append({
+      type: "https://events.iterate.com/events/example/httpbin-echoed",
+      payload: {
+        ok: response.ok,
+        status: response.status,
+        normalizedHeaders: normalizeHeaders(responseJson.headers),
+        response: responseJson,
+      },
+    });
+  },
+};
+`.trim();
+
 const dynamicWorkerRuntimeModule = `
 import processor from "./processor.js";
+import runtimeConfig from "./runtime-config.js";
+
+void runtimeConfig;
 
 function createRemoteAsyncIterator(target) {
   return {
@@ -139,6 +193,7 @@ export function normalizeDynamicWorkerConfig(input: {
   compatibilityDate?: string;
   compatibilityFlags?: string[];
   modules?: Record<string, string>;
+  outboundGateway?: DynamicWorkerOutboundGateway;
   script?: string;
 }): DynamicWorkerConfig {
   if (input.script != null) {
@@ -148,8 +203,12 @@ export function normalizeDynamicWorkerConfig(input: {
       mainModule: defaultDynamicWorkerMainModule,
       modules: {
         [defaultDynamicWorkerProcessorModule]: input.script,
+        [defaultDynamicWorkerRuntimeConfigModule]: buildDynamicWorkerRuntimeConfigModule(
+          input.outboundGateway,
+        ),
         [defaultDynamicWorkerMainModule]: dynamicWorkerRuntimeModule,
       },
+      outboundGateway: input.outboundGateway,
     };
   }
 
@@ -159,8 +218,12 @@ export function normalizeDynamicWorkerConfig(input: {
     mainModule: defaultDynamicWorkerMainModule,
     modules: {
       ...normalizeDynamicWorkerModules(input.modules ?? {}),
+      [defaultDynamicWorkerRuntimeConfigModule]: buildDynamicWorkerRuntimeConfigModule(
+        input.outboundGateway,
+      ),
       [defaultDynamicWorkerMainModule]: dynamicWorkerRuntimeModule,
     },
+    outboundGateway: input.outboundGateway,
   };
 }
 
@@ -197,7 +260,13 @@ function createDynamicWorkerRuntime(context: BuiltinProcessorContext) {
           compatibilityFlags: config.compatibilityFlags,
           mainModule: config.mainModule,
           modules: config.modules,
-          globalOutbound: null,
+          globalOutbound:
+            config.outboundGateway == null
+              ? null
+              : context.createLoopbackBinding({
+                  exportName: config.outboundGateway.entrypoint,
+                  props: config.outboundGateway.props,
+                }),
         }),
       )
       .getEntrypoint() as unknown as {
@@ -264,6 +333,12 @@ function normalizeDynamicWorkerModules(modules: Record<string, string>) {
   }
 
   return normalized;
+}
+
+function buildDynamicWorkerRuntimeConfigModule(
+  outboundGateway: DynamicWorkerOutboundGateway | undefined,
+) {
+  return `export default ${JSON.stringify({ outboundGateway })};`;
 }
 
 function hashDynamicWorkerConfig(value: string) {

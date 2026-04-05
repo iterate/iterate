@@ -11,6 +11,15 @@ export const DynamicWorkerConfiguredEventInput = GenericEventInputBase.extend({
       slug: z.string().trim().min(1),
       compatibilityDate: z.string().trim().min(1).optional(),
       compatibilityFlags: z.array(z.string().trim().min(1)).optional(),
+      outboundGateway: z
+        .strictObject({
+          entrypoint: z.literal("DynamicWorkerEgressGateway"),
+          props: z.strictObject({
+            secretHeaderName: z.string().trim().min(1),
+            secretHeaderValue: z.string().trim().min(1),
+          }),
+        })
+        .optional(),
       script: z.string().trim().min(1).optional(),
       modules: z.record(z.string(), z.string().trim().min(1)).optional(),
     })
@@ -49,11 +58,21 @@ export const DynamicWorkerConfiguredEvent = GenericEventBase.extend(
 export type DynamicWorkerConfiguredEventInput = z.infer<typeof DynamicWorkerConfiguredEventInput>;
 export type DynamicWorkerConfiguredEvent = z.infer<typeof DynamicWorkerConfiguredEvent>;
 
+export const DynamicWorkerOutboundGateway = z.strictObject({
+  entrypoint: z.literal("DynamicWorkerEgressGateway"),
+  props: z.strictObject({
+    secretHeaderName: z.string(),
+    secretHeaderValue: z.string(),
+  }),
+});
+export type DynamicWorkerOutboundGateway = z.infer<typeof DynamicWorkerOutboundGateway>;
+
 export const DynamicWorkerConfig = z.object({
   compatibilityDate: z.string(),
   compatibilityFlags: z.array(z.string()),
   mainModule: z.string(),
   modules: z.record(z.string(), z.string()),
+  outboundGateway: DynamicWorkerOutboundGateway.optional(),
 });
 export type DynamicWorkerConfig = z.infer<typeof DynamicWorkerConfig>;
 

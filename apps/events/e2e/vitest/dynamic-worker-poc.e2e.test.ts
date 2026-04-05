@@ -91,6 +91,7 @@ describe("dynamic worker processor", () => {
                 mainModule: "worker.js",
                 modules: {
                   "processor.js": pingPongDynamicWorkerScript,
+                  "runtime-config.js": expect.any(String),
                   "worker.js": expect.any(String),
                 },
               },
@@ -484,6 +485,7 @@ describe("dynamic worker processor", () => {
                 mainModule: "worker.js",
                 modules: {
                   "processor.js": pingPongDynamicWorkerScript,
+                  "runtime-config.js": expect.any(String),
                   "worker.js": expect.any(String),
                 },
               },

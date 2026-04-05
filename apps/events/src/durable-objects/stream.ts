@@ -11,6 +11,7 @@ import { circuitBreakerProcessor } from "./circuit-breaker.ts";
 import { dynamicWorkerProcessor, type DynamicWorkerAppendInput } from "./dynamic-processor.ts";
 import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
 import type { BuiltinProcessor, BuiltinProcessorRuntime } from "./define-processor.ts";
+import type { DynamicWorkerEgressGateway } from "~/dynamic-worker-egress-gateway.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 
 type ProcessorSlugKey = keyof StreamState["processors"];
@@ -737,6 +738,20 @@ export class StreamDurableObject extends DurableObject<Env> {
     for (const processor of processors) {
       const runtime = processor.createRuntime?.({
         append: (event) => this.append(event),
+        createLoopbackBinding: ({ exportName, props }) => {
+          const exports = (this.ctx as DurableObjectState & { exports: Cloudflare.Exports })
+            .exports as unknown as Record<
+            string,
+            Fetcher<DynamicWorkerEgressGateway> | ((args?: { props?: unknown }) => Fetcher)
+          >;
+          const binding = exports[exportName];
+
+          if (binding == null) {
+            throw new Error(`Unknown loopback export: ${exportName}`);
+          }
+
+          return typeof binding === "function" ? binding({ props }) : binding;
+        },
         createStreamTarget: () =>
           new DynamicWorkerStreamTarget({
             stream: this,
