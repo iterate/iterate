@@ -1,4 +1,3 @@
-import { posix as path } from "node:path";
 import type { ContractRouterClient } from "@orpc/contract";
 import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
@@ -253,7 +252,7 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
       return;
     }
 
-    if (!path.matchesGlob(streamPath, this.#streamPattern)) {
+    if (!matchesStreamPattern(streamPath, this.#streamPattern)) {
       return;
     }
 
@@ -324,4 +323,47 @@ function getDiscoveredStreamPath(event: Event): StreamPath | null {
 
 function normalizeStreamPattern(streamPattern: string) {
   return streamPattern.startsWith("/") ? streamPattern : `/${streamPattern}`;
+}
+
+function matchesStreamPattern(streamPath: string, streamPattern: string) {
+  const pathSegments = toPathSegments(streamPath);
+  const patternSegments = toPathSegments(streamPattern);
+  return matchesPathSegments(pathSegments, patternSegments);
+}
+
+function toPathSegments(value: string) {
+  return value.split("/").filter(Boolean);
+}
+
+function matchesPathSegments(pathSegments: string[], patternSegments: string[]): boolean {
+  if (patternSegments.length === 0) {
+    return pathSegments.length === 0;
+  }
+
+  const [patternHead, ...patternTail] = patternSegments;
+
+  if (patternHead === "**") {
+    if (patternTail.length === 0) {
+      return true;
+    }
+
+    for (let index = 0; index <= pathSegments.length; index += 1) {
+      if (matchesPathSegments(pathSegments.slice(index), patternTail)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  const [pathHead, ...pathTail] = pathSegments;
+  if (pathHead == null) {
+    return false;
+  }
+
+  if (patternHead === "*") {
+    return matchesPathSegments(pathTail, patternTail);
+  }
+
+  return patternHead === pathHead && matchesPathSegments(pathTail, patternTail);
 }
