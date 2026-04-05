@@ -79,7 +79,7 @@ jobs:
     name: Preview / example deploy
     runs-on: ubuntu-24.04
     concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-example-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -144,7 +144,7 @@ jobs:
     name: Preview / example e2e
     runs-on: ubuntu-24.04
     concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-example-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -187,7 +187,7 @@ jobs:
     name: Preview / example cleanup
     runs-on: ubuntu-24.04
     concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-example-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -228,7 +228,7 @@ jobs:
     name: Preview / events deploy
     runs-on: ubuntu-24.04
     concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-events-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -293,7 +293,7 @@ jobs:
     name: Preview / events e2e
     runs-on: ubuntu-24.04
     concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-events-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -336,7 +336,7 @@ jobs:
     name: Preview / events cleanup
     runs-on: ubuntu-24.04
     concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-events-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -377,7 +377,7 @@ jobs:
     name: Preview / semaphore deploy
     runs-on: ubuntu-24.04
     concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-semaphore-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -442,7 +442,7 @@ jobs:
     name: Preview / semaphore e2e
     runs-on: ubuntu-24.04
     concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-semaphore-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -485,7 +485,7 @@ jobs:
     name: Preview / semaphore cleanup
     runs-on: ubuntu-24.04
     concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-semaphore-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -526,7 +526,7 @@ jobs:
     name: Preview / ingress-proxy deploy
     runs-on: ubuntu-24.04
     concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-ingress-proxy-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -591,7 +591,7 @@ jobs:
     name: Preview / ingress-proxy e2e
     runs-on: ubuntu-24.04
     concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-ingress-proxy-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -634,7 +634,7 @@ jobs:
     name: Preview / ingress-proxy cleanup
     runs-on: ubuntu-24.04
     concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-ingress-proxy-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
