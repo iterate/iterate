@@ -87,6 +87,10 @@ export const streamsRouter = {
       }
     }
 
+    if (input.path === "/" && discovered["/"] == null) {
+      discovered["/"] = new Date().toISOString();
+    }
+
     return Object.entries(discovered)
       .map(([path, createdAt]) => ({ path: path as StreamPath, createdAt }))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));

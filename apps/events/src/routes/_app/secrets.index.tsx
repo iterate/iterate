@@ -12,6 +12,7 @@ import {
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { z } from "zod";
+import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { orpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/secrets/")({
@@ -25,6 +26,7 @@ const CreateSecretForm = z.object({
 });
 
 function SecretsIndexPage() {
+  const projectSlug = useCurrentProjectSlug();
   const queryClient = useQueryClient();
   const { data: secretsData } = useQuery({
     ...orpc.secrets.list.queryOptions({ input: { limit: 20, offset: 0 } }),
@@ -181,6 +183,7 @@ function SecretsIndexPage() {
               <Link
                 to="/secrets/$secretId/"
                 params={{ secretId: secret.id }}
+                search={(previous) => ({ ...previous, projectSlug })}
                 className="block truncate font-medium hover:underline"
               >
                 {secret.name}

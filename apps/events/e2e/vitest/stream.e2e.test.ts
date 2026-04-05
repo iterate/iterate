@@ -10,6 +10,7 @@ import {
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
+  defaultE2EProjectSlug,
   requireEventsBaseUrl,
   type Events2AppFixture,
 } from "../helpers.ts";
@@ -17,7 +18,7 @@ import {
 const app = createEvents2AppFixture({
   baseURL: requireEventsBaseUrl(),
 });
-const defaultProjectSlug = "public";
+const defaultProjectSlug = defaultE2EProjectSlug;
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
 const pollIntervalMs = 50;
@@ -775,6 +776,27 @@ describe.sequential("events stream e2e", () => {
       const streams = await app.client.listStreams({ path: "/" });
 
       expect(streams.some((stream) => stream.path === "/")).toBe(true);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "listStreams includes / for a fresh project slug before root initialization",
+    async () => {
+      const projectSlug = `test-${randomUUID().slice(0, 8)}`;
+      const response = await app.fetch("/api/__list/%2F", {
+        headers: {
+          "x-iterate-project": projectSlug,
+        },
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual([
+        {
+          path: "/",
+          createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        },
+      ]);
     },
     testTimeoutMs,
   );

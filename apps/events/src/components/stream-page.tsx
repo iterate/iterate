@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type Event,
-  EventInput,
+  type EventInput,
   type JSONObject,
   type StreamPath,
 } from "@iterate-com/events-contract";
@@ -32,8 +32,10 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamEventFeed } from "~/components/stream-event-feed.tsx";
+import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
 import { eventInputTemplates, getEventInputTemplateById } from "~/lib/event-type-pages.ts";
+import { projectScopedQueryKey } from "~/lib/project-slug.ts";
 import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projection.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { DEFAULT_STREAM_RENDERER_MODE, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
@@ -58,28 +60,47 @@ export function StreamPage({
 }) {
   const queryClient = useQueryClient();
   const { closeMetadata, metadataOpen, setHeaderControls } = useStreamsChrome();
+  const projectSlug = useCurrentProjectSlug();
   const [selectedTemplateId, setSelectedTemplateId] = useState(DEFAULT_EVENT_TEMPLATE_ID);
   const [appendInputJson, setAppendInputJson] = useState(() =>
     createEventInputTemplate(DEFAULT_EVENT_TEMPLATE_ID),
   );
+  const streamStateOptions = useMemo(
+    () => orpc.getState.queryOptions({ input: { path: streamPath } }),
+    [streamPath],
+  );
+  const streamStateQueryKey = useMemo(
+    () => projectScopedQueryKey(streamStateOptions.queryKey, projectSlug),
+    [projectSlug, streamStateOptions.queryKey],
+  );
+  const listStreamsOptions = useMemo(
+    () => orpc.listStreams.queryOptions({ input: { path: "/" } }),
+    [],
+  );
+  const listStreamsQueryKey = useMemo(
+    () => projectScopedQueryKey(listStreamsOptions.queryKey, projectSlug),
+    [listStreamsOptions.queryKey, projectSlug],
+  );
 
   const streamStateQuery = useQuery({
-    ...orpc.getState.queryOptions({ input: { path: streamPath } }),
+    ...streamStateOptions,
+    queryKey: streamStateQueryKey,
     staleTime: 5_000,
   });
 
   const { events, isConnecting } = useLiveStreamEvents({
     streamPath,
+    projectSlug,
     onEvent: useCallback(
       (event: Event) => {
         if (
           streamPath === "/" &&
           event.type === "https://events.iterate.com/events/stream/child-stream-created"
         ) {
-          void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
+          void queryClient.invalidateQueries({ queryKey: listStreamsQueryKey });
         }
       },
-      [queryClient, streamPath],
+      [listStreamsQueryKey, queryClient, streamPath],
     ),
   });
   const feed = useMemo(() => projectWireToFeed(events), [events]);
@@ -110,8 +131,8 @@ export function StreamPage({
   const appendEvent = useMutation(
     orpc.append.mutationOptions({
       onSuccess: async () => {
-        void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
-        await queryClient.invalidateQueries({ queryKey: orpc.getState.key() });
+        void queryClient.invalidateQueries({ queryKey: listStreamsQueryKey });
+        await queryClient.invalidateQueries({ queryKey: streamStateQueryKey });
       },
     }),
   );
@@ -120,13 +141,13 @@ export function StreamPage({
     orpc.destroy.mutationOptions({
       onSuccess: async () => {
         closeMetadata();
-        void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
-        await queryClient.invalidateQueries({ queryKey: orpc.getState.key() });
+        void queryClient.invalidateQueries({ queryKey: listStreamsQueryKey });
+        await queryClient.invalidateQueries({ queryKey: streamStateQueryKey });
       },
     }),
   );
   const submitAppend = async (inputText = appendInputJson) => {
-    let event: ReturnType<typeof EventInput.parse>;
+    let event: EventInput;
 
     try {
       event = parseAppendEventInput(inputText);
@@ -301,5 +322,7 @@ function parseJSONObject(value: string) {
 }
 
 function parseAppendEventInput(value: string) {
-  return EventInput.parse(parseJSONObject(value));
+  // Only require syntactically valid JSON here. The append endpoint will
+  // normalize invalid event shapes into invalid-event-appended server-side.
+  return parseJSONObject(value) as EventInput;
 }

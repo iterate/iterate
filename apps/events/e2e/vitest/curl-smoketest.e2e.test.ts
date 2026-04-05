@@ -27,6 +27,7 @@ import { randomUUID } from "node:crypto";
 import { StreamPath } from "@iterate-com/events-contract";
 import { x } from "tinyexec";
 import { describe, expect, test } from "vitest";
+import { defaultE2EProjectSlug } from "../helpers.ts";
 
 describe("events curl smoke", () => {
   test("append, state, history stream, and root endpoints (shell + snapshot)", async () => {
@@ -46,10 +47,11 @@ set -euo pipefail
 
 retry_json_get() {
   local url="$1"
+  shift
   local body=""
 
   for _ in 1 2 3 4 5; do
-    body="$(curl -sS "$url")"
+    body="$(curl -sS "$url" "$@")"
     if [[ "$body" == \\{* ]]; then
       printf '%s' "$body"
       return 0
@@ -63,20 +65,21 @@ retry_json_get() {
 
 curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \\
   -H 'content-type: application/json' \\
+  -H "x-iterate-project: $PROJECT_SLUG" \\
   -d '{"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true}}'
 echo
 echo '---'
-retry_json_get "$BASE_URL/api/__state/$STREAM_CURL_PATH"
+retry_json_get "$BASE_URL/api/__state/$STREAM_CURL_PATH" -H "x-iterate-project: $PROJECT_SLUG"
 echo
 echo '---'
-retry_json_get "$BASE_URL/api/__state/$STREAM_RPATH"
+retry_json_get "$BASE_URL/api/__state/$STREAM_RPATH" -H "x-iterate-project: $PROJECT_SLUG"
 echo
 echo '---'
-curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH"
+curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH" -H "x-iterate-project: $PROJECT_SLUG"
 echo
 echo '---'
-curl -sS "$BASE_URL/api/__list/%2F" >/dev/null
-curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
+curl -sS "$BASE_URL/api/__list/%2F" -H "x-iterate-project: $PROJECT_SLUG" >/dev/null
+curl -sS "$BASE_URL/api/__state/%2F" -H "x-iterate-project: $PROJECT_SLUG" >/dev/null
 `;
 
     const result = await x("bash", ["-lc", script], {
@@ -86,6 +89,7 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
         env: {
           ...process.env,
           BASE_URL: baseURL,
+          PROJECT_SLUG: defaultE2EProjectSlug,
           STREAM_CURL_PATH: streamCurlPath,
           STREAM_RPATH: streamRpath,
         },
@@ -117,7 +121,7 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
       },
     });
     expect(JSON.parse(encodedStateJson)).toMatchObject({
-      projectSlug: "public",
+      projectSlug: defaultE2EProjectSlug,
       path: "<streamPath>",
       eventCount: 2,
       childPaths: [],
@@ -135,7 +139,7 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
       },
     });
     expect(JSON.parse(slashEscapedStateJson)).toMatchObject({
-      projectSlug: "public",
+      projectSlug: defaultE2EProjectSlug,
       path: "<streamPath>",
       eventCount: 2,
       childPaths: [],
@@ -162,7 +166,7 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
       offset: 1,
       payload: {
         path: "<streamPath>",
-        projectSlug: "public",
+        projectSlug: defaultE2EProjectSlug,
       },
       streamPath: "<streamPath>",
       type: "https://events.iterate.com/events/stream/initialized",
@@ -196,6 +200,7 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
         `set -euo pipefail
 curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \
   -H 'content-type: application/json' \
+  -H "x-iterate-project: $PROJECT_SLUG" \
   -d '{"type":"hello"}'`,
       ],
       {
@@ -205,6 +210,7 @@ curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \
           env: {
             ...process.env,
             BASE_URL: baseURL,
+            PROJECT_SLUG: defaultE2EProjectSlug,
             STREAM_CURL_PATH: streamCurlPath,
           },
         },
