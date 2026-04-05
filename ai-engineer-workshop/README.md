@@ -81,6 +81,8 @@ pnpm w run --script examples/01-hello-world/append-hello-world.ts
 pnpm w run --script examples/03-pattern-processor/prove-jonas-ping-pong.ts
 pnpm w run --script examples/04-llm-codemode/run-llm-codemode-loop.ts
 pnpm w run --script examples/05-slack-codemode/run-slack-codemode-loop.ts
+pnpm w run --script examples/06-slack-composition/run-slack-composition.ts
+pnpm w run --script examples/07-slack-tools/run-slack-tools.ts
 ```
 
 Pattern-processor example:
@@ -105,6 +107,14 @@ Slack codemode example:
 - [examples/05-slack-codemode/codemode.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/05-slack-codemode/codemode.ts) keeps the codemode runner independent and writes artifacts under `.codemode/<stream-path>/<block-count>/`.
 - [examples/05-slack-codemode/run-slack-codemode-loop.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/05-slack-codemode/run-slack-codemode-loop.ts) starts the Slack variant and prints a raw webhook example you can POST straight into the stream.
 - [e2e/vitest/slack-codemode-agent.test.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/e2e/vitest/slack-codemode-agent.test.ts) proves the full flow against the deployed events service: raw Slack JSON becomes `invalid-event-appended`, the agent sees a YAML prompt, and two turns on the same stream produce a remembered Slack reply.
+
+Workshop kernel examples:
+
+- [examples/06-slack-composition/slack-input.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/06-slack-composition/slack-input.ts), [examples/06-slack-composition/agent.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/06-slack-composition/agent.ts), and [examples/06-slack-composition/codemode.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/06-slack-composition/codemode.ts) are the small teaching version of the system: one processor normalizes raw Slack JSON, one turns stream events into LLM input and code blocks, and one runs those blocks.
+- [e2e/vitest/slack-composition.test.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/e2e/vitest/slack-composition.test.ts) proves the minimal chain: raw Slack webhook -> normalized event -> LLM input -> Slack reply.
+- [examples/07-slack-tools/codemode.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/07-slack-tools/codemode.ts) is the follow-on example where blocks export `default async function(ctx)` and a new `codemode-tool-added` event can extend `ctx.*`.
+- [examples/07-slack-tools/run-slack-tools.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/examples/07-slack-tools/run-slack-tools.ts) registers a tiny `ctx.replyToSlack(...)` tool and also shows the real `@slack/web-api` package as the next step for `ctx.slackApi`.
+- [e2e/vitest/slack-tools.test.ts](/Users/jonastemplestein/.superset/worktrees/iterate/wary-ermine/ai-engineer-workshop/e2e/vitest/slack-tools.test.ts) proves both pieces separately: the tool works when called directly from codemode, and the agent can still keep context across two Slack turns on the same stream.
 
 Published preview packages are built directly from this folder via `pkg.pr.new`.
 

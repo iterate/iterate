@@ -118,5 +118,18 @@ function isRunnableWorkshopScript(file: string) {
     return false;
   }
 
-  return !["agent.ts", "codemode.ts", "coding-agent-system-prompt.ts"].includes(basename);
+  if (
+    ["agent.ts", "codemode.ts", "coding-agent-system-prompt.ts", "prompt.ts"].includes(basename)
+  ) {
+    return false;
+  }
+
+  return (
+    basename === "script.ts" ||
+    basename.startsWith("append-") ||
+    basename.startsWith("prove-") ||
+    basename.startsWith("run-") ||
+    basename.startsWith("subscribe-") ||
+    basename.endsWith("-processor.ts")
+  );
 }
