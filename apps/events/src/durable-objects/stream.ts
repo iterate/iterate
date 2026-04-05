@@ -11,6 +11,7 @@ import {
   StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
+import type { Schedule, ScheduleCriteria } from "./scheduling-types.ts";
 import {
   applyBuiltinProcessorProjectionSync,
   createBuiltinProcessorInitialState,
@@ -22,7 +23,13 @@ import {
   runBuiltinProcessorAfterCommit,
   runBuiltinProcessorBeforeAppend,
 } from "~/durable-objects/processors/runtime.ts";
-import type { SchedulingMutationDeps } from "~/durable-objects/processors/scheduling/types.ts";
+import {
+  cancelScheduleOnStream,
+  getScheduleFromStorage,
+  getSchedulesFromStorage,
+  scheduleEveryOnStream,
+  scheduleOnStream,
+} from "~/durable-objects/processors/scheduling/index.ts";
 import {
   hydrateReducedStreamState,
   projectPublicStreamState,
@@ -390,6 +397,70 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  async schedule<T = unknown>(
+    when: Date | number | string,
+    callback: keyof this | string,
+    payload?: T,
+    options?: { idempotent?: boolean },
+  ): Promise<Schedule> {
+    await this.ensureInitializedForCurrentName();
+
+    return scheduleOnStream({
+      when,
+      callback,
+      payload,
+      options,
+      deps: {
+        append: this.append.bind(this),
+        ctx: this.ctx,
+        isInitializing: this.isInitializing,
+        validateScheduleCallback: this.validateScheduleCallback.bind(this),
+        warnedScheduleInOnStart: this._warnedScheduleInOnStart,
+      },
+    });
+  }
+
+  async scheduleEvery<T = unknown>(
+    intervalSeconds: number,
+    callback: keyof this | string,
+    payload?: T,
+    options?: { _idempotent?: boolean },
+  ): Promise<Schedule> {
+    await this.ensureInitializedForCurrentName();
+
+    return scheduleEveryOnStream({
+      intervalSeconds,
+      callback,
+      payload,
+      options,
+      deps: {
+        append: this.append.bind(this),
+        ctx: this.ctx,
+        isInitializing: this.isInitializing,
+        validateScheduleCallback: this.validateScheduleCallback.bind(this),
+        warnedScheduleInOnStart: this._warnedScheduleInOnStart,
+      },
+    });
+  }
+
+  getSchedule(id: string): Schedule | undefined {
+    return getScheduleFromStorage(this.ctx, id);
+  }
+
+  getSchedules(criteria: ScheduleCriteria = {}): Schedule[] {
+    return getSchedulesFromStorage(this.ctx, criteria);
+  }
+
+  async cancelSchedule(id: string): Promise<boolean> {
+    await this.ensureInitializedForCurrentName();
+
+    return cancelScheduleOnStream({
+      id,
+      append: this.append.bind(this),
+      ctx: this.ctx,
+    });
+  }
+
   async alarm() {
     await this.ensureInitializedForCurrentName();
 
@@ -401,7 +472,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  protected async ensureInitializedForCurrentName() {
+  private async ensureInitializedForCurrentName() {
     if (this._state != null) {
       return;
     }
@@ -425,17 +496,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this._warnedScheduleInOnStart.has(callback);
   }
 
-  protected getSchedulingMutationDeps(): SchedulingMutationDeps {
-    return {
-      append: this.append.bind(this),
-      ctx: this.ctx,
-      isInitializing: this.isInitializing,
-      validateScheduleCallback: this.validateScheduleCallback.bind(this),
-      warnedScheduleInOnStart: this._warnedScheduleInOnStart,
-    };
-  }
-
-  protected validateScheduleCallback(callback: PropertyKey) {
+  private validateScheduleCallback(callback: PropertyKey) {
     if (typeof callback !== "string") {
       throw new Error("Callback must be a string");
     }
