@@ -38,6 +38,9 @@ describe("cloudflare preview state helpers", () => {
     });
     expect(body).toContain("## Summary");
     expect(body).toContain("## Preview Environments");
+    expect(body).toContain("<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE -->");
+    expect(body).toContain("<!--\n{");
+    expect(body).toContain("\n-->\n<!-- /CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE -->");
     expect(body).toContain("Preview: https://example-preview-1.iterate.workers.dev");
   });
 
@@ -81,7 +84,9 @@ describe("cloudflare preview state helpers", () => {
       "## Preview Environments",
       "",
       "<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE -->",
-      "<!-- { not json } -->",
+      "<!--",
+      "{ not json }",
+      "-->",
       "<!-- /CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE -->",
     ].join("\n");
 

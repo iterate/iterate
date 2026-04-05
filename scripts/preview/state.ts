@@ -95,7 +95,7 @@ export function parseCloudflarePreviewState(body: string) {
   }
 
   try {
-    const parsed = JSON.parse(current);
+    const parsed = JSON.parse(unwrapHiddenStateBlock(current));
     return z.record(z.string().trim().min(1), CloudflarePreviewEntry).parse(parsed);
   } catch (error) {
     if (error instanceof SyntaxError || error instanceof z.ZodError) {
@@ -124,7 +124,7 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
   return [
     "## Preview Environments",
     "",
-    markdownAnnotator("", cloudflarePreviewStateLabel).update(JSON.stringify(state, null, 2)),
+    markdownAnnotator("", cloudflarePreviewStateLabel).update(wrapHiddenStateBlock(state)),
     rows ? `\n${rows}` : "",
   ]
     .filter(Boolean)
@@ -222,6 +222,19 @@ function renderStatusLabel(status: CloudflarePreviewEntry["status"]) {
 
 function escapeHtml(value: string) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function wrapHiddenStateBlock(state: CloudflarePreviewState) {
+  return ["<!--", JSON.stringify(state, null, 2), "-->"].join("\n");
+}
+
+function unwrapHiddenStateBlock(contents: string) {
+  const lines = contents.trim().split("\n");
+  if (lines[0] === "<!--" && lines.at(-1) === "-->") {
+    return lines.slice(1, -1).join("\n");
+  }
+
+  return contents;
 }
 
 async function readPullRequestBody(params: {
