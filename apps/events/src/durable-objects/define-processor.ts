@@ -11,7 +11,7 @@ export type Processor<TState = Record<string, unknown>> = {
   initialState: TState;
   reduce?(args: { event: Event; state: TState }): TState;
   afterAppend?(args: {
-    append: (event: EventInput) => Event;
+    append: (event: EventInput) => Event | Promise<Event>;
     event: Event;
     state: TState;
   }): Promise<void>;

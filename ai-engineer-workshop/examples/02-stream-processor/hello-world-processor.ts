@@ -15,17 +15,18 @@ export default async function helloWorldProcessor(pathPrefix: string) {
   await new PullSubscriptionProcessorRuntime({
     eventsClient: createEventsClient(baseUrl),
     streamPath,
-    processor: defineProcessor({
-      initialState: { seenHelloWorld: false },
-      reduce: (state, event) => {
+    processor: defineProcessor<{ helloWorldCount: number }>(() => ({
+      slug: "hello-world",
+      initialState: { helloWorldCount: 0 },
+      reduce: ({ event, state }) => {
         if (event.type !== "hello-world") {
           return state;
         }
 
-        return { seenHelloWorld: true };
+        return { helloWorldCount: state.helloWorldCount + 1 };
       },
-      onEvent: async ({ append, event, prevState }) => {
-        if (event.type !== "hello-world" || prevState.seenHelloWorld) {
+      afterAppend: async ({ append, event, state }) => {
+        if (event.type !== "hello-world" || state.helloWorldCount !== 1) {
           return;
         }
 
@@ -36,7 +37,7 @@ export default async function helloWorldProcessor(pathPrefix: string) {
           },
         });
       },
-    }),
+    })),
   }).run();
 }
 

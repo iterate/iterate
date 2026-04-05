@@ -3,6 +3,10 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export * from "../apps/events-contract/src/sdk.ts";
+export {
+  defineProcessor,
+  type Processor,
+} from "../apps/events/src/durable-objects/define-processor.ts";
 
 export function getDefaultWorkshopPathPrefix() {
   return normalizePathPrefix(
