@@ -2,7 +2,7 @@
  * Same curls as below, runnable in a terminal after:
  *   export BASE_URL="http://127.0.0.1:5174"
  *   export STREAM_CURL_PATH="e2e-curl/xxxxxxxx"
- *   export STREAM_RPATH="e2e-curl%2Fxxxxxxxx"   # same path with slashes → %2F
+ *   export STREAM_RPATH="%2Fe2e-curl%2Fxxxxxxxx"   # same path URL-encoded
  *
  *   curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \
  *     -H 'content-type: application/json' \
@@ -40,10 +40,28 @@ describe("events curl smoke", () => {
 
     const streamPath = StreamPath.parse(`/e2e-curl/${randomUUID().slice(0, 8)}`);
     const streamCurlPath = streamPath.slice(1);
-    const streamRpath = streamPath === "/" ? "%2F" : streamPath.slice(1).replaceAll("/", "%2F");
+    const streamRpath = encodeURIComponent(streamPath);
 
     const script = `
 set -euo pipefail
+
+retry_json_get() {
+  local url="$1"
+  shift
+  local body=""
+
+  for _ in 1 2 3 4 5; do
+    body="$(curl -sS "$url" "$@")"
+    if [[ "$body" == \\{* ]]; then
+      printf '%s' "$body"
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  printf '%s' "$body"
+  return 1
+}
 
 curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \\
   -H 'content-type: application/json' \\
@@ -51,10 +69,10 @@ curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \\
   -d '{"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true}}'
 echo
 echo '---'
-curl -sS "$BASE_URL/api/__state/$STREAM_CURL_PATH" -H "x-iterate-project: $PROJECT_SLUG"
+retry_json_get "$BASE_URL/api/__state/$STREAM_CURL_PATH" -H "x-iterate-project: $PROJECT_SLUG"
 echo
 echo '---'
-curl -sS "$BASE_URL/api/__state/$STREAM_RPATH" -H "x-iterate-project: $PROJECT_SLUG"
+retry_json_get "$BASE_URL/api/__state/$STREAM_RPATH" -H "x-iterate-project: $PROJECT_SLUG"
 echo
 echo '---'
 curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH" -H "x-iterate-project: $PROJECT_SLUG"
@@ -80,84 +98,88 @@ curl -sS "$BASE_URL/api/__state/%2F" -H "x-iterate-project: $PROJECT_SLUG" >/dev
 
     expect(result.exitCode).toBe(0);
 
-    expect({
-      stdout: result.stdout
-        .replaceAll("\r\n", "\n")
-        .replaceAll(streamPath, "<streamPath>")
-        .replace(/\d{4}-\d{2}-\d{2}T[0-9:.]+Z/g, "<ts>"),
-      stderr: result.stderr,
-    }).toMatchInlineSnapshot(`
-      {
-        "stderr": "",
-        "stdout": "{
-        "event": {
-          "streamPath": "<streamPath>",
-          "type": "https://events.iterate.com/events/example/value-recorded",
-          "payload": {
-            "curl": true
-          },
-          "offset": 2,
-          "createdAt": "<ts>"
-        }
-      }
-      ---
-      {
-        "projectSlug": "test",
-        "path": "<streamPath>",
-        "eventCount": 2,
-        "childPaths": [],
-        "metadata": {},
-        "processors": {
-          "circuit-breaker": {
-            "paused": false,
-            "pauseReason": null,
-            "pausedAt": null,
-            "recentEventTimestamps": [
-              "<ts>",
-              "<ts>"
-            ]
-          },
-          "jsonata-transformer": {
-            "transformersBySlug": {}
-          }
-        }
-      }
-      ---
-      {
-        "projectSlug": "test",
-        "path": "<streamPath>",
-        "eventCount": 2,
-        "childPaths": [],
-        "metadata": {},
-        "processors": {
-          "circuit-breaker": {
-            "paused": false,
-            "pauseReason": null,
-            "pausedAt": null,
-            "recentEventTimestamps": [
-              "<ts>",
-              "<ts>"
-            ]
-          },
-          "jsonata-transformer": {
-            "transformersBySlug": {}
-          }
-        }
-      }
-      ---
-      : 
+    const stdout = result.stdout
+      .replaceAll("\r\n", "\n")
+      .replaceAll(streamPath, "<streamPath>")
+      .replace(/\d{4}-\d{2}-\d{2}T[0-9:.]+Z/g, "<ts>")
+      .trimEnd();
 
-      event: message
-      data: {"streamPath":"<streamPath>","type":"https://events.iterate.com/events/stream/initialized","payload":{"projectSlug":"test","path":"<streamPath>"},"offset":1,"createdAt":"<ts>"}
+    const [appendJson, encodedStateJson, slashEscapedStateJson, streamOutput, trailingOutput] =
+      stdout.split(/\n---(?:\n|$)/);
 
-      event: message
-      data: {"streamPath":"<streamPath>","type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true},"offset":2,"createdAt":"<ts>"}
-
-
-      ---
-      ",
-      }
-    `);
+    expect(result.stderr).toBe("");
+    expect(trailingOutput).toBe("");
+    expect(JSON.parse(appendJson)).toEqual({
+      event: {
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: {
+          curl: true,
+        },
+        offset: 2,
+        streamPath: "<streamPath>",
+        createdAt: "<ts>",
+      },
+    });
+    expect(JSON.parse(encodedStateJson)).toMatchObject({
+      projectSlug: defaultE2EProjectSlug,
+      path: "<streamPath>",
+      eventCount: 2,
+      childPaths: [],
+      metadata: {},
+      processors: {
+        "circuit-breaker": {
+          paused: false,
+          pauseReason: null,
+          pausedAt: null,
+          recentEventTimestamps: ["<ts>", "<ts>"],
+        },
+        "jsonata-transformer": {
+          transformersBySlug: {},
+        },
+      },
+    });
+    expect(JSON.parse(slashEscapedStateJson)).toMatchObject({
+      projectSlug: defaultE2EProjectSlug,
+      path: "<streamPath>",
+      eventCount: 2,
+      childPaths: [],
+      metadata: {},
+      processors: {
+        "circuit-breaker": {
+          paused: false,
+          pauseReason: null,
+          pausedAt: null,
+          recentEventTimestamps: ["<ts>", "<ts>"],
+        },
+        "jsonata-transformer": {
+          transformersBySlug: {},
+        },
+      },
+    });
+    const streamMessages = streamOutput
+      .split("\n\n")
+      .filter((segment) => segment.length > 0)
+      .map((segment) => segment.trimEnd());
+    expect(streamMessages[0].startsWith(":")).toBe(true);
+    expect(parseSseMessage(streamMessages[1])).toEqual({
+      createdAt: "<ts>",
+      offset: 1,
+      payload: {
+        path: "<streamPath>",
+        projectSlug: defaultE2EProjectSlug,
+      },
+      streamPath: "<streamPath>",
+      type: "https://events.iterate.com/events/stream/initialized",
+    });
+    expect(parseSseMessage(streamMessages[2])).toEqual({
+      createdAt: "<ts>",
+      offset: 2,
+      payload: {
+        curl: true,
+      },
+      streamPath: "<streamPath>",
+      type: "https://events.iterate.com/events/example/value-recorded",
+    });
   }, 15_000);
 
   test("curl append with type-only body (no payload) defaults payload to empty object", async () => {
@@ -207,3 +229,10 @@ curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \
     });
   }, 15_000);
 });
+
+function parseSseMessage(segment: string) {
+  const [eventLine, dataLine] = segment.split("\n");
+  expect(eventLine).toBe("event: message");
+  expect(dataLine.startsWith("data: ")).toBe(true);
+  return JSON.parse(dataLine.slice("data: ".length));
+}

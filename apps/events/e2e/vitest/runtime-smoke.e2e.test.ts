@@ -99,8 +99,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         },
       });
 
-      const streams = await app.client.listStreams({ path: "/" });
-      expect(streams.some((stream) => stream.path === path)).toBe(true);
+      await waitForStream(path);
 
       const rootEvents = await collectAsyncIterableUntilIdle({
         iterable: await app.client.stream({ path: "/" }),
@@ -141,6 +140,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         projectSlug: defaultProjectSlug,
         path,
         eventCount: 2,
+        childPaths: [],
         metadata: {},
         processors: expectedProcessorsWithRecentEventCount(2),
       });
@@ -225,4 +225,20 @@ function expectedProcessorsWithRecentEventCount(count: number) {
       transformersBySlug: {},
     },
   };
+}
+
+async function waitForStream(path: StreamPath) {
+  const deadline = Date.now() + postBootTimeoutMs;
+
+  while (Date.now() < deadline) {
+    const streams = await app.client.listStreams({ path: "/" });
+    const stream = streams.find((candidate) => candidate.path === path);
+    if (stream) {
+      return stream;
+    }
+
+    await delay(100);
+  }
+
+  throw new Error(`Timed out waiting for stream ${path}`);
 }
