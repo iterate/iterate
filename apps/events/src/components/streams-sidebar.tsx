@@ -36,13 +36,13 @@ export function StreamsSidebar() {
     "renderer" in search && typeof search.renderer === "string"
       ? search.renderer
       : defaultStreamViewSearch.renderer;
-  const listStreamsOptions = useMemo(
-    () => orpc.listStreams.queryOptions({ input: { path: "/" } }),
+  const listChildrenOptions = useMemo(
+    () => orpc.listChildren.queryOptions({ input: { path: "/" } }),
     [],
   );
-  const listStreamsQueryKey = useMemo(
-    () => projectScopedQueryKey(listStreamsOptions.queryKey, projectSlug),
-    [listStreamsOptions.queryKey, projectSlug],
+  const listChildrenQueryKey = useMemo(
+    () => projectScopedQueryKey(listChildrenOptions.queryKey, projectSlug),
+    [listChildrenOptions.queryKey, projectSlug],
   );
   const rootStateOptions = useMemo(() => orpc.getState.queryOptions({ input: { path: "/" } }), []);
   const rootStateQueryKey = useMemo(
@@ -51,8 +51,8 @@ export function StreamsSidebar() {
   );
 
   const streamsQuery = useQuery({
-    ...listStreamsOptions,
-    queryKey: listStreamsQueryKey,
+    ...listChildrenOptions,
+    queryKey: listChildrenQueryKey,
     staleTime: 30_000,
   });
 
@@ -97,7 +97,7 @@ export function StreamsSidebar() {
           continue;
         }
 
-        void queryClient.invalidateQueries({ queryKey: listStreamsQueryKey });
+        void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
       }
     })().catch((error) => {
       if (!isCurrent || controller.signal.aborted) {
@@ -118,7 +118,7 @@ export function StreamsSidebar() {
     rootStateQuery.isPending,
     rootLastOffset,
     selectedStreamPath,
-    listStreamsQueryKey,
+    listChildrenQueryKey,
   ]);
 
   const filteredStreams = useMemo(() => {

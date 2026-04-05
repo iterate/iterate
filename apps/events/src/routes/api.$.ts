@@ -28,16 +28,14 @@ export const Route = createFileRoute("/api/$")({
 
 /*
  * For curl ergonomics:
- * - rewrite /api/streams/ to /api/streams/%2F so root stream requests stay short
+ * - rewrite root stream URLs to their canonical %2F path form
  * - wrap a bare JSON event body into { event } so `curl -d '{"type":"..."}'` works
  */
 async function rewriteStreamsRequest(args: { request: Request; url: URL }) {
   const rewrittenUrl = new URL(args.url);
   let rewrittenRequest = args.request;
 
-  if (/^\/api\/streams\/+$/.test(rewrittenUrl.pathname)) {
-    rewrittenUrl.pathname = "/api/streams/%2F";
-  }
+  rewrittenUrl.pathname = rewriteRootStreamPath(rewrittenUrl.pathname);
 
   if (rewrittenUrl.pathname !== args.url.pathname) {
     rewrittenRequest = new Request(rewrittenUrl, rewrittenRequest);
@@ -57,6 +55,22 @@ async function rewriteStreamsRequest(args: { request: Request; url: URL }) {
     headers: rewrittenRequest.headers,
     body: JSON.stringify({ event: parsedBody }),
   });
+}
+
+function rewriteRootStreamPath(pathname: string) {
+  if (/^\/api\/streams\/+$/.test(pathname)) {
+    return "/api/streams/%2F";
+  }
+
+  if (/^\/api\/streams\/__state\/+$/.test(pathname)) {
+    return "/api/streams/__state/%2F";
+  }
+
+  if (/^\/api\/streams\/__children\/+$/.test(pathname)) {
+    return "/api/streams/__children/%2F";
+  }
+
+  return pathname;
 }
 
 function shouldWrapBareStreamEvent(request: Request, url: URL) {

@@ -9,17 +9,17 @@
  *     -d '{"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true}}'
  *   echo
  *   echo '---'
- *   curl -sS "$BASE_URL/api/__state/$STREAM_CURL_PATH"
+ *   curl -sS "$BASE_URL/api/streams/__state/$STREAM_CURL_PATH"
  *   echo
  *   echo '---'
- *   curl -sS "$BASE_URL/api/__state/$STREAM_RPATH"
+ *   curl -sS "$BASE_URL/api/streams/__state/$STREAM_RPATH"
  *   echo
  *   echo '---'
  *   curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH"
  *   echo
  *   echo '---'
- *   curl -sS "$BASE_URL/api/__list/%2F" >/dev/null
- *   curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
+ *   curl -sS "$BASE_URL/api/streams/__children/%2F" >/dev/null
+ *   curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
  *
  * Test run: `EVENTS_BASE_URL` matches `BASE_URL` (no trailing slash).
  */
@@ -69,17 +69,17 @@ curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \\
   -d '{"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true}}'
 echo
 echo '---'
-retry_json_get "$BASE_URL/api/__state/$STREAM_CURL_PATH" -H "x-iterate-project: $PROJECT_SLUG"
+retry_json_get "$BASE_URL/api/streams/__state/$STREAM_CURL_PATH" -H "x-iterate-project: $PROJECT_SLUG"
 echo
 echo '---'
-retry_json_get "$BASE_URL/api/__state/$STREAM_RPATH" -H "x-iterate-project: $PROJECT_SLUG"
+retry_json_get "$BASE_URL/api/streams/__state/$STREAM_RPATH" -H "x-iterate-project: $PROJECT_SLUG"
 echo
 echo '---'
 curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH" -H "x-iterate-project: $PROJECT_SLUG"
 echo
 echo '---'
-curl -sS "$BASE_URL/api/__list/%2F" -H "x-iterate-project: $PROJECT_SLUG" >/dev/null
-curl -sS "$BASE_URL/api/__state/%2F" -H "x-iterate-project: $PROJECT_SLUG" >/dev/null
+curl -sS "$BASE_URL/api/streams/__children/%2F" -H "x-iterate-project: $PROJECT_SLUG" >/dev/null
+curl -sS "$BASE_URL/api/streams/__state/%2F" -H "x-iterate-project: $PROJECT_SLUG" >/dev/null
 `;
 
     const result = await x("bash", ["-lc", script], {

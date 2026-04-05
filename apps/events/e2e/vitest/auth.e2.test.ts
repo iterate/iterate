@@ -44,8 +44,10 @@ describe.sequential("events auth-adjacent e2e", () => {
       expect(defaultProjectAppendResponse.status).toBe(200);
       expect(projectAppendResponse.status).toBe(200);
 
-      const defaultProjectStateResponse = await app.fetch(`/api/__state/${routePathFor(path)}`);
-      const projectStateResponse = await app.fetch(`/api/__state/${routePathFor(path)}`, {
+      const defaultProjectStateResponse = await app.fetch(
+        `/api/streams/__state/${routePathFor(path)}`,
+      );
+      const projectStateResponse = await app.fetch(`/api/streams/__state/${routePathFor(path)}`, {
         headers: {
           "x-iterate-project": "team-a",
         },
