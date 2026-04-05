@@ -57,7 +57,7 @@ export const eventsContract = oc.router({
       successDescription: "Event appended successfully and returned",
       description:
         "Appends one event to a stream. Offsets are assigned by the stream itself. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
-      tags: ["Streams"],
+      tags: ["/streams"],
     })
     .input(AppendInput)
     .output(
@@ -73,7 +73,7 @@ export const eventsContract = oc.router({
       inputStructure: "detailed",
       description:
         "Deletes all persisted data for a stream durable object. When `destroyChildren=true`, also destroys descendant streams discovered from that stream's history.",
-      tags: ["Streams"],
+      tags: ["/streams"],
     })
     .input(
       z.object({
@@ -95,7 +95,7 @@ export const eventsContract = oc.router({
       method: "GET",
       path: "/streams/{+path}",
       description: `Reads historical events from a stream and can keep the connection open for live events. ${PathMungingDescription} For example, \`GET /api/streams/team/inbox\`, \`GET /api/streams/team%2Finbox\`, and \`GET /api/streams/%2Fteam%2Finbox\` all target the same stream. The root stream is addressed canonically as \`GET /api/streams/%2F\`.`,
-      tags: ["Streams"],
+      tags: ["/streams"],
     })
     .input(
       z.object({
@@ -113,7 +113,7 @@ export const eventsContract = oc.router({
       method: "GET",
       path: "/__state/{+path}",
       description: `Returns the latest reduced projection for a stream, including whether it has been initialized, metadata, and generated offsets. ${PathMungingDescription} For example, \`GET /api/__state/team/inbox\`, \`GET /api/__state/team%2Finbox\`, and \`GET /api/__state/%2Fteam%2Finbox\` all target the same stream state. The root stream state is addressed canonically as \`GET /api/__state/%2F\`.`,
-      tags: ["Streams"],
+      tags: ["/streams"],
     })
     .input(
       z.object({
@@ -128,7 +128,7 @@ export const eventsContract = oc.router({
       path: "/__list/{+path}",
       description:
         "Returns stream paths discovered from a given stream. Defaults to the root stream ('/').",
-      tags: ["Streams"],
+      tags: ["/streams"],
     })
     .input(
       z.object({
@@ -149,7 +149,7 @@ export const eventsContract = oc.router({
         method: "POST",
         path: "/secrets",
         description: "Create a secret (values stored in D1 as plaintext — demo only)",
-        tags: ["secrets"],
+        tags: ["/secrets"],
       })
       .input(
         z.object({
@@ -164,7 +164,7 @@ export const eventsContract = oc.router({
         method: "GET",
         path: "/secrets",
         description: "List secrets (no values)",
-        tags: ["secrets"],
+        tags: ["/secrets"],
       })
       .input(
         z.object({
@@ -178,7 +178,7 @@ export const eventsContract = oc.router({
         method: "GET",
         path: "/secrets/{id}",
         description: "Get secret by id (includes value)",
-        tags: ["secrets"],
+        tags: ["/secrets"],
       })
       .input(z.object({ id: z.string() }))
       .output(Secret),
@@ -187,7 +187,7 @@ export const eventsContract = oc.router({
         method: "DELETE",
         path: "/secrets/{id}",
         description: "Delete secret",
-        tags: ["secrets"],
+        tags: ["/secrets"],
       })
       .input(z.object({ id: z.string() }))
       .output(z.object({ ok: z.literal(true), id: z.string(), deleted: z.boolean() })),

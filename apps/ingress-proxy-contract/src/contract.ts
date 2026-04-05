@@ -167,7 +167,7 @@ export const ingressProxyContract = oc.router({
       .route({
         method: "PUT",
         path: "/routes/{rootHost}",
-        tags: ["Routes"],
+        tags: ["/routes"],
       })
       .input(UpsertRouteInput)
       .output(IngressProxyRoute),
@@ -176,7 +176,7 @@ export const ingressProxyContract = oc.router({
       .route({
         method: "GET",
         path: "/routes/{rootHost}",
-        tags: ["Routes"],
+        tags: ["/routes"],
       })
       .input(GetRouteInput)
       .output(IngressProxyRoute),
@@ -185,7 +185,7 @@ export const ingressProxyContract = oc.router({
       .route({
         method: "GET",
         path: "/routes",
-        tags: ["Routes"],
+        tags: ["/routes"],
       })
       .input(ListRoutesInput)
       .output(ListRoutesOutput),
@@ -194,7 +194,7 @@ export const ingressProxyContract = oc.router({
       .route({
         method: "DELETE",
         path: "/routes/{rootHost}",
-        tags: ["Routes"],
+        tags: ["/routes"],
       })
       .input(RemoveRouteInput)
       .output(RemoveRouteOutput),

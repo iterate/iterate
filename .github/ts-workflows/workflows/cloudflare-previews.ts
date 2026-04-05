@@ -4,8 +4,9 @@ import * as utils from "../utils/index.ts";
 
 const previewPaths = [...new Set(Object.values(cloudflarePreviewApps).flatMap((app) => app.paths))];
 const previewApps = Object.values(cloudflarePreviewApps);
-const previewLifecycleConcurrencyGroup =
-  "cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}";
+function previewLifecycleConcurrencyGroup(appSlug: string) {
+  return `cloudflare-preview-lifecycle-${appSlug}-\${{ github.event.pull_request.number }}`;
+}
 
 function createPreviewCommand(input: {
   app?: string;
@@ -85,7 +86,7 @@ function createPreviewLifecycleJob(input: {
     name: input.name,
     ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
     concurrency: {
-      group: previewLifecycleConcurrencyGroup,
+      group: previewLifecycleConcurrencyGroup(input.appSlug),
       "cancel-in-progress": false,
     },
     steps: [

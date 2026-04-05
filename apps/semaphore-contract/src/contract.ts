@@ -126,7 +126,7 @@ export const semaphoreContract = oc.router({
       .route({
         method: "POST",
         path: "/resources",
-        tags: ["Resources"],
+        tags: ["/resources"],
       })
       .input(AddResourceInput)
       .output(SemaphoreResourceRecord),
@@ -135,7 +135,7 @@ export const semaphoreContract = oc.router({
       .route({
         method: "DELETE",
         path: "/resources/{type}/{slug}",
-        tags: ["Resources"],
+        tags: ["/resources"],
       })
       .input(DeleteResourceInput)
       .output(DeleteResourceResult),
@@ -144,7 +144,7 @@ export const semaphoreContract = oc.router({
       .route({
         method: "GET",
         path: "/resources",
-        tags: ["Resources"],
+        tags: ["/resources"],
       })
       .input(ListResourcesInput)
       .output(z.array(SemaphoreResourceRecord)),
@@ -153,7 +153,7 @@ export const semaphoreContract = oc.router({
       .route({
         method: "GET",
         path: "/resources/{type}/{slug}",
-        tags: ["Resources"],
+        tags: ["/resources"],
       })
       .input(FindResourceInput)
       .output(SemaphoreResourceRecord),
@@ -162,7 +162,7 @@ export const semaphoreContract = oc.router({
       .route({
         method: "POST",
         path: "/resources/acquire",
-        tags: ["Resources"],
+        tags: ["/resources"],
       })
       .input(AcquireResourceInput)
       .output(SemaphoreLeaseRecord),
@@ -171,7 +171,7 @@ export const semaphoreContract = oc.router({
       .route({
         method: "POST",
         path: "/resources/release",
-        tags: ["Resources"],
+        tags: ["/resources"],
       })
       .input(ReleaseResourceInput)
       .output(ReleaseResourceResult),
