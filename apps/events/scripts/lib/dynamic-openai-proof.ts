@@ -8,7 +8,6 @@ import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { Event } from "@iterate-com/events-contract";
 import { eventsContract } from "@iterate-com/events-contract";
-import { collectAsyncIterableUntilIdle } from "../../e2e/helpers.ts";
 import { iterateProjectHeader } from "../../src/lib/project-slug.ts";
 import { buildDynamicWorkerConfiguredEvent } from "../../src/durable-objects/dynamic-worker-bundler.ts";
 
@@ -168,8 +167,12 @@ async function waitForEvent(args: {
 }
 
 async function collectHistory(client: EventsClient, path: string) {
-  return (await collectAsyncIterableUntilIdle({
-    iterable: await client.stream({ path, live: false }),
-    idleMs: 500,
-  })) as Event[];
+  const history = await client.stream({ path, live: false });
+  const events: Event[] = [];
+
+  for await (const event of history as AsyncIterable<Event>) {
+    events.push(event);
+  }
+
+  return events;
 }
