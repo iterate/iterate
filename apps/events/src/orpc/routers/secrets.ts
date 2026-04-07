@@ -25,7 +25,7 @@ export const secretsRouter = {
         });
       } catch (error) {
         if (isUniqueConstraintError(error)) {
-          throw new ORPCError("CONFLICT", { message: `Secret name "${name}" already exists` });
+          throw new ORPCError("CONFLICT", { message: `Env var name "${name}" already exists` });
         }
         throw error;
       }
@@ -66,7 +66,7 @@ export const secretsRouter = {
         .limit(1);
 
       if (!row) {
-        throw new ORPCError("NOT_FOUND", { message: `Secret ${input.id} not found` });
+        throw new ORPCError("NOT_FOUND", { message: "Env var not found" });
       }
 
       return {

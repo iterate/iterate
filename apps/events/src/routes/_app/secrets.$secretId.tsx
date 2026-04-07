@@ -1,6 +1,5 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
-import { Identifier } from "@iterate-com/ui/components/identifier";
 import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { orpc } from "~/orpc/client.ts";
 
@@ -27,13 +26,13 @@ function SecretDetailPage() {
     <section className="max-w-md space-y-4 p-4">
       <div className="space-y-1">
         <h2 className="text-sm font-semibold">{secret.name}</h2>
-        <p className="text-sm text-muted-foreground">Secret detail.</p>
+        <p className="text-sm text-muted-foreground">Env var detail.</p>
       </div>
 
       <div className="space-y-4 rounded-lg border p-4">
         <div className="space-y-1">
           <p className="text-xs text-muted-foreground">Value</p>
-          <p className="font-mono text-sm break-all">{secret.value}</p>
+          <p className="font-mono text-sm break-all">{secret.name}=****</p>
         </div>
 
         {secret.description ? (
@@ -42,11 +41,6 @@ function SecretDetailPage() {
             <p className="text-sm">{secret.description}</p>
           </div>
         ) : null}
-
-        <div className="space-y-1">
-          <p className="text-xs text-muted-foreground">Identifier</p>
-          <Identifier value={secret.id} />
-        </div>
 
         <div className="space-y-1">
           <p className="text-xs text-muted-foreground">Created</p>
@@ -65,7 +59,7 @@ function SecretDetailPage() {
         nativeButton={false}
         render={<Link to="/secrets/" search={(previous) => ({ ...previous, projectSlug })} />}
       >
-        Back to secrets
+        Back to env vars
       </Button>
     </section>
   );
