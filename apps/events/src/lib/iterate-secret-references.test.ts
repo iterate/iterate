@@ -49,9 +49,11 @@ describe("iterate secret references", () => {
     expect(replaced.secretKeys).toEqual([]);
   });
 
-  test("throws when the magic string is malformed", () => {
-    expect(() => findIterateSecretReferences("Bearer getIterateSecret({secretKey:oops})")).toThrow(
-      /Malformed getIterateSecret reference/,
-    );
+  test("ignores substring mentions that are not valid secret references", () => {
+    expect(
+      findIterateSecretReferences(
+        'doc="Use getIterateSecret({secretKey:oops}) only in examples, not literal headers"',
+      ),
+    ).toEqual([]);
   });
 });

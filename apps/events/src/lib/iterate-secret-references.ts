@@ -11,16 +11,10 @@ const urlEncodedSecretReferencePattern =
   /getIterateSecret%28%7BsecretKey%3A(?:%20|\+)*(?:%22([^%]+)%22|%27([^%]+)%27)%7D%29/gi;
 
 export function findIterateSecretReferences(input: string): IterateSecretReferenceMatch[] {
-  const matches = [
+  return [
     ...collectMatches(input, rawSecretReferencePattern, "raw"),
     ...collectMatches(input, urlEncodedSecretReferencePattern, "urlencoded"),
   ].sort((left, right) => left.start - right.start);
-
-  if (matches.length === 0 && input.includes("getIterateSecret")) {
-    throw new Error(`Malformed getIterateSecret reference: ${input}`);
-  }
-
-  return matches;
 }
 
 export async function replaceIterateSecretReferences(args: {

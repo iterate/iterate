@@ -46,6 +46,6 @@ export function parseDynamicWorkerEgressGatewayConfig(
 
 function toGatewayProps(
   gateway: DynamicWorkerOutboundGatewayType,
-): DynamicWorkerEgressGatewayProps {
+): DynamicWorkerEgressGatewayProps | undefined {
   return gateway.props;
 }
