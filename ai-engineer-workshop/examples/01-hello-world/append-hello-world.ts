@@ -6,8 +6,8 @@ export default async function appendHelloWorld(pathPrefix: string) {
   const client = createEventsClient(baseUrl);
 
   const result = await client.append({
-    params: { path: streamPath },
-    body: {
+    path: streamPath,
+    event: {
       type: "hello-world",
       payload: { message: "hello world" },
     },

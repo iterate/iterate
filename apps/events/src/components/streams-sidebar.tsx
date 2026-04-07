@@ -14,6 +14,8 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Plus } from "lucide-react";
+import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
+import { projectScopedQueryKey } from "~/lib/project-slug.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 import { orpc, orpcClient } from "~/orpc/client.ts";
@@ -25,6 +27,7 @@ export function StreamsSidebar() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { selectedStreamPath } = useStreamsChrome();
+  const projectSlug = useCurrentProjectSlug();
   const [searchValue, setSearchValue] = useState("");
   const [isCreatingStream, setIsCreatingStream] = useState(false);
   const [newStreamPathInput, setNewStreamPathInput] = useState("");
@@ -33,17 +36,32 @@ export function StreamsSidebar() {
     "renderer" in search && typeof search.renderer === "string"
       ? search.renderer
       : defaultStreamViewSearch.renderer;
+  const listChildrenOptions = useMemo(
+    () => orpc.listChildren.queryOptions({ input: { path: "/" } }),
+    [],
+  );
+  const listChildrenQueryKey = useMemo(
+    () => projectScopedQueryKey(listChildrenOptions.queryKey, projectSlug),
+    [listChildrenOptions.queryKey, projectSlug],
+  );
+  const rootStateOptions = useMemo(() => orpc.getState.queryOptions({ input: { path: "/" } }), []);
+  const rootStateQueryKey = useMemo(
+    () => projectScopedQueryKey(rootStateOptions.queryKey, projectSlug),
+    [projectSlug, rootStateOptions.queryKey],
+  );
 
   const streamsQuery = useQuery({
-    ...orpc.listStreams.queryOptions({ input: {} }),
+    ...listChildrenOptions,
+    queryKey: listChildrenQueryKey,
     staleTime: 30_000,
   });
 
   const rootStateQuery = useQuery({
-    ...orpc.getState.queryOptions({ input: { path: "/" } }),
+    ...rootStateOptions,
+    queryKey: rootStateQueryKey,
     staleTime: 30_000,
   });
-  const rootLastOffset = rootStateQuery.data?.maxOffset ?? undefined;
+  const rootLastOffset = rootStateQuery.data?.eventCount ?? undefined;
 
   useEffect(() => {
     if (selectedStreamPath === "/" || rootStateQuery.isPending || rootStateQuery.isError) {
@@ -79,7 +97,7 @@ export function StreamsSidebar() {
           continue;
         }
 
-        void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
+        void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
       }
     })().catch((error) => {
       if (!isCurrent || controller.signal.aborted) {
@@ -100,6 +118,7 @@ export function StreamsSidebar() {
     rootStateQuery.isPending,
     rootLastOffset,
     selectedStreamPath,
+    listChildrenQueryKey,
   ]);
 
   const filteredStreams = useMemo(() => {
@@ -148,7 +167,12 @@ export function StreamsSidebar() {
     void navigate({
       to: "/streams/$/",
       params: { _splat: streamPathToSplat(parsed.data) },
-      search: { event: defaultStreamViewSearch.event, renderer: currentRenderer },
+      search: (previous) => ({
+        ...previous,
+        projectSlug,
+        event: defaultStreamViewSearch.event,
+        renderer: currentRenderer,
+      }),
     });
     cancelCreateStream();
   }
@@ -157,53 +181,6 @@ export function StreamsSidebar() {
     <SidebarGroup>
       <SidebarGroupLabel>Streams</SidebarGroupLabel>
       <SidebarGroupContent className="space-y-2">
-        {!isLoadingStreams ? (
-          <>
-            <SidebarInput
-              value={searchValue}
-              onChange={(event) => setSearchValue(event.currentTarget.value)}
-              placeholder="Filter streams"
-            />
-
-            <SidebarMenu>
-              {filteredStreams.map((stream) => (
-                <SidebarMenuItem key={stream.path}>
-                  <SidebarMenuButton
-                    render={
-                      stream.path === "/" ? (
-                        <Link
-                          to="/streams/"
-                          search={{
-                            event: defaultStreamViewSearch.event,
-                            renderer: currentRenderer,
-                          }}
-                          activeOptions={{ exact: true }}
-                        />
-                      ) : (
-                        <Link
-                          to="/streams/$/"
-                          params={{ _splat: streamPathToSplat(stream.path) }}
-                          search={{
-                            event: defaultStreamViewSearch.event,
-                            renderer: currentRenderer,
-                          }}
-                        />
-                      )
-                    }
-                    isActive={selectedStreamPath === stream.path}
-                    className="h-auto py-1.5"
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate font-mono text-xs">{stream.path}</div>
-                      <div className="text-[11px] text-muted-foreground">{stream.createdAt}</div>
-                    </div>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </>
-        ) : null}
-
         {isCreatingStream ? (
           <form
             className="space-y-2"
@@ -253,6 +230,57 @@ export function StreamsSidebar() {
             Create stream
           </Button>
         )}
+
+        {!isLoadingStreams ? (
+          <>
+            <SidebarInput
+              value={searchValue}
+              onChange={(event) => setSearchValue(event.currentTarget.value)}
+              placeholder="Filter streams"
+            />
+
+            <SidebarMenu>
+              {filteredStreams.map((stream) => (
+                <SidebarMenuItem key={stream.path}>
+                  <SidebarMenuButton
+                    render={
+                      stream.path === "/" ? (
+                        <Link
+                          to="/streams/"
+                          search={(previous) => ({
+                            ...previous,
+                            projectSlug,
+                            event: defaultStreamViewSearch.event,
+                            renderer: currentRenderer,
+                          })}
+                          activeOptions={{ exact: true }}
+                        />
+                      ) : (
+                        <Link
+                          to="/streams/$/"
+                          params={{ _splat: streamPathToSplat(stream.path) }}
+                          search={(previous) => ({
+                            ...previous,
+                            projectSlug,
+                            event: defaultStreamViewSearch.event,
+                            renderer: currentRenderer,
+                          })}
+                        />
+                      )
+                    }
+                    isActive={selectedStreamPath === stream.path}
+                    className="h-auto py-1.5"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate font-mono text-xs">{stream.path}</div>
+                      <div className="text-[11px] text-muted-foreground">{stream.createdAt}</div>
+                    </div>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </>
+        ) : null}
       </SidebarGroupContent>
     </SidebarGroup>
   );

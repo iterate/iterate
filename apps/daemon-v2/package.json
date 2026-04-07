@@ -7,11 +7,12 @@
     "~/*": "./src/*"
   },
   "scripts": {
-    "cli": "iterate --local-router ./scripts/router.ts local-router",
+    "cli": "iterate-app-cli",
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "iterate --local-router ./scripts/router.ts local-router start",
+    "rpc": "pnpm cli rpc",
+    "start": "pnpm cli start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

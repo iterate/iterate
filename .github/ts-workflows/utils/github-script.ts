@@ -3,6 +3,7 @@ import * as crypto from "node:crypto";
 import { format } from "oxfmt";
 import { findUpSync } from "find-up";
 import type { Step } from "@jlarky/gha-ts/workflow-types";
+import { markdownAnnotator } from "../../../packages/shared/src/jonasland/markdown-annotator.ts";
 
 export type GitHubScriptVariables = {
   context: typeof import("@actions/github").context;
@@ -93,7 +94,7 @@ export async function githubScript(
     ...(handler.name && { name: handler.name, id: handler.name }),
     uses: "actions/github-script@v7",
     with: {
-      ...options,
+      ...Object.fromEntries(Object.entries(options).filter(([key]) => key !== "params")),
       script,
     },
   };
@@ -141,38 +142,6 @@ const prettyPrint = async (script: string) => {
  * <!-- /CURSOR_SUMMARY -->
  * ```
  */
-export const markdownAnnotator = (body: string, label: string) => {
-  const startMarker = `<!-- ${label} -->`;
-  const endMarker = `<!-- /${label} -->`;
-
-  const lines = body.split("\n");
-
-  const startLine = lines.findIndex((line) => line.trim() === startMarker);
-  const endLine = lines.findIndex((line, i) => i > startLine && line.trim() === endMarker);
-
-  if (startLine === -1 || endLine === -1) {
-    return {
-      current: null,
-      update: (contents: string) => `${body.trim()}\n\n${startMarker}\n${contents}\n${endMarker}`,
-    };
-  }
-
-  const currentContents = lines.slice(startLine + 1, endLine).join("\n");
-
-  return {
-    current: currentContents,
-    update: (contents: string) => {
-      return [
-        ...lines.slice(0, startLine),
-        startMarker,
-        contents,
-        endMarker,
-        ...lines.slice(endLine + 1),
-      ].join("\n");
-    },
-  };
-};
-
 export const prState = <State>(body: string, label: string, { parser = JSON } = {}) => {
   let currentBody = body;
   return {

@@ -9,6 +9,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@iterate-com/ui/components/breadcrumb";
+import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 
 type BreadcrumbStaticData = {
   breadcrumb?: string;
@@ -19,6 +20,7 @@ type BreadcrumbLoaderData = {
 };
 
 export function PathBreadcrumbs() {
+  const projectSlug = useCurrentProjectSlug();
   const matches = useMatches();
 
   if (matches.some((match) => match.status === "pending")) {
@@ -60,7 +62,13 @@ export function PathBreadcrumbs() {
         {parentCrumbs.map((crumb) => (
           <Fragment key={crumb.id}>
             <BreadcrumbItem className="hidden md:inline-flex">
-              <BreadcrumbLink render={<Link to={crumb.to} />}>{crumb.label}</BreadcrumbLink>
+              <BreadcrumbLink
+                render={
+                  <Link to={crumb.to} search={(previous) => ({ ...previous, projectSlug })} />
+                }
+              >
+                {crumb.label}
+              </BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator className="hidden md:block" />
           </Fragment>

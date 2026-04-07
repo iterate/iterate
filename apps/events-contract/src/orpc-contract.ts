@@ -1,15 +1,39 @@
 import { eventIterator, oc } from "@orpc/contract";
-import { commonContract } from "@iterate-com/shared/apps/common-router-contract";
+import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { z } from "zod";
 
 import {
+  BuiltInEventInput,
+  BuiltInEventType,
   DestroyStreamResult,
   Event,
   EventInput,
-  JSONObject,
+  GenericEventInput,
+  InvalidEventAppendedEventInput,
   StreamPath,
   StreamState,
 } from "./types.ts";
+
+const PathMungingDescription =
+  "For curl ergonomics, nested stream paths accept either raw nested segments or percent-escaped slash forms. Both resolve to the same canonical stream path.";
+
+const NormalizedAppendEventInput = EventInput.catch((ctx) =>
+  InvalidEventAppendedEventInput.parse({
+    type: "https://events.iterate.com/events/stream/invalid-event-appended",
+    payload: {
+      rawInput: toJsonValue(ctx.input),
+      error: prettifyAppendEventError({
+        input: ctx.input,
+        fallbackIssues: ctx.error.issues,
+      }),
+    },
+  }),
+);
+
+export const AppendInput = z.object({
+  path: StreamPath,
+  event: NormalizedAppendEventInput,
+});
 
 const SecretSummary = z.object({
   id: z.string(),
@@ -19,42 +43,19 @@ const SecretSummary = z.object({
   updatedAt: z.string(),
 });
 
-const Secret = SecretSummary.extend({
-  value: z.string(),
-});
-
-const PathMungingDescription =
-  "For curl ergonomics, nested stream paths accept either raw nested segments or percent-escaped slash forms. Both resolve to the same canonical stream path.";
-
-const streamListEntryCreatedAt = z.iso.datetime({ offset: true });
-
 export const eventsContract = oc.router({
-  common: commonContract,
+  __internal: internalContract,
   append: oc
     .route({
       operationId: "appendStreamEvents",
       method: "POST",
       path: "/streams/{+path}",
-      inputStructure: "detailed",
       successDescription: "Event appended successfully and returned",
       description:
-        "Appends one event to a stream. Offsets are assigned by the stream itself. Events with an existing idempotencyKey return the stored event instead of creating a duplicate. When `jsonataTransform` is present, the raw JSON request body is transformed into a single event body before append.",
-      tags: ["Streams"],
+        "Appends one event to a stream. Offsets are assigned by the stream itself. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
+      tags: ["/streams"],
     })
-    .input(
-      z.union([
-        z.object({
-          params: z.object({ path: StreamPath }),
-          query: z.object({ jsonataTransform: z.undefined().optional() }).optional().default({}),
-          body: EventInput,
-        }),
-        z.object({
-          params: z.object({ path: StreamPath }),
-          query: z.object({ jsonataTransform: z.string().trim().min(1) }),
-          body: JSONObject,
-        }),
-      ]),
-    )
+    .input(AppendInput)
     .output(
       z.object({
         event: Event,
@@ -65,10 +66,24 @@ export const eventsContract = oc.router({
       operationId: "destroyStream",
       method: "DELETE",
       path: "/streams/{+path}",
-      description: "Deletes all persisted data for a stream durable object.",
-      tags: ["Streams"],
+      inputStructure: "detailed",
+      description:
+        "Deletes all persisted data for a stream durable object. When `destroyChildren=true`, also destroys descendant streams discovered from that stream's history.",
+      tags: ["/streams"],
     })
-    .input(z.object({ path: StreamPath }))
+    .input(
+      z.object({
+        params: z.object({
+          path: StreamPath,
+        }),
+        query: z
+          .object({
+            destroyChildren: z.union([z.boolean(), z.stringbool()]).optional(),
+          })
+          .optional()
+          .default({}),
+      }),
+    )
     .output(DestroyStreamResult),
   stream: oc
     .route({
@@ -76,7 +91,7 @@ export const eventsContract = oc.router({
       method: "GET",
       path: "/streams/{+path}",
       description: `Reads historical events from a stream and can keep the connection open for live events. ${PathMungingDescription} For example, \`GET /api/streams/team/inbox\`, \`GET /api/streams/team%2Finbox\`, and \`GET /api/streams/%2Fteam%2Finbox\` all target the same stream. The root stream is addressed canonically as \`GET /api/streams/%2F\`.`,
-      tags: ["Streams"],
+      tags: ["/streams"],
     })
     .input(
       z.object({
@@ -92,9 +107,9 @@ export const eventsContract = oc.router({
     .route({
       operationId: "getStreamState",
       method: "GET",
-      path: "/__state/{+path}",
-      description: `Returns the latest reduced projection for a stream, including whether it has been initialized, metadata, and generated offsets. ${PathMungingDescription} For example, \`GET /api/__state/team/inbox\`, \`GET /api/__state/team%2Finbox\`, and \`GET /api/__state/%2Fteam%2Finbox\` all target the same stream state. The root stream state is addressed canonically as \`GET /api/__state/%2F\`.`,
-      tags: ["Streams"],
+      path: "/streams/__state/{+path}",
+      description: `Returns the latest reduced projection for a stream, including whether it has been initialized, metadata, and generated offsets. ${PathMungingDescription} For example, \`GET /api/streams/__state/team/inbox\`, \`GET /api/streams/__state/team%2Finbox\`, and \`GET /api/streams/__state/%2Fteam%2Finbox\` all target the same stream state. The root stream state is addressed canonically as \`GET /api/streams/__state/%2F\`.`,
+      tags: ["/streams"],
     })
     .input(
       z.object({
@@ -102,20 +117,25 @@ export const eventsContract = oc.router({
       }),
     )
     .output(StreamState),
-  listStreams: oc
+  listChildren: oc
     .route({
-      operationId: "listStreams",
+      operationId: "listChildren",
       method: "GET",
-      path: "/streams",
-      description: "Returns stream paths discovered from the root stream.",
-      tags: ["Streams"],
+      path: "/streams/__children/{+path}",
+      description:
+        "Returns child stream paths discovered from a given stream. Defaults to the root stream ('/').",
+      tags: ["/streams"],
     })
-    .input(z.strictObject({}).optional().default({}))
+    .input(
+      z.object({
+        path: StreamPath,
+      }),
+    )
     .output(
       z.array(
         z.object({
           path: StreamPath,
-          createdAt: streamListEntryCreatedAt,
+          createdAt: z.iso.datetime({ offset: true }),
         }),
       ),
     ),
@@ -125,7 +145,7 @@ export const eventsContract = oc.router({
         method: "POST",
         path: "/secrets",
         description: "Create a secret (values stored in D1 as plaintext — demo only)",
-        tags: ["secrets"],
+        tags: ["/secrets"],
       })
       .input(
         z.object({
@@ -134,13 +154,13 @@ export const eventsContract = oc.router({
           description: z.string().optional(),
         }),
       )
-      .output(Secret),
+      .output(SecretSummary),
     list: oc
       .route({
         method: "GET",
         path: "/secrets",
         description: "List secrets (no values)",
-        tags: ["secrets"],
+        tags: ["/secrets"],
       })
       .input(
         z.object({
@@ -149,23 +169,63 @@ export const eventsContract = oc.router({
         }),
       )
       .output(z.object({ secrets: z.array(SecretSummary), total: z.number().int().nonnegative() })),
-    find: oc
-      .route({
-        method: "GET",
-        path: "/secrets/{id}",
-        description: "Get secret by id (includes value)",
-        tags: ["secrets"],
-      })
-      .input(z.object({ id: z.string() }))
-      .output(Secret),
     remove: oc
       .route({
         method: "DELETE",
         path: "/secrets/{id}",
         description: "Delete secret",
-        tags: ["secrets"],
+        tags: ["/secrets"],
       })
       .input(z.object({ id: z.string() }))
       .output(z.object({ ok: z.literal(true), id: z.string(), deleted: z.boolean() })),
   },
 });
+
+type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
+
+function prettifyAppendEventError(args: { input: unknown; fallbackIssues: z.ZodError["issues"] }) {
+  const specificResult = hasBuiltInEventType(args.input)
+    ? BuiltInEventInput.safeParse(args.input)
+    : GenericEventInput.safeParse(args.input);
+
+  if (!specificResult.success) {
+    return z.prettifyError(specificResult.error);
+  }
+
+  return z.prettifyError(new z.ZodError(args.fallbackIssues));
+}
+
+function hasBuiltInEventType(input: unknown) {
+  if (typeof input !== "object" || input == null || Array.isArray(input)) {
+    return false;
+  }
+
+  return BuiltInEventType.safeParse((input as Record<string, unknown>).type).success;
+}
+
+function toJsonValue(input: unknown): JsonValue {
+  if (input === undefined) {
+    return null;
+  }
+
+  if (
+    input === null ||
+    typeof input === "string" ||
+    typeof input === "number" ||
+    typeof input === "boolean"
+  ) {
+    return input;
+  }
+
+  if (Array.isArray(input)) {
+    return input.map((value) => toJsonValue(value));
+  }
+
+  if (typeof input === "object") {
+    return Object.fromEntries(
+      Object.entries(input).map(([key, value]) => [key, toJsonValue(value)]),
+    );
+  }
+
+  return null;
+}

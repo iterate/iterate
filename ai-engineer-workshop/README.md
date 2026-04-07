@@ -36,8 +36,8 @@ contract shape directly:
 
 ```ts
 await client.append({
-  params: { path: streamPath },
-  body: {
+  path: streamPath,
+  event: {
     type: "hello-world",
     payload: { message: "hello world" },
   },

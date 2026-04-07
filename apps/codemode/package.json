@@ -9,12 +9,15 @@
   "scripts": {
     "alchemy:up": "tsx ./alchemy.run.ts",
     "alchemy:down": "tsx ./alchemy.run.ts --destroy",
+    "cli": "doppler run --project codemode -- iterate-app-cli",
     "dev": "doppler run --project codemode -- tsx ./alchemy.run.ts",
     "build": "doppler run --project codemode -- pnpm exec vite build --config vite.cf.config.ts",
     "deploy": "doppler run --project codemode --config prd -- pnpm alchemy:up",
     "destroy": "doppler run --project codemode --config prd -- pnpm alchemy:down",
+    "rpc": "pnpm cli rpc",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm typecheck"
+    "test": "pnpm typecheck",
+    "test:e2e": "node -e \"if (!process.env.CODEMODE_BASE_URL) { console.error('CODEMODE_BASE_URL is required for codemode e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts"
   },
   "dependencies": {
     "@cloudflare/codemode": "^0.3.2",
@@ -62,6 +65,7 @@
     "alchemy": "^0.83.3",
     "drizzle-kit": "^0.31.1",
     "esbuild": "^0.27.4",
+    "iterate": "workspace:*",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",

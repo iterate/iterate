@@ -9,17 +9,25 @@
   "scripts": {
     "alchemy:up": "tsx ./alchemy.run.ts",
     "alchemy:down": "tsx ./alchemy.run.ts --destroy",
+    "cli": "doppler run --project events -- iterate-app-cli",
     "dev": "doppler run --project events -- tsx ./alchemy.run.ts",
     "build": "doppler run -- pnpm exec vite build",
     "deploy": "doppler run --project events --config prd -- pnpm alchemy:up",
     "destroy": "doppler run --project events --config prd -- pnpm alchemy:down",
-    "demo": "pnpm iterate --local-router ./scripts/demo/router.ts local-router",
-    "demo:hello-world": "pnpm iterate --local-router ./scripts/demo/router.ts local-router hello-world",
+    "rpc": "pnpm cli rpc",
+    "demo": "pnpm cli hello-world",
+    "demo:hello-world": "pnpm cli hello-world",
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck && vitest run src",
     "test:e2e": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest run --dir e2e/vitest",
+    "test:e2e:preview": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest run e2e/vitest/runtime-smoke.e2e.test.ts e2e/vitest/curl-smoketest.e2e.test.ts",
     "test:quick": "pnpm test:e2e",
     "test:watch": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest --dir e2e/vitest"
+  },
+  "iterateAppCli": {
+    "remote": {
+      "defaultBaseUrl": "https://events.iterate.com"
+    }
   },
   "dependencies": {
     "@iterate-com/events-contract": "workspace:*",
@@ -62,6 +70,7 @@
     "alchemy": "^0.83.3",
     "drizzle-kit": "^0.31.1",
     "esbuild": "^0.27.4",
+    "iterate": "workspace:*",
     "tinyexec": "^1.0.2",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",

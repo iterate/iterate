@@ -16,18 +16,19 @@ import { AppProviders } from "@iterate-com/ui/apps/providers";
 import iterateLogoAsset from "@iterate-com/ui/assets/iterate-logo.svg";
 import { DefaultErrorComponent } from "@iterate-com/ui/components/route-defaults";
 import { AppConfig } from "../app.ts";
+import { defaultProjectSlug } from "../lib/project-slug.ts";
 import { defaultStreamViewSearch } from "../lib/stream-view-search.ts";
 import { orpcClient } from "../orpc/client.ts";
 import appCss from "../styles.css?url";
 import type { RouterContext } from "../router.tsx";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
-const commonClient = orpcClient.common as {
+const internalClient = orpcClient.__internal as {
   publicConfig(input: {}): Promise<unknown>;
 };
 
 export const Route = createRootRouteWithContext<RouterContext>()({
-  loader: async () => PublicConfigSchema.parse(await commonClient.publicConfig({})),
+  loader: async () => PublicConfigSchema.parse(await internalClient.publicConfig({})),
   staleTime: Number.POSITIVE_INFINITY,
   head: () => ({
     meta: [
@@ -98,7 +99,7 @@ function RootErrorComponent(props: { error: unknown; reset: () => void }) {
       secondaryAction={
         <Link
           to="/streams/"
-          search={defaultStreamViewSearch}
+          search={{ ...defaultStreamViewSearch, projectSlug: defaultProjectSlug }}
           className="text-sm text-primary hover:underline"
         >
           Go to streams

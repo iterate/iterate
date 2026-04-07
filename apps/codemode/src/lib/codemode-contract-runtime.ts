@@ -86,7 +86,7 @@ function createContractRegistry(
   return {
     example: {
       contract: {
-        common: exampleContract.common,
+        __internal: exampleContract.__internal,
         ping: exampleContract.ping,
         pirateSecret: exampleContract.pirateSecret,
         test: {
@@ -97,7 +97,7 @@ function createContractRegistry(
         things: exampleContract.things,
       },
       client: {
-        common: clients.example.common,
+        __internal: clients.example.__internal,
         ping: clients.example.ping,
         pirateSecret: clients.example.pirateSecret,
         test: {
@@ -110,18 +110,18 @@ function createContractRegistry(
     },
     events: {
       contract: {
-        common: eventsContract.common,
+        __internal: eventsContract.__internal,
         append: eventsContract.append,
         getState: eventsContract.getState,
-        listStreams: eventsContract.listStreams,
+        listChildren: eventsContract.listChildren,
         secrets: eventsContract.secrets,
         stream: eventsContract.stream,
       },
       client: {
-        common: clients.events.common,
+        __internal: clients.events.__internal,
         append: clients.events.append,
         getState: clients.events.getState,
-        listStreams: clients.events.listStreams,
+        listChildren: clients.events.listChildren,
         secrets: clients.events.secrets,
         stream: clients.events.stream,
       },

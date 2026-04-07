@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createSemaphoreClient } from "@iterate-com/semaphore-contract";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import {
   createSemaphoreAppFixture,
@@ -15,6 +16,11 @@ function uniqueType() {
 const app = createSemaphoreAppFixture({
   apiKey: requireSemaphoreApiToken(),
   baseURL: requireSemaphoreBaseUrl(),
+});
+
+const semaphore = createSemaphoreClient({
+  apiKey: app.apiKey,
+  baseURL: app.baseURL,
 });
 
 describe.sequential("live semaphore E2E", () => {
@@ -61,6 +67,26 @@ describe.sequential("live semaphore E2E", () => {
 
   afterAll(async () => {
     await cleanup();
+  });
+
+  test("rejects unauthenticated reads and mutations", async () => {
+    const type = uniqueType();
+
+    const list = await app.fetch(`/api/resources?type=${encodeURIComponent(type)}`);
+    expect(list.ok).toBe(false);
+
+    const create = await app.fetch("/api/resources", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type,
+        slug: "alpha",
+        data: { token: "secret-alpha" },
+      }),
+    });
+    expect(create.ok).toBe(false);
   });
 
   test("can add, list, acquire, release, and delete resources", async () => {
@@ -236,6 +262,26 @@ describe.sequential("live semaphore E2E", () => {
     leasedResources.push({ type, slug: waitingLease.slug, leaseId: waitingLease.leaseId });
     expect(waitingLease.slug).toBe("only");
   }, 120_000);
+
+  test("supports the contract client against the live worker", async () => {
+    const type = uniqueType();
+    const created = await semaphore.resources.add({
+      type,
+      slug: "client-alpha",
+      data: { token: "secret-client" },
+    });
+    createdResources.push({ type, slug: created.slug });
+
+    expect(created.slug).toBe("client-alpha");
+
+    const listed = await semaphore.resources.list({ type });
+    expect(listed).toEqual([
+      expect.objectContaining({
+        slug: "client-alpha",
+        data: { token: "secret-client" },
+      }),
+    ]);
+  });
 });
 
 async function apiJson<T>(pathname: string, init: RequestInit) {

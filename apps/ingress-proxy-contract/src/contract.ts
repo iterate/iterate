@@ -1,5 +1,5 @@
 import { oc } from "@orpc/contract";
-import { commonContract } from "@iterate-com/shared/apps/common-router-contract";
+import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { z } from "zod";
 
 const rootHostChars = /^[a-z0-9._-]+$/;
@@ -161,13 +161,13 @@ export const RemoveRouteOutput = z.object({
 });
 
 export const ingressProxyContract = oc.router({
-  common: commonContract,
+  __internal: internalContract,
   routes: {
     upsert: oc
       .route({
         method: "PUT",
         path: "/routes/{rootHost}",
-        tags: ["Routes"],
+        tags: ["/routes"],
       })
       .input(UpsertRouteInput)
       .output(IngressProxyRoute),
@@ -176,7 +176,7 @@ export const ingressProxyContract = oc.router({
       .route({
         method: "GET",
         path: "/routes/{rootHost}",
-        tags: ["Routes"],
+        tags: ["/routes"],
       })
       .input(GetRouteInput)
       .output(IngressProxyRoute),
@@ -185,7 +185,7 @@ export const ingressProxyContract = oc.router({
       .route({
         method: "GET",
         path: "/routes",
-        tags: ["Routes"],
+        tags: ["/routes"],
       })
       .input(ListRoutesInput)
       .output(ListRoutesOutput),
@@ -194,7 +194,7 @@ export const ingressProxyContract = oc.router({
       .route({
         method: "DELETE",
         path: "/routes/{rootHost}",
-        tags: ["Routes"],
+        tags: ["/routes"],
       })
       .input(RemoveRouteInput)
       .output(RemoveRouteOutput),

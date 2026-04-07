@@ -63,7 +63,6 @@ export default {
       uses: "./.github/workflows/deploy.yml",
       needs: ["variables"],
       if: "needs.variables.outputs.stage == 'prd'",
-      // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       with: {
         stage: "${{ needs.variables.outputs.stage }}",
@@ -74,7 +73,6 @@ export default {
       uses: "./.github/workflows/build-sandbox-image.yml",
       needs: ["variables", "deploy-os-early"],
       if: "needs.variables.outputs.stage == 'prd'",
-      // @ts-expect-error - reusable workflow supports secrets: inherit
       secrets: "inherit",
       with: {
         doppler_config: "prd",
@@ -87,7 +85,6 @@ export default {
       needs: ["variables", "build-sandbox-image"],
       if: "needs.variables.outputs.stage == 'prd'",
       uses: "./.github/workflows/sandbox-test-fly.yml",
-      // @ts-expect-error - reusable workflow supports secrets: inherit
       secrets: "inherit",
       with: {
         doppler_config: "prd",
@@ -126,7 +123,6 @@ export default {
         "promote-fly-default-image",
       ],
       if: "needs.variables.outputs.stage == 'prd'",
-      // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       with: {
         stage: "${{ needs.variables.outputs.stage }}",

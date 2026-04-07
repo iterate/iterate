@@ -5,6 +5,7 @@ import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import { createRouterClient, type RouterClient } from "@orpc/server";
 import { createIsomorphicFn, getGlobalStartContext } from "@tanstack/react-start";
 import { eventsContract } from "@iterate-com/events-contract";
+import { iterateProjectHeader, resolveProjectSlug, withProjectHeader } from "~/lib/project-slug.ts";
 import { appRouter } from "~/orpc/root.ts";
 
 export const makeQueryClient = () =>
@@ -30,6 +31,14 @@ function createBrowserOpenApiClient(): OrpcClient {
   return createORPCClient(
     new OpenAPILink(eventsContract, {
       url: `${window.location.origin}/api`,
+      fetch: (request, init) => {
+        const requestInit = init as RequestInit | undefined;
+        const headers = new Headers(
+          request instanceof Request ? request.headers : requestInit?.headers,
+        );
+        headers.set(iterateProjectHeader, resolveProjectSlug({ url: window.location.href }));
+        return fetch(request, { ...requestInit, headers });
+      },
     }),
   );
 }
@@ -48,7 +57,20 @@ const makeOrpcClient = createIsomorphicFn()
             );
           }
 
-          return context;
+          if (!context.rawRequest) {
+            return context;
+          }
+
+          return {
+            ...context,
+            rawRequest: withProjectHeader(
+              context.rawRequest,
+              resolveProjectSlug({
+                url: context.rawRequest.url,
+                headerValue: context.rawRequest.headers.get(iterateProjectHeader),
+              }),
+            ),
+          };
         },
       }),
   )

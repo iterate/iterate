@@ -9,12 +9,14 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "os": "cd apps/os && pnpm",
+    "events": "cd apps/events && pnpm",
     "daemon": "cd apps/daemon && pnpm",
     "sandbox": "cd sandbox && pnpm",
     "jonasland": "cd jonasland && pnpm",
     "cli": "cd apps/cli && pnpm tsx main.ts",
     "skills:sync": "npx skills add . --skill '*' -a claude-code -a opencode -g -y",
     "skills:list": "npx skills list -g -a claude-code -a opencode",
+    "preview": "node ./packages/iterate/bin/iterate.js --local-router ./scripts/preview/router.ts local-router preview",
     "spec": "playwright test",
     "video": "VIDEO_MODE=1 playwright test",
     "lint": "oxlint . --threads 1 --deny-warnings",
@@ -89,7 +91,9 @@
     }
   },
   "dependencies": {
+    "@octokit/rest": "^22.0.0",
     "@orpc/client": "1.13.13",
-    "@orpc/server": "1.13.13"
+    "@orpc/server": "1.13.13",
+    "zod": "^4.3.6"
   }
 }

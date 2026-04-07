@@ -45,8 +45,8 @@ export function createAfterEventHandlerApp<Bindings extends object, State>({
     const streamPath = parsedStreamPath.data;
     const callbackUrl = createSubscriptionCallbackUrl(c, streamPath);
     const result = await getEventsClient(c).append({
-      params: { path: streamPath },
-      body: {
+      path: streamPath,
+      event: {
         type: "https://events.iterate.com/events/stream/subscription/configured",
         payload: {
           callbackUrl,
@@ -170,8 +170,8 @@ class ProcessorInstance<State> {
     await this.#processor.onEvent?.({
       append: async (nextEvent: AppendEvent) => {
         await this.#eventsClient.append({
-          params: { path: this.#streamPath },
-          body: nextEvent,
+          path: this.#streamPath,
+          event: nextEvent,
         });
       },
       event,
