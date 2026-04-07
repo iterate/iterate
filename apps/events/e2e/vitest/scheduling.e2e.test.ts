@@ -2,16 +2,20 @@
  * Deployed scheduler smoke over the public oRPC API only.
  *
  * We intentionally do not call private Durable Object methods here. Instead,
- * the test appends internal scheduler control events through the normal stream
+ * the test appends the public append-scheduled event through the normal stream
  * append API, then waits for the alarm-driven callback side effects to appear
  * over the same public stream/history surface.
  */
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
-import { StreamPath, type EventType } from "@iterate-com/events-contract";
 import {
-  SCHEDULE_ADDED_TYPE,
+  STREAM_APPEND_SCHEDULED_TYPE,
+  StreamPath,
+  type EventType,
+} from "@iterate-com/events-contract";
+import {
+  SCHEDULE_CANCELLED_TYPE,
   SCHEDULE_EXECUTION_FINISHED_TYPE,
 } from "../../src/durable-objects/scheduling-types.ts";
 import {
@@ -34,8 +38,45 @@ const durableObjectConstructedType =
   "https://events.iterate.com/events/stream/durable-object-constructed";
 
 describeDeployedScheduling("events scheduling e2e", () => {
+  test("append-scheduled fires within 10 seconds when scheduled for 5 seconds from now", async () => {
+    const path = uniqueStreamPath();
+    const scheduleId = `sched-${randomUUID()}`;
+    const markerType =
+      `https://events.iterate.com/events/example/schedule-fired-fast/${randomUUID()}` as EventType;
+
+    await app.client.append({
+      path,
+      event: {
+        type: STREAM_APPEND_SCHEDULED_TYPE,
+        payload: {
+          scheduleId,
+          append: {
+            type: markerType,
+            payload: {
+              scheduleId,
+              source: "alarm",
+            },
+          },
+          schedule: {
+            kind: "once-in",
+            delaySeconds: scheduleDelaySeconds,
+          },
+        },
+      },
+    });
+
+    const firedEvents = await waitForHistoryMatch({
+      path,
+      timeoutMs: 10_000,
+      predicate: (events) => events.some((event) => event.type === markerType),
+    });
+
+    expect(firedEvents.map((event) => event.type)).toContain(markerType);
+    expect(firedEvents.some((event) => event.type === SCHEDULE_EXECUTION_FINISHED_TYPE)).toBe(true);
+  }, 20_000);
+
   test(
-    "delayed schedule appended over oRPC fires once on a deployed worker",
+    "append-scheduled event appended over oRPC fires once on a deployed worker",
     async () => {
       const path = uniqueStreamPath();
       const scheduleId = `sched-${randomUUID()}`;
@@ -46,20 +87,20 @@ describeDeployedScheduling("events scheduling e2e", () => {
       await app.client.append({
         path,
         event: {
-          type: SCHEDULE_ADDED_TYPE,
+          type: STREAM_APPEND_SCHEDULED_TYPE,
           payload: {
             scheduleId,
-            callback: "append",
-            payloadJson: JSON.stringify({
+            append: {
               type: markerType,
               payload: {
                 scheduleId,
                 source: "alarm",
               },
-            }),
-            scheduleType: "delayed",
-            time: scheduledTime,
-            delayInSeconds: scheduleDelaySeconds,
+            },
+            schedule: {
+              kind: "once-in",
+              delaySeconds: scheduleDelaySeconds,
+            },
           },
         },
       });
@@ -71,21 +112,32 @@ describeDeployedScheduling("events scheduling e2e", () => {
       });
 
       expect(firedEvents.map((event) => event.type)).toEqual([
-        SCHEDULE_ADDED_TYPE,
+        STREAM_APPEND_SCHEDULED_TYPE,
+        "https://events.iterate.com/events/stream/schedule/added",
         markerType,
         SCHEDULE_EXECUTION_FINISHED_TYPE,
       ]);
 
       expect(firedEvents[0]?.payload).toMatchObject({
         scheduleId,
+        schedule: {
+          kind: "once-in",
+          delaySeconds: scheduleDelaySeconds,
+        },
+      });
+      expect(firedEvents[1]?.payload).toMatchObject({
+        scheduleId,
         callback: "append",
         scheduleType: "delayed",
       });
-      expect(firedEvents[1]?.payload).toEqual({
+      expect(
+        (firedEvents[1]?.payload as { time?: number } | undefined)?.time,
+      ).toBeGreaterThanOrEqual(scheduledTime);
+      expect(firedEvents[2]?.payload).toEqual({
         scheduleId,
         source: "alarm",
       });
-      expect(firedEvents[2]?.payload).toMatchObject({
+      expect(firedEvents[3]?.payload).toMatchObject({
         scheduleId,
         outcome: "succeeded",
         nextTime: null,
@@ -95,18 +147,84 @@ describeDeployedScheduling("events scheduling e2e", () => {
 
       const settledEvents = await readHistory(path);
       expect(settledEvents.map((event) => event.type)).toEqual([
-        SCHEDULE_ADDED_TYPE,
+        STREAM_APPEND_SCHEDULED_TYPE,
+        "https://events.iterate.com/events/stream/schedule/added",
         markerType,
         SCHEDULE_EXECUTION_FINISHED_TYPE,
       ]);
 
       expect(await app.client.getState({ path })).toMatchObject({
         path,
-        eventCount: 4,
+        eventCount: 5,
         childPaths: [],
       });
     },
     waitForAlarmTimeoutMs + settleAfterFireMs + 15_000,
+  );
+
+  test(
+    "append-scheduled can be cancelled through schedule-cancelled before it fires",
+    async () => {
+      const path = uniqueStreamPath();
+      const scheduleId = `sched-${randomUUID()}`;
+      const markerType =
+        `https://events.iterate.com/events/example/schedule-cancelled/${randomUUID()}` as EventType;
+
+      await app.client.append({
+        path,
+        event: {
+          type: STREAM_APPEND_SCHEDULED_TYPE,
+          payload: {
+            scheduleId,
+            append: {
+              type: markerType,
+              payload: {
+                scheduleId,
+                source: "alarm",
+              },
+            },
+            schedule: {
+              kind: "once-in",
+              delaySeconds: scheduleDelaySeconds,
+            },
+          },
+        },
+      });
+
+      await waitForHistoryMatch({
+        path,
+        timeoutMs: waitForAlarmTimeoutMs,
+        predicate: (events) =>
+          events.some(
+            (event) => event.type === "https://events.iterate.com/events/stream/schedule/added",
+          ),
+      });
+
+      await app.client.append({
+        path,
+        event: {
+          type: SCHEDULE_CANCELLED_TYPE,
+          payload: {
+            scheduleId,
+          },
+        },
+      });
+
+      await delay(scheduleDelaySeconds * 1000 + 4_000);
+
+      const settledEvents = await readHistory(path);
+      expect(settledEvents.map((event) => event.type)).toEqual([
+        STREAM_APPEND_SCHEDULED_TYPE,
+        "https://events.iterate.com/events/stream/schedule/added",
+        SCHEDULE_CANCELLED_TYPE,
+      ]);
+
+      expect(settledEvents.some((event) => event.type === markerType)).toBe(false);
+      expect(settledEvents.some((event) => event.type === SCHEDULE_EXECUTION_FINISHED_TYPE)).toBe(
+        false,
+      );
+    },
+    scheduleDelaySeconds * 1000 + 20_000,
   );
 });
 

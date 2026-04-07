@@ -1,86 +1,44 @@
-import { Event, EventInput, StreamPath } from "@iterate-com/events-contract";
+import {
+  Event,
+  EventInput,
+  SCHEDULE_ADDED_TYPE,
+  SCHEDULE_CANCELLED_TYPE,
+  SCHEDULE_EXECUTION_FINISHED_TYPE,
+  SCHEDULE_EXECUTION_STARTED_TYPE,
+  ScheduleAddedPayload,
+  ScheduleCancelledPayload,
+  ScheduleExecutionFinishedPayload,
+  ScheduleExecutionStartedPayload,
+  SchedulerRowState as SchedulerRowStateSchema,
+  SchedulerState as SchedulerStateSchema,
+  ScheduleType,
+  ScheduleTypeConstraint,
+  STREAM_APPEND_SCHEDULED_TYPE,
+  StreamAppendSchedule,
+  StreamAppendScheduledPayload,
+  StreamPath,
+} from "@iterate-com/events-contract";
 import { z } from "zod";
-
-const iterateEventUriPrefix = "https://events.iterate.com/" as const;
 
 export const HUNG_INTERVAL_TIMEOUT_SECONDS = 30;
 export const DUPLICATE_SCHEDULE_THRESHOLD = 10;
 export const MAX_INTERVAL_SECONDS = 30 * 24 * 60 * 60;
 
-export const SCHEDULE_ADDED_TYPE = `${iterateEventUriPrefix}events/stream/schedule/added` as const;
-export const SCHEDULE_CANCELLED_TYPE =
-  `${iterateEventUriPrefix}events/stream/schedule/cancelled` as const;
-export const SCHEDULE_EXECUTION_STARTED_TYPE =
-  `${iterateEventUriPrefix}events/stream/schedule/execution-started` as const;
-export const SCHEDULE_EXECUTION_FINISHED_TYPE =
-  `${iterateEventUriPrefix}events/stream/schedule/execution-finished` as const;
-
-export const ScheduleType = z.enum(["scheduled", "delayed", "cron", "interval"]);
-export type ScheduleType = z.infer<typeof ScheduleType>;
-
-export const ScheduleTypeConstraint = "'scheduled', 'delayed', 'cron', 'interval'";
-
-export const ScheduleAddedPayload = z
-  .object({
-    scheduleId: z.string().trim().min(1),
-    callback: z.string().trim().min(1),
-    payloadJson: z.string().nullable().optional(),
-    scheduleType: ScheduleType,
-    time: z.number().int().nonnegative(),
-    delayInSeconds: z.number().int().positive().optional(),
-    cron: z.string().trim().min(1).optional(),
-    intervalSeconds: z.number().int().positive().optional(),
-  })
-  .superRefine((payload, ctx) => {
-    switch (payload.scheduleType) {
-      case "scheduled":
-        return;
-      case "delayed":
-        if (payload.delayInSeconds == null) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["delayInSeconds"],
-            message: "delayInSeconds is required for delayed schedules.",
-          });
-        }
-        return;
-      case "cron":
-        if (payload.cron == null) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["cron"],
-            message: "cron is required for cron schedules.",
-          });
-        }
-        return;
-      case "interval":
-        if (payload.intervalSeconds == null) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["intervalSeconds"],
-            message: "intervalSeconds is required for interval schedules.",
-          });
-        }
-        return;
-      default:
-        return;
-    }
-  });
-
-export const ScheduleCancelledPayload = z.object({
-  scheduleId: z.string().trim().min(1),
-});
-
-export const ScheduleExecutionStartedPayload = z.object({
-  scheduleId: z.string().trim().min(1),
-  startedAt: z.number().int().nonnegative(),
-});
-
-export const ScheduleExecutionFinishedPayload = z.object({
-  scheduleId: z.string().trim().min(1),
-  outcome: z.enum(["succeeded", "failed"]),
-  nextTime: z.number().int().nonnegative().nullable(),
-});
+export {
+  SCHEDULE_ADDED_TYPE,
+  SCHEDULE_CANCELLED_TYPE,
+  SCHEDULE_EXECUTION_FINISHED_TYPE,
+  SCHEDULE_EXECUTION_STARTED_TYPE,
+  ScheduleAddedPayload,
+  ScheduleCancelledPayload,
+  ScheduleExecutionFinishedPayload,
+  ScheduleExecutionStartedPayload,
+  ScheduleType,
+  ScheduleTypeConstraint,
+  STREAM_APPEND_SCHEDULED_TYPE,
+  StreamAppendSchedule,
+  StreamAppendScheduledPayload,
+};
 
 export type Schedule = {
   id: string;
@@ -96,23 +54,10 @@ export type Schedule = {
   | { type: "interval"; intervalSeconds?: number }
 );
 
-export const ScheduleRow = z.object({
-  id: z.string().trim().min(1),
-  callback: z.string().trim().min(1),
-  payload: z.string().nullable(),
-  type: ScheduleType,
-  time: z.number().int().nonnegative(),
-  delayInSeconds: z.number().int().nullable(),
-  cron: z.string().nullable(),
-  intervalSeconds: z.number().int().nullable(),
-  running: z.number().int().min(0).max(1),
-  execution_started_at: z.number().int().nonnegative().nullable(),
-  retry_options: z.string().nullable(),
-  created_at: z.number().int().nonnegative(),
-});
+export const ScheduleRow = SchedulerRowStateSchema;
 export type ScheduleRow = z.infer<typeof ScheduleRow>;
 
-export const ScheduleProjectionState = z.record(z.string(), ScheduleRow).default({});
+export const ScheduleProjectionState = SchedulerStateSchema;
 export type ScheduleProjectionState = z.infer<typeof ScheduleProjectionState>;
 
 export type ScheduleCriteria = {

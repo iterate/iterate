@@ -116,7 +116,8 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
           },
           "jsonata-transformer": {
             "transformersBySlug": {}
-          }
+          },
+          "scheduler": {}
         }
       }
       ---
@@ -138,7 +139,8 @@ curl -sS "$BASE_URL/api/__state/%2F" >/dev/null
           },
           "jsonata-transformer": {
             "transformersBySlug": {}
-          }
+          },
+          "scheduler": {}
         }
       }
       ---

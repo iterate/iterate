@@ -19,6 +19,19 @@ import {
   JsonataTransformerConfiguredEventInput,
   JsonataTransformerConfiguredEvent,
 } from "./jsonata-transformer-types.ts";
+import {
+  ScheduleAddedEvent,
+  ScheduleAddedEventInput,
+  ScheduleCancelledEvent,
+  ScheduleCancelledEventInput,
+  ScheduleExecutionFinishedEvent,
+  ScheduleExecutionFinishedEventInput,
+  ScheduleExecutionStartedEvent,
+  ScheduleExecutionStartedEventInput,
+  SchedulerState,
+  StreamAppendScheduledEvent,
+  StreamAppendScheduledEventInput,
+} from "./scheduling-types.ts";
 
 export { JSONObject, Offset, StreamPath };
 
@@ -108,6 +121,11 @@ const builtInEventInputOptions = [
   StreamMetadataUpdatedEventInput,
   ErrorOccurredEventInput,
   InvalidEventAppendedEventInput,
+  StreamAppendScheduledEventInput,
+  ScheduleAddedEventInput,
+  ScheduleCancelledEventInput,
+  ScheduleExecutionStartedEventInput,
+  ScheduleExecutionFinishedEventInput,
   JsonataTransformerConfiguredEventInput,
   StreamPausedEventInput,
   StreamResumedEventInput,
@@ -120,12 +138,18 @@ const builtInEventOptions = [
   StreamMetadataUpdatedEvent,
   ErrorOccurredEvent,
   InvalidEventAppendedEvent,
+  StreamAppendScheduledEvent,
+  ScheduleAddedEvent,
+  ScheduleCancelledEvent,
+  ScheduleExecutionStartedEvent,
+  ScheduleExecutionFinishedEvent,
   JsonataTransformerConfiguredEvent,
   StreamPausedEvent,
   StreamResumedEvent,
 ] as const;
-
-const [firstBuiltInType, ...restBuiltInTypes] = builtInEventInputOptions.map((s) => s.shape.type);
+const [firstBuiltInType, ...restBuiltInTypes] = builtInEventInputOptions.map(
+  (schema) => schema.shape.type,
+);
 export const BuiltInEventType = z.union([firstBuiltInType, ...restBuiltInTypes]);
 
 const GenericEventType = EventTypeSchema.refine(
@@ -169,6 +193,7 @@ export type Event = BuiltInEvent | GenericEvent;
 export const ProcessorsState = z.object({
   "circuit-breaker": CircuitBreakerState,
   "jsonata-transformer": JsonataTransformerState,
+  scheduler: SchedulerState,
 });
 
 export const StreamState = z.object({

@@ -1,6 +1,8 @@
 import { env } from "cloudflare:test";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { STREAM_APPEND_SCHEDULED_TYPE } from "@iterate-com/events-contract";
 import { SCHEDULE_ADDED_TYPE } from "~/durable-objects/scheduling-types.ts";
 import type {
   TestScheduleStreamDurableObject,
@@ -25,7 +27,57 @@ type TestEnv = {
 const testEnv = env as unknown as TestEnv;
 
 describe("schedule operations", () => {
-  it("should repoint the stored alarm when a schedule control event is appended directly", async () => {
+  it("should eventually rewrite append-scheduled into an append callback schedule", async () => {
+    const streamStub = testEnv.TEST_SCHEDULE_STREAM.getByName("append-scheduled-test");
+    const path = "/append-scheduled-test";
+    const scheduleId = "append-scheduled-id";
+
+    await streamStub.initialize({ path });
+    await streamStub.append({
+      type: STREAM_APPEND_SCHEDULED_TYPE,
+      payload: {
+        scheduleId,
+        append: {
+          type: "https://events.iterate.com/events/example/append-scheduled-fired",
+          payload: {
+            source: "test",
+          },
+        },
+        schedule: {
+          kind: "once-in",
+          delaySeconds: 60,
+        },
+      },
+    });
+
+    let schedule = await streamStub.getScheduleById(scheduleId);
+    for (let attempt = 0; attempt < 20 && schedule == null; attempt++) {
+      await delay(10);
+      schedule = await streamStub.getScheduleById(scheduleId);
+    }
+
+    expect(schedule?.id).toBe(scheduleId);
+    expect(schedule?.callback).toBe("append");
+    expect(schedule?.payload).toEqual({
+      type: "https://events.iterate.com/events/example/append-scheduled-fired",
+      payload: {
+        source: "test",
+      },
+    });
+
+    let events = await streamStub.history();
+    for (let attempt = 0; attempt < 20 && events.at(-1)?.type !== SCHEDULE_ADDED_TYPE; attempt++) {
+      await delay(10);
+      events = await streamStub.history();
+    }
+
+    expect(events.slice(-2).map((event) => event.type)).toEqual([
+      STREAM_APPEND_SCHEDULED_TYPE,
+      SCHEDULE_ADDED_TYPE,
+    ]);
+  });
+
+  it("should eventually repoint the stored alarm when a schedule control event is appended directly", async () => {
     const streamStub = testEnv.TEST_SCHEDULE_STREAM.getByName("public-schedule-append-test");
     const path = "/public-schedule-append-test";
     const scheduleId = "public-schedule-append-id";
@@ -44,7 +96,13 @@ describe("schedule operations", () => {
       },
     });
 
-    expect(await streamStub.getStoredAlarm()).toBe(time * 1000);
+    let storedAlarm = await streamStub.getStoredAlarm();
+    for (let attempt = 0; attempt < 20 && storedAlarm !== time * 1000; attempt++) {
+      await delay(10);
+      storedAlarm = await streamStub.getStoredAlarm();
+    }
+
+    expect(storedAlarm).toBe(time * 1000);
 
     const schedule = await streamStub.getScheduleById(scheduleId);
     expect(schedule?.id).toBe(scheduleId);
