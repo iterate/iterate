@@ -32,7 +32,7 @@ describe("schedule operations", () => {
     const path = "/append-scheduled-test";
     const scheduleId = "append-scheduled-id";
 
-    await streamStub.initialize({ path });
+    await streamStub.initialize({ projectSlug: "test", path });
     await streamStub.append({
       type: STREAM_APPEND_SCHEDULED_TYPE,
       payload: {
@@ -83,7 +83,7 @@ describe("schedule operations", () => {
     const scheduleId = "public-schedule-append-id";
     const time = Math.floor(Date.now() / 1000) + 60;
 
-    await streamStub.initialize({ path });
+    await streamStub.initialize({ projectSlug: "test", path });
     await streamStub.append({
       type: SCHEDULE_ADDED_TYPE,
       payload: {

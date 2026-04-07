@@ -225,15 +225,14 @@ export class StreamDurableObject extends DurableObject<Env> {
    * All external callers go through `getInitializedStreamStub()` in
    * `~/lib/stream-helpers.ts`, which calls this before returning the stub.
    */
-  initialize(args: { projectSlug?: ProjectSlug; path: StreamPath }) {
+  initialize(args: { projectSlug: ProjectSlug; path: StreamPath }) {
     if (this._state != null) {
       return;
     }
 
     this.ensureSchema();
 
-    const projectSlug =
-      args.projectSlug ?? this.getProjectSlugFromCurrentName() ?? ("test" as ProjectSlug);
+    const projectSlug = args.projectSlug;
     const processorState = Object.fromEntries(
       processors.map((processor) => [processor.slug, structuredClone(processor.initialState)]),
     ) as StreamState["processors"];
