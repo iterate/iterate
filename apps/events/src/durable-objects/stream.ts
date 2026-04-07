@@ -9,9 +9,9 @@ import {
   StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
+import type { BuiltinProcessor } from "@iterate-com/events-contract/sdk";
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
 import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
-import type { BuiltinProcessor } from "./define-processor.ts";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 
@@ -31,7 +31,7 @@ function getProcessorState(state: StreamState, slug: string) {
  * ## Append lifecycle
  *
  * Every event passes through three phases that intentionally mirror the hooks
- * on `Processor` / `BuiltinProcessor` in `define-processor.ts`:
+ * on `Processor` / `BuiltinProcessor` in `@iterate-com/events-contract/sdk`:
  *
  *   beforeAppend  →  reduce  →  afterAppend
  *
@@ -196,7 +196,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   // Append lifecycle
   //
   // The four methods below — append, beforeAppend, reduce, afterAppend —
-  // mirror the hook structure on BuiltinProcessor in define-processor.ts.
+  // mirror the hook structure on BuiltinProcessor in `@iterate-com/events-contract/sdk`.
   //
   // In each phase the stream core runs its own privileged logic first, then
   // delegates to the registered builtin processors. This symmetry is
@@ -392,7 +392,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     for (const processor of processors) {
       const result = processor.afterAppend?.({
-        append: (nextEvent) => this.append(nextEvent),
+        append: (nextEvent: EventInput) => this.append(nextEvent),
         event,
         state: getProcessorState(this.state, processor.slug),
       });
@@ -401,7 +401,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         continue;
       }
 
-      void result.catch((error) => {
+      void result.catch((error: unknown) => {
         console.error("[stream-do] processor afterAppend failed", {
           path: this.state.path,
           processor: processor.slug,

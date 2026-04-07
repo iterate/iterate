@@ -1,19 +1,39 @@
+import type { ContractRouterClient } from "@orpc/contract";
+import { createORPCClient } from "@orpc/client";
+import { OpenAPILink } from "@orpc/openapi-client/fetch";
+import { eventsContract } from "./orpc-contract.ts";
 import {
   ChildStreamCreatedEvent,
+  EventInput as EventInputSchema,
+  GenericEventInput,
   StreamPath as StreamPathSchema,
   StreamInitializedEvent,
   type Event,
-  type EventInput,
+  type EventType,
+  type JSONObject,
   type StreamPath,
 } from "./types.ts";
 
-type RelativeStreamPath = `.${string}`;
-type ProcessorAppendInput = {
-  event: EventInput;
+export { eventsContract, EventInputSchema as EventInput, GenericEventInput };
+export type { Event, EventType, JSONObject, StreamPath } from "./types.ts";
+
+export type EventsORPCClient = ContractRouterClient<typeof eventsContract>;
+
+export function createEventsClient(baseUrl: string): EventsORPCClient {
+  return createORPCClient(
+    new OpenAPILink(eventsContract, {
+      url: new URL("/api", baseUrl).toString(),
+    }),
+  ) as EventsORPCClient;
+}
+
+export type RelativeStreamPath = `.${string}`;
+export type ProcessorAppendInput = {
+  event: import("./types.ts").EventInput;
   path?: StreamPath | RelativeStreamPath;
 };
 
-type Processor<State = Record<string, unknown>> = {
+export type Processor<State = Record<string, unknown>> = {
   slug: string;
   initialState: State;
   reduce?(args: { event: Event; state: State }): State;
@@ -24,8 +44,36 @@ type Processor<State = Record<string, unknown>> = {
   }): Promise<void>;
 };
 
+/**
+ * A BuiltinProcessor runs in-process inside the Durable Object, so it can
+ * synchronously reject events via `beforeAppend` before they are committed.
+ * Non-builtin processors cannot do this because they may execute across the
+ * network where synchronous rejection is not possible.
+ */
+export type BuiltinProcessor<TState = Record<string, unknown>> = {
+  slug: string;
+  initialState: TState;
+  beforeAppend?(args: { event: import("./types.ts").EventInput; state: TState }): void;
+  reduce?(args: { event: Event; state: TState }): TState;
+  afterAppend?(args: {
+    append: (event: import("./types.ts").EventInput) => Event | Promise<Event>;
+    event: Event;
+    state: TState;
+  }): Promise<void>;
+};
+
+export function defineProcessor<const TState>(factory: () => Processor<TState>): Processor<TState> {
+  return factory();
+}
+
+export function defineBuiltinProcessor<const TState>(
+  factory: () => BuiltinProcessor<TState>,
+): BuiltinProcessor<TState> {
+  return factory();
+}
+
 type PullSubscriptionEventsClient = {
-  append: (input: { path: StreamPath; event: EventInput }) => Promise<{
+  append: (input: { path: StreamPath; event: import("./types.ts").EventInput }) => Promise<{
     event: Event;
   }>;
   stream: (

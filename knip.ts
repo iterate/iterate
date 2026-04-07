@@ -161,6 +161,9 @@ const config: KnipConfig = {
     // This file is generated from Fly's OpenAPI schema and intentionally emits
     // a couple of placeholder exported types that are never imported directly.
     "packages/shared/src/jonasland/deployment/fly-api/generated/openapi.gen.ts": ["types"],
+    // This SDK is intentionally re-exported by ai-engineer-workshop, which is
+    // outside the scoped root Knip command on purpose.
+    "apps/events-contract/src/sdk.ts": ["exports", "types"],
     // TanStack Start resolves these router factories by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/daemon-v2/src/router.tsx": ["exports"],

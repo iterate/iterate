@@ -7,7 +7,6 @@ The real scripts live in the separate workshop repo, while this package keeps a
 few tiny local examples and a scratch `script.ts` for experimentation.
 
 - `sdk.ts` re-exports the shared runtime/client SDK from `apps/events-contract/src/sdk.ts`
-- `sdk.ts` also re-exports the exact `defineProcessor()` helper from `apps/events/src/durable-objects/define-processor.ts`
 - `sdk.ts` also exports lightweight network test helpers for workshop e2e tests
 - `contract.ts` re-exports the shared contract from `apps/events-contract/src/index.ts`
 - `cli.ts` runs workshop scripts from the current working directory
@@ -52,7 +51,7 @@ await client.append({
 });
 ```
 
-Processors use the exact `defineProcessor()` helper from `apps/events`:
+Processors use the shared `defineProcessor()` helper from `apps/events-contract/src/sdk.ts`:
 
 ```ts
 const processor = defineProcessor(() => ({

@@ -2,13 +2,13 @@ import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ContractRouterClient } from "@orpc/contract";
 import {
+  PullSubscriptionProcessorRuntime,
   eventsContract,
   type Event,
-  type EventInput,
+  type Processor,
   type StreamPath,
 } from "../apps/events-contract/src/sdk.ts";
-import type { Processor } from "../apps/events/src/durable-objects/define-processor.ts";
-import { PullSubscriptionProcessorRuntime } from "../apps/events-contract/src/sdk.ts";
+import type { EventInput } from "../apps/events-contract/src/types.ts";
 import { createEventsClient } from "./sdk.ts";
 
 export const defaultWorkshopBaseUrl = "https://events.iterate.com";
