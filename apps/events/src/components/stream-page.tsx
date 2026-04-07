@@ -42,32 +42,33 @@ import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projectio
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { DEFAULT_STREAM_RENDERER_MODE, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
 import { formatClientError } from "~/lib/format-client-error.ts";
+import { defaultStreamViewSearch, type StreamComposerMode } from "~/lib/stream-view-search.ts";
 import { getOrpc } from "~/orpc/client.ts";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
 
 const DEFAULT_EVENT_TEMPLATE_ID = "manual-event-appended:default";
-const DEFAULT_COMPOSER_MODE = "raw" as const;
-
-type ComposerMode = "raw" | "agent";
 
 export function StreamPage({
   streamPath,
   rendererMode = DEFAULT_STREAM_RENDERER_MODE,
+  composerMode = defaultStreamViewSearch.composer,
   openEventOffset,
   onOpenEventOffsetChange,
   onRendererModeChange,
+  onComposerModeChange,
 }: {
   streamPath: StreamPath;
   rendererMode?: StreamRendererMode;
+  composerMode?: StreamComposerMode;
   openEventOffset?: number;
   onOpenEventOffsetChange?: (offset?: number) => void;
   onRendererModeChange?: (mode: StreamRendererMode) => void;
+  onComposerModeChange?: (mode: StreamComposerMode) => void;
 }) {
   const queryClient = useQueryClient();
   const { closeMetadata, metadataOpen, setHeaderControls } = useStreamsChrome();
   const orpc = getOrpc();
   const projectSlug = useCurrentProjectSlug();
-  const [composerMode, setComposerMode] = useState<ComposerMode>(DEFAULT_COMPOSER_MODE);
   const [selectedTemplateId, setSelectedTemplateId] = useState(DEFAULT_EVENT_TEMPLATE_ID);
   const [appendInputJson, setAppendInputJson] = useState(() =>
     createEventInputTemplate(DEFAULT_EVENT_TEMPLATE_ID),
@@ -301,6 +302,8 @@ export function StreamPage({
           <PromptInputBody>
             {composerMode === "agent" ? (
               <Input
+                autoFocus
+                data-slot="input-group-control"
                 value={agentInputText}
                 onChange={(event) => setAgentInputText(event.currentTarget.value)}
                 placeholder="Message this agent"
@@ -321,7 +324,7 @@ export function StreamPage({
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <Tabs
                   value={composerMode}
-                  onValueChange={(value) => setComposerMode(value as ComposerMode)}
+                  onValueChange={(value) => onComposerModeChange?.(value as StreamComposerMode)}
                 >
                   <TabsList className="h-8">
                     <TabsTrigger value="raw" className="px-2 text-xs">

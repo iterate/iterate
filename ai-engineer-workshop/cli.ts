@@ -3,99 +3,85 @@ import { execSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseArgs } from "node:util";
+
+import * as prompts from "@clack/prompts";
+import { os } from "@orpc/server";
+import { createCli, yamlTableConsoleLogger } from "trpc-cli";
+import { z } from "zod";
+
 import { normalizePathPrefix } from "./sdk.ts";
 
-await main();
+process.env.PATH_PREFIX = normalizePathPrefix(
+  process.env.PATH_PREFIX || `/${execSync("id -un").toString().trim()}`,
+);
 
-async function main() {
-  const { positionals, values } = parseArgs({
-    allowPositionals: true,
-    options: {
-      script: { type: "string" },
-      "path-prefix": { type: "string" },
-      help: { type: "boolean", short: "h" },
-    },
-  });
+const modules = await discoverRunnableModules();
+const scriptNames = [...modules.keys()].sort();
+const scriptSchema =
+  scriptNames.length > 0 ? z.enum(scriptNames as [string, ...string[]]) : z.string();
 
-  const [command] = positionals;
-  if (values.help || command == null) {
-    await printUsage(values.help ? 0 : 1);
-    return;
-  }
+const router = os.router({
+  run: os
+    .input(
+      z.object({
+        script: scriptSchema.describe("workshop script to run"),
+        pathPrefix: z
+          .string()
+          .default(process.env.PATH_PREFIX)
+          .describe("stream path prefix, e.g. /jonas"),
+      }),
+    )
+    .handler(async ({ input }) => {
+      process.env.PATH_PREFIX = normalizePathPrefix(input.pathPrefix);
 
-  if (command !== "run") {
-    throw new Error(`Unknown command: ${command}`);
-  }
+      const module = modules.get(input.script);
+      if (!module) {
+        throw new Error(`Script ${input.script} not found`);
+      }
 
-  if (!values.script) {
-    await printUsage(1);
-    return;
-  }
+      await module.run();
+    }),
+});
 
-  const pathPrefix = normalizePathPrefix(
-    values["path-prefix"] ||
-      process.env.WORKSHOP_PATH_PREFIX ||
-      `/${execSync("id -un").toString().trim()}`,
-  );
-  const scriptPath = await resolveScriptPath(values.script);
-  const module = await import(pathToFileURL(scriptPath).href);
+await createCli({ router }).run({ prompts, logger: yamlTableConsoleLogger });
 
-  if (typeof module.default !== "function") {
-    throw new Error(`Script ${values.script} must export a default async function`);
-  }
+async function discoverRunnableModules() {
+  const result = new Map<string, { run: () => Promise<unknown> }>();
 
-  await module.default(pathPrefix);
-}
-
-async function printUsage(exitCode: number) {
-  const scripts = await getScripts();
-  console.error("Usage: workshop run --script <path> [--path-prefix /jonas]");
-  if (scripts.length > 0) {
-    console.error("");
-    console.error("Discovered scripts:");
-    for (const script of scripts) {
-      console.error(`  ${script}`);
-    }
-  }
-  process.exitCode = exitCode;
-}
-
-async function resolveScriptPath(script: string) {
-  const directPath = path.resolve(process.cwd(), script);
-  if (await fileExists(directPath)) {
-    return directPath;
-  }
-
-  const discovered = await getScripts();
-  const discoveredPath = discovered.find((candidate: string) => candidate === script);
-  if (discoveredPath) {
-    return path.resolve(process.cwd(), discoveredPath);
-  }
-
-  throw new Error(`Script not found: ${script}`);
-}
-
-async function getScripts() {
-  const files = new Set<string>();
-  for await (const file of fs.glob("**/[0-9][0-9]-*/*.{js,ts}", {
+  for await (const file of fs.glob("examples/**/*.{js,ts}", {
     cwd: process.cwd(),
-    exclude: ["dist/**", "node_modules/**", "web/**"],
+    exclude: ["dist/**", "node_modules/**", "web/**", "e2e/**", "lib/**"],
   })) {
-    if (!isRunnableWorkshopScript(file)) {
-      continue;
-    }
-
-    files.add(file);
+    if (!isCandidateScript(file)) continue;
+    await tryRegister(result, file);
   }
 
   for (const file of ["script.ts", "script.js"]) {
-    if (await fileExists(path.resolve(process.cwd(), file))) {
-      files.add(file);
+    if (await fileExists(path.join(process.cwd(), file))) {
+      await tryRegister(result, file);
     }
   }
 
-  return [...files].sort();
+  return result;
+}
+
+async function tryRegister(map: Map<string, { run: () => Promise<unknown> }>, file: string) {
+  const module = await import(pathToFileURL(path.resolve(process.cwd(), file)).href);
+  if (typeof module.run === "function") {
+    map.set(file, module as { run: () => Promise<unknown> });
+  }
+}
+
+function isCandidateScript(file: string) {
+  const basename = path.basename(file);
+
+  return (
+    !file.includes("/.") &&
+    !file.endsWith(".d.ts") &&
+    !file.endsWith(".test.ts") &&
+    !file.endsWith("-types.ts") &&
+    !["agent.ts", "codemode.ts", "prompt.ts", "slack-input.ts"].includes(basename)
+  );
 }
 
 async function fileExists(filepath: string) {
@@ -105,31 +91,4 @@ async function fileExists(filepath: string) {
   } catch {
     return false;
   }
-}
-
-function isRunnableWorkshopScript(file: string) {
-  const basename = path.basename(file);
-
-  if (basename.endsWith(".test.ts")) {
-    return false;
-  }
-
-  if (basename.endsWith("-types.ts")) {
-    return false;
-  }
-
-  if (
-    ["agent.ts", "codemode.ts", "coding-agent-system-prompt.ts", "prompt.ts"].includes(basename)
-  ) {
-    return false;
-  }
-
-  return (
-    basename === "script.ts" ||
-    basename.startsWith("append-") ||
-    basename.startsWith("prove-") ||
-    basename.startsWith("run-") ||
-    basename.startsWith("subscribe-") ||
-    basename.endsWith("-processor.ts")
-  );
 }

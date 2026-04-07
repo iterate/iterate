@@ -1,15 +1,15 @@
 import { randomBytes } from "node:crypto";
-import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   createEventsClient,
   defaultWorkshopProjectSlug,
   PullSubscriptionProcessorRuntime,
   resolveWorkshopBaseUrl,
+  runWorkshopMain,
 } from "ai-engineer-workshop";
+import bashmode from "../08-bashmode/bashmode.ts";
 import { createAgentProcessor } from "./agent.ts";
-import { llmInputAddedType } from "./agent-types.ts";
-import { createCodemodeProcessor } from "./codemode.ts";
+import { agentInputAddedType } from "./agent-types.ts";
 
 export async function run() {
   const baseUrl = resolveWorkshopBaseUrl();
@@ -17,8 +17,7 @@ export async function run() {
   const openAiModel = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
   const projectSlug = process.env.PROJECT_SLUG ?? defaultWorkshopProjectSlug;
   const streamPath =
-    process.env.STREAM_PATH || `${process.env.PATH_PREFIX}/04/${randomBytes(4).toString("hex")}`;
-  const codemodeRootDirectory = path.resolve(process.cwd(), ".codemode");
+    process.env.STREAM_PATH || `${process.env.PATH_PREFIX}/09/${randomBytes(4).toString("hex")}`;
   const client = createEventsClient({ baseUrl, projectSlug });
 
   if (!openAiApiKey) {
@@ -28,40 +27,27 @@ export async function run() {
   const agentProcessor = createAgentProcessor({
     agentPath: streamPath,
     apiKey: openAiApiKey,
-    baseUrl,
-    codemodeRootDirectory,
     model: openAiModel,
-    projectSlug,
-    workingDirectory: process.cwd(),
   });
-  const codemodeProcessor = createCodemodeProcessor({
-    codemodeRootDirectory,
-  });
-
-  const llmRuntime = new PullSubscriptionProcessorRuntime({
+  const agentRuntime = new PullSubscriptionProcessorRuntime({
     eventsClient: client,
     processor: agentProcessor,
     streamPath,
   });
-  const codemodeRuntime = new PullSubscriptionProcessorRuntime({
+  const bashmodeRuntime = new PullSubscriptionProcessorRuntime({
     eventsClient: client,
-    processor: codemodeProcessor,
+    processor: bashmode,
     streamPath,
   });
 
-  printInstructions({
-    baseUrl,
-    codemodeRootDirectory,
-    projectSlug,
-    streamPath,
-  });
+  printInstructions({ baseUrl, projectSlug, streamPath });
   installSignalHandlers(() => {
     agentProcessor.stop?.();
-    llmRuntime.stop();
-    codemodeRuntime.stop();
+    agentRuntime.stop();
+    bashmodeRuntime.stop();
   });
 
-  const runPromise = Promise.all([llmRuntime.run(), codemodeRuntime.run()]);
+  const runPromise = Promise.all([agentRuntime.run(), bashmodeRuntime.run()]);
 
   const initialPrompt = process.env.INITIAL_PROMPT?.trim();
   if (initialPrompt) {
@@ -69,10 +55,9 @@ export async function run() {
     await client.append({
       path: streamPath,
       event: {
-        type: llmInputAddedType,
+        type: agentInputAddedType,
         payload: {
           content: initialPrompt,
-          source: "user",
         },
       },
     });
@@ -83,21 +68,18 @@ export async function run() {
 
 function printInstructions({
   baseUrl,
-  codemodeRootDirectory,
   projectSlug,
   streamPath,
 }: {
   baseUrl: string;
-  codemodeRootDirectory: string;
   projectSlug: string;
   streamPath: string;
 }) {
   console.log(`\
-LLM + Codemode Loop
+Bashmode Agent Loop
   agent path: ${streamPath}
   project:    ${projectSlug}
   model:      ${process.env.OPENAI_MODEL ?? "gpt-4.1-mini"}
-  codemode:   ${codemodeRootDirectory}
 
 Open in browser:
   ${new URL(`/streams${streamPath}`, baseUrl)}
@@ -105,11 +87,10 @@ Open in browser:
 Append this event to kick it off:
 ${JSON.stringify(
   {
-    type: llmInputAddedType,
+    type: agentInputAddedType,
     payload: {
       content:
-        "Write exactly one ```ts``` block that fetches your own stream history and logs the most recent event as JSON. No prose.",
-      source: "user",
+        "Write exactly one ```bash``` block that prints hello from bashmode agent. No prose.",
     },
   },
   null,
@@ -125,3 +106,5 @@ function installSignalHandlers(stop: () => void) {
     });
   }
 }
+
+runWorkshopMain(import.meta.url, run);

@@ -29,6 +29,7 @@ import {
   MessageActions,
   MessageContent,
   MessageResponse,
+  MessageToolbar,
 } from "@iterate-com/ui/components/ai-elements/message";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
@@ -37,7 +38,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@iterate-com/ui/components/collapsible";
-import { Identifier } from "@iterate-com/ui/components/identifier";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import {
@@ -56,6 +56,7 @@ import { StreamPathLabel } from "~/components/stream-path-label.tsx";
 import { StreamToolCard } from "~/components/stream-tool-card.tsx";
 import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { getEventTypePageByType } from "~/lib/event-type-pages.ts";
+import { formatElapsedTime } from "~/lib/stream-feed-time.ts";
 import { getAdjacentEventOffset, getEventFeedItems } from "~/lib/stream-feed-projection.ts";
 import { getRelativeStreamPath } from "~/lib/stream-path-relative.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
@@ -94,6 +95,24 @@ export function StreamEventFeed({
   onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   const eventFeedItems = useMemo(() => getEventFeedItems(feed), [feed]);
+  const eventElapsedByOffset = useMemo(() => {
+    const elapsedByOffset = new Map<number, string>();
+
+    for (const [index, event] of eventFeedItems.entries()) {
+      const previousEvent = eventFeedItems[index - 1];
+
+      if (previousEvent == null) {
+        continue;
+      }
+
+      elapsedByOffset.set(
+        event.offset,
+        formatElapsedTime(event.timestamp - previousEvent.timestamp),
+      );
+    }
+
+    return elapsedByOffset;
+  }, [eventFeedItems]);
   const rawEvents = eventFeedItems.map((item) => item.raw);
   const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
 
@@ -150,6 +169,7 @@ export function StreamEventFeed({
               <StreamFeedItemRenderer
                 key={getFeedItemKey(item, index)}
                 item={item}
+                eventElapsedByOffset={eventElapsedByOffset}
                 onOpenEventOffsetChange={onOpenEventOffsetChange}
               />
             ))}
@@ -169,16 +189,30 @@ export function StreamEventFeed({
 
 function StreamFeedItemRenderer({
   item,
+  eventElapsedByOffset,
   onOpenEventOffsetChange,
 }: {
   item: StreamFeedItem;
+  eventElapsedByOffset: ReadonlyMap<number, string>;
   onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   switch (item.kind) {
     case "event":
-      return <EventLine event={item} onOpenEventOffsetChange={onOpenEventOffsetChange} />;
+      return (
+        <EventLine
+          event={item}
+          elapsedLabel={eventElapsedByOffset.get(item.offset)}
+          onOpenEventOffsetChange={onOpenEventOffsetChange}
+        />
+      );
     case "grouped-event":
-      return <GroupedEventLine group={item} onOpenEventOffsetChange={onOpenEventOffsetChange} />;
+      return (
+        <GroupedEventLine
+          group={item}
+          elapsedLabel={eventElapsedByOffset.get(item.events[0]?.offset ?? -1)}
+          onOpenEventOffsetChange={onOpenEventOffsetChange}
+        />
+      );
     case "message":
       return <ChatMessageCard item={item} />;
     case "tool":
@@ -227,6 +261,7 @@ function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) 
           params={{ _splat: streamPathToSplat(item.createdPath) }}
           search={(previous) => ({
             event: undefined,
+            composer: previous.composer ?? defaultStreamViewSearch.composer,
             projectSlug,
             renderer: previous.renderer ?? defaultStreamViewSearch.renderer,
           })}
@@ -248,49 +283,29 @@ function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) 
 function ChatMessageCard({ item }: { item: Extract<StreamFeedItem, { kind: "message" }> }) {
   const content = item.content.map((block) => block.text).join("");
   const showStreaming = item.role === "assistant" && item.streamStatus === "streaming";
-  const showCopyAction = content.length > 0;
+  const showCopyToolbar = item.role === "assistant" && content.length > 0;
 
   return (
     <Message from={item.role}>
-      <MessageContent className="gap-1.5">
-        <div
-          className={`mb-1 flex w-full min-w-0 items-start gap-2 ${
-            showCopyAction
-              ? "justify-between"
-              : item.role === "user"
-                ? "justify-end"
-                : "justify-start"
-          }`}
-        >
-          <div className="flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-            <span>{formatTime(item.timestamp)}</span>
-            {showStreaming ? (
-              <>
-                <span>·</span>
-                <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
-                  <Spinner className="size-3" />
-                  Streaming
-                </span>
-              </>
-            ) : null}
-          </div>
-          {showCopyAction ? (
-            <MessageActions className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
-              <MessageAction
-                tooltip="Copy message text"
-                label="Copy message text"
-                onClick={() => {
-                  void navigator.clipboard.writeText(content);
-                  toast.success("Copied");
-                }}
-              >
-                <CopyIcon className="size-3.5" />
-              </MessageAction>
-            </MessageActions>
-          ) : null}
-        </div>
+      <MessageContent>
         <MessageResponse>{content.length > 0 ? content : showStreaming ? "…" : ""}</MessageResponse>
       </MessageContent>
+      {showCopyToolbar ? (
+        <MessageToolbar className="mt-1.5 w-fit max-w-full justify-start gap-2">
+          <MessageActions className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+            <MessageAction
+              tooltip="Copy message text"
+              label="Copy message text"
+              onClick={() => {
+                void navigator.clipboard.writeText(content);
+                toast.success("Copied");
+              }}
+            >
+              <CopyIcon className="size-3.5" />
+            </MessageAction>
+          </MessageActions>
+        </MessageToolbar>
+      ) : null}
     </Message>
   );
 }
@@ -580,52 +595,101 @@ function ArtifactSection({ children }: { children: ReactNode }) {
 
 function EventLine({
   event,
+  elapsedLabel,
   onOpenEventOffsetChange,
 }: {
   event: EventFeedItem;
+  elapsedLabel?: string;
   onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   return (
-    <div className="flex justify-end">
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-auto max-w-full gap-2 px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-        onClick={() => onOpenEventOffsetChange?.(event.offset)}
-      >
-        <span className="truncate font-mono">{event.eventType}</span>
-        <span>·</span>
-        <span>{formatTime(event.timestamp)}</span>
-      </Button>
-    </div>
+    <RawEventLineButton
+      summary={
+        <>
+          <span className="truncate font-mono">{event.eventType}</span>
+          {elapsedLabel ? (
+            <>
+              <span>·</span>
+              <span>{elapsedLabel}</span>
+            </>
+          ) : null}
+          <span>·</span>
+          <span>{formatTime(event.timestamp)}</span>
+        </>
+      }
+      hoverDetail={formatAbsoluteDateTimeRange(event.timestamp)}
+      onClick={() => onOpenEventOffsetChange?.(event.offset)}
+    />
   );
 }
 
 function GroupedEventLine({
   group,
+  elapsedLabel,
   onOpenEventOffsetChange,
 }: {
   group: GroupedEventFeedItem;
+  elapsedLabel?: string;
   onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   return (
+    <RawEventLineButton
+      summary={
+        <>
+          <span className="truncate font-mono">{group.eventType}</span>
+          <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+            x{group.count}
+          </Badge>
+          {elapsedLabel ? (
+            <>
+              <span>·</span>
+              <span>{elapsedLabel}</span>
+            </>
+          ) : null}
+          <span>·</span>
+          <span>{formatTime(group.firstTimestamp)}</span>
+          {group.firstTimestamp !== group.lastTimestamp ? (
+            <span className="text-muted-foreground/70">to {formatTime(group.lastTimestamp)}</span>
+          ) : null}
+        </>
+      }
+      hoverDetail={formatAbsoluteDateTimeRange(group.firstTimestamp, group.lastTimestamp)}
+      onClick={() => onOpenEventOffsetChange?.(group.events[0]?.offset)}
+    />
+  );
+}
+
+function RawEventLineButton({
+  summary,
+  hoverDetail,
+  onClick,
+}: {
+  summary: ReactNode;
+  hoverDetail: string;
+  onClick: () => void;
+}) {
+  return (
     <div className="flex justify-end">
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-auto max-w-full gap-2 px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-        onClick={() => onOpenEventOffsetChange?.(group.events[0]?.offset)}
-      >
-        <span className="truncate font-mono">{group.eventType}</span>
-        <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
-          x{group.count}
-        </Badge>
-        <span>·</span>
-        <span>{formatTime(group.firstTimestamp)}</span>
-        {group.firstTimestamp !== group.lastTimestamp ? (
-          <span className="text-muted-foreground/70">to {formatTime(group.lastTimestamp)}</span>
-        ) : null}
-      </Button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-auto max-w-full px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+              onClick={onClick}
+            />
+          }
+        >
+          <span className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
+            {summary}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-sm flex-col items-start gap-1.5">
+          <p>{hoverDetail}</p>
+          <p>Click to see raw payload</p>
+        </TooltipContent>
+      </Tooltip>
     </div>
   );
 }
@@ -651,9 +715,25 @@ function EventInspectorSheet({
     () => getAdjacentEventOffset(events, openEventOffset, "next"),
     [events, openEventOffset],
   );
+  const previousEvent = useMemo(
+    () => events.find((event) => event.offset === previousOffset),
+    [events, previousOffset],
+  );
+  const nextEvent = useMemo(
+    () => events.find((event) => event.offset === nextOffset),
+    [events, nextOffset],
+  );
   const docsHref = selectedEvent
     ? getEventTypePageByType(selectedEvent.eventType)?.href
     : undefined;
+  const timeSincePreviousEvent =
+    selectedEvent && previousEvent
+      ? formatElapsedTime(selectedEvent.timestamp - previousEvent.timestamp)
+      : undefined;
+  const timeToNextEvent =
+    selectedEvent && nextEvent
+      ? formatElapsedTime(nextEvent.timestamp - selectedEvent.timestamp)
+      : undefined;
 
   useEffect(() => {
     if (selectedEvent == null) {
@@ -698,46 +778,36 @@ function EventInspectorSheet({
       }}
     >
       <SheetContent className="w-full gap-0 data-[side=right]:sm:w-[min(96vw,120rem)] data-[side=right]:sm:max-w-[min(96vw,120rem)]">
-        <SheetHeader className="space-y-3 border-b pr-14">
-          <div className="min-w-0 space-y-1">
-            <SheetTitle className="truncate font-mono text-sm">
-              {docsHref ? (
-                <a
-                  href={docsHref}
-                  className="inline-flex items-center gap-2 hover:text-primary hover:underline"
-                >
-                  <span className="truncate">{selectedEvent?.eventType ?? "Event"}</span>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <span className="inline-flex items-center text-muted-foreground hover:text-primary" />
-                      }
-                    >
-                      <BookOpenIcon className="size-3.5" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>RTFM</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </a>
-              ) : (
-                (selectedEvent?.eventType ?? "Event")
-              )}
-            </SheetTitle>
-            <SheetDescription>{selectedEvent?.createdAt ?? "No event selected"}</SheetDescription>
-          </div>
-          {selectedEvent ? (
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <Identifier value={String(selectedEvent.offset)} textClassName="text-xs" />
-              <span>Use left and right arrow keys to move between events.</span>
+        <SheetHeader className="space-y-2 border-b px-4 py-3 pr-14">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1 space-y-1">
+              <SheetTitle className="truncate font-mono text-sm">
+                {docsHref ? (
+                  <a
+                    href={docsHref}
+                    className="inline-flex items-center gap-2 hover:text-primary hover:underline"
+                  >
+                    <span className="truncate">{selectedEvent?.eventType ?? "Event"}</span>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span className="inline-flex items-center text-muted-foreground hover:text-primary" />
+                        }
+                      >
+                        <BookOpenIcon className="size-3.5" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>RTFM</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </a>
+                ) : (
+                  (selectedEvent?.eventType ?? "Event")
+                )}
+              </SheetTitle>
+              <SheetDescription>{selectedEvent?.createdAt ?? "No event selected"}</SheetDescription>
             </div>
-          ) : null}
-        </SheetHeader>
-
-        <div className="min-h-0 flex-1 overflow-hidden p-4">
-          <div className="flex items-center justify-between gap-3 pb-3">
-            <div className="text-xs text-muted-foreground">Raw event payload</div>
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               <Button
                 size="sm"
                 variant="outline"
@@ -758,9 +828,33 @@ function EventInspectorSheet({
               </Button>
             </div>
           </div>
+          {selectedEvent ? (
+            <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <span>Event {selectedEvent.offset}</span>
+                <span className="text-muted-foreground/70">Use left and right arrow keys.</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2.5 py-1">
+                <span className="text-muted-foreground/70">Since previous</span>
+                <span className="font-mono text-foreground">
+                  {timeSincePreviousEvent ?? "No previous event"}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2.5 py-1">
+                <span className="text-muted-foreground/70">Until next</span>
+                <span className="font-mono text-foreground">
+                  {timeToNextEvent ?? "No next event"}
+                </span>
+              </div>
+            </div>
+          ) : null}
+        </SheetHeader>
+
+        <div className="min-h-0 flex-1 overflow-hidden px-4 py-3">
+          <div className="pb-2 text-xs text-muted-foreground">Raw event payload</div>
           <SerializedObjectCodeBlock
             data={selectedEvent?.raw ?? null}
-            className="h-full min-h-[72vh]"
+            className="h-full min-h-[68vh]"
             initialFormat="yaml"
             showToggle
             showCopyButton
@@ -773,6 +867,19 @@ function EventInspectorSheet({
 
 function formatTime(timestamp: number) {
   return new Date(timestamp).toLocaleTimeString();
+}
+
+function formatAbsoluteDateTimeRange(startTimestamp: number, endTimestamp = startTimestamp) {
+  const formatter = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "full",
+    timeStyle: "long",
+  });
+
+  if (startTimestamp === endTimestamp) {
+    return formatter.format(new Date(startTimestamp));
+  }
+
+  return `${formatter.format(new Date(startTimestamp))} to ${formatter.format(new Date(endTimestamp))}`;
 }
 
 function getFeedItemKey(item: StreamFeedItem, index: number) {

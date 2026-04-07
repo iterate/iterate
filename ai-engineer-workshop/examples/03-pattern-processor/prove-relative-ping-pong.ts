@@ -5,9 +5,9 @@ import {
   type Event,
   type StreamPath,
 } from "ai-engineer-workshop";
-import { relativePingPongProcessor } from "./relative-ping-pong-processor.ts";
+import relativePingPongProcessor from "./relative-ping-pong-processor.ts";
 
-export default async function proveRelativePingPong(_pathPrefix: string) {
+export async function run() {
   const app = createWorkshopTestHarness();
   const workerPath = app.createTestChildStreamPath({
     testName: "relative-ping-pong",
@@ -84,4 +84,4 @@ function readLocation(event: Event) {
   return typeof value === "string" ? value : null;
 }
 
-runWorkshopMain(import.meta.url, proveRelativePingPong);
+runWorkshopMain(import.meta.url, run);

@@ -33,6 +33,10 @@ export function PathBreadcrumbs() {
   const currentCrumb = crumbs.at(-1);
   const streamSearch = makeStreamSearch({
     projectSlug,
+    composer:
+      "composer" in search && typeof search.composer === "string"
+        ? search.composer
+        : defaultStreamViewSearch.composer,
     renderer:
       "renderer" in search && typeof search.renderer === "string"
         ? search.renderer
@@ -138,14 +142,17 @@ function getStreamSegmentLabel(path: StreamPathType) {
 }
 
 function makeStreamSearch({
+  composer,
   projectSlug,
   renderer,
 }: {
+  composer: typeof defaultStreamViewSearch.composer;
   projectSlug: string;
   renderer: StreamRendererMode;
 }) {
   return {
     event: defaultStreamViewSearch.event,
+    composer,
     projectSlug,
     renderer,
   };

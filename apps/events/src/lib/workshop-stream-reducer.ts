@@ -9,6 +9,9 @@ const OPENAI_RESPONSE_EVENT_ADDED_TYPE = "openai-response-event-added" as const;
 const LLM_REQUEST_COMPLETED_TYPE = "llm-request-completed" as const;
 const CODEMODE_BLOCK_ADDED_TYPE = "codemode-block-added" as const;
 const CODEMODE_RESULT_ADDED_TYPE = "codemode-result-added" as const;
+const AGENT_INPUT_ADDED_TYPE = "agent-input-added" as const;
+const AGENT_OUTPUT_ADDED_TYPE = "agent-output-added" as const;
+const AGENT_REQUEST_FAILED_TYPE = "agent-request-failed" as const;
 
 type WorkshopInputSource = "user" | "event";
 
@@ -36,6 +39,18 @@ type LlmRequestFailedPayload = {
 type LlmRequestCompletedPayload = {
   requestId: string;
   outputText: string;
+};
+
+type AgentInputAddedPayload = {
+  content: string;
+};
+
+type AgentOutputAddedPayload = {
+  content: string;
+};
+
+type AgentRequestFailedPayload = {
+  message: string;
 };
 
 type OpenAiResponseEventAddedPayload = {
@@ -168,6 +183,52 @@ export function buildWorkshopSemanticInsertions(
   const turnsByRequestId = new Map<string, WorkshopTurn>();
 
   for (const event of events) {
+    if (event.type === AGENT_INPUT_ADDED_TYPE) {
+      const payload = parseAgentInputAddedPayload(event.payload);
+      if (!payload) {
+        continue;
+      }
+
+      appendInsertion(insertionsByOffset, event.offset, {
+        kind: "message",
+        role: "user",
+        content: [{ type: "text", text: payload.content }],
+        timestamp: getTimestamp(event.createdAt),
+      });
+      continue;
+    }
+
+    if (event.type === AGENT_OUTPUT_ADDED_TYPE) {
+      const payload = parseAgentOutputAddedPayload(event.payload);
+      if (!payload) {
+        continue;
+      }
+
+      appendInsertion(insertionsByOffset, event.offset, {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: payload.content }],
+        timestamp: getTimestamp(event.createdAt),
+      });
+      continue;
+    }
+
+    if (event.type === AGENT_REQUEST_FAILED_TYPE) {
+      const payload = parseAgentRequestFailedPayload(event.payload);
+      if (!payload) {
+        continue;
+      }
+
+      appendInsertion(insertionsByOffset, event.offset, {
+        kind: "error",
+        message: "Agent request failed",
+        context: payload.message,
+        timestamp: getTimestamp(event.createdAt),
+        raw: event,
+      });
+      continue;
+    }
+
     if (event.type === LLM_INPUT_ADDED_TYPE) {
       const payload = parseLlmInputAddedPayload(event.payload);
       if (!payload) {
@@ -742,6 +803,36 @@ function parseLlmRequestCompletedPayload(payload: unknown): LlmRequestCompletedP
   return {
     requestId: payload.requestId,
     outputText: payload.outputText,
+  };
+}
+
+function parseAgentInputAddedPayload(payload: unknown): AgentInputAddedPayload | null {
+  if (!isRecord(payload) || typeof payload.content !== "string") {
+    return null;
+  }
+
+  return {
+    content: payload.content,
+  };
+}
+
+function parseAgentOutputAddedPayload(payload: unknown): AgentOutputAddedPayload | null {
+  if (!isRecord(payload) || typeof payload.content !== "string") {
+    return null;
+  }
+
+  return {
+    content: payload.content,
+  };
+}
+
+function parseAgentRequestFailedPayload(payload: unknown): AgentRequestFailedPayload | null {
+  if (!isRecord(payload) || typeof payload.message !== "string") {
+    return null;
+  }
+
+  return {
+    message: payload.message,
   };
 }
 

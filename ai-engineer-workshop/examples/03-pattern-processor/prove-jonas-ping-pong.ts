@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import {
   createEventsClient,
+  PullSubscriptionPatternProcessorRuntime,
   type Event,
   type StreamPath,
   runWorkshopMain,
 } from "ai-engineer-workshop";
-import { createJonasPingPongRuntime, jonasStreamPattern } from "./jonas-ping-pong-processor.ts";
+import processor from "./jonas-ping-pong-processor.ts";
 
-export default async function proveJonasPingPong(_pathPrefix: string) {
-  const baseUrl = process.env.BASE_URL || "http://127.0.0.1:4317";
-  const client = createEventsClient(baseUrl);
+const jonasStreamPattern = "/jonas/**/*";
+
+export async function run() {
+  const client = createEventsClient({ baseUrl: process.env.BASE_URL || "http://127.0.0.1:4317" });
   const runId = `proof-${Date.now()}`;
   const matchingPathA = `/jonas/proofs/${runId}/a` as StreamPath;
   const matchingPathB = `/jonas/proofs/${runId}/b` as StreamPath;
@@ -17,7 +19,11 @@ export default async function proveJonasPingPong(_pathPrefix: string) {
   const nonMatchingPathA = `/someone-else/proofs/${runId}/a` as StreamPath;
   const nonMatchingPathB = `/other/proofs/${runId}/b` as StreamPath;
 
-  const runtime = createJonasPingPongRuntime(baseUrl);
+  const runtime = new PullSubscriptionPatternProcessorRuntime({
+    eventsClient: client,
+    streamPattern: jonasStreamPattern,
+    processor,
+  });
   const runtimePromise = runtime.run();
 
   try {
@@ -156,7 +162,7 @@ export default async function proveJonasPingPong(_pathPrefix: string) {
       false,
     );
 
-    console.log(`Base URL: ${baseUrl}`);
+    console.log(`Base URL: ${process.env.BASE_URL || "http://127.0.0.1:4317"}`);
     console.log(`Pattern: ${jonasStreamPattern}`);
     console.log(
       `Discovered matching streams: ${[matchingPathA, matchingPathB, matchingNestedPath].join(
@@ -243,4 +249,4 @@ async function waitFor(
   }
 }
 
-runWorkshopMain(import.meta.url, proveJonasPingPong);
+runWorkshopMain(import.meta.url, run);

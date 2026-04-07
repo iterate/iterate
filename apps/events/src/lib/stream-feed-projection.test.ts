@@ -451,6 +451,57 @@ describe("projectWireToFeed", () => {
     ]);
   });
 
+  test("projects bashmode agent input and output events into ai-elements chat messages", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "agent-input-added",
+        payload: {
+          content: "Run a quick bash command.",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "agent-output-added",
+        payload: {
+          content: "```bash\necho hello\n```",
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "agent-input-added",
+        payload: {
+          content: "Bash result:\nstdout:\nhello\nstderr:\n\nexitCode: 0\n",
+        },
+      }),
+    ]);
+
+    const messages = feed.filter(
+      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
+    );
+
+    expect(messages).toEqual([
+      {
+        kind: "message",
+        role: "user",
+        content: [{ type: "text", text: "Run a quick bash command." }],
+        timestamp: messages[0]!.timestamp,
+      },
+      {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "```bash\necho hello\n```" }],
+        timestamp: messages[1]!.timestamp,
+      },
+      {
+        kind: "message",
+        role: "user",
+        content: [{ type: "text", text: "Bash result:\nstdout:\nhello\nstderr:\n\nexitCode: 0\n" }],
+        timestamp: messages[2]!.timestamp,
+      },
+    ]);
+  });
+
   test("marks workshop assistant output as streaming until the request completes", () => {
     const feed = projectWireToFeed([
       createEvent({
@@ -686,6 +737,24 @@ describe("projectWireToFeed", () => {
       kind: "error",
       message: "LLM request failed",
       context: "model overloaded",
+    });
+  });
+
+  test("projects failed bashmode agent requests into error feed items", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "agent-request-failed",
+        payload: {
+          message: "provider timeout",
+        },
+      }),
+    ]);
+
+    expect(feed.find((item) => item.kind === "error")).toMatchObject({
+      kind: "error",
+      message: "Agent request failed",
+      context: "provider timeout",
     });
   });
 });

@@ -43,13 +43,17 @@ export function StreamsSidebar() {
     "renderer" in search && typeof search.renderer === "string"
       ? (search.renderer as StreamRendererMode)
       : defaultStreamViewSearch.renderer;
+  const currentComposer =
+    "composer" in search && typeof search.composer === "string"
+      ? search.composer
+      : defaultStreamViewSearch.composer;
   const { events: rootEvents, isConnecting } = useLiveStreamEvents({
     streamPath: "/",
     projectSlug,
   });
   const streamSearch = useMemo(
-    () => makeStreamSearch({ projectSlug, renderer: currentRenderer }),
-    [currentRenderer, projectSlug],
+    () => makeStreamSearch({ projectSlug, renderer: currentRenderer, composer: currentComposer }),
+    [currentComposer, currentRenderer, projectSlug],
   );
   const { root, defaultExpandedPaths } = useMemo(
     () =>
@@ -364,14 +368,17 @@ function StreamPathLink({
 }
 
 function makeStreamSearch({
+  composer,
   projectSlug,
   renderer,
 }: {
+  composer: typeof defaultStreamViewSearch.composer;
   projectSlug: string;
   renderer: StreamRendererMode;
 }) {
   return {
     event: defaultStreamViewSearch.event,
+    composer,
     projectSlug,
     renderer,
   };

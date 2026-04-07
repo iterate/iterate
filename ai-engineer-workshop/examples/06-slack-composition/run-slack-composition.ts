@@ -1,8 +1,7 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import {
-  createProjectScopedEventsClient,
-  normalizePathPrefix,
+  createEventsClient,
   PullSubscriptionProcessorRuntime,
   resolveWorkshopBaseUrl,
   resolveWorkshopProjectSlug,
@@ -12,7 +11,7 @@ import { createAgentProcessor } from "./agent.ts";
 import { createCodemodeProcessor } from "./codemode.ts";
 import { createSlackInputProcessor } from "./slack-input.ts";
 
-async function run(pathPrefix: string) {
+export async function run() {
   const apiKey = process.env.OPENAI_API_KEY;
   if (apiKey == null) {
     throw new Error("OPENAI_API_KEY is required");
@@ -20,9 +19,9 @@ async function run(pathPrefix: string) {
 
   const baseUrl = resolveWorkshopBaseUrl();
   const projectSlug = resolveWorkshopProjectSlug();
-  const streamPath = `${normalizePathPrefix(pathPrefix)}/06/${randomBytes(4).toString("hex")}`;
+  const streamPath = `${process.env.PATH_PREFIX}/06/${randomBytes(4).toString("hex")}`;
   const codemodeRootDirectory = path.resolve(process.cwd(), ".codemode");
-  const client = createProjectScopedEventsClient({ baseUrl, projectSlug });
+  const client = createEventsClient({ baseUrl, projectSlug });
 
   console.log(`\
 Slack Composition

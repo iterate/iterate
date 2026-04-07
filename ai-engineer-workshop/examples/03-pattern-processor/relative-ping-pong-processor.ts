@@ -1,40 +1,30 @@
 import { defineProcessor } from "ai-engineer-workshop";
 
-type RelativePingPongState = {
-  pingCount: number;
-};
+type PingPongState = { pingCount: number };
+const initialState: PingPongState = { pingCount: 0 };
 
-export const relativePingPongProcessor = defineProcessor<RelativePingPongState>(() => ({
+export default defineProcessor(() => ({
   slug: "relative-ping-pong",
-  initialState: { pingCount: 0 },
+  initialState,
 
   reduce: ({ event, state }) => {
-    if (event.type !== "ping") {
-      return state;
-    }
-
+    if (event.type !== "ping") return state;
     return { pingCount: state.pingCount + 1 };
   },
 
-  async afterAppend({ append, event, state }) {
-    if (event.type !== "ping") {
-      return;
-    }
+  afterAppend: async ({ append, event, state }) => {
+    if (event.type !== "ping") return;
 
-    const message = readPingMessage(event.payload);
+    const message = String((event.payload as { message?: string }).message ?? "").toLowerCase();
+
     if (message.includes("parent")) {
       await append({
         path: "../",
         event: {
           type: "pong",
-          payload: {
-            location: "parent",
-            pingCount: state.pingCount,
-            replyToOffset: event.offset,
-          },
+          payload: { location: "parent", pingCount: state.pingCount, replyToOffset: event.offset },
         },
       });
-      return;
     }
 
     if (message.includes("child")) {
@@ -42,22 +32,9 @@ export const relativePingPongProcessor = defineProcessor<RelativePingPongState>(
         path: "./child",
         event: {
           type: "pong",
-          payload: {
-            location: "child",
-            pingCount: state.pingCount,
-            replyToOffset: event.offset,
-          },
+          payload: { location: "child", pingCount: state.pingCount, replyToOffset: event.offset },
         },
       });
     }
   },
 }));
-
-function readPingMessage(payload: unknown) {
-  if (typeof payload !== "object" || payload == null || Array.isArray(payload)) {
-    return "";
-  }
-
-  const message = Reflect.get(payload, "message");
-  return typeof message === "string" ? message.toLowerCase() : "";
-}

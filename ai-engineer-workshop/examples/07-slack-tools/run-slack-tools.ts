@@ -1,8 +1,7 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import {
-  createProjectScopedEventsClient,
-  normalizePathPrefix,
+  createEventsClient,
   PullSubscriptionProcessorRuntime,
   resolveWorkshopBaseUrl,
   resolveWorkshopProjectSlug,
@@ -13,7 +12,7 @@ import { createCodemodeProcessor } from "./codemode.ts";
 import { codemodeToolAddedType } from "./codemode-types.ts";
 import { createSlackInputProcessor } from "./slack-input.ts";
 
-async function run(pathPrefix: string) {
+export async function run() {
   const apiKey = process.env.OPENAI_API_KEY;
   if (apiKey == null) {
     throw new Error("OPENAI_API_KEY is required");
@@ -21,9 +20,9 @@ async function run(pathPrefix: string) {
 
   const baseUrl = resolveWorkshopBaseUrl();
   const projectSlug = resolveWorkshopProjectSlug();
-  const streamPath = `${normalizePathPrefix(pathPrefix)}/07/${randomBytes(4).toString("hex")}`;
+  const streamPath = `${process.env.PATH_PREFIX}/07/${randomBytes(4).toString("hex")}`;
   const codemodeRootDirectory = path.resolve(process.cwd(), ".codemode");
-  const client = createProjectScopedEventsClient({ baseUrl, projectSlug });
+  const client = createEventsClient({ baseUrl, projectSlug });
 
   await client.append({
     path: streamPath,

@@ -1,8 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ContractRouterClient } from "@orpc/contract";
-import { createORPCClient } from "@orpc/client";
-import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import {
   eventsContract,
   type Event,
@@ -11,8 +9,7 @@ import {
 } from "../apps/events-contract/src/sdk.ts";
 import type { Processor } from "../apps/events/src/durable-objects/define-processor.ts";
 import { PullSubscriptionProcessorRuntime } from "../apps/events-contract/src/sdk.ts";
-
-const iterateProjectHeader = "x-iterate-project";
+import { createEventsClient } from "./sdk.ts";
 
 export const defaultWorkshopBaseUrl = "https://events.iterate.com";
 export const defaultWorkshopProjectSlug = "public";
@@ -44,20 +41,7 @@ export function createProjectScopedEventsClient({
   baseUrl: string;
   projectSlug: string;
 }) {
-  return createORPCClient(
-    new OpenAPILink(eventsContract, {
-      url: new URL("/api", baseUrl).toString(),
-      fetch: (request, init) => {
-        const requestInit = init as RequestInit | undefined;
-        const headers = new Headers(
-          request instanceof Request ? request.headers : requestInit?.headers,
-        );
-        headers.set("connection", "close");
-        headers.set(iterateProjectHeader, projectSlug);
-        return fetch(request, { ...requestInit, headers });
-      },
-    }),
-  ) as ProjectScopedEventsClient;
+  return createEventsClient({ baseUrl, projectSlug });
 }
 
 export function createWorkshopTestHarness({
@@ -69,7 +53,7 @@ export function createWorkshopTestHarness({
   projectSlug?: string;
   runRootPath?: StreamPath;
 } = {}) {
-  const client = createProjectScopedEventsClient({ baseUrl, projectSlug });
+  const client = createEventsClient({ baseUrl, projectSlug });
 
   return {
     baseUrl,
