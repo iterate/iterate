@@ -70,8 +70,8 @@ It does the full lifecycle against a real `apps/events` deployment:
 2. bundles it into a `dynamic-worker/configured` event
 3. stores the real OpenAI API key as an `apps/events` secret
 4. appends the configured event with the bundled `payload.script` directly to a temporary stream
-5. appends `llm-input-added` with `What is 50 - 8? Reply with only the number.`
-6. waits up to 10 seconds for `llm-output-added`
+5. appends `agent-input-added` with `What is 50 - 8? Reply with only the number.`
+6. waits up to 10 seconds for `agent-output-added`
 7. asserts the response contains `42`
 8. cleans up the OpenAI secret and the temporary stream
 
@@ -100,10 +100,10 @@ Expected shape of the output:
   "eventTypes": [
     "https://events.iterate.com/events/stream/initialized",
     "https://events.iterate.com/events/stream/dynamic-worker/configured",
-    "llm-input-added",
-    "llm-output-added"
+    "agent-input-added",
+    "agent-output-added"
   ],
-  "llmOutputPreview": "42"
+  "agentOutputPreview": "42"
 }
 ```
 
@@ -129,7 +129,7 @@ That test:
 1. builds the processor bundle
 2. appends the configured event to the deployed preview worker
 3. sends a math prompt
-4. asserts that `llm-output-added` arrives within 10 seconds
+4. asserts that `agent-output-added` arrives within 10 seconds
 5. asserts the response contains `42`
 
 ## Related files

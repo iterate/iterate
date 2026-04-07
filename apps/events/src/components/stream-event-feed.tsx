@@ -984,6 +984,8 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `stream-metadata-${item.path}-${item.timestamp}-${index}`;
     case "stream-lifecycle":
       return `lifecycle-${item.label}-${item.timestamp}-${index}`;
+    case "dynamic-worker-configured":
+      return `dynamic-worker-configured-${item.slug}-${item.timestamp}`;
     case "stream-paused":
       return `stream-paused-${item.timestamp}-${index}`;
     case "stream-resumed":

@@ -1,8 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import {
-  parseDynamicWorkerEgressGatewayConfig,
-  type DynamicWorkerEgressGatewayProps,
-} from "~/lib/dynamic-worker-egress-config.ts";
+import { parseDynamicWorkerEgressGatewayConfig } from "~/lib/dynamic-worker-egress-config.ts";
 import { dynamicWorkerEgressConfigHeader } from "~/lib/dynamic-worker-egress.ts";
 import { replaceIterateSecretReferences } from "~/lib/iterate-secret-references.ts";
 
