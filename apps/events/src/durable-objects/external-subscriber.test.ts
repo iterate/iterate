@@ -99,6 +99,54 @@ describe("externalSubscriber", () => {
     }
   });
 
+  test("afterAppend canonicalizes raw event json before websocket delivery", async () => {
+    const socket = new FakeWebSocket();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(createWebSocketUpgradeResponse(socket));
+    const eventWithUndefinedFields = {
+      ...createEvent({
+        streamPath: "/demo/ws-canonical",
+        type: "source",
+        payload: { value: 42 },
+        offset: 8,
+      }),
+      idempotencyKey: undefined,
+      metadata: undefined,
+    } satisfies Event;
+
+    try {
+      await externalSubscriberProcessor.afterAppend?.({
+        append: () => createEvent(),
+        event: eventWithUndefinedFields,
+        state: {
+          subscribersBySlug: {
+            "processor:ping-pong": {
+              slug: "processor:ping-pong",
+              type: "websocket",
+              callbackUrl:
+                "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-canonical",
+            },
+          },
+        },
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(socket.sentMessages).toEqual([
+        JSON.stringify(
+          createEvent({
+            streamPath: "/demo/ws-canonical",
+            type: "source",
+            payload: { value: 42 },
+            offset: 8,
+          }),
+        ),
+      ]);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   test("afterAppend reconnects when a subscriber callbackUrl changes", async () => {
     const staleSocket = new FakeWebSocket({ throwOnClose: true });
     const nextSocket = new FakeWebSocket();

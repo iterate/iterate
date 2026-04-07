@@ -1,104 +1,104 @@
-import { createEventsClient } from "ai-engineer-workshop/runtime";
+import {
+  createEventsClient,
+  normalizeStreamPattern,
+  type Processor,
+} from "ai-engineer-workshop/runtime";
 import type { Context } from "hono";
 import { createAfterEventHandlerApp } from "./hono-processor-runtime.ts";
 import { createOpenAiAgentProcessor } from "./openai-agent-processor.ts";
 import { createPingPongProcessor } from "./ping-pong-processor.ts";
-import type { StreamProcessor } from "./stream-processor.ts";
 
 type Bindings = {
   EVENTS_BASE_URL?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
   PROCESSOR_KIND?: string;
+  STREAM_PATTERN?: string;
 };
 
-const DEFAULT_EVENTS_BASE_URL = "https://prd-events.iterate.workers.dev";
-const LOCAL_EVENTS_BASE_URL = "http://localhost:5173";
+const DEFAULT_EVENTS_BASE_URL = "https://events.iterate.com";
+const LOCAL_EVENTS_BASE_URL = "http://127.0.0.1:5173";
 const DEFAULT_PROCESSOR_KIND = "ping-pong";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
+const DEFAULT_STREAM_PATTERN = "/**/*";
 
 const app = createAfterEventHandlerApp<Bindings, unknown>({
-  getEventsClient: (c) => createEventsClient(getEventsBaseUrl(c)),
-  getEventsClientKey: (c) => getEventsBaseUrl(c),
-  getProcessor: (c) => {
-    const processorKind = getProcessorKind(c);
-
-    if (processorKind === "openai-agent") {
-      const apiKey = getEnvVar(c, "OPENAI_API_KEY");
-      if (!apiKey) {
-        throw new Error("OPENAI_API_KEY is required when PROCESSOR_KIND=openai-agent");
-      }
-
-      return eraseProcessor(
-        createOpenAiAgentProcessor({
-          apiKey,
-          model: getOpenAiModel(c),
-        }),
-      );
-    }
-
-    return eraseProcessor(createPingPongProcessor());
-  },
-  getProcessorKey: (c) => {
-    const processorKind = getProcessorKind(c);
-
-    if (processorKind === "openai-agent") {
-      return `${processorKind}:${getOpenAiModel(c)}`;
-    }
-
-    return processorKind;
-  },
+  getConfig: (c) => resolveConfig(c),
+  getEventsClient: (baseUrl) => createEventsClient(baseUrl),
 });
 
 export default app;
 
-function getEventsBaseUrl(c: Context<{ Bindings: Bindings }>) {
-  const requestUrl = new URL(c.req.url);
+function resolveConfig(c: Context<{ Bindings: Bindings }>) {
+  const query = new URL(c.req.url).searchParams;
+  const env = {
+    EVENTS_BASE_URL: readAmbientValue(c, "EVENTS_BASE_URL"),
+    OPENAI_API_KEY: readAmbientValue(c, "OPENAI_API_KEY"),
+    OPENAI_MODEL: readAmbientValue(c, "OPENAI_MODEL"),
+    PROCESSOR_KIND: readAmbientValue(c, "PROCESSOR_KIND"),
+    STREAM_PATTERN: readAmbientValue(c, "STREAM_PATTERN"),
+  };
+  const isLocalRequest = isLocalHostname(new URL(c.req.url).hostname);
+  const baseUrl =
+    query.get("baseUrl") ||
+    env.EVENTS_BASE_URL ||
+    (isLocalRequest ? LOCAL_EVENTS_BASE_URL : DEFAULT_EVENTS_BASE_URL);
+  const processorKind = query.get("processorKind") || env.PROCESSOR_KIND || DEFAULT_PROCESSOR_KIND;
+  const openAiModel = query.get("openaiModel") || env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+  const streamPattern = normalizeStreamPattern(
+    query.get("streamPattern") || env.STREAM_PATTERN || DEFAULT_STREAM_PATTERN,
+  );
 
-  if (requestUrl.hostname === "127.0.0.1" || requestUrl.hostname === "localhost") {
-    return getEnvVar(c, "EVENTS_BASE_URL") || LOCAL_EVENTS_BASE_URL;
+  if (processorKind === "openai-agent") {
+    if (env.OPENAI_API_KEY == null) {
+      throw new Error("OPENAI_API_KEY is required when PROCESSOR_KIND=openai-agent");
+    }
+
+    return {
+      baseUrl,
+      openAiModel,
+      processor: eraseProcessor(
+        createOpenAiAgentProcessor({
+          apiKey: env.OPENAI_API_KEY,
+          model: openAiModel,
+        }),
+      ),
+      processorDescription:
+        "It reacts to user-message events by asking OpenAI for a response and appending openai-response-output plus assistant-message events.",
+      processorKey: `${processorKind}:${openAiModel}`,
+      processorKind,
+      streamPattern,
+    };
   }
 
-  return getEnvVar(c, "EVENTS_BASE_URL") || DEFAULT_EVENTS_BASE_URL;
+  return {
+    baseUrl,
+    processor: eraseProcessor(createPingPongProcessor()),
+    processorDescription:
+      'It reacts to any event whose type or payload contains the word "ping" by appending a pong event.',
+    processorKey: processorKind,
+    processorKind,
+    streamPattern,
+  };
 }
 
-function getProcessorKind(c: Context<{ Bindings: Bindings }>) {
-  const queryValue = c.req.query("processorKind");
-  if (queryValue != null && queryValue.length > 0) {
-    return queryValue;
-  }
-
-  return getEnvVar(c, "PROCESSOR_KIND") || DEFAULT_PROCESSOR_KIND;
-}
-
-function getOpenAiModel(c: Context<{ Bindings: Bindings }>) {
-  const queryValue = c.req.query("openaiModel");
-  if (queryValue != null && queryValue.length > 0) {
-    return queryValue;
-  }
-
-  return getEnvVar(c, "OPENAI_MODEL") || DEFAULT_OPENAI_MODEL;
-}
-
-function eraseProcessor<State>(processor: StreamProcessor<State>) {
-  return processor as StreamProcessor<unknown>;
-}
-
-function getEnvVar(c: Context<{ Bindings: Bindings }>, key: keyof Bindings) {
+function readAmbientValue(c: Context<{ Bindings: Bindings }>, key: keyof Bindings) {
   const bindingValue = c.env[key];
-
   if (typeof bindingValue === "string" && bindingValue.length > 0) {
     return bindingValue;
   }
 
-  if (
-    !("process" in globalThis) ||
-    typeof globalThis.process !== "object" ||
-    globalThis.process == null
-  ) {
-    return undefined;
-  }
-
-  const processValue = globalThis.process.env?.[key];
+  const processValue =
+    typeof globalThis.process === "object" && globalThis.process != null
+      ? globalThis.process.env?.[key]
+      : undefined;
   return typeof processValue === "string" && processValue.length > 0 ? processValue : undefined;
+}
+
+function isLocalHostname(hostname: string) {
+  return hostname === "127.0.0.1" || hostname === "localhost";
+}
+
+function eraseProcessor<State>(processor: Processor<State>) {
+  return processor as Processor<unknown>;
 }

@@ -1,22 +1,25 @@
-import type { StreamProcessor } from "./stream-processor.ts";
+import { defineProcessor } from "ai-engineer-workshop/runtime";
 
-export function createPingPongProcessor(): StreamProcessor<Record<string, never>> {
-  return {
+export function createPingPongProcessor() {
+  return defineProcessor<Record<string, never>>(() => ({
+    slug: "ping-pong",
     initialState: {},
-    reduce: (state) => state,
-    onEvent: async ({ append, event }) => {
+    reduce: ({ state }) => state,
+    afterAppend: async ({ append, event }) => {
       if (!eventContainsPing(event)) {
         return;
       }
 
       await append({
-        type: "pong",
-        payload: {
-          sourceOffset: event.offset,
+        event: {
+          type: "pong",
+          payload: {
+            sourceOffset: event.offset,
+          },
         },
       });
     },
-  };
+  }));
 }
 
 function eventContainsPing(event: { type: string; payload: unknown }) {

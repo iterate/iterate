@@ -194,6 +194,110 @@ export class PullSubscriptionProcessorRuntime<State> {
   }
 }
 
+export class PushSubscriptionProcessorRuntime<State> {
+  #eventsClient: PullSubscriptionEventsClient;
+  #lastOffset = 0;
+  #pending = Promise.resolve();
+  #processor: Processor<State>;
+  #state: State;
+  #streamPath: StreamPath;
+
+  constructor({
+    eventsClient,
+    processor,
+    streamPath,
+  }: {
+    eventsClient: PullSubscriptionEventsClient;
+    processor: Processor<State>;
+    streamPath: StreamPath;
+  }) {
+    this.#eventsClient = eventsClient;
+    this.#processor = processor;
+    this.#state = structuredClone(this.#processor.initialState);
+    this.#streamPath = streamPath;
+  }
+
+  async consume(event: Event) {
+    const next = this.#pending.then(() => this.#consumeEvent(event));
+    this.#pending = next.catch(() => {});
+    await next;
+  }
+
+  getState() {
+    return this.#state;
+  }
+
+  getProcessorSlug() {
+    return this.#processor.slug;
+  }
+
+  async #consumeEvent(event: Event) {
+    if (event.streamPath !== this.#streamPath) {
+      throw new Error(
+        `Push runtime for ${this.#streamPath} received event for ${event.streamPath}`,
+      );
+    }
+
+    if (event.offset > this.#lastOffset + 1) {
+      await this.#catchUpTo(event.offset);
+    }
+
+    if (event.offset <= this.#lastOffset) {
+      return;
+    }
+
+    this.#reduce(event);
+    this.#lastOffset = event.offset;
+
+    await this.#processor.afterAppend?.({
+      append: this.#append,
+      event,
+      state: this.#state,
+    });
+  }
+
+  async #catchUpTo(targetOffset: number) {
+    const historyStream = await this.#eventsClient.stream(
+      {
+        path: this.#streamPath,
+        offset: this.#lastOffset || undefined,
+      },
+      {},
+    );
+
+    for await (const event of historyStream) {
+      if (event.offset >= targetOffset) {
+        break;
+      }
+
+      this.#reduce(event);
+      this.#lastOffset = event.offset;
+    }
+  }
+
+  #append = async (input: ProcessorAppendInput) => {
+    const result = await this.#eventsClient.append({
+      path: resolveAppendPath({
+        currentPath: this.#streamPath,
+        nextPath: input.path,
+      }),
+      event: input.event,
+    });
+    return result.event;
+  };
+
+  #reduce(event: Event) {
+    if (this.#processor.reduce == null) {
+      return;
+    }
+
+    this.#state = this.#processor.reduce({
+      event,
+      state: structuredClone(this.#state),
+    });
+  }
+}
+
 export class PullSubscriptionPatternProcessorRuntime<State> {
   #controller = new AbortController();
   #eventsClient: PullSubscriptionEventsClient;
@@ -359,7 +463,7 @@ function isAbortError(error: unknown) {
   );
 }
 
-function getDiscoveredStreamPath(event: Event): StreamPath | null {
+export function getDiscoveredStreamPath(event: Event): StreamPath | null {
   const childStreamCreatedEvent = ChildStreamCreatedEvent.safeParse(event);
   if (childStreamCreatedEvent.success) {
     return childStreamCreatedEvent.data.payload.childPath;
@@ -373,7 +477,7 @@ function getDiscoveredStreamPath(event: Event): StreamPath | null {
   return null;
 }
 
-function normalizeStreamPattern(streamPattern: string) {
+export function normalizeStreamPattern(streamPattern: string) {
   return streamPattern.startsWith("/") ? streamPattern : `/${streamPattern}`;
 }
 
@@ -431,7 +535,7 @@ function isRelativeStreamPath(path: string): path is RelativeStreamPath {
   return path === "." || path === ".." || path.startsWith("./") || path.startsWith("../");
 }
 
-function matchesStreamPattern(streamPath: string, streamPattern: string) {
+export function matchesStreamPattern(streamPath: string, streamPattern: string) {
   const pathSegments = toPathSegments(streamPath);
   const patternSegments = toPathSegments(streamPattern);
   return matchesPathSegments(pathSegments, patternSegments);

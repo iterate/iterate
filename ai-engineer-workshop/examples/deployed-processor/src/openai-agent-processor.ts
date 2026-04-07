@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { EasyInputMessage, ResponseInput } from "openai/resources/responses/responses";
-import type { StreamProcessor } from "./stream-processor.ts";
+import { defineProcessor } from "ai-engineer-workshop/runtime";
 
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 
@@ -11,6 +11,7 @@ type ConversationMessage = Pick<EasyInputMessage, "content" | "role"> & {
 
 type AgentState = {
   history: ConversationMessage[];
+  pendingResponseOffset?: number;
   requestInProgress: boolean;
 };
 
@@ -20,15 +21,17 @@ export function createOpenAiAgentProcessor({
 }: {
   apiKey: string;
   model?: string;
-}): StreamProcessor<AgentState> {
+}) {
   const openai = new OpenAI({ apiKey });
 
-  return {
+  return defineProcessor<AgentState>(() => ({
+    slug: `openai-agent:${model}`,
     initialState: {
       history: [],
+      pendingResponseOffset: undefined,
       requestInProgress: false,
     },
-    reduce: (state, event) => {
+    reduce: ({ event, state }) => {
       if (event.type === "user-message") {
         const content = getEventContent(event.payload);
         if (content == null) {
@@ -37,6 +40,9 @@ export function createOpenAiAgentProcessor({
 
         return {
           history: [...state.history, createConversationMessage("user", content)],
+          pendingResponseOffset: state.requestInProgress
+            ? state.pendingResponseOffset
+            : event.offset,
           requestInProgress: true,
         };
       }
@@ -49,6 +55,7 @@ export function createOpenAiAgentProcessor({
 
         return {
           history: [...state.history, createConversationMessage("assistant", content)],
+          pendingResponseOffset: undefined,
           requestInProgress: false,
         };
       }
@@ -56,14 +63,15 @@ export function createOpenAiAgentProcessor({
       if (event.type === "openai-response-error") {
         return {
           ...state,
+          pendingResponseOffset: undefined,
           requestInProgress: false,
         };
       }
 
       return state;
     },
-    onEvent: async ({ append, event, state, prevState }) => {
-      if (event.type !== "user-message" || prevState.requestInProgress) {
+    afterAppend: async ({ append, event, state }) => {
+      if (event.type !== "user-message" || state.pendingResponseOffset !== event.offset) {
         return;
       }
 
@@ -79,19 +87,23 @@ export function createOpenAiAgentProcessor({
         });
 
         await append({
-          type: "openai-response-output",
-          payload: {
-            responseId: response.id,
-            outputText: response.output_text,
+          event: {
+            type: "openai-response-output",
+            payload: {
+              responseId: response.id,
+              outputText: response.output_text,
+            },
           },
         });
 
         if (response.output_text.trim().length > 0) {
           await append({
-            type: "assistant-message",
-            payload: {
-              content: response.output_text,
-              responseId: response.id,
+            event: {
+              type: "assistant-message",
+              payload: {
+                content: response.output_text,
+                responseId: response.id,
+              },
             },
           });
         }
@@ -107,14 +119,16 @@ export function createOpenAiAgentProcessor({
         });
 
         await append({
-          type: "openai-response-error",
-          payload: {
-            message: getErrorMessage(error),
+          event: {
+            type: "openai-response-error",
+            payload: {
+              message: getErrorMessage(error),
+            },
           },
         });
       }
     },
-  };
+  }));
 }
 
 function createConversationMessage(

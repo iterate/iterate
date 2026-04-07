@@ -11,7 +11,11 @@ import type { EventsORPCClient } from "../apps/events-contract/src/sdk.ts";
 
 export {
   eventsContract,
+  getDiscoveredStreamPath,
+  matchesStreamPattern,
+  normalizeStreamPattern,
   type EventsORPCClient,
+  PushSubscriptionProcessorRuntime,
   PullSubscriptionProcessorRuntime,
   PullSubscriptionPatternProcessorRuntime,
   defineBuiltinProcessor,

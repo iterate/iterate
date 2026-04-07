@@ -115,7 +115,25 @@ async function getOutboundPayload(args: { event: Event; subscriber: ExternalSubs
       ? args.event
       : await getCompiledJsonata(args.subscriber.jsonataTransform).evaluate(args.event);
 
-  const parsedPayload = OutboundPayload.safeParse(rawPayload);
+  const serializedPayload = JSON.stringify(rawPayload);
+  if (serializedPayload == null) {
+    console.error("[stream-do] external subscriber transform produced invalid JSON", {
+      streamPath: args.event.streamPath,
+      offset: args.event.offset,
+      eventType: args.event.type,
+      subscriberSlug: args.subscriber.slug,
+      callbackUrl: args.subscriber.callbackUrl,
+      issues: [
+        {
+          message: "transform result could not be serialized as JSON",
+          path: [],
+        },
+      ],
+    });
+    return null;
+  }
+
+  const parsedPayload = OutboundPayload.safeParse(JSON.parse(serializedPayload));
   if (!parsedPayload.success) {
     console.error("[stream-do] external subscriber transform produced invalid JSON", {
       streamPath: args.event.streamPath,
