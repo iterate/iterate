@@ -27,7 +27,7 @@ export function AppSidebar() {
 }
 
 const items = [
-  { to: "/secrets/", label: "Secrets" },
+  { to: "/secrets/", label: "Env vars" },
   { to: "/streams/", label: "Streams" },
 ] as const;
 

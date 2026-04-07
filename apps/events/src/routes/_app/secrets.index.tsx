@@ -1,6 +1,6 @@
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, createFileRoute } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Field,
@@ -9,10 +9,8 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@iterate-com/ui/components/field";
-import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { z } from "zod";
-import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { getOrpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/secrets/")({
@@ -26,7 +24,6 @@ const CreateSecretForm = z.object({
 });
 
 function SecretsIndexPage() {
-  const projectSlug = useCurrentProjectSlug();
   const queryClient = useQueryClient();
   const orpc = getOrpc();
   const { data: secretsData } = useQuery({
@@ -77,10 +74,10 @@ function SecretsIndexPage() {
   return (
     <section className="max-w-md space-y-6 p-4">
       <div className="space-y-1">
-        <h2 className="text-sm font-semibold">Secrets</h2>
+        <h2 className="text-sm font-semibold">Env vars</h2>
         <p className="text-sm text-muted-foreground">
-          CRUD backed by Drizzle + D1. Values are stored in plaintext (demo only — not a hardened
-          vault).
+          Environment variables for this project. Values are masked in the UI and stored in
+          plaintext in D1 for this demo.
         </p>
       </div>
 
@@ -107,9 +104,9 @@ function SecretsIndexPage() {
                     onBlur={field.handleBlur}
                     onChange={(event) => field.handleChange(event.target.value)}
                     aria-invalid={isInvalid}
-                    placeholder="github-token"
+                    placeholder="GITHUB_ACCESS_TOKEN"
                   />
-                  <FieldDescription>Unique secret name.</FieldDescription>
+                  <FieldDescription>Unique environment variable name.</FieldDescription>
                   {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                 </Field>
               );
@@ -134,7 +131,7 @@ function SecretsIndexPage() {
                     aria-invalid={isInvalid}
                     placeholder="ghp_..."
                   />
-                  <FieldDescription>Shown only on the detail page.</FieldDescription>
+                  <FieldDescription>Stored, but never shown again in this UI.</FieldDescription>
                   {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                 </Field>
               );
@@ -167,7 +164,7 @@ function SecretsIndexPage() {
           <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
             {([canSubmit, isSubmitting]) => (
               <Button type="submit" size="sm" disabled={!canSubmit || isSubmitting}>
-                {isSubmitting ? "Adding..." : "Add secret"}
+                {isSubmitting ? "Adding..." : "Add env var"}
               </Button>
             )}
           </form.Subscribe>
@@ -181,18 +178,10 @@ function SecretsIndexPage() {
             className="flex items-start justify-between gap-4 rounded-lg border p-4 text-sm"
           >
             <div className="min-w-0 flex-1 space-y-1">
-              <Link
-                to="/secrets/$secretId/"
-                params={{ secretId: secret.id }}
-                search={(previous) => ({ ...previous, projectSlug })}
-                className="block truncate font-medium hover:underline"
-              >
-                {secret.name}
-              </Link>
+              <p className="truncate font-mono text-sm font-medium">{secret.name}=****</p>
               {secret.description ? (
                 <p className="text-xs text-muted-foreground">{secret.description}</p>
               ) : null}
-              <Identifier value={secret.id} textClassName="text-xs text-muted-foreground" />
             </div>
 
             <Button
@@ -210,7 +199,7 @@ function SecretsIndexPage() {
       </div>
 
       {secretsData && secretsData.secrets.length === 0 && (
-        <p className="text-sm text-muted-foreground">No secrets yet. Create one above.</p>
+        <p className="text-sm text-muted-foreground">No env vars yet. Create one above.</p>
       )}
     </section>
   );

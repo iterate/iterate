@@ -88,7 +88,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
             run: [
               "set -euo pipefail",
               'routes="$(doppler secrets get WORKER_ROUTES --plain 2>/dev/null || true)"',
-              'first_route="$(printf "%s" "$routes" | tr "," "\\n" | sed -e "s#/\\*$##" -e "s#^[[:space:]]*##" -e "s#[[:space:]]*$##" | awk \'NF { print; exit }\')"',
+              'first_route="$(printf "%s" "$routes" | tr "," "\\n" | awk \'{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0); if ($0 != "") { sub(/\\/\\*$/, "", $0); print; exit } }\')"',
               'if [ -n "$first_route" ]; then',
               '  echo "public_url=https://${first_route}" >> "$GITHUB_OUTPUT"',
               "fi",
