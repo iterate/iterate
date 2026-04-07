@@ -4,12 +4,11 @@ import {
   type DynamicWorkerOutboundGateway,
   type DynamicWorkerState,
   type Event,
+  EventInput,
   type JSONObject,
+  type StreamPath,
 } from "@iterate-com/events-contract";
-import {
-  defineBuiltinProcessor,
-  type BuiltinProcessorContext,
-} from "./define-builtin-processor.ts";
+import { defineBuiltinProcessor } from "./define-builtin-processor.ts";
 
 export type DynamicWorkerAppendInput = {
   type: Event["type"];
@@ -186,10 +185,6 @@ export const dynamicWorkerProcessor = defineBuiltinProcessor<DynamicWorkerState>
       },
     };
   },
-
-  createRuntime(context) {
-    return createDynamicWorkerRuntime(context);
-  },
 }));
 
 export function normalizeDynamicWorkerConfig(input: {
@@ -230,7 +225,15 @@ export function normalizeDynamicWorkerConfig(input: {
   };
 }
 
-function createDynamicWorkerRuntime(context: BuiltinProcessorContext) {
+export function createDynamicWorkerManager(context: {
+  append: (event: EventInput) => Event;
+  history: (args?: { afterOffset?: number }) => Event[];
+  stream: (args?: { afterOffset?: number; live?: boolean }) => ReadableStream<Uint8Array>;
+  createLoopbackBinding: (args: { exportName: string; props?: unknown }) => Fetcher;
+  getPath: () => StreamPath;
+  loader: WorkerLoader;
+  waitUntil: (promise: Promise<unknown>) => void;
+}) {
   const runsBySlug = new Map<
     string,
     {
@@ -259,7 +262,26 @@ function createDynamicWorkerRuntime(context: BuiltinProcessorContext) {
           await existing.stream.dispose();
         }
 
-        const stream = context.createStreamTarget() as unknown as LocalDynamicWorkerTarget;
+        const { createDynamicWorkerStreamTarget } =
+          await import("./dynamic-worker-stream-target.ts");
+        const stream = createDynamicWorkerStreamTarget({
+          append: (input: DynamicWorkerAppendInput) =>
+            context.append(
+              EventInput.parse({
+                ...input,
+                payload: input.payload ?? {},
+              }),
+            ),
+          history: (args) =>
+            context.history({
+              afterOffset: args?.afterOffset,
+            }),
+          stream: (args) =>
+            context.stream({
+              afterOffset: args?.afterOffset,
+              live: args?.live,
+            }),
+        }) as LocalDynamicWorkerTarget;
         const entrypoint = context.loader
           .get(
             `dynamic-worker:${context.getPath()}:${slug}:${hashDynamicWorkerConfig(configKey)}`,
@@ -330,11 +352,20 @@ function createDynamicWorkerRuntime(context: BuiltinProcessorContext) {
   }
 
   return {
+    sync(state: DynamicWorkerState) {
+      return ensureConfiguredWorkers(state);
+    },
     afterAppend({ state }: { event: Event; state: DynamicWorkerState }) {
       return ensureConfiguredWorkers(state);
     },
-    onStateLoaded({ state }: { state: DynamicWorkerState }) {
-      return ensureConfiguredWorkers(state);
+    async dispose() {
+      await Promise.all(
+        Array.from(runsBySlug.values(), async (run) => {
+          run.stopping = true;
+          await run.stream.dispose();
+        }),
+      );
+      runsBySlug.clear();
     },
   };
 }

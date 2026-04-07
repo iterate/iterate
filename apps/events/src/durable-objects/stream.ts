@@ -10,10 +10,9 @@ import {
   StreamState,
 } from "@iterate-com/events-contract";
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
-import { dynamicWorkerProcessor, type DynamicWorkerAppendInput } from "./dynamic-processor.ts";
-import { createDynamicWorkerStreamTarget } from "./dynamic-worker-stream-target.ts";
+import { createDynamicWorkerManager, dynamicWorkerProcessor } from "./dynamic-processor.ts";
 import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
-import type { BuiltinProcessor, BuiltinProcessorRuntime } from "./define-builtin-processor.ts";
+import type { BuiltinProcessor } from "./define-builtin-processor.ts";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 
@@ -37,7 +36,8 @@ function getProcessorState(state: StreamState, slug: string) {
  * ## Append lifecycle
  *
  * Every event passes through three phases that intentionally mirror the hooks
- * on `Processor` / `BuiltinProcessor` in `define-processor.ts`:
+ * on `Processor` / `BuiltinProcessor` in `define-processor.ts` and
+ * `define-builtin-processor.ts`:
  *
  *   beforeAppend  →  reduce  →  afterAppend
  *
@@ -84,7 +84,7 @@ function getProcessorState(state: StreamState, slug: string) {
 export class StreamDurableObject extends DurableObject<Env> {
   private _state: StreamState | null = null;
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
-  private readonly processorRuntimes = new Map<string, BuiltinProcessorRuntime>();
+  private readonly dynamicWorkerManager: ReturnType<typeof createDynamicWorkerManager>;
 
   private get state(): StreamState {
     if (this._state == null) {
@@ -112,7 +112,35 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.initializeProcessorRuntimes();
+    this.dynamicWorkerManager = createDynamicWorkerManager({
+      append: (event) => this.append(event),
+      history: (args) =>
+        this.history({
+          afterOffset: args?.afterOffset,
+        }),
+      stream: (args) =>
+        this.stream({
+          afterOffset: args?.afterOffset,
+          live: args?.live,
+        }),
+      createLoopbackBinding: ({ exportName, props }) => {
+        const exports = (this.ctx as DurableObjectState & { exports: Cloudflare.Exports })
+          .exports as unknown as Record<
+          string,
+          Fetcher | ((args?: { props?: unknown }) => Fetcher)
+        >;
+        const binding = exports[exportName];
+
+        if (binding == null) {
+          throw new Error(`Unknown loopback export: ${exportName}`);
+        }
+
+        return typeof binding === "function" ? binding({ props }) : binding;
+      },
+      getPath: () => this.state.path,
+      loader: this.env.LOADER,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+    });
 
     void this.ctx.blockConcurrencyWhile(async () => {
       this.ensureSchema();
@@ -129,7 +157,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       const parsed = StreamState.safeParse(rawState);
       if (parsed.success) {
         this._state = parsed.data;
-        this.notifyProcessorRuntimesStateLoaded();
+        await this.dynamicWorkerManager.sync(parsed.data.processors["dynamic-worker"]);
 
         try {
           this.append({
@@ -204,7 +232,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   // Append lifecycle
   //
   // The four methods below — append, beforeAppend, reduce, afterAppend —
-  // mirror the hook structure on BuiltinProcessor in define-processor.ts.
+  // mirror the hook structure on BuiltinProcessor in define-builtin-processor.ts.
   //
   // In each phase the stream core runs its own privileged logic first, then
   // delegates to the registered builtin processors. This symmetry is
@@ -293,11 +321,6 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     for (const processor of processors) {
       processor.beforeAppend?.({
-        event: input,
-        state: getProcessorState(this.state, processor.slug),
-      });
-
-      this.processorRuntimes.get(processor.slug)?.beforeAppend?.({
         event: input,
         state: getProcessorState(this.state, processor.slug),
       });
@@ -420,25 +443,20 @@ export class StreamDurableObject extends DurableObject<Env> {
           });
         });
       }
+    }
 
-      const runtimeResult = this.processorRuntimes.get(processor.slug)?.afterAppend?.({
+    void this.dynamicWorkerManager
+      .afterAppend({
         event,
-        state: getProcessorState(this.state, processor.slug),
-      });
-
-      if (runtimeResult == null) {
-        continue;
-      }
-
-      void runtimeResult.catch((error) => {
-        console.error("[stream-do] processor runtime afterAppend failed", {
+        state: this.state.processors["dynamic-worker"],
+      })
+      .catch((error) => {
+        console.error("[stream-do] dynamic worker manager afterAppend failed", {
           path: this.state.path,
-          processor: processor.slug,
           eventType: event.type,
           error,
         });
       });
-    }
   }
 
   // ---------------------------------------------------------------------------
@@ -475,6 +493,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       } catch {}
     }
     this.subscribers.clear();
+
+    await this.dynamicWorkerManager.dispose();
 
     await this.ctx.storage.deleteAll();
 
@@ -595,74 +615,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       idempotencyKey: row.idempotency_key ?? undefined,
       createdAt: row.created_at,
     } as Event;
-  }
-
-  private initializeProcessorRuntimes() {
-    for (const processor of processors) {
-      const runtime = processor.createRuntime?.({
-        append: (event) => this.append(event),
-        createLoopbackBinding: ({ exportName, props }) => {
-          const exports = (this.ctx as DurableObjectState & { exports: Cloudflare.Exports })
-            .exports as unknown as Record<
-            string,
-            Fetcher | ((args?: { props?: unknown }) => Fetcher)
-          >;
-          const binding = exports[exportName];
-
-          if (binding == null) {
-            throw new Error(`Unknown loopback export: ${exportName}`);
-          }
-
-          return typeof binding === "function" ? binding({ props }) : binding;
-        },
-        createStreamTarget: () =>
-          createDynamicWorkerStreamTarget({
-            append: (input: DynamicWorkerAppendInput) =>
-              this.append(
-                EventInput.parse({
-                  ...input,
-                  payload: input.payload ?? {},
-                }),
-              ),
-            history: (args) =>
-              this.history({
-                afterOffset: args?.afterOffset,
-              }),
-            stream: (args) =>
-              this.stream({
-                afterOffset: args?.afterOffset,
-                live: args?.live,
-              }),
-          }),
-        getPath: () => this.state.path,
-        loader: this.env.LOADER,
-        waitUntil: (promise) => this.ctx.waitUntil(promise),
-      });
-
-      if (runtime != null) {
-        this.processorRuntimes.set(processor.slug, runtime);
-      }
-    }
-  }
-
-  private notifyProcessorRuntimesStateLoaded() {
-    for (const processor of processors) {
-      const result = this.processorRuntimes.get(processor.slug)?.onStateLoaded?.({
-        state: getProcessorState(this.state, processor.slug),
-      });
-
-      if (result == null) {
-        continue;
-      }
-
-      void Promise.resolve(result).catch((error) => {
-        console.error("[stream-do] processor runtime onStateLoaded failed", {
-          path: this.state.path,
-          processor: processor.slug,
-          error,
-        });
-      });
-    }
   }
 }
 
