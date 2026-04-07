@@ -2,7 +2,7 @@ import { Outlet, createFileRoute } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/_app/secrets")({
   staticData: {
-    breadcrumb: "Secrets",
+    breadcrumb: "Env vars",
   },
   component: SecretsLayout,
 });
