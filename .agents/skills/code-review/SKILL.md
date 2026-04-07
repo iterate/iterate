@@ -29,7 +29,7 @@ Second, in parallel with subagents do a map / reduce:
 2. Produce suggestions for fixes / refactors.
    - Each subagent must produce multiple different options for how to fix each issue, alongside a recommendation and reasoning.
 
-Then take all the findings and combine them into a high level report. Write it to a markdown file in the repo called `code-review-[slug].md` and pick a slug that's appropriate.
+Then take all the findings and combine them into a high level report. Write it to a markdown file in the repo called `_code-review-[slug].md` and pick a slug that's appropriate. These files are intentionally local scratch artifacts and should stay git-ignored.
 
 Leave a section `# Plan (TODO)` empty at the end.
 

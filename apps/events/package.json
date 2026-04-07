@@ -19,10 +19,10 @@
     "demo:hello-world": "pnpm cli hello-world",
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck && vitest run src",
-    "test:e2e": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest run --dir e2e/vitest",
-    "test:e2e:preview": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest run e2e/vitest/runtime-smoke.e2e.test.ts e2e/vitest/curl-smoketest.e2e.test.ts",
+    "test:e2e": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && sh -c 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run --config ./e2e/vitest.config.ts \"$@\"' --",
+    "test:e2e:preview": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts e2e/vitest/runtime-smoke.e2e.test.ts e2e/vitest/curl-smoketest.e2e.test.ts",
     "test:quick": "pnpm test:e2e",
-    "test:watch": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest --dir e2e/vitest"
+    "test:watch": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && sh -c 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest --config ./e2e/vitest.config.ts \"$@\"' --"
   },
   "iterateAppCli": {
     "remote": {
@@ -49,6 +49,7 @@
     "@tanstack/react-router-devtools": "1.166.11",
     "@tanstack/react-router-ssr-query": "^1.166.2",
     "@tanstack/react-start": "1.167.5",
+    "cron-schedule": "^5.0.4",
     "crossws": "^0.4.4",
     "drizzle-orm": "^0.45.1",
     "jsonata": "^2.1.0",
@@ -60,6 +61,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.29.1",
+    "@cloudflare/vitest-pool-workers": "^0.14.0",
     "@cloudflare/workers-types": "^4.20260317.1",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/devtools-vite": "^0.6.0",
@@ -74,7 +76,7 @@
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
-    "vitest": "4.0.15",
+    "vitest": "4.1.0-beta.6",
     "wrangler": "^4.75.0"
   }
 }

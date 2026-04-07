@@ -18,6 +18,19 @@ import {
   JsonataTransformerConfiguredEventInput,
   JsonataTransformerConfiguredEvent,
 } from "./jsonata-transformer-types.ts";
+import {
+  ScheduleConfiguredEvent,
+  ScheduleConfiguredEventInput,
+  ScheduleCancelledEvent,
+  ScheduleCancelledEventInput,
+  ScheduleInternalExecutionFinishedEvent,
+  ScheduleInternalExecutionFinishedEventInput,
+  ScheduleInternalExecutionStartedEvent,
+  ScheduleInternalExecutionStartedEventInput,
+  SchedulerState,
+  StreamAppendScheduledEvent,
+  StreamAppendScheduledEventInput,
+} from "./scheduling-types.ts";
 
 export { JSONObject, StreamPath };
 
@@ -102,6 +115,11 @@ const builtInEventInputOptions = [
   StreamMetadataUpdatedEventInput,
   ErrorOccurredEventInput,
   InvalidEventAppendedEventInput,
+  StreamAppendScheduledEventInput,
+  ScheduleConfiguredEventInput,
+  ScheduleCancelledEventInput,
+  ScheduleInternalExecutionStartedEventInput,
+  ScheduleInternalExecutionFinishedEventInput,
   JsonataTransformerConfiguredEventInput,
   StreamPausedEventInput,
   StreamResumedEventInput,
@@ -114,12 +132,18 @@ const builtInEventOptions = [
   StreamMetadataUpdatedEvent,
   ErrorOccurredEvent,
   InvalidEventAppendedEvent,
+  StreamAppendScheduledEvent,
+  ScheduleConfiguredEvent,
+  ScheduleCancelledEvent,
+  ScheduleInternalExecutionStartedEvent,
+  ScheduleInternalExecutionFinishedEvent,
   JsonataTransformerConfiguredEvent,
   StreamPausedEvent,
   StreamResumedEvent,
 ] as const;
-
-const [firstBuiltInType, ...restBuiltInTypes] = builtInEventInputOptions.map((s) => s.shape.type);
+const [firstBuiltInType, ...restBuiltInTypes] = builtInEventInputOptions.map(
+  (schema) => schema.shape.type,
+);
 export const BuiltInEventType = z.union([firstBuiltInType, ...restBuiltInTypes]);
 
 const GenericEventType = EventTypeSchema.refine(
@@ -163,6 +187,7 @@ export type Event = BuiltInEvent | GenericEvent;
 const ProcessorsState = z.object({
   "circuit-breaker": CircuitBreakerState,
   "jsonata-transformer": JsonataTransformerState,
+  scheduler: SchedulerState,
 });
 
 export const StreamState = z.object({
