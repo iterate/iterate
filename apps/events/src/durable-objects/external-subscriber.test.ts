@@ -96,6 +96,81 @@ describe("externalSubscriber", () => {
     }
   });
 
+  test("afterAppend reconnects when a subscriber callbackUrl changes", async () => {
+    const staleSocket = new FakeWebSocket({ throwOnClose: true });
+    const nextSocket = new FakeWebSocket();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createWebSocketUpgradeResponse(staleSocket))
+      .mockResolvedValueOnce(createWebSocketUpgradeResponse(nextSocket));
+
+    try {
+      await externalSubscriberProcessor.afterAppend?.({
+        append: () => createEvent(),
+        event: createEvent({
+          streamPath: "/demo/ws-reconnect",
+          type: "source",
+          payload: { value: 1 },
+          offset: 1,
+        }),
+        state: {
+          subscribersBySlug: {
+            "processor:ping-pong": {
+              slug: "processor:ping-pong",
+              type: "websocket",
+              callbackUrl:
+                "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect",
+            },
+          },
+        },
+      });
+
+      await externalSubscriberProcessor.afterAppend?.({
+        append: () => createEvent(),
+        event: createEvent({
+          streamPath: "/demo/ws-reconnect",
+          type: "source",
+          payload: { value: 2 },
+          offset: 2,
+        }),
+        state: {
+          subscribersBySlug: {
+            "processor:ping-pong": {
+              slug: "processor:ping-pong",
+              type: "websocket",
+              callbackUrl:
+                "ws://localhost:9898/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect",
+            },
+          },
+        },
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(staleSocket.sentMessages).toEqual([
+        JSON.stringify(
+          createEvent({
+            streamPath: "/demo/ws-reconnect",
+            type: "source",
+            payload: { value: 1 },
+            offset: 1,
+          }),
+        ),
+      ]);
+      expect(nextSocket.sentMessages).toEqual([
+        JSON.stringify(
+          createEvent({
+            streamPath: "/demo/ws-reconnect",
+            type: "source",
+            payload: { value: 2 },
+            offset: 2,
+          }),
+        ),
+      ]);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   test("afterAppend fire-and-forget posts transformed webhook payloads when filter matches", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -239,6 +314,11 @@ class FakeWebSocket {
   sentMessages: string[] = [];
   readyState = 1;
   readonly #listeners = new Map<string, Array<() => void>>();
+  readonly #throwOnClose: boolean;
+
+  constructor(options: { throwOnClose?: boolean } = {}) {
+    this.#throwOnClose = options.throwOnClose ?? false;
+  }
 
   accept() {}
 
@@ -247,6 +327,10 @@ class FakeWebSocket {
   }
 
   close() {
+    if (this.#throwOnClose) {
+      throw new Error("close failed");
+    }
+
     this.readyState = 3;
     for (const listener of this.#listeners.get("close") ?? []) {
       listener();

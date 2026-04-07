@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as StreamSubscriptionConfiguredRouteImport } from './routes/stream-subscription-configured'
 import { Route as StreamResumedRouteImport } from './routes/stream-resumed'
 import { Route as StreamPausedRouteImport } from './routes/stream-paused'
 import { Route as StreamMetadataUpdatedRouteImport } from './routes/stream-metadata-updated'
@@ -30,6 +31,12 @@ import { Route as AppSecretsIndexRouteImport } from './routes/_app/secrets.index
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppStreamsSplatRouteImport } from './routes/_app/streams.$'
 
+const StreamSubscriptionConfiguredRoute =
+  StreamSubscriptionConfiguredRouteImport.update({
+    id: '/stream-subscription-configured',
+    path: '/stream-subscription-configured',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const StreamResumedRoute = StreamResumedRouteImport.update({
   id: '/stream-resumed',
   path: '/stream-resumed',
@@ -144,6 +151,7 @@ export interface FileRoutesByFullPath {
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/stream-paused': typeof StreamPausedRoute
   '/stream-resumed': typeof StreamResumedRoute
+  '/stream-subscription-configured': typeof StreamSubscriptionConfiguredRoute
   '/secrets': typeof AppSecretsRouteWithChildren
   '/streams': typeof AppStreamsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
@@ -165,6 +173,7 @@ export interface FileRoutesByTo {
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/stream-paused': typeof StreamPausedRoute
   '/stream-resumed': typeof StreamResumedRoute
+  '/stream-subscription-configured': typeof StreamSubscriptionConfiguredRoute
   '/api/$': typeof ApiSplatRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/streams/$': typeof AppStreamsSplatRoute
@@ -186,6 +195,7 @@ export interface FileRoutesById {
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/stream-paused': typeof StreamPausedRoute
   '/stream-resumed': typeof StreamResumedRoute
+  '/stream-subscription-configured': typeof StreamSubscriptionConfiguredRoute
   '/_app/secrets': typeof AppSecretsRouteWithChildren
   '/_app/streams': typeof AppStreamsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
@@ -209,6 +219,7 @@ export interface FileRouteTypes {
     | '/stream-metadata-updated'
     | '/stream-paused'
     | '/stream-resumed'
+    | '/stream-subscription-configured'
     | '/secrets'
     | '/streams'
     | '/api/$'
@@ -230,6 +241,7 @@ export interface FileRouteTypes {
     | '/stream-metadata-updated'
     | '/stream-paused'
     | '/stream-resumed'
+    | '/stream-subscription-configured'
     | '/api/$'
     | '/posthog-proxy/$'
     | '/streams/$'
@@ -250,6 +262,7 @@ export interface FileRouteTypes {
     | '/stream-metadata-updated'
     | '/stream-paused'
     | '/stream-resumed'
+    | '/stream-subscription-configured'
     | '/_app/secrets'
     | '/_app/streams'
     | '/api/$'
@@ -273,6 +286,7 @@ export interface RootRouteChildren {
   StreamMetadataUpdatedRoute: typeof StreamMetadataUpdatedRoute
   StreamPausedRoute: typeof StreamPausedRoute
   StreamResumedRoute: typeof StreamResumedRoute
+  StreamSubscriptionConfiguredRoute: typeof StreamSubscriptionConfiguredRoute
   ApiSplatRoute: typeof ApiSplatRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
   ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
@@ -280,6 +294,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/stream-subscription-configured': {
+      id: '/stream-subscription-configured'
+      path: '/stream-subscription-configured'
+      fullPath: '/stream-subscription-configured'
+      preLoaderRoute: typeof StreamSubscriptionConfiguredRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/stream-resumed': {
       id: '/stream-resumed'
       path: '/stream-resumed'
@@ -474,6 +495,7 @@ const rootRouteChildren: RootRouteChildren = {
   StreamMetadataUpdatedRoute: StreamMetadataUpdatedRoute,
   StreamPausedRoute: StreamPausedRoute,
   StreamResumedRoute: StreamResumedRoute,
+  StreamSubscriptionConfiguredRoute: StreamSubscriptionConfiguredRoute,
   ApiSplatRoute: ApiSplatRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
   ApiOrpcSplatRoute: ApiOrpcSplatRoute,
@@ -483,11 +505,10 @@ export const routeTree = rootRouteImport
   ._addFileTypes<FileRouteTypes>()
 
 import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
+import type { createStart } from '@tanstack/react-start'
 declare module '@tanstack/react-start' {
   interface Register {
     ssr: true
     router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
   }
 }

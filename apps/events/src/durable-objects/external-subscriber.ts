@@ -1,4 +1,3 @@
-import jsonata, { type Expression } from "jsonata";
 import { z } from "zod";
 import {
   type Event,
@@ -8,6 +7,7 @@ import {
   StreamSubscriptionConfiguredEvent,
 } from "@iterate-com/events-contract";
 import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
+import { getCompiledJsonata } from "./compiled-jsonata.ts";
 
 type SubscriberConnection = {
   callbackUrl: string;
@@ -17,7 +17,6 @@ type SubscriberConnection = {
 const outboundPayloadSchema = z.json();
 const connectionsBySubscriberKey = new Map<string, SubscriberConnection>();
 const connectPromisesBySubscriberKey = new Map<string, Promise<WebSocket>>();
-const jsonataCache = new Map<string, Expression>();
 
 export const externalSubscriberProcessor = defineBuiltinProcessor<ExternalSubscriberState>(() => ({
   slug: "external-subscriber",
@@ -185,9 +184,10 @@ async function getSubscriberSocket(args: {
   subscriber: ExternalWebsocketSubscriber;
 }) {
   const subscriberKey = getSubscriberKey(args.streamPath, args.subscriber.slug);
-  const cached = connectionsBySubscriberKey.get(subscriberKey);
+  let cached = connectionsBySubscriberKey.get(subscriberKey);
   if (cached != null && cached.callbackUrl !== args.subscriber.callbackUrl) {
     resetSubscriberSocket(subscriberKey);
+    cached = undefined;
   }
 
   if (cached != null && cached.socket.readyState === WebSocket.OPEN) {
@@ -279,24 +279,6 @@ function getWebsocketUpgradeFetchUrl(callbackUrl: string) {
   }
 
   return url;
-}
-
-function getCompiledJsonata(expression: string) {
-  const cached = jsonataCache.get(expression);
-  if (cached) {
-    return cached;
-  }
-
-  if (jsonataCache.size >= 100) {
-    const oldestKey = jsonataCache.keys().next().value;
-    if (oldestKey) {
-      jsonataCache.delete(oldestKey);
-    }
-  }
-
-  const compiled = jsonata(expression);
-  jsonataCache.set(expression, compiled);
-  return compiled;
 }
 
 function getSubscriberKey(streamPath: string, slug: string) {

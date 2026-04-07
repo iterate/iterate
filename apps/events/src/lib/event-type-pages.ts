@@ -144,6 +144,52 @@ export const jsonataTransformerConfiguredPage = {
   ],
 } satisfies EventTypePageDefinition;
 
+export const streamSubscriptionConfiguredPage = {
+  slug: "stream-subscription-configured",
+  href: "/stream-subscription-configured/",
+  title: "Stream Subscription Configured",
+  type: "https://events.iterate.com/events/stream/subscription/configured",
+  summary:
+    "Built-in control event that upserts an external subscriber by slug, using either websocket fanout or fire-and-forget webhook delivery.",
+  payloadExample: {
+    slug: "processor:ping-pong",
+    callbackUrl: "ws://127.0.0.1:8788/after-event-handler?streamPath=%2Fdemo",
+    type: "websocket",
+  },
+  details: [
+    "The latest configured event for a slug replaces the previous subscriber config for that slug.",
+    "Both subscriber kinds can optionally use jsonataFilter and jsonataTransform against the full committed event envelope.",
+  ],
+  templates: [
+    {
+      id: "stream-subscription-configured:websocket-processor",
+      label: "Subscription Configured · Websocket processor",
+      event: {
+        type: "https://events.iterate.com/events/stream/subscription/configured",
+        payload: {
+          slug: "processor:ping-pong",
+          callbackUrl: "ws://127.0.0.1:8788/after-event-handler?streamPath=%2Fdemo",
+          type: "websocket",
+        },
+      },
+    },
+    {
+      id: "stream-subscription-configured:webhook-audit",
+      label: "Subscription Configured · Webhook audit",
+      event: {
+        type: "https://events.iterate.com/events/stream/subscription/configured",
+        payload: {
+          slug: "audit",
+          callbackUrl: "https://example.com/hooks/events",
+          type: "webhook",
+          jsonataFilter: 'type = "demo-message"',
+          jsonataTransform: '{"kind":"audit","path":streamPath,"payload":payload}',
+        },
+      },
+    },
+  ],
+} satisfies EventTypePageDefinition;
+
 export const streamPausedPage = {
   slug: "stream-paused",
   href: "/stream-paused/",
@@ -239,6 +285,7 @@ export const eventTypePages = [
   errorOccurredPage,
   jsonataTransformerConfiguredPage,
   manualEventAppendedPage,
+  streamSubscriptionConfiguredPage,
   streamDurableObjectConstructedPage,
   streamInitializedPage,
   streamMetadataUpdatedPage,
