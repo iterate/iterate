@@ -29,6 +29,8 @@ const app = createEvents2AppFixture({
 const historyIdleTimeoutMs = 250;
 const intervalFireDelayMs = 12_000;
 const idleGapDelayMs = 75_000;
+const wakeCanaryIdleGapMs = 180_000;
+const wakeCanaryFutureDelaySeconds = 600;
 const durableObjectConstructedType =
   "https://events.iterate.com/events/stream/durable-object-constructed";
 
@@ -139,6 +141,58 @@ describeDeployedScheduling("events recurring/restart scheduling e2e", () => {
       nextRunAt: null,
     });
   }, 110_000);
+
+  test("a foreground request wakes an idle stream after three minutes and leaves wake evidence", async () => {
+    const path = uniqueStreamPath("wake-canary");
+    const slug = `sched-${randomUUID()}`;
+
+    await app.client.append({
+      path,
+      event: {
+        type: SCHEDULE_CONFIGURED_TYPE,
+        payload: {
+          slug,
+          callback: "append",
+          payloadJson: JSON.stringify({
+            type: `https://events.iterate.com/events/example/wake-canary/${randomUUID()}` as EventType,
+            payload: {
+              slug,
+              source: "alarm",
+            },
+          }),
+          schedule: {
+            kind: "once-in",
+            delaySeconds: wakeCanaryFutureDelaySeconds,
+          },
+          nextRunAt: Math.floor(Date.now() / 1000) + wakeCanaryFutureDelaySeconds,
+        },
+      },
+    });
+
+    await delay(wakeCanaryIdleGapMs);
+
+    const state = await app.client.getState({ path });
+    expect(state.processors.scheduler[slug]).toMatchObject({
+      callback: "append",
+      schedule: {
+        kind: "once-in",
+        delaySeconds: wakeCanaryFutureDelaySeconds,
+      },
+    });
+
+    const events = await readHistoryIncludingWake(path);
+    expect(events.map((event) => event.type)).toContain(SCHEDULE_CONFIGURED_TYPE);
+    expect(events.map((event) => event.type)).toContain(durableObjectConstructedType);
+
+    const configuredOffset = events.find(
+      (event) => event.type === SCHEDULE_CONFIGURED_TYPE,
+    )?.offset;
+    const wakeOffset = events.find((event) => event.type === durableObjectConstructedType)?.offset;
+
+    expect(configuredOffset).toBeTypeOf("number");
+    expect(wakeOffset).toBeTypeOf("number");
+    expect((wakeOffset ?? 0) > (configuredOffset ?? Number.POSITIVE_INFINITY)).toBe(true);
+  }, 230_000);
 });
 
 async function readHistory(path: StreamPath) {
@@ -157,6 +211,25 @@ async function readHistory(path: StreamPath) {
         (event.type === "https://events.iterate.com/events/stream/initialized" &&
           event.streamPath === path &&
           getPayloadPath(event) === path)
+      ),
+  );
+}
+
+async function readHistoryIncludingWake(path: StreamPath) {
+  const events = await collectAsyncIterableUntilIdle({
+    iterable: await app.client.stream({
+      path,
+      live: false,
+    }),
+    idleMs: historyIdleTimeoutMs,
+  });
+
+  return events.filter(
+    (event) =>
+      !(
+        event.type === "https://events.iterate.com/events/stream/initialized" &&
+        event.streamPath === path &&
+        getPayloadPath(event) === path
       ),
   );
 }
