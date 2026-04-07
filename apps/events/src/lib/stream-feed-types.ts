@@ -1,4 +1,4 @@
-import type { Event, StreamPath } from "@iterate-com/events-contract";
+import type { Event, ExternalSubscriber, StreamPath } from "@iterate-com/events-contract";
 
 export const streamRendererModes = ["pretty", "raw-pretty", "raw"] as const;
 export type StreamRendererMode = (typeof streamRendererModes)[number];
@@ -102,6 +102,24 @@ export interface StreamMetadataUpdatedFeedItem {
   raw: Event;
 }
 
+export interface ExternalSubscriberConfiguredFeedItem {
+  kind: "external-subscriber-configured";
+  subscriber: ExternalSubscriber;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface JsonataTransformerConfiguredFeedItem {
+  kind: "jsonata-transformer-configured";
+  transformer: {
+    slug: string;
+    matcher: string;
+    transform: string;
+  };
+  timestamp: number;
+  raw: Event;
+}
+
 export interface StreamLifecycleFeedItem {
   kind: "stream-lifecycle";
   label: string;
@@ -164,6 +182,8 @@ export type StreamFeedItem =
   | GroupedEventFeedItem
   | ChildStreamCreatedFeedItem
   | StreamMetadataUpdatedFeedItem
+  | ExternalSubscriberConfiguredFeedItem
+  | JsonataTransformerConfiguredFeedItem
   | StreamLifecycleFeedItem
   | StreamPausedFeedItem
   | StreamResumedFeedItem

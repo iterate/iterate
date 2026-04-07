@@ -4,6 +4,7 @@ import {
   AlertTriangleIcon,
   BookOpenIcon,
   BracesIcon,
+  CableIcon,
   CheckCircle2Icon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -11,6 +12,7 @@ import {
   Code2Icon,
   CopyIcon,
   FolderPlusIcon,
+  SendIcon,
   PauseCircleIcon,
   PlayCircleIcon,
   Settings2Icon,
@@ -67,7 +69,9 @@ import type {
   CodemodeResultFeedItem,
   ChildStreamCreatedFeedItem,
   EventFeedItem,
+  ExternalSubscriberConfiguredFeedItem,
   GroupedEventFeedItem,
+  JsonataTransformerConfiguredFeedItem,
   StreamErrorOccurredFeedItem,
   StreamFeedItem,
   StreamLifecycleFeedItem,
@@ -223,6 +227,10 @@ function StreamFeedItemRenderer({
       return <ChildStreamCreatedCard item={item} />;
     case "stream-metadata-updated":
       return <StreamMetadataUpdatedCard item={item} />;
+    case "external-subscriber-configured":
+      return <ExternalSubscriberConfiguredCard item={item} />;
+    case "jsonata-transformer-configured":
+      return <JsonataTransformerConfiguredCard item={item} />;
     case "stream-lifecycle":
       return <StreamLifecycleLine item={item} />;
     case "stream-paused":
@@ -323,6 +331,61 @@ function StreamMetadataUpdatedCard({ item }: { item: StreamMetadataUpdatedFeedIt
           data={item.metadata}
           className="min-h-24 max-h-56"
           initialFormat="yaml"
+          showToggle
+          showCopyButton
+        />
+      </ArtifactSection>
+    </AssistantArtifact>
+  );
+}
+
+function ExternalSubscriberConfiguredCard({
+  item,
+}: {
+  item: ExternalSubscriberConfiguredFeedItem;
+}) {
+  const isWebhook = item.subscriber.type === "webhook";
+  const SubscriberIcon = isWebhook ? SendIcon : CableIcon;
+  const title = isWebhook ? "Webhook subscriber configured" : "Websocket subscriber configured";
+
+  return (
+    <AssistantArtifact
+      eyebrow={<SubscriberIcon className="size-3.5" />}
+      eyebrowLabel="Subscription configured"
+      title={title}
+      badge={item.subscriber.slug}
+      meta={[item.subscriber.type, formatTime(item.timestamp)]}
+    >
+      <ArtifactSection>
+        <SerializedObjectCodeBlock
+          data={item.subscriber}
+          className="min-h-24 max-h-56"
+          initialFormat="json"
+          showToggle
+          showCopyButton
+        />
+      </ArtifactSection>
+    </AssistantArtifact>
+  );
+}
+
+function JsonataTransformerConfiguredCard({
+  item,
+}: {
+  item: JsonataTransformerConfiguredFeedItem;
+}) {
+  return (
+    <AssistantArtifact
+      eyebrow={<Settings2Icon className="size-3.5" />}
+      eyebrowLabel="JSONata transformer configured"
+      title={item.transformer.slug}
+      meta={[formatTime(item.timestamp)]}
+    >
+      <ArtifactSection>
+        <SerializedObjectCodeBlock
+          data={item.transformer}
+          className="min-h-24 max-h-56"
+          initialFormat="json"
           showToggle
           showCopyButton
         />

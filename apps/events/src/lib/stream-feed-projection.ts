@@ -1,6 +1,8 @@
 import {
   ChildStreamCreatedEvent,
   ErrorOccurredEvent,
+  JsonataTransformerConfiguredEvent,
+  StreamSubscriptionConfiguredEvent,
   StreamMetadataUpdatedEvent,
   StreamPausedEvent,
   StreamResumedEvent,
@@ -127,6 +129,24 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
+  if (event.type === "https://events.iterate.com/events/stream/subscription/configured") {
+    return {
+      kind: "external-subscriber-configured",
+      subscriber: getStreamSubscriptionConfiguredSubscriber(event),
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === "https://events.iterate.com/events/stream/jsonata-transformer-configured") {
+    return {
+      kind: "jsonata-transformer-configured",
+      transformer: getJsonataTransformerConfiguredTransformer(event),
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
   if (event.type === "https://events.iterate.com/events/stream/initialized") {
     return {
       kind: "stream-lifecycle",
@@ -225,6 +245,14 @@ function getChildStreamCreatedEventPath(event: Event) {
 
 function getStreamMetadataUpdatedEventMetadata(event: Event) {
   return StreamMetadataUpdatedEvent.parse(event).payload.metadata;
+}
+
+function getStreamSubscriptionConfiguredSubscriber(event: Event) {
+  return StreamSubscriptionConfiguredEvent.parse(event).payload;
+}
+
+function getJsonataTransformerConfiguredTransformer(event: Event) {
+  return JsonataTransformerConfiguredEvent.parse(event).payload;
 }
 
 export function createGroupedOrSingleEvent(

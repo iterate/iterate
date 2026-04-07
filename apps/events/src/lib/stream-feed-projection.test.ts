@@ -78,6 +78,54 @@ describe("projectWireToFeed", () => {
     });
   });
 
+  test("adds a semantic subscriber item after subscription-configured events", () => {
+    const feed = projectEventToFeed(
+      createEvent({
+        streamPath: "/demo",
+        type: "https://events.iterate.com/events/stream/subscription/configured",
+        payload: {
+          slug: "processor:ping-pong",
+          callbackUrl: "ws://127.0.0.1:8788/after-event-handler?streamPath=%2Fdemo",
+          type: "websocket",
+        },
+      }),
+    );
+
+    expect(feed.map((item) => item.kind)).toEqual(["event", "external-subscriber-configured"]);
+    expect(feed[1]).toMatchObject({
+      kind: "external-subscriber-configured",
+      subscriber: {
+        slug: "processor:ping-pong",
+        callbackUrl: "ws://127.0.0.1:8788/after-event-handler?streamPath=%2Fdemo",
+        type: "websocket",
+      },
+    });
+  });
+
+  test("adds a semantic transformer item after jsonata-transformer-configured events", () => {
+    const feed = projectEventToFeed(
+      createEvent({
+        streamPath: "/demo",
+        type: "https://events.iterate.com/events/stream/jsonata-transformer-configured",
+        payload: {
+          slug: "normalize-webhook",
+          matcher: "type = 'webhook.raw'",
+          transform: '{"type":"webhook.normalized","payload":{"body":payload}}',
+        },
+      }),
+    );
+
+    expect(feed.map((item) => item.kind)).toEqual(["event", "jsonata-transformer-configured"]);
+    expect(feed[1]).toMatchObject({
+      kind: "jsonata-transformer-configured",
+      transformer: {
+        slug: "normalize-webhook",
+        matcher: "type = 'webhook.raw'",
+        transform: '{"type":"webhook.normalized","payload":{"body":payload}}',
+      },
+    });
+  });
+
   test("extracts only raw event rows from a mixed feed", () => {
     const feed = projectWireToFeed([
       createEvent({
@@ -762,6 +810,30 @@ describe("projectWireToFeed", () => {
 describe("toSemanticFeedItem", () => {
   test("returns null for unknown events", () => {
     expect(toSemanticFeedItem(createEvent())).toBeNull();
+  });
+
+  test("returns semantic item for subscription-configured events", () => {
+    expect(
+      toSemanticFeedItem(
+        createEvent({
+          type: "https://events.iterate.com/events/stream/subscription/configured",
+          payload: {
+            slug: "audit",
+            callbackUrl: "http://127.0.0.1:9797/hook",
+            type: "webhook",
+            jsonataFilter: 'type = "demo-message"',
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "external-subscriber-configured",
+      subscriber: {
+        slug: "audit",
+        callbackUrl: "http://127.0.0.1:9797/hook",
+        type: "webhook",
+        jsonataFilter: 'type = "demo-message"',
+      },
+    });
   });
 });
 
