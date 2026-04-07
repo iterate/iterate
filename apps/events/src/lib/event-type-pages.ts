@@ -1,4 +1,13 @@
-import { type EventInput, type EventType, type JSONObject } from "@iterate-com/events-contract";
+import {
+  type EventInput,
+  type EventType,
+  type JSONObject,
+  SCHEDULE_CANCELLED_TYPE,
+  SCHEDULE_CONFIGURED_TYPE,
+  SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
+  SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
+  STREAM_APPEND_SCHEDULED_TYPE,
+} from "@iterate-com/events-contract";
 
 export type EventTypePageDefinition = {
   readonly slug: string;
@@ -98,6 +107,202 @@ export const errorOccurredPage = {
   ],
 } satisfies EventTypePageDefinition;
 
+export const streamAppendScheduledPage = {
+  slug: "stream-append-scheduled",
+  href: "/stream-append-scheduled/",
+  title: "Append Scheduled",
+  type: STREAM_APPEND_SCHEDULED_TYPE,
+  summary:
+    "Built-in ergonomic scheduling event that asks the stream to append another event later using a named slug.",
+  payloadExample: {
+    slug: "daily-rollup",
+    append: {
+      type: "https://events.iterate.com/events/example/rollup-requested",
+      payload: {
+        source: "scheduler",
+      },
+    },
+    schedule: {
+      kind: "once-in",
+      delaySeconds: 30,
+    },
+  },
+  details: [
+    "This is the ergonomic public trigger event. The scheduler processor rewrites it into the canonical low-level `schedule/configured` control event after commit.",
+    "Use it when the desired callback is simply `append` another event back into the same stream.",
+  ],
+  templates: [
+    {
+      id: "stream-append-scheduled:once-in",
+      label: "Append Scheduled · Once in 30s",
+      event: {
+        type: STREAM_APPEND_SCHEDULED_TYPE,
+        payload: {
+          slug: "daily-rollup",
+          append: {
+            type: "https://events.iterate.com/events/example/rollup-requested",
+            payload: {
+              source: "scheduler",
+            },
+          },
+          schedule: {
+            kind: "once-in",
+            delaySeconds: 30,
+          },
+        },
+      },
+    },
+    {
+      id: "stream-append-scheduled:every",
+      label: "Append Scheduled · Every 5m",
+      event: {
+        type: STREAM_APPEND_SCHEDULED_TYPE,
+        payload: {
+          slug: "heartbeat",
+          append: {
+            type: "https://events.iterate.com/events/example/heartbeat",
+            payload: {
+              source: "scheduler",
+            },
+          },
+          schedule: {
+            kind: "every",
+            intervalSeconds: 300,
+          },
+        },
+      },
+    },
+  ],
+} satisfies EventTypePageDefinition;
+
+export const scheduleConfiguredPage = {
+  slug: "schedule-configured",
+  href: "/schedule-configured/",
+  title: "Schedule Configured",
+  type: SCHEDULE_CONFIGURED_TYPE,
+  summary:
+    "Built-in canonical scheduler control event that upserts a schedule by slug into reduced processor state.",
+  payloadExample: {
+    slug: "daily-rollup",
+    callback: "append",
+    payloadJson: JSON.stringify(
+      {
+        type: "https://events.iterate.com/events/example/rollup-requested",
+        payload: {
+          source: "scheduler",
+        },
+      },
+      null,
+      2,
+    ),
+    schedule: {
+      kind: "once-in",
+      delaySeconds: 30,
+    },
+    nextRunAt: 1_775_592_400,
+  },
+  details: [
+    "This is the canonical low-level scheduler event. Appending it directly is the most explicit way to configure or replace a schedule by slug.",
+    "The reducer stores this in `state.processors.scheduler`; the Durable Object alarm is then derived from that reduced state.",
+    "Only explicitly schedulable callbacks can run. `append` is built in; custom stream subclasses must opt in extra callback names deliberately.",
+  ],
+  templates: [
+    {
+      id: "schedule-configured:once-in",
+      label: "Schedule Configured · Once in 30s",
+      event: {
+        type: SCHEDULE_CONFIGURED_TYPE,
+        payload: {
+          slug: "daily-rollup",
+          callback: "append",
+          payloadJson: JSON.stringify({
+            type: "https://events.iterate.com/events/example/rollup-requested",
+            payload: {
+              source: "scheduler",
+            },
+          }),
+          schedule: {
+            kind: "once-in",
+            delaySeconds: 30,
+          },
+          nextRunAt: 1_775_592_400,
+        },
+      },
+    },
+    {
+      id: "schedule-configured:cron",
+      label: "Schedule Configured · Cron",
+      event: {
+        type: SCHEDULE_CONFIGURED_TYPE,
+        payload: {
+          slug: "daily-rollup",
+          callback: "append",
+          payloadJson: JSON.stringify({
+            type: "https://events.iterate.com/events/example/rollup-requested",
+            payload: {
+              source: "scheduler",
+            },
+          }),
+          schedule: {
+            kind: "cron",
+            cron: "0 * * * *",
+          },
+          nextRunAt: 1_775_596_000,
+        },
+      },
+    },
+  ],
+} satisfies EventTypePageDefinition;
+
+export const scheduleCancelledPage = {
+  slug: "schedule-cancelled",
+  href: "/schedule-cancelled/",
+  title: "Schedule Cancelled",
+  type: SCHEDULE_CANCELLED_TYPE,
+  summary: "Built-in control event that removes the configured schedule for a slug.",
+  payloadExample: {
+    slug: "daily-rollup",
+  },
+  details: [
+    "Cancellation is keyed only by slug. The latest configured schedule for that slug stops being eligible to run.",
+  ],
+} satisfies EventTypePageDefinition;
+
+export const scheduleExecutionStartedPage = {
+  slug: "schedule-execution-started",
+  href: "/schedule-execution-started/",
+  title: "Schedule Execution Started",
+  type: SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
+  summary:
+    "Internal scheduler bookkeeping event emitted before an interval execution begins running.",
+  payloadExample: {
+    slug: "heartbeat",
+    startedAt: 1_775_592_400,
+  },
+  details: [
+    "This is an internal runtime event, not the recommended public authoring surface.",
+    "It exists so the reduced scheduler state can track overlap and hung-interval recovery durably.",
+  ],
+} satisfies EventTypePageDefinition;
+
+export const scheduleExecutionFinishedPage = {
+  slug: "schedule-execution-finished",
+  href: "/schedule-execution-finished/",
+  title: "Schedule Execution Finished",
+  type: SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
+  summary:
+    "Internal scheduler bookkeeping event emitted after an attempted execution, including success/failure and the next run time.",
+  payloadExample: {
+    slug: "heartbeat",
+    outcome: "succeeded",
+    nextRunAt: 1_775_592_700,
+  },
+  details: [
+    "This is an internal runtime event, not the recommended public authoring surface.",
+    "A `null` `nextRunAt` retires the schedule; a numeric `nextRunAt` keeps it active for the next alarm cycle.",
+  ],
+} satisfies EventTypePageDefinition;
+
 export const jsonataTransformerConfiguredPage = {
   slug: "jsonata-transformer-configured",
   href: "/jsonata-transformer-configured/",
@@ -187,6 +392,56 @@ export const streamSubscriptionConfiguredPage = {
         },
       },
     },
+  ],
+} satisfies EventTypePageDefinition;
+
+const pingPongDynamicWorkerTemplateScript = `
+export default {
+  slug: "ping-pong",
+  initialState: {},
+
+  reduce({ state }) {
+    return state;
+  },
+
+  async afterAppend({ append, event }) {
+    if (
+      event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured" ||
+      !/\\bping\\b/i.test(
+        JSON.stringify({
+          type: event.type,
+          payload: event.payload,
+          metadata: event.metadata ?? null,
+        }),
+      )
+    ) {
+      return;
+    }
+
+    await append({
+      event: {
+        type: "pong",
+      },
+    });
+  },
+};
+`.trim();
+
+export const dynamicWorkerConfiguredPage = {
+  slug: "dynamic-worker-configured",
+  href: "/dynamic-worker-configured/",
+  title: "Dynamic Worker Configured",
+  type: "https://events.iterate.com/events/stream/dynamic-worker/configured",
+  summary:
+    "Built-in control event that registers or replaces a dynamic worker processor by slug for a stream.",
+  payloadExample: {
+    slug: "ping-pong",
+    script: pingPongDynamicWorkerTemplateScript,
+  },
+  details: [
+    "The latest configured event for a slug replaces the previous dynamic worker runtime for that slug on the same stream.",
+    "The raw composer template uses `script` directly so it is copy-pastable without any bundling or dependencies.",
+    'This trivial example replies with `{ type: "pong" }` whenever a later event contains the word `ping`.',
   ],
 } satisfies EventTypePageDefinition;
 
@@ -282,9 +537,15 @@ export const manualEventAppendedPage = {
 
 export const eventTypePages = [
   childStreamCreatedPage,
+  dynamicWorkerConfiguredPage,
   errorOccurredPage,
   jsonataTransformerConfiguredPage,
   manualEventAppendedPage,
+  scheduleCancelledPage,
+  scheduleConfiguredPage,
+  scheduleExecutionFinishedPage,
+  scheduleExecutionStartedPage,
+  streamAppendScheduledPage,
   streamDurableObjectConstructedPage,
   streamInitializedPage,
   streamMetadataUpdatedPage,

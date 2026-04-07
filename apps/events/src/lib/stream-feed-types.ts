@@ -1,4 +1,10 @@
-import type { Event, ExternalSubscriber, StreamPath } from "@iterate-com/events-contract";
+import type {
+  Event,
+  ExternalSubscriber,
+  ScheduleInternalExecutionFinishedPayload,
+  StreamPath,
+  StreamSchedule,
+} from "@iterate-com/events-contract";
 
 export const streamRendererModes = ["pretty", "raw-pretty", "raw"] as const;
 export type StreamRendererMode = (typeof streamRendererModes)[number];
@@ -127,6 +133,21 @@ export interface StreamLifecycleFeedItem {
   raw: Event;
 }
 
+export interface DynamicWorkerConfiguredFeedItem {
+  kind: "dynamic-worker-configured";
+  slug: string;
+  sourceCode: string;
+  compatibilityDate?: string;
+  compatibilityFlags: string[];
+  outboundGateway?: {
+    entrypoint: string;
+    secretHeaderName?: string;
+    secretHeaderValue?: string;
+  };
+  timestamp: number;
+  raw: Event;
+}
+
 export interface StreamPausedFeedItem {
   kind: "stream-paused";
   reason: string;
@@ -174,6 +195,29 @@ export interface CodemodeResultFeedItem {
   raw: Event;
 }
 
+export interface SchedulerControlFeedItem {
+  kind: "scheduler-control";
+  action: "append-scheduled" | "configured" | "cancelled";
+  slug: string;
+  schedule?: StreamSchedule;
+  append?: unknown;
+  callback?: string;
+  payloadJson?: string | null;
+  nextRunAt?: number;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface SchedulerExecutionFeedItem {
+  kind: "scheduler-execution";
+  action: "started" | "finished";
+  slug: string;
+  outcome?: ScheduleInternalExecutionFinishedPayload["outcome"];
+  nextRunAt?: number | null;
+  timestamp: number;
+  raw: Event;
+}
+
 export type StreamFeedItem =
   | MessageFeedItem
   | ToolFeedItem
@@ -185,8 +229,11 @@ export type StreamFeedItem =
   | ExternalSubscriberConfiguredFeedItem
   | JsonataTransformerConfiguredFeedItem
   | StreamLifecycleFeedItem
+  | DynamicWorkerConfiguredFeedItem
   | StreamPausedFeedItem
   | StreamResumedFeedItem
   | StreamErrorOccurredFeedItem
   | CodemodeBlockFeedItem
-  | CodemodeResultFeedItem;
+  | CodemodeResultFeedItem
+  | SchedulerControlFeedItem
+  | SchedulerExecutionFeedItem;

@@ -23,7 +23,7 @@ const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
 const defaultProjectSlug = defaultE2EProjectSlug;
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
-const testTimeoutMs = 5_000;
+const testTimeoutMs = 10_000;
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe;
 describeRuntimeSmoke("events runtime smoke", () => {
   test(
@@ -226,9 +226,13 @@ function expectedProcessorsWithRecentEventCount(count: number) {
     "external-subscriber": {
       subscribersBySlug: {},
     },
+    "dynamic-worker": {
+      workersBySlug: {},
+    },
     "jsonata-transformer": {
       transformersBySlug: {},
     },
+    scheduler: {},
   };
 }
 

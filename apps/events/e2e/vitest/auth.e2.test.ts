@@ -134,8 +134,12 @@ function expectedProcessorsWithRecentEventCount(count: number) {
     "external-subscriber": {
       subscribersBySlug: {},
     },
+    "dynamic-worker": {
+      workersBySlug: {},
+    },
     "jsonata-transformer": {
       transformersBySlug: {},
     },
+    scheduler: {},
   };
 }

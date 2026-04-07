@@ -1,10 +1,20 @@
 import {
   ChildStreamCreatedEvent,
+  DynamicWorkerConfiguredEvent,
   ErrorOccurredEvent,
   JsonataTransformerConfiguredEvent,
   StreamSubscriptionConfiguredEvent,
+  SCHEDULE_CANCELLED_TYPE,
+  SCHEDULE_CONFIGURED_TYPE,
+  SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
+  SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
+  ScheduleConfiguredPayload,
+  ScheduleInternalExecutionFinishedPayload,
+  ScheduleInternalExecutionStartedPayload,
   StreamMetadataUpdatedEvent,
+  STREAM_APPEND_SCHEDULED_TYPE,
   StreamPausedEvent,
+  StreamAppendScheduledPayload,
   StreamResumedEvent,
   type Event,
 } from "@iterate-com/events-contract";
@@ -165,6 +175,33 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
+  if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured") {
+    const configured = DynamicWorkerConfiguredEvent.parse(event);
+    const sourceCode =
+      configured.payload.script ??
+      configured.payload.modules?.["processor.ts"] ??
+      Object.values(configured.payload.modules ?? {})[0] ??
+      "";
+
+    return {
+      kind: "dynamic-worker-configured",
+      slug: configured.payload.slug,
+      sourceCode,
+      compatibilityDate: configured.payload.compatibilityDate,
+      compatibilityFlags: configured.payload.compatibilityFlags ?? [],
+      outboundGateway:
+        configured.payload.outboundGateway == null
+          ? undefined
+          : {
+              entrypoint: configured.payload.outboundGateway.entrypoint,
+              secretHeaderName: configured.payload.outboundGateway.props?.secretHeaderName,
+              secretHeaderValue: configured.payload.outboundGateway.props?.secretHeaderValue,
+            },
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
   if (event.type === "https://events.iterate.com/events/stream/paused") {
     return {
       kind: "stream-paused",
@@ -187,6 +224,69 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     return {
       kind: "stream-error-occurred",
       message: ErrorOccurredEvent.parse(event).payload.message,
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === STREAM_APPEND_SCHEDULED_TYPE) {
+    const payload = StreamAppendScheduledPayload.parse(event.payload);
+    return {
+      kind: "scheduler-control",
+      action: "append-scheduled",
+      slug: payload.slug,
+      schedule: payload.schedule,
+      append: payload.append,
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === SCHEDULE_CONFIGURED_TYPE) {
+    const payload = ScheduleConfiguredPayload.parse(event.payload);
+    return {
+      kind: "scheduler-control",
+      action: "configured",
+      slug: payload.slug,
+      callback: payload.callback,
+      payloadJson: payload.payloadJson ?? null,
+      schedule: payload.schedule,
+      nextRunAt: payload.nextRunAt,
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === SCHEDULE_CANCELLED_TYPE) {
+    const payload = { slug: (event.payload as { slug: string }).slug };
+    return {
+      kind: "scheduler-control",
+      action: "cancelled",
+      slug: payload.slug,
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE) {
+    const payload = ScheduleInternalExecutionStartedPayload.parse(event.payload);
+    return {
+      kind: "scheduler-execution",
+      action: "started",
+      slug: payload.slug,
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE) {
+    const payload = ScheduleInternalExecutionFinishedPayload.parse(event.payload);
+    return {
+      kind: "scheduler-execution",
+      action: "finished",
+      slug: payload.slug,
+      outcome: payload.outcome,
+      nextRunAt: payload.nextRunAt,
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };

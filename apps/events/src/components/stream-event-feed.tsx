@@ -2,10 +2,13 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   AlertTriangleIcon,
+  BotIcon,
+  Clock3Icon,
   BookOpenIcon,
   BracesIcon,
   CableIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CircleIcon,
@@ -67,11 +70,14 @@ import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 import type {
   CodemodeBlockFeedItem,
   CodemodeResultFeedItem,
+  DynamicWorkerConfiguredFeedItem,
   ChildStreamCreatedFeedItem,
   EventFeedItem,
   ExternalSubscriberConfiguredFeedItem,
   GroupedEventFeedItem,
   JsonataTransformerConfiguredFeedItem,
+  SchedulerControlFeedItem,
+  SchedulerExecutionFeedItem,
   StreamErrorOccurredFeedItem,
   StreamFeedItem,
   StreamLifecycleFeedItem,
@@ -233,12 +239,18 @@ function StreamFeedItemRenderer({
       return <JsonataTransformerConfiguredCard item={item} />;
     case "stream-lifecycle":
       return <StreamLifecycleLine item={item} />;
+    case "dynamic-worker-configured":
+      return <DynamicWorkerConfiguredCard item={item} />;
     case "stream-paused":
       return <StreamPausedCard item={item} />;
     case "stream-resumed":
       return <StreamResumedCard item={item} />;
     case "stream-error-occurred":
       return <StreamErrorOccurredCard item={item} />;
+    case "scheduler-control":
+      return <SchedulerControlCard item={item} />;
+    case "scheduler-execution":
+      return <SchedulerExecutionCard item={item} />;
     case "codemode-block":
       return <CodemodeBlockCard item={item} />;
     case "codemode-result":
@@ -407,6 +419,79 @@ function StreamLifecycleLine({ item }: { item: StreamLifecycleFeedItem }) {
   );
 }
 
+function DynamicWorkerConfiguredCard({ item }: { item: DynamicWorkerConfiguredFeedItem }) {
+  const [open, setOpen] = useState(false);
+  const previewCode = getSourceCodePreview(item.sourceCode, 10);
+  const hasMoreCode = previewCode !== item.sourceCode;
+  const gatewaySummary = item.outboundGateway
+    ? item.outboundGateway.secretHeaderName
+      ? `${item.outboundGateway.entrypoint} · injects ${item.outboundGateway.secretHeaderName}`
+      : item.outboundGateway.entrypoint
+    : undefined;
+
+  return (
+    <AssistantArtifact
+      eyebrow={<BotIcon className="size-3.5" />}
+      eyebrowLabel="Dynamic worker configured"
+      title={item.slug}
+      meta={[
+        ...(item.compatibilityDate ? [item.compatibilityDate] : []),
+        ...(item.compatibilityFlags.length > 0
+          ? [
+              `${item.compatibilityFlags.length} compatibility flag${item.compatibilityFlags.length === 1 ? "" : "s"}`,
+            ]
+          : []),
+        ...(gatewaySummary ? [gatewaySummary] : []),
+        formatTime(item.timestamp),
+      ]}
+    >
+      <ArtifactSection>
+        <div className="rounded-md border bg-muted/30 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Processor source
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {hasMoreCode ? "Showing first 10 lines" : "Full source"}
+              </div>
+            </div>
+            {hasMoreCode ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 px-2 text-xs"
+                onClick={() => setOpen((value) => !value)}
+              >
+                {open ? "Collapse" : "Expand"}
+                <ChevronDownIcon
+                  className={cn("size-3.5 transition-transform duration-200", open && "rotate-180")}
+                />
+              </Button>
+            ) : null}
+          </div>
+
+          <div
+            className={cn(
+              "grid transition-all duration-300 ease-in-out",
+              open || !hasMoreCode ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-100",
+            )}
+          >
+            <div className="overflow-hidden pt-3">
+              <SourceCodeBlock
+                code={open || !hasMoreCode ? item.sourceCode : previewCode}
+                language="typescript"
+                className={cn("min-h-32", open ? "max-h-[36rem]" : "max-h-72")}
+                showCopyButton
+              />
+            </div>
+          </div>
+        </div>
+      </ArtifactSection>
+    </AssistantArtifact>
+  );
+}
+
 function StreamPausedCard({ item }: { item: StreamPausedFeedItem }) {
   return (
     <AssistantArtifact
@@ -439,6 +524,77 @@ function StreamErrorOccurredCard({ item }: { item: StreamErrorOccurredFeedItem }
       title={item.message}
       meta={[formatTime(item.timestamp)]}
       tone="danger"
+    />
+  );
+}
+
+function SchedulerControlCard({ item }: { item: SchedulerControlFeedItem }) {
+  const eyebrowLabel =
+    item.action === "append-scheduled"
+      ? "Append scheduled"
+      : item.action === "configured"
+        ? "Schedule configured"
+        : "Schedule cancelled";
+  const title = item.slug;
+  const data =
+    item.action === "append-scheduled"
+      ? { slug: item.slug, schedule: item.schedule, append: item.append }
+      : item.action === "configured"
+        ? {
+            slug: item.slug,
+            callback: item.callback,
+            schedule: item.schedule,
+            nextRunAt: item.nextRunAt,
+            payload: tryParseJson(item.payloadJson),
+          }
+        : { slug: item.slug };
+
+  return (
+    <AssistantArtifact
+      eyebrow={<Clock3Icon className="size-3.5" />}
+      eyebrowLabel={eyebrowLabel}
+      title={title}
+      meta={buildSchedulerControlMeta(item)}
+      tone={item.action === "cancelled" ? "warning" : "default"}
+    >
+      <ArtifactSection>
+        <SerializedObjectCodeBlock
+          data={data}
+          className="min-h-20 max-h-64"
+          initialFormat="yaml"
+          showToggle
+          showCopyButton
+        />
+      </ArtifactSection>
+    </AssistantArtifact>
+  );
+}
+
+function SchedulerExecutionCard({ item }: { item: SchedulerExecutionFeedItem }) {
+  const isFailure = item.action === "finished" && item.outcome === "failed";
+  const isSuccess = item.action === "finished" && item.outcome === "succeeded";
+
+  return (
+    <AssistantArtifact
+      eyebrow={
+        item.action === "started" ? (
+          <PlayCircleIcon className="size-3.5" />
+        ) : isSuccess ? (
+          <CheckCircle2Icon className="size-3.5" />
+        ) : (
+          <XCircleIcon className="size-3.5" />
+        )
+      }
+      eyebrowLabel={
+        item.action === "started"
+          ? "Schedule execution started"
+          : isFailure
+            ? "Schedule execution failed"
+            : "Schedule execution finished"
+      }
+      title={item.slug}
+      meta={buildSchedulerExecutionMeta(item)}
+      tone={item.action === "started" ? "default" : isFailure ? "danger" : "success"}
     />
   );
 }
@@ -651,6 +807,67 @@ function AssistantArtifact({
 
 function ArtifactSection({ children }: { children: ReactNode }) {
   return <div className="space-y-2">{children}</div>;
+}
+
+function getSourceCodePreview(sourceCode: string, lineCount: number) {
+  const lines = sourceCode.split("\n");
+  if (lines.length <= lineCount) {
+    return sourceCode;
+  }
+
+  return `${lines.slice(0, lineCount).join("\n")}\n...`;
+}
+
+function buildSchedulerControlMeta(item: SchedulerControlFeedItem) {
+  const meta = [formatTime(item.timestamp)];
+
+  if (item.schedule != null) {
+    meta.unshift(describeSchedule(item.schedule));
+  }
+
+  if (item.action === "configured" && item.nextRunAt != null) {
+    meta.push(`Next run ${formatTime(item.nextRunAt * 1000)}`);
+  }
+
+  return meta;
+}
+
+function buildSchedulerExecutionMeta(item: SchedulerExecutionFeedItem) {
+  const meta = [formatTime(item.timestamp)];
+
+  if (item.action === "finished") {
+    meta.unshift(item.outcome === "failed" ? "Failed" : "Succeeded");
+    meta.push(
+      item.nextRunAt == null ? "No next run" : `Next run ${formatTime(item.nextRunAt * 1000)}`,
+    );
+  }
+
+  return meta;
+}
+
+function describeSchedule(schedule: NonNullable<SchedulerControlFeedItem["schedule"]>) {
+  switch (schedule.kind) {
+    case "once-at":
+      return `Once at ${schedule.at}`;
+    case "once-in":
+      return `Once in ${schedule.delaySeconds}s`;
+    case "every":
+      return `Every ${schedule.intervalSeconds}s`;
+    case "cron":
+      return `Cron ${schedule.cron}`;
+  }
+}
+
+function tryParseJson(payloadJson: string | null | undefined) {
+  if (payloadJson == null) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(payloadJson);
+  } catch {
+    return payloadJson;
+  }
 }
 
 function EventLine({
@@ -964,6 +1181,8 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `jsonata-transformer-${item.transformer.slug}-${item.timestamp}-${index}`;
     case "stream-lifecycle":
       return `lifecycle-${item.label}-${item.timestamp}-${index}`;
+    case "dynamic-worker-configured":
+      return `dynamic-worker-configured-${item.slug}-${item.raw.offset}`;
     case "stream-paused":
       return `stream-paused-${item.timestamp}-${index}`;
     case "stream-resumed":
@@ -974,6 +1193,10 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `codemode-block-${item.blockId}-${item.timestamp}-${index}`;
     case "codemode-result":
       return `codemode-result-${item.blockId}-${item.blockCount}-${item.timestamp}-${index}`;
+    case "scheduler-control":
+      return `scheduler-control-${item.action}-${item.slug}-${item.raw.offset}`;
+    case "scheduler-execution":
+      return `scheduler-execution-${item.action}-${item.slug}-${item.raw.offset}`;
     default:
       return `feed-item-${index}`;
   }

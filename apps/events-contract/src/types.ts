@@ -23,6 +23,24 @@ import {
   JsonataTransformerConfiguredEventInput,
   JsonataTransformerState,
 } from "./jsonata-transformer-types.ts";
+import {
+  DynamicWorkerState,
+  DynamicWorkerConfiguredEventInput,
+  DynamicWorkerConfiguredEvent,
+} from "./dynamic-worker-types.ts";
+import {
+  ScheduleConfiguredEvent,
+  ScheduleConfiguredEventInput,
+  ScheduleCancelledEvent,
+  ScheduleCancelledEventInput,
+  ScheduleInternalExecutionFinishedEvent,
+  ScheduleInternalExecutionFinishedEventInput,
+  ScheduleInternalExecutionStartedEvent,
+  ScheduleInternalExecutionStartedEventInput,
+  SchedulerState,
+  StreamAppendScheduledEvent,
+  StreamAppendScheduledEventInput,
+} from "./scheduling-types.ts";
 
 export { JSONObject, StreamPath };
 
@@ -108,7 +126,13 @@ const builtInEventInputOptions = [
   StreamSubscriptionConfiguredEventInput,
   ErrorOccurredEventInput,
   InvalidEventAppendedEventInput,
+  StreamAppendScheduledEventInput,
+  ScheduleConfiguredEventInput,
+  ScheduleCancelledEventInput,
+  ScheduleInternalExecutionStartedEventInput,
+  ScheduleInternalExecutionFinishedEventInput,
   JsonataTransformerConfiguredEventInput,
+  DynamicWorkerConfiguredEventInput,
   StreamPausedEventInput,
   StreamResumedEventInput,
 ] as const;
@@ -121,12 +145,19 @@ const builtInEventOptions = [
   StreamSubscriptionConfiguredEvent,
   ErrorOccurredEvent,
   InvalidEventAppendedEvent,
+  StreamAppendScheduledEvent,
+  ScheduleConfiguredEvent,
+  ScheduleCancelledEvent,
+  ScheduleInternalExecutionStartedEvent,
+  ScheduleInternalExecutionFinishedEvent,
   JsonataTransformerConfiguredEvent,
+  DynamicWorkerConfiguredEvent,
   StreamPausedEvent,
   StreamResumedEvent,
 ] as const;
-
-const [firstBuiltInType, ...restBuiltInTypes] = builtInEventInputOptions.map((s) => s.shape.type);
+const [firstBuiltInType, ...restBuiltInTypes] = builtInEventInputOptions.map(
+  (schema) => schema.shape.type,
+);
 export const BuiltInEventType = z.union([firstBuiltInType, ...restBuiltInTypes]);
 
 const GenericEventType = EventTypeSchema.refine(
@@ -165,7 +196,9 @@ export type Event = BuiltInEvent | GenericEvent;
 const ProcessorsState = z.object({
   "circuit-breaker": CircuitBreakerState,
   "external-subscriber": ExternalSubscriberState.default({ subscribersBySlug: {} }),
+  "dynamic-worker": DynamicWorkerState,
   "jsonata-transformer": JsonataTransformerState,
+  scheduler: SchedulerState,
 });
 
 export const StreamState = z.object({

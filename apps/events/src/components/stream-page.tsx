@@ -193,10 +193,9 @@ export function StreamPage({
 
     await submitAppendEvent({
       event: {
-        type: "llm-input-added",
+        type: "agent-input-added",
         payload: {
           content,
-          source: "user",
         },
       },
     });
