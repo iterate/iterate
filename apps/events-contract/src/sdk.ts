@@ -1,38 +1,19 @@
-import type { ContractRouterClient } from "@orpc/contract";
-import { createORPCClient } from "@orpc/client";
-import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import { eventsContract } from "./orpc-contract.ts";
 import {
   ChildStreamCreatedEvent,
   StreamPath as StreamPathSchema,
   StreamInitializedEvent,
   type Event,
   type EventInput,
-  type EventType,
-  type JSONObject,
   type StreamPath,
 } from "./types.ts";
 
-export { eventsContract } from "./orpc-contract.ts";
-export type { Event, EventInput, EventType, JSONObject, StreamPath } from "./types.ts";
-
-export type EventsORPCClient = ContractRouterClient<typeof eventsContract>;
-
-export function createEventsClient(baseUrl: string): EventsORPCClient {
-  return createORPCClient(
-    new OpenAPILink(eventsContract, {
-      url: new URL("/api", baseUrl).toString(),
-    }),
-  ) as EventsORPCClient;
-}
-
-export type RelativeStreamPath = `.${string}`;
-export type ProcessorAppendInput = {
+type RelativeStreamPath = `.${string}`;
+type ProcessorAppendInput = {
   event: EventInput;
   path?: StreamPath | RelativeStreamPath;
 };
 
-export type Processor<State = Record<string, unknown>> = {
+type Processor<State = Record<string, unknown>> = {
   slug: string;
   initialState: State;
   reduce?(args: { event: Event; state: State }): State;

@@ -1,7 +1,7 @@
 import type { Event, EventInput, StreamPath } from "@iterate-com/events-contract";
 
-export type RelativeStreamPath = `.${string}`;
-export type ProcessorAppendInput = {
+type RelativeStreamPath = `.${string}`;
+type ProcessorAppendInput = {
   event: EventInput;
   path?: StreamPath | RelativeStreamPath;
 };
@@ -12,7 +12,7 @@ export type ProcessorAppendInput = {
  * destination), so they cannot block event acceptance — they have no
  * `beforeAppend` hook.
  */
-export type Processor<TState = Record<string, unknown>> = {
+type Processor<TState = Record<string, unknown>> = {
   slug: string;
   initialState: TState;
   reduce?(args: { event: Event; state: TState }): TState;

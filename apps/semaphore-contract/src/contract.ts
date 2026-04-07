@@ -2,17 +2,17 @@ import { oc } from "@orpc/contract";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { z } from "zod";
 
-export const SEMAPHORE_KEY_PATTERN = /^(?=.*[a-z])[a-z0-9-]+$/;
-export const MAX_LEASE_MS = 30 * 24 * 60 * 60 * 1000;
-export const MAX_WAIT_MS = 5 * 60 * 1000;
+const SEMAPHORE_KEY_PATTERN = /^(?=.*[a-z])[a-z0-9-]+$/;
+const MAX_LEASE_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_WAIT_MS = 5 * 60 * 1000;
 
-export const semaphoreKeySchema = z
+const semaphoreKeySchema = z
   .string()
   .trim()
   .toLowerCase()
   .regex(SEMAPHORE_KEY_PATTERN, "must match ^(?=.*[a-z])[a-z0-9-]+$");
 export const semaphoreTypeSchema = semaphoreKeySchema;
-export const semaphoreSlugSchema = semaphoreKeySchema;
+const semaphoreSlugSchema = semaphoreKeySchema;
 
 export type SemaphoreJsonObject = Record<string, unknown>;
 
@@ -47,17 +47,17 @@ export const semaphoreDataSchema = z
       });
     }
   });
-export const semaphoreLeaseMsSchema = z
+const semaphoreLeaseMsSchema = z
   .number()
   .int()
   .positive()
   .max(MAX_LEASE_MS, `leaseMs must be <= ${MAX_LEASE_MS}`);
-export const semaphoreWaitMsSchema = z
+const semaphoreWaitMsSchema = z
   .number()
   .int()
   .nonnegative()
   .max(MAX_WAIT_MS, `waitMs must be <= ${MAX_WAIT_MS}`);
-export const SemaphoreLeaseState = z.enum(["available", "leased"]);
+const SemaphoreLeaseState = z.enum(["available", "leased"]);
 
 export const SemaphoreResourceRecord = z.object({
   type: semaphoreTypeSchema,
@@ -79,7 +79,7 @@ export const SemaphoreLeaseRecord = z.object({
   expiresAt: z.number().int().positive(),
 });
 
-export const AddResourceInput = z.object({
+const AddResourceInput = z.object({
   type: semaphoreTypeSchema,
   slug: semaphoreSlugSchema,
   data: semaphoreDataSchema,
@@ -90,7 +90,7 @@ export const DeleteResourceInput = z.object({
   slug: semaphoreSlugSchema,
 });
 
-export const ListResourcesInput = z.object({
+const ListResourcesInput = z.object({
   type: semaphoreTypeSchema.optional(),
 });
 
@@ -111,11 +111,11 @@ export const ReleaseResourceInput = z.object({
   leaseId: z.string().uuid(),
 });
 
-export const DeleteResourceResult = z.object({
+const DeleteResourceResult = z.object({
   deleted: z.boolean(),
 });
 
-export const ReleaseResourceResult = z.object({
+const ReleaseResourceResult = z.object({
   released: z.boolean(),
 });
 

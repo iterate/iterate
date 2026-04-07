@@ -156,7 +156,7 @@ export const RemoveRouteInput = z.object({
   rootHost: rootHostSchema,
 });
 
-export const RemoveRouteOutput = z.object({
+const RemoveRouteOutput = z.object({
   deleted: z.boolean(),
 });
 

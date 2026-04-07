@@ -69,7 +69,7 @@ function makeDualRuntimeAppWorkspace(workerEnvShim: string): WorkspaceConfig {
 
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
-    entry: ["alchemy.run.ts", "vite.config.ts", "src/entry.workerd.ts!"],
+    entry: ["alchemy.run.ts", "vite.config.ts", "scripts/router.ts", "src/entry.workerd.ts!"],
     project: [
       "*.test.ts",
       "e2e/**/*.ts",
@@ -84,7 +84,7 @@ function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceCon
     paths: {
       "cloudflare:workers": [workerEnvShim],
     },
-    ignoreBinaries: ["doppler"],
+    ignoreBinaries: ["doppler", "read", "sqlite3"],
     ignoreDependencies: ["cloudflare", "tailwindcss"],
   };
 }
@@ -130,6 +130,7 @@ function makeSharedWorkspace(): WorkspaceConfig {
     // This package exposes many subpath exports from package.json rather than a
     // single `src/index.ts`, so keep the workspace config minimal and let Knip
     // use the declared export map as the public entry surface.
+    entry: ["bin/iterate-app-cli.js", "src/apps/cli-entry.ts"],
     project: ["src/**/*.ts"],
   };
 }
@@ -160,6 +161,13 @@ const config: KnipConfig = {
     // This file is generated from Fly's OpenAPI schema and intentionally emits
     // a couple of placeholder exported types that are never imported directly.
     "packages/shared/src/jonasland/deployment/fly-api/generated/openapi.gen.ts": ["types"],
+    // TanStack Start resolves these router factories by convention from the
+    // entrypoint, so there is no direct import Knip can follow.
+    "apps/daemon-v2/src/router.tsx": ["exports"],
+    "apps/example/src/router.tsx": ["exports"],
+    "apps/ingress-proxy-contract/src/client.ts": ["types"],
+    "apps/semaphore-contract/src/client.ts": ["types"],
+    "apps/semaphore/src/router.tsx": ["exports"],
   },
   workspaces: {
     "apps/example": makeDualRuntimeAppWorkspace("./src/lib/worker-env.d.ts"),

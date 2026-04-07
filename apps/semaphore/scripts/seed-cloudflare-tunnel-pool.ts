@@ -105,11 +105,11 @@ class CloudflareRequestError extends Error {
   }
 }
 
-export function countMissingResources(existingCount: number, desiredCount: number): number {
+function countMissingResources(existingCount: number, desiredCount: number): number {
   return Math.max(desiredCount - existingCount, 0);
 }
 
-export function buildIngressConfig(params: { publicHostname: string; service: string }) {
+function buildIngressConfig(params: { publicHostname: string; service: string }) {
   return {
     config: {
       ingress: [
@@ -128,11 +128,7 @@ export function buildIngressConfig(params: { publicHostname: string; service: st
   };
 }
 
-export function buildDnsRecordBody(params: {
-  publicHostname: string;
-  tunnelId: string;
-  comment: string;
-}) {
+function buildDnsRecordBody(params: { publicHostname: string; tunnelId: string; comment: string }) {
   return {
     type: "CNAME",
     name: params.publicHostname,
@@ -143,7 +139,7 @@ export function buildDnsRecordBody(params: {
   };
 }
 
-export function selectReusableCertificatePack(
+function selectReusableCertificatePack(
   packs: CertificatePack[],
   wildcardHost: string,
 ): CertificatePack | null {
@@ -156,7 +152,7 @@ export function selectReusableCertificatePack(
   );
 }
 
-export function pickUnusedSlug(existingSlugs: Set<string>, makeSlug = makeFunnySlug): string {
+function pickUnusedSlug(existingSlugs: Set<string>, makeSlug = makeFunnySlug): string {
   for (let attempt = 0; attempt < MAX_SLUG_ATTEMPTS; attempt += 1) {
     const slug = makeSlug();
     if (!existingSlugs.has(slug)) {
