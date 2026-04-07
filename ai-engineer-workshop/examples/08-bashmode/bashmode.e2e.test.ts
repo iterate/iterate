@@ -1,5 +1,5 @@
-import { Bash } from "just-bash";
 import { setTimeout as delay } from "node:timers/promises";
+import { Bash } from "just-bash";
 import { afterEach, describe, expect, test } from "vitest";
 import {
   createWorkshopTestHarness,

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { createWorkshopTestHarness } from "ai-engineer-workshop";
 import bashmode from "../08-bashmode/bashmode.ts";
+import { destroyLingeringSockets } from "../../e2e/vitest/slack-codemode-agent.helpers.ts";
 import { createAgentProcessor } from "./agent.ts";
 import { agentInputAddedType, agentOutputAddedType } from "./agent-types.ts";
-import { destroyLingeringSockets } from "../../e2e/vitest/slack-codemode-agent.helpers.ts";
 
 const openAiApiKey = process.env.OPENAI_API_KEY;
 const openAiModel = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
