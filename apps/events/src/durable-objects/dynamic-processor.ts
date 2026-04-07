@@ -25,20 +25,6 @@ const defaultDynamicWorkerMainModule = "worker.js";
 const defaultDynamicWorkerProcessorModule = "processor.js";
 const defaultDynamicWorkerRuntimeConfigModule = "runtime-config.js";
 export const pingPongDynamicWorkerScript = `
-function containsPing(event) {
-  if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured") {
-    return false;
-  }
-
-  return /\\bping\\b/i.test(
-    JSON.stringify({
-      type: event.type,
-      payload: event.payload,
-      metadata: event.metadata ?? null,
-    }),
-  );
-}
-
 export default {
   initialState: {},
 
@@ -47,7 +33,16 @@ export default {
   },
 
   async onEvent({ append, event }) {
-    if (!containsPing(event)) {
+    if (
+      event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured" ||
+      !/\\bping\\b/i.test(
+        JSON.stringify({
+          type: event.type,
+          payload: event.payload,
+          metadata: event.metadata ?? null,
+        }),
+      )
+    ) {
       return;
     }
 

@@ -145,20 +145,6 @@ export const jsonataTransformerConfiguredPage = {
 } satisfies EventTypePageDefinition;
 
 const pingPongDynamicWorkerTemplateScript = `
-function containsPing(event) {
-  if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured") {
-    return false;
-  }
-
-  return /\\bping\\b/i.test(
-    JSON.stringify({
-      type: event.type,
-      payload: event.payload,
-      metadata: event.metadata ?? null,
-    }),
-  );
-}
-
 export default {
   initialState: {},
 
@@ -167,7 +153,16 @@ export default {
   },
 
   async onEvent({ append, event }) {
-    if (!containsPing(event)) {
+    if (
+      event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured" ||
+      !/\\bping\\b/i.test(
+        JSON.stringify({
+          type: event.type,
+          payload: event.payload,
+          metadata: event.metadata ?? null,
+        }),
+      )
+    ) {
       return;
     }
 
@@ -191,19 +186,6 @@ export const dynamicWorkerConfiguredPage = {
     "The latest configured event for a slug replaces the previous dynamic worker runtime for that slug on the same stream.",
     "The raw composer template uses `script` directly so it is copy-pastable without any bundling or dependencies.",
     'This trivial example replies with `{ type: "pong" }` whenever a later event contains the word `ping`.',
-  ],
-  templates: [
-    {
-      id: "dynamic-worker-configured:ping-pong",
-      label: "Dynamic Worker Configured · Ping pong",
-      event: {
-        type: "https://events.iterate.com/events/stream/dynamic-worker/configured",
-        payload: {
-          slug: "ping-pong",
-          script: pingPongDynamicWorkerTemplateScript,
-        },
-      },
-    },
   ],
 } satisfies EventTypePageDefinition;
 
