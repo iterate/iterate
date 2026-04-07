@@ -71,7 +71,7 @@ export const streamsRouter = {
     return streamStub.getState();
   }),
 
-  listStreams: os.listStreams.use(withProject).handler(async ({ input, context }) => {
+  listChildren: os.listChildren.use(withProject).handler(async ({ input, context }) => {
     const streamStub = getStreamStub({
       projectSlug: context.projectSlug,
       path: input.path,
@@ -85,6 +85,10 @@ export const streamsRouter = {
       } else if (event.type === "https://events.iterate.com/events/stream/initialized") {
         discovered[input.path] = event.createdAt;
       }
+    }
+
+    if (input.path === "/" && discovered["/"] == null) {
+      discovered["/"] = new Date().toISOString();
     }
 
     return Object.entries(discovered)

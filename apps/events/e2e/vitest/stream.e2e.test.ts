@@ -10,6 +10,7 @@ import {
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
+  defaultE2EProjectSlug,
   requireEventsBaseUrl,
   type Events2AppFixture,
 } from "../helpers.ts";
@@ -17,7 +18,7 @@ import {
 const app = createEvents2AppFixture({
   baseURL: requireEventsBaseUrl(),
 });
-const defaultProjectSlug = "public";
+const defaultProjectSlug = defaultE2EProjectSlug;
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
 const pollIntervalMs = 50;
@@ -646,11 +647,9 @@ describe.sequential("events stream e2e", () => {
         "https://events.iterate.com/events/stream/initialized",
       );
 
-      const escapedRootStateResponse = await app.fetch("/api/__state/%2F");
-      expect(escapedRootStateResponse.status).toBe(200);
-      expect(await escapedRootStateResponse.json()).toEqual(
-        await app.client.getState({ path: "/" }),
-      );
+      const rootStateResponse = await app.fetch("/api/streams/__state/");
+      expect(rootStateResponse.status).toBe(200);
+      expect(await rootStateResponse.json()).toEqual(await app.client.getState({ path: "/" }));
       expect(rootHistory[0]).toMatchObject({
         streamPath: "/",
         type: "https://events.iterate.com/events/stream/initialized",
@@ -729,8 +728,8 @@ describe.sequential("events stream e2e", () => {
       expect(rawHistoryResponse.status).toBe(200);
       expect(await escapedHistoryResponse.text()).toEqual(await rawHistoryResponse.text());
 
-      const rawStateResponse = await app.fetch(`/api/__state${path}`);
-      const escapedStateResponse = await app.fetch(`/api/__state/${routePath}`);
+      const rawStateResponse = await app.fetch(`/api/streams/__state${path}`);
+      const escapedStateResponse = await app.fetch(`/api/streams/__state/${routePath}`);
 
       expect(rawStateResponse.status).toBe(200);
       expect(await escapedStateResponse.json()).toEqual(await rawStateResponse.json());
@@ -739,7 +738,7 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "listStreams reads discovered paths from the root stream",
+    "listChildren reads discovered paths from the root stream",
     async () => {
       const path = uniqueStreamPath();
 
@@ -758,10 +757,10 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "listStreams is exposed at /api/__list/{path}",
+    "listChildren is exposed at /api/streams/__children/{path}",
     async () => {
-      const streams = await app.client.listStreams({ path: "/" });
-      const response = await app.fetch("/api/__list/%2F");
+      const streams = await app.client.listChildren({ path: "/" });
+      const response = await app.fetch("/api/streams/__children/");
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual(streams);
@@ -772,7 +771,7 @@ describe.sequential("events stream e2e", () => {
   test(
     "root stream is explicitly listed as a known system stream",
     async () => {
-      const streams = await app.client.listStreams({ path: "/" });
+      const streams = await app.client.listChildren({ path: "/" });
 
       expect(streams.some((stream) => stream.path === "/")).toBe(true);
     },
@@ -780,13 +779,34 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "listStreams on an untouched path does not create or discover that stream",
+    "listChildren includes / for a fresh project slug before root initialization",
+    async () => {
+      const projectSlug = `test-${randomUUID().slice(0, 8)}`;
+      const response = await app.fetch("/api/streams/__children/%2F", {
+        headers: {
+          "x-iterate-project": projectSlug,
+        },
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual([
+        {
+          path: "/",
+          createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        },
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "listChildren on an untouched path does not create or discover that stream",
     async () => {
       const path = uniqueStreamPath();
 
-      expect(await app.client.listStreams({ path })).toEqual([]);
+      expect(await app.client.listChildren({ path })).toEqual([]);
       expect(
-        (await app.client.listStreams({ path: "/" })).some((stream) => stream.path === path),
+        (await app.client.listChildren({ path: "/" })).some((stream) => stream.path === path),
       ).toBe(false);
       expect(await app.client.destroy({ params: { path }, query: {} })).toEqual({
         destroyedStreamCount: 0,
@@ -878,7 +898,7 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "destroy does not remove stale discovery entries from listStreams",
+    "destroy does not remove stale discovery entries from listChildren",
     async () => {
       const path = uniqueStreamPath();
 
@@ -893,7 +913,7 @@ describe.sequential("events stream e2e", () => {
       await waitForStream(app, path);
       await app.client.destroy({ params: { path }, query: {} });
 
-      const streams = await app.client.listStreams({ path: "/" });
+      const streams = await app.client.listChildren({ path: "/" });
       expect(streams.some((stream) => stream.path === path)).toBe(true);
     },
     testTimeoutMs,
@@ -1162,7 +1182,7 @@ describe.sequential("events stream e2e", () => {
         }),
       });
       const historyResponse = await app.fetch("/api/streams/e2e/__reserved");
-      const stateResponse = await app.fetch("/api/__state/e2e/__reserved");
+      const stateResponse = await app.fetch("/api/streams/__state/e2e/__reserved");
 
       expect(appendResponse.status).toBe(200);
       expect(historyResponse.status).toBe(200);
@@ -1422,7 +1442,7 @@ async function waitForStream(appFixture: Events2AppFixture, path: StreamPath) {
   const deadline = Date.now() + postBootTimeoutMs;
 
   while (Date.now() < deadline) {
-    const streams = await appFixture.client.listStreams({ path: "/" });
+    const streams = await appFixture.client.listChildren({ path: "/" });
     const stream = streams.find((candidate) => candidate.path === path);
     if (stream) {
       return stream;

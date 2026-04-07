@@ -33,6 +33,7 @@ __pycache__/
 
 # Experiment artifacts
 experiments/*/disk-config.json
+ai-engineer-workshop/.codemode/
 
 # ad-hoc ignored files/paths
 *ignoreme*

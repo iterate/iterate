@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import process from "node:process";
+import { inspect } from "node:util";
 import { pathToFileURL } from "node:url";
 
 import { createORPCClient } from "@orpc/client";
@@ -8,6 +9,7 @@ import { RPCLink } from "@orpc/client/fetch";
 import { os } from "@orpc/server";
 import { createCli, parseRouter, type AnyRouter } from "trpc-cli";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
+import { parse as parseYaml } from "yaml";
 
 const DEFAULT_DISCOVERY_PATH = "/__internal/trpc-cli-procedures";
 const DEFAULT_RPC_PATH = "/orpc/";
@@ -60,6 +62,7 @@ type IterateAppCliConfig = {
 
 export async function runAppCli() {
   const baseUrlFlag = consumeCliStringFlag("--base-url");
+  normalizePermissiveInputArgv(process.argv);
   const cwd = process.cwd();
   const packageJson = readPackageJson(cwd);
   const config = resolveCliConfig({ cwd, packageJson });
@@ -103,7 +106,9 @@ export async function runAppCli() {
     description: packageJson.description ?? "Iterate app CLI",
   });
 
-  await cli.run();
+  await cli.run({
+    formatError: formatAppCliError,
+  });
 }
 
 async function loadLocalRouter(params: { cwd: string; localRouterPaths: string[] }) {
@@ -458,4 +463,139 @@ function proxifyOrpc<R extends AnyRouter>(
   }
 
   return outputRouterRecord;
+}
+
+type ValidationIssue = {
+  code?: unknown;
+  expected?: unknown;
+  path?: unknown;
+  message?: unknown;
+  values?: unknown;
+};
+
+type ErrorWithIssues = {
+  code?: unknown;
+  message?: unknown;
+  data?: {
+    issues?: unknown;
+  };
+};
+
+export function formatAppCliError(error: unknown) {
+  const issues = getValidationIssues(error);
+
+  if (issues.length > 0) {
+    const header =
+      error instanceof Error && error.message.trim().length > 0
+        ? error.message
+        : "Input validation failed";
+
+    return [header, ...issues.map((issue) => `- ${formatIssue(issue)}`)].join("\n");
+  }
+
+  return inspect(error);
+}
+
+export function normalizePermissiveInputArgv(argv: string[]) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+
+    if (value === "--input") {
+      const next = argv[index + 1];
+      if (next && !next.startsWith("-")) {
+        argv[index + 1] = normalizePermissiveInputValue(next);
+        index += 1;
+      }
+      continue;
+    }
+
+    if (typeof value === "string" && value.startsWith("--input=")) {
+      argv[index] = `--input=${normalizePermissiveInputValue(value.slice("--input=".length))}`;
+    }
+  }
+}
+
+export function normalizePermissiveInputValue(value: string) {
+  if (value.trim().length === 0) {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(JSON.parse(value));
+  } catch {
+    // Fall through to YAML parsing.
+  }
+
+  try {
+    return JSON.stringify(parseYaml(value));
+  } catch {
+    return value;
+  }
+}
+
+function getValidationIssues(error: unknown): ValidationIssue[] {
+  const maybeError = error as ErrorWithIssues;
+
+  if (maybeError?.code !== "BAD_REQUEST") {
+    return [];
+  }
+
+  const rawIssues = maybeError.data?.issues;
+  if (!Array.isArray(rawIssues)) {
+    return [];
+  }
+
+  return rawIssues.filter(isValidationIssue);
+}
+
+function isValidationIssue(value: unknown): value is ValidationIssue {
+  return typeof value === "object" && value !== null;
+}
+
+function formatIssue(issue: ValidationIssue) {
+  const path = formatIssuePath(issue.path);
+  const message = formatIssueMessage(issue);
+
+  return path ? `${path}: ${message}` : message;
+}
+
+function formatIssueMessage(issue: ValidationIssue) {
+  if (typeof issue.message === "string" && issue.message.trim().length > 0) {
+    if (issue.message !== "Invalid input") {
+      return issue.message;
+    }
+  }
+
+  if (Array.isArray(issue.values) && issue.values.length > 0) {
+    return `Expected one of: ${issue.values.map((value) => JSON.stringify(value)).join(", ")}`;
+  }
+
+  if (typeof issue.expected === "string" && issue.expected.trim().length > 0) {
+    return `Expected ${issue.expected}`;
+  }
+
+  return "Invalid input";
+}
+
+function formatIssuePath(path: unknown) {
+  if (!Array.isArray(path) || path.length === 0) {
+    return "";
+  }
+
+  let output = "";
+
+  for (const part of path) {
+    if (typeof part === "number") {
+      output += `[${part}]`;
+      continue;
+    }
+
+    if (typeof part !== "string" || part.length === 0) {
+      continue;
+    }
+
+    output += output.length === 0 ? part : `.${part}`;
+  }
+
+  return output;
 }

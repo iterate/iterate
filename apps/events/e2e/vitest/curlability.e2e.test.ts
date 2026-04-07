@@ -240,8 +240,8 @@ describe.sequential("events curlability e2e", () => {
 
 function canonicalStatePath(path: StreamPathType) {
   if (path === "/") {
-    return "/api/__state/%2F";
+    return "/api/streams/__state/%2F";
   }
 
-  return `/api/__state/${path.slice(1).replaceAll("/", "%2F")}`;
+  return `/api/streams/__state/${path.slice(1).replaceAll("/", "%2F")}`;
 }

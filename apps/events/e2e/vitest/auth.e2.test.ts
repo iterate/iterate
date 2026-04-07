@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { StreamPath } from "@iterate-com/events-contract";
-import { createEvents2AppFixture, requireEventsBaseUrl } from "../helpers.ts";
+import {
+  createEvents2AppFixture,
+  defaultE2EProjectSlug,
+  requireEventsBaseUrl,
+} from "../helpers.ts";
 
 const app = createEvents2AppFixture({
   baseURL: requireEventsBaseUrl(),
 });
-const defaultProjectSlug = "public";
+const defaultProjectSlug = defaultE2EProjectSlug;
 const testTimeoutMs = 5_000;
 
 describe.sequential("events auth-adjacent e2e", () => {
@@ -22,7 +26,7 @@ describe.sequential("events auth-adjacent e2e", () => {
         },
         body: JSON.stringify({
           type: "https://events.iterate.com/events/example/value-recorded",
-          payload: { scope: "public" },
+          payload: { scope: defaultProjectSlug },
         }),
       });
       const projectAppendResponse = await app.fetch(`/api/streams/${routePathFor(path)}`, {
@@ -40,8 +44,10 @@ describe.sequential("events auth-adjacent e2e", () => {
       expect(defaultProjectAppendResponse.status).toBe(200);
       expect(projectAppendResponse.status).toBe(200);
 
-      const defaultProjectStateResponse = await app.fetch(`/api/__state/${routePathFor(path)}`);
-      const projectStateResponse = await app.fetch(`/api/__state/${routePathFor(path)}`, {
+      const defaultProjectStateResponse = await app.fetch(
+        `/api/streams/__state/${routePathFor(path)}`,
+      );
+      const projectStateResponse = await app.fetch(`/api/streams/__state/${routePathFor(path)}`, {
         headers: {
           "x-iterate-project": "team-a",
         },
@@ -67,8 +73,8 @@ describe.sequential("events auth-adjacent e2e", () => {
       const defaultProjectHistoryResponse = await app.fetch(`/api/streams/${routePathFor(path)}`);
       expect(defaultProjectHistoryResponse.status).toBe(200);
       const defaultProjectHistoryText = await defaultProjectHistoryResponse.text();
-      expect(defaultProjectHistoryText).toContain('"projectSlug":"public"');
-      expect(defaultProjectHistoryText).toContain('"scope":"public"');
+      expect(defaultProjectHistoryText).toContain(`"projectSlug":"${defaultProjectSlug}"`);
+      expect(defaultProjectHistoryText).toContain(`"scope":"${defaultProjectSlug}"`);
       expect(defaultProjectHistoryText).not.toContain('"scope":"team-a"');
 
       const projectHistoryResponse = await app.fetch(`/api/streams/${routePathFor(path)}`, {
@@ -80,7 +86,7 @@ describe.sequential("events auth-adjacent e2e", () => {
       const projectHistoryText = await projectHistoryResponse.text();
       expect(projectHistoryText).toContain('"projectSlug":"team-a"');
       expect(projectHistoryText).toContain('"scope":"team-a"');
-      expect(projectHistoryText).not.toContain('"scope":"public"');
+      expect(projectHistoryText).not.toContain(`"scope":"${defaultProjectSlug}"`);
     },
     testTimeoutMs,
   );

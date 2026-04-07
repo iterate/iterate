@@ -13,6 +13,7 @@ import type {
   StreamRendererMode,
 } from "~/lib/stream-feed-types.ts";
 import { buildAgentSemanticInsertions } from "~/lib/agent-stream-reducer.ts";
+import { buildWorkshopSemanticInsertions } from "~/lib/workshop-stream-reducer.ts";
 
 /**
  * Raw + Pretty groups consecutive wire rows of the same `eventType`. Very large
@@ -199,6 +200,7 @@ function buildSemanticInsertions(events: readonly Event[]) {
   }
 
   mergeInsertions(insertionsByOffset, buildAgentSemanticInsertions(events));
+  mergeInsertions(insertionsByOffset, buildWorkshopSemanticInsertions(events));
 
   return insertionsByOffset;
 }
