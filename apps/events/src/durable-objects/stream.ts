@@ -5,7 +5,9 @@ import {
   Event as EventSchema,
   type EventInput,
   EventInput as EventInputSchema,
+  type ExternalWebsocketSubscriber,
   type StreamMetadataUpdatedEvent,
+  type StreamSubscriptionConfiguredEvent,
   StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
@@ -37,6 +39,9 @@ import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/s
 export class StreamDurableObject extends DurableObject<Env> {
   private _state: StreamState | null = null;
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  private outboundSubscriberSocket: WebSocket | null = null;
+  private outboundSubscriberCallbackUrl: string | null = null;
+  private outboundSubscriberSocketPromise: Promise<WebSocket> | null = null;
 
   private get state(): StreamState {
     if (this._state == null) {
@@ -103,6 +108,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       path: args.path,
       maxOffset: 0,
       metadata: {},
+      externalSubscriber: undefined,
     };
 
     try {
@@ -182,6 +188,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     this._state = nextState;
 
     this.publish(event);
+    this.ctx.waitUntil(this.publishToOutboundSubscriber(event));
 
     switch (event.type) {
       case "https://events.iterate.com/events/stream/initialized": {
@@ -364,12 +371,126 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
     }
   }
+
+  private async publishToOutboundSubscriber(event: Event) {
+    const subscriber = this.state.externalSubscriber;
+    if (subscriber == null) {
+      return;
+    }
+
+    const payload = JSON.stringify(event);
+
+    try {
+      const socket = await this.getOutboundSubscriberSocket(subscriber);
+      socket.send(payload);
+    } catch (error) {
+      this.resetOutboundSubscriberSocket();
+
+      try {
+        const socket = await this.getOutboundSubscriberSocket(subscriber);
+        socket.send(payload);
+      } catch (retryError) {
+        console.error("[stream-do] failed to publish event to outbound subscriber", {
+          url: subscriber.callbackUrl,
+          streamPath: event.streamPath,
+          offset: event.offset,
+          error,
+          retryError,
+        });
+      }
+    }
+  }
+
+  private async getOutboundSubscriberSocket(subscriber: ExternalWebsocketSubscriber) {
+    if (this.outboundSubscriberCallbackUrl !== subscriber.callbackUrl) {
+      this.resetOutboundSubscriberSocket();
+    }
+
+    if (
+      this.outboundSubscriberSocket != null &&
+      this.outboundSubscriberSocket.readyState === WebSocket.OPEN
+    ) {
+      return this.outboundSubscriberSocket;
+    }
+
+    if (this.outboundSubscriberSocketPromise != null) {
+      return this.outboundSubscriberSocketPromise;
+    }
+
+    const connectPromise = this.connectOutboundSubscriberSocket(subscriber);
+    this.outboundSubscriberSocketPromise = connectPromise;
+
+    try {
+      const socket = await connectPromise;
+      this.outboundSubscriberSocket = socket;
+      this.outboundSubscriberCallbackUrl = subscriber.callbackUrl;
+      return socket;
+    } finally {
+      if (this.outboundSubscriberSocketPromise === connectPromise) {
+        this.outboundSubscriberSocketPromise = null;
+      }
+    }
+  }
+
+  private async connectOutboundSubscriberSocket(subscriber: ExternalWebsocketSubscriber) {
+    const url = getWebsocketUpgradeFetchUrl(subscriber.callbackUrl);
+
+    const response = (await fetch(url.toString(), {
+      headers: {
+        Upgrade: "websocket",
+      },
+    })) as Response & { webSocket?: WebSocket | null };
+
+    const socket = response.webSocket;
+    if (socket == null) {
+      throw new Error(`Subscriber did not accept websocket upgrade. Status: ${response.status}`);
+    }
+
+    socket.accept();
+    socket.addEventListener("close", () => {
+      if (this.outboundSubscriberSocket === socket) {
+        this.outboundSubscriberSocket = null;
+        this.outboundSubscriberCallbackUrl = null;
+      }
+    });
+    socket.addEventListener("error", () => {
+      if (this.outboundSubscriberSocket === socket) {
+        this.outboundSubscriberSocket = null;
+        this.outboundSubscriberCallbackUrl = null;
+      }
+    });
+
+    return socket;
+  }
+
+  private resetOutboundSubscriberSocket() {
+    if (this.outboundSubscriberSocket != null) {
+      try {
+        this.outboundSubscriberSocket.close(1011, "resetting_subscriber_socket");
+      } catch {}
+    }
+
+    this.outboundSubscriberSocket = null;
+    this.outboundSubscriberCallbackUrl = null;
+  }
 }
 
 const textEncoder = new TextEncoder();
 
 function encodeEventLine(event: Event) {
   return textEncoder.encode(`${JSON.stringify(event)}\n`);
+}
+
+function getWebsocketUpgradeFetchUrl(callbackUrl: string) {
+  const url = new URL(callbackUrl);
+
+  if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  } else if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  }
+
+  return url;
 }
 
 type SqliteEventRow = {
@@ -409,6 +530,14 @@ function reduceStreamState(args: { state: StreamState; event: Event }): StreamSt
       return {
         ...state,
         metadata: metadataUpdatedEvent.payload.metadata,
+      };
+    }
+
+    case "https://events.iterate.com/events/stream/subscription/configured": {
+      const subscriptionConfiguredEvent = event as StreamSubscriptionConfiguredEvent;
+      return {
+        ...state,
+        externalSubscriber: subscriptionConfiguredEvent.payload,
       };
     }
 

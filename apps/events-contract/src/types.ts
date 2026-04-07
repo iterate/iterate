@@ -96,6 +96,24 @@ export const StreamMetadataUpdatedEvent = GenericEvent.extend(
 export type StreamMetadataUpdatedEventInput = z.infer<typeof StreamMetadataUpdatedEventInput>;
 export type StreamMetadataUpdatedEvent = z.infer<typeof StreamMetadataUpdatedEvent>;
 
+export const ExternalWebsocketSubscriber = z.object({
+  callbackUrl: z.url(),
+  type: z.literal("websocket"),
+});
+export type ExternalWebsocketSubscriber = z.infer<typeof ExternalWebsocketSubscriber>;
+
+export const StreamSubscriptionConfiguredEventInput = GenericEventInput.extend({
+  type: z.literal("https://events.iterate.com/events/stream/subscription/configured"),
+  payload: ExternalWebsocketSubscriber,
+});
+export const StreamSubscriptionConfiguredEvent = GenericEvent.extend(
+  StreamSubscriptionConfiguredEventInput.pick({ type: true, payload: true }).shape,
+);
+export type StreamSubscriptionConfiguredEventInput = z.infer<
+  typeof StreamSubscriptionConfiguredEventInput
+>;
+export type StreamSubscriptionConfiguredEvent = z.infer<typeof StreamSubscriptionConfiguredEvent>;
+
 export const ErrorOccurredEventInput = GenericEventInput.extend({
   type: z.literal("https://events.iterate.com/events/stream/error-occurred"),
   payload: z.object({
@@ -112,12 +130,14 @@ export const BuiltInEventInput = z.discriminatedUnion("type", [
   StreamInitializedEventInput,
   ChildStreamCreatedEventInput,
   StreamMetadataUpdatedEventInput,
+  StreamSubscriptionConfiguredEventInput,
   ErrorOccurredEventInput,
 ]);
 export const BuiltInEvent = z.discriminatedUnion("type", [
   StreamInitializedEvent,
   ChildStreamCreatedEvent,
   StreamMetadataUpdatedEvent,
+  StreamSubscriptionConfiguredEvent,
   ErrorOccurredEvent,
 ]);
 export type BuiltInEventInput = z.infer<typeof BuiltInEventInput>;
@@ -141,6 +161,7 @@ export const StreamState = z.object({
   path: StreamPath,
   maxOffset: z.number().int().nonnegative(),
   metadata: JSONObject,
+  externalSubscriber: ExternalWebsocketSubscriber.optional(),
 });
 export type StreamState = z.infer<typeof StreamState>;
 

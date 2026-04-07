@@ -54,6 +54,10 @@ pnpm w --help
 pnpm w run --script examples/01-hello-world/append-hello-world.ts
 ```
 
+The deployed processor example lives in:
+
+- `ai-engineer-workshop/examples/deployed-processor`
+
 Published preview packages are built directly from this folder via `pkg.pr.new`.
 
 The separate scripts repo lives at:

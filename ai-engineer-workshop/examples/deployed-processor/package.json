@@ -1,0 +1,23 @@
+{
+  "name": "ai-engineer-workshop-deployed-processor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "ai-engineer-workshop": "workspace:*",
+    "hono": "^4.12.5",
+    "openai": "^6.33.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.29.1",
+    "@cloudflare/workers-types": "^4.20260317.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.0",
+    "wrangler": "^4.75.0"
+  }
+}
