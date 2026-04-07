@@ -57,7 +57,7 @@ export const jsonataTransformerProcessor = defineBuiltinProcessor<JsonataTransfo
           continue;
         }
 
-        append(parsed.data);
+        await append(parsed.data);
       } catch (error) {
         console.error("[stream-do] jsonata transformer failed", {
           slug,

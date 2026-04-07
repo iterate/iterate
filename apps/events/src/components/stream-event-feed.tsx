@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import {
   AlertTriangleIcon,
   BotIcon,
+  Clock3Icon,
   BookOpenIcon,
   BracesIcon,
   CheckCircle2Icon,
@@ -71,6 +72,8 @@ import type {
   ChildStreamCreatedFeedItem,
   EventFeedItem,
   GroupedEventFeedItem,
+  SchedulerControlFeedItem,
+  SchedulerExecutionFeedItem,
   StreamErrorOccurredFeedItem,
   StreamFeedItem,
   StreamLifecycleFeedItem,
@@ -236,6 +239,10 @@ function StreamFeedItemRenderer({
       return <StreamResumedCard item={item} />;
     case "stream-error-occurred":
       return <StreamErrorOccurredCard item={item} />;
+    case "scheduler-control":
+      return <SchedulerControlCard item={item} />;
+    case "scheduler-execution":
+      return <SchedulerExecutionCard item={item} />;
     case "codemode-block":
       return <CodemodeBlockCard item={item} />;
     case "codemode-result":
@@ -458,6 +465,77 @@ function StreamErrorOccurredCard({ item }: { item: StreamErrorOccurredFeedItem }
   );
 }
 
+function SchedulerControlCard({ item }: { item: SchedulerControlFeedItem }) {
+  const eyebrowLabel =
+    item.action === "append-scheduled"
+      ? "Append scheduled"
+      : item.action === "configured"
+        ? "Schedule configured"
+        : "Schedule cancelled";
+  const title = item.slug;
+  const data =
+    item.action === "append-scheduled"
+      ? { slug: item.slug, schedule: item.schedule, append: item.append }
+      : item.action === "configured"
+        ? {
+            slug: item.slug,
+            callback: item.callback,
+            schedule: item.schedule,
+            nextRunAt: item.nextRunAt,
+            payload: tryParseJson(item.payloadJson),
+          }
+        : { slug: item.slug };
+
+  return (
+    <AssistantArtifact
+      eyebrow={<Clock3Icon className="size-3.5" />}
+      eyebrowLabel={eyebrowLabel}
+      title={title}
+      meta={buildSchedulerControlMeta(item)}
+      tone={item.action === "cancelled" ? "warning" : "default"}
+    >
+      <ArtifactSection>
+        <SerializedObjectCodeBlock
+          data={data}
+          className="min-h-20 max-h-64"
+          initialFormat="yaml"
+          showToggle
+          showCopyButton
+        />
+      </ArtifactSection>
+    </AssistantArtifact>
+  );
+}
+
+function SchedulerExecutionCard({ item }: { item: SchedulerExecutionFeedItem }) {
+  const isFailure = item.action === "finished" && item.outcome === "failed";
+  const isSuccess = item.action === "finished" && item.outcome === "succeeded";
+
+  return (
+    <AssistantArtifact
+      eyebrow={
+        item.action === "started" ? (
+          <PlayCircleIcon className="size-3.5" />
+        ) : isSuccess ? (
+          <CheckCircle2Icon className="size-3.5" />
+        ) : (
+          <XCircleIcon className="size-3.5" />
+        )
+      }
+      eyebrowLabel={
+        item.action === "started"
+          ? "Schedule execution started"
+          : isFailure
+            ? "Schedule execution failed"
+            : "Schedule execution finished"
+      }
+      title={item.slug}
+      meta={buildSchedulerExecutionMeta(item)}
+      tone={item.action === "started" ? "default" : isFailure ? "danger" : "success"}
+    />
+  );
+}
+
 function CodemodeBlockCard({ item }: { item: CodemodeBlockFeedItem }) {
   return (
     <AssistantArtifact
@@ -675,6 +753,58 @@ function getSourceCodePreview(sourceCode: string, lineCount: number) {
   }
 
   return `${lines.slice(0, lineCount).join("\n")}\n...`;
+}
+
+function buildSchedulerControlMeta(item: SchedulerControlFeedItem) {
+  const meta = [formatTime(item.timestamp)];
+
+  if (item.schedule != null) {
+    meta.unshift(describeSchedule(item.schedule));
+  }
+
+  if (item.action === "configured" && item.nextRunAt != null) {
+    meta.push(`Next run ${formatTime(item.nextRunAt * 1000)}`);
+  }
+
+  return meta;
+}
+
+function buildSchedulerExecutionMeta(item: SchedulerExecutionFeedItem) {
+  const meta = [formatTime(item.timestamp)];
+
+  if (item.action === "finished") {
+    meta.unshift(item.outcome === "failed" ? "Failed" : "Succeeded");
+    meta.push(
+      item.nextRunAt == null ? "No next run" : `Next run ${formatTime(item.nextRunAt * 1000)}`,
+    );
+  }
+
+  return meta;
+}
+
+function describeSchedule(schedule: NonNullable<SchedulerControlFeedItem["schedule"]>) {
+  switch (schedule.kind) {
+    case "once-at":
+      return `Once at ${schedule.at}`;
+    case "once-in":
+      return `Once in ${schedule.delaySeconds}s`;
+    case "every":
+      return `Every ${schedule.intervalSeconds}s`;
+    case "cron":
+      return `Cron ${schedule.cron}`;
+  }
+}
+
+function tryParseJson(payloadJson: string | null | undefined) {
+  if (payloadJson == null) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(payloadJson);
+  } catch {
+    return payloadJson;
+  }
 }
 
 function EventLine({
@@ -996,6 +1126,10 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `codemode-block-${item.blockId}-${item.timestamp}-${index}`;
     case "codemode-result":
       return `codemode-result-${item.blockId}-${item.blockCount}-${item.timestamp}-${index}`;
+    case "scheduler-control":
+      return `scheduler-control-${item.action}-${item.slug}-${item.raw.offset}`;
+    case "scheduler-execution":
+      return `scheduler-execution-${item.action}-${item.slug}-${item.raw.offset}`;
     default:
       return `feed-item-${index}`;
   }

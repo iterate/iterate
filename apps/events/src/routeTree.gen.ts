@@ -15,6 +15,11 @@ import { Route as StreamPausedRouteImport } from './routes/stream-paused'
 import { Route as StreamMetadataUpdatedRouteImport } from './routes/stream-metadata-updated'
 import { Route as StreamInitializedRouteImport } from './routes/stream-initialized'
 import { Route as StreamDurableObjectConstructedRouteImport } from './routes/stream-durable-object-constructed'
+import { Route as StreamAppendScheduledRouteImport } from './routes/stream-append-scheduled'
+import { Route as ScheduleExecutionStartedRouteImport } from './routes/schedule-execution-started'
+import { Route as ScheduleExecutionFinishedRouteImport } from './routes/schedule-execution-finished'
+import { Route as ScheduleConfiguredRouteImport } from './routes/schedule-configured'
+import { Route as ScheduleCancelledRouteImport } from './routes/schedule-cancelled'
 import { Route as ManualEventAppendedRouteImport } from './routes/manual-event-appended'
 import { Route as JsonataTransformerConfiguredRouteImport } from './routes/jsonata-transformer-configured'
 import { Route as ErrorOccurredRouteImport } from './routes/error-occurred'
@@ -62,6 +67,33 @@ const StreamDurableObjectConstructedRoute =
     path: '/stream-durable-object-constructed',
     getParentRoute: () => rootRouteImport,
   } as any)
+const StreamAppendScheduledRoute = StreamAppendScheduledRouteImport.update({
+  id: '/stream-append-scheduled',
+  path: '/stream-append-scheduled',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ScheduleExecutionStartedRoute =
+  ScheduleExecutionStartedRouteImport.update({
+    id: '/schedule-execution-started',
+    path: '/schedule-execution-started',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ScheduleExecutionFinishedRoute =
+  ScheduleExecutionFinishedRouteImport.update({
+    id: '/schedule-execution-finished',
+    path: '/schedule-execution-finished',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ScheduleConfiguredRoute = ScheduleConfiguredRouteImport.update({
+  id: '/schedule-configured',
+  path: '/schedule-configured',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ScheduleCancelledRoute = ScheduleCancelledRouteImport.update({
+  id: '/schedule-cancelled',
+  path: '/schedule-cancelled',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ManualEventAppendedRoute = ManualEventAppendedRouteImport.update({
   id: '/manual-event-appended',
   path: '/manual-event-appended',
@@ -146,6 +178,11 @@ export interface FileRoutesByFullPath {
   '/error-occurred': typeof ErrorOccurredRoute
   '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
+  '/schedule-cancelled': typeof ScheduleCancelledRoute
+  '/schedule-configured': typeof ScheduleConfiguredRoute
+  '/schedule-execution-finished': typeof ScheduleExecutionFinishedRoute
+  '/schedule-execution-started': typeof ScheduleExecutionStartedRoute
+  '/stream-append-scheduled': typeof StreamAppendScheduledRoute
   '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
   '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
@@ -168,6 +205,11 @@ export interface FileRoutesByTo {
   '/error-occurred': typeof ErrorOccurredRoute
   '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
+  '/schedule-cancelled': typeof ScheduleCancelledRoute
+  '/schedule-configured': typeof ScheduleConfiguredRoute
+  '/schedule-execution-finished': typeof ScheduleExecutionFinishedRoute
+  '/schedule-execution-started': typeof ScheduleExecutionStartedRoute
+  '/stream-append-scheduled': typeof StreamAppendScheduledRoute
   '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
   '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
@@ -190,6 +232,11 @@ export interface FileRoutesById {
   '/error-occurred': typeof ErrorOccurredRoute
   '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
+  '/schedule-cancelled': typeof ScheduleCancelledRoute
+  '/schedule-configured': typeof ScheduleConfiguredRoute
+  '/schedule-execution-finished': typeof ScheduleExecutionFinishedRoute
+  '/schedule-execution-started': typeof ScheduleExecutionStartedRoute
+  '/stream-append-scheduled': typeof StreamAppendScheduledRoute
   '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
   '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
@@ -214,6 +261,11 @@ export interface FileRouteTypes {
     | '/error-occurred'
     | '/jsonata-transformer-configured'
     | '/manual-event-appended'
+    | '/schedule-cancelled'
+    | '/schedule-configured'
+    | '/schedule-execution-finished'
+    | '/schedule-execution-started'
+    | '/stream-append-scheduled'
     | '/stream-durable-object-constructed'
     | '/stream-initialized'
     | '/stream-metadata-updated'
@@ -236,6 +288,11 @@ export interface FileRouteTypes {
     | '/error-occurred'
     | '/jsonata-transformer-configured'
     | '/manual-event-appended'
+    | '/schedule-cancelled'
+    | '/schedule-configured'
+    | '/schedule-execution-finished'
+    | '/schedule-execution-started'
+    | '/stream-append-scheduled'
     | '/stream-durable-object-constructed'
     | '/stream-initialized'
     | '/stream-metadata-updated'
@@ -257,6 +314,11 @@ export interface FileRouteTypes {
     | '/error-occurred'
     | '/jsonata-transformer-configured'
     | '/manual-event-appended'
+    | '/schedule-cancelled'
+    | '/schedule-configured'
+    | '/schedule-execution-finished'
+    | '/schedule-execution-started'
+    | '/stream-append-scheduled'
     | '/stream-durable-object-constructed'
     | '/stream-initialized'
     | '/stream-metadata-updated'
@@ -281,6 +343,11 @@ export interface RootRouteChildren {
   ErrorOccurredRoute: typeof ErrorOccurredRoute
   JsonataTransformerConfiguredRoute: typeof JsonataTransformerConfiguredRoute
   ManualEventAppendedRoute: typeof ManualEventAppendedRoute
+  ScheduleCancelledRoute: typeof ScheduleCancelledRoute
+  ScheduleConfiguredRoute: typeof ScheduleConfiguredRoute
+  ScheduleExecutionFinishedRoute: typeof ScheduleExecutionFinishedRoute
+  ScheduleExecutionStartedRoute: typeof ScheduleExecutionStartedRoute
+  StreamAppendScheduledRoute: typeof StreamAppendScheduledRoute
   StreamDurableObjectConstructedRoute: typeof StreamDurableObjectConstructedRoute
   StreamInitializedRoute: typeof StreamInitializedRoute
   StreamMetadataUpdatedRoute: typeof StreamMetadataUpdatedRoute
@@ -333,6 +400,41 @@ declare module '@tanstack/react-router' {
       path: '/stream-durable-object-constructed'
       fullPath: '/stream-durable-object-constructed'
       preLoaderRoute: typeof StreamDurableObjectConstructedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/stream-append-scheduled': {
+      id: '/stream-append-scheduled'
+      path: '/stream-append-scheduled'
+      fullPath: '/stream-append-scheduled'
+      preLoaderRoute: typeof StreamAppendScheduledRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/schedule-execution-started': {
+      id: '/schedule-execution-started'
+      path: '/schedule-execution-started'
+      fullPath: '/schedule-execution-started'
+      preLoaderRoute: typeof ScheduleExecutionStartedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/schedule-execution-finished': {
+      id: '/schedule-execution-finished'
+      path: '/schedule-execution-finished'
+      fullPath: '/schedule-execution-finished'
+      preLoaderRoute: typeof ScheduleExecutionFinishedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/schedule-configured': {
+      id: '/schedule-configured'
+      path: '/schedule-configured'
+      fullPath: '/schedule-configured'
+      preLoaderRoute: typeof ScheduleConfiguredRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/schedule-cancelled': {
+      id: '/schedule-cancelled'
+      path: '/schedule-cancelled'
+      fullPath: '/schedule-cancelled'
+      preLoaderRoute: typeof ScheduleCancelledRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/manual-event-appended': {
@@ -490,6 +592,11 @@ const rootRouteChildren: RootRouteChildren = {
   ErrorOccurredRoute: ErrorOccurredRoute,
   JsonataTransformerConfiguredRoute: JsonataTransformerConfiguredRoute,
   ManualEventAppendedRoute: ManualEventAppendedRoute,
+  ScheduleCancelledRoute: ScheduleCancelledRoute,
+  ScheduleConfiguredRoute: ScheduleConfiguredRoute,
+  ScheduleExecutionFinishedRoute: ScheduleExecutionFinishedRoute,
+  ScheduleExecutionStartedRoute: ScheduleExecutionStartedRoute,
+  StreamAppendScheduledRoute: StreamAppendScheduledRoute,
   StreamDurableObjectConstructedRoute: StreamDurableObjectConstructedRoute,
   StreamInitializedRoute: StreamInitializedRoute,
   StreamMetadataUpdatedRoute: StreamMetadataUpdatedRoute,

@@ -139,6 +139,7 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" -H "x-iterate-project: $PROJECT_SLU
         "jsonata-transformer": {
           transformersBySlug: {},
         },
+        scheduler: {},
       },
     });
     expect(JSON.parse(slashEscapedStateJson)).toMatchObject({
@@ -160,6 +161,7 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" -H "x-iterate-project: $PROJECT_SLU
         "jsonata-transformer": {
           transformersBySlug: {},
         },
+        scheduler: {},
       },
     });
     const streamMessages = streamOutput

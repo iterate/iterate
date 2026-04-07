@@ -229,6 +229,7 @@ function expectedProcessorsWithRecentEventCount(count: number) {
     "jsonata-transformer": {
       transformersBySlug: {},
     },
+    scheduler: {},
   };
 }
 
