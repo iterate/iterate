@@ -4,7 +4,6 @@ import {
   GenericEvent as GenericEventBase,
   GenericEventInput as GenericEventInputBase,
   JSONObject,
-  Offset,
   StreamPath,
 } from "./event-base-types.ts";
 import {
