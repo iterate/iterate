@@ -33,7 +33,6 @@ export const secretsRouter = {
       return {
         id,
         name,
-        value: input.value,
         description: input.description ?? null,
         createdAt: now,
         updatedAt: now,
@@ -57,26 +56,6 @@ export const secretsRouter = {
         .offset(input.offset);
 
       return { secrets: rows, total: totalRow?.value ?? 0 };
-    }),
-    find: os.secrets.find.handler(async ({ context, input }) => {
-      const [row] = await context.db
-        .select()
-        .from(secretsTable)
-        .where(eq(secretsTable.id, input.id))
-        .limit(1);
-
-      if (!row) {
-        throw new ORPCError("NOT_FOUND", { message: "Env var not found" });
-      }
-
-      return {
-        id: row.id,
-        name: row.name,
-        value: row.value,
-        description: row.description,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      };
     }),
     remove: os.secrets.remove.handler(async ({ context, input }) => {
       const [existing] = await context.db

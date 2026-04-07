@@ -43,10 +43,6 @@ const SecretSummary = z.object({
   updatedAt: z.string(),
 });
 
-const Secret = SecretSummary.extend({
-  value: z.string(),
-});
-
 export const eventsContract = oc.router({
   __internal: internalContract,
   append: oc
@@ -158,7 +154,7 @@ export const eventsContract = oc.router({
           description: z.string().optional(),
         }),
       )
-      .output(Secret),
+      .output(SecretSummary),
     list: oc
       .route({
         method: "GET",
@@ -173,15 +169,6 @@ export const eventsContract = oc.router({
         }),
       )
       .output(z.object({ secrets: z.array(SecretSummary), total: z.number().int().nonnegative() })),
-    find: oc
-      .route({
-        method: "GET",
-        path: "/secrets/{id}",
-        description: "Get secret by id (includes value)",
-        tags: ["/secrets"],
-      })
-      .input(z.object({ id: z.string() }))
-      .output(Secret),
     remove: oc
       .route({
         method: "DELETE",
