@@ -122,27 +122,15 @@ export class StreamDurableObject extends DurableObject<Env> {
           afterOffset: args?.afterOffset,
           live: args?.live,
         }),
-      createLoopbackBinding: ({ exportName, props }) => {
+      createLoopbackBinding: ({ exportName }) => {
         if (exportName !== "DynamicWorkerEgressGateway") {
           throw new Error(`Unsupported loopback binding export: ${exportName}`);
         }
 
-        const gateway = this.env.DYNAMIC_WORKER_EGRESS_GATEWAY as unknown as (options: {
-          props?: unknown;
-        }) => Fetcher;
-
-        return gateway({ props });
+        return this.env.DYNAMIC_WORKER_EGRESS_GATEWAY as unknown as Fetcher;
       },
       getPath: () => this.state.path,
       loader: this.env.LOADER,
-      loadSecretsByName: async () => {
-        const { results } = await this.env.DB.prepare("SELECT name, value FROM secrets").all<{
-          name: string;
-          value: string;
-        }>();
-
-        return Object.fromEntries((results ?? []).map((row) => [row.name, row.value] as const));
-      },
       waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
 

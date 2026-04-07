@@ -23,6 +23,7 @@ const defaultDynamicWorkerCompatibilityFlags: string[] = [];
 const defaultDynamicWorkerMainModule = "worker.js";
 const defaultDynamicWorkerProcessorModule = "processor.js";
 const defaultDynamicWorkerRuntimeConfigModule = "runtime-config.js";
+const dynamicWorkerEgressConfigHeader = "x-iterate-dynamic-worker-egress-config";
 
 export const pingPongDynamicWorkerScript = `
 function containsPing(event) {
@@ -109,7 +110,24 @@ const dynamicWorkerRuntimeModule = `
 import processor from "./processor.js";
 import runtimeConfig from "./runtime-config.js";
 
-void runtimeConfig;
+const originalFetch = globalThis.fetch.bind(globalThis);
+
+function withDynamicWorkerEgressConfig(input, init) {
+  const request = new Request(input, init);
+
+  if (runtimeConfig.outboundGateway == null) {
+    return request;
+  }
+
+  const headers = new Headers(request.headers);
+  headers.set("${dynamicWorkerEgressConfigHeader}", JSON.stringify(runtimeConfig.outboundGateway));
+
+  return new Request(request, { headers });
+}
+
+if (runtimeConfig.outboundGateway != null) {
+  globalThis.fetch = (input, init) => originalFetch(withDynamicWorkerEgressConfig(input, init));
+}
 
 function createRemoteAsyncIterator(target) {
   return {
@@ -229,10 +247,9 @@ export function createDynamicWorkerManager(context: {
   append: (event: EventInput) => Event;
   history: (args?: { afterOffset?: number }) => Event[];
   stream: (args?: { afterOffset?: number; live?: boolean }) => ReadableStream<Uint8Array>;
-  createLoopbackBinding: (args: { exportName: string; props?: unknown }) => Fetcher;
+  createLoopbackBinding: (args: { exportName: string }) => Fetcher;
   getPath: () => StreamPath;
   loader: WorkerLoader;
-  loadSecretsByName: () => Promise<Record<string, string>>;
   waitUntil: (promise: Promise<unknown>) => void;
 }) {
   const runsBySlug = new Map<
@@ -288,10 +305,6 @@ export function createDynamicWorkerManager(context: {
             ? null
             : context.createLoopbackBinding({
                 exportName: config.outboundGateway.entrypoint,
-                props: {
-                  ...(config.outboundGateway.props ?? {}),
-                  secretsByName: await context.loadSecretsByName(),
-                },
               });
         const entrypoint = context.loader
           .get(

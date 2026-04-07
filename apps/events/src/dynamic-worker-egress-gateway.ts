@@ -1,45 +1,50 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { replaceIterateSecretReferences } from "~/lib/iterate-secret-references.ts";
 
+const dynamicWorkerEgressConfigHeader = "x-iterate-dynamic-worker-egress-config";
+
 export type DynamicWorkerEgressGatewayProps = {
   secretHeaderName?: string;
   secretHeaderValue?: string;
-  secretsByName?: Record<string, string>;
 };
 
-export class DynamicWorkerEgressGateway extends WorkerEntrypoint<
-  Env,
-  DynamicWorkerEgressGatewayProps
-> {
+export class DynamicWorkerEgressGateway extends WorkerEntrypoint<Env> {
   async fetch(request: Request) {
     const headers = new Headers(request.headers);
+    const target = new URL(request.url);
+    const gatewayConfig = parseDynamicWorkerEgressGatewayConfig(
+      headers.get(dynamicWorkerEgressConfigHeader),
+    );
 
-    if ((this.ctx.props.secretHeaderName == null) !== (this.ctx.props.secretHeaderValue == null)) {
+    headers.delete(dynamicWorkerEgressConfigHeader);
+
+    if ((gatewayConfig?.secretHeaderName == null) !== (gatewayConfig?.secretHeaderValue == null)) {
       throw new Error(
         "DynamicWorkerEgressGateway requires secretHeaderName and secretHeaderValue together.",
       );
     }
 
-    if (this.ctx.props.secretHeaderName != null && this.ctx.props.secretHeaderValue != null) {
-      headers.set(this.ctx.props.secretHeaderName, this.ctx.props.secretHeaderValue);
+    if (gatewayConfig?.secretHeaderName != null && gatewayConfig.secretHeaderValue != null) {
+      headers.set(gatewayConfig.secretHeaderName, gatewayConfig.secretHeaderValue);
     }
 
     const replacedHeaderNames: string[] = [];
     const resolvedSecretKeys = new Set<string>();
-    const secretsByName = this.ctx.props.secretsByName ?? {};
-    const target = new URL(request.url);
 
     try {
       for (const [headerName, headerValue] of Array.from(headers.entries())) {
         const resolved = await replaceIterateSecretReferences({
           input: headerValue,
           loadSecret: async (secretKey) => {
-            const value = secretsByName[secretKey];
-            if (typeof value !== "string") {
+            const result = await this.env.DB.prepare("SELECT value FROM secrets WHERE name = ?")
+              .bind(secretKey)
+              .first<{ value: string }>();
+
+            if (typeof result?.value !== "string") {
               throw new Error(`Secret "${secretKey}" was not found in apps/events secrets.`);
             }
 
-            return value;
+            return result.value;
           },
         });
 
@@ -83,4 +88,38 @@ export class DynamicWorkerEgressGateway extends WorkerEntrypoint<
       }),
     );
   }
+}
+
+function parseDynamicWorkerEgressGatewayConfig(
+  headerValue: string | null,
+): DynamicWorkerEgressGatewayProps | undefined {
+  if (headerValue == null) {
+    return undefined;
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(headerValue);
+  } catch (error) {
+    console.error("[dynamic-worker-egress] failed to parse gateway config header", {
+      error: error instanceof Error ? error.message : error,
+      headerName: dynamicWorkerEgressConfigHeader,
+    });
+    throw new Error("DynamicWorkerEgressGateway received an invalid config header.");
+  }
+
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("DynamicWorkerEgressGateway received a non-object config header.");
+  }
+
+  const props =
+    "props" in parsed &&
+    parsed.props != null &&
+    typeof parsed.props === "object" &&
+    !Array.isArray(parsed.props)
+      ? (parsed.props as DynamicWorkerEgressGatewayProps)
+      : undefined;
+
+  return props;
 }
