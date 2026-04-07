@@ -349,10 +349,18 @@ describe("scheduler control events", () => {
     await runDurableObjectAlarm(streamStub);
 
     const history = await streamStub.history();
-    expect(history.map((event) => event.type).slice(-2)).toEqual([
-      SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
-      SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
-    ]);
+    const finishedEvents = history.filter(
+      (event) => event.type === SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
+    );
+    expect(finishedEvents).toContainEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          nextRunAt: expect.any(Number),
+          outcome: "succeeded",
+          slug,
+        }),
+      }),
+    );
   });
 
   it("malformed payloadJson retires the schedule without invoking the callback", async () => {
