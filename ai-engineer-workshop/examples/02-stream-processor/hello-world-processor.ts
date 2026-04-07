@@ -1,43 +1,25 @@
-import {
-  createEventsClient,
-  defineProcessor,
-  normalizePathPrefix,
-  PullSubscriptionProcessorRuntime,
-  runWorkshopMain,
-} from "ai-engineer-workshop";
+import { defineProcessor } from "ai-engineer-workshop";
 
-export default async function helloWorldProcessor(pathPrefix: string) {
-  const baseUrl = process.env.BASE_URL || "https://events.iterate.com";
-  const streamPath = process.env.STREAM_PATH || `${normalizePathPrefix(pathPrefix)}/processor`;
+type HelloWorldState = { count: number };
+const initialState: HelloWorldState = { count: 0 };
 
-  console.log(`Watching ${streamPath}`);
+export default defineProcessor(() => ({
+  slug: "hello-world",
+  initialState,
 
-  await new PullSubscriptionProcessorRuntime({
-    eventsClient: createEventsClient(baseUrl),
-    streamPath,
-    processor: defineProcessor({
-      initialState: { seenHelloWorld: false },
-      reduce: (state, event) => {
-        if (event.type !== "hello-world") {
-          return state;
-        }
+  reduce: ({ event, state }) => {
+    if (event.type !== "hello-world") return state;
+    return { count: state.count + 1 };
+  },
 
-        return { seenHelloWorld: true };
+  afterAppend: async ({ append, event, state }) => {
+    if (event.type !== "hello-world" || state.count !== 1) return;
+
+    await append({
+      event: {
+        type: "hello-world-seen",
+        payload: { sourceOffset: event.offset },
       },
-      onEvent: async ({ append, event, prevState }) => {
-        if (event.type !== "hello-world" || prevState.seenHelloWorld) {
-          return;
-        }
-
-        await append({
-          type: "hello-world-seen",
-          payload: {
-            sourceOffset: event.offset,
-          },
-        });
-      },
-    }),
-  }).run();
-}
-
-runWorkshopMain(import.meta.url, helloWorldProcessor);
+    });
+  },
+}));

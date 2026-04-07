@@ -27,7 +27,7 @@ export function AppSidebar() {
 }
 
 const items = [
-  { to: "/secrets/", label: "Secrets" },
+  { to: "/secrets/", label: "Env vars" },
   { to: "/streams/", label: "Streams" },
 ] as const;
 
@@ -38,6 +38,10 @@ function AppSidebarBrand() {
     "renderer" in search && typeof search.renderer === "string"
       ? search.renderer
       : defaultStreamViewSearch.renderer;
+  const currentComposer =
+    "composer" in search && typeof search.composer === "string"
+      ? search.composer
+      : defaultStreamViewSearch.composer;
 
   return (
     <SidebarMenu>
@@ -52,6 +56,7 @@ function AppSidebarBrand() {
                 projectSlug,
                 event: defaultStreamViewSearch.event,
                 renderer: currentRenderer,
+                composer: currentComposer,
               })}
             />
           }
@@ -77,6 +82,10 @@ function AppSidebarNav() {
     "renderer" in search && typeof search.renderer === "string"
       ? search.renderer
       : defaultStreamViewSearch.renderer;
+  const currentComposer =
+    "composer" in search && typeof search.composer === "string"
+      ? search.composer
+      : defaultStreamViewSearch.composer;
 
   return (
     <SidebarGroup>
@@ -94,6 +103,7 @@ function AppSidebarNav() {
                         projectSlug,
                         event: defaultStreamViewSearch.event,
                         renderer: currentRenderer,
+                        composer: currentComposer,
                       })}
                     />
                   ) : (
@@ -134,6 +144,10 @@ function AppSidebarProjectSlugFooter() {
     searchParams.set(
       "renderer",
       typeof search.renderer === "string" ? search.renderer : defaultStreamViewSearch.renderer,
+    );
+    searchParams.set(
+      "composer",
+      typeof search.composer === "string" ? search.composer : defaultStreamViewSearch.composer,
     );
     searchParams.delete("event");
 

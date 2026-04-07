@@ -9,7 +9,7 @@ describe("dynamic worker bundler", () => {
     expect(slugFromEntryFile("/tmp/simple-openai-loop.ts")).toBe("simple-openai-loop");
   });
 
-  test("bundles a current workshop-style processor into a configured event", async () => {
+  test("bundles a workshop processor into a configured event", async () => {
     const directory = await mkdtemp(join(tmpdir(), "dynamic-worker-bundler-"));
     const entryFile = join(directory, "current-processor.ts");
 
@@ -18,26 +18,29 @@ describe("dynamic worker bundler", () => {
       `
 import { defineProcessor } from "ai-engineer-workshop";
 
-export default defineProcessor({
+export default defineProcessor(() => ({
+  slug: "workshop-processor",
   initialState: { count: 0 },
-  reduce: (state, event) => {
+  reduce: ({ state, event }) => {
     if (event.type !== "ping") {
       return state;
     }
 
     return { count: state.count + 1 };
   },
-  onEvent: async ({ append, event, state }) => {
+  afterAppend: async ({ append, event, state }) => {
     if (event.type !== "ping") {
       return;
     }
 
     await append({
-      type: "pong",
-      payload: { count: state.count },
+      event: {
+        type: "pong",
+        payload: { count: state.count },
+      },
     });
   },
-});
+}));
       `.trim(),
     );
 
@@ -62,22 +65,25 @@ export default defineProcessor({
       entryFile,
       `
 export default {
+  slug: "gateway-processor",
   initialState: { count: 0 },
-  reduce(state, event) {
+  reduce({ state, event }) {
     if (event.type !== "ping") {
       return state;
     }
 
     return { count: state.count + 1 };
   },
-  async onEvent({ append, event, state }) {
+  async afterAppend({ append, event, state }) {
     if (event.type !== "ping") {
       return;
     }
 
     await append({
-      type: "pong",
-      payload: { count: state.count },
+      event: {
+        type: "pong",
+        payload: { count: state.count },
+      },
     });
   },
 };
@@ -121,8 +127,9 @@ export default {
       entryFile,
       `
 export default {
+  slug: "gateway-only-processor",
   initialState: {},
-  reduce(state) {
+  reduce({ state }) {
     return state;
   },
 };
@@ -145,7 +152,7 @@ export default {
     }
   });
 
-  test("embeds a runtime guard for the legacy processor shape", async () => {
+  test("embeds a runtime guard for a non-workshop processor shape", async () => {
     const directory = await mkdtemp(join(tmpdir(), "dynamic-worker-bundler-"));
     const entryFile = join(directory, "legacy-processor.ts");
 
@@ -153,10 +160,9 @@ export default {
       entryFile,
       `
 export default {
-  slug: "legacy-processor",
   initialState: {},
-  reduce: ({ state }) => state,
-  async afterAppend() {},
+  reduce: (state, event) => state,
+  async onEvent() {},
 };
       `.trim(),
     );
@@ -167,7 +173,7 @@ export default {
       });
 
       expect(configuredEvent.payload.script).toContain(
-        "Legacy processor shape with afterAppend() is not supported.",
+        "Dynamic worker processor bundle must default-export the workshop processor shape",
       );
     } finally {
       await rm(directory, { force: true, recursive: true });

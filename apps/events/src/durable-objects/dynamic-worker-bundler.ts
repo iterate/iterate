@@ -87,28 +87,18 @@ function reduce(state: unknown, event: unknown) {
     return state;
   }
 
-  return importedProcessor.reduce(state, event) ?? state;
+  return importedProcessor.reduce({ state, event }) ?? state;
 }
 
 if (
   importedProcessor == null ||
   typeof importedProcessor !== "object" ||
-  !("initialState" in importedProcessor)
+  !("initialState" in importedProcessor) ||
+  typeof importedProcessor.slug !== "string" ||
+  importedProcessor.slug.length === 0
 ) {
   throw new Error(
-    "Dynamic worker processor bundle must default-export the current processor shape: { initialState, reduce, onEvent? }.",
-  );
-}
-
-if (hasFunction(importedProcessor, "afterAppend")) {
-  throw new Error(
-    "Legacy processor shape with afterAppend() is not supported. Export the current processor shape with onEvent().",
-  );
-}
-
-if ("slug" in importedProcessor) {
-  throw new Error(
-    "Dynamic worker processor bundles must not export slug on the processor object. Pass slug in the dynamic-worker/configured event payload instead.",
+    "Dynamic worker processor bundle must default-export the workshop processor shape: defineProcessor(() => ({ slug, initialState, reduce?, afterAppend? })).",
   );
 }
 
@@ -118,11 +108,29 @@ async function onEvent(args: {
   state: unknown;
   prevState: unknown;
 }) {
-  if (!hasFunction(importedProcessor, "onEvent")) {
+  if (!hasFunction(importedProcessor, "afterAppend")) {
     return;
   }
 
-  await importedProcessor.onEvent(args);
+  await importedProcessor.afterAppend({
+    append: async (input: { event: unknown; path?: unknown }) => {
+      if (input == null || typeof input !== "object" || !("event" in input)) {
+        throw new Error(
+          "Dynamic worker processors must call append({ event }) using the workshop processor contract.",
+        );
+      }
+
+      if ("path" in input && input.path != null) {
+        throw new Error(
+          "Dynamic worker processors can only append to their own stream. append({ path }) is not supported.",
+        );
+      }
+
+      return args.append(input.event);
+    },
+    event: args.event,
+    state: args.state,
+  });
 }
 
 export default {

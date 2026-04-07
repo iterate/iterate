@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { ResponseInput } from "openai/resources/responses/responses";
-import { defineProcessor } from "../../../events-contract/src/sdk.ts";
+import { defineProcessor } from "../../src/durable-objects/define-processor.ts";
 
 type State = { history: ResponseInput };
 const initialState: State = { history: [] };
@@ -10,10 +10,11 @@ const openai = new OpenAI({
   dangerouslyAllowBrowser: true,
 });
 
-export default defineProcessor<State>({
+export default defineProcessor<State>(() => ({
+  slug: "simple-openai-loop",
   initialState,
 
-  reduce(state, event) {
+  reduce({ state, event }) {
     if (event.type !== "llm-input-added" && event.type !== "llm-output-added") {
       return state;
     }
@@ -29,7 +30,7 @@ export default defineProcessor<State>({
     };
   },
 
-  async onEvent({ append, event, state }) {
+  async afterAppend({ append, event, state }) {
     if (event.type !== "llm-input-added") {
       return;
     }
@@ -42,13 +43,15 @@ export default defineProcessor<State>({
     });
 
     await append({
-      type: "llm-output-added",
-      payload: {
-        content: response.output_text,
+      event: {
+        type: "llm-output-added",
+        payload: {
+          content: response.output_text,
+        },
       },
     });
   },
-});
+}));
 
 function readEventContent(event: { payload?: unknown }) {
   const payload = event.payload;
