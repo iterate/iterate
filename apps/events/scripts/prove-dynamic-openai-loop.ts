@@ -30,7 +30,6 @@ async function main() {
         llmOutputPreview: result.output.slice(0, 160),
         openAiSecretName: result.openAiSecretName,
         path: result.path,
-        processorScriptSecretName: result.processorScriptSecretName,
       },
       null,
       2,

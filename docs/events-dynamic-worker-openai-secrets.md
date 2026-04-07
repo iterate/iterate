@@ -68,13 +68,12 @@ It does the full lifecycle against a real `apps/events` deployment:
 
 1. customizes the example processor to use a unique temporary secret name
 2. bundles it into a `dynamic-worker/configured` event
-3. stores the bundled processor source as an `apps/events` secret
-4. stores the real OpenAI API key as another `apps/events` secret
-5. appends the configured event to a temporary stream
-6. appends `llm-input-added` with `What is 50 - 8? Reply with only the number.`
-7. waits up to 10 seconds for `llm-output-added`
-8. asserts the response contains `42`
-9. cleans up both secrets and the temporary stream
+3. stores the real OpenAI API key as an `apps/events` secret
+4. appends the configured event with the bundled `payload.script` directly to a temporary stream
+5. appends `llm-input-added` with `What is 50 - 8? Reply with only the number.`
+6. waits up to 10 seconds for `llm-output-added`
+7. asserts the response contains `42`
+8. cleans up the OpenAI secret and the temporary stream
 
 ## Local proof
 

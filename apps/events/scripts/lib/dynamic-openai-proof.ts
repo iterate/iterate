@@ -30,14 +30,12 @@ export async function runDynamicOpenAiProof(args: {
     projectSlug: args.projectSlug ?? "test",
   });
   const path = `/dynamic-worker-openai-proof/${randomUUID().slice(0, 8)}` as const;
-  const processorScriptSecretName = `dynamic-worker-processor-${randomUUID().slice(0, 8)}`;
   const openAiSecretName = `dynamic_worker_openai_api_key_${randomUUID().slice(0, 8)}`;
   const responseTimeoutMs = args.responseTimeoutMs ?? 10_000;
   const temporaryProcessorEntryFile = join(
     dirname(exampleProcessorEntryFile),
     `.dynamic-openai-proof-${randomUUID().slice(0, 8)}.processor.ts`,
   );
-  let bundleSecretId: string | undefined;
   let openAiSecretId: string | undefined;
 
   try {
@@ -66,13 +64,6 @@ export async function runDynamicOpenAiProof(args: {
       throw new Error("Bundler returned a configured event without payload.script");
     }
 
-    const bundleSecret = await client.secrets.create({
-      name: processorScriptSecretName,
-      value: bundledScript,
-      description: "Temporary bundled dynamic worker processor for OpenAI proof",
-    });
-    bundleSecretId = bundleSecret.id;
-
     const openAiSecret = await client.secrets.create({
       name: openAiSecretName,
       value: args.openAiApiKey,
@@ -80,15 +71,13 @@ export async function runDynamicOpenAiProof(args: {
     });
     openAiSecretId = openAiSecret.id;
 
-    const storedScript = (await client.secrets.find({ id: bundleSecret.id })).value;
-
     await client.append({
       path,
       event: {
         type: configuredEvent.type,
         payload: {
           ...configuredEvent.payload,
-          script: storedScript,
+          script: bundledScript,
         },
       },
     });
@@ -125,14 +114,9 @@ export async function runDynamicOpenAiProof(args: {
       openAiSecretName,
       output,
       path,
-      processorScriptSecretName,
     };
   } finally {
     await rm(temporaryProcessorEntryFile, { force: true });
-
-    if (bundleSecretId != null) {
-      await client.secrets.remove({ id: bundleSecretId });
-    }
 
     if (openAiSecretId != null) {
       await client.secrets.remove({ id: openAiSecretId });
