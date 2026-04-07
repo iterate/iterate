@@ -18,6 +18,9 @@ import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/s
 
 type ProcessorSlugKey = keyof StreamState["processors"];
 
+// Keep callback fanout as a builtin processor rather than growing bespoke
+// stream-core branches. `stream.ts` stays responsible for lifecycle ordering
+// while the external subscriber processor owns its own reduced state + delivery.
 const processors: BuiltinProcessor[] = [
   circuitBreakerProcessor,
   externalSubscriberProcessor,
@@ -327,6 +330,9 @@ export class StreamDurableObject extends DurableObject<Env> {
         continue;
       }
 
+      // Builtin processor side effects are asynchronous, but they still belong
+      // to the append lifecycle. Hold the DO open so fire-and-forget callback
+      // delivery does not get cut off once the request returns.
       this.ctx.waitUntil(
         result.catch((error) => {
           console.error("[stream-do] processor afterAppend failed", {
