@@ -20,6 +20,7 @@
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck && vitest run src",
     "test:e2e": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest run --dir e2e/vitest",
+    "test:e2e:openai-preview": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); } if (!process.env.OPENAI_API_KEY) { console.error('OPENAI_API_KEY is required for the OpenAI preview proof'); process.exit(1); }\" && vitest run e2e/vitest/dynamic-worker-openai-preview.e2e.test.ts",
     "test:e2e:preview": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest run e2e/vitest/runtime-smoke.e2e.test.ts e2e/vitest/curl-smoketest.e2e.test.ts",
     "test:quick": "pnpm test:e2e",
     "test:watch": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest --dir e2e/vitest"

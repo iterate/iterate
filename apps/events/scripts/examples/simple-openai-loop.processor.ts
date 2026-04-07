@@ -6,7 +6,7 @@ type State = { history: ResponseInput };
 const initialState: State = { history: [] };
 
 const openai = new OpenAI({
-  apiKey: "placeholder",
+  apiKey: "getIterateSecret({secretKey: 'dynamic_worker_openai_api_key'})",
   dangerouslyAllowBrowser: true,
 });
 
@@ -37,7 +37,7 @@ export default defineProcessor<State>({
     const response = await openai.responses.create({
       model: "gpt-4o-mini",
       instructions:
-        "You are a helpful assistant in an events stream. Keep answers concise and mention the word pineapple exactly once.",
+        "You are a helpful assistant in an events stream. Keep answers concise. If the user asks a math question, reply with only the final answer.",
       input: state.history,
     });
 

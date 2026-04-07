@@ -113,6 +113,38 @@ export default {
     }
   });
 
+  test("allows outbound gateway config without injected headers", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dynamic-worker-bundler-"));
+    const entryFile = join(directory, "gateway-only-processor.ts");
+
+    await writeFile(
+      entryFile,
+      `
+export default {
+  initialState: {},
+  reduce(state) {
+    return state;
+  },
+};
+      `.trim(),
+    );
+
+    try {
+      const configuredEvent = await buildDynamicWorkerConfiguredEvent({
+        entryFile,
+        outboundGateway: {
+          entrypoint: "DynamicWorkerEgressGateway",
+        },
+      });
+
+      expect(configuredEvent.payload.outboundGateway).toEqual({
+        entrypoint: "DynamicWorkerEgressGateway",
+      });
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   test("embeds a runtime guard for the legacy processor shape", async () => {
     const directory = await mkdtemp(join(tmpdir(), "dynamic-worker-bundler-"));
     const entryFile = join(directory, "legacy-processor.ts");

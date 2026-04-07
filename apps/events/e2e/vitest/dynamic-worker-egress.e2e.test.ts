@@ -53,6 +53,111 @@ describe("dynamic worker outbound gateway", () => {
     });
   }, 30_000);
 
+  test("resolves getIterateSecret in the configured injected header from apps/events secrets", async () => {
+    const path = uniquePath();
+    const secretHeaderName = "x-dynamic-worker-secret";
+    const secretName = `dynamic-worker-egress-${randomUUID().slice(0, 8)}`;
+    const secretHeaderValue = `secret-${randomUUID().slice(0, 8)}`;
+    const secret = await app.client.secrets.create({
+      name: secretName,
+      value: secretHeaderValue,
+      description: "Temporary secret for dynamic-worker egress substitution test",
+    });
+
+    try {
+      await configureEchoWorker({
+        path,
+        secretHeaderName,
+        secretHeaderValue: `getIterateSecret({secretKey: '${secretName}'})`,
+        slug: "httpbin-echo",
+      });
+      await append(path, {
+        type: valueRecordedEventType,
+        payload: { message: "please ping the echo gateway" },
+      });
+
+      const echoed = await waitForEchoEvent(path, 1);
+
+      expect(echoed.payload.normalizedHeaders[secretHeaderName]).toBe(secretHeaderValue);
+      expect(
+        (echoed.payload.response as { headers: Record<string, string> }).headers[
+          "X-Dynamic-Worker-Secret"
+        ],
+      ).toBe(secretHeaderValue);
+    } finally {
+      await app.client.secrets.remove({ id: secret.id });
+    }
+  }, 30_000);
+
+  test("resolves getIterateSecret in headers created by the dynamic worker fetch call itself", async () => {
+    const path = uniquePath();
+    const secretName = `dynamic-worker-egress-${randomUUID().slice(0, 8)}`;
+    const secretHeaderValue = `Bearer secret-${randomUUID().slice(0, 8)}`;
+    const secret = await app.client.secrets.create({
+      name: secretName,
+      value: secretHeaderValue,
+      description: "Temporary secret for dynamic-worker header substitution test",
+    });
+
+    try {
+      await append(path, {
+        type: configuredEventType,
+        payload: {
+          slug: "httpbin-fetch-header",
+          script: `
+export default {
+  initialState: {},
+
+  reduce(state) {
+    return state;
+  },
+
+  async onEvent({ append, event }) {
+    if (!/\\bping\\b/i.test(JSON.stringify(event))) {
+      return;
+    }
+
+    const response = await fetch("https://httpbin.org/headers", {
+      headers: {
+        authorization: "getIterateSecret({secretKey: '${secretName}'})",
+      },
+    });
+    const responseJson = await response.json();
+
+    await append({
+      type: "https://events.iterate.com/events/example/httpbin-echoed",
+      payload: {
+        ok: response.ok,
+        status: response.status,
+        normalizedHeaders: Object.fromEntries(
+          Object.entries(responseJson.headers ?? {}).map(([key, value]) => [
+            String(key).toLowerCase(),
+            value,
+          ]),
+        ),
+        response: responseJson,
+      },
+    });
+  },
+};
+          `.trim(),
+          outboundGateway: {
+            entrypoint: "DynamicWorkerEgressGateway",
+          },
+        },
+      });
+      await append(path, {
+        type: valueRecordedEventType,
+        payload: { message: "please ping the echo gateway" },
+      });
+
+      const echoed = await waitForEchoEvent(path, 1);
+      expect(echoed.payload.normalizedHeaders.authorization).toBe(secretHeaderValue);
+    } finally {
+      await app.client.secrets.remove({ id: secret.id });
+    }
+  }, 30_000);
+
   test("hot-swapping the outbound gateway secret changes the echoed header", async () => {
     const path = uniquePath();
     const secretHeaderName = "x-dynamic-worker-secret";

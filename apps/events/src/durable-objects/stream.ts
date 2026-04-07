@@ -139,6 +139,14 @@ export class StreamDurableObject extends DurableObject<Env> {
       },
       getPath: () => this.state.path,
       loader: this.env.LOADER,
+      loadSecretsByName: async () => {
+        const { results } = await this.env.DB.prepare("SELECT name, value FROM secrets").all<{
+          name: string;
+          value: string;
+        }>();
+
+        return Object.fromEntries((results ?? []).map((row) => [row.name, row.value] as const));
+      },
       waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
 

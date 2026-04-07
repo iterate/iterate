@@ -14,10 +14,25 @@ export const DynamicWorkerConfiguredEventInput = GenericEventInputBase.extend({
       outboundGateway: z
         .strictObject({
           entrypoint: z.literal("DynamicWorkerEgressGateway"),
-          props: z.strictObject({
-            secretHeaderName: z.string().trim().min(1),
-            secretHeaderValue: z.string().trim().min(1),
-          }),
+          props: z
+            .strictObject({
+              secretHeaderName: z.string().trim().min(1).optional(),
+              secretHeaderValue: z.string().trim().min(1).optional(),
+            })
+            .optional()
+            .superRefine((props, ctx) => {
+              if (props == null) {
+                return;
+              }
+
+              if ((props.secretHeaderName == null) !== (props.secretHeaderValue == null)) {
+                ctx.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  message: "Provide both secretHeaderName and secretHeaderValue together.",
+                  path: ["secretHeaderName"],
+                });
+              }
+            }),
         })
         .optional(),
       script: z.string().trim().min(1).optional(),
@@ -60,10 +75,12 @@ export type DynamicWorkerConfiguredEvent = z.infer<typeof DynamicWorkerConfigure
 
 export const DynamicWorkerOutboundGateway = z.strictObject({
   entrypoint: z.literal("DynamicWorkerEgressGateway"),
-  props: z.strictObject({
-    secretHeaderName: z.string(),
-    secretHeaderValue: z.string(),
-  }),
+  props: z
+    .strictObject({
+      secretHeaderName: z.string().optional(),
+      secretHeaderValue: z.string().optional(),
+    })
+    .optional(),
 });
 export type DynamicWorkerOutboundGateway = z.infer<typeof DynamicWorkerOutboundGateway>;
 

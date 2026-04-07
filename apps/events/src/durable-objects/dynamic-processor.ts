@@ -232,6 +232,7 @@ export function createDynamicWorkerManager(context: {
   createLoopbackBinding: (args: { exportName: string; props?: unknown }) => Fetcher;
   getPath: () => StreamPath;
   loader: WorkerLoader;
+  loadSecretsByName: () => Promise<Record<string, string>>;
   waitUntil: (promise: Promise<unknown>) => void;
 }) {
   const runsBySlug = new Map<
@@ -282,6 +283,16 @@ export function createDynamicWorkerManager(context: {
               live: args?.live,
             }),
         }) as LocalDynamicWorkerTarget;
+        const globalOutbound =
+          config.outboundGateway == null
+            ? null
+            : context.createLoopbackBinding({
+                exportName: config.outboundGateway.entrypoint,
+                props: {
+                  ...(config.outboundGateway.props ?? {}),
+                  secretsByName: await context.loadSecretsByName(),
+                },
+              });
         const entrypoint = context.loader
           .get(
             `dynamic-worker:${context.getPath()}:${slug}:${hashDynamicWorkerConfig(configKey)}`,
@@ -290,13 +301,7 @@ export function createDynamicWorkerManager(context: {
               compatibilityFlags: config.compatibilityFlags,
               mainModule: config.mainModule,
               modules: config.modules,
-              globalOutbound:
-                config.outboundGateway == null
-                  ? null
-                  : context.createLoopbackBinding({
-                      exportName: config.outboundGateway.entrypoint,
-                      props: config.outboundGateway.props,
-                    }),
+              globalOutbound,
             }),
           )
           .getEntrypoint() as unknown as {

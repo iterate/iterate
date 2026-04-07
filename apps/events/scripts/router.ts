@@ -9,6 +9,11 @@ const DynamicWorkerConfiguredEventInput = z.object({
   slug: z.string().trim().min(1).optional().describe("Dynamic worker slug"),
   compatibilityDate: z.string().trim().min(1).optional().describe("Compatibility date"),
   compatibilityFlags: z.array(z.string().trim().min(1)).optional().describe("Compatibility flags"),
+  outboundGateway: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Route outbound fetch through DynamicWorkerEgressGateway"),
   secretHeaderName: z
     .string()
     .trim()
@@ -36,20 +41,27 @@ export const router = {
         throw new Error("Provide both secretHeaderName and secretHeaderValue together.");
       }
 
+      const shouldUseOutboundGateway =
+        input.outboundGateway ||
+        (input.secretHeaderName != null && input.secretHeaderValue != null);
+
       return await buildDynamicWorkerConfiguredEvent({
         compatibilityDate: input.compatibilityDate,
         compatibilityFlags: input.compatibilityFlags,
         entryFile: resolve(process.cwd(), input.entryFile),
-        outboundGateway:
-          input.secretHeaderName == null || input.secretHeaderValue == null
-            ? undefined
-            : {
-                entrypoint: "DynamicWorkerEgressGateway",
-                props: {
-                  secretHeaderName: input.secretHeaderName,
-                  secretHeaderValue: input.secretHeaderValue,
-                },
-              },
+        outboundGateway: !shouldUseOutboundGateway
+          ? undefined
+          : {
+              entrypoint: "DynamicWorkerEgressGateway",
+              ...(input.secretHeaderName == null || input.secretHeaderValue == null
+                ? {}
+                : {
+                    props: {
+                      secretHeaderName: input.secretHeaderName,
+                      secretHeaderValue: input.secretHeaderValue,
+                    },
+                  }),
+            },
         slug: input.slug,
       });
     }),
