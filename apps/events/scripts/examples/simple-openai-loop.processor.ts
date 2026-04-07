@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { ResponseInput } from "openai/resources/responses/responses";
-import { defineProcessor } from "../../src/durable-objects/define-processor.ts";
+import { defineProcessor } from "ai-engineer-workshop";
 
 type State = { history: ResponseInput };
 const initialState: State = { history: [] };

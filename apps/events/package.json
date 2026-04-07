@@ -68,6 +68,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.1",
+    "ai-engineer-workshop": "workspace:*",
     "alchemy": "^0.83.3",
     "drizzle-kit": "^0.31.1",
     "esbuild": "^0.27.4",

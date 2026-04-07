@@ -901,9 +901,6 @@ importers:
       get-port:
         specifier: ^7.1.0
         version: 7.1.0
-      iterate:
-        specifier: workspace:*
-        version: link:../../packages/iterate
       nodemon:
         specifier: ^3.1.14
         version: 3.1.14
@@ -1060,6 +1057,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^6.0.1
         version: 6.0.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      ai-engineer-workshop:
+        specifier: workspace:*
+        version: link:../../ai-engineer-workshop
       alchemy:
         specifier: ^0.83.3
         version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.29.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260205.0)(wrangler@4.75.0(@cloudflare/workers-types@4.20260317.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260205.0)(wrangler@4.75.0(@cloudflare/workers-types@4.20260317.1))
@@ -1456,9 +1456,6 @@ importers:
       '@orpc/client':
         specifier: 1.13.13
         version: 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
       '@orpc/openapi':
         specifier: 1.13.13
         version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
@@ -1535,12 +1532,6 @@ importers:
       esbuild:
         specifier: ^0.27.4
         version: 0.27.4
-      iterate:
-        specifier: workspace:*
-        version: link:../../packages/iterate
-      tinyexec:
-        specifier: ^1.0.2
-        version: 1.0.2
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
@@ -2130,9 +2121,6 @@ importers:
       '@orpc/client':
         specifier: 1.13.13
         version: 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
       '@orpc/openapi':
         specifier: 1.13.13
         version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
@@ -2209,12 +2197,6 @@ importers:
       esbuild:
         specifier: ^0.27.4
         version: 0.27.4
-      iterate:
-        specifier: workspace:*
-        version: link:../../packages/iterate
-      tinyexec:
-        specifier: ^1.0.2
-        version: 1.0.2
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
@@ -2519,9 +2501,6 @@ importers:
       '@iterate-com/ingress-proxy-contract':
         specifier: workspace:*
         version: link:../../apps/ingress-proxy-contract
-      '@octokit/rest':
-        specifier: ^22.0.0
-        version: 22.0.1
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -24817,7 +24796,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
-      vitest: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@25.5.0)(@vitest/ui@4.0.15)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.32.0)(msw@2.12.10(@types/node@25.5.0)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+      vitest: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(@vitest/ui@4.0.15)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.32.0)(msw@2.12.10(@types/node@25.3.3)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
 
   '@vitest/utils@3.2.4':
     dependencies:

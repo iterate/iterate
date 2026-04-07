@@ -4,7 +4,6 @@ import {
   GenericEvent as GenericEventBase,
   GenericEventInput as GenericEventInputBase,
   JSONObject,
-  Offset,
   StreamPath,
 } from "./event-base-types.ts";
 import {
@@ -25,12 +24,12 @@ import {
   DynamicWorkerConfiguredEvent,
 } from "./dynamic-worker-types.ts";
 
-export { JSONObject, Offset, StreamPath };
+export { JSONObject, StreamPath };
 
 export const ProjectSlug = z.string().trim().min(1).max(255);
 export type ProjectSlug = z.infer<typeof ProjectSlug>;
 
-export const StreamInitializedEventInput = GenericEventInputBase.extend({
+const StreamInitializedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/initialized"),
   payload: z.strictObject({
     projectSlug: ProjectSlug,
@@ -40,24 +39,21 @@ export const StreamInitializedEventInput = GenericEventInputBase.extend({
 export const StreamInitializedEvent = GenericEventBase.extend(
   StreamInitializedEventInput.pick({ type: true, payload: true }).shape,
 );
-export type StreamInitializedEventInput = z.infer<typeof StreamInitializedEventInput>;
 export type StreamInitializedEvent = z.infer<typeof StreamInitializedEvent>;
 
-export const StreamDurableObjectConstructedEventInput = GenericEventInputBase.extend({
+const StreamDurableObjectConstructedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/durable-object-constructed"),
   payload: z.strictObject({}),
 });
-export const StreamDurableObjectConstructedEvent = GenericEventBase.extend(
+const StreamDurableObjectConstructedEvent = GenericEventBase.extend(
   StreamDurableObjectConstructedEventInput.pick({ type: true, payload: true }).shape,
 );
-export type StreamDurableObjectConstructedEventInput = z.infer<
+type StreamDurableObjectConstructedEventInput = z.infer<
   typeof StreamDurableObjectConstructedEventInput
 >;
-export type StreamDurableObjectConstructedEvent = z.infer<
-  typeof StreamDurableObjectConstructedEvent
->;
+type StreamDurableObjectConstructedEvent = z.infer<typeof StreamDurableObjectConstructedEvent>;
 
-export const ChildStreamCreatedEventInput = GenericEventInputBase.extend({
+const ChildStreamCreatedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/child-stream-created"),
   payload: z.strictObject({
     childPath: StreamPath,
@@ -66,7 +62,6 @@ export const ChildStreamCreatedEventInput = GenericEventInputBase.extend({
 export const ChildStreamCreatedEvent = GenericEventBase.extend(
   ChildStreamCreatedEventInput.pick({ type: true, payload: true }).shape,
 );
-export type ChildStreamCreatedEventInput = z.infer<typeof ChildStreamCreatedEventInput>;
 export type ChildStreamCreatedEvent = z.infer<typeof ChildStreamCreatedEvent>;
 
 export const StreamMetadataUpdatedEventInput = GenericEventInputBase.extend({
@@ -81,7 +76,7 @@ export const StreamMetadataUpdatedEvent = GenericEventBase.extend(
 export type StreamMetadataUpdatedEventInput = z.infer<typeof StreamMetadataUpdatedEventInput>;
 export type StreamMetadataUpdatedEvent = z.infer<typeof StreamMetadataUpdatedEvent>;
 
-export const ErrorOccurredEventInput = GenericEventInputBase.extend({
+const ErrorOccurredEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/error-occurred"),
   payload: z.strictObject({
     message: z.string().trim().min(1),
@@ -90,7 +85,6 @@ export const ErrorOccurredEventInput = GenericEventInputBase.extend({
 export const ErrorOccurredEvent = GenericEventBase.extend(
   ErrorOccurredEventInput.pick({ type: true, payload: true }).shape,
 );
-export type ErrorOccurredEventInput = z.infer<typeof ErrorOccurredEventInput>;
 export type ErrorOccurredEvent = z.infer<typeof ErrorOccurredEvent>;
 
 export const InvalidEventAppendedEventInput = GenericEventInputBase.extend({
@@ -100,11 +94,11 @@ export const InvalidEventAppendedEventInput = GenericEventInputBase.extend({
     error: z.string().trim().min(1),
   }),
 });
-export const InvalidEventAppendedEvent = GenericEventBase.extend(
+const InvalidEventAppendedEvent = GenericEventBase.extend(
   InvalidEventAppendedEventInput.pick({ type: true, payload: true }).shape,
 );
 export type InvalidEventAppendedEventInput = z.infer<typeof InvalidEventAppendedEventInput>;
-export type InvalidEventAppendedEvent = z.infer<typeof InvalidEventAppendedEvent>;
+type InvalidEventAppendedEvent = z.infer<typeof InvalidEventAppendedEvent>;
 
 const builtInEventInputOptions = [
   StreamInitializedEventInput,
@@ -173,7 +167,7 @@ export type EventInput = BuiltInEventInput | GenericEventInput;
 export const Event = z.union([BuiltInEvent, GenericEvent]);
 export type Event = BuiltInEvent | GenericEvent;
 
-export const ProcessorsState = z.object({
+const ProcessorsState = z.object({
   "circuit-breaker": CircuitBreakerState,
   "dynamic-worker": DynamicWorkerState,
   "jsonata-transformer": JsonataTransformerState,

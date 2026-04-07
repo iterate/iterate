@@ -8,7 +8,7 @@ import {
   type JSONObject,
   type StreamPath,
 } from "@iterate-com/events-contract";
-import { defineBuiltinProcessor } from "./define-builtin-processor.ts";
+import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
 
 export type DynamicWorkerAppendInput = {
   type: Event["type"];
