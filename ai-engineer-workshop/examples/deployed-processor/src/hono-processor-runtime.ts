@@ -131,6 +131,7 @@ class ProcessorInstance<State> {
   readonly #eventsClient: WorkshopEventsClient;
   readonly #processor: StreamProcessor<State>;
   readonly #streamPath: string;
+  #pending = Promise.resolve();
   #state: State;
   #lastOffset = 0;
 
@@ -150,7 +151,9 @@ class ProcessorInstance<State> {
   }
 
   async consume(event: Event) {
-    await this.#processEvent(event);
+    const next = this.#pending.then(() => this.#processEvent(event));
+    this.#pending = next.catch(() => {});
+    await next;
   }
 
   async #processEvent(event: Event) {

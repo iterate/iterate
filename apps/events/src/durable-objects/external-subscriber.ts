@@ -14,7 +14,7 @@ type SubscriberConnection = {
   socket: WebSocket;
 };
 
-const outboundPayloadSchema = z.json();
+const OutboundPayload = z.json();
 const connectionsBySubscriberKey = new Map<string, SubscriberConnection>();
 const connectPromisesBySubscriberKey = new Map<string, Promise<WebSocket>>();
 
@@ -94,6 +94,14 @@ async function publishToExternalSubscriber(args: { event: Event; subscriber: Ext
 }
 
 async function evaluateFilter(args: { event: Event; subscriber: ExternalSubscriber }) {
+  if (
+    args.subscriber.type === "webhook" &&
+    args.event.type === "https://events.iterate.com/events/stream/subscription/configured" &&
+    args.subscriber.jsonataFilter == null
+  ) {
+    return false;
+  }
+
   if (args.subscriber.jsonataFilter == null) {
     return true;
   }
@@ -107,7 +115,7 @@ async function getOutboundPayload(args: { event: Event; subscriber: ExternalSubs
       ? args.event
       : await getCompiledJsonata(args.subscriber.jsonataTransform).evaluate(args.event);
 
-  const parsedPayload = outboundPayloadSchema.safeParse(rawPayload);
+  const parsedPayload = OutboundPayload.safeParse(rawPayload);
   if (!parsedPayload.success) {
     console.error("[stream-do] external subscriber transform produced invalid JSON", {
       streamPath: args.event.streamPath,
@@ -124,7 +132,7 @@ async function getOutboundPayload(args: { event: Event; subscriber: ExternalSubs
 }
 
 async function postWebhook(args: {
-  payload: z.infer<typeof outboundPayloadSchema>;
+  payload: z.infer<typeof OutboundPayload>;
   subscriber: Extract<ExternalSubscriber, { type: "webhook" }>;
 }) {
   const response = await fetch(args.subscriber.callbackUrl, {
@@ -145,7 +153,7 @@ async function postWebhook(args: {
 }
 
 async function sendWebsocketMessage(args: {
-  payload: z.infer<typeof outboundPayloadSchema>;
+  payload: z.infer<typeof OutboundPayload>;
   subscriber: ExternalWebsocketSubscriber;
   streamPath: string;
 }) {
@@ -283,4 +291,15 @@ function getWebsocketUpgradeFetchUrl(callbackUrl: string) {
 
 function getSubscriberKey(streamPath: string, slug: string) {
   return JSON.stringify([streamPath, slug]);
+}
+
+export function resetSubscriberSocketsForStream(streamPath: string) {
+  for (const subscriberKey of connectionsBySubscriberKey.keys()) {
+    const parsedKey = JSON.parse(subscriberKey) as [string, string];
+    if (parsedKey[0] !== streamPath) {
+      continue;
+    }
+
+    resetSubscriberSocket(subscriberKey);
+  }
 }

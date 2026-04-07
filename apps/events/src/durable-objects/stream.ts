@@ -11,7 +11,10 @@ import {
 } from "@iterate-com/events-contract";
 import type { BuiltinProcessor } from "@iterate-com/events-contract/sdk";
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
-import { externalSubscriberProcessor } from "./external-subscriber.ts";
+import {
+  externalSubscriberProcessor,
+  resetSubscriberSocketsForStream,
+} from "./external-subscriber.ts";
 import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
@@ -396,6 +399,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       } catch {}
     }
     this.subscribers.clear();
+    if (path != null) {
+      resetSubscriberSocketsForStream(path);
+    }
 
     await this.ctx.storage.deleteAll();
 

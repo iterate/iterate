@@ -4,7 +4,10 @@ import type {
   ExternalSubscriber,
   StreamSubscriptionConfiguredEvent,
 } from "@iterate-com/events-contract";
-import { externalSubscriberProcessor } from "./external-subscriber.ts";
+import {
+  externalSubscriberProcessor,
+  resetSubscriberSocketsForStream,
+} from "./external-subscriber.ts";
 
 describe("externalSubscriber", () => {
   test("reduce stores subscribers by slug and replaces existing entries", () => {
@@ -212,6 +215,36 @@ describe("externalSubscriber", () => {
     }
   });
 
+  test("afterAppend does not deliver subscription-configured events to webhook subscribers by default", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 202 }));
+
+    try {
+      await externalSubscriberProcessor.afterAppend?.({
+        append: () => createEvent(),
+        event: createConfiguredEvent({
+          slug: "audit",
+          type: "webhook",
+          callbackUrl: "https://example.com/hook",
+        }),
+        state: {
+          subscribersBySlug: {
+            audit: {
+              slug: "audit",
+              type: "webhook",
+              callbackUrl: "https://example.com/hook",
+            },
+          },
+        },
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   test("afterAppend skips subscribers whose filter does not match", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -280,6 +313,73 @@ describe("externalSubscriber", () => {
     } finally {
       consoleError.mockRestore();
       fetchMock.mockRestore();
+    }
+  });
+
+  test("resetSubscriberSocketsForStream clears cached websocket connections for the stream", async () => {
+    const firstSocket = new FakeWebSocket();
+    const secondSocket = new FakeWebSocket();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createWebSocketUpgradeResponse(firstSocket))
+      .mockResolvedValueOnce(createWebSocketUpgradeResponse(secondSocket));
+
+    try {
+      await externalSubscriberProcessor.afterAppend?.({
+        append: () => createEvent(),
+        event: createEvent({
+          streamPath: "/demo/ws-reset",
+          type: "source",
+          payload: { value: 1 },
+          offset: 1,
+        }),
+        state: {
+          subscribersBySlug: {
+            "processor:ping-pong": {
+              slug: "processor:ping-pong",
+              type: "websocket",
+              callbackUrl: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset",
+            },
+          },
+        },
+      });
+
+      resetSubscriberSocketsForStream("/demo/ws-reset");
+
+      await externalSubscriberProcessor.afterAppend?.({
+        append: () => createEvent(),
+        event: createEvent({
+          streamPath: "/demo/ws-reset",
+          type: "source",
+          payload: { value: 2 },
+          offset: 2,
+        }),
+        state: {
+          subscribersBySlug: {
+            "processor:ping-pong": {
+              slug: "processor:ping-pong",
+              type: "websocket",
+              callbackUrl: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset",
+            },
+          },
+        },
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(firstSocket.readyState).toBe(3);
+      expect(secondSocket.sentMessages).toEqual([
+        JSON.stringify(
+          createEvent({
+            streamPath: "/demo/ws-reset",
+            type: "source",
+            payload: { value: 2 },
+            offset: 2,
+          }),
+        ),
+      ]);
+    } finally {
+      fetchMock.mockRestore();
+      resetSubscriberSocketsForStream("/demo/ws-reset");
     }
   });
 });
