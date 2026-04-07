@@ -4,6 +4,7 @@ import {
   DurableObjectNamespace,
   Self,
   TanStackStart,
+  Worker,
   WorkerLoader,
 } from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
@@ -90,6 +91,10 @@ export const worker = await TanStackStart(APP_NAME, {
     DB: db,
     STREAM: stream,
     SELF: Self,
+    DYNAMIC_WORKER_EGRESS_GATEWAY: Worker.experimentalEntrypoint(
+      Self,
+      "DynamicWorkerEgressGateway",
+    ),
     LOADER: WorkerLoader(),
     APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
   },

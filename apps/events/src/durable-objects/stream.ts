@@ -123,11 +123,15 @@ export class StreamDurableObject extends DurableObject<Env> {
           live: args?.live,
         }),
       createLoopbackBinding: ({ exportName, props }) => {
-        const self = this.env.SELF as unknown as {
-          getEntrypoint(name?: string, options?: { props?: unknown }): Fetcher;
-        };
+        if (exportName !== "DynamicWorkerEgressGateway") {
+          throw new Error(`Unsupported loopback binding export: ${exportName}`);
+        }
 
-        return self.getEntrypoint(exportName, { props });
+        const gateway = this.env.DYNAMIC_WORKER_EGRESS_GATEWAY as unknown as (options: {
+          props?: unknown;
+        }) => Fetcher;
+
+        return gateway({ props });
       },
       getPath: () => this.state.path,
       loader: this.env.LOADER,
