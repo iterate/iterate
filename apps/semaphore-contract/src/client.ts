@@ -5,12 +5,9 @@ import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { semaphoreContract } from "./contract.ts";
 
 export type SemaphoreClient = ContractRouterClient<typeof semaphoreContract>;
-export type SemaphoreFetch = (
-  input: URL | string | Request,
-  init?: RequestInit,
-) => Promise<Response>;
+type SemaphoreFetch = (input: URL | string | Request, init?: RequestInit) => Promise<Response>;
 
-export type CreateSemaphoreClientOptions =
+type CreateSemaphoreClientOptions =
   | {
       apiKey: string;
       baseURL: string;
@@ -22,12 +19,9 @@ export type CreateSemaphoreClientOptions =
       baseURL?: string;
     };
 
-export const FETCH_ONLY_PLACEHOLDER_URL = "https://semaphore.invalid/api";
+const FETCH_ONLY_PLACEHOLDER_URL = "https://semaphore.invalid/api";
 
-export function resolveSemaphoreOrpcUrl(options: {
-  baseURL?: string;
-  fetch?: SemaphoreFetch;
-}): string {
+function resolveSemaphoreOrpcUrl(options: { baseURL?: string; fetch?: SemaphoreFetch }): string {
   if (options.baseURL) {
     return new URL("/api", options.baseURL).toString();
   }

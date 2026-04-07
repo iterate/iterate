@@ -11,7 +11,7 @@ export class StreamOffsetPreconditionError extends Error {
 // Durable Object names define global identity. Keep this explicit and stable
 // rather than relying on object key order in JSON.stringify():
 // https://developers.cloudflare.com/durable-objects/api/namespace/
-export function getStreamDurableObjectName(args: { projectSlug: ProjectSlug; path: StreamPath }) {
+function getStreamDurableObjectName(args: { projectSlug: ProjectSlug; path: StreamPath }) {
   return `${args.projectSlug}::${args.path}`;
 }
 

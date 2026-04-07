@@ -26,7 +26,7 @@ export const makeQueryClient = () =>
     },
   });
 
-export type OrpcClient = ContractRouterClient<typeof eventsContract>;
+type OrpcClient = ContractRouterClient<typeof eventsContract>;
 
 type OrpcClientOptions = {
   baseUrl?: string;
@@ -103,7 +103,7 @@ function createFetchWithProjectHeader() {
   };
 }
 
-export function makeOrpcClient(options: OrpcClientOptions = {}): OrpcClient {
+function makeOrpcClient(options: OrpcClientOptions = {}): OrpcClient {
   return createORPCClient(
     new OpenAPILink(eventsContract, {
       url: resolveApiUrl(options.baseUrl ?? configuredBaseUrl),

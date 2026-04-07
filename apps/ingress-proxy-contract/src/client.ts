@@ -5,10 +5,7 @@ import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { ingressProxyContract } from "./contract.ts";
 
 export type IngressProxyClient = ContractRouterClient<typeof ingressProxyContract>;
-export type IngressProxyFetch = (
-  input: URL | string | Request,
-  init?: RequestInit,
-) => Promise<Response>;
+type IngressProxyFetch = (input: URL | string | Request, init?: RequestInit) => Promise<Response>;
 
 export function createIngressProxyClient(options: {
   baseURL: string;

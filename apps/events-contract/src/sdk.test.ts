@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
-import { defineProcessor } from "../../events/src/durable-objects/define-processor.ts";
 import {
+  defineProcessor,
   PullSubscriptionPatternProcessorRuntime,
   PullSubscriptionProcessorRuntime,
 } from "./sdk.ts";
