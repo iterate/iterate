@@ -100,6 +100,20 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this._state;
   }
 
+  // ---------------------------------------------------------------------------
+  // Construction & initialization
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Hydrates in-memory state from persisted SQLite and ensures the schema
+   * exists. This is infrastructure-level bootstrapping — intentionally outside
+   * the processor model, because processors depend on a fully initialized
+   * stream to operate on.
+   *
+   * Cloudflare recommends `blockConcurrencyWhile()` in the constructor so
+   * requests never observe a half-initialized actor.
+   * https://developers.cloudflare.com/durable-objects/api/state/
+   */
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
@@ -138,6 +152,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         return;
       }
 
+      // Deliberately not crashing — throwing from the DO constructor makes
+      // the object permanently unaddressable and much harder to debug.
       console.error(
         "[stream-do] persisted reduced_state failed validation, leaving _state null so initialize() can re-derive it",
         { error: parsed.error, raw: persistedStateRow.json },
@@ -145,6 +161,17 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  /**
+   * Ensures this stream exists. On the very first call, commits a synthetic
+   * `stream-initialized` event at offset 1 through `append()`. Subsequent
+   * calls are no-ops.
+   *
+   * Think of this like the durable object constructor. We take arguments like
+   * { projectSlug, path } and set the initial state.
+   *
+   * All external callers go through `getInitializedStreamStub()` in
+   * `~/lib/stream-helpers.ts`, which calls this before returning the stub.
+   */
   initialize(args: { projectSlug: ProjectSlug; path: StreamPath }) {
     if (this._state != null) {
       return;
@@ -242,6 +269,17 @@ export class StreamDurableObject extends DurableObject<Env> {
     return event;
   }
 
+  /**
+   * Validate-or-throw boundary. Enforces core invariants and runs builtin
+   * processor gates before any state mutation occurs:
+   *
+   * 1. Core invariants: stream-initialized uniqueness, offset precondition.
+   * 2. Builtin processor beforeAppend hooks (e.g. circuit-breaker rejection).
+   *
+   * Returns the next offset to use. Idempotency is handled by `append()`
+   * before this method is called — by the time we get here, the input is
+   * known to be a genuinely new event.
+   */
   private beforeAppend(input: EventInput): number {
     if (
       input.type === "https://events.iterate.com/events/stream/initialized" &&
@@ -268,6 +306,15 @@ export class StreamDurableObject extends DurableObject<Env> {
     return nextOffset;
   }
 
+  /**
+   * Pure reduction: computes the next StreamState from the current state and
+   * the committed event, without performing any I/O.
+   *
+   * Core stream state (eventCount, metadata) is reduced first, then each
+   * builtin processor reduces its own slice under `state.processors`. This
+   * mirrors the processor `reduce` hook but for the privileged top-level
+   * fields that are not modeled as processor state.
+   */
   private reduce(event: Event): StreamState {
     if (this.state.path !== event.streamPath) {
       throw new Error(
@@ -314,6 +361,20 @@ export class StreamDurableObject extends DurableObject<Env> {
     return nextState;
   }
 
+  /**
+   * Post-commit side effects, in order:
+   *
+   * 1. Subscriber fanout: push the committed event to all live pull-subscription
+   *    readers connected via `stream()`.
+   *
+   * 2. Core propagation: after `stream-initialized`, notify every ancestor
+   *    stream with `child-stream-created` in parallel. This is a structural
+   *    concern of the stream tree, not something a pluggable processor should own.
+   *
+   * 3. Builtin processor afterAppend hooks: each processor may inspect the
+   *    committed event and its own state slice, then optionally append derived
+   *    events back into this stream.
+   */
   private afterAppend(event: Event) {
     this.publish(event);
 
@@ -369,6 +430,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // State & lifecycle
+  // ---------------------------------------------------------------------------
+
   getState(): StreamState {
     return this.state;
   }
@@ -417,6 +482,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       finalStateByPath,
     };
   }
+
+  // ---------------------------------------------------------------------------
+  // Pull subscriptions
+  // ---------------------------------------------------------------------------
 
   history(args: { afterOffset?: number } = {}): Event[] {
     const afterOffset = args.afterOffset ?? 0;
@@ -470,6 +539,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Storage & helpers
+  // ---------------------------------------------------------------------------
 
   private ensureSchema() {
     this.ctx.storage.sql.exec(`
