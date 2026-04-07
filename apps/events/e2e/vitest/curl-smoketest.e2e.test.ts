@@ -133,6 +133,9 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" -H "x-iterate-project: $PROJECT_SLU
           pausedAt: null,
           recentEventTimestamps: ["<ts>", "<ts>"],
         },
+        "dynamic-worker": {
+          workersBySlug: {},
+        },
         "jsonata-transformer": {
           transformersBySlug: {},
         },
@@ -151,6 +154,9 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" -H "x-iterate-project: $PROJECT_SLU
           pauseReason: null,
           pausedAt: null,
           recentEventTimestamps: ["<ts>", "<ts>"],
+        },
+        "dynamic-worker": {
+          workersBySlug: {},
         },
         "jsonata-transformer": {
           transformersBySlug: {},

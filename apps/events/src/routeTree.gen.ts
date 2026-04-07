@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as DynamicWorkerConfiguredRouteImport } from './routes/dynamic-worker-configured'
 import { Route as StreamResumedRouteImport } from './routes/stream-resumed'
 import { Route as StreamPausedRouteImport } from './routes/stream-paused'
 import { Route as StreamMetadataUpdatedRouteImport } from './routes/stream-metadata-updated'
@@ -35,6 +36,11 @@ import { Route as AppSecretsIndexRouteImport } from './routes/_app/secrets.index
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppStreamsSplatRouteImport } from './routes/_app/streams.$'
 
+const DynamicWorkerConfiguredRoute = DynamicWorkerConfiguredRouteImport.update({
+  id: '/dynamic-worker-configured',
+  path: '/dynamic-worker-configured',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const StreamResumedRoute = StreamResumedRouteImport.update({
   id: '/stream-resumed',
   path: '/stream-resumed',
@@ -168,6 +174,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
+  '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
   '/error-occurred': typeof ErrorOccurredRoute
   '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
@@ -194,6 +201,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
+  '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
   '/error-occurred': typeof ErrorOccurredRoute
   '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
@@ -220,6 +228,7 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
+  '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
   '/error-occurred': typeof ErrorOccurredRoute
   '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
@@ -248,6 +257,7 @@ export interface FileRouteTypes {
     | '/'
     | '/child-stream-created'
     | '/docs'
+    | '/dynamic-worker-configured'
     | '/error-occurred'
     | '/jsonata-transformer-configured'
     | '/manual-event-appended'
@@ -274,6 +284,7 @@ export interface FileRouteTypes {
     | '/'
     | '/child-stream-created'
     | '/docs'
+    | '/dynamic-worker-configured'
     | '/error-occurred'
     | '/jsonata-transformer-configured'
     | '/manual-event-appended'
@@ -299,6 +310,7 @@ export interface FileRouteTypes {
     | '/_app'
     | '/child-stream-created'
     | '/docs'
+    | '/dynamic-worker-configured'
     | '/error-occurred'
     | '/jsonata-transformer-configured'
     | '/manual-event-appended'
@@ -327,6 +339,7 @@ export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   ChildStreamCreatedRoute: typeof ChildStreamCreatedRoute
   DocsRoute: typeof DocsRoute
+  DynamicWorkerConfiguredRoute: typeof DynamicWorkerConfiguredRoute
   ErrorOccurredRoute: typeof ErrorOccurredRoute
   JsonataTransformerConfiguredRoute: typeof JsonataTransformerConfiguredRoute
   ManualEventAppendedRoute: typeof ManualEventAppendedRoute
@@ -347,6 +360,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/dynamic-worker-configured': {
+      id: '/dynamic-worker-configured'
+      path: '/dynamic-worker-configured'
+      fullPath: '/dynamic-worker-configured'
+      preLoaderRoute: typeof DynamicWorkerConfiguredRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/stream-resumed': {
       id: '/stream-resumed'
       path: '/stream-resumed'
@@ -568,6 +588,7 @@ const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   ChildStreamCreatedRoute: ChildStreamCreatedRoute,
   DocsRoute: DocsRoute,
+  DynamicWorkerConfiguredRoute: DynamicWorkerConfiguredRoute,
   ErrorOccurredRoute: ErrorOccurredRoute,
   JsonataTransformerConfiguredRoute: JsonataTransformerConfiguredRoute,
   ManualEventAppendedRoute: ManualEventAppendedRoute,

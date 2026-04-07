@@ -349,6 +349,51 @@ export const jsonataTransformerConfiguredPage = {
   ],
 } satisfies EventTypePageDefinition;
 
+const pingPongDynamicWorkerTemplateScript = `
+export default {
+  initialState: {},
+
+  reduce(state) {
+    return state;
+  },
+
+  async onEvent({ append, event }) {
+    if (
+      event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured" ||
+      !/\\bping\\b/i.test(
+        JSON.stringify({
+          type: event.type,
+          payload: event.payload,
+          metadata: event.metadata ?? null,
+        }),
+      )
+    ) {
+      return;
+    }
+
+    await append({ type: "pong" });
+  },
+};
+`.trim();
+
+export const dynamicWorkerConfiguredPage = {
+  slug: "dynamic-worker-configured",
+  href: "/dynamic-worker-configured/",
+  title: "Dynamic Worker Configured",
+  type: "https://events.iterate.com/events/stream/dynamic-worker/configured",
+  summary:
+    "Built-in control event that registers or replaces a dynamic worker processor by slug for a stream.",
+  payloadExample: {
+    slug: "ping-pong",
+    script: pingPongDynamicWorkerTemplateScript,
+  },
+  details: [
+    "The latest configured event for a slug replaces the previous dynamic worker runtime for that slug on the same stream.",
+    "The raw composer template uses `script` directly so it is copy-pastable without any bundling or dependencies.",
+    'This trivial example replies with `{ type: "pong" }` whenever a later event contains the word `ping`.',
+  ],
+} satisfies EventTypePageDefinition;
+
 export const streamPausedPage = {
   slug: "stream-paused",
   href: "/stream-paused/",
@@ -441,6 +486,7 @@ export const manualEventAppendedPage = {
 
 export const eventTypePages = [
   childStreamCreatedPage,
+  dynamicWorkerConfiguredPage,
   errorOccurredPage,
   jsonataTransformerConfiguredPage,
   manualEventAppendedPage,

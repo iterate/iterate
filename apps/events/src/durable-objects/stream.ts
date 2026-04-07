@@ -11,6 +11,7 @@ import {
 } from "@iterate-com/events-contract";
 import type { BuiltinProcessor } from "@iterate-com/events-contract/sdk";
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
+import { createDynamicWorkerManager, dynamicWorkerProcessor } from "./dynamic-processor.ts";
 import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
 import {
   isSchedulerAlarmEventType,
@@ -25,6 +26,7 @@ type ProcessorSlugKey = keyof StreamState["processors"];
 
 const processors: BuiltinProcessor[] = [
   circuitBreakerProcessor,
+  dynamicWorkerProcessor,
   jsonataTransformerProcessor,
   schedulingProcessor,
 ];
@@ -95,6 +97,7 @@ function getProcessorState(state: StreamState, slug: string) {
 export class StreamDurableObject extends DurableObject<Env> {
   private _state: StreamState | null = null;
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  private readonly dynamicWorkerManager: ReturnType<typeof createDynamicWorkerManager>;
 
   private get state(): StreamState {
     if (this._state == null) {
@@ -122,6 +125,37 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    // Dynamic workers are intentionally not "frameworkized" as a generic
+    // processor runtime. This experimental feature owns its own manager in
+    // `dynamic-processor.ts`, and `stream.ts` only provides the minimal stream
+    // capabilities it needs: append/history/live-stream plus the dynamic worker
+    // loader and the loopback egress binding.
+    //
+    // First-party references:
+    // - Dynamic Workers overview: https://developers.cloudflare.com/dynamic-workers/
+    // - RPC lifecycle / targets: https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
+    this.dynamicWorkerManager = createDynamicWorkerManager({
+      append: (event) => this.append(event),
+      history: (args) =>
+        this.history({
+          afterOffset: args?.afterOffset,
+        }),
+      stream: (args) =>
+        this.stream({
+          afterOffset: args?.afterOffset,
+          live: args?.live,
+        }),
+      createLoopbackBinding: ({ exportName }) => {
+        if (exportName !== "DynamicWorkerEgressGateway") {
+          throw new Error(`Unsupported loopback binding export: ${exportName}`);
+        }
+
+        return this.env.DYNAMIC_WORKER_EGRESS_GATEWAY as unknown as Fetcher;
+      },
+      getPath: () => this.state.path,
+      loader: this.env.LOADER,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+    });
 
     void this.ctx.blockConcurrencyWhile(async () => {
       this.ensureSchema();
@@ -138,6 +172,11 @@ export class StreamDurableObject extends DurableObject<Env> {
       const parsed = StreamState.safeParse(rawState);
       if (parsed.success) {
         this._state = parsed.data;
+        // Reconnect any previously configured dynamic workers before normal
+        // traffic resumes. The manager restores one runtime per slug from the
+        // reduced processor state, and then we append an explicit lifecycle
+        // event so processor code can observe that this DO instance woke up.
+        await this.dynamicWorkerManager.sync(parsed.data.processors["dynamic-worker"]);
 
         try {
           this.append({
@@ -154,7 +193,6 @@ export class StreamDurableObject extends DurableObject<Env> {
           );
           throw error;
         }
-
         return;
       }
 
@@ -417,20 +455,30 @@ export class StreamDurableObject extends DurableObject<Env> {
         state: getProcessorState(this.state, processor.slug),
       });
 
-      if (result == null) {
-        continue;
+      if (result != null) {
+        void result.catch((error) => {
+          console.error("[stream-do] processor afterAppend failed", {
+            path: this.state.path,
+            processor: processor.slug,
+            eventType: event.type,
+            error,
+          });
+        });
       }
+    }
 
-      void result.catch((error: unknown) => {
-        console.error("[stream-do] processor afterAppend failed", {
+    void this.dynamicWorkerManager
+      .afterAppend({
+        event,
+        state: this.state.processors["dynamic-worker"],
+      })
+      .catch((error) => {
+        console.error("[stream-do] dynamic worker manager afterAppend failed", {
           path: this.state.path,
-          processor: processor.slug,
           eventType: event.type,
           error,
         });
       });
-    }
-
     if (isSchedulerAlarmEventType(event.type)) {
       void repointSchedulerAlarm({
         ctx: this.ctx,
@@ -503,6 +551,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       } catch {}
     }
     this.subscribers.clear();
+
+    await this.dynamicWorkerManager.dispose();
 
     await this.ctx.storage.deleteAll();
 
