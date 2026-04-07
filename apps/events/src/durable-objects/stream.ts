@@ -123,17 +123,11 @@ export class StreamDurableObject extends DurableObject<Env> {
           live: args?.live,
         }),
       createLoopbackBinding: ({ exportName, props }) => {
-        const exports = this.env.SELF as unknown as Record<
-          string,
-          Fetcher | ((args?: { props?: unknown }) => Fetcher)
-        >;
-        const binding = exports[exportName];
+        const self = this.env.SELF as unknown as {
+          getEntrypoint(name?: string, options?: { props?: unknown }): Fetcher;
+        };
 
-        if (binding == null) {
-          throw new Error(`Unknown loopback export: ${exportName}`);
-        }
-
-        return typeof binding === "function" ? binding({ props }) : binding;
+        return self.getEntrypoint(exportName, { props });
       },
       getPath: () => this.state.path,
       loader: this.env.LOADER,
