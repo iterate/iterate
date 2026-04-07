@@ -76,7 +76,9 @@ export const DynamicWorkerConfig = z.object({
 });
 export type DynamicWorkerConfig = z.infer<typeof DynamicWorkerConfig>;
 
-export const DynamicWorkerState = z.object({
-  workersBySlug: z.record(z.string(), DynamicWorkerConfig),
-});
+export const DynamicWorkerState = z
+  .object({
+    workersBySlug: z.record(z.string(), DynamicWorkerConfig).default({}),
+  })
+  .default({ workersBySlug: {} });
 export type DynamicWorkerState = z.infer<typeof DynamicWorkerState>;

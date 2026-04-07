@@ -6,7 +6,10 @@ import {
   type Event,
   type JSONObject,
 } from "@iterate-com/events-contract";
-import { defineBuiltinProcessor, type BuiltinProcessorContext } from "./define-processor.ts";
+import {
+  defineBuiltinProcessor,
+  type BuiltinProcessorContext,
+} from "./define-builtin-processor.ts";
 
 export type DynamicWorkerAppendInput = {
   type: Event["type"];
@@ -237,74 +240,87 @@ function createDynamicWorkerRuntime(context: BuiltinProcessorContext) {
       stopping: boolean;
     }
   >();
+  const transitionsBySlug = new Map<string, Promise<void>>();
 
-  async function ensureDynamicWorker(slug: string, config: DynamicWorkerConfig) {
-    const existing = runsBySlug.get(slug);
-    const configKey = JSON.stringify(config);
+  function ensureDynamicWorker(slug: string, config: DynamicWorkerConfig) {
+    const previousTransition = transitionsBySlug.get(slug) ?? Promise.resolve();
+    const nextTransition = previousTransition
+      .catch(() => {})
+      .then(async () => {
+        const existing = runsBySlug.get(slug);
+        const configKey = JSON.stringify(config);
 
-    if (existing?.configKey === configKey) {
-      return;
-    }
-
-    if (existing != null) {
-      existing.stopping = true;
-      await existing.stream.dispose();
-    }
-
-    const stream = context.createStreamTarget() as unknown as LocalDynamicWorkerTarget;
-    const entrypoint = context.loader
-      .get(
-        `dynamic-worker:${context.getPath()}:${slug}:${hashDynamicWorkerConfig(configKey)}`,
-        () => ({
-          compatibilityDate: config.compatibilityDate,
-          compatibilityFlags: config.compatibilityFlags,
-          mainModule: config.mainModule,
-          modules: config.modules,
-          globalOutbound:
-            config.outboundGateway == null
-              ? null
-              : context.createLoopbackBinding({
-                  exportName: config.outboundGateway.entrypoint,
-                  props: config.outboundGateway.props,
-                }),
-        }),
-      )
-      .getEntrypoint() as unknown as {
-      run(stream: RpcDynamicWorkerTarget): Promise<void>;
-    };
-    const run = entrypoint.run(stream as RpcDynamicWorkerTarget);
-    const nextRun = {
-      configKey,
-      stream,
-      run,
-      stopping: false,
-    };
-
-    runsBySlug.set(slug, nextRun);
-    context.waitUntil(run);
-
-    void run.then(
-      () => {
-        if (runsBySlug.get(slug) === nextRun) {
-          runsBySlug.delete(slug);
-        }
-      },
-      (error) => {
-        if (runsBySlug.get(slug) === nextRun) {
-          runsBySlug.delete(slug);
-        }
-
-        if (nextRun.stopping) {
+        if (existing?.configKey === configKey) {
           return;
         }
 
-        console.error("[stream-do] dynamic worker failed", {
-          path: context.getPath(),
-          slug,
-          error,
-        });
-      },
-    );
+        if (existing != null) {
+          existing.stopping = true;
+          await existing.stream.dispose();
+        }
+
+        const stream = context.createStreamTarget() as unknown as LocalDynamicWorkerTarget;
+        const entrypoint = context.loader
+          .get(
+            `dynamic-worker:${context.getPath()}:${slug}:${hashDynamicWorkerConfig(configKey)}`,
+            () => ({
+              compatibilityDate: config.compatibilityDate,
+              compatibilityFlags: config.compatibilityFlags,
+              mainModule: config.mainModule,
+              modules: config.modules,
+              globalOutbound:
+                config.outboundGateway == null
+                  ? null
+                  : context.createLoopbackBinding({
+                      exportName: config.outboundGateway.entrypoint,
+                      props: config.outboundGateway.props,
+                    }),
+            }),
+          )
+          .getEntrypoint() as unknown as {
+          run(stream: RpcDynamicWorkerTarget): Promise<void>;
+        };
+        const run = entrypoint.run(stream as RpcDynamicWorkerTarget);
+        const nextRun = {
+          configKey,
+          stream,
+          run,
+          stopping: false,
+        };
+
+        runsBySlug.set(slug, nextRun);
+        context.waitUntil(run);
+
+        void run.then(
+          () => {
+            if (runsBySlug.get(slug) === nextRun) {
+              runsBySlug.delete(slug);
+            }
+          },
+          (error) => {
+            if (runsBySlug.get(slug) === nextRun) {
+              runsBySlug.delete(slug);
+            }
+
+            if (nextRun.stopping) {
+              return;
+            }
+
+            console.error("[stream-do] dynamic worker failed", {
+              path: context.getPath(),
+              slug,
+              error,
+            });
+          },
+        );
+      });
+    const trackedTransition = nextTransition.finally(() => {
+      if (transitionsBySlug.get(slug) === trackedTransition) {
+        transitionsBySlug.delete(slug);
+      }
+    });
+    transitionsBySlug.set(slug, trackedTransition);
+    return trackedTransition;
   }
 
   async function ensureConfiguredWorkers(state: DynamicWorkerState) {

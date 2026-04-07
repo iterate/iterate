@@ -21,6 +21,14 @@ const altPongDynamicWorkerScript = pingPongDynamicWorkerScript.replace(
   'await append({ type: "pong" });',
   'await append({ type: "alt-pong" });',
 );
+const altPongADynamicWorkerScript = pingPongDynamicWorkerScript.replace(
+  'await append({ type: "pong" });',
+  'await append({ type: "alt-pong-a" });',
+);
+const altPongBDynamicWorkerScript = pingPongDynamicWorkerScript.replace(
+  'await append({ type: "pong" });',
+  'await append({ type: "alt-pong-b" });',
+);
 
 describe("dynamic worker processor", () => {
   test("subscribes once and appends pong for later ping payloads", async () => {
@@ -367,6 +375,74 @@ describe("dynamic worker processor", () => {
       await expectEvent(iterator, { streamPath: path, type: valueRecordedEventType });
       await expectEvent(iterator, { streamPath: path, type: "pong" });
       await expectEventCount(path, 5);
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
+  test("concurrent same-slug reconfiguration does not leave a phantom live runtime behind", async () => {
+    const path = uniqueDynamicWorkerPath();
+    const iterator = await openLiveIterator(path);
+
+    try {
+      await expectInitialized(iterator, path);
+      await configureWorker({
+        path,
+        slug: "ping-pong",
+        script: pingPongDynamicWorkerScript,
+      });
+      await expectConfiguredEvent(iterator, path, "ping-pong");
+
+      await append(path, {
+        type: valueRecordedEventType,
+        payload: { message: "activate the original ping worker" },
+      });
+      await expectEvent(iterator, { streamPath: path, type: valueRecordedEventType });
+      await expectEvent(iterator, { streamPath: path, type: "pong" });
+
+      await Promise.all([
+        configureWorker({
+          path,
+          slug: "ping-pong",
+          script: altPongADynamicWorkerScript,
+        }),
+        configureWorker({
+          path,
+          slug: "ping-pong",
+          script: altPongBDynamicWorkerScript,
+        }),
+      ]);
+      await expectConfiguredEvent(iterator, path, "ping-pong");
+      await expectConfiguredEvent(iterator, path, "ping-pong");
+
+      await append(path, {
+        type: valueRecordedEventType,
+        payload: { message: "warm the latest runtime without matching" },
+      });
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: valueRecordedEventType,
+        payload: { message: "warm the latest runtime without matching" },
+      });
+
+      const finalProcessorScript = (await app.client.getState({ path })).processors[
+        "dynamic-worker"
+      ].workersBySlug["ping-pong"]?.modules["processor.js"];
+
+      await append(path, {
+        type: valueRecordedEventType,
+        payload: { message: "exactly one ping response after concurrent reconfig" },
+      });
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: valueRecordedEventType,
+        payload: { message: "exactly one ping response after concurrent reconfig" },
+      });
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: finalProcessorScript === altPongADynamicWorkerScript ? "alt-pong-a" : "alt-pong-b",
+      });
+      await expectEventCount(path, 9);
     } finally {
       await iterator.return?.();
     }

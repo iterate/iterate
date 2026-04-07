@@ -4,7 +4,7 @@ import {
   StreamPausedEvent,
   StreamResumedEvent,
 } from "@iterate-com/events-contract";
-import { defineBuiltinProcessor } from "./define-processor.ts";
+import { defineBuiltinProcessor } from "./define-builtin-processor.ts";
 
 /**
  * Rate-limiting circuit breaker for event streams.

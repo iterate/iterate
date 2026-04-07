@@ -5,7 +5,7 @@ import {
   JsonataTransformerConfiguredEvent,
   type JsonataTransformerState,
 } from "@iterate-com/events-contract";
-import { defineBuiltinProcessor } from "./define-processor.ts";
+import { defineBuiltinProcessor } from "./define-builtin-processor.ts";
 
 /**
  * Event-driven JSONata transformer processor.

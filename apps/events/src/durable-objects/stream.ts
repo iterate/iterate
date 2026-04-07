@@ -1,4 +1,4 @@
-import { DurableObject, RpcTarget } from "cloudflare:workers";
+import { DurableObject } from "cloudflare:workers";
 import {
   type ChildStreamCreatedEvent,
   type DestroyStreamResult,
@@ -11,8 +11,9 @@ import {
 } from "@iterate-com/events-contract";
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
 import { dynamicWorkerProcessor, type DynamicWorkerAppendInput } from "./dynamic-processor.ts";
+import { createDynamicWorkerStreamTarget } from "./dynamic-worker-stream-target.ts";
 import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
-import type { BuiltinProcessor, BuiltinProcessorRuntime } from "./define-processor.ts";
+import type { BuiltinProcessor, BuiltinProcessorRuntime } from "./define-builtin-processor.ts";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 
@@ -26,147 +27,6 @@ const processors: BuiltinProcessor[] = [
 
 function getProcessorState(state: StreamState, slug: string) {
   return state.processors[slug as ProcessorSlugKey];
-}
-
-class DynamicWorkerStreamTarget extends RpcTarget {
-  #stream: StreamDurableObject;
-  #disposed = false;
-  readonly #subscriptions = new Set<DynamicWorkerSubscriptionTarget>();
-  readonly dispose = async () => {
-    this.#disposed = true;
-    const subscriptions = Array.from(this.#subscriptions);
-    this.#subscriptions.clear();
-    await Promise.all(subscriptions.map((subscription) => subscription.dispose()));
-  };
-
-  constructor(args: { stream: StreamDurableObject }) {
-    super();
-    this.#stream = args.stream;
-  }
-
-  async append(input: DynamicWorkerAppendInput) {
-    return this.#stream.append(
-      EventInput.parse({
-        ...input,
-        payload: input.payload ?? {},
-      }),
-    );
-  }
-
-  async subscribe(args: { afterOffset?: number; live?: boolean } = {}) {
-    if (this.#disposed) {
-      throw new Error("dynamic worker stream target was disposed");
-    }
-
-    const subscription = new DynamicWorkerSubscriptionTarget({
-      stream: this.#stream.stream({
-        afterOffset: args.afterOffset,
-        live: args.live ?? true,
-      }),
-      onDispose: () => {
-        this.#subscriptions.delete(subscription);
-      },
-    });
-
-    this.#subscriptions.add(subscription);
-    return subscription;
-  }
-
-  async history(args: { afterOffset?: number } = {}) {
-    return this.#stream.history({
-      afterOffset: args.afterOffset,
-    });
-  }
-}
-
-class DynamicWorkerSubscriptionTarget extends RpcTarget {
-  readonly #reader: ReadableStreamDefaultReader<Uint8Array>;
-  readonly #decoder = new TextDecoder();
-  readonly #onDispose: () => void;
-  #buffer = "";
-  #done = false;
-  #released = false;
-  readonly dispose = async () => {
-    await this.return();
-  };
-
-  constructor(args: { onDispose: () => void; stream: ReadableStream<Uint8Array> }) {
-    super();
-    this.#onDispose = args.onDispose;
-    this.#reader = args.stream.getReader();
-  }
-
-  async next() {
-    if (this.#done) {
-      return { done: true as const, value: undefined };
-    }
-
-    while (true) {
-      const line = await this.#readLine();
-      if (line == null) {
-        return { done: true as const, value: undefined };
-      }
-
-      try {
-        const parsed = JSON.parse(line);
-        if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-          continue;
-        }
-
-        return {
-          done: false as const,
-          value: parsed as Event,
-        };
-      } catch {
-        continue;
-      }
-    }
-  }
-
-  async return() {
-    if (!this.#done) {
-      this.#done = true;
-      await this.#reader.cancel();
-    }
-
-    if (!this.#released) {
-      this.#released = true;
-      this.#reader.releaseLock();
-      this.#onDispose();
-    }
-
-    return { done: true as const, value: undefined };
-  }
-
-  async #readLine() {
-    while (true) {
-      const newlineIndex = this.#buffer.indexOf("\n");
-      if (newlineIndex !== -1) {
-        const line = this.#buffer.slice(0, newlineIndex);
-        this.#buffer = this.#buffer.slice(newlineIndex + 1);
-        if (line.length === 0) {
-          continue;
-        }
-
-        return line;
-      }
-
-      if (this.#done) {
-        const finalLine = this.#buffer.trim();
-        this.#buffer = "";
-        return finalLine.length > 0 ? finalLine : null;
-      }
-
-      const { done, value } = await this.#reader.read();
-      if (done) {
-        this.#done = true;
-        this.#buffer += this.#decoder.decode();
-        continue;
-      }
-
-      this.#buffer += this.#decoder.decode(value, { stream: true });
-    }
-  }
 }
 
 /**
@@ -756,8 +616,23 @@ export class StreamDurableObject extends DurableObject<Env> {
           return typeof binding === "function" ? binding({ props }) : binding;
         },
         createStreamTarget: () =>
-          new DynamicWorkerStreamTarget({
-            stream: this,
+          createDynamicWorkerStreamTarget({
+            append: (input: DynamicWorkerAppendInput) =>
+              this.append(
+                EventInput.parse({
+                  ...input,
+                  payload: input.payload ?? {},
+                }),
+              ),
+            history: (args) =>
+              this.history({
+                afterOffset: args?.afterOffset,
+              }),
+            stream: (args) =>
+              this.stream({
+                afterOffset: args?.afterOffset,
+                live: args?.live,
+              }),
           }),
         getPath: () => this.state.path,
         loader: this.env.LOADER,
