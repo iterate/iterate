@@ -60,8 +60,9 @@ describeLocalRestart("dynamic worker restart", () => {
 
       const history = await waitForEventCounts({
         path,
-        totalEvents: 9,
+        totalEvents: 10,
         counts: {
+          "https://events.iterate.com/events/stream/durable-object-constructed": 1,
           [configuredEventType]: 2,
           [valueRecordedEventType]: 2,
           pong: 2,
@@ -131,8 +132,9 @@ describeLocalRestart("dynamic worker restart", () => {
 
       const history = await waitForEventCounts({
         path,
-        totalEvents: 9,
+        totalEvents: 10,
         counts: {
+          "https://events.iterate.com/events/stream/durable-object-constructed": 1,
           [configuredEventType]: 2,
           [valueRecordedEventType]: 3,
           pong: 1,

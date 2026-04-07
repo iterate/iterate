@@ -1,10 +1,13 @@
 import { useEffect, useMemo } from "react";
 import {
+  AlertTriangleIcon,
   BookOpenIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
   FolderPlusIcon,
+  PauseCircleIcon,
+  PlayCircleIcon,
   Settings2Icon,
 } from "lucide-react";
 import {
@@ -43,9 +46,13 @@ import type {
   ChildStreamCreatedFeedItem,
   EventFeedItem,
   GroupedEventFeedItem,
+  StreamErrorOccurredFeedItem,
   StreamFeedItem,
+  StreamLifecycleFeedItem,
   StreamMetadataUpdatedFeedItem,
+  StreamPausedFeedItem,
   StreamRendererMode,
+  StreamResumedFeedItem,
 } from "~/lib/stream-feed-types.ts";
 
 export function StreamEventFeed({
@@ -161,6 +168,14 @@ function StreamFeedItemRenderer({
       return <ChildStreamCreatedCard item={item} />;
     case "stream-metadata-updated":
       return <StreamMetadataUpdatedCard item={item} />;
+    case "stream-lifecycle":
+      return <StreamLifecycleLine item={item} />;
+    case "stream-paused":
+      return <StreamPausedCard item={item} />;
+    case "stream-resumed":
+      return <StreamResumedCard item={item} />;
+    case "stream-error-occurred":
+      return <StreamErrorOccurredCard item={item} />;
     default:
       return null;
   }
@@ -254,6 +269,61 @@ function StreamMetadataUpdatedCard({ item }: { item: StreamMetadataUpdatedFeedIt
           {JSON.stringify(item.metadata, null, 2)}
         </pre>
 
+        <div className="text-xs text-muted-foreground">{formatTime(item.timestamp)}</div>
+      </div>
+    </article>
+  );
+}
+
+function StreamLifecycleLine({ item }: { item: StreamLifecycleFeedItem }) {
+  return (
+    <div className="flex items-center gap-3 py-1">
+      <div className="h-px flex-1 bg-purple-400/50" />
+      <span className="shrink-0 text-xs font-bold text-purple-500">{item.label}</span>
+      <div className="h-px flex-1 bg-purple-400/50" />
+    </div>
+  );
+}
+
+function StreamPausedCard({ item }: { item: StreamPausedFeedItem }) {
+  return (
+    <article className="max-w-md rounded-lg border border-amber-500/35 bg-card p-4 shadow-sm">
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400">
+          <PauseCircleIcon className="size-3.5" />
+          <span>Stream paused</span>
+        </div>
+        <p className="text-sm text-foreground">{item.reason}</p>
+        <div className="text-xs text-muted-foreground">{formatTime(item.timestamp)}</div>
+      </div>
+    </article>
+  );
+}
+
+function StreamResumedCard({ item }: { item: StreamResumedFeedItem }) {
+  return (
+    <article className="max-w-md rounded-lg border border-emerald-500/35 bg-card p-4 shadow-sm">
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
+          <PlayCircleIcon className="size-3.5" />
+          <span>Stream resumed</span>
+        </div>
+        <p className="text-sm text-foreground">{item.reason}</p>
+        <div className="text-xs text-muted-foreground">{formatTime(item.timestamp)}</div>
+      </div>
+    </article>
+  );
+}
+
+function StreamErrorOccurredCard({ item }: { item: StreamErrorOccurredFeedItem }) {
+  return (
+    <article className="max-w-md rounded-lg border border-destructive/35 bg-card p-4 shadow-sm">
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-destructive">
+          <AlertTriangleIcon className="size-3.5" />
+          <span>Error occurred</span>
+        </div>
+        <p className="text-sm font-semibold text-foreground">{item.message}</p>
         <div className="text-xs text-muted-foreground">{formatTime(item.timestamp)}</div>
       </div>
     </article>
@@ -473,6 +543,14 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `child-stream-created-${item.createdPath}-${item.timestamp}-${index}`;
     case "stream-metadata-updated":
       return `stream-metadata-${item.path}-${item.timestamp}-${index}`;
+    case "stream-lifecycle":
+      return `lifecycle-${item.label}-${item.timestamp}-${index}`;
+    case "stream-paused":
+      return `stream-paused-${item.timestamp}-${index}`;
+    case "stream-resumed":
+      return `stream-resumed-${item.timestamp}-${index}`;
+    case "stream-error-occurred":
+      return `stream-error-occurred-${item.timestamp}-${index}`;
     default:
       return `feed-item-${index}`;
   }

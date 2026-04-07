@@ -27,9 +27,13 @@ import {
 
 export { JSONObject, Offset, StreamPath };
 
+export const ProjectSlug = z.string().trim().min(1).max(255);
+export type ProjectSlug = z.infer<typeof ProjectSlug>;
+
 export const StreamInitializedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/initialized"),
   payload: z.strictObject({
+    projectSlug: ProjectSlug,
     path: StreamPath,
   }),
 });
@@ -38,6 +42,20 @@ export const StreamInitializedEvent = GenericEventBase.extend(
 );
 export type StreamInitializedEventInput = z.infer<typeof StreamInitializedEventInput>;
 export type StreamInitializedEvent = z.infer<typeof StreamInitializedEvent>;
+
+export const StreamDurableObjectConstructedEventInput = GenericEventInputBase.extend({
+  type: z.literal("https://events.iterate.com/events/stream/durable-object-constructed"),
+  payload: z.strictObject({}),
+});
+export const StreamDurableObjectConstructedEvent = GenericEventBase.extend(
+  StreamDurableObjectConstructedEventInput.pick({ type: true, payload: true }).shape,
+);
+export type StreamDurableObjectConstructedEventInput = z.infer<
+  typeof StreamDurableObjectConstructedEventInput
+>;
+export type StreamDurableObjectConstructedEvent = z.infer<
+  typeof StreamDurableObjectConstructedEvent
+>;
 
 export const ChildStreamCreatedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/child-stream-created"),
@@ -90,6 +108,7 @@ export type InvalidEventAppendedEvent = z.infer<typeof InvalidEventAppendedEvent
 
 const builtInEventInputOptions = [
   StreamInitializedEventInput,
+  StreamDurableObjectConstructedEventInput,
   ChildStreamCreatedEventInput,
   StreamMetadataUpdatedEventInput,
   ErrorOccurredEventInput,
@@ -102,6 +121,7 @@ const builtInEventInputOptions = [
 
 const builtInEventOptions = [
   StreamInitializedEvent,
+  StreamDurableObjectConstructedEvent,
   ChildStreamCreatedEvent,
   StreamMetadataUpdatedEvent,
   ErrorOccurredEvent,
@@ -160,15 +180,17 @@ export const ProcessorsState = z.object({
 });
 
 export const StreamState = z.object({
+  projectSlug: ProjectSlug,
   path: StreamPath,
   eventCount: z.number().int().nonnegative(),
+  childPaths: z.array(StreamPath).default([]),
   metadata: JSONObject,
   processors: ProcessorsState,
 });
 export type StreamState = z.infer<typeof StreamState>;
 
 export const DestroyStreamResult = z.object({
-  destroyed: z.literal(true),
-  finalState: StreamState.nullable(),
+  destroyedStreamCount: z.number().int().nonnegative(),
+  finalStateByPath: z.record(z.string(), z.object({ finalState: StreamState.nullable() })),
 });
 export type DestroyStreamResult = z.infer<typeof DestroyStreamResult>;

@@ -33,7 +33,7 @@ export const orpcOpenApiHandler = new OpenAPIHandler(appRouter, {
   ],
   plugins: [
     ...plugins,
-    createOpenApiReferencePluginForApp(manifest, ["Streams", "secrets"], {
+    createOpenApiReferencePluginForApp(manifest, ["/streams", "/secrets"], {
       defaultOpenFirstTag: true,
     }),
   ],

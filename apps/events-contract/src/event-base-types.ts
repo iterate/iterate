@@ -50,7 +50,7 @@ export const EventTypeSchema = z.string().trim().min(1).max(2048);
 // `z.strictObject(...)` at each call site.
 export const GenericEventInput = z.strictObject({
   type: EventTypeSchema,
-  payload: JSONObject,
+  payload: JSONObject.default({}),
   metadata: JSONObject.optional(),
   idempotencyKey: z.string().trim().min(1).optional(),
   offset: Offset.optional(),

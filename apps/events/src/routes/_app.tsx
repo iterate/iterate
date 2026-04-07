@@ -3,9 +3,11 @@ import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { AppSidebar } from "~/components/app-sidebar.tsx";
 import { PathBreadcrumbs } from "~/components/path-breadcrumbs.tsx";
+import { validateAppSearch } from "~/lib/project-slug.ts";
 import { StreamsChromeProvider, StreamsHeaderAction } from "~/components/streams-chrome.tsx";
 
 export const Route = createFileRoute("/_app")({
+  validateSearch: validateAppSearch,
   component: AppLayout,
 });
 

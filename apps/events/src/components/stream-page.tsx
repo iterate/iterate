@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type Event,
-  EventInput,
+  type EventInput,
   type JSONObject,
   type StreamPath,
 } from "@iterate-com/events-contract";
@@ -18,6 +18,10 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "@iterate-com/ui/components/ai-elements/prompt-input";
+import { Button } from "@iterate-com/ui/components/button";
+import { Checkbox } from "@iterate-com/ui/components/checkbox";
+import { Label } from "@iterate-com/ui/components/label";
+import { Separator } from "@iterate-com/ui/components/separator";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
   Sheet,
@@ -28,8 +32,10 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamEventFeed } from "~/components/stream-event-feed.tsx";
+import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
 import { eventInputTemplates, getEventInputTemplateById } from "~/lib/event-type-pages.ts";
+import { projectScopedQueryKey } from "~/lib/project-slug.ts";
 import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projection.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { DEFAULT_STREAM_RENDERER_MODE, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
@@ -54,28 +60,47 @@ export function StreamPage({
 }) {
   const queryClient = useQueryClient();
   const { closeMetadata, metadataOpen, setHeaderControls } = useStreamsChrome();
+  const projectSlug = useCurrentProjectSlug();
   const [selectedTemplateId, setSelectedTemplateId] = useState(DEFAULT_EVENT_TEMPLATE_ID);
   const [appendInputJson, setAppendInputJson] = useState(() =>
     createEventInputTemplate(DEFAULT_EVENT_TEMPLATE_ID),
   );
+  const streamStateOptions = useMemo(
+    () => orpc.getState.queryOptions({ input: { path: streamPath } }),
+    [streamPath],
+  );
+  const streamStateQueryKey = useMemo(
+    () => projectScopedQueryKey(streamStateOptions.queryKey, projectSlug),
+    [projectSlug, streamStateOptions.queryKey],
+  );
+  const listChildrenOptions = useMemo(
+    () => orpc.listChildren.queryOptions({ input: { path: "/" } }),
+    [],
+  );
+  const listChildrenQueryKey = useMemo(
+    () => projectScopedQueryKey(listChildrenOptions.queryKey, projectSlug),
+    [listChildrenOptions.queryKey, projectSlug],
+  );
 
   const streamStateQuery = useQuery({
-    ...orpc.getState.queryOptions({ input: { path: streamPath } }),
+    ...streamStateOptions,
+    queryKey: streamStateQueryKey,
     staleTime: 5_000,
   });
 
   const { events, isConnecting } = useLiveStreamEvents({
     streamPath,
+    projectSlug,
     onEvent: useCallback(
       (event: Event) => {
         if (
           streamPath === "/" &&
           event.type === "https://events.iterate.com/events/stream/child-stream-created"
         ) {
-          void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
+          void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
         }
       },
-      [queryClient, streamPath],
+      [listChildrenQueryKey, queryClient, streamPath],
     ),
   });
   const feed = useMemo(() => projectWireToFeed(events), [events]);
@@ -101,16 +126,28 @@ export function StreamPage({
     };
   }, [feedSummary, onRendererModeChange, rendererMode, setHeaderControls]);
 
+  const [destroyChildren, setDestroyChildren] = useState(true);
+
   const appendEvent = useMutation(
     orpc.append.mutationOptions({
       onSuccess: async () => {
-        void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
-        await queryClient.invalidateQueries({ queryKey: orpc.getState.key() });
+        void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
+        await queryClient.invalidateQueries({ queryKey: streamStateQueryKey });
+      },
+    }),
+  );
+
+  const destroyStream = useMutation(
+    orpc.destroy.mutationOptions({
+      onSuccess: async () => {
+        closeMetadata();
+        void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
+        await queryClient.invalidateQueries({ queryKey: streamStateQueryKey });
       },
     }),
   );
   const submitAppend = async (inputText = appendInputJson) => {
-    let event: ReturnType<typeof EventInput.parse>;
+    let event: EventInput;
 
     try {
       event = parseAppendEventInput(inputText);
@@ -172,6 +209,47 @@ export function StreamPage({
               showToggle
               showCopyButton
             />
+
+            <Separator className="my-6" />
+
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+              <h3 className="text-sm font-semibold text-destructive">Danger zone</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Permanently destroy this stream. This cannot be undone.
+              </p>
+
+              <div className="mt-4 flex items-center gap-2">
+                <Checkbox
+                  id="destroy-children"
+                  checked={destroyChildren}
+                  onCheckedChange={(checked) => setDestroyChildren(checked)}
+                />
+                <Label htmlFor="destroy-children" className="text-xs">
+                  Destroy child streams
+                </Label>
+              </div>
+
+              <Button
+                variant="destructive"
+                size="sm"
+                className="mt-4"
+                disabled={destroyStream.isPending}
+                onClick={() => {
+                  const request = destroyStream.mutateAsync({
+                    params: { path: streamPath },
+                    query: { destroyChildren },
+                  });
+                  void toast.promise(request, {
+                    loading: "Destroying stream…",
+                    success: (result) =>
+                      `Destroyed ${result.destroyedStreamCount} stream${result.destroyedStreamCount === 1 ? "" : "s"}`,
+                    error: (error) => formatClientError(error),
+                  });
+                }}
+              >
+                {destroyStream.isPending ? "Destroying…" : "Destroy stream"}
+              </Button>
+            </div>
           </div>
         </SheetContent>
       </Sheet>
@@ -244,5 +322,7 @@ function parseJSONObject(value: string) {
 }
 
 function parseAppendEventInput(value: string) {
-  return EventInput.parse(parseJSONObject(value));
+  // Only require syntactically valid JSON here. The append endpoint will
+  // normalize invalid event shapes into invalid-event-appended server-side.
+  return parseJSONObject(value) as EventInput;
 }

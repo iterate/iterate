@@ -1,6 +1,7 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
+import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { orpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/secrets/$secretId")({
@@ -19,6 +20,7 @@ export const Route = createFileRoute("/_app/secrets/$secretId")({
 });
 
 function SecretDetailPage() {
+  const projectSlug = useCurrentProjectSlug();
   const { secret } = Route.useLoaderData();
 
   return (
@@ -57,7 +59,12 @@ function SecretDetailPage() {
         </div>
       </div>
 
-      <Button size="sm" variant="outline" nativeButton={false} render={<Link to="/secrets/" />}>
+      <Button
+        size="sm"
+        variant="outline"
+        nativeButton={false}
+        render={<Link to="/secrets/" search={(previous) => ({ ...previous, projectSlug })} />}
+      >
         Back to secrets
       </Button>
     </section>

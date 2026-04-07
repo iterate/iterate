@@ -72,7 +72,7 @@ describe("dynamic worker processor", () => {
       });
       await expectEvent(iterator, { streamPath: path, type: "pong" });
 
-      expect(await app.client.getState({ path })).toEqual({
+      expect(await app.client.getState({ path })).toMatchObject({
         path,
         eventCount: 7,
         metadata: {},

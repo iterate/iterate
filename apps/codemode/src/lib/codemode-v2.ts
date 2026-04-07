@@ -72,7 +72,7 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
     sources: DEFAULT_CODEMODE_SOURCES,
     code: `async ({ ctx }) => {
   const ping = await ctx.example.ping({});
-  const streams = await ctx.events.listStreams({ path: "/" });
+  const streams = await ctx.events.listChildren({ path: "/" });
   const routes = await ctx.ingressProxy.routes.list({ limit: 5, offset: 0 });
   const pets = await ctx.petstore.findPetsByStatus({ status: "available" });
 
@@ -169,7 +169,7 @@ export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
       "Cross-check ingress routes against recent event streams and summarize both sides.",
     sources: [EVENTS_OPENAPI_SOURCE, INGRESS_PROXY_OPENAPI_SOURCE],
     code: `async ({ ctx }) => {
-  const streams = await ctx.events.listStreams({ path: "/" });
+  const streams = await ctx.events.listChildren({ path: "/" });
   const routes = await ctx.ingressProxy.routes.list({ limit: 100, offset: 0 });
 
   return {

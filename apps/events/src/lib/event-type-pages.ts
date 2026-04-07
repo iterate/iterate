@@ -24,12 +24,28 @@ export const streamInitializedPage = {
   type: "https://events.iterate.com/events/stream/initialized",
   summary: "Internal meta event emitted exactly once when a stream initializes itself.",
   payloadExample: {
+    projectSlug: "public",
     path: "/demo/stream",
   },
   details: [
     "Every initialized stream writes its own self-initialized event at offset 1 before any caller-appended events.",
     "Parent/root discovery uses a separate built-in child-stream-created event.",
     "It is useful for reasoning about a stream's own lifecycle and offset invariants.",
+  ],
+} satisfies EventTypePageDefinition;
+
+export const streamDurableObjectConstructedPage = {
+  slug: "stream-durable-object-constructed",
+  href: "/stream-durable-object-constructed/",
+  title: "Stream Durable Object Constructed",
+  type: "https://events.iterate.com/events/stream/durable-object-constructed",
+  summary:
+    "Internal meta event emitted when a previously initialized stream durable object wakes and reconstructs itself from persisted state.",
+  payloadExample: {},
+  details: [
+    "This only appears after the durable object constructor rehydrates an already initialized stream from SQLite state.",
+    "Fresh streams do not emit it on first initialize because there is no prior reduced state to rehydrate.",
+    "It is useful when debugging durable object cold starts, hibernation, and resume behavior.",
   ],
 } satisfies EventTypePageDefinition;
 
@@ -223,6 +239,7 @@ export const eventTypePages = [
   errorOccurredPage,
   jsonataTransformerConfiguredPage,
   manualEventAppendedPage,
+  streamDurableObjectConstructedPage,
   streamInitializedPage,
   streamMetadataUpdatedPage,
   streamPausedPage,

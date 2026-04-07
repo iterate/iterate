@@ -229,6 +229,7 @@ PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_
 
 - Egress proxy & secrets: `docs/egress-proxy-secrets.md`
 - Brand & tone: `docs/brand-and-tone-of-voice.md`
+- Cloudflare preview + deploy cheat sheet: `docs/cloudflare-preview-and-deploy-cheatsheet.md`
 - Website (iterate.com): `apps/iterate-com`
 - Frontend: `apps/os/app/AGENTS.md`
 - Backend: `apps/os/backend/AGENTS.md`

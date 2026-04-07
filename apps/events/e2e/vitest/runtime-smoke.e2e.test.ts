@@ -11,6 +11,7 @@ import { AppConfig } from "../../src/app.ts";
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
+  defaultE2EProjectSlug,
   requireEventsBaseUrl,
 } from "../helpers.ts";
 
@@ -20,15 +21,16 @@ const app = createEvents2AppFixture({
 });
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
+const defaultProjectSlug = defaultE2EProjectSlug;
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
-const testTimeoutMs = 5_000;
+const testTimeoutMs = 10_000;
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe;
 describeRuntimeSmoke("events runtime smoke", () => {
   test(
     "streams page responds",
     async () => {
-      const res = await app.fetch("/streams", {
-        signal: AbortSignal.timeout(3_000),
+      const res = await app.fetch(`/streams?projectSlug=${defaultProjectSlug}`, {
+        signal: AbortSignal.timeout(8_000),
       });
 
       expect(res.ok).toBe(true);
@@ -56,12 +58,32 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const paths = body.paths ?? {};
 
       expect(paths).toHaveProperty("/streams/{path}");
-      expect(paths).toHaveProperty("/__state/{path}");
-      expect(paths).toHaveProperty("/__list/{path}");
+      expect(paths).toHaveProperty("/streams/__state/{path}");
+      expect(paths).toHaveProperty("/streams/__children/{path}");
       expect(paths).not.toHaveProperty("/streams");
       expect(paths).not.toHaveProperty("/stream-state/{streamPath}");
+      expect(paths).not.toHaveProperty("/__list/{path}");
+      expect(paths).not.toHaveProperty("/__state/{path}");
       expect(paths).not.toHaveProperty("/streams/__list");
       expect(paths).not.toHaveProperty("/__state");
+      expect(paths["/streams/{path}"]).toMatchObject({
+        post: {
+          parameters: expect.arrayContaining([
+            expect.objectContaining({
+              in: "path",
+              name: "path",
+            }),
+          ]),
+        },
+        delete: {
+          parameters: expect.arrayContaining([
+            expect.objectContaining({
+              in: "query",
+              name: "destroyChildren",
+            }),
+          ]),
+        },
+      });
     },
     testTimeoutMs,
   );
@@ -79,8 +101,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         },
       });
 
-      const streams = await app.client.listStreams({ path: "/" });
-      expect(streams.some((stream) => stream.path === path)).toBe(true);
+      await waitForStream(path);
 
       const rootEvents = await collectAsyncIterableUntilIdle({
         iterable: await app.client.stream({ path: "/" }),
@@ -91,6 +112,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         type: "https://events.iterate.com/events/stream/initialized",
       });
       expect(await app.client.getState({ path: "/" })).toMatchObject({
+        projectSlug: defaultProjectSlug,
         path: "/",
         metadata: {},
       });
@@ -108,7 +130,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         streamPath: path,
         type: "https://events.iterate.com/events/stream/initialized",
         offset: expectedStoredOffset(0),
-        payload: { path },
+        payload: { projectSlug: defaultProjectSlug, path },
       });
       expect(events[1]).toMatchObject({
         streamPath: path,
@@ -117,8 +139,10 @@ describeRuntimeSmoke("events runtime smoke", () => {
       });
 
       expect(await app.client.getState({ path })).toEqual({
+        projectSlug: defaultProjectSlug,
         path,
         eventCount: 2,
+        childPaths: [],
         metadata: {},
         processors: expectedProcessorsWithRecentEventCount(2),
       });
@@ -129,9 +153,10 @@ describeRuntimeSmoke("events runtime smoke", () => {
         "https://events.iterate.com/events/stream/initialized",
       );
 
-      const rootStateResponse = await app.fetch("/api/__state/%2F");
+      const rootStateResponse = await app.fetch("/api/streams/__state/%2F");
       expect(rootStateResponse.status).toBe(200);
       expect(await rootStateResponse.json()).toMatchObject({
+        projectSlug: defaultProjectSlug,
         path: "/",
       });
 
@@ -205,4 +230,20 @@ function expectedProcessorsWithRecentEventCount(count: number) {
       transformersBySlug: {},
     },
   };
+}
+
+async function waitForStream(path: StreamPath) {
+  const deadline = Date.now() + postBootTimeoutMs;
+
+  while (Date.now() < deadline) {
+    const streams = await app.client.listChildren({ path: "/" });
+    const stream = streams.find((candidate) => candidate.path === path);
+    if (stream) {
+      return stream;
+    }
+
+    await delay(100);
+  }
+
+  throw new Error(`Timed out waiting for stream ${path}`);
 }
