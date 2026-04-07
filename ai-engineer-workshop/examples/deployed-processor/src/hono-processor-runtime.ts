@@ -44,11 +44,13 @@ export function createAfterEventHandlerApp<Bindings extends object, State>({
 
     const streamPath = parsedStreamPath.data;
     const callbackUrl = createSubscriptionCallbackUrl(c, streamPath);
+    const slug = `processor:${getProcessorKey(c)}`;
     const result = await getEventsClient(c).append({
       path: streamPath,
       event: {
         type: "https://events.iterate.com/events/stream/subscription/configured",
         payload: {
+          slug,
           callbackUrl,
           type: "websocket",
         },
@@ -58,6 +60,7 @@ export function createAfterEventHandlerApp<Bindings extends object, State>({
     return c.json({
       ok: true,
       processorKey: getProcessorKey(c),
+      slug,
       streamPath,
       callbackUrl,
       event: result.event,

@@ -217,6 +217,28 @@ assert.deepEqual(streamInitializedEvent.event.payload, {
   path: examplePath,
 });
 
+const subscriptionConfiguredEvent = AppendInput.parse({
+  path: examplePath,
+  event: {
+    type: "https://events.iterate.com/events/stream/subscription/configured",
+    payload: {
+      slug: "audit",
+      type: "webhook",
+      callbackUrl: "https://example.com/hook",
+      jsonataFilter: "type = 'source'",
+      jsonataTransform: '{"kind":"hook"}',
+    },
+  },
+});
+
+assert.deepEqual(subscriptionConfiguredEvent.event.payload, {
+  slug: "audit",
+  type: "webhook",
+  callbackUrl: "https://example.com/hook",
+  jsonataFilter: "type = 'source'",
+  jsonataTransform: '{"kind":"hook"}',
+});
+
 const streamDurableObjectConstructedEvent = AppendInput.parse({
   path: examplePath,
   event: {

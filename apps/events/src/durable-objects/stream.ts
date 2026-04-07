@@ -4,22 +4,25 @@ import {
   type DestroyStreamResult,
   Event,
   EventInput,
-  type ExternalWebsocketSubscriber,
   type ProjectSlug,
   type StreamMetadataUpdatedEvent,
-  type StreamSubscriptionConfiguredEvent,
   StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
 import type { BuiltinProcessor } from "./define-processor.ts";
+import { externalSubscriberProcessor } from "./external-subscriber.ts";
 import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 
 type ProcessorSlugKey = keyof StreamState["processors"];
 
-const processors: BuiltinProcessor[] = [circuitBreakerProcessor, jsonataTransformerProcessor];
+const processors: BuiltinProcessor[] = [
+  circuitBreakerProcessor,
+  externalSubscriberProcessor,
+  jsonataTransformerProcessor,
+];
 
 function getProcessorState(state: StreamState, slug: string) {
   return state.processors[slug as ProcessorSlugKey];
@@ -80,9 +83,6 @@ function getProcessorState(state: StreamState, slug: string) {
 export class StreamDurableObject extends DurableObject<Env> {
   private _state: StreamState | null = null;
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
-  private outboundSubscriberSocket: WebSocket | null = null;
-  private outboundSubscriberCallbackUrl: string | null = null;
-  private outboundSubscriberSocketPromise: Promise<WebSocket> | null = null;
 
   private get state(): StreamState {
     if (this._state == null) {
@@ -156,7 +156,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       eventCount: 0,
       childPaths: [],
       metadata: {},
-      externalSubscriber: undefined,
       processors: processorState,
     };
 
@@ -271,14 +270,6 @@ export class StreamDurableObject extends DurableObject<Env> {
         }
         break;
       }
-      case "https://events.iterate.com/events/stream/subscription/configured": {
-        const subscriptionConfiguredEvent = event as StreamSubscriptionConfiguredEvent;
-        nextState = {
-          ...nextState,
-          externalSubscriber: subscriptionConfiguredEvent.payload,
-        };
-        break;
-      }
     }
 
     for (const processor of processors) {
@@ -299,7 +290,6 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   private afterAppend(event: Event) {
     this.publish(event);
-    this.ctx.waitUntil(this.publishToOutboundSubscriber(event));
 
     if (event.type === "https://events.iterate.com/events/stream/initialized") {
       const ancestorPaths = getAncestorStreamPaths(event.streamPath);
@@ -337,14 +327,16 @@ export class StreamDurableObject extends DurableObject<Env> {
         continue;
       }
 
-      void result.catch((error) => {
-        console.error("[stream-do] processor afterAppend failed", {
-          path: this.state.path,
-          processor: processor.slug,
-          eventType: event.type,
-          error,
-        });
-      });
+      this.ctx.waitUntil(
+        result.catch((error) => {
+          console.error("[stream-do] processor afterAppend failed", {
+            path: this.state.path,
+            processor: processor.slug,
+            eventType: event.type,
+            error,
+          });
+        }),
+      );
     }
   }
 
@@ -378,8 +370,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       } catch {}
     }
     this.subscribers.clear();
-    this.resetOutboundSubscriberSocket();
-    this.outboundSubscriberSocketPromise = null;
 
     await this.ctx.storage.deleteAll();
 
@@ -494,124 +484,12 @@ export class StreamDurableObject extends DurableObject<Env> {
       createdAt: row.created_at,
     } as Event;
   }
-
-  private async publishToOutboundSubscriber(event: Event) {
-    const subscriber = this.state.externalSubscriber;
-    if (subscriber == null) {
-      return;
-    }
-
-    const payload = JSON.stringify(event);
-
-    try {
-      const socket = await this.getOutboundSubscriberSocket(subscriber);
-      socket.send(payload);
-    } catch (error) {
-      this.resetOutboundSubscriberSocket();
-
-      try {
-        const socket = await this.getOutboundSubscriberSocket(subscriber);
-        socket.send(payload);
-      } catch (retryError) {
-        console.error("[stream-do] failed to publish event to outbound subscriber", {
-          url: subscriber.callbackUrl,
-          streamPath: event.streamPath,
-          offset: event.offset,
-          error,
-          retryError,
-        });
-      }
-    }
-  }
-
-  private async getOutboundSubscriberSocket(subscriber: ExternalWebsocketSubscriber) {
-    if (this.outboundSubscriberCallbackUrl !== subscriber.callbackUrl) {
-      this.resetOutboundSubscriberSocket();
-    }
-
-    if (
-      this.outboundSubscriberSocket != null &&
-      this.outboundSubscriberSocket.readyState === WebSocket.OPEN
-    ) {
-      return this.outboundSubscriberSocket;
-    }
-
-    if (this.outboundSubscriberSocketPromise != null) {
-      return this.outboundSubscriberSocketPromise;
-    }
-
-    const connectPromise = this.connectOutboundSubscriberSocket(subscriber);
-    this.outboundSubscriberSocketPromise = connectPromise;
-
-    try {
-      const socket = await connectPromise;
-      this.outboundSubscriberSocket = socket;
-      this.outboundSubscriberCallbackUrl = subscriber.callbackUrl;
-      return socket;
-    } finally {
-      if (this.outboundSubscriberSocketPromise === connectPromise) {
-        this.outboundSubscriberSocketPromise = null;
-      }
-    }
-  }
-
-  private async connectOutboundSubscriberSocket(subscriber: ExternalWebsocketSubscriber) {
-    const response = (await fetch(getWebsocketUpgradeFetchUrl(subscriber.callbackUrl).toString(), {
-      headers: {
-        Upgrade: "websocket",
-      },
-    })) as Response & { webSocket?: WebSocket | null };
-
-    const socket = response.webSocket;
-    if (socket == null) {
-      throw new Error(`Subscriber did not accept websocket upgrade. Status: ${response.status}`);
-    }
-
-    socket.accept();
-    socket.addEventListener("close", () => {
-      if (this.outboundSubscriberSocket === socket) {
-        this.outboundSubscriberSocket = null;
-        this.outboundSubscriberCallbackUrl = null;
-      }
-    });
-    socket.addEventListener("error", () => {
-      if (this.outboundSubscriberSocket === socket) {
-        this.outboundSubscriberSocket = null;
-        this.outboundSubscriberCallbackUrl = null;
-      }
-    });
-
-    return socket;
-  }
-
-  private resetOutboundSubscriberSocket() {
-    if (this.outboundSubscriberSocket != null) {
-      try {
-        this.outboundSubscriberSocket.close(1011, "resetting_subscriber_socket");
-      } catch {}
-    }
-
-    this.outboundSubscriberSocket = null;
-    this.outboundSubscriberCallbackUrl = null;
-  }
 }
 
 const textEncoder = new TextEncoder();
 
 function encodeEventLine(event: Event) {
   return textEncoder.encode(`${JSON.stringify(event)}\n`);
-}
-
-function getWebsocketUpgradeFetchUrl(callbackUrl: string) {
-  const url = new URL(callbackUrl);
-
-  if (url.protocol === "ws:") {
-    url.protocol = "http:";
-  } else if (url.protocol === "wss:") {
-    url.protocol = "https:";
-  }
-
-  return url;
 }
 
 function getImmediateChildPath(args: {

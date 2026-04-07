@@ -15,6 +15,11 @@ import {
   StreamResumedEventInput,
 } from "./circuit-breaker-types.ts";
 import {
+  ExternalSubscriberState,
+  StreamSubscriptionConfiguredEvent,
+  StreamSubscriptionConfiguredEventInput,
+} from "./external-subscriber-types.ts";
+import {
   JsonataTransformerConfiguredEvent,
   JsonataTransformerConfiguredEventInput,
   JsonataTransformerState,
@@ -75,24 +80,6 @@ export const StreamMetadataUpdatedEvent = GenericEventBase.extend(
 );
 export type StreamMetadataUpdatedEventInput = z.infer<typeof StreamMetadataUpdatedEventInput>;
 export type StreamMetadataUpdatedEvent = z.infer<typeof StreamMetadataUpdatedEvent>;
-
-export const ExternalWebsocketSubscriber = z.strictObject({
-  callbackUrl: z.url(),
-  type: z.literal("websocket"),
-});
-export type ExternalWebsocketSubscriber = z.infer<typeof ExternalWebsocketSubscriber>;
-
-export const StreamSubscriptionConfiguredEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/subscription/configured"),
-  payload: ExternalWebsocketSubscriber,
-});
-export const StreamSubscriptionConfiguredEvent = GenericEventBase.extend(
-  StreamSubscriptionConfiguredEventInput.pick({ type: true, payload: true }).shape,
-);
-export type StreamSubscriptionConfiguredEventInput = z.infer<
-  typeof StreamSubscriptionConfiguredEventInput
->;
-export type StreamSubscriptionConfiguredEvent = z.infer<typeof StreamSubscriptionConfiguredEvent>;
 
 export const ErrorOccurredEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/error-occurred"),
@@ -183,6 +170,7 @@ export type Event = BuiltInEvent | GenericEvent;
 
 export const ProcessorsState = z.object({
   "circuit-breaker": CircuitBreakerState,
+  "external-subscriber": ExternalSubscriberState,
   "jsonata-transformer": JsonataTransformerState,
 });
 
@@ -192,7 +180,6 @@ export const StreamState = z.object({
   eventCount: z.number().int().nonnegative(),
   childPaths: z.array(StreamPath).default([]),
   metadata: JSONObject,
-  externalSubscriber: ExternalWebsocketSubscriber.optional(),
   processors: ProcessorsState,
 });
 export type StreamState = z.infer<typeof StreamState>;
