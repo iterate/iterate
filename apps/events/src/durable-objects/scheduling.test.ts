@@ -1,6 +1,6 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { env } from "cloudflare:test";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { STREAM_APPEND_SCHEDULED_TYPE } from "@iterate-com/events-contract";
 import { SCHEDULE_ADDED_TYPE } from "~/durable-objects/scheduling-types.ts";
