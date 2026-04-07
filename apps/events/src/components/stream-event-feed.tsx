@@ -958,6 +958,10 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `child-stream-created-${item.createdPath}-${item.timestamp}-${index}`;
     case "stream-metadata-updated":
       return `stream-metadata-${item.path}-${item.timestamp}-${index}`;
+    case "external-subscriber-configured":
+      return `external-subscriber-${item.subscriber.slug}-${item.timestamp}-${index}`;
+    case "jsonata-transformer-configured":
+      return `jsonata-transformer-${item.transformer.slug}-${item.timestamp}-${index}`;
     case "stream-lifecycle":
       return `lifecycle-${item.label}-${item.timestamp}-${index}`;
     case "stream-paused":

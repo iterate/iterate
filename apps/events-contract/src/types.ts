@@ -164,7 +164,7 @@ export type Event = BuiltInEvent | GenericEvent;
 
 const ProcessorsState = z.object({
   "circuit-breaker": CircuitBreakerState,
-  "external-subscriber": ExternalSubscriberState,
+  "external-subscriber": ExternalSubscriberState.default({ subscribersBySlug: {} }),
   "jsonata-transformer": JsonataTransformerState,
 });
 
