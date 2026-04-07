@@ -405,9 +405,6 @@ function CodemodeResultCard({ item }: { item: CodemodeResultFeedItem }) {
   const [stdoutOpen, setStdoutOpen] = useState(item.stdout.length > 0);
   const [stderrOpen, setStderrOpen] = useState(item.stderr.length > 0 && !item.success);
   const StatusIcon = item.success ? CheckCircle2Icon : XCircleIcon;
-  const statusClassName = item.success
-    ? "text-emerald-600 dark:text-emerald-400"
-    : "text-destructive";
   const statusLabel = item.success ? "Succeeded" : "Failed";
 
   return (

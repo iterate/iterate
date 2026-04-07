@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { createWorkshopTestHarness } from "ai-engineer-workshop";
+import { destroyLingeringSockets } from "../../e2e/vitest/slack-codemode-agent.helpers.ts";
 import bashmode from "../08-bashmode/bashmode.ts";
 import { destroyLingeringSockets } from "../../e2e/vitest/slack-codemode-agent.helpers.ts";
 import { createAgentProcessor } from "./agent.ts";

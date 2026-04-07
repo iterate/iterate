@@ -76,7 +76,7 @@ export function StreamPage({
   const [agentInputText, setAgentInputText] = useState("");
   const streamStateOptions = useMemo(
     () => orpc.getState.queryOptions({ input: { path: streamPath } }),
-    [streamPath],
+    [orpc, streamPath],
   );
   const streamStateQueryKey = useMemo(
     () => projectScopedQueryKey(streamStateOptions.queryKey, projectSlug),
@@ -84,7 +84,7 @@ export function StreamPage({
   );
   const listChildrenOptions = useMemo(
     () => orpc.listChildren.queryOptions({ input: { path: "/" } }),
-    [],
+    [orpc],
   );
   const listChildrenQueryKey = useMemo(
     () => projectScopedQueryKey(listChildrenOptions.queryKey, projectSlug),
@@ -302,7 +302,6 @@ export function StreamPage({
           <PromptInputBody>
             {composerMode === "agent" ? (
               <Input
-                autoFocus
                 data-slot="input-group-control"
                 value={agentInputText}
                 onChange={(event) => setAgentInputText(event.currentTarget.value)}

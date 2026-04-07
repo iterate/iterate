@@ -1,9 +1,9 @@
 import { Bash } from "just-bash";
 import dedent from "dedent";
-import { defineProcessor, GenericEventInput } from "ai-engineer-workshop";
+import { defineProcessor, GenericEventInputSchema } from "ai-engineer-workshop";
 import { z } from "zod";
 
-export const BashmodeBlockAddedEventInput = GenericEventInput.extend({
+export const BashmodeBlockAddedEventInput = GenericEventInputSchema.extend({
   type: z.literal("bashmode-block-added"),
   payload: z.object({
     content: z.string().min(1),

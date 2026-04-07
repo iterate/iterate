@@ -12,7 +12,10 @@ export {
   PullSubscriptionProcessorRuntime,
   PullSubscriptionPatternProcessorRuntime,
 } from "../apps/events-contract/src/sdk.ts";
-export { EventInput, GenericEventInput } from "../apps/events-contract/src/types.ts";
+export {
+  EventInput as EventInputSchema,
+  GenericEventInput as GenericEventInputSchema,
+} from "../apps/events-contract/src/types.ts";
 export type {
   Event,
   EventInput,
