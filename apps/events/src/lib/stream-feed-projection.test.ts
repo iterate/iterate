@@ -78,6 +78,45 @@ describe("projectWireToFeed", () => {
     });
   });
 
+  test("adds a semantic dynamic worker configured item after config events", () => {
+    const feed = projectEventToFeed(
+      createEvent({
+        streamPath: "/demo",
+        type: "https://events.iterate.com/events/stream/dynamic-worker/configured",
+        payload: {
+          slug: "simple-openai-loop",
+          script: [
+            "export default {",
+            "  initialState: {},",
+            "  reduce(state) {",
+            "    return state;",
+            "  },",
+            "};",
+          ].join("\n"),
+          outboundGateway: {
+            entrypoint: "DynamicWorkerEgressGateway",
+            props: {
+              secretHeaderName: "authorization",
+              secretHeaderValue: "Bearer getIterateSecret({secretKey: 'openai'})",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(feed.map((item) => item.kind)).toEqual(["event", "dynamic-worker-configured"]);
+    expect(feed[1]).toMatchObject({
+      kind: "dynamic-worker-configured",
+      slug: "simple-openai-loop",
+      sourceCode: expect.stringContaining("export default"),
+      outboundGateway: {
+        entrypoint: "DynamicWorkerEgressGateway",
+        secretHeaderName: "authorization",
+        secretHeaderValue: "Bearer getIterateSecret({secretKey: 'openai'})",
+      },
+    });
+  });
+
   test("extracts only raw event rows from a mixed feed", () => {
     const feed = projectWireToFeed([
       createEvent({

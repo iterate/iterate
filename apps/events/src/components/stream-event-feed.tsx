@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   AlertTriangleIcon,
+  BotIcon,
   BookOpenIcon,
   BracesIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CircleIcon,
@@ -65,6 +67,7 @@ import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 import type {
   CodemodeBlockFeedItem,
   CodemodeResultFeedItem,
+  DynamicWorkerConfiguredFeedItem,
   ChildStreamCreatedFeedItem,
   EventFeedItem,
   GroupedEventFeedItem,
@@ -225,6 +228,8 @@ function StreamFeedItemRenderer({
       return <StreamMetadataUpdatedCard item={item} />;
     case "stream-lifecycle":
       return <StreamLifecycleLine item={item} />;
+    case "dynamic-worker-configured":
+      return <DynamicWorkerConfiguredCard item={item} />;
     case "stream-paused":
       return <StreamPausedCard item={item} />;
     case "stream-resumed":
@@ -341,6 +346,79 @@ function StreamLifecycleLine({ item }: { item: StreamLifecycleFeedItem }) {
       </div>
       <div className="h-px flex-1 bg-border" />
     </div>
+  );
+}
+
+function DynamicWorkerConfiguredCard({ item }: { item: DynamicWorkerConfiguredFeedItem }) {
+  const [open, setOpen] = useState(false);
+  const previewCode = getSourceCodePreview(item.sourceCode, 10);
+  const hasMoreCode = previewCode !== item.sourceCode;
+  const gatewaySummary = item.outboundGateway
+    ? item.outboundGateway.secretHeaderName
+      ? `${item.outboundGateway.entrypoint} · injects ${item.outboundGateway.secretHeaderName}`
+      : item.outboundGateway.entrypoint
+    : undefined;
+
+  return (
+    <AssistantArtifact
+      eyebrow={<BotIcon className="size-3.5" />}
+      eyebrowLabel="Dynamic worker configured"
+      title={item.slug}
+      meta={[
+        ...(item.compatibilityDate ? [item.compatibilityDate] : []),
+        ...(item.compatibilityFlags.length > 0
+          ? [
+              `${item.compatibilityFlags.length} compatibility flag${item.compatibilityFlags.length === 1 ? "" : "s"}`,
+            ]
+          : []),
+        ...(gatewaySummary ? [gatewaySummary] : []),
+        formatTime(item.timestamp),
+      ]}
+    >
+      <ArtifactSection>
+        <div className="rounded-md border bg-muted/30 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Processor source
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {hasMoreCode ? "Showing first 10 lines" : "Full source"}
+              </div>
+            </div>
+            {hasMoreCode ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 px-2 text-xs"
+                onClick={() => setOpen((value) => !value)}
+              >
+                {open ? "Collapse" : "Expand"}
+                <ChevronDownIcon
+                  className={cn("size-3.5 transition-transform duration-200", open && "rotate-180")}
+                />
+              </Button>
+            ) : null}
+          </div>
+
+          <div
+            className={cn(
+              "grid transition-all duration-300 ease-in-out",
+              open || !hasMoreCode ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-100",
+            )}
+          >
+            <div className="overflow-hidden pt-3">
+              <SourceCodeBlock
+                code={open || !hasMoreCode ? item.sourceCode : previewCode}
+                language="typescript"
+                className={cn("min-h-32", open ? "max-h-[36rem]" : "max-h-72")}
+                showCopyButton
+              />
+            </div>
+          </div>
+        </div>
+      </ArtifactSection>
+    </AssistantArtifact>
   );
 }
 
@@ -588,6 +666,15 @@ function AssistantArtifact({
 
 function ArtifactSection({ children }: { children: ReactNode }) {
   return <div className="space-y-2">{children}</div>;
+}
+
+function getSourceCodePreview(sourceCode: string, lineCount: number) {
+  const lines = sourceCode.split("\n");
+  if (lines.length <= lineCount) {
+    return sourceCode;
+  }
+
+  return `${lines.slice(0, lineCount).join("\n")}\n...`;
 }
 
 function EventLine({

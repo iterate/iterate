@@ -87,7 +87,7 @@ export async function runDynamicOpenAiProof(args: {
     await client.append({
       path,
       event: {
-        type: "llm-input-added",
+        type: "agent-input-added",
         payload: {
           content: args.prompt,
         },
@@ -98,12 +98,12 @@ export async function runDynamicOpenAiProof(args: {
       client,
       path,
       timeoutMs: responseTimeoutMs,
-      type: "llm-output-added",
+      type: "agent-output-added",
     });
     const output = String((outputEvent.payload as { content?: string } | undefined)?.content ?? "");
 
     if (output.length === 0) {
-      throw new Error("llm-output-added was appended without payload.content");
+      throw new Error("agent-output-added was appended without payload.content");
     }
 
     const history = await collectHistory(client, path);

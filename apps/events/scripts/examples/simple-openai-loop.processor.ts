@@ -15,11 +15,11 @@ export default defineProcessor<State>(() => ({
   initialState,
 
   reduce({ state, event }) {
-    if (event.type !== "llm-input-added" && event.type !== "llm-output-added") {
+    if (event.type !== "agent-input-added" && event.type !== "agent-output-added") {
       return state;
     }
 
-    const role = event.type === "llm-input-added" ? "user" : "assistant";
+    const role = event.type === "agent-input-added" ? "user" : "assistant";
     const content = readEventContent(event);
     if (typeof content !== "string" || content.trim().length === 0) {
       return state;
@@ -31,7 +31,7 @@ export default defineProcessor<State>(() => ({
   },
 
   async afterAppend({ append, event, state }) {
-    if (event.type !== "llm-input-added") {
+    if (event.type !== "agent-input-added") {
       return;
     }
 
@@ -44,7 +44,7 @@ export default defineProcessor<State>(() => ({
 
     await append({
       event: {
-        type: "llm-output-added",
+        type: "agent-output-added",
         payload: {
           content: response.output_text,
         },

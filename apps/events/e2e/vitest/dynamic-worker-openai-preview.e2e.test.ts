@@ -19,6 +19,6 @@ describe("dynamic worker OpenAI proof against a deployed worker", () => {
 
     expect(result.elapsedMs).toBeLessThanOrEqual(10_000);
     expect(result.output).toMatch(/\b42\b/);
-    expect(result.eventTypes).toContain("llm-output-added");
+    expect(result.eventTypes).toContain("agent-output-added");
   }, 20_000);
 });

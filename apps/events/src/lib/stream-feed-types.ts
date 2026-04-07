@@ -109,6 +109,21 @@ export interface StreamLifecycleFeedItem {
   raw: Event;
 }
 
+export interface DynamicWorkerConfiguredFeedItem {
+  kind: "dynamic-worker-configured";
+  slug: string;
+  sourceCode: string;
+  compatibilityDate?: string;
+  compatibilityFlags: string[];
+  outboundGateway?: {
+    entrypoint: string;
+    secretHeaderName?: string;
+    secretHeaderValue?: string;
+  };
+  timestamp: number;
+  raw: Event;
+}
+
 export interface StreamPausedFeedItem {
   kind: "stream-paused";
   reason: string;
@@ -165,6 +180,7 @@ export type StreamFeedItem =
   | ChildStreamCreatedFeedItem
   | StreamMetadataUpdatedFeedItem
   | StreamLifecycleFeedItem
+  | DynamicWorkerConfiguredFeedItem
   | StreamPausedFeedItem
   | StreamResumedFeedItem
   | StreamErrorOccurredFeedItem

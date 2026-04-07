@@ -1,5 +1,6 @@
 import {
   ChildStreamCreatedEvent,
+  DynamicWorkerConfiguredEvent,
   ErrorOccurredEvent,
   StreamMetadataUpdatedEvent,
   StreamPausedEvent,
@@ -140,6 +141,33 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     return {
       kind: "stream-lifecycle",
       label: "Durable object woke up",
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured") {
+    const configured = DynamicWorkerConfiguredEvent.parse(event);
+    const sourceCode =
+      configured.payload.script ??
+      configured.payload.modules?.["processor.ts"] ??
+      Object.values(configured.payload.modules ?? {})[0] ??
+      "";
+
+    return {
+      kind: "dynamic-worker-configured",
+      slug: configured.payload.slug,
+      sourceCode,
+      compatibilityDate: configured.payload.compatibilityDate,
+      compatibilityFlags: configured.payload.compatibilityFlags ?? [],
+      outboundGateway:
+        configured.payload.outboundGateway == null
+          ? undefined
+          : {
+              entrypoint: configured.payload.outboundGateway.entrypoint,
+              secretHeaderName: configured.payload.outboundGateway.props?.secretHeaderName,
+              secretHeaderValue: configured.payload.outboundGateway.props?.secretHeaderValue,
+            },
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };

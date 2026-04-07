@@ -18,7 +18,7 @@ async function main() {
   });
 
   if (!/\b42\b/.test(result.output)) {
-    throw new Error(`Expected llm-output-added to contain 42; got: ${result.output}`);
+    throw new Error(`Expected agent-output-added to contain 42; got: ${result.output}`);
   }
 
   console.log(
