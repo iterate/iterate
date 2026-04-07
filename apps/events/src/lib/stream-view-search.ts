@@ -6,7 +6,7 @@ import {
 } from "~/lib/stream-feed-types.ts";
 
 export const streamComposerModes = ["raw", "agent"] as const;
-export const DEFAULT_STREAM_COMPOSER_MODE = "raw" as const;
+const DEFAULT_STREAM_COMPOSER_MODE = "raw" as const;
 
 export type StreamComposerMode = (typeof streamComposerModes)[number];
 

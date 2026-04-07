@@ -30,12 +30,6 @@ export function resolveProjectSlug(args: {
   return defaultProjectSlug;
 }
 
-export function withProjectHeader(request: Request, projectSlug: ProjectSlugValue) {
-  const headers = new Headers(request.headers);
-  headers.set(iterateProjectHeader, projectSlug);
-  return new Request(request, { headers });
-}
-
 export function projectScopedQueryKey(baseKey: readonly unknown[], projectSlug: ProjectSlugValue) {
   return [...baseKey, { projectSlug }] as const;
 }
