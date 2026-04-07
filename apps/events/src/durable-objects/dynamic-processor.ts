@@ -9,6 +9,7 @@ import {
   type StreamPath,
 } from "@iterate-com/events-contract";
 import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
+import { dynamicWorkerEgressConfigHeader } from "~/lib/dynamic-worker-egress.ts";
 
 export type DynamicWorkerAppendInput = {
   type: Event["type"];
@@ -23,8 +24,6 @@ const defaultDynamicWorkerCompatibilityFlags: string[] = [];
 const defaultDynamicWorkerMainModule = "worker.js";
 const defaultDynamicWorkerProcessorModule = "processor.js";
 const defaultDynamicWorkerRuntimeConfigModule = "runtime-config.js";
-const dynamicWorkerEgressConfigHeader = "x-iterate-dynamic-worker-egress-config";
-
 export const pingPongDynamicWorkerScript = `
 function containsPing(event) {
   if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured") {

@@ -1,12 +1,10 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import {
+  parseDynamicWorkerEgressGatewayConfig,
+  type DynamicWorkerEgressGatewayProps,
+} from "~/lib/dynamic-worker-egress-config.ts";
+import { dynamicWorkerEgressConfigHeader } from "~/lib/dynamic-worker-egress.ts";
 import { replaceIterateSecretReferences } from "~/lib/iterate-secret-references.ts";
-
-const dynamicWorkerEgressConfigHeader = "x-iterate-dynamic-worker-egress-config";
-
-export type DynamicWorkerEgressGatewayProps = {
-  secretHeaderName?: string;
-  secretHeaderValue?: string;
-};
 
 export class DynamicWorkerEgressGateway extends WorkerEntrypoint<Env> {
   async fetch(request: Request) {
@@ -88,38 +86,4 @@ export class DynamicWorkerEgressGateway extends WorkerEntrypoint<Env> {
       }),
     );
   }
-}
-
-function parseDynamicWorkerEgressGatewayConfig(
-  headerValue: string | null,
-): DynamicWorkerEgressGatewayProps | undefined {
-  if (headerValue == null) {
-    return undefined;
-  }
-
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(headerValue);
-  } catch (error) {
-    console.error("[dynamic-worker-egress] failed to parse gateway config header", {
-      error: error instanceof Error ? error.message : error,
-      headerName: dynamicWorkerEgressConfigHeader,
-    });
-    throw new Error("DynamicWorkerEgressGateway received an invalid config header.");
-  }
-
-  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("DynamicWorkerEgressGateway received a non-object config header.");
-  }
-
-  const props =
-    "props" in parsed &&
-    parsed.props != null &&
-    typeof parsed.props === "object" &&
-    !Array.isArray(parsed.props)
-      ? (parsed.props as DynamicWorkerEgressGatewayProps)
-      : undefined;
-
-  return props;
 }
