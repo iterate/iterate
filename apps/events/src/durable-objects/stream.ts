@@ -123,8 +123,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           live: args?.live,
         }),
       createLoopbackBinding: ({ exportName, props }) => {
-        const exports = (this.ctx as DurableObjectState & { exports: Cloudflare.Exports })
-          .exports as unknown as Record<
+        const exports = this.env.SELF as unknown as Record<
           string,
           Fetcher | ((args?: { props?: unknown }) => Fetcher)
         >;

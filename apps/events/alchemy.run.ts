@@ -2,6 +2,7 @@ import alchemy, { type Scope } from "alchemy";
 import {
   D1Database,
   DurableObjectNamespace,
+  Self,
   TanStackStart,
   WorkerLoader,
 } from "alchemy/cloudflare";
@@ -88,6 +89,7 @@ export const worker = await TanStackStart(APP_NAME, {
   bindings: {
     DB: db,
     STREAM: stream,
+    SELF: Self,
     LOADER: WorkerLoader(),
     APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
   },
