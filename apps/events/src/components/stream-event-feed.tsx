@@ -10,7 +10,6 @@ import {
   PlayCircleIcon,
   Settings2Icon,
 } from "lucide-react";
-import type { StreamPath } from "@iterate-com/events-contract";
 import {
   Conversation,
   ConversationContent,
@@ -43,7 +42,6 @@ import { StreamToolCard } from "~/components/stream-tool-card.tsx";
 import { getEventTypePageByType } from "~/lib/event-type-pages.ts";
 import { getAdjacentEventOffset, getEventFeedItems } from "~/lib/stream-feed-projection.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
-import { getRelativeDescendantStreamPath } from "~/lib/stream-path-relative.ts";
 import type {
   ChildStreamCreatedFeedItem,
   EventFeedItem,
@@ -58,7 +56,6 @@ import type {
 } from "~/lib/stream-feed-types.ts";
 
 export function StreamEventFeed({
-  streamPath,
   feed,
   displayFeed,
   rendererMode,
@@ -67,7 +64,6 @@ export function StreamEventFeed({
   openEventOffset,
   onOpenEventOffsetChange,
 }: {
-  streamPath: StreamPath;
   feed: readonly StreamFeedItem[];
   displayFeed: readonly StreamFeedItem[] | null;
   rendererMode: StreamRendererMode;
@@ -133,7 +129,6 @@ export function StreamEventFeed({
               <StreamFeedItemRenderer
                 key={getFeedItemKey(item, index)}
                 item={item}
-                streamPath={streamPath}
                 onOpenEventOffsetChange={onOpenEventOffsetChange}
               />
             ))}
@@ -153,11 +148,9 @@ export function StreamEventFeed({
 
 function StreamFeedItemRenderer({
   item,
-  streamPath,
   onOpenEventOffsetChange,
 }: {
   item: StreamFeedItem;
-  streamPath: StreamPath;
   onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   switch (item.kind) {
@@ -172,7 +165,7 @@ function StreamFeedItemRenderer({
     case "error":
       return <StreamErrorAlert item={item} />;
     case "child-stream-created":
-      return <ChildStreamCreatedCard item={item} streamPath={streamPath} />;
+      return <ChildStreamCreatedCard item={item} />;
     case "stream-metadata-updated":
       return <StreamMetadataUpdatedCard item={item} />;
     case "stream-lifecycle":
@@ -188,15 +181,7 @@ function StreamFeedItemRenderer({
   }
 }
 
-function ChildStreamCreatedCard({
-  item,
-  streamPath,
-}: {
-  item: ChildStreamCreatedFeedItem;
-  streamPath: StreamPath;
-}) {
-  const relativeCreatedPath = getRelativeDescendantStreamPath(streamPath, item.createdPath);
-
+function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) {
   return (
     <article className="max-w-md rounded-lg border bg-card p-4 shadow-sm">
       <div className="space-y-2">
@@ -205,7 +190,7 @@ function ChildStreamCreatedCard({
             <FolderPlusIcon className="size-3.5" />
             <span>Child stream created</span>
           </div>
-          <p className="font-mono text-sm">{relativeCreatedPath} created</p>
+          <p className="font-mono text-sm">{item.createdPath}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
