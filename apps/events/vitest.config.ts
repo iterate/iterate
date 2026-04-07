@@ -26,18 +26,6 @@ writeFileSync(
             name: "TEST_SCHEDULE_STREAM",
             class_name: "TestScheduleStreamDurableObject",
           },
-          {
-            name: "TEST_STARTUP_SCHEDULE_WARN_STREAM",
-            class_name: "TestStartupScheduleWarnStreamDurableObject",
-          },
-          {
-            name: "TEST_STARTUP_SCHEDULE_NO_WARN_STREAM",
-            class_name: "TestStartupScheduleNoWarnStreamDurableObject",
-          },
-          {
-            name: "TEST_STARTUP_SCHEDULE_EXPLICIT_FALSE_STREAM",
-            class_name: "TestStartupScheduleExplicitFalseStreamDurableObject",
-          },
         ],
       },
       d1_databases: [
@@ -52,13 +40,7 @@ writeFileSync(
       migrations: [
         {
           tag: "v1",
-          new_sqlite_classes: [
-            "StreamDurableObject",
-            "TestScheduleStreamDurableObject",
-            "TestStartupScheduleWarnStreamDurableObject",
-            "TestStartupScheduleNoWarnStreamDurableObject",
-            "TestStartupScheduleExplicitFalseStreamDurableObject",
-          ],
+          new_sqlite_classes: ["StreamDurableObject", "TestScheduleStreamDurableObject"],
           new_classes: [],
         },
       ],

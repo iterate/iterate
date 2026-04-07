@@ -348,7 +348,7 @@ function getNextRunAtAfterExecution(args: {
   try {
     return Math.floor(getNextCronTime(args.schedule.cron).getTime() / 1000);
   } catch {
-    return args.outcome === "failed" ? null : null;
+    return null;
   }
 }
 

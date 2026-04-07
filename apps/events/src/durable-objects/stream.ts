@@ -445,6 +445,21 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
+  /**
+   * Cloudflare gives each Durable Object exactly one alarm slot, so the
+   * stream-level `alarm()` entry point must stay tiny and generic: wake the
+   * actor, hand control to the scheduler runtime, and let that runtime derive
+   * due work plus the next alarm pointer from `state.processors.scheduler`.
+   *
+   * This method is intentionally the only scheduler-specific execution hook in
+   * `stream.ts`. The control-event reduction and due-schedule logic live in
+   * `./scheduling.ts`; `stream.ts` only provides the generic stream append
+   * surface and current reduced state.
+   *
+   * First-party references:
+   * - https://developers.cloudflare.com/durable-objects/api/alarms/
+   * - https://developers.cloudflare.com/durable-objects/api/state/
+   */
   async alarm() {
     await runSchedulerAlarm({
       append: (event) => this.append(event),
