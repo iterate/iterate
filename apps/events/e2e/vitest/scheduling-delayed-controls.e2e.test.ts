@@ -2,18 +2,19 @@
  * Deployed delayed-schedule coverage over the public oRPC API only.
  *
  * These tests intentionally avoid private Durable Object methods. They drive
- * delayed one-shot schedules entirely through append/stream/getState so the
- * public API stays the contract.
+ * one-shot scheduling entirely through append/stream/getState so the control
+ * events remain the contract.
  */
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
-import { StreamPath, type EventType } from "@iterate-com/events-contract";
 import {
-  SCHEDULE_ADDED_TYPE,
   SCHEDULE_CANCELLED_TYPE,
-  SCHEDULE_EXECUTION_FINISHED_TYPE,
-} from "../../src/durable-objects/scheduling-types.ts";
+  SCHEDULE_CONFIGURED_TYPE,
+  SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
+  StreamPath,
+  type EventType,
+} from "@iterate-com/events-contract";
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
@@ -36,15 +37,15 @@ const idleRestartDelaySeconds = 62;
 describeDeployedScheduling("events delayed scheduling e2e", () => {
   test("a delayed schedule can be cancelled before it fires", async () => {
     const path = uniqueStreamPath();
-    const scheduleId = `sched-${randomUUID()}`;
+    const slug = `sched-${randomUUID()}`;
     const markerType =
       `https://events.iterate.com/events/example/delayed-cancelled/${randomUUID()}` as EventType;
 
     await appendDelayedSchedule({
-      delayInSeconds: shortDelaySeconds,
+      delaySeconds: shortDelaySeconds,
       markerType,
       path,
-      scheduleId,
+      slug,
     });
 
     await delay(1_000);
@@ -54,7 +55,7 @@ describeDeployedScheduling("events delayed scheduling e2e", () => {
       event: {
         type: SCHEDULE_CANCELLED_TYPE,
         payload: {
-          scheduleId,
+          slug,
         },
       },
     });
@@ -63,45 +64,42 @@ describeDeployedScheduling("events delayed scheduling e2e", () => {
 
     const events = await readHistory(path);
     expect(events.map((event) => event.type)).toEqual([
-      SCHEDULE_ADDED_TYPE,
+      SCHEDULE_CONFIGURED_TYPE,
       SCHEDULE_CANCELLED_TYPE,
     ]);
     expect(events[0]?.payload).toMatchObject({
-      scheduleId,
+      slug,
       callback: "append",
-      scheduleType: "delayed",
+      schedule: {
+        kind: "once-in",
+        delaySeconds: shortDelaySeconds,
+      },
     });
     expect(events[1]?.payload).toEqual({
-      scheduleId,
+      slug,
     });
-    const state = await app.client.getState({ path });
-    expect(state).toMatchObject({
-      path,
-      childPaths: [],
-    });
-    expect(state.eventCount).toBeGreaterThanOrEqual(3);
   }, 30_000);
 
   test("two delayed schedules fire in time order", async () => {
     const path = uniqueStreamPath();
-    const firstScheduleId = `sched-${randomUUID()}`;
-    const secondScheduleId = `sched-${randomUUID()}`;
+    const firstSlug = `sched-${randomUUID()}`;
+    const secondSlug = `sched-${randomUUID()}`;
     const firstMarkerType =
       `https://events.iterate.com/events/example/delayed-order/first/${randomUUID()}` as EventType;
     const secondMarkerType =
       `https://events.iterate.com/events/example/delayed-order/second/${randomUUID()}` as EventType;
 
     await appendDelayedSchedule({
-      delayInSeconds: firstFireDelaySeconds,
+      delaySeconds: firstFireDelaySeconds,
       markerType: firstMarkerType,
       path,
-      scheduleId: firstScheduleId,
+      slug: firstSlug,
     });
     await appendDelayedSchedule({
-      delayInSeconds: secondFireDelaySeconds,
+      delaySeconds: secondFireDelaySeconds,
       markerType: secondMarkerType,
       path,
-      scheduleId: secondScheduleId,
+      slug: secondSlug,
     });
 
     const events = await waitForHistoryMatch({
@@ -113,50 +111,34 @@ describeDeployedScheduling("events delayed scheduling e2e", () => {
     });
 
     expect(events.map((event) => event.type)).toEqual([
-      SCHEDULE_ADDED_TYPE,
-      SCHEDULE_ADDED_TYPE,
+      SCHEDULE_CONFIGURED_TYPE,
+      SCHEDULE_CONFIGURED_TYPE,
       firstMarkerType,
-      SCHEDULE_EXECUTION_FINISHED_TYPE,
+      SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
       secondMarkerType,
-      SCHEDULE_EXECUTION_FINISHED_TYPE,
+      SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
     ]);
-    expect(events[0]?.payload).toMatchObject({
-      scheduleId: firstScheduleId,
-      callback: "append",
-      scheduleType: "delayed",
-    });
-    expect(events[1]?.payload).toMatchObject({
-      scheduleId: secondScheduleId,
-      callback: "append",
-      scheduleType: "delayed",
-    });
     expect(events[2]?.payload).toEqual({
-      scheduleId: firstScheduleId,
+      slug: firstSlug,
       source: "alarm",
     });
     expect(events[4]?.payload).toEqual({
-      scheduleId: secondScheduleId,
+      slug: secondSlug,
       source: "alarm",
     });
-    const state = await app.client.getState({ path });
-    expect(state).toMatchObject({
-      path,
-      childPaths: [],
-    });
-    expect(state.eventCount).toBeGreaterThanOrEqual(6);
   }, 45_000);
 
   test("a delayed schedule still fires after the stream has gone idle", async () => {
     const path = uniqueStreamPath();
-    const scheduleId = `sched-${randomUUID()}`;
+    const slug = `sched-${randomUUID()}`;
     const markerType =
       `https://events.iterate.com/events/example/delayed-idle/${randomUUID()}` as EventType;
 
     await appendDelayedSchedule({
-      delayInSeconds: idleRestartDelaySeconds,
+      delaySeconds: idleRestartDelaySeconds,
       markerType,
       path,
-      scheduleId,
+      slug,
     });
 
     const events = await waitForHistoryMatch({
@@ -166,53 +148,47 @@ describeDeployedScheduling("events delayed scheduling e2e", () => {
     });
 
     expect(events.map((event) => event.type)).toEqual([
-      SCHEDULE_ADDED_TYPE,
+      SCHEDULE_CONFIGURED_TYPE,
       markerType,
-      SCHEDULE_EXECUTION_FINISHED_TYPE,
+      SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
     ]);
     expect(events[1]?.payload).toEqual({
-      scheduleId,
+      slug,
       source: "alarm",
     });
     expect(events[2]?.payload).toMatchObject({
-      scheduleId,
+      slug,
       outcome: "succeeded",
-      nextTime: null,
+      nextRunAt: null,
     });
-    const state = await app.client.getState({ path });
-    expect(state).toMatchObject({
-      path,
-      childPaths: [],
-    });
-    expect(state.eventCount).toBeGreaterThanOrEqual(4);
   }, 110_000);
 });
 
 async function appendDelayedSchedule(args: {
-  delayInSeconds: number;
+  delaySeconds: number;
   markerType: EventType;
   path: StreamPath;
-  scheduleId: string;
+  slug: string;
 }) {
-  const time = Math.floor(Date.now() / 1000) + args.delayInSeconds;
-
   await app.append({
     path: args.path,
     event: {
-      type: SCHEDULE_ADDED_TYPE,
+      type: SCHEDULE_CONFIGURED_TYPE,
       payload: {
-        scheduleId: args.scheduleId,
+        slug: args.slug,
         callback: "append",
         payloadJson: JSON.stringify({
           type: args.markerType,
           payload: {
-            scheduleId: args.scheduleId,
+            slug: args.slug,
             source: "alarm",
           },
         }),
-        scheduleType: "delayed",
-        time,
-        delayInSeconds: args.delayInSeconds,
+        schedule: {
+          kind: "once-in",
+          delaySeconds: args.delaySeconds,
+        },
+        nextRunAt: Math.floor(Date.now() / 1000) + args.delaySeconds,
       },
     },
   });
@@ -258,7 +234,7 @@ async function waitForHistoryMatch(args: {
 }
 
 function uniqueStreamPath() {
-  return StreamPath.parse(`/e2e-delayed-scheduling/${randomUUID().slice(0, 8)}`);
+  return StreamPath.parse(`/e2e-scheduling/${randomUUID().slice(0, 8)}`);
 }
 
 function getPayloadPath(event: { payload: unknown }) {

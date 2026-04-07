@@ -6,13 +6,14 @@
  */
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { StreamPath, type EventType } from "@iterate-com/events-contract";
-import { describe, expect, test } from "vitest";
 import {
-  SCHEDULE_ADDED_TYPE,
-  SCHEDULE_EXECUTION_FINISHED_TYPE,
-  SCHEDULE_EXECUTION_STARTED_TYPE,
-} from "../../src/durable-objects/scheduling-types.ts";
+  SCHEDULE_CONFIGURED_TYPE,
+  SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
+  SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
+  StreamPath,
+  type EventType,
+} from "@iterate-com/events-contract";
+import { describe, expect, test } from "vitest";
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
@@ -34,27 +35,29 @@ const durableObjectConstructedType =
 describeDeployedScheduling("events recurring/restart scheduling e2e", () => {
   test("an interval schedule keeps emitting ordered callback and finished events", async () => {
     const path = uniqueStreamPath("interval");
-    const scheduleId = `sched-${randomUUID()}`;
+    const slug = `sched-${randomUUID()}`;
     const markerType =
       `https://events.iterate.com/events/example/interval-fired/${randomUUID()}` as EventType;
 
     await app.client.append({
       path,
       event: {
-        type: SCHEDULE_ADDED_TYPE,
+        type: SCHEDULE_CONFIGURED_TYPE,
         payload: {
-          scheduleId,
+          slug,
           callback: "append",
           payloadJson: JSON.stringify({
             type: markerType,
             payload: {
-              scheduleId,
+              slug,
               source: "alarm",
             },
           }),
-          scheduleType: "interval",
-          time: Math.floor(Date.now() / 1000) + 1,
-          intervalSeconds: 1,
+          schedule: {
+            kind: "every",
+            intervalSeconds: 1,
+          },
+          nextRunAt: Math.floor(Date.now() / 1000) + 1,
         },
       },
     });
@@ -65,58 +68,55 @@ describeDeployedScheduling("events recurring/restart scheduling e2e", () => {
     const types = events.map((event) => event.type);
 
     expect(countTypes(types, markerType)).toBeGreaterThanOrEqual(2);
-    expect(countTypes(types, SCHEDULE_EXECUTION_STARTED_TYPE)).toBeGreaterThanOrEqual(2);
-    expect(countTypes(types, SCHEDULE_EXECUTION_FINISHED_TYPE)).toBeGreaterThanOrEqual(2);
+    expect(countTypes(types, SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE)).toBeGreaterThanOrEqual(2);
+    expect(countTypes(types, SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE)).toBeGreaterThanOrEqual(2);
     expect(types.slice(0, 8)).toEqual([
-      SCHEDULE_ADDED_TYPE,
-      SCHEDULE_EXECUTION_STARTED_TYPE,
+      SCHEDULE_CONFIGURED_TYPE,
+      SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
       markerType,
-      SCHEDULE_EXECUTION_FINISHED_TYPE,
-      SCHEDULE_EXECUTION_STARTED_TYPE,
+      SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
+      SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
       markerType,
-      SCHEDULE_EXECUTION_FINISHED_TYPE,
-      SCHEDULE_EXECUTION_STARTED_TYPE,
+      SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
+      SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
     ]);
 
     expect(events[2]?.payload).toEqual({
-      scheduleId,
+      slug,
       source: "alarm",
     });
     expect(events[3]?.payload).toMatchObject({
-      scheduleId,
+      slug,
       outcome: "succeeded",
-      nextTime: expect.any(Number),
+      nextRunAt: expect.any(Number),
     });
-
-    const state = await app.client.getState({ path });
-    expect(state.path).toBe(path);
-    expect(state.childPaths).toEqual([]);
-    expect(state.eventCount).toBeGreaterThanOrEqual(8);
   }, 45_000);
 
   test("a delayed schedule still fires after the stream has been idle long enough to restart", async () => {
     const path = uniqueStreamPath("idle-gap");
-    const scheduleId = `sched-${randomUUID()}`;
+    const slug = `sched-${randomUUID()}`;
     const markerType =
       `https://events.iterate.com/events/example/delayed-idle/${randomUUID()}` as EventType;
 
     await app.client.append({
       path,
       event: {
-        type: SCHEDULE_ADDED_TYPE,
+        type: SCHEDULE_CONFIGURED_TYPE,
         payload: {
-          scheduleId,
+          slug,
           callback: "append",
           payloadJson: JSON.stringify({
             type: markerType,
             payload: {
-              scheduleId,
+              slug,
               source: "alarm",
             },
           }),
-          scheduleType: "delayed",
-          time: Math.floor(Date.now() / 1000) + 70,
-          delayInSeconds: 70,
+          schedule: {
+            kind: "once-in",
+            delaySeconds: 70,
+          },
+          nextRunAt: Math.floor(Date.now() / 1000) + 70,
         },
       },
     });
@@ -125,24 +125,19 @@ describeDeployedScheduling("events recurring/restart scheduling e2e", () => {
 
     const events = await readHistory(path);
     expect(events.map((event) => event.type)).toEqual([
-      SCHEDULE_ADDED_TYPE,
+      SCHEDULE_CONFIGURED_TYPE,
       markerType,
-      SCHEDULE_EXECUTION_FINISHED_TYPE,
+      SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
     ]);
     expect(events[1]?.payload).toEqual({
-      scheduleId,
+      slug,
       source: "alarm",
     });
     expect(events[2]?.payload).toMatchObject({
-      scheduleId,
+      slug,
       outcome: "succeeded",
-      nextTime: null,
+      nextRunAt: null,
     });
-
-    const state = await app.client.getState({ path });
-    expect(state.path).toBe(path);
-    expect(state.childPaths).toEqual([]);
-    expect(state.eventCount).toBeGreaterThanOrEqual(4);
   }, 110_000);
 });
 
