@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { Outlet, createFileRoute } from "@tanstack/react-router";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
@@ -13,7 +14,11 @@ export const Route = createFileRoute("/_app")({
 
 function AppLayout() {
   return (
-    <SidebarProvider defaultOpen={true} className="h-svh">
+    <SidebarProvider
+      defaultOpen={true}
+      className="h-svh"
+      style={{ "--sidebar-width": "24rem" } as CSSProperties}
+    >
       <StreamsChromeProvider>
         <AppSidebar />
         <SidebarInset className="min-w-0 overflow-hidden">

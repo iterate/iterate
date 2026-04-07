@@ -4,11 +4,12 @@
   "version": "0.0.1",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./sdk": "./src/sdk.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "pnpm exec tsx src/orpc-contract.test.ts"
+    "test": "pnpm exec tsx src/orpc-contract.test.ts && pnpm exec tsx src/sdk.test.ts"
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",

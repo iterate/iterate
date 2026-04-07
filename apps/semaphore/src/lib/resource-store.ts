@@ -34,7 +34,7 @@ export function parseType(input: string): string {
   return semaphoreTypeSchema.parse(input);
 }
 
-export function parseData(value: string): SemaphoreJsonObject {
+function parseData(value: string): SemaphoreJsonObject {
   try {
     return semaphoreDataSchema.parse(JSON.parse(value) as unknown);
   } catch (error) {

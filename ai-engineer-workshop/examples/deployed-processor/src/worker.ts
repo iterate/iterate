@@ -1,12 +1,9 @@
-import {
-  createEventsClient,
-  defineProcessor,
-  type StreamProcessor,
-} from "ai-engineer-workshop/runtime";
+import { createEventsClient } from "ai-engineer-workshop/runtime";
 import type { Context } from "hono";
 import { createAfterEventHandlerApp } from "./hono-processor-runtime.ts";
 import { createOpenAiAgentProcessor } from "./openai-agent-processor.ts";
 import { createPingPongProcessor } from "./ping-pong-processor.ts";
+import type { StreamProcessor } from "./stream-processor.ts";
 
 type Bindings = {
   EVENTS_BASE_URL?: string;
@@ -84,20 +81,7 @@ function getOpenAiModel(c: Context<{ Bindings: Bindings }>) {
 }
 
 function eraseProcessor<State>(processor: StreamProcessor<State>) {
-  return defineProcessor<unknown>({
-    initialState: structuredClone(processor.initialState),
-    reduce: (state, event) => processor.reduce(state as State, event),
-    onEvent: processor.onEvent
-      ? async ({ append, event, state, prevState }) => {
-          await processor.onEvent?.({
-            append,
-            event,
-            state: state as State,
-            prevState: prevState as State,
-          });
-        }
-      : undefined,
-  });
+  return processor as StreamProcessor<unknown>;
 }
 
 function getEnvVar(c: Context<{ Bindings: Bindings }>, key: keyof Bindings) {

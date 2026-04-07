@@ -7,28 +7,33 @@ import {
   Scripts,
   createRootRouteWithContext,
 } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import { TanStackDevtools } from "@tanstack/react-devtools";
 import { FormDevtoolsPanel } from "@tanstack/react-form-devtools";
 import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
-import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
+import { extractPublicConfigSchema, getPublicConfig } from "@iterate-com/shared/apps/config";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
 import iterateLogoAsset from "@iterate-com/ui/assets/iterate-logo.svg";
 import { DefaultErrorComponent } from "@iterate-com/ui/components/route-defaults";
 import { AppConfig } from "../app.ts";
 import { defaultProjectSlug } from "../lib/project-slug.ts";
 import { defaultStreamViewSearch } from "../lib/stream-view-search.ts";
-import { orpcClient } from "../orpc/client.ts";
+import { configureOrpcClient } from "../orpc/client.ts";
 import appCss from "../styles.css?url";
 import type { RouterContext } from "../router.tsx";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
-const internalClient = orpcClient.__internal as {
-  publicConfig(input: {}): Promise<unknown>;
-};
+const loadPublicConfig = createServerFn({ method: "GET" }).handler(async ({ context }) =>
+  PublicConfigSchema.parse(getPublicConfig(context.config, AppConfig)),
+);
 
 export const Route = createRootRouteWithContext<RouterContext>()({
-  loader: async () => PublicConfigSchema.parse(await internalClient.publicConfig({})),
+  loader: async () => {
+    const config = await loadPublicConfig();
+    configureOrpcClient({ baseUrl: config.apiBaseUrl });
+    return config;
+  },
   staleTime: Number.POSITIVE_INFINITY,
   head: () => ({
     meta: [
@@ -62,6 +67,7 @@ function RootDocument({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const config = Route.useLoaderData();
+  configureOrpcClient({ baseUrl: config.apiBaseUrl });
 
   return (
     <AppProviders config={config} devtools={<EventsDevtools />}>

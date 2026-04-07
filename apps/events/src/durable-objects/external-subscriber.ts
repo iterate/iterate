@@ -7,7 +7,7 @@ import {
   type ExternalWebsocketSubscriber,
   StreamSubscriptionConfiguredEvent,
 } from "@iterate-com/events-contract";
-import { defineBuiltinProcessor } from "./define-processor.ts";
+import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
 
 type SubscriberConnection = {
   callbackUrl: string;

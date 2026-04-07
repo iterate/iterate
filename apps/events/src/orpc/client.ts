@@ -1,12 +1,13 @@
+import type { ContractRouterClient } from "@orpc/contract";
 import { QueryClient } from "@tanstack/react-query";
 import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
-import { createRouterClient, type RouterClient } from "@orpc/server";
-import { createIsomorphicFn, getGlobalStartContext } from "@tanstack/react-start";
+import { getGlobalStartContext } from "@tanstack/react-start";
 import { eventsContract } from "@iterate-com/events-contract";
-import { iterateProjectHeader, resolveProjectSlug, withProjectHeader } from "~/lib/project-slug.ts";
-import { appRouter } from "~/orpc/root.ts";
+import { iterateProjectHeader, resolveProjectSlug } from "~/lib/project-slug.ts";
+
+const DEFAULT_API_BASE_URL = "/api";
 
 export const makeQueryClient = () =>
   new QueryClient({
@@ -25,59 +26,136 @@ export const makeQueryClient = () =>
     },
   });
 
-type OrpcClient = RouterClient<typeof appRouter>;
+type OrpcClient = ContractRouterClient<typeof eventsContract>;
 
-function createBrowserOpenApiClient(): OrpcClient {
-  return createORPCClient(
-    new OpenAPILink(eventsContract, {
-      url: `${window.location.origin}/api`,
-      fetch: (request, init) => {
-        const requestInit = init as RequestInit | undefined;
-        const headers = new Headers(
-          request instanceof Request ? request.headers : requestInit?.headers,
-        );
-        headers.set(iterateProjectHeader, resolveProjectSlug({ url: window.location.href }));
-        return fetch(request, { ...requestInit, headers });
-      },
-    }),
-  );
+type OrpcClientOptions = {
+  baseUrl?: string;
+};
+
+type BrowserOrpcState = {
+  apiUrl: string;
+  client: OrpcClient;
+  queryUtils: OrpcQueryUtils;
+};
+
+let configuredBaseUrl: string | undefined;
+let browserOrpcState: BrowserOrpcState | undefined;
+
+function createOrpcQueryUtils(client: OrpcClient) {
+  return createTanstackQueryUtils(client);
 }
 
-let cachedOpenApiClient: OrpcClient | undefined;
+type OrpcQueryUtils = ReturnType<typeof createOrpcQueryUtils>;
 
-const makeOrpcClient = createIsomorphicFn()
-  .server(
-    (): OrpcClient =>
-      createRouterClient(appRouter, {
-        context: () => {
-          const context = getGlobalStartContext();
-          if (!context) {
-            throw new Error(
-              "No tanstack start context found for the request - your entrypoint is wired up wrong",
-            );
-          }
+function getCurrentUrl() {
+  if (typeof window !== "undefined") {
+    return window.location.href;
+  }
 
-          if (!context.rawRequest) {
-            return context;
-          }
+  const requestUrl = getGlobalStartContext()?.rawRequest?.url;
+  if (requestUrl) {
+    return requestUrl;
+  }
 
-          return {
-            ...context,
-            rawRequest: withProjectHeader(
-              context.rawRequest,
-              resolveProjectSlug({
-                url: context.rawRequest.url,
-                headerValue: context.rawRequest.headers.get(iterateProjectHeader),
-              }),
-            ),
-          };
-        },
+  return "http://localhost/";
+}
+
+function getCurrentHeaderValue(name: string) {
+  if (typeof window !== "undefined") {
+    return undefined;
+  }
+
+  return getGlobalStartContext()?.rawRequest?.headers.get(name) ?? undefined;
+}
+
+function normalizeApiBaseUrl(baseUrl: string | undefined) {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return DEFAULT_API_BASE_URL;
+  }
+
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return trimmed;
+  }
+
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+function resolveApiUrl(baseUrl: string | undefined) {
+  return new URL(normalizeApiBaseUrl(baseUrl), getCurrentUrl()).toString();
+}
+
+function createFetchWithProjectHeader() {
+  return (request: Request | URL | string, init?: RequestInit) => {
+    const requestInit = init as RequestInit | undefined;
+    const headers = new Headers(
+      request instanceof Request ? request.headers : requestInit?.headers,
+    );
+    headers.set(
+      iterateProjectHeader,
+      resolveProjectSlug({
+        url: getCurrentUrl(),
+        headerValue: getCurrentHeaderValue(iterateProjectHeader),
       }),
-  )
-  .client((): OrpcClient => {
-    cachedOpenApiClient ??= createBrowserOpenApiClient();
-    return cachedOpenApiClient;
-  });
+    );
 
-export const orpcClient = makeOrpcClient();
-export const orpc = createTanstackQueryUtils(orpcClient);
+    return fetch(request, { ...requestInit, headers });
+  };
+}
+
+function makeOrpcClient(options: OrpcClientOptions = {}): OrpcClient {
+  return createORPCClient(
+    new OpenAPILink(eventsContract, {
+      url: resolveApiUrl(options.baseUrl ?? configuredBaseUrl),
+      fetch: createFetchWithProjectHeader(),
+    }),
+  ) as OrpcClient;
+}
+
+function createBrowserOrpcState(options: OrpcClientOptions = {}) {
+  const client = makeOrpcClient(options);
+  const queryUtils = createOrpcQueryUtils(client);
+
+  return {
+    apiUrl: resolveApiUrl(options.baseUrl ?? configuredBaseUrl),
+    client,
+    queryUtils,
+  };
+}
+
+export function configureOrpcClient(options: OrpcClientOptions = {}) {
+  configuredBaseUrl = options.baseUrl;
+
+  if (typeof window === "undefined") {
+    return makeOrpcClient(options);
+  }
+
+  const nextApiUrl = resolveApiUrl(options.baseUrl);
+  if (browserOrpcState?.apiUrl === nextApiUrl) {
+    return browserOrpcState.client;
+  }
+
+  browserOrpcState = createBrowserOrpcState(options);
+  return browserOrpcState.client;
+}
+
+function getBrowserOrpcState() {
+  browserOrpcState ??= createBrowserOrpcState({ baseUrl: configuredBaseUrl });
+  return browserOrpcState;
+}
+
+export function getOrpcClient() {
+  if (typeof window === "undefined") {
+    return makeOrpcClient({ baseUrl: configuredBaseUrl });
+  }
+
+  return getBrowserOrpcState().client;
+}
+
+export function getOrpc() {
+  if (typeof window === "undefined") {
+    return createOrpcQueryUtils(makeOrpcClient({ baseUrl: configuredBaseUrl }));
+  }
+
+  return getBrowserOrpcState().queryUtils;
+}

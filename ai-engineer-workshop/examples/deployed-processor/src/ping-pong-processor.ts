@@ -1,7 +1,7 @@
-import { defineProcessor } from "ai-engineer-workshop/runtime";
+import type { StreamProcessor } from "./stream-processor.ts";
 
-export function createPingPongProcessor() {
-  return defineProcessor({
+export function createPingPongProcessor(): StreamProcessor<Record<string, never>> {
+  return {
     initialState: {},
     reduce: (state) => state,
     onEvent: async ({ append, event }) => {
@@ -16,7 +16,7 @@ export function createPingPongProcessor() {
         },
       });
     },
-  });
+  };
 }
 
 function eventContainsPing(event: { type: string; payload: unknown }) {

@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { EasyInputMessage, ResponseInput } from "openai/resources/responses/responses";
-import { defineProcessor } from "ai-engineer-workshop/runtime";
+import type { StreamProcessor } from "./stream-processor.ts";
 
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 
@@ -20,10 +20,10 @@ export function createOpenAiAgentProcessor({
 }: {
   apiKey: string;
   model?: string;
-}) {
+}): StreamProcessor<AgentState> {
   const openai = new OpenAI({ apiKey });
 
-  return defineProcessor<AgentState>({
+  return {
     initialState: {
       history: [],
       requestInProgress: false,
@@ -114,7 +114,7 @@ export function createOpenAiAgentProcessor({
         });
       }
     },
-  });
+  };
 }
 
 function createConversationMessage(

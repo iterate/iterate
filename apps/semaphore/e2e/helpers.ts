@@ -1,4 +1,4 @@
-export type SemaphoreAppFixture = {
+type SemaphoreAppFixture = {
   apiKey: string;
   baseURL: string;
   fetch(pathname: string, init?: RequestInit): Promise<Response>;

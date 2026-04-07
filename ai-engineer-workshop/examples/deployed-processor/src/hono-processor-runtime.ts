@@ -1,13 +1,9 @@
 import { Hono } from "hono";
 import { upgradeWebSocket } from "hono/cloudflare-workers";
 import type { Context } from "hono";
-import {
-  type Event,
-  type EventInput,
-  type EventsORPCClient,
-  type StreamProcessor,
-} from "ai-engineer-workshop/runtime";
+import { type Event, type EventInput, type EventsORPCClient } from "ai-engineer-workshop/runtime";
 import { Event as EventSchema, StreamPath } from "ai-engineer-workshop/contract";
+import type { StreamProcessor } from "./stream-processor.ts";
 
 type AppendEvent = Omit<EventInput, "path">;
 type WorkshopEventsClient = Pick<EventsORPCClient, "append" | "stream">;
