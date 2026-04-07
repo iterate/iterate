@@ -130,6 +130,32 @@ export interface StreamErrorOccurredFeedItem {
   raw: Event;
 }
 
+export interface CodemodeBlockFeedItem {
+  kind: "codemode-block";
+  requestId: string;
+  blockId: string;
+  language: string;
+  code: string;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface CodemodeResultFeedItem {
+  kind: "codemode-result";
+  requestId: string;
+  blockId: string;
+  blockCount: number;
+  success: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  codePath: string;
+  outputPath: string;
+  timestamp: number;
+  raw: Event;
+}
+
 export type StreamFeedItem =
   | MessageFeedItem
   | ToolFeedItem
@@ -141,4 +167,6 @@ export type StreamFeedItem =
   | StreamLifecycleFeedItem
   | StreamPausedFeedItem
   | StreamResumedFeedItem
-  | StreamErrorOccurredFeedItem;
+  | StreamErrorOccurredFeedItem
+  | CodemodeBlockFeedItem
+  | CodemodeResultFeedItem;

@@ -374,6 +374,389 @@ describe("projectWireToFeed", () => {
       context: "boom",
     });
   });
+
+  test("projects workshop llm events into a user and assistant message timeline", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "llm-input-added",
+        payload: {
+          content: "Write a tiny hello world",
+          source: "user",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "llm-request-started",
+        payload: {
+          requestId: "req_1",
+          inputOffset: 1,
+          inputSource: "user",
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_1",
+          event: {
+            type: "response.output_text.delta",
+            item_id: "msg_1",
+            content_index: 0,
+            delta: "hello",
+          },
+        },
+      }),
+      createEvent({
+        offset: 4,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_1",
+          event: {
+            type: "response.output_text.delta",
+            item_id: "msg_1",
+            content_index: 0,
+            delta: " world",
+          },
+        },
+      }),
+      createEvent({
+        offset: 5,
+        type: "llm-request-completed",
+        payload: {
+          requestId: "req_1",
+          outputText: "hello world",
+        },
+      }),
+    ]);
+
+    const messages = feed.filter(
+      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
+    );
+
+    expect(messages).toEqual([
+      {
+        kind: "message",
+        role: "user",
+        content: [{ type: "text", text: "Write a tiny hello world" }],
+        timestamp: messages[0]!.timestamp,
+      },
+      {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "hello world" }],
+        timestamp: messages[1]!.timestamp,
+        streamStatus: "complete",
+      },
+    ]);
+  });
+
+  test("projects bashmode agent input and output events into ai-elements chat messages", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "agent-input-added",
+        payload: {
+          content: "Run a quick bash command.",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "agent-output-added",
+        payload: {
+          content: "```bash\necho hello\n```",
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "agent-input-added",
+        payload: {
+          content: "Bash result:\nstdout:\nhello\nstderr:\n\nexitCode: 0\n",
+        },
+      }),
+    ]);
+
+    const messages = feed.filter(
+      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
+    );
+
+    expect(messages).toEqual([
+      {
+        kind: "message",
+        role: "user",
+        content: [{ type: "text", text: "Run a quick bash command." }],
+        timestamp: messages[0]!.timestamp,
+      },
+      {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "```bash\necho hello\n```" }],
+        timestamp: messages[1]!.timestamp,
+      },
+      {
+        kind: "message",
+        role: "user",
+        content: [{ type: "text", text: "Bash result:\nstdout:\nhello\nstderr:\n\nexitCode: 0\n" }],
+        timestamp: messages[2]!.timestamp,
+      },
+    ]);
+  });
+
+  test("marks workshop assistant output as streaming until the request completes", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "llm-input-added",
+        payload: {
+          content: "Keep streaming",
+          source: "user",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "llm-request-started",
+        payload: {
+          requestId: "req_stream",
+          inputOffset: 1,
+          inputSource: "user",
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_stream",
+          event: {
+            type: "response.output_text.delta",
+            item_id: "msg_stream",
+            content_index: 0,
+            delta: "Partial output",
+          },
+        },
+      }),
+    ]);
+
+    const assistant = feed.find(
+      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
+        item.kind === "message" && item.role === "assistant",
+    );
+
+    expect(assistant).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "Partial output" }],
+      streamStatus: "streaming",
+    });
+  });
+
+  test("projects actual OpenAI assistant output items as separate streamed messages", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "llm-input-added",
+        payload: {
+          content: "Write two short replies",
+          source: "user",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "llm-request-started",
+        payload: {
+          requestId: "req_items",
+          inputOffset: 1,
+          inputSource: "user",
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_items",
+          event: {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              id: "msg_a",
+              type: "message",
+              role: "assistant",
+              content: [],
+            },
+          },
+        },
+      }),
+      createEvent({
+        offset: 4,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_items",
+          event: {
+            type: "response.output_text.delta",
+            item_id: "msg_a",
+            content_index: 0,
+            delta: "First reply",
+            output_index: 0,
+          },
+        },
+      }),
+      createEvent({
+        offset: 5,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_items",
+          event: {
+            type: "response.output_item.added",
+            output_index: 1,
+            item: {
+              id: "msg_b",
+              type: "message",
+              role: "assistant",
+              content: [],
+            },
+          },
+        },
+      }),
+      createEvent({
+        offset: 6,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_items",
+          event: {
+            type: "response.output_text.delta",
+            item_id: "msg_b",
+            content_index: 0,
+            delta: "Second reply",
+            output_index: 1,
+          },
+        },
+      }),
+    ]);
+
+    const assistants = feed.filter(
+      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
+        item.kind === "message" && item.role === "assistant",
+    );
+
+    expect(assistants).toMatchObject([
+      {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "First reply" }],
+        streamStatus: "streaming",
+      },
+      {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "Second reply" }],
+        streamStatus: "streaming",
+      },
+    ]);
+  });
+
+  test("projects codemode block and result events into dedicated cards", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "codemode-block-added",
+        payload: {
+          requestId: "req_1",
+          blockId: "ts-block-1",
+          language: "ts",
+          code: 'console.log("hello");',
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "codemode-result-added",
+        payload: {
+          requestId: "req_1",
+          blockId: "ts-block-1",
+          blockCount: 1,
+          success: true,
+          exitCode: 0,
+          stdout: "hello",
+          stderr: "",
+          durationMs: 42,
+          codePath: "/tmp/1/code.ts",
+          outputPath: "/tmp/1/out.txt",
+        },
+      }),
+    ]);
+
+    expect(feed.map((item) => item.kind)).toEqual([
+      "event",
+      "codemode-block",
+      "event",
+      "codemode-result",
+    ]);
+    expect(feed[1]).toMatchObject({
+      kind: "codemode-block",
+      blockId: "ts-block-1",
+      language: "ts",
+      code: 'console.log("hello");',
+    });
+    expect(feed[3]).toMatchObject({
+      kind: "codemode-result",
+      blockId: "ts-block-1",
+      success: true,
+      stdout: "hello",
+      codePath: "/tmp/1/code.ts",
+    });
+  });
+
+  test("projects failed workshop requests into error feed items", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "llm-input-added",
+        payload: {
+          content: "Break",
+          source: "user",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "llm-request-started",
+        payload: {
+          requestId: "req_fail",
+          inputOffset: 1,
+          inputSource: "user",
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "llm-request-failed",
+        payload: {
+          requestId: "req_fail",
+          message: "model overloaded",
+        },
+      }),
+    ]);
+
+    expect(feed.find((item) => item.kind === "error")).toMatchObject({
+      kind: "error",
+      message: "LLM request failed",
+      context: "model overloaded",
+    });
+  });
+
+  test("projects failed bashmode agent requests into error feed items", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "agent-request-failed",
+        payload: {
+          message: "provider timeout",
+        },
+      }),
+    ]);
+
+    expect(feed.find((item) => item.kind === "error")).toMatchObject({
+      kind: "error",
+      message: "Agent request failed",
+      context: "provider timeout",
+    });
+  });
 });
 
 describe("toSemanticFeedItem", () => {
