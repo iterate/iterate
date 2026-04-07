@@ -48,10 +48,12 @@ export function createAgentProcessor({
       // This is the composition seam: any non-core event can become fresh LLM input.
       if (!isAgentEventType(event.type) && shouldMirrorToLlmInput(event)) {
         await append({
-          type: llmInputAddedType,
-          payload: {
-            content: formatEventForLlm(event),
-            sourceEventType: event.type,
+          event: {
+            type: llmInputAddedType,
+            payload: {
+              content: formatEventForLlm(event),
+              sourceEventType: event.type,
+            },
           },
         });
         return;
@@ -62,8 +64,10 @@ export function createAgentProcessor({
       }
 
       await append({
-        type: llmRequestStartedType,
-        payload: { requestId: randomUUID() },
+        event: {
+          type: llmRequestStartedType,
+          payload: { requestId: randomUUID() },
+        },
       });
 
       const response = await openAi.responses.create({
@@ -74,14 +78,18 @@ export function createAgentProcessor({
       });
       const outputText = response.output_text ?? "";
       await append({
-        type: llmRequestCompletedType,
-        payload: { outputText },
+        event: {
+          type: llmRequestCompletedType,
+          payload: { outputText },
+        },
       });
 
       for (const [index, code] of extractTypeScriptBlocks(outputText).entries()) {
         await append({
-          type: codemodeBlockAddedType,
-          payload: { blockId: `block-${index + 1}`, code },
+          event: {
+            type: codemodeBlockAddedType,
+            payload: { blockId: `block-${index + 1}`, code },
+          },
         });
       }
     },

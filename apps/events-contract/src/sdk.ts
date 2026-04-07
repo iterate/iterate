@@ -4,6 +4,7 @@ import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { eventsContract } from "./orpc-contract.ts";
 import {
   ChildStreamCreatedEvent,
+  StreamPath as StreamPathSchema,
   StreamInitializedEvent,
   type Event,
   type EventInput,
@@ -25,14 +26,18 @@ export function createEventsClient(baseUrl: string): EventsORPCClient {
   ) as EventsORPCClient;
 }
 
-type AppendEvent = Omit<EventInput, "path">;
+export type RelativeStreamPath = `.${string}`;
+export type ProcessorAppendInput = {
+  event: EventInput;
+  path?: StreamPath | RelativeStreamPath;
+};
 
 export type Processor<State = Record<string, unknown>> = {
   slug: string;
   initialState: State;
   reduce?(args: { event: Event; state: State }): State;
   afterAppend?(args: {
-    append: (event: AppendEvent) => Event | Promise<Event>;
+    append: (input: ProcessorAppendInput) => Event | Promise<Event>;
     event: Event;
     state: State;
   }): Promise<void>;
@@ -71,10 +76,13 @@ export class PullSubscriptionProcessorRuntime<State> {
   }
 
   async run() {
-    const append = async (event: AppendEvent) => {
+    const append = async (input: ProcessorAppendInput) => {
       const result = await this.#eventsClient.append({
-        path: this.#streamPath,
-        event,
+        path: resolveAppendPath({
+          currentPath: this.#streamPath,
+          nextPath: input.path,
+        }),
+        event: input.event,
       });
       return result.event;
     };
@@ -338,6 +346,60 @@ function getDiscoveredStreamPath(event: Event): StreamPath | null {
 
 function normalizeStreamPattern(streamPattern: string) {
   return streamPattern.startsWith("/") ? streamPattern : `/${streamPattern}`;
+}
+
+function resolveAppendPath({
+  currentPath,
+  nextPath,
+}: {
+  currentPath: StreamPath;
+  nextPath?: StreamPath | RelativeStreamPath;
+}) {
+  if (nextPath == null) {
+    return currentPath;
+  }
+
+  if (nextPath.startsWith("/")) {
+    return StreamPathSchema.parse(nextPath);
+  }
+
+  const normalizedRelativePath = normalizeRelativeAppendPath(nextPath);
+  if (!isRelativeStreamPath(normalizedRelativePath)) {
+    throw new Error(`append path must be absolute or dot-relative. Received: ${nextPath}`);
+  }
+
+  const segments = toPathSegments(currentPath);
+
+  for (const segment of normalizedRelativePath.split("/")) {
+    if (segment === ".") {
+      continue;
+    }
+
+    if (segment === "..") {
+      if (segments.length === 0) {
+        throw new Error(`append path cannot walk above root. Received: ${nextPath}`);
+      }
+
+      segments.pop();
+      continue;
+    }
+
+    segments.push(segment);
+  }
+
+  return StreamPathSchema.parse(`/${segments.join("/")}`);
+}
+
+function normalizeRelativeAppendPath(path: string) {
+  if (path === "." || path === "..") {
+    return path;
+  }
+
+  return path.replace(/\/+$/, "");
+}
+
+function isRelativeStreamPath(path: string): path is RelativeStreamPath {
+  return path === "." || path === ".." || path.startsWith("./") || path.startsWith("../");
 }
 
 function matchesStreamPattern(streamPath: string, streamPattern: string) {

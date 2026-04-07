@@ -13,18 +13,20 @@ export function createSlackInputProcessor() {
       }
 
       await append({
-        type: slackMessageAddedType,
-        payload: {
-          ...webhook,
-          prompt: [
-            "Please process this event.",
-            "",
-            "```yaml",
-            `type: ${slackMessageAddedType}`,
-            `text: ${JSON.stringify(webhook.text)}`,
-            `responseUrl: ${JSON.stringify(webhook.responseUrl)}`,
-            "```",
-          ].join("\n"),
+        event: {
+          type: slackMessageAddedType,
+          payload: {
+            ...webhook,
+            prompt: [
+              "Please process this event.",
+              "",
+              "```yaml",
+              `type: ${slackMessageAddedType}`,
+              `text: ${JSON.stringify(webhook.text)}`,
+              `responseUrl: ${JSON.stringify(webhook.responseUrl)}`,
+              "```",
+            ].join("\n"),
+          },
         },
       });
     },

@@ -25,11 +25,13 @@ export const jonasPingPongProcessor = defineProcessor<{ pingCount: number }>(() 
     }
 
     await append({
-      type: "pong",
-      payload: {
-        message: "pong",
-        replyToOffset: event.offset,
-        pingCount: state.pingCount,
+      event: {
+        type: "pong",
+        payload: {
+          message: "pong",
+          replyToOffset: event.offset,
+          pingCount: state.pingCount,
+        },
       },
     });
   },

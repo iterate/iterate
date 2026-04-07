@@ -31,9 +31,11 @@ export default async function helloWorldProcessor(pathPrefix: string) {
         }
 
         await append({
-          type: "hello-world-seen",
-          payload: {
-            sourceOffset: event.offset,
+          event: {
+            type: "hello-world-seen",
+            payload: {
+              sourceOffset: event.offset,
+            },
           },
         });
       },

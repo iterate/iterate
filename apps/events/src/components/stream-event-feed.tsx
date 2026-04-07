@@ -1,14 +1,21 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Link } from "@tanstack/react-router";
 import {
   AlertTriangleIcon,
   BookOpenIcon,
+  BracesIcon,
+  CheckCircle2Icon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  CircleIcon,
+  Code2Icon,
   CopyIcon,
   FolderPlusIcon,
   PauseCircleIcon,
   PlayCircleIcon,
   Settings2Icon,
+  TerminalSquareIcon,
+  XCircleIcon,
 } from "lucide-react";
 import {
   Conversation,
@@ -25,7 +32,13 @@ import {
 } from "@iterate-com/ui/components/ai-elements/message";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@iterate-com/ui/components/collapsible";
 import { Identifier } from "@iterate-com/ui/components/identifier";
+import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import {
   Sheet,
@@ -37,12 +50,20 @@ import {
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
+import { cn } from "@iterate-com/ui/lib/utils";
 import { StreamErrorAlert } from "~/components/stream-error-alert.tsx";
+import { StreamPathLabel } from "~/components/stream-path-label.tsx";
 import { StreamToolCard } from "~/components/stream-tool-card.tsx";
+import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { getEventTypePageByType } from "~/lib/event-type-pages.ts";
 import { getAdjacentEventOffset, getEventFeedItems } from "~/lib/stream-feed-projection.ts";
+import { getRelativeStreamPath } from "~/lib/stream-path-relative.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
+import { streamPathToSplat } from "~/lib/stream-links.ts";
+import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 import type {
+  CodemodeBlockFeedItem,
+  CodemodeResultFeedItem,
   ChildStreamCreatedFeedItem,
   EventFeedItem,
   GroupedEventFeedItem,
@@ -176,30 +197,51 @@ function StreamFeedItemRenderer({
       return <StreamResumedCard item={item} />;
     case "stream-error-occurred":
       return <StreamErrorOccurredCard item={item} />;
+    case "codemode-block":
+      return <CodemodeBlockCard item={item} />;
+    case "codemode-result":
+      return <CodemodeResultCard item={item} />;
     default:
       return null;
   }
 }
 
 function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) {
-  return (
-    <article className="max-w-md rounded-lg border bg-card p-4 shadow-sm">
-      <div className="space-y-2">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            <FolderPlusIcon className="size-3.5" />
-            <span>Child stream created</span>
-          </div>
-          <p className="font-mono text-sm">{item.createdPath}</p>
-        </div>
+  const projectSlug = useCurrentProjectSlug();
+  const relativePath = getRelativeStreamPath({
+    basePath: item.parentPath,
+    targetPath: item.createdPath,
+  });
 
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <span>From {item.parentPath}</span>
-          <span>·</span>
-          <span>{formatTime(item.timestamp)}</span>
-        </div>
+  return (
+    <div className="flex w-full min-w-0 items-start gap-3 py-1.5">
+      <div className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <FolderPlusIcon className="size-3.5" />
       </div>
-    </article>
+      <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+        <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+          Child stream created
+        </span>
+        <Link
+          to="/streams/$/"
+          params={{ _splat: streamPathToSplat(item.createdPath) }}
+          search={(previous) => ({
+            event: undefined,
+            projectSlug,
+            renderer: previous.renderer ?? defaultStreamViewSearch.renderer,
+          })}
+          className="block min-w-0 max-w-full text-foreground hover:text-primary hover:underline sm:flex-1"
+        >
+          <StreamPathLabel
+            path={item.createdPath}
+            label={relativePath}
+            className="w-full max-w-full overflow-hidden"
+            startChars={28}
+            endChars={18}
+          />
+        </Link>
+      </div>
+    </div>
   );
 }
 
@@ -255,79 +297,285 @@ function ChatMessageCard({ item }: { item: Extract<StreamFeedItem, { kind: "mess
 
 function StreamMetadataUpdatedCard({ item }: { item: StreamMetadataUpdatedFeedItem }) {
   return (
-    <article className="max-w-md rounded-lg border bg-card p-4 shadow-sm">
-      <div className="space-y-3">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            <Settings2Icon className="size-3.5" />
-            <span>Metadata updated</span>
-          </div>
-          <p className="font-mono text-xs text-muted-foreground">{item.path}</p>
-        </div>
-
-        <pre className="max-h-40 overflow-auto rounded-md bg-muted p-3 text-xs">
-          {JSON.stringify(item.metadata, null, 2)}
-        </pre>
-
-        <div className="text-xs text-muted-foreground">{formatTime(item.timestamp)}</div>
-      </div>
-    </article>
+    <AssistantArtifact
+      eyebrow={<Settings2Icon className="size-3.5" />}
+      eyebrowLabel="Metadata updated"
+      title={item.path}
+      meta={[formatTime(item.timestamp)]}
+    >
+      <ArtifactSection>
+        <SerializedObjectCodeBlock
+          data={item.metadata}
+          className="min-h-24 max-h-56"
+          initialFormat="yaml"
+          showToggle
+          showCopyButton
+        />
+      </ArtifactSection>
+    </AssistantArtifact>
   );
 }
 
 function StreamLifecycleLine({ item }: { item: StreamLifecycleFeedItem }) {
   return (
-    <div className="flex items-center gap-3 py-1">
-      <div className="h-px flex-1 bg-purple-400/50" />
-      <span className="shrink-0 text-xs font-bold text-purple-500">{item.label}</span>
-      <div className="h-px flex-1 bg-purple-400/50" />
+    <div className="flex items-center gap-3 py-2">
+      <div className="h-px flex-1 bg-border" />
+      <div className="inline-flex items-center gap-2 rounded-full border bg-background px-3 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground shadow-sm">
+        <CircleIcon className="size-2 fill-current" />
+        <span>{item.label}</span>
+      </div>
+      <div className="h-px flex-1 bg-border" />
     </div>
   );
 }
 
 function StreamPausedCard({ item }: { item: StreamPausedFeedItem }) {
   return (
-    <article className="max-w-md rounded-lg border border-amber-500/35 bg-card p-4 shadow-sm">
-      <div className="space-y-2">
-        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400">
-          <PauseCircleIcon className="size-3.5" />
-          <span>Stream paused</span>
-        </div>
-        <p className="text-sm text-foreground">{item.reason}</p>
-        <div className="text-xs text-muted-foreground">{formatTime(item.timestamp)}</div>
-      </div>
-    </article>
+    <AssistantArtifact
+      eyebrow={<PauseCircleIcon className="size-3.5" />}
+      eyebrowLabel="Stream paused"
+      title={item.reason}
+      meta={[formatTime(item.timestamp)]}
+      tone="warning"
+    />
   );
 }
 
 function StreamResumedCard({ item }: { item: StreamResumedFeedItem }) {
   return (
-    <article className="max-w-md rounded-lg border border-emerald-500/35 bg-card p-4 shadow-sm">
-      <div className="space-y-2">
-        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
-          <PlayCircleIcon className="size-3.5" />
-          <span>Stream resumed</span>
-        </div>
-        <p className="text-sm text-foreground">{item.reason}</p>
-        <div className="text-xs text-muted-foreground">{formatTime(item.timestamp)}</div>
-      </div>
-    </article>
+    <AssistantArtifact
+      eyebrow={<PlayCircleIcon className="size-3.5" />}
+      eyebrowLabel="Stream resumed"
+      title={item.reason}
+      meta={[formatTime(item.timestamp)]}
+      tone="success"
+    />
   );
 }
 
 function StreamErrorOccurredCard({ item }: { item: StreamErrorOccurredFeedItem }) {
   return (
-    <article className="max-w-md rounded-lg border border-destructive/35 bg-card p-4 shadow-sm">
-      <div className="space-y-2">
-        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-destructive">
-          <AlertTriangleIcon className="size-3.5" />
-          <span>Error occurred</span>
-        </div>
-        <p className="text-sm font-semibold text-foreground">{item.message}</p>
-        <div className="text-xs text-muted-foreground">{formatTime(item.timestamp)}</div>
-      </div>
-    </article>
+    <AssistantArtifact
+      eyebrow={<AlertTriangleIcon className="size-3.5" />}
+      eyebrowLabel="Error occurred"
+      title={item.message}
+      meta={[formatTime(item.timestamp)]}
+      tone="danger"
+    />
   );
+}
+
+function CodemodeBlockCard({ item }: { item: CodemodeBlockFeedItem }) {
+  return (
+    <AssistantArtifact
+      eyebrow={<Code2Icon className="size-3.5" />}
+      eyebrowLabel="Codemode block"
+      title={item.blockId}
+      badge={item.requestId}
+      meta={[item.language.toUpperCase(), formatTime(item.timestamp)]}
+    >
+      <ArtifactSection>
+        <SourceCodeBlock
+          code={item.code}
+          language={item.language === "ts" ? "typescript" : "text"}
+          className="min-h-40 max-h-[32rem]"
+          showCopyButton
+        />
+      </ArtifactSection>
+    </AssistantArtifact>
+  );
+}
+
+function CodemodeResultCard({ item }: { item: CodemodeResultFeedItem }) {
+  const [stdoutOpen, setStdoutOpen] = useState(item.stdout.length > 0);
+  const [stderrOpen, setStderrOpen] = useState(item.stderr.length > 0 && !item.success);
+  const StatusIcon = item.success ? CheckCircle2Icon : XCircleIcon;
+  const statusClassName = item.success
+    ? "text-emerald-600 dark:text-emerald-400"
+    : "text-destructive";
+  const statusLabel = item.success ? "Succeeded" : "Failed";
+
+  return (
+    <AssistantArtifact
+      eyebrow={<TerminalSquareIcon className="size-3.5" />}
+      eyebrowLabel="Codemode result"
+      title={item.blockId}
+      badge={item.requestId}
+      meta={[
+        `Block #${item.blockCount}`,
+        `Exit ${item.exitCode}`,
+        formatDuration(item.durationMs),
+        formatTime(item.timestamp),
+      ]}
+      headerExtra={
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs",
+            item.success
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+              : "border-destructive/30 bg-destructive/10 text-destructive",
+          )}
+        >
+          <StatusIcon className="size-3.5" />
+          {statusLabel}
+        </span>
+      }
+      tone={item.success ? "success" : "danger"}
+    >
+      <ArtifactSection>
+        <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <BracesIcon className="size-3.5" />
+            <span className="font-medium text-foreground">Artifacts</span>
+          </div>
+          <div className="mt-2 space-y-1 font-mono">
+            <div>{item.codePath}</div>
+            <div>{item.outputPath}</div>
+          </div>
+        </div>
+      </ArtifactSection>
+
+      <ArtifactSection>
+        <Collapsible open={stdoutOpen} onOpenChange={setStdoutOpen}>
+          <CollapsibleTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-auto w-full justify-between gap-2 px-2 py-1.5 text-xs font-normal"
+              />
+            }
+          >
+            <span>Stdout{item.stdout.length === 0 ? " (empty)" : ""}</span>
+            <CircleIcon
+              className={`size-3.5 transition-transform ${stdoutOpen ? "fill-current" : ""}`}
+            />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-2">
+            {item.stdout.length > 0 ? (
+              <SourceCodeBlock
+                code={item.stdout}
+                language="text"
+                className="min-h-24 max-h-72"
+                showCopyButton
+              />
+            ) : (
+              <p className="text-xs text-muted-foreground">No stdout.</p>
+            )}
+          </CollapsibleContent>
+        </Collapsible>
+      </ArtifactSection>
+
+      <ArtifactSection>
+        <Collapsible open={stderrOpen} onOpenChange={setStderrOpen}>
+          <CollapsibleTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-auto w-full justify-between gap-2 px-2 py-1.5 text-xs font-normal"
+              />
+            }
+          >
+            <span>Stderr{item.stderr.length === 0 ? " (empty)" : ""}</span>
+            <CircleIcon
+              className={`size-3.5 transition-transform ${stderrOpen ? "fill-current" : ""}`}
+            />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-2">
+            {item.stderr.length > 0 ? (
+              <SourceCodeBlock
+                code={item.stderr}
+                language="text"
+                className="min-h-24 max-h-72"
+                showCopyButton
+              />
+            ) : (
+              <p className="text-xs text-muted-foreground">No stderr.</p>
+            )}
+          </CollapsibleContent>
+        </Collapsible>
+      </ArtifactSection>
+    </AssistantArtifact>
+  );
+}
+
+function AssistantArtifact({
+  eyebrow,
+  eyebrowLabel,
+  title,
+  meta = [],
+  badge,
+  headerExtra,
+  tone = "default",
+  children,
+}: {
+  eyebrow: ReactNode;
+  eyebrowLabel: string;
+  title?: ReactNode;
+  meta?: string[];
+  badge?: string;
+  headerExtra?: ReactNode;
+  tone?: "default" | "success" | "warning" | "danger";
+  children?: ReactNode;
+}) {
+  const toneClassName =
+    tone === "success"
+      ? "border-emerald-500/30"
+      : tone === "warning"
+        ? "border-amber-500/30"
+        : tone === "danger"
+          ? "border-destructive/30"
+          : "border-border";
+
+  return (
+    <Message from="assistant" className="max-w-3xl">
+      <MessageContent
+        className={cn(
+          "w-full gap-0 overflow-hidden rounded-xl border bg-card px-0 py-0 shadow-sm",
+          toneClassName,
+        )}
+      >
+        <div className="border-b px-4 py-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1 space-y-1">
+              <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {eyebrow}
+                <span>{eyebrowLabel}</span>
+              </div>
+              {title ? (
+                <div className="font-mono text-sm font-medium leading-snug">{title}</div>
+              ) : null}
+              {meta.length > 0 ? (
+                <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                  {meta.map((part, index) => (
+                    <div key={`${part}-${index}`} className="flex items-center gap-2">
+                      {index > 0 ? <span>·</span> : null}
+                      <span>{part}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {headerExtra}
+              {badge ? (
+                <div className="rounded-full border border-border bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
+                  {badge}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        {children ? <div className="space-y-3 px-4 py-3">{children}</div> : null}
+      </MessageContent>
+    </Message>
+  );
+}
+
+function ArtifactSection({ children }: { children: ReactNode }) {
+  return <div className="space-y-2">{children}</div>;
 }
 
 function EventLine({
@@ -551,7 +799,19 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `stream-resumed-${item.timestamp}-${index}`;
     case "stream-error-occurred":
       return `stream-error-occurred-${item.timestamp}-${index}`;
+    case "codemode-block":
+      return `codemode-block-${item.blockId}-${item.timestamp}-${index}`;
+    case "codemode-result":
+      return `codemode-result-${item.blockId}-${item.blockCount}-${item.timestamp}-${index}`;
     default:
       return `feed-item-${index}`;
   }
+}
+
+function formatDuration(durationMs: number) {
+  if (durationMs < 1_000) {
+    return `${durationMs}ms`;
+  }
+
+  return `${(durationMs / 1_000).toFixed(1)}s`;
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
 import type { ResponseInput } from "openai/resources/responses/responses";
-import { defineProcessor, type EventInput } from "ai-engineer-workshop";
+import { defineProcessor, type ProcessorAppendInput } from "ai-engineer-workshop";
 import {
   LlmInputAddedPayload,
   LlmRequestCompletedPayload,
@@ -127,12 +127,14 @@ export function createAgentProcessor({
     afterAppend: async ({ append, event, state }) => {
       if (!isAgentEventType(event.type) && shouldMirrorEventToLlmInput(event)) {
         await append({
-          type: llmInputAddedType,
-          payload: {
-            content: formatEventAsPromptInput(event),
-            source: "event",
-            sourceEventOffset: event.offset,
-            sourceEventType: event.type,
+          event: {
+            type: llmInputAddedType,
+            payload: {
+              content: formatEventAsPromptInput(event),
+              source: "event",
+              sourceEventOffset: event.offset,
+              sourceEventType: event.type,
+            },
           },
         });
         return;
@@ -153,10 +155,12 @@ export function createAgentProcessor({
         canceledRequest.controller.abort();
 
         await append({
-          type: llmRequestCanceledType,
-          payload: {
-            replacementInputOffset: event.offset,
-            requestId: canceledRequest.requestId,
+          event: {
+            type: llmRequestCanceledType,
+            payload: {
+              replacementInputOffset: event.offset,
+              requestId: canceledRequest.requestId,
+            },
           },
         });
       }
@@ -166,11 +170,13 @@ export function createAgentProcessor({
       activeRequest = { controller, requestId };
 
       await append({
-        type: llmRequestStartedType,
-        payload: {
-          inputOffset: event.offset,
-          inputSource: input.data.source,
-          requestId,
+        event: {
+          type: llmRequestStartedType,
+          payload: {
+            inputOffset: event.offset,
+            inputSource: input.data.source,
+            requestId,
+          },
         },
       });
 
@@ -210,7 +216,7 @@ async function runOpenAiRequest({
   systemPrompt,
 }: {
   apiKey: string;
-  append: (event: EventInput) => unknown;
+  append: (input: ProcessorAppendInput) => unknown;
   controller: AbortController;
   conversation: LlmConversationMessage[];
   model: string;
@@ -241,10 +247,12 @@ async function runOpenAiRequest({
 
     for await (const streamEvent of stream) {
       await append({
-        type: openAiResponseEventAddedType,
-        payload: {
-          event: toJsonObject(streamEvent),
-          requestId,
+        event: {
+          type: openAiResponseEventAddedType,
+          payload: {
+            event: toJsonObject(streamEvent),
+            requestId,
+          },
         },
       });
 
@@ -254,31 +262,37 @@ async function runOpenAiRequest({
     }
 
     await append({
-      type: llmRequestCompletedType,
-      payload: {
-        outputText,
-        requestId,
+      event: {
+        type: llmRequestCompletedType,
+        payload: {
+          outputText,
+          requestId,
+        },
       },
     });
 
     for (const block of extractTypeScriptBlocks(outputText)) {
       await append({
-        type: codemodeBlockAddedType,
-        payload: {
-          blockId: block.blockId,
-          code: block.code,
-          language: "ts",
-          requestId,
+        event: {
+          type: codemodeBlockAddedType,
+          payload: {
+            blockId: block.blockId,
+            code: block.code,
+            language: "ts",
+            requestId,
+          },
         },
       });
     }
   } catch (error) {
     if (!isAbortError(error)) {
       await append({
-        type: llmRequestFailedType,
-        payload: {
-          message: error instanceof Error ? error.message : String(error),
-          requestId,
+        event: {
+          type: llmRequestFailedType,
+          payload: {
+            message: error instanceof Error ? error.message : String(error),
+            requestId,
+          },
         },
       });
     }

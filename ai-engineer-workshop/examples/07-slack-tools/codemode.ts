@@ -153,44 +153,48 @@ export function createCodemodeProcessor({
 
         await fs.writeFile(outputPath, output, "utf8");
         await append({
-          type: codemodeResultAddedType,
-          payload: {
-            blockId: state.currentBlock.blockId,
-            codePath: mainPath,
-            ok: true,
-            output,
-            outputPath,
-            prompt: [
-              "Your last code block finished successfully.",
-              "",
-              "```json",
-              JSON.stringify({ ok: true, output }, null, 2),
-              "```",
-              "",
-              "Only emit another ```ts``` block if more work is needed.",
-            ].join("\n"),
+          event: {
+            type: codemodeResultAddedType,
+            payload: {
+              blockId: state.currentBlock.blockId,
+              codePath: mainPath,
+              ok: true,
+              output,
+              outputPath,
+              prompt: [
+                "Your last code block finished successfully.",
+                "",
+                "```json",
+                JSON.stringify({ ok: true, output }, null, 2),
+                "```",
+                "",
+                "Only emit another ```ts``` block if more work is needed.",
+              ].join("\n"),
+            },
           },
         });
       } catch (error) {
         const output = error instanceof Error ? error.message : String(error);
         await fs.writeFile(outputPath, output, "utf8");
         await append({
-          type: codemodeResultAddedType,
-          payload: {
-            blockId: state.currentBlock.blockId,
-            codePath: mainPath,
-            ok: false,
-            output,
-            outputPath,
-            prompt: [
-              "Your last code block failed.",
-              "",
-              "```json",
-              JSON.stringify({ ok: false, output }, null, 2),
-              "```",
-              "",
-              "Fix the code and emit a new ```ts``` block.",
-            ].join("\n"),
+          event: {
+            type: codemodeResultAddedType,
+            payload: {
+              blockId: state.currentBlock.blockId,
+              codePath: mainPath,
+              ok: false,
+              output,
+              outputPath,
+              prompt: [
+                "Your last code block failed.",
+                "",
+                "```json",
+                JSON.stringify({ ok: false, output }, null, 2),
+                "```",
+                "",
+                "Fix the code and emit a new ```ts``` block.",
+              ].join("\n"),
+            },
           },
         });
       }

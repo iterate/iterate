@@ -11,76 +11,161 @@ export default async function proveJonasPingPong(_pathPrefix: string) {
   const baseUrl = process.env.BASE_URL || "http://127.0.0.1:4317";
   const client = createEventsClient(baseUrl);
   const runId = `proof-${Date.now()}`;
-  const matchingPath = `/jonas/proofs/${runId}` as StreamPath;
-  const nonMatchingPath = `/someone-else/proofs/${runId}` as StreamPath;
+  const matchingPathA = `/jonas/proofs/${runId}/a` as StreamPath;
+  const matchingPathB = `/jonas/proofs/${runId}/b` as StreamPath;
+  const matchingNestedPath = `/jonas/proofs/${runId}/nested/c` as StreamPath;
+  const nonMatchingPathA = `/someone-else/proofs/${runId}/a` as StreamPath;
+  const nonMatchingPathB = `/other/proofs/${runId}/b` as StreamPath;
 
   const runtime = createJonasPingPongRuntime(baseUrl);
   const runtimePromise = runtime.run();
 
   try {
     await client.append({
-      path: matchingPath,
+      path: matchingPathA,
       event: {
         type: "warmup",
-        payload: { scope: "matching" },
+        payload: { scope: "matching-a" },
       },
     });
     await client.append({
-      path: nonMatchingPath,
+      path: nonMatchingPathA,
       event: {
         type: "warmup",
-        payload: { scope: "non-matching" },
+        payload: { scope: "non-matching-a" },
       },
     });
 
     await waitFor(
-      () => runtime.getStreamPaths().includes(matchingPath),
-      `Expected ${matchingPath} to be discovered`,
+      () => runtime.getStreamPaths().includes(matchingPathA),
+      `Expected ${matchingPathA} to be discovered`,
     );
 
-    assert.equal(runtime.getStreamPaths().includes(nonMatchingPath), false);
+    assert.equal(runtime.getStreamPaths().includes(nonMatchingPathA), false);
 
-    const matchingPing = await client.append({
-      path: matchingPath,
+    await client.append({
+      path: matchingPathB,
       event: {
-        type: "ping",
-        payload: { scope: "matching" },
+        type: "warmup",
+        payload: { scope: "matching-b" },
       },
     });
-    const nonMatchingPing = await client.append({
-      path: nonMatchingPath,
+    await client.append({
+      path: nonMatchingPathB,
       event: {
-        type: "ping",
-        payload: { scope: "non-matching" },
+        type: "warmup",
+        payload: { scope: "non-matching-b" },
       },
     });
 
-    const matchingPong = await waitForPong({
-      client,
-      path: matchingPath,
-      replyToOffset: matchingPing.event.offset,
+    await waitFor(
+      () => runtime.getStreamPaths().includes(matchingPathB),
+      `Expected ${matchingPathB} to be discovered`,
+    );
+
+    assert.equal(runtime.getStreamPaths().includes(nonMatchingPathB), false);
+
+    await client.append({
+      path: matchingNestedPath,
+      event: {
+        type: "warmup",
+        payload: { scope: "matching-nested" },
+      },
     });
 
-    const nonMatchingEvents = await readHistory({
+    await waitFor(
+      () => runtime.getStreamPaths().includes(matchingNestedPath),
+      `Expected ${matchingNestedPath} to be discovered`,
+    );
+
+    const matchingPingA = await client.append({
+      path: matchingPathA,
+      event: {
+        type: "ping",
+        payload: { scope: "matching-a" },
+      },
+    });
+    const matchingPingB = await client.append({
+      path: matchingPathB,
+      event: {
+        type: "ping",
+        payload: { scope: "matching-b" },
+      },
+    });
+    const matchingNestedPing = await client.append({
+      path: matchingNestedPath,
+      event: {
+        type: "ping",
+        payload: { scope: "matching-nested" },
+      },
+    });
+    const nonMatchingPingA = await client.append({
+      path: nonMatchingPathA,
+      event: {
+        type: "ping",
+        payload: { scope: "non-matching-a" },
+      },
+    });
+    const nonMatchingPingB = await client.append({
+      path: nonMatchingPathB,
+      event: {
+        type: "ping",
+        payload: { scope: "non-matching-b" },
+      },
+    });
+
+    const matchingPongA = await waitForPong({
       client,
-      path: nonMatchingPath,
-      afterOffset: nonMatchingPing.event.offset,
+      path: matchingPathA,
+      replyToOffset: matchingPingA.event.offset,
+    });
+    const matchingPongB = await waitForPong({
+      client,
+      path: matchingPathB,
+      replyToOffset: matchingPingB.event.offset,
+    });
+    const matchingNestedPong = await waitForPong({
+      client,
+      path: matchingNestedPath,
+      replyToOffset: matchingNestedPing.event.offset,
+    });
+
+    const nonMatchingEventsA = await readHistory({
+      client,
+      path: nonMatchingPathA,
+      afterOffset: nonMatchingPingA.event.offset,
+    });
+    const nonMatchingEventsB = await readHistory({
+      client,
+      path: nonMatchingPathB,
+      afterOffset: nonMatchingPingB.event.offset,
     });
 
     assert.equal(
-      nonMatchingEvents.some(
+      nonMatchingEventsA.some(
         (event) =>
-          event.type === "pong" && getReplyToOffset(event) === nonMatchingPing.event.offset,
+          event.type === "pong" && getReplyToOffset(event) === nonMatchingPingA.event.offset,
+      ),
+      false,
+    );
+    assert.equal(
+      nonMatchingEventsB.some(
+        (event) =>
+          event.type === "pong" && getReplyToOffset(event) === nonMatchingPingB.event.offset,
       ),
       false,
     );
 
     console.log(`Base URL: ${baseUrl}`);
     console.log(`Pattern: ${jonasStreamPattern}`);
-    console.log(`Matching stream: ${matchingPath}`);
-    console.log(`Non-matching stream: ${nonMatchingPath}`);
-    console.log("matching pong");
-    console.log(JSON.stringify(matchingPong, null, 2));
+    console.log(
+      `Discovered matching streams: ${[matchingPathA, matchingPathB, matchingNestedPath].join(
+        ", ",
+      )}`,
+    );
+    console.log(`Ignored non-matching streams: ${[nonMatchingPathA, nonMatchingPathB].join(", ")}`);
+    console.log("matching pongs");
+    console.log(JSON.stringify([matchingPongA, matchingPongB, matchingNestedPong], null, 2));
     console.log("proof passed");
   } finally {
     runtime.stop();

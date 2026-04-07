@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { defineProcessor, type EventInput } from "ai-engineer-workshop";
+import { defineProcessor, type ProcessorAppendInput } from "ai-engineer-workshop";
 import {
   CodemodeBlockAddedPayload,
   codemodeBlockAddedType,
@@ -75,7 +75,7 @@ async function runCodemodeBlock({
   requestId,
   timeoutMs,
 }: {
-  append: (event: EventInput) => unknown;
+  append: (input: ProcessorAppendInput) => unknown;
   blockCount: number;
   blockId: string;
   code: string;
@@ -136,18 +136,20 @@ async function runCodemodeBlock({
     );
 
     await append({
-      type: codemodeResultAddedType,
-      payload: {
-        blockCount,
-        blockId,
-        codePath,
-        durationMs: Date.now() - startedAt,
-        exitCode: 0,
-        outputPath,
-        requestId,
-        stderr: joinText([compileResult.stderr, runResult.stderr]),
-        stdout: joinText([compileResult.stdout, runResult.stdout]),
-        success: true,
+      event: {
+        type: codemodeResultAddedType,
+        payload: {
+          blockCount,
+          blockId,
+          codePath,
+          durationMs: Date.now() - startedAt,
+          exitCode: 0,
+          outputPath,
+          requestId,
+          stderr: joinText([compileResult.stderr, runResult.stderr]),
+          stdout: joinText([compileResult.stdout, runResult.stdout]),
+          success: true,
+        },
       },
     });
   } catch (error) {
@@ -170,18 +172,20 @@ async function runCodemodeBlock({
     );
 
     await append({
-      type: codemodeResultAddedType,
-      payload: {
-        blockCount,
-        blockId,
-        codePath,
-        durationMs: Date.now() - startedAt,
-        exitCode: getExitCode(executionError),
-        outputPath,
-        requestId,
-        stderr,
-        stdout,
-        success: false,
+      event: {
+        type: codemodeResultAddedType,
+        payload: {
+          blockCount,
+          blockId,
+          codePath,
+          durationMs: Date.now() - startedAt,
+          exitCode: getExitCode(executionError),
+          outputPath,
+          requestId,
+          stderr,
+          stdout,
+          success: false,
+        },
       },
     });
   }

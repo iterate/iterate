@@ -1,4 +1,10 @@
-import type { Event, EventInput } from "@iterate-com/events-contract";
+import type { Event, EventInput, StreamPath } from "@iterate-com/events-contract";
+
+export type RelativeStreamPath = `.${string}`;
+export type ProcessorAppendInput = {
+  event: EventInput;
+  path?: StreamPath | RelativeStreamPath;
+};
 
 /**
  * A Processor runs reduce/afterAppend hooks against its own slice of stream
@@ -11,7 +17,7 @@ export type Processor<TState = Record<string, unknown>> = {
   initialState: TState;
   reduce?(args: { event: Event; state: TState }): TState;
   afterAppend?(args: {
-    append: (event: EventInput) => Event | Promise<Event>;
+    append: (input: ProcessorAppendInput) => Event | Promise<Event>;
     event: Event;
     state: TState;
   }): Promise<void>;

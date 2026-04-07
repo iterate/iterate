@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { StreamPath, type Event } from "@iterate-com/events-contract";
+import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/events-contract";
+import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   SidebarGroup,
@@ -11,176 +11,103 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from "@iterate-com/ui/components/sidebar";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { Plus } from "lucide-react";
+import { Minus, Plus } from "lucide-react";
+import { StreamPathLabel } from "~/components/stream-path-label.tsx";
+import { useStreamsChrome } from "~/components/streams-chrome.tsx";
 import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
-import { projectScopedQueryKey } from "~/lib/project-slug.ts";
+import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
+import {
+  discoverStreamPaths,
+  filterStreamPaths,
+  getStreamsSidebarState,
+  type StreamsSidebarTreeNode,
+} from "~/lib/streams-sidebar-tree.ts";
+import { type StreamRendererMode } from "~/lib/stream-feed-types.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
-import { orpc, orpcClient } from "~/orpc/client.ts";
-import { useStreamsChrome } from "~/components/streams-chrome.tsx";
-
-const DEFAULT_NEW_STREAM_PATH = "/some-stream";
 
 export function StreamsSidebar() {
-  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { selectedStreamPath } = useStreamsChrome();
   const projectSlug = useCurrentProjectSlug();
+  const search = useSearch({ strict: false });
   const [searchValue, setSearchValue] = useState("");
   const [isCreatingStream, setIsCreatingStream] = useState(false);
   const [newStreamPathInput, setNewStreamPathInput] = useState("");
-  const search = useSearch({ strict: false });
   const currentRenderer =
     "renderer" in search && typeof search.renderer === "string"
-      ? search.renderer
+      ? (search.renderer as StreamRendererMode)
       : defaultStreamViewSearch.renderer;
-  const listStreamsOptions = useMemo(
-    () => orpc.listStreams.queryOptions({ input: { path: "/" } }),
-    [],
-  );
-  const listStreamsQueryKey = useMemo(
-    () => projectScopedQueryKey(listStreamsOptions.queryKey, projectSlug),
-    [listStreamsOptions.queryKey, projectSlug],
-  );
-  const rootStateOptions = useMemo(() => orpc.getState.queryOptions({ input: { path: "/" } }), []);
-  const rootStateQueryKey = useMemo(
-    () => projectScopedQueryKey(rootStateOptions.queryKey, projectSlug),
-    [projectSlug, rootStateOptions.queryKey],
-  );
-
-  const streamsQuery = useQuery({
-    ...listStreamsOptions,
-    queryKey: listStreamsQueryKey,
-    staleTime: 30_000,
+  const { events: rootEvents, isConnecting } = useLiveStreamEvents({
+    streamPath: "/",
+    projectSlug,
   });
-
-  const rootStateQuery = useQuery({
-    ...rootStateOptions,
-    queryKey: rootStateQueryKey,
-    staleTime: 30_000,
-  });
-  const rootLastOffset = rootStateQuery.data?.eventCount ?? undefined;
+  const streamSearch = useMemo(
+    () => makeStreamSearch({ projectSlug, renderer: currentRenderer }),
+    [currentRenderer, projectSlug],
+  );
+  const { root, defaultExpandedPaths } = useMemo(
+    () =>
+      getStreamsSidebarState({
+        streamPaths: filterStreamPaths(discoverStreamPaths(rootEvents), searchValue),
+        currentStreamPath: selectedStreamPath,
+      }),
+    [rootEvents, searchValue, selectedStreamPath],
+  );
+  const [expandedPaths, setExpandedPaths] = useState<Set<StreamPathType>>(new Set(["/"]));
 
   useEffect(() => {
-    if (selectedStreamPath === "/" || rootStateQuery.isPending || rootStateQuery.isError) {
-      return;
-    }
-
-    const controller = new AbortController();
-    let isCurrent = true;
-    let iterator: AsyncIterator<Event> | undefined;
-
-    void (async () => {
-      const stream = await orpcClient.stream(
-        {
-          path: "/",
-          offset: rootLastOffset,
-          live: true,
-        },
-        { signal: controller.signal },
-      );
-
-      iterator = stream[Symbol.asyncIterator]();
-
-      if (!isCurrent || controller.signal.aborted) {
-        return;
-      }
-
-      for await (const event of stream) {
-        if (!isCurrent || controller.signal.aborted) {
-          return;
-        }
-
-        if (event.type !== "https://events.iterate.com/events/stream/child-stream-created") {
-          continue;
-        }
-
-        void queryClient.invalidateQueries({ queryKey: listStreamsQueryKey });
-      }
-    })().catch((error) => {
-      if (!isCurrent || controller.signal.aborted) {
-        return;
-      }
-
-      toast.error(readErrorMessage(error));
-    });
-
-    return () => {
-      isCurrent = false;
-      controller.abort();
-      void iterator?.return?.();
-    };
-  }, [
-    queryClient,
-    rootStateQuery.isError,
-    rootStateQuery.isPending,
-    rootLastOffset,
-    selectedStreamPath,
-    listStreamsQueryKey,
-  ]);
-
-  const filteredStreams = useMemo(() => {
-    const query = searchValue.trim().toLowerCase();
-    const streams = streamsQuery.data ?? [];
-
-    if (query.length === 0) {
-      return streams;
-    }
-
-    return streams.filter((stream) => stream.path.toLowerCase().includes(query));
-  }, [streamsQuery.data, searchValue]);
-
-  const isLoadingStreams = streamsQuery.isPending && streamsQuery.data == null;
+    setExpandedPaths(new Set(defaultExpandedPaths));
+  }, [defaultExpandedPaths]);
 
   function openCreateStreamForm() {
-    setNewStreamPathInput(DEFAULT_NEW_STREAM_PATH);
+    setNewStreamPathInput("/some-stream");
     setIsCreatingStream(true);
   }
 
-  function cancelCreateStream() {
+  function closeCreateStreamForm() {
     setIsCreatingStream(false);
     setNewStreamPathInput("");
   }
 
-  function submitNewStreamPath() {
-    const trimmed = newStreamPathInput.trim();
-    if (trimmed.length === 0) {
-      toast.error("Enter a stream path");
-      return;
-    }
+  function openStreamPath(path: StreamPathType) {
+    void navigate({
+      to: "/streams/$/",
+      params: { _splat: streamPathToSplat(path) },
+      search: (previous) => ({
+        ...previous,
+        ...streamSearch,
+      }),
+    });
+  }
 
-    const parsed = StreamPath.safeParse(trimmed);
-    if (!parsed.success) {
+  function submitNewStreamPath() {
+    const parsedPath = StreamPath.safeParse(newStreamPathInput.trim());
+    if (!parsedPath.success) {
       toast.error(
         "Use lowercase letters, numbers, hyphens, underscores, and slashes only (e.g. my-stream or team/inbox).",
       );
       return;
     }
 
-    if (parsed.data === "/") {
+    if (parsedPath.data === "/") {
       toast.error("Pick a path under a non-root stream.");
       return;
     }
 
-    void navigate({
-      to: "/streams/$/",
-      params: { _splat: streamPathToSplat(parsed.data) },
-      search: (previous) => ({
-        ...previous,
-        projectSlug,
-        event: defaultStreamViewSearch.event,
-        renderer: currentRenderer,
-      }),
-    });
-    cancelCreateStream();
+    openStreamPath(parsedPath.data);
+    closeCreateStreamForm();
   }
 
   return (
     <SidebarGroup>
       <SidebarGroupLabel>Streams</SidebarGroupLabel>
-      <SidebarGroupContent className="space-y-2">
+      <SidebarGroupContent className="space-y-2 overflow-x-auto">
         {isCreatingStream ? (
           <form
             className="space-y-2"
@@ -193,14 +120,14 @@ export function StreamsSidebar() {
               value={newStreamPathInput}
               onChange={(event) => setNewStreamPathInput(event.currentTarget.value)}
               onFocus={(event) => {
-                if (event.currentTarget.value === DEFAULT_NEW_STREAM_PATH) {
+                if (event.currentTarget.value === "/some-stream") {
                   event.currentTarget.select();
                 }
               }}
               placeholder="e.g. my-stream or team/inbox"
               onKeyDown={(event) => {
                 if (event.key === "Escape") {
-                  cancelCreateStream();
+                  closeCreateStreamForm();
                 }
               }}
             />
@@ -210,7 +137,7 @@ export function StreamsSidebar() {
                 variant="outline"
                 size="sm"
                 className="flex-1"
-                onClick={cancelCreateStream}
+                onClick={closeCreateStreamForm}
               >
                 Cancel
               </Button>
@@ -231,53 +158,26 @@ export function StreamsSidebar() {
           </Button>
         )}
 
-        {!isLoadingStreams ? (
+        {!isConnecting || rootEvents.length > 0 ? (
           <>
             <SidebarInput
               value={searchValue}
               onChange={(event) => setSearchValue(event.currentTarget.value)}
               placeholder="Filter streams"
             />
-
-            <SidebarMenu>
-              {filteredStreams.map((stream) => (
-                <SidebarMenuItem key={stream.path}>
-                  <SidebarMenuButton
-                    render={
-                      stream.path === "/" ? (
-                        <Link
-                          to="/streams/"
-                          search={(previous) => ({
-                            ...previous,
-                            projectSlug,
-                            event: defaultStreamViewSearch.event,
-                            renderer: currentRenderer,
-                          })}
-                          activeOptions={{ exact: true }}
-                        />
-                      ) : (
-                        <Link
-                          to="/streams/$/"
-                          params={{ _splat: streamPathToSplat(stream.path) }}
-                          search={(previous) => ({
-                            ...previous,
-                            projectSlug,
-                            event: defaultStreamViewSearch.event,
-                            renderer: currentRenderer,
-                          })}
-                        />
-                      )
-                    }
-                    isActive={selectedStreamPath === stream.path}
-                    className="h-auto py-1.5"
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate font-mono text-xs">{stream.path}</div>
-                      <div className="text-[11px] text-muted-foreground">{stream.createdAt}</div>
-                    </div>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+            <SidebarMenu className="min-w-max">
+              <StreamTreeItem
+                depth={0}
+                expandedPaths={expandedPaths}
+                node={root}
+                onTogglePath={(path) => {
+                  setExpandedPaths((currentExpandedPaths) =>
+                    toggleExpandedPath(currentExpandedPaths, path),
+                  );
+                }}
+                selectedStreamPath={selectedStreamPath ?? undefined}
+                streamSearch={streamSearch}
+              />
             </SidebarMenu>
           </>
         ) : null}
@@ -286,6 +186,220 @@ export function StreamsSidebar() {
   );
 }
 
-function readErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+function StreamTreeItem({
+  depth,
+  expandedPaths,
+  node,
+  onTogglePath,
+  selectedStreamPath,
+  streamSearch,
+}: {
+  depth: number;
+  expandedPaths: ReadonlySet<StreamPathType>;
+  node: StreamsSidebarTreeNode;
+  onTogglePath: (path: StreamPathType) => void;
+  selectedStreamPath?: StreamPathType;
+  streamSearch: ReturnType<typeof makeStreamSearch>;
+}) {
+  const isBranch = node.children.length > 0;
+  const isExpanded = expandedPaths.has(node.path);
+  const isSubRow = depth > 1;
+  const rowClassName = "h-6 min-w-0 px-2 text-[10px] data-[active=true]:bg-transparent";
+
+  if (isSubRow) {
+    return (
+      <SidebarMenuSubItem>
+        <SidebarMenuSubButton
+          render={<div />}
+          isActive={selectedStreamPath === node.path}
+          className={rowClassName}
+        >
+          <StreamBranchToggle
+            isBranch={isBranch}
+            isExpanded={isExpanded}
+            onToggle={isBranch ? () => onTogglePath(node.path) : undefined}
+          />
+          <StreamPathLink
+            path={node.path}
+            childCount={countDescendantStreams(node)}
+            streamSearch={streamSearch}
+          />
+        </SidebarMenuSubButton>
+        {isBranch && isExpanded ? (
+          <SidebarMenuSub className="mx-0 min-w-max border-l pl-3 pr-0">
+            {node.children.map((childNode) => (
+              <StreamTreeItem
+                key={childNode.path}
+                depth={depth + 1}
+                expandedPaths={expandedPaths}
+                node={childNode}
+                onTogglePath={onTogglePath}
+                selectedStreamPath={selectedStreamPath}
+                streamSearch={streamSearch}
+              />
+            ))}
+          </SidebarMenuSub>
+        ) : null}
+      </SidebarMenuSubItem>
+    );
+  }
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        render={<div />}
+        isActive={selectedStreamPath === node.path}
+        className={rowClassName}
+      >
+        <StreamBranchToggle
+          isBranch={isBranch}
+          isExpanded={isExpanded}
+          onToggle={isBranch ? () => onTogglePath(node.path) : undefined}
+        />
+        <StreamPathLink
+          path={node.path}
+          childCount={countDescendantStreams(node)}
+          streamSearch={streamSearch}
+        />
+      </SidebarMenuButton>
+      {isBranch && isExpanded ? (
+        depth === 0 ? (
+          <SidebarMenu className="min-w-max">
+            {node.children.map((childNode) => (
+              <StreamTreeItem
+                key={childNode.path}
+                depth={depth + 1}
+                expandedPaths={expandedPaths}
+                node={childNode}
+                onTogglePath={onTogglePath}
+                selectedStreamPath={selectedStreamPath}
+                streamSearch={streamSearch}
+              />
+            ))}
+          </SidebarMenu>
+        ) : (
+          <SidebarMenuSub className="mx-0 min-w-max border-l pl-3 pr-0">
+            {node.children.map((childNode) => (
+              <StreamTreeItem
+                key={childNode.path}
+                depth={depth + 1}
+                expandedPaths={expandedPaths}
+                node={childNode}
+                onTogglePath={onTogglePath}
+                selectedStreamPath={selectedStreamPath}
+                streamSearch={streamSearch}
+              />
+            ))}
+          </SidebarMenuSub>
+        )
+      ) : null}
+    </SidebarMenuItem>
+  );
+}
+
+function StreamBranchToggle({
+  isBranch,
+  isExpanded,
+  onToggle,
+}: {
+  isBranch: boolean;
+  isExpanded: boolean;
+  onToggle?: () => void;
+}) {
+  if (!isBranch) {
+    return <span className="inline-flex size-3 shrink-0" aria-hidden="true" />;
+  }
+
+  return (
+    <button
+      type="button"
+      className="inline-flex size-3 shrink-0 items-center justify-center rounded-sm text-muted-foreground/50 transition-colors hover:text-foreground"
+      aria-label={isExpanded ? "Collapse folder" : "Expand folder"}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle?.();
+      }}
+    >
+      {isExpanded ? <Minus className="size-2.5" /> : <Plus className="size-2.5" />}
+    </button>
+  );
+}
+
+function StreamPathLink({
+  path,
+  childCount,
+  streamSearch,
+}: {
+  path: StreamPathType;
+  childCount: number;
+  streamSearch: ReturnType<typeof makeStreamSearch>;
+}) {
+  return (
+    <Link
+      to="/streams/$/"
+      params={{ _splat: streamPathToSplat(path) }}
+      search={streamSearch}
+      className="flex min-w-0 flex-1 items-center justify-between gap-2"
+      onClick={(event) => {
+        event.stopPropagation();
+      }}
+    >
+      <StreamPathLabel
+        path={path}
+        label={getSidebarPathSegmentLabel(path)}
+        className="leading-4 text-[10px]"
+        startChars={14}
+        endChars={12}
+      />
+      {childCount > 0 ? (
+        <Badge
+          variant="outline"
+          className="h-4 shrink-0 rounded-sm px-1 font-mono text-[9px] font-normal tabular-nums text-muted-foreground"
+        >
+          {childCount}
+        </Badge>
+      ) : null}
+    </Link>
+  );
+}
+
+function makeStreamSearch({
+  projectSlug,
+  renderer,
+}: {
+  projectSlug: string;
+  renderer: StreamRendererMode;
+}) {
+  return {
+    event: defaultStreamViewSearch.event,
+    projectSlug,
+    renderer,
+  };
+}
+
+function toggleExpandedPath(expandedPaths: ReadonlySet<StreamPathType>, path: StreamPathType) {
+  const nextExpandedPaths = new Set(expandedPaths);
+
+  if (nextExpandedPaths.has(path)) {
+    nextExpandedPaths.delete(path);
+  } else {
+    nextExpandedPaths.add(path);
+  }
+
+  return nextExpandedPaths;
+}
+
+function countDescendantStreams(node: StreamsSidebarTreeNode): number {
+  return node.children.reduce(
+    (count, childNode) => count + 1 + countDescendantStreams(childNode),
+    0,
+  );
+}
+
+function getSidebarPathSegmentLabel(path: StreamPathType) {
+  if (path === "/") {
+    return "/";
+  }
+
+  return `/${path.split("/").at(-1) ?? path}`;
 }

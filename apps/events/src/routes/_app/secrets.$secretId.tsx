@@ -2,10 +2,11 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
-import { orpc } from "~/orpc/client.ts";
+import { getOrpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/secrets/$secretId")({
   loader: async ({ context, params }) => {
+    const orpc = getOrpc();
     const secret = await context.queryClient.ensureQueryData({
       ...orpc.secrets.find.queryOptions({ input: { id: params.secretId } }),
       staleTime: 30_000,

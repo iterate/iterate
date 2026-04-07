@@ -61,9 +61,19 @@ const processor = defineProcessor(() => ({
   reduce: ({ event, state }) => (event.type === "hello-world" ? { seen: state.seen + 1 } : state),
   afterAppend: async ({ append, event, state }) => {
     if (event.type !== "hello-world" || state.seen !== 1) return;
-    await append({ type: "hello-world-seen", payload: { sourceOffset: event.offset } });
+    await append({
+      event: { type: "hello-world-seen", payload: { sourceOffset: event.offset } },
+    });
   },
 }));
+```
+
+Processor `append()` now always takes an options object:
+
+```ts
+await append({ event: { type: "pong", payload: {} } });
+await append({ path: "./child", event: { type: "child-ping", payload: {} } });
+await append({ path: "../", event: { type: "notify-parent", payload: {} } });
 ```
 
 For multi-stream workers, `PullSubscriptionPatternProcessorRuntime` watches `/`

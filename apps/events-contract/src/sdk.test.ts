@@ -137,10 +137,12 @@ async function testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly() {
         }
 
         await append({
-          type: "processed",
-          payload: {
-            sourceOffset: event.offset,
-            tickCount: state.tickCount,
+          event: {
+            type: "processed",
+            payload: {
+              sourceOffset: event.offset,
+              tickCount: state.tickCount,
+            },
           },
         });
       },
@@ -282,6 +284,156 @@ async function testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly() {
 
   runtime.stop();
   await runPromise;
+}
+
+async function testProcessorAppendResolvesCurrentAbsoluteAndRelativePaths() {
+  const teamAPath = StreamPath.parse("/team/a");
+  const client = new MockEventsClient({
+    [teamAPath]: [makeInitializedEvent({ streamPath: teamAPath, offset: 1 })],
+  });
+
+  const runtime = new PullSubscriptionProcessorRuntime({
+    eventsClient: client,
+    processor: defineProcessor(() => ({
+      slug: "append-paths",
+      initialState: null,
+      async afterAppend({ append, event }) {
+        if (event.type !== "tick") {
+          return;
+        }
+
+        await append({
+          event: { type: "same-stream", payload: {} },
+        });
+        await append({
+          path: ".",
+          event: { type: "same-stream-dot", payload: {} },
+        });
+        await append({
+          path: "./child",
+          event: { type: "child-stream", payload: {} },
+        });
+        await append({
+          path: "../",
+          event: { type: "parent-stream", payload: {} },
+        });
+        await append({
+          path: "/elsewhere",
+          event: { type: "absolute-stream", payload: {} },
+        });
+      },
+    })),
+    streamPath: teamAPath,
+  });
+
+  const runPromise = runtime.run();
+
+  await client.waitForLiveSubscription(teamAPath);
+
+  client.emit(
+    teamAPath,
+    makeGenericEvent({
+      streamPath: teamAPath,
+      offset: 2,
+      type: "tick",
+      payload: { source: "live" },
+    }),
+  );
+
+  await client.waitForAppendCount(5);
+
+  assert.deepEqual(
+    client.appended.map((entry) => entry.path),
+    [
+      teamAPath,
+      teamAPath,
+      StreamPath.parse("/team/a/child"),
+      StreamPath.parse("/team"),
+      StreamPath.parse("/elsewhere"),
+    ],
+  );
+
+  runtime.stop();
+  await runPromise;
+}
+
+async function testProcessorAppendRejectsInvalidRelativePaths() {
+  const rootPath = StreamPath.parse("/");
+  const childPath = StreamPath.parse("/team/a");
+
+  const invalidRelativeClient = new MockEventsClient({
+    [childPath]: [makeInitializedEvent({ streamPath: childPath, offset: 1 })],
+  });
+  const invalidRelativeRuntime = new PullSubscriptionProcessorRuntime({
+    eventsClient: invalidRelativeClient,
+    processor: defineProcessor(() => ({
+      slug: "invalid-relative",
+      initialState: null,
+      async afterAppend({ append, event }) {
+        if (event.type !== "tick") {
+          return;
+        }
+
+        await append({
+          path: "child" as never,
+          event: { type: "unreachable", payload: {} },
+        });
+      },
+    })),
+    streamPath: childPath,
+  });
+
+  const invalidRelativeRunPromise = invalidRelativeRuntime.run();
+  await invalidRelativeClient.waitForLiveSubscription(childPath);
+  invalidRelativeClient.emit(
+    childPath,
+    makeGenericEvent({
+      streamPath: childPath,
+      offset: 2,
+      type: "tick",
+      payload: { source: "live" },
+    }),
+  );
+
+  await assert.rejects(invalidRelativeRunPromise, /append path must be absolute or dot-relative/);
+  assert.equal(invalidRelativeClient.appended.length, 0);
+
+  const aboveRootClient = new MockEventsClient({
+    [rootPath]: [makeInitializedEvent({ streamPath: rootPath, offset: 1 })],
+  });
+  const aboveRootRuntime = new PullSubscriptionProcessorRuntime({
+    eventsClient: aboveRootClient,
+    processor: defineProcessor(() => ({
+      slug: "above-root",
+      initialState: null,
+      async afterAppend({ append, event }) {
+        if (event.type !== "tick") {
+          return;
+        }
+
+        await append({
+          path: "../",
+          event: { type: "unreachable", payload: {} },
+        });
+      },
+    })),
+    streamPath: rootPath,
+  });
+
+  const aboveRootRunPromise = aboveRootRuntime.run();
+  await aboveRootClient.waitForLiveSubscription(rootPath);
+  aboveRootClient.emit(
+    rootPath,
+    makeGenericEvent({
+      streamPath: rootPath,
+      offset: 2,
+      type: "tick",
+      payload: { source: "live" },
+    }),
+  );
+
+  await assert.rejects(aboveRootRunPromise, /append path cannot walk above root/);
+  assert.equal(aboveRootClient.appended.length, 0);
 }
 
 async function testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase() {
@@ -654,5 +806,7 @@ function makeEvent(args: {
 
 await testSharedProcessorDefinitionKeepsPerRuntimeState();
 await testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly();
+await testProcessorAppendResolvesCurrentAbsoluteAndRelativePaths();
+await testProcessorAppendRejectsInvalidRelativePaths();
 await testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase();
 await testPatternRuntimeStopDuringHistoryWaitsForChildrenToExit();

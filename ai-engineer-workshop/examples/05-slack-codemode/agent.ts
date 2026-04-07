@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
-import { defineProcessor, type EventInput } from "ai-engineer-workshop";
+import { defineProcessor, type ProcessorAppendInput } from "ai-engineer-workshop";
 import {
   type LlmConversationMessage,
   buildConversationInput,
@@ -68,12 +68,14 @@ export function createSlackAgentProcessor({
     afterAppend: async ({ append, event, state }) => {
       if (!isAgentEventType(event.type) && shouldMirrorEventToLlmInput(event)) {
         await append({
-          type: llmInputAddedType,
-          payload: {
-            content: formatEventAsPromptInput(event),
-            source: "event",
-            sourceEventOffset: event.offset,
-            sourceEventType: event.type,
+          event: {
+            type: llmInputAddedType,
+            payload: {
+              content: formatEventAsPromptInput(event),
+              source: "event",
+              sourceEventOffset: event.offset,
+              sourceEventType: event.type,
+            },
           },
         });
         return;
@@ -91,8 +93,10 @@ export function createSlackAgentProcessor({
       if (activeRequest != null) {
         activeRequest.controller.abort();
         await append({
-          type: llmRequestCanceledType,
-          payload: { replacementInputOffset: event.offset, requestId: activeRequest.requestId },
+          event: {
+            type: llmRequestCanceledType,
+            payload: { replacementInputOffset: event.offset, requestId: activeRequest.requestId },
+          },
         });
       }
 
@@ -100,8 +104,10 @@ export function createSlackAgentProcessor({
       activeRequest = { controller: new AbortController(), requestId };
 
       await append({
-        type: llmRequestStartedType,
-        payload: { inputOffset: event.offset, inputSource: input.source, requestId },
+        event: {
+          type: llmRequestStartedType,
+          payload: { inputOffset: event.offset, inputSource: input.source, requestId },
+        },
       });
 
       void runRequest({
@@ -139,7 +145,7 @@ async function runRequest({
   openAi,
   requestId,
 }: {
-  append: (event: EventInput) => unknown;
+  append: (input: ProcessorAppendInput) => unknown;
   conversation: LlmConversationMessage[];
   controller: AbortController;
   instructions: string;
@@ -163,27 +169,35 @@ async function runRequest({
 
     for await (const streamEvent of stream) {
       await append({
-        type: openAiResponseEventAddedType,
-        payload: { event: toJsonObject(streamEvent), requestId },
+        event: {
+          type: openAiResponseEventAddedType,
+          payload: { event: toJsonObject(streamEvent), requestId },
+        },
       });
       if (streamEvent.type === "response.output_text.delta") {
         outputText += streamEvent.delta;
       }
     }
 
-    await append({ type: llmRequestCompletedType, payload: { outputText, requestId } });
+    await append({
+      event: { type: llmRequestCompletedType, payload: { outputText, requestId } },
+    });
 
     for (const block of extractTypeScriptBlocks(outputText)) {
       await append({
-        type: codemodeBlockAddedType,
-        payload: { blockId: block.blockId, code: block.code, language: "ts", requestId },
+        event: {
+          type: codemodeBlockAddedType,
+          payload: { blockId: block.blockId, code: block.code, language: "ts", requestId },
+        },
       });
     }
   } catch (error) {
     if (!isAbortError(error)) {
       await append({
-        type: llmRequestFailedType,
-        payload: { message: error instanceof Error ? error.message : String(error), requestId },
+        event: {
+          type: llmRequestFailedType,
+          payload: { message: error instanceof Error ? error.message : String(error), requestId },
+        },
       });
     }
   } finally {
