@@ -125,6 +125,15 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    // Dynamic workers are intentionally not "frameworkized" as a generic
+    // processor runtime. This experimental feature owns its own manager in
+    // `dynamic-processor.ts`, and `stream.ts` only provides the minimal stream
+    // capabilities it needs: append/history/live-stream plus the dynamic worker
+    // loader and the loopback egress binding.
+    //
+    // First-party references:
+    // - Dynamic Workers overview: https://developers.cloudflare.com/dynamic-workers/
+    // - RPC lifecycle / targets: https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
     this.dynamicWorkerManager = createDynamicWorkerManager({
       append: (event) => this.append(event),
       history: (args) =>
@@ -163,6 +172,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       const parsed = StreamState.safeParse(rawState);
       if (parsed.success) {
         this._state = parsed.data;
+        // Reconnect any previously configured dynamic workers before normal
+        // traffic resumes. The manager restores one runtime per slug from the
+        // reduced processor state, and then we append an explicit lifecycle
+        // event so processor code can observe that this DO instance woke up.
         await this.dynamicWorkerManager.sync(parsed.data.processors["dynamic-worker"]);
 
         try {

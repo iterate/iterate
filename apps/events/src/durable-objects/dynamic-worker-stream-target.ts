@@ -6,6 +6,22 @@ type LocalDynamicWorkerSubscriptionTarget = {
   dispose(): Promise<void>;
 };
 
+/**
+ * Bridges the Stream DO's local append/history/live-stream APIs into a scoped
+ * RPC capability that a dynamic worker can hold.
+ *
+ * Why this shape:
+ * - `RpcTarget` methods run back inside the DO execution context, so the
+ *   dynamic worker gets a narrow capability without a separate HTTP surface.
+ * - `append()` and `history()` are simple request/response RPC methods.
+ * - `subscribe()` returns another `RpcTarget` that behaves like a tiny remote
+ *   async iterator (`next()` / `return()`), translating the DO's NDJSON
+ *   `ReadableStream` into parsed `Event` objects.
+ *
+ * First-party references:
+ * - RPC lifecycle / targets: https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
+ * - Dynamic Workers RPC example patterns: https://developers.cloudflare.com/dynamic-workers/
+ */
 export function createDynamicWorkerStreamTarget(args: {
   append: (input: DynamicWorkerAppendInput) => Event;
   history: (args?: { afterOffset?: number }) => Event[];
@@ -55,6 +71,9 @@ function createDynamicWorkerSubscriptionTarget(args: {
   onDispose: () => void;
   stream: ReadableStream<Uint8Array>;
 }) {
+  // The DO already exposes live events as newline-delimited JSON bytes.
+  // Dynamic workers cannot directly hold this reader, so we keep the reader
+  // inside the DO and expose a small RPC iterator surface instead.
   const reader = args.stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";

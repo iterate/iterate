@@ -1115,7 +1115,7 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
     case "stream-lifecycle":
       return `lifecycle-${item.label}-${item.timestamp}-${index}`;
     case "dynamic-worker-configured":
-      return `dynamic-worker-configured-${item.slug}-${item.timestamp}`;
+      return `dynamic-worker-configured-${item.slug}-${item.raw.offset}`;
     case "stream-paused":
       return `stream-paused-${item.timestamp}-${index}`;
     case "stream-resumed":
