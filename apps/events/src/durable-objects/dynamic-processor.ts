@@ -261,12 +261,17 @@ export function createDynamicWorkerManager(context: {
     }
   >();
   const transitionsBySlug = new Map<string, Promise<void>>();
+  let disposed = false;
 
   function ensureDynamicWorker(slug: string, config: DynamicWorkerConfig) {
     const previousTransition = transitionsBySlug.get(slug) ?? Promise.resolve();
     const nextTransition = previousTransition
       .catch(() => {})
       .then(async () => {
+        if (disposed) {
+          return;
+        }
+
         const existing = runsBySlug.get(slug);
         const configKey = JSON.stringify(config);
 
@@ -277,6 +282,10 @@ export function createDynamicWorkerManager(context: {
         if (existing != null) {
           existing.stopping = true;
           await existing.stream.dispose();
+        }
+
+        if (disposed) {
+          return;
         }
 
         const { createDynamicWorkerStreamTarget } =
@@ -299,6 +308,12 @@ export function createDynamicWorkerManager(context: {
               live: args?.live,
             }),
         }) as LocalDynamicWorkerTarget;
+
+        if (disposed) {
+          await stream.dispose();
+          return;
+        }
+
         const globalOutbound =
           config.outboundGateway == null
             ? null
@@ -376,12 +391,17 @@ export function createDynamicWorkerManager(context: {
       return ensureConfiguredWorkers(state);
     },
     async dispose() {
+      disposed = true;
+      await Promise.all(
+        Array.from(transitionsBySlug.values(), (transition) => transition.catch(() => {})),
+      );
       await Promise.all(
         Array.from(runsBySlug.values(), async (run) => {
           run.stopping = true;
           await run.stream.dispose();
         }),
       );
+      transitionsBySlug.clear();
       runsBySlug.clear();
     },
   };
