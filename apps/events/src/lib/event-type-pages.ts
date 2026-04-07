@@ -204,6 +204,7 @@ export const scheduleConfiguredPage = {
   details: [
     "This is the canonical low-level scheduler event. Appending it directly is the most explicit way to configure or replace a schedule by slug.",
     "The reducer stores this in `state.processors.scheduler`; the Durable Object alarm is then derived from that reduced state.",
+    "Only explicitly schedulable callbacks can run. `append` is built in; custom stream subclasses must opt in extra callback names deliberately.",
   ],
   templates: [
     {
@@ -224,7 +225,7 @@ export const scheduleConfiguredPage = {
             kind: "once-in",
             delaySeconds: 30,
           },
-          nextRunAt: Math.floor(Date.now() / 1000) + 30,
+          nextRunAt: 1_775_592_400,
         },
       },
     },
@@ -246,7 +247,7 @@ export const scheduleConfiguredPage = {
             kind: "cron",
             cron: "0 * * * *",
           },
-          nextRunAt: Math.floor(Date.now() / 1000) + 3_600,
+          nextRunAt: 1_775_596_000,
         },
       },
     },

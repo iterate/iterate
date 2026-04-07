@@ -155,6 +155,7 @@ export const SchedulerEntryState = z.strictObject({
   payloadJson: z.string().nullable(),
   schedule: StreamSchedule,
   nextRunAt: z.number().int().nonnegative(),
+  executionCount: z.number().int().nonnegative(),
   running: z.boolean(),
   executionStartedAt: z.number().int().nonnegative().nullable(),
   createdAt: z.number().int().nonnegative(),

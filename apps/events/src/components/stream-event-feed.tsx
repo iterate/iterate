@@ -1037,6 +1037,10 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `codemode-block-${item.blockId}-${item.timestamp}-${index}`;
     case "codemode-result":
       return `codemode-result-${item.blockId}-${item.blockCount}-${item.timestamp}-${index}`;
+    case "scheduler-control":
+      return `scheduler-control-${item.action}-${item.slug}-${item.raw.offset}`;
+    case "scheduler-execution":
+      return `scheduler-execution-${item.action}-${item.slug}-${item.raw.offset}`;
     default:
       return `feed-item-${index}`;
   }

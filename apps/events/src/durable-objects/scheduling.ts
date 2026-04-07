@@ -13,7 +13,6 @@ import {
   ScheduleInternalExecutionFinishedPayload as ScheduleInternalExecutionFinishedPayloadSchema,
   type ScheduleInternalExecutionStartedPayload,
   ScheduleInternalExecutionStartedPayload as ScheduleInternalExecutionStartedPayloadSchema,
-  type StreamAppendScheduledPayload,
   StreamAppendScheduledPayload as StreamAppendScheduledPayloadSchema,
   type StreamSchedule,
 } from "@iterate-com/events-contract";
@@ -47,6 +46,7 @@ import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
  *   https://developers.cloudflare.com/agents/api-reference/schedule-tasks/
  */
 export const HUNG_INTERVAL_TIMEOUT_SECONDS = 30;
+const BUILTIN_SCHEDULABLE_CALLBACKS = ["append"] as const;
 
 export const schedulingProcessor = defineBuiltinProcessor<SchedulerState>(() => ({
   slug: "scheduler",
@@ -123,8 +123,8 @@ export async function runSchedulerAlarm(args: {
       continue;
     }
 
-    const callback = Reflect.get(args.instance, entry.callback);
-    if (typeof callback !== "function") {
+    const callback = getSchedulableCallback(args.instance, entry.callback);
+    if (callback == null) {
       await appendScheduleExecutionFinished({
         append: args.append,
         outcome: "failed",
@@ -191,6 +191,7 @@ function reduceSchedulerState(args: {
           payloadJson: payload.payloadJson ?? null,
           schedule: payload.schedule,
           nextRunAt: payload.nextRunAt,
+          executionCount: 0,
           running: false,
           executionStartedAt: null,
           createdAt: Math.floor(new Date(args.event.createdAt).getTime() / 1000),
@@ -241,6 +242,7 @@ function reduceSchedulerState(args: {
         [payload.slug]: {
           ...entry,
           nextRunAt: payload.nextRunAt,
+          executionCount: entry.executionCount + 1,
           running: false,
           executionStartedAt: null,
         },
@@ -265,6 +267,34 @@ function lowerAppendScheduledEvent(event: Event): ScheduleConfiguredPayload {
       schedule: payload.schedule,
     }),
   };
+}
+
+/**
+ * Scheduling callbacks are an explicit allowlist, not "any method name that
+ * happens to exist on the Durable Object instance".
+ *
+ * `append` is the only built-in schedulable callback because it is the public
+ * control-event use case. Test harnesses or subclassed stream objects can opt
+ * in extra callbacks by defining `schedulableCallbacks = ["foo", "bar"]`.
+ */
+function getSchedulableCallback(instance: object, callbackName: string) {
+  const allowedCallbacks = new Set<string>(BUILTIN_SCHEDULABLE_CALLBACKS);
+  const extraCallbacks = Reflect.get(instance, "schedulableCallbacks");
+
+  if (Array.isArray(extraCallbacks)) {
+    for (const value of extraCallbacks) {
+      if (typeof value === "string" && value.length > 0) {
+        allowedCallbacks.add(value);
+      }
+    }
+  }
+
+  if (!allowedCallbacks.has(callbackName)) {
+    return null;
+  }
+
+  const callback = Reflect.get(instance, callbackName);
+  return typeof callback === "function" ? callback : null;
 }
 
 function getAppendScheduledRewriteIdempotencyKey(event: Event) {

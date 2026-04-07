@@ -50,6 +50,7 @@ describe("scheduler control events", () => {
     ]);
     expect(state[slug]).toMatchObject({
       callback: "append",
+      executionCount: 0,
       payloadJson: JSON.stringify({
         type: "https://events.iterate.com/events/example/append-scheduled-fired",
         payload: {
@@ -100,6 +101,7 @@ describe("scheduler control events", () => {
     expect(Object.keys(schedulerState)).toEqual([slug]);
     expect(schedulerState[slug]).toMatchObject({
       callback: "intervalCallback",
+      executionCount: 0,
       payloadJson: JSON.stringify({ hello: "world" }),
       schedule: {
         kind: "every",
@@ -210,6 +212,39 @@ describe("scheduler control events", () => {
     expect((await streamStub.getState()).processors.scheduler[slug]).toBeUndefined();
   });
 
+  it("disallowed callbacks are never invoked on the durable object instance", async () => {
+    const streamStub = testEnv.TEST_SCHEDULE_STREAM.getByName("disallowed-callback-test");
+    const slug = "disallowed-callback-slug";
+
+    await streamStub.initialize({ projectSlug: "test", path: "/disallowed-callback-test" });
+    await streamStub.append(
+      makeConfiguredEvent({
+        callback: "destroy",
+        nextRunAt: Math.floor(Date.now() / 1000) - 1,
+        schedule: {
+          kind: "once-in",
+          delaySeconds: 1,
+        },
+        slug,
+      }),
+    );
+
+    await runDurableObjectAlarm(streamStub);
+
+    const history = await streamStub.history();
+    const finishedEvent = history.find(
+      (event) => event.type === SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
+    );
+
+    expect(finishedEvent?.payload).toEqual({
+      slug,
+      outcome: "failed",
+      nextRunAt: null,
+    });
+    expect((await streamStub.getState()).path).toBe("/disallowed-callback-test");
+    expect((await streamStub.getState()).processors.scheduler[slug]).toBeUndefined();
+  });
+
   it("interval schedules append internal execution-started and stay configured", async () => {
     const streamStub = testEnv.TEST_SCHEDULE_STREAM.getByName("interval-running-test");
     const slug = "interval-slug";
@@ -239,6 +274,7 @@ describe("scheduler control events", () => {
 
     const schedulerEntry = (await streamStub.getState()).processors.scheduler[slug];
     expect(schedulerEntry).toMatchObject({
+      executionCount: 1,
       running: false,
       schedule: {
         kind: "every",
@@ -257,7 +293,7 @@ describe("scheduler control events", () => {
     await streamStub.append(
       makeConfiguredEvent({
         callback: "intervalCallback",
-        nextRunAt: nowSeconds - 1,
+        nextRunAt: nowSeconds + 60,
         schedule: {
           kind: "every",
           intervalSeconds: 1,

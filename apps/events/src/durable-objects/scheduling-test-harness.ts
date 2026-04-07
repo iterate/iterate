@@ -8,6 +8,14 @@ export function createSchedulingTestDurableObjects<TBase extends new (...args: a
   Base: TBase,
 ) {
   class TestScheduleStreamDurableObject extends Base {
+    readonly schedulableCallbacks = [
+      "testCallback",
+      "intervalCallback",
+      "throwingCallback",
+      "slowCallback",
+      "cronCallback",
+    ] as const;
+
     intervalCallbackCount = 0;
     slowCallbackExecutionCount = 0;
     slowCallbackStartTimes: number[] = [];
