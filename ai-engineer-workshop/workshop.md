@@ -1,22 +1,36 @@
+NOTE TO AI AGENTS: We're working on this file together - please don't change anything unless I explicitly ask you to. But please do propose improvements and changes and flag with me where things could be homogenized.
+
+For context: This is the outline of an interactive workshop I'm giving at the AI Engineer Conference. I will walk people through this step by step and will try to write the code from scratch
+
+-- snip --
+
+WIP thoughts
+High level outline
+
+- What I'm about to tell you
+- Introduction to streams
+-
+
 In this workshop we will build an AI agent entirely from scratch using only two ingredients:
 
-1. An durable stream API that supports `.append({ path, event })` and `.subscribe({ path })`
+1. A durable stream API that supports `.append({ path, event })` and `.subscribe({ path })`
 2. Stream processors that implement the `.reduce` and `.afterAppend` methods
 
 This is all very prototype level code, but I hope the _ideas_ come across. We're all just reducing over event streams!
 
-## 1. Streams
+## 1. Playing with streams
 
 We made a simple durable streams server at https://events.iterate.com for this workshop. Let's [look at the docs](https://events.iterate.com/api/docs)!
 
 **WARNING: There is no authentication on this server, so please don't stick any secrets in your streams.**
 
-Let's play with this together!
+Here's how you use them:
 
 ```bash
 
-# Streams are structured into paths. Let's give ourselves a unique path prefix
-# My prefix will be /jonastemplestein - paths start with a slash!
+# Like files, a "stream" is identified by a "path" that starts with a slash
+# Let's give ourselves a unique path prefix so we don't collide with other people
+# My prefix will be /jonastemplestein
 export PATH_PREFIX="/$(id -un)"
 export BASE_URL="https://events.iterate.com"
 export STREAM_PATH="${PATH_PREFIX}/hello-world"
@@ -28,21 +42,22 @@ curl --json '{"type": "hello-world"}' \
 # Let's see if it's there
 curl -N "${BASE_URL}/api/streams${STREAM_PATH}"
 
-# We can also live tail the stream
-# With pretty printing
+# We can also live tail the stream with pretty printing (start this in a new tab)
 curl -sN "${BASE_URL}/api/streams${STREAM_PATH}?live=true" | sed -nu 's/^data: //p' | jq .
-```
-
-Now let's in another tab append another event
-
-```bash
-curl --json '{"type": "hello-world"}' \
-  "${BASE_URL}/api/streams${STREAM_PATH}"
 
 # Can also append hogwash!
 curl --json '{"hogwash": "yes!"}' \
   "${BASE_URL}/api/streams${STREAM_PATH}"
 
+
+# You can get the "reduced state" of a stream
+curl "${BASE_URL}/api/streams/__state${STREAM_PATH}" | jq .
+
+# It can do some weird things  (maybe)
+# - you can pause a stream
+# - jsonata transform
+# - send filtered and transformed webhooks to arbitrary endpoints
+# - schedule messages
 
 ```
 
@@ -60,7 +75,7 @@ Some notes / observations:
 
 ## Ping-pong script
 
-- Let's make a script where if anyone appends a `type: ping` event, we append a `type: pong` event!
+Let's make a very rudimentary script. Any time somebody appends an event of type "ping", we append a "pong" event!
 
 ## A simple LLM loop
 
@@ -189,6 +204,31 @@ Implementation sketch:
 - Debounce LLM requests by e.g. 200ms
 - Any processor can now listen for "LLM request triggered" events or something like that
 
+### "Inheritable event" processor
+
+Add an event that says "I want this event to be inherited by all child streams when they are created"
+
+This can be implemented as a lightweight processor + event with `{ type: "inheritable-event-added", payload: { ... event ... }}`
+
+### Compaction
+
+All manner of compaction strategies can be implemented as processors. You could e.g. do this:
+
+In agents processor
+
+- add `history-reset` event with payload `{ history: [ ... ] }` to agent processor with simple reducer that sets the history to whatever is in the payload
+
+In new "my-compaction" processor:
+
+- add `compaction-triggered` event to trigger a compaction (manually or when some condition is met)
+- in `afterAppend` hook make an LLM request to summarize the history up to that point however you please
+
+### Images
+
+### Voice agent
+
+The events API has a websocket endpoint specifically so we could use it as backend for openai or grok realtime voice agents!
+
 ### Multi-LLM agent
 
 Use tanstack AI or vercel AI or whatever you like to
@@ -216,8 +256,3 @@ Goal: Allow people to queue up messages before an LLM request is sent.
 # What is bad about this?
 
 - Loop detection is a PITA
-
-# Workshop CLI should
-
-1. Take script and "path pattern" to hook up to as input
-2.
