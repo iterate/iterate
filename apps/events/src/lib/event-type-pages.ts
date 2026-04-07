@@ -285,12 +285,12 @@ export const eventTypePages = [
   errorOccurredPage,
   jsonataTransformerConfiguredPage,
   manualEventAppendedPage,
-  streamSubscriptionConfiguredPage,
   streamDurableObjectConstructedPage,
   streamInitializedPage,
   streamMetadataUpdatedPage,
   streamPausedPage,
   streamResumedPage,
+  streamSubscriptionConfiguredPage,
 ] as const satisfies readonly EventTypePageDefinition[];
 
 export function getEventTypePageByType(type: string) {
