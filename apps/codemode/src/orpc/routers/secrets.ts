@@ -79,7 +79,6 @@ export const secretsRouter = {
       return {
         id: secret.id,
         key: secret.key,
-        value: secret.value,
         description: secret.description,
         createdAt: secret.createdAt,
         updatedAt: secret.updatedAt,

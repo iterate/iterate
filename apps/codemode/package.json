@@ -17,7 +17,8 @@
     "rpc": "pnpm cli rpc",
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck",
-    "test:e2e": "node -e \"if (!process.env.CODEMODE_BASE_URL) { console.error('CODEMODE_BASE_URL is required for codemode e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts"
+    "test:e2e": "node -e \"if (!process.env.CODEMODE_BASE_URL) { console.error('CODEMODE_BASE_URL is required for codemode e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",
+    "test:e2e:doppler": "node -e \"if (!process.env.CODEMODE_BASE_URL) { console.error('CODEMODE_BASE_URL is required for codemode e2e tests'); process.exit(1); }\" && doppler run --project ai-engineer-workshop --config dev_jonas -- pnpm exec vitest run --config ./e2e/vitest.config.ts"
   },
   "dependencies": {
     "@cloudflare/codemode": "^0.3.2",

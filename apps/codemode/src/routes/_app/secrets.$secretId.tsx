@@ -25,15 +25,12 @@ function SecretDetailPage() {
     <section className="max-w-md space-y-4 p-4">
       <div className="space-y-1">
         <p className="text-sm font-semibold">{secret.key}</p>
-        <p className="text-sm text-muted-foreground">Secret detail.</p>
+        <p className="text-sm text-muted-foreground">
+          Secret metadata only. Raw values are never returned after creation.
+        </p>
       </div>
 
       <div className="space-y-4 rounded-lg border p-4">
-        <div className="space-y-1">
-          <p className="text-xs text-muted-foreground">Value</p>
-          <p className="font-mono text-sm break-all">{secret.value}</p>
-        </div>
-
         {secret.description ? (
           <div className="space-y-1">
             <p className="text-xs text-muted-foreground">Description</p>

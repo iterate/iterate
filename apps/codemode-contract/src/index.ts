@@ -86,9 +86,7 @@ export const CodemodeSecretRecord = z.object({
 });
 export type CodemodeSecretRecord = z.infer<typeof CodemodeSecretRecord>;
 
-export const CodemodeSecretDetail = CodemodeSecretRecord.extend({
-  value: z.string(),
-});
+export const CodemodeSecretDetail = CodemodeSecretRecord;
 export type CodemodeSecretDetail = z.infer<typeof CodemodeSecretDetail>;
 
 export const CodemodeRun = z.object({

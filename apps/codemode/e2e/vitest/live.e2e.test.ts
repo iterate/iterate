@@ -7,15 +7,55 @@ import { codemodeContract } from "@iterate-com/codemode-contract";
 import type { appRouter } from "~/orpc/root.ts";
 
 type OrpcClient = RouterClient<typeof appRouter>;
+const defaultOpenAiSecretKey = "openai.apiKey";
+
+function requireCodemodeBaseUrl() {
+  const baseUrl = process.env.CODEMODE_BASE_URL?.trim().replace(/\/+$/, "");
+
+  if (!baseUrl) {
+    throw new Error("CODEMODE_BASE_URL is required for codemode e2e tests.");
+  }
+
+  return baseUrl;
+}
+
+function requireOpenAiApiKey() {
+  const openAiApiKey = process.env.OPENAI_API_KEY?.trim();
+
+  if (!openAiApiKey) {
+    throw new Error("OPENAI_API_KEY is required for the codemode OpenAI e2e proofs.");
+  }
+
+  return openAiApiKey;
+}
+
+async function createClient(baseUrl: string) {
+  return createORPCClient(
+    new OpenAPILink(codemodeContract, {
+      url: `${baseUrl}/api`,
+    }),
+  ) as OrpcClient;
+}
+
+async function ensureOpenAiSecret(client: OrpcClient) {
+  const openAiApiKey = requireOpenAiApiKey();
+  const existingSecrets = await client.secrets.list({ limit: 100, offset: 0 });
+  const existing = existingSecrets.secrets.find((secret) => secret.key === defaultOpenAiSecretKey);
+
+  if (existing) {
+    await client.secrets.remove({ id: existing.id });
+  }
+
+  return client.secrets.create({
+    key: defaultOpenAiSecretKey,
+    value: openAiApiKey,
+    description: "Shared OpenAI API key for codemode live e2e and preview proofs",
+  });
+}
 
 describe("live codemode", () => {
   it("serves the new run page", async () => {
-    const baseUrl = process.env.CODEMODE_BASE_URL?.trim().replace(/\/+$/, "");
-    if (!baseUrl) {
-      throw new Error(
-        "CODEMODE_BASE_URL is required. Example: CODEMODE_BASE_URL=https://codemode-stg.iterate.com pnpm test:e2e",
-      );
-    }
+    const baseUrl = requireCodemodeBaseUrl();
 
     const response = await fetch(`${baseUrl}/runs-v2-new`);
     expect(response.status).toBe(200);
@@ -27,16 +67,8 @@ describe("live codemode", () => {
   });
 
   it("returns a sentinel from getIterateSecret instead of the stored secret value", async () => {
-    const baseUrl = process.env.CODEMODE_BASE_URL?.trim().replace(/\/+$/, "");
-    if (!baseUrl) {
-      throw new Error("CODEMODE_BASE_URL is required for codemode e2e tests.");
-    }
-
-    const client: OrpcClient = createORPCClient(
-      new OpenAPILink(codemodeContract, {
-        url: `${baseUrl}/api`,
-      }),
-    );
+    const baseUrl = requireCodemodeBaseUrl();
+    const client = await createClient(baseUrl);
 
     const nonce = randomUUID().slice(0, 8);
     const secretKey = `openai.apiKey.e2e.${nonce}`;
@@ -49,6 +81,11 @@ describe("live codemode", () => {
     });
 
     try {
+      const foundSecret = await client.secrets.find({ id: secret.id });
+      expect(foundSecret.key).toBe(secretKey);
+      expect(JSON.stringify(foundSecret)).not.toContain(actualSecretValue);
+      expect("value" in (foundSecret as object)).toBe(false);
+
       const run = await client.runV2({
         input: {
           type: "package-project",
@@ -86,16 +123,8 @@ export default async function ({ getIterateSecret }) {
   });
 
   it("ignores a user-supplied executor.js module and still runs the generated executor", async () => {
-    const baseUrl = process.env.CODEMODE_BASE_URL?.trim().replace(/\/+$/, "");
-    if (!baseUrl) {
-      throw new Error("CODEMODE_BASE_URL is required for codemode e2e tests.");
-    }
-
-    const client: OrpcClient = createORPCClient(
-      new OpenAPILink(codemodeContract, {
-        url: `${baseUrl}/api`,
-      }),
-    );
+    const baseUrl = requireCodemodeBaseUrl();
+    const client = await createClient(baseUrl);
 
     const run = await client.runV2({
       input: {
@@ -138,55 +167,36 @@ export default async function () {
   });
 
   it("bundles a package-project snippet, reads the OpenAI key from codemode secrets, and gets a model response", async () => {
-    const baseUrl = process.env.CODEMODE_BASE_URL?.trim().replace(/\/+$/, "");
-    const openAiApiKey = process.env.OPENAI_API_KEY?.trim();
+    const baseUrl = requireCodemodeBaseUrl();
+    const openAiApiKey = requireOpenAiApiKey();
+    const client = await createClient(baseUrl);
 
-    if (!baseUrl) {
-      throw new Error("CODEMODE_BASE_URL is required for codemode e2e tests.");
-    }
-
-    if (!openAiApiKey) {
-      throw new Error("OPENAI_API_KEY is required for the codemode OpenAI proof e2e.");
-    }
-
-    const client: OrpcClient = createORPCClient(
-      new OpenAPILink(codemodeContract, {
-        url: `${baseUrl}/api`,
-      }),
-    );
+    await ensureOpenAiSecret(client);
 
     const nonce = randomUUID().slice(0, 8);
-    const secretKey = `openai.apiKey.e2e.${nonce}`;
     const expectedReply = `codemode-openai-proof-${nonce}`;
-    const secret = await client.secrets.create({
-      key: secretKey,
-      value: openAiApiKey,
-      description: "Temporary OpenAI API key for codemode package-project e2e proof",
-    });
-
-    try {
-      const run = await client.runV2({
-        input: {
-          type: "package-project",
-          entryPoint: "src/index.ts",
-          files: {
-            "package.json": JSON.stringify(
-              {
-                name: "codemode-openai-proof",
-                private: true,
-                type: "module",
-                dependencies: {
-                  openai: "^6.0.0",
-                },
+    const run = await client.runV2({
+      input: {
+        type: "package-project",
+        entryPoint: "src/index.ts",
+        files: {
+          "package.json": JSON.stringify(
+            {
+              name: "codemode-openai-proof",
+              private: true,
+              type: "module",
+              dependencies: {
+                openai: "^6.0.0",
               },
-              null,
-              2,
-            ),
-            "src/index.ts": `
+            },
+            null,
+            2,
+          ),
+          "src/index.ts": `
 import OpenAI from "openai";
 
 export default async function ({ getIterateSecret }) {
-  const visibleValue = await getIterateSecret({ secretKey: ${JSON.stringify(secretKey)} });
+  const visibleValue = await getIterateSecret({ secretKey: ${JSON.stringify(defaultOpenAiSecretKey)} });
   const client = new OpenAI({
     apiKey: visibleValue,
   });
@@ -201,30 +211,27 @@ export default async function ({ getIterateSecret }) {
     message: response.output_text ?? null,
   };
 }
-              `.trim(),
-          },
+          `.trim(),
         },
-        sources: [],
-      });
+      },
+      sources: [],
+    });
 
-      expect(run.error).toBeNull();
+    expect(run.error).toBeNull();
 
-      const result = JSON.parse(run.result) as {
-        message?: string | null;
-        visibleValue?: string | null;
-      };
-      expect(result.visibleValue).toBe(
-        `getIterateSecret({ secretKey: ${JSON.stringify(secretKey)} })`,
-      );
-      expect(run.result).not.toContain(openAiApiKey);
-      expect(result.message).toContain(expectedReply);
+    const result = JSON.parse(run.result) as {
+      message?: string | null;
+      visibleValue?: string | null;
+    };
+    expect(result.visibleValue).toBe(
+      `getIterateSecret({ secretKey: ${JSON.stringify(defaultOpenAiSecretKey)} })`,
+    );
+    expect(run.result).not.toContain(openAiApiKey);
+    expect(result.message).toContain(expectedReply);
 
-      const savedRun = await client.runs.find({ id: run.id });
-      expect(savedRun.error).toBeNull();
-      expect(savedRun.result).not.toContain(openAiApiKey);
-      expect(savedRun.result).toContain(expectedReply);
-    } finally {
-      await client.secrets.remove({ id: secret.id });
-    }
+    const savedRun = await client.runs.find({ id: run.id });
+    expect(savedRun.error).toBeNull();
+    expect(savedRun.result).not.toContain(openAiApiKey);
+    expect(savedRun.result).toContain(expectedReply);
   }, 120_000);
 });
