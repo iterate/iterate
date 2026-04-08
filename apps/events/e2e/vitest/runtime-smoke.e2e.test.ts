@@ -105,7 +105,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       await waitForStream(path);
 
       const rootEvents = await collectAsyncIterableUntilIdle({
-        iterable: await app.client.stream({ path: "/" }),
+        iterable: await app.client.stream({ path: "/", before: "end" }),
         idleMs: rootHistoryIdleTimeoutMs,
       });
       expect(rootEvents[0]).toMatchObject({
@@ -121,7 +121,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const events = await collectAsyncIterableUntilIdle({
         iterable: await app.client.stream({
           path,
-          live: false,
+          before: "end",
         }),
         idleMs: historyIdleTimeoutMs,
       });
@@ -148,7 +148,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         processors: expectedProcessorsWithRecentEventCount(2),
       });
 
-      const rootHistoryResponse = await app.fetch("/api/streams/%2F");
+      const rootHistoryResponse = await app.fetch("/api/streams/%2F?before=end");
       expect(rootHistoryResponse.status).toBe(200);
       expect(await rootHistoryResponse.text()).toContain(
         "https://events.iterate.com/events/stream/initialized",
@@ -165,8 +165,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const liveStream = await app.client.stream(
         {
           path,
-          offset: expectedOffset(1),
-          live: true,
+          after: expectedOffset(1),
         },
         { signal: controller.signal },
       );

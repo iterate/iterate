@@ -307,7 +307,7 @@ async function waitForEventCounts(args: {
 async function readHistory(path: StreamPath) {
   const app = createEvents2AppFixture({ baseURL: localBaseUrl });
   return (await collectAsyncIterableUntilIdle({
-    iterable: await app.client.stream({ path, live: false }),
+    iterable: await app.client.stream({ path, before: "end" }),
     idleMs: 500,
   })) as Event[];
 }

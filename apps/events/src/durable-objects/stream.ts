@@ -5,6 +5,7 @@ import {
   Event,
   EventInput,
   type ProjectSlug,
+  type StreamCursor,
   type StreamMetadataUpdatedEvent,
   StreamPath,
   StreamState,
@@ -146,12 +147,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       append: (event) => this.append(event),
       history: (args) =>
         this.history({
-          afterOffset: args?.afterOffset,
+          after: args?.after,
+          before: args?.before,
         }),
       stream: (args) =>
         this.stream({
-          afterOffset: args?.afterOffset,
-          live: args?.live,
+          after: args?.after,
+          before: args?.before,
         }),
       createLoopbackBinding: ({ exportName }) => {
         if (exportName !== "DynamicWorkerEgressGateway") {
@@ -598,13 +600,18 @@ export class StreamDurableObject extends DurableObject<Env> {
   // Pull subscriptions
   // ---------------------------------------------------------------------------
 
-  history(args: { afterOffset?: number } = {}): Event[] {
-    const afterOffset = args.afterOffset ?? 0;
+  history(args: { after?: StreamCursor; before?: StreamCursor } = {}): Event[] {
+    const range = resolveStreamRange({
+      after: args.after,
+      before: args.before ?? "end",
+      endOffset: this.state.eventCount,
+    });
 
     return this.ctx.storage.sql
       .exec<SqliteEventRow>(
-        `SELECT * FROM events WHERE offset > ? ORDER BY offset ASC`,
-        afterOffset,
+        `SELECT * FROM events WHERE offset > ? AND offset < ? ORDER BY offset ASC`,
+        range.afterOffset,
+        range.beforeOffset,
       )
       .toArray()
       .flatMap((row) => {
@@ -613,8 +620,11 @@ export class StreamDurableObject extends DurableObject<Env> {
       });
   }
 
-  stream(args: { afterOffset?: number; live?: boolean } = {}): ReadableStream<Uint8Array> {
-    const backlog = this.history(args);
+  stream(args: { after?: StreamCursor; before?: StreamCursor } = {}): ReadableStream<Uint8Array> {
+    const backlog = this.history({
+      after: args.after,
+      before: args.before ?? "end",
+    });
     let subscriber: ReadableStreamDefaultController<Uint8Array> | undefined;
 
     return new ReadableStream<Uint8Array>({
@@ -623,7 +633,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           controller.enqueue(encodeEventLine(event));
         }
 
-        if (!args.live) {
+        if (args.before != null) {
           controller.close();
           return;
         }
@@ -700,6 +710,41 @@ export class StreamDurableObject extends DurableObject<Env> {
       createdAt: row.created_at,
     } as Event;
   }
+}
+
+function resolveStreamRange(args: {
+  after?: StreamCursor;
+  before?: StreamCursor;
+  endOffset: number;
+}) {
+  return {
+    afterOffset: resolveAfterCursor(args.after, args.endOffset),
+    beforeOffset: resolveBeforeCursor(args.before, args.endOffset),
+  };
+}
+
+function resolveAfterCursor(cursor: StreamCursor | undefined, endOffset: number) {
+  if (cursor == null || cursor === "start") {
+    return 0;
+  }
+
+  if (cursor === "end") {
+    return endOffset;
+  }
+
+  return cursor;
+}
+
+function resolveBeforeCursor(cursor: StreamCursor | undefined, endOffset: number) {
+  if (cursor == null || cursor === "end") {
+    return endOffset + 1;
+  }
+
+  if (cursor === "start") {
+    return 1;
+  }
+
+  return cursor;
 }
 
 const textEncoder = new TextEncoder();

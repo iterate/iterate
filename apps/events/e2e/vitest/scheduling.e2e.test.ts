@@ -228,7 +228,7 @@ async function readHistory(path: StreamPath) {
   const events = await collectAsyncIterableUntilIdle({
     iterable: await app.client.stream({
       path,
-      live: false,
+      before: "end",
     }),
     idleMs: historyIdleTimeoutMs,
   });

@@ -11,6 +11,7 @@ import {
   type Event,
   type EventType,
   type JSONObject,
+  type StreamCursor,
   type StreamPath,
 } from "./types.ts";
 
@@ -85,7 +86,7 @@ type PullSubscriptionEventsClient = {
     event: Event;
   }>;
   stream: (
-    input: { path: StreamPath; offset?: number; live?: boolean },
+    input: { path: StreamPath; after?: StreamCursor; before?: StreamCursor },
     options: { signal?: AbortSignal },
   ) => Promise<AsyncIterable<Event>>;
 };
@@ -150,7 +151,10 @@ export class PullSubscriptionProcessorRuntime<State> {
       this.#runtimeLogger.catchupStart({ streamPath: this.#streamPath });
 
       const historyStream = await this.#eventsClient.stream(
-        { path: this.#streamPath },
+        {
+          path: this.#streamPath,
+          before: "end",
+        },
         { signal: this.#controller.signal },
       );
       let lastOffset: number | undefined;
@@ -180,8 +184,7 @@ export class PullSubscriptionProcessorRuntime<State> {
       const liveStream = await this.#eventsClient.stream(
         {
           path: this.#streamPath,
-          offset: lastOffset,
-          live: true,
+          after: toLiveTailCursor(lastOffset),
         },
         {
           signal: this.#controller.signal,
@@ -337,7 +340,8 @@ export class PushSubscriptionProcessorRuntime<State> {
     const historyStream = await this.#eventsClient.stream(
       {
         path: this.#streamPath,
-        offset: this.#lastOffset || undefined,
+        after: this.#lastOffset > 0 ? this.#lastOffset : "start",
+        before: targetOffset,
       },
       {},
     );
@@ -345,10 +349,6 @@ export class PushSubscriptionProcessorRuntime<State> {
     for await (const event of historyStream) {
       if (event.offset <= this.#lastOffset) {
         continue;
-      }
-
-      if (event.offset >= targetOffset) {
-        break;
       }
 
       this.#reduce(event);
@@ -418,7 +418,10 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
       this.#runtimeLogger.watchPattern({ streamPattern: this.#streamPattern });
 
       const historyStream = await this.#eventsClient.stream(
-        { path: "/" },
+        {
+          path: "/",
+          before: "end",
+        },
         { signal: this.#controller.signal },
       );
       let lastOffset: number | undefined;
@@ -446,8 +449,7 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
       const liveStream = await this.#eventsClient.stream(
         {
           path: "/",
-          offset: lastOffset,
-          live: true,
+          after: toLiveTailCursor(lastOffset),
         },
         {
           signal: this.#controller.signal,
@@ -735,6 +737,10 @@ function formatEventOffset(offset: number) {
 
 function formatOffsetValue(offset: number | undefined) {
   return offset == null ? colorize("none", ANSI.gray) : colorize(String(offset), ANSI.yellow);
+}
+
+function toLiveTailCursor(lastOffset: number | undefined): StreamCursor {
+  return lastOffset == null ? "start" : lastOffset;
 }
 
 function formatEventCount(count: number) {

@@ -12,6 +12,7 @@ import {
   StreamPath,
   type Event,
   type EventInput,
+  type StreamCursor,
   type StreamPath as StreamPathType,
 } from "./types.ts";
 
@@ -919,16 +920,20 @@ class MockEventsClient {
   }
 
   async stream(
-    input: { path: StreamPathType; offset?: number; live?: boolean },
+    input: { path: StreamPathType; after?: StreamCursor; before?: StreamCursor },
     options: { signal?: AbortSignal },
   ) {
+    const pathEvents = this.#eventsByPath.get(input.path) ?? [];
+    const endOffset = pathEvents.at(-1)?.offset ?? 0;
     const history = (this.#eventsByPath.get(input.path) ?? []).filter(
-      (event) => event.offset > (input.offset ?? 0),
+      (event) =>
+        event.offset > resolveAfterCursor(input.after, endOffset) &&
+        event.offset < resolveBeforeCursor(input.before, endOffset),
     );
 
     return this.#iterate({
       history,
-      live: input.live === true,
+      live: input.before == null,
       path: input.path,
       signal: options.signal,
     });
@@ -1028,10 +1033,10 @@ class SlowHistoryEventsClient {
   }
 
   async stream(
-    input: { path: StreamPathType; offset?: number; live?: boolean },
+    input: { path: StreamPathType; after?: StreamCursor; before?: StreamCursor },
     options: { signal?: AbortSignal },
   ) {
-    if (input.live) {
+    if (input.before == null) {
       this.liveStreamStarted = true;
       return waitForever(options.signal);
     }
@@ -1067,15 +1072,15 @@ class SlowPatternHistoryEventsClient extends MockEventsClient {
   }
 
   override async stream(
-    input: { path: StreamPathType; offset?: number; live?: boolean },
+    input: { path: StreamPathType; after?: StreamCursor; before?: StreamCursor },
     options: { signal?: AbortSignal },
   ) {
-    if (input.path === this.#childPath && input.live) {
+    if (input.path === this.#childPath && input.before == null) {
       this.childLiveStreamStarted = true;
       return waitForever(options.signal);
     }
 
-    if (input.path === this.#childPath && !input.live) {
+    if (input.path === this.#childPath && input.before != null) {
       return this.#childHistory(options.signal);
     }
 
@@ -1095,19 +1100,44 @@ class SlowPatternHistoryEventsClient extends MockEventsClient {
 
 class InclusiveOffsetMockEventsClient extends MockEventsClient {
   override async stream(
-    input: { path: StreamPathType; offset?: number; live?: boolean },
+    input: { path: StreamPathType; after?: StreamCursor; before?: StreamCursor },
     options: { signal?: AbortSignal },
   ) {
-    const inclusiveOffset = input.offset == null ? undefined : Math.max(0, input.offset - 1);
+    const inclusiveAfter =
+      typeof input.after !== "number" ? input.after : input.after <= 1 ? "start" : input.after - 1;
 
     return super.stream(
       {
         ...input,
-        offset: inclusiveOffset,
+        after: inclusiveAfter,
       },
       options,
     );
   }
+}
+
+function resolveAfterCursor(cursor: StreamCursor | undefined, endOffset: number) {
+  if (cursor == null || cursor === "start") {
+    return 0;
+  }
+
+  if (cursor === "end") {
+    return endOffset;
+  }
+
+  return cursor;
+}
+
+function resolveBeforeCursor(cursor: StreamCursor | undefined, endOffset: number) {
+  if (cursor == null || cursor === "end") {
+    return endOffset + 1;
+  }
+
+  if (cursor === "start") {
+    return 1;
+  }
+
+  return cursor;
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000) {

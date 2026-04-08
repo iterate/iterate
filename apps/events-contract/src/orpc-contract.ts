@@ -11,6 +11,7 @@ import {
   GenericEventInput,
   InvalidEventAppendedEventInput,
   StreamPath,
+  StreamQuery,
   StreamState,
 } from "./types.ts";
 
@@ -94,14 +95,12 @@ export const eventsContract = oc.router({
       operationId: "streamEvents",
       method: "GET",
       path: "/streams/{+path}",
-      description: `Reads historical events from a stream and can keep the connection open for live events. ${PathMungingDescription} For example, \`GET /api/streams/team/inbox\`, \`GET /api/streams/team%2Finbox\`, and \`GET /api/streams/%2Fteam%2Finbox\` all target the same stream. The root stream is addressed canonically as \`GET /api/streams/%2F\`.`,
+      description: `Reads events from a stream using exclusive \`after\` / \`before\` cursors. \`start\` and \`end\` are virtual bookends outside the event space. Omitting \`before\` keeps the connection open for future events; setting \`before\` returns a finite stream. ${PathMungingDescription} For example, \`GET /api/streams/team/inbox\`, \`GET /api/streams/team%2Finbox\`, and \`GET /api/streams/%2Fteam%2Finbox\` all target the same stream. The root stream is addressed canonically as \`GET /api/streams/%2F\`.`,
       tags: ["/streams"],
     })
     .input(
-      z.object({
+      StreamQuery.extend({
         path: StreamPath,
-        offset: z.coerce.number().int().positive().optional(),
-        live: z.coerce.boolean().optional(),
       }),
     )
     // https://orpc.dev/docs/event-iterator

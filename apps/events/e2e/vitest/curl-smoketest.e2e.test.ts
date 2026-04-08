@@ -15,7 +15,7 @@
  *   curl -sS "$BASE_URL/api/streams/__state/$STREAM_RPATH"
  *   echo
  *   echo '---'
- *   curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH"
+ *   curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH?before=end"
  *   echo
  *   echo '---'
  *   curl -sS "$BASE_URL/api/streams/__children/%2F" >/dev/null
@@ -75,7 +75,7 @@ echo '---'
 retry_json_get "$BASE_URL/api/streams/__state/$STREAM_RPATH" -H "x-iterate-project: $PROJECT_SLUG"
 echo
 echo '---'
-curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH" -H "x-iterate-project: $PROJECT_SLUG"
+curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH?before=end" -H "x-iterate-project: $PROJECT_SLUG"
 echo
 echo '---'
 curl -sS "$BASE_URL/api/streams/__children/%2F" -H "x-iterate-project: $PROJECT_SLUG" >/dev/null
