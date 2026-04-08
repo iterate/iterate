@@ -18,10 +18,14 @@ export const OpenAiResponseEventAddedEvent = z.object({
 
 export type AgentState = {
   history: ResponseInputItem[];
+  systemPrompt: string;
+  model: string;
 };
 
 const initialState: AgentState = {
   history: [],
+  systemPrompt: "You are a helpful assistant that likes to joke.",
+  model: "gpt-4o-mini",
 };
 
 export const agentProcessor = defineProcessor<AgentState>(() => {
@@ -34,6 +38,7 @@ export const agentProcessor = defineProcessor<AgentState>(() => {
     reduce: ({ event, state }) =>
       match(event)
         .case(AgentInputAddedEvent, ({ payload }) => ({
+          ...state,
           history: [...state.history, { role: "user" as const, content: payload.content }],
         }))
         .default(() => state),
@@ -42,8 +47,8 @@ export const agentProcessor = defineProcessor<AgentState>(() => {
       await match(event)
         .case(AgentInputAddedEvent, async () => {
           const response = await openai.responses.create({
-            model: "gpt-4o-mini",
-            instructions: "You are a helpful assistant. Keep answers concise.",
+            model: state.model,
+            instructions: state.systemPrompt,
             input: state.history,
             stream: true,
           });

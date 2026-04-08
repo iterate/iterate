@@ -1,24 +1,10 @@
-NOTE TO AI AGENTS: We're working on this file together - please don't change anything unless I explicitly ask you to. But please do propose improvements and changes and flag with me where things could be homogenized.
-
-For context: This is the outline of an interactive workshop I'm giving at the AI Engineer Conference. I will walk people through this step by step and will try to write the code from scratch
-
--- snip --
-
-WIP thoughts
-High level outline
-
-- What I'm about to tell you
-- Introduction to streams
--
-
 In this workshop we will build an AI agent entirely from scratch using only two ingredients:
 
 1. A durable stream API that supports `.append({ path, event })` and `.subscribe({ path })`
-2. Stream processors that implement the `.reduce` and `.afterAppend` methods
 
-This is all very prototype level code, but I hope the _ideas_ come across. We're all just reducing over event streams!
+2. Stream processors that implement the `.reduce({ event, state })` and `.afterAppend({ append, event, state })` methods
 
-## 1. Playing with streams
+# 1. Playing with streams
 
 We made a simple durable streams server at https://events.iterate.com for this workshop. Let's [look at the docs](https://events.iterate.com/api/docs)!
 

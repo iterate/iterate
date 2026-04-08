@@ -265,20 +265,24 @@ export class PushSubscriptionProcessorRuntime<State> {
   #eventsClient: PullSubscriptionEventsClient;
   #lastOffset = 0;
   #pending = Promise.resolve();
+  #processorLogger: ProcessorLogger;
   #processor: Processor<State>;
   #state: State;
   #streamPath: StreamPath;
 
   constructor({
     eventsClient,
+    logger = console,
     processor,
     streamPath,
   }: {
     eventsClient: PullSubscriptionEventsClient;
+    logger?: ProcessorLogger;
     processor: Processor<State>;
     streamPath: StreamPath;
   }) {
     this.#eventsClient = eventsClient;
+    this.#processorLogger = logger;
     this.#processor = processor;
     this.#state = structuredClone(this.#processor.initialState);
     this.#streamPath = streamPath;
@@ -319,6 +323,7 @@ export class PushSubscriptionProcessorRuntime<State> {
     await this.#processor.afterAppend?.({
       append: this.#append,
       event,
+      logger: this.#processorLogger,
       state: this.#state,
     });
   }
@@ -364,6 +369,7 @@ export class PushSubscriptionProcessorRuntime<State> {
 
     this.#state = this.#processor.reduce({
       event,
+      logger: this.#processorLogger,
       state: structuredClone(this.#state),
     });
   }
