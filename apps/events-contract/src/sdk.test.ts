@@ -4,6 +4,7 @@ import {
   defineProcessor,
   PullSubscriptionPatternProcessorRuntime,
   PullSubscriptionProcessorRuntime,
+  PushSubscriptionProcessorRuntime,
 } from "./sdk.ts";
 import {
   StreamPath,
@@ -457,6 +458,209 @@ async function testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase() {
   assert.equal(client.liveStreamStarted, false);
 }
 
+async function testPushRuntimeCatchesUpAndAppendsWithCanonicalProcessorContract() {
+  const streamPath = StreamPath.parse("/push/demo");
+  const client = new MockEventsClient({
+    [streamPath]: [
+      makeInitializedEvent({ streamPath, offset: 1 }),
+      makeGenericEvent({
+        streamPath,
+        offset: 2,
+        type: "tick",
+        payload: { source: "history" },
+      }),
+      makeGenericEvent({
+        streamPath,
+        offset: 3,
+        type: "tick",
+        payload: { source: "history" },
+      }),
+    ],
+  });
+
+  const runtime = new PushSubscriptionProcessorRuntime({
+    eventsClient: client,
+    processor: defineProcessor<{ count: number }>(() => ({
+      slug: "push-runtime",
+      initialState: { count: 0 },
+      reduce: ({ event, state }) => (event.type === "tick" ? { count: state.count + 1 } : state),
+      async afterAppend({ append, event, state }) {
+        if (event.type !== "tick") {
+          return;
+        }
+
+        await append({
+          event: {
+            type: "processed",
+            payload: {
+              sourceOffset: event.offset,
+              tickCount: state.count,
+            },
+          },
+        });
+      },
+    })),
+    streamPath,
+  });
+
+  await runtime.consume(
+    makeGenericEvent({
+      streamPath,
+      offset: 4,
+      type: "tick",
+      payload: { source: "live" },
+    }),
+  );
+
+  assert.deepEqual(runtime.getState(), { count: 3 });
+  assert.deepEqual(client.appended, [
+    {
+      path: streamPath,
+      event: makeEvent({
+        streamPath,
+        offset: 4,
+        type: "processed",
+        payload: {
+          sourceOffset: 4,
+          tickCount: 3,
+        },
+      }),
+    },
+  ]);
+}
+
+async function testPushRuntimeSerializesOutOfOrderDeliveriesWithoutDoubleReducingHistory() {
+  const streamPath = StreamPath.parse("/push/ordered");
+  const client = new MockEventsClient({
+    [streamPath]: [
+      makeInitializedEvent({ streamPath, offset: 1 }),
+      makeGenericEvent({
+        streamPath,
+        offset: 2,
+        type: "tick",
+        payload: { source: "history-1" },
+      }),
+      makeGenericEvent({
+        streamPath,
+        offset: 3,
+        type: "tick",
+        payload: { source: "history-2" },
+      }),
+      makeGenericEvent({
+        streamPath,
+        offset: 4,
+        type: "tick",
+        payload: { source: "history-3" },
+      }),
+    ],
+  });
+
+  const seenOffsets: number[] = [];
+  const runtime = new PushSubscriptionProcessorRuntime({
+    eventsClient: client,
+    processor: defineProcessor<{ count: number }>(() => ({
+      slug: "push-ordered",
+      initialState: { count: 0 },
+      reduce: ({ event, state }) => {
+        if (event.type !== "tick") {
+          return state;
+        }
+
+        seenOffsets.push(event.offset);
+        return { count: state.count + 1 };
+      },
+    })),
+    streamPath,
+  });
+
+  await Promise.all([
+    runtime.consume(
+      makeGenericEvent({
+        streamPath,
+        offset: 5,
+        type: "tick",
+        payload: { source: "live-5" },
+      }),
+    ),
+    runtime.consume(
+      makeGenericEvent({
+        streamPath,
+        offset: 6,
+        type: "tick",
+        payload: { source: "live-6" },
+      }),
+    ),
+  ]);
+
+  assert.deepEqual(seenOffsets, [2, 3, 4, 5, 6]);
+  assert.deepEqual(runtime.getState(), { count: 5 });
+}
+
+async function testPushRuntimeSkipsInclusiveCatchUpEventsAtLastProcessedOffset() {
+  const streamPath = StreamPath.parse("/push/inclusive");
+  const client = new InclusiveOffsetMockEventsClient({
+    [streamPath]: [
+      makeInitializedEvent({ streamPath, offset: 1 }),
+      makeGenericEvent({
+        streamPath,
+        offset: 2,
+        type: "tick",
+        payload: { source: "history-2" },
+      }),
+      makeGenericEvent({
+        streamPath,
+        offset: 3,
+        type: "tick",
+        payload: { source: "history-3" },
+      }),
+      makeGenericEvent({
+        streamPath,
+        offset: 4,
+        type: "tick",
+        payload: { source: "history-4" },
+      }),
+    ],
+  });
+  const seenOffsets: number[] = [];
+
+  const runtime = new PushSubscriptionProcessorRuntime({
+    eventsClient: client,
+    processor: defineProcessor<{ count: number }>(() => ({
+      slug: "push-inclusive",
+      initialState: { count: 0 },
+      reduce: ({ event, state }) => {
+        if (event.type !== "tick") {
+          return state;
+        }
+
+        seenOffsets.push(event.offset);
+        return { count: state.count + 1 };
+      },
+    })),
+    streamPath,
+  });
+
+  await runtime.consume(
+    makeGenericEvent({
+      streamPath,
+      offset: 3,
+      type: "tick",
+      payload: { source: "live-3" },
+    }),
+  );
+  await runtime.consume(
+    makeGenericEvent({
+      streamPath,
+      offset: 5,
+      type: "tick",
+      payload: { source: "live-5" },
+    }),
+  );
+
+  assert.deepEqual(seenOffsets, [2, 3, 4, 5]);
+  assert.deepEqual(runtime.getState(), { count: 4 });
+}
+
 async function testPatternRuntimeStopDuringHistoryWaitsForChildrenToExit() {
   const rootPath = StreamPath.parse("/");
   const childPath = StreamPath.parse("/team/history");
@@ -680,6 +884,23 @@ class SlowPatternHistoryEventsClient extends MockEventsClient {
   }
 }
 
+class InclusiveOffsetMockEventsClient extends MockEventsClient {
+  override async stream(
+    input: { path: StreamPathType; offset?: number; live?: boolean },
+    options: { signal?: AbortSignal },
+  ) {
+    const inclusiveOffset = input.offset == null ? undefined : Math.max(0, input.offset - 1);
+
+    return super.stream(
+      {
+        ...input,
+        offset: inclusiveOffset,
+      },
+      options,
+    );
+  }
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000) {
   const startedAt = Date.now();
 
@@ -810,3 +1031,6 @@ await testProcessorAppendResolvesCurrentAbsoluteAndRelativePaths();
 await testProcessorAppendRejectsInvalidRelativePaths();
 await testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase();
 await testPatternRuntimeStopDuringHistoryWaitsForChildrenToExit();
+await testPushRuntimeCatchesUpAndAppendsWithCanonicalProcessorContract();
+await testPushRuntimeSerializesOutOfOrderDeliveriesWithoutDoubleReducingHistory();
+await testPushRuntimeSkipsInclusiveCatchUpEventsAtLastProcessedOffset();

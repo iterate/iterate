@@ -5,19 +5,15 @@ import {
   type DynamicWorkerState,
   type Event,
   EventInput,
-  type JSONObject,
   type StreamPath,
 } from "@iterate-com/events-contract";
-import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
+import {
+  defineBuiltinProcessor,
+  type ProcessorAppendInput,
+} from "@iterate-com/events-contract/sdk";
 import { dynamicWorkerEgressConfigHeader } from "~/lib/dynamic-worker-egress.ts";
 
-export type DynamicWorkerAppendInput = {
-  type: Event["type"];
-  payload?: JSONObject;
-  metadata?: JSONObject;
-  idempotencyKey?: string;
-  offset?: number;
-};
+export type DynamicWorkerAppendInput = ProcessorAppendInput;
 
 const defaultDynamicWorkerCompatibilityDate = "2026-02-05";
 const defaultDynamicWorkerCompatibilityFlags: string[] = [];
@@ -26,13 +22,14 @@ const defaultDynamicWorkerProcessorModule = "processor.js";
 const defaultDynamicWorkerRuntimeConfigModule = "runtime-config.js";
 export const pingPongDynamicWorkerScript = `
 export default {
+  slug: "ping-pong",
   initialState: {},
 
-  reduce(state) {
+  reduce({ state }) {
     return state;
   },
 
-  async onEvent({ append, event }) {
+  async afterAppend({ append, event }) {
     if (
       event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured" ||
       !/\\bping\\b/i.test(
@@ -46,7 +43,11 @@ export default {
       return;
     }
 
-    await append({ type: "pong" });
+    await append({
+      event: {
+        type: "pong",
+      },
+    });
   },
 };
 `.trim();
@@ -73,13 +74,14 @@ function normalizeHeaders(headers) {
 }
 
 export default {
+  slug: "httpbin-echo",
   initialState: {},
 
-  reduce(state) {
+  reduce({ state }) {
     return state;
   },
 
-  async onEvent({ append, event }) {
+  async afterAppend({ append, event }) {
     if (!containsPing(event)) {
       return;
     }
@@ -88,12 +90,14 @@ export default {
     const responseJson = await response.json();
 
     await append({
-      type: "https://events.iterate.com/events/example/httpbin-echoed",
-      payload: {
-        ok: response.ok,
-        status: response.status,
-        normalizedHeaders: normalizeHeaders(responseJson.headers),
-        response: responseJson,
+      event: {
+        type: "https://events.iterate.com/events/example/httpbin-echoed",
+        payload: {
+          ok: response.ok,
+          status: response.status,
+          normalizedHeaders: normalizeHeaders(responseJson.headers),
+          response: responseJson,
+        },
       },
     });
   },
@@ -123,6 +127,20 @@ if (runtimeConfig.outboundGateway != null) {
   globalThis.fetch = (input, init) => originalFetch(withDynamicWorkerEgressConfig(input, init));
 }
 
+function hasFunction(value, key) {
+  return value != null && typeof value === "object" && typeof value[key] === "function";
+}
+
+if (
+  processor == null ||
+  typeof processor !== "object" ||
+  !("initialState" in processor)
+) {
+  throw new Error(
+    "Dynamic worker processor modules must default-export a processor object with initialState and optional reduce/afterAppend/onEvent hooks.",
+  );
+}
+
 function createRemoteAsyncIterator(target) {
   return {
     [Symbol.asyncIterator]() {
@@ -139,6 +157,35 @@ function createRemoteAsyncIterator(target) {
   };
 }
 
+function reduceEvent(state, event) {
+  if (!hasFunction(processor, "reduce")) {
+    return state;
+  }
+
+  return processor.reduce({ state: structuredClone(state), event }) ?? state;
+}
+
+async function appendSameStream(stream, input) {
+  const normalizedInput =
+    input != null && typeof input === "object" && "event" in input ? input : { event: input };
+
+  if (
+    normalizedInput == null ||
+    typeof normalizedInput !== "object" ||
+    !("event" in normalizedInput)
+  ) {
+    throw new Error("Dynamic worker processors must call append(event) or append({ event }).");
+  }
+
+  if ("path" in normalizedInput && normalizedInput.path != null) {
+    throw new Error(
+      "Dynamic worker processors can only append to their own stream. append({ path }) is not supported.",
+    );
+  }
+
+  return stream.append({ event: normalizedInput.event });
+}
+
 async function replayProcessorState(stream, processor) {
   let state = structuredClone(processor.initialState);
   let lastOffset = 0;
@@ -146,7 +193,7 @@ async function replayProcessorState(stream, processor) {
 
   for (const event of history) {
     lastOffset = event.offset;
-    state = processor.reduce(structuredClone(state), event) ?? state;
+    state = reduceEvent(state, event);
   }
 
   return { lastOffset, state };
@@ -162,15 +209,25 @@ export default {
         continue;
       }
 
-      const prevState = state;
-      state = processor.reduce(structuredClone(state), event) ?? state;
+      const prevState = structuredClone(state);
+      state = reduceEvent(state, event);
 
-      await processor.onEvent?.({
-        append: (nextEvent) => stream.append(nextEvent),
-        event,
-        state,
-        prevState,
-      });
+      if (hasFunction(processor, "afterAppend")) {
+        await processor.afterAppend({
+          append: (input) => appendSameStream(stream, input),
+          event,
+          state,
+        });
+      }
+
+      if (hasFunction(processor, "onEvent")) {
+        await processor.onEvent({
+          append: (input) => appendSameStream(stream, input),
+          event,
+          prevState,
+          state,
+        });
+      }
 
       lastOffset = event.offset;
     }
@@ -286,13 +343,17 @@ export function createDynamicWorkerManager(context: {
         const { createDynamicWorkerStreamTarget } =
           await import("./dynamic-worker-stream-target.ts");
         const stream = createDynamicWorkerStreamTarget({
-          append: (input: DynamicWorkerAppendInput) =>
-            context.append(
-              EventInput.parse({
-                ...input,
-                payload: input.payload ?? {},
-              }),
-            ),
+          append: (input: DynamicWorkerAppendInput) => {
+            if (input.path != null) {
+              throw new Error(
+                "Dynamic worker processors can only append to their own stream. append({ path }) is not supported.",
+              );
+            }
+
+            return context.append(
+              EventInput.parse({ ...input.event, payload: input.event.payload ?? {} }),
+            );
+          },
           history: (args) =>
             context.history({
               afterOffset: args?.afterOffset,

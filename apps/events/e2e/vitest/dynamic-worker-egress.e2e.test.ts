@@ -106,13 +106,14 @@ describe("dynamic worker outbound gateway", () => {
           slug: "httpbin-fetch-header",
           script: `
 export default {
+  slug: "httpbin-fetch-header",
   initialState: {},
 
-  reduce(state) {
+  reduce({ state }) {
     return state;
   },
 
-  async onEvent({ append, event }) {
+  async afterAppend({ append, event }) {
     if (!/\\bping\\b/i.test(JSON.stringify(event))) {
       return;
     }
@@ -125,17 +126,19 @@ export default {
     const responseJson = await response.json();
 
     await append({
-      type: "https://events.iterate.com/events/example/httpbin-echoed",
-      payload: {
-        ok: response.ok,
-        status: response.status,
-        normalizedHeaders: Object.fromEntries(
-          Object.entries(responseJson.headers ?? {}).map(([key, value]) => [
-            String(key).toLowerCase(),
-            value,
-          ]),
-        ),
-        response: responseJson,
+      event: {
+        type: "https://events.iterate.com/events/example/httpbin-echoed",
+        payload: {
+          ok: response.ok,
+          status: response.status,
+          normalizedHeaders: Object.fromEntries(
+            Object.entries(responseJson.headers ?? {}).map(([key, value]) => [
+              String(key).toLowerCase(),
+              value,
+            ]),
+          ),
+          response: responseJson,
+        },
       },
     });
   },

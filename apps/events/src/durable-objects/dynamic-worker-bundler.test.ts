@@ -53,6 +53,8 @@ export default defineProcessor(() => ({
 
       expect(configuredEvent.payload.slug).toBe("current-processor");
       expect(configuredEvent.payload.script).toContain('type: "pong"');
+      expect(configuredEvent.payload.script).toContain("afterAppend");
+      expect(configuredEvent.payload.script).not.toContain("onEvent");
       expect(configuredEvent.payload.script).not.toContain('from "ai-engineer-workshop"');
     } finally {
       await rm(directory, { force: true, recursive: true });
@@ -116,6 +118,7 @@ export default {
         },
       });
       expect(configuredEvent.payload.script).toContain('type: "pong"');
+      expect(configuredEvent.payload.script).toContain("afterAppend");
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
@@ -149,34 +152,6 @@ export default {
       expect(configuredEvent.payload.outboundGateway).toEqual({
         entrypoint: "DynamicWorkerEgressGateway",
       });
-    } finally {
-      await rm(directory, { force: true, recursive: true });
-    }
-  });
-
-  test("embeds a runtime guard for a non-workshop processor shape", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dynamic-worker-bundler-"));
-    const entryFile = join(directory, "legacy-processor.ts");
-
-    await writeFile(
-      entryFile,
-      `
-export default {
-  initialState: {},
-  reduce: (state, event) => state,
-  async onEvent() {},
-};
-      `.trim(),
-    );
-
-    try {
-      const configuredEvent = await buildDynamicWorkerConfiguredEvent({
-        entryFile,
-      });
-
-      expect(configuredEvent.payload.script).toContain(
-        "Dynamic worker processor bundle must default-export the workshop processor shape",
-      );
     } finally {
       await rm(directory, { force: true, recursive: true });
     }

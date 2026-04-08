@@ -2,6 +2,11 @@ import { EventType } from "~/components/event-type.tsx";
 import { type EventTypePageDefinition } from "~/lib/event-type-pages.ts";
 
 export function EventTypePageView({ page }: { page: EventTypePageDefinition }) {
+  const defaultEventExample = {
+    type: page.type,
+    payload: page.payloadExample ?? {},
+  };
+
   return (
     <section className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-4">
       <div className="space-y-1">
@@ -43,6 +48,29 @@ export function EventTypePageView({ page }: { page: EventTypePageDefinition }) {
           <pre className="overflow-x-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-3 font-mono text-xs">
             {JSON.stringify(page.payloadExample, null, 2)}
           </pre>
+        </div>
+      ) : null}
+
+      <div className="space-y-2 rounded-lg border bg-card p-4">
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">Example event input</p>
+        <pre className="overflow-x-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-3 font-mono text-xs">
+          {JSON.stringify(defaultEventExample, null, 2)}
+        </pre>
+      </div>
+
+      {page.templates?.length ? (
+        <div className="space-y-4 rounded-lg border bg-card p-4">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">
+            More input examples
+          </p>
+          {page.templates.map((template) => (
+            <div key={template.id} className="space-y-2">
+              <p className="text-sm font-medium">{template.label}</p>
+              <pre className="overflow-x-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-3 font-mono text-xs">
+                {JSON.stringify(template.event, null, 2)}
+              </pre>
+            </div>
+          ))}
         </div>
       ) : null}
 

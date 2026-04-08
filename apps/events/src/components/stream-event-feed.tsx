@@ -6,6 +6,7 @@ import {
   Clock3Icon,
   BookOpenIcon,
   BracesIcon,
+  CableIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
   ChevronLeftIcon,
@@ -14,6 +15,7 @@ import {
   Code2Icon,
   CopyIcon,
   FolderPlusIcon,
+  SendIcon,
   PauseCircleIcon,
   PlayCircleIcon,
   Settings2Icon,
@@ -71,7 +73,9 @@ import type {
   DynamicWorkerConfiguredFeedItem,
   ChildStreamCreatedFeedItem,
   EventFeedItem,
+  ExternalSubscriberConfiguredFeedItem,
   GroupedEventFeedItem,
+  JsonataTransformerConfiguredFeedItem,
   SchedulerControlFeedItem,
   SchedulerExecutionFeedItem,
   StreamErrorOccurredFeedItem,
@@ -229,6 +233,10 @@ function StreamFeedItemRenderer({
       return <ChildStreamCreatedCard item={item} />;
     case "stream-metadata-updated":
       return <StreamMetadataUpdatedCard item={item} />;
+    case "external-subscriber-configured":
+      return <ExternalSubscriberConfiguredCard item={item} />;
+    case "jsonata-transformer-configured":
+      return <JsonataTransformerConfiguredCard item={item} />;
     case "stream-lifecycle":
       return <StreamLifecycleLine item={item} />;
     case "dynamic-worker-configured":
@@ -335,6 +343,61 @@ function StreamMetadataUpdatedCard({ item }: { item: StreamMetadataUpdatedFeedIt
           data={item.metadata}
           className="min-h-24 max-h-56"
           initialFormat="yaml"
+          showToggle
+          showCopyButton
+        />
+      </ArtifactSection>
+    </AssistantArtifact>
+  );
+}
+
+function ExternalSubscriberConfiguredCard({
+  item,
+}: {
+  item: ExternalSubscriberConfiguredFeedItem;
+}) {
+  const isWebhook = item.subscriber.type === "webhook";
+  const SubscriberIcon = isWebhook ? SendIcon : CableIcon;
+  const title = isWebhook ? "Webhook subscriber configured" : "Websocket subscriber configured";
+
+  return (
+    <AssistantArtifact
+      eyebrow={<SubscriberIcon className="size-3.5" />}
+      eyebrowLabel="Subscription configured"
+      title={title}
+      badge={item.subscriber.slug}
+      meta={[item.subscriber.type, formatTime(item.timestamp)]}
+    >
+      <ArtifactSection>
+        <SerializedObjectCodeBlock
+          data={item.subscriber}
+          className="min-h-24 max-h-56"
+          initialFormat="json"
+          showToggle
+          showCopyButton
+        />
+      </ArtifactSection>
+    </AssistantArtifact>
+  );
+}
+
+function JsonataTransformerConfiguredCard({
+  item,
+}: {
+  item: JsonataTransformerConfiguredFeedItem;
+}) {
+  return (
+    <AssistantArtifact
+      eyebrow={<Settings2Icon className="size-3.5" />}
+      eyebrowLabel="JSONata transformer configured"
+      title={item.transformer.slug}
+      meta={[formatTime(item.timestamp)]}
+    >
+      <ArtifactSection>
+        <SerializedObjectCodeBlock
+          data={item.transformer}
+          className="min-h-24 max-h-56"
+          initialFormat="json"
           showToggle
           showCopyButton
         />
@@ -1112,6 +1175,10 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `child-stream-created-${item.createdPath}-${item.timestamp}-${index}`;
     case "stream-metadata-updated":
       return `stream-metadata-${item.path}-${item.timestamp}-${index}`;
+    case "external-subscriber-configured":
+      return `external-subscriber-${item.subscriber.slug}-${item.timestamp}-${index}`;
+    case "jsonata-transformer-configured":
+      return `jsonata-transformer-${item.transformer.slug}-${item.timestamp}-${index}`;
     case "stream-lifecycle":
       return `lifecycle-${item.label}-${item.timestamp}-${index}`;
     case "dynamic-worker-configured":

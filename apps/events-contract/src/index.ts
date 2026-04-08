@@ -1,4 +1,5 @@
 export * from "./circuit-breaker-types.ts";
+export * from "./external-subscriber-types.ts";
 export * from "./dynamic-worker-types.ts";
 export * from "./jsonata-transformer-types.ts";
 export * from "./scheduling-types.ts";

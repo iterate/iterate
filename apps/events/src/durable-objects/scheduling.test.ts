@@ -174,7 +174,10 @@ describe("scheduler control events", () => {
 
     await runDurableObjectAlarm(streamStub);
 
-    const history = await streamStub.history();
+    const history = await waitForCondition(async () => {
+      const nextHistory = await streamStub.history();
+      return nextHistory.some((event) => event.type === markerType) ? nextHistory : false;
+    });
     expect(history.map((event) => event.type)).toContain(markerType);
     expect(history.map((event) => event.type)).toContain(SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE);
     expect((await streamStub.getState()).processors.scheduler[slug]).toBeUndefined();

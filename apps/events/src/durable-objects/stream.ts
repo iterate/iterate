@@ -11,6 +11,10 @@ import {
 } from "@iterate-com/events-contract";
 import type { BuiltinProcessor } from "@iterate-com/events-contract/sdk";
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
+import {
+  externalSubscriberProcessor,
+  resetSubscriberSocketsForStream,
+} from "./external-subscriber.ts";
 import { createDynamicWorkerManager, dynamicWorkerProcessor } from "./dynamic-processor.ts";
 import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
 import {
@@ -24,8 +28,12 @@ import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/s
 
 type ProcessorSlugKey = keyof StreamState["processors"];
 
+// Keep callback fanout as a builtin processor rather than growing bespoke
+// stream-core branches. `stream.ts` stays responsible for lifecycle ordering
+// while the external subscriber processor owns its own reduced state + delivery.
 const processors: BuiltinProcessor[] = [
   circuitBreakerProcessor,
+  externalSubscriberProcessor,
   dynamicWorkerProcessor,
   jsonataTransformerProcessor,
   schedulingProcessor,
@@ -272,7 +280,9 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     if (input.idempotencyKey != null) {
       const existingEvent = this.getEventByIdempotencyKey(input.idempotencyKey);
-      if (existingEvent != null) return existingEvent;
+      if (existingEvent != null) {
+        return existingEvent;
+      }
     }
 
     const nextOffset = this.beforeAppend(input);
@@ -455,41 +465,53 @@ export class StreamDurableObject extends DurableObject<Env> {
         state: getProcessorState(this.state, processor.slug),
       });
 
-      if (result != null) {
-        void result.catch((error) => {
+      if (result == null) {
+        continue;
+      }
+
+      // Builtin processor side effects are asynchronous, but they still belong
+      // to the append lifecycle. Hold the DO open so fire-and-forget callback
+      // delivery does not get cut off once the request returns.
+      this.ctx.waitUntil(
+        result.catch((error) => {
           console.error("[stream-do] processor afterAppend failed", {
             path: this.state.path,
             processor: processor.slug,
             eventType: event.type,
             error,
           });
-        });
-      }
+        }),
+      );
     }
 
-    void this.dynamicWorkerManager
-      .afterAppend({
-        event,
-        state: this.state.processors["dynamic-worker"],
-      })
-      .catch((error) => {
-        console.error("[stream-do] dynamic worker manager afterAppend failed", {
-          path: this.state.path,
-          eventType: event.type,
-          error,
-        });
-      });
+    this.ctx.waitUntil(
+      this.dynamicWorkerManager
+        .afterAppend({
+          event,
+          state: this.state.processors["dynamic-worker"],
+        })
+        .catch((error) => {
+          console.error("[stream-do] dynamic worker manager afterAppend failed", {
+            path: this.state.path,
+            eventType: event.type,
+            error,
+          });
+        }),
+    );
+
     if (isSchedulerAlarmEventType(event.type)) {
-      void repointSchedulerAlarm({
-        ctx: this.ctx,
-        schedulerState: this.state.processors.scheduler,
-      }).catch((error) => {
-        console.error("[stream-do] failed to repoint scheduler alarm", {
-          path: this.state.path,
-          eventType: event.type,
-          error,
-        });
-      });
+      this.ctx.waitUntil(
+        repointSchedulerAlarm({
+          ctx: this.ctx,
+          schedulerState: this.state.processors.scheduler,
+        }).catch((error) => {
+          console.error("[stream-do] failed to repoint scheduler alarm", {
+            path: this.state.path,
+            eventType: event.type,
+            error,
+          });
+        }),
+      );
     }
   }
 
@@ -551,6 +573,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       } catch {}
     }
     this.subscribers.clear();
+    if (path != null) {
+      resetSubscriberSocketsForStream(path);
+    }
 
     await this.dynamicWorkerManager.dispose();
 
@@ -664,6 +689,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (row == null) {
       return null;
     }
+
     return {
       streamPath: this.state.path,
       offset: row.offset,

@@ -1,4 +1,4 @@
-import { basename, dirname, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import {
   DynamicWorkerConfiguredEventInput,
   type DynamicWorkerConfiguredEventInput as DynamicWorkerConfiguredEventInputType,
@@ -44,6 +44,7 @@ export function slugFromEntryFile(entryFile: string) {
 async function bundleDynamicWorkerProcessor(args: { absoluteEntryFile: string }) {
   const result = await build({
     bundle: true,
+    entryPoints: [args.absoluteEntryFile],
     format: "esm",
     legalComments: "none",
     mainFields: ["browser", "module", "main"],
@@ -53,14 +54,6 @@ async function bundleDynamicWorkerProcessor(args: { absoluteEntryFile: string })
     target: "es2024",
     treeShaking: true,
     write: false,
-    stdin: {
-      contents: buildDynamicWorkerAdapterModule({
-        entryFileName: basename(args.absoluteEntryFile),
-      }),
-      loader: "ts",
-      resolveDir: dirname(args.absoluteEntryFile),
-      sourcefile: "dynamic-worker-adapter.ts",
-    },
     plugins: [aiEngineerWorkshopShimPlugin()],
   });
 
@@ -70,76 +63,6 @@ async function bundleDynamicWorkerProcessor(args: { absoluteEntryFile: string })
   }
 
   return outputFile.text.trim();
-}
-
-function buildDynamicWorkerAdapterModule(args: { entryFileName: string }) {
-  const entryImport = JSON.stringify(`./${args.entryFileName}`);
-
-  return `
-import importedProcessor from ${entryImport};
-
-function hasFunction(value: unknown, key: string): boolean {
-  return value != null && typeof value === "object" && typeof value[key] === "function";
-}
-
-function reduce(state: unknown, event: unknown) {
-  if (!hasFunction(importedProcessor, "reduce")) {
-    return state;
-  }
-
-  return importedProcessor.reduce({ state, event }) ?? state;
-}
-
-if (
-  importedProcessor == null ||
-  typeof importedProcessor !== "object" ||
-  !("initialState" in importedProcessor) ||
-  typeof importedProcessor.slug !== "string" ||
-  importedProcessor.slug.length === 0
-) {
-  throw new Error(
-    "Dynamic worker processor bundle must default-export the workshop processor shape: defineProcessor(() => ({ slug, initialState, reduce?, afterAppend? })).",
-  );
-}
-
-async function onEvent(args: {
-  append: (event: unknown) => Promise<unknown>;
-  event: unknown;
-  state: unknown;
-  prevState: unknown;
-}) {
-  if (!hasFunction(importedProcessor, "afterAppend")) {
-    return;
-  }
-
-  await importedProcessor.afterAppend({
-    append: async (input: { event: unknown; path?: unknown }) => {
-      if (input == null || typeof input !== "object" || !("event" in input)) {
-        throw new Error(
-          "Dynamic worker processors must call append({ event }) using the workshop processor contract.",
-        );
-      }
-
-      if ("path" in input && input.path != null) {
-        throw new Error(
-          "Dynamic worker processors can only append to their own stream. append({ path }) is not supported.",
-        );
-      }
-
-      return args.append(input.event);
-    },
-    event: args.event,
-    state: args.state,
-  });
-}
-
-export default {
-  initialState: importedProcessor.initialState ?? {},
-
-  reduce,
-  onEvent,
-};
-`.trim();
 }
 
 function aiEngineerWorkshopShimPlugin() {

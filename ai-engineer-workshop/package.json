@@ -27,7 +27,8 @@
   },
   "exports": {
     ".": "./sdk.ts",
-    "./contract": "./contract.ts"
+    "./contract": "./contract.ts",
+    "./runtime": "./runtime.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -39,6 +40,10 @@
       "./contract": {
         "import": "./dist/contract.js",
         "types": "./dist/contract.d.ts"
+      },
+      "./runtime": {
+        "import": "./dist/runtime.js",
+        "types": "./dist/runtime.d.ts"
       }
     }
   },

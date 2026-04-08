@@ -8,15 +8,20 @@ import {
 } from "./event-base-types.ts";
 import {
   CircuitBreakerState,
-  StreamPausedEventInput,
   StreamPausedEvent,
-  StreamResumedEventInput,
+  StreamPausedEventInput,
   StreamResumedEvent,
+  StreamResumedEventInput,
 } from "./circuit-breaker-types.ts";
 import {
-  JsonataTransformerState,
-  JsonataTransformerConfiguredEventInput,
+  ExternalSubscriberState,
+  StreamSubscriptionConfiguredEvent,
+  StreamSubscriptionConfiguredEventInput,
+} from "./external-subscriber-types.ts";
+import {
   JsonataTransformerConfiguredEvent,
+  JsonataTransformerConfiguredEventInput,
+  JsonataTransformerState,
 } from "./jsonata-transformer-types.ts";
 import {
   DynamicWorkerState,
@@ -118,6 +123,7 @@ const builtInEventInputOptions = [
   StreamDurableObjectConstructedEventInput,
   ChildStreamCreatedEventInput,
   StreamMetadataUpdatedEventInput,
+  StreamSubscriptionConfiguredEventInput,
   ErrorOccurredEventInput,
   InvalidEventAppendedEventInput,
   StreamAppendScheduledEventInput,
@@ -136,6 +142,7 @@ const builtInEventOptions = [
   StreamDurableObjectConstructedEvent,
   ChildStreamCreatedEvent,
   StreamMetadataUpdatedEvent,
+  StreamSubscriptionConfiguredEvent,
   ErrorOccurredEvent,
   InvalidEventAppendedEvent,
   StreamAppendScheduledEvent,
@@ -172,11 +179,6 @@ export const BuiltInEvent = z.discriminatedUnion("type", builtInEventOptions);
 export type BuiltInEventInput = z.infer<typeof BuiltInEventInput>;
 export type BuiltInEvent = z.infer<typeof BuiltInEvent>;
 
-// Widens `type` from a narrow literal to the full `EventType` union so editors
-// autocomplete built-in type URIs while still accepting arbitrary strings.
-// The `& {}` in `EventType` prevents TypeScript from collapsing the union to
-// just `string`, preserving literal suggestions in IntelliSense.
-// https://github.com/microsoft/TypeScript/issues/29729
 type WithAutocompleteEventType<T extends { type: string }> = Omit<T, "type"> & {
   type: EventType;
 };
@@ -193,6 +195,7 @@ export type Event = BuiltInEvent | GenericEvent;
 
 const ProcessorsState = z.object({
   "circuit-breaker": CircuitBreakerState,
+  "external-subscriber": ExternalSubscriberState.default({ subscribersBySlug: {} }),
   "dynamic-worker": DynamicWorkerState,
   "jsonata-transformer": JsonataTransformerState,
   scheduler: SchedulerState,

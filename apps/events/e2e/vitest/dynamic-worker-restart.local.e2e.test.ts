@@ -13,8 +13,8 @@ const valueRecordedEventType = "https://events.iterate.com/events/example/value-
 const localBaseUrl = "http://localhost:5173";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const altPongDynamicWorkerScript = pingPongDynamicWorkerScript.replace(
-  'await append({ type: "pong" });',
-  'await append({ type: "alt-pong" });',
+  'await append({\n      event: {\n        type: "pong",\n      },\n    });',
+  'await append({\n      event: {\n        type: "alt-pong",\n      },\n    });',
 );
 const describeLocalRestart = process.env.CI ? describe.skip : describe.sequential;
 

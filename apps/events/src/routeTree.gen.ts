@@ -9,7 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as DynamicWorkerConfiguredRouteImport } from './routes/dynamic-worker-configured'
+import { Route as StreamSubscriptionConfiguredRouteImport } from './routes/stream-subscription-configured'
 import { Route as StreamResumedRouteImport } from './routes/stream-resumed'
 import { Route as StreamPausedRouteImport } from './routes/stream-paused'
 import { Route as StreamMetadataUpdatedRouteImport } from './routes/stream-metadata-updated'
@@ -23,6 +23,7 @@ import { Route as ScheduleCancelledRouteImport } from './routes/schedule-cancell
 import { Route as ManualEventAppendedRouteImport } from './routes/manual-event-appended'
 import { Route as JsonataTransformerConfiguredRouteImport } from './routes/jsonata-transformer-configured'
 import { Route as ErrorOccurredRouteImport } from './routes/error-occurred'
+import { Route as DynamicWorkerConfiguredRouteImport } from './routes/dynamic-worker-configured'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as ChildStreamCreatedRouteImport } from './routes/child-stream-created'
 import { Route as AppRouteImport } from './routes/_app'
@@ -36,11 +37,12 @@ import { Route as AppSecretsIndexRouteImport } from './routes/_app/secrets.index
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppStreamsSplatRouteImport } from './routes/_app/streams.$'
 
-const DynamicWorkerConfiguredRoute = DynamicWorkerConfiguredRouteImport.update({
-  id: '/dynamic-worker-configured',
-  path: '/dynamic-worker-configured',
-  getParentRoute: () => rootRouteImport,
-} as any)
+const StreamSubscriptionConfiguredRoute =
+  StreamSubscriptionConfiguredRouteImport.update({
+    id: '/stream-subscription-configured',
+    path: '/stream-subscription-configured',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const StreamResumedRoute = StreamResumedRouteImport.update({
   id: '/stream-resumed',
   path: '/stream-resumed',
@@ -108,6 +110,11 @@ const JsonataTransformerConfiguredRoute =
 const ErrorOccurredRoute = ErrorOccurredRouteImport.update({
   id: '/error-occurred',
   path: '/error-occurred',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DynamicWorkerConfiguredRoute = DynamicWorkerConfiguredRouteImport.update({
+  id: '/dynamic-worker-configured',
+  path: '/dynamic-worker-configured',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DocsRoute = DocsRouteImport.update({
@@ -188,6 +195,7 @@ export interface FileRoutesByFullPath {
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/stream-paused': typeof StreamPausedRoute
   '/stream-resumed': typeof StreamResumedRoute
+  '/stream-subscription-configured': typeof StreamSubscriptionConfiguredRoute
   '/secrets': typeof AppSecretsRouteWithChildren
   '/streams': typeof AppStreamsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
@@ -215,6 +223,7 @@ export interface FileRoutesByTo {
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/stream-paused': typeof StreamPausedRoute
   '/stream-resumed': typeof StreamResumedRoute
+  '/stream-subscription-configured': typeof StreamSubscriptionConfiguredRoute
   '/api/$': typeof ApiSplatRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/streams/$': typeof AppStreamsSplatRoute
@@ -242,6 +251,7 @@ export interface FileRoutesById {
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/stream-paused': typeof StreamPausedRoute
   '/stream-resumed': typeof StreamResumedRoute
+  '/stream-subscription-configured': typeof StreamSubscriptionConfiguredRoute
   '/_app/secrets': typeof AppSecretsRouteWithChildren
   '/_app/streams': typeof AppStreamsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
@@ -271,6 +281,7 @@ export interface FileRouteTypes {
     | '/stream-metadata-updated'
     | '/stream-paused'
     | '/stream-resumed'
+    | '/stream-subscription-configured'
     | '/secrets'
     | '/streams'
     | '/api/$'
@@ -298,6 +309,7 @@ export interface FileRouteTypes {
     | '/stream-metadata-updated'
     | '/stream-paused'
     | '/stream-resumed'
+    | '/stream-subscription-configured'
     | '/api/$'
     | '/posthog-proxy/$'
     | '/streams/$'
@@ -324,6 +336,7 @@ export interface FileRouteTypes {
     | '/stream-metadata-updated'
     | '/stream-paused'
     | '/stream-resumed'
+    | '/stream-subscription-configured'
     | '/_app/secrets'
     | '/_app/streams'
     | '/api/$'
@@ -353,6 +366,7 @@ export interface RootRouteChildren {
   StreamMetadataUpdatedRoute: typeof StreamMetadataUpdatedRoute
   StreamPausedRoute: typeof StreamPausedRoute
   StreamResumedRoute: typeof StreamResumedRoute
+  StreamSubscriptionConfiguredRoute: typeof StreamSubscriptionConfiguredRoute
   ApiSplatRoute: typeof ApiSplatRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
   ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
@@ -360,11 +374,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/dynamic-worker-configured': {
-      id: '/dynamic-worker-configured'
-      path: '/dynamic-worker-configured'
-      fullPath: '/dynamic-worker-configured'
-      preLoaderRoute: typeof DynamicWorkerConfiguredRouteImport
+    '/stream-subscription-configured': {
+      id: '/stream-subscription-configured'
+      path: '/stream-subscription-configured'
+      fullPath: '/stream-subscription-configured'
+      preLoaderRoute: typeof StreamSubscriptionConfiguredRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/stream-resumed': {
@@ -456,6 +470,13 @@ declare module '@tanstack/react-router' {
       path: '/error-occurred'
       fullPath: '/error-occurred'
       preLoaderRoute: typeof ErrorOccurredRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dynamic-worker-configured': {
+      id: '/dynamic-worker-configured'
+      path: '/dynamic-worker-configured'
+      fullPath: '/dynamic-worker-configured'
+      preLoaderRoute: typeof DynamicWorkerConfiguredRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/docs': {
@@ -602,6 +623,7 @@ const rootRouteChildren: RootRouteChildren = {
   StreamMetadataUpdatedRoute: StreamMetadataUpdatedRoute,
   StreamPausedRoute: StreamPausedRoute,
   StreamResumedRoute: StreamResumedRoute,
+  StreamSubscriptionConfiguredRoute: StreamSubscriptionConfiguredRoute,
   ApiSplatRoute: ApiSplatRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
   ApiOrpcSplatRoute: ApiOrpcSplatRoute,

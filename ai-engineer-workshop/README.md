@@ -94,6 +94,10 @@ pnpm w run --script examples/06-slack-composition/run-slack-composition.ts
 pnpm w run --script examples/07-slack-tools/run-slack-tools.ts
 ```
 
+The deployed processor example lives in:
+
+- `ai-engineer-workshop/examples/deployed-processor`
+
 Pattern-processor example:
 
 - [`examples/03-pattern-processor/jonas-ping-pong-processor.ts`](./examples/03-pattern-processor/jonas-ping-pong-processor.ts) watches `"/jonas/**/*"` and replies to every `ping` with a `pong`.

@@ -1,6 +1,7 @@
 packages:
   - ai-engineer-workshop
   - ai-engineer-workshop/*
+  - ai-engineer-workshop/examples/*
   - jonasland
   - apps/ingress-proxy
   - apps/ingress-proxy-contract

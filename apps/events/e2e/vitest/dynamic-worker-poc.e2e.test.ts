@@ -18,17 +18,53 @@ const valueRecordedEventType = "https://events.iterate.com/events/example/value-
 const nextEventTimeoutMs = 10_000;
 const idleEventTimeoutMs = 500;
 const altPongDynamicWorkerScript = pingPongDynamicWorkerScript.replace(
-  'await append({ type: "pong" });',
-  'await append({ type: "alt-pong" });',
+  'await append({\n      event: {\n        type: "pong",\n      },\n    });',
+  'await append({\n      event: {\n        type: "alt-pong",\n      },\n    });',
 );
 const altPongADynamicWorkerScript = pingPongDynamicWorkerScript.replace(
-  'await append({ type: "pong" });',
-  'await append({ type: "alt-pong-a" });',
+  'await append({\n      event: {\n        type: "pong",\n      },\n    });',
+  'await append({\n      event: {\n        type: "alt-pong-a",\n      },\n    });',
 );
 const altPongBDynamicWorkerScript = pingPongDynamicWorkerScript.replace(
-  'await append({ type: "pong" });',
-  'await append({ type: "alt-pong-b" });',
+  'await append({\n      event: {\n        type: "pong",\n      },\n    });',
+  'await append({\n      event: {\n        type: "alt-pong-b",\n      },\n    });',
 );
+const onEventPingPongDynamicWorkerScript = `
+export default {
+  initialState: { seen: 0 },
+
+  reduce({ state, event }) {
+    if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured") {
+      return state;
+    }
+
+    if (!/\\bping\\b/i.test(JSON.stringify({ type: event.type, payload: event.payload }))) {
+      return state;
+    }
+
+    return {
+      seen: state.seen + 1,
+    };
+  },
+
+  async onEvent({ append, event, prevState, state }) {
+    if (
+      event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured" ||
+      !/\\bping\\b/i.test(JSON.stringify({ type: event.type, payload: event.payload }))
+    ) {
+      return;
+    }
+
+    await append({
+      type: "legacy-pong",
+      payload: {
+        previousSeen: prevState.seen,
+        seen: state.seen,
+      },
+    });
+  },
+};
+`.trim();
 
 describe("dynamic worker processor", () => {
   test("subscribes once and appends pong for later ping payloads", async () => {
@@ -128,6 +164,42 @@ describe("dynamic worker processor", () => {
       });
       await expectConfiguredEvent(iterator, path, "ping-pong");
       await expectEventCount(path, 2);
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
+  test("runs onEvent dynamic worker bundles with the canonical reducer contract", async () => {
+    const path = uniqueDynamicWorkerPath();
+    const iterator = await openLiveIterator(path);
+
+    try {
+      await expectInitialized(iterator, path);
+      await configureWorker({
+        path,
+        slug: "on-event-ping-pong",
+        script: onEventPingPongDynamicWorkerScript,
+      });
+      await expectConfiguredEvent(iterator, path, "on-event-ping-pong");
+
+      await append(path, {
+        type: valueRecordedEventType,
+        payload: { message: "legacy ping" },
+      });
+
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: valueRecordedEventType,
+        payload: { message: "legacy ping" },
+      });
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: "legacy-pong",
+        payload: {
+          previousSeen: 0,
+          seen: 1,
+        },
+      });
     } finally {
       await iterator.return?.();
     }
