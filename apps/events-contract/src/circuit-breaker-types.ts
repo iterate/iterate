@@ -32,7 +32,8 @@ export const CircuitBreakerState = z.object({
   paused: z.boolean(),
   pauseReason: z.string().nullable(),
   pausedAt: z.string().nullable(),
-  recentEventTimestamps: z.array(z.string()),
+  availableTokens: z.number(),
+  lastRefillAtMs: z.number().int().nonnegative().nullable(),
 });
 export type CircuitBreakerState = z.infer<typeof CircuitBreakerState>;
 

@@ -6,12 +6,21 @@ import {
 } from "@iterate-com/events-contract";
 import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
 
+const maxEventsPerSecond = 100;
+const refillRatePerMs = maxEventsPerSecond / 1_000;
+
 /**
  * Rate-limiting circuit breaker for event streams.
  *
- * Tracks the last 100 event timestamps in state. When all 100 fall within a
- * single second, it auto-appends a "stream/paused" event, which causes
- * `beforeAppend` to reject all subsequent writes (except "stream/resumed").
+ * Uses a token bucket so the reducer can approximate burst rate limiting with
+ * constant-size state. Each event spends one token, and the bucket refills at
+ * `maxEventsPerSecond`. When a write pushes the bucket below zero, the stream
+ * auto-appends "stream/paused".
+ *
+ * Token bucket gives a bounded burst budget with O(1) state rather than an
+ * exact sliding window that grows with the threshold. Primary references:
+ * - RFC 1363: https://datatracker.ietf.org/doc/rfc1363/
+ * - RFC 3290 Appendix A: https://datatracker.ietf.org/doc/html/rfc3290
  *
  * This prevents runaway producers from flooding a stream while still allowing
  * an operator to resume manually.
@@ -22,7 +31,8 @@ export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerStat
     paused: false,
     pauseReason: null,
     pausedAt: null,
-    recentEventTimestamps: [],
+    availableTokens: maxEventsPerSecond,
+    lastRefillAtMs: null,
   },
 
   beforeAppend({ event, state }) {
@@ -35,13 +45,15 @@ export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerStat
   },
 
   reduce({ event, state }) {
+    const createdAtMs = Date.parse(event.createdAt);
     const pausedEvent = StreamPausedEvent.safeParse(event);
     if (pausedEvent.success) {
       return {
         paused: true,
         pauseReason: pausedEvent.data.payload.reason ?? null,
         pausedAt: event.createdAt,
-        recentEventTimestamps: [event.createdAt],
+        availableTokens: maxEventsPerSecond,
+        lastRefillAtMs: createdAtMs,
       };
     }
 
@@ -50,26 +62,33 @@ export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerStat
         paused: false,
         pauseReason: null,
         pausedAt: null,
-        recentEventTimestamps: [event.createdAt],
+        availableTokens: maxEventsPerSecond,
+        lastRefillAtMs: createdAtMs,
       };
     }
 
+    const refilledTokens =
+      state.lastRefillAtMs == null
+        ? maxEventsPerSecond
+        : Math.min(
+            maxEventsPerSecond,
+            state.availableTokens + (createdAtMs - state.lastRefillAtMs) * refillRatePerMs,
+          );
+
     return {
       ...state,
-      recentEventTimestamps: [...state.recentEventTimestamps, event.createdAt].slice(-100),
+      availableTokens: refilledTokens - 1,
+      lastRefillAtMs: createdAtMs,
     };
   },
 
   async afterAppend({ append, state }) {
-    if (state.paused || state.recentEventTimestamps.length < 100) return;
-
-    const first = Date.parse(state.recentEventTimestamps[0]);
-    const last = Date.parse(state.recentEventTimestamps[state.recentEventTimestamps.length - 1]);
-    if (last - first >= 1_000) return;
+    if (state.paused) return;
+    if (state.availableTokens >= 0) return;
 
     await append({
       type: "https://events.iterate.com/events/stream/paused",
-      payload: { reason: "circuit breaker tripped: 100 events in under 1 second" },
+      payload: { reason: "circuit breaker tripped: burst rate limit exceeded" },
     });
   },
 }));

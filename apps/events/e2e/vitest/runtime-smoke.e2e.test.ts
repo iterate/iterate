@@ -145,7 +145,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         eventCount: 2,
         childPaths: [],
         metadata: {},
-        processors: expectedProcessorsWithRecentEventCount(2),
+        processors: expectedProcessorsWithTokenBucketCircuitBreaker(),
       });
 
       const rootHistoryResponse = await app.fetch("/api/streams/%2F");
@@ -216,13 +216,14 @@ function expectedStoredOffset(value: number) {
   return value + 1;
 }
 
-function expectedProcessorsWithRecentEventCount(count: number) {
+function expectedProcessorsWithTokenBucketCircuitBreaker() {
   return {
     "circuit-breaker": {
       paused: false,
       pauseReason: null,
       pausedAt: null,
-      recentEventTimestamps: Array.from({ length: count }, () => expect.any(String)),
+      availableTokens: expect.any(Number),
+      lastRefillAtMs: expect.any(Number),
     },
     "external-subscriber": {
       subscribersBySlug: {},

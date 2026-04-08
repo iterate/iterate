@@ -131,7 +131,8 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" -H "x-iterate-project: $PROJECT_SLU
           paused: false,
           pauseReason: null,
           pausedAt: null,
-          recentEventTimestamps: ["<ts>", "<ts>"],
+          availableTokens: expect.any(Number),
+          lastRefillAtMs: expect.any(Number),
         },
         "external-subscriber": {
           subscribersBySlug: {},
@@ -156,7 +157,8 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" -H "x-iterate-project: $PROJECT_SLU
           paused: false,
           pauseReason: null,
           pausedAt: null,
-          recentEventTimestamps: ["<ts>", "<ts>"],
+          availableTokens: expect.any(Number),
+          lastRefillAtMs: expect.any(Number),
         },
         "external-subscriber": {
           subscribersBySlug: {},
