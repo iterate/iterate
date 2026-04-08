@@ -1389,9 +1389,16 @@ function expectedProcessorsWithRecentEventCount(count: number) {
       pausedAt: null,
       recentEventTimestamps: Array.from({ length: count }, () => expect.any(String)),
     },
+    "external-subscriber": {
+      subscribersBySlug: {},
+    },
+    "dynamic-worker": {
+      workersBySlug: {},
+    },
     "jsonata-transformer": {
       transformersBySlug: {},
     },
+    scheduler: {},
   };
 }
 

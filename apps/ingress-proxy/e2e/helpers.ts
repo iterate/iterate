@@ -1,4 +1,4 @@
-export type IngressProxyAppFixture = {
+type IngressProxyAppFixture = {
   apiToken: string;
   baseURL: string;
   fetch(pathname: string, init?: RequestInit): Promise<Response>;

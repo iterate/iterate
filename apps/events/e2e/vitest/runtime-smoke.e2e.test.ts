@@ -21,9 +21,10 @@ const app = createEvents2AppFixture({
 });
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
+const rootHistoryIdleTimeoutMs = 1_000;
 const defaultProjectSlug = defaultE2EProjectSlug;
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
-const testTimeoutMs = 5_000;
+const testTimeoutMs = 10_000;
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe;
 describeRuntimeSmoke("events runtime smoke", () => {
   test(
@@ -105,7 +106,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
 
       const rootEvents = await collectAsyncIterableUntilIdle({
         iterable: await app.client.stream({ path: "/" }),
-        idleMs: historyIdleTimeoutMs,
+        idleMs: rootHistoryIdleTimeoutMs,
       });
       expect(rootEvents[0]).toMatchObject({
         streamPath: "/",
@@ -223,9 +224,16 @@ function expectedProcessorsWithRecentEventCount(count: number) {
       pausedAt: null,
       recentEventTimestamps: Array.from({ length: count }, () => expect.any(String)),
     },
+    "external-subscriber": {
+      subscribersBySlug: {},
+    },
+    "dynamic-worker": {
+      workersBySlug: {},
+    },
     "jsonata-transformer": {
       transformersBySlug: {},
     },
+    scheduler: {},
   };
 }
 

@@ -1,5 +1,6 @@
 {
   "include": ["**/*.ts", "**/*.tsx", "alchemy.run.ts"],
+  "exclude": ["**/*.test.ts"],
   "compilerOptions": {
     "target": "ES2024",
     "jsx": "react-jsx",
@@ -12,7 +13,12 @@
       ]
     },
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
-    "types": ["vite/client", "node", "@cloudflare/workers-types"],
+    "types": [
+      "vite/client",
+      "node",
+      "@cloudflare/workers-types",
+      "@cloudflare/vitest-pool-workers/types"
+    ],
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "noEmit": true,

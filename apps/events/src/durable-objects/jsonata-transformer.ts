@@ -1,11 +1,12 @@
-import jsonata, { type Expression } from "jsonata";
+import jsonata from "jsonata";
 import { z } from "zod";
 import {
   EventInput as EventInputSchema,
   JsonataTransformerConfiguredEvent,
   type JsonataTransformerState,
 } from "@iterate-com/events-contract";
-import { defineBuiltinProcessor } from "./define-processor.ts";
+import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
+import { getCompiledJsonata } from "./compiled-jsonata.ts";
 
 /**
  * Event-driven JSONata transformer processor.
@@ -57,7 +58,7 @@ export const jsonataTransformerProcessor = defineBuiltinProcessor<JsonataTransfo
           continue;
         }
 
-        append(parsed.data);
+        await append(parsed.data);
       } catch (error) {
         console.error("[stream-do] jsonata transformer failed", {
           slug,
@@ -84,19 +85,3 @@ export const JsonataExpression = z
       });
     }
   });
-
-const jsonataCache = new Map<string, Expression>();
-
-function getCompiledJsonata(expression: string) {
-  const cached = jsonataCache.get(expression);
-  if (cached) return cached;
-
-  if (jsonataCache.size >= 100) {
-    const oldestKey = jsonataCache.keys().next().value;
-    if (oldestKey) jsonataCache.delete(oldestKey);
-  }
-
-  const compiled = jsonata(expression);
-  jsonataCache.set(expression, compiled);
-  return compiled;
-}

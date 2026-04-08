@@ -4,17 +4,18 @@ import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { eventsContract } from "./orpc-contract.ts";
 import {
   ChildStreamCreatedEvent,
+  EventInput as EventInputSchema,
+  GenericEventInput,
   StreamPath as StreamPathSchema,
   StreamInitializedEvent,
   type Event,
-  type EventInput,
   type EventType,
   type JSONObject,
   type StreamPath,
 } from "./types.ts";
 
-export { eventsContract } from "./orpc-contract.ts";
-export type { Event, EventInput, EventType, JSONObject, StreamPath } from "./types.ts";
+export { eventsContract, EventInputSchema as EventInput, GenericEventInput };
+export type { Event, EventType, JSONObject, StreamPath } from "./types.ts";
 
 export type EventsORPCClient = ContractRouterClient<typeof eventsContract>;
 
@@ -28,7 +29,7 @@ export function createEventsClient(baseUrl: string): EventsORPCClient {
 
 export type RelativeStreamPath = `.${string}`;
 export type ProcessorAppendInput = {
-  event: EventInput;
+  event: import("./types.ts").EventInput;
   path?: StreamPath | RelativeStreamPath;
 };
 
@@ -43,8 +44,36 @@ export type Processor<State = Record<string, unknown>> = {
   }): Promise<void>;
 };
 
+/**
+ * A BuiltinProcessor runs in-process inside the Durable Object, so it can
+ * synchronously reject events via `beforeAppend` before they are committed.
+ * Non-builtin processors cannot do this because they may execute across the
+ * network where synchronous rejection is not possible.
+ */
+export type BuiltinProcessor<TState = Record<string, unknown>> = {
+  slug: string;
+  initialState: TState;
+  beforeAppend?(args: { event: import("./types.ts").EventInput; state: TState }): void;
+  reduce?(args: { event: Event; state: TState }): TState;
+  afterAppend?(args: {
+    append: (event: import("./types.ts").EventInput) => Event | Promise<Event>;
+    event: Event;
+    state: TState;
+  }): Promise<void>;
+};
+
+export function defineProcessor<const TState>(factory: () => Processor<TState>): Processor<TState> {
+  return factory();
+}
+
+export function defineBuiltinProcessor<const TState>(
+  factory: () => BuiltinProcessor<TState>,
+): BuiltinProcessor<TState> {
+  return factory();
+}
+
 type PullSubscriptionEventsClient = {
-  append: (input: { path: StreamPath; event: EventInput }) => Promise<{
+  append: (input: { path: StreamPath; event: import("./types.ts").EventInput }) => Promise<{
     event: Event;
   }>;
   stream: (
@@ -152,6 +181,114 @@ export class PullSubscriptionProcessorRuntime<State> {
   getProcessorSlug() {
     return this.#processor.slug;
   }
+
+  #reduce(event: Event) {
+    if (this.#processor.reduce == null) {
+      return;
+    }
+
+    this.#state = this.#processor.reduce({
+      event,
+      state: structuredClone(this.#state),
+    });
+  }
+}
+
+export class PushSubscriptionProcessorRuntime<State> {
+  #eventsClient: PullSubscriptionEventsClient;
+  #lastOffset = 0;
+  #pending = Promise.resolve();
+  #processor: Processor<State>;
+  #state: State;
+  #streamPath: StreamPath;
+
+  constructor({
+    eventsClient,
+    processor,
+    streamPath,
+  }: {
+    eventsClient: PullSubscriptionEventsClient;
+    processor: Processor<State>;
+    streamPath: StreamPath;
+  }) {
+    this.#eventsClient = eventsClient;
+    this.#processor = processor;
+    this.#state = structuredClone(this.#processor.initialState);
+    this.#streamPath = streamPath;
+  }
+
+  async consume(event: Event) {
+    const next = this.#pending.then(() => this.#consumeEvent(event));
+    this.#pending = next.catch(() => {});
+    await next;
+  }
+
+  getState() {
+    return this.#state;
+  }
+
+  getProcessorSlug() {
+    return this.#processor.slug;
+  }
+
+  async #consumeEvent(event: Event) {
+    if (event.streamPath !== this.#streamPath) {
+      throw new Error(
+        `Push runtime for ${this.#streamPath} received event for ${event.streamPath}`,
+      );
+    }
+
+    if (event.offset > this.#lastOffset + 1) {
+      await this.#catchUpTo(event.offset);
+    }
+
+    if (event.offset <= this.#lastOffset) {
+      return;
+    }
+
+    this.#reduce(event);
+    this.#lastOffset = event.offset;
+
+    await this.#processor.afterAppend?.({
+      append: this.#append,
+      event,
+      state: this.#state,
+    });
+  }
+
+  async #catchUpTo(targetOffset: number) {
+    const historyStream = await this.#eventsClient.stream(
+      {
+        path: this.#streamPath,
+        offset: this.#lastOffset || undefined,
+      },
+      {},
+    );
+
+    for await (const event of historyStream) {
+      if (event.offset <= this.#lastOffset) {
+        continue;
+      }
+
+      if (event.offset >= targetOffset) {
+        break;
+      }
+
+      this.#reduce(event);
+      this.#lastOffset = event.offset;
+    }
+  }
+
+  #append = async (input: ProcessorAppendInput) => {
+    const result = await this.#eventsClient.append({
+      path: resolveAppendPath({
+        currentPath: this.#streamPath,
+        nextPath: input.path,
+      }),
+      event: input.event,
+    });
+    return result.event;
+  };
 
   #reduce(event: Event) {
     if (this.#processor.reduce == null) {
@@ -330,7 +467,7 @@ function isAbortError(error: unknown) {
   );
 }
 
-function getDiscoveredStreamPath(event: Event): StreamPath | null {
+export function getDiscoveredStreamPath(event: Event): StreamPath | null {
   const childStreamCreatedEvent = ChildStreamCreatedEvent.safeParse(event);
   if (childStreamCreatedEvent.success) {
     return childStreamCreatedEvent.data.payload.childPath;
@@ -344,7 +481,7 @@ function getDiscoveredStreamPath(event: Event): StreamPath | null {
   return null;
 }
 
-function normalizeStreamPattern(streamPattern: string) {
+export function normalizeStreamPattern(streamPattern: string) {
   return streamPattern.startsWith("/") ? streamPattern : `/${streamPattern}`;
 }
 
@@ -402,7 +539,7 @@ function isRelativeStreamPath(path: string): path is RelativeStreamPath {
   return path === "." || path === ".." || path.startsWith("./") || path.startsWith("../");
 }
 
-function matchesStreamPattern(streamPath: string, streamPattern: string) {
+export function matchesStreamPattern(streamPath: string, streamPattern: string) {
   const pathSegments = toPathSegments(streamPath);
   const patternSegments = toPathSegments(streamPattern);
   return matchesPathSegments(pathSegments, patternSegments);

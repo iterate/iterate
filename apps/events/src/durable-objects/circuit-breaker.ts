@@ -4,7 +4,7 @@ import {
   StreamPausedEvent,
   StreamResumedEvent,
 } from "@iterate-com/events-contract";
-import { defineBuiltinProcessor } from "./define-processor.ts";
+import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
 
 /**
  * Rate-limiting circuit breaker for event streams.
@@ -67,7 +67,7 @@ export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerStat
     const last = Date.parse(state.recentEventTimestamps[state.recentEventTimestamps.length - 1]);
     if (last - first >= 1_000) return;
 
-    append({
+    await append({
       type: "https://events.iterate.com/events/stream/paused",
       payload: { reason: "circuit breaker tripped: 100 events in under 1 second" },
     });

@@ -78,6 +78,102 @@ describe("projectWireToFeed", () => {
     });
   });
 
+  test("adds a semantic dynamic worker configured item after config events", () => {
+    const feed = projectEventToFeed(
+      createEvent({
+        streamPath: "/demo",
+        type: "https://events.iterate.com/events/stream/dynamic-worker/configured",
+        payload: {
+          slug: "simple-openai-loop",
+          script: [
+            "export default {",
+            "  initialState: {},",
+            "  reduce(state) {",
+            "    return state;",
+            "  },",
+            "};",
+          ].join("\n"),
+          outboundGateway: {
+            entrypoint: "DynamicWorkerEgressGateway",
+            props: {
+              secretHeaderName: "authorization",
+              secretHeaderValue: "Bearer getIterateSecret({secretKey: 'openai'})",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(feed.map((item) => item.kind)).toEqual(["event", "dynamic-worker-configured"]);
+    expect(feed[1]).toMatchObject({
+      kind: "dynamic-worker-configured",
+      slug: "simple-openai-loop",
+      sourceCode: expect.stringContaining("export default"),
+      outboundGateway: {
+        entrypoint: "DynamicWorkerEgressGateway",
+        secretHeaderName: "authorization",
+        secretHeaderValue: "Bearer getIterateSecret({secretKey: 'openai'})",
+      },
+    });
+  });
+
+  test("adds a semantic scheduler control item after append-scheduled events", () => {
+    const feed = projectEventToFeed(
+      createEvent({
+        streamPath: "/demo",
+        type: "https://events.iterate.com/events/stream/append-scheduled",
+        payload: {
+          slug: "nightly-rollup",
+          append: {
+            type: "https://events.iterate.com/events/example/rollup-requested",
+            payload: { source: "schedule" },
+          },
+          schedule: {
+            kind: "every",
+            intervalSeconds: 300,
+          },
+        },
+      }),
+    );
+
+    expect(feed.map((item) => item.kind)).toEqual(["event", "scheduler-control"]);
+    expect(feed[1]).toMatchObject({
+      kind: "scheduler-control",
+      action: "append-scheduled",
+      slug: "nightly-rollup",
+      schedule: {
+        kind: "every",
+        intervalSeconds: 300,
+      },
+      append: {
+        type: "https://events.iterate.com/events/example/rollup-requested",
+        payload: { source: "schedule" },
+      },
+    });
+  });
+
+  test("adds a semantic scheduler execution item after execution-finished events", () => {
+    const feed = projectEventToFeed(
+      createEvent({
+        streamPath: "/demo",
+        type: "https://events.iterate.com/events/stream/schedule/internal/execution-finished",
+        payload: {
+          slug: "nightly-rollup",
+          outcome: "succeeded",
+          nextRunAt: 1_775_000_000,
+        },
+      }),
+    );
+
+    expect(feed.map((item) => item.kind)).toEqual(["event", "scheduler-execution"]);
+    expect(feed[1]).toMatchObject({
+      kind: "scheduler-execution",
+      action: "finished",
+      slug: "nightly-rollup",
+      outcome: "succeeded",
+      nextRunAt: 1_775_000_000,
+    });
+  });
   test("extracts only raw event rows from a mixed feed", () => {
     const feed = projectWireToFeed([
       createEvent({

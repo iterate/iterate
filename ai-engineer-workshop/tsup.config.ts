@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     cli: "cli.ts",
     contract: "contract.ts",
+    runtime: "runtime.ts",
     sdk: "sdk.ts",
   },
   format: ["esm"],

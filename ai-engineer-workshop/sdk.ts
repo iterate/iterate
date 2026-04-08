@@ -1,37 +1,35 @@
 import { execSync } from "node:child_process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ContractRouterClient } from "@orpc/contract";
-import { createORPCClient } from "@orpc/client";
-import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { Procedure } from "@orpc/server";
 import { call, os as orpcOs } from "@orpc/server";
 import { z } from "zod";
-import { eventsContract } from "../apps/events-contract/src/orpc-contract.ts";
-import type { ProcessorLogger } from "../apps/events-contract/src/sdk.ts";
+import { eventsContract } from "../apps/events-contract/src/sdk.ts";
+import type { EventsORPCClient, ProcessorLogger } from "../apps/events-contract/src/sdk.ts";
+import { createWorkshopEventsClient } from "./events-client.ts";
 
 export {
   eventsContract,
+  getDiscoveredStreamPath,
+  matchesStreamPattern,
+  normalizeStreamPattern,
   type EventsORPCClient,
   type ProcessorLogger,
+  PushSubscriptionProcessorRuntime,
   PullSubscriptionProcessorRuntime,
   PullSubscriptionPatternProcessorRuntime,
-} from "../apps/events-contract/src/sdk.ts";
-export { EventInput, GenericEventInput } from "../apps/events-contract/src/types.ts";
-export type {
-  Event,
-  EventType,
-  JSONObject,
-  StreamPath,
-} from "../apps/events-contract/src/types.ts";
-export {
+  defineBuiltinProcessor,
   defineProcessor,
+  EventInput,
+  GenericEventInput,
+  type BuiltinProcessor,
   type Processor,
   type ProcessorAppendInput,
-} from "../apps/events/src/durable-objects/define-processor.ts";
+  type RelativeStreamPath,
+} from "../apps/events-contract/src/sdk.ts";
+export type { Event, EventType, JSONObject, StreamPath } from "../apps/events-contract/src/sdk.ts";
 export * from "./test-helpers.ts";
 
-const iterateProjectHeader = "x-iterate-project";
 const defaultBaseUrl = "https://events.iterate.com";
 const workshopLogLevels = ["debug", "info", "warn", "error"] as const;
 
@@ -47,20 +45,12 @@ export function createEventsClient({
 }: {
   baseUrl?: string;
   projectSlug?: string;
-} = {}): ContractRouterClient<typeof eventsContract> {
-  return createORPCClient(
-    new OpenAPILink(eventsContract, {
-      url: new URL("/api", baseUrl).toString(),
-      ...(projectSlug != null && {
-        fetch: (request: RequestInfo | URL, init?: RequestInit) => {
-          const headers = new Headers(request instanceof Request ? request.headers : init?.headers);
-          headers.set("connection", "close");
-          headers.set(iterateProjectHeader, projectSlug);
-          return fetch(request, { ...init, headers });
-        },
-      }),
-    }),
-  ) as ContractRouterClient<typeof eventsContract>;
+} = {}): EventsORPCClient {
+  return createWorkshopEventsClient({
+    baseUrl,
+    closeConnection: true,
+    projectSlug,
+  });
 }
 
 export function normalizePathPrefix(pathPrefix: string) {
@@ -162,11 +152,37 @@ export const os = Object.assign(baseWorkshopProcedure, {
   },
 });
 
+export function isMainModule(importMetaUrl: string) {
+  if (!process.argv[1]) {
+    return false;
+  }
+
+  return importMetaUrl === pathToFileURL(resolve(process.argv[1])).href;
+}
+
+export function runWorkshopMain(
+  importMetaUrl: string,
+  run: (pathPrefix?: string) => Promise<void>,
+) {
+  if (!isMainModule(importMetaUrl)) {
+    return;
+  }
+
+  process.env.PATH_PREFIX ||= getDefaultWorkshopPathPrefix();
+
+  void run(process.env.PATH_PREFIX).catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
 export function runIfMain(
   importMetaUrl: string,
   procedure: Procedure<any, any, any, any, any, any>,
 ) {
-  if (!process.argv[1] || importMetaUrl !== pathToFileURL(resolve(process.argv[1])).href) return;
+  if (!isMainModule(importMetaUrl)) {
+    return;
+  }
 
   process.env.PATH_PREFIX ||= getDefaultWorkshopPathPrefix();
   const logLevel = getDefaultWorkshopLogLevel();
