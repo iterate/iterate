@@ -18,6 +18,7 @@ import {
 
 type WorkshopEventsClient = Pick<EventsORPCClient, "append" | "stream">;
 type SubscriberType = "webhook" | "websocket";
+const MAX_CACHED_RUNTIMES = 100;
 
 type ProcessorDeploymentConfig<State> = {
   baseUrl: string;
@@ -198,8 +199,12 @@ function getOrCreateRuntime<State>(args: {
   ]);
   const existing = args.runtimes.get(runtimeKey);
   if (existing != null) {
+    args.runtimes.delete(runtimeKey);
+    args.runtimes.set(runtimeKey, existing);
     return existing;
   }
+
+  evictOldestRuntimeIfNeeded(args.runtimes);
 
   const runtime = new PushSubscriptionProcessorRuntime({
     eventsClient: args.eventsClient,
@@ -208,6 +213,19 @@ function getOrCreateRuntime<State>(args: {
   });
   args.runtimes.set(runtimeKey, runtime);
   return runtime;
+}
+
+function evictOldestRuntimeIfNeeded<State>(
+  runtimes: Map<string, PushSubscriptionProcessorRuntime<State>>,
+) {
+  if (runtimes.size < MAX_CACHED_RUNTIMES) {
+    return;
+  }
+
+  const oldestKey = runtimes.keys().next().value;
+  if (oldestKey != null) {
+    runtimes.delete(oldestKey);
+  }
 }
 
 function renderUsageText<State>(args: {
