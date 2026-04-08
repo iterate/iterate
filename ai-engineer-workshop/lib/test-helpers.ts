@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { expect } from "vitest";
 import {
@@ -37,15 +38,17 @@ export async function useProcessorTestHarness<TState>({
   baseUrl = resolveWorkshopBaseUrl(),
   projectSlug = resolveWorkshopProjectSlug(),
   testIdentifier = expect.getState().currentTestName ?? processor.slug,
+  testRunId = createProcessorTestRunId(),
 }: {
   processor: StoppableProcessor<TState>;
   pathPrefix: string;
   baseUrl?: string;
   projectSlug?: string;
   testIdentifier?: string;
+  testRunId?: string;
 }): Promise<ProcessorTestHarness<TState>> {
   const client = createEventsClient({ baseUrl, projectSlug });
-  const path = createProcessorTestPath({ pathPrefix, testIdentifier });
+  const path = createProcessorTestPath({ pathPrefix, testIdentifier, testRunId });
   const runtime = new PullSubscriptionProcessorRuntime({
     eventsClient: client,
     processor,
@@ -153,12 +156,18 @@ export async function useProcessorTestHarness<TState>({
 function createProcessorTestPath({
   pathPrefix,
   testIdentifier,
+  testRunId,
 }: {
   pathPrefix: string;
   testIdentifier: string;
+  testRunId: string;
 }) {
   const normalizedPrefix = normalizePathPrefix(pathPrefix).replace(/\/+$/, "");
-  return `${normalizedPrefix}/${slugifyPathSegment(testIdentifier)}` as StreamPath;
+  return `${normalizedPrefix}/${slugifyPathSegment(testIdentifier)}-${slugifyPathSegment(testRunId)}` as StreamPath;
+}
+
+function createProcessorTestRunId() {
+  return randomBytes(6).toString("hex");
 }
 
 function slugifyPathSegment(value: string) {

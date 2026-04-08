@@ -33,12 +33,13 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
-import { stringify as stringifyYaml, parse as parseYaml } from "yaml";
+import { stringify as stringifyYaml } from "yaml";
 import { StreamEventFeed } from "~/components/stream-event-feed.tsx";
 import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
 import { eventInputTemplates, getEventInputTemplateById } from "~/lib/event-type-pages.ts";
 import { projectScopedQueryKey } from "~/lib/project-slug.ts";
+import { parseObjectFromComposerText } from "~/lib/stream-composer-input.ts";
 import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projection.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { DEFAULT_STREAM_RENDERER_MODE, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
@@ -151,12 +152,11 @@ export function StreamPage({
     }),
   );
 
-  const destroyStream = useMutation(
+  const resetStream = useMutation(
     orpc.destroy.mutationOptions({
-      onSuccess: async () => {
+      onSuccess: () => {
         closeMetadata();
-        void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
-        await queryClient.invalidateQueries({ queryKey: streamStateQueryKey });
+        window.location.reload();
       },
     }),
   );
@@ -206,6 +206,7 @@ export function StreamPage({
       event: {
         type: "agent-input-added",
         payload: {
+          role: "user",
           content,
         },
       },
@@ -245,6 +246,51 @@ export function StreamPage({
           </SheetHeader>
 
           <div className="min-h-0 flex-1 overflow-auto p-4">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5">
+              <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-destructive">Reset stream</p>
+                  <p className="text-[11px] leading-snug text-muted-foreground">
+                    Clears durable state — cannot be undone.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 sm:justify-end">
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="reset-child-streams"
+                      checked={destroyChildren}
+                      onCheckedChange={(checked) => setDestroyChildren(checked)}
+                    />
+                    <Label htmlFor="reset-child-streams" className="text-xs leading-none">
+                      Reset child streams
+                    </Label>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="h-8 shrink-0 px-3 text-xs"
+                    disabled={resetStream.isPending}
+                    onClick={() => {
+                      const request = resetStream.mutateAsync({
+                        params: { path: streamPath },
+                        query: { destroyChildren },
+                      });
+                      void toast.promise(request, {
+                        loading: "Resetting stream…",
+                        success: (result) =>
+                          `Reset ${result.destroyedStreamCount} stream${result.destroyedStreamCount === 1 ? "" : "s"}`,
+                        error: (error) => formatClientError(error),
+                      });
+                    }}
+                  >
+                    {resetStream.isPending ? "Resetting…" : "Reset"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <Separator className="my-4" />
+
             <SerializedObjectCodeBlock
               data={streamStateQuery.data ?? null}
               className="min-h-80"
@@ -252,47 +298,6 @@ export function StreamPage({
               showToggle
               showCopyButton
             />
-
-            <Separator className="my-6" />
-
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4">
-              <h3 className="text-sm font-semibold text-destructive">Danger zone</h3>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Permanently destroy this stream. This cannot be undone.
-              </p>
-
-              <div className="mt-4 flex items-center gap-2">
-                <Checkbox
-                  id="destroy-children"
-                  checked={destroyChildren}
-                  onCheckedChange={(checked) => setDestroyChildren(checked)}
-                />
-                <Label htmlFor="destroy-children" className="text-xs">
-                  Destroy child streams
-                </Label>
-              </div>
-
-              <Button
-                variant="destructive"
-                size="sm"
-                className="mt-4"
-                disabled={destroyStream.isPending}
-                onClick={() => {
-                  const request = destroyStream.mutateAsync({
-                    params: { path: streamPath },
-                    query: { destroyChildren },
-                  });
-                  void toast.promise(request, {
-                    loading: "Destroying stream…",
-                    success: (result) =>
-                      `Destroyed ${result.destroyedStreamCount} stream${result.destroyedStreamCount === 1 ? "" : "s"}`,
-                    error: (error) => formatClientError(error),
-                  });
-                }}
-              >
-                {destroyStream.isPending ? "Destroying…" : "Destroy stream"}
-              </Button>
-            </div>
           </div>
         </SheetContent>
       </Sheet>
@@ -412,16 +417,6 @@ function createEventInputTemplate(templateId: string, format: "json" | "yaml") {
   return format === "yaml" ? stringifyYaml(data) : JSON.stringify(data, null, 2);
 }
 
-function parseObjectFromText(value: string, format: "json" | "yaml") {
-  const parsed = (format === "yaml" ? parseYaml(value) : JSON.parse(value)) as unknown;
-
-  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Value must be a ${format === "yaml" ? "YAML" : "JSON"} object.`);
-  }
-
-  return parsed as JSONObject;
-}
-
 function parseAppendEventInput(value: string, format: "json" | "yaml") {
-  return parseObjectFromText(value, format) as EventInput;
+  return parseObjectFromComposerText(value, format) as EventInput;
 }

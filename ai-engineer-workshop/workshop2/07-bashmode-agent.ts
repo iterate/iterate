@@ -1,6 +1,6 @@
 import {
   createEventsClient,
-  PullSubscriptionProcessorRuntime,
+  PullSubscriptionPatternProcessorRuntime,
   workshopLogger,
   workshopPathPrefix,
 } from "ai-engineer-workshop";
@@ -9,23 +9,22 @@ import bashmode from "./bashmode.ts";
 
 async function main() {
   const pathPrefix = workshopPathPrefix();
-  const streamPath = `${pathPrefix}/bashmode-agent`;
   const eventsClient = createEventsClient();
 
-  console.log(`Watching ${streamPath}`);
+  console.log(`Watching streams under ${pathPrefix}`);
 
   await Promise.all([
-    new PullSubscriptionProcessorRuntime({
+    new PullSubscriptionPatternProcessorRuntime({
       eventsClient,
       logger: workshopLogger,
+      pathPrefix,
       processor: agentProcessor,
-      streamPath,
     }).run(),
-    new PullSubscriptionProcessorRuntime({
+    new PullSubscriptionPatternProcessorRuntime({
       eventsClient,
       logger: workshopLogger,
+      pathPrefix,
       processor: bashmode,
-      streamPath,
     }).run(),
   ]);
 }

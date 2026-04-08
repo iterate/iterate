@@ -6,20 +6,16 @@ import {
 } from "ai-engineer-workshop";
 import { agentProcessor } from "./agent-processor.ts";
 
-/** Appended to `PATH_PREFIX` to build the stream pattern. Default `"/**"`. */
-const streamPatternSuffix = process.env.STREAM_PATTERN_SUFFIX ?? "/**";
-
 try {
   const pathPrefix = workshopPathPrefix();
-  const streamPattern = `${pathPrefix}${streamPatternSuffix}`;
 
-  console.log(`Watching streams matching ${streamPattern}`);
+  console.log(`Watching streams under ${pathPrefix}`);
 
   await new PullSubscriptionPatternProcessorRuntime({
     eventsClient: createEventsClient(),
     logger: workshopLogger,
+    pathPrefix,
     processor: agentProcessor,
-    streamPattern,
   }).run();
 } catch (error: unknown) {
   console.log(error);

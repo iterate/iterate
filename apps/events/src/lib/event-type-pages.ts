@@ -491,7 +491,24 @@ export const manualEventAppendedPage = {
   ],
 } satisfies EventTypePageDefinition;
 
+export const agentInputAddedPage = {
+  slug: "agent-input-added",
+  href: "/agent-input-added/",
+  title: "Agent Input Added",
+  type: "agent-input-added",
+  summary: "User turn for agent-style processors (dynamic worker loops, OpenAI, and similar).",
+  payloadExample: {
+    role: "user",
+    content: "Tell me a joke I never heard before",
+  },
+  details: [
+    "Append this after configuring a processor that listens for agent-input-added.",
+    "The pretty feed shows it as a user message; pair with agent-output-added or streamed OpenAI events for the reply.",
+  ],
+} satisfies EventTypePageDefinition;
+
 export const eventTypePages = [
+  agentInputAddedPage,
   childStreamCreatedPage,
   dynamicWorkerConfiguredPage,
   errorOccurredPage,

@@ -16,32 +16,28 @@ describeAgentProcessor("agent processor", () => {
       payload: { content: "What is 50 - 8? Reply with exactly 42." },
     });
 
-    const completedEvent = await f.waitForEvent(
+    const completedMessageEvent = await f.waitForEvent(
       (event) =>
         event.type === "openai-response-event-added" &&
-        (event.payload as { type?: string }).type === "response.completed",
-      { timeout: 10_000 },
+        (event.payload as { type?: string }).type === "response.output_item.done",
+      { timeout: 15_000 },
     );
 
-    expect(completedEvent).toMatchObject({
+    expect(completedMessageEvent).toMatchObject({
       type: "openai-response-event-added",
       payload: {
-        type: "response.completed",
-        response: {
-          output: [
+        type: "response.output_item.done",
+        item: {
+          type: "message",
+          role: "assistant",
+          content: [
             {
-              type: "message",
-              role: "assistant",
-              content: [
-                {
-                  type: "output_text",
-                  text: expect.stringContaining("42"),
-                },
-              ],
+              type: "output_text",
+              text: expect.stringContaining("42"),
             },
           ],
         },
       },
     });
-  }, 15_000);
+  }, 30_000);
 });

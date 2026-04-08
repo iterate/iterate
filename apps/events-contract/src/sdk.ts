@@ -394,13 +394,13 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
   constructor({
     eventsClient,
     logger = console,
+    pathPrefix,
     processor,
-    streamPattern,
   }: {
     eventsClient: PullSubscriptionEventsClient;
     logger?: ProcessorLogger;
+    pathPrefix: string;
     processor: Processor<State>;
-    streamPattern: string;
   }) {
     this.#eventsClient = eventsClient;
     this.#processorLogger = logger;
@@ -410,7 +410,7 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
       scope: "pattern",
     });
     this.#processor = processor;
-    this.#streamPattern = normalizeStreamPattern(streamPattern);
+    this.#streamPattern = createDescendantStreamPattern(pathPrefix);
   }
 
   async run() {
@@ -872,6 +872,19 @@ export function getDiscoveredStreamPath(event: Event): StreamPath | null {
 
 export function normalizeStreamPattern(streamPattern: string) {
   return streamPattern.startsWith("/") ? streamPattern : `/${streamPattern}`;
+}
+
+function normalizePathPrefix(pathPrefix: string) {
+  if (pathPrefix === "/") {
+    return StreamPathSchema.parse(pathPrefix);
+  }
+
+  return StreamPathSchema.parse(normalizeStreamPattern(pathPrefix).replace(/\/+$/, ""));
+}
+
+function createDescendantStreamPattern(pathPrefix: string) {
+  const normalizedPrefix = normalizePathPrefix(pathPrefix);
+  return normalizedPrefix === "/" ? "/**" : `${normalizedPrefix}/**`;
 }
 
 function resolveAppendPath({

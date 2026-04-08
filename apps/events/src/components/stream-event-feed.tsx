@@ -61,6 +61,7 @@ import { StreamPathLabel } from "~/components/stream-path-label.tsx";
 import { StreamToolCard } from "~/components/stream-tool-card.tsx";
 import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { getEventTypePageByType } from "~/lib/event-type-pages.ts";
+import { orderEventKeysForYamlDisplay } from "~/lib/order-event-keys-for-yaml-display.ts";
 import { formatElapsedTime } from "~/lib/stream-feed-time.ts";
 import { getAdjacentEventOffset, getEventFeedItems } from "~/lib/stream-feed-projection.ts";
 import { getRelativeStreamPath } from "~/lib/stream-path-relative.ts";
@@ -123,7 +124,10 @@ export function StreamEventFeed({
 
     return elapsedByOffset;
   }, [eventFeedItems]);
-  const rawEvents = eventFeedItems.map((item) => item.raw);
+  const rawEvents = useMemo(
+    () => eventFeedItems.map((item) => orderEventKeysForYamlDisplay(item.raw)),
+    [eventFeedItems],
+  );
   const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
 
   const items = displayFeed ?? [];
@@ -1101,7 +1105,7 @@ function EventInspectorSheet({
         <div className="min-h-0 flex-1 overflow-hidden px-4 py-3">
           <div className="pb-2 text-xs text-muted-foreground">Raw event payload</div>
           <SerializedObjectCodeBlock
-            data={selectedEvent?.raw ?? null}
+            data={selectedEvent == null ? null : orderEventKeysForYamlDisplay(selectedEvent.raw)}
             className="h-full min-h-[68vh]"
             initialFormat="yaml"
             showToggle

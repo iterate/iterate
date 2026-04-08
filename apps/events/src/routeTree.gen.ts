@@ -26,6 +26,7 @@ import { Route as ErrorOccurredRouteImport } from './routes/error-occurred'
 import { Route as DynamicWorkerConfiguredRouteImport } from './routes/dynamic-worker-configured'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as ChildStreamCreatedRouteImport } from './routes/child-stream-created'
+import { Route as AgentInputAddedRouteImport } from './routes/agent-input-added'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
@@ -127,6 +128,11 @@ const ChildStreamCreatedRoute = ChildStreamCreatedRouteImport.update({
   path: '/child-stream-created',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AgentInputAddedRoute = AgentInputAddedRouteImport.update({
+  id: '/agent-input-added',
+  path: '/agent-input-added',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppRoute = AppRouteImport.update({
   id: '/_app',
   getParentRoute: () => rootRouteImport,
@@ -179,6 +185,7 @@ const AppStreamsSplatRoute = AppStreamsSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/agent-input-added': typeof AgentInputAddedRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
@@ -207,6 +214,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/agent-input-added': typeof AgentInputAddedRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
@@ -235,6 +243,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
+  '/agent-input-added': typeof AgentInputAddedRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
@@ -265,6 +274,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/agent-input-added'
     | '/child-stream-created'
     | '/docs'
     | '/dynamic-worker-configured'
@@ -293,6 +303,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/agent-input-added'
     | '/child-stream-created'
     | '/docs'
     | '/dynamic-worker-configured'
@@ -320,6 +331,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/_app'
+    | '/agent-input-added'
     | '/child-stream-created'
     | '/docs'
     | '/dynamic-worker-configured'
@@ -350,6 +362,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
+  AgentInputAddedRoute: typeof AgentInputAddedRoute
   ChildStreamCreatedRoute: typeof ChildStreamCreatedRoute
   DocsRoute: typeof DocsRoute
   DynamicWorkerConfiguredRoute: typeof DynamicWorkerConfiguredRoute
@@ -493,6 +506,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChildStreamCreatedRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/agent-input-added': {
+      id: '/agent-input-added'
+      path: '/agent-input-added'
+      fullPath: '/agent-input-added'
+      preLoaderRoute: typeof AgentInputAddedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app': {
       id: '/_app'
       path: ''
@@ -607,6 +627,7 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
+  AgentInputAddedRoute: AgentInputAddedRoute,
   ChildStreamCreatedRoute: ChildStreamCreatedRoute,
   DocsRoute: DocsRoute,
   DynamicWorkerConfiguredRoute: DynamicWorkerConfiguredRoute,
