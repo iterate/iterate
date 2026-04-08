@@ -57,8 +57,8 @@
     "slides": "marp -w -p README.md",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm test:e2e",
-    "test:e2e": "vitest run --dir examples/08-bashmode --maxWorkers 1",
-    "test:watch": "vitest --dir examples/08-bashmode --maxWorkers 1",
+    "test:e2e": "vitest run --dir examples/09-bashmode-agent --maxWorkers 1",
+    "test:watch": "vitest --dir examples/09-bashmode-agent --maxWorkers 1",
     "workshop": "node --import tsx ./cli.ts",
     "w": "pnpm workshop"
   },
