@@ -16,6 +16,10 @@ export type ParsedSecret = {
   secretKey: string;
 };
 
+export function formatIterateSecretReference(secretKey: string) {
+  return `getIterateSecret({ secretKey: ${JSON.stringify(secretKey)} })`;
+}
+
 type ReplaceMagicStringsResult =
   | { ok: true; result: string }
   | { ok: false; error: CodemodeSecretError };
@@ -57,6 +61,21 @@ export function parseMagicString(match: string): ParsedSecret | null {
   } catch {
     return null;
   }
+}
+
+export function parseGetIterateSecretInput(input: unknown): ParsedSecret {
+  const secretKey =
+    typeof input === "object" && input !== null && "secretKey" in input
+      ? input.secretKey
+      : undefined;
+
+  if (typeof secretKey !== "string" || secretKey.trim().length === 0) {
+    throw new Error("secretKey is required");
+  }
+
+  return {
+    secretKey,
+  };
 }
 
 async function lookupCodemodeSecret(db: D1Database, secretKey: string) {

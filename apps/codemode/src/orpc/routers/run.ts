@@ -48,7 +48,6 @@ export const runRouter = {
         input: input.input,
         loader: context.env.LOADER,
         outbound: context.env.OUTBOUND,
-        db: context.env.DB,
         config: context.config,
         sources: input.sources,
       });

@@ -9,6 +9,10 @@ import {
   type WorkerBundleDefinition,
 } from "~/lib/codemode/executor.ts";
 import { buildCodemodeContextFromSources } from "~/lib/codemode-contract-runtime.ts";
+import {
+  formatIterateSecretReference,
+  parseGetIterateSecretInput,
+} from "~/lib/codemode-secret-injection.ts";
 
 export interface CodemodeExecutionResult {
   result: string;
@@ -43,35 +47,13 @@ function buildCompiledScriptModuleSource(script: string) {
   return `export default ${normalizeCode(script)};`;
 }
 
-async function lookupCodemodeSecret(db: D1Database, secretKey: string) {
-  const row = await db
-    .prepare("select value from codemode_secrets where key = ?1 limit 1")
-    .bind(secretKey)
-    .first<{ value: string }>();
-
-  return row?.value ?? null;
-}
-
-function createRuntimeProvider(db: D1Database): ResolvedProvider {
+function createRuntimeProvider(): ResolvedProvider {
   return {
     name: "codemodeRuntime",
     fns: {
       getIterateSecret: async (input) => {
-        const secretKey =
-          typeof input === "object" && input !== null && "secretKey" in input
-            ? input.secretKey
-            : undefined;
-
-        if (typeof secretKey !== "string" || secretKey.trim().length === 0) {
-          throw new Error("secretKey is required");
-        }
-
-        const secretValue = await lookupCodemodeSecret(db, secretKey);
-        if (secretValue == null) {
-          throw new Error(`Secret '${secretKey}' not found`);
-        }
-
-        return secretValue;
+        const { secretKey } = parseGetIterateSecretInput(input);
+        return formatIterateSecretReference(secretKey);
       },
     },
   };
@@ -118,7 +100,6 @@ async function bundleCodemodeInput(options: {
 export async function executeCodemodeFunction(options: {
   input: CodemodeInput;
   config: AppConfig;
-  db: D1Database;
   loader: WorkerLoader;
   outbound: Fetcher;
   sources?: CodemodeSource[];
@@ -133,7 +114,7 @@ export async function executeCodemodeFunction(options: {
       ),
   });
 
-  const providers = [...contractContext.providers, createRuntimeProvider(options.db)];
+  const providers = [...contractContext.providers, createRuntimeProvider()];
   const bundle = await bundleCodemodeInput({
     input: options.input,
     providers,
