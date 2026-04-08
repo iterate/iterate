@@ -1,4 +1,4 @@
-import type { Event } from "@iterate-com/events-contract";
+import type { Event, StreamCursor } from "@iterate-com/events-contract";
 import { RpcTarget } from "cloudflare:workers";
 import type { DynamicWorkerAppendInput } from "./dynamic-processor.ts";
 
@@ -24,8 +24,8 @@ type LocalDynamicWorkerSubscriptionTarget = {
  */
 export function createDynamicWorkerStreamTarget(args: {
   append: (input: DynamicWorkerAppendInput) => Event;
-  history: (args?: { afterOffset?: number }) => Event[];
-  stream: (args?: { afterOffset?: number; live?: boolean }) => ReadableStream<Uint8Array>;
+  history: (args?: { after?: StreamCursor; before?: StreamCursor }) => Event[];
+  stream: (args?: { after?: StreamCursor; before?: StreamCursor }) => ReadableStream<Uint8Array>;
 }) {
   const subscriptions = new Set<LocalDynamicWorkerSubscriptionTarget>();
   let disposed = false;
@@ -35,7 +35,7 @@ export function createDynamicWorkerStreamTarget(args: {
       return args.append(input);
     }
 
-    async subscribe(options: { afterOffset?: number; live?: boolean } = {}) {
+    async subscribe(options: { after?: StreamCursor; before?: StreamCursor } = {}) {
       if (disposed) {
         throw new Error("dynamic worker stream target was disposed");
       }
@@ -45,8 +45,8 @@ export function createDynamicWorkerStreamTarget(args: {
           subscriptions.delete(subscription);
         },
         stream: args.stream({
-          afterOffset: options.afterOffset,
-          live: options.live ?? true,
+          after: options.after,
+          before: options.before,
         }),
       });
 
@@ -54,7 +54,7 @@ export function createDynamicWorkerStreamTarget(args: {
       return subscription;
     }
 
-    async history(options: { afterOffset?: number } = {}) {
+    async history(options: { after?: StreamCursor; before?: StreamCursor } = {}) {
       return args.history(options);
     }
 

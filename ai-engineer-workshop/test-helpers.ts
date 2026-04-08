@@ -71,7 +71,7 @@ export function createWorkshopTestHarness({
     },
     async collectEvents(streamPath: StreamPath) {
       const events: Event[] = [];
-      for await (const event of await client.stream({ path: streamPath }, {})) {
+      for await (const event of await client.stream({ path: streamPath, before: "end" }, {})) {
         events.push(event);
       }
       return events;

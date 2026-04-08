@@ -689,7 +689,6 @@ async function append(path: StreamPath, event: EventInput) {
 async function openLiveIterator(path: StreamPath) {
   const stream = await app.client.stream({
     path,
-    live: true,
   });
 
   return stream[Symbol.asyncIterator]();

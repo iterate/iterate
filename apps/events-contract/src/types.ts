@@ -47,6 +47,19 @@ export { JSONObject, StreamPath };
 export const ProjectSlug = z.string().trim().min(1).max(255);
 export type ProjectSlug = z.infer<typeof ProjectSlug>;
 
+export const StreamCursor = z.union([
+  z.coerce.number().int().positive(),
+  z.literal("start"),
+  z.literal("end"),
+]);
+export type StreamCursor = z.infer<typeof StreamCursor>;
+
+export const StreamQuery = z.object({
+  after: StreamCursor.optional(),
+  before: StreamCursor.optional(),
+});
+export type StreamQuery = z.infer<typeof StreamQuery>;
+
 const StreamInitializedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/initialized"),
   payload: z.strictObject({

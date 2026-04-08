@@ -5,6 +5,7 @@ import {
   type DynamicWorkerState,
   type Event,
   EventInput,
+  type StreamCursor,
   type StreamPath,
 } from "@iterate-com/events-contract";
 import {
@@ -189,7 +190,7 @@ async function appendSameStream(stream, input) {
 async function replayProcessorState(stream, processor) {
   let state = structuredClone(processor.initialState);
   let lastOffset = 0;
-  const history = await stream.history({ afterOffset: 0 });
+  const history = await stream.history({ before: "end" });
 
   for (const event of history) {
     lastOffset = event.offset;
@@ -202,7 +203,9 @@ async function replayProcessorState(stream, processor) {
 export default {
   async run(stream) {
     let { lastOffset, state } = await replayProcessorState(stream, processor);
-    const live = createRemoteAsyncIterator(await stream.subscribe({ afterOffset: lastOffset }));
+    const live = createRemoteAsyncIterator(
+      await stream.subscribe({ after: lastOffset > 0 ? lastOffset : "start" }),
+    );
 
     for await (const event of live) {
       if (event.offset === lastOffset) {
@@ -296,8 +299,8 @@ export function normalizeDynamicWorkerConfig(input: {
 
 export function createDynamicWorkerManager(context: {
   append: (event: EventInput) => Event;
-  history: (args?: { afterOffset?: number }) => Event[];
-  stream: (args?: { afterOffset?: number; live?: boolean }) => ReadableStream<Uint8Array>;
+  history: (args?: { after?: StreamCursor; before?: StreamCursor }) => Event[];
+  stream: (args?: { after?: StreamCursor; before?: StreamCursor }) => ReadableStream<Uint8Array>;
   createLoopbackBinding: (args: { exportName: string }) => Fetcher;
   getPath: () => StreamPath;
   loader: WorkerLoader;
@@ -356,12 +359,13 @@ export function createDynamicWorkerManager(context: {
           },
           history: (args) =>
             context.history({
-              afterOffset: args?.afterOffset,
+              after: args?.after,
+              before: args?.before,
             }),
           stream: (args) =>
             context.stream({
-              afterOffset: args?.afterOffset,
-              live: args?.live,
+              after: args?.after,
+              before: args?.before,
             }),
         }) as LocalDynamicWorkerTarget;
 
@@ -493,8 +497,8 @@ function hashDynamicWorkerConfig(value: string) {
 
 type RpcDynamicWorkerTarget = {
   append(input: DynamicWorkerAppendInput): Promise<Event>;
-  history(args?: { afterOffset?: number }): Promise<Event[]>;
-  subscribe(args?: { afterOffset?: number }): Promise<{
+  history(args?: { after?: StreamCursor; before?: StreamCursor }): Promise<Event[]>;
+  subscribe(args?: { after?: StreamCursor; before?: StreamCursor }): Promise<{
     next(): Promise<{ done: boolean; value?: Event }>;
     return(): Promise<{ done: boolean; value?: Event }>;
   }>;
