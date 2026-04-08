@@ -21,6 +21,7 @@ type SubscriberType = "webhook" | "websocket";
 
 type ProcessorDeploymentConfig<State> = {
   baseUrl: string;
+  projectSlug?: string;
   openAiModel?: string;
   processor: Processor<State>;
   processorDescription: string;
@@ -28,9 +29,18 @@ type ProcessorDeploymentConfig<State> = {
   processorKind: string;
   streamPattern: string;
 };
+type AfterEventHandlerAppEnv<Bindings extends object, State> = {
+  Bindings: Bindings;
+  Variables: {
+    callbackContext: z.infer<typeof CallbackContext>;
+    config: ProcessorDeploymentConfig<State>;
+    runtime: PushSubscriptionProcessorRuntime<State>;
+  };
+};
 
 const CallbackContext = z.object({
   baseUrl: z.url(),
+  projectSlug: z.string().min(1).optional(),
   streamPath: StreamPathSchema,
 });
 
@@ -47,10 +57,10 @@ export function createAfterEventHandlerApp<Bindings extends object, State>({
   getConfig,
   getEventsClient,
 }: {
-  getConfig: (context: Context<{ Bindings: Bindings }>) => ProcessorDeploymentConfig<State>;
-  getEventsClient: (baseUrl: string) => WorkshopEventsClient;
+  getConfig: (context: Context) => ProcessorDeploymentConfig<State>;
+  getEventsClient: (args: { baseUrl: string; projectSlug?: string }) => WorkshopEventsClient;
 }) {
-  const app = new Hono<{ Bindings: Bindings }>();
+  const app = new Hono<AfterEventHandlerAppEnv<Bindings, State>>();
   const runtimes = new Map<string, PushSubscriptionProcessorRuntime<State>>();
 
   app.get("/", (c) => {
@@ -63,7 +73,7 @@ export function createAfterEventHandlerApp<Bindings extends object, State>({
     );
   });
 
-  app.get("/after-event-handler", async (c, next) => {
+  app.use("/after-event-handler", async (c, next) => {
     const config = getConfig(c);
     const callbackContext = parseCallbackContext(c, config.baseUrl);
     if (!callbackContext.success) {
@@ -86,52 +96,66 @@ export function createAfterEventHandlerApp<Bindings extends object, State>({
       );
     }
 
-    const runtime = getOrCreateRuntime({
-      config,
-      eventsClient: getEventsClient(callbackContext.data.baseUrl),
-      runtimes,
-      streamPath,
-    });
+    c.set("callbackContext", callbackContext.data);
+    c.set("config", config);
+    c.set(
+      "runtime",
+      getOrCreateRuntime({
+        config,
+        eventsClient: getEventsClient({
+          baseUrl: callbackContext.data.baseUrl,
+          projectSlug: callbackContext.data.projectSlug,
+        }),
+        runtimes,
+        streamPath,
+      }),
+    );
 
-    const handler = upgradeWebSocket(() => ({
-      onMessage: async (messageEvent, ws) => {
-        try {
-          const event = await parseIncomingEvent(messageEvent.data);
-          if (event == null || event.streamPath !== streamPath) {
-            ws.close(1008, "invalid_event");
-            return;
-          }
-
-          await runtime.consume(event);
-        } catch (error) {
-          console.error("[processor-runtime] failed to consume websocket event", {
-            streamPath,
-            error,
-          });
-          ws.close(1011, "processor_error");
-        }
-      },
-      onError: (_event, ws) => {
-        ws.close(1011, "processor_error");
-      },
-    }));
-
-    return handler(c, next);
+    await next();
   });
 
+  app.get(
+    "/after-event-handler",
+    upgradeWebSocket((c) => {
+      const callbackContext = c.get("callbackContext");
+      const runtime = c.get("runtime");
+
+      return {
+        onMessage: async (messageEvent, ws) => {
+          try {
+            const event = await parseIncomingEvent(messageEvent.data);
+            if (event == null || event.streamPath !== callbackContext.streamPath) {
+              ws.close(1008, "invalid_event");
+              return;
+            }
+
+            await runtime.consume(event);
+          } catch (error) {
+            console.error("[processor-runtime] failed to consume websocket event", {
+              streamPath: callbackContext.streamPath,
+              error,
+            });
+            ws.close(1011, "processor_error");
+          }
+        },
+        onError: (_event, ws) => {
+          ws.close(1011, "processor_error");
+        },
+      };
+    }),
+  );
+
   app.post("/after-event-handler", async (c) => {
-    const config = getConfig(c);
-    const callbackContext = parseCallbackContext(c, config.baseUrl);
-    if (!callbackContext.success) {
-      return c.json({ ok: false, issues: formatIssues(callbackContext.error.issues) }, 400);
-    }
+    const callbackContext = c.get("callbackContext");
+    const config = c.get("config");
+    const runtime = c.get("runtime");
+    const streamPath = callbackContext.streamPath;
 
     const eventResult = await parseBodyEvent(c);
     if (!eventResult.success) {
       return c.json({ ok: false, issues: formatIssues(eventResult.error.issues) }, 400);
     }
 
-    const streamPath = callbackContext.data.streamPath;
     if (eventResult.data.streamPath !== streamPath) {
       return c.json(
         {
@@ -151,12 +175,6 @@ export function createAfterEventHandlerApp<Bindings extends object, State>({
       return c.json({ ok: true, skipped: true });
     }
 
-    const runtime = getOrCreateRuntime({
-      config,
-      eventsClient: getEventsClient(callbackContext.data.baseUrl),
-      runtimes,
-      streamPath,
-    });
     await runtime.consume(eventResult.data);
 
     return c.json({ ok: true });
@@ -173,6 +191,7 @@ function getOrCreateRuntime<State>(args: {
 }) {
   const runtimeKey = JSON.stringify([
     args.config.baseUrl,
+    args.config.projectSlug,
     args.config.processorKey,
     args.config.streamPattern,
     args.streamPath,
@@ -231,6 +250,9 @@ function renderUsageText<State>(args: {
     "",
     `Example stream path: ${exampleStreamPath}`,
     `Events base URL used by this deployment: ${args.config.baseUrl}`,
+    args.config.projectSlug == null
+      ? "Events project slug used by this deployment: default"
+      : `Events project slug used by this deployment: ${args.config.projectSlug}`,
     "",
     "Websocket subscription event:",
     JSON.stringify(websocketEvent, null, 2),
@@ -258,6 +280,9 @@ function createProcessorCallbackUrl<State>(args: {
 }) {
   const callbackUrl = new URL("/after-event-handler", args.callbackBaseUrl);
   callbackUrl.searchParams.set("baseUrl", args.config.baseUrl);
+  if (args.config.projectSlug != null) {
+    callbackUrl.searchParams.set("projectSlug", args.config.projectSlug);
+  }
   callbackUrl.searchParams.set("streamPath", args.streamPath);
   callbackUrl.searchParams.set("streamPattern", args.config.streamPattern);
   callbackUrl.searchParams.set("processorKind", args.config.processorKind);
@@ -291,6 +316,7 @@ function createSubscriptionConfiguredEvent(args: {
 function parseCallbackContext(c: Context, defaultBaseUrl: string) {
   return CallbackContext.safeParse({
     baseUrl: c.req.query("baseUrl") ?? defaultBaseUrl,
+    projectSlug: c.req.query("projectSlug"),
     streamPath: c.req.query("streamPath"),
   });
 }

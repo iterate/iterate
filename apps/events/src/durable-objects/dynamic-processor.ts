@@ -134,11 +134,10 @@ function hasFunction(value, key) {
 if (
   processor == null ||
   typeof processor !== "object" ||
-  !("initialState" in processor) ||
-  ("onEvent" in processor && typeof processor.onEvent === "function")
+  !("initialState" in processor)
 ) {
   throw new Error(
-    "Dynamic worker processor modules must default-export the normal processor shape: { initialState, reduce?, afterAppend? }. Legacy onEvent processors are not supported.",
+    "Dynamic worker processor modules must default-export a processor object with initialState and optional reduce/afterAppend/onEvent hooks.",
   );
 }
 
@@ -163,23 +162,34 @@ function reduceEvent(state, event) {
     return state;
   }
 
-  return processor.reduce({ state: structuredClone(state), event }) ?? state;
+  const stateClone = structuredClone(state);
+
+  if (processor.reduce.length >= 2) {
+    return processor.reduce(stateClone, event) ?? state;
+  }
+
+  return processor.reduce({ state: stateClone, event }) ?? state;
 }
 
 async function appendSameStream(stream, input) {
-  if (input == null || typeof input !== "object" || !("event" in input)) {
-    throw new Error(
-      "Dynamic worker processors must call append({ event }) using the normal processor contract.",
-    );
+  const normalizedInput =
+    input != null && typeof input === "object" && "event" in input ? input : { event: input };
+
+  if (
+    normalizedInput == null ||
+    typeof normalizedInput !== "object" ||
+    !("event" in normalizedInput)
+  ) {
+    throw new Error("Dynamic worker processors must call append(event) or append({ event }).");
   }
 
-  if ("path" in input && input.path != null) {
+  if ("path" in normalizedInput && normalizedInput.path != null) {
     throw new Error(
       "Dynamic worker processors can only append to their own stream. append({ path }) is not supported.",
     );
   }
 
-  return stream.append({ event: input.event });
+  return stream.append({ event: normalizedInput.event });
 }
 
 async function replayProcessorState(stream, processor) {
@@ -205,13 +215,25 @@ export default {
         continue;
       }
 
+      const prevState = structuredClone(state);
       state = reduceEvent(state, event);
 
-      await processor.afterAppend?.({
-        append: (input) => appendSameStream(stream, input),
-        event,
-        state,
-      });
+      if (hasFunction(processor, "afterAppend")) {
+        await processor.afterAppend({
+          append: (input) => appendSameStream(stream, input),
+          event,
+          state,
+        });
+      }
+
+      if (hasFunction(processor, "onEvent")) {
+        await processor.onEvent({
+          append: (input) => appendSameStream(stream, input),
+          event,
+          prevState,
+          state,
+        });
+      }
 
       lastOffset = event.offset;
     }

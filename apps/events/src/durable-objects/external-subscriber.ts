@@ -8,15 +8,17 @@ import {
 } from "@iterate-com/events-contract";
 import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
 import { getCompiledJsonata } from "./compiled-jsonata.ts";
+import { openOutboundWebSocket } from "./outbound-websocket.ts";
 
 type SubscriberConnection = {
   callbackUrl: string;
   socket: WebSocket;
 };
 
-const OutboundPayload = z.json();
+const SerializedOutboundPayload = z.string();
 const connectionsBySubscriberKey = new Map<string, SubscriberConnection>();
 const connectPromisesBySubscriberKey = new Map<string, Promise<WebSocket>>();
+const connectionGenerationBySubscriberKey = new Map<string, number>();
 
 export const externalSubscriberProcessor = defineBuiltinProcessor<ExternalSubscriberState>(() => ({
   slug: "external-subscriber",
@@ -60,24 +62,24 @@ async function publishToExternalSubscriber(args: { event: Event; subscriber: Ext
       return;
     }
 
-    const outboundPayload = await getOutboundPayload({
+    const serializedPayload = await getOutboundPayload({
       event: args.event,
       subscriber: args.subscriber,
     });
-    if (outboundPayload == null) {
+    if (serializedPayload == null) {
       return;
     }
 
     if (args.subscriber.type === "webhook") {
       await postWebhook({
-        payload: outboundPayload,
+        serializedPayload,
         subscriber: args.subscriber,
       });
       return;
     }
 
     await sendWebsocketMessage({
-      payload: outboundPayload,
+      serializedPayload,
       subscriber: args.subscriber,
       streamPath: args.event.streamPath,
     });
@@ -115,42 +117,24 @@ async function getOutboundPayload(args: { event: Event; subscriber: ExternalSubs
       ? args.event
       : await getCompiledJsonata(args.subscriber.jsonataTransform).evaluate(args.event);
 
-  const serializedPayload = JSON.stringify(rawPayload);
-  if (serializedPayload == null) {
+  const serializedPayload = SerializedOutboundPayload.safeParse(JSON.stringify(rawPayload));
+  if (!serializedPayload.success) {
     console.error("[stream-do] external subscriber transform produced invalid JSON", {
       streamPath: args.event.streamPath,
       offset: args.event.offset,
       eventType: args.event.type,
       subscriberSlug: args.subscriber.slug,
       callbackUrl: args.subscriber.callbackUrl,
-      issues: [
-        {
-          message: "transform result could not be serialized as JSON",
-          path: [],
-        },
-      ],
+      issues: serializedPayload.error.issues,
     });
     return null;
   }
 
-  const parsedPayload = OutboundPayload.safeParse(JSON.parse(serializedPayload));
-  if (!parsedPayload.success) {
-    console.error("[stream-do] external subscriber transform produced invalid JSON", {
-      streamPath: args.event.streamPath,
-      offset: args.event.offset,
-      eventType: args.event.type,
-      subscriberSlug: args.subscriber.slug,
-      callbackUrl: args.subscriber.callbackUrl,
-      issues: parsedPayload.error.issues,
-    });
-    return null;
-  }
-
-  return parsedPayload.data;
+  return serializedPayload.data;
 }
 
 async function postWebhook(args: {
-  payload: z.infer<typeof OutboundPayload>;
+  serializedPayload: z.infer<typeof SerializedOutboundPayload>;
   subscriber: Extract<ExternalSubscriber, { type: "webhook" }>;
 }) {
   const response = await fetch(args.subscriber.callbackUrl, {
@@ -158,7 +142,7 @@ async function postWebhook(args: {
     headers: {
       "content-type": "application/json",
     },
-    body: JSON.stringify(args.payload),
+    body: args.serializedPayload,
   });
 
   if (!response.ok) {
@@ -171,11 +155,10 @@ async function postWebhook(args: {
 }
 
 async function sendWebsocketMessage(args: {
-  payload: z.infer<typeof OutboundPayload>;
+  serializedPayload: z.infer<typeof SerializedOutboundPayload>;
   subscriber: ExternalWebsocketSubscriber;
   streamPath: string;
 }) {
-  const encodedPayload = JSON.stringify(args.payload);
   const subscriberKey = getSubscriberKey(args.streamPath, args.subscriber.slug);
 
   try {
@@ -183,7 +166,7 @@ async function sendWebsocketMessage(args: {
       streamPath: args.streamPath,
       subscriber: args.subscriber,
     });
-    socket.send(encodedPayload);
+    socket.send(args.serializedPayload);
   } catch (error) {
     resetSubscriberSocket(subscriberKey);
 
@@ -192,7 +175,7 @@ async function sendWebsocketMessage(args: {
         streamPath: args.streamPath,
         subscriber: args.subscriber,
       });
-      socket.send(encodedPayload);
+      socket.send(args.serializedPayload);
     } catch (retryError) {
       console.error("[stream-do] external websocket subscriber publish failed", {
         streamPath: args.streamPath,
@@ -215,6 +198,7 @@ async function getSubscriberSocket(args: {
     resetSubscriberSocket(subscriberKey);
     cached = undefined;
   }
+  const connectionGeneration = getSubscriberConnectionGeneration(subscriberKey);
 
   if (cached != null && cached.socket.readyState === WebSocket.OPEN) {
     return cached.socket;
@@ -234,6 +218,14 @@ async function getSubscriberSocket(args: {
 
   try {
     const socket = await connectPromise;
+    if (getSubscriberConnectionGeneration(subscriberKey) !== connectionGeneration) {
+      try {
+        socket.close();
+      } catch {}
+
+      throw new Error("stale subscriber socket connection completed after reset");
+    }
+
     connectionsBySubscriberKey.set(subscriberKey, {
       callbackUrl: args.subscriber.callbackUrl,
       socket,
@@ -251,21 +243,7 @@ async function connectSubscriberSocket(args: {
   subscriber: ExternalWebsocketSubscriber;
   subscriberKey: string;
 }) {
-  const response = (await fetch(
-    getWebsocketUpgradeFetchUrl(args.subscriber.callbackUrl).toString(),
-    {
-      headers: {
-        Upgrade: "websocket",
-      },
-    },
-  )) as Response & { webSocket?: WebSocket | null };
-
-  const socket = response.webSocket;
-  if (socket == null) {
-    throw new Error(`Subscriber did not accept websocket upgrade. Status: ${response.status}`);
-  }
-
-  socket.accept();
+  const socket = await openOutboundWebSocket(args.subscriber.callbackUrl);
   socket.addEventListener("close", () => {
     const cached = connectionsBySubscriberKey.get(args.subscriberKey);
     if (cached?.socket === socket) {
@@ -278,11 +256,15 @@ async function connectSubscriberSocket(args: {
       connectionsBySubscriberKey.delete(args.subscriberKey);
     }
   });
-
   return socket;
 }
 
 function resetSubscriberSocket(subscriberKey: string) {
+  connectionGenerationBySubscriberKey.set(
+    subscriberKey,
+    getSubscriberConnectionGeneration(subscriberKey) + 1,
+  );
+
   const cached = connectionsBySubscriberKey.get(subscriberKey);
 
   if (cached != null) {
@@ -295,24 +277,17 @@ function resetSubscriberSocket(subscriberKey: string) {
   connectPromisesBySubscriberKey.delete(subscriberKey);
 }
 
-function getWebsocketUpgradeFetchUrl(callbackUrl: string) {
-  const url = new URL(callbackUrl);
-
-  if (url.protocol === "ws:") {
-    url.protocol = "http:";
-  } else if (url.protocol === "wss:") {
-    url.protocol = "https:";
-  }
-
-  return url;
-}
-
 function getSubscriberKey(streamPath: string, slug: string) {
   return JSON.stringify([streamPath, slug]);
 }
 
 export function resetSubscriberSocketsForStream(streamPath: string) {
-  for (const subscriberKey of connectionsBySubscriberKey.keys()) {
+  const subscriberKeys = new Set<string>([
+    ...connectionsBySubscriberKey.keys(),
+    ...connectPromisesBySubscriberKey.keys(),
+  ]);
+
+  for (const subscriberKey of subscriberKeys) {
     const parsedKey = JSON.parse(subscriberKey) as [string, string];
     if (parsedKey[0] !== streamPath) {
       continue;
@@ -320,4 +295,8 @@ export function resetSubscriberSocketsForStream(streamPath: string) {
 
     resetSubscriberSocket(subscriberKey);
   }
+}
+
+function getSubscriberConnectionGeneration(subscriberKey: string) {
+  return connectionGenerationBySubscriberKey.get(subscriberKey) ?? 0;
 }

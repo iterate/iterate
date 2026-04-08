@@ -10,6 +10,7 @@ import { createPingPongProcessor } from "./ping-pong-processor.ts";
 
 type Bindings = {
   EVENTS_BASE_URL?: string;
+  EVENTS_PROJECT_SLUG?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
   PROCESSOR_KIND?: string;
@@ -24,7 +25,7 @@ const DEFAULT_STREAM_PATTERN = "/**/*";
 
 const app = createAfterEventHandlerApp<Bindings, unknown>({
   getConfig: (c) => resolveConfig(c),
-  getEventsClient: (baseUrl) => createEventsClient(baseUrl),
+  getEventsClient: ({ baseUrl, projectSlug }) => createEventsClient({ baseUrl, projectSlug }),
 });
 
 export default app;
@@ -33,6 +34,7 @@ function resolveConfig(c: Context<{ Bindings: Bindings }>) {
   const query = new URL(c.req.url).searchParams;
   const env = {
     EVENTS_BASE_URL: readAmbientValue(c, "EVENTS_BASE_URL"),
+    EVENTS_PROJECT_SLUG: readAmbientValue(c, "EVENTS_PROJECT_SLUG"),
     OPENAI_API_KEY: readAmbientValue(c, "OPENAI_API_KEY"),
     OPENAI_MODEL: readAmbientValue(c, "OPENAI_MODEL"),
     PROCESSOR_KIND: readAmbientValue(c, "PROCESSOR_KIND"),
@@ -43,6 +45,10 @@ function resolveConfig(c: Context<{ Bindings: Bindings }>) {
     query.get("baseUrl") ||
     env.EVENTS_BASE_URL ||
     (isLocalRequest ? LOCAL_EVENTS_BASE_URL : DEFAULT_EVENTS_BASE_URL);
+  const projectSlug =
+    query.get("projectSlug") ||
+    env.EVENTS_PROJECT_SLUG ||
+    (isLocalEventsBaseUrl(baseUrl) ? "test" : undefined);
   const processorKind = query.get("processorKind") || env.PROCESSOR_KIND || DEFAULT_PROCESSOR_KIND;
   const openAiModel = query.get("openaiModel") || env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
   const streamPattern = normalizeStreamPattern(
@@ -56,6 +62,7 @@ function resolveConfig(c: Context<{ Bindings: Bindings }>) {
 
     return {
       baseUrl,
+      projectSlug,
       openAiModel,
       processor: eraseProcessor(
         createOpenAiAgentProcessor({
@@ -73,6 +80,7 @@ function resolveConfig(c: Context<{ Bindings: Bindings }>) {
 
   return {
     baseUrl,
+    projectSlug,
     processor: eraseProcessor(createPingPongProcessor()),
     processorDescription:
       'It reacts to any event whose type or payload contains the word "ping" by appending a pong event.',
@@ -97,6 +105,11 @@ function readAmbientValue(c: Context<{ Bindings: Bindings }>, key: keyof Binding
 
 function isLocalHostname(hostname: string) {
   return hostname === "127.0.0.1" || hostname === "localhost";
+}
+
+function isLocalEventsBaseUrl(baseUrl: string) {
+  const url = new URL(baseUrl);
+  return isLocalHostname(url.hostname);
 }
 
 function eraseProcessor<State>(processor: Processor<State>) {

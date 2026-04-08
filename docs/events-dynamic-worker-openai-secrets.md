@@ -1,19 +1,21 @@
-# `apps/events` Dynamic Workers With `getIterateSecret(...)`
+# `apps/events` OpenAI Proofs: Dynamic Workers and Deployed Processor Runtimes
 
-This document shows the full working flow for a dynamic worker processor that:
+This document records the two OpenAI execution paths that are working in this
+branch and how to prove them:
 
-1. is authored as a normal `apps/events` processor
-2. is bundled into a `dynamic-worker/configured` event
-3. uses `getIterateSecret(...)` directly as the OpenAI API key
-4. fetches through `DynamicWorkerEgressGateway`
-5. resolves secrets from the `apps/events` secret store at runtime
-6. appends the OpenAI response back into the stream
+1. a dynamic worker bundled from source and configured by
+   `stream/dynamic-worker/configured`
+2. a deployed Hono app on Cloudflare Workers receiving pushed events over
+   `websocket` or `webhook` subscriptions
 
-## Working example processor
+Both paths use the normal workshop `defineProcessor()` contract.
 
-The committed example lives at [simple-openai-loop.processor.ts](/Users/jonastemplestein/.superset/worktrees/iterate/discovered-ghost/apps/events/scripts/examples/simple-openai-loop.processor.ts).
+## Dynamic worker: bundled from source with `getIterateSecret(...)`
 
-The important part is the client construction:
+The committed example processor lives at
+[apps/events/scripts/examples/simple-openai-loop.processor.ts](../apps/events/scripts/examples/simple-openai-loop.processor.ts).
+
+It uses a real OpenAI client with a secret placeholder in the API key:
 
 ```ts
 const openai = new OpenAI({
@@ -22,29 +24,10 @@ const openai = new OpenAI({
 });
 ```
 
-This is no longer a placeholder. The dynamic worker emits the OpenAI request normally, and the outbound gateway rewrites any header value containing `getIterateSecret(...)` before the request leaves the worker.
+At runtime, the `DynamicWorkerEgressGateway` rewrites that placeholder from the
+`apps/events` secret store before the outbound OpenAI request leaves the worker.
 
-## How secret resolution works
-
-`DynamicWorkerEgressGateway` now receives:
-
-- an optional explicit injected header pair
-- a runtime snapshot of all `apps/events` secrets by `name`
-
-When a dynamic worker does `fetch(...)`, the gateway:
-
-1. copies the outbound request headers
-2. applies any configured injected header
-3. scans **all** outbound header values for `getIterateSecret(...)`
-4. replaces each match with the real secret value from the `apps/events` secret store
-5. logs a redacted audit line with header names and secret keys, never secret values
-6. forwards the request
-
-In v1 this substitution is **headers only** for `apps/events` dynamic workers.
-
-## Building a configured event
-
-You can bundle a current-shape processor into a dynamic-worker event with the `apps/events` CLI script:
+### Build a configured event from source
 
 ```bash
 pnpm --dir apps/events cli dynamic-worker-configured-event \
@@ -53,50 +36,47 @@ pnpm --dir apps/events cli dynamic-worker-configured-event \
   --outbound-gateway true
 ```
 
-That command emits a `https://events.iterate.com/events/stream/dynamic-worker/configured` event payload with:
+That emits a
+`https://events.iterate.com/events/stream/dynamic-worker/configured` event with
+the bundled script in `payload.script`.
 
-- the bundled processor in `payload.script`
-- `payload.outboundGateway.entrypoint = "DynamicWorkerEgressGateway"`
+### Proof script
 
-No injected header props are needed when the processor itself uses `getIterateSecret(...)`.
+The reusable proof runner is
+[apps/events/scripts/prove-dynamic-openai-loop.ts](../apps/events/scripts/prove-dynamic-openai-loop.ts).
+It does the full loop:
 
-## End-to-end proof flow
+1. copies the example processor
+2. rewrites the secret key name to a unique temporary secret
+3. bundles the processor from source
+4. stores the real OpenAI API key in the `apps/events` secret store
+5. appends `stream/dynamic-worker/configured`
+6. appends `agent-input-added`
+7. waits for `agent-output-added`
+8. asserts the answer contains `42`
+9. cleans up the temporary secret and stream
 
-The committed proof runner is [prove-dynamic-openai-loop.ts](/Users/jonastemplestein/.superset/worktrees/iterate/discovered-ghost/apps/events/scripts/prove-dynamic-openai-loop.ts).
+### Local proof
 
-It does the full lifecycle against a real `apps/events` deployment:
-
-1. customizes the example processor to use a unique temporary secret name
-2. bundles it into a `dynamic-worker/configured` event
-3. stores the real OpenAI API key as an `apps/events` secret
-4. appends the configured event with the bundled `payload.script` directly to a temporary stream
-5. appends `agent-input-added` with `What is 50 - 8? Reply with only the number.`
-6. waits up to 10 seconds for `agent-output-added`
-7. asserts the response contains `42`
-8. cleans up the OpenAI secret and the temporary stream
-
-## Local proof
-
-Start a local worker:
+Start local `apps/events`:
 
 ```bash
 pnpm --dir apps/events dev
 ```
 
-Then run the proof with a real OpenAI key from Doppler:
+Then run:
 
 ```bash
 doppler run --project ai-engineer-workshop -- \
-  env EVENTS_BASE_URL=http://localhost:5174 \
+  env EVENTS_BASE_URL=http://127.0.0.1:5173 \
   pnpm --dir apps/events exec tsx ./scripts/prove-dynamic-openai-loop.ts
 ```
 
-Expected shape of the output:
+The successful output from this branch included:
 
 ```json
 {
   "ok": true,
-  "elapsedMs": 4563,
   "eventTypes": [
     "https://events.iterate.com/events/stream/initialized",
     "https://events.iterate.com/events/stream/dynamic-worker/configured",
@@ -107,34 +87,202 @@ Expected shape of the output:
 }
 ```
 
-## Preview proof
+### Preview proof
 
-Deploy or refresh a preview slot for this PR:
-
-```bash
-doppler run --project os --config prd -- \
-  pnpm preview deploy --app events --pull-request-number 1242
-```
-
-Then run the preview-targeted Vitest proof:
+Use the PR preview URL:
 
 ```bash
 doppler run --project ai-engineer-workshop -- \
-  env EVENTS_BASE_URL=https://events-preview-<slot>.iterate.workers.dev \
-  pnpm --dir apps/events exec vitest run e2e/vitest/dynamic-worker-openai-preview.e2e.test.ts
+  env EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+      OPENAI_API_KEY="$OPENAI_API_KEY" \
+  pnpm --dir apps/events test:e2e:openai-preview
 ```
 
-That test:
+The underlying test is
+[apps/events/e2e/vitest/dynamic-worker-openai-preview.e2e.test.ts](../apps/events/e2e/vitest/dynamic-worker-openai-preview.e2e.test.ts).
 
-1. builds the processor bundle
-2. appends the configured event to the deployed preview worker
-3. sends a math prompt
-4. asserts that `agent-output-added` arrives within 10 seconds
-5. asserts the response contains `42`
+## Deployed processor runtime: pushed events over websocket or webhook
 
-## Related files
+The worker example lives in
+[ai-engineer-workshop/examples/deployed-processor](../ai-engineer-workshop/examples/deployed-processor).
 
-- [dynamic-worker-egress-gateway.ts](/Users/jonastemplestein/.superset/worktrees/iterate/discovered-ghost/apps/events/src/dynamic-worker-egress-gateway.ts)
-- [iterate-secret-references.ts](/Users/jonastemplestein/.superset/worktrees/iterate/discovered-ghost/apps/events/src/lib/iterate-secret-references.ts)
-- [dynamic-openai-proof.ts](/Users/jonastemplestein/.superset/worktrees/iterate/discovered-ghost/apps/events/scripts/lib/dynamic-openai-proof.ts)
-- [dynamic-worker-openai-preview.e2e.test.ts](/Users/jonastemplestein/.superset/worktrees/iterate/discovered-ghost/apps/events/e2e/vitest/dynamic-worker-openai-preview.e2e.test.ts)
+Key files:
+
+- [src/worker.ts](../ai-engineer-workshop/examples/deployed-processor/src/worker.ts)
+- [src/hono-processor-runtime.ts](../ai-engineer-workshop/examples/deployed-processor/src/hono-processor-runtime.ts)
+- [src/openai-agent-processor.ts](../ai-engineer-workshop/examples/deployed-processor/src/openai-agent-processor.ts)
+- [src/ping-pong-processor.ts](../ai-engineer-workshop/examples/deployed-processor/src/ping-pong-processor.ts)
+
+This runtime uses the same shared workshop processor shape as the other
+examples. The Hono app only provides:
+
+- `GET /` for human-readable usage text and concrete subscription events
+- `GET /after-event-handler` for websocket delivery
+- `POST /after-event-handler` for webhook delivery
+
+Streams opt in by appending
+`https://events.iterate.com/events/stream/subscription/configured`.
+
+The callback URL may also include `projectSlug=...` when the target events
+service is multi-project. Local `apps/events` and preview proofs in this branch
+used `projectSlug=test`.
+
+### Local proof
+
+Start both local services:
+
+```bash
+pnpm --dir apps/events dev
+pnpm --dir ai-engineer-workshop/examples/deployed-processor dev
+```
+
+The reusable proof runner is
+[apps/events/scripts/prove-pushed-processor.ts](../apps/events/scripts/prove-pushed-processor.ts).
+It appends the subscription event, appends one source event, waits for the
+derived output, prints the resulting event types, and destroys the stream.
+
+Ping over websocket:
+
+```bash
+pnpm --dir apps/events exec tsx ./scripts/prove-pushed-processor.ts
+```
+
+Ping over webhook:
+
+```bash
+SUBSCRIBER_TYPE=webhook \
+  pnpm --dir apps/events exec tsx ./scripts/prove-pushed-processor.ts
+```
+
+OpenAI over websocket:
+
+```bash
+PROCESSOR_KIND=openai-agent \
+  pnpm --dir apps/events exec tsx ./scripts/prove-pushed-processor.ts
+```
+
+OpenAI over webhook:
+
+```bash
+PROCESSOR_KIND=openai-agent SUBSCRIBER_TYPE=webhook \
+  pnpm --dir apps/events exec tsx ./scripts/prove-pushed-processor.ts
+```
+
+This branch was verified locally for all four combinations:
+
+- ping/pong over `websocket`
+- ping/pong over `webhook`
+- OpenAI over `websocket`
+- OpenAI over `webhook`
+
+Observed local OpenAI streams ended with:
+
+```json
+[
+  "https://events.iterate.com/events/stream/initialized",
+  "https://events.iterate.com/events/stream/subscription/configured",
+  "user-message",
+  "openai-response-output",
+  "assistant-message"
+]
+```
+
+and the assistant payload contained `"42"`.
+
+### Deploy the worker
+
+```bash
+pnpm exec wrangler deploy
+```
+
+The current deployment URL used for validation was:
+
+```text
+https://ai-engineer-workshop-deployed-processor.iterate.workers.dev
+```
+
+### Proving the deployed worker against real `events.iterate.com`
+
+There is one important nuance today:
+
+- the public `events.iterate.com` service does not yet run this branch’s
+  `external-subscriber` builtin processor
+
+That means public
+`stream/subscription/configured` events are stored, but they do not fan out
+automatically yet. So the production proof for this branch uses the deployed
+worker’s real callback endpoints directly against real public stream events.
+
+That validation still proves the two important things:
+
+1. the deployed Hono runtime accepts real callback traffic over both transports
+2. the processor logic appends back into real `events.iterate.com` streams
+
+This branch re-proved all four direct callback combinations against the deployed
+worker:
+
+- ping over `webhook`
+- ping over `websocket`
+- OpenAI over `webhook`
+- OpenAI over `websocket`
+
+Observed deployed OpenAI event types:
+
+```json
+[
+  "https://events.iterate.com/events/stream/initialized",
+  "user-message",
+  "openai-response-output",
+  "assistant-message"
+]
+```
+
+and the assistant payload again contained `"42"`.
+
+### Preview validation for `apps/events`
+
+The preview URL in PR #1254 was:
+
+```text
+https://events-preview-1.iterate.workers.dev
+```
+
+These preview-targeted validations passed in this branch:
+
+```bash
+doppler run --project ai-engineer-workshop -- \
+  env EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+  pnpm --dir apps/events exec tsx ./scripts/prove-dynamic-openai-loop.ts
+
+doppler run --project ai-engineer-workshop -- bash -lc '
+  export EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev
+  pnpm --dir apps/events test:e2e:openai-preview
+'
+
+EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+  pnpm --dir apps/events test:e2e:preview
+```
+
+## Full validation matrix run on this branch
+
+These all passed during the final hardening pass:
+
+- `pnpm --dir apps/events-contract typecheck`
+- `pnpm --dir apps/events-contract test`
+- `pnpm --dir apps/events test`
+- `pnpm --dir apps/events build`
+- `pnpm --dir ai-engineer-workshop typecheck`
+- `pnpm --dir ai-engineer-workshop/examples/deployed-processor typecheck`
+- `pnpm --dir ai-engineer-workshop/examples/deployed-processor build`
+- `doppler run --project ai-engineer-workshop -- env EVENTS_BASE_URL=http://127.0.0.1:5173 pnpm --dir apps/events exec tsx ./scripts/prove-dynamic-openai-loop.ts`
+- `doppler run --project ai-engineer-workshop -- env EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev pnpm --dir apps/events exec tsx ./scripts/prove-dynamic-openai-loop.ts`
+- local pushed-processor proof for ping/websocket
+- local pushed-processor proof for ping/webhook
+- local pushed-processor proof for OpenAI/websocket
+- local pushed-processor proof for OpenAI/webhook
+- deployed worker direct callback proof against real `events.iterate.com` for ping/webhook
+- deployed worker direct callback proof against real `events.iterate.com` for ping/websocket
+- deployed worker direct callback proof against real `events.iterate.com` for OpenAI/webhook
+- deployed worker direct callback proof against real `events.iterate.com` for OpenAI/websocket
+- `doppler run --project ai-engineer-workshop -- bash -lc 'export EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev; pnpm --dir apps/events test:e2e:openai-preview'`
+- `EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev pnpm --dir apps/events test:e2e:preview`

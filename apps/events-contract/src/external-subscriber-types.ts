@@ -3,12 +3,13 @@ import {
   GenericEvent as GenericEventBase,
   GenericEventInput as GenericEventInputBase,
 } from "./event-base-types.ts";
+import { JsonataExpression } from "./jsonata-expression.ts";
 
 const ExternalSubscriberBase = z.strictObject({
   slug: z.string().trim().min(1),
   callbackUrl: z.url(),
-  jsonataFilter: z.string().trim().min(1).optional(),
-  jsonataTransform: z.string().trim().min(1).optional(),
+  jsonataFilter: JsonataExpression.optional(),
+  jsonataTransform: JsonataExpression.optional(),
 });
 
 export const ExternalWebsocketSubscriber = ExternalSubscriberBase.extend({
