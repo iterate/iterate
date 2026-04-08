@@ -54,10 +54,12 @@ export const StreamCursor = z.union([
 ]);
 export type StreamCursor = z.infer<typeof StreamCursor>;
 
-export const StreamQuery = z.object({
-  after: StreamCursor.optional(),
-  before: StreamCursor.optional(),
-});
+export const StreamQuery = z
+  .object({
+    afterOffset: StreamCursor.optional(),
+    beforeOffset: StreamCursor.optional(),
+  })
+  .strict();
 export type StreamQuery = z.infer<typeof StreamQuery>;
 
 const StreamInitializedEventInput = GenericEventInputBase.extend({

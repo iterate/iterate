@@ -95,7 +95,7 @@ export const eventsContract = oc.router({
       operationId: "streamEvents",
       method: "GET",
       path: "/streams/{+path}",
-      description: `Reads events from a stream using exclusive \`after\` / \`before\` cursors. \`start\` and \`end\` are virtual bookends outside the event space. Omitting \`before\` keeps the connection open for future events; setting \`before\` returns a finite stream. ${PathMungingDescription} For example, \`GET /api/streams/team/inbox\`, \`GET /api/streams/team%2Finbox\`, and \`GET /api/streams/%2Fteam%2Finbox\` all target the same stream. The root stream is addressed canonically as \`GET /api/streams/%2F\`.`,
+      description: `Reads events from a stream using exclusive \`afterOffset\` / \`beforeOffset\` cursors. They are strictly non-inclusive: \`afterOffset=1&beforeOffset=2\` returns no events, which is expected because offset 1 is excluded and offset 2 is also excluded. \`start\` and \`end\` are virtual bookends outside the event space. Omitting \`beforeOffset\` keeps the connection open for future events; setting \`beforeOffset\` returns a finite stream. ${PathMungingDescription} For example, \`GET /api/streams/team/inbox\`, \`GET /api/streams/team%2Finbox\`, and \`GET /api/streams/%2Fteam%2Finbox\` all target the same stream. The root stream is addressed canonically as \`GET /api/streams/%2F\`.`,
       tags: ["/streams"],
     })
     .input(

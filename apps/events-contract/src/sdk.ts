@@ -86,7 +86,7 @@ type PullSubscriptionEventsClient = {
     event: Event;
   }>;
   stream: (
-    input: { path: StreamPath; after?: StreamCursor; before?: StreamCursor },
+    input: { path: StreamPath; afterOffset?: StreamCursor; beforeOffset?: StreamCursor },
     options: { signal?: AbortSignal },
   ) => Promise<AsyncIterable<Event>>;
 };
@@ -153,7 +153,7 @@ export class PullSubscriptionProcessorRuntime<State> {
       const historyStream = await this.#eventsClient.stream(
         {
           path: this.#streamPath,
-          before: "end",
+          beforeOffset: "end",
         },
         { signal: this.#controller.signal },
       );
@@ -184,7 +184,7 @@ export class PullSubscriptionProcessorRuntime<State> {
       const liveStream = await this.#eventsClient.stream(
         {
           path: this.#streamPath,
-          after: toLiveTailCursor(lastOffset),
+          afterOffset: toLiveTailCursor(lastOffset),
         },
         {
           signal: this.#controller.signal,
@@ -340,8 +340,8 @@ export class PushSubscriptionProcessorRuntime<State> {
     const historyStream = await this.#eventsClient.stream(
       {
         path: this.#streamPath,
-        after: this.#lastOffset > 0 ? this.#lastOffset : "start",
-        before: targetOffset,
+        afterOffset: this.#lastOffset > 0 ? this.#lastOffset : "start",
+        beforeOffset: targetOffset,
       },
       {},
     );
@@ -420,7 +420,7 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
       const historyStream = await this.#eventsClient.stream(
         {
           path: "/",
-          before: "end",
+          beforeOffset: "end",
         },
         { signal: this.#controller.signal },
       );
@@ -449,7 +449,7 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
       const liveStream = await this.#eventsClient.stream(
         {
           path: "/",
-          after: toLiveTailCursor(lastOffset),
+          afterOffset: toLiveTailCursor(lastOffset),
         },
         {
           signal: this.#controller.signal,
