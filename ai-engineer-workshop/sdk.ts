@@ -57,13 +57,34 @@ export function normalizePathPrefix(pathPrefix: string) {
   return pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
 }
 
+/**
+ * Path prefix for plain `tsx` workshop scripts (`workshop2/`).
+ * Uses `process.env.PATH_PREFIX || "/"`; non-root values without a leading `/` are normalized.
+ */
+export function workshopPathPrefix(): string {
+  const raw = process.env.PATH_PREFIX || "/";
+  if (raw === "/") {
+    return "/";
+  }
+  return normalizePathPrefix(raw);
+}
+
+/** Logger for processor runtimes when every level should go to `console.log`. */
+export const workshopLogger: ProcessorLogger = {
+  debug: (...args: unknown[]) => console.log(...args),
+  error: (...args: unknown[]) => console.log(...args),
+  info: (...args: unknown[]) => console.log(...args),
+  log: (...args: unknown[]) => console.log(...args),
+  warn: (...args: unknown[]) => console.log(...args),
+};
+
 export function getDefaultWorkshopPathPrefix() {
   return normalizePathPrefix(process.env.PATH_PREFIX || `/${execSync("id -un").toString().trim()}`);
 }
 
 export function getDefaultWorkshopLogLevel(): WorkshopLogLevel {
   const parsed = WorkshopLogLevel.safeParse(process.env.LOG_LEVEL);
-  return parsed.success ? parsed.data : "info";
+  return parsed.success ? parsed.data : "debug";
 }
 
 export function createWorkshopLogger({ level }: { level: WorkshopLogLevel }): ProcessorLogger {

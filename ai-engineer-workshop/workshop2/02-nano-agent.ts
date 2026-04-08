@@ -1,15 +1,16 @@
 import OpenAI from "openai";
-import { createEventsClient, os, runIfMain } from "ai-engineer-workshop";
+import { createEventsClient, workshopPathPrefix } from "ai-engineer-workshop";
 
-export const handler = os.handler(async ({ input, context }) => {
+async function main() {
+  const pathPrefix = workshopPathPrefix();
   const client = createEventsClient();
   const openai = new OpenAI();
-  const streamPath = `${input.pathPrefix}/nano-agent`;
+  const streamPath = `${pathPrefix}/nano-agent`;
 
   for await (const event of await client.stream({ path: streamPath, live: true })) {
     if (event.type !== "agent-input-added") continue;
 
-    context.logger.info("Sending LLM request", { event });
+    console.log("Sending LLM request", { event });
 
     const response = await openai.responses.create({
       model: "gpt-5.4",
@@ -26,6 +27,9 @@ export const handler = os.handler(async ({ input, context }) => {
       });
     }
   }
-});
+}
 
-runIfMain(import.meta.url, handler);
+main().catch((error: unknown) => {
+  console.log(error);
+  process.exitCode = 1;
+});

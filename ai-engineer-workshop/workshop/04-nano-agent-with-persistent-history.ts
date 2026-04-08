@@ -52,7 +52,7 @@ export const handler = os.handler(async ({ context, input }) => {
     if (event.type !== "agent-input-added") continue;
 
     const response = await openai.responses.create({
-      model: "gpt-4o-mini",
+      model: "gpt-5.4",
       instructions: "You are a helpful assistant. Keep answers concise.",
       input: history,
     });

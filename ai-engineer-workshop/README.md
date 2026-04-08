@@ -1,13 +1,39 @@
-# AI Engineer Workshop
+# What are we doing here?
 
-Build an AI agent from two primitives:
+### I love making agent harnesses
 
-1. Durable streams
-2. Stream processors
+### And this is how I'd like to make them
 
 ---
 
-# What it feels like
+- Purely event sourced (aka "Debuggable")
+- Extensible with good composability
+- On the edge / publicly routable
+- Distributed
+
+---
+
+In this workshop we will build an AI agent entirely from scratch using only two ingredients:
+
+1. A durable stream API that supports
+
+- `.append({ path, event })`
+- `.stream({ path })`
+
+2. Stream processors that implement
+
+- `.reduce({ event, state })`
+- `.afterAppend({ append, event, state })`
+
+---
+
+# WARNING!
+
+You'll be able to play with this events.iterate.com service - it currently has no authentication. Don't put any secrets in your streams!
+
+---
+
+# Hello world
 
 ```bash
 export PATH_PREFIX="/$(id -un)"

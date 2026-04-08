@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { ResponseInput } from "openai/resources/responses/responses";
-import { createEventsClient, type EventInput, os, runIfMain } from "ai-engineer-workshop";
+import { createEventsClient, type EventInput, workshopPathPrefix } from "ai-engineer-workshop";
 
 type OpenAiOutputItemAddedPayload = {
   item: {
@@ -26,10 +26,11 @@ function updateHistoryFromEvent(history: ResponseInput, event: EventInput) {
   }
 }
 
-export const handler = os.handler(async ({ context, input }) => {
+async function main() {
+  const pathPrefix = workshopPathPrefix();
   const client = createEventsClient();
   const openai = new OpenAI();
-  const streamPath = `${input.pathPrefix}/nano-agent`;
+  const streamPath = `${pathPrefix}/nano-agent`;
   const history: ResponseInput = [];
   let lastSeenOffset: number | undefined;
 
@@ -38,7 +39,7 @@ export const handler = os.handler(async ({ context, input }) => {
     updateHistoryFromEvent(history, event);
   }
 
-  context.logger.info(`Watching ${streamPath} with ${history.length} history items`);
+  console.log(`Watching ${streamPath} with ${history.length} history items`);
 
   for await (const event of await client.stream(
     { path: streamPath, offset: lastSeenOffset, live: true },
@@ -66,6 +67,9 @@ export const handler = os.handler(async ({ context, input }) => {
       });
     }
   }
-});
+}
 
-runIfMain(import.meta.url, handler);
+main().catch((error: unknown) => {
+  console.log(error);
+  process.exitCode = 1;
+});

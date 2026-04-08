@@ -6,7 +6,7 @@ describe("bashmode", () => {
   test("turns stdout into agent-input-added", async () => {
     await using f = await useProcessorTestHarness({
       processor: bashmode,
-      pathPrefix: "/ai-engineer-workshop/tests/bashmode",
+      pathPrefix: "/ai-engineer-workshop/workshop2/tests/bashmode",
     });
 
     await f.append(
@@ -30,7 +30,7 @@ describe("bashmode", () => {
   test("includes stderr in the result", async () => {
     await using f = await useProcessorTestHarness({
       processor: bashmode,
-      pathPrefix: "/ai-engineer-workshop/tests/bashmode",
+      pathPrefix: "/ai-engineer-workshop/workshop2/tests/bashmode",
     });
 
     await f.append(
@@ -54,7 +54,7 @@ describe("bashmode", () => {
   test("extracts bash blocks from completed openai responses", async () => {
     await using f = await useProcessorTestHarness({
       processor: bashmode,
-      pathPrefix: "/ai-engineer-workshop/tests/bashmode",
+      pathPrefix: "/ai-engineer-workshop/workshop2/tests/bashmode",
     });
 
     await f.append({

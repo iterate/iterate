@@ -4,6 +4,13 @@ In this workshop we will build an AI agent entirely from scratch using only two 
 
 2. Stream processors that implement the `.reduce({ event, state })` and `.afterAppend({ append, event, state })` methods
 
+Our AI agent will be
+
+- Purely event sourced (aka "Debuggable")
+- Extensible with good composability
+- On the edge / publicly routable
+- Distributed
+
 # Playing with streams
 
 We made a simple durable streams server at https://events.iterate.com for this workshop. Let's [look at the docs](https://events.iterate.com/api/docs)!
@@ -27,9 +34,6 @@ curl --json '{"type": "hello-world"}' \
 
 # Let's see if it's there
 curl -N "${BASE_URL}/api/streams${STREAM_PATH}"
-
-# Look, streams are created implicitly and stream creation events propagate up
-curl -N "${BASE_URL}/api/streams/
 
 # We can also live tail the stream with pretty printing (start this in a new tab)
 curl -sN "${BASE_URL}/api/streams${STREAM_PATH}?live=true" | sed -nu 's/^data: //p' | jq .
@@ -114,21 +118,42 @@ curl --json '{
   }
 }' "${BASE_URL}/api/streams${STREAM_PATH}"
 
+
+# Receive webhooks when new events occur
+
+# Use this disposable webhook.site inbox for the demo
+# UI: https://webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63
+# Matching future events on this stream will now be POSTed to that webhook.site URL
+curl --json '{
+  "type": "https://events.iterate.com/events/stream/subscription/configured",
+  "payload": {
+    "slug": "webhook-site",
+    "callbackUrl": "https://webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63",
+    "type": "webhook",
+    "jsonataFilter": "type = \"webhook-demo\"",
+    "jsonataTransform": "{\"kind\":\"webhook-demo\",\"message\":payload.message,\"streamPath\":streamPath,\"offset\":offset}"
+  }
+}' "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Append a matching event and the transformed payload gets delivered to webhook.site
+curl --json '{
+  "type": "webhook-demo",
+  "payload": {
+    "message": "hello from iterate streams"
+  }
+}' "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Fetch the latest transformed request body back from webhook.site over curl too
+curl "https://webhook.site/token/aa6bf8b4-39ff-4807-a400-c21b37ee8e63/request/latest/raw"
+
+# Webhook inbox UI for this example: https://webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63
+
+
 ```
-
-Webhook inbox UI for this example: [webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63](https://webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63)
-
-Some notes / observations:
-
-- Paths start with a slash!
-- Events are JSON objects with a `type` and optional `payload` property
-- Use `idempotencyKey` to ensure you don't append the same event twice
-- Server assigns monotonically increasing `offset` and `createdAt` to each event
-- There's a web UI at https://events.iterate.com/
 
 ## Hello world in script form
 
-- Let's make a typescript version of the hello world script!
+Let's make a typescript version of the hello world script!
 
 ## Ping-pong script
 
@@ -278,140 +303,18 @@ curl --json '{"type": "ping"}' \
 # Watch the stream and you'll see the derived pong event
 curl -N "${BASE_URL}/api/streams${STREAM_PATH}"
 
-
-# Use this disposable webhook.site inbox for the demo
-# UI: https://webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63
-# Matching future events on this stream will now be POSTed to that webhook.site URL
-curl --json '{
-  "type": "https://events.iterate.com/events/stream/subscription/configured",
-  "payload": {
-    "slug": "webhook-site",
-    "callbackUrl": "https://webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63",
-    "type": "webhook",
-    "jsonataFilter": "type = \"webhook-demo\"",
-    "jsonataTransform": "{\"kind\":\"webhook-demo\",\"message\":payload.message,\"streamPath\":streamPath,\"offset\":offset}"
-  }
-}' "${BASE_URL}/api/streams${STREAM_PATH}"
-
-# Append a matching event and the transformed payload gets delivered to webhook.site
-curl --json '{
-  "type": "webhook-demo",
-  "payload": {
-    "message": "hello from iterate streams"
-  }
-}' "${BASE_URL}/api/streams${STREAM_PATH}"
-
-# Fetch the latest transformed request body back from webhook.site over curl too
-curl "https://webhook.site/token/aa6bf8b4-39ff-4807-a400-c21b37ee8e63/request/latest/raw"
-
 ```
 
-# Fun processors we can now build
+# Fun things we can easily build now
 
-### Add model selection to openai example
-
-### Debouncing your inputs
-
-### Asynchronous context gathering (e.g. RAG from knowledge bases)
-
-Goal: Allow processors to contribute additional context before an LLM request
-
-Implementation sketch:
-
-- Debounce LLM requests by e.g. 200ms
-- Any processor can now listen for "LLM request triggered" events or something like that
-
-### "Inheritable event" processor
-
-Add an event that says "I want this event to be inherited by all child streams when they are created"
-
-This can be implemented as a lightweight processor + event with `{ type: "inheritable-event-added", payload: { ... event ... }}`
-
-### Compaction
-
-All manner of compaction strategies can be implemented as processors. You could e.g. do this:
-
-In agents processor
-
-- add `history-reset` event with payload `{ history: [ ... ] }` to agent processor with simple reducer that sets the history to whatever is in the payload
-
-In new "my-compaction" processor:
-
-- add `compaction-triggered` event to trigger a compaction (manually or when some condition is met)
-- in `afterAppend` hook make an LLM request to summarize the history up to that point however you please
-
-### Images
-
-### Voice agent
-
-The events API has a websocket endpoint specifically so we could use it as backend for openai or grok realtime voice agents!
-
-### Multi-LLM agent
-
-Use tanstack AI or vercel AI or whatever you like to
-
-### Opencode / pi / claude / codex / whatever bridge
-
-Build a processor that sits between opencode / pi / claude / codex / or whatever other coding agent you use. It
-
-1. consumes input item events from the iterate stream and forwards on to agents
-2. consumes events from other harness sessions and sticks them into iterate streams
-
-You can then easily build a conductor-style UI on top.
-
-### Queued messages and interruptions
-
-Goal: Allow people to queue up messages before an LLM request is sent.
-
-- Add "interruptionBehavior" property to LLM input event type. Could e.g. be "queue" or "interrupt"
-- Add `queuedInputItems` array to state
-- In reducer: when encountering an input event without "interrupt
--
-
-### Workflow codemode!
-
-###
-
-# What is bad about this?
-
-- Loop detection is a PITA
-
-# Processor skill
-
-Stream processors consist of
-
-1. A slug - this is the unique, URL-safe slug that identifies the processor
-2. (Optional) new event types
-3. (Optional) an initial state and associated schema/type
-4. (Optional) a synchronous `reducer`
-5. (Optional) an asynchronous `afterAppend` hook
-
-### Examples
-
-### Tips
-
-- The only way to interact with your processor is by appending an event!
-- To make sure your processor survives crashes and restarts, you should
-- Don't try to "transform" events - that is deliberately not possible. Instead, just append a new event.
-- Embrace the distributed chaos. It's totally fine to say "I will wait up to 100ms before enacting my side effect to see if any other processor wants to stop me".
-- Be mindful of loops. the downside of distributed chaos is that you can easily create loops between processors who are pooping back and forth endlessly forever.
-- Be mindful of race conditions. Another downside of distributed chaos is that there are lots of race conditions.
-- Secrets should never be stored in events. There is a _very_ rudimentary secrets system in the events API for that reason.
-
-# TODO
-
-- AGENTS.md file
-
-# The end
-
-Remember
-
-- All you need are streams and stream processors
-- Your agent can be distributed across many programs
-
-Stuff I want to play with
-
-- Can I prompt an agent to actually self-debug and self-improve?
-- "Workflow codemode"
-- What if you could charge for agent plugins?
--
+- Add events for model and system prompt setting
+- Debounce inputs so repeated inputs don't interrupt the LLM over and over
+- Collect prompt context from "context providers" (e.g. RAG from knowledge bases) for some period of time before making each LLM request
+- Image / attachment event types
+- Opencode / pi bridge - we could have a processor that sits between an opencode agent and e.g. a pi or opencode session - so we could speak to all these agent harnesses using a single _input_ interface
+- Different compaction strategies
+- Multi LLM agent (via tanstack AI or vercel AI sdk for example)
+- Allow agents to have multple multiple LLM requests in flight at the same time
+  - ... for safety - run a prompt injection protector in parallel
+  - ... or to allow "sidebar" conversations
+- Proper codemode - add new tools via events!

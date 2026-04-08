@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import type { EasyInputMessage, ResponseInput } from "openai/resources/responses/responses";
 import { defineProcessor } from "ai-engineer-workshop/runtime";
 
-const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
+const DEFAULT_OPENAI_MODEL = "gpt-5.4";
 
 type ConversationMessage = Pick<EasyInputMessage, "content" | "role"> & {
   role: "assistant" | "user";
