@@ -41,7 +41,7 @@ export const handler = os.handler(async ({ context, input }) => {
   context.logger.info(`Watching ${streamPath} with ${history.length} history items`);
 
   for await (const event of await client.stream(
-    { path: streamPath, after: lastSeenOffset ?? "end" },
+    { path: streamPath, after: lastSeenOffset ?? "start" },
     {},
   )) {
     if (event.offset === lastSeenOffset) continue;

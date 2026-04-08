@@ -740,7 +740,7 @@ function formatOffsetValue(offset: number | undefined) {
 }
 
 function toLiveTailCursor(lastOffset: number | undefined): StreamCursor {
-  return lastOffset == null ? "end" : lastOffset;
+  return lastOffset == null ? "start" : lastOffset;
 }
 
 function formatEventCount(count: number) {

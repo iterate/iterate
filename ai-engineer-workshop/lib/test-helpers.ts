@@ -120,7 +120,7 @@ export async function useProcessorTestHarness<TState>({
             await client.stream(
               {
                 path,
-                after: lastOffset ?? "end",
+                after: lastOffset ?? "start",
               },
               { signal: controller.signal },
             ),

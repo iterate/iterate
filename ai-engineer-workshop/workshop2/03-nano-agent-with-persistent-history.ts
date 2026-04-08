@@ -42,7 +42,7 @@ try {
   console.log(`Watching ${streamPath} with ${history.length} history items`);
 
   for await (const event of await client.stream(
-    { path: streamPath, after: lastSeenOffset ?? "end" },
+    { path: streamPath, after: lastSeenOffset ?? "start" },
     {},
   )) {
     if (event.offset === lastSeenOffset) continue;

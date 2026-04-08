@@ -204,7 +204,7 @@ export default {
   async run(stream) {
     let { lastOffset, state } = await replayProcessorState(stream, processor);
     const live = createRemoteAsyncIterator(
-      await stream.subscribe({ after: lastOffset > 0 ? lastOffset : "end" }),
+      await stream.subscribe({ after: lastOffset > 0 ? lastOffset : "start" }),
     );
 
     for await (const event of live) {
