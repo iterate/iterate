@@ -9,17 +9,26 @@
   "scripts": {
     "alchemy:up": "tsx ./alchemy.run.ts",
     "alchemy:down": "tsx ./alchemy.run.ts --destroy",
+    "cli": "doppler run --project events -- iterate-app-cli",
     "dev": "doppler run --project events -- tsx ./alchemy.run.ts",
     "build": "doppler run -- pnpm exec vite build",
     "deploy": "doppler run --project events --config prd -- pnpm alchemy:up",
     "destroy": "doppler run --project events --config prd -- pnpm alchemy:down",
-    "demo": "pnpm iterate --local-router ./scripts/demo/router.ts local-router",
-    "demo:hello-world": "pnpm iterate --local-router ./scripts/demo/router.ts local-router hello-world",
+    "rpc": "pnpm cli rpc",
+    "demo": "pnpm cli hello-world",
+    "demo:hello-world": "pnpm cli hello-world",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm typecheck && vitest run src",
-    "test:e2e": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest run --dir e2e/vitest",
+    "test": "pnpm typecheck && vitest run src --exclude src/durable-objects/dynamic-worker-bundler.test.ts && vitest run --config ./vitest.node.config.ts src/durable-objects/dynamic-worker-bundler.test.ts",
+    "test:e2e": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && sh -c 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run --config ./e2e/vitest.config.ts \"$@\"' --",
+    "test:e2e:preview": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts e2e/vitest/runtime-smoke.e2e.test.ts e2e/vitest/curl-smoketest.e2e.test.ts",
+    "test:e2e:openai-preview": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); } if (!process.env.OPENAI_API_KEY) { console.error('OPENAI_API_KEY is required for the OpenAI preview proof'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts e2e/vitest/dynamic-worker-openai-preview.e2e.test.ts",
     "test:quick": "pnpm test:e2e",
-    "test:watch": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && vitest --dir e2e/vitest"
+    "test:watch": "node -e \"if (!process.env.EVENTS_BASE_URL) { console.error('EVENTS_BASE_URL is required for events e2e tests'); process.exit(1); }\" && sh -c 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest --config ./e2e/vitest.config.ts \"$@\"' --"
+  },
+  "iterateAppCli": {
+    "remote": {
+      "defaultBaseUrl": "https://events.iterate.com"
+    }
   },
   "dependencies": {
     "@iterate-com/events-contract": "workspace:*",
@@ -41,8 +50,10 @@
     "@tanstack/react-router-devtools": "1.166.11",
     "@tanstack/react-router-ssr-query": "^1.166.2",
     "@tanstack/react-start": "1.167.5",
+    "cron-schedule": "^5.0.4",
     "crossws": "^0.4.4",
     "drizzle-orm": "^0.45.1",
+    "jsonata": "^2.1.0",
     "lucide-react": "^1.7.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
@@ -51,6 +62,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.29.1",
+    "@cloudflare/vitest-pool-workers": "^0.14.0",
     "@cloudflare/workers-types": "^4.20260317.1",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/devtools-vite": "^0.6.0",
@@ -58,14 +70,17 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.1",
+    "ai-engineer-workshop": "workspace:*",
     "alchemy": "^0.83.3",
     "drizzle-kit": "^0.31.1",
     "esbuild": "^0.27.4",
+    "iterate": "workspace:*",
+    "openai": "^6.25.0",
     "tinyexec": "^1.0.2",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
-    "vitest": "4.0.15",
+    "vitest": "4.1.0-beta.6",
     "wrangler": "^4.75.0"
   }
 }

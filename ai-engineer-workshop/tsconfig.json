@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext", "DOM"],
+    "types": ["node"],
+    "strict": true,
+    "allowImportingTsExtensions": true,
+    "baseUrl": ".",
+    "paths": {
+      "ai-engineer-workshop": ["./sdk.ts"],
+      "ai-engineer-workshop/contract": ["./contract.ts"]
+    },
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "skipLibCheck": true
+  },
+  "include": ["*.ts", "examples/**/*.ts", "e2e/**/*.ts"],
+  "exclude": ["dist"]
+}

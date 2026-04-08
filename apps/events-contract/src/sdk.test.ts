@@ -1,0 +1,1036 @@
+import assert from "node:assert/strict";
+import { setTimeout as delay } from "node:timers/promises";
+import {
+  defineProcessor,
+  PullSubscriptionPatternProcessorRuntime,
+  PullSubscriptionProcessorRuntime,
+  PushSubscriptionProcessorRuntime,
+} from "./sdk.ts";
+import {
+  StreamPath,
+  type Event,
+  type EventInput,
+  type JSONObject,
+  type StreamPath as StreamPathType,
+} from "./types.ts";
+
+async function testSharedProcessorDefinitionKeepsPerRuntimeState() {
+  const processor = defineProcessor<{ processorInstanceId: number }>(() => ({
+    slug: "factory-test",
+    initialState: {
+      processorInstanceId: 0,
+    },
+    reduce: ({ event, state }) => {
+      if (event.type !== "tick") {
+        return state;
+      }
+
+      return {
+        processorInstanceId: event.offset,
+      };
+    },
+  }));
+
+  const client = new MockEventsClient({
+    [StreamPath.parse("/one")]: [
+      makeInitializedEvent({ streamPath: StreamPath.parse("/one"), offset: 1 }),
+      makeGenericEvent({
+        streamPath: StreamPath.parse("/one"),
+        offset: 2,
+        type: "tick",
+        payload: { source: "one" },
+      }),
+    ],
+    [StreamPath.parse("/two")]: [
+      makeInitializedEvent({ streamPath: StreamPath.parse("/two"), offset: 1 }),
+      makeGenericEvent({
+        streamPath: StreamPath.parse("/two"),
+        offset: 9,
+        type: "tick",
+        payload: { source: "two" },
+      }),
+    ],
+  });
+
+  const firstRuntime = new PullSubscriptionProcessorRuntime({
+    eventsClient: client,
+    processor,
+    streamPath: StreamPath.parse("/one"),
+  });
+  const secondRuntime = new PullSubscriptionProcessorRuntime({
+    eventsClient: client,
+    processor,
+    streamPath: StreamPath.parse("/two"),
+  });
+
+  assert.equal(firstRuntime.getState().processorInstanceId, 0);
+  assert.equal(secondRuntime.getState().processorInstanceId, 0);
+
+  const firstRunPromise = firstRuntime.run();
+  const secondRunPromise = secondRuntime.run();
+
+  await client.waitForLiveSubscription(StreamPath.parse("/one"));
+  await client.waitForLiveSubscription(StreamPath.parse("/two"));
+
+  firstRuntime.stop();
+  secondRuntime.stop();
+
+  await firstRunPromise;
+  await secondRunPromise;
+
+  assert.equal(firstRuntime.getState().processorInstanceId, 2);
+  assert.equal(secondRuntime.getState().processorInstanceId, 9);
+  assert.notEqual(
+    firstRuntime.getState().processorInstanceId,
+    secondRuntime.getState().processorInstanceId,
+  );
+}
+
+async function testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly() {
+  const rootPath = StreamPath.parse("/");
+  const teamAPath = StreamPath.parse("/team/a");
+  const teamBPath = StreamPath.parse("/team/b");
+  const teamCPath = StreamPath.parse("/team/c");
+  const teamDeepPath = StreamPath.parse("/team/a/deep");
+  const teamBDeepPath = StreamPath.parse("/team/b/deep");
+  const otherPath = StreamPath.parse("/other/x");
+  const otherLaterPath = StreamPath.parse("/other/y");
+
+  const client = new MockEventsClient({
+    [rootPath]: [
+      makeInitializedEvent({ streamPath: rootPath, offset: 1 }),
+      makeChildStreamCreatedEvent({ offset: 2, childPath: teamAPath }),
+      makeChildStreamCreatedEvent({ offset: 3, childPath: otherPath }),
+    ],
+    [teamAPath]: [
+      makeInitializedEvent({ streamPath: teamAPath, offset: 1 }),
+      makeGenericEvent({
+        streamPath: teamAPath,
+        offset: 2,
+        type: "tick",
+        payload: { source: "history" },
+      }),
+    ],
+    [teamBPath]: [makeInitializedEvent({ streamPath: teamBPath, offset: 1 })],
+    [teamCPath]: [makeInitializedEvent({ streamPath: teamCPath, offset: 1 })],
+    [teamDeepPath]: [makeInitializedEvent({ streamPath: teamDeepPath, offset: 1 })],
+    [teamBDeepPath]: [makeInitializedEvent({ streamPath: teamBDeepPath, offset: 1 })],
+    [otherPath]: [makeInitializedEvent({ streamPath: otherPath, offset: 1 })],
+    [otherLaterPath]: [makeInitializedEvent({ streamPath: otherLaterPath, offset: 1 })],
+  });
+
+  const runtime = new PullSubscriptionPatternProcessorRuntime({
+    eventsClient: client,
+    streamPattern: "/team/*",
+    processor: defineProcessor<{ tickCount: number }>(() => ({
+      slug: "pattern-test",
+      initialState: { tickCount: 0 },
+      reduce: ({ event, state }) => {
+        if (event.type !== "tick") {
+          return state;
+        }
+
+        return { tickCount: state.tickCount + 1 };
+      },
+      afterAppend: async ({ append, event, state }) => {
+        if (event.type !== "tick") {
+          return;
+        }
+
+        await append({
+          event: {
+            type: "processed",
+            payload: {
+              sourceOffset: event.offset,
+              tickCount: state.tickCount,
+            },
+          },
+        });
+      },
+    })),
+  });
+
+  const runPromise = runtime.run();
+
+  await client.waitForLiveSubscription(rootPath);
+  await client.waitForLiveSubscription(teamAPath);
+
+  assert.deepEqual(runtime.getStreamPaths(), [teamAPath]);
+  assert.equal(client.getLiveSubscriptionCount(otherPath), 0);
+  assert.equal(client.getLiveSubscriptionCount(teamDeepPath), 0);
+
+  client.emit(
+    teamAPath,
+    makeGenericEvent({
+      streamPath: teamAPath,
+      offset: 3,
+      type: "tick",
+      payload: { source: "live-a" },
+    }),
+  );
+
+  await client.waitForAppendCount(1);
+
+  assert.deepEqual(
+    client.appended.map((entry) => entry.path),
+    [teamAPath],
+  );
+
+  client.emit(rootPath, makeChildStreamCreatedEvent({ offset: 4, childPath: teamBPath }));
+  client.emit(rootPath, makeChildStreamCreatedEvent({ offset: 5, childPath: teamDeepPath }));
+  client.emit(rootPath, makeChildStreamCreatedEvent({ offset: 6, childPath: otherLaterPath }));
+  client.emit(rootPath, makeChildStreamCreatedEvent({ offset: 7, childPath: teamCPath }));
+  client.emit(rootPath, makeChildStreamCreatedEvent({ offset: 8, childPath: teamBDeepPath }));
+
+  await client.waitForLiveSubscription(teamBPath);
+  await client.waitForLiveSubscription(teamCPath);
+
+  assert.deepEqual(runtime.getStreamPaths(), [teamAPath, teamBPath, teamCPath]);
+  assert.equal(client.getLiveSubscriptionCount(teamDeepPath), 0);
+  assert.equal(client.getLiveSubscriptionCount(teamBDeepPath), 0);
+  assert.equal(client.getLiveSubscriptionCount(otherPath), 0);
+  assert.equal(client.getLiveSubscriptionCount(otherLaterPath), 0);
+
+  client.emit(
+    teamBPath,
+    makeGenericEvent({
+      streamPath: teamBPath,
+      offset: 2,
+      type: "tick",
+      payload: { source: "live-b" },
+    }),
+  );
+  client.emit(
+    teamCPath,
+    makeGenericEvent({
+      streamPath: teamCPath,
+      offset: 2,
+      type: "tick",
+      payload: { source: "live-c" },
+    }),
+  );
+  client.emit(
+    teamDeepPath,
+    makeGenericEvent({
+      streamPath: teamDeepPath,
+      offset: 2,
+      type: "tick",
+      payload: { source: "live-deep-a" },
+    }),
+  );
+  client.emit(
+    teamBDeepPath,
+    makeGenericEvent({
+      streamPath: teamBDeepPath,
+      offset: 2,
+      type: "tick",
+      payload: { source: "live-deep-b" },
+    }),
+  );
+  client.emit(
+    otherLaterPath,
+    makeGenericEvent({
+      streamPath: otherLaterPath,
+      offset: 2,
+      type: "tick",
+      payload: { source: "live-other" },
+    }),
+  );
+
+  await client.waitForAppendCount(3);
+  await delay(25);
+
+  assert.deepEqual(client.appended.map((entry) => entry.path).sort(), [
+    teamAPath,
+    teamBPath,
+    teamCPath,
+  ]);
+  assert.equal(runtime.getState(teamDeepPath), undefined);
+  assert.equal(runtime.getState(teamBDeepPath), undefined);
+  assert.equal(runtime.getState(otherPath), undefined);
+  assert.equal(runtime.getState(otherLaterPath), undefined);
+  assert.deepEqual(
+    client.appended.map((entry) => ({
+      path: entry.path,
+      type: entry.event.type,
+      payload: entry.event.payload,
+    })),
+    [
+      {
+        path: teamAPath,
+        type: "processed",
+        payload: {
+          sourceOffset: 3,
+          tickCount: 2,
+        },
+      },
+      {
+        path: teamBPath,
+        type: "processed",
+        payload: {
+          sourceOffset: 2,
+          tickCount: 1,
+        },
+      },
+      {
+        path: teamCPath,
+        type: "processed",
+        payload: {
+          sourceOffset: 2,
+          tickCount: 1,
+        },
+      },
+    ],
+  );
+
+  runtime.stop();
+  await runPromise;
+}
+
+async function testProcessorAppendResolvesCurrentAbsoluteAndRelativePaths() {
+  const teamAPath = StreamPath.parse("/team/a");
+  const client = new MockEventsClient({
+    [teamAPath]: [makeInitializedEvent({ streamPath: teamAPath, offset: 1 })],
+  });
+
+  const runtime = new PullSubscriptionProcessorRuntime({
+    eventsClient: client,
+    processor: defineProcessor(() => ({
+      slug: "append-paths",
+      initialState: null,
+      async afterAppend({ append, event }) {
+        if (event.type !== "tick") {
+          return;
+        }
+
+        await append({
+          event: { type: "same-stream", payload: {} },
+        });
+        await append({
+          path: ".",
+          event: { type: "same-stream-dot", payload: {} },
+        });
+        await append({
+          path: "./child",
+          event: { type: "child-stream", payload: {} },
+        });
+        await append({
+          path: "../",
+          event: { type: "parent-stream", payload: {} },
+        });
+        await append({
+          path: "/elsewhere",
+          event: { type: "absolute-stream", payload: {} },
+        });
+      },
+    })),
+    streamPath: teamAPath,
+  });
+
+  const runPromise = runtime.run();
+
+  await client.waitForLiveSubscription(teamAPath);
+
+  client.emit(
+    teamAPath,
+    makeGenericEvent({
+      streamPath: teamAPath,
+      offset: 2,
+      type: "tick",
+      payload: { source: "live" },
+    }),
+  );
+
+  await client.waitForAppendCount(5);
+
+  assert.deepEqual(
+    client.appended.map((entry) => entry.path),
+    [
+      teamAPath,
+      teamAPath,
+      StreamPath.parse("/team/a/child"),
+      StreamPath.parse("/team"),
+      StreamPath.parse("/elsewhere"),
+    ],
+  );
+
+  runtime.stop();
+  await runPromise;
+}
+
+async function testProcessorAppendRejectsInvalidRelativePaths() {
+  const rootPath = StreamPath.parse("/");
+  const childPath = StreamPath.parse("/team/a");
+
+  const invalidRelativeClient = new MockEventsClient({
+    [childPath]: [makeInitializedEvent({ streamPath: childPath, offset: 1 })],
+  });
+  const invalidRelativeRuntime = new PullSubscriptionProcessorRuntime({
+    eventsClient: invalidRelativeClient,
+    processor: defineProcessor(() => ({
+      slug: "invalid-relative",
+      initialState: null,
+      async afterAppend({ append, event }) {
+        if (event.type !== "tick") {
+          return;
+        }
+
+        await append({
+          path: "child" as never,
+          event: { type: "unreachable", payload: {} },
+        });
+      },
+    })),
+    streamPath: childPath,
+  });
+
+  const invalidRelativeRunPromise = invalidRelativeRuntime.run();
+  await invalidRelativeClient.waitForLiveSubscription(childPath);
+  invalidRelativeClient.emit(
+    childPath,
+    makeGenericEvent({
+      streamPath: childPath,
+      offset: 2,
+      type: "tick",
+      payload: { source: "live" },
+    }),
+  );
+
+  await assert.rejects(invalidRelativeRunPromise, /append path must be absolute or dot-relative/);
+  assert.equal(invalidRelativeClient.appended.length, 0);
+
+  const aboveRootClient = new MockEventsClient({
+    [rootPath]: [makeInitializedEvent({ streamPath: rootPath, offset: 1 })],
+  });
+  const aboveRootRuntime = new PullSubscriptionProcessorRuntime({
+    eventsClient: aboveRootClient,
+    processor: defineProcessor(() => ({
+      slug: "above-root",
+      initialState: null,
+      async afterAppend({ append, event }) {
+        if (event.type !== "tick") {
+          return;
+        }
+
+        await append({
+          path: "../",
+          event: { type: "unreachable", payload: {} },
+        });
+      },
+    })),
+    streamPath: rootPath,
+  });
+
+  const aboveRootRunPromise = aboveRootRuntime.run();
+  await aboveRootClient.waitForLiveSubscription(rootPath);
+  aboveRootClient.emit(
+    rootPath,
+    makeGenericEvent({
+      streamPath: rootPath,
+      offset: 2,
+      type: "tick",
+      payload: { source: "live" },
+    }),
+  );
+
+  await assert.rejects(aboveRootRunPromise, /append path cannot walk above root/);
+  assert.equal(aboveRootClient.appended.length, 0);
+}
+
+async function testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase() {
+  const client = new SlowHistoryEventsClient(StreamPath.parse("/history"));
+  const runtime = new PullSubscriptionProcessorRuntime({
+    eventsClient: client,
+    processor: defineProcessor<{ seen: number }>(() => ({
+      slug: "history-stop",
+      initialState: { seen: 0 },
+      reduce: ({ event, state }) => (event.type === "tick" ? { seen: state.seen + 1 } : state),
+    })),
+    streamPath: StreamPath.parse("/history"),
+  });
+
+  const runPromise = runtime.run();
+
+  await client.waitForHistoryStart();
+  runtime.stop();
+  await runPromise;
+
+  assert.equal(client.liveStreamStarted, false);
+}
+
+async function testPushRuntimeCatchesUpAndAppendsWithCanonicalProcessorContract() {
+  const streamPath = StreamPath.parse("/push/demo");
+  const client = new MockEventsClient({
+    [streamPath]: [
+      makeInitializedEvent({ streamPath, offset: 1 }),
+      makeGenericEvent({
+        streamPath,
+        offset: 2,
+        type: "tick",
+        payload: { source: "history" },
+      }),
+      makeGenericEvent({
+        streamPath,
+        offset: 3,
+        type: "tick",
+        payload: { source: "history" },
+      }),
+    ],
+  });
+
+  const runtime = new PushSubscriptionProcessorRuntime({
+    eventsClient: client,
+    processor: defineProcessor<{ count: number }>(() => ({
+      slug: "push-runtime",
+      initialState: { count: 0 },
+      reduce: ({ event, state }) => (event.type === "tick" ? { count: state.count + 1 } : state),
+      async afterAppend({ append, event, state }) {
+        if (event.type !== "tick") {
+          return;
+        }
+
+        await append({
+          event: {
+            type: "processed",
+            payload: {
+              sourceOffset: event.offset,
+              tickCount: state.count,
+            },
+          },
+        });
+      },
+    })),
+    streamPath,
+  });
+
+  await runtime.consume(
+    makeGenericEvent({
+      streamPath,
+      offset: 4,
+      type: "tick",
+      payload: { source: "live" },
+    }),
+  );
+
+  assert.deepEqual(runtime.getState(), { count: 3 });
+  assert.deepEqual(client.appended, [
+    {
+      path: streamPath,
+      event: makeEvent({
+        streamPath,
+        offset: 4,
+        type: "processed",
+        payload: {
+          sourceOffset: 4,
+          tickCount: 3,
+        },
+      }),
+    },
+  ]);
+}
+
+async function testPushRuntimeSerializesOutOfOrderDeliveriesWithoutDoubleReducingHistory() {
+  const streamPath = StreamPath.parse("/push/ordered");
+  const client = new MockEventsClient({
+    [streamPath]: [
+      makeInitializedEvent({ streamPath, offset: 1 }),
+      makeGenericEvent({
+        streamPath,
+        offset: 2,
+        type: "tick",
+        payload: { source: "history-1" },
+      }),
+      makeGenericEvent({
+        streamPath,
+        offset: 3,
+        type: "tick",
+        payload: { source: "history-2" },
+      }),
+      makeGenericEvent({
+        streamPath,
+        offset: 4,
+        type: "tick",
+        payload: { source: "history-3" },
+      }),
+    ],
+  });
+
+  const seenOffsets: number[] = [];
+  const runtime = new PushSubscriptionProcessorRuntime({
+    eventsClient: client,
+    processor: defineProcessor<{ count: number }>(() => ({
+      slug: "push-ordered",
+      initialState: { count: 0 },
+      reduce: ({ event, state }) => {
+        if (event.type !== "tick") {
+          return state;
+        }
+
+        seenOffsets.push(event.offset);
+        return { count: state.count + 1 };
+      },
+    })),
+    streamPath,
+  });
+
+  await Promise.all([
+    runtime.consume(
+      makeGenericEvent({
+        streamPath,
+        offset: 5,
+        type: "tick",
+        payload: { source: "live-5" },
+      }),
+    ),
+    runtime.consume(
+      makeGenericEvent({
+        streamPath,
+        offset: 6,
+        type: "tick",
+        payload: { source: "live-6" },
+      }),
+    ),
+  ]);
+
+  assert.deepEqual(seenOffsets, [2, 3, 4, 5, 6]);
+  assert.deepEqual(runtime.getState(), { count: 5 });
+}
+
+async function testPushRuntimeSkipsInclusiveCatchUpEventsAtLastProcessedOffset() {
+  const streamPath = StreamPath.parse("/push/inclusive");
+  const client = new InclusiveOffsetMockEventsClient({
+    [streamPath]: [
+      makeInitializedEvent({ streamPath, offset: 1 }),
+      makeGenericEvent({
+        streamPath,
+        offset: 2,
+        type: "tick",
+        payload: { source: "history-2" },
+      }),
+      makeGenericEvent({
+        streamPath,
+        offset: 3,
+        type: "tick",
+        payload: { source: "history-3" },
+      }),
+      makeGenericEvent({
+        streamPath,
+        offset: 4,
+        type: "tick",
+        payload: { source: "history-4" },
+      }),
+    ],
+  });
+  const seenOffsets: number[] = [];
+
+  const runtime = new PushSubscriptionProcessorRuntime({
+    eventsClient: client,
+    processor: defineProcessor<{ count: number }>(() => ({
+      slug: "push-inclusive",
+      initialState: { count: 0 },
+      reduce: ({ event, state }) => {
+        if (event.type !== "tick") {
+          return state;
+        }
+
+        seenOffsets.push(event.offset);
+        return { count: state.count + 1 };
+      },
+    })),
+    streamPath,
+  });
+
+  await runtime.consume(
+    makeGenericEvent({
+      streamPath,
+      offset: 3,
+      type: "tick",
+      payload: { source: "live-3" },
+    }),
+  );
+  await runtime.consume(
+    makeGenericEvent({
+      streamPath,
+      offset: 5,
+      type: "tick",
+      payload: { source: "live-5" },
+    }),
+  );
+
+  assert.deepEqual(seenOffsets, [2, 3, 4, 5]);
+  assert.deepEqual(runtime.getState(), { count: 4 });
+}
+
+async function testPatternRuntimeStopDuringHistoryWaitsForChildrenToExit() {
+  const rootPath = StreamPath.parse("/");
+  const childPath = StreamPath.parse("/team/history");
+  const client = new SlowPatternHistoryEventsClient(rootPath, childPath);
+  const runtime = new PullSubscriptionPatternProcessorRuntime({
+    eventsClient: client,
+    streamPattern: "/team/*",
+    processor: defineProcessor(() => ({
+      slug: "pattern-stop",
+      initialState: null,
+    })),
+  });
+
+  const runPromise = runtime.run();
+
+  await client.waitForChildHistoryStart();
+  runtime.stop();
+  await runPromise;
+
+  assert.equal(client.childLiveStreamStarted, false);
+}
+
+class MockEventsClient {
+  appended: Array<{ path: StreamPathType; event: Event }> = [];
+  #eventsByPath: Map<StreamPathType, Event[]>;
+  #liveSubscribers = new Map<StreamPathType, Set<(event: Event) => void>>();
+
+  constructor(seedEventsByPath: Record<StreamPathType, Event[]>) {
+    this.#eventsByPath = new Map(
+      Object.entries(seedEventsByPath) as Array<[StreamPathType, Event[]]>,
+    );
+  }
+
+  async append(input: { path: StreamPathType; event: EventInput }) {
+    const nextOffset =
+      (this.#eventsByPath.get(input.path)?.at(-1)?.offset ?? 0) + this.appended.length + 1;
+    const event = makeEvent({
+      streamPath: input.path,
+      offset: nextOffset,
+      type: input.event.type,
+      payload: input.event.payload,
+      metadata: input.event.metadata,
+      idempotencyKey: input.event.idempotencyKey,
+    });
+    this.appended.push({ path: input.path, event });
+    return { event };
+  }
+
+  async stream(
+    input: { path: StreamPathType; offset?: number; live?: boolean },
+    options: { signal?: AbortSignal },
+  ) {
+    const history = (this.#eventsByPath.get(input.path) ?? []).filter(
+      (event) => event.offset > (input.offset ?? 0),
+    );
+
+    return this.#iterate({
+      history,
+      live: input.live === true,
+      path: input.path,
+      signal: options.signal,
+    });
+  }
+
+  emit(path: StreamPathType, event: Event) {
+    const subscribers = this.#liveSubscribers.get(path);
+    if (subscribers == null) {
+      return;
+    }
+
+    for (const subscriber of subscribers) {
+      subscriber(event);
+    }
+  }
+
+  async waitForLiveSubscription(path: StreamPathType, count = 1) {
+    await waitFor(() => (this.#liveSubscribers.get(path)?.size ?? 0) >= count);
+  }
+
+  getLiveSubscriptionCount(path: StreamPathType) {
+    return this.#liveSubscribers.get(path)?.size ?? 0;
+  }
+
+  async waitForAppendCount(count: number) {
+    await waitFor(() => this.appended.length >= count);
+  }
+
+  async *#iterate(args: {
+    history: Event[];
+    live: boolean;
+    path: StreamPathType;
+    signal?: AbortSignal;
+  }): AsyncIterable<Event> {
+    for (const event of args.history) {
+      yield event;
+    }
+
+    if (!args.live) {
+      return;
+    }
+
+    const queue: Event[] = [];
+    let notifyNext: (() => void) | undefined;
+    const onEvent = (event: Event) => {
+      queue.push(event);
+      notifyNext?.();
+      notifyNext = undefined;
+    };
+
+    const subscribers = this.#liveSubscribers.get(args.path) ?? new Set<(event: Event) => void>();
+    subscribers.add(onEvent);
+    this.#liveSubscribers.set(args.path, subscribers);
+
+    try {
+      while (true) {
+        if (queue.length > 0) {
+          yield queue.shift()!;
+          continue;
+        }
+
+        await waitForLiveEvent({
+          signal: args.signal,
+          onReady: (resolve) => (notifyNext = resolve),
+        });
+      }
+    } finally {
+      const liveSubscribers = this.#liveSubscribers.get(args.path);
+      liveSubscribers?.delete(onEvent);
+      if (liveSubscribers?.size === 0) {
+        this.#liveSubscribers.delete(args.path);
+      }
+    }
+  }
+}
+
+class SlowHistoryEventsClient {
+  liveStreamStarted = false;
+  historyStarted = createDeferred<void>();
+  #path: StreamPathType;
+
+  constructor(path: StreamPathType) {
+    this.#path = path;
+  }
+
+  async append(input: { path: StreamPathType; event: EventInput }) {
+    return {
+      event: makeEvent({
+        streamPath: input.path,
+        offset: 1,
+        type: input.event.type,
+        payload: input.event.payload ?? {},
+        metadata: input.event.metadata,
+        idempotencyKey: input.event.idempotencyKey,
+      }),
+    };
+  }
+
+  async stream(
+    input: { path: StreamPathType; offset?: number; live?: boolean },
+    options: { signal?: AbortSignal },
+  ) {
+    if (input.live) {
+      this.liveStreamStarted = true;
+      return waitForever(options.signal);
+    }
+
+    return this.#history(options.signal);
+  }
+
+  async waitForHistoryStart() {
+    await this.historyStarted.promise;
+  }
+
+  async *#history(signal?: AbortSignal) {
+    yield makeInitializedEvent({ streamPath: this.#path, offset: 1 });
+    this.historyStarted.resolve();
+    await waitUntilAbort(signal);
+  }
+}
+
+class SlowPatternHistoryEventsClient extends MockEventsClient {
+  childLiveStreamStarted = false;
+  childHistoryStarted = createDeferred<void>();
+  #childPath: StreamPathType;
+
+  constructor(rootPath: StreamPathType, childPath: StreamPathType) {
+    super({
+      [rootPath]: [
+        makeInitializedEvent({ streamPath: rootPath, offset: 1 }),
+        makeChildStreamCreatedEvent({ offset: 2, childPath }),
+      ],
+      [childPath]: [],
+    });
+    this.#childPath = childPath;
+  }
+
+  override async stream(
+    input: { path: StreamPathType; offset?: number; live?: boolean },
+    options: { signal?: AbortSignal },
+  ) {
+    if (input.path === this.#childPath && input.live) {
+      this.childLiveStreamStarted = true;
+      return waitForever(options.signal);
+    }
+
+    if (input.path === this.#childPath && !input.live) {
+      return this.#childHistory(options.signal);
+    }
+
+    return super.stream(input, options);
+  }
+
+  async waitForChildHistoryStart() {
+    await this.childHistoryStarted.promise;
+  }
+
+  async *#childHistory(signal?: AbortSignal) {
+    yield makeInitializedEvent({ streamPath: this.#childPath, offset: 1 });
+    this.childHistoryStarted.resolve();
+    await waitUntilAbort(signal);
+  }
+}
+
+class InclusiveOffsetMockEventsClient extends MockEventsClient {
+  override async stream(
+    input: { path: StreamPathType; offset?: number; live?: boolean },
+    options: { signal?: AbortSignal },
+  ) {
+    const inclusiveOffset = input.offset == null ? undefined : Math.max(0, input.offset - 1);
+
+    return super.stream(
+      {
+        ...input,
+        offset: inclusiveOffset,
+      },
+      options,
+    );
+  }
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000) {
+  const startedAt = Date.now();
+
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`Timed out after ${timeoutMs}ms`);
+    }
+
+    await delay(10);
+  }
+}
+
+async function waitForLiveEvent(args: {
+  signal?: AbortSignal;
+  onReady: (resolve: () => void) => void;
+}) {
+  if (args.signal?.aborted) {
+    throw abortError();
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      reject(abortError());
+    };
+
+    args.signal?.addEventListener("abort", onAbort, { once: true });
+    args.onReady(() => {
+      args.signal?.removeEventListener("abort", onAbort);
+      resolve();
+    });
+  });
+}
+
+function waitForever(signal?: AbortSignal): AsyncIterable<Event> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        async next() {
+          await waitForLiveEvent({
+            signal,
+            onReady: () => {},
+          });
+
+          return { done: false, value: undefined as never };
+        },
+      };
+    },
+  };
+}
+
+async function waitUntilAbort(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw abortError();
+  }
+
+  await new Promise<never>((_, reject) => {
+    signal?.addEventListener("abort", () => reject(abortError()), { once: true });
+  });
+}
+
+function abortError() {
+  return new DOMException("Aborted", "AbortError");
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+
+  return { promise, resolve };
+}
+
+function makeInitializedEvent(args: { streamPath: StreamPathType; offset: number }): Event {
+  return makeEvent({
+    streamPath: args.streamPath,
+    offset: args.offset,
+    type: "https://events.iterate.com/events/stream/initialized",
+    payload: {
+      projectSlug: "public",
+      path: args.streamPath,
+    },
+  });
+}
+
+function makeChildStreamCreatedEvent(args: { offset: number; childPath: StreamPathType }): Event {
+  return makeEvent({
+    streamPath: StreamPath.parse("/"),
+    offset: args.offset,
+    type: "https://events.iterate.com/events/stream/child-stream-created",
+    payload: {
+      childPath: args.childPath,
+    },
+  });
+}
+
+function makeGenericEvent(args: {
+  streamPath: StreamPathType;
+  offset: number;
+  type: string;
+  payload: Record<string, string>;
+}): Event {
+  return makeEvent(args);
+}
+
+function makeEvent(args: {
+  streamPath: StreamPathType;
+  offset: number;
+  type: string;
+  payload: JSONObject;
+  metadata?: JSONObject;
+  idempotencyKey?: string;
+}): Event {
+  return {
+    streamPath: args.streamPath,
+    offset: args.offset,
+    type: args.type,
+    payload: args.payload,
+    metadata: args.metadata,
+    idempotencyKey: args.idempotencyKey,
+    createdAt: new Date(args.offset * 1_000).toISOString(),
+  };
+}
+
+await testSharedProcessorDefinitionKeepsPerRuntimeState();
+await testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly();
+await testProcessorAppendResolvesCurrentAbsoluteAndRelativePaths();
+await testProcessorAppendRejectsInvalidRelativePaths();
+await testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase();
+await testPatternRuntimeStopDuringHistoryWaitsForChildrenToExit();
+await testPushRuntimeCatchesUpAndAppendsWithCanonicalProcessorContract();
+await testPushRuntimeSerializesOutOfOrderDeliveriesWithoutDoubleReducingHistory();
+await testPushRuntimeSkipsInclusiveCatchUpEventsAtLastProcessedOffset();

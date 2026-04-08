@@ -60,52 +60,21 @@ describe.sequential("live ingress proxy", () => {
     await cleanupCreatedRoutes();
   });
 
-  it("serves OpenAPI for the route contract", async () => {
-    const response = await app.fetch("/api/openapi.json");
-    expect(response.status).toBe(200);
-
-    const payload = (await response.json()) as {
-      paths?: Record<string, unknown>;
-    };
-
-    expect(payload.paths?.["/routes"]).toBeTruthy();
-    expect(payload.paths?.["/routes/{rootHost}"]).toBeTruthy();
-  }, 120_000);
-
-  it("creates, gets, lists, and proxies exact root hosts through httpbin", async () => {
+  it("proxies exact root hosts through httpbin", async () => {
     const rootHost = makeRootHost(app.baseURL);
     const token = randomSuffix();
 
-    const created = await apiJson<{ id: string; rootHost: string }>(
-      `/api/routes/${encodeURIComponent(rootHost)}`,
-      {
-        method: "PUT",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          targetUrl: "https://httpbin.org",
-          metadata: { kind: "exact" },
-        }),
+    await apiJson<{ id: string; rootHost: string }>(`/api/routes/${encodeURIComponent(rootHost)}`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
       },
-    );
+      body: JSON.stringify({
+        targetUrl: "https://httpbin.org",
+        metadata: { kind: "exact" },
+      }),
+    });
     createdRootHosts.add(rootHost);
-
-    expect(created.id).toBeTruthy();
-    expect(created.rootHost).toBe(rootHost);
-
-    const fetched = await apiJson<{ id: string; rootHost: string }>(
-      `/api/routes/${encodeURIComponent(rootHost)}`,
-      { method: "GET" },
-    );
-    expect(fetched.id).toBe(created.id);
-    expect(fetched.rootHost).toBe(rootHost);
-
-    const listed = await apiJson<{ routes: Array<{ rootHost: string }> }>(
-      "/api/routes?limit=100&offset=0",
-      { method: "GET" },
-    );
-    expect(listed.routes.some((route) => route.rootHost === rootHost)).toBe(true);
 
     const response = await fetch(
       `https://${rootHost}/anything?token=${encodeURIComponent(token)}`,

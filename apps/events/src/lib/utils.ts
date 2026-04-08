@@ -1,14 +1,4 @@
-import { Event, StreamPath } from "@iterate-com/events-contract";
-
-export const ROOT_STREAM_PATH: StreamPath = "/";
-export function getParentPath(path: StreamPath): StreamPath | null {
-  if (path === ROOT_STREAM_PATH) {
-    return null;
-  }
-
-  const lastSlashIndex = path.lastIndexOf("/");
-  return lastSlashIndex === 0 ? ROOT_STREAM_PATH : StreamPath.parse(path.slice(0, lastSlashIndex));
-}
+import type { Event } from "@iterate-com/events-contract";
 
 /**
  * Decode the DO's newline-delimited JSON event stream.

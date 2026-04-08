@@ -15,7 +15,6 @@ type AgentInputMessage = Omit<TextModelMessage, "role"> & { role: AgentMessageRo
 
 type InputItemAddedPayload = {
   item: AgentInputMessage;
-  sourceOffset?: string;
 };
 
 type RunErrorChunk = {
@@ -24,17 +23,16 @@ type RunErrorChunk = {
 };
 
 type OutputItemAddedPayload = {
-  sourceOffset: string;
   chunk: StreamChunk | RunErrorChunk;
 };
 
 type AgentTurn = {
-  sourceOffset: string;
+  inputOffset: number;
   inputRole: AgentMessageRole;
   inputText: string;
   inputTimestamp: number;
   outputChunks: StreamChunk[];
-  latestOutputOffset?: string;
+  latestOutputOffset?: number;
   hasFinalAssistantMessage?: boolean;
   outputError?: {
     title: string;
@@ -49,8 +47,8 @@ function getTimestamp(createdAt: string) {
 }
 
 function appendInsertion(
-  insertionsByOffset: Map<string, StreamFeedItem[]>,
-  offset: string,
+  insertionsByOffset: Map<number, StreamFeedItem[]>,
+  offset: number,
   item: StreamFeedItem,
 ) {
   const existing = insertionsByOffset.get(offset);
@@ -68,9 +66,8 @@ function appendInsertion(
  */
 export function buildAgentSemanticInsertions(
   events: readonly Event[],
-): Map<string, StreamFeedItem[]> {
-  const insertionsByOffset = new Map<string, StreamFeedItem[]>();
-  const turnsByOffset = new Map<string, AgentTurn>();
+): Map<number, StreamFeedItem[]> {
+  const insertionsByOffset = new Map<number, StreamFeedItem[]>();
   const pendingTurns: AgentTurn[] = [];
   const turns: AgentTurn[] = [];
 
@@ -89,9 +86,7 @@ export function buildAgentSemanticInsertions(
       });
 
       if (payload.item.role !== "user") {
-        const turn =
-          (payload.sourceOffset ? turnsByOffset.get(payload.sourceOffset) : undefined) ??
-          pendingTurns.find((candidate) => candidate.hasFinalAssistantMessage !== true);
+        const turn = pendingTurns.find((candidate) => candidate.hasFinalAssistantMessage !== true);
         if (turn) {
           turn.hasFinalAssistantMessage = true;
         }
@@ -99,7 +94,7 @@ export function buildAgentSemanticInsertions(
       }
 
       const turn: AgentTurn = {
-        sourceOffset: event.offset,
+        inputOffset: event.offset,
         inputRole: payload.item.role,
         inputText: payload.item.content,
         inputTimestamp: getTimestamp(event.createdAt),
@@ -108,7 +103,6 @@ export function buildAgentSemanticInsertions(
 
       turns.push(turn);
       pendingTurns.push(turn);
-      turnsByOffset.set(event.offset, turn);
       continue;
     }
 
@@ -121,7 +115,7 @@ export function buildAgentSemanticInsertions(
       continue;
     }
 
-    const turn = turnsByOffset.get(payload.sourceOffset);
+    const turn = pendingTurns.find((candidate) => candidate.hasFinalAssistantMessage !== true);
     if (!turn) {
       continue;
     }
@@ -134,7 +128,7 @@ export function buildAgentSemanticInsertions(
         title: "Agent run failed",
         message: payload.chunk.error,
         raw: {
-          sourceOffset: turn.sourceOffset,
+          inputOffset: turn.inputOffset,
           error: payload.chunk.error,
         },
       };
@@ -146,7 +140,7 @@ export function buildAgentSemanticInsertions(
         title: "Agent response ended with error",
         message: payload.chunk.error.message,
         raw: {
-          sourceOffset: turn.sourceOffset,
+          inputOffset: turn.inputOffset,
           error: payload.chunk.error,
         },
       };
@@ -161,7 +155,7 @@ export function buildAgentSemanticInsertions(
       continue;
     }
 
-    const insertionOffset = turn.latestOutputOffset ?? turn.sourceOffset;
+    const insertionOffset = turn.latestOutputOffset ?? turn.inputOffset;
     for (const item of buildAgentOutputFeedItems(turn)) {
       appendInsertion(insertionsByOffset, insertionOffset, item);
     }
@@ -358,7 +352,6 @@ function parseInputItemAddedPayload(payload: unknown): InputItemAddedPayload | n
       role,
       content,
     },
-    sourceOffset: typeof payload.sourceOffset === "string" ? payload.sourceOffset : undefined,
   };
 }
 
@@ -380,7 +373,7 @@ function isRunErrorChunk(value: unknown): value is RunErrorChunk {
 }
 
 function parseOutputItemAddedPayload(payload: unknown): OutputItemAddedPayload | null {
-  if (!isRecord(payload) || typeof payload.sourceOffset !== "string") {
+  if (!isRecord(payload)) {
     return null;
   }
 
@@ -389,7 +382,6 @@ function parseOutputItemAddedPayload(payload: unknown): OutputItemAddedPayload |
   }
 
   return {
-    sourceOffset: payload.sourceOffset,
     chunk: payload.chunk,
   };
 }

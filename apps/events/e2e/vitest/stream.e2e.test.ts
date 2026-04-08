@@ -2,15 +2,15 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import {
-  STREAM_CREATED_TYPE,
-  STREAM_METADATA_UPDATED_TYPE,
+  ChildStreamCreatedEvent,
+  StreamInitializedEvent,
   StreamPath,
   type Event,
-  type StreamState,
 } from "@iterate-com/events-contract";
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
+  defaultE2EProjectSlug,
   requireEventsBaseUrl,
   type Events2AppFixture,
 } from "../helpers.ts";
@@ -18,31 +18,95 @@ import {
 const app = createEvents2AppFixture({
   baseURL: requireEventsBaseUrl(),
 });
+const defaultProjectSlug = defaultE2EProjectSlug;
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
 const pollIntervalMs = 50;
-const testTimeoutMs = 5_000;
+const testTimeoutMs = 10_000;
+const circuitBreakerTripTimeoutMs = 15_000;
+const circuitBreakerSlowTestTimeoutMs = 20_000;
+const slowCircuitBreakerDelayMs = 20;
+const rapidCircuitBreakerEventCount = 140;
+const slowCircuitBreakerEventCount = 105;
 
 describe.sequential("events stream e2e", () => {
   test(
-    "append via HTTP and replay via stream",
+    "new streams always store self stream-initialized at offset 0 before caller events",
     async () => {
       const path = uniqueStreamPath();
 
-      await app.client.append({
+      const result = await app.append({
         path,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { value: 42 },
+        },
+      });
+
+      expect(result.event).toMatchObject({
+        streamPath: path,
+        offset: expectedOffset(1),
         type: "https://events.iterate.com/events/example/value-recorded",
         payload: { value: 42 },
       });
 
-      const events = await collectStreamEvents(app, { path });
-
-      expect(events).toEqual([
+      expect(await collectStreamEvents(app, { path })).toEqual([
         {
-          path,
+          streamPath: path,
           offset: expectedOffset(1),
           type: "https://events.iterate.com/events/example/value-recorded",
           payload: { value: 42 },
+          createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        },
+      ]);
+      expect(await collectAllStreamEvents(app, { path })).toMatchObject([
+        {
+          streamPath: path,
+          offset: expectedStoredOffset(0),
+          type: "https://events.iterate.com/events/stream/initialized",
+          payload: { projectSlug: defaultProjectSlug, path },
+        },
+        {
+          streamPath: path,
+          offset: expectedOffset(1),
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { value: 42 },
+        },
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "append without payload defaults to empty object",
+    async () => {
+      const path = uniqueStreamPath();
+
+      const response = await app.fetch(`/api/streams${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/example/no-payload",
+        }),
+      });
+      const result = (await response.json()) as { event: Event };
+
+      expect(response.status).toBe(200);
+      expect(result.event).toMatchObject({
+        streamPath: path,
+        offset: expectedOffset(1),
+        type: "https://events.iterate.com/events/example/no-payload",
+        payload: {},
+      });
+
+      expect(await collectStreamEvents(app, { path })).toEqual([
+        {
+          streamPath: path,
+          offset: expectedOffset(1),
+          type: "https://events.iterate.com/events/example/no-payload",
+          payload: {},
           createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
         },
       ]);
@@ -55,14 +119,16 @@ describe.sequential("events stream e2e", () => {
     async () => {
       const path = uniqueStreamPath();
 
-      await app.client.append({
+      await app.append({
         path,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { value: 42 },
-        metadata: {
-          actor: "e2e",
-          attempts: 1,
-          tags: ["round-trip"],
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { value: 42 },
+          metadata: {
+            actor: "e2e",
+            attempts: 1,
+            tags: ["round-trip"],
+          },
         },
       });
 
@@ -70,7 +136,7 @@ describe.sequential("events stream e2e", () => {
 
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
-        path,
+        streamPath: path,
         offset: expectedOffset(1),
         type: "https://events.iterate.com/events/example/value-recorded",
         payload: { value: 42 },
@@ -91,101 +157,426 @@ describe.sequential("events stream e2e", () => {
       const path = uniqueStreamPath();
       const idempotencyKey = `idem-${randomUUID()}`;
 
-      const first = await app.client.append({
+      const first = await app.append({
         path,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { value: 1 },
-        metadata: {
-          source: "first-call",
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { value: 1 },
+          metadata: {
+            source: "first-call",
+          },
+          idempotencyKey,
         },
-        idempotencyKey,
       });
 
-      const second = await app.client.append({
+      const second = await app.append({
         path,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { value: 999 },
-        metadata: {
-          source: "second-call",
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { value: 999 },
+          metadata: {
+            source: "second-call",
+          },
+          idempotencyKey,
         },
-        idempotencyKey,
       });
 
-      expect(first.created).toBe(true);
-      expect(second.created).toBe(false);
-      expect(second.events).toEqual(first.events);
-
-      const events = await collectStreamEvents(app, { path });
-
-      expect(events).toEqual(first.events);
+      expect(second.event).toEqual(first.event);
+      expect(await collectStreamEvents(app, { path })).toEqual([first.event]);
     },
     testTimeoutMs,
   );
 
   test(
-    "empty idempotencyKey is rejected",
+    "empty idempotencyKey is recorded as invalid-event-appended",
     async () => {
       const path = uniqueStreamPath();
 
       await expect(
-        app.client.append({
+        app.append({
           path,
-          type: "https://events.iterate.com/events/example/value-recorded",
-          payload: { value: 1 },
-          idempotencyKey: "",
+          event: {
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { value: 1 },
+            idempotencyKey: "",
+          },
         }),
-      ).rejects.toThrow(/idempotency/i);
+      ).resolves.toMatchObject({
+        event: {
+          streamPath: path,
+          offset: expectedOffset(1),
+          type: "https://events.iterate.com/events/stream/invalid-event-appended",
+          payload: {
+            rawInput: {
+              type: "https://events.iterate.com/events/example/value-recorded",
+              payload: { value: 1 },
+              idempotencyKey: "",
+            },
+            error: expect.stringContaining("idempotencyKey"),
+          },
+        },
+      });
     },
     testTimeoutMs,
   );
 
   test(
-    "different idempotency keys create distinct events",
+    "http append stores an invalid-event-appended row when the body is not a valid event",
+    async () => {
+      const path = uniqueStreamPath();
+      const rawInput = {
+        type: "https://events.iterate.com/events/example/value-recorded",
+        payload: "not-an-object",
+        metadata: {
+          source: "e2e",
+        },
+      };
+
+      const response = await app.fetch(`/api/streams${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(rawInput),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        event: {
+          streamPath: path,
+          offset: expectedOffset(1),
+          type: "https://events.iterate.com/events/stream/invalid-event-appended",
+          payload: {
+            rawInput,
+            error: expect.stringContaining("payload"),
+          },
+        },
+      });
+
+      expect(await collectStreamEvents(app, { path })).toMatchObject([
+        {
+          streamPath: path,
+          offset: expectedOffset(1),
+          type: "https://events.iterate.com/events/stream/invalid-event-appended",
+          payload: {
+            rawInput,
+            error: expect.stringContaining("payload"),
+          },
+        },
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "public append allows child-stream-created and rejects only a second stream-initialized",
+    async () => {
+      const path = uniqueStreamPath();
+      const childPath = StreamPath.parse(`${path}/child`);
+
+      const childCreatedResponse = await app.fetch(`/api/streams/${routePathFor(path)}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/stream/child-stream-created",
+          payload: { childPath },
+        }),
+      });
+
+      const initializedResponse = await app.fetch(`/api/streams/${routePathFor(path)}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/stream/initialized",
+          payload: { projectSlug: defaultProjectSlug, path },
+        }),
+      });
+
+      expect(childCreatedResponse.status).toBe(200);
+      await expect(childCreatedResponse.json()).resolves.toMatchObject({
+        event: {
+          streamPath: path,
+          type: "https://events.iterate.com/events/stream/child-stream-created",
+          payload: { childPath },
+        },
+      });
+      expect(initializedResponse.status).toBe(400);
+      expect(await initializedResponse.text()).toContain(
+        "stream-initialized may only be appended once",
+      );
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "paused streams reject appends with a precondition failure until stream/resumed is appended",
     async () => {
       const path = uniqueStreamPath();
 
-      const first = await app.client.append({
+      await app.append({
         path,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { step: 1 },
-        idempotencyKey: `idem-${randomUUID()}`,
+        event: {
+          type: "https://events.iterate.com/events/stream/paused",
+          payload: {
+            reason: "manual pause",
+          },
+        },
       });
 
-      const second = await app.client.append({
-        path,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { step: 2 },
-        idempotencyKey: `idem-${randomUUID()}`,
+      const pausedResponse = await app.fetch(`/api/streams${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { paused: true },
+        }),
       });
 
-      expect(first.events[0]?.offset).toEqual(expectedOffset(1));
-      expect(second.events[0]?.offset).toEqual(expectedOffset(2));
+      expect(pausedResponse.status).toBe(412);
+      expect(await pausedResponse.text()).toContain("stream is paused");
 
-      const events = await collectStreamEvents(app, { path });
+      await app.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/stream/resumed",
+          payload: {
+            reason: "operator override",
+          },
+        },
+      });
 
-      expect(events.map((event) => event.payload)).toEqual([{ step: 1 }, { step: 2 }]);
+      await expect(
+        app.append({
+          path,
+          event: {
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { resumed: true },
+          },
+        }),
+      ).resolves.toMatchObject({
+        event: {
+          streamPath: path,
+          payload: { resumed: true },
+          type: "https://events.iterate.com/events/example/value-recorded",
+        },
+      });
     },
     testTimeoutMs,
   );
 
   test(
-    "duplicate idempotencyKey does not publish a second live event",
+    "a burst of 100+ quick appends trips the circuit breaker and pauses the stream",
+    async () => {
+      const path = uniqueStreamPath();
+
+      const pausedEvent = await tripCircuitBreaker(app, path);
+
+      expect(pausedEvent).toMatchObject({
+        streamPath: path,
+        type: "https://events.iterate.com/events/stream/paused",
+        payload: {
+          reason: "circuit breaker tripped: 100 events in under 1 second",
+        },
+      });
+
+      const pausedResponse = await app.fetch(`/api/streams${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { afterTrip: true },
+        }),
+      });
+
+      expect(pausedResponse.status).toBe(412);
+      expect(await pausedResponse.text()).toContain("stream is paused");
+    },
+    circuitBreakerTripTimeoutMs,
+  );
+
+  test(
+    "spreading the same volume of appends out over time does not trip the circuit breaker",
+    async () => {
+      const path = uniqueStreamPath();
+
+      for (let index = 0; index < slowCircuitBreakerEventCount; index += 1) {
+        await app.append({
+          path,
+          event: {
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { slow: index },
+          },
+        });
+
+        await delay(slowCircuitBreakerDelayMs);
+      }
+
+      const events = await collectAllStreamEvents(app, { path });
+
+      expect(
+        events.some((event) => event.type === "https://events.iterate.com/events/stream/paused"),
+      ).toBe(false);
+
+      await expect(
+        app.append({
+          path,
+          event: {
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { afterSlowBurst: true },
+          },
+        }),
+      ).resolves.toMatchObject({
+        event: {
+          streamPath: path,
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { afterSlowBurst: true },
+        },
+      });
+    },
+    circuitBreakerSlowTestTimeoutMs,
+  );
+
+  test(
+    "stream/resumed clears an automatically tripped circuit breaker",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await tripCircuitBreaker(app, path);
+
+      await expect(
+        app.append({
+          path,
+          event: {
+            type: "https://events.iterate.com/events/stream/resumed",
+            payload: {
+              reason: "operator override after burst",
+            },
+          },
+        }),
+      ).resolves.toMatchObject({
+        event: {
+          streamPath: path,
+          type: "https://events.iterate.com/events/stream/resumed",
+          payload: {
+            reason: "operator override after burst",
+          },
+        },
+      });
+
+      await expect(
+        app.append({
+          path,
+          event: {
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { afterResume: true },
+          },
+        }),
+      ).resolves.toMatchObject({
+        event: {
+          streamPath: path,
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { afterResume: true },
+        },
+      });
+    },
+    circuitBreakerTripTimeoutMs,
+  );
+
+  test(
+    "append rejects the wrong first user offset and leaves only the synthetic self-initialized event",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await expect(
+        app.append({
+          path,
+          event: {
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { step: 1 },
+            offset: expectedOffset(2),
+          },
+        }),
+      ).rejects.toThrow(/next generated offset/i);
+
+      expect(await app.client.getState({ path })).toEqual({
+        projectSlug: defaultProjectSlug,
+        path,
+        eventCount: 1,
+        childPaths: [],
+        metadata: {},
+        processors: expectedProcessorsWithRecentEventCount(1),
+      });
+      expect(await collectStreamEvents(app, { path })).toEqual([]);
+      expect(await collectAllStreamEvents(app, { path })).toMatchObject([
+        {
+          streamPath: path,
+          offset: expectedStoredOffset(0),
+          type: "https://events.iterate.com/events/stream/initialized",
+          payload: { projectSlug: defaultProjectSlug, path },
+        },
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "append accepts the exact next offset when supplied",
+    async () => {
+      const path = uniqueStreamPath();
+
+      const first = await app.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: 1 },
+          offset: expectedOffset(1),
+        },
+      });
+
+      const second = await app.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: 2 },
+          offset: expectedOffset(2),
+        },
+      });
+
+      expect(first.event.offset).toEqual(expectedOffset(1));
+      expect(second.event.offset).toEqual(expectedOffset(2));
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "idempotent retry with a stale supplied offset returns the stored event and stays quiet",
     async () => {
       const path = uniqueStreamPath();
       const idempotencyKey = `idem-${randomUUID()}`;
 
-      const first = await app.client.append({
+      const first = await app.append({
         path,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { step: "initial" },
-        idempotencyKey,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: 1 },
+          idempotencyKey,
+          offset: expectedOffset(1),
+        },
       });
 
       const controller = new AbortController();
       const stream = await app.client.stream(
         {
           path,
-          offset: first.events[0]?.offset,
+          offset: first.event.offset,
           live: true,
         },
         { signal: controller.signal },
@@ -193,14 +584,17 @@ describe.sequential("events stream e2e", () => {
       const iterator = stream[Symbol.asyncIterator]();
 
       try {
-        const duplicate = await app.client.append({
+        const duplicate = await app.append({
           path,
-          type: "https://events.iterate.com/events/example/value-recorded",
-          payload: { step: "duplicate" },
-          idempotencyKey,
+          event: {
+            type: "https://events.iterate.com/events/example/value-recorded",
+            payload: { step: "duplicate" },
+            idempotencyKey,
+            offset: expectedOffset(1),
+          },
         });
 
-        expect(duplicate.events).toEqual(first.events);
+        expect(duplicate.event).toEqual(first.event);
 
         const next = await Promise.race([
           iterator.next().then((result) => ({ kind: "next" as const, result })),
@@ -217,152 +611,48 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "batch append applies idempotency per event",
+    "getState initializes untouched streams before returning state",
     async () => {
       const path = uniqueStreamPath();
-      const existingKey = `idem-${randomUUID()}`;
-      const batchKey = `idem-${randomUUID()}`;
 
-      const existing = await app.client.append({
-        path,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { step: "existing" },
-        idempotencyKey: existingKey,
-      });
-
-      const batch = await app.client.append({
-        path,
-        events: [
-          {
-            path,
-            type: "https://events.iterate.com/events/example/value-recorded",
-            payload: { step: "ignored-duplicate" },
-            idempotencyKey: existingKey,
-          },
-          {
-            path,
-            type: "https://events.iterate.com/events/example/value-recorded",
-            payload: { step: "new-in-batch" },
-            idempotencyKey: batchKey,
-          },
-          {
-            path,
-            type: "https://events.iterate.com/events/example/value-recorded",
-            payload: { step: "ignored-same-batch-duplicate" },
-            idempotencyKey: batchKey,
-          },
-        ],
-      });
-
-      expect(batch.created).toBe(false);
-      expect(batch.events).toHaveLength(3);
-      expect(batch.events[0]).toEqual(existing.events[0]);
-      expect(batch.events[1]?.offset).toEqual(expectedOffset(2));
-      expect(batch.events[1]?.payload).toEqual({ step: "new-in-batch" });
-      expect(batch.events[2]).toEqual(batch.events[1]);
-
-      const events = await collectStreamEvents(app, { path });
-
-      expect(events.map((event) => event.offset)).toEqual([expectedOffset(1), expectedOffset(2)]);
-      expect(events.map((event) => event.payload)).toEqual([
-        { step: "existing" },
-        { step: "new-in-batch" },
-      ]);
-    },
-    testTimeoutMs,
-  );
-
-  test(
-    "url-encoded slashes in path params resolve to nested stream paths",
-    async () => {
-      const path = StreamPath.parse(`/e2e/${randomUUID().slice(0, 6)}/${randomUUID().slice(0, 6)}`);
-      const encodedPath = path.slice(1).replaceAll("/", "%2F");
-
-      const appendResponse = await app.fetch(`/api/streams/${encodedPath}`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          type: "https://events.iterate.com/events/example/value-recorded",
-          payload: { encoded: true },
-        }),
-      });
-
-      expect(appendResponse.status).toBe(200);
-      expect(await appendResponse.json()).toMatchObject({
-        created: true,
-        events: [
-          {
-            path,
-            payload: { encoded: true },
-          },
-        ],
-      });
-
-      const stateResponse = await app.fetch(`/api/stream-state/${encodedPath}`);
-
-      expect(stateResponse.status).toBe(200);
-      expect(await stateResponse.json()).toMatchObject({
+      expect(await app.client.getState({ path })).toEqual({
+        projectSlug: defaultProjectSlug,
         path,
         eventCount: 1,
-      });
-    },
-    testTimeoutMs,
-  );
-
-  test(
-    "append multiple assigns generated offsets in order",
-    async () => {
-      const path = uniqueStreamPath();
-
-      await app.client.append({
-        path,
-        events: [
-          {
-            path,
-            type: "https://events.iterate.com/events/example/value-recorded",
-            payload: { value: 1 },
-          },
-          {
-            path,
-            type: "https://events.iterate.com/events/example/value-recorded",
-            payload: { value: 2 },
-          },
-          {
-            path,
-            type: "https://events.iterate.com/events/example/value-recorded",
-            payload: { value: 3 },
-          },
-        ],
-      });
-
-      const events = await collectStreamEvents(app, { path });
-
-      expect(events.map((event) => event.offset)).toEqual([
-        expectedOffset(1),
-        expectedOffset(2),
-        expectedOffset(3),
-      ]);
-      expect(events.map((event) => event.payload)).toEqual([
-        { value: 1 },
-        { value: 2 },
-        { value: 3 },
-      ]);
-    },
-    testTimeoutMs,
-  );
-
-  test(
-    "getState returns an empty projection for untouched streams",
-    async () => {
-      const path = uniqueStreamPath();
-
-      expect(await app.client.getState({ streamPath: path })).toEqual({
-        path: null,
-        lastOffset: null,
-        eventCount: 0,
+        childPaths: [],
         metadata: {},
+        processors: expectedProcessorsWithRecentEventCount(1),
+      });
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "root uses the same stream and state procedures as every other path",
+    async () => {
+      const rootHistory = await collectAsyncIterableUntilIdle({
+        iterable: await app.client.stream({ path: "/" }),
+        idleMs: historyIdleTimeoutMs,
+      });
+
+      expect(await app.client.getState({ path: "/" })).toMatchObject({
+        projectSlug: defaultProjectSlug,
+        path: "/",
+        metadata: {},
+      });
+
+      const escapedRootHistoryResponse = await app.fetch("/api/streams/%2F");
+      expect(escapedRootHistoryResponse.status).toBe(200);
+      expect(await escapedRootHistoryResponse.text()).toContain(
+        "https://events.iterate.com/events/stream/initialized",
+      );
+
+      const rootStateResponse = await app.fetch("/api/streams/__state/");
+      expect(rootStateResponse.status).toBe(200);
+      expect(await rootStateResponse.json()).toEqual(await app.client.getState({ path: "/" }));
+      expect(rootHistory[0]).toMatchObject({
+        streamPath: "/",
+        type: "https://events.iterate.com/events/stream/initialized",
       });
     },
     testTimeoutMs,
@@ -373,62 +663,107 @@ describe.sequential("events stream e2e", () => {
     async () => {
       const path = uniqueStreamPath();
 
-      await app.client.append({
+      await app.append({
         path,
-        events: [
-          {
-            path,
-            type: "https://events.iterate.com/events/example/value-recorded",
-            payload: { step: 1 },
-          },
-          {
-            path,
-            type: STREAM_METADATA_UPDATED_TYPE,
-            payload: {
-              metadata: {
-                owner: "first",
-                stale: true,
-              },
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: 1 },
+        },
+      });
+      await app.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/stream/metadata-updated",
+          payload: {
+            metadata: {
+              owner: "first",
+              stale: true,
             },
           },
-          {
-            path,
-            type: STREAM_METADATA_UPDATED_TYPE,
-            payload: {
-              metadata: {
-                owner: "second",
-              },
+        },
+      });
+      await app.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/stream/metadata-updated",
+          payload: {
+            metadata: {
+              owner: "second",
             },
           },
-        ],
+        },
       });
 
-      expect(await app.client.getState({ streamPath: path })).toEqual({
+      expect(await app.client.getState({ path })).toEqual({
+        projectSlug: defaultProjectSlug,
         path,
-        lastOffset: expectedOffset(3),
-        eventCount: 3,
+        eventCount: 4,
+        childPaths: [],
         metadata: {
           owner: "second",
         },
-      } satisfies StreamState);
+        processors: expectedProcessorsWithRecentEventCount(4),
+      });
     },
     testTimeoutMs,
   );
 
   test(
-    "listStreams reads discovered paths from the root stream",
+    "history and state accept both raw nested segments and escaped path forms over HTTP",
+    async () => {
+      const path = StreamPath.parse(`/e2e/${randomUUID().slice(0, 6)}/${randomUUID().slice(0, 6)}`);
+      const routePath = routePathFor(path);
+
+      await app.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { encoded: true },
+        },
+      });
+
+      const rawHistoryResponse = await app.fetch(`/api/streams${path}`);
+      const escapedHistoryResponse = await app.fetch(`/api/streams/${routePath}`);
+
+      expect(rawHistoryResponse.status).toBe(200);
+      expect(await escapedHistoryResponse.text()).toEqual(await rawHistoryResponse.text());
+
+      const rawStateResponse = await app.fetch(`/api/streams/__state${path}`);
+      const escapedStateResponse = await app.fetch(`/api/streams/__state/${routePath}`);
+
+      expect(rawStateResponse.status).toBe(200);
+      expect(await escapedStateResponse.json()).toEqual(await rawStateResponse.json());
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "listChildren reads discovered paths from the root stream",
     async () => {
       const path = uniqueStreamPath();
 
-      await app.client.append({
+      await app.append({
         path,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { listed: true },
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { listed: true },
+        },
       });
 
       const stream = await waitForStream(app, path);
-
       expect(stream.createdAt).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/));
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "listChildren is exposed at /api/streams/__children/{path}",
+    async () => {
+      const streams = await app.client.listChildren({ path: "/" });
+      const response = await app.fetch("/api/streams/__children/");
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(streams);
     },
     testTimeoutMs,
   );
@@ -436,7 +771,7 @@ describe.sequential("events stream e2e", () => {
   test(
     "root stream is explicitly listed as a known system stream",
     async () => {
-      const streams = await app.client.listStreams({});
+      const streams = await app.client.listChildren({ path: "/" });
 
       expect(streams.some((stream) => stream.path === "/")).toBe(true);
     },
@@ -444,83 +779,294 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "first append propagates stream-created events to parent paths",
+    "listChildren includes / for a fresh project slug before root initialization",
     async () => {
-      const path = StreamPath.parse(
-        `/agents/${randomUUID().slice(0, 6)}/${randomUUID().slice(0, 6)}`,
-      );
-      const parentPath = StreamPath.parse(path.slice(0, path.lastIndexOf("/")));
+      const projectSlug = `test-${randomUUID().slice(0, 8)}`;
+      const response = await app.fetch("/api/streams/__children/%2F", {
+        headers: {
+          "x-iterate-project": projectSlug,
+        },
+      });
 
-      await app.client.append({
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual([
+        {
+          path: "/",
+          createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        },
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "listChildren on an untouched path does not create or discover that stream",
+    async () => {
+      const path = uniqueStreamPath();
+
+      expect(await app.client.listChildren({ path })).toEqual([]);
+      expect(
+        (await app.client.listChildren({ path: "/" })).some((stream) => stream.path === path),
+      ).toBe(false);
+      expect(await app.client.destroy({ params: { path }, query: {} })).toEqual({
+        destroyedStreamCount: 0,
+        finalStateByPath: {},
+      });
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroy wipes an existing stream and returns pre-destruction state",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await app.append({
         path,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { propagated: true },
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: 1 },
+        },
+      });
+      await app.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/stream/metadata-updated",
+          payload: { metadata: { owner: "destroy-me" } },
+        },
       });
 
-      const rootEvent = await waitForEvent(app, "/", (event) => isCreatedForPath(event, path));
-      const parentEvent = await waitForEvent(app, parentPath, (event) =>
-        isCreatedForPath(event, path),
-      );
+      const stateBeforeDestroy = await app.client.getState({ path });
 
-      expect(rootEvent.type).toBe(STREAM_CREATED_TYPE);
-      expect(parentEvent.type).toBe(STREAM_CREATED_TYPE);
+      const result = await app.client.destroy({ params: { path }, query: {} });
+      expect(result).toEqual({
+        destroyedStreamCount: 1,
+        finalStateByPath: {
+          [path]: {
+            finalState: stateBeforeDestroy,
+          },
+        },
+      });
     },
     testTimeoutMs,
   );
 
   test(
-    "existing parent still ladders child stream-created events up to root",
+    "destroy on untouched stream returns null finalState",
     async () => {
-      const parentPath = StreamPath.parse("/banana");
-      const childPath = StreamPath.parse("/banana/banana");
+      const path = uniqueStreamPath();
 
-      await app.client.append({
-        path: parentPath,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { parent: true },
+      expect(await app.client.destroy({ params: { path }, query: {} })).toEqual({
+        destroyedStreamCount: 0,
+        finalStateByPath: {},
       });
-
-      await waitForEvent(app, "/", (event) => isCreatedForPath(event, parentPath));
-
-      await app.client.append({
-        path: childPath,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { child: true },
-      });
-
-      const parentEvent = await waitForEvent(app, parentPath, (event) =>
-        isCreatedForPath(event, childPath),
-      );
-      const rootEvent = await waitForEvent(app, "/", (event) => isCreatedForPath(event, childPath));
-
-      expect(parentEvent.type).toBe(STREAM_CREATED_TYPE);
-      expect(rootEvent.type).toBe(STREAM_CREATED_TYPE);
     },
     testTimeoutMs,
   );
 
   test(
-    "streams stay isolated by path",
+    "destroy only wipes the targeted stream",
     async () => {
       const pathA = uniqueStreamPath();
       const pathB = uniqueStreamPath();
 
-      await app.client.append({
+      await app.append({
         path: pathA,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { label: "A" },
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { label: "A" },
+        },
       });
-      await app.client.append({
+      await app.append({
         path: pathB,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { label: "B" },
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { label: "B" },
+        },
       });
 
-      const eventsA = await collectStreamEvents(app, { path: pathA });
-      const eventsB = await collectStreamEvents(app, { path: pathB });
+      await app.client.destroy({ params: { path: pathA }, query: {} });
 
-      expect(eventsA.map((event) => event.payload)).toEqual([{ label: "A" }]);
-      expect(eventsB.map((event) => event.payload)).toEqual([{ label: "B" }]);
+      expect(await collectStreamEvents(app, { path: pathB })).toEqual([
+        expect.objectContaining({
+          streamPath: pathB,
+          payload: { label: "B" },
+        }),
+      ]);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroy does not remove stale discovery entries from listChildren",
+    async () => {
+      const path = uniqueStreamPath();
+
+      await app.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { listed: true },
+        },
+      });
+
+      await waitForStream(app, path);
+      await app.client.destroy({ params: { path }, query: {} });
+
+      const streams = await app.client.listChildren({ path: "/" });
+      expect(streams.some((stream) => stream.path === path)).toBe(true);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroy allows wiping the root stream",
+    async () => {
+      const stateBeforeDestroy = await app.client.getState({ path: "/" });
+
+      const result = await app.client.destroy({ params: { path: "/" }, query: {} });
+      expect(result).toEqual({
+        destroyedStreamCount: 1,
+        finalStateByPath: {
+          "/": {
+            finalState: stateBeforeDestroy,
+          },
+        },
+      });
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "first append to a nested stream initializes the chain and propagates child-stream-created events upward",
+    async () => {
+      const top = randomUUID().slice(0, 6);
+      const second = randomUUID().slice(0, 6);
+      const third = randomUUID().slice(0, 6);
+      const fourth = randomUUID().slice(0, 6);
+      const path = StreamPath.parse(`/${top}/${second}/${third}/${fourth}`);
+      const parentPath = StreamPath.parse(`/${top}/${second}/${third}`);
+      const propagatedPaths = [
+        StreamPath.parse(`/${top}`),
+        StreamPath.parse(`/${top}/${second}`),
+        parentPath,
+        path,
+      ];
+
+      await app.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { propagated: true },
+        },
+      });
+
+      await waitForEvent(app, "/", (event) => isChildStreamCreatedForPath(event, path));
+
+      expect(await collectStreamEvents(app, { path })).toMatchObject([
+        {
+          streamPath: path,
+          offset: expectedOffset(1),
+          payload: { propagated: true },
+        },
+      ]);
+
+      expect(await collectAllStreamEvents(app, { path })).toMatchObject([
+        {
+          streamPath: path,
+          offset: expectedStoredOffset(0),
+          type: "https://events.iterate.com/events/stream/initialized",
+          payload: { projectSlug: defaultProjectSlug, path },
+        },
+        {
+          streamPath: path,
+          offset: expectedOffset(1),
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { propagated: true },
+        },
+      ]);
+
+      const parentEvents = await collectAllStreamEvents(app, { path: parentPath });
+      expect(
+        parentEvents
+          .filter(
+            (event) =>
+              event.type === "https://events.iterate.com/events/stream/child-stream-created",
+          )
+          .map((event) => getPayloadPath(event)),
+      ).toEqual([path]);
+
+      const rootEvents = await collectAllStreamEvents(app, { path: "/" });
+      const rootPropagatedPaths = rootEvents
+        .filter(
+          (event) =>
+            event.type === "https://events.iterate.com/events/stream/child-stream-created" &&
+            event.streamPath === "/" &&
+            typeof getPayloadPath(event) === "string" &&
+            propagatedPaths.includes(getPayloadPath(event) as StreamPath),
+        )
+        .map((event) => getPayloadPath(event));
+
+      expect(rootPropagatedPaths.sort()).toEqual([...propagatedPaths].sort());
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "later non-stream-initialized appends do not propagate additional child-stream-created events",
+    async () => {
+      const top = randomUUID().slice(0, 6);
+      const second = randomUUID().slice(0, 6);
+      const third = randomUUID().slice(0, 6);
+      const fourth = randomUUID().slice(0, 6);
+      const childPath = StreamPath.parse(`/${top}/${second}/${third}/${fourth}`);
+      const parentPath = StreamPath.parse(`/${top}/${second}/${third}`);
+
+      await app.append({
+        path: childPath,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { child: true },
+        },
+      });
+
+      await waitForEvent(app, "/", (event) => isChildStreamCreatedForPath(event, childPath));
+
+      const parentInitializedBefore = (
+        await collectAllStreamEvents(app, { path: parentPath })
+      ).filter(
+        (event) =>
+          event.type === "https://events.iterate.com/events/stream/child-stream-created" &&
+          getPayloadPath(event) === childPath,
+      );
+      const rootInitializedBefore = (await collectAllStreamEvents(app, { path: "/" })).filter(
+        (event) =>
+          event.type === "https://events.iterate.com/events/stream/child-stream-created" &&
+          getPayloadPath(event) === childPath,
+      );
+
+      await app.append({
+        path: childPath,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { child: "second" },
+        },
+      });
+
+      expect(
+        (await collectAllStreamEvents(app, { path: parentPath })).filter(
+          (event) =>
+            event.type === "https://events.iterate.com/events/stream/child-stream-created" &&
+            getPayloadPath(event) === childPath,
+        ),
+      ).toHaveLength(parentInitializedBefore.length);
+      expect(
+        (await collectAllStreamEvents(app, { path: "/" })).filter(
+          (event) =>
+            event.type === "https://events.iterate.com/events/stream/child-stream-created" &&
+            getPayloadPath(event) === childPath,
+        ),
+      ).toHaveLength(rootInitializedBefore.length);
     },
     testTimeoutMs,
   );
@@ -530,25 +1076,26 @@ describe.sequential("events stream e2e", () => {
     async () => {
       const path = uniqueStreamPath();
 
-      await app.client.append({
+      await app.append({
         path,
-        events: [
-          {
-            path,
-            type: "https://events.iterate.com/events/example/value-recorded",
-            payload: { step: 1 },
-          },
-          {
-            path,
-            type: "https://events.iterate.com/events/example/value-recorded",
-            payload: { step: 2 },
-          },
-          {
-            path,
-            type: "https://events.iterate.com/events/example/value-recorded",
-            payload: { step: 3 },
-          },
-        ],
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: 1 },
+        },
+      });
+      await app.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: 2 },
+        },
+      });
+      await app.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: 3 },
+        },
       });
 
       const resumed = await collectStreamEvents(app, {
@@ -562,25 +1109,7 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "append validates non-empty event batches",
-    async () => {
-      const path = uniqueStreamPath();
-
-      const error = await app.client
-        .append({
-          path,
-          events: [],
-        })
-        .catch((caught) => caught);
-
-      expect(String(error)).toContain("Input validation failed");
-      expect(JSON.stringify(error)).toContain("events");
-    },
-    testTimeoutMs,
-  );
-
-  test(
-    "append rejects array metadata",
+    "http append accepts offset without an event-local path",
     async () => {
       const path = uniqueStreamPath();
 
@@ -591,21 +1120,35 @@ describe.sequential("events stream e2e", () => {
         },
         body: JSON.stringify({
           type: "https://events.iterate.com/events/example/value-recorded",
-          payload: { value: 1 },
-          metadata: ["not", "an", "object"],
+          payload: { via: "http" },
+          offset: expectedOffset(1),
         }),
       });
 
-      expect(response.ok).toBe(false);
-      expect(await response.text()).toContain("metadata");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        event: {
+          streamPath: path,
+          offset: expectedOffset(1),
+          payload: { via: "http" },
+        },
+      });
     },
     testTimeoutMs,
   );
 
   test(
-    "append rejects scalar metadata",
+    "http append with a stale supplied offset returns a precondition failure",
     async () => {
       const path = uniqueStreamPath();
+
+      await app.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { step: 1 },
+        },
+      });
 
       const response = await app.fetch(`/api/streams${path}`, {
         method: "POST",
@@ -614,36 +1157,159 @@ describe.sequential("events stream e2e", () => {
         },
         body: JSON.stringify({
           type: "https://events.iterate.com/events/example/value-recorded",
-          payload: { value: 1 },
-          metadata: "not-an-object",
+          payload: { step: 2 },
+          offset: expectedOffset(1),
         }),
       });
 
-      expect(response.ok).toBe(false);
-      expect(await response.text()).toContain("metadata");
+      expect(response.status).toBe(412);
+      expect(await response.text()).toContain("does not match next generated offset");
     },
     testTimeoutMs,
   );
 
   test(
-    "append rejects null metadata",
+    "__ path segments are valid stream path segments now that root uses the normal procedures",
     async () => {
-      const path = uniqueStreamPath();
-
-      const response = await app.fetch(`/api/streams${path}`, {
+      const appendResponse = await app.fetch("/api/streams/e2e/__reserved", {
         method: "POST",
         headers: {
           "content-type": "application/json",
         },
         body: JSON.stringify({
           type: "https://events.iterate.com/events/example/value-recorded",
-          payload: { value: 1 },
-          metadata: null,
+          payload: { invalid: true },
         }),
       });
+      const historyResponse = await app.fetch("/api/streams/e2e/__reserved");
+      const stateResponse = await app.fetch("/api/streams/__state/e2e/__reserved");
 
-      expect(response.ok).toBe(false);
-      expect(await response.text()).toContain("metadata");
+      expect(appendResponse.status).toBe(200);
+      expect(historyResponse.status).toBe(200);
+      expect(stateResponse.status).toBe(200);
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "configured JSONata transformers can normalize a raw Slack webhook after it is stored as invalid-event-appended",
+    async () => {
+      const path = uniqueStreamPath();
+      const rawSlackWebhook = {
+        token: "slack-token",
+        team_id: "T123",
+        team_domain: "iterate",
+        channel_id: "C123",
+        channel_name: "alerts",
+        user_id: "U123",
+        user_name: "jonas",
+        command: "/iterate",
+        text: "deploy status",
+        response_url: "https://hooks.slack.test/response",
+        trigger_id: "1337.42",
+      };
+
+      await app.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/stream/jsonata-transformer-configured",
+          payload: {
+            slug: "slack-webhook",
+            matcher:
+              "type = 'https://events.iterate.com/events/stream/invalid-event-appended' and payload.rawInput.command = '/iterate'",
+            transform: `{
+              "type":"https://events.iterate.com/events/example/slack-webhook-received",
+              "payload":{
+                "teamId":payload.rawInput.team_id,
+                "channelId":payload.rawInput.channel_id,
+                "userId":payload.rawInput.user_id,
+                "command":payload.rawInput.command,
+                "text":payload.rawInput.text
+              },
+              "metadata":{
+                "source":"slack-webhook",
+                "teamDomain":payload.rawInput.team_domain
+              }
+            }`,
+          },
+        },
+      });
+
+      const response = await app.fetch(`/api/streams${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(rawSlackWebhook),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        event: {
+          streamPath: path,
+          offset: expectedOffset(2),
+          type: "https://events.iterate.com/events/stream/invalid-event-appended",
+          payload: {
+            rawInput: rawSlackWebhook,
+            error: expect.stringContaining("type"),
+          },
+        },
+      });
+
+      const slackWebhookReceivedEvent = await waitForEvent(
+        app,
+        path,
+        (event) =>
+          event.type === "https://events.iterate.com/events/example/slack-webhook-received",
+      );
+
+      expect(slackWebhookReceivedEvent).toMatchObject({
+        streamPath: path,
+        offset: expectedOffset(3),
+        type: "https://events.iterate.com/events/example/slack-webhook-received",
+        payload: {
+          teamId: "T123",
+          channelId: "C123",
+          userId: "U123",
+          command: "/iterate",
+          text: "deploy status",
+        },
+        metadata: {
+          source: "slack-webhook",
+          teamDomain: "iterate",
+        },
+      });
+
+      expect(await collectStreamEvents(app, { path })).toMatchObject([
+        {
+          streamPath: path,
+          offset: expectedOffset(1),
+          type: "https://events.iterate.com/events/stream/jsonata-transformer-configured",
+          payload: {
+            slug: "slack-webhook",
+          },
+        },
+        {
+          streamPath: path,
+          offset: expectedOffset(2),
+          type: "https://events.iterate.com/events/stream/invalid-event-appended",
+          payload: {
+            rawInput: rawSlackWebhook,
+          },
+        },
+        {
+          streamPath: path,
+          offset: expectedOffset(3),
+          type: "https://events.iterate.com/events/example/slack-webhook-received",
+          payload: {
+            teamId: "T123",
+            channelId: "C123",
+            userId: "U123",
+            command: "/iterate",
+            text: "deploy status",
+          },
+        },
+      ]);
     },
     testTimeoutMs,
   );
@@ -664,18 +1330,29 @@ describe.sequential("events stream e2e", () => {
 
       try {
         setTimeout(() => {
-          void app.client.append({
+          void app.append({
             path,
-            type: "https://events.iterate.com/events/example/value-recorded",
-            payload: { live: true },
+            event: {
+              type: "https://events.iterate.com/events/example/value-recorded",
+              payload: { live: true },
+            },
           });
         }, 250);
 
-        const next = await withTimeout(iterator.next(), postBootTimeoutMs);
+        const first = await withTimeout(iterator.next(), postBootTimeoutMs);
+        const second = await withTimeout(iterator.next(), postBootTimeoutMs);
 
-        expect(next.done).toBe(false);
-        expect(next.value).toMatchObject({
-          path,
+        expect(first.done).toBe(false);
+        expect(first.value).toMatchObject({
+          streamPath: path,
+          offset: expectedStoredOffset(0),
+          type: "https://events.iterate.com/events/stream/initialized",
+          payload: { projectSlug: defaultProjectSlug, path },
+        });
+
+        expect(second.done).toBe(false);
+        expect(second.value).toMatchObject({
+          streamPath: path,
           offset: expectedOffset(1),
           payload: { live: true },
         });
@@ -692,15 +1369,69 @@ function uniqueStreamPath() {
   return StreamPath.parse(`/e2e/${randomUUID().slice(0, 8)}`);
 }
 
+function routePathFor(path: StreamPath) {
+  return path === "/" ? "%2F" : path.slice(1).replaceAll("/", "%2F");
+}
+
 function expectedOffset(value: number) {
-  return String(value).padStart(16, "0");
+  return value + 1;
+}
+
+function expectedStoredOffset(value: number) {
+  return value + 1;
+}
+
+function expectedProcessorsWithRecentEventCount(count: number) {
+  return {
+    "circuit-breaker": {
+      paused: false,
+      pauseReason: null,
+      pausedAt: null,
+      recentEventTimestamps: Array.from({ length: count }, () => expect.any(String)),
+    },
+    "external-subscriber": {
+      subscribersBySlug: {},
+    },
+    "dynamic-worker": {
+      workersBySlug: {},
+    },
+    "jsonata-transformer": {
+      transformersBySlug: {},
+    },
+    scheduler: {},
+  };
 }
 
 async function collectStreamEvents(
   appFixture: Events2AppFixture,
   options: {
     path: StreamPath;
-    offset?: string;
+    offset?: number;
+  },
+) {
+  const events = await collectAsyncIterableUntilIdle({
+    iterable: await appFixture.client.stream({
+      path: options.path,
+      offset: options.offset,
+      live: false,
+    }),
+    idleMs: historyIdleTimeoutMs,
+  });
+
+  return events.filter(
+    (event) =>
+      !(
+        event.type === "https://events.iterate.com/events/stream/initialized" &&
+        event.streamPath === options.path
+      ),
+  );
+}
+
+async function collectAllStreamEvents(
+  appFixture: Events2AppFixture,
+  options: {
+    path: StreamPath;
+    offset?: number;
   },
 ) {
   return await collectAsyncIterableUntilIdle({
@@ -717,7 +1448,7 @@ async function waitForStream(appFixture: Events2AppFixture, path: StreamPath) {
   const deadline = Date.now() + postBootTimeoutMs;
 
   while (Date.now() < deadline) {
-    const streams = await appFixture.client.listStreams({});
+    const streams = await appFixture.client.listChildren({ path: "/" });
     const stream = streams.find((candidate) => candidate.path === path);
     if (stream) {
       return stream;
@@ -737,7 +1468,7 @@ async function waitForEvent(
   const deadline = Date.now() + postBootTimeoutMs;
 
   while (Date.now() < deadline) {
-    const events = await collectStreamEvents(appFixture, { path });
+    const events = await collectAllStreamEvents(appFixture, { path });
     const event = events.find(predicate);
     if (event) {
       return event;
@@ -749,11 +1480,35 @@ async function waitForEvent(
   throw new Error(`Timed out waiting for event in ${path}`);
 }
 
-function isCreatedForPath(event: Event, path: StreamPath) {
+async function tripCircuitBreaker(appFixture: Events2AppFixture, path: StreamPath) {
+  await Promise.allSettled(
+    Array.from({ length: rapidCircuitBreakerEventCount }, (_, index) =>
+      appFixture.append({
+        path,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { burst: index },
+        },
+      }),
+    ),
+  );
+
+  return await waitForEvent(
+    appFixture,
+    path,
+    (event) =>
+      event.type === "https://events.iterate.com/events/stream/paused" &&
+      typeof event.payload === "object" &&
+      event.payload !== null &&
+      "reason" in event.payload &&
+      event.payload.reason === "circuit breaker tripped: 100 events in under 1 second",
+  );
+}
+
+function isChildStreamCreatedForPath(event: Event, path: StreamPath) {
   return (
-    event.type === STREAM_CREATED_TYPE &&
-    typeof event.payload.path === "string" &&
-    event.payload.path === path
+    event.type === "https://events.iterate.com/events/stream/child-stream-created" &&
+    getPayloadPath(event) === path
   );
 }
 
@@ -764,4 +1519,27 @@ async function withTimeout<T>(promise: Promise<T>, ms: number) {
       throw new Error(`Timed out after ${ms}ms`);
     }),
   ]);
+}
+
+function getPayloadPath(event: Event) {
+  if (
+    event.type === "https://events.iterate.com/events/stream/initialized" ||
+    event.type === "https://events.iterate.com/events/stream/child-stream-created"
+  ) {
+    return getPathPayload(event);
+  }
+
+  return undefined;
+}
+
+function getPathPayload(event: Event) {
+  if (event.type === "https://events.iterate.com/events/stream/initialized") {
+    return StreamInitializedEvent.parse(event).streamPath;
+  }
+
+  if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
+    return ChildStreamCreatedEvent.parse(event).payload.childPath;
+  }
+
+  throw new Error(`Expected a path payload event, received ${event.type}.`);
 }

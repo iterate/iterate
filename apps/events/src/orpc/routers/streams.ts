@@ -1,25 +1,46 @@
-import { STREAM_CREATED_TYPE, StreamPath } from "@iterate-com/events-contract";
-import { ROOT_STREAM_PATH, decodeEventStream } from "~/lib/utils.ts";
-import { os } from "~/orpc/orpc.ts";
+import { ORPCError } from "@orpc/server";
+import {
+  type ChildStreamCreatedEvent,
+  type StreamPath,
+  StreamPausedError,
+} from "@iterate-com/events-contract";
+import {
+  getInitializedStreamStub,
+  getStreamStub,
+  StreamOffsetPreconditionError,
+} from "~/lib/stream-helpers.ts";
+import { decodeEventStream } from "~/lib/utils.ts";
+import { os, withProject } from "~/orpc/orpc.ts";
 
 export const streamsRouter = {
-  append: os.append.handler(async ({ context, input }) => {
-    // We would rather let the Durable Object read its own name from `ctx.id.name`,
-    // but that is still not reliable enough in constructors today. Until Cloudflare
-    // makes that robust, the router stamps the validated path onto every event so
-    // the DO can reduce and persist a trustworthy `state.path` on its own.
-    const events = ("events" in input ? input.events : [input]).map((event) => ({
-      ...event,
+  append: os.append.use(withProject).handler(async ({ input, context }) => {
+    const streamStub = await getInitializedStreamStub({
+      projectSlug: context.projectSlug,
       path: input.path,
-    }));
+    });
 
-    // Durable Object RPC is always async from the caller side, even if the method
-    // body itself only performs synchronous SQLite work.
-    const streamStub = context.env.STREAM.getByName(input.path);
-    return streamStub.append({ events });
+    try {
+      return { event: await streamStub.append(input.event) };
+    } catch (error) {
+      throw mapAppendOrpcError(error);
+    }
   }),
-  stream: os.stream.handler(async function* ({ context, input, signal }) {
-    const streamStub = context.env.STREAM.getByName(input.path);
+
+  destroy: os.destroy.use(withProject).handler(async ({ input, context }) => {
+    return getStreamStub({
+      projectSlug: context.projectSlug,
+      path: input.params.path,
+    }).destroy({
+      destroyChildren: input.query.destroyChildren,
+    });
+  }),
+
+  stream: os.stream.use(withProject).handler(async function* ({ input, signal, context }) {
+    const streamStub = await getInitializedStreamStub({
+      projectSlug: context.projectSlug,
+      path: input.path,
+    });
+
     if (!input.live) {
       const events = await streamStub.history({
         afterOffset: input.offset,
@@ -41,35 +62,66 @@ export const streamsRouter = {
       yield event;
     }
   }),
-  getState: os.getState.handler(async ({ context, input }) => {
-    const streamStub = context.env.STREAM.getByName(input.streamPath);
+
+  getState: os.getState.use(withProject).handler(async ({ input, context }) => {
+    const streamStub = await getInitializedStreamStub({
+      projectSlug: context.projectSlug,
+      path: input.path,
+    });
     return streamStub.getState();
   }),
-  listStreams: os.listStreams.handler(async ({ context }) => {
-    const rootStreamStub = context.env.STREAM.getByName(ROOT_STREAM_PATH);
-    const events = await rootStreamStub.history();
-    const discovered = new Map<StreamPath, string>();
+
+  listChildren: os.listChildren.use(withProject).handler(async ({ input, context }) => {
+    const streamStub = getStreamStub({
+      projectSlug: context.projectSlug,
+      path: input.path,
+    });
+    const events = await streamStub.history();
+    const discovered: Record<StreamPath, string> = {};
 
     for (const event of events) {
-      if (event.type !== STREAM_CREATED_TYPE) {
-        continue;
+      if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
+        discovered[(event as ChildStreamCreatedEvent).payload.childPath] = event.createdAt;
+      } else if (event.type === "https://events.iterate.com/events/stream/initialized") {
+        discovered[input.path] = event.createdAt;
       }
-
-      const parsedPath = StreamPath.safeParse(event.payload.path);
-      if (!parsedPath.success || discovered.has(parsedPath.data)) {
-        continue;
-      }
-
-      discovered.set(parsedPath.data, event.createdAt);
     }
 
-    // `/` is the discovery stream itself, so it will not discover itself via a
-    // `STREAM_CREATED` payload. Add it explicitly so the UI can always navigate
-    // to the root stream as a first-class system stream.
-    discovered.set(ROOT_STREAM_PATH, events[0]?.createdAt ?? new Date(0).toISOString());
+    if (input.path === "/" && discovered["/"] == null) {
+      discovered["/"] = new Date().toISOString();
+    }
 
-    return [...discovered.entries()]
-      .map(([path, createdAt]) => ({ path, createdAt }))
+    return Object.entries(discovered)
+      .map(([path, createdAt]) => ({ path: path as StreamPath, createdAt }))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }),
 };
+
+function mapAppendOrpcError(error: unknown) {
+  if (
+    error instanceof StreamOffsetPreconditionError ||
+    (error instanceof Error && error.name === "StreamOffsetPreconditionError") ||
+    (error instanceof Error && /does not match next generated offset/i.test(error.message))
+  ) {
+    return new ORPCError("PRECONDITION_FAILED", {
+      message: error instanceof Error ? error.message : "Offset precondition failed.",
+    });
+  }
+
+  if (error instanceof Error && error.message === "stream-initialized may only be appended once") {
+    return new ORPCError("BAD_REQUEST", { message: error.message });
+  }
+
+  if (
+    error instanceof StreamPausedError ||
+    (error instanceof Error && error.name === "StreamPausedError") ||
+    (error instanceof Error && /stream is paused/i.test(error.message))
+  ) {
+    return new ORPCError("PRECONDITION_FAILED", {
+      message:
+        error instanceof Error ? error.message : "stream is paused; only stream/resumed is allowed",
+    });
+  }
+
+  return error;
+}

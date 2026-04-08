@@ -6,12 +6,12 @@ describe("decodeEventStream", () => {
   test("decodes newline-delimited events across chunk boundaries", async () => {
     const events = await collectEvents(
       createStream([
-        `${JSON.stringify(createEvent({ offset: "1" }))}\n${JSON.stringify(createEvent({ offset: "2" })).slice(0, 40)}`,
-        `${JSON.stringify(createEvent({ offset: "2" })).slice(40)}\n`,
+        `${JSON.stringify(createEvent({ offset: 1 }))}\n${JSON.stringify(createEvent({ offset: 2 })).slice(0, 40)}`,
+        `${JSON.stringify(createEvent({ offset: 2 })).slice(40)}\n`,
       ]),
     );
 
-    expect(events.map((event) => event.offset)).toEqual(["1", "2"]);
+    expect(events.map((event) => event.offset)).toEqual([1, 2]);
   });
 
   test("skips malformed lines and keeps later valid events flowing", async () => {
@@ -20,12 +20,12 @@ describe("decodeEventStream", () => {
     try {
       const events = await collectEvents(
         createStream([
-          `${JSON.stringify(createEvent({ offset: "1" }))}\n`,
-          `not-json\n42\n${JSON.stringify(createEvent({ offset: "2" }))}\n`,
+          `${JSON.stringify(createEvent({ offset: 1 }))}\n`,
+          `not-json\n42\n${JSON.stringify(createEvent({ offset: 2 }))}\n`,
         ]),
       );
 
-      expect(events.map((event) => event.offset)).toEqual(["1", "2"]);
+      expect(events.map((event) => event.offset)).toEqual([1, 2]);
       expect(consoleWarn).toHaveBeenCalledTimes(2);
     } finally {
       consoleWarn.mockRestore();
@@ -59,10 +59,10 @@ function createStream(chunks: string[]) {
 
 function createEvent(overrides: Partial<Event> = {}): Event {
   return {
-    path: "/demo",
+    streamPath: "/demo",
     type: "https://events.iterate.com/manual-event-appended",
     payload: {},
-    offset: "1",
+    offset: 1,
     createdAt: "2026-03-30T00:00:00.000Z",
     ...overrides,
   };

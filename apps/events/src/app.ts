@@ -4,6 +4,7 @@ import { z } from "zod";
 import packageJson from "../package.json" with { type: "json" };
 
 export const AppConfig = BaseAppConfig.extend({
+  apiBaseUrl: publicValue(z.string().trim().default("")),
   iterateOauth: z.object({
     clientId: publicValue(z.string().trim().min(1)),
     clientSecret: redacted(z.string().trim().min(1)),

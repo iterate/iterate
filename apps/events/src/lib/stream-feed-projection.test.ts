@@ -1,9 +1,5 @@
 import { describe, expect, test } from "vitest";
-import {
-  STREAM_CREATED_TYPE,
-  STREAM_METADATA_UPDATED_TYPE,
-  type Event,
-} from "@iterate-com/events-contract";
+import { type Event } from "@iterate-com/events-contract";
 import {
   buildDisplayFeed,
   createGroupedOrSingleEvent,
@@ -19,17 +15,17 @@ import type { EventFeedItem, StreamFeedItem } from "~/lib/stream-feed-types.ts";
 describe("toEventFeedItem", () => {
   test("maps contract events to feed events", () => {
     const event = createEvent({
-      path: "/demo",
+      streamPath: "/demo",
       type: "https://events.iterate.com/demo/created",
-      offset: "5",
+      offset: 5,
       createdAt: "2026-03-30T12:34:56.000Z",
       payload: { ok: true },
     });
 
     expect(toEventFeedItem(event)).toEqual({
       kind: "event",
-      path: "/demo",
-      offset: "5",
+      streamPath: "/demo",
+      offset: 5,
       createdAt: "2026-03-30T12:34:56.000Z",
       eventType: "https://events.iterate.com/demo/created",
       timestamp: Date.parse("2026-03-30T12:34:56.000Z"),
@@ -41,25 +37,25 @@ describe("toEventFeedItem", () => {
 describe("projectWireToFeed", () => {
   test("projects every event into the feed timeline", () => {
     const events = [
-      createEvent({ offset: "1", type: "https://events.iterate.com/demo/one" }),
-      createEvent({ offset: "2", type: "https://events.iterate.com/demo/two" }),
+      createEvent({ offset: 1, type: "https://events.iterate.com/demo/one" }),
+      createEvent({ offset: 2, type: "https://events.iterate.com/demo/two" }),
     ];
 
     expect(projectWireToFeed(events).map((item) => item.kind)).toEqual(["event", "event"]);
   });
 
-  test("adds a semantic child-stream item after stream-created events", () => {
+  test("adds a semantic child-stream item after child-stream-created events", () => {
     const feed = projectEventToFeed(
       createEvent({
-        path: "/",
-        type: STREAM_CREATED_TYPE,
-        payload: { path: "/child-stream" },
+        streamPath: "/",
+        type: "https://events.iterate.com/events/stream/child-stream-created",
+        payload: { childPath: "/child-stream" },
       }),
     );
 
-    expect(feed.map((item) => item.kind)).toEqual(["event", "stream-created"]);
+    expect(feed.map((item) => item.kind)).toEqual(["event", "child-stream-created"]);
     expect(feed[1]).toMatchObject({
-      kind: "stream-created",
+      kind: "child-stream-created",
       parentPath: "/",
       createdPath: "/child-stream",
     });
@@ -68,8 +64,8 @@ describe("projectWireToFeed", () => {
   test("adds a semantic metadata item after metadata-updated events", () => {
     const feed = projectEventToFeed(
       createEvent({
-        path: "/demo",
-        type: STREAM_METADATA_UPDATED_TYPE,
+        streamPath: "/demo",
+        type: "https://events.iterate.com/events/stream/metadata-updated",
         payload: { metadata: { owner: "jonas" } },
       }),
     );
@@ -82,12 +78,108 @@ describe("projectWireToFeed", () => {
     });
   });
 
+  test("adds a semantic dynamic worker configured item after config events", () => {
+    const feed = projectEventToFeed(
+      createEvent({
+        streamPath: "/demo",
+        type: "https://events.iterate.com/events/stream/dynamic-worker/configured",
+        payload: {
+          slug: "simple-openai-loop",
+          script: [
+            "export default {",
+            "  initialState: {},",
+            "  reduce(state) {",
+            "    return state;",
+            "  },",
+            "};",
+          ].join("\n"),
+          outboundGateway: {
+            entrypoint: "DynamicWorkerEgressGateway",
+            props: {
+              secretHeaderName: "authorization",
+              secretHeaderValue: "Bearer getIterateSecret({secretKey: 'openai'})",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(feed.map((item) => item.kind)).toEqual(["event", "dynamic-worker-configured"]);
+    expect(feed[1]).toMatchObject({
+      kind: "dynamic-worker-configured",
+      slug: "simple-openai-loop",
+      sourceCode: expect.stringContaining("export default"),
+      outboundGateway: {
+        entrypoint: "DynamicWorkerEgressGateway",
+        secretHeaderName: "authorization",
+        secretHeaderValue: "Bearer getIterateSecret({secretKey: 'openai'})",
+      },
+    });
+  });
+
+  test("adds a semantic scheduler control item after append-scheduled events", () => {
+    const feed = projectEventToFeed(
+      createEvent({
+        streamPath: "/demo",
+        type: "https://events.iterate.com/events/stream/append-scheduled",
+        payload: {
+          slug: "nightly-rollup",
+          append: {
+            type: "https://events.iterate.com/events/example/rollup-requested",
+            payload: { source: "schedule" },
+          },
+          schedule: {
+            kind: "every",
+            intervalSeconds: 300,
+          },
+        },
+      }),
+    );
+
+    expect(feed.map((item) => item.kind)).toEqual(["event", "scheduler-control"]);
+    expect(feed[1]).toMatchObject({
+      kind: "scheduler-control",
+      action: "append-scheduled",
+      slug: "nightly-rollup",
+      schedule: {
+        kind: "every",
+        intervalSeconds: 300,
+      },
+      append: {
+        type: "https://events.iterate.com/events/example/rollup-requested",
+        payload: { source: "schedule" },
+      },
+    });
+  });
+
+  test("adds a semantic scheduler execution item after execution-finished events", () => {
+    const feed = projectEventToFeed(
+      createEvent({
+        streamPath: "/demo",
+        type: "https://events.iterate.com/events/stream/schedule/internal/execution-finished",
+        payload: {
+          slug: "nightly-rollup",
+          outcome: "succeeded",
+          nextRunAt: 1_775_000_000,
+        },
+      }),
+    );
+
+    expect(feed.map((item) => item.kind)).toEqual(["event", "scheduler-execution"]);
+    expect(feed[1]).toMatchObject({
+      kind: "scheduler-execution",
+      action: "finished",
+      slug: "nightly-rollup",
+      outcome: "succeeded",
+      nextRunAt: 1_775_000_000,
+    });
+  });
   test("extracts only raw event rows from a mixed feed", () => {
     const feed = projectWireToFeed([
       createEvent({
-        path: "/",
-        type: STREAM_CREATED_TYPE,
-        payload: { path: "/child-stream" },
+        streamPath: "/",
+        type: "https://events.iterate.com/events/stream/child-stream-created",
+        payload: { childPath: "/child-stream" },
       }),
     ]);
 
@@ -97,7 +189,7 @@ describe("projectWireToFeed", () => {
   test("projects agent input and output events into a chat-style timeline", () => {
     const feed = projectWireToFeed([
       createEvent({
-        offset: "1",
+        offset: 1,
         type: "https://events.iterate.com/agent/input-item-added",
         payload: {
           item: {
@@ -107,10 +199,9 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "2",
+        offset: 2,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "content",
             id: "chunk-1",
@@ -123,10 +214,9 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "3",
+        offset: 3,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "content",
             id: "chunk-2",
@@ -139,10 +229,9 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "4",
+        offset: 4,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "done",
             id: "chunk-3",
@@ -178,7 +267,7 @@ describe("projectWireToFeed", () => {
   test("marks assistant replies as streaming until a done chunk arrives", () => {
     const feed = projectWireToFeed([
       createEvent({
-        offset: "1",
+        offset: 1,
         type: "https://events.iterate.com/agent/input-item-added",
         payload: {
           item: {
@@ -188,10 +277,9 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "2",
+        offset: 2,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "content",
             id: "chunk-1",
@@ -220,7 +308,7 @@ describe("projectWireToFeed", () => {
   test("prefers finalized assistant messages over reconstructed chunk text", () => {
     const feed = projectWireToFeed([
       createEvent({
-        offset: "1",
+        offset: 1,
         type: "https://events.iterate.com/agent/input-item-added",
         payload: {
           item: {
@@ -230,10 +318,9 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "2",
+        offset: 2,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "content",
             id: "chunk-1",
@@ -246,10 +333,9 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "3",
+        offset: 3,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "done",
             id: "chunk-2",
@@ -260,10 +346,9 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "4",
+        offset: 4,
         type: "https://events.iterate.com/agent/input-item-added",
         payload: {
-          sourceOffset: "1",
           item: {
             role: "assistant",
             content: "Hello",
@@ -289,7 +374,7 @@ describe("projectWireToFeed", () => {
   test("projects tool_call and tool_result chunks into tool feed items", () => {
     const feed = projectWireToFeed([
       createEvent({
-        offset: "1",
+        offset: 1,
         type: "https://events.iterate.com/agent/input-item-added",
         payload: {
           item: {
@@ -299,10 +384,9 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "2",
+        offset: 2,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "tool_call",
             id: "c1",
@@ -318,10 +402,9 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "3",
+        offset: 3,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "tool_result",
             id: "c2",
@@ -333,10 +416,9 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "4",
+        offset: 4,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "done",
             id: "c3",
@@ -360,7 +442,7 @@ describe("projectWireToFeed", () => {
   test("adds an error item for failed agent output events", () => {
     const feed = projectWireToFeed([
       createEvent({
-        offset: "1",
+        offset: 1,
         type: "https://events.iterate.com/agent/input-item-added",
         payload: {
           item: {
@@ -370,10 +452,9 @@ describe("projectWireToFeed", () => {
         },
       }),
       createEvent({
-        offset: "2",
+        offset: 2,
         type: "https://events.iterate.com/agent/output-item-added",
         payload: {
-          sourceOffset: "1",
           chunk: {
             type: "RUN_ERROR",
             error: "boom",
@@ -389,6 +470,389 @@ describe("projectWireToFeed", () => {
       context: "boom",
     });
   });
+
+  test("projects workshop llm events into a user and assistant message timeline", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "llm-input-added",
+        payload: {
+          content: "Write a tiny hello world",
+          source: "user",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "llm-request-started",
+        payload: {
+          requestId: "req_1",
+          inputOffset: 1,
+          inputSource: "user",
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_1",
+          event: {
+            type: "response.output_text.delta",
+            item_id: "msg_1",
+            content_index: 0,
+            delta: "hello",
+          },
+        },
+      }),
+      createEvent({
+        offset: 4,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_1",
+          event: {
+            type: "response.output_text.delta",
+            item_id: "msg_1",
+            content_index: 0,
+            delta: " world",
+          },
+        },
+      }),
+      createEvent({
+        offset: 5,
+        type: "llm-request-completed",
+        payload: {
+          requestId: "req_1",
+          outputText: "hello world",
+        },
+      }),
+    ]);
+
+    const messages = feed.filter(
+      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
+    );
+
+    expect(messages).toEqual([
+      {
+        kind: "message",
+        role: "user",
+        content: [{ type: "text", text: "Write a tiny hello world" }],
+        timestamp: messages[0]!.timestamp,
+      },
+      {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "hello world" }],
+        timestamp: messages[1]!.timestamp,
+        streamStatus: "complete",
+      },
+    ]);
+  });
+
+  test("projects bashmode agent input and output events into ai-elements chat messages", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "agent-input-added",
+        payload: {
+          content: "Run a quick bash command.",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "agent-output-added",
+        payload: {
+          content: "```bash\necho hello\n```",
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "agent-input-added",
+        payload: {
+          content: "Bash result:\nstdout:\nhello\nstderr:\n\nexitCode: 0\n",
+        },
+      }),
+    ]);
+
+    const messages = feed.filter(
+      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
+    );
+
+    expect(messages).toEqual([
+      {
+        kind: "message",
+        role: "user",
+        content: [{ type: "text", text: "Run a quick bash command." }],
+        timestamp: messages[0]!.timestamp,
+      },
+      {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "```bash\necho hello\n```" }],
+        timestamp: messages[1]!.timestamp,
+      },
+      {
+        kind: "message",
+        role: "user",
+        content: [{ type: "text", text: "Bash result:\nstdout:\nhello\nstderr:\n\nexitCode: 0\n" }],
+        timestamp: messages[2]!.timestamp,
+      },
+    ]);
+  });
+
+  test("marks workshop assistant output as streaming until the request completes", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "llm-input-added",
+        payload: {
+          content: "Keep streaming",
+          source: "user",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "llm-request-started",
+        payload: {
+          requestId: "req_stream",
+          inputOffset: 1,
+          inputSource: "user",
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_stream",
+          event: {
+            type: "response.output_text.delta",
+            item_id: "msg_stream",
+            content_index: 0,
+            delta: "Partial output",
+          },
+        },
+      }),
+    ]);
+
+    const assistant = feed.find(
+      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
+        item.kind === "message" && item.role === "assistant",
+    );
+
+    expect(assistant).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "Partial output" }],
+      streamStatus: "streaming",
+    });
+  });
+
+  test("projects actual OpenAI assistant output items as separate streamed messages", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "llm-input-added",
+        payload: {
+          content: "Write two short replies",
+          source: "user",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "llm-request-started",
+        payload: {
+          requestId: "req_items",
+          inputOffset: 1,
+          inputSource: "user",
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_items",
+          event: {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              id: "msg_a",
+              type: "message",
+              role: "assistant",
+              content: [],
+            },
+          },
+        },
+      }),
+      createEvent({
+        offset: 4,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_items",
+          event: {
+            type: "response.output_text.delta",
+            item_id: "msg_a",
+            content_index: 0,
+            delta: "First reply",
+            output_index: 0,
+          },
+        },
+      }),
+      createEvent({
+        offset: 5,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_items",
+          event: {
+            type: "response.output_item.added",
+            output_index: 1,
+            item: {
+              id: "msg_b",
+              type: "message",
+              role: "assistant",
+              content: [],
+            },
+          },
+        },
+      }),
+      createEvent({
+        offset: 6,
+        type: "openai-response-event-added",
+        payload: {
+          requestId: "req_items",
+          event: {
+            type: "response.output_text.delta",
+            item_id: "msg_b",
+            content_index: 0,
+            delta: "Second reply",
+            output_index: 1,
+          },
+        },
+      }),
+    ]);
+
+    const assistants = feed.filter(
+      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
+        item.kind === "message" && item.role === "assistant",
+    );
+
+    expect(assistants).toMatchObject([
+      {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "First reply" }],
+        streamStatus: "streaming",
+      },
+      {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "Second reply" }],
+        streamStatus: "streaming",
+      },
+    ]);
+  });
+
+  test("projects codemode block and result events into dedicated cards", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "codemode-block-added",
+        payload: {
+          requestId: "req_1",
+          blockId: "ts-block-1",
+          language: "ts",
+          code: 'console.log("hello");',
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "codemode-result-added",
+        payload: {
+          requestId: "req_1",
+          blockId: "ts-block-1",
+          blockCount: 1,
+          success: true,
+          exitCode: 0,
+          stdout: "hello",
+          stderr: "",
+          durationMs: 42,
+          codePath: "/tmp/1/code.ts",
+          outputPath: "/tmp/1/out.txt",
+        },
+      }),
+    ]);
+
+    expect(feed.map((item) => item.kind)).toEqual([
+      "event",
+      "codemode-block",
+      "event",
+      "codemode-result",
+    ]);
+    expect(feed[1]).toMatchObject({
+      kind: "codemode-block",
+      blockId: "ts-block-1",
+      language: "ts",
+      code: 'console.log("hello");',
+    });
+    expect(feed[3]).toMatchObject({
+      kind: "codemode-result",
+      blockId: "ts-block-1",
+      success: true,
+      stdout: "hello",
+      codePath: "/tmp/1/code.ts",
+    });
+  });
+
+  test("projects failed workshop requests into error feed items", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "llm-input-added",
+        payload: {
+          content: "Break",
+          source: "user",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "llm-request-started",
+        payload: {
+          requestId: "req_fail",
+          inputOffset: 1,
+          inputSource: "user",
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "llm-request-failed",
+        payload: {
+          requestId: "req_fail",
+          message: "model overloaded",
+        },
+      }),
+    ]);
+
+    expect(feed.find((item) => item.kind === "error")).toMatchObject({
+      kind: "error",
+      message: "LLM request failed",
+      context: "model overloaded",
+    });
+  });
+
+  test("projects failed bashmode agent requests into error feed items", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "agent-request-failed",
+        payload: {
+          message: "provider timeout",
+        },
+      }),
+    ]);
+
+    expect(feed.find((item) => item.kind === "error")).toMatchObject({
+      kind: "error",
+      message: "Agent request failed",
+      context: "provider timeout",
+    });
+  });
 });
 
 describe("toSemanticFeedItem", () => {
@@ -400,9 +864,9 @@ describe("toSemanticFeedItem", () => {
 describe("buildDisplayFeed", () => {
   test("groups consecutive events of the same type in raw-pretty mode", () => {
     const feed = projectWireToFeed([
-      createEvent({ offset: "1", type: "https://events.iterate.com/demo/a" }),
-      createEvent({ offset: "2", type: "https://events.iterate.com/demo/a" }),
-      createEvent({ offset: "3", type: "https://events.iterate.com/demo/b" }),
+      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 2, type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 3, type: "https://events.iterate.com/demo/b" }),
     ]);
     const eventFeed = feed.filter((item): item is EventFeedItem => item.kind === "event");
 
@@ -414,9 +878,9 @@ describe("buildDisplayFeed", () => {
 
   test("flushes an event group when a non-event item appears", () => {
     const eventFeed = projectWireToFeed([
-      createEvent({ offset: "1", type: "https://events.iterate.com/demo/a" }),
-      createEvent({ offset: "2", type: "https://events.iterate.com/demo/a" }),
-      createEvent({ offset: "3", type: "https://events.iterate.com/demo/b" }),
+      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 2, type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 3, type: "https://events.iterate.com/demo/b" }),
     ]).filter((item): item is EventFeedItem => item.kind === "event");
 
     const message: StreamFeedItem = {
@@ -437,7 +901,7 @@ describe("buildDisplayFeed", () => {
 
   test("drops raw event rows in pretty mode", () => {
     const feed = projectWireToFeed([
-      createEvent({ offset: "1", type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
     ]);
 
     const message: StreamFeedItem = {
@@ -453,28 +917,28 @@ describe("buildDisplayFeed", () => {
   test("keeps semantic stream lifecycle rows in pretty mode", () => {
     const feed = projectWireToFeed([
       createEvent({
-        path: "/",
-        offset: "1",
-        type: STREAM_CREATED_TYPE,
-        payload: { path: "/created" },
+        streamPath: "/",
+        offset: 1,
+        type: "https://events.iterate.com/events/stream/child-stream-created",
+        payload: { childPath: "/created" },
       }),
       createEvent({
-        path: "/created",
-        offset: "2",
-        type: STREAM_METADATA_UPDATED_TYPE,
+        streamPath: "/created",
+        offset: 2,
+        type: "https://events.iterate.com/events/stream/metadata-updated",
         payload: { metadata: { color: "blue" } },
       }),
     ]);
 
     expect(buildDisplayFeed(feed, "pretty")?.map((item) => item.kind)).toEqual([
-      "stream-created",
+      "child-stream-created",
       "stream-metadata-updated",
     ]);
   });
 
   test("returns null in raw mode", () => {
     const feed = projectWireToFeed([
-      createEvent({ offset: "1", type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
     ]);
 
     expect(buildDisplayFeed(feed, "raw")).toBeNull();
@@ -485,25 +949,29 @@ describe("getAdjacentEventOffset", () => {
   test("returns previous and next offsets within the raw event list", () => {
     const events = getEventFeedItems(
       projectWireToFeed([
-        createEvent({ offset: "1", type: "https://events.iterate.com/demo/a" }),
-        createEvent({ offset: "2", type: "https://events.iterate.com/demo/b" }),
-        createEvent({ offset: "3", type: STREAM_CREATED_TYPE, payload: { path: "/child" } }),
+        createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
+        createEvent({ offset: 2, type: "https://events.iterate.com/demo/b" }),
+        createEvent({
+          offset: 3,
+          type: "https://events.iterate.com/events/stream/child-stream-created",
+          payload: { childPath: "/child" },
+        }),
       ]),
     );
 
-    expect(getAdjacentEventOffset(events, "2", "previous")).toBe("1");
-    expect(getAdjacentEventOffset(events, "2", "next")).toBe("3");
-    expect(getAdjacentEventOffset(events, "1", "previous")).toBeUndefined();
-    expect(getAdjacentEventOffset(events, "3", "next")).toBeUndefined();
+    expect(getAdjacentEventOffset(events, 2, "previous")).toBe(1);
+    expect(getAdjacentEventOffset(events, 2, "next")).toBe(3);
+    expect(getAdjacentEventOffset(events, 1, "previous")).toBeUndefined();
+    expect(getAdjacentEventOffset(events, 3, "next")).toBeUndefined();
   });
 });
 
 function createEvent(overrides: Partial<Event> = {}): Event {
   return {
-    path: "/demo",
+    streamPath: "/demo",
     type: "https://events.iterate.com/manual-event-appended",
     payload: {},
-    offset: "1",
+    offset: 1,
     createdAt: "2026-03-30T00:00:00.000Z",
     ...overrides,
   };

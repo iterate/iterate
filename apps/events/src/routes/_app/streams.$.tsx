@@ -21,10 +21,10 @@ export const Route = createFileRoute("/_app/streams/$")({
 
 function StreamsDetailPage() {
   const { streamPath } = Route.useLoaderData();
-  const { event, renderer } = Route.useSearch();
+  const { composer, event, renderer } = Route.useSearch();
   const navigate = Route.useNavigate();
   const updateEventOffset = useCallback(
-    (nextEventOffset?: string) => {
+    (nextEventOffset?: number) => {
       // Search state is the source of truth for the open event sheet, which is
       // why Prev/Next and deep links all update `event=<offset>` rather than
       // using a local `useState`.
@@ -50,14 +50,28 @@ function StreamsDetailPage() {
     },
     [navigate],
   );
+  const updateComposer = useCallback(
+    (nextComposer: typeof composer) => {
+      void navigate({
+        search: (previous) => ({
+          ...previous,
+          composer: nextComposer,
+        }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
 
   return (
     <StreamPage
       streamPath={streamPath}
       rendererMode={renderer}
+      composerMode={composer}
       openEventOffset={event}
       onOpenEventOffsetChange={updateEventOffset}
       onRendererModeChange={updateRenderer}
+      onComposerModeChange={updateComposer}
     />
   );
 }

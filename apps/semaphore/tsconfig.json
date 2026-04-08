@@ -13,12 +13,7 @@
       ]
     },
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
-    "types": [
-      "vite/client",
-      "node",
-      "@cloudflare/workers-types",
-      "@cloudflare/vitest-pool-workers"
-    ],
+    "types": ["vite/client", "node", "@cloudflare/workers-types"],
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "noEmit": true,

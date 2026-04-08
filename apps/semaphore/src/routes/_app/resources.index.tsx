@@ -62,6 +62,12 @@ export const Route = createFileRoute("/_app/resources/")({
 
 function ResourcesIndexPage() {
   const data = Route.useLoaderData();
+  const groupedResources = data.reduce((groups, resource) => {
+    const group = groups.get(resource.type) ?? [];
+    group.push(resource);
+    groups.set(resource.type, group);
+    return groups;
+  }, new Map<string, SerializableSemaphoreResource[]>());
 
   return (
     <section className="space-y-4">
@@ -70,29 +76,54 @@ function ResourcesIndexPage() {
         the bearer token.
       </p>
 
-      <div className="space-y-3">
-        {data.map((resource) => (
-          <a
-            key={`${resource.type}:${resource.slug}`}
-            href={`/resources/${encodeURIComponent(resource.type)}/${encodeURIComponent(resource.slug)}/`}
-            className="block rounded-lg border bg-card p-4 transition-colors hover:border-foreground/30"
-          >
-            <div className="space-y-2">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="truncate font-medium">{resource.slug}</p>
-                  <p className="truncate text-sm text-muted-foreground">{resource.type}</p>
-                </div>
-                <div className="shrink-0 text-xs text-muted-foreground">{resource.leaseState}</div>
+      <div className="space-y-6">
+        {Array.from(groupedResources.entries()).map(([type, resources]) => {
+          const leasedCount = resources.filter(
+            (resource) => resource.leaseState === "leased",
+          ).length;
+
+          return (
+            <section key={type} className="space-y-3">
+              <div className="space-y-1">
+                <p className="font-medium">{type}</p>
+                <p className="text-xs text-muted-foreground">
+                  {leasedCount} leased · {resources.length - leasedCount} available
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground">
-                {resource.leasedUntil
-                  ? `leased until ${new Date(resource.leasedUntil).toISOString()}`
-                  : "available now"}
-              </p>
-            </div>
-          </a>
-        ))}
+
+              <div className="space-y-3">
+                {resources.map((resource) => (
+                  <a
+                    key={`${resource.type}:${resource.slug}`}
+                    href={`/resources/${encodeURIComponent(resource.type)}/${encodeURIComponent(resource.slug)}/`}
+                    className="block rounded-lg border bg-card p-4 transition-colors hover:border-foreground/30"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <p className="truncate font-medium">{resource.slug}</p>
+                          <p className="truncate text-sm text-muted-foreground">{resource.type}</p>
+                        </div>
+                        <div className="shrink-0 text-xs text-muted-foreground">
+                          {resource.leaseState}
+                        </div>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {Object.keys(resource.data).length} data field
+                        {Object.keys(resource.data).length === 1 ? "" : "s"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {resource.leasedUntil
+                          ? `leased until ${new Date(resource.leasedUntil).toISOString()}`
+                          : "available now"}
+                      </p>
+                    </div>
+                  </a>
+                ))}
+              </div>
+            </section>
+          );
+        })}
       </div>
 
       {data.length === 0 ? (

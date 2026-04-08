@@ -1,5 +1,12 @@
 import alchemy, { type Scope } from "alchemy";
-import { D1Database, DurableObjectNamespace, TanStackStart } from "alchemy/cloudflare";
+import {
+  D1Database,
+  DurableObjectNamespace,
+  Self,
+  TanStackStart,
+  Worker,
+  WorkerLoader,
+} from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { z } from "zod";
@@ -43,9 +50,6 @@ const AlchemyEnv = z.object({
 const env = AlchemyEnv.parse(process.env);
 const stateStore = (scope: Scope) =>
   scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
-if (!env.ALCHEMY_LOCAL && env.WORKER_ROUTES.length === 0) {
-  throw new Error("WORKER_ROUTES is required when deploying. Set it in Doppler.");
-}
 const primaryUrl = env.WORKER_ROUTES[0] ? `https://${env.WORKER_ROUTES[0]}` : undefined;
 const compiledAppConfig = parseAppConfigFromEnv({
   configSchema: AppConfig,
@@ -57,6 +61,8 @@ const rawAppConfig = compileRawAppConfigFromEnv({
   prefix: "APP_CONFIG_",
   env: process.env,
 });
+
+if (env.ALCHEMY_LOCAL) delete process.env.CI;
 
 const app = await alchemy(APP_NAME, {
   stage: env.ALCHEMY_STAGE,
@@ -84,8 +90,19 @@ export const worker = await TanStackStart(APP_NAME, {
   bindings: {
     DB: db,
     STREAM: stream,
+    SELF: Self,
+    DYNAMIC_WORKER_EGRESS_GATEWAY: Worker.experimentalEntrypoint(
+      Self,
+      "DynamicWorkerEgressGateway",
+    ),
+    LOADER: WorkerLoader(),
     APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
   },
+  // `packages/shared/src/apps/logging/orpc-plugin.ts` inspects `request.signal`
+  // so aborted client requests do not log as real handler failures. Cloudflare
+  // gates that API behind this compatibility flag:
+  // https://developers.cloudflare.com/workers/runtime-apis/request/
+  compatibilityFlags: ["enable_request_signal"],
   wrangler: {
     main: "./src/entry.workerd.ts",
   },

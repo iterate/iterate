@@ -172,8 +172,19 @@ function formatErrorValue(value: unknown) {
 
   const name = "name" in value && typeof value.name === "string" ? value.name : "Error";
   const message = "message" in value && typeof value.message === "string" ? value.message : "";
+  const stack = "stack" in value && typeof value.stack === "string" ? value.stack : undefined;
 
-  return message ? `${name}: ${message}` : name;
+  const header = message ? `${name}: ${message}` : name;
+
+  if (stack) {
+    const headerLine = `${name}: ${message}`;
+    const stackWithoutHeader = stack.startsWith(headerLine)
+      ? stack.slice(headerLine.length)
+      : stack;
+    return `${header}${stackWithoutHeader}`;
+  }
+
+  return header;
 }
 
 function createBodyEntries(event: AppStdoutEvent) {

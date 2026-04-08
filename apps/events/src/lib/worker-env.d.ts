@@ -6,7 +6,10 @@ import type { StreamDurableObject } from "~/durable-objects/stream.ts";
 // this override in sync with `StreamDurableObject` while avoiding the much
 // larger generated stub type. This is the same containment strategy Cloudflare
 // maintainers have suggested for awkward env bindings in upstream threads.
-type StreamRpcStub = Pick<StreamDurableObject, "append" | "history" | "stream" | "getState">;
+type StreamRpcStub = Pick<
+  StreamDurableObject,
+  "initialize" | "append" | "destroy" | "history" | "stream" | "getState"
+>;
 type BaseEnv = typeof worker.Env;
 
 // `typeof worker.Env` gives `STREAM` the full generated
@@ -19,13 +22,13 @@ type BaseEnv = typeof worker.Env;
 // Override only this local binding so `get()` / `getByName()` return the small
 // method surface we actually call. Runtime behavior is unchanged; this is
 // purely a TypeScript escape hatch for the generated type.
-type StreamNamespace = Omit<BaseEnv["STREAM"], "get" | "getByName"> & {
+type StreamBinding = Omit<BaseEnv["STREAM"], "get" | "getByName"> & {
   get(id: DurableObjectId, options?: DurableObjectNamespaceGetDurableObjectOptions): StreamRpcStub;
   getByName(name: string, options?: DurableObjectNamespaceGetDurableObjectOptions): StreamRpcStub;
 };
 
 export type CloudflareEnv = Omit<BaseEnv, "STREAM"> & {
-  STREAM: StreamNamespace;
+  STREAM: StreamBinding;
 };
 
 declare global {

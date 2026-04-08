@@ -1,4 +1,10 @@
-import type { Event, StreamPath } from "@iterate-com/events-contract";
+import type {
+  Event,
+  ExternalSubscriber,
+  ScheduleInternalExecutionFinishedPayload,
+  StreamPath,
+  StreamSchedule,
+} from "@iterate-com/events-contract";
 
 export const streamRendererModes = ["pretty", "raw-pretty", "raw"] as const;
 export type StreamRendererMode = (typeof streamRendererModes)[number];
@@ -69,8 +75,8 @@ export interface ErrorFeedItem {
 
 export interface EventFeedItem {
   kind: "event";
-  path: StreamPath;
-  offset: string;
+  streamPath: StreamPath;
+  offset: number;
   createdAt: string;
   eventType: string;
   timestamp: number;
@@ -86,8 +92,8 @@ export interface GroupedEventFeedItem {
   lastTimestamp: number;
 }
 
-export interface StreamCreatedFeedItem {
-  kind: "stream-created";
+export interface ChildStreamCreatedFeedItem {
+  kind: "child-stream-created";
   parentPath: StreamPath;
   createdPath: StreamPath;
   timestamp: number;
@@ -102,11 +108,132 @@ export interface StreamMetadataUpdatedFeedItem {
   raw: Event;
 }
 
+export interface ExternalSubscriberConfiguredFeedItem {
+  kind: "external-subscriber-configured";
+  subscriber: ExternalSubscriber;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface JsonataTransformerConfiguredFeedItem {
+  kind: "jsonata-transformer-configured";
+  transformer: {
+    slug: string;
+    matcher: string;
+    transform: string;
+  };
+  timestamp: number;
+  raw: Event;
+}
+
+export interface StreamLifecycleFeedItem {
+  kind: "stream-lifecycle";
+  label: string;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface DynamicWorkerConfiguredFeedItem {
+  kind: "dynamic-worker-configured";
+  slug: string;
+  sourceCode: string;
+  compatibilityDate?: string;
+  compatibilityFlags: string[];
+  outboundGateway?: {
+    entrypoint: string;
+    secretHeaderName?: string;
+    secretHeaderValue?: string;
+  };
+  timestamp: number;
+  raw: Event;
+}
+
+export interface StreamPausedFeedItem {
+  kind: "stream-paused";
+  reason: string;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface StreamResumedFeedItem {
+  kind: "stream-resumed";
+  reason: string;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface StreamErrorOccurredFeedItem {
+  kind: "stream-error-occurred";
+  message: string;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface CodemodeBlockFeedItem {
+  kind: "codemode-block";
+  requestId: string;
+  blockId: string;
+  language: string;
+  code: string;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface CodemodeResultFeedItem {
+  kind: "codemode-result";
+  requestId: string;
+  blockId: string;
+  blockCount: number;
+  success: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  codePath: string;
+  outputPath: string;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface SchedulerControlFeedItem {
+  kind: "scheduler-control";
+  action: "append-scheduled" | "configured" | "cancelled";
+  slug: string;
+  schedule?: StreamSchedule;
+  append?: unknown;
+  callback?: string;
+  payloadJson?: string | null;
+  nextRunAt?: number;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface SchedulerExecutionFeedItem {
+  kind: "scheduler-execution";
+  action: "started" | "finished";
+  slug: string;
+  outcome?: ScheduleInternalExecutionFinishedPayload["outcome"];
+  nextRunAt?: number | null;
+  timestamp: number;
+  raw: Event;
+}
+
 export type StreamFeedItem =
   | MessageFeedItem
   | ToolFeedItem
   | ErrorFeedItem
   | EventFeedItem
   | GroupedEventFeedItem
-  | StreamCreatedFeedItem
-  | StreamMetadataUpdatedFeedItem;
+  | ChildStreamCreatedFeedItem
+  | StreamMetadataUpdatedFeedItem
+  | ExternalSubscriberConfiguredFeedItem
+  | JsonataTransformerConfiguredFeedItem
+  | StreamLifecycleFeedItem
+  | DynamicWorkerConfiguredFeedItem
+  | StreamPausedFeedItem
+  | StreamResumedFeedItem
+  | StreamErrorOccurredFeedItem
+  | CodemodeBlockFeedItem
+  | CodemodeResultFeedItem
+  | SchedulerControlFeedItem
+  | SchedulerExecutionFeedItem;

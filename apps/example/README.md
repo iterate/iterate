@@ -9,7 +9,7 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + Drizzle, dual-
 - **Frontend:** TanStack Start in SPA mode + TanStack Router + TanStack Query
 - **DB:** Drizzle ORM — better-sqlite3 (Node), D1 (Workers). Shared `BaseSQLiteDatabase<"sync" | "async">` type.
 - **Observability:** Node and Workers both use the shared `withEvlog()` runtime wrapper; shared `useEvlog()` only enriches a request-scoped log
-- **Runtime config:** optional `APP_CONFIG` JSON env var plus `APP_CONFIG_*` nested overrides, with frontend-visible fields annotated in the schema and exposed through the typed `common.publicConfig` oRPC procedure
+- **Runtime config:** optional `APP_CONFIG` JSON env var plus `APP_CONFIG_*` nested overrides, with frontend-visible fields annotated in the schema and exposed through the typed `__internal.publicConfig` oRPC procedure
 
 ## Key files
 
@@ -74,6 +74,9 @@ the shared `withEvlog()` wrapper in the runtime entrypoints rather than Nitro's
 ## Dev
 
 ```bash
+doppler run --config stg -- pnpm alchemy:up    # staging-style deploy
+doppler run --config prd -- pnpm alchemy:up    # production-style deploy
+doppler run --config stg -- pnpm alchemy:down  # destroy the staging stack
 pnpm dev          # Node dev server
 pnpm start        # Run the built server bundle and restart on rebuilds
 pnpm cf:dev       # Cloudflare local dev
@@ -99,7 +102,7 @@ schema's camelCase shape. For example:
 - `APP_CONFIG_PIRATE_SECRET=arrr` -> `pirateSecret`
 - `APP_CONFIG_LOGS__STDOUT_FORMAT=pretty` -> `logs.stdoutFormat`
 
-The root route loads the typed `common.publicConfig` procedure over `/api`
+The root route loads the typed `__internal.publicConfig` procedure over `/api`
 during SSR, and PostHog is configured from `posthog.apiKey` on the
 client. The app always uses the built-in PostHog proxy at `/posthog-proxy`
 and always enables bootstrap-from-url behavior.

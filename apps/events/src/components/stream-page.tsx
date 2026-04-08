@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  EventInput,
   type Event,
-  type EventType,
+  type EventInput,
   type JSONObject,
-  STREAM_CREATED_TYPE,
   type StreamPath,
 } from "@iterate-com/events-contract";
 import {
@@ -20,6 +18,11 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "@iterate-com/ui/components/ai-elements/prompt-input";
+import { Button } from "@iterate-com/ui/components/button";
+import { Checkbox } from "@iterate-com/ui/components/checkbox";
+import { Input } from "@iterate-com/ui/components/input";
+import { Label } from "@iterate-com/ui/components/label";
+import { Separator } from "@iterate-com/ui/components/separator";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
   Sheet,
@@ -29,53 +32,84 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { StreamEventFeed } from "~/components/stream-event-feed.tsx";
+import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
-import { eventTypePages, getEventTypePageByType } from "~/lib/event-type-pages.ts";
+import { eventInputTemplates, getEventInputTemplateById } from "~/lib/event-type-pages.ts";
+import { projectScopedQueryKey } from "~/lib/project-slug.ts";
 import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projection.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { DEFAULT_STREAM_RENDERER_MODE, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
 import { formatClientError } from "~/lib/format-client-error.ts";
-import { ROOT_STREAM_PATH } from "~/lib/utils.ts";
-import { orpc } from "~/orpc/client.ts";
+import { defaultStreamViewSearch, type StreamComposerMode } from "~/lib/stream-view-search.ts";
+import { getOrpc } from "~/orpc/client.ts";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
 
-const DEFAULT_EVENT_TYPE = "https://events.iterate.com/manual-event-appended";
+const DEFAULT_EVENT_TEMPLATE_ID = "manual-event-appended:default";
 
 export function StreamPage({
   streamPath,
   rendererMode = DEFAULT_STREAM_RENDERER_MODE,
+  composerMode = defaultStreamViewSearch.composer,
   openEventOffset,
   onOpenEventOffsetChange,
   onRendererModeChange,
+  onComposerModeChange,
 }: {
   streamPath: StreamPath;
   rendererMode?: StreamRendererMode;
-  openEventOffset?: string;
-  onOpenEventOffsetChange?: (offset?: string) => void;
+  composerMode?: StreamComposerMode;
+  openEventOffset?: number;
+  onOpenEventOffsetChange?: (offset?: number) => void;
   onRendererModeChange?: (mode: StreamRendererMode) => void;
+  onComposerModeChange?: (mode: StreamComposerMode) => void;
 }) {
   const queryClient = useQueryClient();
   const { closeMetadata, metadataOpen, setHeaderControls } = useStreamsChrome();
-  const [selectedTemplateType, setSelectedTemplateType] = useState<EventType>(DEFAULT_EVENT_TYPE);
+  const orpc = getOrpc();
+  const projectSlug = useCurrentProjectSlug();
+  const [selectedTemplateId, setSelectedTemplateId] = useState(DEFAULT_EVENT_TEMPLATE_ID);
   const [appendInputJson, setAppendInputJson] = useState(() =>
-    createEventInputTemplate({ streamPath, type: DEFAULT_EVENT_TYPE }),
+    createEventInputTemplate(DEFAULT_EVENT_TEMPLATE_ID),
+  );
+  const [agentInputText, setAgentInputText] = useState("");
+  const streamStateOptions = useMemo(
+    () => orpc.getState.queryOptions({ input: { path: streamPath } }),
+    [orpc, streamPath],
+  );
+  const streamStateQueryKey = useMemo(
+    () => projectScopedQueryKey(streamStateOptions.queryKey, projectSlug),
+    [projectSlug, streamStateOptions.queryKey],
+  );
+  const listChildrenOptions = useMemo(
+    () => orpc.listChildren.queryOptions({ input: { path: "/" } }),
+    [orpc],
+  );
+  const listChildrenQueryKey = useMemo(
+    () => projectScopedQueryKey(listChildrenOptions.queryKey, projectSlug),
+    [listChildrenOptions.queryKey, projectSlug],
   );
 
   const streamStateQuery = useQuery({
-    ...orpc.getState.queryOptions({ input: { streamPath } }),
+    ...streamStateOptions,
+    queryKey: streamStateQueryKey,
     staleTime: 5_000,
   });
 
   const { events, isConnecting } = useLiveStreamEvents({
     streamPath,
+    projectSlug,
     onEvent: useCallback(
       (event: Event) => {
-        if (streamPath === ROOT_STREAM_PATH && event.type === STREAM_CREATED_TYPE) {
-          void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
+        if (
+          streamPath === "/" &&
+          event.type === "https://events.iterate.com/events/stream/child-stream-created"
+        ) {
+          void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
         }
       },
-      [queryClient, streamPath],
+      [listChildrenQueryKey, queryClient, streamPath],
     ),
   });
   const feed = useMemo(() => projectWireToFeed(events), [events]);
@@ -83,8 +117,8 @@ export function StreamPage({
   const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
 
   useEffect(() => {
-    setAppendInputJson(createEventInputTemplate({ streamPath, type: selectedTemplateType }));
-  }, [selectedTemplateType, streamPath]);
+    setAppendInputJson(createEventInputTemplate(selectedTemplateId));
+  }, [selectedTemplateId]);
 
   useEffect(() => {
     // The header lives in the parent `_app` layout, outside the concrete stream
@@ -101,30 +135,30 @@ export function StreamPage({
     };
   }, [feedSummary, onRendererModeChange, rendererMode, setHeaderControls]);
 
+  const [destroyChildren, setDestroyChildren] = useState(true);
+
   const appendEvent = useMutation(
     orpc.append.mutationOptions({
       onSuccess: async () => {
-        void queryClient.invalidateQueries({ queryKey: orpc.listStreams.key() });
-        await queryClient.invalidateQueries({ queryKey: orpc.getState.key() });
+        void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
+        await queryClient.invalidateQueries({ queryKey: streamStateQueryKey });
       },
     }),
   );
 
-  const selectedTemplatePage = getEventTypePageByType(selectedTemplateType);
-
-  const submitAppend = async (inputText = appendInputJson) => {
-    let event: EventInput;
-
-    try {
-      event = EventInput.parse(parseJSONObject(inputText));
-    } catch (error) {
-      toast.error(formatClientError(error));
-      return;
-    }
-
+  const destroyStream = useMutation(
+    orpc.destroy.mutationOptions({
+      onSuccess: async () => {
+        closeMetadata();
+        void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
+        await queryClient.invalidateQueries({ queryKey: streamStateQueryKey });
+      },
+    }),
+  );
+  const submitAppendEvent = async ({ event }: { event: EventInput }) => {
     const request = appendEvent.mutateAsync({
-      path: event.path,
-      events: [event],
+      path: streamPath,
+      event,
     });
 
     void toast.promise(request, {
@@ -134,6 +168,38 @@ export function StreamPage({
     });
 
     await request.catch(() => undefined);
+  };
+
+  const submitRawAppend = async ({ inputText }: { inputText: string }) => {
+    let event: EventInput;
+
+    try {
+      event = parseAppendEventInput(inputText);
+    } catch (error) {
+      toast.error(formatClientError(error));
+      return;
+    }
+
+    await submitAppendEvent({ event });
+  };
+
+  const submitAgentAppend = async ({ inputText }: { inputText: string }) => {
+    const content = inputText.trim();
+
+    if (content.length === 0) {
+      toast.error("Enter a message");
+      return;
+    }
+
+    await submitAppendEvent({
+      event: {
+        type: "agent-input-added",
+        payload: {
+          content,
+        },
+      },
+    });
+    setAgentInputText("");
   };
 
   return (
@@ -175,6 +241,47 @@ export function StreamPage({
               showToggle
               showCopyButton
             />
+
+            <Separator className="my-6" />
+
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+              <h3 className="text-sm font-semibold text-destructive">Danger zone</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Permanently destroy this stream. This cannot be undone.
+              </p>
+
+              <div className="mt-4 flex items-center gap-2">
+                <Checkbox
+                  id="destroy-children"
+                  checked={destroyChildren}
+                  onCheckedChange={(checked) => setDestroyChildren(checked)}
+                />
+                <Label htmlFor="destroy-children" className="text-xs">
+                  Destroy child streams
+                </Label>
+              </div>
+
+              <Button
+                variant="destructive"
+                size="sm"
+                className="mt-4"
+                disabled={destroyStream.isPending}
+                onClick={() => {
+                  const request = destroyStream.mutateAsync({
+                    params: { path: streamPath },
+                    query: { destroyChildren },
+                  });
+                  void toast.promise(request, {
+                    loading: "Destroying stream…",
+                    success: (result) =>
+                      `Destroyed ${result.destroyedStreamCount} stream${result.destroyedStreamCount === 1 ? "" : "s"}`,
+                    error: (error) => formatClientError(error),
+                  });
+                }}
+              >
+                {destroyStream.isPending ? "Destroying…" : "Destroy stream"}
+              </Button>
+            </div>
           </div>
         </SheetContent>
       </Sheet>
@@ -182,42 +289,80 @@ export function StreamPage({
       <footer className="supports-backdrop-filter:bg-background/80 shrink-0 border-t bg-background/95 px-4 py-4">
         <PromptInput
           className="relative w-full"
-          onSubmit={async ({ text }) => {
-            await submitAppend(text);
+          onSubmit={async () => {
+            if (composerMode === "agent") {
+              await submitAgentAppend({ inputText: agentInputText });
+              return;
+            }
+
+            await submitRawAppend({ inputText: appendInputJson });
           }}
         >
           <PromptInputBody>
-            <PromptInputTextarea
-              value={appendInputJson}
-              onChange={(event) => setAppendInputJson(event.currentTarget.value)}
-              className="min-h-36 max-h-[45vh] font-mono text-xs leading-5"
-              placeholder='{"path":"/demo","type":"https://events.iterate.com/manual-event-appended","payload":{"message":"hello"}}'
-              spellCheck={false}
-            />
+            {composerMode === "agent" ? (
+              <Input
+                data-slot="input-group-control"
+                value={agentInputText}
+                onChange={(event) => setAgentInputText(event.currentTarget.value)}
+                placeholder="Message this agent"
+                className="h-11 rounded-none border-0 bg-transparent px-4 shadow-none focus-visible:ring-0"
+              />
+            ) : (
+              <PromptInputTextarea
+                value={appendInputJson}
+                onChange={(event) => setAppendInputJson(event.currentTarget.value)}
+                className="min-h-36 max-h-[45vh] font-mono text-xs leading-5"
+                placeholder="Enter event JSON"
+                spellCheck={false}
+              />
+            )}
           </PromptInputBody>
           <PromptInputFooter className="items-center justify-between gap-2 border-t p-2.5">
             <PromptInputTools className="min-w-0 flex-1">
-              <PromptInputSelect
-                value={selectedTemplateType}
-                onValueChange={(value) => {
-                  setSelectedTemplateType(value as EventType);
-                }}
-              >
-                <PromptInputSelectTrigger className="h-8 max-w-full min-w-0 text-xs sm:max-w-[18rem]">
-                  <span className="truncate">{selectedTemplatePage?.title ?? "Event type"}</span>
-                </PromptInputSelectTrigger>
-                <PromptInputSelectContent align="start">
-                  {eventTypePages.map((page) => (
-                    <PromptInputSelectItem key={page.type} value={page.type}>
-                      {page.title}
-                    </PromptInputSelectItem>
-                  ))}
-                </PromptInputSelectContent>
-              </PromptInputSelect>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <Tabs
+                  value={composerMode}
+                  onValueChange={(value) => onComposerModeChange?.(value as StreamComposerMode)}
+                >
+                  <TabsList className="h-8">
+                    <TabsTrigger value="raw" className="px-2 text-xs">
+                      Raw
+                    </TabsTrigger>
+                    <TabsTrigger value="agent" className="px-2 text-xs">
+                      Agent
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+
+                {composerMode === "raw" ? (
+                  <PromptInputSelect
+                    value={selectedTemplateId}
+                    onValueChange={(value) => {
+                      setSelectedTemplateId(value as string);
+                    }}
+                  >
+                    <PromptInputSelectTrigger className="h-8 max-w-full min-w-0 text-xs sm:max-w-[18rem]">
+                      <span className="truncate">
+                        {getEventInputTemplateById(selectedTemplateId)?.label ?? "Event template"}
+                      </span>
+                    </PromptInputSelectTrigger>
+                    <PromptInputSelectContent align="start">
+                      {eventInputTemplates.map((template) => (
+                        <PromptInputSelectItem key={template.id} value={template.id}>
+                          {template.label}
+                        </PromptInputSelectItem>
+                      ))}
+                    </PromptInputSelectContent>
+                  </PromptInputSelect>
+                ) : null}
+              </div>
             </PromptInputTools>
             <PromptInputSubmit
               className="shrink-0"
-              disabled={appendEvent.isPending || !appendInputJson.trim()}
+              disabled={
+                appendEvent.isPending ||
+                (composerMode === "agent" ? !agentInputText.trim() : !appendInputJson.trim())
+              }
               status={appendEvent.isPending ? "submitted" : "ready"}
             />
           </PromptInputFooter>
@@ -227,22 +372,11 @@ export function StreamPage({
   );
 }
 
-function createEventInputTemplate({
-  streamPath,
-  type,
-}: {
-  streamPath: StreamPath;
-  type: EventType;
-}) {
-  return JSON.stringify(
-    {
-      path: streamPath,
-      type,
-      payload: clonePayloadTemplate(getEventTypePageByType(type)?.payloadExample),
-    } satisfies EventInput,
-    null,
-    2,
-  );
+function createEventInputTemplate(templateId: string) {
+  const template =
+    getEventInputTemplateById(templateId) ?? getEventInputTemplateById(DEFAULT_EVENT_TEMPLATE_ID);
+
+  return JSON.stringify(JSON.parse(JSON.stringify(template?.event ?? {})) as JSONObject, null, 2);
 }
 
 function parseJSONObject(value: string) {
@@ -255,10 +389,8 @@ function parseJSONObject(value: string) {
   return parsed as JSONObject;
 }
 
-function clonePayloadTemplate(payload: Record<string, unknown> | undefined) {
-  if (!payload) {
-    return {} as JSONObject;
-  }
-
-  return JSON.parse(JSON.stringify(payload)) as JSONObject;
+function parseAppendEventInput(value: string) {
+  // Only require syntactically valid JSON here. The append endpoint will
+  // normalize invalid event shapes into invalid-event-appended server-side.
+  return parseJSONObject(value) as EventInput;
 }

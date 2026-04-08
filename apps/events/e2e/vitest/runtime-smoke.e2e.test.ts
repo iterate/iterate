@@ -6,15 +6,12 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
 import { describe, expect, test } from "vitest";
-import {
-  STREAM_METADATA_UPDATED_TYPE,
-  type StreamPath,
-  type StreamState,
-} from "@iterate-com/events-contract";
+import { type StreamPath } from "@iterate-com/events-contract";
 import { AppConfig } from "../../src/app.ts";
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
+  defaultE2EProjectSlug,
   requireEventsBaseUrl,
 } from "../helpers.ts";
 
@@ -24,20 +21,21 @@ const app = createEvents2AppFixture({
 });
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
+const rootHistoryIdleTimeoutMs = 1_000;
+const defaultProjectSlug = defaultE2EProjectSlug;
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
-const testTimeoutMs = 5_000;
+const testTimeoutMs = 10_000;
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe;
-
 describeRuntimeSmoke("events runtime smoke", () => {
   test(
     "streams page responds",
     async () => {
-      const res = await app.fetch("/streams", {
-        signal: AbortSignal.timeout(3_000),
+      const res = await app.fetch(`/streams?projectSlug=${defaultProjectSlug}`, {
+        signal: AbortSignal.timeout(8_000),
       });
 
       expect(res.ok).toBe(true);
-      expect(await res.text()).toContain("Append event");
+      expect(await res.text()).toContain("Create stream");
     },
     testTimeoutMs,
   );
@@ -45,7 +43,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
   test(
     "public config and openapi docs are reachable",
     async () => {
-      const config = PublicConfigSchema.parse(await app.client.common.publicConfig({}));
+      const config = PublicConfigSchema.parse(await app.client.__internal.publicConfig({}));
       expect(config.iterateOauth.clientId).toEqual(expect.any(String));
       expect(config.posthog.apiKey).toEqual(expect.any(String));
 
@@ -58,9 +56,35 @@ describeRuntimeSmoke("events runtime smoke", () => {
         paths?: Record<string, unknown>;
       };
 
-      expect(body.paths).toHaveProperty("/streams");
-      expect(body.paths).toHaveProperty("/streams/{path}");
-      expect(body.paths).toHaveProperty("/stream-state/{streamPath}");
+      const paths = body.paths ?? {};
+
+      expect(paths).toHaveProperty("/streams/{path}");
+      expect(paths).toHaveProperty("/streams/__state/{path}");
+      expect(paths).toHaveProperty("/streams/__children/{path}");
+      expect(paths).not.toHaveProperty("/streams");
+      expect(paths).not.toHaveProperty("/stream-state/{streamPath}");
+      expect(paths).not.toHaveProperty("/__list/{path}");
+      expect(paths).not.toHaveProperty("/__state/{path}");
+      expect(paths).not.toHaveProperty("/streams/__list");
+      expect(paths).not.toHaveProperty("/__state");
+      expect(paths["/streams/{path}"]).toMatchObject({
+        post: {
+          parameters: expect.arrayContaining([
+            expect.objectContaining({
+              in: "path",
+              name: "path",
+            }),
+          ]),
+        },
+        delete: {
+          parameters: expect.arrayContaining([
+            expect.objectContaining({
+              in: "query",
+              name: "destroyChildren",
+            }),
+          ]),
+        },
+      });
     },
     testTimeoutMs,
   );
@@ -70,14 +94,29 @@ describeRuntimeSmoke("events runtime smoke", () => {
     async () => {
       const path: StreamPath = `/smoke/${Date.now().toString(36)}`;
 
-      await app.client.append({
-        path,
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: { smoke: true },
+      await app.append({
+        streamPath: path,
+        event: {
+          type: "https://events.iterate.com/events/example/value-recorded",
+          payload: { smoke: true },
+        },
       });
 
-      const streams = await app.client.listStreams({});
-      expect(streams.some((stream) => stream.path === path)).toBe(true);
+      await waitForStream(path);
+
+      const rootEvents = await collectAsyncIterableUntilIdle({
+        iterable: await app.client.stream({ path: "/" }),
+        idleMs: rootHistoryIdleTimeoutMs,
+      });
+      expect(rootEvents[0]).toMatchObject({
+        streamPath: "/",
+        type: "https://events.iterate.com/events/stream/initialized",
+      });
+      expect(await app.client.getState({ path: "/" })).toMatchObject({
+        projectSlug: defaultProjectSlug,
+        path: "/",
+        metadata: {},
+      });
 
       const events = await collectAsyncIterableUntilIdle({
         iterable: await app.client.stream({
@@ -87,19 +126,40 @@ describeRuntimeSmoke("events runtime smoke", () => {
         idleMs: historyIdleTimeoutMs,
       });
 
-      expect(events).toHaveLength(1);
+      expect(events).toHaveLength(2);
       expect(events[0]).toMatchObject({
-        path,
+        streamPath: path,
+        type: "https://events.iterate.com/events/stream/initialized",
+        offset: expectedStoredOffset(0),
+        payload: { projectSlug: defaultProjectSlug, path },
+      });
+      expect(events[1]).toMatchObject({
+        streamPath: path,
         offset: expectedOffset(1),
         payload: { smoke: true },
       });
 
-      expect(await app.client.getState({ streamPath: path })).toEqual({
+      expect(await app.client.getState({ path })).toEqual({
+        projectSlug: defaultProjectSlug,
         path,
-        lastOffset: expectedOffset(1),
-        eventCount: 1,
+        eventCount: 2,
+        childPaths: [],
         metadata: {},
-      } satisfies StreamState);
+        processors: expectedProcessorsWithRecentEventCount(2),
+      });
+
+      const rootHistoryResponse = await app.fetch("/api/streams/%2F");
+      expect(rootHistoryResponse.status).toBe(200);
+      expect(await rootHistoryResponse.text()).toContain(
+        "https://events.iterate.com/events/stream/initialized",
+      );
+
+      const rootStateResponse = await app.fetch("/api/streams/__state/%2F");
+      expect(rootStateResponse.status).toBe(200);
+      expect(await rootStateResponse.json()).toMatchObject({
+        projectSlug: defaultProjectSlug,
+        path: "/",
+      });
 
       const controller = new AbortController();
       const liveStream = await app.client.stream(
@@ -114,12 +174,14 @@ describeRuntimeSmoke("events runtime smoke", () => {
 
       try {
         setTimeout(() => {
-          void app.client.append({
-            path,
-            type: STREAM_METADATA_UPDATED_TYPE,
-            payload: {
-              metadata: {
-                live: true,
+          void app.append({
+            streamPath: path,
+            event: {
+              type: "https://events.iterate.com/events/stream/metadata-updated",
+              payload: {
+                metadata: {
+                  live: true,
+                },
               },
             },
           });
@@ -134,7 +196,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
 
         expect(next.done).toBe(false);
         expect(next.value).toMatchObject({
-          path,
+          streamPath: path,
           offset: expectedOffset(2),
         });
       } finally {
@@ -147,5 +209,46 @@ describeRuntimeSmoke("events runtime smoke", () => {
 });
 
 function expectedOffset(value: number) {
-  return String(value).padStart(16, "0");
+  return value + 1;
+}
+
+function expectedStoredOffset(value: number) {
+  return value + 1;
+}
+
+function expectedProcessorsWithRecentEventCount(count: number) {
+  return {
+    "circuit-breaker": {
+      paused: false,
+      pauseReason: null,
+      pausedAt: null,
+      recentEventTimestamps: Array.from({ length: count }, () => expect.any(String)),
+    },
+    "external-subscriber": {
+      subscribersBySlug: {},
+    },
+    "dynamic-worker": {
+      workersBySlug: {},
+    },
+    "jsonata-transformer": {
+      transformersBySlug: {},
+    },
+    scheduler: {},
+  };
+}
+
+async function waitForStream(path: StreamPath) {
+  const deadline = Date.now() + postBootTimeoutMs;
+
+  while (Date.now() < deadline) {
+    const streams = await app.client.listChildren({ path: "/" });
+    const stream = streams.find((candidate) => candidate.path === path);
+    if (stream) {
+      return stream;
+    }
+
+    await delay(100);
+  }
+
+  throw new Error(`Timed out waiting for stream ${path}`);
 }

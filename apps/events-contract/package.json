@@ -4,14 +4,18 @@
   "version": "0.0.1",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./sdk": "./src/sdk.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm exec tsx src/orpc-contract.test.ts && pnpm exec tsx src/sdk.test.ts && pnpm exec tsx src/external-subscriber-types.test.ts"
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",
+    "@orpc/client": "1.13.13",
     "@orpc/contract": "1.13.13",
+    "@orpc/openapi-client": "1.13.13",
     "zod": "^4.3.6"
   },
   "devDependencies": {

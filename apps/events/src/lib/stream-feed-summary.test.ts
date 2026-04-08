@@ -7,8 +7,8 @@ describe("summarizeStreamFeed", () => {
     const feed: StreamFeedItem[] = [
       {
         kind: "event",
-        path: "/",
-        offset: "1",
+        streamPath: "/",
+        offset: 1,
         createdAt: "2026-03-30T00:00:00.000Z",
         eventType: "https://events.iterate.com/demo/a",
         timestamp: 1,

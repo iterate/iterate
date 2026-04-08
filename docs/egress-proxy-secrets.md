@@ -2,6 +2,8 @@
 
 Sandboxes use a magic string pattern to access secrets without exposing them directly.
 
+`apps/events` dynamic-worker egress now also supports this pattern, but only for outbound **header values**. It does not currently rewrite URL paths, query strings, or Basic auth payloads there.
+
 ## Magic String
 
 ```

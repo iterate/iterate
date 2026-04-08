@@ -7,11 +7,12 @@
     "~/*": "./src/*"
   },
   "scripts": {
-    "cli": "iterate --local-router ./scripts/router.ts local-router",
+    "cli": "iterate-app-cli",
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "iterate --local-router ./scripts/router.ts local-router start",
+    "rpc": "pnpm cli rpc",
+    "start": "pnpm cli start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -62,7 +63,6 @@
     "drizzle-kit": "^0.31.1",
     "esbuild": "^0.27.4",
     "get-port": "^7.1.0",
-    "iterate": "workspace:*",
     "nodemon": "^3.1.14",
     "tinyexec": "^1.0.2",
     "tsx": "^4.20.3",
