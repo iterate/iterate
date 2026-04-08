@@ -1,13 +1,9 @@
 import assert from "node:assert/strict";
-import {
-  createWorkshopTestHarness,
-  runWorkshopMain,
-  type Event,
-  type StreamPath,
-} from "ai-engineer-workshop";
+import { os } from "@orpc/server";
+import { createWorkshopTestHarness, type Event, type StreamPath } from "ai-engineer-workshop";
 import relativePingPongProcessor from "./relative-ping-pong-processor.ts";
 
-export async function run() {
+export default os.handler(async () => {
   const app = createWorkshopTestHarness();
   const workerPath = app.createTestChildStreamPath({
     testName: "relative-ping-pong",
@@ -67,7 +63,7 @@ export async function run() {
   } finally {
     await runner.stopAndWait();
   }
-}
+});
 
 function toParentPath(path: StreamPath) {
   const segments = path.split("/").filter(Boolean);
@@ -83,5 +79,3 @@ function readLocation(event: Event) {
   const value = Reflect.get(event.payload, "location");
   return typeof value === "string" ? value : null;
 }
-
-runWorkshopMain(import.meta.url, run);

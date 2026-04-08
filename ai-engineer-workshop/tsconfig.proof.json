@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["./sdk.ts", "./proofs/workshop-os-proof.ts", "./proofs/workshop-os-runtime-proof.ts"]
+}

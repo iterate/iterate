@@ -1,6 +1,7 @@
-import { createEventsClient, runWorkshopMain } from "ai-engineer-workshop";
+import { os } from "@orpc/server";
+import { createEventsClient } from "ai-engineer-workshop";
 
-export async function run() {
+export default os.handler(async () => {
   const client = createEventsClient();
   const streamPath = `${process.env.PATH_PREFIX}/hello-world`;
 
@@ -10,6 +11,4 @@ export async function run() {
   });
 
   console.log(JSON.stringify(result, null, 2));
-}
-
-runWorkshopMain(import.meta.url, run);
+});

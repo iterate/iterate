@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
+import { os } from "@orpc/server";
 import {
   createEventsClient,
   PullSubscriptionPatternProcessorRuntime,
   type Event,
   type StreamPath,
-  runWorkshopMain,
 } from "ai-engineer-workshop";
 import processor from "./jonas-ping-pong-processor.ts";
 
 const jonasStreamPattern = "/jonas/**/*";
 
-export async function run() {
+export default os.handler(async () => {
   const client = createEventsClient({ baseUrl: process.env.BASE_URL || "http://127.0.0.1:4317" });
   const runId = `proof-${Date.now()}`;
   const matchingPathA = `/jonas/proofs/${runId}/a` as StreamPath;
@@ -177,7 +177,7 @@ export async function run() {
     runtime.stop();
     await runtimePromise;
   }
-}
+});
 
 async function waitForPong(args: {
   client: ReturnType<typeof createEventsClient>;
@@ -248,5 +248,3 @@ async function waitFor(
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }
-
-runWorkshopMain(import.meta.url, run);

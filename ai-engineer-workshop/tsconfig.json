@@ -19,6 +19,6 @@
     "outDir": "dist",
     "skipLibCheck": true
   },
-  "include": ["*.ts", "examples/**/*.ts", "e2e/**/*.ts"],
+  "include": ["**/*.ts"],
   "exclude": ["dist"]
 }

@@ -42,6 +42,10 @@ curl --json '{"type": "hello-world"}' \
 # Let's see if it's there
 curl -N "${BASE_URL}/api/streams${STREAM_PATH}"
 
+# Look, streams are created implicitly and stream creation events propagate up
+curl -N "${BASE_URL}/api/streams/
+
+
 # We can also live tail the stream with pretty printing (start this in a new tab)
 curl -sN "${BASE_URL}/api/streams${STREAM_PATH}?live=true" | sed -nu 's/^data: //p' | jq .
 
@@ -49,14 +53,59 @@ curl -sN "${BASE_URL}/api/streams${STREAM_PATH}?live=true" | sed -nu 's/^data: /
 curl --json '{"hogwash": "yes!"}' \
   "${BASE_URL}/api/streams${STREAM_PATH}"
 
+# Use an idempotency key to prevent duplicate appends - run this twice!
+curl --json '{"type": "hello-world", "idempotencyKey": "boop"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}"
 
 # You can get the "reduced state" of a stream
 curl "${BASE_URL}/api/streams/__state${STREAM_PATH}" | jq .
 
+
+# It can also do weird things!
+
+# Configure a JSONata transformer: any event with hogwash in it
+# gets transformed into a "hogwash-received" event
+curl --json '{
+  "type": "https://events.iterate.com/events/stream/jsonata-transformer-configured",
+  "payload": {
+    "slug": "hogwash-transformer",
+    "matcher": "payload.rawInput.hogwash",
+    "transform": "{\"type\": \"hogwash-received\"}"
+  }
+}' "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Now try appending hogwash again!
+curl --json '{"hogwash": "yes!e"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}"
+
+
+# You should see a new "hogwash-received" event appear in the stream
+
+
+
 # It can do some weird things  (maybe)
-# - you can pause a stream
-# - jsonata transform
+
+# You can pause a stream!
+curl -s --json '{"type":"https://events.iterate.com/events/stream/paused"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}" | jq .
+
+# check the state - it should show paused: true
+curl -s "${BASE_URL}/api/streams/__state${STREAM_PATH}" | jq .
+
+# try to append something - you'll get an error!
+curl --json '{"type": "hello-world"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# unpause
+curl --json '{"type":"https://events.iterate.com/events/stream/resumed"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# now appending works again
+curl --json '{"type": "hello-world"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}"
+
 # - send filtered and transformed webhooks to arbitrary endpoints
+
 # - schedule messages
 
 ```
@@ -86,11 +135,13 @@ See `examples/simple-openai-loop/`
 - `03-single-path-with-catch-up.ts`
 - `04-single-stream-runtime.ts`
 - `05-all-paths-with-interruptions.ts`
+- Live-coding versions: `workshop/02-nano-agent.ts`, `workshop/03-nano-agent-with-history.ts`, `workshop/04-nano-agent-with-persistent-history.ts`, `workshop/05-nano-agent-with-llm-processor.ts`
+- Structure these workshop versions so `updateHistoryFromEvent()` feels like the obvious precursor to a reducer
 
 ### Single turn
 
-- We define an `llm-input-added` event with `{ content: string }`
-- Whenever one is appended, we call the OpenAI Responses API and append the response as `llm-output-added` with `{ content: string }`
+- We define an `agent-input-added` event with `{ content: string }`
+- Whenever one is appended, we call the OpenAI Responses API and append each assistant output item as `openai-output-item-added`
 - Start with `01-single-path-script.ts`
 - It is just a script on one path
 - No `defineProcessor`
@@ -105,6 +156,7 @@ Problem:
 Solution:
 
 - In `02-single-path-with-history.ts`, we make a `history[]` variable and add to it over time
+- In the workshop version, `updateHistoryFromEvent()` is a tiny reducer-shaped helper over `agent-input-added` and `openai-output-item-added`
 
 ### With history from start
 
@@ -126,6 +178,7 @@ Problem:
 - We move the OpenAI call into `afterAppend`
 - `PullSubscriptionProcessorRuntime` gives us catch-up reads automatically for a single stream
 - This is the first version that uses `defineProcessor`
+- Workshop version: `workshop/agent-processor.ts` + `workshop/05-nano-agent-with-llm-processor.ts`
 
 ### All paths and interruptions
 
@@ -251,8 +304,50 @@ Goal: Allow people to queue up messages before an LLM request is sent.
 - In reducer: when encountering an input event without "interrupt
 -
 
+### Workflow codemode!
+
 ###
 
 # What is bad about this?
 
 - Loop detection is a PITA
+
+# Processor skill
+
+Stream processors consist of
+
+1. A slug - this is the unique, URL-safe slug that identifies the processor
+2. (Optional) new event types
+3. (Optional) an initial state and associated schema/type
+4. (Optional) a synchronous `reducer`
+5. (Optional) an asynchronous `afterAppend` hook
+
+### Examples
+
+### Tips
+
+- The only way to interact with your processor is by appending an event!
+- To make sure your processor survives crashes and restarts, you should
+- Don't try to "transform" events - that is deliberately not possible. Instead, just append a new event.
+- Embrace the distributed chaos. It's totally fine to say "I will wait up to 100ms before enacting my side effect to see if any other processor wants to stop me".
+- Be mindful of loops. the downside of distributed chaos is that you can easily create loops between processors who are pooping back and forth endlessly forever.
+- Be mindful of race conditions. Another downside of distributed chaos is that there are lots of race conditions.
+- Secrets should never be stored in events. There is a _very_ rudimentary secrets system in the events API for that reason.
+
+# TODO
+
+- AGENTS.md file
+
+# The end
+
+Remember
+
+- All you need are streams and stream processors
+- Your agent can be distributed across many programs
+
+Stuff I want to play with
+
+- Can I prompt an agent to actually self-debug and self-improve?
+- "Workflow codemode"
+- What if you could charge for agent plugins?
+-

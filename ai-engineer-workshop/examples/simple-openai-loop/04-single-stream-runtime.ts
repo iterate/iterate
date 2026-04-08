@@ -1,16 +1,16 @@
 import OpenAI from "openai";
 import type { ResponseInput } from "openai/resources/responses/responses";
+import { os } from "@orpc/server";
 import {
   createEventsClient,
   defineProcessor,
   PullSubscriptionProcessorRuntime,
-  runWorkshopMain,
 } from "ai-engineer-workshop";
 
 type State = { history: ResponseInput };
 const initialState: State = { history: [] };
 
-export async function run() {
+export default os.handler(async () => {
   const processor = defineProcessor(() => {
     const openai = new OpenAI();
 
@@ -53,6 +53,4 @@ export async function run() {
     processor,
     streamPath,
   }).run();
-}
-
-runWorkshopMain(import.meta.url, run);
+});

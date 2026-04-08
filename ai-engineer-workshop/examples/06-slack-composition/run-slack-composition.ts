@@ -1,17 +1,17 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
+import { os } from "@orpc/server";
 import {
   createEventsClient,
   PullSubscriptionProcessorRuntime,
   resolveWorkshopBaseUrl,
   resolveWorkshopProjectSlug,
-  runWorkshopMain,
 } from "ai-engineer-workshop";
 import { createAgentProcessor } from "./agent.ts";
 import { createCodemodeProcessor } from "./codemode.ts";
 import { createSlackInputProcessor } from "./slack-input.ts";
 
-export async function run() {
+export default os.handler(async () => {
   const apiKey = process.env.OPENAI_API_KEY;
   if (apiKey == null) {
     throw new Error("OPENAI_API_KEY is required");
@@ -50,6 +50,4 @@ Post raw Slack-style JSON to:
       streamPath,
     }).run(),
   ]);
-}
-
-runWorkshopMain(import.meta.url, run);
+});

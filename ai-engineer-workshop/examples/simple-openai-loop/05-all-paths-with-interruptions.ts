@@ -1,17 +1,17 @@
 import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
 import type { ResponseInput } from "openai/resources/responses/responses";
+import { os } from "@orpc/server";
 import {
   createEventsClient,
   defineProcessor,
   PullSubscriptionPatternProcessorRuntime,
-  runWorkshopMain,
 } from "ai-engineer-workshop";
 
 type State = { history: ResponseInput; requestId: string | null };
 const initialState: State = { history: [], requestId: null };
 
-export async function run() {
+export default os.handler(async ({ input }) => {
   const processor = defineProcessor(() => {
     const openai = new OpenAI();
     const activeRequests = new Map<string, { controller: AbortController; requestId: string }>();
@@ -91,6 +91,4 @@ export async function run() {
     processor,
     streamPattern,
   }).run();
-}
-
-runWorkshopMain(import.meta.url, run);
+});

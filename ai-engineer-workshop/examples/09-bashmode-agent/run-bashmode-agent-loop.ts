@@ -1,17 +1,17 @@
 import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { os } from "@orpc/server";
 import {
   createEventsClient,
   defaultWorkshopProjectSlug,
   PullSubscriptionProcessorRuntime,
   resolveWorkshopBaseUrl,
-  runWorkshopMain,
 } from "ai-engineer-workshop";
 import bashmode from "../08-bashmode/bashmode.ts";
 import { createAgentProcessor } from "./agent.ts";
 import { agentInputAddedType } from "./agent-types.ts";
 
-export async function run() {
+export default os.handler(async () => {
   const baseUrl = resolveWorkshopBaseUrl();
   const openAiApiKey = process.env.OPENAI_API_KEY;
   const openAiModel = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
@@ -64,7 +64,7 @@ export async function run() {
   }
 
   await runPromise;
-}
+});
 
 function printInstructions({
   baseUrl,
@@ -90,7 +90,7 @@ ${JSON.stringify(
     type: agentInputAddedType,
     payload: {
       content:
-        "Write exactly one ```bash``` block that prints hello from bashmode agent. No prose.",
+        "Write exactly one \`\`\`bash\`\`\` block that prints hello from bashmode agent. No prose.",
     },
   },
   null,
@@ -106,5 +106,3 @@ function installSignalHandlers(stop: () => void) {
     });
   }
 }
-
-runWorkshopMain(import.meta.url, run);

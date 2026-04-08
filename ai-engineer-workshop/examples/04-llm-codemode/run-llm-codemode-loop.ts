@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { os } from "@orpc/server";
 import {
   createEventsClient,
   defaultWorkshopProjectSlug,
@@ -11,7 +12,7 @@ import { createAgentProcessor } from "./agent.ts";
 import { llmInputAddedType } from "./agent-types.ts";
 import { createCodemodeProcessor } from "./codemode.ts";
 
-export async function run() {
+export default os.handler(async () => {
   const baseUrl = resolveWorkshopBaseUrl();
   const openAiApiKey = process.env.OPENAI_API_KEY;
   const openAiModel = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
@@ -79,7 +80,7 @@ export async function run() {
   }
 
   await runPromise;
-}
+});
 
 function printInstructions({
   baseUrl,
@@ -108,7 +109,7 @@ ${JSON.stringify(
     type: llmInputAddedType,
     payload: {
       content:
-        "Write exactly one ```ts``` block that fetches your own stream history and logs the most recent event as JSON. No prose.",
+        "Write exactly one \`\`\`ts\`\`\` block that fetches your own stream history and logs the most recent event as JSON. No prose.",
       source: "user",
     },
   },

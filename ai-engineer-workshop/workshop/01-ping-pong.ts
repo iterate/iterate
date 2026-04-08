@@ -1,7 +1,7 @@
-import { createEventsClient, runWorkshopMain } from "ai-engineer-workshop";
+import { createEventsClient, os, runIfMain } from "ai-engineer-workshop";
 
-export async function run() {
-  const streamPath = `${process.env.PATH_PREFIX}/00-hello-world`;
+export const handler = os.handler(async ({ input }) => {
+  const streamPath = `${input.pathPrefix}/00-hello-world`;
   const client = createEventsClient();
 
   for await (const event of await client.stream({ path: streamPath, live: true }, {})) {
@@ -12,6 +12,6 @@ export async function run() {
       });
     }
   }
-}
+});
 
-runWorkshopMain(import.meta.url, run);
+runIfMain(import.meta.url, handler);

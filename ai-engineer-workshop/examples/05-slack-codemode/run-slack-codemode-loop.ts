@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
+import { os } from "@orpc/server";
 import {
   createEventsClient,
   defaultWorkshopProjectSlug,
@@ -9,7 +10,7 @@ import {
 import { createSlackAgentProcessor } from "./agent.ts";
 import { createCodemodeProcessor } from "./codemode.ts";
 
-export async function run() {
+export default os.handler(async () => {
   const baseUrl = resolveWorkshopBaseUrl();
   const openAiApiKey = process.env.OPENAI_API_KEY;
   const projectSlug = process.env.PROJECT_SLUG ?? defaultWorkshopProjectSlug;
@@ -50,7 +51,7 @@ export async function run() {
   });
 
   await Promise.all([agentRuntime.run(), codemodeRuntime.run()]);
-}
+});
 
 function printInstructions({
   baseUrl,

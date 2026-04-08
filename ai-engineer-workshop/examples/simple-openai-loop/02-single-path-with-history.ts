@@ -1,8 +1,9 @@
 import OpenAI from "openai";
 import type { ResponseInput } from "openai/resources/responses/responses";
-import { createEventsClient, runWorkshopMain } from "ai-engineer-workshop";
+import { os } from "@orpc/server";
+import { createEventsClient } from "ai-engineer-workshop";
 
-export async function run() {
+export default os.handler(async () => {
   const client = createEventsClient();
   const openai = new OpenAI();
   const streamPath = `${process.env.PATH_PREFIX}/simple-openai-loop-history`;
@@ -29,6 +30,4 @@ export async function run() {
       event: { type: "llm-output-added", payload: { content: response.output_text } },
     });
   }
-}
-
-runWorkshopMain(import.meta.url, run);
+});
