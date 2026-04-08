@@ -576,7 +576,7 @@ describe.sequential("events stream e2e", () => {
       const stream = await app.client.stream(
         {
           path,
-          after: first.event.offset,
+          afterOffset: first.event.offset,
         },
         { signal: controller.signal },
       );
@@ -630,7 +630,7 @@ describe.sequential("events stream e2e", () => {
     "root uses the same stream and state procedures as every other path",
     async () => {
       const rootHistory = await collectAsyncIterableUntilIdle({
-        iterable: await app.client.stream({ path: "/", before: "end" }),
+        iterable: await app.client.stream({ path: "/", beforeOffset: "end" }),
         idleMs: historyIdleTimeoutMs,
       });
 
@@ -640,7 +640,7 @@ describe.sequential("events stream e2e", () => {
         metadata: {},
       });
 
-      const escapedRootHistoryResponse = await app.fetch("/api/streams/%2F?before=end");
+      const escapedRootHistoryResponse = await app.fetch("/api/streams/%2F?beforeOffset=end");
       expect(escapedRootHistoryResponse.status).toBe(200);
       expect(await escapedRootHistoryResponse.text()).toContain(
         "https://events.iterate.com/events/stream/initialized",
@@ -721,8 +721,8 @@ describe.sequential("events stream e2e", () => {
         },
       });
 
-      const rawHistoryResponse = await app.fetch(`/api/streams${path}?before=end`);
-      const escapedHistoryResponse = await app.fetch(`/api/streams/${routePath}?before=end`);
+      const rawHistoryResponse = await app.fetch(`/api/streams${path}?beforeOffset=end`);
+      const escapedHistoryResponse = await app.fetch(`/api/streams/${routePath}?beforeOffset=end`);
 
       expect(rawHistoryResponse.status).toBe(200);
       expect(await escapedHistoryResponse.text()).toEqual(await rawHistoryResponse.text());
@@ -1099,7 +1099,7 @@ describe.sequential("events stream e2e", () => {
 
       const resumed = await collectStreamEvents(app, {
         path,
-        after: expectedOffset(1),
+        afterOffset: expectedOffset(1),
       });
 
       expect(resumed.map((event) => event.payload)).toEqual([{ step: 2 }, { step: 3 }]);
@@ -1180,7 +1180,7 @@ describe.sequential("events stream e2e", () => {
           payload: { invalid: true },
         }),
       });
-      const historyResponse = await app.fetch("/api/streams/e2e/__reserved?before=end");
+      const historyResponse = await app.fetch("/api/streams/e2e/__reserved?beforeOffset=end");
       const stateResponse = await app.fetch("/api/streams/__state/e2e/__reserved");
 
       expect(appendResponse.status).toBe(200);
@@ -1405,14 +1405,14 @@ async function collectStreamEvents(
   appFixture: Events2AppFixture,
   options: {
     path: StreamPath;
-    after?: number;
+    afterOffset?: number;
   },
 ) {
   const events = await collectAsyncIterableUntilIdle({
     iterable: await appFixture.client.stream({
       path: options.path,
-      after: options.after,
-      before: "end",
+      afterOffset: options.afterOffset,
+      beforeOffset: "end",
     }),
     idleMs: historyIdleTimeoutMs,
   });
@@ -1430,14 +1430,14 @@ async function collectAllStreamEvents(
   appFixture: Events2AppFixture,
   options: {
     path: StreamPath;
-    after?: number;
+    afterOffset?: number;
   },
 ) {
   return await collectAsyncIterableUntilIdle({
     iterable: await appFixture.client.stream({
       path: options.path,
-      after: options.after,
-      before: "end",
+      afterOffset: options.afterOffset,
+      beforeOffset: "end",
     }),
     idleMs: historyIdleTimeoutMs,
   });

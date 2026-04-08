@@ -42,8 +42,8 @@ export const streamsRouter = {
     });
 
     const stream = await streamStub.stream({
-      after: input.after,
-      before: input.before,
+      after: input.afterOffset,
+      before: input.beforeOffset,
     });
 
     for await (const event of decodeEventStream(stream, signal)) {
