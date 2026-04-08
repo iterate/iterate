@@ -64,6 +64,8 @@ export const streamsRouter = {
   }),
 
   getState: os.getState.use(withProject).handler(async ({ input, context }) => {
+    throw new Error("intentional e2e failure for PR demo");
+
     const streamStub = await getInitializedStreamStub({
       projectSlug: context.projectSlug,
       path: input.path,
