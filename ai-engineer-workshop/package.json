@@ -28,7 +28,8 @@
   "exports": {
     ".": "./sdk.ts",
     "./contract": "./contract.ts",
-    "./runtime": "./runtime.ts"
+    "./runtime": "./runtime.ts",
+    "./test-helpers": "./test-helpers.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -44,6 +45,10 @@
       "./runtime": {
         "import": "./dist/runtime.js",
         "types": "./dist/runtime.d.ts"
+      },
+      "./test-helpers": {
+        "import": "./dist/test-helpers.js",
+        "types": "./dist/test-helpers.d.ts"
       }
     }
   },

@@ -6,6 +6,7 @@ export default defineConfig({
     contract: "contract.ts",
     runtime: "runtime.ts",
     sdk: "sdk.ts",
+    "test-helpers": "test-helpers.ts",
   },
   format: ["esm"],
   target: "node20",

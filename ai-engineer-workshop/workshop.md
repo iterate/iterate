@@ -240,10 +240,6 @@ Now we should be able to
 
 - let's add bashmode!
 
-# Maybe: tests
-
-# Maybe: how do we deploy this?
-
 Problem: My computer isn't always on!
 
 # Deployments
@@ -310,7 +306,7 @@ curl "https://webhook.site/token/aa6bf8b4-39ff-4807-a400-c21b37ee8e63/request/la
 
 ```
 
-# Workshop projects
+# Fun processors we can now build
 
 ### Add model selection to openai example
 

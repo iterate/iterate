@@ -247,9 +247,7 @@ export default {
 
 ---
 
-<!-- _class: lead -->
-
-# Remember
+# In closing
 
 - All you need are streams and stream processors
 - An agent can be distributed across many programs
