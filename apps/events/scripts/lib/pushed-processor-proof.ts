@@ -155,7 +155,7 @@ async function waitForEvent(args: {
 
 async function collectHistory(client: EventsClient, path: string) {
   return (await collectAsyncIterableUntilIdle({
-    iterable: (await client.stream({ path, live: false })) as AsyncIterable<Event>,
+    iterable: (await client.stream({ path, before: "end" })) as AsyncIterable<Event>,
     idleMs: 500,
   })) as Event[];
 }

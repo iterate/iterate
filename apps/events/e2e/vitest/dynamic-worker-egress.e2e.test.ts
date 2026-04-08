@@ -257,7 +257,7 @@ async function waitForEchoEvent(path: StreamPath, ordinal: number) {
 
 async function readHistory(path: StreamPath) {
   return (await collectAsyncIterableUntilIdle({
-    iterable: await app.client.stream({ path, live: false }),
+    iterable: await app.client.stream({ path, before: "end" }),
     idleMs: 500,
   })) as Event[];
 }

@@ -68,7 +68,7 @@ export async function useProcessorTestHarness<TState>({
   async function collectEvents() {
     const events: Event[] = [];
 
-    for await (const event of await client.stream({ path }, {})) {
+    for await (const event of await client.stream({ path, before: "end" }, {})) {
       events.push(event);
     }
 
@@ -113,15 +113,14 @@ export async function useProcessorTestHarness<TState>({
       };
 
       try {
-        await consume(await client.stream({ path }, { signal: controller.signal }));
+        await consume(await client.stream({ path, before: "end" }, { signal: controller.signal }));
 
         if (matchedEvent == null) {
           await consume(
             await client.stream(
               {
                 path,
-                offset: lastOffset,
-                live: true,
+                after: lastOffset ?? "start",
               },
               { signal: controller.signal },
             ),

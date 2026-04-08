@@ -6,7 +6,7 @@ export const handler = os.handler(async ({ input, context }) => {
   const openai = new OpenAI();
   const streamPath = `${input.pathPrefix}/nano-agent`;
 
-  for await (const event of await client.stream({ path: streamPath, live: true })) {
+  for await (const event of await client.stream({ path: streamPath })) {
     if (event.type !== "agent-input-added") continue;
 
     context.logger.info("Sending LLM request", { event });

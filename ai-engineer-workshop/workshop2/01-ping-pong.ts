@@ -5,7 +5,7 @@ async function main() {
   const streamPath = `${pathPrefix}/00-hello-world`;
   const client = createEventsClient();
 
-  for await (const event of await client.stream({ path: streamPath, live: true }, {})) {
+  for await (const event of await client.stream({ path: streamPath }, {})) {
     if (event.type === "ping") {
       await client.append({
         path: streamPath,

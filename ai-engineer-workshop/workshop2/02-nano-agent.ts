@@ -7,7 +7,7 @@ try {
   const openai = new OpenAI();
   const streamPath = `${pathPrefix}/nano-agent`;
 
-  for await (const event of await client.stream({ path: streamPath, live: true })) {
+  for await (const event of await client.stream({ path: streamPath })) {
     if (event.type !== "agent-input-added") continue;
 
     console.log("Sending LLM request", { event });
