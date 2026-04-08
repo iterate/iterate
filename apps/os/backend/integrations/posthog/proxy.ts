@@ -10,6 +10,19 @@ import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
 const POSTHOG_HOST = "eu.i.posthog.com";
 const POSTHOG_SECRET_HEADER = "x-iterate-webhook-secret";
 
+/**
+ * PostHog event types that should NOT be forwarded to machines.
+ * `$error_tracking_issue_created` events are generated when our own outbox DLQ
+ * sends a `$exception` to PostHog, which then fires a webhook back to us.
+ * Forwarding these creates a recursive loop:
+ *   forwardPosthogWebhook fails → DLQ → $exception → PostHog webhook
+ *   → forwardPosthogWebhook → fail → DLQ → $exception → …
+ */
+const IGNORED_EVENT_TYPES = new Set([
+  "$error_tracking_issue_created",
+  "$error_tracking_issue_status_change",
+]);
+
 export const posthogProxyApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
 posthogProxyApp.post("/api/integrations/posthog/webhook", async (c) => {
@@ -25,6 +38,13 @@ posthogProxyApp.post("/api/integrations/posthog/webhook", async (c) => {
     payload = JSON.parse(body) as Record<string, unknown>;
   } catch {
     return c.json({ error: "Invalid JSON payload" }, 400);
+  }
+
+  // Drop PostHog-internal events that would cause recursive error loops.
+  const eventType = resolveEventType(payload);
+  if (eventType && IGNORED_EVENT_TYPES.has(eventType)) {
+    logger.debug("[PostHog Webhook] Ignoring internal event type", { eventType });
+    return c.json({ received: true, ignored: true, reason: `event type ${eventType} is filtered` });
   }
 
   const deliveryId =
@@ -74,6 +94,23 @@ posthogProxyApp.all("/api/integrations/posthog/proxy/*", async (c) => {
 
   return new Response(response.body, response);
 });
+
+/**
+ * Extract the PostHog event type from a webhook payload.
+ * PostHog webhooks nest the event data under `event.event` (action webhooks)
+ * or at the top-level `event` key (direct event webhooks).
+ */
+function resolveEventType(payload: Record<string, unknown>): string | null {
+  // Action webhook format: { event: { event: "$error_tracking_issue_created", ... } }
+  const nested = payload.event;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    const inner = (nested as Record<string, unknown>).event;
+    if (typeof inner === "string") return inner;
+  }
+  // Direct event format: { event: "$error_tracking_issue_created" }
+  if (typeof payload.event === "string") return payload.event;
+  return null;
+}
 
 function verifySharedSecret(
   expected: string | undefined,
