@@ -381,7 +381,7 @@ describe.sequential("events stream e2e", () => {
         streamPath: path,
         type: "https://events.iterate.com/events/stream/paused",
         payload: {
-          reason: "circuit breaker tripped: 100 events in under 1 second",
+          reason: "circuit breaker tripped: burst rate limit exceeded",
         },
       });
 
@@ -512,7 +512,7 @@ describe.sequential("events stream e2e", () => {
         eventCount: 1,
         childPaths: [],
         metadata: {},
-        processors: expectedProcessorsWithRecentEventCount(1),
+        processors: expectedProcessorsWithTokenBucketCircuitBreaker(),
       });
       expect(await collectStreamEvents(app, { path })).toEqual([]);
       expect(await collectAllStreamEvents(app, { path })).toMatchObject([
@@ -620,7 +620,7 @@ describe.sequential("events stream e2e", () => {
         eventCount: 1,
         childPaths: [],
         metadata: {},
-        processors: expectedProcessorsWithRecentEventCount(1),
+        processors: expectedProcessorsWithTokenBucketCircuitBreaker(),
       });
     },
     testTimeoutMs,
@@ -701,7 +701,7 @@ describe.sequential("events stream e2e", () => {
         metadata: {
           owner: "second",
         },
-        processors: expectedProcessorsWithRecentEventCount(4),
+        processors: expectedProcessorsWithTokenBucketCircuitBreaker(),
       });
     },
     testTimeoutMs,
@@ -1379,13 +1379,14 @@ function expectedStoredOffset(value: number) {
   return value + 1;
 }
 
-function expectedProcessorsWithRecentEventCount(count: number) {
+function expectedProcessorsWithTokenBucketCircuitBreaker() {
   return {
     "circuit-breaker": {
       paused: false,
       pauseReason: null,
       pausedAt: null,
-      recentEventTimestamps: Array.from({ length: count }, () => expect.any(String)),
+      availableTokens: expect.any(Number),
+      lastRefillAtMs: expect.any(Number),
     },
     "external-subscriber": {
       subscribersBySlug: {},
@@ -1499,7 +1500,7 @@ async function tripCircuitBreaker(appFixture: Events2AppFixture, path: StreamPat
       typeof event.payload === "object" &&
       event.payload !== null &&
       "reason" in event.payload &&
-      event.payload.reason === "circuit breaker tripped: 100 events in under 1 second",
+      event.payload.reason === "circuit breaker tripped: burst rate limit exceeded",
   );
 }
 

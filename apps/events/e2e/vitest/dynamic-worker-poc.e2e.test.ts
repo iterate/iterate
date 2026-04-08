@@ -125,7 +125,8 @@ describe("dynamic worker processor", () => {
             paused: false,
             pauseReason: null,
             pausedAt: null,
-            recentEventTimestamps: Array.from({ length: 7 }, () => expect.any(String)),
+            availableTokens: expect.any(Number),
+            lastRefillAtMs: expect.any(Number),
           },
           "dynamic-worker": {
             workersBySlug: {

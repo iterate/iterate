@@ -13,7 +13,8 @@ describe("StreamState", () => {
           paused: false,
           pauseReason: null,
           pausedAt: null,
-          recentEventTimestamps: [],
+          availableTokens: 100,
+          lastRefillAtMs: null,
         },
         "jsonata-transformer": {
           transformersBySlug: {},
@@ -21,6 +22,13 @@ describe("StreamState", () => {
       },
     });
 
+    expect(parsed.processors["circuit-breaker"]).toEqual({
+      paused: false,
+      pauseReason: null,
+      pausedAt: null,
+      availableTokens: 100,
+      lastRefillAtMs: null,
+    });
     expect(parsed.processors["dynamic-worker"]).toEqual({
       workersBySlug: {},
     });
