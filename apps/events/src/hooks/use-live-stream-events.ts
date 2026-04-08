@@ -35,7 +35,6 @@ export function useLiveStreamEvents({
         const stream = await orpcClient.stream(
           {
             path: streamPath,
-            live: true,
           },
           { signal: controller.signal },
         );

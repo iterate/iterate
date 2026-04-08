@@ -33,7 +33,7 @@ export const handler = os.handler(async ({ context, input }) => {
   const history: ResponseInput = [];
   let lastSeenOffset: number | undefined;
 
-  for await (const event of await client.stream({ path: streamPath }, {})) {
+  for await (const event of await client.stream({ path: streamPath, before: "end" }, {})) {
     lastSeenOffset = event.offset;
     updateHistoryFromEvent(history, event);
   }
@@ -41,7 +41,7 @@ export const handler = os.handler(async ({ context, input }) => {
   context.logger.info(`Watching ${streamPath} with ${history.length} history items`);
 
   for await (const event of await client.stream(
-    { path: streamPath, offset: lastSeenOffset, live: true },
+    { path: streamPath, after: lastSeenOffset ?? "end" },
     {},
   )) {
     if (event.offset === lastSeenOffset) continue;
