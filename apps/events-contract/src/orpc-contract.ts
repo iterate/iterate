@@ -17,6 +17,10 @@ import {
 const PathMungingDescription =
   "For curl ergonomics, nested stream paths accept either raw nested segments or percent-escaped slash forms. Both resolve to the same canonical stream path.";
 
+// `.catch()` keeps the server lenient — malformed events are stored as
+// InvalidEventAppendedEvent instead of rejected. The cast preserves the input
+// side as `EventInput` for client typing while keeping the output side aligned
+// with Zod's parsed output shape.
 const NormalizedAppendEventInput = EventInput.catch((ctx) =>
   InvalidEventAppendedEventInput.parse({
     type: "https://events.iterate.com/events/stream/invalid-event-appended",
@@ -28,7 +32,7 @@ const NormalizedAppendEventInput = EventInput.catch((ctx) =>
       }),
     },
   }),
-);
+) as unknown as z.ZodType<z.output<typeof EventInput>, EventInput>;
 
 export const AppendInput = z.object({
   path: StreamPath,

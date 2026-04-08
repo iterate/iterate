@@ -458,28 +458,6 @@ export const streamPausedPage = {
     "While paused, the durable object rejects all new appends except `stream/resumed`.",
     "The circuit breaker processor can emit this event automatically.",
   ],
-  templates: [
-    {
-      id: "stream-paused:manual-pause",
-      label: "Stream Paused · Manual pause",
-      event: {
-        type: "https://events.iterate.com/events/stream/paused",
-        payload: {
-          reason: "operator paused stream during incident triage",
-        },
-      },
-    },
-    {
-      id: "stream-paused:circuit-breaker",
-      label: "Stream Paused · Circuit breaker trip",
-      event: {
-        type: "https://events.iterate.com/events/stream/paused",
-        payload: {
-          reason: "circuit breaker tripped: 100 events in under 1 second",
-        },
-      },
-    },
-  ],
 } satisfies EventTypePageDefinition;
 
 export const streamResumedPage = {
@@ -494,28 +472,6 @@ export const streamResumedPage = {
   details: [
     "This is the only event type allowed through while a stream is paused.",
     "Resuming clears the active paused state so normal appends can continue.",
-  ],
-  templates: [
-    {
-      id: "stream-resumed:operator-override",
-      label: "Stream Resumed · Operator override",
-      event: {
-        type: "https://events.iterate.com/events/stream/resumed",
-        payload: {
-          reason: "operator override after inspection",
-        },
-      },
-    },
-    {
-      id: "stream-resumed:traffic-normalized",
-      label: "Stream Resumed · Traffic normalized",
-      event: {
-        type: "https://events.iterate.com/events/stream/resumed",
-        payload: {
-          reason: "traffic normalized after the burst subsided",
-        },
-      },
-    },
   ],
 } satisfies EventTypePageDefinition;
 

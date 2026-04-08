@@ -7,7 +7,7 @@ import {
 export const StreamPausedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/paused"),
   payload: z.strictObject({
-    reason: z.string().trim().min(1),
+    reason: z.string().trim().min(1).optional(),
   }),
 });
 export const StreamPausedEvent = GenericEventBase.extend(
@@ -19,7 +19,7 @@ export type StreamPausedEvent = z.infer<typeof StreamPausedEvent>;
 export const StreamResumedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/resumed"),
   payload: z.strictObject({
-    reason: z.string().trim().min(1),
+    reason: z.string().trim().min(1).optional(),
   }),
 });
 export const StreamResumedEvent = GenericEventBase.extend(

@@ -34,6 +34,7 @@ __pycache__/
 # Experiment artifacts
 experiments/*/disk-config.json
 ai-engineer-workshop/.codemode/
+ai-engineer-workshop/README.html
 
 # ad-hoc ignored files/paths
 *ignoreme*

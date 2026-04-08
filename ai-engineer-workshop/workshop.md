@@ -1,22 +1,29 @@
 In this workshop we will build an AI agent entirely from scratch using only two ingredients:
 
-1. An durable stream API that supports `.append({ path, event })` and `.subscribe({ path })`
-2. Stream processors that implement the `.reduce` and `.afterAppend` methods
+1. A durable stream API that supports `.append({ path, event })` and `.subscribe({ path })`
 
-This is all very prototype level code, but I hope the _ideas_ come across. We're all just reducing over event streams!
+2. Stream processors that implement the `.reduce({ event, state })` and `.afterAppend({ append, event, state })` methods
 
-## 1. Streams
+Our AI agent will be
+
+- Purely event sourced (aka "Debuggable")
+- Extensible with good composability
+- On the edge / publicly routable
+- Distributed
+
+# Playing with streams
 
 We made a simple durable streams server at https://events.iterate.com for this workshop. Let's [look at the docs](https://events.iterate.com/api/docs)!
 
 **WARNING: There is no authentication on this server, so please don't stick any secrets in your streams.**
 
-Let's play with this together!
+Here's how you use them:
 
 ```bash
 
-# Streams are structured into paths. Let's give ourselves a unique path prefix
-# My prefix will be /jonastemplestein - paths start with a slash!
+# Like files, a "stream" is identified by a "path" that starts with a slash
+# Let's give ourselves a unique path prefix so we don't collide with other people
+# My prefix will be /jonastemplestein
 export PATH_PREFIX="/$(id -un)"
 export BASE_URL="https://events.iterate.com"
 export STREAM_PATH="${PATH_PREFIX}/hello-world"
@@ -28,54 +35,134 @@ curl --json '{"type": "hello-world"}' \
 # Let's see if it's there
 curl -N "${BASE_URL}/api/streams${STREAM_PATH}"
 
-# We can also live tail the stream
-# With pretty printing
+# We can also live tail the stream with pretty printing (start this in a new tab)
 curl -sN "${BASE_URL}/api/streams${STREAM_PATH}?live=true" | sed -nu 's/^data: //p' | jq .
-```
-
-Now let's in another tab append another event
-
-```bash
-curl --json '{"type": "hello-world"}' \
-  "${BASE_URL}/api/streams${STREAM_PATH}"
 
 # Can also append hogwash!
 curl --json '{"hogwash": "yes!"}' \
   "${BASE_URL}/api/streams${STREAM_PATH}"
 
+# Use an idempotency key to prevent duplicate appends - run this twice!
+curl --json '{"type": "hello-world", "idempotencyKey": "boop"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# You can get the "reduced state" of a stream
+curl "${BASE_URL}/api/streams/__state${STREAM_PATH}" | jq .
+
+# You should see a new "hogwash-received" event appear in the stream
+
+# You can pause a stream!
+curl -s --json '{"type":"https://events.iterate.com/events/stream/paused"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}" | jq .
+
+# check the state - it should show paused: true
+curl -s "${BASE_URL}/api/streams/__state${STREAM_PATH}" | jq .
+
+# try to append something - you'll get an error!
+curl --json '{"type": "hello-world"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# unpause
+curl --json '{"type":"https://events.iterate.com/events/stream/resumed"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# now appending works again
+curl --json '{"type": "hello-world"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# It can also do weird things!
+
+# Configure a JSONata transformer: any event with hogwash in it
+# gets transformed into a "hogwash-received" event
+curl --json '{
+  "type": "https://events.iterate.com/events/stream/jsonata-transformer-configured",
+  "payload": {
+    "slug": "hogwash-transformer",
+    "matcher": "payload.rawInput.hogwash",
+    "transform": "{\"type\": \"hogwash-received\"}"
+  }
+}' "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Now try appending hogwash again!
+curl --json '{"hogwash": "yes!e"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# You can even schedule messages!
+
+# Schedule a recurring heartbeat every 5 seconds
+curl --json '{
+  "type": "https://events.iterate.com/events/stream/append-scheduled",
+  "payload": {
+    "slug": "heartbeat-every-5s",
+    "append": {
+      "type": "heartbeat"
+    },
+    "schedule": {
+      "kind": "every",
+      "intervalSeconds": 5
+    }
+  }
+}' "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Tail it and you should see heartbeat events keep showing up
+curl -N "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Look at the state of the stream again
+curl "${BASE_URL}/api/streams/__state${STREAM_PATH}" | jq .
+
+# Stop the recurring schedule again
+curl --json '{
+  "type": "https://events.iterate.com/events/stream/schedule/cancelled",
+  "payload": {
+    "slug": "heartbeat-every-5s"
+  }
+}' "${BASE_URL}/api/streams${STREAM_PATH}"
+
+
+# Receive webhooks when new events occur
+
+# Use this disposable webhook.site inbox for the demo
+# UI: https://webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63
+# Matching future events on this stream will now be POSTed to that webhook.site URL
+curl --json '{
+  "type": "https://events.iterate.com/events/stream/subscription/configured",
+  "payload": {
+    "slug": "webhook-site",
+    "callbackUrl": "https://webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63",
+    "type": "webhook",
+    "jsonataFilter": "type = \"webhook-demo\"",
+    "jsonataTransform": "{\"kind\":\"webhook-demo\",\"message\":payload.message,\"streamPath\":streamPath,\"offset\":offset}"
+  }
+}' "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Append a matching event and the transformed payload gets delivered to webhook.site
+curl --json '{
+  "type": "webhook-demo",
+  "payload": {
+    "message": "hello from iterate streams"
+  }
+}' "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Fetch the latest transformed request body back from webhook.site over curl too
+curl "https://webhook.site/token/aa6bf8b4-39ff-4807-a400-c21b37ee8e63/request/latest/raw"
+
+# Webhook inbox UI for this example: https://webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63
+
 
 ```
 
-Some notes / observations:
-
-- Paths start with a slash!
-- Events are JSON objects with a `type` and optional `payload` property
-- Use `idempotencyKey` to ensure you don't append the same event twice
-- Server assigns monotonically increasing `offset` and `createdAt` to each event
-- There's a web UI at https://events.iterate.com/
-
 ## Hello world in script form
 
-- Let's make a typescript version of the hello world script!
+Let's make a typescript version of the hello world script!
 
 ## Ping-pong script
 
-- Let's make a script where if anyone appends a `type: ping` event, we append a `type: pong` event!
-
-## A simple LLM loop
-
-See `examples/simple-openai-loop/`
-
-- `01-single-path-script.ts`
-- `02-single-path-with-history.ts`
-- `03-single-path-with-catch-up.ts`
-- `04-single-stream-runtime.ts`
-- `05-all-paths-with-interruptions.ts`
+Let's make a very rudimentary script. Any time somebody appends an event of type "ping", we append a "pong" event!
 
 ### Single turn
 
-- We define an `llm-input-added` event with `{ content: string }`
-- Whenever one is appended, we call the OpenAI Responses API and append the response as `llm-output-added` with `{ content: string }`
+- We define an `agent-input-added` event with `{ content: string }`
+- Whenever one is appended, we call the OpenAI Responses API and append each assistant output item as `openai-output-item-added`
 - Start with `01-single-path-script.ts`
 - It is just a script on one path
 - No `defineProcessor`
@@ -90,6 +177,7 @@ Problem:
 Solution:
 
 - In `02-single-path-with-history.ts`, we make a `history[]` variable and add to it over time
+- In the workshop version, `updateHistoryFromEvent()` is a tiny reducer-shaped helper over `agent-input-added` and `openai-output-item-added`
 
 ### With history from start
 
@@ -111,6 +199,7 @@ Problem:
 - We move the OpenAI call into `afterAppend`
 - `PullSubscriptionProcessorRuntime` gives us catch-up reads automatically for a single stream
 - This is the first version that uses `defineProcessor`
+- Workshop version: `workshop/agent-processor.ts` + `workshop/05-nano-agent-with-llm-processor.ts`
 
 ### All paths and interruptions
 
@@ -166,58 +255,66 @@ Now we should be able to
 - spawn sub-agents and send messages back and forth - let's try that - we can write a test for it
 -
 
-# Maybe: let's make the UI nice!
+# Sequence of iterations
 
-# Maybe: how do we deploy this?
+- ping / pong
+- non-processor llm loop w/o memory
+- non-processor llm loop w/ memory
+- processor loop with memory
+- processor loop with memory and interruptions and queued messages
+
+- let's add bashmode!
 
 Problem: My computer isn't always on!
 
-# Maybe scheduled execution
+# Deployments
 
-# Workshop projects
+```bash
 
-### Add model selection to openai example
+# Append a tiny dynamic worker that replies "pong" to every "ping"
+export DYNAMIC_WORKER="$(cat <<'EOF'
+export default {
+  slug: "ping-pong",
+  initialState: {},
+  reduce({ state }) {
+    return state;
+  },
+  async afterAppend({ append, event }) {
+    if (event.type !== "ping") return;
+    await append({ event: { type: "pong" } });
+  },
+};
+EOF
 
-### Debouncing your inputs
+)"
 
-### Asynchronous context gathering (e.g. RAG from knowledge bases)
+curl --json "$(jq -nc --arg script "$DYNAMIC_WORKER" '{
+  type: "https://events.iterate.com/events/stream/dynamic-worker/configured",
+  payload: {
+    slug: "ping-pong",
+    script: $script
+  }
+}')" "${BASE_URL}/api/streams${STREAM_PATH}"
 
-Goal: Allow processors to contribute additional context before an LLM request
+# Now append ping and the stream suddenly ping-pongs
+curl --json '{"type": "ping"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}"
 
-Implementation sketch:
+# Watch the stream and you'll see the derived pong event
+curl -N "${BASE_URL}/api/streams${STREAM_PATH}"
 
-- Debounce LLM requests by e.g. 200ms
-- Any processor can now listen for "LLM request triggered" events or something like that
+```
 
-### Multi-LLM agent
+# Fun things we can easily build now
 
-Use tanstack AI or vercel AI or whatever you like to
-
-### Opencode / pi / claude / codex / whatever bridge
-
-Build a processor that sits between opencode / pi / claude / codex / or whatever other coding agent you use. It
-
-1. consumes input item events from the iterate stream and forwards on to agents
-2. consumes events from other harness sessions and sticks them into iterate streams
-
-You can then easily build a conductor-style UI on top.
-
-### Queued messages and interruptions
-
-Goal: Allow people to queue up messages before an LLM request is sent.
-
-- Add "interruptionBehavior" property to LLM input event type. Could e.g. be "queue" or "interrupt"
-- Add `queuedInputItems` array to state
-- In reducer: when encountering an input event without "interrupt
--
-
-###
-
-# What is bad about this?
-
-- Loop detection is a PITA
-
-# Workshop CLI should
-
-1. Take script and "path pattern" to hook up to as input
-2.
+- Add events for model and system prompt setting
+- Debounce inputs so repeated inputs don't interrupt the LLM over and over
+- Collect prompt context from "context providers" (e.g. RAG from knowledge bases) for some period of time before making each LLM request
+- Image / attachment event types
+- Opencode / pi bridge - we could have a processor that sits between an opencode agent and e.g. a pi or opencode session - so we could speak to all these agent harnesses using a single _input_ interface
+- Different compaction strategies
+- Multi LLM agent (via tanstack AI or vercel AI sdk for example)
+- Allow agents to have multple multiple LLM requests in flight at the same time
+  - ... for safety - run a prompt injection protector in parallel
+  - ... or to allow "sidebar" conversations
+- Proper codemode - add new tools via events!

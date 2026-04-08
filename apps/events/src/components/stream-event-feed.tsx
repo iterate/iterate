@@ -68,6 +68,7 @@ import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 import type {
+  BashmodeBlockFeedItem,
   CodemodeBlockFeedItem,
   CodemodeResultFeedItem,
   DynamicWorkerConfiguredFeedItem,
@@ -77,7 +78,6 @@ import type {
   GroupedEventFeedItem,
   JsonataTransformerConfiguredFeedItem,
   SchedulerControlFeedItem,
-  SchedulerExecutionFeedItem,
   StreamErrorOccurredFeedItem,
   StreamFeedItem,
   StreamLifecycleFeedItem,
@@ -249,10 +249,10 @@ function StreamFeedItemRenderer({
       return <StreamErrorOccurredCard item={item} />;
     case "scheduler-control":
       return <SchedulerControlCard item={item} />;
-    case "scheduler-execution":
-      return <SchedulerExecutionCard item={item} />;
     case "codemode-block":
       return <CodemodeBlockCard item={item} />;
+    case "bashmode-block":
+      return <BashmodeBlockCard item={item} />;
     case "codemode-result":
       return <CodemodeResultCard item={item} />;
     default:
@@ -272,7 +272,7 @@ function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) 
       <div className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
         <FolderPlusIcon className="size-3.5" />
       </div>
-      <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
           Child stream created
         </span>
@@ -285,7 +285,7 @@ function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) 
             projectSlug,
             renderer: previous.renderer ?? defaultStreamViewSearch.renderer,
           })}
-          className="block min-w-0 max-w-full text-foreground hover:text-primary hover:underline sm:flex-1"
+          className="block min-w-0 max-w-full text-foreground hover:text-primary hover:underline"
         >
           <StreamPathLabel
             path={item.createdPath}
@@ -481,7 +481,7 @@ function DynamicWorkerConfiguredCard({ item }: { item: DynamicWorkerConfiguredFe
               <SourceCodeBlock
                 code={open || !hasMoreCode ? item.sourceCode : previewCode}
                 language="typescript"
-                className={cn("min-h-32", open ? "max-h-[36rem]" : "max-h-72")}
+                className={cn("min-h-32", open ? "max-h-144" : "max-h-72")}
                 showCopyButton
               />
             </div>
@@ -529,25 +529,18 @@ function StreamErrorOccurredCard({ item }: { item: StreamErrorOccurredFeedItem }
 }
 
 function SchedulerControlCard({ item }: { item: SchedulerControlFeedItem }) {
-  const eyebrowLabel =
-    item.action === "append-scheduled"
-      ? "Append scheduled"
-      : item.action === "configured"
-        ? "Schedule configured"
-        : "Schedule cancelled";
+  const eyebrowLabel = item.action === "configured" ? "Schedule configured" : "Schedule cancelled";
   const title = item.slug;
   const data =
-    item.action === "append-scheduled"
-      ? { slug: item.slug, schedule: item.schedule, append: item.append }
-      : item.action === "configured"
-        ? {
-            slug: item.slug,
-            callback: item.callback,
-            schedule: item.schedule,
-            nextRunAt: item.nextRunAt,
-            payload: tryParseJson(item.payloadJson),
-          }
-        : { slug: item.slug };
+    item.action === "configured"
+      ? {
+          slug: item.slug,
+          callback: item.callback,
+          schedule: item.schedule,
+          nextRunAt: item.nextRunAt,
+          payload: tryParseJson(item.payloadJson),
+        }
+      : { slug: item.slug };
 
   return (
     <AssistantArtifact
@@ -570,35 +563,6 @@ function SchedulerControlCard({ item }: { item: SchedulerControlFeedItem }) {
   );
 }
 
-function SchedulerExecutionCard({ item }: { item: SchedulerExecutionFeedItem }) {
-  const isFailure = item.action === "finished" && item.outcome === "failed";
-  const isSuccess = item.action === "finished" && item.outcome === "succeeded";
-
-  return (
-    <AssistantArtifact
-      eyebrow={
-        item.action === "started" ? (
-          <PlayCircleIcon className="size-3.5" />
-        ) : isSuccess ? (
-          <CheckCircle2Icon className="size-3.5" />
-        ) : (
-          <XCircleIcon className="size-3.5" />
-        )
-      }
-      eyebrowLabel={
-        item.action === "started"
-          ? "Schedule execution started"
-          : isFailure
-            ? "Schedule execution failed"
-            : "Schedule execution finished"
-      }
-      title={item.slug}
-      meta={buildSchedulerExecutionMeta(item)}
-      tone={item.action === "started" ? "default" : isFailure ? "danger" : "success"}
-    />
-  );
-}
-
 function CodemodeBlockCard({ item }: { item: CodemodeBlockFeedItem }) {
   return (
     <AssistantArtifact
@@ -612,7 +576,27 @@ function CodemodeBlockCard({ item }: { item: CodemodeBlockFeedItem }) {
         <SourceCodeBlock
           code={item.code}
           language={item.language === "ts" ? "typescript" : "text"}
-          className="min-h-40 max-h-[32rem]"
+          className="min-h-40 max-h-128"
+          showCopyButton
+        />
+      </ArtifactSection>
+    </AssistantArtifact>
+  );
+}
+
+function BashmodeBlockCard({ item }: { item: BashmodeBlockFeedItem }) {
+  return (
+    <AssistantArtifact
+      eyebrow={<TerminalSquareIcon className="size-3.5" />}
+      eyebrowLabel="Bash block"
+      title="shell"
+      meta={[formatTime(item.timestamp)]}
+    >
+      <ArtifactSection>
+        <SourceCodeBlock
+          code={item.content}
+          language="text"
+          className="min-h-32 max-h-128"
           showCopyButton
         />
       </ArtifactSection>
@@ -827,19 +811,6 @@ function buildSchedulerControlMeta(item: SchedulerControlFeedItem) {
 
   if (item.action === "configured" && item.nextRunAt != null) {
     meta.push(`Next run ${formatTime(item.nextRunAt * 1000)}`);
-  }
-
-  return meta;
-}
-
-function buildSchedulerExecutionMeta(item: SchedulerExecutionFeedItem) {
-  const meta = [formatTime(item.timestamp)];
-
-  if (item.action === "finished") {
-    meta.unshift(item.outcome === "failed" ? "Failed" : "Succeeded");
-    meta.push(
-      item.nextRunAt == null ? "No next run" : `Next run ${formatTime(item.nextRunAt * 1000)}`,
-    );
   }
 
   return meta;
@@ -1166,7 +1137,7 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
     case "grouped-event":
       return `group-${item.eventType}-${item.firstTimestamp}-${item.lastTimestamp}-${item.count}`;
     case "message":
-      return `message-${item.role}-${item.timestamp}-${index}`;
+      return item.messageId ?? `message-${item.role}-${item.timestamp}-${index}`;
     case "tool":
       return `tool-${item.toolCallId}-${item.startTimestamp}`;
     case "error":
@@ -1191,12 +1162,12 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `stream-error-occurred-${item.timestamp}-${index}`;
     case "codemode-block":
       return `codemode-block-${item.blockId}-${item.timestamp}-${index}`;
+    case "bashmode-block":
+      return `bashmode-block-${item.timestamp}-${index}`;
     case "codemode-result":
       return `codemode-result-${item.blockId}-${item.blockCount}-${item.timestamp}-${index}`;
     case "scheduler-control":
       return `scheduler-control-${item.action}-${item.slug}-${item.raw.offset}`;
-    case "scheduler-execution":
-      return `scheduler-execution-${item.action}-${item.slug}-${item.raw.offset}`;
     default:
       return `feed-item-${index}`;
   }

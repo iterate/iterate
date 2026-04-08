@@ -39,7 +39,7 @@ export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerStat
     if (pausedEvent.success) {
       return {
         paused: true,
-        pauseReason: pausedEvent.data.payload.reason,
+        pauseReason: pausedEvent.data.payload.reason ?? null,
         pausedAt: event.createdAt,
         recentEventTimestamps: [event.createdAt],
       };

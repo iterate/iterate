@@ -6,15 +6,9 @@ import {
   StreamSubscriptionConfiguredEvent,
   SCHEDULE_CANCELLED_TYPE,
   SCHEDULE_CONFIGURED_TYPE,
-  SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
-  SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
   ScheduleConfiguredPayload,
-  ScheduleInternalExecutionFinishedPayload,
-  ScheduleInternalExecutionStartedPayload,
   StreamMetadataUpdatedEvent,
-  STREAM_APPEND_SCHEDULED_TYPE,
   StreamPausedEvent,
-  StreamAppendScheduledPayload,
   StreamResumedEvent,
   type Event,
 } from "@iterate-com/events-contract";
@@ -203,18 +197,20 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
   }
 
   if (event.type === "https://events.iterate.com/events/stream/paused") {
+    const paused = StreamPausedEvent.parse(event);
     return {
       kind: "stream-paused",
-      reason: StreamPausedEvent.parse(event).payload.reason,
+      reason: paused.payload.reason ?? "No reason provided",
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };
   }
 
   if (event.type === "https://events.iterate.com/events/stream/resumed") {
+    const resumed = StreamResumedEvent.parse(event);
     return {
       kind: "stream-resumed",
-      reason: StreamResumedEvent.parse(event).payload.reason,
+      reason: resumed.payload.reason ?? "No reason provided",
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };
@@ -224,19 +220,6 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     return {
       kind: "stream-error-occurred",
       message: ErrorOccurredEvent.parse(event).payload.message,
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    };
-  }
-
-  if (event.type === STREAM_APPEND_SCHEDULED_TYPE) {
-    const payload = StreamAppendScheduledPayload.parse(event.payload);
-    return {
-      kind: "scheduler-control",
-      action: "append-scheduled",
-      slug: payload.slug,
-      schedule: payload.schedule,
-      append: payload.append,
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };
@@ -263,30 +246,6 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
       kind: "scheduler-control",
       action: "cancelled",
       slug: payload.slug,
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    };
-  }
-
-  if (event.type === SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE) {
-    const payload = ScheduleInternalExecutionStartedPayload.parse(event.payload);
-    return {
-      kind: "scheduler-execution",
-      action: "started",
-      slug: payload.slug,
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    };
-  }
-
-  if (event.type === SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE) {
-    const payload = ScheduleInternalExecutionFinishedPayload.parse(event.payload);
-    return {
-      kind: "scheduler-execution",
-      action: "finished",
-      slug: payload.slug,
-      outcome: payload.outcome,
-      nextRunAt: payload.nextRunAt,
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };

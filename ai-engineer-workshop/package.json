@@ -28,7 +28,8 @@
   "exports": {
     ".": "./sdk.ts",
     "./contract": "./contract.ts",
-    "./runtime": "./runtime.ts"
+    "./runtime": "./runtime.ts",
+    "./test-helpers": "./test-helpers.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -44,15 +45,20 @@
       "./runtime": {
         "import": "./dist/runtime.js",
         "types": "./dist/runtime.d.ts"
+      },
+      "./test-helpers": {
+        "import": "./dist/test-helpers.js",
+        "types": "./dist/test-helpers.d.ts"
       }
     }
   },
   "scripts": {
     "build": "tsup",
+    "slides": "marp -w -p README.md",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm test:e2e",
-    "test:e2e": "vitest run --dir examples/08-bashmode --maxWorkers 1",
-    "test:watch": "vitest --dir examples/08-bashmode --maxWorkers 1",
+    "test:e2e": "vitest run --dir examples/09-bashmode-agent --maxWorkers 1 --passWithNoTests",
+    "test:watch": "vitest --dir examples/09-bashmode-agent --maxWorkers 1 --passWithNoTests",
     "workshop": "node --import tsx ./cli.ts",
     "w": "pnpm workshop"
   },
@@ -66,10 +72,12 @@
     "dedent": "^1.7.2",
     "just-bash": "^2.14.0",
     "openai": "^6.25.0",
+    "schematch": "0.2.1",
     "trpc-cli": "0.14.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@marp-team/marp-cli": "^4.3.1",
     "@types/node": "25.5.0",
     "tsup": "^8.5.0",
     "tsx": "^4.20.3",

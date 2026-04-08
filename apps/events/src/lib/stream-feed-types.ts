@@ -1,7 +1,6 @@
 import type {
   Event,
   ExternalSubscriber,
-  ScheduleInternalExecutionFinishedPayload,
   StreamPath,
   StreamSchedule,
 } from "@iterate-com/events-contract";
@@ -46,6 +45,8 @@ export interface MessageFeedItem {
   role: "user" | "assistant";
   content: ContentBlock[];
   timestamp: number;
+  /** Stable identity for streamed messages that update across multiple events. */
+  messageId?: string;
   /** Present for assistant messages reconstructed from agent output chunks. */
   streamStatus?: MessageStreamStatus;
 }
@@ -179,6 +180,13 @@ export interface CodemodeBlockFeedItem {
   raw: Event;
 }
 
+export interface BashmodeBlockFeedItem {
+  kind: "bashmode-block";
+  content: string;
+  timestamp: number;
+  raw: Event;
+}
+
 export interface CodemodeResultFeedItem {
   kind: "codemode-result";
   requestId: string;
@@ -197,23 +205,12 @@ export interface CodemodeResultFeedItem {
 
 export interface SchedulerControlFeedItem {
   kind: "scheduler-control";
-  action: "append-scheduled" | "configured" | "cancelled";
+  action: "configured" | "cancelled";
   slug: string;
   schedule?: StreamSchedule;
-  append?: unknown;
   callback?: string;
   payloadJson?: string | null;
   nextRunAt?: number;
-  timestamp: number;
-  raw: Event;
-}
-
-export interface SchedulerExecutionFeedItem {
-  kind: "scheduler-execution";
-  action: "started" | "finished";
-  slug: string;
-  outcome?: ScheduleInternalExecutionFinishedPayload["outcome"];
-  nextRunAt?: number | null;
   timestamp: number;
   raw: Event;
 }
@@ -234,6 +231,6 @@ export type StreamFeedItem =
   | StreamResumedFeedItem
   | StreamErrorOccurredFeedItem
   | CodemodeBlockFeedItem
+  | BashmodeBlockFeedItem
   | CodemodeResultFeedItem
-  | SchedulerControlFeedItem
-  | SchedulerExecutionFeedItem;
+  | SchedulerControlFeedItem;

@@ -69,7 +69,7 @@ function aiEngineerWorkshopShimPlugin() {
   return {
     name: "ai-engineer-workshop-shim",
     setup(buildApi: import("esbuild").PluginBuild) {
-      buildApi.onResolve({ filter: /^ai-engineer-workshop$/ }, () => ({
+      buildApi.onResolve({ filter: /^ai-engineer-workshop(?:\/runtime)?$/ }, () => ({
         namespace: "ai-engineer-workshop-shim",
         path: "ai-engineer-workshop",
       }));

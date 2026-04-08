@@ -33,6 +33,7 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
+import { stringify as stringifyYaml, parse as parseYaml } from "yaml";
 import { StreamEventFeed } from "~/components/stream-event-feed.tsx";
 import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
@@ -71,7 +72,10 @@ export function StreamPage({
   const projectSlug = useCurrentProjectSlug();
   const [selectedTemplateId, setSelectedTemplateId] = useState(DEFAULT_EVENT_TEMPLATE_ID);
   const [appendInputJson, setAppendInputJson] = useState(() =>
-    createEventInputTemplate(DEFAULT_EVENT_TEMPLATE_ID),
+    createEventInputTemplate(DEFAULT_EVENT_TEMPLATE_ID, "json"),
+  );
+  const [appendInputYaml, setAppendInputYaml] = useState(() =>
+    createEventInputTemplate(DEFAULT_EVENT_TEMPLATE_ID, "yaml"),
   );
   const [agentInputText, setAgentInputText] = useState("");
   const streamStateOptions = useMemo(
@@ -117,7 +121,8 @@ export function StreamPage({
   const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
 
   useEffect(() => {
-    setAppendInputJson(createEventInputTemplate(selectedTemplateId));
+    setAppendInputJson(createEventInputTemplate(selectedTemplateId, "json"));
+    setAppendInputYaml(createEventInputTemplate(selectedTemplateId, "yaml"));
   }, [selectedTemplateId]);
 
   useEffect(() => {
@@ -170,11 +175,17 @@ export function StreamPage({
     await request.catch(() => undefined);
   };
 
-  const submitRawAppend = async ({ inputText }: { inputText: string }) => {
+  const submitRawAppend = async ({
+    inputText,
+    format,
+  }: {
+    inputText: string;
+    format: "json" | "yaml";
+  }) => {
     let event: EventInput;
 
     try {
-      event = parseAppendEventInput(inputText);
+      event = parseAppendEventInput(inputText, format);
     } catch (error) {
       toast.error(formatClientError(error));
       return;
@@ -295,7 +306,12 @@ export function StreamPage({
               return;
             }
 
-            await submitRawAppend({ inputText: appendInputJson });
+            if (composerMode === "yaml") {
+              await submitRawAppend({ inputText: appendInputYaml, format: "yaml" });
+              return;
+            }
+
+            await submitRawAppend({ inputText: appendInputJson, format: "json" });
           }}
         >
           <PromptInputBody>
@@ -306,6 +322,14 @@ export function StreamPage({
                 onChange={(event) => setAgentInputText(event.currentTarget.value)}
                 placeholder="Message this agent"
                 className="h-11 rounded-none border-0 bg-transparent px-4 shadow-none focus-visible:ring-0"
+              />
+            ) : composerMode === "yaml" ? (
+              <PromptInputTextarea
+                value={appendInputYaml}
+                onChange={(event) => setAppendInputYaml(event.currentTarget.value)}
+                className="min-h-36 max-h-[45vh] font-mono text-xs leading-5"
+                placeholder="Enter event YAML"
+                spellCheck={false}
               />
             ) : (
               <PromptInputTextarea
@@ -325,8 +349,11 @@ export function StreamPage({
                   onValueChange={(value) => onComposerModeChange?.(value as StreamComposerMode)}
                 >
                   <TabsList className="h-8">
-                    <TabsTrigger value="raw" className="px-2 text-xs">
-                      Raw
+                    <TabsTrigger value="json" className="px-2 text-xs">
+                      JSON
+                    </TabsTrigger>
+                    <TabsTrigger value="yaml" className="px-2 text-xs">
+                      YAML
                     </TabsTrigger>
                     <TabsTrigger value="agent" className="px-2 text-xs">
                       Agent
@@ -334,7 +361,7 @@ export function StreamPage({
                   </TabsList>
                 </Tabs>
 
-                {composerMode === "raw" ? (
+                {composerMode !== "agent" ? (
                   <PromptInputSelect
                     value={selectedTemplateId}
                     onValueChange={(value) => {
@@ -346,7 +373,7 @@ export function StreamPage({
                         {getEventInputTemplateById(selectedTemplateId)?.label ?? "Event template"}
                       </span>
                     </PromptInputSelectTrigger>
-                    <PromptInputSelectContent align="start">
+                    <PromptInputSelectContent align="start" className="w-fit">
                       {eventInputTemplates.map((template) => (
                         <PromptInputSelectItem key={template.id} value={template.id}>
                           {template.label}
@@ -361,7 +388,11 @@ export function StreamPage({
               className="shrink-0"
               disabled={
                 appendEvent.isPending ||
-                (composerMode === "agent" ? !agentInputText.trim() : !appendInputJson.trim())
+                (composerMode === "agent"
+                  ? !agentInputText.trim()
+                  : composerMode === "yaml"
+                    ? !appendInputYaml.trim()
+                    : !appendInputJson.trim())
               }
               status={appendEvent.isPending ? "submitted" : "ready"}
             />
@@ -372,25 +403,25 @@ export function StreamPage({
   );
 }
 
-function createEventInputTemplate(templateId: string) {
+function createEventInputTemplate(templateId: string, format: "json" | "yaml") {
   const template =
     getEventInputTemplateById(templateId) ?? getEventInputTemplateById(DEFAULT_EVENT_TEMPLATE_ID);
 
-  return JSON.stringify(JSON.parse(JSON.stringify(template?.event ?? {})) as JSONObject, null, 2);
+  const data = JSON.parse(JSON.stringify(template?.event ?? {})) as JSONObject;
+
+  return format === "yaml" ? stringifyYaml(data) : JSON.stringify(data, null, 2);
 }
 
-function parseJSONObject(value: string) {
-  const parsed = JSON.parse(value) as unknown;
+function parseObjectFromText(value: string, format: "json" | "yaml") {
+  const parsed = (format === "yaml" ? parseYaml(value) : JSON.parse(value)) as unknown;
 
   if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Value must be a JSON object.");
+    throw new Error(`Value must be a ${format === "yaml" ? "YAML" : "JSON"} object.`);
   }
 
   return parsed as JSONObject;
 }
 
-function parseAppendEventInput(value: string) {
-  // Only require syntactically valid JSON here. The append endpoint will
-  // normalize invalid event shapes into invalid-event-appended server-side.
-  return parseJSONObject(value) as EventInput;
+function parseAppendEventInput(value: string, format: "json" | "yaml") {
+  return parseObjectFromText(value, format) as EventInput;
 }
