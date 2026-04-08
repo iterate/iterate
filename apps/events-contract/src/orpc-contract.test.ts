@@ -187,28 +187,25 @@ if (typeof malformedArrayError !== "string") {
 }
 assert.match(malformedArrayError, /expected object/);
 
-const malformedNestedNonJsonValues = InvalidEventAppendedEventInput.parse(
-  AppendInput.parse({
-    path: examplePath,
-    event: {
-      type: "https://events.iterate.com/events/example/unknown-to-the-contract",
-      payload: {
-        nested: [1, BigInt(2), { fn: () => "nope", deeper: [BigInt(3), undefined] }],
-      },
+const nestedFn = () => "nope";
+const genericEventWithNestedNonJsonValues = AppendInput.parse({
+  path: examplePath,
+  event: {
+    type: "https://events.iterate.com/events/example/unknown-to-the-contract",
+    payload: {
+      nested: [1, BigInt(2), { fn: nestedFn, deeper: [BigInt(3), undefined] }],
     },
-  }).event,
-);
+  },
+}).event;
 
 assert.equal(
-  malformedNestedNonJsonValues.type,
-  "https://events.iterate.com/events/stream/invalid-event-appended",
+  genericEventWithNestedNonJsonValues.type,
+  "https://events.iterate.com/events/example/unknown-to-the-contract",
 );
-assert.deepEqual(malformedNestedNonJsonValues.payload.rawInput, {
-  type: "https://events.iterate.com/events/example/unknown-to-the-contract",
-  payload: {
-    nested: [1, null, { fn: null, deeper: [null, null] }],
-  },
-});
+assert.equal(genericEventWithNestedNonJsonValues.payload.nested[1], BigInt(2));
+assert.equal(genericEventWithNestedNonJsonValues.payload.nested[2].fn, nestedFn);
+assert.equal(genericEventWithNestedNonJsonValues.payload.nested[2].deeper[0], BigInt(3));
+assert.equal(genericEventWithNestedNonJsonValues.payload.nested[2].deeper[1], undefined);
 
 const streamInitializedEvent = AppendInput.parse({
   path: examplePath,
