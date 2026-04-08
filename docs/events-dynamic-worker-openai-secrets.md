@@ -263,6 +263,47 @@ EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
   pnpm --dir apps/events test:e2e:preview
 ```
 
+### Why the deployed worker does not fully prove against the preview URL
+
+The remaining gap is specifically:
+
+- preview `apps/events` on `workers.dev`
+- calling into the already deployed Hono processor worker on `workers.dev`
+
+The deployed processor worker does receive the callback request, but then fails
+when it tries to fetch the preview events service as its upstream.
+
+Observed deployed worker log excerpt:
+
+```json
+{
+  "status": 404,
+  "message": "Not Found",
+  "data": {
+    "body": "error code: 1042"
+  }
+}
+```
+
+That failure showed up both when:
+
+- the preview `external-subscriber` builtin tried to fan out to the deployed
+  worker, and
+- the deployed worker callback endpoint was invoked directly with
+  `baseUrl=https://events-preview-1.iterate.workers.dev`
+
+So the current limitation is not the processor runtime itself. The limitation
+is that this deployed worker cannot use the PR preview `workers.dev` URL as its
+upstream events service.
+
+Practically, the proof matrix for this branch is therefore:
+
+- local `apps/events` -> local deployed-processor worker: fully proven
+- deployed processor worker -> public `events.iterate.com`: fully proven
+- local scripts + preview URL for `apps/events`: fully proven
+- deployed processor worker -> preview `workers.dev` URL: currently blocked by
+  Cloudflare `error code: 1042`
+
 ## Full validation matrix run on this branch
 
 These all passed during the final hardening pass:
@@ -286,3 +327,6 @@ These all passed during the final hardening pass:
 - deployed worker direct callback proof against real `events.iterate.com` for OpenAI/websocket
 - `doppler run --project ai-engineer-workshop -- bash -lc 'export EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev; pnpm --dir apps/events test:e2e:openai-preview'`
 - `EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev pnpm --dir apps/events test:e2e:preview`
+- preview -> deployed-worker pushed-processor proofs were attempted for both
+  `websocket` and `webhook`, and both failed with Cloudflare `error code: 1042`
+  when the deployed worker tried to fetch the preview `workers.dev` upstream

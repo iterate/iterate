@@ -29,3 +29,6 @@ That document covers:
 - the current limitation that public `events.iterate.com` does not yet run this
   branch's `external-subscriber` builtin, so public deployed proofs use the
   callback endpoints directly
+- the current Cloudflare `workers.dev` preview limitation (`error code: 1042`)
+  when this deployed worker tries to use a preview `workers.dev` events service
+  as its upstream
