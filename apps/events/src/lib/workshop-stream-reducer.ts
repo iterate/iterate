@@ -10,6 +10,7 @@ const OPENAI_OUTPUT_ITEM_ADDED_TYPE = "openai-output-item-added" as const;
 const LLM_REQUEST_COMPLETED_TYPE = "llm-request-completed" as const;
 const CODEMODE_BLOCK_ADDED_TYPE = "codemode-block-added" as const;
 const CODEMODE_RESULT_ADDED_TYPE = "codemode-result-added" as const;
+const BASHMODE_BLOCK_ADDED_TYPE = "bashmode-block-added" as const;
 const AGENT_INPUT_ADDED_TYPE = "agent-input-added" as const;
 const AGENT_OUTPUT_ADDED_TYPE = "agent-output-added" as const;
 const AGENT_REQUEST_FAILED_TYPE = "agent-request-failed" as const;
@@ -81,6 +82,10 @@ type CodemodeResultAddedPayload = {
   durationMs: number;
   codePath: string;
   outputPath: string;
+};
+
+type BashmodeBlockAddedPayload = {
+  content: string;
 };
 
 type OpenAiResponseTextDeltaEvent = {
@@ -296,6 +301,21 @@ export function buildWorkshopSemanticInsertions(
         event.offset,
         getTimestamp(event.createdAt),
       );
+      continue;
+    }
+
+    if (event.type === BASHMODE_BLOCK_ADDED_TYPE) {
+      const payload = parseBashmodeBlockAddedPayload(event.payload);
+      if (!payload) {
+        continue;
+      }
+
+      appendInsertion(insertionsByOffset, event.offset, {
+        kind: "bashmode-block",
+        content: payload.content,
+        timestamp: getTimestamp(event.createdAt),
+        raw: event,
+      });
       continue;
     }
 
@@ -707,6 +727,7 @@ function buildWorkshopAssistantMessages({
       kind: "message",
       role: "assistant",
       content: [{ type: "text", text: fallbackText }],
+      messageId: `workshop-turn-${turn.inputOffset}-assistant`,
       timestamp,
       streamStatus: requestFinished ? "complete" : "streaming",
     },
@@ -742,6 +763,7 @@ function buildStreamingAgentAssistantMessages({
       kind: "message",
       role: "assistant",
       content: [{ type: "text", text: fallbackText }],
+      messageId: `workshop-agent-turn-${turn.inputOffset}-assistant`,
       timestamp,
       streamStatus: requestFinished ? "complete" : "streaming",
     },
@@ -764,6 +786,7 @@ function buildWorkshopAssistantMessage(
     kind: "message",
     role: "assistant",
     content: [{ type: "text", text }],
+    messageId: outputMessage.itemId,
     timestamp,
     streamStatus: streaming ? "streaming" : "complete",
   };
@@ -1174,6 +1197,16 @@ function parseCodemodeResultAddedPayload(payload: unknown): CodemodeResultAddedP
     durationMs: payload.durationMs,
     codePath: payload.codePath,
     outputPath: payload.outputPath,
+  };
+}
+
+function parseBashmodeBlockAddedPayload(payload: unknown): BashmodeBlockAddedPayload | null {
+  if (!isRecord(payload) || typeof payload.content !== "string") {
+    return null;
+  }
+
+  return {
+    content: payload.content,
   };
 }
 

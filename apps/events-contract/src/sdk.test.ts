@@ -91,6 +91,57 @@ async function testSharedProcessorDefinitionKeepsPerRuntimeState() {
   );
 }
 
+async function testStatelessProcessorCanOmitInitialState() {
+  const streamPath = StreamPath.parse("/stateless");
+  let afterAppendStateSeen: undefined | "unset" = "unset";
+  const client = new MockEventsClient({
+    [streamPath]: [makeInitializedEvent({ streamPath, offset: 1 })],
+  });
+
+  const runtime = new PullSubscriptionProcessorRuntime({
+    eventsClient: client,
+    logger: silentLogger,
+    processor: defineProcessor(() => ({
+      slug: "stateless",
+      async afterAppend({ append, event, state }) {
+        afterAppendStateSeen = state;
+        if (event.type !== "tick") {
+          return;
+        }
+
+        await append({
+          event: {
+            type: "processed",
+            payload: { sourceOffset: event.offset },
+          },
+        });
+      },
+    })),
+    streamPath,
+  });
+
+  assert.equal(runtime.getState(), undefined);
+
+  const runPromise = runtime.run();
+  await client.waitForLiveSubscription(streamPath);
+  client.emit(
+    streamPath,
+    makeGenericEvent({
+      streamPath,
+      offset: 2,
+      type: "tick",
+      payload: { source: "live" },
+    }),
+  );
+
+  await client.waitForAppendCount(1);
+  runtime.stop();
+  await runPromise;
+
+  assert.equal(afterAppendStateSeen, undefined);
+  assert.equal(runtime.getState(), undefined);
+}
+
 async function testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly() {
   const rootPath = StreamPath.parse("/");
   const teamAPath = StreamPath.parse("/team/a");
@@ -1190,6 +1241,7 @@ function makeEvent(args: {
 }
 
 await testSharedProcessorDefinitionKeepsPerRuntimeState();
+await testStatelessProcessorCanOmitInitialState();
 await testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly();
 await testProcessorAppendResolvesCurrentAbsoluteAndRelativePaths();
 await testProcessorAppendRejectsInvalidRelativePaths();

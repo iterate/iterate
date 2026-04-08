@@ -35,9 +35,7 @@ export type ProcessorAppendInput = {
 
 export type ProcessorLogger = Pick<Console, "debug" | "error" | "info" | "log" | "warn">;
 
-export type Processor<State = Record<string, unknown>> = {
-  slug: string;
-  initialState: State;
+type ProcessorMethods<State> = {
   reduce?(args: { event: Event; logger: ProcessorLogger; state: State }): State;
   afterAppend?(args: {
     append: (input: ProcessorAppendInput) => Event | Promise<Event>;
@@ -46,6 +44,11 @@ export type Processor<State = Record<string, unknown>> = {
     state: State;
   }): Promise<void>;
 };
+
+export type Processor<State = undefined> = {
+  slug: string;
+  initialState?: State;
+} & ProcessorMethods<State>;
 
 /**
  * A BuiltinProcessor runs in-process inside the Durable Object, so it can
@@ -65,7 +68,9 @@ export type BuiltinProcessor<TState = Record<string, unknown>> = {
   }): Promise<void>;
 };
 
-export function defineProcessor<const TState>(factory: () => Processor<TState>): Processor<TState> {
+export function defineProcessor<const TState = undefined>(
+  factory: () => Processor<TState>,
+): Processor<TState> {
   return factory();
 }
 
@@ -136,7 +141,7 @@ export class PullSubscriptionProcessorRuntime<State> {
       scope: "stream",
     });
     this.#processor = processor;
-    this.#state = structuredClone(this.#processor.initialState);
+    this.#state = structuredClone(this.#processor.initialState) as State;
     this.#streamPath = streamPath;
   }
 
@@ -284,7 +289,7 @@ export class PushSubscriptionProcessorRuntime<State> {
     this.#eventsClient = eventsClient;
     this.#processorLogger = logger;
     this.#processor = processor;
-    this.#state = structuredClone(this.#processor.initialState);
+    this.#state = structuredClone(this.#processor.initialState) as State;
     this.#streamPath = streamPath;
   }
 

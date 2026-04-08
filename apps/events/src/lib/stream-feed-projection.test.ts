@@ -117,7 +117,7 @@ describe("projectWireToFeed", () => {
     });
   });
 
-  test("adds a semantic scheduler control item after append-scheduled events", () => {
+  test("does not add a semantic item for append-scheduled events", () => {
     const feed = projectEventToFeed(
       createEvent({
         streamPath: "/demo",
@@ -136,23 +136,10 @@ describe("projectWireToFeed", () => {
       }),
     );
 
-    expect(feed.map((item) => item.kind)).toEqual(["event", "scheduler-control"]);
-    expect(feed[1]).toMatchObject({
-      kind: "scheduler-control",
-      action: "append-scheduled",
-      slug: "nightly-rollup",
-      schedule: {
-        kind: "every",
-        intervalSeconds: 300,
-      },
-      append: {
-        type: "https://events.iterate.com/events/example/rollup-requested",
-        payload: { source: "schedule" },
-      },
-    });
+    expect(feed.map((item) => item.kind)).toEqual(["event"]);
   });
 
-  test("adds a semantic scheduler execution item after execution-finished events", () => {
+  test("does not add a semantic item for schedule execution-finished events", () => {
     const feed = projectEventToFeed(
       createEvent({
         streamPath: "/demo",
@@ -165,14 +152,7 @@ describe("projectWireToFeed", () => {
       }),
     );
 
-    expect(feed.map((item) => item.kind)).toEqual(["event", "scheduler-execution"]);
-    expect(feed[1]).toMatchObject({
-      kind: "scheduler-execution",
-      action: "finished",
-      slug: "nightly-rollup",
-      outcome: "succeeded",
-      nextRunAt: 1_775_000_000,
-    });
+    expect(feed.map((item) => item.kind)).toEqual(["event"]);
   });
   test("extracts only raw event rows from a mixed feed", () => {
     const feed = projectWireToFeed([
@@ -541,6 +521,7 @@ describe("projectWireToFeed", () => {
         kind: "message",
         role: "assistant",
         content: [{ type: "text", text: "hello world" }],
+        messageId: "msg_1",
         timestamp: messages[1]!.timestamp,
         streamStatus: "complete",
       },
@@ -594,6 +575,28 @@ describe("projectWireToFeed", () => {
         role: "user",
         content: [{ type: "text", text: "Bash result:\nstdout:\nhello\nstderr:\n\nexitCode: 0\n" }],
         timestamp: messages[2]!.timestamp,
+      },
+    ]);
+  });
+
+  test("projects bashmode blocks into dedicated shell cards", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "bashmode-block-added",
+        payload: {
+          content: "echo hello",
+        },
+      }),
+    ]);
+
+    expect(feed).toMatchObject([
+      {
+        kind: "event",
+      },
+      {
+        kind: "bashmode-block",
+        content: "echo hello",
       },
     ]);
   });
@@ -697,6 +700,7 @@ describe("projectWireToFeed", () => {
       kind: "message",
       role: "assistant",
       content: [{ type: "text", text: "Hello there" }],
+      messageId: "msg_stream",
       streamStatus: "streaming",
     });
   });
@@ -756,6 +760,7 @@ describe("projectWireToFeed", () => {
       kind: "message",
       role: "assistant",
       content: [{ type: "text", text: "Hello there" }],
+      messageId: "msg_stream_done",
       streamStatus: "complete",
     });
   });
@@ -803,6 +808,7 @@ describe("projectWireToFeed", () => {
       kind: "message",
       role: "assistant",
       content: [{ type: "text", text: "Partial output" }],
+      messageId: "msg_stream",
       streamStatus: "streaming",
     });
   });

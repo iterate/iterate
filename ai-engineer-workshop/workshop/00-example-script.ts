@@ -6,7 +6,7 @@ export const handler = os.handler(async ({ context, input }) => {
 
   const result = await client.append({
     path: streamPath,
-    event: { type: "" },
+    event: { type: "hello-world" },
   });
 
   context.logger.info(JSON.stringify(result, null, 2));

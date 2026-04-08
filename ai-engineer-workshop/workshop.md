@@ -31,7 +31,6 @@ curl -N "${BASE_URL}/api/streams${STREAM_PATH}"
 # Look, streams are created implicitly and stream creation events propagate up
 curl -N "${BASE_URL}/api/streams/
 
-
 # We can also live tail the stream with pretty printing (start this in a new tab)
 curl -sN "${BASE_URL}/api/streams${STREAM_PATH}?live=true" | sed -nu 's/^data: //p' | jq .
 
@@ -46,30 +45,7 @@ curl --json '{"type": "hello-world", "idempotencyKey": "boop"}' \
 # You can get the "reduced state" of a stream
 curl "${BASE_URL}/api/streams/__state${STREAM_PATH}" | jq .
 
-
-# It can also do weird things!
-
-# Configure a JSONata transformer: any event with hogwash in it
-# gets transformed into a "hogwash-received" event
-curl --json '{
-  "type": "https://events.iterate.com/events/stream/jsonata-transformer-configured",
-  "payload": {
-    "slug": "hogwash-transformer",
-    "matcher": "payload.rawInput.hogwash",
-    "transform": "{\"type\": \"hogwash-received\"}"
-  }
-}' "${BASE_URL}/api/streams${STREAM_PATH}"
-
-# Now try appending hogwash again!
-curl --json '{"hogwash": "yes!e"}' \
-  "${BASE_URL}/api/streams${STREAM_PATH}"
-
-
 # You should see a new "hogwash-received" event appear in the stream
-
-
-
-# It can do some weird things  (maybe)
 
 # You can pause a stream!
 curl -s --json '{"type":"https://events.iterate.com/events/stream/paused"}' \
@@ -90,11 +66,56 @@ curl --json '{"type":"https://events.iterate.com/events/stream/resumed"}' \
 curl --json '{"type": "hello-world"}' \
   "${BASE_URL}/api/streams${STREAM_PATH}"
 
-# - send filtered and transformed webhooks to arbitrary endpoints
+# It can also do weird things!
+
+# Configure a JSONata transformer: any event with hogwash in it
+# gets transformed into a "hogwash-received" event
+curl --json '{
+  "type": "https://events.iterate.com/events/stream/jsonata-transformer-configured",
+  "payload": {
+    "slug": "hogwash-transformer",
+    "matcher": "payload.rawInput.hogwash",
+    "transform": "{\"type\": \"hogwash-received\"}"
+  }
+}' "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Now try appending hogwash again!
+curl --json '{"hogwash": "yes!e"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}"
+
+
 
 # - schedule messages
 
+# Schedule a recurring heartbeat every 5 seconds
+curl --json '{
+  "type": "https://events.iterate.com/events/stream/append-scheduled",
+  "payload": {
+    "slug": "heartbeat-every-5s",
+    "append": {
+      "type": "heartbeat"
+    },
+    "schedule": {
+      "kind": "every",
+      "intervalSeconds": 5
+    }
+  }
+}' "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Tail it and you should see heartbeat events keep showing up
+curl -N "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Stop the recurring schedule again
+curl --json '{
+  "type": "https://events.iterate.com/events/stream/schedule/cancelled",
+  "payload": {
+    "slug": "heartbeat-every-5s"
+  }
+}' "${BASE_URL}/api/streams${STREAM_PATH}"
+
 ```
+
+Webhook inbox UI for this example: [webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63](https://webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63)
 
 Some notes / observations:
 
@@ -235,6 +256,70 @@ Now we should be able to
 # Maybe: how do we deploy this?
 
 Problem: My computer isn't always on!
+
+# Deployments
+
+```bash
+
+# Append a tiny dynamic worker that replies "pong" to every "ping"
+export DYNAMIC_WORKER="$(cat <<'EOF'
+export default {
+  slug: "ping-pong",
+  initialState: {},
+  reduce({ state }) {
+    return state;
+  },
+  async afterAppend({ append, event }) {
+    if (event.type !== "ping") return;
+    await append({ event: { type: "pong" } });
+  },
+};
+EOF
+
+)"
+
+curl --json "$(jq -nc --arg script "$DYNAMIC_WORKER" '{
+  type: "https://events.iterate.com/events/stream/dynamic-worker/configured",
+  payload: {
+    slug: "ping-pong",
+    script: $script
+  }
+}')" "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Now append ping and the stream suddenly ping-pongs
+curl --json '{"type": "ping"}' \
+  "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Watch the stream and you'll see the derived pong event
+curl -N "${BASE_URL}/api/streams${STREAM_PATH}"
+
+
+# Use this disposable webhook.site inbox for the demo
+# UI: https://webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63
+# Matching future events on this stream will now be POSTed to that webhook.site URL
+curl --json '{
+  "type": "https://events.iterate.com/events/stream/subscription/configured",
+  "payload": {
+    "slug": "webhook-site",
+    "callbackUrl": "https://webhook.site/aa6bf8b4-39ff-4807-a400-c21b37ee8e63",
+    "type": "webhook",
+    "jsonataFilter": "type = \"webhook-demo\"",
+    "jsonataTransform": "{\"kind\":\"webhook-demo\",\"message\":payload.message,\"streamPath\":streamPath,\"offset\":offset}"
+  }
+}' "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Append a matching event and the transformed payload gets delivered to webhook.site
+curl --json '{
+  "type": "webhook-demo",
+  "payload": {
+    "message": "hello from iterate streams"
+  }
+}' "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Fetch the latest transformed request body back from webhook.site over curl too
+curl "https://webhook.site/token/aa6bf8b4-39ff-4807-a400-c21b37ee8e63/request/latest/raw"
+
+```
 
 # Workshop projects
 

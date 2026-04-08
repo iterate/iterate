@@ -29,8 +29,6 @@ const initialState: AgentState = {
 };
 
 export const agentProcessor = defineProcessor<AgentState>(() => {
-  const openai = new OpenAI();
-
   return {
     slug: "agent",
     initialState,
@@ -41,11 +39,24 @@ export const agentProcessor = defineProcessor<AgentState>(() => {
           ...state,
           history: [...state.history, { role: "user" as const, content: payload.content }],
         }))
+        .case(OpenAiResponseEventAddedEvent, ({ payload }) => {
+          const outputText = getOutputTextDoneText(payload);
+
+          if (outputText == null) {
+            return state;
+          }
+
+          return {
+            ...state,
+            history: [...state.history, { role: "assistant" as const, content: outputText }],
+          };
+        })
         .default(() => state),
 
     afterAppend: async ({ append, event, state }) => {
       await match(event)
         .case(AgentInputAddedEvent, async () => {
+          const openai = new OpenAI();
           const response = await openai.responses.create({
             model: state.model,
             instructions: state.systemPrompt,
@@ -57,9 +68,35 @@ export const agentProcessor = defineProcessor<AgentState>(() => {
             await append({
               event: { type: "openai-response-event-added", payload: item },
             });
+
+            const outputText = getOutputTextDoneText(item);
+            if (outputText == null) continue;
+
+            for (const content of extractBashBlocks(outputText)) {
+              await append({
+                event: {
+                  type: "bashmode-block-added",
+                  payload: { content },
+                },
+              });
+            }
           }
         })
         .default(() => undefined);
     },
   };
 });
+
+function getOutputTextDoneText(event: ResponseStreamEvent) {
+  if (event.type !== "response.output_text.done") {
+    return null;
+  }
+
+  return event.text;
+}
+
+function extractBashBlocks(outputText: string) {
+  return [...outputText.matchAll(/```(?:bash|sh|shell)\s*([\s\S]*?)```/g)]
+    .map((match) => match[1]?.trim() ?? "")
+    .filter((content) => content.length > 0);
+}
