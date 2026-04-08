@@ -1,5 +1,6 @@
 import { RpcTarget } from "cloudflare:workers";
 import { normalizeCode, sanitizeToolName } from "@cloudflare/codemode";
+import type { Modules } from "@cloudflare/worker-bundler";
 
 export interface ExecuteResult {
   result: unknown;
@@ -20,7 +21,14 @@ export interface DynamicWorkerExecutorOptions {
   loader: WorkerLoader;
   timeout?: number;
   globalOutbound?: Fetcher | null;
-  modules?: Record<string, string>;
+  modules?: Modules;
+}
+
+export interface WorkerBundleDefinition {
+  mainModule: string;
+  modules: Modules;
+  compatibilityDate?: string;
+  compatibilityFlags?: string[];
 }
 
 function stringifyRpcEnvelope(value: unknown) {
@@ -40,6 +48,143 @@ function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
     Symbol.asyncIterator in value &&
     typeof (value as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function"
   );
+}
+
+function createImportPath(fromModule: string, toModule: string) {
+  const fromParts = fromModule.split("/");
+  fromParts.pop();
+  const toParts = toModule.split("/");
+  let sharedIndex = 0;
+
+  while (sharedIndex < fromParts.length && sharedIndex < toParts.length) {
+    if (fromParts[sharedIndex] !== toParts[sharedIndex]) {
+      break;
+    }
+
+    sharedIndex += 1;
+  }
+
+  const parentSegments = fromParts.slice(sharedIndex).map(() => "..");
+  const childSegments = toParts.slice(sharedIndex);
+  const relativePath = [...parentSegments, ...childSegments].join("/");
+
+  return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
+}
+
+function createInlineUserModuleSource(code: string) {
+  return `export default ${normalizeCode(code)};`;
+}
+
+function indent(value: string, spaces: number) {
+  const prefix = " ".repeat(spaces);
+  return value
+    .split("\n")
+    .map((line) => `${prefix}${line}`)
+    .join("\n");
+}
+
+function createExecutorModule(options: {
+  providers: ResolvedProvider[];
+  sandboxPrelude?: string;
+  timeoutMs: number;
+  userModulePath: string;
+  getSecretProviderName?: string;
+}) {
+  const importPath = createImportPath("executor.js", options.userModulePath);
+  const getSecretProviderName = options.getSecretProviderName ?? null;
+  const sandboxPrelude = options.sandboxPrelude?.trim().length
+    ? indent(options.sandboxPrelude.trim(), 4)
+    : "    const ctx = { fetch: (...args) => fetch(...args) };";
+
+  return [
+    'import { WorkerEntrypoint } from "cloudflare:workers";',
+    `import userDefault, * as userModule from "${importPath}";`,
+    "",
+    "function __createRemoteAsyncIterator(target) {",
+    "  return {",
+    "    [Symbol.asyncIterator]() {",
+    "      return this;",
+    "    },",
+    "    async next() {",
+    "      const resJson = await target.next();",
+    "      const data = JSON.parse(resJson);",
+    "      if (data.error) throw new Error(data.error);",
+    "      return data.result;",
+    "    },",
+    "    async return(value) {",
+    "      const resJson = await target.return(JSON.stringify(value ?? null));",
+    "      const data = JSON.parse(resJson);",
+    "      if (data.error) throw new Error(data.error);",
+    "      return data.result ?? { value, done: true };",
+    "    },",
+    "    async throw(error) {",
+    "      const resJson = await target.throw(JSON.stringify({ message: String(error) }));",
+    "      const data = JSON.parse(resJson);",
+    "      if (data.error) throw new Error(data.error);",
+    "      return data.result;",
+    "    },",
+    "  };",
+    "}",
+    "",
+    "function __stringifyLogValue(value) {",
+    "  if (typeof value === 'string') return value;",
+    "  if (typeof value === 'undefined') return 'undefined';",
+    "  try {",
+    "    return JSON.stringify(value, null, 2);",
+    "  } catch {",
+    "    return String(value);",
+    "  }",
+    "}",
+    "",
+    "function __resolveUserFn() {",
+    "  if (typeof userDefault === 'function') return userDefault;",
+    "  if (typeof userModule.run === 'function') return userModule.run;",
+    "  throw new Error(",
+    '    "Codemode entrypoint must export a default function or a named run() function.",',
+    "  );",
+    "}",
+    "",
+    "export default class CodeExecutor extends WorkerEntrypoint {",
+    "  async evaluate(__dispatchers = {}) {",
+    "    const __logs = [];",
+    '    console.log = (...a) => { __logs.push(a.map(__stringifyLogValue).join(" ")); };',
+    '    console.warn = (...a) => { __logs.push("[warn] " + a.map(__stringifyLogValue).join(" ")); };',
+    '    console.error = (...a) => { __logs.push("[error] " + a.map(__stringifyLogValue).join(" ")); };',
+    ...options.providers.map((provider) => {
+      if (provider.mode === "stream") {
+        return `    const ${provider.name} = new Proxy({}, {\n      get: (_, toolName) => async (args) => {\n        const target = await __dispatchers.${provider.name}.stream(String(toolName), JSON.stringify(args ?? {}));\n        return __createRemoteAsyncIterator(target);\n      }\n    });`;
+      }
+
+      if (provider.positionalArgs) {
+        return `    const ${provider.name} = new Proxy({}, {\n      get: (_, toolName) => async (...args) => {\n        const resJson = await __dispatchers.${provider.name}.call(String(toolName), JSON.stringify(args));\n        const data = JSON.parse(resJson);\n        if (data.error) throw new Error(data.error);\n        return data.result;\n      }\n    });`;
+      }
+
+      return `    const ${provider.name} = new Proxy({}, {\n      get: (_, toolName) => async (args) => {\n        const resJson = await __dispatchers.${provider.name}.call(String(toolName), JSON.stringify(args ?? {}));\n        const data = JSON.parse(resJson);\n        if (data.error) throw new Error(data.error);\n        return data.result;\n      }\n    });`;
+    }),
+    sandboxPrelude,
+    getSecretProviderName == null
+      ? ""
+      : `    const getIterateSecret = async (args) => ${getSecretProviderName}.getIterateSecret(args ?? {});`,
+    "",
+    "    try {",
+    "      const __userFn = __resolveUserFn();",
+    "      const result = await Promise.race([",
+    getSecretProviderName == null
+      ? "        __userFn({ ctx }),"
+      : "        __userFn({ ctx, getIterateSecret }),",
+    `        new Promise((_, reject) => setTimeout(() => reject(new Error("Execution timed out")), ${options.timeoutMs})),`,
+    "      ]);",
+    "      return { result, logs: __logs };",
+    "    } catch (error) {",
+    "      return {",
+    "        result: undefined,",
+    "        error: error instanceof Error ? error.message : String(error),",
+    "        logs: __logs,",
+    "      };",
+    "    }",
+    "  }",
+    "}",
+  ].join("\n");
 }
 
 class RemoteAsyncIteratorDispatcher extends RpcTarget {
@@ -148,149 +293,60 @@ export class DynamicWorkerExecutor {
   #loader: WorkerLoader;
   #timeout: number;
   #globalOutbound: Fetcher | null | undefined;
-  #modules: Record<string, string>;
+  #modules: Modules;
 
   constructor(options: DynamicWorkerExecutorOptions) {
     this.#loader = options.loader;
     this.#timeout = options.timeout ?? 30_000;
     this.#globalOutbound = options.globalOutbound ?? null;
-
-    const { "executor.js": _executorModule, ...safeModules } = options.modules ?? {};
-    this.#modules = safeModules;
+    this.#modules = options.modules ?? {};
   }
 
   async execute(code: string, providers: ResolvedProvider[]): Promise<ExecuteResult> {
-    const normalized = normalizeCode(code);
-    const timeoutMs = this.#timeout;
-    const reservedNames = new Set(["__dispatchers", "__logs"]);
-    const validIdentifier = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
-    const seenNames = new Set<string>();
+    return this.executeWorkerBundle(
+      {
+        mainModule: "executor.js",
+        modules: {
+          "executor.js": createExecutorModule({
+            providers,
+            timeoutMs: this.#timeout,
+            userModulePath: "user-inline.js",
+          }),
+          "user-inline.js": createInlineUserModuleSource(code),
+        },
+      },
+      providers,
+    );
+  }
 
-    for (const provider of providers) {
-      if (reservedNames.has(provider.name)) {
-        return { result: undefined, error: `Provider name "${provider.name}" is reserved` };
-      }
-
-      if (!validIdentifier.test(provider.name)) {
-        return {
-          result: undefined,
-          error: `Provider name "${provider.name}" is not a valid JavaScript identifier`,
-        };
-      }
-
-      if (seenNames.has(provider.name)) {
-        return { result: undefined, error: `Duplicate provider name "${provider.name}"` };
-      }
-
-      seenNames.add(provider.name);
-    }
-
-    const executorModule = [
-      'import { WorkerEntrypoint } from "cloudflare:workers";',
-      "",
-      "function __createRemoteAsyncIterator(target) {",
-      "  return {",
-      "    [Symbol.asyncIterator]() {",
-      "      return this;",
-      "    },",
-      "    async next() {",
-      "      const resJson = await target.next();",
-      "      const data = JSON.parse(resJson);",
-      "      if (data.error) throw new Error(data.error);",
-      "      return data.result;",
-      "    },",
-      "    async return(value) {",
-      "      const resJson = await target.return(JSON.stringify(value ?? null));",
-      "      const data = JSON.parse(resJson);",
-      "      if (data.error) throw new Error(data.error);",
-      "      return data.result ?? { value, done: true };",
-      "    },",
-      "    async throw(error) {",
-      "      const resJson = await target.throw(JSON.stringify({ message: String(error) }));",
-      "      const data = JSON.parse(resJson);",
-      "      if (data.error) throw new Error(data.error);",
-      "      return data.result;",
-      "    },",
-      "  };",
-      "}",
-      "",
-      "function __stringifyLogValue(value) {",
-      "  if (typeof value === 'string') return value;",
-      "  if (typeof value === 'undefined') return 'undefined';",
-      "  try {",
-      "    return JSON.stringify(value, null, 2);",
-      "  } catch {",
-      "    return String(value);",
-      "  }",
-      "}",
-      "",
-      "export default class CodeExecutor extends WorkerEntrypoint {",
-      "  async evaluate(__dispatchers = {}) {",
-      "    const __logs = [];",
-      '    console.log = (...a) => { __logs.push(a.map(__stringifyLogValue).join(" ")); };',
-      '    console.warn = (...a) => { __logs.push("[warn] " + a.map(__stringifyLogValue).join(" ")); };',
-      '    console.error = (...a) => { __logs.push("[error] " + a.map(__stringifyLogValue).join(" ")); };',
-      ...providers.map((provider) => {
-        if (provider.mode === "stream") {
-          return `    const ${provider.name} = new Proxy({}, {\n      get: (_, toolName) => async (args) => {\n        const target = await __dispatchers.${provider.name}.stream(String(toolName), JSON.stringify(args ?? {}));\n        return __createRemoteAsyncIterator(target);\n      }\n    });`;
-        }
-
-        if (provider.positionalArgs) {
-          return `    const ${provider.name} = new Proxy({}, {\n      get: (_, toolName) => async (...args) => {\n        const resJson = await __dispatchers.${provider.name}.call(String(toolName), JSON.stringify(args));\n        const data = JSON.parse(resJson);\n        if (data.error) throw new Error(data.error);\n        return data.result;\n      }\n    });`;
-        }
-
-        return `    const ${provider.name} = new Proxy({}, {\n      get: (_, toolName) => async (args) => {\n        const resJson = await __dispatchers.${provider.name}.call(String(toolName), JSON.stringify(args ?? {}));\n        const data = JSON.parse(resJson);\n        if (data.error) throw new Error(data.error);\n        return data.result;\n      }\n    });`;
-      }),
-      "",
-      "    try {",
-      "      const result = await Promise.race([",
-      "        (",
-      normalized,
-      "        )(),",
-      `        new Promise((_, reject) => setTimeout(() => reject(new Error("Execution timed out")), ${timeoutMs}))`,
-      "      ]);",
-      "      return { result, logs: __logs };",
-      "    } catch (error) {",
-      "      return {",
-      "        result: undefined,",
-      "        error: error instanceof Error ? error.message : String(error),",
-      "        logs: __logs,",
-      "      };",
-      "    }",
-      "  }",
-      "}",
-    ].join("\n");
-
-    const dispatchers: Record<string, ToolDispatcher> = {};
-
-    for (const provider of providers) {
-      const sanitizedFns: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
-
-      for (const [name, fn] of Object.entries(provider.fns)) {
-        sanitizedFns[sanitizeToolName(name)] = fn;
-      }
-
-      dispatchers[provider.name] = new ToolDispatcher(sanitizedFns, {
-        mode: provider.mode,
-        positionalArgs: provider.positionalArgs,
-      });
+  async executeWorkerBundle(
+    bundle: WorkerBundleDefinition,
+    providers: ResolvedProvider[],
+  ): Promise<ExecuteResult> {
+    const validationError = validateProviderNames(providers);
+    if (validationError) {
+      return { result: undefined, error: validationError };
     }
 
     const entrypoint = this.#loader
       .get(`codemode-${crypto.randomUUID()}`, () => ({
-        compatibilityDate: "2025-06-01",
-        compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
-        mainModule: "executor.js",
+        compatibilityDate: bundle.compatibilityDate ?? "2025-06-01",
+        compatibilityFlags: bundle.compatibilityFlags ?? [
+          "nodejs_compat",
+          "global_fetch_strictly_public",
+        ],
+        mainModule: bundle.mainModule,
         modules: {
           ...this.#modules,
-          "executor.js": executorModule,
+          ...bundle.modules,
         },
         globalOutbound: this.#globalOutbound,
       }))
       .getEntrypoint() as unknown as {
       evaluate(input: Record<string, ToolDispatcher>): Promise<ExecuteResult>;
     };
-    const response = await entrypoint.evaluate(dispatchers);
+
+    const response = await entrypoint.evaluate(buildDispatchers(providers));
 
     if (response.error) {
       return {
@@ -305,4 +361,70 @@ export class DynamicWorkerExecutor {
       logs: response.logs,
     };
   }
+}
+
+export function buildCodemodeExecutionBundle(options: {
+  userModulePath: string;
+  userModules: Modules;
+  providers: ResolvedProvider[];
+  sandboxPrelude?: string;
+  timeoutMs?: number;
+  getSecretProviderName?: string;
+}): WorkerBundleDefinition {
+  return {
+    mainModule: "executor.js",
+    modules: {
+      "executor.js": createExecutorModule({
+        providers: options.providers,
+        sandboxPrelude: options.sandboxPrelude,
+        timeoutMs: options.timeoutMs ?? 30_000,
+        userModulePath: options.userModulePath,
+        getSecretProviderName: options.getSecretProviderName,
+      }),
+      ...options.userModules,
+    },
+  };
+}
+
+function validateProviderNames(providers: ResolvedProvider[]) {
+  const reservedNames = new Set(["__dispatchers", "__logs"]);
+  const validIdentifier = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
+  const seenNames = new Set<string>();
+
+  for (const provider of providers) {
+    if (reservedNames.has(provider.name)) {
+      return `Provider name "${provider.name}" is reserved`;
+    }
+
+    if (!validIdentifier.test(provider.name)) {
+      return `Provider name "${provider.name}" is not a valid JavaScript identifier`;
+    }
+
+    if (seenNames.has(provider.name)) {
+      return `Duplicate provider name "${provider.name}"`;
+    }
+
+    seenNames.add(provider.name);
+  }
+
+  return null;
+}
+
+function buildDispatchers(providers: ResolvedProvider[]) {
+  const dispatchers: Record<string, ToolDispatcher> = {};
+
+  for (const provider of providers) {
+    const sanitizedFns: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
+
+    for (const [name, fn] of Object.entries(provider.fns)) {
+      sanitizedFns[sanitizeToolName(name)] = fn;
+    }
+
+    dispatchers[provider.name] = new ToolDispatcher(sanitizedFns, {
+      mode: provider.mode,
+      positionalArgs: provider.positionalArgs,
+    });
+  }
+
+  return dispatchers;
 }

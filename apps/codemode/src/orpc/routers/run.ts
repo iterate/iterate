@@ -3,6 +3,7 @@ import type { CodemodeRun } from "@iterate-com/codemode-contract";
 import { ORPCError } from "@orpc/server";
 import type { AppContext } from "~/context.ts";
 import { codemodeRunsTable } from "~/db/schema.ts";
+import { serializeCodemodeInput } from "~/lib/codemode-input.ts";
 import { buildCodemodeContextFromSources } from "~/lib/codemode-contract-runtime.ts";
 import { executeCodemodeFunction } from "~/lib/execute-code-v2.ts";
 import { parseCodemodeRunRecord, summarizeCodemodeRun } from "~/lib/runs.ts";
@@ -16,7 +17,7 @@ async function saveRun(context: AppContext, run: CodemodeRun, logs: string[]) {
   await context.db.insert(codemodeRunsTable).values({
     id: run.id,
     runnerKind: run.runnerKind,
-    codeSnippet: run.code,
+    codeSnippet: serializeCodemodeInput(run.input),
     sourcesJson: JSON.stringify(run.sources),
     result: run.result,
     logsJson: JSON.stringify(logs),
@@ -44,16 +45,17 @@ export const runRouter = {
   runV2: os.runV2.handler(async ({ context, input }) => {
     try {
       const execution = await executeCodemodeFunction({
-        code: input.code,
+        input: input.input,
         loader: context.env.LOADER,
         outbound: context.env.OUTBOUND,
+        db: context.env.DB,
         config: context.config,
         sources: input.sources,
       });
       const run: CodemodeRun = {
         id: createRunId(),
         runnerKind: "deterministic-v2",
-        code: input.code,
+        input: input.input,
         sources: input.sources,
         result: execution.result,
         error: execution.error,
