@@ -22,10 +22,12 @@ const LOCAL_EVENTS_BASE_URL = "http://127.0.0.1:5173";
 const DEFAULT_PROCESSOR_KIND = "ping-pong";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 const DEFAULT_STREAM_PATTERN = "/**/*";
+const eventsClientByKey = new Map<string, ReturnType<typeof createEventsClient>>();
+const processorByKey = new Map<string, Processor<unknown>>();
 
 const app = createAfterEventHandlerApp<Bindings, unknown>({
   getConfig: (c) => resolveConfig(c),
-  getEventsClient: ({ baseUrl, projectSlug }) => createEventsClient({ baseUrl, projectSlug }),
+  getEventsClient: ({ baseUrl, projectSlug }) => getCachedEventsClient({ baseUrl, projectSlug }),
 });
 
 export default app;
@@ -59,17 +61,22 @@ function resolveConfig(c: Context<{ Bindings: Bindings }>) {
     if (env.OPENAI_API_KEY == null) {
       throw new Error("OPENAI_API_KEY is required when PROCESSOR_KIND=openai-agent");
     }
+    const openAiApiKey = env.OPENAI_API_KEY;
 
     return {
       baseUrl,
       projectSlug,
       openAiModel,
-      processor: eraseProcessor(
-        createOpenAiAgentProcessor({
-          apiKey: env.OPENAI_API_KEY,
-          model: openAiModel,
-        }),
-      ),
+      processor: getCachedProcessor({
+        key: JSON.stringify(["openai-agent", openAiModel, openAiApiKey]),
+        create: () =>
+          eraseProcessor(
+            createOpenAiAgentProcessor({
+              apiKey: openAiApiKey,
+              model: openAiModel,
+            }),
+          ),
+      }),
       processorDescription:
         "It reacts to user-message events by asking OpenAI for a response and appending openai-response-output plus assistant-message events.",
       processorKey: `${processorKind}:${openAiModel}`,
@@ -81,13 +88,42 @@ function resolveConfig(c: Context<{ Bindings: Bindings }>) {
   return {
     baseUrl,
     projectSlug,
-    processor: eraseProcessor(createPingPongProcessor()),
+    processor: getCachedProcessor({
+      key: processorKind,
+      create: () => eraseProcessor(createPingPongProcessor()),
+    }),
     processorDescription:
       'It reacts to any event whose type or payload contains the word "ping" by appending a pong event.',
     processorKey: processorKind,
     processorKind,
     streamPattern,
   };
+}
+
+function getCachedEventsClient(args: { baseUrl: string; projectSlug?: string }) {
+  const cacheKey = JSON.stringify([args.baseUrl, args.projectSlug]);
+  const cached = eventsClientByKey.get(cacheKey);
+  if (cached != null) {
+    return cached;
+  }
+
+  const eventsClient = createEventsClient({
+    baseUrl: args.baseUrl,
+    projectSlug: args.projectSlug,
+  });
+  eventsClientByKey.set(cacheKey, eventsClient);
+  return eventsClient;
+}
+
+function getCachedProcessor(args: { key: string; create: () => Processor<unknown> }) {
+  const cached = processorByKey.get(args.key);
+  if (cached != null) {
+    return cached;
+  }
+
+  const processor = args.create();
+  processorByKey.set(args.key, processor);
+  return processor;
 }
 
 function readAmbientValue(c: Context<{ Bindings: Bindings }>, key: keyof Bindings) {

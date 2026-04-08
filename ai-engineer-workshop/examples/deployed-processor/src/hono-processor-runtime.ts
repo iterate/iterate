@@ -76,7 +76,10 @@ export function createAfterEventHandlerApp<Bindings extends object, State>({
 
   app.use("/after-event-handler", async (c, next) => {
     const config = getConfig(c);
-    const callbackContext = parseCallbackContext(c, config.baseUrl);
+    const callbackContext = parseCallbackContext(c, {
+      baseUrl: config.baseUrl,
+      projectSlug: config.projectSlug,
+    });
     if (!callbackContext.success) {
       return c.json({ ok: false, issues: formatIssues(callbackContext.error.issues) }, 400);
     }
@@ -102,13 +105,16 @@ export function createAfterEventHandlerApp<Bindings extends object, State>({
     c.set(
       "runtime",
       getOrCreateRuntime({
-        config,
-        eventsClient: getEventsClient({
-          baseUrl: callbackContext.data.baseUrl,
-          projectSlug: callbackContext.data.projectSlug,
-        }),
+        callbackContext: callbackContext.data,
+        createEventsClient: () =>
+          getEventsClient({
+            baseUrl: callbackContext.data.baseUrl,
+            projectSlug: callbackContext.data.projectSlug,
+          }),
+        createProcessor: () => config.processor,
+        processorKey: config.processorKey,
+        streamPattern: config.streamPattern,
         runtimes,
-        streamPath,
       }),
     );
 
@@ -148,7 +154,6 @@ export function createAfterEventHandlerApp<Bindings extends object, State>({
 
   app.post("/after-event-handler", async (c) => {
     const callbackContext = c.get("callbackContext");
-    const config = c.get("config");
     const runtime = c.get("runtime");
     const streamPath = callbackContext.streamPath;
 
@@ -172,10 +177,6 @@ export function createAfterEventHandlerApp<Bindings extends object, State>({
       );
     }
 
-    if (!matchesStreamPattern(streamPath, config.streamPattern)) {
-      return c.json({ ok: true, skipped: true });
-    }
-
     await runtime.consume(eventResult.data);
 
     return c.json({ ok: true });
@@ -185,17 +186,19 @@ export function createAfterEventHandlerApp<Bindings extends object, State>({
 }
 
 function getOrCreateRuntime<State>(args: {
-  config: ProcessorDeploymentConfig<State>;
-  eventsClient: WorkshopEventsClient;
+  callbackContext: z.infer<typeof CallbackContext>;
+  createEventsClient: () => WorkshopEventsClient;
+  createProcessor: () => Processor<State>;
+  processorKey: string;
   runtimes: Map<string, PushSubscriptionProcessorRuntime<State>>;
-  streamPath: StreamPath;
+  streamPattern: string;
 }) {
   const runtimeKey = JSON.stringify([
-    args.config.baseUrl,
-    args.config.projectSlug,
-    args.config.processorKey,
-    args.config.streamPattern,
-    args.streamPath,
+    args.callbackContext.baseUrl,
+    args.callbackContext.projectSlug,
+    args.processorKey,
+    args.streamPattern,
+    args.callbackContext.streamPath,
   ]);
   const existing = args.runtimes.get(runtimeKey);
   if (existing != null) {
@@ -207,9 +210,9 @@ function getOrCreateRuntime<State>(args: {
   evictOldestRuntimeIfNeeded(args.runtimes);
 
   const runtime = new PushSubscriptionProcessorRuntime({
-    eventsClient: args.eventsClient,
-    processor: args.config.processor,
-    streamPath: args.streamPath,
+    eventsClient: args.createEventsClient(),
+    processor: args.createProcessor(),
+    streamPath: args.callbackContext.streamPath,
   });
   args.runtimes.set(runtimeKey, runtime);
   return runtime;
@@ -331,10 +334,16 @@ function createSubscriptionConfiguredEvent(args: {
   });
 }
 
-function parseCallbackContext(c: Context, defaultBaseUrl: string) {
+function parseCallbackContext(
+  c: Context,
+  defaults: {
+    baseUrl: string;
+    projectSlug?: string;
+  },
+) {
   return CallbackContext.safeParse({
-    baseUrl: c.req.query("baseUrl") ?? defaultBaseUrl,
-    projectSlug: c.req.query("projectSlug"),
+    baseUrl: c.req.query("baseUrl") ?? defaults.baseUrl,
+    projectSlug: c.req.query("projectSlug") ?? defaults.projectSlug,
     streamPath: c.req.query("streamPath"),
   });
 }
