@@ -20,7 +20,7 @@ describeAgentProcessor("agent processor", () => {
       (event) =>
         event.type === "openai-response-event-added" &&
         (event.payload as { type?: string }).type === "response.completed",
-      { timeout: 5_000 },
+      { timeout: 10_000 },
     );
 
     expect(completedEvent).toMatchObject({
