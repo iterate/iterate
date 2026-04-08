@@ -26,7 +26,7 @@ function updateHistoryFromEvent(history: ResponseInput, event: EventInput) {
   }
 }
 
-async function main() {
+try {
   const pathPrefix = workshopPathPrefix();
   const client = createEventsClient();
   const openai = new OpenAI();
@@ -67,9 +67,7 @@ async function main() {
       });
     }
   }
-}
-
-main().catch((error: unknown) => {
+} catch (error: unknown) {
   console.log(error);
   process.exitCode = 1;
-});
+}

@@ -6,7 +6,7 @@ import {
 } from "ai-engineer-workshop";
 import { agentProcessor } from "./agent-processor.ts";
 
-async function main() {
+try {
   const pathPrefix = workshopPathPrefix();
   const streamPath = `${pathPrefix}/nano-agent`;
 
@@ -18,9 +18,7 @@ async function main() {
     processor: agentProcessor,
     streamPath,
   }).run();
-}
-
-main().catch((error: unknown) => {
+} catch (error: unknown) {
   console.log(error);
   process.exitCode = 1;
-});
+}

@@ -9,7 +9,7 @@ import { agentProcessor } from "./agent-processor.ts";
 /** Appended to `PATH_PREFIX` to build the stream pattern. Default `"/**"`. */
 const streamPatternSuffix = process.env.STREAM_PATTERN_SUFFIX ?? "/**";
 
-async function main() {
+try {
   const pathPrefix = workshopPathPrefix();
   const streamPattern = `${pathPrefix}${streamPatternSuffix}`;
 
@@ -21,9 +21,7 @@ async function main() {
     processor: agentProcessor,
     streamPattern,
   }).run();
-}
-
-main().catch((error: unknown) => {
+} catch (error: unknown) {
   console.log(error);
   process.exitCode = 1;
-});
+}
