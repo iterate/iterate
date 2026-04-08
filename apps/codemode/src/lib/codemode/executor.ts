@@ -374,6 +374,7 @@ export function buildCodemodeExecutionBundle(options: {
   return {
     mainModule: "executor.js",
     modules: {
+      ...options.userModules,
       "executor.js": createExecutorModule({
         providers: options.providers,
         sandboxPrelude: options.sandboxPrelude,
@@ -381,7 +382,6 @@ export function buildCodemodeExecutionBundle(options: {
         userModulePath: options.userModulePath,
         getSecretProviderName: options.getSecretProviderName,
       }),
-      ...options.userModules,
     },
   };
 }

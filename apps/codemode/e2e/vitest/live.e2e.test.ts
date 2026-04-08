@@ -85,6 +85,58 @@ export default async function ({ getIterateSecret }) {
     }
   });
 
+  it("ignores a user-supplied executor.js module and still runs the generated executor", async () => {
+    const baseUrl = process.env.CODEMODE_BASE_URL?.trim().replace(/\/+$/, "");
+    if (!baseUrl) {
+      throw new Error("CODEMODE_BASE_URL is required for codemode e2e tests.");
+    }
+
+    const client: OrpcClient = createORPCClient(
+      new OpenAPILink(codemodeContract, {
+        url: `${baseUrl}/api`,
+      }),
+    );
+
+    const run = await client.runV2({
+      input: {
+        type: "package-project",
+        entryPoint: "src/index.ts",
+        files: {
+          "package.json": JSON.stringify(
+            {
+              name: "codemode-executor-collision-proof",
+              private: true,
+              type: "module",
+            },
+            null,
+            2,
+          ),
+          "executor.js": `
+export default {
+  async evaluate() {
+    return {
+      result: "user executor should never run",
+    };
+  },
+};
+          `.trim(),
+          "src/index.ts": `
+export default async function () {
+  return {
+    message: "generated executor still won",
+  };
+}
+          `.trim(),
+        },
+      },
+      sources: [],
+    });
+
+    expect(run.error).toBeNull();
+    expect(run.result).toContain("generated executor still won");
+    expect(run.result).not.toContain("user executor should never run");
+  });
+
   it("bundles a package-project snippet, reads the OpenAI key from codemode secrets, and gets a model response", async () => {
     const baseUrl = process.env.CODEMODE_BASE_URL?.trim().replace(/\/+$/, "");
     const openAiApiKey = process.env.OPENAI_API_KEY?.trim();
