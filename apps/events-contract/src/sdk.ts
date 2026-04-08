@@ -266,6 +266,10 @@ export class PushSubscriptionProcessorRuntime<State> {
     );
 
     for await (const event of historyStream) {
+      if (event.offset <= this.#lastOffset) {
+        continue;
+      }
+
       if (event.offset >= targetOffset) {
         break;
       }

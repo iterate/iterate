@@ -29,11 +29,11 @@ const altPongBDynamicWorkerScript = pingPongDynamicWorkerScript.replace(
   'await append({\n      event: {\n        type: "pong",\n      },\n    });',
   'await append({\n      event: {\n        type: "alt-pong-b",\n      },\n    });',
 );
-const legacyPingPongDynamicWorkerScript = `
+const onEventPingPongDynamicWorkerScript = `
 export default {
   initialState: { seen: 0 },
 
-  reduce(state, event) {
+  reduce({ state, event }) {
     if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured") {
       return state;
     }
@@ -169,7 +169,7 @@ describe("dynamic worker processor", () => {
     }
   });
 
-  test("keeps running older onEvent dynamic worker bundles after the runtime refactor", async () => {
+  test("runs onEvent dynamic worker bundles with the canonical reducer contract", async () => {
     const path = uniqueDynamicWorkerPath();
     const iterator = await openLiveIterator(path);
 
@@ -177,10 +177,10 @@ describe("dynamic worker processor", () => {
       await expectInitialized(iterator, path);
       await configureWorker({
         path,
-        slug: "legacy-ping-pong",
-        script: legacyPingPongDynamicWorkerScript,
+        slug: "on-event-ping-pong",
+        script: onEventPingPongDynamicWorkerScript,
       });
-      await expectConfiguredEvent(iterator, path, "legacy-ping-pong");
+      await expectConfiguredEvent(iterator, path, "on-event-ping-pong");
 
       await append(path, {
         type: valueRecordedEventType,

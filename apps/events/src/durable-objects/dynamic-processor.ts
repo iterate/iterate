@@ -162,13 +162,7 @@ function reduceEvent(state, event) {
     return state;
   }
 
-  const stateClone = structuredClone(state);
-
-  if (processor.reduce.length >= 2) {
-    return processor.reduce(stateClone, event) ?? state;
-  }
-
-  return processor.reduce({ state: stateClone, event }) ?? state;
+  return processor.reduce({ state: structuredClone(state), event }) ?? state;
 }
 
 async function appendSameStream(stream, input) {
