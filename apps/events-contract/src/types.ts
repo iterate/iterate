@@ -176,7 +176,7 @@ export const GenericEvent = GenericEventBase.extend({
 
 export const BuiltInEventInput = z.discriminatedUnion("type", builtInEventInputOptions);
 export const BuiltInEvent = z.discriminatedUnion("type", builtInEventOptions);
-export type BuiltInEventInput = z.infer<typeof BuiltInEventInput>;
+export type BuiltInEventInput = z.input<typeof BuiltInEventInput>;
 export type BuiltInEvent = z.infer<typeof BuiltInEvent>;
 
 type WithAutocompleteEventType<T extends { type: string }> = Omit<T, "type"> & {
@@ -184,7 +184,7 @@ type WithAutocompleteEventType<T extends { type: string }> = Omit<T, "type"> & {
 };
 
 export type EventType = BuiltInEventInput["type"] | (z.infer<typeof EventTypeSchema> & {});
-export type GenericEventInput = WithAutocompleteEventType<z.infer<typeof GenericEventInput>>;
+export type GenericEventInput = WithAutocompleteEventType<z.input<typeof GenericEventInput>>;
 export type GenericEvent = WithAutocompleteEventType<z.infer<typeof GenericEvent>>;
 
 export const EventInput = z.union([BuiltInEventInput, GenericEventInput]);

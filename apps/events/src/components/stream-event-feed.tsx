@@ -272,7 +272,7 @@ function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) 
       <div className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
         <FolderPlusIcon className="size-3.5" />
       </div>
-      <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
           Child stream created
         </span>
@@ -285,7 +285,7 @@ function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) 
             projectSlug,
             renderer: previous.renderer ?? defaultStreamViewSearch.renderer,
           })}
-          className="block min-w-0 max-w-full text-foreground hover:text-primary hover:underline sm:flex-1"
+          className="block min-w-0 max-w-full text-foreground hover:text-primary hover:underline"
         >
           <StreamPathLabel
             path={item.createdPath}

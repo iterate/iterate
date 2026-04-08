@@ -13,4 +13,15 @@ describe("validateStreamViewSearch", () => {
       event: 12,
     });
   });
+
+  test("accepts yaml composer mode", () => {
+    expect(validateStreamViewSearch({ composer: "yaml" })).toEqual({
+      ...defaultStreamViewSearch,
+      composer: "yaml",
+    });
+  });
+
+  test("falls back to default for old 'raw' composer value", () => {
+    expect(validateStreamViewSearch({ composer: "raw" })).toEqual(defaultStreamViewSearch);
+  });
 });

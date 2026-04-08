@@ -234,13 +234,21 @@ Now we should be able to
 - spawn sub-agents and send messages back and forth - let's try that - we can write a test for it
 -
 
-# Maybe: let's make the UI nice!
+# Sequence of iterations
+
+- ping / pong
+- non-processor llm loop w/o memory
+- non-processor llm loop w/ memory
+- processor loop with memory
+- processor loop with memory and interruptions and queued messages
+
+- let's add bashmode!
+
+# Maybe: tests
 
 # Maybe: how do we deploy this?
 
 Problem: My computer isn't always on!
-
-# Maybe scheduled execution
 
 # Workshop projects
 

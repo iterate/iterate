@@ -33,13 +33,16 @@ export type ProcessorAppendInput = {
   path?: StreamPath | RelativeStreamPath;
 };
 
+export type ProcessorLogger = Pick<Console, "debug" | "error" | "info" | "log" | "warn">;
+
 export type Processor<State = Record<string, unknown>> = {
   slug: string;
   initialState: State;
-  reduce?(args: { event: Event; state: State }): State;
+  reduce?(args: { event: Event; logger: ProcessorLogger; state: State }): State;
   afterAppend?(args: {
     append: (input: ProcessorAppendInput) => Event | Promise<Event>;
     event: Event;
+    logger: ProcessorLogger;
     state: State;
   }): Promise<void>;
 };
@@ -82,46 +85,71 @@ type PullSubscriptionEventsClient = {
   ) => Promise<AsyncIterable<Event>>;
 };
 
+type PullSubscriptionRuntimeLogger<State> = {
+  afterAppendComplete(args: { event: Event }): void;
+  afterAppendStart(args: { event: Event }): void;
+  appendedEvent(args: { appendedEvent: Event; sourceEvent: Event }): void;
+  catchupComplete(args: {
+    lastOffset?: number;
+    reducedCount: number;
+    state: State;
+    streamPath: StreamPath;
+  }): void;
+  catchupStart(args: { streamPath: StreamPath }): void;
+  error(args: { error: unknown; headline: string }): void;
+  liveEvent(args: { event: Event }): void;
+  liveReduce(args: { event: Event; state: State }): void;
+  patternDecision(args: {
+    alreadySubscribed: boolean;
+    matched: boolean;
+    streamPath: StreamPath;
+    streamPattern: string;
+  }): void;
+  watchPattern(args: { streamPattern: string }): void;
+};
+
 export class PullSubscriptionProcessorRuntime<State> {
   #controller = new AbortController();
   #eventsClient: PullSubscriptionEventsClient;
+  #processorLogger: ProcessorLogger;
+  #runtimeLogger: PullSubscriptionRuntimeLogger<State>;
   #processor: Processor<State>;
   #state: State;
   #streamPath: StreamPath;
 
   constructor({
     eventsClient,
+    logger = console,
     processor,
     streamPath,
   }: {
     eventsClient: PullSubscriptionEventsClient;
+    logger?: ProcessorLogger;
     processor: Processor<State>;
     streamPath: StreamPath;
   }) {
     this.#eventsClient = eventsClient;
+    this.#processorLogger = logger;
+    this.#runtimeLogger = createPullSubscriptionRuntimeLogger({
+      logger,
+      processorSlug: processor.slug,
+      scope: "stream",
+    });
     this.#processor = processor;
     this.#state = structuredClone(this.#processor.initialState);
     this.#streamPath = streamPath;
   }
 
   async run() {
-    const append = async (input: ProcessorAppendInput) => {
-      const result = await this.#eventsClient.append({
-        path: resolveAppendPath({
-          currentPath: this.#streamPath,
-          nextPath: input.path,
-        }),
-        event: input.event,
-      });
-      return result.event;
-    };
-
     try {
+      this.#runtimeLogger.catchupStart({ streamPath: this.#streamPath });
+
       const historyStream = await this.#eventsClient.stream(
         { path: this.#streamPath },
         { signal: this.#controller.signal },
       );
       let lastOffset: number | undefined;
+      let reducedHistoryEventCount = 0;
 
       for await (const event of historyStream) {
         if (this.#controller.signal.aborted) {
@@ -129,12 +157,20 @@ export class PullSubscriptionProcessorRuntime<State> {
         }
 
         lastOffset = event.offset;
+        reducedHistoryEventCount += 1;
         this.#reduce(event);
       }
 
       if (this.#controller.signal.aborted) {
         return;
       }
+
+      this.#runtimeLogger.catchupComplete({
+        lastOffset,
+        reducedCount: reducedHistoryEventCount,
+        state: this.#state,
+        streamPath: this.#streamPath,
+      });
 
       const liveStream = await this.#eventsClient.stream(
         {
@@ -153,19 +189,48 @@ export class PullSubscriptionProcessorRuntime<State> {
         }
 
         lastOffset = event.offset;
-        this.#reduce(event);
+        const didReduce = this.#reduce(event);
+        if (didReduce) {
+          this.#runtimeLogger.liveReduce({ event, state: this.#state });
+        } else {
+          this.#runtimeLogger.liveEvent({ event });
+        }
 
-        await this.#processor.afterAppend?.({
-          append,
+        if (this.#processor.afterAppend == null) {
+          continue;
+        }
+
+        this.#runtimeLogger.afterAppendStart({ event });
+        await this.#processor.afterAppend({
+          append: async (input: ProcessorAppendInput) => {
+            const result = await this.#eventsClient.append({
+              path: resolveAppendPath({
+                currentPath: this.#streamPath,
+                nextPath: input.path,
+              }),
+              event: input.event,
+            });
+            this.#runtimeLogger.appendedEvent({
+              appendedEvent: result.event,
+              sourceEvent: event,
+            });
+            return result.event;
+          },
           event,
+          logger: this.#processorLogger,
           state: this.#state,
         });
+        this.#runtimeLogger.afterAppendComplete({ event });
       }
     } catch (error) {
       if (this.#controller.signal.aborted && isAbortError(error)) {
         return;
       }
 
+      this.#runtimeLogger.error({
+        error,
+        headline: `Processor runtime failed for stream ${formatPath(this.#streamPath)}.`,
+      });
       throw error;
     }
   }
@@ -184,13 +249,15 @@ export class PullSubscriptionProcessorRuntime<State> {
 
   #reduce(event: Event) {
     if (this.#processor.reduce == null) {
-      return;
+      return false;
     }
 
     this.#state = this.#processor.reduce({
       event,
+      logger: this.#processorLogger,
       state: structuredClone(this.#state),
     });
+    return true;
   }
 }
 
@@ -306,6 +373,8 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
   #controller = new AbortController();
   #eventsClient: PullSubscriptionEventsClient;
   #fatalError: unknown;
+  #processorLogger: ProcessorLogger;
+  #runtimeLogger: PullSubscriptionRuntimeLogger<State>;
   #processor: Processor<State>;
   #runtimeByStreamPath = new Map<StreamPath, PullSubscriptionProcessorRuntime<State>>();
   #runPromiseByStreamPath = new Map<StreamPath, Promise<void>>();
@@ -313,20 +382,30 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
 
   constructor({
     eventsClient,
+    logger = console,
     processor,
     streamPattern,
   }: {
     eventsClient: PullSubscriptionEventsClient;
+    logger?: ProcessorLogger;
     processor: Processor<State>;
     streamPattern: string;
   }) {
     this.#eventsClient = eventsClient;
+    this.#processorLogger = logger;
+    this.#runtimeLogger = createPullSubscriptionRuntimeLogger({
+      logger,
+      processorSlug: processor.slug,
+      scope: "pattern",
+    });
     this.#processor = processor;
     this.#streamPattern = normalizeStreamPattern(streamPattern);
   }
 
   async run() {
     try {
+      this.#runtimeLogger.watchPattern({ streamPattern: this.#streamPattern });
+
       const historyStream = await this.#eventsClient.stream(
         { path: "/" },
         { signal: this.#controller.signal },
@@ -378,6 +457,10 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
       }
     } catch (error) {
       if (!(this.#controller.signal.aborted && isAbortError(error))) {
+        this.#runtimeLogger.error({
+          error,
+          headline: `Pattern runtime failed for ${formatPattern(this.#streamPattern)}.`,
+        });
         this.#fail(error);
       }
     }
@@ -412,17 +495,23 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
       return;
     }
 
-    if (!matchesStreamPattern(streamPath, this.#streamPattern)) {
-      return;
-    }
+    const matched = matchesStreamPattern(streamPath, this.#streamPattern);
+    const alreadySubscribed = this.#runtimeByStreamPath.has(streamPath);
+    this.#runtimeLogger.patternDecision({
+      alreadySubscribed,
+      matched,
+      streamPath,
+      streamPattern: this.#streamPattern,
+    });
 
-    if (this.#runtimeByStreamPath.has(streamPath)) {
+    if (!matched || alreadySubscribed) {
       return;
     }
 
     try {
       const runtime = new PullSubscriptionProcessorRuntime({
         eventsClient: this.#eventsClient,
+        logger: this.#processorLogger,
         processor: this.#processor,
         streamPath,
       });
@@ -457,6 +546,295 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
     this.#fatalError = error;
     this.stop();
   }
+}
+
+function createPullSubscriptionRuntimeLogger<State>({
+  logger,
+  processorSlug,
+  scope,
+}: {
+  logger: ProcessorLogger;
+  processorSlug: string;
+  scope: "pattern" | "stream";
+}): PullSubscriptionRuntimeLogger<State> {
+  const prefix = formatRuntimeLogPrefix({ processorSlug, scope });
+
+  return {
+    watchPattern({ streamPattern }) {
+      logPrettyBlock(
+        logger.info.bind(logger),
+        prefix,
+        `Watching for streams matching pattern ${formatPattern(streamPattern)}.`,
+      );
+    },
+
+    patternDecision({ alreadySubscribed, matched, streamPath, streamPattern }) {
+      if (matched && !alreadySubscribed) {
+        logPrettyBlock(
+          logger.info.bind(logger),
+          prefix,
+          `Subscribing to new stream ${formatPath(streamPath)} as it matches pattern ${formatPattern(streamPattern)}.`,
+        );
+        return;
+      }
+
+      if (matched) {
+        logPrettyBlock(
+          logger.info.bind(logger),
+          prefix,
+          `Already subscribed to stream ${formatPath(streamPath)} because it matches pattern ${formatPattern(streamPattern)}.`,
+        );
+        return;
+      }
+
+      logPrettyBlock(
+        logger.info.bind(logger),
+        prefix,
+        `Ignoring new stream ${formatPath(streamPath)} because it does not match pattern ${formatPattern(streamPattern)}.`,
+      );
+    },
+
+    catchupStart({ streamPath }) {
+      logPrettyBlock(
+        logger.info.bind(logger),
+        prefix,
+        `Catching up to stream ${formatPath(streamPath)}.`,
+      );
+    },
+
+    catchupComplete({ lastOffset, reducedCount, state }) {
+      logPrettyBlock(
+        logger.info.bind(logger),
+        prefix,
+        `Reduced ${formatEventCount(reducedCount)} up to offset ${formatOffsetValue(lastOffset)}.`,
+        [
+          {
+            label: "Reduced state:",
+            value: formatPrettyJson(state),
+          },
+        ],
+      );
+    },
+
+    liveReduce({ event, state }) {
+      logPrettyBlock(
+        logger.info.bind(logger),
+        prefix,
+        `Live reduce for ${formatEventReference(event)}.`,
+        [
+          { label: "Input event:", value: formatPrettyJson(event) },
+          { label: "Reduced state:", value: formatPrettyJson(state) },
+        ],
+      );
+    },
+
+    liveEvent({ event }) {
+      logPrettyBlock(
+        logger.info.bind(logger),
+        prefix,
+        `Received live event ${formatEventReference(event)}.`,
+        [{ label: "Input event:", value: formatPrettyJson(event) }],
+      );
+    },
+
+    afterAppendStart({ event }) {
+      logPrettyBlock(
+        logger.info.bind(logger),
+        prefix,
+        `afterAppend for ${formatEventReference(event)}.`,
+      );
+    },
+
+    afterAppendComplete({ event }) {
+      logPrettyBlock(
+        logger.info.bind(logger),
+        prefix,
+        `afterAppend complete for ${formatEventReference(event)}.`,
+      );
+    },
+
+    appendedEvent({ appendedEvent, sourceEvent }) {
+      logPrettyBlock(
+        logger.info.bind(logger),
+        prefix,
+        `Appended ${formatEventReference(appendedEvent)} while handling ${formatEventReference(sourceEvent)}.`,
+      );
+    },
+
+    error({ error, headline }) {
+      logPrettyBlock(logger.error.bind(logger), prefix, colorize(headline, ANSI.red), [
+        { label: "Error:", value: formatPrettyError(error) },
+      ]);
+    },
+  };
+}
+
+const ANSI = {
+  blue: "\u001b[34m",
+  cyan: "\u001b[36m",
+  gray: "\u001b[90m",
+  green: "\u001b[32m",
+  magenta: "\u001b[35m",
+  red: "\u001b[31m",
+  reset: "\u001b[0m",
+  yellow: "\u001b[33m",
+} as const;
+
+function logPrettyBlock(
+  log: (...args: unknown[]) => void,
+  prefix: string,
+  headline: string,
+  sections: Array<{ label: string; value?: string }> = [],
+) {
+  const lines = [`${prefix} ${headline}`];
+
+  for (const section of sections) {
+    lines.push(`  ${colorize(section.label, ANSI.gray)}`);
+    if (section.value != null) {
+      lines.push(indentBlock(section.value, 4));
+    }
+  }
+
+  log(lines.join("\n"));
+}
+
+function formatRuntimeLogPrefix(args: { processorSlug: string; scope: "pattern" | "stream" }) {
+  const scope =
+    args.scope === "pattern"
+      ? colorize(`pattern:${args.processorSlug}`, ANSI.magenta)
+      : colorize(`stream:${args.processorSlug}`, ANSI.cyan);
+  return `${colorize("[", ANSI.gray)}${scope}${colorize("]", ANSI.gray)}`;
+}
+
+function formatPath(path: string) {
+  return colorize(path, ANSI.cyan);
+}
+
+function formatPattern(pattern: string) {
+  return colorize(pattern, ANSI.magenta);
+}
+
+function formatEventType(eventType: string) {
+  return colorize(eventType, ANSI.green);
+}
+
+function formatEventOffset(offset: number) {
+  return colorize(`#${offset}`, ANSI.yellow);
+}
+
+function formatOffsetValue(offset: number | undefined) {
+  return offset == null ? colorize("none", ANSI.gray) : colorize(String(offset), ANSI.yellow);
+}
+
+function formatEventCount(count: number) {
+  return `${colorize(String(count), ANSI.yellow)} event${count === 1 ? "" : "s"}`;
+}
+
+function formatEventReference(event: Pick<Event, "offset" | "streamPath" | "type">) {
+  return `${formatEventType(event.type)} ${formatEventOffset(event.offset)} ${formatPath(event.streamPath)}`;
+}
+
+function indentBlock(value: string, spaces: number) {
+  const indentation = " ".repeat(spaces);
+  return value
+    .split("\n")
+    .map((line) => `${indentation}${line}`)
+    .join("\n");
+}
+
+function formatPrettyJson(value: unknown) {
+  return colorizeJson(safeJSONStringify(value));
+}
+
+function safeJSONStringify(value: unknown) {
+  const seen = new WeakSet<object>();
+
+  return (
+    JSON.stringify(
+      value,
+      (_key, currentValue) => {
+        if (typeof currentValue === "bigint") {
+          return `${currentValue}n`;
+        }
+
+        if (currentValue instanceof Error) {
+          return {
+            message: currentValue.message,
+            name: currentValue.name,
+            stack: currentValue.stack,
+          };
+        }
+
+        if (currentValue instanceof Map) {
+          return Object.fromEntries(currentValue.entries());
+        }
+
+        if (currentValue instanceof Set) {
+          return [...currentValue.values()];
+        }
+
+        if (typeof currentValue === "function") {
+          return `[Function ${currentValue.name || "anonymous"}]`;
+        }
+
+        if (typeof currentValue === "symbol") {
+          return currentValue.toString();
+        }
+
+        if (typeof currentValue === "object" && currentValue != null) {
+          if (seen.has(currentValue)) {
+            return "[Circular]";
+          }
+
+          seen.add(currentValue);
+        }
+
+        return currentValue;
+      },
+      2,
+    ) ?? "null"
+  );
+}
+
+function colorizeJson(json: string) {
+  return json.replace(
+    /("(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\btrue\b|\bfalse\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
+    (token) => {
+      if (token.startsWith('"') && token.endsWith(":")) {
+        return colorize(token, ANSI.blue);
+      }
+
+      if (token.startsWith('"')) {
+        return colorize(token, ANSI.green);
+      }
+
+      if (token === "true" || token === "false") {
+        return colorize(token, ANSI.magenta);
+      }
+
+      if (token === "null") {
+        return colorize(token, ANSI.gray);
+      }
+
+      return colorize(token, ANSI.yellow);
+    },
+  );
+}
+
+function formatPrettyError(error: unknown) {
+  if (error instanceof Error) {
+    return colorize(error.stack ?? `${error.name}: ${error.message}`, ANSI.red);
+  }
+
+  if (typeof error === "string") {
+    return colorize(error, ANSI.red);
+  }
+
+  return formatPrettyJson(error);
+}
+
+function colorize(text: string, color: string) {
+  return `${color}${text}${ANSI.reset}`;
 }
 
 function isAbortError(error: unknown) {

@@ -34,14 +34,30 @@ export type StreamPath = z.infer<typeof StreamPath>;
 export const Offset = z.coerce.number().int().positive();
 export type Offset = z.infer<typeof Offset>;
 
-// Keep public payload/state shapes JSON-only so Cloudflare Durable Object RPC
-// can prove they are serializable. `Record<string, unknown>` made the generated
+// Keep metadata/state shapes JSON-only so Cloudflare Durable Object RPC can
+// prove they are serializable. `Record<string, unknown>` made the generated
 // stub methods collapse to `never`, while bare `z.json()` would also allow
 // top-level arrays/scalars/null. We want "JSON object with JSON values". For
 // background on the `never` failure mode, see
 // https://github.com/cloudflare/workerd/issues/2003.
 export const JSONObject = z.record(z.string(), z.json());
 export type JSONObject = z.infer<typeof JSONObject>;
+
+// Generic event payloads are intentionally looser than `JSONObject`. We want
+// callers to be able to do `{ payload: itemFromOpenaiResponse }` without first
+// coercing SDK object unions into `Record<string, JsonValue>`.
+//
+// This breaks Cloudflare Durable Object RPC type inference because workerd can
+// no longer prove that payloads are recursively JSON-serializable. Once `Event`
+// / `EventInput` flow through a DO stub, method signatures can degrade and some
+// generated parameter types collapse toward `never`, which makes typed
+// `stub.append(...)` calls effectively unusable.
+//
+// TODO: Find a recursive JSON-safe payload type that still accepts SDK object
+// unions like OpenAI `ResponseStreamEvent` directly at the call site.
+const GenericEventPayload = z.custom<object>(
+  (value) => typeof value === "object" && value != null && !Array.isArray(value),
+);
 
 export const EventTypeSchema = z.string().trim().min(1).max(2048);
 
@@ -50,7 +66,7 @@ export const EventTypeSchema = z.string().trim().min(1).max(2048);
 // `z.strictObject(...)` at each call site.
 export const GenericEventInput = z.strictObject({
   type: EventTypeSchema,
-  payload: JSONObject.default({}),
+  payload: GenericEventPayload.default({}),
   metadata: JSONObject.optional(),
   idempotencyKey: z.string().trim().min(1).optional(),
   offset: Offset.optional(),

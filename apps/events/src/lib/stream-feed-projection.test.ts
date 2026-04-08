@@ -598,6 +598,168 @@ describe("projectWireToFeed", () => {
     ]);
   });
 
+  test("projects nano agent input and OpenAI output items into ai-elements chat messages", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "agent-input-added",
+        payload: {
+          content: "Say hello in two words.",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "openai-output-item-added",
+        payload: {
+          item: {
+            id: "msg_1",
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Hello there" }],
+          },
+        },
+      }),
+    ]);
+
+    const messages = feed.filter(
+      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
+    );
+
+    expect(messages).toEqual([
+      {
+        kind: "message",
+        role: "user",
+        content: [{ type: "text", text: "Say hello in two words." }],
+        timestamp: messages[0]!.timestamp,
+      },
+      {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "Hello there" }],
+        timestamp: messages[1]!.timestamp,
+      },
+    ]);
+  });
+
+  test("projects streamed nano agent OpenAI events into a single assistant message", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "agent-input-added",
+        payload: {
+          content: "Say hello.",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "openai-response-event-added",
+        payload: {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            id: "msg_stream",
+            type: "message",
+            role: "assistant",
+            content: [],
+          },
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "openai-response-event-added",
+        payload: {
+          type: "response.output_text.delta",
+          item_id: "msg_stream",
+          content_index: 0,
+          delta: "Hello",
+          output_index: 0,
+        },
+      }),
+      createEvent({
+        offset: 4,
+        type: "openai-response-event-added",
+        payload: {
+          type: "response.output_text.delta",
+          item_id: "msg_stream",
+          content_index: 0,
+          delta: " there",
+          output_index: 0,
+        },
+      }),
+    ]);
+
+    const assistant = feed.find(
+      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
+        item.kind === "message" && item.role === "assistant",
+    );
+
+    expect(assistant).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "Hello there" }],
+      streamStatus: "streaming",
+    });
+  });
+
+  test("marks streamed nano agent OpenAI messages complete after response completion", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "agent-input-added",
+        payload: {
+          content: "Say hello.",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "openai-response-event-added",
+        payload: {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            id: "msg_stream_done",
+            type: "message",
+            role: "assistant",
+            content: [],
+          },
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "openai-response-event-added",
+        payload: {
+          type: "response.output_text.delta",
+          item_id: "msg_stream_done",
+          content_index: 0,
+          delta: "Hello there",
+          output_index: 0,
+        },
+      }),
+      createEvent({
+        offset: 4,
+        type: "openai-response-event-added",
+        payload: {
+          type: "response.completed",
+          response: {
+            output: [],
+          },
+        },
+      }),
+    ]);
+
+    const assistant = feed.find(
+      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
+        item.kind === "message" && item.role === "assistant",
+    );
+
+    expect(assistant).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "Hello there" }],
+      streamStatus: "complete",
+    });
+  });
+
   test("marks workshop assistant output as streaming until the request completes", () => {
     const feed = projectWireToFeed([
       createEvent({

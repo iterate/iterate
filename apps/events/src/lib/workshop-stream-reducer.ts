@@ -6,6 +6,7 @@ const LLM_REQUEST_STARTED_TYPE = "llm-request-started" as const;
 const LLM_REQUEST_CANCELED_TYPE = "llm-request-canceled" as const;
 const LLM_REQUEST_FAILED_TYPE = "llm-request-failed" as const;
 const OPENAI_RESPONSE_EVENT_ADDED_TYPE = "openai-response-event-added" as const;
+const OPENAI_OUTPUT_ITEM_ADDED_TYPE = "openai-output-item-added" as const;
 const LLM_REQUEST_COMPLETED_TYPE = "llm-request-completed" as const;
 const CODEMODE_BLOCK_ADDED_TYPE = "codemode-block-added" as const;
 const CODEMODE_RESULT_ADDED_TYPE = "codemode-result-added" as const;
@@ -53,8 +54,12 @@ type AgentRequestFailedPayload = {
   message: string;
 };
 
+type OpenAiOutputItemAddedPayload = {
+  item: OpenAiAssistantOutputItem;
+};
+
 type OpenAiResponseEventAddedPayload = {
-  requestId: string;
+  requestId?: string;
   event: OpenAiResponseStreamEvent;
 };
 
@@ -174,6 +179,21 @@ type WorkshopTurn = {
   failedMessage?: string;
 };
 
+type OutputMessageContainer = {
+  outputMessages: Map<string, WorkshopOutputMessage>;
+  outputMessageOrder: string[];
+};
+
+type StreamingAgentTurn = OutputMessageContainer & {
+  inputOffset: number;
+  inputTimestamp: number;
+  latestOutputOffset?: number;
+  outputTimestamp?: number;
+  terminalOffset?: number;
+  terminalTimestamp?: number;
+  failedMessage?: string;
+};
+
 export function buildWorkshopSemanticInsertions(
   events: readonly Event[],
 ): Map<number, StreamFeedItem[]> {
@@ -181,6 +201,8 @@ export function buildWorkshopSemanticInsertions(
   const turns: WorkshopTurn[] = [];
   const turnsByInputOffset = new Map<number, WorkshopTurn>();
   const turnsByRequestId = new Map<string, WorkshopTurn>();
+  const streamingAgentTurns: StreamingAgentTurn[] = [];
+  const pendingStreamingAgentTurns: StreamingAgentTurn[] = [];
 
   for (const event of events) {
     if (event.type === AGENT_INPUT_ADDED_TYPE) {
@@ -195,6 +217,16 @@ export function buildWorkshopSemanticInsertions(
         content: [{ type: "text", text: payload.content }],
         timestamp: getTimestamp(event.createdAt),
       });
+
+      const turn: StreamingAgentTurn = {
+        inputOffset: event.offset,
+        inputTimestamp: getTimestamp(event.createdAt),
+        outputMessages: new Map<string, WorkshopOutputMessage>(),
+        outputMessageOrder: [],
+      };
+
+      streamingAgentTurns.push(turn);
+      pendingStreamingAgentTurns.push(turn);
       continue;
     }
 
@@ -210,6 +242,38 @@ export function buildWorkshopSemanticInsertions(
         content: [{ type: "text", text: payload.content }],
         timestamp: getTimestamp(event.createdAt),
       });
+
+      closeLatestPendingStreamingAgentTurn(
+        pendingStreamingAgentTurns,
+        event.offset,
+        getTimestamp(event.createdAt),
+      );
+      continue;
+    }
+
+    if (event.type === OPENAI_OUTPUT_ITEM_ADDED_TYPE) {
+      const payload = parseOpenAiOutputItemAddedPayload(event.payload);
+      if (!payload) {
+        continue;
+      }
+
+      const content = extractAssistantTextFromContentItems(payload.item.content);
+      if (content.length === 0) {
+        continue;
+      }
+
+      appendInsertion(insertionsByOffset, event.offset, {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: content }],
+        timestamp: getTimestamp(event.createdAt),
+      });
+
+      closeLatestPendingStreamingAgentTurn(
+        pendingStreamingAgentTurns,
+        event.offset,
+        getTimestamp(event.createdAt),
+      );
       continue;
     }
 
@@ -226,6 +290,12 @@ export function buildWorkshopSemanticInsertions(
         timestamp: getTimestamp(event.createdAt),
         raw: event,
       });
+
+      closeLatestPendingStreamingAgentTurn(
+        pendingStreamingAgentTurns,
+        event.offset,
+        getTimestamp(event.createdAt),
+      );
       continue;
     }
 
@@ -327,14 +397,31 @@ export function buildWorkshopSemanticInsertions(
         continue;
       }
 
-      const turn = turnsByRequestId.get(payload.requestId);
-      if (!turn) {
+      const turn = payload.requestId == null ? undefined : turnsByRequestId.get(payload.requestId);
+      if (turn) {
+        turn.latestOutputOffset = event.offset;
+        turn.outputTimestamp = getTimestamp(event.createdAt);
+        applyOpenAiResponseStreamEvent(turn, payload.event);
         continue;
       }
 
-      turn.latestOutputOffset = event.offset;
-      turn.outputTimestamp = getTimestamp(event.createdAt);
-      applyOpenAiResponseStreamEvent(turn, payload.event);
+      const streamingAgentTurn = getLatestPendingStreamingAgentTurn(pendingStreamingAgentTurns);
+      if (!streamingAgentTurn) {
+        continue;
+      }
+
+      streamingAgentTurn.latestOutputOffset = event.offset;
+      streamingAgentTurn.outputTimestamp = getTimestamp(event.createdAt);
+      applyOpenAiResponseStreamEventToStreamingAgentTurn(streamingAgentTurn, payload.event);
+
+      if (isTerminalOpenAiResponseStreamEvent(payload.event)) {
+        closePendingStreamingAgentTurn(
+          pendingStreamingAgentTurns,
+          streamingAgentTurn,
+          event.offset,
+          getTimestamp(event.createdAt),
+        );
+      }
       continue;
     }
 
@@ -440,6 +527,34 @@ export function buildWorkshopSemanticInsertions(
     }
   }
 
+  for (const turn of streamingAgentTurns) {
+    const timestamp = turn.terminalTimestamp ?? turn.outputTimestamp ?? turn.inputTimestamp;
+    const messageOffset = turn.terminalOffset ?? turn.latestOutputOffset ?? turn.inputOffset;
+    const requestFinished = turn.terminalOffset != null;
+    const assistantMessages = buildStreamingAgentAssistantMessages({
+      requestFinished,
+      timestamp,
+      turn,
+    });
+
+    for (const assistantMessage of assistantMessages) {
+      appendInsertion(insertionsByOffset, messageOffset, assistantMessage);
+    }
+
+    if (turn.failedMessage) {
+      appendInsertion(insertionsByOffset, turn.terminalOffset ?? messageOffset, {
+        kind: "error",
+        message: "Agent request failed",
+        context: turn.failedMessage,
+        timestamp: turn.terminalTimestamp ?? timestamp,
+        raw: {
+          inputOffset: turn.inputOffset,
+          message: turn.failedMessage,
+        },
+      });
+    }
+  }
+
   return insertionsByOffset;
 }
 
@@ -505,6 +620,63 @@ function applyOpenAiResponseStreamEvent(turn: WorkshopTurn, event: OpenAiRespons
   }
 }
 
+function applyOpenAiResponseStreamEventToStreamingAgentTurn(
+  turn: StreamingAgentTurn,
+  event: OpenAiResponseStreamEvent,
+) {
+  if (event.type === "response.output_item.added") {
+    registerAssistantOutputItem(turn, event.item, event.output_index);
+    return;
+  }
+
+  if (event.type === "response.output_item.done") {
+    const outputMessage = registerAssistantOutputItem(turn, event.item, event.output_index);
+    if (outputMessage == null) {
+      return;
+    }
+    const completedText = extractAssistantTextFromContentItems(event.item.content);
+    if (completedText.length > 0) {
+      outputMessage.completedText = completedText;
+    }
+    outputMessage.done = true;
+    return;
+  }
+
+  if (event.type === "response.output_text.delta") {
+    const outputMessage = getOrCreateOutputMessage(turn, {
+      itemId: event.item_id,
+      outputIndex: event.output_index,
+    });
+    setOutputMessageTextPart(
+      outputMessage,
+      event.content_index,
+      getExistingOutputMessageTextPart(outputMessage, event.content_index) + event.delta,
+    );
+    return;
+  }
+
+  if (event.type === "response.output_text.done") {
+    const outputMessage = getOrCreateOutputMessage(turn, {
+      itemId: event.item_id,
+      outputIndex: event.output_index,
+    });
+    setOutputMessageTextPart(outputMessage, event.content_index, event.text);
+    return;
+  }
+
+  if (event.type === "response.failed") {
+    const errorMessage = event.response?.error?.message;
+    if (typeof errorMessage === "string" && errorMessage.length > 0) {
+      turn.failedMessage = errorMessage;
+    }
+    return;
+  }
+
+  if (event.type === "error") {
+    turn.failedMessage = event.message;
+  }
+}
+
 function buildWorkshopAssistantMessages({
   requestFinished,
   timestamp,
@@ -541,6 +713,41 @@ function buildWorkshopAssistantMessages({
   ];
 }
 
+function buildStreamingAgentAssistantMessages({
+  requestFinished,
+  timestamp,
+  turn,
+}: {
+  requestFinished: boolean;
+  timestamp: number;
+  turn: StreamingAgentTurn;
+}): StreamFeedItem[] {
+  const assistantMessages = getOrderedOutputMessages(turn)
+    .map((outputMessage) =>
+      buildWorkshopAssistantMessage(outputMessage, timestamp, requestFinished),
+    )
+    .filter((item): item is Extract<StreamFeedItem, { kind: "message" }> => item != null);
+
+  if (assistantMessages.length > 0) {
+    return assistantMessages;
+  }
+
+  const fallbackText = getOutputMessagesText(turn);
+  if (fallbackText.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "text", text: fallbackText }],
+      timestamp,
+      streamStatus: requestFinished ? "complete" : "streaming",
+    },
+  ];
+}
+
 function buildWorkshopAssistantMessage(
   outputMessage: WorkshopOutputMessage,
   timestamp: number,
@@ -562,9 +769,9 @@ function buildWorkshopAssistantMessage(
   };
 }
 
-function getOrderedOutputMessages(turn: WorkshopTurn) {
-  return turn.outputMessageOrder
-    .map((itemId) => turn.outputMessages.get(itemId))
+function getOrderedOutputMessages(container: OutputMessageContainer) {
+  return container.outputMessageOrder
+    .map((itemId) => container.outputMessages.get(itemId))
     .filter((item): item is WorkshopOutputMessage => item != null)
     .sort((left, right) => {
       if (left.outputIndex == null && right.outputIndex == null) {
@@ -585,7 +792,11 @@ function getTurnFallbackOutputText(turn: WorkshopTurn) {
     return turn.completedOutputText;
   }
 
-  return getOrderedOutputMessages(turn)
+  return getOutputMessagesText(turn);
+}
+
+function getOutputMessagesText(container: OutputMessageContainer) {
+  return getOrderedOutputMessages(container)
     .map((outputMessage) => getOutputMessageText(outputMessage))
     .join("");
 }
@@ -629,7 +840,7 @@ function extractAssistantTextFromContentItems(content: unknown[] | undefined) {
 }
 
 function registerAssistantOutputItem(
-  turn: WorkshopTurn,
+  turn: OutputMessageContainer,
   item: OpenAiAssistantOutputItem,
   outputIndex: number,
 ) {
@@ -643,7 +854,7 @@ function registerAssistantOutputItem(
 }
 
 function getOrCreateOutputMessage(
-  turn: WorkshopTurn,
+  turn: OutputMessageContainer,
   {
     itemId,
     outputIndex,
@@ -668,6 +879,40 @@ function getOrCreateOutputMessage(
   turn.outputMessages.set(itemId, outputMessage);
   turn.outputMessageOrder.push(itemId);
   return outputMessage;
+}
+
+function getLatestPendingStreamingAgentTurn(
+  pendingStreamingAgentTurns: readonly StreamingAgentTurn[],
+) {
+  return pendingStreamingAgentTurns.at(-1);
+}
+
+function closeLatestPendingStreamingAgentTurn(
+  pendingStreamingAgentTurns: StreamingAgentTurn[],
+  offset: number,
+  timestamp: number,
+) {
+  const turn = pendingStreamingAgentTurns.at(-1);
+  if (!turn) {
+    return;
+  }
+
+  closePendingStreamingAgentTurn(pendingStreamingAgentTurns, turn, offset, timestamp);
+}
+
+function closePendingStreamingAgentTurn(
+  pendingStreamingAgentTurns: StreamingAgentTurn[],
+  turn: StreamingAgentTurn,
+  offset: number,
+  timestamp: number,
+) {
+  turn.terminalOffset ??= offset;
+  turn.terminalTimestamp ??= timestamp;
+
+  const index = pendingStreamingAgentTurns.lastIndexOf(turn);
+  if (index !== -1) {
+    pendingStreamingAgentTurns.splice(index, 1);
+  }
 }
 
 function getExistingOutputMessageTextPart(
@@ -836,21 +1081,48 @@ function parseAgentRequestFailedPayload(payload: unknown): AgentRequestFailedPay
   };
 }
 
+function parseOpenAiOutputItemAddedPayload(payload: unknown): OpenAiOutputItemAddedPayload | null {
+  if (!isRecord(payload) || !isAssistantOutputItem(payload.item)) {
+    return null;
+  }
+
+  return {
+    item: payload.item,
+  };
+}
+
 function parseOpenAiResponseEventAddedPayload(
   payload: unknown,
 ): OpenAiResponseEventAddedPayload | null {
+  if (isOpenAiResponseStreamEvent(payload)) {
+    return {
+      requestId: undefined,
+      event: payload,
+    };
+  }
+
   if (
     !isRecord(payload) ||
-    typeof payload.requestId !== "string" ||
+    ("requestId" in payload &&
+      payload.requestId != null &&
+      typeof payload.requestId !== "string") ||
     !isOpenAiResponseStreamEvent(payload.event)
   ) {
     return null;
   }
 
   return {
-    requestId: payload.requestId,
+    requestId: typeof payload.requestId === "string" ? payload.requestId : undefined,
     event: payload.event,
   };
+}
+
+function isTerminalOpenAiResponseStreamEvent(event: OpenAiResponseStreamEvent) {
+  return (
+    event.type === "response.completed" ||
+    event.type === "response.failed" ||
+    event.type === "error"
+  );
 }
 
 function parseCodemodeBlockAddedPayload(payload: unknown): CodemodeBlockAddedPayload | null {

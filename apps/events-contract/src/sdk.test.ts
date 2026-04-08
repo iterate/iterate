@@ -2,17 +2,20 @@ import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   defineProcessor,
+  type ProcessorLogger,
   PullSubscriptionPatternProcessorRuntime,
   PullSubscriptionProcessorRuntime,
   PushSubscriptionProcessorRuntime,
 } from "./sdk.ts";
 import {
+  Event as EventSchema,
   StreamPath,
   type Event,
   type EventInput,
-  type JSONObject,
   type StreamPath as StreamPathType,
 } from "./types.ts";
+
+const silentLogger = createSilentLogger();
 
 async function testSharedProcessorDefinitionKeepsPerRuntimeState() {
   const processor = defineProcessor<{ processorInstanceId: number }>(() => ({
@@ -54,11 +57,13 @@ async function testSharedProcessorDefinitionKeepsPerRuntimeState() {
 
   const firstRuntime = new PullSubscriptionProcessorRuntime({
     eventsClient: client,
+    logger: silentLogger,
     processor,
     streamPath: StreamPath.parse("/one"),
   });
   const secondRuntime = new PullSubscriptionProcessorRuntime({
     eventsClient: client,
+    logger: silentLogger,
     processor,
     streamPath: StreamPath.parse("/two"),
   });
@@ -121,6 +126,7 @@ async function testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly() {
 
   const runtime = new PullSubscriptionPatternProcessorRuntime({
     eventsClient: client,
+    logger: silentLogger,
     streamPattern: "/team/*",
     processor: defineProcessor<{ tickCount: number }>(() => ({
       slug: "pattern-test",
@@ -295,6 +301,7 @@ async function testProcessorAppendResolvesCurrentAbsoluteAndRelativePaths() {
 
   const runtime = new PullSubscriptionProcessorRuntime({
     eventsClient: client,
+    logger: silentLogger,
     processor: defineProcessor(() => ({
       slug: "append-paths",
       initialState: null,
@@ -367,6 +374,7 @@ async function testProcessorAppendRejectsInvalidRelativePaths() {
   });
   const invalidRelativeRuntime = new PullSubscriptionProcessorRuntime({
     eventsClient: invalidRelativeClient,
+    logger: silentLogger,
     processor: defineProcessor(() => ({
       slug: "invalid-relative",
       initialState: null,
@@ -404,6 +412,7 @@ async function testProcessorAppendRejectsInvalidRelativePaths() {
   });
   const aboveRootRuntime = new PullSubscriptionProcessorRuntime({
     eventsClient: aboveRootClient,
+    logger: silentLogger,
     processor: defineProcessor(() => ({
       slug: "above-root",
       initialState: null,
@@ -441,6 +450,7 @@ async function testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase() {
   const client = new SlowHistoryEventsClient(StreamPath.parse("/history"));
   const runtime = new PullSubscriptionProcessorRuntime({
     eventsClient: client,
+    logger: silentLogger,
     processor: defineProcessor<{ seen: number }>(() => ({
       slug: "history-stop",
       initialState: { seen: 0 },
@@ -667,6 +677,7 @@ async function testPatternRuntimeStopDuringHistoryWaitsForChildrenToExit() {
   const client = new SlowPatternHistoryEventsClient(rootPath, childPath);
   const runtime = new PullSubscriptionPatternProcessorRuntime({
     eventsClient: client,
+    logger: silentLogger,
     streamPattern: "/team/*",
     processor: defineProcessor(() => ({
       slug: "pattern-stop",
@@ -681,6 +692,125 @@ async function testPatternRuntimeStopDuringHistoryWaitsForChildrenToExit() {
   await runPromise;
 
   assert.equal(client.childLiveStreamStarted, false);
+}
+
+async function testPrettyLoggingDescribesCatchupLiveReduceAndAfterAppend() {
+  const streamPath = StreamPath.parse("/logs");
+  const capturedLogger = createCapturedLogger();
+  let reduceLoggerSeen: ProcessorLogger | undefined;
+  let afterAppendLoggerSeen: ProcessorLogger | undefined;
+  const client = new MockEventsClient({
+    [streamPath]: [
+      makeInitializedEvent({ streamPath, offset: 1 }),
+      makeGenericEvent({
+        streamPath,
+        offset: 2,
+        type: "tick",
+        payload: { source: "history" },
+      }),
+    ],
+  });
+
+  const runtime = new PullSubscriptionProcessorRuntime({
+    eventsClient: client,
+    logger: capturedLogger.logger,
+    processor: defineProcessor<{ seen: number }>(() => ({
+      slug: "pretty-log",
+      initialState: { seen: 0 },
+      reduce: ({ event, logger, state }) => {
+        reduceLoggerSeen = logger;
+        return event.type === "tick" ? { seen: state.seen + 1 } : state;
+      },
+      async afterAppend({ append, event, logger, state }) {
+        afterAppendLoggerSeen = logger;
+        if (event.type !== "tick") {
+          return;
+        }
+
+        await append({
+          event: {
+            type: "processed",
+            payload: { seen: state.seen, sourceOffset: event.offset },
+          },
+        });
+      },
+    })),
+    streamPath,
+  });
+
+  const runPromise = runtime.run();
+
+  await client.waitForLiveSubscription(streamPath);
+  client.emit(
+    streamPath,
+    makeGenericEvent({
+      streamPath,
+      offset: 3,
+      type: "tick",
+      payload: { source: "live" },
+    }),
+  );
+
+  await client.waitForAppendCount(1);
+  runtime.stop();
+  await runPromise;
+
+  assert.equal(reduceLoggerSeen, capturedLogger.logger);
+  assert.equal(afterAppendLoggerSeen, capturedLogger.logger);
+  assert.match(capturedLogger.joinedLogs(), /Catching up to stream \/logs\./);
+  assert.match(capturedLogger.joinedLogs(), /Reduced 2 events up to offset 2\./);
+  assert.match(capturedLogger.joinedLogs(), /Reduced state:/);
+  assert.match(capturedLogger.joinedLogs(), /"seen": 1/);
+  assert.match(capturedLogger.joinedLogs(), /Live reduce for tick #3 \/logs\./);
+  assert.match(capturedLogger.joinedLogs(), /Input event:/);
+  assert.match(capturedLogger.joinedLogs(), /"source": "live"/);
+  assert.match(capturedLogger.joinedLogs(), /afterAppend for tick #3 \/logs\./);
+  assert.match(
+    capturedLogger.joinedLogs(),
+    /Appended processed #[0-9]+ \/logs while handling tick #3 \/logs\./,
+  );
+  assert.match(capturedLogger.joinedLogs(), /afterAppend complete for tick #3 \/logs\./);
+}
+
+async function testPrettyPatternLoggingDescribesMatchedAndIgnoredStreams() {
+  const rootPath = StreamPath.parse("/");
+  const teamAPath = StreamPath.parse("/team/a");
+  const otherPath = StreamPath.parse("/other/x");
+  const capturedLogger = createCapturedLogger();
+  const client = new MockEventsClient({
+    [rootPath]: [
+      makeInitializedEvent({ streamPath: rootPath, offset: 1 }),
+      makeChildStreamCreatedEvent({ offset: 2, childPath: teamAPath }),
+      makeChildStreamCreatedEvent({ offset: 3, childPath: otherPath }),
+    ],
+    [teamAPath]: [makeInitializedEvent({ streamPath: teamAPath, offset: 1 })],
+    [otherPath]: [makeInitializedEvent({ streamPath: otherPath, offset: 1 })],
+  });
+
+  const runtime = new PullSubscriptionPatternProcessorRuntime({
+    eventsClient: client,
+    logger: capturedLogger.logger,
+    streamPattern: "/team/*",
+    processor: defineProcessor(() => ({
+      slug: "pattern-log",
+      initialState: null,
+    })),
+  });
+
+  const runPromise = runtime.run();
+  await client.waitForLiveSubscription(teamAPath);
+  runtime.stop();
+  await runPromise;
+
+  assert.match(capturedLogger.joinedLogs(), /Watching for streams matching pattern \/team\/\*\./);
+  assert.match(
+    capturedLogger.joinedLogs(),
+    /Subscribing to new stream \/team\/a as it matches pattern \/team\/\*\./,
+  );
+  assert.match(
+    capturedLogger.joinedLogs(),
+    /Ignoring new stream \/other\/x because it does not match pattern \/team\/\*\./,
+  );
 }
 
 class MockEventsClient {
@@ -701,7 +831,7 @@ class MockEventsClient {
       streamPath: input.path,
       offset: nextOffset,
       type: input.event.type,
-      payload: input.event.payload,
+      payload: input.event.payload ?? {},
       metadata: input.event.metadata,
       idempotencyKey: input.event.idempotencyKey,
     });
@@ -974,6 +1104,40 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
+function createCapturedLogger() {
+  const lines: string[] = [];
+  const write = (...args: unknown[]) => {
+    lines.push(args.map((arg) => String(arg)).join(" "));
+  };
+
+  return {
+    joinedLogs: () => stripAnsi(lines.join("\n")),
+    lines,
+    logger: {
+      debug: write,
+      error: write,
+      info: write,
+      log: write,
+      warn: write,
+    } satisfies ProcessorLogger,
+  };
+}
+
+function createSilentLogger(): ProcessorLogger {
+  const noop = () => {};
+  return {
+    debug: noop,
+    error: noop,
+    info: noop,
+    log: noop,
+    warn: noop,
+  };
+}
+
+function stripAnsi(value: string) {
+  return value.replace(/\u001b\[[0-9;]*m/g, "");
+}
+
 function makeInitializedEvent(args: { streamPath: StreamPathType; offset: number }): Event {
   return makeEvent({
     streamPath: args.streamPath,
@@ -1010,19 +1174,19 @@ function makeEvent(args: {
   streamPath: StreamPathType;
   offset: number;
   type: string;
-  payload: JSONObject;
-  metadata?: JSONObject;
+  payload: EventInput["payload"];
+  metadata?: EventInput["metadata"];
   idempotencyKey?: string;
 }): Event {
-  return {
+  return EventSchema.parse({
     streamPath: args.streamPath,
     offset: args.offset,
     type: args.type,
-    payload: args.payload,
+    payload: args.payload ?? {},
     metadata: args.metadata,
     idempotencyKey: args.idempotencyKey,
     createdAt: new Date(args.offset * 1_000).toISOString(),
-  };
+  });
 }
 
 await testSharedProcessorDefinitionKeepsPerRuntimeState();
@@ -1034,3 +1198,5 @@ await testPatternRuntimeStopDuringHistoryWaitsForChildrenToExit();
 await testPushRuntimeCatchesUpAndAppendsWithCanonicalProcessorContract();
 await testPushRuntimeSerializesOutOfOrderDeliveriesWithoutDoubleReducingHistory();
 await testPushRuntimeSkipsInclusiveCatchUpEventsAtLastProcessedOffset();
+await testPrettyLoggingDescribesCatchupLiveReduceAndAfterAppend();
+await testPrettyPatternLoggingDescribesMatchedAndIgnoredStreams();
