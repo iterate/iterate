@@ -34,12 +34,20 @@ import {
 } from "~/lib/codemode-sources.ts";
 import { orpc, orpcClient } from "~/orpc/client.ts";
 
-const RunFunctionForm = z.object({
-  mode: z.enum(["compiled-script", "package-project"]),
-  compiledScript: z.string().trim().min(1, "Script is required"),
-  packageEntryPoint: z.string().trim().min(1, "Entry point is required"),
-  packageFilesYaml: z.string().trim().min(1, "Files YAML is required"),
-});
+const RunFunctionForm = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("compiled-script"),
+    compiledScript: z.string().trim().min(1, "Script is required"),
+    packageEntryPoint: z.string(),
+    packageFilesYaml: z.string(),
+  }),
+  z.object({
+    mode: z.literal("package-project"),
+    compiledScript: z.string(),
+    packageEntryPoint: z.string().trim().min(1, "Entry point is required"),
+    packageFilesYaml: z.string().trim().min(1, "Files YAML is required"),
+  }),
+]);
 
 export const Route = createFileRoute("/_app/runs-v2-new")({
   staticData: {
