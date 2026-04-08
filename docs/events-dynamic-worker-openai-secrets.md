@@ -192,7 +192,7 @@ and the assistant payload contained `"42"`.
 ### Deploy the worker
 
 ```bash
-pnpm exec wrangler deploy
+pnpm --dir ai-engineer-workshop/examples/deployed-processor deploy
 ```
 
 The current deployment URL used for validation was:
@@ -200,6 +200,12 @@ The current deployment URL used for validation was:
 ```text
 https://ai-engineer-workshop-deployed-processor.iterate.workers.dev
 ```
+
+The deployed worker needs `global_fetch_strictly_public` so it can use a
+preview `workers.dev` events service as its upstream. The important wrinkle is
+that Wrangler deploys from the Vite-generated
+`dist/ai_engineer_workshop_deployed_processor/wrangler.json`, so you must build
+before deploy. The `pnpm deploy` script above does both in the correct order.
 
 ### Proving the deployed worker against real `events.iterate.com`
 
@@ -263,46 +269,64 @@ EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
   pnpm --dir apps/events test:e2e:preview
 ```
 
-### Why the deployed worker does not fully prove against the preview URL
+### End-to-end preview proof for the deployed worker
 
-The remaining gap is specifically:
+After rebuilding and redeploying the worker with
+`global_fetch_strictly_public`, the preview end-to-end proofs succeeded for all
+four combinations:
 
-- preview `apps/events` on `workers.dev`
-- calling into the already deployed Hono processor worker on `workers.dev`
+- ping over `websocket`
+- ping over `webhook`
+- OpenAI over `websocket`
+- OpenAI over `webhook`
 
-The deployed processor worker does receive the callback request, but then fails
-when it tries to fetch the preview events service as its upstream.
+Commands:
 
-Observed deployed worker log excerpt:
+```bash
+EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+PROCESSOR_BASE_URL=https://ai-engineer-workshop-deployed-processor.iterate.workers.dev \
+pnpm --dir apps/events exec tsx ./scripts/prove-pushed-processor.ts
 
-```json
-{
-  "status": 404,
-  "message": "Not Found",
-  "data": {
-    "body": "error code: 1042"
-  }
-}
+EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+PROCESSOR_BASE_URL=https://ai-engineer-workshop-deployed-processor.iterate.workers.dev \
+SUBSCRIBER_TYPE=webhook \
+pnpm --dir apps/events exec tsx ./scripts/prove-pushed-processor.ts
+
+EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+PROCESSOR_BASE_URL=https://ai-engineer-workshop-deployed-processor.iterate.workers.dev \
+PROCESSOR_KIND=openai-agent \
+pnpm --dir apps/events exec tsx ./scripts/prove-pushed-processor.ts
+
+EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+PROCESSOR_BASE_URL=https://ai-engineer-workshop-deployed-processor.iterate.workers.dev \
+PROCESSOR_KIND=openai-agent SUBSCRIBER_TYPE=webhook \
+pnpm --dir apps/events exec tsx ./scripts/prove-pushed-processor.ts
 ```
 
-That failure showed up both when:
+Observed websocket ping result:
 
-- the preview `external-subscriber` builtin tried to fan out to the deployed
-  worker, and
-- the deployed worker callback endpoint was invoked directly with
-  `baseUrl=https://events-preview-1.iterate.workers.dev`
+```json
+[
+  "https://events.iterate.com/events/stream/initialized",
+  "https://events.iterate.com/events/stream/subscription/configured",
+  "value-recorded",
+  "pong"
+]
+```
 
-So the current limitation is not the processor runtime itself. The limitation
-is that this deployed worker cannot use the PR preview `workers.dev` URL as its
-upstream events service.
+Observed webhook OpenAI result:
 
-Practically, the proof matrix for this branch is therefore:
+```json
+[
+  "https://events.iterate.com/events/stream/initialized",
+  "https://events.iterate.com/events/stream/subscription/configured",
+  "user-message",
+  "openai-response-output",
+  "assistant-message"
+]
+```
 
-- local `apps/events` -> local deployed-processor worker: fully proven
-- deployed processor worker -> public `events.iterate.com`: fully proven
-- local scripts + preview URL for `apps/events`: fully proven
-- deployed processor worker -> preview `workers.dev` URL: currently blocked by
-  Cloudflare `error code: 1042`
+with `outputPreview: "42"`.
 
 ## Full validation matrix run on this branch
 
@@ -327,6 +351,7 @@ These all passed during the final hardening pass:
 - deployed worker direct callback proof against real `events.iterate.com` for OpenAI/websocket
 - `doppler run --project ai-engineer-workshop -- bash -lc 'export EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev; pnpm --dir apps/events test:e2e:openai-preview'`
 - `EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev pnpm --dir apps/events test:e2e:preview`
-- preview -> deployed-worker pushed-processor proofs were attempted for both
-  `websocket` and `webhook`, and both failed with Cloudflare `error code: 1042`
-  when the deployed worker tried to fetch the preview `workers.dev` upstream
+- preview -> deployed-worker pushed-processor proof for ping/websocket
+- preview -> deployed-worker pushed-processor proof for ping/webhook
+- preview -> deployed-worker pushed-processor proof for OpenAI/websocket
+- preview -> deployed-worker pushed-processor proof for OpenAI/webhook

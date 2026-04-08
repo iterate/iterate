@@ -3,6 +3,7 @@
   "name": "ai-engineer-workshop-deployed-processor",
   "main": "./src/worker.ts",
   "compatibility_date": "2026-04-02",
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "observability": {
     "logs": {
       "enabled": true,

@@ -3,7 +3,7 @@
 Tiny Cloudflare Worker example.
 
 - `pnpm dev` runs `vite dev` on `http://localhost:8788`
-- `pnpm wrangler deploy` deploys the worker
+- `pnpm deploy` builds the Vite worker output and then deploys it with Wrangler
 - `GET /` prints usage instructions plus concrete `stream/subscription/configured` events to append
 - `GET /after-event-handler?streamPath=/some/path` accepts websocket delivery for one stream
 - `POST /after-event-handler?streamPath=/some/path` accepts webhook delivery for one stream
@@ -25,10 +25,9 @@ That document covers:
 
 - bundling the OpenAI agent loop as a dynamic worker from source with `getIterateSecret(...)`
 - running this deployed processor locally against local `apps/events` with `prove-pushed-processor.ts`
-- validating this worker after `wrangler deploy` over both direct websocket and direct webhook callbacks
+- validating this worker after deploy over both direct websocket and direct webhook callbacks
 - the current limitation that public `events.iterate.com` does not yet run this
   branch's `external-subscriber` builtin, so public deployed proofs use the
   callback endpoints directly
-- the current Cloudflare `workers.dev` preview limitation (`error code: 1042`)
-  when this deployed worker tries to use a preview `workers.dev` events service
-  as its upstream
+- end-to-end preview proofs for websocket and webhook after enabling
+  `global_fetch_strictly_public`
