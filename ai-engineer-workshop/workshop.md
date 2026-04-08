@@ -4,7 +4,7 @@ In this workshop we will build an AI agent entirely from scratch using only two 
 
 2. Stream processors that implement the `.reduce({ event, state })` and `.afterAppend({ append, event, state })` methods
 
-# 1. Playing with streams
+# Playing with streams
 
 We made a simple durable streams server at https://events.iterate.com for this workshop. Let's [look at the docs](https://events.iterate.com/api/docs)!
 
@@ -83,9 +83,7 @@ curl --json '{
 curl --json '{"hogwash": "yes!e"}' \
   "${BASE_URL}/api/streams${STREAM_PATH}"
 
-
-
-# - schedule messages
+# You can even schedule messages!
 
 # Schedule a recurring heartbeat every 5 seconds
 curl --json '{
@@ -104,6 +102,9 @@ curl --json '{
 
 # Tail it and you should see heartbeat events keep showing up
 curl -N "${BASE_URL}/api/streams${STREAM_PATH}"
+
+# Look at the state of the stream again
+curl "${BASE_URL}/api/streams/__state${STREAM_PATH}" | jq .
 
 # Stop the recurring schedule again
 curl --json '{
@@ -132,18 +133,6 @@ Some notes / observations:
 ## Ping-pong script
 
 Let's make a very rudimentary script. Any time somebody appends an event of type "ping", we append a "pong" event!
-
-## A simple LLM loop
-
-See `examples/simple-openai-loop/`
-
-- `01-single-path-script.ts`
-- `02-single-path-with-history.ts`
-- `03-single-path-with-catch-up.ts`
-- `04-single-stream-runtime.ts`
-- `05-all-paths-with-interruptions.ts`
-- Live-coding versions: `workshop/02-nano-agent.ts`, `workshop/03-nano-agent-with-history.ts`, `workshop/04-nano-agent-with-persistent-history.ts`, `workshop/05-nano-agent-with-llm-processor.ts`
-- Structure these workshop versions so `updateHistoryFromEvent()` feels like the obvious precursor to a reducer
 
 ### Single turn
 

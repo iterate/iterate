@@ -197,18 +197,20 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
   }
 
   if (event.type === "https://events.iterate.com/events/stream/paused") {
+    const paused = StreamPausedEvent.parse(event);
     return {
       kind: "stream-paused",
-      reason: StreamPausedEvent.parse(event).payload.reason,
+      reason: paused.payload.reason ?? "No reason provided",
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };
   }
 
   if (event.type === "https://events.iterate.com/events/stream/resumed") {
+    const resumed = StreamResumedEvent.parse(event);
     return {
       kind: "stream-resumed",
-      reason: StreamResumedEvent.parse(event).payload.reason,
+      reason: resumed.payload.reason ?? "No reason provided",
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };

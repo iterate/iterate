@@ -7,7 +7,7 @@ import {
   PullSubscriptionProcessorRuntime,
   resolveWorkshopBaseUrl,
 } from "ai-engineer-workshop";
-import bashmode from "../08-bashmode/bashmode.ts";
+import bashmode from "../../workshop/bashmode.ts";
 import { createAgentProcessor } from "./agent.ts";
 import { agentInputAddedType } from "./agent-types.ts";
 
@@ -90,7 +90,7 @@ ${JSON.stringify(
     type: agentInputAddedType,
     payload: {
       content:
-        "Write exactly one \`\`\`bash\`\`\` block that prints hello from bashmode agent. No prose.",
+        "Write exactly one ```bash``` block that prints hello from bashmode agent. No prose.",
     },
   },
   null,

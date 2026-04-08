@@ -28,6 +28,8 @@ const initialState: AgentState = {
   model: "gpt-4o-mini",
 };
 
+const dynamicWorkerOpenAiApiKey = "getIterateSecret({secretKey: 'dynamic_worker_openai_api_key'})";
+
 export const agentProcessor = defineProcessor<AgentState>(() => {
   return {
     slug: "agent",
@@ -56,7 +58,10 @@ export const agentProcessor = defineProcessor<AgentState>(() => {
     afterAppend: async ({ append, event, state }) => {
       await match(event)
         .case(AgentInputAddedEvent, async () => {
-          const openai = new OpenAI();
+          const openai = new OpenAI({
+            apiKey: getOpenAiApiKey(),
+            dangerouslyAllowBrowser: true,
+          });
           const response = await openai.responses.create({
             model: state.model,
             instructions: state.systemPrompt,
@@ -87,6 +92,8 @@ export const agentProcessor = defineProcessor<AgentState>(() => {
   };
 });
 
+export default agentProcessor;
+
 function getOutputTextDoneText(event: ResponseStreamEvent) {
   if (event.type !== "response.output_text.done") {
     return null;
@@ -99,4 +106,13 @@ function extractBashBlocks(outputText: string) {
   return [...outputText.matchAll(/```(?:bash|sh|shell)\s*([\s\S]*?)```/g)]
     .map((match) => match[1]?.trim() ?? "")
     .filter((content) => content.length > 0);
+}
+
+function getOpenAiApiKey() {
+  const configuredApiKey =
+    typeof process === "undefined" ? undefined : process.env.OPENAI_API_KEY?.trim();
+
+  return configuredApiKey && configuredApiKey.length > 0
+    ? configuredApiKey
+    : dynamicWorkerOpenAiApiKey;
 }

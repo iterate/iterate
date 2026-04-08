@@ -49,6 +49,7 @@
   },
   "scripts": {
     "build": "tsup",
+    "slides": "marp -w -p README.md",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm test:e2e",
     "test:e2e": "vitest run --dir examples/08-bashmode --maxWorkers 1",
@@ -71,6 +72,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@marp-team/marp-cli": "^4.3.1",
     "@types/node": "25.5.0",
     "tsup": "^8.5.0",
     "tsx": "^4.20.3",

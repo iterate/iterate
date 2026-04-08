@@ -595,7 +595,7 @@ function BashmodeBlockCard({ item }: { item: BashmodeBlockFeedItem }) {
       <ArtifactSection>
         <SourceCodeBlock
           code={item.content}
-          language="shell"
+          language="text"
           className="min-h-32 max-h-128"
           showCopyButton
         />

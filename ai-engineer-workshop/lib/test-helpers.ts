@@ -90,9 +90,7 @@ export async function useProcessorTestHarness<TState>({
       const controller = new AbortController();
       let lastOffset: number | undefined;
       let matchedEvent: Event | undefined;
-      let timedOut = false;
       const timeoutId = setTimeout(() => {
-        timedOut = true;
         controller.abort();
       }, timeout);
 

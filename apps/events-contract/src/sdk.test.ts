@@ -1186,7 +1186,7 @@ function createSilentLogger(): ProcessorLogger {
 }
 
 function stripAnsi(value: string) {
-  return value.replace(/\u001b\[[0-9;]*m/g, "");
+  return value.replace(new RegExp(String.raw`\u001b\[[0-9;]*m`, "g"), "");
 }
 
 function makeInitializedEvent(args: { streamPath: StreamPathType; offset: number }): Event {
