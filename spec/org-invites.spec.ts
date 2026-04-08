@@ -188,7 +188,7 @@ test.describe("organization invites", () => {
 
     // User accepts invite from welcome page
     await login(page, userEmail);
-    await page.getByText(orgName).waitFor();
+    await page.getByText(orgName).first().waitFor();
     await page.getByRole("button", { name: "Accept" }).click();
     await toast.success(page, `Joined ${orgName}`).waitFor();
 
