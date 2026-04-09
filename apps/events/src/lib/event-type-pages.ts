@@ -507,8 +507,29 @@ export const agentInputAddedPage = {
   ],
 } satisfies EventTypePageDefinition;
 
+export const bashmodeBlockAddedPage = {
+  slug: "bashmode-block-added",
+  href: "/bashmode-block-added/",
+  title: "Bashmode Block Added",
+  type: "bashmode-block-added",
+  summary:
+    "Shell script payload for processors that run bash after append (workshop bashmode pattern).",
+  payloadExample: {
+    script: [
+      "curl -H 'Content-Type: application/json'  \\",
+      '  --data \'{"type": "hello-world"}\' \\',
+      '  "https://events.iterate.com/api/streams/"',
+    ].join("\n"),
+  },
+  details: [
+    "Use with a processor whose afterAppend runs the script (see ai-engineer-workshop bashmode example).",
+    "Typically paired with appending agent-input-added with the command output.",
+  ],
+} satisfies EventTypePageDefinition;
+
 export const eventTypePages = [
   agentInputAddedPage,
+  bashmodeBlockAddedPage,
   childStreamCreatedPage,
   dynamicWorkerConfiguredPage,
   errorOccurredPage,

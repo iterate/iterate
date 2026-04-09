@@ -67,8 +67,12 @@ export function buildDisplayFeed(
   feed: readonly StreamFeedItem[],
   mode: StreamRendererMode,
 ): StreamFeedItem[] | null {
-  if (mode === "raw") {
+  if (mode === "raw-single-json") {
     return null;
+  }
+
+  if (mode === "raw") {
+    return getEventFeedItems(feed);
   }
 
   if (mode === "pretty") {

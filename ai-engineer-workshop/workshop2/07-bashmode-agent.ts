@@ -1,6 +1,6 @@
 import {
   createEventsClient,
-  PullSubscriptionPatternProcessorRuntime,
+  PullProcessorRuntime,
   workshopLogger,
   workshopPathPrefix,
 } from "ai-engineer-workshop";
@@ -14,16 +14,16 @@ async function main() {
   console.log(`Watching streams under ${pathPrefix}`);
 
   await Promise.all([
-    new PullSubscriptionPatternProcessorRuntime({
+    new PullProcessorRuntime({
       eventsClient,
       logger: workshopLogger,
-      pathPrefix,
+      path: pathPrefix,
       processor: agentProcessor,
     }).run(),
-    new PullSubscriptionPatternProcessorRuntime({
+    new PullProcessorRuntime({
       eventsClient,
       logger: workshopLogger,
-      pathPrefix,
+      path: pathPrefix,
       processor: bashmode,
     }).run(),
   ]);

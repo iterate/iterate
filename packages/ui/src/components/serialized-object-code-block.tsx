@@ -57,6 +57,8 @@ export interface SerializedObjectCodeBlockProps {
   showToggle?: boolean;
   showCopyButton?: boolean;
   showDebugConsoleButton?: boolean;
+  scrollToBottom?: boolean;
+  showLineNumbers?: boolean;
 }
 
 export function SerializedObjectCodeBlock({
@@ -66,10 +68,13 @@ export function SerializedObjectCodeBlock({
   showToggle = true,
   showCopyButton = true,
   showDebugConsoleButton = false,
+  scrollToBottom = false,
+  showLineNumbers = true,
 }: SerializedObjectCodeBlockProps) {
   const [currentFormat, setCurrentFormat] = useState<SerializedFormat>(initialFormat);
   const [copiedFormat, setCopiedFormat] = useState<SerializedFormat | null>(null);
   const { resolvedTheme } = useTheme();
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const code = useMemo(() => serializeData(data, currentFormat), [currentFormat, data]);
 
@@ -84,8 +89,15 @@ export function SerializedObjectCodeBlock({
       EditorView.editable.of(false),
       EditorView.contentAttributes.of({ tabindex: "0" }),
       EditorView.lineWrapping,
+      !showLineNumbers
+        ? EditorView.theme({
+            ".cm-gutters": {
+              display: "none",
+            },
+          })
+        : [],
     ],
-    [currentFormat, resolvedTheme],
+    [currentFormat, resolvedTheme, showLineNumbers],
   );
 
   const handleCopy = async (format: SerializedFormat) => {
@@ -101,9 +113,31 @@ export function SerializedObjectCodeBlock({
     }
   };
 
+  useEffect(() => {
+    if (!scrollToBottom) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const scrollContainer = scrollContainerRef.current;
+      if (scrollContainer == null) {
+        return;
+      }
+
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [code, scrollToBottom]);
+
   return (
     <div className={cn("relative flex min-h-0 flex-col", className)}>
-      <div className="cm-SerializedObjectCodeBlock min-h-0 flex-1 overflow-hidden overflow-y-auto rounded border">
+      <div
+        ref={scrollContainerRef}
+        className="cm-SerializedObjectCodeBlock min-h-0 flex-1 overflow-hidden overflow-y-auto rounded border"
+      >
         <CodeMirror value={code} extensions={extensions} />
       </div>
 

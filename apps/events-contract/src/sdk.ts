@@ -20,7 +20,9 @@ export type { Event, EventType, JSONObject, StreamPath } from "./types.ts";
 
 export type EventsORPCClient = ContractRouterClient<typeof eventsContract>;
 
-export function createEventsClient(baseUrl: string): EventsORPCClient {
+const DEFAULT_EVENTS_BASE_URL = "https://events.iterate.com";
+
+export function createEventsClient(baseUrl: string = DEFAULT_EVENTS_BASE_URL): EventsORPCClient {
   return createORPCClient(
     new OpenAPILink(eventsContract, {
       url: new URL("/api", baseUrl).toString(),
@@ -37,7 +39,7 @@ export type ProcessorAppendInput = {
 export type ProcessorLogger = Pick<Console, "debug" | "error" | "info" | "log" | "warn">;
 
 type ProcessorMethods<State> = {
-  reduce?(args: { event: Event; logger: ProcessorLogger; state: State }): State;
+  reduce?(args: { event: Event; logger: ProcessorLogger; state: State }): State | void;
   afterAppend?(args: {
     append: (input: ProcessorAppendInput) => Event | Promise<Event>;
     event: Event;
@@ -94,14 +96,17 @@ type PullSubscriptionEventsClient = {
 type PullSubscriptionRuntimeLogger<State> = {
   afterAppendComplete(args: { event: Event }): void;
   afterAppendStart(args: { event: Event }): void;
-  appendedEvent(args: { appendedEvent: Event; sourceEvent: Event }): void;
+  appendedEvent(args: {
+    appendedEvent: Event;
+    sourceEvent: Event;
+    targetPath?: StreamPath | RelativeStreamPath;
+  }): void;
   catchupComplete(args: {
     lastOffset?: number;
     reducedCount: number;
     state: State;
     streamPath: StreamPath;
   }): void;
-  catchupStart(args: { streamPath: StreamPath }): void;
   error(args: { error: unknown; headline: string }): void;
   liveEvent(args: { event: Event }): void;
   liveReduce(args: { event: Event; state: State }): void;
@@ -111,10 +116,10 @@ type PullSubscriptionRuntimeLogger<State> = {
     streamPath: StreamPath;
     streamPattern: string;
   }): void;
-  watchPattern(args: { streamPattern: string }): void;
+  subscriptionStart(args: { streamPath: StreamPath }): void;
 };
 
-export class PullSubscriptionProcessorRuntime<State> {
+class PullSubscriptionProcessorRuntime<State> {
   #controller = new AbortController();
   #eventsClient: PullSubscriptionEventsClient;
   #processorLogger: ProcessorLogger;
@@ -140,6 +145,7 @@ export class PullSubscriptionProcessorRuntime<State> {
       logger,
       processorSlug: processor.slug,
       scope: "stream",
+      streamPath,
     });
     this.#processor = processor;
     this.#state = structuredClone(this.#processor.initialState) as State;
@@ -148,8 +154,6 @@ export class PullSubscriptionProcessorRuntime<State> {
 
   async run() {
     try {
-      this.#runtimeLogger.catchupStart({ streamPath: this.#streamPath });
-
       const historyStream = await this.#eventsClient.stream(
         {
           path: this.#streamPath,
@@ -174,12 +178,14 @@ export class PullSubscriptionProcessorRuntime<State> {
         return;
       }
 
-      this.#runtimeLogger.catchupComplete({
-        lastOffset,
-        reducedCount: reducedHistoryEventCount,
-        state: this.#state,
-        streamPath: this.#streamPath,
-      });
+      if (this.#processor.reduce != null) {
+        this.#runtimeLogger.catchupComplete({
+          lastOffset,
+          reducedCount: reducedHistoryEventCount,
+          state: this.#state,
+          streamPath: this.#streamPath,
+        });
+      }
 
       const liveStream = await this.#eventsClient.stream(
         {
@@ -211,16 +217,18 @@ export class PullSubscriptionProcessorRuntime<State> {
         this.#runtimeLogger.afterAppendStart({ event });
         await this.#processor.afterAppend({
           append: async (input: ProcessorAppendInput) => {
+            const resolvedPath = resolveAppendPath({
+              currentPath: this.#streamPath,
+              nextPath: input.path,
+            });
             const result = await this.#eventsClient.append({
-              path: resolveAppendPath({
-                currentPath: this.#streamPath,
-                nextPath: input.path,
-              }),
+              path: resolvedPath,
               event: input.event,
             });
             this.#runtimeLogger.appendedEvent({
               appendedEvent: result.event,
               sourceEvent: event,
+              targetPath: input.path,
             });
             return result.event;
           },
@@ -260,11 +268,16 @@ export class PullSubscriptionProcessorRuntime<State> {
       return false;
     }
 
-    this.#state = this.#processor.reduce({
+    const nextState = this.#processor.reduce({
       event,
       logger: this.#processorLogger,
       state: structuredClone(this.#state),
     });
+    if (nextState === undefined) {
+      return false;
+    }
+
+    this.#state = nextState as State;
     return true;
   }
 }
@@ -372,56 +385,161 @@ export class PushSubscriptionProcessorRuntime<State> {
       return;
     }
 
-    this.#state = this.#processor.reduce({
+    const nextState = this.#processor.reduce({
       event,
       logger: this.#processorLogger,
       state: structuredClone(this.#state),
     });
+    if (nextState === undefined) {
+      return;
+    }
+
+    this.#state = nextState as State;
   }
 }
 
-export class PullSubscriptionPatternProcessorRuntime<State> {
+/**
+ * Unified pull-based processor runtime that subscribes to a stream and
+ * processes events through catch-up replay followed by a live tail.
+ *
+ * When `includeChildren` is `true` (the default), the runtime processes
+ * the stream at `path` directly, watches `path` for `child-stream-created`
+ * events, and spawns an independent processor instance for each discovered
+ * descendant stream. The stream tree propagates structural events to
+ * ancestors, so all descendants are automatically discovered without
+ * polling the root stream.
+ *
+ * When `includeChildren` is `false`, only the single stream at `path`
+ * is processed directly.
+ */
+export class PullProcessorRuntime<State> {
   #controller = new AbortController();
   #eventsClient: PullSubscriptionEventsClient;
   #fatalError: unknown;
+  #includeChildren: boolean;
+  #path: StreamPath;
   #processorLogger: ProcessorLogger;
-  #runtimeLogger: PullSubscriptionRuntimeLogger<State>;
   #processor: Processor<State>;
+  #runtimeLogger: PullSubscriptionRuntimeLogger<State>;
   #runtimeByStreamPath = new Map<StreamPath, PullSubscriptionProcessorRuntime<State>>();
   #runPromiseByStreamPath = new Map<StreamPath, Promise<void>>();
-  #streamPattern: string;
 
   constructor({
     eventsClient,
+    includeChildren = true,
     logger = console,
-    pathPrefix,
+    path,
     processor,
   }: {
-    eventsClient: PullSubscriptionEventsClient;
+    /** Client used to read from and append to streams. Defaults to the public events API. */
+    eventsClient?: PullSubscriptionEventsClient;
+    /**
+     * The runtime always processes the stream at `path`.
+     * When `true` (default), it also watches `path` for
+     * `child-stream-created` events and runs the processor on each
+     * discovered descendant stream.
+     */
+    includeChildren?: boolean;
+    /** Logger forwarded to the processor's `reduce` and `afterAppend` hooks. */
     logger?: ProcessorLogger;
-    pathPrefix: string;
+    /** Stream path to subscribe to. */
+    path: string;
+    /** Processor definition with `reduce` and/or `afterAppend` hooks. */
     processor: Processor<State>;
   }) {
-    this.#eventsClient = eventsClient;
+    this.#eventsClient = eventsClient ?? (createEventsClient() as PullSubscriptionEventsClient);
+    this.#includeChildren = includeChildren;
+    this.#path = normalizePathPrefix(path);
     this.#processorLogger = logger;
+    this.#processor = processor;
     this.#runtimeLogger = createPullSubscriptionRuntimeLogger({
       logger,
       processorSlug: processor.slug,
-      scope: "pattern",
+      scope: includeChildren ? "pattern" : "stream",
+      streamPath: includeChildren ? undefined : this.#path,
     });
-    this.#processor = processor;
-    this.#streamPattern = createDescendantStreamPattern(pathPrefix);
+
+    const runtime = new PullSubscriptionProcessorRuntime({
+      eventsClient: this.#eventsClient,
+      logger,
+      processor,
+      streamPath: this.#path,
+    });
+    this.#runtimeByStreamPath.set(this.#path, runtime);
   }
 
+  /**
+   * Start the runtime. Replays historical events, then follows the live
+   * tail until {@link stop} is called or a fatal error occurs.
+   */
   async run() {
-    try {
-      this.#runtimeLogger.watchPattern({ streamPattern: this.#streamPattern });
+    if (this.#includeChildren) {
+      return this.#runWithChildren();
+    }
+    return this.#runSingle();
+  }
 
+  /** Abort all active subscriptions and stop the runtime. */
+  stop() {
+    this.#controller.abort();
+
+    for (const runtime of this.#runtimeByStreamPath.values()) {
+      runtime.stop();
+    }
+  }
+
+  /**
+   * Returns the sorted list of stream paths the runtime is subscribed to.
+   * In single-stream mode this is `[path]`. In child-discovery mode this
+   * includes `path` itself plus any discovered descendant paths.
+   */
+  getStreamPaths(): StreamPath[] {
+    if (!this.#includeChildren) {
+      return [this.#path];
+    }
+    return [...this.#runtimeByStreamPath.keys()].sort();
+  }
+
+  /**
+   * Returns the reduced processor state.
+   *
+   * In single-stream mode (`includeChildren: false`), call with no
+   * argument to get the state. In child-discovery mode, pass a specific
+   * root or descendant stream path. Returns `undefined` when the path has
+   * no active subscription.
+   */
+  getState(path?: StreamPath): State | undefined {
+    if (!this.#includeChildren) {
+      return this.#runtimeByStreamPath.get(this.#path)?.getState();
+    }
+    if (path == null) {
+      return undefined;
+    }
+    return this.#runtimeByStreamPath.get(path)?.getState();
+  }
+
+  /** Returns the processor's slug identifier. */
+  getProcessorSlug() {
+    return this.#processor.slug;
+  }
+
+  async #runSingle() {
+    const runtime = this.#runtimeByStreamPath.get(this.#path);
+    if (runtime == null || this.#controller.signal.aborted) {
+      return;
+    }
+    this.#runtimeLogger.subscriptionStart({ streamPath: this.#path });
+    await runtime.run();
+  }
+
+  async #runWithChildren() {
+    const streamPattern = createDescendantStreamPattern(this.#path);
+    this.#runtimeLogger.subscriptionStart({ streamPath: this.#path });
+    this.#startRuntime(this.#path);
+
+    try {
       const historyStream = await this.#eventsClient.stream(
-        {
-          path: "/",
-          before: "end",
-        },
+        { path: this.#path, before: "end" },
         { signal: this.#controller.signal },
       );
       let lastOffset: number | undefined;
@@ -432,7 +550,7 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
         }
 
         lastOffset = event.offset;
-        this.#startRuntimeIfMatched(event);
+        this.#startChildRuntimeIfDiscovered(event, streamPattern);
       }
 
       if (this.#fatalError != null || this.#controller.signal.aborted) {
@@ -447,13 +565,8 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
       }
 
       const liveStream = await this.#eventsClient.stream(
-        {
-          path: "/",
-          after: toLiveTailCursor(lastOffset),
-        },
-        {
-          signal: this.#controller.signal,
-        },
+        { path: this.#path, after: toLiveTailCursor(lastOffset) },
+        { signal: this.#controller.signal },
       );
 
       for await (const event of liveStream) {
@@ -462,7 +575,7 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
         }
 
         lastOffset = event.offset;
-        this.#startRuntimeIfMatched(event);
+        this.#startChildRuntimeIfDiscovered(event, streamPattern);
 
         if (this.#fatalError != null) {
           break;
@@ -472,7 +585,7 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
       if (!(this.#controller.signal.aborted && isAbortError(error))) {
         this.#runtimeLogger.error({
           error,
-          headline: `Pattern runtime failed for ${formatPattern(this.#streamPattern)}.`,
+          headline: `Child discovery failed for ${formatPath(this.#path)}.`,
         });
         this.#fail(error);
       }
@@ -486,38 +599,21 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
     }
   }
 
-  stop() {
-    this.#controller.abort();
-
-    for (const runtime of this.#runtimeByStreamPath.values()) {
-      runtime.stop();
-    }
-  }
-
-  getStreamPaths() {
-    return [...this.#runtimeByStreamPath.keys()].sort();
-  }
-
-  getState(streamPath: StreamPath) {
-    return this.#runtimeByStreamPath.get(streamPath)?.getState();
-  }
-
-  #startRuntimeIfMatched(event: Event) {
-    const streamPath = getDiscoveredStreamPath(event);
-    if (streamPath == null) {
+  #startChildRuntimeIfDiscovered(event: Event, streamPattern: string) {
+    const discoveredPath = getDiscoveredStreamPath(event);
+    if (discoveredPath == null) {
       return;
     }
 
-    const matched = matchesStreamPattern(streamPath, this.#streamPattern);
-    const alreadySubscribed = this.#runtimeByStreamPath.has(streamPath);
+    const alreadySubscribed = this.#runtimeByStreamPath.has(discoveredPath);
     this.#runtimeLogger.patternDecision({
       alreadySubscribed,
-      matched,
-      streamPath,
-      streamPattern: this.#streamPattern,
+      matched: true,
+      streamPath: discoveredPath,
+      streamPattern,
     });
 
-    if (!matched || alreadySubscribed) {
+    if (alreadySubscribed) {
       return;
     }
 
@@ -526,25 +622,34 @@ export class PullSubscriptionPatternProcessorRuntime<State> {
         eventsClient: this.#eventsClient,
         logger: this.#processorLogger,
         processor: this.#processor,
-        streamPath,
+        streamPath: discoveredPath,
       });
-      const runPromise = runtime.run().catch((error) => {
-        if (this.#controller?.signal.aborted && isAbortError(error)) {
-          return;
-        }
-
-        this.#fail(
-          new Error(`Processor ${runtime.getProcessorSlug()} failed for stream ${streamPath}`, {
-            cause: error,
-          }),
-        );
-      });
-
-      this.#runtimeByStreamPath.set(streamPath, runtime);
-      this.#runPromiseByStreamPath.set(streamPath, runPromise);
+      this.#runtimeByStreamPath.set(discoveredPath, runtime);
+      this.#startRuntime(discoveredPath);
     } catch (error) {
       this.#fail(error);
     }
+  }
+
+  #startRuntime(streamPath: StreamPath) {
+    const runtime = this.#runtimeByStreamPath.get(streamPath);
+    if (runtime == null || this.#runPromiseByStreamPath.has(streamPath)) {
+      return;
+    }
+
+    const runPromise = runtime.run().catch((error) => {
+      if (this.#controller.signal.aborted && isAbortError(error)) {
+        return;
+      }
+
+      this.#fail(
+        new Error(`Processor ${runtime.getProcessorSlug()} failed for stream ${streamPath}`, {
+          cause: error,
+        }),
+      );
+    });
+
+    this.#runPromiseByStreamPath.set(streamPath, runPromise);
   }
 
   async #waitForStreamRuntimes() {
@@ -565,53 +670,37 @@ function createPullSubscriptionRuntimeLogger<State>({
   logger,
   processorSlug,
   scope,
+  streamPath,
 }: {
   logger: ProcessorLogger;
   processorSlug: string;
   scope: "pattern" | "stream";
+  streamPath?: StreamPath;
 }): PullSubscriptionRuntimeLogger<State> {
-  const prefix = formatRuntimeLogPrefix({ processorSlug, scope });
+  const prefix = formatRuntimeLogPrefix({ processorSlug, scope, streamPath });
 
   return {
-    watchPattern({ streamPattern }) {
-      logPrettyBlock(
-        logger.info.bind(logger),
-        prefix,
-        `Watching for streams matching pattern ${formatPattern(streamPattern)}.`,
-      );
-    },
-
-    patternDecision({ alreadySubscribed, matched, streamPath, streamPattern }) {
-      if (matched && !alreadySubscribed) {
-        logPrettyBlock(
-          logger.info.bind(logger),
-          prefix,
-          `Subscribing to new stream ${formatPath(streamPath)} as it matches pattern ${formatPattern(streamPattern)}.`,
-        );
+    patternDecision({ alreadySubscribed, matched, streamPath }) {
+      if (alreadySubscribed) {
         return;
       }
 
-      if (matched) {
-        logPrettyBlock(
-          logger.info.bind(logger),
-          prefix,
-          `Already subscribed to stream ${formatPath(streamPath)} because it matches pattern ${formatPattern(streamPattern)}.`,
-        );
+      if (!matched) {
         return;
       }
 
       logPrettyBlock(
         logger.info.bind(logger),
         prefix,
-        `Ignoring new stream ${formatPath(streamPath)} because it does not match pattern ${formatPattern(streamPattern)}.`,
+        `Subscribing to stream ${formatPath(streamPath)}.`,
       );
     },
 
-    catchupStart({ streamPath }) {
+    subscriptionStart({ streamPath }) {
       logPrettyBlock(
         logger.info.bind(logger),
         prefix,
-        `Catching up to stream ${formatPath(streamPath)}.`,
+        `Subscribing to stream ${formatPath(streamPath)}.`,
       );
     },
 
@@ -619,7 +708,7 @@ function createPullSubscriptionRuntimeLogger<State>({
       logPrettyBlock(
         logger.info.bind(logger),
         prefix,
-        `Reduced ${formatEventCount(reducedCount)} up to offset ${formatOffsetValue(lastOffset)}.`,
+        `Catch-up reduced ${formatEventCount(reducedCount)} up to offset ${formatOffsetValue(lastOffset)}.`,
         [
           {
             label: "Reduced state:",
@@ -654,7 +743,7 @@ function createPullSubscriptionRuntimeLogger<State>({
       logPrettyBlock(
         logger.info.bind(logger),
         prefix,
-        `afterAppend for ${formatEventReference(event)}.`,
+        `Running afterAppend for ${formatEventReference(event)}.`,
       );
     },
 
@@ -666,11 +755,12 @@ function createPullSubscriptionRuntimeLogger<State>({
       );
     },
 
-    appendedEvent({ appendedEvent, sourceEvent }) {
+    appendedEvent({ appendedEvent, sourceEvent, targetPath }) {
+      const targetSuffix = targetPath ? ` to ${formatPath(appendedEvent.streamPath)}` : "";
       logPrettyBlock(
         logger.info.bind(logger),
         prefix,
-        `Appended ${formatEventReference(appendedEvent)} while handling ${formatEventReference(sourceEvent)}.`,
+        `Appended ${formatEventReference(appendedEvent)}${targetSuffix} while handling ${formatEventReference(sourceEvent)}.`,
       );
     },
 
@@ -711,7 +801,16 @@ function logPrettyBlock(
   log(lines.join("\n"));
 }
 
-function formatRuntimeLogPrefix(args: { processorSlug: string; scope: "pattern" | "stream" }) {
+function formatRuntimeLogPrefix(args: {
+  processorSlug: string;
+  scope: "pattern" | "stream";
+  streamPath?: string;
+}) {
+  if (args.scope === "stream" && args.streamPath) {
+    const inner = `${colorize(args.processorSlug, ANSI.cyan)}${colorize(":", ANSI.gray)}${colorize(args.streamPath, ANSI.cyan)}`;
+    return `${colorize("[", ANSI.gray)}${inner}${colorize("]", ANSI.gray)}`;
+  }
+
   const scope =
     args.scope === "pattern"
       ? colorize(`pattern:${args.processorSlug}`, ANSI.magenta)
@@ -721,10 +820,6 @@ function formatRuntimeLogPrefix(args: { processorSlug: string; scope: "pattern" 
 
 function formatPath(path: string) {
   return colorize(path, ANSI.cyan);
-}
-
-function formatPattern(pattern: string) {
-  return colorize(pattern, ANSI.magenta);
 }
 
 function formatEventType(eventType: string) {

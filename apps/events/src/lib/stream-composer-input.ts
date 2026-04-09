@@ -18,16 +18,32 @@ export function parseObjectFromComposerText(
 
 function parseComposerValue(value: string, format: StreamComposerDataFormat): unknown {
   if (format === "yaml") {
-    return parseYaml(value);
+    return parseYamlComposerValue(value);
   }
 
   try {
     return JSON.parse(value) as unknown;
   } catch (jsonError) {
     try {
-      return parseYaml(value);
+      return parseYamlComposerValue(value);
     } catch {
       throw jsonError;
     }
   }
+}
+
+function parseYamlComposerValue(value: string): unknown {
+  try {
+    return parseYaml(value);
+  } catch (error) {
+    throw createYamlComposerError(error);
+  }
+}
+
+function createYamlComposerError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : "Invalid YAML.";
+
+  return new Error(
+    `${message} If you meant a string value that contains ':' (for example a curl command, URL, or inline JSON), wrap it in quotes or use a block scalar (|).`,
+  );
 }

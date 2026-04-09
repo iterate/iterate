@@ -1088,6 +1088,24 @@ describe("toSemanticFeedItem", () => {
 });
 
 describe("buildDisplayFeed", () => {
+  test("keeps only raw events, ungrouped, in raw mode", () => {
+    const feed = projectWireToFeed([
+      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 2, type: "https://events.iterate.com/demo/a" }),
+      createEvent({
+        offset: 3,
+        type: "https://events.iterate.com/events/stream/metadata-updated",
+        payload: { metadata: { color: "blue" } },
+      }),
+    ]);
+
+    expect(buildDisplayFeed(feed, "raw")?.map((item) => item.kind)).toEqual([
+      "event",
+      "event",
+      "event",
+    ]);
+  });
+
   test("groups consecutive events of the same type in raw-pretty mode", () => {
     const feed = projectWireToFeed([
       createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
@@ -1162,12 +1180,12 @@ describe("buildDisplayFeed", () => {
     ]);
   });
 
-  test("returns null in raw mode", () => {
+  test("returns null in raw-single-json mode", () => {
     const feed = projectWireToFeed([
       createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
     ]);
 
-    expect(buildDisplayFeed(feed, "raw")).toBeNull();
+    expect(buildDisplayFeed(feed, "raw-single-json")).toBeNull();
   });
 });
 

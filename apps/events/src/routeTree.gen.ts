@@ -26,6 +26,7 @@ import { Route as ErrorOccurredRouteImport } from './routes/error-occurred'
 import { Route as DynamicWorkerConfiguredRouteImport } from './routes/dynamic-worker-configured'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as ChildStreamCreatedRouteImport } from './routes/child-stream-created'
+import { Route as BashmodeBlockAddedRouteImport } from './routes/bashmode-block-added'
 import { Route as AgentInputAddedRouteImport } from './routes/agent-input-added'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
@@ -128,6 +129,11 @@ const ChildStreamCreatedRoute = ChildStreamCreatedRouteImport.update({
   path: '/child-stream-created',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BashmodeBlockAddedRoute = BashmodeBlockAddedRouteImport.update({
+  id: '/bashmode-block-added',
+  path: '/bashmode-block-added',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AgentInputAddedRoute = AgentInputAddedRouteImport.update({
   id: '/agent-input-added',
   path: '/agent-input-added',
@@ -186,6 +192,7 @@ const AppStreamsSplatRoute = AppStreamsSplatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/agent-input-added': typeof AgentInputAddedRoute
+  '/bashmode-block-added': typeof BashmodeBlockAddedRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
@@ -215,6 +222,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/agent-input-added': typeof AgentInputAddedRoute
+  '/bashmode-block-added': typeof BashmodeBlockAddedRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
@@ -244,6 +252,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
   '/agent-input-added': typeof AgentInputAddedRoute
+  '/bashmode-block-added': typeof BashmodeBlockAddedRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
@@ -275,6 +284,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/agent-input-added'
+    | '/bashmode-block-added'
     | '/child-stream-created'
     | '/docs'
     | '/dynamic-worker-configured'
@@ -304,6 +314,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/agent-input-added'
+    | '/bashmode-block-added'
     | '/child-stream-created'
     | '/docs'
     | '/dynamic-worker-configured'
@@ -332,6 +343,7 @@ export interface FileRouteTypes {
     | '/'
     | '/_app'
     | '/agent-input-added'
+    | '/bashmode-block-added'
     | '/child-stream-created'
     | '/docs'
     | '/dynamic-worker-configured'
@@ -363,6 +375,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
   AgentInputAddedRoute: typeof AgentInputAddedRoute
+  BashmodeBlockAddedRoute: typeof BashmodeBlockAddedRoute
   ChildStreamCreatedRoute: typeof ChildStreamCreatedRoute
   DocsRoute: typeof DocsRoute
   DynamicWorkerConfiguredRoute: typeof DynamicWorkerConfiguredRoute
@@ -506,6 +519,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChildStreamCreatedRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/bashmode-block-added': {
+      id: '/bashmode-block-added'
+      path: '/bashmode-block-added'
+      fullPath: '/bashmode-block-added'
+      preLoaderRoute: typeof BashmodeBlockAddedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/agent-input-added': {
       id: '/agent-input-added'
       path: '/agent-input-added'
@@ -628,6 +648,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
   AgentInputAddedRoute: AgentInputAddedRoute,
+  BashmodeBlockAddedRoute: BashmodeBlockAddedRoute,
   ChildStreamCreatedRoute: ChildStreamCreatedRoute,
   DocsRoute: DocsRoute,
   DynamicWorkerConfiguredRoute: DynamicWorkerConfiguredRoute,

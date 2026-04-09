@@ -84,10 +84,10 @@ export function createEventsClient() {
   throw new Error("createEventsClient is not available in dynamic worker processor bundles.");
 }
 
-export class PullSubscriptionProcessorRuntime {
+export class PullProcessorRuntime {
   constructor() {
     throw new Error(
-      "PullSubscriptionProcessorRuntime is not available in dynamic worker processor bundles.",
+      "PullProcessorRuntime is not available in dynamic worker processor bundles.",
     );
   }
 }

@@ -157,7 +157,7 @@ This separates pure state reconstruction from side effects.
 - Move state building into `reduce`
 - Move OpenAI calls into `afterAppend`
 - Use `defineProcessor(...)`
-- Let `PullSubscriptionProcessorRuntime` handle catch-up
+- Let `PullProcessorRuntime` handle catch-up
 
 Now the code starts looking like a real durable agent.
 

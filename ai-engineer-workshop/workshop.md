@@ -197,14 +197,14 @@ Problem:
 
 - In `04-single-stream-runtime.ts`, we move history building into `reduce`
 - We move the OpenAI call into `afterAppend`
-- `PullSubscriptionProcessorRuntime` gives us catch-up reads automatically for a single stream
+- `PullProcessorRuntime` with `includeChildren: false` gives us catch-up reads automatically for a single stream
 - This is the first version that uses `defineProcessor`
 - Workshop version: `workshop/agent-processor.ts` + `workshop/05-nano-agent-with-llm-processor.ts`
 
 ### All paths and interruptions
 
-- In `05-all-paths-with-interruptions.ts`, we switch to `PullSubscriptionPatternProcessorRuntime`
-- It watches every stream under `${PATH_PREFIX}/**`
+- In `05-all-paths-with-interruptions.ts`, we switch to `PullProcessorRuntime` with `includeChildren: true` (default)
+- It watches every descendant stream under the given path
 - We add `llm-request-started`, `llm-request-completed`, and `llm-request-canceled`
 - When a new input arrives on a stream, we abort the previous request for that stream and start a new one
 - This is the first version that handles interruptions

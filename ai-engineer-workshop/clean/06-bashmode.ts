@@ -1,73 +1,92 @@
-import { createEventsClient, defineProcessor } from "ai-engineer-workshop";
-import dedent from "dedent";
+import { defineProcessor } from "ai-engineer-workshop";
 import { Bash } from "just-bash";
-import type { ResponseCompletedEvent } from "openai/resources/responses/responses.mjs";
+import { z } from "zod";
+import { PullProcessorRuntime } from "ai-engineer-workshop";
+import dedent from "dedent";
+import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
+import {
+  OpenAiResponseEventAdded,
+  AgentInputAdded,
+} from "./04-with-openai-request-with-history.ts";
 
-const client = createEventsClient();
-const path = "/jonas/hello-world";
+const prompt = `
+You can execute bash code on your computer. All you have to do is put the code in 
 
-const bash = new Bash({
-  network: {
-    dangerouslyAllowFullInternetAccess: true,
-  },
+\`\`\`bash
+echo "Hello world" > hello.txt
+\`\`\`
+
+This is the main way you interact with the world. Use it to research the web, read files, and more.
+
+### Messaging other agents
+
+You can use curl to message other agents. For example if your path is /jonas/hello-world, you can
+create a sub-agent 
+
+\`\`\`bash
+curl --json '{"type": "ping"}' https://events.iterate.com/api/streams/:path
+\`\`\`
+`;
+
+export const BashmodeBlockAdded = z.object({
+  type: z.literal("bashmode-block-added"),
+  payload: z.object({
+    script: z.string(),
+  }),
 });
 
-const bashmode = defineProcessor(() => {
+export const bashmodeProcessor = defineProcessor(() => {
+  const bash = new Bash({
+    network: {
+      dangerouslyAllowFullInternetAccess: true,
+    },
+  });
   return {
     slug: "bashmode",
     afterAppend: async ({ append, event }) => {
+      if (event.type === "agent-output-added") {
+        const typedEvent = OpenAiResponseEventAdded.parse(event);
+        const script = extractBashBlocks(typedEvent.payload);
+        if (script) {
+          await append({
+            event: {
+              type: "bashmode-block-added",
+              payload: { script },
+            },
+          });
+        }
+      }
       if (event.type === "bashmode-block-added") {
-        const result = await bash.exec(event.payload.content);
+        const typedEvent = BashmodeBlockAdded.parse(event);
+        const result = await bash.exec(typedEvent.payload.script);
         await append({
-          event: {
+          event: AgentInputAdded.parse({
             type: "agent-input-added",
             payload: {
-              content: JSON.stringify(result, null, 2),
+              role: "developer",
+              content: [
+                `Bash exited with code ${result.exitCode}.`,
+                "```",
+                `Stdout: ${result.stdout}`,
+                `Stderr: ${result.stderr}`,
+                "```",
+              ].join("\n"),
             },
-          },
+          }),
         });
       }
-
-      await handleEvent(event as StreamEvent, async (nextEvent) => {
-        await append({ event: nextEvent });
-      });
     },
   };
 });
 
-let eventCount = 0;
-for await (const _event of await client.stream({
-  path,
-  after: "start",
-  before: "end",
-})) {
-  eventCount++;
-}
-console.log("Caught up with history");
-
-for await (const event of await client.stream({
-  path,
-  after: eventCount,
-})) {
-  console.log("Event appended", JSON.stringify(event, null, 2));
-  await handleEvent(event as StreamEvent, async (nextEvent) => {
-    await client.append({
-      path,
-      event: nextEvent,
-    });
-  });
+function extractBashBlocks(event: ResponseStreamEvent) {
+  if (event.type !== "response.output_text.done") return null;
+  return event.text.match(/```(?:bash|sh|shell)\s*([\s\S]*?)```/)?.[1]?.trim() || null;
 }
 
-function extractBashBlocks(event: ResponseCompletedEvent) {
-  return event.response.output
-    .filter((item) => item.type === "message" && item.role === "assistant")
-    .flatMap((item) => item.content)
-    .filter((item) => item.type === "output_text")
-    .flatMap((item) =>
-      [...item.text.matchAll(/```(?:bash|sh|shell)\s*([\s\S]*?)```/g)]
-        .map((match) => match[1]?.trim())
-        .filter((content): content is string => Boolean(content)),
-    );
+if (import.meta.main) {
+  await new PullProcessorRuntime({
+    path: "/jonas",
+    processor: bashmodeProcessor,
+  }).run();
 }
-
-void bashmode;

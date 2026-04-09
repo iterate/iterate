@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ContractRouterClient } from "@orpc/contract";
 import {
-  PullSubscriptionProcessorRuntime,
+  PullProcessorRuntime,
   eventsContract,
   type Event,
   type Processor,
@@ -85,10 +85,11 @@ export function createWorkshopTestHarness({
     }) {
       const runtimes = processors.map(
         (processor) =>
-          new PullSubscriptionProcessorRuntime({
+          new PullProcessorRuntime({
             eventsClient: client,
+            includeChildren: false,
             processor,
-            streamPath,
+            path: streamPath,
           }),
       );
       const runPromise = Promise.all(runtimes.map((runtime) => runtime.run()));

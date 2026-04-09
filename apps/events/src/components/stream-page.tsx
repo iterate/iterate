@@ -20,10 +20,10 @@ import {
 } from "@iterate-com/ui/components/ai-elements/prompt-input";
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
-import { Input } from "@iterate-com/ui/components/input";
 import { Label } from "@iterate-com/ui/components/label";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
+import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import {
   Sheet,
   SheetContent,
@@ -161,18 +161,14 @@ export function StreamPage({
     }),
   );
   const submitAppendEvent = async ({ event }: { event: EventInput }) => {
-    const request = appendEvent.mutateAsync({
-      path: streamPath,
-      event,
-    });
-
-    void toast.promise(request, {
-      loading: "Appending event",
-      success: "Event appended",
-      error: (error) => formatClientError(error),
-    });
-
-    await request.catch(() => undefined);
+    try {
+      await appendEvent.mutateAsync({
+        path: streamPath,
+        event,
+      });
+    } catch (error) {
+      toast.error(formatClientError(error));
+    }
   };
 
   const submitRawAppend = async ({
@@ -212,6 +208,20 @@ export function StreamPage({
       },
     });
     setAgentInputText("");
+  };
+
+  const handleComposerSubmit = async () => {
+    if (composerMode === "agent") {
+      await submitAgentAppend({ inputText: agentInputText });
+      return;
+    }
+
+    if (composerMode === "yaml") {
+      await submitRawAppend({ inputText: appendInputYaml, format: "yaml" });
+      return;
+    }
+
+    await submitRawAppend({ inputText: appendInputJson, format: "json" });
   };
 
   return (
@@ -303,46 +313,34 @@ export function StreamPage({
       </Sheet>
 
       <footer className="supports-backdrop-filter:bg-background/80 shrink-0 border-t bg-background/95 px-4 py-4">
-        <PromptInput
-          className="relative w-full"
-          onSubmit={async () => {
-            if (composerMode === "agent") {
-              await submitAgentAppend({ inputText: agentInputText });
-              return;
-            }
-
-            if (composerMode === "yaml") {
-              await submitRawAppend({ inputText: appendInputYaml, format: "yaml" });
-              return;
-            }
-
-            await submitRawAppend({ inputText: appendInputJson, format: "json" });
-          }}
-        >
+        <PromptInput className="relative w-full" onSubmit={handleComposerSubmit}>
           <PromptInputBody>
             {composerMode === "agent" ? (
-              <Input
-                data-slot="input-group-control"
+              <PromptInputTextarea
                 value={agentInputText}
                 onChange={(event) => setAgentInputText(event.currentTarget.value)}
                 placeholder="Message this agent"
-                className="h-11 rounded-none border-0 bg-transparent px-4 shadow-none focus-visible:ring-0"
+                className="min-h-11 max-h-[45vh] text-sm leading-5"
               />
             ) : composerMode === "yaml" ? (
-              <PromptInputTextarea
-                value={appendInputYaml}
-                onChange={(event) => setAppendInputYaml(event.currentTarget.value)}
-                className="min-h-36 max-h-[45vh] font-mono text-xs leading-5"
-                placeholder="Enter event YAML"
-                spellCheck={false}
+              <SourceCodeBlock
+                code={appendInputYaml}
+                language="yaml"
+                editable
+                onChange={setAppendInputYaml}
+                onModEnter={handleComposerSubmit}
+                showCopyButton={false}
+                className="w-full max-h-[45vh]"
               />
             ) : (
-              <PromptInputTextarea
-                value={appendInputJson}
-                onChange={(event) => setAppendInputJson(event.currentTarget.value)}
-                className="min-h-36 max-h-[45vh] font-mono text-xs leading-5"
-                placeholder="Enter event JSON"
-                spellCheck={false}
+              <SourceCodeBlock
+                code={appendInputJson}
+                language="json"
+                editable
+                onChange={setAppendInputJson}
+                onModEnter={handleComposerSubmit}
+                showCopyButton={false}
+                className="w-full max-h-[45vh]"
               />
             )}
           </PromptInputBody>

@@ -189,8 +189,8 @@ importers:
         specifier: ^2.14.0
         version: 2.14.0
       openai:
-        specifier: ^6.25.0
-        version: 6.25.0(ws@8.19.0)(zod@4.3.6)
+        specifier: ^6.33.0
+        version: 6.33.0(ws@8.19.0)(zod@4.3.6)
       schematch:
         specifier: 0.2.1
         version: 0.2.1

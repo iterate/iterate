@@ -25,4 +25,31 @@ describe("parseObjectFromComposerText", () => {
       "Value must be a JSON object.",
     );
   });
+
+  test("parses quoted shell commands in yaml mode", () => {
+    expect(
+      parseObjectFromComposerText(
+        `type: bashmode-block-added
+payload:
+  script: "curl --json '{\\"type\\": \\"hi\\"}' https://events.iterate.com/api/streams/jonas/bla/new/new/new"`,
+        "yaml",
+      ),
+    ).toEqual({
+      type: "bashmode-block-added",
+      payload: {
+        script: `curl --json '{"type": "hi"}' https://events.iterate.com/api/streams/jonas/bla/new/new/new`,
+      },
+    });
+  });
+
+  test("adds a helpful hint for yaml strings containing colons", () => {
+    expect(() =>
+      parseObjectFromComposerText(
+        `type: bashmode-block-added
+payload:
+  script: curl --json '{"type": "hi"}' https://events.iterate.com/api/streams/jonas/bla/new/new/new`,
+        "yaml",
+      ),
+    ).toThrow("wrap it in quotes or use a block scalar (|)");
+  });
 });

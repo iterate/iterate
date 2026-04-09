@@ -134,11 +134,11 @@ export function StreamEventFeed({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {rendererMode === "raw" ? (
-        <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
+      {rendererMode === "raw-single-json" ? (
+        <div className="min-h-0 flex-1 overflow-hidden p-4 md:p-6">
           {rawEvents.length === 0 ? (
             <ConversationEmptyState
-              className="min-h-[240px] rounded-lg border bg-card text-sm text-muted-foreground"
+              className="h-full min-h-[240px] rounded-lg border bg-card text-sm text-muted-foreground"
               description={isPending ? "Connecting to the stream." : emptyLabel}
               icon={isPending ? <Spinner className="size-4" /> : undefined}
               title={isPending ? "Loading events" : "No events yet"}
@@ -146,10 +146,11 @@ export function StreamEventFeed({
           ) : (
             <SerializedObjectCodeBlock
               data={rawEvents}
-              className="min-h-80"
+              className="h-full min-h-80"
               initialFormat="yaml"
               showToggle
               showCopyButton
+              scrollToBottom
             />
           )}
         </div>
@@ -168,7 +169,7 @@ export function StreamEventFeed({
                 <ConversationEmptyState
                   className="min-h-[240px] rounded-lg border bg-card text-sm text-muted-foreground"
                   title="No semantic cards for this stream yet"
-                  description={`${feedSummary.rawEvents} raw event${feedSummary.rawEvents === 1 ? "" : "s"} in the log · ${feedSummary.semanticItems} semantic item${feedSummary.semanticItems === 1 ? "" : "s"}. Use Raw + Pretty to see wire rows next to projections, or Raw for a full dump.`}
+                  description={`${feedSummary.rawEvents} raw event${feedSummary.rawEvents === 1 ? "" : "s"} in the log · ${feedSummary.semanticItems} semantic item${feedSummary.semanticItems === 1 ? "" : "s"}. Use Raw + Pretty to see wire rows next to projections, Raw for every event as its own YAML item, or Raw Single JSON for a full dump.`}
                 />
               ) : (
                 <ConversationEmptyState
@@ -183,6 +184,7 @@ export function StreamEventFeed({
               <StreamFeedItemRenderer
                 key={getFeedItemKey(item, index)}
                 item={item}
+                rendererMode={rendererMode}
                 eventElapsedByOffset={eventElapsedByOffset}
                 onOpenEventOffsetChange={onOpenEventOffsetChange}
               />
@@ -203,16 +205,24 @@ export function StreamEventFeed({
 
 function StreamFeedItemRenderer({
   item,
+  rendererMode,
   eventElapsedByOffset,
   onOpenEventOffsetChange,
 }: {
   item: StreamFeedItem;
+  rendererMode: StreamRendererMode;
   eventElapsedByOffset: ReadonlyMap<number, string>;
   onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
   switch (item.kind) {
     case "event":
-      return (
+      return rendererMode === "raw" ? (
+        <RawEventCard
+          event={item}
+          elapsedLabel={eventElapsedByOffset.get(item.offset)}
+          onOpenEventOffsetChange={onOpenEventOffsetChange}
+        />
+      ) : (
         <EventLine
           event={item}
           elapsedLabel={eventElapsedByOffset.get(item.offset)}
@@ -856,22 +866,42 @@ function EventLine({
 }) {
   return (
     <RawEventLineButton
-      summary={
-        <>
-          <span className="truncate font-mono">{event.eventType}</span>
-          {elapsedLabel ? (
-            <>
-              <span>·</span>
-              <span>{elapsedLabel}</span>
-            </>
-          ) : null}
-          <span>·</span>
-          <span>{formatTime(event.timestamp)}</span>
-        </>
-      }
+      summary={renderEventSummary({ event, elapsedLabel })}
       hoverDetail={formatAbsoluteDateTimeRange(event.timestamp)}
       onClick={() => onOpenEventOffsetChange?.(event.offset)}
     />
+  );
+}
+
+function RawEventCard({
+  event,
+  elapsedLabel,
+  onOpenEventOffsetChange,
+}: {
+  event: EventFeedItem;
+  elapsedLabel?: string;
+  onOpenEventOffsetChange?: (offset?: number) => void;
+}) {
+  return (
+    <div className="flex w-full flex-col gap-2">
+      <RawEventLineButton
+        summary={renderEventSummary({ event, elapsedLabel })}
+        hoverDetail={formatAbsoluteDateTimeRange(event.timestamp)}
+        onClick={() => onOpenEventOffsetChange?.(event.offset)}
+      />
+      <Message from="assistant" className="max-w-3xl" data-label="stream-raw-event-card">
+        <MessageContent className="w-full">
+          <SerializedObjectCodeBlock
+            data={orderEventKeysForYamlDisplay(event.raw)}
+            className="min-h-28 max-h-128"
+            initialFormat="yaml"
+            showToggle
+            showCopyButton
+            showLineNumbers={false}
+          />
+        </MessageContent>
+      </Message>
+    </div>
   );
 }
 
@@ -888,6 +918,13 @@ function GroupedEventLine({
     <RawEventLineButton
       summary={
         <>
+          <span className="font-mono">
+            {group.events[0]?.offset}
+            {group.events[group.events.length - 1]?.offset !== group.events[0]?.offset
+              ? `-${group.events[group.events.length - 1]?.offset}`
+              : ""}
+          </span>
+          <span>·</span>
           <span className="truncate font-mono">{group.eventType}</span>
           <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
             x{group.count}
@@ -908,6 +945,30 @@ function GroupedEventLine({
       hoverDetail={formatAbsoluteDateTimeRange(group.firstTimestamp, group.lastTimestamp)}
       onClick={() => onOpenEventOffsetChange?.(group.events[0]?.offset)}
     />
+  );
+}
+
+function renderEventSummary({
+  event,
+  elapsedLabel,
+}: {
+  event: EventFeedItem;
+  elapsedLabel?: string;
+}) {
+  return (
+    <>
+      <span className="font-mono">{event.offset}</span>
+      <span>·</span>
+      <span className="truncate font-mono">{event.eventType}</span>
+      {elapsedLabel ? (
+        <>
+          <span>·</span>
+          <span>{elapsedLabel}</span>
+        </>
+      ) : null}
+      <span>·</span>
+      <span>{formatTime(event.timestamp)}</span>
+    </>
   );
 }
 

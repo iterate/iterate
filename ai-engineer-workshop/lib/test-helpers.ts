@@ -4,7 +4,7 @@ import { expect } from "vitest";
 import {
   createEventsClient,
   normalizePathPrefix,
-  PullSubscriptionProcessorRuntime,
+  PullProcessorRuntime,
   type Event,
   type EventInput,
   type EventsORPCClient,
@@ -49,10 +49,11 @@ export async function useProcessorTestHarness<TState>({
 }): Promise<ProcessorTestHarness<TState>> {
   const client = createEventsClient({ baseUrl, projectSlug });
   const path = createProcessorTestPath({ pathPrefix, testIdentifier, testRunId });
-  const runtime = new PullSubscriptionProcessorRuntime({
+  const runtime = new PullProcessorRuntime({
     eventsClient: client,
+    includeChildren: false,
     processor,
-    streamPath: path,
+    path,
   });
 
   let runtimeError: unknown;
