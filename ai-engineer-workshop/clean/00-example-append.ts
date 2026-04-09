@@ -3,7 +3,7 @@ import { createEventsClient } from "ai-engineer-workshop";
 const client = createEventsClient();
 
 const result = await client.append({
-  path: "/jonastemplestein/hello-world",
+  path: "/jonas/hello-world",
   event: {
     type: "agent-input-added",
     payload: {

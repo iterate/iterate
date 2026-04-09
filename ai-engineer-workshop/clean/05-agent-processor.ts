@@ -1,4 +1,4 @@
-import { createEventsClient } from "ai-engineer-workshop";
+import { createEventsClient, defineProcessor } from "ai-engineer-workshop";
 import OpenAI from "openai";
 import type {
   ResponseCompletedEvent,
@@ -8,14 +8,24 @@ const client = createEventsClient();
 
 const openai = new OpenAI();
 
-const history: ResponseInputItem[] = [];
-const systemPrompt = "You are a helpful assistant. Keep answers concise.";
-const model = "gpt-4o-mini";
+type AgentState = {
+  history: ResponseInputItem[];
+  systemPrompt: string;
+  model: string;
+};
+
+const agentProcessor = defineProcessor<AgentState>(() => {
+  return {
+    slug: "agent",
+    initialState,
+  };
+});
 
 let eventCount = 0;
 for await (const event of await client.stream({
-  path: "/jonastemplestein/hello-world2",
-  live: false,
+  path: "/jonas/hello-world",
+  after: "start",
+  before: "end",
 })) {
   eventCount++;
   if (event.type === "agent-input-added") {
@@ -24,13 +34,16 @@ for await (const event of await client.stream({
     history.push(...(event.payload as ResponseCompletedEvent).response.output);
   }
 }
+console.log("Caught up with history", JSON.stringify(history, null, 2));
 
 for await (const event of await client.stream({
-  path: "/jonastemplestein/hello-world2",
-  offset: eventCount,
-  live: true,
+  path: "/jonas/hello-world",
+  after: eventCount,
 })) {
+  console.log("Event appended", JSON.stringify(event, null, 2));
   if (event.type === "agent-input-added") {
+    console.log("Making LLM request with history", JSON.stringify(history, null, 2));
+    history.push(event.payload as ResponseInputItem);
     const response = await openai.responses.create({
       model,
       instructions: systemPrompt,
@@ -39,9 +52,8 @@ for await (const event of await client.stream({
     });
     for await (const item of response) {
       if (item.type === "response.completed") {
-        history.push(...item.response.output);
         await client.append({
-          path: "/jonastemplestein/hello-world2",
+          path: "/jonas/hello-world",
           event: {
             type: "agent-output-added",
             payload: item,
@@ -50,8 +62,7 @@ for await (const event of await client.stream({
       }
     }
   }
+  if (event.type === "agent-output-added") {
+    history.push(...(event.payload as ResponseCompletedEvent).response.output);
+  }
 }
-
-// if (import.meta.main) {
-//   console.log("running as the entry script");
-// }

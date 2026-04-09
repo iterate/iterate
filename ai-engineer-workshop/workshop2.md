@@ -31,12 +31,13 @@
 
 4. Now we have a problem!
    - The agent can't remember stuff!
-   - So let's make a history
-   - 03-with-openai-request-with-history.ts
+   - So let's make a history (and move systemprompt and model to top next to it)
+   - We always add to the history when we encounter an input or output event
+   - But what if my program restarts?
    - Problem : If I restart my program, the history is lost! And we also make loads of LLM requests. Whoops
    - Solution: Let's populate the history from the stream when we start
 
-05 Now we have a new problem - The agent makes lots of LLM requests -
+05 Now this is a mess! - Gotten quite long - Lots of repeated constants and fiddly logic with off by one errors abound - Let's introduce a very lightweight framework
 
 Narrative
 

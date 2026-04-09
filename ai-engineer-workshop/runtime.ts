@@ -1,5 +1,12 @@
-import { eventsContract } from "../apps/events-contract/src/sdk.ts";
-import type { EventsORPCClient } from "../apps/events-contract/src/sdk.ts";
+import {
+  PullSubscriptionPatternProcessorRuntime as BasePullSubscriptionPatternProcessorRuntime,
+  eventsContract,
+} from "../apps/events-contract/src/sdk.ts";
+import type {
+  EventsORPCClient,
+  Processor,
+  ProcessorLogger,
+} from "../apps/events-contract/src/sdk.ts";
 import { createWorkshopEventsClient } from "./events-client.ts";
 
 export {
@@ -10,7 +17,6 @@ export {
   type EventsORPCClient,
   PushSubscriptionProcessorRuntime,
   PullSubscriptionProcessorRuntime,
-  PullSubscriptionPatternProcessorRuntime,
   defineBuiltinProcessor,
   defineProcessor,
   EventInput,
@@ -32,4 +38,31 @@ export function createEventsClient({
   projectSlug?: string;
 } = {}): EventsORPCClient {
   return createWorkshopEventsClient({ baseUrl, projectSlug });
+}
+
+type BasePullSubscriptionPatternProcessorRuntimeArgs = ConstructorParameters<
+  typeof BasePullSubscriptionPatternProcessorRuntime
+>[0];
+
+export class PullSubscriptionPatternProcessorRuntime<
+  State,
+> extends BasePullSubscriptionPatternProcessorRuntime<State> {
+  constructor({
+    eventsClient = createEventsClient() as BasePullSubscriptionPatternProcessorRuntimeArgs["eventsClient"],
+    logger = console,
+    pathPrefix,
+    processor,
+  }: {
+    eventsClient?: BasePullSubscriptionPatternProcessorRuntimeArgs["eventsClient"];
+    logger?: ProcessorLogger;
+    pathPrefix: string;
+    processor: Processor<State>;
+  }) {
+    super({
+      eventsClient,
+      logger,
+      pathPrefix,
+      processor,
+    });
+  }
 }
