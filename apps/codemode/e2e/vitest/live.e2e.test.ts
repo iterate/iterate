@@ -166,6 +166,40 @@ export default async function () {
     expect(run.result).not.toContain("user executor should never run");
   });
 
+  it("runs a package project whose entry point bundles to executor.js without self-importing", async () => {
+    const baseUrl = requireCodemodeBaseUrl();
+    const client = await createClient(baseUrl);
+
+    const run = await client.runV2({
+      input: {
+        type: "package-project",
+        entryPoint: "executor.ts",
+        files: {
+          "package.json": JSON.stringify(
+            {
+              name: "codemode-entrypoint-executor-proof",
+              private: true,
+              type: "module",
+            },
+            null,
+            2,
+          ),
+          "executor.ts": `
+export default async function () {
+  return {
+    message: "executor entrypoint ran",
+  };
+}
+          `.trim(),
+        },
+      },
+      sources: [],
+    });
+
+    expect(run.error).toBeNull();
+    expect(run.result).toContain("executor entrypoint ran");
+  });
+
   it("bundles a package-project snippet, reads the OpenAI key from codemode secrets, and gets a model response", async () => {
     const baseUrl = requireCodemodeBaseUrl();
     const openAiApiKey = requireOpenAiApiKey();

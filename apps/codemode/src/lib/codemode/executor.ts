@@ -31,6 +31,9 @@ export interface WorkerBundleDefinition {
   compatibilityFlags?: string[];
 }
 
+const INTERNAL_EXECUTOR_MODULE_PATH = "__codemode_executor__.js";
+const INLINE_USER_MODULE_PATH = "__codemode_user_inline__.js";
+
 function stringifyRpcEnvelope(value: unknown) {
   return JSON.stringify({ result: value });
 }
@@ -90,7 +93,7 @@ function createExecutorModule(options: {
   userModulePath: string;
   getSecretProviderName?: string;
 }) {
-  const importPath = createImportPath("executor.js", options.userModulePath);
+  const importPath = createImportPath(INTERNAL_EXECUTOR_MODULE_PATH, options.userModulePath);
   const getSecretProviderName = options.getSecretProviderName ?? null;
   const sandboxPrelude = options.sandboxPrelude?.trim().length
     ? indent(options.sandboxPrelude.trim(), 4)
@@ -305,14 +308,14 @@ export class DynamicWorkerExecutor {
   async execute(code: string, providers: ResolvedProvider[]): Promise<ExecuteResult> {
     return this.executeWorkerBundle(
       {
-        mainModule: "executor.js",
+        mainModule: INTERNAL_EXECUTOR_MODULE_PATH,
         modules: {
-          "executor.js": createExecutorModule({
+          [INTERNAL_EXECUTOR_MODULE_PATH]: createExecutorModule({
             providers,
             timeoutMs: this.#timeout,
-            userModulePath: "user-inline.js",
+            userModulePath: INLINE_USER_MODULE_PATH,
           }),
-          "user-inline.js": createInlineUserModuleSource(code),
+          [INLINE_USER_MODULE_PATH]: createInlineUserModuleSource(code),
         },
       },
       providers,
@@ -371,11 +374,17 @@ export function buildCodemodeExecutionBundle(options: {
   timeoutMs?: number;
   getSecretProviderName?: string;
 }): WorkerBundleDefinition {
+  if (INTERNAL_EXECUTOR_MODULE_PATH in options.userModules) {
+    throw new Error(
+      `Codemode package-project cannot define reserved internal module ${JSON.stringify(INTERNAL_EXECUTOR_MODULE_PATH)}.`,
+    );
+  }
+
   return {
-    mainModule: "executor.js",
+    mainModule: INTERNAL_EXECUTOR_MODULE_PATH,
     modules: {
       ...options.userModules,
-      "executor.js": createExecutorModule({
+      [INTERNAL_EXECUTOR_MODULE_PATH]: createExecutorModule({
         providers: options.providers,
         sandboxPrelude: options.sandboxPrelude,
         timeoutMs: options.timeoutMs ?? 30_000,
