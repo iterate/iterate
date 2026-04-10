@@ -103,13 +103,6 @@ function createFetchWithProjectHeader() {
   };
 }
 
-function resolveCurrentProjectSlug() {
-  return resolveProjectSlug({
-    url: getCurrentUrl(),
-    headerValue: getCurrentHeaderValue(iterateProjectHeader),
-  });
-}
-
 function makeOrpcClient(options: OrpcClientOptions = {}): OrpcClient {
   return createORPCClient(
     new OpenAPILink(eventsContract, {
