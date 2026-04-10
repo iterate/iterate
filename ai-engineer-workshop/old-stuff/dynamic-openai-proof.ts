@@ -6,14 +6,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import type { Event } from "@iterate-com/events-contract";
-import { eventsContract } from "@iterate-com/events-contract";
-import { collectAsyncIterableUntilIdle } from "../../e2e/helpers.ts";
-import { iterateProjectHeader } from "../../src/lib/project-slug.ts";
-import { buildDynamicWorkerConfiguredEvent } from "../../src/durable-objects/dynamic-worker-bundler.ts";
+import { eventsContract, type Event } from "../../apps/events-contract/src/sdk.ts";
+import { collectAsyncIterableUntilIdle } from "../../apps/events/e2e/helpers.ts";
+import { iterateProjectHeader } from "../../apps/events/src/lib/project-slug.ts";
+import { buildDynamicWorkerConfiguredEvent } from "../../apps/events/src/durable-objects/dynamic-worker-bundler.ts";
 
 const exampleProcessorEntryFile = fileURLToPath(
-  new URL("../examples/simple-openai-loop.processor.ts", import.meta.url),
+  new URL("./simple-openai-loop.processor.ts", import.meta.url),
 );
 
 type EventsClient = ContractRouterClient<typeof eventsContract>;

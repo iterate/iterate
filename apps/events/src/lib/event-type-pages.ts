@@ -522,7 +522,7 @@ export const bashmodeBlockAddedPage = {
     ].join("\n"),
   },
   details: [
-    "Use with a processor whose afterAppend runs the script (see ai-engineer-workshop bashmode example).",
+    "Use with a processor whose afterAppend runs the script (see the workshop bashmode example).",
     "Typically paired with appending agent-input-added with the command output.",
   ],
 } satisfies EventTypePageDefinition;

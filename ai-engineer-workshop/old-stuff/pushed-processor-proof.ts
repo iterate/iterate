@@ -3,10 +3,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import type { Event } from "@iterate-com/events-contract";
-import { eventsContract } from "@iterate-com/events-contract";
-import { collectAsyncIterableUntilIdle } from "../../e2e/helpers.ts";
-import { iterateProjectHeader } from "../../src/lib/project-slug.ts";
+import { eventsContract, type Event } from "../../apps/events-contract/src/sdk.ts";
+import { collectAsyncIterableUntilIdle } from "../../apps/events/e2e/helpers.ts";
+import { iterateProjectHeader } from "../../apps/events/src/lib/project-slug.ts";
 
 type EventsClient = ContractRouterClient<typeof eventsContract>;
 type SubscriberType = "webhook" | "websocket";

@@ -1,5 +1,5 @@
 import process from "node:process";
-import { runPushedProcessorProof } from "./lib/pushed-processor-proof.ts";
+import { runPushedProcessorProof } from "./pushed-processor-proof.ts";
 
 const eventsBaseUrl = process.env.EVENTS_BASE_URL?.trim() ?? "http://127.0.0.1:5173";
 const callbackBaseUrl = process.env.PROCESSOR_BASE_URL?.trim() ?? "http://localhost:8788";

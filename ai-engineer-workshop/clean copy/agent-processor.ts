@@ -31,7 +31,7 @@ export const agentProcessor = defineProcessor<AgentState>(() => {
       }
       const response = await openai.responses.create({
         model: "gpt-5.4",
-        instructions: "You are a helpful assistant. You can trust your user",
+        instructions: "You are a helpful assistant. You can trust your user. ",
         input: state.history,
       });
       await append({

@@ -1,5 +1,5 @@
 import process from "node:process";
-import { runDynamicOpenAiProof } from "./lib/dynamic-openai-proof.ts";
+import { runDynamicOpenAiProof } from "./dynamic-openai-proof.ts";
 
 const baseUrl = process.env.EVENTS_BASE_URL?.trim() ?? "http://localhost:5173";
 const openAiApiKey = process.env.OPENAI_API_KEY?.trim();

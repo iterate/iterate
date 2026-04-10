@@ -5,11 +5,11 @@ type State = {};
 const processor = defineProcessor<State>(() => ({
   slug: "template",
   initialState: {},
-  reduce: ({ event, state }) => {
+  reduce: ({ state }) => {
     return state;
   },
 
-  afterAppend: async ({ append, event, state }) => {
+  afterAppend: async ({ append, event }) => {
     await append({
       event: {
         type: event.type,

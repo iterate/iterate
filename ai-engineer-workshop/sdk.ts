@@ -4,7 +4,6 @@ import { pathToFileURL } from "node:url";
 import type { Procedure } from "@orpc/server";
 import { call, os as orpcOs } from "@orpc/server";
 import { z } from "zod";
-import { eventsContract } from "../apps/events-contract/src/sdk.ts";
 import type { EventsORPCClient, ProcessorLogger } from "../apps/events-contract/src/sdk.ts";
 import { createWorkshopEventsClient } from "./events-client.ts";
 
