@@ -17,10 +17,10 @@ export const ExternalWebsocketSubscriber = ExternalSubscriberBase.extend({
 });
 export type ExternalWebsocketSubscriber = z.infer<typeof ExternalWebsocketSubscriber>;
 
-export const ExternalWebhookSubscriber = ExternalSubscriberBase.extend({
+const ExternalWebhookSubscriber = ExternalSubscriberBase.extend({
   type: z.literal("webhook"),
 });
-export type ExternalWebhookSubscriber = z.infer<typeof ExternalWebhookSubscriber>;
+type ExternalWebhookSubscriber = z.infer<typeof ExternalWebhookSubscriber>;
 
 export const ExternalSubscriber = z.discriminatedUnion("type", [
   ExternalWebsocketSubscriber,

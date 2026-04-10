@@ -259,7 +259,7 @@ export const dynamicWorkerProcessor = defineBuiltinProcessor<DynamicWorkerState>
   },
 }));
 
-export function normalizeDynamicWorkerConfig(input: {
+function normalizeDynamicWorkerConfig(input: {
   compatibilityDate?: string;
   compatibilityFlags?: string[];
   modules?: Record<string, string>;

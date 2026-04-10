@@ -31,8 +31,8 @@ export const StreamPath = z.preprocess(
 );
 export type StreamPath = z.infer<typeof StreamPath>;
 
-export const Offset = z.coerce.number().int().positive();
-export type Offset = z.infer<typeof Offset>;
+const Offset = z.coerce.number().int().positive();
+type Offset = z.infer<typeof Offset>;
 
 // Keep metadata/state shapes JSON-only so Cloudflare Durable Object RPC can
 // prove they are serializable. `Record<string, unknown>` made the generated

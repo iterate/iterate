@@ -10,7 +10,15 @@ import {
 } from "@iterate-com/events-contract";
 import { describe, expect, it } from "vitest";
 import { HUNG_INTERVAL_TIMEOUT_SECONDS } from "~/durable-objects/scheduling.ts";
-import type { TestScheduleStreamDurableObject } from "~/entry.workerd.vitest.ts";
+import workerEntry, {
+  StreamDurableObject,
+  type TestScheduleStreamDurableObject,
+} from "~/entry.workerd.vitest.ts";
+
+// `vitest.config.ts` wires the worker entry by path/class-name strings. Touch
+// the exports here so static analysis also sees the runtime-required symbols.
+void workerEntry;
+void StreamDurableObject;
 
 const testEnv = env as {
   TEST_SCHEDULE_STREAM: DurableObjectNamespace<TestScheduleStreamDurableObject>;

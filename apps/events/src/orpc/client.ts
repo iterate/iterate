@@ -124,7 +124,7 @@ function makeOrpcClient(options: OrpcClientOptions = {}): OrpcClient {
   ) as OrpcClient;
 }
 
-export function createBrowserWebSocketClient(options: OrpcClientOptions = {}) {
+function createBrowserWebSocketClient(options: OrpcClientOptions = {}) {
   const apiUrl = new URL(resolveApiUrl(options.baseUrl ?? configuredBaseUrl));
   apiUrl.pathname = "/api/orpc-ws";
   apiUrl.protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";

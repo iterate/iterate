@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { runDynamicOpenAiProof } from "./dynamic-openai-proof.ts";
 import { requireEventsBaseUrl } from "../../apps/events/e2e/helpers.ts";
+import { runDynamicOpenAiProof } from "./dynamic-openai-proof.ts";
 
 const openAiApiKey = process.env.OPENAI_API_KEY?.trim();
 

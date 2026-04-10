@@ -5,7 +5,7 @@ import {
 } from "@iterate-com/events-contract";
 import { build } from "esbuild";
 
-export type BuildDynamicWorkerConfiguredEventOptions = {
+type BuildDynamicWorkerConfiguredEventOptions = {
   compatibilityDate?: string;
   compatibilityFlags?: string[];
   entryFile: string;

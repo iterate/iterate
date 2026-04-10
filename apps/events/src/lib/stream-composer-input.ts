@@ -1,7 +1,7 @@
 import type { JSONObject } from "@iterate-com/events-contract";
 import { parse as parseYaml } from "yaml";
 
-export type StreamComposerDataFormat = "json" | "yaml";
+type StreamComposerDataFormat = "json" | "yaml";
 
 export function parseObjectFromComposerText(
   value: string,

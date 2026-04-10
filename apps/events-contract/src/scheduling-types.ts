@@ -65,10 +65,10 @@ export type StreamSchedule = z.infer<typeof StreamSchedule>;
 // recursively re-run built-in payload discrimination at schedule-creation time.
 // The eventual callback remains the canonical validator when the scheduled
 // event actually fires.
-export const ScheduledAppendTargetEventInput = GenericEventInputBase.extend({
+const ScheduledAppendTargetEventInput = GenericEventInputBase.extend({
   type: EventTypeSchema,
 });
-export type ScheduledAppendTargetEventInput = z.infer<typeof ScheduledAppendTargetEventInput>;
+type ScheduledAppendTargetEventInput = z.infer<typeof ScheduledAppendTargetEventInput>;
 
 export const StreamAppendScheduledPayload = z.strictObject({
   slug: z.string().trim().min(1),
@@ -104,10 +104,10 @@ export const ScheduleConfiguredEvent = GenericEventBase.extend(
   ScheduleConfiguredEventInput.pick({ type: true, payload: true }).shape,
 );
 
-export const ScheduleCancelledPayload = z.strictObject({
+const ScheduleCancelledPayload = z.strictObject({
   slug: z.string().trim().min(1),
 });
-export type ScheduleCancelledPayload = z.infer<typeof ScheduleCancelledPayload>;
+type ScheduleCancelledPayload = z.infer<typeof ScheduleCancelledPayload>;
 
 export const ScheduleCancelledEventInput = GenericEventInputBase.extend({
   type: z.literal(SCHEDULE_CANCELLED_TYPE),
@@ -150,7 +150,7 @@ export const ScheduleInternalExecutionFinishedEvent = GenericEventBase.extend(
   ScheduleInternalExecutionFinishedEventInput.pick({ type: true, payload: true }).shape,
 );
 
-export const SchedulerEntryState = z.strictObject({
+const SchedulerEntryState = z.strictObject({
   callback: z.string().trim().min(1),
   payloadJson: z.string().nullable(),
   schedule: StreamSchedule,
@@ -160,7 +160,7 @@ export const SchedulerEntryState = z.strictObject({
   executionStartedAt: z.number().int().nonnegative().nullable(),
   createdAt: z.number().int().nonnegative(),
 });
-export type SchedulerEntryState = z.infer<typeof SchedulerEntryState>;
+type SchedulerEntryState = z.infer<typeof SchedulerEntryState>;
 
 export const SchedulerState = z.record(z.string(), SchedulerEntryState).default({});
 export type SchedulerState = z.infer<typeof SchedulerState>;
