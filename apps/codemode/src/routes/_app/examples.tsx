@@ -10,6 +10,11 @@ import {
   buildCodemodeNewRunSearch,
   CodemodeExamplesSearch,
 } from "~/lib/codemode-links.ts";
+import {
+  codemodeInputLanguage,
+  formatCodemodeInputForDisplay,
+  resolveCodemodeEditorInput,
+} from "~/lib/codemode-input.ts";
 import { formatCodemodeSourcesYaml } from "~/lib/codemode-sources.ts";
 import { CODEMODE_EXAMPLES } from "~/lib/codemode-v2.ts";
 
@@ -31,7 +36,7 @@ function ExamplesPage() {
         const haystack = [
           example.title,
           example.description,
-          example.code,
+          formatExampleInputForDisplay(example),
           formatCodemodeSourcesYaml(example.sources),
         ]
           .join("\n")
@@ -87,6 +92,11 @@ function ExamplesPage() {
               <div className="space-y-1">
                 <p className="text-sm font-medium">{example.title}</p>
                 <p className="text-sm text-muted-foreground">{example.description}</p>
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                  {resolveExampleInput(example).type === "package-project"
+                    ? "Package project"
+                    : "Compiled script"}
+                </p>
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -97,6 +107,7 @@ function ExamplesPage() {
                     <Link
                       to="/runs-v2-new"
                       search={buildCodemodeNewRunSearch({
+                        input: example.input,
                         code: example.code,
                         sources: example.sources,
                       })}
@@ -109,7 +120,14 @@ function ExamplesPage() {
                 <Button
                   type="button"
                   variant="ghost"
-                  onClick={() => void copyExampleLink(example.code, example.sources, example.title)}
+                  onClick={() =>
+                    void copyExampleLink({
+                      code: example.code,
+                      input: example.input,
+                      sources: example.sources,
+                      title: example.title,
+                    })
+                  }
                 >
                   <Copy className="size-4" />
                   Copy deep link
@@ -131,9 +149,13 @@ function ExamplesPage() {
 
               <div className="space-y-1">
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Code
+                  Codemode Input
                 </p>
-                <SourceCodeBlock code={example.code} language="typescript" className="min-h-52" />
+                <SourceCodeBlock
+                  code={formatExampleInputForDisplay(example)}
+                  language={codemodeInputLanguage(resolveExampleInput(example))}
+                  className="min-h-52"
+                />
               </div>
             </div>
           </article>
@@ -143,21 +165,31 @@ function ExamplesPage() {
   );
 }
 
-async function copyExampleLink(
-  code: string,
-  sources: (typeof CODEMODE_EXAMPLES)[number]["sources"],
-  title: string,
-) {
+function resolveExampleInput(example: (typeof CODEMODE_EXAMPLES)[number]) {
+  return example.input ?? resolveCodemodeEditorInput({ code: example.code });
+}
+
+function formatExampleInputForDisplay(example: (typeof CODEMODE_EXAMPLES)[number]) {
+  return formatCodemodeInputForDisplay(resolveExampleInput(example));
+}
+
+async function copyExampleLink(input: {
+  code: string;
+  input?: (typeof CODEMODE_EXAMPLES)[number]["input"];
+  sources: (typeof CODEMODE_EXAMPLES)[number]["sources"];
+  title: string;
+}) {
   try {
     await navigator.clipboard.writeText(
       buildCodemodeNewRunHref({
         origin: window.location.origin,
-        code,
-        sources,
+        input: input.input,
+        code: input.code,
+        sources: input.sources,
       }),
     );
-    toast.success(`Copied deep link for "${title}"`);
+    toast.success(`Copied deep link for "${input.title}"`);
   } catch {
-    toast.error(`Failed to copy deep link for "${title}"`);
+    toast.error(`Failed to copy deep link for "${input.title}"`);
   }
 }

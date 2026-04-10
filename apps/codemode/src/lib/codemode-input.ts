@@ -3,45 +3,10 @@ import {
   type CodemodeInput,
   CodemodeInput as CodemodeInputSchema,
 } from "@iterate-com/codemode-contract";
+import { CODEMODE_OPENAI_PACKAGE_PROJECT_INPUT } from "~/lib/codemode-package-project-openai.ts";
 import { CODEMODE_V2_STARTER } from "~/lib/codemode-v2.ts";
 
-export const CODEMODE_PACKAGE_PROJECT_STARTER = CodemodeInputSchema.parse({
-  type: "package-project",
-  entryPoint: "src/index.ts",
-  files: {
-    "package.json": JSON.stringify(
-      {
-        name: "codemode-openai-demo",
-        private: true,
-        type: "module",
-        dependencies: {
-          openai: "^6.0.0",
-        },
-      },
-      null,
-      2,
-    ),
-    "src/index.ts": `import OpenAI from "openai";
-
-export default async function ({ ctx, getIterateSecret }) {
-  const client = new OpenAI({
-    apiKey: await getIterateSecret({ secretKey: "openai.apiKey" }),
-  });
-
-  const routes = await ctx.ingressProxy.routes.list({ limit: 1, offset: 0 });
-  const response = await client.responses.create({
-    model: "gpt-4.1-mini",
-    input: "Reply with the single word ready.",
-  });
-
-  return {
-    routeCount: routes.total,
-    modelReply: response.output_text ?? null,
-  };
-}
-`,
-  },
-}) as Extract<CodemodeInput, { type: "package-project" }>;
+export const CODEMODE_PACKAGE_PROJECT_STARTER = CODEMODE_OPENAI_PACKAGE_PROJECT_INPUT;
 
 export const DEFAULT_CODEMODE_INPUT = CodemodeInputSchema.parse({
   type: "compiled-script",

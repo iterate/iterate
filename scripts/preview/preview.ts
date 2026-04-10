@@ -19,6 +19,7 @@ const defaultPreviewTestMaxAttempts = 2;
 const defaultPreviewTestRetryDelayMs = 5_000;
 
 export type PreviewSemaphoreResourceClient = {
+  ensurePreviewInventory: (input: { appSlug: string; type: string }) => Promise<void>;
   acquire: (input: { leaseMs: number; type: string; waitMs?: number }) => Promise<{
     expiresAt: number;
     leaseId: string;
@@ -526,6 +527,10 @@ async function createPreviewEnvironment(
     const semaphore = params.createPreviewSemaphoreResourceClient({
       semaphoreApiToken: params.semaphoreApiToken,
       semaphoreBaseUrl: params.semaphoreBaseUrl,
+    });
+    await semaphore.ensurePreviewInventory({
+      appSlug: params.appSlug,
+      type: params.previewResourceType,
     });
     lease = await semaphore.acquire({
       type: params.previewResourceType,
