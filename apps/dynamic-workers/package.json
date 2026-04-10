@@ -1,0 +1,24 @@
+{
+  "name": "@iterate-com/dynamic-workers",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "imports": {
+    "~/*": "./src/*"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.7"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.14.0",
+    "@cloudflare/workers-types": "^4.20260317.1",
+    "typescript": "^5.9.3",
+    "vitest": "4.1.0-beta.6",
+    "wrangler": "^4.75.0"
+  }
+}

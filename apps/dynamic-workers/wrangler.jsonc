@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dynamic-worker-sqlite",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-01",
+
+  // Worker Loader binding — gives access to env.LOADER
+  "worker_loaders": [{ "binding": "LOADER" }],
+
+  // Durable Object bindings
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DYNAMIC_WORKER_DO",
+        "class_name": "DynamicWorkerDO",
+      },
+    ],
+  },
+
+  // SQLite-backed DO migration
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DynamicWorkerDO"] }],
+
+  // Include SQL migration files in the deploy bundle
+  "rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
+}

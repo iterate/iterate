@@ -1,0 +1,18 @@
+{
+  "include": ["**/*.ts"],
+  "exclude": ["**/*.test.ts"],
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "ESNext",
+    "paths": {
+      "~/*": ["./src/*"]
+    },
+    "lib": ["ES2024"],
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types"],
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true
+  }
+}
