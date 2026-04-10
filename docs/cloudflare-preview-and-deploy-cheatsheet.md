@@ -2,7 +2,7 @@
 
 ## Cheat sheet
 
-- In scope apps: `example`, `events`, `semaphore`, `ingress-proxy`
+- In scope apps: `codemode`, `example`, `events`, `semaphore`, `ingress-proxy`
 - PR previews are owned by one workflow: `Cloudflare Previews`
 - Production deploys are owned by per-app workflows:
   - `Deploy Example`
