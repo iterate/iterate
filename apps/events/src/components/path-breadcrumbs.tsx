@@ -25,6 +25,11 @@ import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 import { getOrpc } from "~/orpc/client.ts";
 
+type BreadcrumbSearch = {
+  projectSlug?: string;
+  [key: string]: unknown;
+};
+
 const CHILD_STREAM_SEGMENT_PATTERN = /^[a-z0-9_-]+$/;
 
 export function PathBreadcrumbs() {
@@ -173,7 +178,6 @@ function StreamChildrenBreadcrumb({
               }}
             >
               <Input
-                autoFocus
                 value={newChildSegment}
                 onChange={(event) => setNewChildSegment(event.currentTarget.value)}
                 onKeyDown={(event) => {
@@ -266,7 +270,12 @@ function renderBreadcrumbLink({
     );
   }
 
-  return <Link to={crumb.to ?? "/"} search={(previous) => ({ ...previous, projectSlug })} />;
+  return (
+    <Link
+      to={crumb.to ?? "/"}
+      search={(previous: BreadcrumbSearch) => ({ ...previous, projectSlug })}
+    />
+  );
 }
 
 function getStreamSegmentLabel(path: StreamPathType) {

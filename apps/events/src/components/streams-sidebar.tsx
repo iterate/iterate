@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/events-contract";
 import { Badge } from "@iterate-com/ui/components/badge";
@@ -30,6 +30,14 @@ import {
 import { type StreamRendererMode } from "~/lib/stream-feed-types.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
+
+type StreamLinkSearch = {
+  composer?: string;
+  event?: number;
+  projectSlug?: string;
+  renderer?: string;
+  [key: string]: unknown;
+};
 
 export function StreamsSidebar() {
   const navigate = useNavigate();
@@ -83,7 +91,7 @@ export function StreamsSidebar() {
     void navigate({
       to: "/streams/$/",
       params: { _splat: streamPathToSplat(path) },
-      search: (previous) => ({
+      search: (previous: StreamLinkSearch) => ({
         ...previous,
         ...streamSearch,
       }),
@@ -344,7 +352,7 @@ function StreamPathLink({
       params={{ _splat: streamPathToSplat(path) }}
       search={streamSearch}
       className="flex min-w-0 flex-1 items-center justify-between gap-2"
-      onClick={(event) => {
+      onClick={(event: ReactMouseEvent<HTMLAnchorElement>) => {
         event.stopPropagation();
       }}
     >

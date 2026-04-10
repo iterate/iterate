@@ -1,10 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import type { ContractRouterClient } from "@orpc/contract";
 import {
   PullProcessorRuntime,
-  eventsContract,
   type Event,
+  type EventsORPCClient,
   type Processor,
   type StreamPath,
 } from "../apps/events-contract/src/sdk.ts";
@@ -14,8 +13,37 @@ import { createEventsClient } from "./sdk.ts";
 export const defaultWorkshopBaseUrl = "https://events.iterate.com";
 export const defaultWorkshopProjectSlug = "public";
 
-type ProjectScopedEventsClient = ContractRouterClient<typeof eventsContract>;
+type ProjectScopedEventsClient = EventsORPCClient;
 type StoppableProcessor = Processor<unknown> & { stop?: () => void };
+type WorkshopProcessorsHandle = {
+  runPromise: Promise<void[]>;
+  stop(): void;
+  stopAndWait(timeoutMs?: number): Promise<void>;
+};
+
+export type WorkshopTestHarness = {
+  baseUrl: string;
+  client: EventsORPCClient;
+  projectSlug: string;
+  runRootPath: StreamPath;
+  append(args: { path: StreamPath; event: EventInput }): ReturnType<EventsORPCClient["append"]>;
+  createTestStreamPath(testName: string): StreamPath;
+  createTestChildStreamPath(args: { childSlug: string; testName: string }): StreamPath;
+  collectEvents(streamPath: StreamPath): Promise<Event[]>;
+  startProcessors(args: {
+    processors: readonly StoppableProcessor[];
+    streamPath: StreamPath;
+  }): Promise<WorkshopProcessorsHandle>;
+  stream(
+    args: Parameters<ProjectScopedEventsClient["stream"]>[0],
+    options?: Parameters<ProjectScopedEventsClient["stream"]>[1],
+  ): ReturnType<ProjectScopedEventsClient["stream"]>;
+  waitForEvent(args: {
+    predicate: (event: Event) => boolean;
+    streamPath: StreamPath;
+    timeoutMs?: number;
+  }): Promise<Event>;
+};
 
 export function resolveWorkshopBaseUrl(value = process.env.BASE_URL) {
   const trimmed = value?.trim();
@@ -40,7 +68,7 @@ export function createProjectScopedEventsClient({
 }: {
   baseUrl: string;
   projectSlug: string;
-}) {
+}): ProjectScopedEventsClient {
   return createEventsClient({ baseUrl, projectSlug });
 }
 
@@ -52,7 +80,7 @@ export function createWorkshopTestHarness({
   baseUrl?: string;
   projectSlug?: string;
   runRootPath?: StreamPath;
-} = {}) {
+} = {}): WorkshopTestHarness {
   const client = createEventsClient({ baseUrl, projectSlug });
 
   return {
@@ -94,20 +122,21 @@ export function createWorkshopTestHarness({
       );
       const runPromise = Promise.all(runtimes.map((runtime) => runtime.run()));
       await delay(1_000);
+      const stop = () => {
+        for (const processor of processors) {
+          processor.stop?.();
+        }
+
+        for (const runtime of runtimes) {
+          runtime.stop();
+        }
+      };
 
       return {
         runPromise,
-        stop() {
-          for (const processor of processors) {
-            processor.stop?.();
-          }
-
-          for (const runtime of runtimes) {
-            runtime.stop();
-          }
-        },
+        stop,
         async stopAndWait(timeoutMs = 2_000) {
-          this.stop();
+          stop();
           await Promise.race([runPromise.catch(() => undefined), delay(timeoutMs)]);
         },
       };

@@ -88,6 +88,14 @@ import type {
   StreamResumedFeedItem,
 } from "~/lib/stream-feed-types.ts";
 
+type StreamLinkSearch = {
+  composer?: string;
+  event?: number;
+  projectSlug?: string;
+  renderer?: string;
+  [key: string]: unknown;
+};
+
 export function StreamEventFeed({
   feed,
   displayFeed,
@@ -293,7 +301,7 @@ function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) 
         <Link
           to="/streams/$/"
           params={{ _splat: streamPathToSplat(item.createdPath) }}
-          search={(previous) => ({
+          search={(previous: StreamLinkSearch) => ({
             event: undefined,
             composer: previous.composer ?? defaultStreamViewSearch.composer,
             projectSlug,

@@ -19,6 +19,14 @@ import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { projectSlugSearchParam } from "~/lib/project-slug.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 
+type StreamLinkSearch = {
+  composer?: string;
+  event?: number;
+  projectSlug?: string;
+  renderer?: string;
+  [key: string]: unknown;
+};
+
 export function AppSidebar() {
   return (
     <SidebarShell
@@ -62,7 +70,7 @@ function AppSidebarBrand() {
           render={
             <Link
               to="/streams/"
-              search={(previous) => ({
+              search={(previous: StreamLinkSearch) => ({
                 ...previous,
                 projectSlug,
                 event: defaultStreamViewSearch.event,
@@ -109,7 +117,7 @@ function AppSidebarNav() {
                   item.to === "/streams/" ? (
                     <Link
                       to={item.to}
-                      search={(previous) => ({
+                      search={(previous: StreamLinkSearch) => ({
                         ...previous,
                         projectSlug,
                         event: defaultStreamViewSearch.event,
@@ -118,7 +126,10 @@ function AppSidebarNav() {
                       })}
                     />
                   ) : (
-                    <Link to={item.to} search={(previous) => ({ ...previous, projectSlug })} />
+                    <Link
+                      to={item.to}
+                      search={(previous: StreamLinkSearch) => ({ ...previous, projectSlug })}
+                    />
                   )
                 }
                 isActive={Boolean(matchRoute({ to: item.to, fuzzy: true }))}

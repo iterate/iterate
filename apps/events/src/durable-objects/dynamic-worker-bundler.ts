@@ -15,7 +15,7 @@ export type BuildDynamicWorkerConfiguredEventOptions = {
 
 export async function buildDynamicWorkerConfiguredEvent(
   options: BuildDynamicWorkerConfiguredEventOptions,
-) {
+): Promise<DynamicWorkerConfiguredEventInputType> {
   const absoluteEntryFile = resolve(options.entryFile);
   const script = await bundleDynamicWorkerProcessor({
     absoluteEntryFile,
