@@ -21,6 +21,35 @@ export type { Event, EventType, JSONObject, StreamPath } from "./types.ts";
 export type EventsORPCClient = ContractRouterClient<typeof eventsContract>;
 
 const DEFAULT_EVENTS_BASE_URL = "https://events.iterate.com";
+// HACK:
+// Pull runtimes intentionally do not track durable "last processed" offsets.
+// That means they are safe to point at an existing stream with lots of history:
+// we reduce that history to rebuild state, but we do not re-run afterAppend()
+// and accidentally repeat side effects.
+//
+// That default is still what we want in general.
+//
+// The awkward product problem is a narrower case: in includeChildren mode we can
+// discover a brand new child stream from the live tail of the parent. That child
+// often already has a tiny seed history when we attach to it:
+//   1. stream/initialized
+//   2. maybe 1-2 user/domain events
+//
+// In that case, "never run afterAppend() for history" feels wrong, because the
+// stream was just created and those first few events are effectively happening
+// "right now".
+//
+// So we have a deliberately narrow hack:
+// - only for child runtimes discovered from the *live* tail of the parent
+// - only if the child history is tiny
+// - only if the first event is stream/initialized
+// - only if that initialized event is very recent
+//
+// If all of those are true, we replay afterAppend() for that small catch-up
+// window. We do *not* make this a general catch-up policy, because doing so
+// would reintroduce duplicated side effects when attaching to older streams.
+const LIVE_DISCOVERED_HISTORY_AFTER_APPEND_REPLAY_MAX_AGE_MS = 10_000;
+const LIVE_DISCOVERED_HISTORY_AFTER_APPEND_REPLAY_MAX_EVENT_COUNT = 5;
 
 export function createEventsClient(baseUrl: string = DEFAULT_EVENTS_BASE_URL): EventsORPCClient {
   return createORPCClient(
@@ -119,9 +148,15 @@ type PullSubscriptionRuntimeLogger<State> = {
   subscriptionStart(args: { streamPath: StreamPath }): void;
 };
 
+type HistoryAfterAppendReplayConfig = {
+  maxAgeMs: number;
+  maxEventCount: number;
+};
+
 class PullSubscriptionProcessorRuntime<State> {
   #controller = new AbortController();
   #eventsClient: PullSubscriptionEventsClient;
+  #historyAfterAppendReplay: HistoryAfterAppendReplayConfig | undefined;
   #processorLogger: ProcessorLogger;
   #runtimeLogger: PullSubscriptionRuntimeLogger<State>;
   #processor: Processor<State>;
@@ -130,16 +165,19 @@ class PullSubscriptionProcessorRuntime<State> {
 
   constructor({
     eventsClient,
+    historyAfterAppendReplay,
     logger = console,
     processor,
     streamPath,
   }: {
     eventsClient: PullSubscriptionEventsClient;
+    historyAfterAppendReplay?: HistoryAfterAppendReplayConfig;
     logger?: ProcessorLogger;
     processor: Processor<State>;
     streamPath: StreamPath;
   }) {
     this.#eventsClient = eventsClient;
+    this.#historyAfterAppendReplay = historyAfterAppendReplay;
     this.#processorLogger = logger;
     this.#runtimeLogger = createPullSubscriptionRuntimeLogger({
       logger,
@@ -163,6 +201,27 @@ class PullSubscriptionProcessorRuntime<State> {
       );
       let lastOffset: number | undefined;
       let reducedHistoryEventCount = 0;
+      // This buffer exists only for the narrow "fresh child discovered live"
+      // hack described above.
+      //
+      // Important detail: afterAppend() must observe the reducer state as it
+      // looked immediately after *that specific event*, not the final state
+      // after all history has been reduced.
+      //
+      // To preserve that behavior without adding persistent offset tracking or
+      // refactoring the runtime around a second reducer pass, we capture a tiny
+      // list of { event, postReduceState } pairs while catching up.
+      //
+      // We only even allocate this buffer when a caller explicitly opted this
+      // runtime into history-side replay.
+      const historyAfterAppendEntries: Array<{ event: Event; state: State }> | undefined =
+        this.#processor.afterAppend != null && this.#historyAfterAppendReplay != null
+          ? []
+          : undefined;
+      // Once the history grows beyond our tiny cap, we permanently abandon the
+      // replay idea for this runtime. That keeps the hack obviously bounded and
+      // avoids "surprising" work on real historical streams.
+      let historyAfterAppendExceededMaxEventCount = false;
 
       for await (const event of historyStream) {
         if (this.#controller.signal.aborted) {
@@ -172,6 +231,26 @@ class PullSubscriptionProcessorRuntime<State> {
         lastOffset = event.offset;
         reducedHistoryEventCount += 1;
         this.#reduce(event);
+
+        if (historyAfterAppendEntries == null || historyAfterAppendExceededMaxEventCount) {
+          continue;
+        }
+
+        if (historyAfterAppendEntries.length >= this.#historyAfterAppendReplay!.maxEventCount) {
+          // We intentionally stop buffering instead of trimming or doing
+          // something clever. If the history is not tiny, we treat it as normal
+          // catch-up history and do not run history-side afterAppend().
+          historyAfterAppendExceededMaxEventCount = true;
+          continue;
+        }
+
+        historyAfterAppendEntries.push({
+          // Snapshot the post-reduce state for this exact event so a later
+          // afterAppend() replay observes the same state shape/counts it would
+          // have seen if the runtime had been attached at append time.
+          event,
+          state: structuredClone(this.#state) as State,
+        });
       }
 
       if (this.#controller.signal.aborted) {
@@ -186,6 +265,11 @@ class PullSubscriptionProcessorRuntime<State> {
           streamPath: this.#streamPath,
         });
       }
+
+      await this.#replayFreshHistoryAfterAppend({
+        entries: historyAfterAppendEntries,
+        exceededMaxEventCount: historyAfterAppendExceededMaxEventCount,
+      });
 
       const liveStream = await this.#eventsClient.stream(
         {
@@ -214,29 +298,10 @@ class PullSubscriptionProcessorRuntime<State> {
           continue;
         }
 
-        this.#runtimeLogger.afterAppendStart({ event });
-        await this.#processor.afterAppend({
-          append: async (input: ProcessorAppendInput) => {
-            const resolvedPath = resolveAppendPath({
-              currentPath: this.#streamPath,
-              nextPath: input.path,
-            });
-            const result = await this.#eventsClient.append({
-              path: resolvedPath,
-              event: input.event,
-            });
-            this.#runtimeLogger.appendedEvent({
-              appendedEvent: result.event,
-              sourceEvent: event,
-              targetPath: input.path,
-            });
-            return result.event;
-          },
+        await this.#runAfterAppend({
           event,
-          logger: this.#processorLogger,
           state: this.#state,
         });
-        this.#runtimeLogger.afterAppendComplete({ event });
       }
     } catch (error) {
       if (this.#controller.signal.aborted && isAbortError(error)) {
@@ -261,6 +326,90 @@ class PullSubscriptionProcessorRuntime<State> {
 
   getProcessorSlug() {
     return this.#processor.slug;
+  }
+
+  async #replayFreshHistoryAfterAppend(args: {
+    entries: Array<{ event: Event; state: State }> | undefined;
+    exceededMaxEventCount: boolean;
+  }) {
+    // This whole method is an intentional compromise.
+    //
+    // Normal pull-runtime semantics:
+    // - history rebuilds state
+    // - live events get afterAppend()
+    //
+    // Special-case semantics here:
+    // - if this runtime was spawned because we *just now* discovered a child
+    //   stream on the live tail of the parent
+    // - and that child looks like a freshly created stream with a tiny history
+    // then replay afterAppend() for that tiny history window.
+    //
+    // The goal is to recover the intuitive behavior for brand new streams
+    // without turning historical catch-up into a side-effect replay engine.
+    if (
+      this.#processor.afterAppend == null ||
+      this.#historyAfterAppendReplay == null ||
+      args.entries == null ||
+      args.entries.length === 0 ||
+      args.exceededMaxEventCount
+    ) {
+      return;
+    }
+
+    const firstEvent = args.entries[0]?.event;
+    // Require stream/initialized as the first event. This keeps the hack tied
+    // to streams that really look newly created, rather than any arbitrary
+    // stream whose recent history happened to be short.
+    if (firstEvent == null || !StreamInitializedEvent.safeParse(firstEvent).success) {
+      return;
+    }
+
+    const initializedAt = Date.parse(firstEvent.createdAt);
+    // Age gate: if the stream was not initialized recently, we fall back to the
+    // normal "history is reduce-only" behavior. This avoids replaying side
+    // effects when a runtime merely attaches late to an already-existing stream.
+    if (
+      !Number.isFinite(initializedAt) ||
+      Date.now() - initializedAt > this.#historyAfterAppendReplay.maxAgeMs
+    ) {
+      return;
+    }
+
+    for (const entry of args.entries) {
+      // Each entry carries the post-reduce state for *that* source event.
+      // This is the key correctness property for the hack.
+      await this.#runAfterAppend(entry);
+    }
+  }
+
+  async #runAfterAppend(args: { event: Event; state: State }) {
+    if (this.#processor.afterAppend == null) {
+      return;
+    }
+
+    this.#runtimeLogger.afterAppendStart({ event: args.event });
+    await this.#processor.afterAppend({
+      append: async (input: ProcessorAppendInput) => {
+        const resolvedPath = resolveAppendPath({
+          currentPath: this.#streamPath,
+          nextPath: input.path,
+        });
+        const result = await this.#eventsClient.append({
+          path: resolvedPath,
+          event: input.event,
+        });
+        this.#runtimeLogger.appendedEvent({
+          appendedEvent: result.event,
+          sourceEvent: args.event,
+          targetPath: input.path,
+        });
+        return result.event;
+      },
+      event: args.event,
+      logger: this.#processorLogger,
+      state: args.state,
+    });
+    this.#runtimeLogger.afterAppendComplete({ event: args.event });
   }
 
   #reduce(event: Event) {
@@ -550,7 +699,7 @@ export class PullProcessorRuntime<State> {
         }
 
         lastOffset = event.offset;
-        this.#startChildRuntimeIfDiscovered(event, streamPattern);
+        this.#startChildRuntimeIfDiscovered(event, streamPattern, false);
       }
 
       if (this.#fatalError != null || this.#controller.signal.aborted) {
@@ -575,7 +724,7 @@ export class PullProcessorRuntime<State> {
         }
 
         lastOffset = event.offset;
-        this.#startChildRuntimeIfDiscovered(event, streamPattern);
+        this.#startChildRuntimeIfDiscovered(event, streamPattern, true);
 
         if (this.#fatalError != null) {
           break;
@@ -599,7 +748,11 @@ export class PullProcessorRuntime<State> {
     }
   }
 
-  #startChildRuntimeIfDiscovered(event: Event, streamPattern: string) {
+  #startChildRuntimeIfDiscovered(
+    event: Event,
+    streamPattern: string,
+    discoveredDuringLiveTail: boolean,
+  ) {
     const discoveredPath = getDiscoveredStreamPath(event);
     if (discoveredPath == null) {
       return;
@@ -620,6 +773,19 @@ export class PullProcessorRuntime<State> {
     try {
       const runtime = new PullSubscriptionProcessorRuntime({
         eventsClient: this.#eventsClient,
+        // HACK:
+        // Only child streams discovered from the parent's live tail are allowed
+        // to do the tiny history-side afterAppend() replay.
+        //
+        // Child streams discovered while replaying the parent's own history are
+        // treated as ordinary historical streams. Those should rebuild state but
+        // should not re-fire side effects.
+        historyAfterAppendReplay: discoveredDuringLiveTail
+          ? {
+              maxAgeMs: LIVE_DISCOVERED_HISTORY_AFTER_APPEND_REPLAY_MAX_AGE_MS,
+              maxEventCount: LIVE_DISCOVERED_HISTORY_AFTER_APPEND_REPLAY_MAX_EVENT_COUNT,
+            }
+          : undefined,
         logger: this.#processorLogger,
         processor: this.#processor,
         streamPath: discoveredPath,

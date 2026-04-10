@@ -1,7 +1,11 @@
 import { ORPCError, implement } from "@orpc/server";
 import { eventsContract, ProjectSlug } from "@iterate-com/events-contract";
 import type { AppContext } from "~/context.ts";
-import { defaultProjectSlug, iterateProjectHeader } from "~/lib/project-slug.ts";
+import {
+  defaultProjectSlug,
+  iterateProjectHeader,
+  resolveProjectSlug,
+} from "~/lib/project-slug.ts";
 
 export const os = implement(eventsContract).$context<AppContext>();
 
@@ -9,8 +13,10 @@ export const os = implement(eventsContract).$context<AppContext>();
 // handlers can depend on validated context instead of reading Request globals:
 // https://orpc.dev/docs/middleware
 export const withProject = os.middleware(({ context, next }) => {
-  const rawProjectSlug =
-    context.rawRequest?.headers.get(iterateProjectHeader) ?? defaultProjectSlug;
+  const rawProjectSlug = resolveProjectSlug({
+    url: context.rawRequest?.url,
+    headerValue: context.rawRequest?.headers.get(iterateProjectHeader) ?? defaultProjectSlug,
+  });
   const parsedProjectSlug = ProjectSlug.safeParse(rawProjectSlug);
 
   if (!parsedProjectSlug.success) {

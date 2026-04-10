@@ -516,7 +516,7 @@ export const bashmodeBlockAddedPage = {
     "Shell script payload for processors that run bash after append (workshop bashmode pattern).",
   payloadExample: {
     script: [
-      "curl -H 'Content-Type: application/json'  \\",
+      "curl -sH 'Content-Type: application/json'  \\",
       '  --data \'{"type": "hello-world"}\' \\',
       '  "https://events.iterate.com/api/streams/"',
     ].join("\n"),

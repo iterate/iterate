@@ -182,6 +182,15 @@ importers:
       '@slack/web-api':
         specifier: ^7.15.0
         version: 7.15.0
+      '@tanstack/ai':
+        specifier: ^0.2.2
+        version: 0.2.2
+      '@tanstack/ai-code-mode':
+        specifier: ^0.1.0
+        version: 0.1.0(@tanstack/ai@0.2.2)(zod@4.3.6)
+      '@tanstack/ai-openai':
+        specifier: ^0.7.3
+        version: 0.7.3(@tanstack/ai-client@0.7.7)(@tanstack/ai@0.2.2)(ws@8.19.0)(zod@4.3.6)
       dedent:
         specifier: ^1.7.2
         version: 1.7.2
@@ -194,6 +203,9 @@ importers:
       schematch:
         specifier: 0.2.1
         version: 0.2.1
+      tinyexec:
+        specifier: ^1.1.1
+        version: 1.1.1
       trpc-cli:
         specifier: 0.14.0
         version: 0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
@@ -8691,6 +8703,32 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7
 
+  '@tanstack/ai-client@0.7.7':
+    resolution: {integrity: sha512-Z4BcVgtYMaeSp46UcRzKWvG2SYC3M0VW2jYaWGKRrTouQ71+3C0DREZr8MYZr1gAkCCcQqqWPejKkYdJ7+cLSQ==}
+
+  '@tanstack/ai-code-mode@0.1.0':
+    resolution: {integrity: sha512-44N6ZHNvsvsJglpgoG9/nDo0mHt1JMx47vg5I9MdztY0wjWekHyJMpT79hd8zJmEHXPWd/w/tcG0cUbkXfzj/g==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@tanstack/ai': workspace:*
+      zod: ^3.0.0 || ^4.0.0
+
+  '@tanstack/ai-event-client@0.2.0':
+    resolution: {integrity: sha512-1O7PbBlSo0gCrv4/bmOvnemZ6Cvf+kZmHqug19JEz8Bj4/anup3GkwvKBk8XzEvPIB+vQb4GL9TLN4Tfo6ZCkA==}
+    peerDependencies:
+      '@tanstack/ai': 0.10.0
+
+  '@tanstack/ai-openai@0.7.3':
+    resolution: {integrity: sha512-xdxTR7E/BzeQcFte/chDA//2WpZQqDQF4op1TgKNoaTqffW9+JMlSubaZbMkawtJoImVCGjZoPVkUfb8aRldNA==}
+    peerDependencies:
+      '@tanstack/ai': ^0.10.0
+      '@tanstack/ai-client': ^0.7.7
+      zod: ^4.0.0
+
+  '@tanstack/ai@0.10.0':
+    resolution: {integrity: sha512-b1GDenJs2udQfjFMnAWZ6WX9RLg04O9wC85V4cSD8phuVMJscs+Qp0UkNj7FTc+V1ggqf4Pz1jLFfqjLO2z3mg==}
+    engines: {node: '>=18'}
+
   '@tanstack/ai@0.2.2':
     resolution: {integrity: sha512-qqnUSKYMuJnGhiL6t8BAu3Joc9QhQTJIxUIWgQlObDhdY+dCJMLyv+Z7Zw+WqzCCjDfvWmHgLNWDI8+f3KkOPw==}
     engines: {node: '>=18'}
@@ -15571,6 +15609,10 @@ packages:
 
   tinyexec@1.0.2:
     resolution: {integrity: sha512-W/KYk+NFhkmsYpuHq5JykngiOCnxeVL8v8dFnqxSD8qEEdRfXk1SDM6JzNqcERbcGYj9tMrDQBYV9cjgnunFIg==}
+    engines: {node: '>=18'}
+
+  tinyexec@1.1.1:
+    resolution: {integrity: sha512-VKS/ZaQhhkKFMANmAOhhXVoIfBXblQxGX1myCQ2faQrfmobMftXeJPcZGp0gS07ocvGJWDLZGyOZDadDBqYIJg==}
     engines: {node: '>=18'}
 
   tinyglobby@0.2.15:
@@ -23782,6 +23824,36 @@ snapshots:
       '@tailwindcss/oxide': 4.2.1
       tailwindcss: 4.2.1
       vite: 8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+
+  '@tanstack/ai-client@0.7.7':
+    dependencies:
+      '@tanstack/ai': 0.10.0
+      '@tanstack/ai-event-client': 0.2.0(@tanstack/ai@0.10.0)
+
+  '@tanstack/ai-code-mode@0.1.0(@tanstack/ai@0.2.2)(zod@4.3.6)':
+    dependencies:
+      '@tanstack/ai': 0.2.2
+      esbuild: 0.25.12
+      zod: 4.3.6
+
+  '@tanstack/ai-event-client@0.2.0(@tanstack/ai@0.10.0)':
+    dependencies:
+      '@tanstack/ai': 0.10.0
+      '@tanstack/devtools-event-client': 0.4.1
+
+  '@tanstack/ai-openai@0.7.3(@tanstack/ai-client@0.7.7)(@tanstack/ai@0.2.2)(ws@8.19.0)(zod@4.3.6)':
+    dependencies:
+      '@tanstack/ai': 0.2.2
+      '@tanstack/ai-client': 0.7.7
+      openai: 6.33.0(ws@8.19.0)(zod@4.3.6)
+      zod: 4.3.6
+    transitivePeerDependencies:
+      - ws
+
+  '@tanstack/ai@0.10.0':
+    dependencies:
+      '@tanstack/ai-event-client': 0.2.0(@tanstack/ai@0.10.0)
+      partial-json: 0.1.7
 
   '@tanstack/ai@0.2.2':
     dependencies:
@@ -32288,6 +32360,8 @@ snapshots:
 
   tinyexec@1.0.2: {}
 
+  tinyexec@1.1.1: {}
+
   tinyglobby@0.2.15:
     dependencies:
       fdir: 6.5.0(picomatch@4.0.3)
@@ -33126,7 +33200,7 @@ snapshots:
       picomatch: 4.0.3
       std-env: 3.10.0
       tinybench: 2.9.0
-      tinyexec: 1.0.2
+      tinyexec: 1.1.1
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
       vite: 7.3.1(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
@@ -33166,7 +33240,7 @@ snapshots:
       picomatch: 4.0.3
       std-env: 3.10.0
       tinybench: 2.9.0
-      tinyexec: 1.0.2
+      tinyexec: 1.1.1
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
       vite: 7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
@@ -33206,7 +33280,7 @@ snapshots:
       picomatch: 4.0.3
       std-env: 3.10.0
       tinybench: 2.9.0
-      tinyexec: 1.0.2
+      tinyexec: 1.1.1
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
       vite: 7.3.1(@types/node@25.5.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)

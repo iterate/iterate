@@ -1,11 +1,16 @@
 import type { ContractRouterClient } from "@orpc/contract";
 import { QueryClient } from "@tanstack/react-query";
 import { createORPCClient } from "@orpc/client";
+import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import { getGlobalStartContext } from "@tanstack/react-start";
 import { eventsContract } from "@iterate-com/events-contract";
-import { iterateProjectHeader, resolveProjectSlug } from "~/lib/project-slug.ts";
+import {
+  iterateProjectHeader,
+  projectSlugSearchParam,
+  resolveProjectSlug,
+} from "~/lib/project-slug.ts";
 
 const DEFAULT_API_BASE_URL = "/api";
 
@@ -103,6 +108,13 @@ function createFetchWithProjectHeader() {
   };
 }
 
+function resolveCurrentProjectSlug() {
+  return resolveProjectSlug({
+    url: getCurrentUrl(),
+    headerValue: getCurrentHeaderValue(iterateProjectHeader),
+  });
+}
+
 function makeOrpcClient(options: OrpcClientOptions = {}): OrpcClient {
   return createORPCClient(
     new OpenAPILink(eventsContract, {
@@ -110,6 +122,21 @@ function makeOrpcClient(options: OrpcClientOptions = {}): OrpcClient {
       fetch: createFetchWithProjectHeader(),
     }),
   ) as OrpcClient;
+}
+
+export function createBrowserWebSocketClient(options: OrpcClientOptions = {}) {
+  const apiUrl = new URL(resolveApiUrl(options.baseUrl ?? configuredBaseUrl));
+  apiUrl.pathname = "/api/orpc-ws";
+  apiUrl.protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
+  apiUrl.searchParams.set(projectSlugSearchParam, resolveCurrentProjectSlug());
+
+  const websocket = new WebSocket(apiUrl.toString());
+  const client = createORPCClient(new WebSocketRPCLink({ websocket })) as OrpcClient;
+
+  return {
+    client,
+    close: () => websocket.close(),
+  };
 }
 
 function createBrowserOrpcState(options: OrpcClientOptions = {}) {

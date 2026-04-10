@@ -447,6 +447,113 @@ async function testIncludeChildrenWatchesExistingAndNewDescendantStreams() {
   await runPromise;
 }
 
+async function testLiveDiscoveredFreshChildReplaysRecentHistoryAfterAppendWithPerEventState() {
+  const teamPath = StreamPath.parse("/team");
+  const freshChildPath = StreamPath.parse("/team/fresh");
+  const recentCreatedAt = new Date().toISOString();
+  const client = new MockEventsClient({
+    [teamPath]: [makeInitializedEvent({ streamPath: teamPath, offset: 1 })],
+    [freshChildPath]: [
+      makeInitializedEvent({
+        streamPath: freshChildPath,
+        offset: 1,
+        createdAt: recentCreatedAt,
+      }),
+      makeGenericEvent({
+        streamPath: freshChildPath,
+        offset: 2,
+        type: "tick",
+        payload: { source: "history-1" },
+        createdAt: recentCreatedAt,
+      }),
+      makeGenericEvent({
+        streamPath: freshChildPath,
+        offset: 3,
+        type: "tick",
+        payload: { source: "history-2" },
+        createdAt: recentCreatedAt,
+      }),
+    ],
+  });
+
+  const runtime = new PullProcessorRuntime({
+    eventsClient: client,
+    logger: silentLogger,
+    path: "/team",
+    processor: defineProcessor<{ tickCount: number }>(() => ({
+      slug: "fresh-child-history-replay",
+      initialState: { tickCount: 0 },
+      reduce: ({ event, state }) => {
+        if (event.type !== "tick") {
+          return state;
+        }
+
+        return { tickCount: state.tickCount + 1 };
+      },
+      afterAppend: async ({ append, event, state }) => {
+        if (event.type !== "tick") {
+          return;
+        }
+
+        await append({
+          event: {
+            type: "processed",
+            payload: {
+              sourceOffset: event.offset,
+              tickCount: state.tickCount,
+            },
+          },
+        });
+      },
+    })),
+  });
+
+  const runPromise = runtime.run();
+
+  await client.waitForLiveSubscription(teamPath, 2);
+  client.emit(
+    teamPath,
+    makeChildStreamCreatedEvent({
+      offset: 2,
+      childPath: freshChildPath,
+      streamPath: teamPath,
+    }),
+  );
+
+  await client.waitForLiveSubscription(freshChildPath);
+  await client.waitForAppendCount(2);
+
+  assert.deepEqual(
+    client.appended.map((entry) => ({
+      path: entry.path,
+      type: entry.event.type,
+      payload: entry.event.payload,
+    })),
+    [
+      {
+        path: freshChildPath,
+        type: "processed",
+        payload: {
+          sourceOffset: 2,
+          tickCount: 1,
+        },
+      },
+      {
+        path: freshChildPath,
+        type: "processed",
+        payload: {
+          sourceOffset: 3,
+          tickCount: 2,
+        },
+      },
+    ],
+  );
+  assert.deepEqual(runtime.getState(freshChildPath), { tickCount: 2 });
+
+  runtime.stop();
+  await runPromise;
+}
+
 async function testProcessorAppendResolvesCurrentAbsoluteAndRelativePaths() {
   const teamAPath = StreamPath.parse("/team/a");
   const client = new MockEventsClient({
@@ -1315,7 +1422,11 @@ function stripAnsi(value: string) {
   return value.replace(new RegExp(String.raw`\u001b\[[0-9;]*m`, "g"), "");
 }
 
-function makeInitializedEvent(args: { streamPath: StreamPathType; offset: number }): Event {
+function makeInitializedEvent(args: {
+  streamPath: StreamPathType;
+  offset: number;
+  createdAt?: string;
+}): Event {
   return makeEvent({
     streamPath: args.streamPath,
     offset: args.offset,
@@ -1324,6 +1435,7 @@ function makeInitializedEvent(args: { streamPath: StreamPathType; offset: number
       projectSlug: "public",
       path: args.streamPath,
     },
+    createdAt: args.createdAt,
   });
 }
 
@@ -1347,6 +1459,7 @@ function makeGenericEvent(args: {
   offset: number;
   type: string;
   payload: Record<string, string>;
+  createdAt?: string;
 }): Event {
   return makeEvent(args);
 }
@@ -1358,6 +1471,7 @@ function makeEvent(args: {
   payload: EventInput["payload"];
   metadata?: EventInput["metadata"];
   idempotencyKey?: string;
+  createdAt?: string;
 }): Event {
   return EventSchema.parse({
     streamPath: args.streamPath,
@@ -1366,7 +1480,7 @@ function makeEvent(args: {
     payload: args.payload ?? {},
     metadata: args.metadata,
     idempotencyKey: args.idempotencyKey,
-    createdAt: new Date(args.offset * 1_000).toISOString(),
+    createdAt: args.createdAt ?? new Date(args.offset * 1_000).toISOString(),
   });
 }
 
@@ -1374,6 +1488,7 @@ await testSharedProcessorDefinitionKeepsPerRuntimeState();
 await testStatelessProcessorCanOmitInitialState();
 await testReducerCanSkipReturningState();
 await testIncludeChildrenWatchesExistingAndNewDescendantStreams();
+await testLiveDiscoveredFreshChildReplaysRecentHistoryAfterAppendWithPerEventState();
 await testProcessorAppendResolvesCurrentAbsoluteAndRelativePaths();
 await testProcessorAppendRejectsInvalidRelativePaths();
 await testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase();
