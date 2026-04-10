@@ -54,6 +54,18 @@ async function ensureOpenAiSecret(client: OrpcClient) {
 }
 
 describe("live codemode", () => {
+  it("lists the OpenAI package-project example", async () => {
+    const baseUrl = requireCodemodeBaseUrl();
+
+    const response = await fetch(`${baseUrl}/examples`);
+    expect(response.status).toBe(200);
+
+    const body = await response.text();
+    expect(body).toContain("OpenAI Package Project");
+    expect(body).toContain("Package project");
+    expect(body).toContain("openai.apiKey");
+  });
+
   it("serves the new run page", async () => {
     const baseUrl = requireCodemodeBaseUrl();
 
