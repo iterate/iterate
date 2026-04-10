@@ -125,6 +125,40 @@ export default {
     }
   });
 
+  test("preserves node builtins when nodejs_compat is enabled", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dynamic-worker-bundler-"));
+    const entryFile = join(directory, "node-compat-processor.ts");
+
+    await writeFile(
+      entryFile,
+      `
+import { gunzipSync } from "node:zlib";
+
+export default {
+  slug: "node-compat-processor",
+  initialState: {},
+  reduce({ state }) {
+    gunzipSync(new Uint8Array([31, 139, 8, 0, 0, 0, 0, 0, 0, 3]));
+    return state;
+  },
+};
+      `.trim(),
+    );
+
+    try {
+      const configuredEvent = await buildDynamicWorkerConfiguredEvent({
+        compatibilityFlags: ["nodejs_compat"],
+        entryFile,
+      });
+
+      expect(configuredEvent.payload.compatibilityFlags).toEqual(["nodejs_compat"]);
+      expect(configuredEvent.payload.script).toContain('from "node:zlib"');
+      expect(configuredEvent.payload.script).toContain("gunzipSync");
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   test("allows outbound gateway config without injected headers", async () => {
     const directory = await mkdtemp(join(tmpdir(), "dynamic-worker-bundler-"));
     const entryFile = join(directory, "gateway-only-processor.ts");

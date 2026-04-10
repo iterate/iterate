@@ -18,6 +18,7 @@ type DeployProcessorEventsClient = Pick<EventsORPCClient, "append">;
 export type DeployProcessorOptions = {
   baseUrl?: string;
   client?: DeployProcessorEventsClient;
+  compatibilityFlags?: string[];
   eventJson?: string;
   file: string;
   outboundGateway?: boolean;
@@ -51,6 +52,7 @@ export async function deployProcessor(
     preferredExportName: args.processorExportName,
   });
   const configuredEvent = await buildConfiguredEventFromProcessorFile({
+    compatibilityFlags: args.compatibilityFlags,
     file: resolvedFile,
     outboundGateway: args.outboundGateway ?? true,
     processorExportName: resolvedExport.exportName,
@@ -92,6 +94,7 @@ export async function deployProcessor(
 }
 
 export async function buildConfiguredEventFromProcessorFile(args: {
+  compatibilityFlags?: string[];
   file: string;
   outboundGateway: boolean;
   processorExportName: string;
@@ -110,6 +113,7 @@ export async function buildConfiguredEventFromProcessorFile(args: {
     );
 
     return await buildDynamicWorkerConfiguredEvent({
+      compatibilityFlags: args.compatibilityFlags,
       entryFile: wrapperFile,
       outboundGateway: args.outboundGateway
         ? {

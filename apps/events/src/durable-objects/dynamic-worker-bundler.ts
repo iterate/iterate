@@ -19,6 +19,7 @@ export async function buildDynamicWorkerConfiguredEvent(
   const absoluteEntryFile = resolve(options.entryFile);
   const script = await bundleDynamicWorkerProcessor({
     absoluteEntryFile,
+    compatibilityFlags: options.compatibilityFlags,
   });
 
   return DynamicWorkerConfiguredEventInput.parse({
@@ -41,10 +42,14 @@ export function slugFromEntryFile(entryFile: string) {
   return basename(entryFile).replace(/\.[^/.]+$/, "");
 }
 
-async function bundleDynamicWorkerProcessor(args: { absoluteEntryFile: string }) {
+async function bundleDynamicWorkerProcessor(args: {
+  absoluteEntryFile: string;
+  compatibilityFlags?: string[];
+}) {
   const result = await build({
     bundle: true,
     entryPoints: [args.absoluteEntryFile],
+    external: shouldExternalizeNodeBuiltins(args.compatibilityFlags) ? ["node:*"] : [],
     format: "esm",
     legalComments: "none",
     mainFields: ["browser", "module", "main"],
@@ -63,6 +68,10 @@ async function bundleDynamicWorkerProcessor(args: { absoluteEntryFile: string })
   }
 
   return outputFile.text.trim();
+}
+
+function shouldExternalizeNodeBuiltins(compatibilityFlags: string[] | undefined) {
+  return compatibilityFlags?.includes("nodejs_compat") ?? false;
 }
 
 const processorRuntimePackageName = ["ai", "engineer", "workshop"].join("-");
