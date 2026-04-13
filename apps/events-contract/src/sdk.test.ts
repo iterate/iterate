@@ -520,6 +520,43 @@ async function testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase() {
   assert.equal(client.liveStreamStarted, false);
 }
 
+async function testStreamQueryOffsetsAreStrictlyExclusive() {
+  const streamPath = StreamPath.parse("/exclusive");
+  const client = new MockEventsClient({
+    [streamPath]: [
+      makeInitializedEvent({ streamPath, offset: 1 }),
+      makeGenericEvent({
+        streamPath,
+        offset: 2,
+        type: "tick",
+        payload: { source: "history-2" },
+      }),
+      makeGenericEvent({
+        streamPath,
+        offset: 3,
+        type: "tick",
+        payload: { source: "history-3" },
+      }),
+    ],
+  });
+
+  const historyStream = await client.stream(
+    {
+      path: streamPath,
+      afterOffset: 1,
+      beforeOffset: 2,
+    },
+    {},
+  );
+
+  const history: Event[] = [];
+  for await (const event of historyStream) {
+    history.push(event);
+  }
+
+  assert.deepEqual(history, []);
+}
+
 async function testPushRuntimeCatchesUpAndAppendsWithCanonicalProcessorContract() {
   const streamPath = StreamPath.parse("/push/demo");
   const client = new MockEventsClient({
@@ -892,20 +929,20 @@ class MockEventsClient {
   }
 
   async stream(
-    input: { path: StreamPathType; after?: StreamCursor; before?: StreamCursor },
+    input: { path: StreamPathType; afterOffset?: StreamCursor; beforeOffset?: StreamCursor },
     options: { signal?: AbortSignal },
   ) {
     const pathEvents = this.#eventsByPath.get(input.path) ?? [];
     const endOffset = pathEvents.at(-1)?.offset ?? 0;
     const history = (this.#eventsByPath.get(input.path) ?? []).filter(
       (event) =>
-        event.offset > resolveAfterCursor(input.after, endOffset) &&
-        event.offset < resolveBeforeCursor(input.before, endOffset),
+        event.offset > resolveAfterCursor(input.afterOffset, endOffset) &&
+        event.offset < resolveBeforeCursor(input.beforeOffset, endOffset),
     );
 
     return this.#iterate({
       history,
-      live: input.before == null,
+      live: input.beforeOffset == null,
       path: input.path,
       signal: options.signal,
     });
@@ -1005,10 +1042,10 @@ class SlowHistoryEventsClient {
   }
 
   async stream(
-    input: { path: StreamPathType; after?: StreamCursor; before?: StreamCursor },
+    input: { path: StreamPathType; afterOffset?: StreamCursor; beforeOffset?: StreamCursor },
     options: { signal?: AbortSignal },
   ) {
-    if (input.before == null) {
+    if (input.beforeOffset == null) {
       this.liveStreamStarted = true;
       return waitForever(options.signal);
     }
@@ -1044,15 +1081,15 @@ class SlowPatternHistoryEventsClient extends MockEventsClient {
   }
 
   override async stream(
-    input: { path: StreamPathType; after?: StreamCursor; before?: StreamCursor },
+    input: { path: StreamPathType; afterOffset?: StreamCursor; beforeOffset?: StreamCursor },
     options: { signal?: AbortSignal },
   ) {
-    if (input.path === this.#childPath && input.before == null) {
+    if (input.path === this.#childPath && input.beforeOffset == null) {
       this.childLiveStreamStarted = true;
       return waitForever(options.signal);
     }
 
-    if (input.path === this.#childPath && input.before != null) {
+    if (input.path === this.#childPath && input.beforeOffset != null) {
       return this.#childHistory(options.signal);
     }
 
@@ -1072,16 +1109,20 @@ class SlowPatternHistoryEventsClient extends MockEventsClient {
 
 class InclusiveOffsetMockEventsClient extends MockEventsClient {
   override async stream(
-    input: { path: StreamPathType; after?: StreamCursor; before?: StreamCursor },
+    input: { path: StreamPathType; afterOffset?: StreamCursor; beforeOffset?: StreamCursor },
     options: { signal?: AbortSignal },
   ) {
     const inclusiveAfter =
-      typeof input.after !== "number" ? input.after : input.after <= 1 ? "start" : input.after - 1;
+      typeof input.afterOffset !== "number"
+        ? input.afterOffset
+        : input.afterOffset <= 1
+          ? "start"
+          : input.afterOffset - 1;
 
     return super.stream(
       {
         ...input,
-        after: inclusiveAfter,
+        afterOffset: inclusiveAfter,
       },
       options,
     );
@@ -1277,6 +1318,7 @@ await testProcessorAppendResolvesCurrentAbsoluteAndRelativePaths();
 await testProcessorAppendRejectsInvalidRelativePaths();
 await testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase();
 await testPatternRuntimeStopDuringHistoryWaitsForChildrenToExit();
+await testStreamQueryOffsetsAreStrictlyExclusive();
 await testPushRuntimeCatchesUpAndAppendsWithCanonicalProcessorContract();
 await testPushRuntimeSerializesOutOfOrderDeliveriesWithoutDoubleReducingHistory();
 await testPushRuntimeSkipsInclusiveCatchUpEventsAtLastProcessedOffset();

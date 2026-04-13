@@ -34,7 +34,7 @@ try {
   const history: ResponseInput = [];
   let lastSeenOffset: number | undefined;
 
-  for await (const event of await client.stream({ path: streamPath, before: "end" }, {})) {
+  for await (const event of await client.stream({ path: streamPath, beforeOffset: "end" }, {})) {
     lastSeenOffset = event.offset;
     updateHistoryFromEvent(history, event);
   }
@@ -42,7 +42,7 @@ try {
   console.log(`Watching ${streamPath} with ${history.length} history items`);
 
   for await (const event of await client.stream(
-    { path: streamPath, after: lastSeenOffset ?? "start" },
+    { path: streamPath, afterOffset: lastSeenOffset ?? "start" },
     {},
   )) {
     if (event.offset === lastSeenOffset) continue;
