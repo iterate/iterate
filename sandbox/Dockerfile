@@ -175,7 +175,8 @@ RUN mkdir -p /home/iterate/.local/bin && \
     cd /tmp/gogcli && \
     git checkout ${SANDBOX_GOGCLI_REF} && \
     go build -o /home/iterate/.local/bin/gog ./cmd/gog && \
-    rm -rf /tmp/gogcli
+    go clean -cache -modcache && \
+    rm -rf /tmp/gogcli /home/iterate/go/pkg /home/iterate/go/src /home/iterate/.cache/go-build
 
 # Install Archil client (persistent POSIX volumes backed by S3/R2)
 # Installs to /usr/bin/archil by default (system path)
@@ -240,6 +241,14 @@ RUN pnpm install --frozen-lockfile --offline
 # Run post-repo-sync steps (cacheable - only reruns when source changes)
 RUN bash "$ITERATE_REPO/sandbox/after-repo-sync-steps.sh"
 
+# Drop build/install caches that duplicate runtime payloads and can push Fly
+# over its 8GB unpack limit. Keep OpenCode and Playwright browser payloads.
+RUN sudo rm -rf \
+    /home/iterate/.local/share/pnpm/store \
+    /home/iterate/.cache/uv \
+    /home/iterate/.cache/node/corepack \
+    /home/iterate/.npm \
+    /tmp/*
 
 
 ARG GIT_SHA=unknown
