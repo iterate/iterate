@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, Eye, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@iterate-com/ui/components/field";
+import { Input } from "@iterate-com/ui/components/input";
 import {
   Sheet,
   SheetContent,
@@ -15,6 +16,14 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { z } from "zod";
+import type { CodemodeInput } from "@iterate-com/codemode-contract";
+import {
+  CODEMODE_PACKAGE_PROJECT_STARTER,
+  DEFAULT_CODEMODE_INPUT,
+  formatCodemodeProjectFilesYaml,
+  parseCodemodeProjectFilesYaml,
+} from "~/lib/codemode-input.ts";
+import { CodemodeNewRunSearch, resolveCodemodeSearchInput } from "~/lib/codemode-links.ts";
 import {
   CODEMODE_SOURCE_PRESETS,
   DEFAULT_CODEMODE_SOURCES,
@@ -23,13 +32,22 @@ import {
   parseCodemodeSourcesYaml,
   type CodemodeUiSource,
 } from "~/lib/codemode-sources.ts";
-import { CodemodeNewRunSearch, resolveCodemodeEditorCode } from "~/lib/codemode-links.ts";
-import { CODEMODE_V2_STARTER } from "~/lib/codemode-v2.ts";
 import { orpc, orpcClient } from "~/orpc/client.ts";
 
-const RunFunctionForm = z.object({
-  code: z.string().trim().min(1, "Code is required"),
-});
+const RunFunctionForm = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("compiled-script"),
+    compiledScript: z.string().trim().min(1, "Script is required"),
+    packageEntryPoint: z.string(),
+    packageFilesYaml: z.string(),
+  }),
+  z.object({
+    mode: z.literal("package-project"),
+    compiledScript: z.string(),
+    packageEntryPoint: z.string().trim().min(1, "Entry point is required"),
+    packageFilesYaml: z.string().trim().min(1, "Files YAML is required"),
+  }),
+]);
 
 export const Route = createFileRoute("/_app/runs-v2-new")({
   staticData: {
@@ -48,6 +66,7 @@ function NewRunPage() {
   const [sourcesYaml, setSourcesYaml] = useState(
     () => search.sources ?? DEFAULT_CODEMODE_SOURCES_YAML,
   );
+  const initialInput = resolveCodemodeSearchInput(search);
   const parsedSources = parseSourcesYamlSafely(sourcesYaml);
   const selectedSources = parsedSources.ok ? parsedSources.sources : DEFAULT_CODEMODE_SOURCES;
 
@@ -62,16 +81,15 @@ function NewRunPage() {
   });
 
   const runMutation = useMutation({
-    mutationFn: (input: { code: string; sources: CodemodeUiSource[] }) => orpcClient.runV2(input),
+    mutationFn: (input: { input: CodemodeInput; sources: CodemodeUiSource[] }) =>
+      orpcClient.runV2(input),
     onError: (error) => {
       toast.error(readErrorMessage(error));
     },
   });
 
   const form = useForm({
-    defaultValues: {
-      code: resolveCodemodeEditorCode(search.code),
-    },
+    defaultValues: createFormDefaults(initialInput),
     validators: {
       onChange: RunFunctionForm,
       onSubmit: RunFunctionForm,
@@ -82,8 +100,14 @@ function NewRunPage() {
         return;
       }
 
+      const input = buildCodemodeInputFromForm(value);
+      if (!input.ok) {
+        toast.error(input.error);
+        return;
+      }
+
       const run = await runMutation.mutateAsync({
-        code: value.code.trim(),
+        input: input.value,
         sources: parsedSources.sources,
       });
 
@@ -104,6 +128,21 @@ function NewRunPage() {
     toast.success(`Added ${readSourceTitle(source)}`);
   };
 
+  const resetStarter = () => {
+    const mode = form.getFieldValue("mode");
+
+    if (mode === "package-project") {
+      form.setFieldValue("packageEntryPoint", CODEMODE_PACKAGE_PROJECT_STARTER.entryPoint);
+      form.setFieldValue(
+        "packageFilesYaml",
+        formatCodemodeProjectFilesYaml(CODEMODE_PACKAGE_PROJECT_STARTER.files),
+      );
+      return;
+    }
+
+    form.setFieldValue("compiledScript", DEFAULT_CODEMODE_INPUT.script);
+  };
+
   return (
     <section className="space-y-6 p-4">
       <div className="flex items-start justify-between gap-4">
@@ -113,9 +152,9 @@ function NewRunPage() {
             <span>Codemode</span>
           </div>
           <p className="max-w-4xl text-sm text-muted-foreground">
-            Write the codemode function in TypeScript. Define <code>ctx</code> with YAML on the
-            right. The YAML is the real source model, and the type sheet updates from the current
-            valid source set.
+            Switch between a single compiled script and a package-backed file tree. Both run with
+            the same injected <code>ctx</code>, and package mode can bundle npm imports like{" "}
+            <code>openai</code>.
           </p>
         </div>
 
@@ -130,13 +169,7 @@ function NewRunPage() {
           <Button type="button" variant="outline" render={<Link to="/examples" />}>
             Examples
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              form.setFieldValue("code", CODEMODE_V2_STARTER);
-            }}
-          >
+          <Button type="button" variant="outline" onClick={resetStarter}>
             Reset starter
           </Button>
           <Button
@@ -171,9 +204,36 @@ function NewRunPage() {
         >
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <div>
-                <FieldLabel htmlFor="codemode-source">Codemode snippet</FieldLabel>
-                <FieldDescription>Return a value to save it with the run.</FieldDescription>
+              <div className="space-y-2">
+                <div>
+                  <FieldLabel>Runtime input</FieldLabel>
+                  <FieldDescription>
+                    Choose whether codemode should run a single module or bundle a package project.
+                  </FieldDescription>
+                </div>
+
+                <form.Subscribe selector={(state) => state.values.mode}>
+                  {(mode) => (
+                    <div className="inline-flex rounded-lg border bg-muted/40 p-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={mode === "compiled-script" ? "secondary" : "ghost"}
+                        onClick={() => form.setFieldValue("mode", "compiled-script")}
+                      >
+                        Compiled script
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={mode === "package-project" ? "secondary" : "ghost"}
+                        onClick={() => form.setFieldValue("mode", "package-project")}
+                      >
+                        Package project
+                      </Button>
+                    </div>
+                  )}
+                </form.Subscribe>
               </div>
 
               <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
@@ -185,24 +245,81 @@ function NewRunPage() {
               </form.Subscribe>
             </div>
 
-            <form.Field name="code">
-              {(field) => {
-                const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
+            <form.Subscribe selector={(state) => state.values.mode}>
+              {(mode) =>
+                mode === "package-project" ? (
+                  <div className="space-y-3">
+                    <Field>
+                      <FieldLabel htmlFor="package-entry-point">Entry point</FieldLabel>
+                      <FieldDescription>
+                        This file is imported as the project entry. Export a default async function
+                        or a named <code>run</code>.
+                      </FieldDescription>
+                      <form.Field name="packageEntryPoint">
+                        {(field) => (
+                          <Input
+                            id="package-entry-point"
+                            value={field.state.value}
+                            onChange={(event) => field.handleChange(event.target.value)}
+                          />
+                        )}
+                      </form.Field>
+                    </Field>
 
-                return (
-                  <Field data-invalid={isInvalid}>
-                    <SourceCodeBlock
-                      code={field.state.value}
-                      language="typescript"
-                      editable={true}
-                      onChange={field.handleChange}
-                      className="min-h-[42rem]"
-                    />
-                    {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
-                  </Field>
-                );
-              }}
-            </form.Field>
+                    <form.Field name="packageFilesYaml">
+                      {(field) => {
+                        const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
+
+                        return (
+                          <Field data-invalid={isInvalid}>
+                            <FieldLabel htmlFor="package-files">Project files YAML</FieldLabel>
+                            <FieldDescription>
+                              Include <code>package.json</code> plus source files. Use{" "}
+                              <code>
+                                getIterateSecret(&#123; secretKey: &quot;...&quot; &#125;)
+                              </code>{" "}
+                              inside your entry function for API keys.
+                            </FieldDescription>
+                            <SourceCodeBlock
+                              code={field.state.value}
+                              language="text"
+                              editable={true}
+                              onChange={field.handleChange}
+                              className="min-h-[42rem]"
+                            />
+                            {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
+                          </Field>
+                        );
+                      }}
+                    </form.Field>
+                  </div>
+                ) : (
+                  <form.Field name="compiledScript">
+                    {(field) => {
+                      const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
+
+                      return (
+                        <Field data-invalid={isInvalid}>
+                          <FieldLabel htmlFor="codemode-source">Compiled script</FieldLabel>
+                          <FieldDescription>
+                            Paste a bundled module or a bare async function. Export default or a
+                            named <code>run</code> for full module mode.
+                          </FieldDescription>
+                          <SourceCodeBlock
+                            code={field.state.value}
+                            language="typescript"
+                            editable={true}
+                            onChange={field.handleChange}
+                            className="min-h-[42rem]"
+                          />
+                          {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
+                        </Field>
+                      );
+                    }}
+                  </form.Field>
+                )
+              }
+            </form.Subscribe>
           </div>
 
           {isSourcesOpen ? (
@@ -293,6 +410,54 @@ function NewRunPage() {
   );
 }
 
+function createFormDefaults(input: CodemodeInput) {
+  if (input.type === "package-project") {
+    return {
+      mode: input.type,
+      compiledScript: DEFAULT_CODEMODE_INPUT.script,
+      packageEntryPoint: input.entryPoint,
+      packageFilesYaml: formatCodemodeProjectFilesYaml(input.files),
+    } as const;
+  }
+
+  return {
+    mode: input.type,
+    compiledScript: input.script,
+    packageEntryPoint: CODEMODE_PACKAGE_PROJECT_STARTER.entryPoint,
+    packageFilesYaml: formatCodemodeProjectFilesYaml(CODEMODE_PACKAGE_PROJECT_STARTER.files),
+  } as const;
+}
+
+function buildCodemodeInputFromForm(value: z.infer<typeof RunFunctionForm>) {
+  if (value.mode === "package-project") {
+    const parsedFiles = parseCodemodeProjectFilesYaml(value.packageFilesYaml);
+
+    if (!parsedFiles.ok) {
+      return {
+        ok: false as const,
+        error: parsedFiles.error,
+      };
+    }
+
+    return {
+      ok: true as const,
+      value: {
+        type: "package-project" as const,
+        entryPoint: value.packageEntryPoint.trim(),
+        files: parsedFiles.files,
+      },
+    };
+  }
+
+  return {
+    ok: true as const,
+    value: {
+      type: "compiled-script" as const,
+      script: value.compiledScript.trim(),
+    },
+  };
+}
+
 function parseSourcesYamlSafely(yamlText: string) {
   try {
     return {
@@ -318,6 +483,7 @@ function readSourceTitle(source: CodemodeUiSource) {
 
   return source.namespace?.trim() || source.url;
 }
+
 function readErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }

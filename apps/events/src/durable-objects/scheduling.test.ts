@@ -210,12 +210,14 @@ describe("scheduler control events", () => {
 
     await runDurableObjectAlarm(streamStub);
 
-    const history = await streamStub.history();
-    const finishedEvent = history.find(
-      (event) => event.type === SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
-    );
+    const finishedEvent = await waitForCondition(async () => {
+      const history = await streamStub.history();
+      return (
+        history.find((event) => event.type === SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE) || false
+      );
+    });
 
-    expect(finishedEvent?.payload).toEqual({
+    expect(finishedEvent.payload).toEqual({
       slug,
       outcome: "failed",
       nextRunAt: null,
@@ -242,12 +244,14 @@ describe("scheduler control events", () => {
 
     await runDurableObjectAlarm(streamStub);
 
-    const history = await streamStub.history();
-    const finishedEvent = history.find(
-      (event) => event.type === SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
-    );
+    const finishedEvent = await waitForCondition(async () => {
+      const history = await streamStub.history();
+      return (
+        history.find((event) => event.type === SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE) || false
+      );
+    });
 
-    expect(finishedEvent?.payload).toEqual({
+    expect(finishedEvent.payload).toEqual({
       slug,
       outcome: "failed",
       nextRunAt: null,

@@ -2,6 +2,7 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { codemodeInputLanguage } from "~/lib/codemode-input.ts";
 import { buildCodemodeNewRunSearch } from "~/lib/codemode-links.ts";
 import { formatCodemodeSourcesYaml } from "~/lib/codemode-sources.ts";
 import { summarizeCodeSnippet } from "~/lib/run-preview.ts";
@@ -57,7 +58,7 @@ function RunDetailPage() {
               <Link
                 to="/runs-v2-new"
                 search={buildCodemodeNewRunSearch({
-                  code: run.codeSnippet,
+                  input: run.input,
                   sources: run.sources,
                 })}
               />
@@ -100,7 +101,11 @@ function RunDetailPage() {
 
       <div className="space-y-2 border-t pt-6">
         <p className="text-sm font-medium">Code</p>
-        <SourceCodeBlock code={run.codeSnippet} language="typescript" className="min-h-[20rem]" />
+        <SourceCodeBlock
+          code={run.codeSnippet}
+          language={codemodeInputLanguage(run.input)}
+          className="min-h-[20rem]"
+        />
       </div>
 
       <div className="space-y-2 border-t pt-6">

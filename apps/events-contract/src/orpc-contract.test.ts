@@ -11,6 +11,7 @@ import {
 import {
   EventInput,
   InvalidEventAppendedEventInput,
+  StreamQuery,
   StreamMetadataUpdatedEventInput,
   StreamPath,
 } from "./types.ts";
@@ -65,6 +66,25 @@ const clientBuiltInEvent: ClientAppendArgs = {
 };
 
 void clientBuiltInEvent;
+
+assert.deepEqual(
+  StreamQuery.parse({
+    afterOffset: 1,
+    beforeOffset: 2,
+  }),
+  {
+    afterOffset: 1,
+    beforeOffset: 2,
+  },
+);
+
+assert.equal(
+  StreamQuery.safeParse({
+    after: 1,
+    before: 2,
+  }).success,
+  false,
+);
 
 assert.equal(
   EventInput.safeParse({

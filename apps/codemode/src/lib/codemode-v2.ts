@@ -1,3 +1,4 @@
+import type { CodemodeInput } from "@iterate-com/codemode-contract";
 import {
   AGENTUTIL_GEOCODE_OPENAPI_SOURCE,
   AGENTUTIL_WEATHER_OPENAPI_SOURCE,
@@ -13,16 +14,27 @@ import {
   WEATHER_OPENAPI_SOURCE,
   type CodemodeUiSource,
 } from "~/lib/codemode-sources.ts";
+import { CODEMODE_OPENAI_PACKAGE_PROJECT_INPUT } from "~/lib/codemode-package-project-openai.ts";
 
 export interface CodemodeExampleSnippet {
   id: string;
   title: string;
   description: string;
   code: string;
+  input?: CodemodeInput;
   sources: CodemodeUiSource[];
 }
 
 export const CODEMODE_EXAMPLES: CodemodeExampleSnippet[] = [
+  {
+    id: "openai-package-project",
+    title: "OpenAI Package Project",
+    description:
+      "Bundle a package.json project, use the openai.apiKey codemode secret as apiKey, and make an OpenAI Responses API call.",
+    input: CODEMODE_OPENAI_PACKAGE_PROJECT_INPUT,
+    sources: [],
+    code: CODEMODE_OPENAI_PACKAGE_PROJECT_INPUT.files["src/index.ts"]!,
+  },
   {
     id: "postman-echo-inline",
     title: "Inline Echo Debug",
@@ -474,4 +486,6 @@ ${indent(options.sandboxPrelude.trim(), 2)}
 }`.trim();
 }
 
-export const CODEMODE_V2_STARTER = CODEMODE_EXAMPLES[0]!.code;
+export const CODEMODE_V2_STARTER = CODEMODE_EXAMPLES.find(
+  (example) => example.id === "postman-echo-inline",
+)!.code;

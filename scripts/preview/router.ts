@@ -3,6 +3,7 @@ import { os } from "@orpc/server";
 import { z } from "zod";
 import { createSemaphoreClient } from "../../apps/semaphore-contract/src/client.ts";
 import { CloudflarePreviewAppSlug, cloudflarePreviewApps } from "./apps.ts";
+import { ensurePreviewInventory } from "./preview-inventory.ts";
 import {
   cleanupCloudflarePreviewForPullRequest,
   createCloudflarePreviewCleanupInputSchema,
@@ -45,12 +46,23 @@ function createPreviewSemaphoreClient(input: {
     apiKey: input.semaphoreApiToken,
     baseURL: input.semaphoreBaseUrl,
   });
+  const list = ({ type }: { type: string }) => semaphore.resources.list({ type });
+  const add = ({ slug, type }: { slug: string; type: string }) =>
+    semaphore.resources.add({ type, slug, data: {} });
+
   return {
+    ensurePreviewInventory: async ({ appSlug, type }: { appSlug: string; type: string }) => {
+      await ensurePreviewInventory({
+        appSlug,
+        client: { add, list },
+        type,
+      });
+    },
     acquire: ({ leaseMs, type, waitMs }: { leaseMs: number; type: string; waitMs?: number }) =>
       semaphore.resources.acquire({ leaseMs, type, waitMs }),
     release: ({ leaseId, slug, type }: { leaseId: string; slug: string; type: string }) =>
       semaphore.resources.release({ leaseId, slug, type }),
-    list: ({ type }: { type: string }) => semaphore.resources.list({ type }),
+    list,
   };
 }
 

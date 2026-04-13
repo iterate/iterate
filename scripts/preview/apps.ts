@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-export const CloudflarePreviewAppSlug = z.enum(["example", "events", "semaphore", "ingress-proxy"]);
+export const CloudflarePreviewAppSlug = z.enum([
+  "codemode",
+  "example",
+  "events",
+  "semaphore",
+  "ingress-proxy",
+]);
 
 export type CloudflarePreviewAppSlug = z.infer<typeof CloudflarePreviewAppSlug>;
 
@@ -16,6 +22,16 @@ export type CloudflarePreviewApp = {
 };
 
 export const cloudflarePreviewApps = {
+  codemode: {
+    slug: "codemode",
+    displayName: "Codemode",
+    appPath: "apps/codemode",
+    dopplerProject: "codemode",
+    paths: ["apps/codemode/**", "apps/codemode-contract/**"],
+    previewResourceType: "codemode-preview-environment",
+    previewTestBaseUrlEnvVar: "CODEMODE_BASE_URL",
+    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
+  },
   example: {
     slug: "example",
     displayName: "Example",

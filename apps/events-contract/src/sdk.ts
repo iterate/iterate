@@ -117,7 +117,7 @@ type PullSubscriptionEventsClient = {
     event: Event;
   }>;
   stream: (
-    input: { path: StreamPath; after?: StreamCursor; before?: StreamCursor },
+    input: { path: StreamPath; afterOffset?: StreamCursor; beforeOffset?: StreamCursor },
     options: { signal?: AbortSignal },
   ) => Promise<AsyncIterable<Event>>;
 };
@@ -195,7 +195,7 @@ class PullSubscriptionProcessorRuntime<State> {
       const historyStream = await this.#eventsClient.stream(
         {
           path: this.#streamPath,
-          before: "end",
+          beforeOffset: "end",
         },
         { signal: this.#controller.signal },
       );
@@ -274,7 +274,7 @@ class PullSubscriptionProcessorRuntime<State> {
       const liveStream = await this.#eventsClient.stream(
         {
           path: this.#streamPath,
-          after: toLiveTailCursor(lastOffset),
+          afterOffset: toLiveTailCursor(lastOffset),
         },
         {
           signal: this.#controller.signal,
@@ -502,8 +502,8 @@ export class PushSubscriptionProcessorRuntime<State> {
     const historyStream = await this.#eventsClient.stream(
       {
         path: this.#streamPath,
-        after: this.#lastOffset > 0 ? this.#lastOffset : "start",
-        before: targetOffset,
+        afterOffset: this.#lastOffset > 0 ? this.#lastOffset : "start",
+        beforeOffset: targetOffset,
       },
       {},
     );
@@ -688,7 +688,10 @@ export class PullProcessorRuntime<State> {
 
     try {
       const historyStream = await this.#eventsClient.stream(
-        { path: this.#path, before: "end" },
+        {
+          path: this.#path,
+          beforeOffset: "end",
+        },
         { signal: this.#controller.signal },
       );
       let lastOffset: number | undefined;
@@ -714,7 +717,10 @@ export class PullProcessorRuntime<State> {
       }
 
       const liveStream = await this.#eventsClient.stream(
-        { path: this.#path, after: toLiveTailCursor(lastOffset) },
+        {
+          path: this.#path,
+          afterOffset: toLiveTailCursor(lastOffset),
+        },
         { signal: this.#controller.signal },
       );
 

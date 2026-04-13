@@ -1,9 +1,10 @@
-import type { CodemodeSource } from "@iterate-com/codemode-contract";
+import type { CodemodeInput, CodemodeSource } from "@iterate-com/codemode-contract";
 import { z } from "zod";
+import { resolveCodemodeEditorInput, serializeCodemodeInput } from "~/lib/codemode-input.ts";
 import { formatCodemodeSourcesYaml } from "~/lib/codemode-sources.ts";
-import { CODEMODE_V2_STARTER } from "~/lib/codemode-v2.ts";
 
 export const CodemodeNewRunSearch = z.object({
+  input: z.string().optional(),
   code: z.string().optional(),
   sources: z.string().optional(),
 });
@@ -12,22 +13,29 @@ export const CodemodeExamplesSearch = z.object({
   q: z.string().optional(),
 });
 
-export function buildCodemodeNewRunSearch(options: { code: string; sources: CodemodeSource[] }) {
+export function buildCodemodeNewRunSearch(options: {
+  input?: CodemodeInput;
+  code?: string;
+  sources: CodemodeSource[];
+}) {
+  const input = options.input ?? resolveCodemodeEditorInput({ code: options.code });
+
   return {
-    code: options.code,
+    input: serializeCodemodeInput(input),
     sources: formatCodemodeSourcesYaml(options.sources),
   };
 }
 
 export function buildCodemodeNewRunHref(options: {
   origin: string;
-  code: string;
+  input?: CodemodeInput;
+  code?: string;
   sources: CodemodeSource[];
 }) {
   const search = new URLSearchParams(buildCodemodeNewRunSearch(options));
   return `${options.origin}/runs-v2-new?${search.toString()}`;
 }
 
-export function resolveCodemodeEditorCode(code?: string) {
-  return code?.trim().length ? code : CODEMODE_V2_STARTER;
+export function resolveCodemodeSearchInput(search: { input?: string; code?: string }) {
+  return resolveCodemodeEditorInput(search);
 }

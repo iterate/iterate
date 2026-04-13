@@ -59,7 +59,7 @@ describe.sequential("events auth-adjacent e2e", () => {
         eventCount: 2,
         childPaths: [],
         metadata: {},
-        processors: expectedProcessorsWithRecentEventCount(2),
+        processors: expectedProcessorsWithTokenBucketCircuitBreaker(),
       });
       expect(await projectStateResponse.json()).toEqual({
         projectSlug: "team-a",
@@ -67,7 +67,7 @@ describe.sequential("events auth-adjacent e2e", () => {
         eventCount: 2,
         childPaths: [],
         metadata: {},
-        processors: expectedProcessorsWithRecentEventCount(2),
+        processors: expectedProcessorsWithTokenBucketCircuitBreaker(),
       });
 
       const defaultProjectHistoryResponse = await app.fetch(`/api/streams/${routePathFor(path)}`);
@@ -123,13 +123,14 @@ function routePathFor(path: StreamPath) {
   return path === "/" ? "%2F" : path.slice(1).replaceAll("/", "%2F");
 }
 
-function expectedProcessorsWithRecentEventCount(count: number) {
+function expectedProcessorsWithTokenBucketCircuitBreaker() {
   return {
     "circuit-breaker": {
       paused: false,
       pauseReason: null,
       pausedAt: null,
-      recentEventTimestamps: Array.from({ length: count }, () => expect.any(String)),
+      availableTokens: expect.any(Number),
+      lastRefillAtMs: expect.any(Number),
     },
     "external-subscriber": {
       subscribersBySlug: {},

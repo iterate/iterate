@@ -452,7 +452,7 @@ export const streamPausedPage = {
   type: "https://events.iterate.com/events/stream/paused",
   summary: "Built-in control event that marks a stream as temporarily rejecting new events.",
   payloadExample: {
-    reason: "circuit breaker tripped: 100 events in under 1 second",
+    reason: "circuit breaker tripped: burst rate limit exceeded",
   },
   details: [
     "While paused, the durable object rejects all new appends except `stream/resumed`.",

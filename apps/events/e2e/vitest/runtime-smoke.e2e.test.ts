@@ -105,7 +105,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       await waitForStream(path);
 
       const rootEvents = await collectAsyncIterableUntilIdle({
-        iterable: await app.client.stream({ path: "/", before: "end" }),
+        iterable: await app.client.stream({ path: "/", beforeOffset: "end" }),
         idleMs: rootHistoryIdleTimeoutMs,
       });
       expect(rootEvents[0]).toMatchObject({
@@ -121,7 +121,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const events = await collectAsyncIterableUntilIdle({
         iterable: await app.client.stream({
           path,
-          before: "end",
+          beforeOffset: "end",
         }),
         idleMs: historyIdleTimeoutMs,
       });
@@ -145,10 +145,10 @@ describeRuntimeSmoke("events runtime smoke", () => {
         eventCount: 2,
         childPaths: [],
         metadata: {},
-        processors: expectedProcessorsWithRecentEventCount(2),
+        processors: expectedProcessorsWithTokenBucketCircuitBreaker(),
       });
 
-      const rootHistoryResponse = await app.fetch("/api/streams/%2F?before=end");
+      const rootHistoryResponse = await app.fetch("/api/streams/%2F?beforeOffset=end");
       expect(rootHistoryResponse.status).toBe(200);
       expect(await rootHistoryResponse.text()).toContain(
         "https://events.iterate.com/events/stream/initialized",
@@ -165,7 +165,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const liveStream = await app.client.stream(
         {
           path,
-          after: expectedOffset(1),
+          afterOffset: expectedOffset(1),
         },
         { signal: controller.signal },
       );
@@ -215,13 +215,14 @@ function expectedStoredOffset(value: number) {
   return value + 1;
 }
 
-function expectedProcessorsWithRecentEventCount(count: number) {
+function expectedProcessorsWithTokenBucketCircuitBreaker() {
   return {
     "circuit-breaker": {
       paused: false,
       pauseReason: null,
       pausedAt: null,
-      recentEventTimestamps: Array.from({ length: count }, () => expect.any(String)),
+      availableTokens: expect.any(Number),
+      lastRefillAtMs: expect.any(Number),
     },
     "external-subscriber": {
       subscribersBySlug: {},

@@ -130,7 +130,9 @@ function SecretsIndexPage() {
                     aria-invalid={isInvalid}
                     placeholder="token-or-password"
                   />
-                  <FieldDescription>Shown only on the detail page.</FieldDescription>
+                  <FieldDescription>
+                    Stored now, but never returned by codemode after creation.
+                  </FieldDescription>
                   {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                 </Field>
               );

@@ -44,6 +44,39 @@ export const CodemodeSource = z.discriminatedUnion("type", [
 ]);
 export type CodemodeSource = z.infer<typeof CodemodeSource>;
 
+export const CodemodeCompiledScriptInput = z.object({
+  type: z.literal("compiled-script"),
+  script: z.string().trim().min(1, "Script is required"),
+});
+export type CodemodeCompiledScriptInput = z.infer<typeof CodemodeCompiledScriptInput>;
+
+export const CodemodePackageProjectInput = z.object({
+  type: z.literal("package-project"),
+  entryPoint: z.string().trim().min(1, "Entry point is required"),
+  files: z.record(z.string(), z.string()).superRefine((files, context) => {
+    if (Object.keys(files).length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "At least one file is required",
+      });
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(files, "package.json")) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "package.json is required for package-project inputs",
+      });
+    }
+  }),
+});
+export type CodemodePackageProjectInput = z.infer<typeof CodemodePackageProjectInput>;
+
+export const CodemodeInput = z.discriminatedUnion("type", [
+  CodemodeCompiledScriptInput,
+  CodemodePackageProjectInput,
+]);
+export type CodemodeInput = z.infer<typeof CodemodeInput>;
+
 export const CodemodeSecretRecord = z.object({
   id: z.string(),
   key: z.string(),
@@ -53,15 +86,13 @@ export const CodemodeSecretRecord = z.object({
 });
 export type CodemodeSecretRecord = z.infer<typeof CodemodeSecretRecord>;
 
-export const CodemodeSecretDetail = CodemodeSecretRecord.extend({
-  value: z.string(),
-});
+export const CodemodeSecretDetail = CodemodeSecretRecord;
 export type CodemodeSecretDetail = z.infer<typeof CodemodeSecretDetail>;
 
 export const CodemodeRun = z.object({
   id: z.string(),
   runnerKind: CodemodeRunnerKind,
-  code: z.string(),
+  input: CodemodeInput,
   sources: z.array(CodemodeSource),
   result: z.string(),
   error: z.string().nullable(),
@@ -71,6 +102,7 @@ export type CodemodeRun = z.infer<typeof CodemodeRun>;
 export const CodemodeRunRecord = z.object({
   id: z.string(),
   runnerKind: CodemodeRunnerKind,
+  input: CodemodeInput,
   codeSnippet: z.string(),
   sources: z.array(CodemodeSource),
   result: z.string(),
@@ -165,7 +197,7 @@ export const codemodeContract = oc.router({
     })
     .input(
       z.object({
-        code: z.string().trim().min(1, "Code is required"),
+        input: CodemodeInput,
         sources: z.array(CodemodeSource).optional().default([]),
       }),
     )

@@ -5,6 +5,7 @@ import {
   CodemodeRunnerKind,
   CodemodeSource,
 } from "@iterate-com/codemode-contract";
+import { formatCodemodeInputForDisplay, parseStoredCodemodeInput } from "~/lib/codemode-input.ts";
 import { summarizeCodeSnippet, summarizeError, summarizeResult } from "~/lib/run-preview.ts";
 
 const StoredRun = z.object({
@@ -24,11 +25,13 @@ export const LIST_RUNS_INPUT = {
 
 export function parseCodemodeRunRecord(row: unknown) {
   const parsed = StoredRun.parse(row);
+  const input = parseStoredCodemodeInput(parsed.codeSnippet);
 
   return CodemodeRunRecord.parse({
     id: parsed.id,
     runnerKind: parsed.runnerKind,
-    codeSnippet: parsed.codeSnippet,
+    input,
+    codeSnippet: formatCodemodeInputForDisplay(input),
     sources: CodemodeSource.array().parse(JSON.parse(parsed.sourcesJson)),
     result: parsed.result,
     logs: z.array(z.string()).parse(JSON.parse(parsed.logsJson)),
