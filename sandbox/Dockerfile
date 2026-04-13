@@ -195,7 +195,8 @@ RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPEN
 ENV PATH="/home/iterate/.opencode/bin:$PATH"
 
 # Pre-download Chromium for agent-browser (pinned to version bundled with agent-browser@0.13.0)
-RUN agent-browser install
+# Comment out for now because our images are exceeding 8GB
+# RUN agent-browser install
 
 # Ensure wrapper scripts win after all PATH modifications.
 ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
