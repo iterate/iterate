@@ -14,6 +14,9 @@ const app = createEvents2AppFixture({
   baseURL: eventsBaseUrl,
 });
 const configuredEventType = "https://events.iterate.com/events/stream/dynamic-worker/configured";
+const envVarSetEventType = "https://events.iterate.com/events/stream/dynamic-worker/env-var-set";
+const envVarObservedEventType = "https://events.iterate.com/events/example/env-var-observed";
+const httpbinEchoedEventType = "https://events.iterate.com/events/example/httpbin-echoed";
 const valueRecordedEventType = "https://events.iterate.com/events/example/value-recorded";
 const nextEventTimeoutMs = 10_000;
 const idleEventTimeoutMs = 500;
@@ -60,6 +63,103 @@ export default {
       payload: {
         previousSeen: prevState.seen,
         seen: state.seen,
+      },
+    });
+  },
+};
+`.trim();
+const noInitialStateDynamicWorkerScript = `
+export default {
+  slug: "no-initial-state",
+
+  async afterAppend({ append, event }) {
+    if (event.type !== "${valueRecordedEventType}") {
+      return;
+    }
+
+    await append({
+      event: {
+        type: "${envVarObservedEventType}",
+        payload: {
+          sawMessage: event.payload?.message ?? null,
+        },
+      },
+    });
+  },
+};
+`.trim();
+const envVarObserverDynamicWorkerScript = `
+export default {
+  initialState: {},
+
+  reduce({ state }) {
+    return state;
+  },
+
+  async afterAppend({ append, event }) {
+    if (event.type !== "${valueRecordedEventType}") {
+      return;
+    }
+
+    await append({
+      event: {
+        type: "${envVarObservedEventType}",
+        payload: {
+          key: "OPENAI_API_KEY",
+          value: process.env.OPENAI_API_KEY ?? null,
+        },
+      },
+    });
+  },
+};
+`.trim();
+const envVarEgressDynamicWorkerScript = `
+function normalizeHeaders(headers) {
+  return Object.fromEntries(
+    Object.entries(headers ?? {}).map(([key, value]) => [String(key).toLowerCase(), value]),
+  );
+}
+
+export default {
+  initialState: {},
+
+  reduce({ state }) {
+    return state;
+  },
+
+  async afterAppend({ append, event }) {
+    if (event.type !== "${valueRecordedEventType}") {
+      return;
+    }
+
+    const authorization = \`Bearer \${process.env.OPENAI_API_KEY ?? ""}\`;
+    await append({
+      event: {
+        type: "${envVarObservedEventType}",
+        payload: {
+          key: "OPENAI_API_KEY",
+          value: process.env.OPENAI_API_KEY ?? null,
+          authorization,
+        },
+      },
+    });
+
+    const response = await fetch("https://httpbin.org/headers", {
+      headers: {
+        authorization,
+      },
+    });
+    const responseJson = await response.json();
+
+    await append({
+      event: {
+        type: "${httpbinEchoedEventType}",
+        payload: {
+          ok: response.ok,
+          status: response.status,
+          normalizedHeaders: normalizeHeaders(responseJson.headers),
+          response: responseJson,
+        },
       },
     });
   },
@@ -646,6 +746,160 @@ describe("dynamic worker processor", () => {
       await iterator.return?.();
     }
   });
+
+  test("defaults missing processor initialState to an empty object", async () => {
+    const path = uniqueDynamicWorkerPath();
+    const iterator = await openLiveIterator(path);
+
+    try {
+      await expectInitialized(iterator, path);
+      await configureWorker({
+        path,
+        slug: "no-initial-state",
+        script: noInitialStateDynamicWorkerScript,
+      });
+      await expectConfiguredEvent(iterator, path, "no-initial-state");
+
+      await append(path, {
+        type: valueRecordedEventType,
+        payload: { message: "hello from missing initial state" },
+      });
+
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: valueRecordedEventType,
+        payload: { message: "hello from missing initial state" },
+      });
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: envVarObservedEventType,
+        payload: {
+          sawMessage: "hello from missing initial state",
+        },
+      });
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
+  test("injects stream-wide env vars into process.env for configured workers", async () => {
+    const path = uniqueDynamicWorkerPath();
+    const iterator = await openLiveIterator(path);
+
+    try {
+      await expectInitialized(iterator, path);
+      await setDynamicWorkerEnvVar({
+        path,
+        key: "OPENAI_API_KEY",
+        value: "plain-demo-key",
+      });
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: envVarSetEventType,
+        payload: {
+          key: "OPENAI_API_KEY",
+          value: "plain-demo-key",
+        },
+      });
+      await configureWorker({
+        path,
+        slug: "env-observer",
+        script: envVarObserverDynamicWorkerScript,
+      });
+      await expectConfiguredEvent(iterator, path, "env-observer");
+
+      await append(path, {
+        type: valueRecordedEventType,
+        payload: { message: "read the env var" },
+      });
+
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: valueRecordedEventType,
+        payload: { message: "read the env var" },
+      });
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: envVarObservedEventType,
+        payload: {
+          key: "OPENAI_API_KEY",
+          value: "plain-demo-key",
+        },
+      });
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
+  test("keeps getIterateSecret literal in process.env and resolves SDK-style auth headers at egress", async () => {
+    const path = uniqueDynamicWorkerPath();
+    const iterator = await openLiveIterator(path);
+    const secretName = `dynamic-worker-env-${randomUUID().slice(0, 8)}`;
+    const secretValue = `secret-${randomUUID().slice(0, 8)}`;
+    const secret = await app.client.secrets.create({
+      name: secretName,
+      value: secretValue,
+      description: "Temporary secret for dynamic worker env binding e2e",
+    });
+
+    try {
+      await expectInitialized(iterator, path);
+      await setDynamicWorkerEnvVar({
+        path,
+        key: "OPENAI_API_KEY",
+        value: `getIterateSecret({secretKey: '${secretName}'})`,
+      });
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: envVarSetEventType,
+        payload: {
+          key: "OPENAI_API_KEY",
+          value: `getIterateSecret({secretKey: '${secretName}'})`,
+        },
+      });
+      await configureWorker({
+        path,
+        slug: "env-egress",
+        script: envVarEgressDynamicWorkerScript,
+        outboundGateway: {
+          entrypoint: "DynamicWorkerEgressGateway",
+        },
+      });
+      await expectConfiguredEvent(iterator, path, "env-egress");
+
+      await append(path, {
+        type: valueRecordedEventType,
+        payload: { message: "read the env var and fetch" },
+      });
+
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: valueRecordedEventType,
+      });
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: envVarObservedEventType,
+        payload: {
+          key: "OPENAI_API_KEY",
+          value: `getIterateSecret({secretKey: '${secretName}'})`,
+          authorization: `Bearer getIterateSecret({secretKey: '${secretName}'})`,
+        },
+      });
+      await expectEvent(iterator, {
+        streamPath: path,
+        type: httpbinEchoedEventType,
+        payload: {
+          ok: true,
+          normalizedHeaders: {
+            authorization: `Bearer ${secretValue}`,
+          },
+        },
+      });
+    } finally {
+      await app.client.secrets.remove({ id: secret.id });
+      await iterator.return?.();
+    }
+  }, 30_000);
 });
 
 async function expectInitialized(iterator: AsyncIterator<unknown>, path: StreamPath) {
@@ -669,12 +923,30 @@ async function expectConfiguredEvent(
   });
 }
 
-async function configureWorker(args: { path: StreamPath; slug: string; script: string }) {
+async function configureWorker(args: {
+  path: StreamPath;
+  slug: string;
+  script: string;
+  outboundGateway?: {
+    entrypoint: "DynamicWorkerEgressGateway";
+  };
+}) {
   await append(args.path, {
     type: configuredEventType,
     payload: {
       slug: args.slug,
       script: args.script,
+      ...(args.outboundGateway != null ? { outboundGateway: args.outboundGateway } : {}),
+    },
+  });
+}
+
+async function setDynamicWorkerEnvVar(args: { path: StreamPath; key: string; value: string }) {
+  await append(args.path, {
+    type: envVarSetEventType,
+    payload: {
+      key: args.key,
+      value: args.value,
     },
   });
 }

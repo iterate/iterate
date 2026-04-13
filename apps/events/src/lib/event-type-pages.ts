@@ -441,7 +441,120 @@ export const dynamicWorkerConfiguredPage = {
   details: [
     "The latest configured event for a slug replaces the previous dynamic worker runtime for that slug on the same stream.",
     "The raw composer template uses `script` directly so it is copy-pastable without any bundling or dependencies.",
+    "If `outboundGateway` is omitted, the dynamic worker uses the default `DynamicWorkerEgressGateway`, so outbound requests can resolve `getIterateSecret(...)` header sentinels.",
     'This trivial example replies with `{ type: "pong" }` whenever a later event contains the word `ping`.',
+  ],
+  templates: [
+    {
+      id: "dynamic-worker-configured:openai-fetch-append",
+      label: "Dynamic Worker Configured · OpenAI fetch append",
+      event: {
+        type: "https://events.iterate.com/events/stream/dynamic-worker/configured",
+        payload: {
+          slug: "openai-fetch-append",
+          script: `
+export default {
+  initialState: { history: [] },
+
+  reduce({ state, event }) {
+    if (event.type === "agent-input-added" && typeof event.payload?.content === "string") {
+      return {
+        history: [
+          ...state.history,
+          {
+            role: event.payload.role === "assistant" ? "assistant" : "user",
+            content: event.payload.content,
+          },
+        ],
+      };
+    }
+
+    return state;
+  },
+
+  async afterAppend({ append, event, state }) {
+    if (event.type === "agent-input-added" && event.payload?.role === "user") {
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          authorization: \`Bearer \${process.env.OPENAI_API_KEY}\`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-5.4",
+          input: state.history,
+        }),
+      });
+
+      await append({
+        event: {
+          type: "https://events.iterate.com/events/example/openai-response-body-added",
+          payload: {
+            ok: response.ok,
+            status: response.status,
+            body: await response.text(),
+          },
+        },
+      });
+
+      return;
+    }
+
+    if (
+      event.type !== "https://events.iterate.com/events/example/openai-response-body-added" ||
+      event.payload?.ok !== true ||
+      typeof event.payload?.body !== "string"
+    ) {
+      return;
+    }
+
+    const content = (JSON.parse(event.payload.body).output ?? [])
+      .flatMap((item) =>
+        item?.role === "assistant" && Array.isArray(item.content) ? item.content : [],
+      )
+      .flatMap((item) =>
+        item?.type === "output_text" && typeof item.text === "string" ? [item.text] : [],
+      )
+      .join("\\n\\n")
+      .trim();
+
+    if (!content) {
+      return;
+    }
+
+    await append({
+      event: {
+        type: "agent-input-added",
+        payload: {
+          role: "assistant",
+          content,
+        },
+      },
+    });
+  },
+};
+          `.trim(),
+        },
+      },
+    },
+  ],
+} satisfies EventTypePageDefinition;
+
+export const dynamicWorkerEnvVarSetPage = {
+  slug: "dynamic-worker-env-var-set",
+  href: "/dynamic-worker-env-var-set/",
+  title: "Dynamic Worker Env Var Set",
+  type: "https://events.iterate.com/events/stream/dynamic-worker/env-var-set",
+  summary:
+    "Built-in control event that stores a stream-wide env var string to inject into dynamic workers via `process.env`.",
+  payloadExample: {
+    key: "OPENAI_API_KEY",
+    value: 'getIterateSecret({secretKey: "openai"})',
+  },
+  details: [
+    "The value is injected literally into the dynamic worker env bindings, so processor code reads the same raw string from `process.env`.",
+    "This is designed for SDKs that expect credentials in `process.env`, while keeping `getIterateSecret(...)` resolution in the outbound egress proxy.",
+    "If a worker never sends the value back out in a request header, the placeholder stays a plain string and is not resolved automatically.",
   ],
 } satisfies EventTypePageDefinition;
 
@@ -496,14 +609,14 @@ export const agentInputAddedPage = {
   href: "/agent-input-added/",
   title: "Agent Input Added",
   type: "agent-input-added",
-  summary: "User turn for agent-style processors (dynamic worker loops, OpenAI, and similar).",
+  summary: "Message turn for agent-style processors (dynamic worker loops, OpenAI, and similar).",
   payloadExample: {
     role: "user",
     content: "Tell me a joke I never heard before",
   },
   details: [
     "Append this after configuring a processor that listens for agent-input-added.",
-    "The pretty feed shows it as a user message; pair with agent-output-added or streamed OpenAI events for the reply.",
+    "The pretty feed renders it as a user or assistant message based on payload.role; if omitted, role defaults to user.",
   ],
 } satisfies EventTypePageDefinition;
 
@@ -530,6 +643,7 @@ export const bashmodeBlockAddedPage = {
 export const eventTypePages = [
   agentInputAddedPage,
   bashmodeBlockAddedPage,
+  dynamicWorkerEnvVarSetPage,
   childStreamCreatedPage,
   dynamicWorkerConfiguredPage,
   errorOccurredPage,

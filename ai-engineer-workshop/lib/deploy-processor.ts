@@ -206,11 +206,7 @@ export async function resolveProcessorExport(args: {
 
 function isProcessorLike(value: unknown): value is Processor<unknown> {
   return (
-    value != null &&
-    typeof value === "object" &&
-    "slug" in value &&
-    typeof value.slug === "string" &&
-    "initialState" in value
+    value != null && typeof value === "object" && "slug" in value && typeof value.slug === "string"
   );
 }
 

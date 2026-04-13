@@ -40,6 +40,24 @@ describe("deploy processor helpers", () => {
     expect(resolved.processor.slug).toBe("agent");
   });
 
+  test("accepts a processor export without initialState", async () => {
+    const directory = await createTempDirectory();
+    const file = join(directory, "processor.mjs");
+
+    await writeFile(
+      file,
+      ['export const bashmodeProcessor = { slug: "bashmode", afterAppend() {} };', ""].join("\n"),
+    );
+
+    const resolved = await resolveProcessorExport({
+      file,
+      preferredExportName: "bashmodeProcessor",
+    });
+
+    expect(resolved.exportName).toBe("bashmodeProcessor");
+    expect(resolved.processor.slug).toBe("bashmode");
+  });
+
   test("requires an explicit export when multiple processors are exported", async () => {
     const directory = await createTempDirectory();
     const file = join(directory, "processor.mjs");

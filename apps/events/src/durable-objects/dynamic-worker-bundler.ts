@@ -53,7 +53,7 @@ async function bundleDynamicWorkerProcessor(args: {
     format: "esm",
     legalComments: "none",
     mainFields: ["browser", "module", "main"],
-    minify: false,
+    minify: true,
     platform: "browser",
     sourcemap: false,
     target: "es2024",

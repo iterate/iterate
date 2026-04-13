@@ -155,6 +155,14 @@ export interface DynamicWorkerConfiguredFeedItem {
   raw: Event;
 }
 
+export interface DynamicWorkerEnvVarSetFeedItem {
+  kind: "dynamic-worker-env-var-set";
+  key: string;
+  usesIterateSecret: boolean;
+  timestamp: number;
+  raw: Event;
+}
+
 export interface StreamPausedFeedItem {
   kind: "stream-paused";
   reason: string;
@@ -233,6 +241,7 @@ export type StreamFeedItem =
   | JsonataTransformerConfiguredFeedItem
   | StreamLifecycleFeedItem
   | DynamicWorkerConfiguredFeedItem
+  | DynamicWorkerEnvVarSetFeedItem
   | StreamPausedFeedItem
   | StreamResumedFeedItem
   | StreamErrorOccurredFeedItem

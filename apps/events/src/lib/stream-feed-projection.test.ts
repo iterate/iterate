@@ -117,6 +117,26 @@ describe("projectWireToFeed", () => {
     });
   });
 
+  test("adds a semantic dynamic worker env var item after env-var-set events", () => {
+    const feed = projectEventToFeed(
+      createEvent({
+        streamPath: "/demo",
+        type: "https://events.iterate.com/events/stream/dynamic-worker/env-var-set",
+        payload: {
+          key: "OPENAI_API_KEY",
+          value: "getIterateSecret({secretKey: 'openai'})",
+        },
+      }),
+    );
+
+    expect(feed.map((item) => item.kind)).toEqual(["event", "dynamic-worker-env-var-set"]);
+    expect(feed[1]).toMatchObject({
+      kind: "dynamic-worker-env-var-set",
+      key: "OPENAI_API_KEY",
+      usesIterateSecret: true,
+    });
+  });
+
   test("does not add a semantic item for append-scheduled events", () => {
     const feed = projectEventToFeed(
       createEvent({
@@ -575,6 +595,45 @@ describe("projectWireToFeed", () => {
         role: "user",
         content: [{ type: "text", text: "Bash result:\nstdout:\nhello\nstderr:\n\nexitCode: 0\n" }],
         timestamp: messages[2]!.timestamp,
+      },
+    ]);
+  });
+
+  test("projects assistant-role agent-input-added events as assistant messages", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "agent-input-added",
+        payload: {
+          content: "Tell me a joke I never heard before",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "agent-input-added",
+        payload: {
+          role: "assistant",
+          content: "I would, but then I'd have to pretend it was original.",
+        },
+      }),
+    ]);
+
+    const messages = feed.filter(
+      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
+    );
+
+    expect(messages).toEqual([
+      {
+        kind: "message",
+        role: "user",
+        content: [{ type: "text", text: "Tell me a joke I never heard before" }],
+        timestamp: messages[0]!.timestamp,
+      },
+      {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "I would, but then I'd have to pretend it was original." }],
+        timestamp: messages[1]!.timestamp,
       },
     ]);
   });

@@ -45,6 +45,7 @@ type LlmRequestCompletedPayload = {
 
 type AgentInputAddedPayload = {
   content: string;
+  role: "user" | "assistant";
 };
 
 type AgentOutputAddedPayload = {
@@ -262,10 +263,19 @@ export function buildWorkshopSemanticInsertions(
 
       appendInsertion(insertionsByOffset, event.offset, {
         kind: "message",
-        role: "user",
+        role: payload.role,
         content: [{ type: "text", text: payload.content }],
         timestamp: getTimestamp(event.createdAt),
       });
+
+      if (payload.role === "assistant") {
+        closeLatestPendingStreamingAgentTurn(
+          pendingStreamingAgentTurns,
+          event.offset,
+          getTimestamp(event.createdAt),
+        );
+        continue;
+      }
 
       const turn: StreamingAgentTurn = {
         inputOffset: event.offset,
@@ -1130,12 +1140,17 @@ function parseLlmRequestCompletedPayload(payload: unknown): LlmRequestCompletedP
 }
 
 function parseAgentInputAddedPayload(payload: unknown): AgentInputAddedPayload | null {
-  if (!isRecord(payload) || typeof payload.content !== "string") {
+  if (
+    !isRecord(payload) ||
+    typeof payload.content !== "string" ||
+    ("role" in payload && payload.role !== "user" && payload.role !== "assistant")
+  ) {
     return null;
   }
 
   return {
     content: payload.content,
+    role: payload.role === "assistant" ? "assistant" : "user",
   };
 }
 

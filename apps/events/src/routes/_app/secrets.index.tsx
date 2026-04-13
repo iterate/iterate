@@ -76,8 +76,8 @@ function SecretsIndexPage() {
       <div className="space-y-1">
         <h2 className="text-sm font-semibold">Env vars</h2>
         <p className="text-sm text-muted-foreground">
-          Environment variables for this project. Values are masked in the UI and stored in
-          plaintext in D1 for this demo.
+          Env vars for this project. Values are masked in the UI and stored in plaintext in D1 for
+          this demo.
         </p>
       </div>
 
@@ -106,7 +106,7 @@ function SecretsIndexPage() {
                     aria-invalid={isInvalid}
                     placeholder="GITHUB_ACCESS_TOKEN"
                   />
-                  <FieldDescription>Unique environment variable name.</FieldDescription>
+                  <FieldDescription>Unique env var name.</FieldDescription>
                   {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                 </Field>
               );

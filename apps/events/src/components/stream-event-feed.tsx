@@ -73,6 +73,7 @@ import type {
   CodemodeBlockFeedItem,
   CodemodeResultFeedItem,
   DynamicWorkerConfiguredFeedItem,
+  DynamicWorkerEnvVarSetFeedItem,
   ChildStreamCreatedFeedItem,
   EventFeedItem,
   ExternalSubscriberConfiguredFeedItem,
@@ -263,6 +264,8 @@ function StreamFeedItemRenderer({
       return <StreamLifecycleLine item={item} />;
     case "dynamic-worker-configured":
       return <DynamicWorkerConfiguredCard item={item} />;
+    case "dynamic-worker-env-var-set":
+      return <DynamicWorkerEnvVarSetCard item={item} />;
     case "stream-paused":
       return <StreamPausedCard item={item} />;
     case "stream-resumed":
@@ -509,6 +512,30 @@ function DynamicWorkerConfiguredCard({ item }: { item: DynamicWorkerConfiguredFe
             </div>
           </div>
         </div>
+      </ArtifactSection>
+    </AssistantArtifact>
+  );
+}
+
+function DynamicWorkerEnvVarSetCard({ item }: { item: DynamicWorkerEnvVarSetFeedItem }) {
+  return (
+    <AssistantArtifact
+      eyebrow={<Settings2Icon className="size-3.5" />}
+      eyebrowLabel="Dynamic worker env var set"
+      title={item.key}
+      meta={[
+        item.usesIterateSecret ? "Uses getIterateSecret placeholder" : "Literal string value",
+        formatTime(item.timestamp),
+      ]}
+    >
+      <ArtifactSection>
+        <p className="text-sm text-muted-foreground">
+          Available to dynamic workers as <code>{`process.env.${item.key}`}</code>.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Pretty view hides the raw value; inspect the raw event payload if you need the exact
+          stored string.
+        </p>
       </ArtifactSection>
     </AssistantArtifact>
   );
@@ -1227,6 +1254,8 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `lifecycle-${item.label}-${item.timestamp}-${index}`;
     case "dynamic-worker-configured":
       return `dynamic-worker-configured-${item.slug}-${item.raw.offset}`;
+    case "dynamic-worker-env-var-set":
+      return `dynamic-worker-env-var-set-${item.key}-${item.raw.offset}`;
     case "stream-paused":
       return `stream-paused-${item.timestamp}-${index}`;
     case "stream-resumed":

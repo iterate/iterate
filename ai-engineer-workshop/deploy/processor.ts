@@ -36,7 +36,7 @@ const DeployProcessorInput = z.object({
     .describe("Route outbound fetch through DynamicWorkerEgressGateway"),
   nodejsCompat: z
     .boolean()
-    .default(false)
+    .default(true)
     .describe("Enable Cloudflare Workers nodejs_compat for node:* builtins"),
 });
 

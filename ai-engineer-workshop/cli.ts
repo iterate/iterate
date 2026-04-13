@@ -42,7 +42,17 @@ async function discoverRouter() {
 
   for await (const file of fs.glob("**/*.{js,ts}", {
     cwd: process.cwd(),
-    exclude: ["dist/**", "node_modules/**", "web/**", "e2e/**", "lib/**"],
+    exclude: [
+      "dist/**",
+      "node_modules/**",
+      "web/**",
+      "e2e/**",
+      "lib/**",
+      "video/**",
+      "old-stuff/**",
+      "clean copy/**",
+      "deployed-processor/**",
+    ],
   })) {
     if (!isCandidateScript(file)) continue;
 

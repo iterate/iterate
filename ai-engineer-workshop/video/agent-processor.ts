@@ -14,7 +14,7 @@ export type AgentState = {
   history: z.infer<typeof InputItem>[];
 };
 
-export const agentProcessor = defineProcessor<AgentState>(() => {
+export const processor = defineProcessor<AgentState>(() => {
   return {
     slug: "agent",
     initialState: {
@@ -59,6 +59,6 @@ export const agentProcessor = defineProcessor<AgentState>(() => {
 if (import.meta.main) {
   await new PullProcessorRuntime({
     path: "/jonas",
-    processor: agentProcessor,
+    processor,
   }).run();
 }
