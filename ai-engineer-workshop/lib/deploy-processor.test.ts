@@ -122,7 +122,7 @@ export const agentProcessor = defineProcessor(() => ({
     expect(configuredEvent.payload.outboundGateway).toEqual({
       entrypoint: "DynamicWorkerEgressGateway",
     });
-    expect(configuredEvent.payload.script).toContain('type: "pong"');
+    expect(configuredEvent.payload.script).toMatch(/type:\s*"pong"/);
     expect(configuredEvent.payload.script).not.toContain('from "ai-engineer-workshop"');
   });
 

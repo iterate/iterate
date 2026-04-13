@@ -8,15 +8,25 @@ import * as prompts from "@clack/prompts";
 import { os } from "@orpc/server";
 import { createCli, type AnyRouter, yamlTableConsoleLogger } from "trpc-cli";
 
+import {
+  getDeployCommandHelp,
+  parseDeployCommandArgs,
+  promptForDeployCommandInput,
+  runDeployCommand,
+} from "./lib/deploy-command.ts";
 import { normalizePathPrefix } from "./sdk.ts";
 
 process.env.PATH_PREFIX = normalizePathPrefix(
   process.env.PATH_PREFIX || `/${execSync("id -un").toString().trim()}`,
 );
 
-const { router, leafPaths } = await discoverRouter();
-
 const userArgs = process.argv.slice(2);
+if (userArgs[0] === "deploy") {
+  await runBuiltinDeploy(userArgs.slice(1));
+  process.exit(0);
+}
+
+const { router, leafPaths } = await discoverRouter();
 const needsInteractiveSelection =
   userArgs.length === 0 || (userArgs.length === 1 && userArgs[0] === "run");
 
@@ -35,6 +45,22 @@ await createCli({ router: router as AnyRouter }).run({
   logger: yamlTableConsoleLogger,
   ...(argv && { argv }),
 });
+
+async function runBuiltinDeploy(args: string[]) {
+  const { help, input } = parseDeployCommandArgs(args);
+  if (help) {
+    console.log(getDeployCommandHelp());
+    return;
+  }
+
+  const commandInput = await promptForDeployCommandInput(input);
+  const result = await runDeployCommand(commandInput);
+
+  console.info(
+    `Deployed ${result.file} (${result.processorExportName}) to ${result.streamPath} as ${result.processorSlug}`,
+  );
+  console.log(JSON.stringify(result, null, 2));
+}
 
 async function discoverRouter() {
   const tree: Record<string, unknown> = {};
