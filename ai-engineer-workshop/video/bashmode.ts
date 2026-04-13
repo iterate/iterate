@@ -1,6 +1,4 @@
 import { defineProcessor, PullProcessorRuntime } from "ai-engineer-workshop";
-import { chat } from "@tanstack/ai";
-import { openaiText } from "@tanstack/ai-openai";
 import { z } from "zod";
 import { Bash } from "just-bash";
 import { AgentInputAddedEvent } from "./stream.ts";
