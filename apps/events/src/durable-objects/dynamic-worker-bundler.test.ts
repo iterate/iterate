@@ -11,14 +11,15 @@ describe("dynamic worker bundler", () => {
     expect(slugFromEntryFile("/tmp/simple-openai-loop.ts")).toBe("simple-openai-loop");
   });
 
-  test("bundles a workshop processor into a configured event", async () => {
+  test("bundles a processor SDK import into a configured event", async () => {
     const directory = await mkdtemp(join(tmpdir(), "dynamic-worker-bundler-"));
     const entryFile = join(directory, "current-processor.ts");
+    const processorRuntimePackageName = ["ai", "engineer", "workshop"].join("-");
 
     await writeFile(
       entryFile,
       `
-import { defineProcessor } from "ai-engineer-workshop";
+import { defineProcessor } from ${JSON.stringify(processorRuntimePackageName)};
 
 export default defineProcessor(() => ({
   slug: "workshop-processor",
@@ -55,7 +56,7 @@ export default defineProcessor(() => ({
       expect(configuredEvent.payload.script).toContain('type: "pong"');
       expect(configuredEvent.payload.script).toContain("afterAppend");
       expect(configuredEvent.payload.script).not.toContain("onEvent");
-      expect(configuredEvent.payload.script).not.toContain('from "ai-engineer-workshop"');
+      expect(configuredEvent.payload.script).not.toContain(`from "${processorRuntimePackageName}"`);
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
@@ -119,6 +120,40 @@ export default {
       });
       expect(configuredEvent.payload.script).toContain('type: "pong"');
       expect(configuredEvent.payload.script).toContain("afterAppend");
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("preserves node builtins when nodejs_compat is enabled", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dynamic-worker-bundler-"));
+    const entryFile = join(directory, "node-compat-processor.ts");
+
+    await writeFile(
+      entryFile,
+      `
+import { gunzipSync } from "node:zlib";
+
+export default {
+  slug: "node-compat-processor",
+  initialState: {},
+  reduce({ state }) {
+    gunzipSync(new Uint8Array([31, 139, 8, 0, 0, 0, 0, 0, 0, 3]));
+    return state;
+  },
+};
+      `.trim(),
+    );
+
+    try {
+      const configuredEvent = await buildDynamicWorkerConfiguredEvent({
+        compatibilityFlags: ["nodejs_compat"],
+        entryFile,
+      });
+
+      expect(configuredEvent.payload.compatibilityFlags).toEqual(["nodejs_compat"]);
+      expect(configuredEvent.payload.script).toContain('from "node:zlib"');
+      expect(configuredEvent.payload.script).toContain("gunzipSync");
     } finally {
       await rm(directory, { force: true, recursive: true });
     }

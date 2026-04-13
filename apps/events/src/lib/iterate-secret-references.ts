@@ -1,4 +1,4 @@
-export type IterateSecretReferenceMatch = {
+type IterateSecretReferenceMatch = {
   encoding: "raw" | "urlencoded";
   end: number;
   raw: string;

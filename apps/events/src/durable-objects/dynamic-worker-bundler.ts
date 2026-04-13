@@ -5,7 +5,7 @@ import {
 } from "@iterate-com/events-contract";
 import { build } from "esbuild";
 
-export type BuildDynamicWorkerConfiguredEventOptions = {
+type BuildDynamicWorkerConfiguredEventOptions = {
   compatibilityDate?: string;
   compatibilityFlags?: string[];
   entryFile: string;
@@ -15,10 +15,11 @@ export type BuildDynamicWorkerConfiguredEventOptions = {
 
 export async function buildDynamicWorkerConfiguredEvent(
   options: BuildDynamicWorkerConfiguredEventOptions,
-) {
+): Promise<DynamicWorkerConfiguredEventInputType> {
   const absoluteEntryFile = resolve(options.entryFile);
   const script = await bundleDynamicWorkerProcessor({
     absoluteEntryFile,
+    compatibilityFlags: options.compatibilityFlags,
   });
 
   return DynamicWorkerConfiguredEventInput.parse({
@@ -41,20 +42,24 @@ export function slugFromEntryFile(entryFile: string) {
   return basename(entryFile).replace(/\.[^/.]+$/, "");
 }
 
-async function bundleDynamicWorkerProcessor(args: { absoluteEntryFile: string }) {
+async function bundleDynamicWorkerProcessor(args: {
+  absoluteEntryFile: string;
+  compatibilityFlags?: string[];
+}) {
   const result = await build({
     bundle: true,
     entryPoints: [args.absoluteEntryFile],
+    external: shouldExternalizeNodeBuiltins(args.compatibilityFlags) ? ["node:*"] : [],
     format: "esm",
     legalComments: "none",
     mainFields: ["browser", "module", "main"],
-    minify: false,
+    minify: true,
     platform: "browser",
     sourcemap: false,
     target: "es2024",
     treeShaking: true,
     write: false,
-    plugins: [aiEngineerWorkshopShimPlugin()],
+    plugins: [processorRuntimeShimPlugin()],
   });
 
   const outputFile = result.outputFiles[0];
@@ -65,16 +70,25 @@ async function bundleDynamicWorkerProcessor(args: { absoluteEntryFile: string })
   return outputFile.text.trim();
 }
 
-function aiEngineerWorkshopShimPlugin() {
+function shouldExternalizeNodeBuiltins(compatibilityFlags: string[] | undefined) {
+  return compatibilityFlags?.includes("nodejs_compat") ?? false;
+}
+
+const processorRuntimePackageName = ["ai", "engineer", "workshop"].join("-");
+const processorRuntimeSpecifierPattern = new RegExp(
+  `^${processorRuntimePackageName}(?:/runtime)?$`,
+);
+
+function processorRuntimeShimPlugin() {
   return {
-    name: "ai-engineer-workshop-shim",
+    name: "processor-runtime-shim",
     setup(buildApi: import("esbuild").PluginBuild) {
-      buildApi.onResolve({ filter: /^ai-engineer-workshop(?:\/runtime)?$/ }, () => ({
-        namespace: "ai-engineer-workshop-shim",
-        path: "ai-engineer-workshop",
+      buildApi.onResolve({ filter: processorRuntimeSpecifierPattern }, () => ({
+        namespace: "processor-runtime-shim",
+        path: processorRuntimePackageName,
       }));
 
-      buildApi.onLoad({ filter: /.*/, namespace: "ai-engineer-workshop-shim" }, () => ({
+      buildApi.onLoad({ filter: /.*/, namespace: "processor-runtime-shim" }, () => ({
         contents: `
 export function defineProcessor(input) {
   return typeof input === "function" ? input() : input;
@@ -84,10 +98,10 @@ export function createEventsClient() {
   throw new Error("createEventsClient is not available in dynamic worker processor bundles.");
 }
 
-export class PullSubscriptionProcessorRuntime {
+export class PullProcessorRuntime {
   constructor() {
     throw new Error(
-      "PullSubscriptionProcessorRuntime is not available in dynamic worker processor bundles.",
+      "PullProcessorRuntime is not available in dynamic worker processor bundles.",
     );
   }
 }

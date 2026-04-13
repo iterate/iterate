@@ -34,6 +34,10 @@ const DeployProcessorInput = z.object({
     .boolean()
     .default(true)
     .describe("Route outbound fetch through DynamicWorkerEgressGateway"),
+  nodejsCompat: z
+    .boolean()
+    .default(true)
+    .describe("Enable Cloudflare Workers nodejs_compat for node:* builtins"),
 });
 
 export const handler = os
@@ -43,7 +47,10 @@ export const handler = os
       "Bundle a processor module into stream/dynamic-worker/configured and append it to a stream",
   })
   .handler(async ({ context, input }) => {
-    const result = await deployProcessor(input);
+    const result = await deployProcessor({
+      ...input,
+      compatibilityFlags: input.nodejsCompat ? ["nodejs_compat"] : undefined,
+    });
 
     context.logger.info(
       `Deployed ${result.file} (${result.processorExportName}) to ${result.streamPath} as ${result.processorSlug}`,

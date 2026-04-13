@@ -2,14 +2,23 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { DynamicWorkerConfiguredEventInput } from "../../apps/events-contract/src/dynamic-worker-types.ts";
+import type { EventInput as EventInputType } from "../../apps/events-contract/src/types.ts";
 import { buildDynamicWorkerConfiguredEvent } from "../../apps/events/src/durable-objects/dynamic-worker-bundler.ts";
-import { createEventsClient, EventInput, type EventsORPCClient, type Processor } from "../sdk.ts";
+import {
+  createEventsClient,
+  EventInput,
+  type Event,
+  type EventsORPCClient,
+  type Processor,
+} from "../sdk.ts";
 
 type DeployProcessorEventsClient = Pick<EventsORPCClient, "append">;
 
 export type DeployProcessorOptions = {
   baseUrl?: string;
   client?: DeployProcessorEventsClient;
+  compatibilityFlags?: string[];
   eventJson?: string;
   file: string;
   outboundGateway?: boolean;
@@ -19,7 +28,23 @@ export type DeployProcessorOptions = {
   streamPath: string;
 };
 
-export async function deployProcessor(args: DeployProcessorOptions) {
+export type DeployProcessorResult = {
+  baseUrl?: string;
+  configuredEvent: Event;
+  configuredEventInput: DynamicWorkerConfiguredEventInput;
+  file: string;
+  outboundGateway: boolean;
+  processorExportName: string;
+  processorSlug: string;
+  projectSlug?: string;
+  seedEvent?: Event;
+  seedEventInput?: EventInputType;
+  streamPath: string;
+};
+
+export async function deployProcessor(
+  args: DeployProcessorOptions,
+): Promise<DeployProcessorResult> {
   const resolvedFile = resolve(args.file);
   const normalizedStreamPath = normalizeStreamPath(args.streamPath);
   const resolvedExport = await resolveProcessorExport({
@@ -27,6 +52,7 @@ export async function deployProcessor(args: DeployProcessorOptions) {
     preferredExportName: args.processorExportName,
   });
   const configuredEvent = await buildConfiguredEventFromProcessorFile({
+    compatibilityFlags: args.compatibilityFlags,
     file: resolvedFile,
     outboundGateway: args.outboundGateway ?? true,
     processorExportName: resolvedExport.exportName,
@@ -68,11 +94,12 @@ export async function deployProcessor(args: DeployProcessorOptions) {
 }
 
 export async function buildConfiguredEventFromProcessorFile(args: {
+  compatibilityFlags?: string[];
   file: string;
   outboundGateway: boolean;
   processorExportName: string;
   slug: string;
-}) {
+}): Promise<DynamicWorkerConfiguredEventInput> {
   const wrapperDirectory = await mkdtemp(join(tmpdir(), "ai-engineer-workshop-deploy-processor-"));
   const wrapperFile = join(wrapperDirectory, "processor-entry.ts");
 
@@ -86,6 +113,7 @@ export async function buildConfiguredEventFromProcessorFile(args: {
     );
 
     return await buildDynamicWorkerConfiguredEvent({
+      compatibilityFlags: args.compatibilityFlags,
       entryFile: wrapperFile,
       outboundGateway: args.outboundGateway
         ? {
@@ -108,7 +136,7 @@ export function createProcessorWrapperSource(args: { exportName: string; file: s
   return [importStatement, "", "export default processor;", ""].join("\n");
 }
 
-export function parseEventJson(eventJson: string) {
+export function parseEventJson(eventJson: string): EventInputType {
   let parsed: unknown;
 
   try {
@@ -178,11 +206,7 @@ export async function resolveProcessorExport(args: {
 
 function isProcessorLike(value: unknown): value is Processor<unknown> {
   return (
-    value != null &&
-    typeof value === "object" &&
-    "slug" in value &&
-    typeof value.slug === "string" &&
-    "initialState" in value
+    value != null && typeof value === "object" && "slug" in value && typeof value.slug === "string"
   );
 }
 

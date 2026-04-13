@@ -26,9 +26,12 @@ import { Route as ErrorOccurredRouteImport } from './routes/error-occurred'
 import { Route as DynamicWorkerConfiguredRouteImport } from './routes/dynamic-worker-configured'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as ChildStreamCreatedRouteImport } from './routes/child-stream-created'
+import { Route as BashmodeBlockAddedRouteImport } from './routes/bashmode-block-added'
+import { Route as AgentInputAddedRouteImport } from './routes/agent-input-added'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
+import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppStreamsRouteImport } from './routes/_app/streams'
 import { Route as AppSecretsRouteImport } from './routes/_app/secrets'
@@ -127,6 +130,16 @@ const ChildStreamCreatedRoute = ChildStreamCreatedRouteImport.update({
   path: '/child-stream-created',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BashmodeBlockAddedRoute = BashmodeBlockAddedRouteImport.update({
+  id: '/bashmode-block-added',
+  path: '/bashmode-block-added',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentInputAddedRoute = AgentInputAddedRouteImport.update({
+  id: '/agent-input-added',
+  path: '/agent-input-added',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppRoute = AppRouteImport.update({
   id: '/_app',
   getParentRoute: () => rootRouteImport,
@@ -139,6 +152,11 @@ const IndexRoute = IndexRouteImport.update({
 const PosthogProxySplatRoute = PosthogProxySplatRouteImport.update({
   id: '/posthog-proxy/$',
   path: '/posthog-proxy/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiOrpcWsRoute = ApiOrpcWsRouteImport.update({
+  id: '/api/orpc-ws',
+  path: '/api/orpc-ws',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSplatRoute = ApiSplatRouteImport.update({
@@ -179,6 +197,8 @@ const AppStreamsSplatRoute = AppStreamsSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/agent-input-added': typeof AgentInputAddedRoute
+  '/bashmode-block-added': typeof BashmodeBlockAddedRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
@@ -199,6 +219,7 @@ export interface FileRoutesByFullPath {
   '/secrets': typeof AppSecretsRouteWithChildren
   '/streams': typeof AppStreamsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
+  '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/streams/$': typeof AppStreamsSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
@@ -207,6 +228,8 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/agent-input-added': typeof AgentInputAddedRoute
+  '/bashmode-block-added': typeof BashmodeBlockAddedRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
@@ -225,6 +248,7 @@ export interface FileRoutesByTo {
   '/stream-resumed': typeof StreamResumedRoute
   '/stream-subscription-configured': typeof StreamSubscriptionConfiguredRoute
   '/api/$': typeof ApiSplatRoute
+  '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/streams/$': typeof AppStreamsSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
@@ -235,6 +259,8 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
+  '/agent-input-added': typeof AgentInputAddedRoute
+  '/bashmode-block-added': typeof BashmodeBlockAddedRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
@@ -255,6 +281,7 @@ export interface FileRoutesById {
   '/_app/secrets': typeof AppSecretsRouteWithChildren
   '/_app/streams': typeof AppStreamsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
+  '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/_app/streams/$': typeof AppStreamsSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
@@ -265,6 +292,8 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/agent-input-added'
+    | '/bashmode-block-added'
     | '/child-stream-created'
     | '/docs'
     | '/dynamic-worker-configured'
@@ -285,6 +314,7 @@ export interface FileRouteTypes {
     | '/secrets'
     | '/streams'
     | '/api/$'
+    | '/api/orpc-ws'
     | '/posthog-proxy/$'
     | '/streams/$'
     | '/api/orpc/$'
@@ -293,6 +323,8 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/agent-input-added'
+    | '/bashmode-block-added'
     | '/child-stream-created'
     | '/docs'
     | '/dynamic-worker-configured'
@@ -311,6 +343,7 @@ export interface FileRouteTypes {
     | '/stream-resumed'
     | '/stream-subscription-configured'
     | '/api/$'
+    | '/api/orpc-ws'
     | '/posthog-proxy/$'
     | '/streams/$'
     | '/api/orpc/$'
@@ -320,6 +353,8 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/_app'
+    | '/agent-input-added'
+    | '/bashmode-block-added'
     | '/child-stream-created'
     | '/docs'
     | '/dynamic-worker-configured'
@@ -340,6 +375,7 @@ export interface FileRouteTypes {
     | '/_app/secrets'
     | '/_app/streams'
     | '/api/$'
+    | '/api/orpc-ws'
     | '/posthog-proxy/$'
     | '/_app/streams/$'
     | '/api/orpc/$'
@@ -350,6 +386,8 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
+  AgentInputAddedRoute: typeof AgentInputAddedRoute
+  BashmodeBlockAddedRoute: typeof BashmodeBlockAddedRoute
   ChildStreamCreatedRoute: typeof ChildStreamCreatedRoute
   DocsRoute: typeof DocsRoute
   DynamicWorkerConfiguredRoute: typeof DynamicWorkerConfiguredRoute
@@ -368,6 +406,7 @@ export interface RootRouteChildren {
   StreamResumedRoute: typeof StreamResumedRoute
   StreamSubscriptionConfiguredRoute: typeof StreamSubscriptionConfiguredRoute
   ApiSplatRoute: typeof ApiSplatRoute
+  ApiOrpcWsRoute: typeof ApiOrpcWsRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
   ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
 }
@@ -493,6 +532,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChildStreamCreatedRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/bashmode-block-added': {
+      id: '/bashmode-block-added'
+      path: '/bashmode-block-added'
+      fullPath: '/bashmode-block-added'
+      preLoaderRoute: typeof BashmodeBlockAddedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agent-input-added': {
+      id: '/agent-input-added'
+      path: '/agent-input-added'
+      fullPath: '/agent-input-added'
+      preLoaderRoute: typeof AgentInputAddedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app': {
       id: '/_app'
       path: ''
@@ -512,6 +565,13 @@ declare module '@tanstack/react-router' {
       path: '/posthog-proxy/$'
       fullPath: '/posthog-proxy/$'
       preLoaderRoute: typeof PosthogProxySplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/orpc-ws': {
+      id: '/api/orpc-ws'
+      path: '/api/orpc-ws'
+      fullPath: '/api/orpc-ws'
+      preLoaderRoute: typeof ApiOrpcWsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/$': {
@@ -607,6 +667,8 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
+  AgentInputAddedRoute: AgentInputAddedRoute,
+  BashmodeBlockAddedRoute: BashmodeBlockAddedRoute,
   ChildStreamCreatedRoute: ChildStreamCreatedRoute,
   DocsRoute: DocsRoute,
   DynamicWorkerConfiguredRoute: DynamicWorkerConfiguredRoute,
@@ -625,6 +687,7 @@ const rootRouteChildren: RootRouteChildren = {
   StreamResumedRoute: StreamResumedRoute,
   StreamSubscriptionConfiguredRoute: StreamSubscriptionConfiguredRoute,
   ApiSplatRoute: ApiSplatRoute,
+  ApiOrpcWsRoute: ApiOrpcWsRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
   ApiOrpcSplatRoute: ApiOrpcSplatRoute,
 }

@@ -10,7 +10,7 @@ dependsOn:
 This task captures the proposed shape for exporting the stream browsing UI from `apps/events` so it can be reused both:
 
 - inside `apps/events` itself
-- inside simpler host apps like `ai-engineer-workshop/jonas/web`
+- inside simpler host apps like a workshop web app
 
 This is a proposal/spec task only. It is intentionally **not** implementation work yet.
 
@@ -288,5 +288,5 @@ If this task is accepted later, the likely shape is:
 1. create `src/sdk/` inside `apps/events`
 2. export the SDK from `@iterate-com/events`
 3. refactor `apps/events` to consume its own shared SDK through route adapters
-4. add React Query + SDK wiring in `ai-engineer-workshop/jonas/web`
+4. add React Query + SDK wiring in a workshop host app
 5. prove that the workshop app can pass custom pretty reducers/renderers per `StreamDetailView` instance

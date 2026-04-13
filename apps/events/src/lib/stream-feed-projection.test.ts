@@ -117,6 +117,26 @@ describe("projectWireToFeed", () => {
     });
   });
 
+  test("adds a semantic dynamic worker env var item after env-var-set events", () => {
+    const feed = projectEventToFeed(
+      createEvent({
+        streamPath: "/demo",
+        type: "https://events.iterate.com/events/stream/dynamic-worker/env-var-set",
+        payload: {
+          key: "OPENAI_API_KEY",
+          value: "getIterateSecret({secretKey: 'openai'})",
+        },
+      }),
+    );
+
+    expect(feed.map((item) => item.kind)).toEqual(["event", "dynamic-worker-env-var-set"]);
+    expect(feed[1]).toMatchObject({
+      kind: "dynamic-worker-env-var-set",
+      key: "OPENAI_API_KEY",
+      usesIterateSecret: true,
+    });
+  });
+
   test("does not add a semantic item for append-scheduled events", () => {
     const feed = projectEventToFeed(
       createEvent({
@@ -579,6 +599,45 @@ describe("projectWireToFeed", () => {
     ]);
   });
 
+  test("projects assistant-role agent-input-added events as assistant messages", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "agent-input-added",
+        payload: {
+          content: "Tell me a joke I never heard before",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "agent-input-added",
+        payload: {
+          role: "assistant",
+          content: "I would, but then I'd have to pretend it was original.",
+        },
+      }),
+    ]);
+
+    const messages = feed.filter(
+      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
+    );
+
+    expect(messages).toEqual([
+      {
+        kind: "message",
+        role: "user",
+        content: [{ type: "text", text: "Tell me a joke I never heard before" }],
+        timestamp: messages[0]!.timestamp,
+      },
+      {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "I would, but then I'd have to pretend it was original." }],
+        timestamp: messages[1]!.timestamp,
+      },
+    ]);
+  });
+
   test("projects bashmode blocks into dedicated shell cards", () => {
     const feed = projectWireToFeed([
       createEvent({
@@ -701,6 +760,64 @@ describe("projectWireToFeed", () => {
       role: "assistant",
       content: [{ type: "text", text: "Hello there" }],
       messageId: "msg_stream",
+      streamStatus: "streaming",
+    });
+  });
+
+  test("projects agent-output-added with OpenAI stream payloads like openai-response-event-added", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "agent-input-added",
+        payload: {
+          content: "Say hello.",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "agent-output-added",
+        payload: {
+          type: "response.content_part.added",
+          item_id: "msg_agent_stream",
+          content_index: 0,
+          output_index: 0,
+          part: { type: "output_text", text: "" },
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "agent-output-added",
+        payload: {
+          type: "response.output_text.delta",
+          item_id: "msg_agent_stream",
+          content_index: 0,
+          delta: "Hello",
+          output_index: 0,
+        },
+      }),
+      createEvent({
+        offset: 4,
+        type: "agent-output-added",
+        payload: {
+          type: "response.output_text.delta",
+          item_id: "msg_agent_stream",
+          content_index: 0,
+          delta: " there",
+          output_index: 0,
+        },
+      }),
+    ]);
+
+    const assistant = feed.find(
+      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
+        item.kind === "message" && item.role === "assistant",
+    );
+
+    expect(assistant).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "Hello there" }],
+      messageId: "msg_agent_stream",
       streamStatus: "streaming",
     });
   });
@@ -1030,6 +1147,24 @@ describe("toSemanticFeedItem", () => {
 });
 
 describe("buildDisplayFeed", () => {
+  test("keeps only raw events, ungrouped, in raw mode", () => {
+    const feed = projectWireToFeed([
+      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
+      createEvent({ offset: 2, type: "https://events.iterate.com/demo/a" }),
+      createEvent({
+        offset: 3,
+        type: "https://events.iterate.com/events/stream/metadata-updated",
+        payload: { metadata: { color: "blue" } },
+      }),
+    ]);
+
+    expect(buildDisplayFeed(feed, "raw")?.map((item) => item.kind)).toEqual([
+      "event",
+      "event",
+      "event",
+    ]);
+  });
+
   test("groups consecutive events of the same type in raw-pretty mode", () => {
     const feed = projectWireToFeed([
       createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
@@ -1104,12 +1239,12 @@ describe("buildDisplayFeed", () => {
     ]);
   });
 
-  test("returns null in raw mode", () => {
+  test("returns null in raw-single-json mode", () => {
     const feed = projectWireToFeed([
       createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
     ]);
 
-    expect(buildDisplayFeed(feed, "raw")).toBeNull();
+    expect(buildDisplayFeed(feed, "raw-single-json")).toBeNull();
   });
 });
 

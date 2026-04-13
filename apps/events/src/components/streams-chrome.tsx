@@ -89,21 +89,14 @@ export function StreamsHeaderAction() {
   return (
     <div className="flex items-center gap-2">
       {headerControls.feedSummary ? (
-        <div
-          className="hidden items-center gap-1.5 text-muted-foreground lg:flex"
-          aria-label="Stream item counts"
-        >
+        <div className="hidden lg:flex">
           <Badge
             variant="outline"
-            className="px-1.5 font-mono text-[10px] font-normal tabular-nums"
+            className="px-1.5 font-mono text-[10px] font-normal tabular-nums text-muted-foreground"
+            aria-label={`${headerControls.feedSummary.rawEvents} event${headerControls.feedSummary.rawEvents === 1 ? "" : "s"} in stream`}
           >
-            Raw {headerControls.feedSummary.rawEvents}
-          </Badge>
-          <Badge
-            variant="outline"
-            className="px-1.5 font-mono text-[10px] font-normal tabular-nums"
-          >
-            Semantic {headerControls.feedSummary.semanticItems}
+            {headerControls.feedSummary.rawEvents}{" "}
+            {headerControls.feedSummary.rawEvents === 1 ? "event" : "events"}
           </Badge>
         </div>
       ) : null}

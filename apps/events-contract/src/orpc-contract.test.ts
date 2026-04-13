@@ -18,6 +18,7 @@ import {
 
 type EventsContractClient = ContractRouterClient<typeof eventsContract>;
 type ClientAppendArgs = Parameters<EventsContractClient["append"]>[0];
+type ClientStreamArgs = Parameters<EventsContractClient["stream"]>[0];
 type AppendArgs = z.input<typeof AppendInput>;
 
 type IsAssignable<From, To> = [From] extends [To] ? true : false;
@@ -32,6 +33,25 @@ type _appendArgsMatchPublicShape = Assert<
       event: EventInput;
     },
     AppendArgs
+  >
+>;
+type _clientAppendArgsExposeTypedPath = Assert<
+  IsAssignable<
+    ClientAppendArgs,
+    {
+      path: z.infer<typeof StreamPath>;
+      event: EventInput;
+    }
+  >
+>;
+type _clientStreamArgsExposeTypedCursors = Assert<
+  IsAssignable<
+    ClientStreamArgs,
+    {
+      path: z.infer<typeof StreamPath>;
+      afterOffset?: z.infer<typeof StreamQuery>["afterOffset"];
+      beforeOffset?: z.infer<typeof StreamQuery>["beforeOffset"];
+    }
   >
 >;
 

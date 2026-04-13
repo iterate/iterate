@@ -10,6 +10,7 @@ type ErrorFallbackProps = {
 
 type NotFoundFallbackProps = {
   action?: ReactNode;
+  [key: string]: unknown;
 };
 
 export function DefaultPendingComponent() {

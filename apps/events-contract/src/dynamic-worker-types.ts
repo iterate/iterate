@@ -73,6 +73,19 @@ export const DynamicWorkerConfiguredEvent = GenericEventBase.extend(
 export type DynamicWorkerConfiguredEventInput = z.infer<typeof DynamicWorkerConfiguredEventInput>;
 export type DynamicWorkerConfiguredEvent = z.infer<typeof DynamicWorkerConfiguredEvent>;
 
+export const DynamicWorkerEnvVarSetEventInput = GenericEventInputBase.extend({
+  type: z.literal("https://events.iterate.com/events/stream/dynamic-worker/env-var-set"),
+  payload: z.strictObject({
+    key: z.string().trim().min(1),
+    value: z.string(),
+  }),
+});
+export const DynamicWorkerEnvVarSetEvent = GenericEventBase.extend(
+  DynamicWorkerEnvVarSetEventInput.pick({ type: true, payload: true }).shape,
+);
+export type DynamicWorkerEnvVarSetEventInput = z.infer<typeof DynamicWorkerEnvVarSetEventInput>;
+export type DynamicWorkerEnvVarSetEvent = z.infer<typeof DynamicWorkerEnvVarSetEvent>;
+
 export const DynamicWorkerOutboundGateway = z.strictObject({
   entrypoint: z.literal("DynamicWorkerEgressGateway"),
   props: z
@@ -95,7 +108,8 @@ export type DynamicWorkerConfig = z.infer<typeof DynamicWorkerConfig>;
 
 export const DynamicWorkerState = z
   .object({
+    envVarsByKey: z.record(z.string(), z.string()).default({}),
     workersBySlug: z.record(z.string(), DynamicWorkerConfig).default({}),
   })
-  .default({ workersBySlug: {} });
+  .default({ envVarsByKey: {}, workersBySlug: {} });
 export type DynamicWorkerState = z.infer<typeof DynamicWorkerState>;

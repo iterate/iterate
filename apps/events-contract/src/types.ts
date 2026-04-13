@@ -27,6 +27,8 @@ import {
   DynamicWorkerState,
   DynamicWorkerConfiguredEventInput,
   DynamicWorkerConfiguredEvent,
+  DynamicWorkerEnvVarSetEvent,
+  DynamicWorkerEnvVarSetEventInput,
 } from "./dynamic-worker-types.ts";
 import {
   ScheduleConfiguredEvent,
@@ -48,7 +50,7 @@ export const ProjectSlug = z.string().trim().min(1).max(255);
 export type ProjectSlug = z.infer<typeof ProjectSlug>;
 
 export const StreamCursor = z.union([
-  z.coerce.number().int().positive(),
+  z.coerce.number<number>().int().positive(),
   z.literal("start"),
   z.literal("end"),
 ]);
@@ -148,6 +150,7 @@ const builtInEventInputOptions = [
   ScheduleInternalExecutionFinishedEventInput,
   JsonataTransformerConfiguredEventInput,
   DynamicWorkerConfiguredEventInput,
+  DynamicWorkerEnvVarSetEventInput,
   StreamPausedEventInput,
   StreamResumedEventInput,
 ] as const;
@@ -167,6 +170,7 @@ const builtInEventOptions = [
   ScheduleInternalExecutionFinishedEvent,
   JsonataTransformerConfiguredEvent,
   DynamicWorkerConfiguredEvent,
+  DynamicWorkerEnvVarSetEvent,
   StreamPausedEvent,
   StreamResumedEvent,
 ] as const;

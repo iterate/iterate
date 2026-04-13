@@ -59,7 +59,7 @@ function RootComponent() {
 const ExampleDevtools = memo(function ExampleDevtools() {
   return (
     <TanStackDevtools
-      config={{ position: "bottom-right" }}
+      config={{ position: "bottom-left" }}
       plugins={[
         {
           name: "TanStack Router",

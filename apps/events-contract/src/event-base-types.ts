@@ -11,28 +11,27 @@ import { z } from "zod";
 // other malformed inputs because that would hide real misunderstandings.
 // https://orpc.dev/docs/openapi/routing
 // https://github.com/colinhacks/zod/blob/main/packages/docs-v3/README.md#preprocess
-export const StreamPath = z.preprocess(
-  (value) => {
-    if (typeof value !== "string") {
-      return value;
-    }
+const CanonicalStreamPath = z
+  .string()
+  .max(1023)
+  .regex(/^\/(?:[a-z0-9_-]+(?:\/[a-z0-9_-]+)*)?$/);
 
-    try {
-      const decoded = decodeURIComponent(value);
-      return decoded.startsWith("/") ? decoded : `/${decoded}`;
-    } catch {
-      return value;
-    }
-  },
-  z
-    .string()
-    .max(1023)
-    .regex(/^\/(?:[a-z0-9_-]+(?:\/[a-z0-9_-]+)*)?$/),
-);
+export const StreamPath = z.preprocess<string, typeof CanonicalStreamPath, string>((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  try {
+    const decoded = decodeURIComponent(value);
+    return decoded.startsWith("/") ? decoded : `/${decoded}`;
+  } catch {
+    return value;
+  }
+}, CanonicalStreamPath);
 export type StreamPath = z.infer<typeof StreamPath>;
 
-export const Offset = z.coerce.number().int().positive();
-export type Offset = z.infer<typeof Offset>;
+const Offset = z.coerce.number<number>().int().positive();
+type Offset = z.infer<typeof Offset>;
 
 // Keep metadata/state shapes JSON-only so Cloudflare Durable Object RPC can
 // prove they are serializable. `Record<string, unknown>` made the generated

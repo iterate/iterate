@@ -13,6 +13,8 @@ export const Route = createFileRoute("/_app/streams/")({
   component: StreamsIndexPage,
 });
 
+type StreamRouteSearch = ReturnType<typeof Route.useSearch>;
+
 function StreamsIndexPage() {
   const { composer, event, renderer } = Route.useSearch();
   const navigate = Route.useNavigate();
@@ -21,7 +23,7 @@ function StreamsIndexPage() {
       // TanStack Router's functional `search` updater preserves sibling view
       // state while only changing the event currently shown in the sheet.
       void navigate({
-        search: (previous) => ({
+        search: (previous: StreamRouteSearch) => ({
           ...previous,
           event: nextEventOffset,
         }),
@@ -35,7 +37,7 @@ function StreamsIndexPage() {
       // Renderer mode is URL state on purpose so switching between pretty/raw
       // survives refresh and can be shared as a link.
       void navigate({
-        search: (previous) => ({
+        search: (previous: StreamRouteSearch) => ({
           ...previous,
           renderer: nextRenderer,
         }),
@@ -47,7 +49,7 @@ function StreamsIndexPage() {
   const updateComposer = useCallback(
     (nextComposer: typeof composer) => {
       void navigate({
-        search: (previous) => ({
+        search: (previous: StreamRouteSearch) => ({
           ...previous,
           composer: nextComposer,
         }),

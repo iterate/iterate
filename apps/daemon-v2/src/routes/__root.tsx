@@ -71,7 +71,7 @@ function RootComponent() {
 const DaemonV2Devtools = memo(function DaemonV2Devtools() {
   return (
     <TanStackDevtools
-      config={{ position: "bottom-right" }}
+      config={{ position: "bottom-left" }}
       plugins={[
         {
           name: "TanStack Router",

@@ -5,6 +5,7 @@ import { Check, Copy } from "lucide-react";
 import { basicSetup, EditorView } from "codemirror";
 import { json } from "@codemirror/lang-json";
 import { javascript } from "@codemirror/lang-javascript";
+import { yaml } from "@codemirror/lang-yaml";
 import { foldService } from "@codemirror/language";
 import { search, searchKeymap } from "@codemirror/search";
 import { keymap } from "@codemirror/view";
@@ -14,7 +15,7 @@ import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
 
-type SourceCodeLanguage = "typescript" | "json" | "text";
+type SourceCodeLanguage = "typescript" | "json" | "yaml" | "text";
 type EditorExtensions = Exclude<
   NonNullable<ConstructorParameters<typeof EditorView>[0]>["extensions"],
   undefined
@@ -25,17 +26,23 @@ interface CodeMirrorProps {
   extensions: readonly EditorExtensions[];
   editable: boolean;
   onChange?: (value: string) => void;
+  onModEnter?: () => void;
 }
 
-function CodeMirror({ value, extensions, editable, onChange }: CodeMirrorProps) {
+function CodeMirror({ value, extensions, editable, onChange, onModEnter }: CodeMirrorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
+  const onModEnterRef = useRef(onModEnter);
   const initialValueRef = useRef(value);
 
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
+
+  useEffect(() => {
+    onModEnterRef.current = onModEnter;
+  }, [onModEnter]);
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -47,6 +54,22 @@ function CodeMirror({ value, extensions, editable, onChange }: CodeMirrorProps) 
     const view = new EditorView({
       doc: initialValueRef.current,
       extensions: [
+        keymap.of([
+          {
+            key: "Mod-Enter",
+            run: () => {
+              onModEnterRef.current?.();
+              return !!onModEnterRef.current;
+            },
+          },
+          {
+            key: "Shift-Enter",
+            run: () => {
+              onModEnterRef.current?.();
+              return !!onModEnterRef.current;
+            },
+          },
+        ]),
         extensions,
         EditorView.editable.of(editable),
         EditorView.updateListener.of((update) => {
@@ -124,6 +147,7 @@ export interface SourceCodeBlockProps {
   wrapLongLines?: boolean;
   editable?: boolean;
   onChange?: (value: string) => void;
+  onModEnter?: () => void;
 }
 
 export function SourceCodeBlock({
@@ -134,6 +158,7 @@ export function SourceCodeBlock({
   wrapLongLines = true,
   editable = false,
   onChange,
+  onModEnter,
 }: SourceCodeBlockProps) {
   const [copied, setCopied] = useState(false);
   const { resolvedTheme } = useTheme();
@@ -142,9 +167,11 @@ export function SourceCodeBlock({
     const languageExtension =
       language === "json"
         ? json()
-        : language === "typescript"
-          ? javascript({ typescript: true })
-          : [];
+        : language === "yaml"
+          ? yaml()
+          : language === "typescript"
+            ? javascript({ typescript: true })
+            : [];
 
     return [
       basicSetup,
@@ -172,7 +199,13 @@ export function SourceCodeBlock({
   return (
     <div className={cn("relative flex min-h-0 flex-col", className)}>
       <div className="min-h-0 flex-1 overflow-hidden overflow-y-auto rounded border">
-        <CodeMirror value={code} extensions={extensions} editable={editable} onChange={onChange} />
+        <CodeMirror
+          value={code}
+          extensions={extensions}
+          editable={editable}
+          onChange={onChange}
+          onModEnter={onModEnter}
+        />
       </div>
 
       {showCopyButton ? (

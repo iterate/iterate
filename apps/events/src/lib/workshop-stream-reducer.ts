@@ -45,6 +45,7 @@ type LlmRequestCompletedPayload = {
 
 type AgentInputAddedPayload = {
   content: string;
+  role: "user" | "assistant";
 };
 
 type AgentOutputAddedPayload = {
@@ -144,6 +145,14 @@ type OpenAiErrorEvent = {
   message: string;
 };
 
+/** Frames an output_text part; text is carried by delta/done events. */
+type OpenAiContentPartStreamEvent = {
+  type: "response.content_part.added" | "response.content_part.done";
+  item_id: string;
+  content_index: number;
+  output_index: number;
+};
+
 type OpenAiResponseStreamEvent =
   | OpenAiResponseTextDeltaEvent
   | OpenAiResponseTextDoneEvent
@@ -151,7 +160,8 @@ type OpenAiResponseStreamEvent =
   | OpenAiResponseOutputItemDoneEvent
   | OpenAiResponseCompletedEvent
   | OpenAiResponseFailedEvent
-  | OpenAiErrorEvent;
+  | OpenAiErrorEvent
+  | OpenAiContentPartStreamEvent;
 
 type WorkshopOutputMessage = {
   itemId: string;
@@ -197,7 +207,42 @@ type StreamingAgentTurn = OutputMessageContainer & {
   terminalOffset?: number;
   terminalTimestamp?: number;
   failedMessage?: string;
+  completedOutputText?: string;
 };
+
+function routeOpenAiResponseStreamToWorkshopTurns(
+  payload: OpenAiResponseEventAddedPayload,
+  event: Event,
+  turnsByRequestId: Map<string, WorkshopTurn>,
+  pendingStreamingAgentTurns: StreamingAgentTurn[],
+) {
+  const timestamp = getTimestamp(event.createdAt);
+  const turn = payload.requestId == null ? undefined : turnsByRequestId.get(payload.requestId);
+  if (turn) {
+    turn.latestOutputOffset = event.offset;
+    turn.outputTimestamp = timestamp;
+    applyOpenAiResponseStreamEvent(turn, payload.event);
+    return;
+  }
+
+  const streamingAgentTurn = getLatestPendingStreamingAgentTurn(pendingStreamingAgentTurns);
+  if (!streamingAgentTurn) {
+    return;
+  }
+
+  streamingAgentTurn.latestOutputOffset = event.offset;
+  streamingAgentTurn.outputTimestamp = timestamp;
+  applyOpenAiResponseStreamEventToStreamingAgentTurn(streamingAgentTurn, payload.event);
+
+  if (isTerminalOpenAiResponseStreamEvent(payload.event)) {
+    closePendingStreamingAgentTurn(
+      pendingStreamingAgentTurns,
+      streamingAgentTurn,
+      event.offset,
+      timestamp,
+    );
+  }
+}
 
 export function buildWorkshopSemanticInsertions(
   events: readonly Event[],
@@ -218,10 +263,19 @@ export function buildWorkshopSemanticInsertions(
 
       appendInsertion(insertionsByOffset, event.offset, {
         kind: "message",
-        role: "user",
+        role: payload.role,
         content: [{ type: "text", text: payload.content }],
         timestamp: getTimestamp(event.createdAt),
       });
+
+      if (payload.role === "assistant") {
+        closeLatestPendingStreamingAgentTurn(
+          pendingStreamingAgentTurns,
+          event.offset,
+          getTimestamp(event.createdAt),
+        );
+        continue;
+      }
 
       const turn: StreamingAgentTurn = {
         inputOffset: event.offset,
@@ -236,22 +290,33 @@ export function buildWorkshopSemanticInsertions(
     }
 
     if (event.type === AGENT_OUTPUT_ADDED_TYPE) {
-      const payload = parseAgentOutputAddedPayload(event.payload);
-      if (!payload) {
+      const plainPayload = parseAgentOutputAddedPayload(event.payload);
+      if (plainPayload) {
+        appendInsertion(insertionsByOffset, event.offset, {
+          kind: "message",
+          role: "assistant",
+          content: [{ type: "text", text: plainPayload.content }],
+          timestamp: getTimestamp(event.createdAt),
+        });
+
+        closeLatestPendingStreamingAgentTurn(
+          pendingStreamingAgentTurns,
+          event.offset,
+          getTimestamp(event.createdAt),
+        );
         continue;
       }
 
-      appendInsertion(insertionsByOffset, event.offset, {
-        kind: "message",
-        role: "assistant",
-        content: [{ type: "text", text: payload.content }],
-        timestamp: getTimestamp(event.createdAt),
-      });
+      const openAiPayload = parseOpenAiResponseEventAddedPayload(event.payload);
+      if (!openAiPayload) {
+        continue;
+      }
 
-      closeLatestPendingStreamingAgentTurn(
+      routeOpenAiResponseStreamToWorkshopTurns(
+        openAiPayload,
+        event,
+        turnsByRequestId,
         pendingStreamingAgentTurns,
-        event.offset,
-        getTimestamp(event.createdAt),
       );
       continue;
     }
@@ -417,31 +482,12 @@ export function buildWorkshopSemanticInsertions(
         continue;
       }
 
-      const turn = payload.requestId == null ? undefined : turnsByRequestId.get(payload.requestId);
-      if (turn) {
-        turn.latestOutputOffset = event.offset;
-        turn.outputTimestamp = getTimestamp(event.createdAt);
-        applyOpenAiResponseStreamEvent(turn, payload.event);
-        continue;
-      }
-
-      const streamingAgentTurn = getLatestPendingStreamingAgentTurn(pendingStreamingAgentTurns);
-      if (!streamingAgentTurn) {
-        continue;
-      }
-
-      streamingAgentTurn.latestOutputOffset = event.offset;
-      streamingAgentTurn.outputTimestamp = getTimestamp(event.createdAt);
-      applyOpenAiResponseStreamEventToStreamingAgentTurn(streamingAgentTurn, payload.event);
-
-      if (isTerminalOpenAiResponseStreamEvent(payload.event)) {
-        closePendingStreamingAgentTurn(
-          pendingStreamingAgentTurns,
-          streamingAgentTurn,
-          event.offset,
-          getTimestamp(event.createdAt),
-        );
-      }
+      routeOpenAiResponseStreamToWorkshopTurns(
+        payload,
+        event,
+        turnsByRequestId,
+        pendingStreamingAgentTurns,
+      );
       continue;
     }
 
@@ -579,6 +625,10 @@ export function buildWorkshopSemanticInsertions(
 }
 
 function applyOpenAiResponseStreamEvent(turn: WorkshopTurn, event: OpenAiResponseStreamEvent) {
+  if (event.type === "response.content_part.added" || event.type === "response.content_part.done") {
+    return;
+  }
+
   if (event.type === "response.output_item.added") {
     registerAssistantOutputItem(turn, event.item, event.output_index);
     return;
@@ -644,6 +694,10 @@ function applyOpenAiResponseStreamEventToStreamingAgentTurn(
   turn: StreamingAgentTurn,
   event: OpenAiResponseStreamEvent,
 ) {
+  if (event.type === "response.content_part.added" || event.type === "response.content_part.done") {
+    return;
+  }
+
   if (event.type === "response.output_item.added") {
     registerAssistantOutputItem(turn, event.item, event.output_index);
     return;
@@ -681,6 +735,14 @@ function applyOpenAiResponseStreamEventToStreamingAgentTurn(
       outputIndex: event.output_index,
     });
     setOutputMessageTextPart(outputMessage, event.content_index, event.text);
+    return;
+  }
+
+  if (event.type === "response.completed") {
+    const completedText = extractAssistantTextFromCompletedResponse(event.response.output);
+    if (completedText.length > 0) {
+      turn.completedOutputText = completedText;
+    }
     return;
   }
 
@@ -753,7 +815,10 @@ function buildStreamingAgentAssistantMessages({
     return assistantMessages;
   }
 
-  const fallbackText = getOutputMessagesText(turn);
+  const fallbackText =
+    typeof turn.completedOutputText === "string" && turn.completedOutputText.length > 0
+      ? turn.completedOutputText
+      : getOutputMessagesText(turn);
   if (fallbackText.length === 0) {
     return [];
   }
@@ -1075,12 +1140,17 @@ function parseLlmRequestCompletedPayload(payload: unknown): LlmRequestCompletedP
 }
 
 function parseAgentInputAddedPayload(payload: unknown): AgentInputAddedPayload | null {
-  if (!isRecord(payload) || typeof payload.content !== "string") {
+  if (
+    !isRecord(payload) ||
+    typeof payload.content !== "string" ||
+    ("role" in payload && payload.role !== "user" && payload.role !== "assistant")
+  ) {
     return null;
   }
 
   return {
     content: payload.content,
+    role: payload.role === "assistant" ? "assistant" : "user",
   };
 }
 
@@ -1237,6 +1307,15 @@ function isOpenAiResponseStreamEvent(value: unknown): value is OpenAiResponseStr
     (value.type === "response.output_item.added" || value.type === "response.output_item.done") &&
     typeof value.output_index === "number" &&
     isAssistantOutputItem(value.item)
+  ) {
+    return true;
+  }
+
+  if (
+    (value.type === "response.content_part.added" || value.type === "response.content_part.done") &&
+    typeof value.item_id === "string" &&
+    typeof value.content_index === "number" &&
+    typeof value.output_index === "number"
   ) {
     return true;
   }

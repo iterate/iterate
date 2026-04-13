@@ -9,17 +9,36 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarSeparator,
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
+import { SidebarThemeSwitcher } from "@iterate-com/ui/components/sidebar-theme-switcher";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamsSidebar } from "~/components/streams-sidebar.tsx";
 import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { projectSlugSearchParam } from "~/lib/project-slug.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 
+type StreamLinkSearch = {
+  composer?: string;
+  event?: number;
+  projectSlug?: string;
+  renderer?: string;
+  [key: string]: unknown;
+};
+
 export function AppSidebar() {
   return (
-    <SidebarShell header={<AppSidebarBrand />} footer={<AppSidebarProjectSlugFooter />}>
+    <SidebarShell
+      header={<AppSidebarBrand />}
+      footer={
+        <>
+          <AppSidebarProjectSlugFooter />
+          <SidebarSeparator />
+          <SidebarThemeSwitcher />
+        </>
+      }
+    >
       <AppSidebarNav />
       <StreamsSidebar />
     </SidebarShell>
@@ -51,7 +70,7 @@ function AppSidebarBrand() {
           render={
             <Link
               to="/streams/"
-              search={(previous) => ({
+              search={(previous: StreamLinkSearch) => ({
                 ...previous,
                 projectSlug,
                 event: defaultStreamViewSearch.event,
@@ -98,7 +117,7 @@ function AppSidebarNav() {
                   item.to === "/streams/" ? (
                     <Link
                       to={item.to}
-                      search={(previous) => ({
+                      search={(previous: StreamLinkSearch) => ({
                         ...previous,
                         projectSlug,
                         event: defaultStreamViewSearch.event,
@@ -107,7 +126,10 @@ function AppSidebarNav() {
                       })}
                     />
                   ) : (
-                    <Link to={item.to} search={(previous) => ({ ...previous, projectSlug })} />
+                    <Link
+                      to={item.to}
+                      search={(previous: StreamLinkSearch) => ({ ...previous, projectSlug })}
+                    />
                   )
                 }
                 isActive={Boolean(matchRoute({ to: item.to, fuzzy: true }))}
@@ -159,7 +181,7 @@ function AppSidebarProjectSlugFooter() {
 
   return (
     <form
-      className="space-y-2 p-2"
+      className="flex flex-col gap-2 p-2"
       onSubmit={(event) => {
         event.preventDefault();
         submitProjectSlug();

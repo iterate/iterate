@@ -19,6 +19,8 @@ export const Route = createFileRoute("/_app/streams/$")({
   component: StreamsDetailPage,
 });
 
+type StreamRouteSearch = ReturnType<typeof Route.useSearch>;
+
 function StreamsDetailPage() {
   const { streamPath } = Route.useLoaderData();
   const { composer, event, renderer } = Route.useSearch();
@@ -29,7 +31,7 @@ function StreamsDetailPage() {
       // why Prev/Next and deep links all update `event=<offset>` rather than
       // using a local `useState`.
       void navigate({
-        search: (previous) => ({
+        search: (previous: StreamRouteSearch) => ({
           ...previous,
           event: nextEventOffset,
         }),
@@ -41,7 +43,7 @@ function StreamsDetailPage() {
   const updateRenderer = useCallback(
     (nextRenderer: typeof renderer) => {
       void navigate({
-        search: (previous) => ({
+        search: (previous: StreamRouteSearch) => ({
           ...previous,
           renderer: nextRenderer,
         }),
@@ -53,7 +55,7 @@ function StreamsDetailPage() {
   const updateComposer = useCallback(
     (nextComposer: typeof composer) => {
       void navigate({
-        search: (previous) => ({
+        search: (previous: StreamRouteSearch) => ({
           ...previous,
           composer: nextComposer,
         }),

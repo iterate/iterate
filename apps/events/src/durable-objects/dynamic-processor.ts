@@ -1,6 +1,7 @@
 import {
   DynamicWorkerConfiguredEvent,
   type DynamicWorkerConfig,
+  DynamicWorkerEnvVarSetEvent,
   type DynamicWorkerOutboundGateway,
   type DynamicWorkerState,
   type Event,
@@ -16,8 +17,14 @@ import { dynamicWorkerEgressConfigHeader } from "~/lib/dynamic-worker-egress.ts"
 
 export type DynamicWorkerAppendInput = ProcessorAppendInput;
 
+const nodejsCompatFlag = "nodejs_compat";
+const nodejsCompatPopulateProcessEnvFlag = "nodejs_compat_populate_process_env";
+const nodejsCompatDoNotPopulateProcessEnvFlag = "nodejs_compat_do_not_populate_process_env";
 const defaultDynamicWorkerCompatibilityDate = "2026-02-05";
-const defaultDynamicWorkerCompatibilityFlags: string[] = [];
+const defaultDynamicWorkerCompatibilityFlags = resolveDynamicWorkerCompatibilityFlags([]);
+const defaultDynamicWorkerOutboundGateway = {
+  entrypoint: "DynamicWorkerEgressGateway",
+} satisfies DynamicWorkerOutboundGateway;
 const defaultDynamicWorkerMainModule = "worker.js";
 const defaultDynamicWorkerProcessorModule = "processor.js";
 const defaultDynamicWorkerRuntimeConfigModule = "runtime-config.js";
@@ -134,12 +141,15 @@ function hasFunction(value, key) {
 
 if (
   processor == null ||
-  typeof processor !== "object" ||
-  !("initialState" in processor)
+  typeof processor !== "object"
 ) {
   throw new Error(
-    "Dynamic worker processor modules must default-export a processor object with initialState and optional reduce/afterAppend/onEvent hooks.",
+    "Dynamic worker processor modules must default-export a processor object with optional initialState and optional reduce/afterAppend/onEvent hooks.",
   );
+}
+
+function getInitialProcessorState(processor) {
+  return "initialState" in processor ? processor.initialState : {};
 }
 
 function createRemoteAsyncIterator(target) {
@@ -187,8 +197,16 @@ async function appendSameStream(stream, input) {
   return stream.append({ event: normalizedInput.event });
 }
 
+const logger = {
+  debug: (...args) => console.log(...args),
+  info: (...args) => console.log(...args),
+  log: (...args) => console.log(...args),
+  warn: (...args) => console.warn(...args),
+  error: (...args) => console.error(...args),
+};
+
 async function replayProcessorState(stream, processor) {
-  let state = structuredClone(processor.initialState);
+  let state = structuredClone(getInitialProcessorState(processor));
   let lastOffset = 0;
   const history = await stream.history({ before: "end" });
 
@@ -219,6 +237,7 @@ export default {
         await processor.afterAppend({
           append: (input) => appendSameStream(stream, input),
           event,
+          logger,
           state,
         });
       }
@@ -227,6 +246,7 @@ export default {
         await processor.onEvent({
           append: (input) => appendSameStream(stream, input),
           event,
+          logger,
           prevState,
           state,
         });
@@ -240,60 +260,79 @@ export default {
 
 export const dynamicWorkerProcessor = defineBuiltinProcessor<DynamicWorkerState>(() => ({
   slug: "dynamic-worker",
-  initialState: { workersBySlug: {} },
+  initialState: { envVarsByKey: {}, workersBySlug: {} },
 
   reduce({ event, state }) {
     const configured = DynamicWorkerConfiguredEvent.safeParse(event);
-    if (!configured.success) {
+
+    if (configured.success) {
+      const normalizedConfig = normalizeDynamicWorkerConfig(configured.data.payload);
+
+      return {
+        envVarsByKey: state.envVarsByKey,
+        workersBySlug: {
+          ...state.workersBySlug,
+          [configured.data.payload.slug]: normalizedConfig,
+        },
+      };
+    }
+
+    const envVarSet = DynamicWorkerEnvVarSetEvent.safeParse(event);
+    if (!envVarSet.success) {
       return state;
     }
 
-    const normalizedConfig = normalizeDynamicWorkerConfig(configured.data.payload);
-
     return {
+      envVarsByKey: {
+        ...state.envVarsByKey,
+        [envVarSet.data.payload.key]: envVarSet.data.payload.value,
+      },
       workersBySlug: {
         ...state.workersBySlug,
-        [configured.data.payload.slug]: normalizedConfig,
       },
     };
   },
 }));
 
-export function normalizeDynamicWorkerConfig(input: {
+function normalizeDynamicWorkerConfig(input: {
   compatibilityDate?: string;
   compatibilityFlags?: string[];
   modules?: Record<string, string>;
   outboundGateway?: DynamicWorkerOutboundGateway;
   script?: string;
 }): DynamicWorkerConfig {
+  const outboundGateway = resolveDynamicWorkerOutboundGateway(input.outboundGateway);
+
   if (input.script != null) {
     return {
       compatibilityDate: input.compatibilityDate ?? defaultDynamicWorkerCompatibilityDate,
-      compatibilityFlags: input.compatibilityFlags ?? defaultDynamicWorkerCompatibilityFlags,
+      compatibilityFlags: resolveDynamicWorkerCompatibilityFlags(
+        input.compatibilityFlags ?? defaultDynamicWorkerCompatibilityFlags,
+      ),
       mainModule: defaultDynamicWorkerMainModule,
       modules: {
         [defaultDynamicWorkerProcessorModule]: input.script,
-        [defaultDynamicWorkerRuntimeConfigModule]: buildDynamicWorkerRuntimeConfigModule(
-          input.outboundGateway,
-        ),
+        [defaultDynamicWorkerRuntimeConfigModule]:
+          buildDynamicWorkerRuntimeConfigModule(outboundGateway),
         [defaultDynamicWorkerMainModule]: dynamicWorkerRuntimeModule,
       },
-      outboundGateway: input.outboundGateway,
+      outboundGateway,
     };
   }
 
   return {
     compatibilityDate: input.compatibilityDate ?? defaultDynamicWorkerCompatibilityDate,
-    compatibilityFlags: input.compatibilityFlags ?? defaultDynamicWorkerCompatibilityFlags,
+    compatibilityFlags: resolveDynamicWorkerCompatibilityFlags(
+      input.compatibilityFlags ?? defaultDynamicWorkerCompatibilityFlags,
+    ),
     mainModule: defaultDynamicWorkerMainModule,
     modules: {
       ...normalizeDynamicWorkerModules(input.modules ?? {}),
-      [defaultDynamicWorkerRuntimeConfigModule]: buildDynamicWorkerRuntimeConfigModule(
-        input.outboundGateway,
-      ),
+      [defaultDynamicWorkerRuntimeConfigModule]:
+        buildDynamicWorkerRuntimeConfigModule(outboundGateway),
       [defaultDynamicWorkerMainModule]: dynamicWorkerRuntimeModule,
     },
-    outboundGateway: input.outboundGateway,
+    outboundGateway,
   };
 }
 
@@ -318,7 +357,11 @@ export function createDynamicWorkerManager(context: {
   const transitionsBySlug = new Map<string, Promise<void>>();
   let disposed = false;
 
-  function ensureDynamicWorker(slug: string, config: DynamicWorkerConfig) {
+  function ensureDynamicWorker(
+    slug: string,
+    config: DynamicWorkerConfig,
+    envVarsByKey: DynamicWorkerState["envVarsByKey"],
+  ) {
     const previousTransition = transitionsBySlug.get(slug) ?? Promise.resolve();
     const nextTransition = previousTransition
       .catch(() => {})
@@ -328,7 +371,10 @@ export function createDynamicWorkerManager(context: {
         }
 
         const existing = runsBySlug.get(slug);
-        const configKey = JSON.stringify(config);
+        const configKey = JSON.stringify({
+          config,
+          envVarsByKey,
+        });
 
         if (existing?.configKey === configKey) {
           return;
@@ -374,22 +420,15 @@ export function createDynamicWorkerManager(context: {
           return;
         }
 
-        const globalOutbound =
-          config.outboundGateway == null
-            ? null
-            : context.createLoopbackBinding({
-                exportName: config.outboundGateway.entrypoint,
-              });
+        const outboundGateway = resolveDynamicWorkerOutboundGateway(config.outboundGateway);
+        const globalOutbound = context.createLoopbackBinding({
+          exportName: outboundGateway.entrypoint,
+        });
+        const env = buildDynamicWorkerEnvBindings(envVarsByKey);
         const entrypoint = context.loader
           .get(
             `dynamic-worker:${context.getPath()}:${slug}:${hashDynamicWorkerConfig(configKey)}`,
-            () => ({
-              compatibilityDate: config.compatibilityDate,
-              compatibilityFlags: config.compatibilityFlags,
-              mainModule: config.mainModule,
-              modules: config.modules,
-              globalOutbound,
-            }),
+            () => buildDynamicWorkerLoaderCode({ config, env, globalOutbound }),
           )
           .getEntrypoint() as unknown as {
           run(stream: RpcDynamicWorkerTarget): Promise<void>;
@@ -439,7 +478,7 @@ export function createDynamicWorkerManager(context: {
 
   async function ensureConfiguredWorkers(state: DynamicWorkerState) {
     for (const [slug, config] of Object.entries(state.workersBySlug)) {
-      await ensureDynamicWorker(slug, config);
+      await ensureDynamicWorker(slug, config, state.envVarsByKey);
     }
   }
 
@@ -483,6 +522,46 @@ function buildDynamicWorkerRuntimeConfigModule(
   outboundGateway: DynamicWorkerOutboundGateway | undefined,
 ) {
   return `export default ${JSON.stringify({ outboundGateway })};`;
+}
+
+function buildDynamicWorkerEnvBindings(envVarsByKey: DynamicWorkerState["envVarsByKey"]) {
+  if (Object.keys(envVarsByKey).length === 0) {
+    return undefined;
+  }
+
+  return { ...envVarsByKey };
+}
+
+export function resolveDynamicWorkerCompatibilityFlags(compatibilityFlags: string[]) {
+  const flags = new Set(compatibilityFlags);
+  flags.add(nodejsCompatFlag);
+
+  if (!flags.has(nodejsCompatDoNotPopulateProcessEnvFlag)) {
+    flags.add(nodejsCompatPopulateProcessEnvFlag);
+  }
+
+  return Array.from(flags);
+}
+
+export function resolveDynamicWorkerOutboundGateway(
+  outboundGateway: DynamicWorkerOutboundGateway | undefined,
+) {
+  return outboundGateway ?? defaultDynamicWorkerOutboundGateway;
+}
+
+export function buildDynamicWorkerLoaderCode(args: {
+  config: DynamicWorkerConfig;
+  env: Record<string, string> | undefined;
+  globalOutbound: Fetcher | undefined;
+}) {
+  return {
+    compatibilityDate: args.config.compatibilityDate,
+    compatibilityFlags: resolveDynamicWorkerCompatibilityFlags(args.config.compatibilityFlags),
+    env: args.env,
+    mainModule: args.config.mainModule,
+    modules: args.config.modules,
+    ...(args.globalOutbound == null ? {} : { globalOutbound: args.globalOutbound }),
+  };
 }
 
 function hashDynamicWorkerConfig(value: string) {

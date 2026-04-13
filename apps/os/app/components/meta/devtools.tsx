@@ -6,7 +6,7 @@ import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
 export const Devtools = memo(function Devtools() {
   return (
     <TanStackDevtools
-      config={{ requireUrlFlag: true }}
+      config={{ requireUrlFlag: true, position: "bottom-left" }}
       plugins={[
         {
           name: "Tanstack Router",

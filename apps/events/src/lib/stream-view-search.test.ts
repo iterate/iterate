@@ -21,6 +21,20 @@ describe("validateStreamViewSearch", () => {
     });
   });
 
+  test("accepts raw renderer mode", () => {
+    expect(validateStreamViewSearch({ renderer: "raw" })).toEqual({
+      ...defaultStreamViewSearch,
+      renderer: "raw",
+    });
+  });
+
+  test("accepts raw-single-json renderer mode", () => {
+    expect(validateStreamViewSearch({ renderer: "raw-single-json" })).toEqual({
+      ...defaultStreamViewSearch,
+      renderer: "raw-single-json",
+    });
+  });
+
   test("falls back to default for old 'raw' composer value", () => {
     expect(validateStreamViewSearch({ composer: "raw" })).toEqual(defaultStreamViewSearch);
   });

@@ -1,7 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import { createRouterClient, type RouterClient } from "@orpc/server";
 import { createIsomorphicFn, getGlobalStartContext } from "@tanstack/react-start";
 import { semaphoreContract } from "@iterate-com/semaphore-contract";
@@ -58,4 +57,3 @@ const makeOrpcClient = createIsomorphicFn()
   });
 
 export const orpcClient = makeOrpcClient();
-export const orpc = createTanstackQueryUtils(orpcClient);

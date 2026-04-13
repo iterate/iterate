@@ -3,8 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   defineProcessor,
   type ProcessorLogger,
-  PullSubscriptionPatternProcessorRuntime,
-  PullSubscriptionProcessorRuntime,
+  PullProcessorRuntime,
   PushSubscriptionProcessorRuntime,
 } from "./sdk.ts";
 import {
@@ -56,21 +55,23 @@ async function testSharedProcessorDefinitionKeepsPerRuntimeState() {
     ],
   });
 
-  const firstRuntime = new PullSubscriptionProcessorRuntime({
+  const firstRuntime = new PullProcessorRuntime({
     eventsClient: client,
+    includeChildren: false,
     logger: silentLogger,
     processor,
-    streamPath: StreamPath.parse("/one"),
+    path: "/one",
   });
-  const secondRuntime = new PullSubscriptionProcessorRuntime({
+  const secondRuntime = new PullProcessorRuntime({
     eventsClient: client,
+    includeChildren: false,
     logger: silentLogger,
     processor,
-    streamPath: StreamPath.parse("/two"),
+    path: "/two",
   });
 
-  assert.equal(firstRuntime.getState().processorInstanceId, 0);
-  assert.equal(secondRuntime.getState().processorInstanceId, 0);
+  assert.equal(firstRuntime.getState()!.processorInstanceId, 0);
+  assert.equal(secondRuntime.getState()!.processorInstanceId, 0);
 
   const firstRunPromise = firstRuntime.run();
   const secondRunPromise = secondRuntime.run();
@@ -84,11 +85,11 @@ async function testSharedProcessorDefinitionKeepsPerRuntimeState() {
   await firstRunPromise;
   await secondRunPromise;
 
-  assert.equal(firstRuntime.getState().processorInstanceId, 2);
-  assert.equal(secondRuntime.getState().processorInstanceId, 9);
+  assert.equal(firstRuntime.getState()!.processorInstanceId, 2);
+  assert.equal(secondRuntime.getState()!.processorInstanceId, 9);
   assert.notEqual(
-    firstRuntime.getState().processorInstanceId,
-    secondRuntime.getState().processorInstanceId,
+    firstRuntime.getState()!.processorInstanceId,
+    secondRuntime.getState()!.processorInstanceId,
   );
 }
 
@@ -99,8 +100,9 @@ async function testStatelessProcessorCanOmitInitialState() {
     [streamPath]: [makeInitializedEvent({ streamPath, offset: 1 })],
   });
 
-  const runtime = new PullSubscriptionProcessorRuntime({
+  const runtime = new PullProcessorRuntime({
     eventsClient: client,
+    includeChildren: false,
     logger: silentLogger,
     processor: defineProcessor(() => ({
       slug: "stateless",
@@ -118,7 +120,7 @@ async function testStatelessProcessorCanOmitInitialState() {
         });
       },
     })),
-    streamPath,
+    path: streamPath,
   });
 
   assert.equal(runtime.getState(), undefined);
@@ -143,21 +145,69 @@ async function testStatelessProcessorCanOmitInitialState() {
   assert.equal(runtime.getState(), undefined);
 }
 
-async function testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly() {
-  const rootPath = StreamPath.parse("/");
+async function testReducerCanSkipReturningState() {
+  const streamPath = StreamPath.parse("/reduce-optional-return");
+  const client = new MockEventsClient({
+    [streamPath]: [makeInitializedEvent({ streamPath, offset: 1 })],
+  });
+
+  const runtime = new PullProcessorRuntime({
+    eventsClient: client,
+    includeChildren: false,
+    logger: silentLogger,
+    processor: defineProcessor<{ count: number }>(() => ({
+      slug: "reduce-optional-return",
+      initialState: { count: 0 },
+      reduce: ({ event, state }) => {
+        if (event.type === "tick") {
+          return { count: state.count + 1 };
+        }
+      },
+    })),
+    path: streamPath,
+  });
+
+  const runPromise = runtime.run();
+  await client.waitForLiveSubscription(streamPath);
+
+  client.emit(
+    streamPath,
+    makeGenericEvent({
+      streamPath,
+      offset: 2,
+      type: "noop",
+      payload: {},
+    }),
+  );
+  client.emit(
+    streamPath,
+    makeGenericEvent({
+      streamPath,
+      offset: 3,
+      type: "tick",
+      payload: {},
+    }),
+  );
+
+  await waitFor(() => runtime.getState()!.count === 1);
+  runtime.stop();
+  await runPromise;
+
+  assert.deepEqual(runtime.getState(), { count: 1 });
+}
+
+async function testIncludeChildrenWatchesExistingAndNewDescendantStreams() {
+  const teamPath = StreamPath.parse("/team");
   const teamAPath = StreamPath.parse("/team/a");
   const teamBPath = StreamPath.parse("/team/b");
   const teamCPath = StreamPath.parse("/team/c");
   const teamDeepPath = StreamPath.parse("/team/a/deep");
   const teamBDeepPath = StreamPath.parse("/team/b/deep");
-  const otherPath = StreamPath.parse("/other/x");
-  const otherLaterPath = StreamPath.parse("/other/y");
 
   const client = new MockEventsClient({
-    [rootPath]: [
-      makeInitializedEvent({ streamPath: rootPath, offset: 1 }),
-      makeChildStreamCreatedEvent({ offset: 2, childPath: teamAPath }),
-      makeChildStreamCreatedEvent({ offset: 3, childPath: otherPath }),
+    [teamPath]: [
+      makeInitializedEvent({ streamPath: teamPath, offset: 1 }),
+      makeChildStreamCreatedEvent({ offset: 2, childPath: teamAPath, streamPath: teamPath }),
     ],
     [teamAPath]: [
       makeInitializedEvent({ streamPath: teamAPath, offset: 1 }),
@@ -172,14 +222,12 @@ async function testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly() {
     [teamCPath]: [makeInitializedEvent({ streamPath: teamCPath, offset: 1 })],
     [teamDeepPath]: [makeInitializedEvent({ streamPath: teamDeepPath, offset: 1 })],
     [teamBDeepPath]: [makeInitializedEvent({ streamPath: teamBDeepPath, offset: 1 })],
-    [otherPath]: [makeInitializedEvent({ streamPath: otherPath, offset: 1 })],
-    [otherLaterPath]: [makeInitializedEvent({ streamPath: otherLaterPath, offset: 1 })],
   });
 
-  const runtime = new PullSubscriptionPatternProcessorRuntime({
+  const runtime = new PullProcessorRuntime({
     eventsClient: client,
     logger: silentLogger,
-    streamPattern: "/team/*",
+    path: "/team",
     processor: defineProcessor<{ tickCount: number }>(() => ({
       slug: "pattern-test",
       initialState: { tickCount: 0 },
@@ -210,12 +258,29 @@ async function testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly() {
 
   const runPromise = runtime.run();
 
-  await client.waitForLiveSubscription(rootPath);
+  await client.waitForLiveSubscription(teamPath, 2);
   await client.waitForLiveSubscription(teamAPath);
 
-  assert.deepEqual(runtime.getStreamPaths(), [teamAPath]);
-  assert.equal(client.getLiveSubscriptionCount(otherPath), 0);
-  assert.equal(client.getLiveSubscriptionCount(teamDeepPath), 0);
+  assert.deepEqual(runtime.getStreamPaths(), [teamPath, teamAPath]);
+  assert.equal(client.getLiveSubscriptionCount(teamPath), 2);
+
+  client.emit(
+    teamPath,
+    makeGenericEvent({
+      streamPath: teamPath,
+      offset: 3,
+      type: "tick",
+      payload: { source: "live-root" },
+    }),
+  );
+
+  await client.waitForAppendCount(1);
+
+  assert.deepEqual(
+    client.appended.map((entry) => entry.path),
+    [teamPath],
+  );
+  assert.deepEqual(runtime.getState(teamPath), { tickCount: 1 });
 
   client.emit(
     teamAPath,
@@ -227,27 +292,45 @@ async function testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly() {
     }),
   );
 
-  await client.waitForAppendCount(1);
+  await client.waitForAppendCount(2);
 
   assert.deepEqual(
     client.appended.map((entry) => entry.path),
-    [teamAPath],
+    [teamPath, teamAPath],
   );
 
-  client.emit(rootPath, makeChildStreamCreatedEvent({ offset: 4, childPath: teamBPath }));
-  client.emit(rootPath, makeChildStreamCreatedEvent({ offset: 5, childPath: teamDeepPath }));
-  client.emit(rootPath, makeChildStreamCreatedEvent({ offset: 6, childPath: otherLaterPath }));
-  client.emit(rootPath, makeChildStreamCreatedEvent({ offset: 7, childPath: teamCPath }));
-  client.emit(rootPath, makeChildStreamCreatedEvent({ offset: 8, childPath: teamBDeepPath }));
+  client.emit(
+    teamPath,
+    makeChildStreamCreatedEvent({ offset: 4, childPath: teamBPath, streamPath: teamPath }),
+  );
+  client.emit(
+    teamPath,
+    makeChildStreamCreatedEvent({ offset: 5, childPath: teamDeepPath, streamPath: teamPath }),
+  );
+  client.emit(
+    teamPath,
+    makeChildStreamCreatedEvent({ offset: 6, childPath: teamCPath, streamPath: teamPath }),
+  );
+  client.emit(
+    teamPath,
+    makeChildStreamCreatedEvent({ offset: 7, childPath: teamBDeepPath, streamPath: teamPath }),
+  );
 
   await client.waitForLiveSubscription(teamBPath);
+  await client.waitForLiveSubscription(teamDeepPath);
   await client.waitForLiveSubscription(teamCPath);
+  await client.waitForLiveSubscription(teamBDeepPath);
 
-  assert.deepEqual(runtime.getStreamPaths(), [teamAPath, teamBPath, teamCPath]);
-  assert.equal(client.getLiveSubscriptionCount(teamDeepPath), 0);
-  assert.equal(client.getLiveSubscriptionCount(teamBDeepPath), 0);
-  assert.equal(client.getLiveSubscriptionCount(otherPath), 0);
-  assert.equal(client.getLiveSubscriptionCount(otherLaterPath), 0);
+  assert.deepEqual(runtime.getStreamPaths(), [
+    teamPath,
+    teamAPath,
+    teamDeepPath,
+    teamBPath,
+    teamBDeepPath,
+    teamCPath,
+  ]);
+  assert.equal(client.getLiveSubscriptionCount(teamDeepPath), 1);
+  assert.equal(client.getLiveSubscriptionCount(teamBDeepPath), 1);
 
   client.emit(
     teamBPath,
@@ -285,35 +368,38 @@ async function testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly() {
       payload: { source: "live-deep-b" },
     }),
   );
-  client.emit(
-    otherLaterPath,
-    makeGenericEvent({
-      streamPath: otherLaterPath,
-      offset: 2,
-      type: "tick",
-      payload: { source: "live-other" },
-    }),
-  );
 
-  await client.waitForAppendCount(3);
+  await client.waitForAppendCount(6);
   await delay(25);
 
   assert.deepEqual(client.appended.map((entry) => entry.path).sort(), [
+    teamPath,
     teamAPath,
+    teamDeepPath,
     teamBPath,
+    teamBDeepPath,
     teamCPath,
   ]);
-  assert.equal(runtime.getState(teamDeepPath), undefined);
-  assert.equal(runtime.getState(teamBDeepPath), undefined);
-  assert.equal(runtime.getState(otherPath), undefined);
-  assert.equal(runtime.getState(otherLaterPath), undefined);
+  assert.deepEqual(runtime.getState(teamPath), { tickCount: 1 });
+  assert.deepEqual(runtime.getState(teamDeepPath), { tickCount: 1 });
+  assert.deepEqual(runtime.getState(teamBDeepPath), { tickCount: 1 });
   assert.deepEqual(
-    client.appended.map((entry) => ({
-      path: entry.path,
-      type: entry.event.type,
-      payload: entry.event.payload,
-    })),
+    client.appended
+      .map((entry) => ({
+        path: entry.path,
+        type: entry.event.type,
+        payload: entry.event.payload,
+      }))
+      .toSorted((left, right) => left.path.localeCompare(right.path)),
     [
+      {
+        path: teamPath,
+        type: "processed",
+        payload: {
+          sourceOffset: 3,
+          tickCount: 1,
+        },
+      },
       {
         path: teamAPath,
         type: "processed",
@@ -323,7 +409,23 @@ async function testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly() {
         },
       },
       {
+        path: teamDeepPath,
+        type: "processed",
+        payload: {
+          sourceOffset: 2,
+          tickCount: 1,
+        },
+      },
+      {
         path: teamBPath,
+        type: "processed",
+        payload: {
+          sourceOffset: 2,
+          tickCount: 1,
+        },
+      },
+      {
+        path: teamBDeepPath,
         type: "processed",
         payload: {
           sourceOffset: 2,
@@ -345,14 +447,122 @@ async function testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly() {
   await runPromise;
 }
 
+async function testLiveDiscoveredFreshChildReplaysRecentHistoryAfterAppendWithPerEventState() {
+  const teamPath = StreamPath.parse("/team");
+  const freshChildPath = StreamPath.parse("/team/fresh");
+  const recentCreatedAt = new Date().toISOString();
+  const client = new MockEventsClient({
+    [teamPath]: [makeInitializedEvent({ streamPath: teamPath, offset: 1 })],
+    [freshChildPath]: [
+      makeInitializedEvent({
+        streamPath: freshChildPath,
+        offset: 1,
+        createdAt: recentCreatedAt,
+      }),
+      makeGenericEvent({
+        streamPath: freshChildPath,
+        offset: 2,
+        type: "tick",
+        payload: { source: "history-1" },
+        createdAt: recentCreatedAt,
+      }),
+      makeGenericEvent({
+        streamPath: freshChildPath,
+        offset: 3,
+        type: "tick",
+        payload: { source: "history-2" },
+        createdAt: recentCreatedAt,
+      }),
+    ],
+  });
+
+  const runtime = new PullProcessorRuntime({
+    eventsClient: client,
+    logger: silentLogger,
+    path: "/team",
+    processor: defineProcessor<{ tickCount: number }>(() => ({
+      slug: "fresh-child-history-replay",
+      initialState: { tickCount: 0 },
+      reduce: ({ event, state }) => {
+        if (event.type !== "tick") {
+          return state;
+        }
+
+        return { tickCount: state.tickCount + 1 };
+      },
+      afterAppend: async ({ append, event, state }) => {
+        if (event.type !== "tick") {
+          return;
+        }
+
+        await append({
+          event: {
+            type: "processed",
+            payload: {
+              sourceOffset: event.offset,
+              tickCount: state.tickCount,
+            },
+          },
+        });
+      },
+    })),
+  });
+
+  const runPromise = runtime.run();
+
+  await client.waitForLiveSubscription(teamPath, 2);
+  client.emit(
+    teamPath,
+    makeChildStreamCreatedEvent({
+      offset: 2,
+      childPath: freshChildPath,
+      streamPath: teamPath,
+    }),
+  );
+
+  await client.waitForLiveSubscription(freshChildPath);
+  await client.waitForAppendCount(2);
+
+  assert.deepEqual(
+    client.appended.map((entry) => ({
+      path: entry.path,
+      type: entry.event.type,
+      payload: entry.event.payload,
+    })),
+    [
+      {
+        path: freshChildPath,
+        type: "processed",
+        payload: {
+          sourceOffset: 2,
+          tickCount: 1,
+        },
+      },
+      {
+        path: freshChildPath,
+        type: "processed",
+        payload: {
+          sourceOffset: 3,
+          tickCount: 2,
+        },
+      },
+    ],
+  );
+  assert.deepEqual(runtime.getState(freshChildPath), { tickCount: 2 });
+
+  runtime.stop();
+  await runPromise;
+}
+
 async function testProcessorAppendResolvesCurrentAbsoluteAndRelativePaths() {
   const teamAPath = StreamPath.parse("/team/a");
   const client = new MockEventsClient({
     [teamAPath]: [makeInitializedEvent({ streamPath: teamAPath, offset: 1 })],
   });
 
-  const runtime = new PullSubscriptionProcessorRuntime({
+  const runtime = new PullProcessorRuntime({
     eventsClient: client,
+    includeChildren: false,
     logger: silentLogger,
     processor: defineProcessor(() => ({
       slug: "append-paths",
@@ -383,7 +593,7 @@ async function testProcessorAppendResolvesCurrentAbsoluteAndRelativePaths() {
         });
       },
     })),
-    streamPath: teamAPath,
+    path: teamAPath,
   });
 
   const runPromise = runtime.run();
@@ -424,8 +634,9 @@ async function testProcessorAppendRejectsInvalidRelativePaths() {
   const invalidRelativeClient = new MockEventsClient({
     [childPath]: [makeInitializedEvent({ streamPath: childPath, offset: 1 })],
   });
-  const invalidRelativeRuntime = new PullSubscriptionProcessorRuntime({
+  const invalidRelativeRuntime = new PullProcessorRuntime({
     eventsClient: invalidRelativeClient,
+    includeChildren: false,
     logger: silentLogger,
     processor: defineProcessor(() => ({
       slug: "invalid-relative",
@@ -441,7 +652,7 @@ async function testProcessorAppendRejectsInvalidRelativePaths() {
         });
       },
     })),
-    streamPath: childPath,
+    path: childPath,
   });
 
   const invalidRelativeRunPromise = invalidRelativeRuntime.run();
@@ -462,8 +673,9 @@ async function testProcessorAppendRejectsInvalidRelativePaths() {
   const aboveRootClient = new MockEventsClient({
     [rootPath]: [makeInitializedEvent({ streamPath: rootPath, offset: 1 })],
   });
-  const aboveRootRuntime = new PullSubscriptionProcessorRuntime({
+  const aboveRootRuntime = new PullProcessorRuntime({
     eventsClient: aboveRootClient,
+    includeChildren: false,
     logger: silentLogger,
     processor: defineProcessor(() => ({
       slug: "above-root",
@@ -479,7 +691,7 @@ async function testProcessorAppendRejectsInvalidRelativePaths() {
         });
       },
     })),
-    streamPath: rootPath,
+    path: rootPath,
   });
 
   const aboveRootRunPromise = aboveRootRuntime.run();
@@ -500,15 +712,16 @@ async function testProcessorAppendRejectsInvalidRelativePaths() {
 
 async function testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase() {
   const client = new SlowHistoryEventsClient(StreamPath.parse("/history"));
-  const runtime = new PullSubscriptionProcessorRuntime({
+  const runtime = new PullProcessorRuntime({
     eventsClient: client,
+    includeChildren: false,
     logger: silentLogger,
     processor: defineProcessor<{ seen: number }>(() => ({
       slug: "history-stop",
       initialState: { seen: 0 },
       reduce: ({ event, state }) => (event.type === "tick" ? { seen: state.seen + 1 } : state),
     })),
-    streamPath: StreamPath.parse("/history"),
+    path: "/history",
   });
 
   const runPromise = runtime.run();
@@ -760,14 +973,14 @@ async function testPushRuntimeSkipsInclusiveCatchUpEventsAtLastProcessedOffset()
   assert.deepEqual(runtime.getState(), { count: 4 });
 }
 
-async function testPatternRuntimeStopDuringHistoryWaitsForChildrenToExit() {
-  const rootPath = StreamPath.parse("/");
+async function testIncludeChildrenStopDuringHistoryWaitsForChildrenToExit() {
+  const teamPath = StreamPath.parse("/team");
   const childPath = StreamPath.parse("/team/history");
-  const client = new SlowPatternHistoryEventsClient(rootPath, childPath);
-  const runtime = new PullSubscriptionPatternProcessorRuntime({
+  const client = new SlowPatternHistoryEventsClient(teamPath, childPath);
+  const runtime = new PullProcessorRuntime({
     eventsClient: client,
     logger: silentLogger,
-    streamPattern: "/team/*",
+    path: "/team",
     processor: defineProcessor(() => ({
       slug: "pattern-stop",
       initialState: null,
@@ -800,8 +1013,9 @@ async function testPrettyLoggingDescribesCatchupLiveReduceAndAfterAppend() {
     ],
   });
 
-  const runtime = new PullSubscriptionProcessorRuntime({
+  const runtime = new PullProcessorRuntime({
     eventsClient: client,
+    includeChildren: false,
     logger: capturedLogger.logger,
     processor: defineProcessor<{ seen: number }>(() => ({
       slug: "pretty-log",
@@ -824,7 +1038,7 @@ async function testPrettyLoggingDescribesCatchupLiveReduceAndAfterAppend() {
         });
       },
     })),
-    streamPath,
+    path: streamPath,
   });
 
   const runPromise = runtime.run();
@@ -846,8 +1060,7 @@ async function testPrettyLoggingDescribesCatchupLiveReduceAndAfterAppend() {
 
   assert.equal(reduceLoggerSeen, capturedLogger.logger);
   assert.equal(afterAppendLoggerSeen, capturedLogger.logger);
-  assert.match(capturedLogger.joinedLogs(), /Catching up to stream \/logs\./);
-  assert.match(capturedLogger.joinedLogs(), /Reduced 2 events up to offset 2\./);
+  assert.match(capturedLogger.joinedLogs(), /Catch-up reduced 2 events up to offset 2\./);
   assert.match(capturedLogger.joinedLogs(), /Reduced state:/);
   assert.match(capturedLogger.joinedLogs(), /"seen": 1/);
   assert.match(capturedLogger.joinedLogs(), /Live reduce for tick #3 \/logs\./);
@@ -861,25 +1074,22 @@ async function testPrettyLoggingDescribesCatchupLiveReduceAndAfterAppend() {
   assert.match(capturedLogger.joinedLogs(), /afterAppend complete for tick #3 \/logs\./);
 }
 
-async function testPrettyPatternLoggingDescribesMatchedAndIgnoredStreams() {
-  const rootPath = StreamPath.parse("/");
+async function testPrettyChildDiscoveryLoggingDescribesSubscribedStreams() {
+  const teamPath = StreamPath.parse("/team");
   const teamAPath = StreamPath.parse("/team/a");
-  const otherPath = StreamPath.parse("/other/x");
   const capturedLogger = createCapturedLogger();
   const client = new MockEventsClient({
-    [rootPath]: [
-      makeInitializedEvent({ streamPath: rootPath, offset: 1 }),
-      makeChildStreamCreatedEvent({ offset: 2, childPath: teamAPath }),
-      makeChildStreamCreatedEvent({ offset: 3, childPath: otherPath }),
+    [teamPath]: [
+      makeInitializedEvent({ streamPath: teamPath, offset: 1 }),
+      makeChildStreamCreatedEvent({ offset: 2, childPath: teamAPath, streamPath: teamPath }),
     ],
     [teamAPath]: [makeInitializedEvent({ streamPath: teamAPath, offset: 1 })],
-    [otherPath]: [makeInitializedEvent({ streamPath: otherPath, offset: 1 })],
   });
 
-  const runtime = new PullSubscriptionPatternProcessorRuntime({
+  const runtime = new PullProcessorRuntime({
     eventsClient: client,
     logger: capturedLogger.logger,
-    streamPattern: "/team/*",
+    path: "/team",
     processor: defineProcessor(() => ({
       slug: "pattern-log",
       initialState: null,
@@ -891,15 +1101,8 @@ async function testPrettyPatternLoggingDescribesMatchedAndIgnoredStreams() {
   runtime.stop();
   await runPromise;
 
-  assert.match(capturedLogger.joinedLogs(), /Watching for streams matching pattern \/team\/\*\./);
-  assert.match(
-    capturedLogger.joinedLogs(),
-    /Subscribing to new stream \/team\/a as it matches pattern \/team\/\*\./,
-  );
-  assert.match(
-    capturedLogger.joinedLogs(),
-    /Ignoring new stream \/other\/x because it does not match pattern \/team\/\*\./,
-  );
+  assert.match(capturedLogger.joinedLogs(), /Subscribing to stream \/team\./);
+  assert.match(capturedLogger.joinedLogs(), /Subscribing to stream \/team\/a\./);
 }
 
 class MockEventsClient {
@@ -1069,11 +1272,11 @@ class SlowPatternHistoryEventsClient extends MockEventsClient {
   childHistoryStarted = createDeferred<void>();
   #childPath: StreamPathType;
 
-  constructor(rootPath: StreamPathType, childPath: StreamPathType) {
+  constructor(parentPath: StreamPathType, childPath: StreamPathType) {
     super({
-      [rootPath]: [
-        makeInitializedEvent({ streamPath: rootPath, offset: 1 }),
-        makeChildStreamCreatedEvent({ offset: 2, childPath }),
+      [parentPath]: [
+        makeInitializedEvent({ streamPath: parentPath, offset: 1 }),
+        makeChildStreamCreatedEvent({ offset: 2, childPath, streamPath: parentPath }),
       ],
       [childPath]: [],
     });
@@ -1260,7 +1463,11 @@ function stripAnsi(value: string) {
   return value.replace(new RegExp(String.raw`\u001b\[[0-9;]*m`, "g"), "");
 }
 
-function makeInitializedEvent(args: { streamPath: StreamPathType; offset: number }): Event {
+function makeInitializedEvent(args: {
+  streamPath: StreamPathType;
+  offset: number;
+  createdAt?: string;
+}): Event {
   return makeEvent({
     streamPath: args.streamPath,
     offset: args.offset,
@@ -1269,12 +1476,17 @@ function makeInitializedEvent(args: { streamPath: StreamPathType; offset: number
       projectSlug: "public",
       path: args.streamPath,
     },
+    createdAt: args.createdAt,
   });
 }
 
-function makeChildStreamCreatedEvent(args: { offset: number; childPath: StreamPathType }): Event {
+function makeChildStreamCreatedEvent(args: {
+  offset: number;
+  childPath: StreamPathType;
+  streamPath?: StreamPathType;
+}): Event {
   return makeEvent({
-    streamPath: StreamPath.parse("/"),
+    streamPath: args.streamPath ?? StreamPath.parse("/"),
     offset: args.offset,
     type: "https://events.iterate.com/events/stream/child-stream-created",
     payload: {
@@ -1288,6 +1500,7 @@ function makeGenericEvent(args: {
   offset: number;
   type: string;
   payload: Record<string, string>;
+  createdAt?: string;
 }): Event {
   return makeEvent(args);
 }
@@ -1299,6 +1512,7 @@ function makeEvent(args: {
   payload: EventInput["payload"];
   metadata?: EventInput["metadata"];
   idempotencyKey?: string;
+  createdAt?: string;
 }): Event {
   return EventSchema.parse({
     streamPath: args.streamPath,
@@ -1307,20 +1521,22 @@ function makeEvent(args: {
     payload: args.payload ?? {},
     metadata: args.metadata,
     idempotencyKey: args.idempotencyKey,
-    createdAt: new Date(args.offset * 1_000).toISOString(),
+    createdAt: args.createdAt ?? new Date(args.offset * 1_000).toISOString(),
   });
 }
 
 await testSharedProcessorDefinitionKeepsPerRuntimeState();
 await testStatelessProcessorCanOmitInitialState();
-await testPatternRuntimeWatchesExistingAndNewMatchingStreamsOnly();
+await testReducerCanSkipReturningState();
+await testIncludeChildrenWatchesExistingAndNewDescendantStreams();
+await testLiveDiscoveredFreshChildReplaysRecentHistoryAfterAppendWithPerEventState();
 await testProcessorAppendResolvesCurrentAbsoluteAndRelativePaths();
 await testProcessorAppendRejectsInvalidRelativePaths();
 await testProcessorRuntimeStopDuringHistoryDoesNotEnterLivePhase();
-await testPatternRuntimeStopDuringHistoryWaitsForChildrenToExit();
+await testIncludeChildrenStopDuringHistoryWaitsForChildrenToExit();
 await testStreamQueryOffsetsAreStrictlyExclusive();
 await testPushRuntimeCatchesUpAndAppendsWithCanonicalProcessorContract();
 await testPushRuntimeSerializesOutOfOrderDeliveriesWithoutDoubleReducingHistory();
 await testPushRuntimeSkipsInclusiveCatchUpEventsAtLastProcessedOffset();
 await testPrettyLoggingDescribesCatchupLiveReduceAndAfterAppend();
-await testPrettyPatternLoggingDescribesMatchedAndIgnoredStreams();
+await testPrettyChildDiscoveryLoggingDescribesSubscribedStreams();

@@ -112,6 +112,21 @@ function makeOrpcClient(options: OrpcClientOptions = {}): OrpcClient {
   ) as OrpcClient;
 }
 
+// function createBrowserWebSocketClient(options: OrpcClientOptions = {}) {
+//   const apiUrl = new URL(resolveApiUrl(options.baseUrl ?? configuredBaseUrl));
+//   apiUrl.pathname = "/api/orpc-ws";
+//   apiUrl.protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
+//   apiUrl.searchParams.set(projectSlugSearchParam, resolveCurrentProjectSlug());
+
+//   const websocket = new WebSocket(apiUrl.toString());
+//   const client = createORPCClient(new WebSocketRPCLink({ websocket })) as OrpcClient;
+
+//   return {
+//     client,
+//     close: () => websocket.close(),
+//   };
+// }
+
 function createBrowserOrpcState(options: OrpcClientOptions = {}) {
   const client = makeOrpcClient(options);
   const queryUtils = createOrpcQueryUtils(client);

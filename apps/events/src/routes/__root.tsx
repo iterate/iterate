@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import "../lib/tanstack-devtools-strip-position-from-storage.ts";
 import { memo, type ReactNode } from "react";
 import {
   HeadContent,

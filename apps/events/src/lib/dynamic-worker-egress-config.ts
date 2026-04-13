@@ -4,7 +4,7 @@ import {
 } from "@iterate-com/events-contract";
 import { dynamicWorkerEgressConfigHeader } from "./dynamic-worker-egress.ts";
 
-export type DynamicWorkerEgressGatewayProps = {
+type DynamicWorkerEgressGatewayProps = {
   secretHeaderName?: string;
   secretHeaderValue?: string;
 };

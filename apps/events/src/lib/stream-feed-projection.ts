@@ -1,6 +1,7 @@
 import {
   ChildStreamCreatedEvent,
   DynamicWorkerConfiguredEvent,
+  DynamicWorkerEnvVarSetEvent,
   ErrorOccurredEvent,
   JsonataTransformerConfiguredEvent,
   StreamSubscriptionConfiguredEvent,
@@ -18,6 +19,7 @@ import type {
   StreamFeedItem,
   StreamRendererMode,
 } from "~/lib/stream-feed-types.ts";
+import { findIterateSecretReferences } from "~/lib/iterate-secret-references.ts";
 import { buildAgentSemanticInsertions } from "~/lib/agent-stream-reducer.ts";
 import { buildWorkshopSemanticInsertions } from "~/lib/workshop-stream-reducer.ts";
 
@@ -67,8 +69,12 @@ export function buildDisplayFeed(
   feed: readonly StreamFeedItem[],
   mode: StreamRendererMode,
 ): StreamFeedItem[] | null {
-  if (mode === "raw") {
+  if (mode === "raw-single-json") {
     return null;
+  }
+
+  if (mode === "raw") {
+    return getEventFeedItems(feed);
   }
 
   if (mode === "pretty") {
@@ -191,6 +197,18 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
               secretHeaderName: configured.payload.outboundGateway.props?.secretHeaderName,
               secretHeaderValue: configured.payload.outboundGateway.props?.secretHeaderValue,
             },
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/env-var-set") {
+    const envVarSet = DynamicWorkerEnvVarSetEvent.parse(event);
+
+    return {
+      kind: "dynamic-worker-env-var-set",
+      key: envVarSet.payload.key,
+      usesIterateSecret: findIterateSecretReferences(envVarSet.payload.value).length > 0,
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };
