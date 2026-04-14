@@ -88,7 +88,8 @@ RUN corepack enable
 
 # Global npm tools (as root for system-wide access)
 RUN corepack prepare pnpm@10.24.0 --activate && \
-    npm install -g tsx serve
+    npm install -g tsx serve && \
+    rm -rf /home/iterate/.cache/node/corepack /home/iterate/.npm
 
 # Configure UTF-8 locale (required for btop and other CLI tools)
 RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
@@ -120,7 +121,8 @@ RUN sudo mkdir -p /opt/mitmproxy /opt/uv/python && \
     UV_TOOL_DIR=/opt/mitmproxy/tools UV_TOOL_BIN_DIR=/opt/mitmproxy/bin \
     UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     uv tool install --python 3.12 mitmproxy==${SANDBOX_MITMPROXY_VERSION} && \
-    chmod -R a+rX /opt/mitmproxy /opt/uv
+    chmod -R a+rX /opt/mitmproxy /opt/uv && \
+    rm -rf /home/iterate/.cache/uv
 ENV PATH="/opt/mitmproxy/bin:$PATH"
 
 # Generate mitmproxy CA certificate at build time.
@@ -218,14 +220,10 @@ RUN set -e && \
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 WORKDIR /home/iterate/src/github.com/iterate/iterate
 
-# Copy lockfile first (dependency layer)
-# This way, unless the dependencies change, we don't have to download from pnpm
-# TODO: consider BuildKit cache mount for pnpm store to speed CI builds.
+# Copy lockfile first so BuildKit can reuse the dependency step when source-only
+# files change. The pnpm store itself stays in a cache mount, not the image.
 COPY --chown=iterate:iterate package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --chown=iterate:iterate patches ./patches
-RUN ARCH=$(dpkg --print-architecture) && \
-    if [ "$ARCH" = "amd64" ]; then PNPM_ARCH="x64"; else PNPM_ARCH="arm64"; fi && \
-    pnpm fetch --config.platform=linux --config.arch="$PNPM_ARCH" --config.libc=glibc
 
 # Copy repo, exclude git metadata from context.
 # If .git is a worktree file, replace with dir
@@ -235,17 +233,15 @@ RUN if [ -f .git ]; then rm .git && mkdir .git; fi
 # Ensure shell scripts are executable (git may not preserve permissions on all platforms)
 RUN chmod +x sandbox/*.sh sandbox/providers/docker/*.sh
 
-# Install dependencies (cacheable - only reruns when lockfile changes)
-RUN pnpm install --frozen-lockfile --offline
-
-# Run post-repo-sync steps (cacheable - only reruns when source changes)
-RUN bash "$ITERATE_REPO/sandbox/after-repo-sync-steps.sh"
-
-# Drop build/install caches that duplicate runtime payloads and can push Fly
-# over its 8GB unpack limit. Keep OpenCode and Playwright browser payloads.
-RUN sudo rm -rf \
-    /home/iterate/.local/share/pnpm/store \
-    /home/iterate/.cache/uv \
+# Keep pnpm fetch/install and post-sync outputs in a single layer so the store
+# and temporary build files do not remain in the image Fly has to unpack.
+RUN --mount=type=cache,target=/home/iterate/.pnpm-store,uid=1000,gid=1000,sharing=locked \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "amd64" ]; then PNPM_ARCH="x64"; else PNPM_ARCH="arm64"; fi && \
+    pnpm fetch --config.platform=linux --config.arch="$PNPM_ARCH" --config.libc=glibc && \
+    pnpm install --frozen-lockfile --offline && \
+    bash "$ITERATE_REPO/sandbox/after-repo-sync-steps.sh" && \
+    sudo rm -rf \
     /home/iterate/.cache/node/corepack \
     /home/iterate/.npm \
     /tmp/*
