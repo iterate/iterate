@@ -1,119 +1,57 @@
 #!/usr/bin/env node
 import { execSync } from "node:child_process";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 
-import * as prompts from "@clack/prompts";
-import { os } from "@orpc/server";
-import { createCli, type AnyRouter, yamlTableConsoleLogger } from "trpc-cli";
-
-import { normalizePathPrefix } from "./sdk.ts";
+import {
+  getDeployCommandHelp,
+  parseDeployCommandArgs,
+  promptForDeployCommandInput,
+  runDeployCommand,
+} from "./lib/deploy-command.ts";
 
 process.env.PATH_PREFIX = normalizePathPrefix(
   process.env.PATH_PREFIX || `/${execSync("id -un").toString().trim()}`,
 );
 
-const { router, leafPaths } = await discoverRouter();
-
 const userArgs = process.argv.slice(2);
-const needsInteractiveSelection =
-  userArgs.length === 0 || (userArgs.length === 1 && userArgs[0] === "run");
-
-let argv: string[] | undefined;
-if (needsInteractiveSelection && leafPaths.length > 0) {
-  const selected = await prompts.select({
-    message: "Select a script to run",
-    options: leafPaths.sort().map((p) => ({ value: p, label: p })),
-  });
-  if (prompts.isCancel(selected)) process.exit(0);
-  argv = (selected as string).split("/");
+if (userArgs.length === 0 || userArgs[0] === "-h" || userArgs[0] === "--help") {
+  console.log(getCliHelp());
+  process.exit(0);
 }
 
-await createCli({ router: router as AnyRouter }).run({
-  prompts,
-  logger: yamlTableConsoleLogger,
-  ...(argv && { argv }),
-});
+if (userArgs[0] !== "deploy") {
+  console.error(`Unknown command: ${userArgs[0]}`);
+  console.log(getCliHelp());
+  process.exit(1);
+}
 
-async function discoverRouter() {
-  const tree: Record<string, unknown> = {};
-  const leafPaths: string[] = [];
+await runBuiltinDeploy(userArgs.slice(1));
 
-  for await (const file of fs.glob("**/*.{js,ts}", {
-    cwd: process.cwd(),
-    exclude: [
-      "dist/**",
-      "node_modules/**",
-      "web/**",
-      "e2e/**",
-      "lib/**",
-      "video/**",
-      "old-stuff/**",
-      "clean copy/**",
-      "deployed-processor/**",
-    ],
-  })) {
-    if (!isCandidateScript(file)) continue;
-
-    try {
-      const mod = await import(pathToFileURL(path.resolve(process.cwd(), file)).href);
-      const procedure = mod.handler ?? mod.default;
-      if (!procedure?.["~orpc"]) continue;
-
-      const segments = fileToSegments(file);
-      leafPaths.push(segments.join("/"));
-
-      let node = tree;
-      for (let i = 0; i < segments.length - 1; i++) {
-        node[segments[i]] ??= {};
-        node = node[segments[i]] as Record<string, unknown>;
-      }
-      node[segments.at(-1)!] = procedure;
-    } catch {
-      // skip files that fail to import
-    }
+async function runBuiltinDeploy(args: string[]) {
+  const { help, input } = parseDeployCommandArgs(args);
+  if (help) {
+    console.log(getCliHelp());
+    return;
   }
 
-  return {
-    router: os.router(toNestedRouter(tree) as never) as AnyRouter,
-    leafPaths,
-  };
-}
+  const commandInput = await promptForDeployCommandInput(input);
+  const result = await runDeployCommand(commandInput);
 
-function fileToSegments(file: string): string[] {
-  return file.replace(/\.(ts|js)$/, "").split("/");
-}
-
-function toNestedRouter(node: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(node)) {
-    if (value != null && typeof value === "object" && "~orpc" in value) {
-      out[key] = value;
-    } else if (value != null && typeof value === "object") {
-      out[key] = os.router(toNestedRouter(value as Record<string, unknown>) as never);
-    }
-  }
-  return out;
-}
-
-function isCandidateScript(file: string) {
-  const basename = path.basename(file);
-  return (
-    !file.includes("/.") &&
-    !file.endsWith(".d.ts") &&
-    !file.endsWith(".test.ts") &&
-    !file.endsWith(".e2e.test.ts") &&
-    !file.endsWith("-types.ts") &&
-    ![
-      "agent.ts",
-      "codemode.ts",
-      "prompt.ts",
-      "slack-input.ts",
-      "cli.ts",
-      "sdk.ts",
-      "test-helpers.ts",
-      "contract.ts",
-    ].includes(basename)
+  console.info(
+    `Deployed ${result.file} (${result.processorExportName}) to ${result.streamPath} as ${result.processorSlug}`,
   );
+  console.log(JSON.stringify(result, null, 2));
+}
+
+function getCliHelp() {
+  return [
+    "Usage: ai-engineer-workshop deploy [options]",
+    "",
+    "This CLI only supports the deploy command.",
+    "",
+    getDeployCommandHelp(),
+  ].join("\n");
+}
+
+function normalizePathPrefix(pathPrefix: string) {
+  return pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
 }

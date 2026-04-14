@@ -10,10 +10,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@orpc/client": "1.13.13",
     "@iterate-com/shared": "workspace:*",
-    "@orpc/contract": "1.13.13",
-    "@orpc/openapi-client": "1.13.13",
+    "@orpc/client": "1.13.14",
+    "@orpc/contract": "1.13.14",
+    "@orpc/openapi-client": "1.13.14",
     "zod": "^4.3.6"
   },
   "devDependencies": {

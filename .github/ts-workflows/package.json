@@ -16,7 +16,7 @@
     "@iterate-com/shared": "workspace:*",
     "@jlarky/gha-ts": "^0.1.3",
     "@octokit/rest": "^22.0.0",
-    "@orpc/server": "1.13.13",
+    "@orpc/server": "1.13.14",
     "@slack/web-api": "^7.12.0",
     "dedent": "^1.7.0",
     "find-up": "^8.0.0",

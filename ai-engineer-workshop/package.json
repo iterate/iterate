@@ -22,8 +22,7 @@
     "dist"
   ],
   "bin": {
-    "ai-engineer-workshop": "./dist/cli.js",
-    "workshop": "./dist/cli.js"
+    "ai-engineer-workshop": "./dist/cli.js"
   },
   "exports": {
     ".": "./sdk.ts",
@@ -58,27 +57,25 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm test:e2e",
     "test:e2e": "vitest run --dir examples/09-bashmode-agent --maxWorkers 1 --passWithNoTests",
-    "test:watch": "vitest --dir examples/09-bashmode-agent --maxWorkers 1 --passWithNoTests",
-    "workshop": "node --import tsx ./cli.ts",
-    "w": "pnpm workshop"
+    "test:watch": "vitest --dir examples/09-bashmode-agent --maxWorkers 1 --passWithNoTests"
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
-    "@orpc/client": "1.13.13",
-    "@orpc/contract": "1.13.13",
-    "@orpc/openapi-client": "1.13.13",
-    "@orpc/server": "1.13.13",
+    "@orpc/client": "1.13.14",
+    "@orpc/contract": "1.13.14",
+    "@orpc/openapi-client": "1.13.14",
+    "@orpc/server": "1.13.14",
     "@slack/web-api": "^7.15.0",
     "@tanstack/ai": "^0.10.2",
     "@tanstack/ai-client": "0.7.9",
     "@tanstack/ai-code-mode": "^0.1.2",
     "@tanstack/ai-openai": "^0.7.4",
     "dedent": "^1.7.2",
+    "esbuild": "^0.27.4",
     "just-bash": "^2.14.0",
     "openai": "^6.33.0",
     "schematch": "0.2.1",
     "tinyexec": "^1.1.1",
-    "trpc-cli": "0.14.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

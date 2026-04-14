@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",
-    "@orpc/server": "1.13.13",
+    "@orpc/server": "1.13.14",
     "yaml": "^2.8.2",
     "zod": "^4.3.6"
   },
