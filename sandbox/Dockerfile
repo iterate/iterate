@@ -89,7 +89,7 @@ RUN corepack enable
 # Global npm tools (as root for system-wide access)
 RUN corepack prepare pnpm@10.24.0 --activate && \
     npm install -g tsx serve && \
-    rm -rf /home/iterate/.cache/node/corepack /home/iterate/.npm
+    rm -rf /root/.cache/node/corepack /root/.npm
 
 # Configure UTF-8 locale (required for btop and other CLI tools)
 RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
@@ -220,10 +220,18 @@ RUN set -e && \
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 WORKDIR /home/iterate/src/github.com/iterate/iterate
 
+# pnpm reads npm-style config env vars. Keep build-time and runtime pnpm store
+# paths aligned with the Docker volume mounted at /home/iterate/.pnpm-store.
+ENV npm_config_store_dir=/home/iterate/.pnpm-store
+
 # Copy lockfile first so BuildKit can reuse the dependency step when source-only
 # files change. The pnpm store itself stays in a cache mount, not the image.
 COPY --chown=iterate:iterate package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --chown=iterate:iterate patches ./patches
+RUN --mount=type=cache,target=/home/iterate/.pnpm-store,uid=1001,gid=1001,sharing=locked \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "amd64" ]; then PNPM_ARCH="x64"; else PNPM_ARCH="arm64"; fi && \
+    pnpm fetch --config.platform=linux --config.arch="$PNPM_ARCH" --config.libc=glibc
 
 # Copy repo, exclude git metadata from context.
 # If .git is a worktree file, replace with dir
@@ -233,12 +241,9 @@ RUN if [ -f .git ]; then rm .git && mkdir .git; fi
 # Ensure shell scripts are executable (git may not preserve permissions on all platforms)
 RUN chmod +x sandbox/*.sh sandbox/providers/docker/*.sh
 
-# Keep pnpm fetch/install and post-sync outputs in a single layer so the store
-# and temporary build files do not remain in the image Fly has to unpack.
-RUN --mount=type=cache,target=/home/iterate/.pnpm-store,uid=1000,gid=1000,sharing=locked \
-    ARCH=$(dpkg --print-architecture) && \
-    if [ "$ARCH" = "amd64" ]; then PNPM_ARCH="x64"; else PNPM_ARCH="arm64"; fi && \
-    pnpm fetch --config.platform=linux --config.arch="$PNPM_ARCH" --config.libc=glibc && \
+# Keep install and post-sync outputs in a single layer so the mounted pnpm
+# store and temporary build files do not remain in the image Fly has to unpack.
+RUN --mount=type=cache,target=/home/iterate/.pnpm-store,uid=1001,gid=1001,sharing=locked \
     pnpm install --frozen-lockfile --offline && \
     bash "$ITERATE_REPO/sandbox/after-repo-sync-steps.sh" && \
     sudo rm -rf \

@@ -136,7 +136,7 @@ export default workflow({
             '    SANDBOX_TEST_SNAPSHOT_ID="${FLY_IMAGE_TAG}" \\',
             '    FLY_DEFAULT_IMAGE="${FLY_IMAGE_TAG}" \\',
             '    DOPPLER_TOKEN="${DOPPLER_TOKEN}" \\',
-            '    doppler run -- env RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=fly SANDBOX_TEST_SNAPSHOT_ID="$FLY_IMAGE_TAG" FLY_DEFAULT_IMAGE="$FLY_IMAGE_TAG" pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1',
+            '    doppler run -- env RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=fly SANDBOX_TEST_SNAPSHOT_ID="$FLY_IMAGE_TAG" FLY_DEFAULT_IMAGE="$FLY_IMAGE_TAG" pnpm sandbox test test/provider-base-image.test.ts test/fly-daemon-smoke.test.ts --maxWorkers=1',
             '  ) >"${fly_log}" 2>&1 &',
             '  fly_pid="$!"',
             "fi",
@@ -191,7 +191,10 @@ export default workflow({
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
-          run: "doppler run -- pnpm sandbox fly:cleanup -- --timeframe 0s --action delete --prefix test-base-image-test --all",
+          run: [
+            "doppler run -- pnpm sandbox fly:cleanup -- --timeframe 0s --action delete --prefix test-base-image-test --all",
+            "doppler run -- pnpm sandbox fly:cleanup -- --timeframe 0s --action delete --prefix test-fly-daemon-smoke --all",
+          ].join("\n"),
         },
       ],
     },

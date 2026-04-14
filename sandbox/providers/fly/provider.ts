@@ -401,6 +401,71 @@ async function getMachineForDebug(params: {
   }
 }
 
+async function listAppMachines(params: {
+  env: FlyEnv;
+  appName: string;
+}): Promise<Array<Record<string, unknown>> | null> {
+  const { env, appName } = params;
+  try {
+    const payload = await flyApi<unknown>({
+      env,
+      method: "GET",
+      path: `/v1/apps/${encodeURIComponent(appName)}/machines`,
+    });
+    return Array.isArray(payload) ? payload.map(asRecord) : [];
+  } catch (error) {
+    if (isNotFoundError(error) || isGraphQlNotFoundError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function waitForNoSandboxMachines(params: {
+  env: FlyEnv;
+  appName: string;
+  timeoutMs: number;
+}): Promise<void> {
+  const { env, appName, timeoutMs } = params;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const machines = await listAppMachines({ env, appName });
+    if (!machines) return;
+
+    const sandboxMachine = resolveSandboxMachine(machines);
+    if (!sandboxMachine) return;
+
+    await sleep(WAIT_RETRY_DELAY_MS);
+  }
+
+  throw new Error(`Timed out waiting for Fly app ${appName} to clear sandbox machines`);
+}
+
+async function cleanupFailedCreateAttempt(params: {
+  env: FlyEnv;
+  appName: string;
+  machineId?: string;
+}): Promise<void> {
+  const { env, appName, machineId } = params;
+
+  if (machineId) {
+    try {
+      await flyApi({
+        env,
+        method: "DELETE",
+        path: `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}?force=true`,
+      });
+    } catch (error) {
+      if (!isMachineNotFoundError(error) && !isNotFoundError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  await waitForNoSandboxMachines({ env, appName, timeoutMs: CREATE_RETRY_BACKOFF_MS });
+}
+
 async function ensureFlyAppExists(params: { env: FlyEnv; appName: string }): Promise<void> {
   const { env, appName } = params;
   try {
@@ -805,11 +870,11 @@ export class FlyProvider extends SandboxProvider {
           },
         });
 
-        await new FlySandbox({
+        await cleanupFailedCreateAttempt({
           env: this.env,
           appName,
           machineId,
-        }).delete();
+        });
         await sleep(CREATE_RETRY_BACKOFF_MS);
       }
     }
