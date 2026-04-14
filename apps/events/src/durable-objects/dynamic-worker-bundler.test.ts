@@ -53,7 +53,7 @@ export default defineProcessor(() => ({
       });
 
       expect(configuredEvent.payload.slug).toBe("current-processor");
-      expect(configuredEvent.payload.script).toContain('type: "pong"');
+      expect(configuredEvent.payload.script).toMatch(/type:\s*"pong"/);
       expect(configuredEvent.payload.script).toContain("afterAppend");
       expect(configuredEvent.payload.script).not.toContain("onEvent");
       expect(configuredEvent.payload.script).not.toContain(`from "${processorRuntimePackageName}"`);
@@ -118,7 +118,7 @@ export default {
           secretHeaderValue: "Bearer test",
         },
       });
-      expect(configuredEvent.payload.script).toContain('type: "pong"');
+      expect(configuredEvent.payload.script).toMatch(/type:\s*"pong"/);
       expect(configuredEvent.payload.script).toContain("afterAppend");
     } finally {
       await rm(directory, { force: true, recursive: true });
@@ -152,7 +152,7 @@ export default {
       });
 
       expect(configuredEvent.payload.compatibilityFlags).toEqual(["nodejs_compat"]);
-      expect(configuredEvent.payload.script).toContain('from "node:zlib"');
+      expect(configuredEvent.payload.script).toMatch(/from\s*"node:zlib"/);
       expect(configuredEvent.payload.script).toContain("gunzipSync");
     } finally {
       await rm(directory, { force: true, recursive: true });
