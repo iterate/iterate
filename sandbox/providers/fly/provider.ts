@@ -17,6 +17,8 @@ const WAIT_TIMEOUT_SECONDS = 300;
 const MAX_WAIT_TIMEOUT_SECONDS = 60;
 const WAIT_RETRY_DELAY_MS = 1_000;
 const WAIT_NOT_FOUND_GRACE_SECONDS = 45;
+const CREATE_RETRY_LIMIT = 2;
+const CREATE_RETRY_BACKOFF_MS = 30_000;
 const DEFAULT_WEB_INTERNAL_PORT = 8080;
 const DEFAULT_SERVICE_PORTS: number[] = [];
 const DEFAULT_FLY_ORG = "iterate";
@@ -347,6 +349,14 @@ function isMachineStillActiveError(error: unknown): boolean {
 function isMachineNotFoundError(error: unknown): boolean {
   const message = String(error).toLowerCase();
   return message.includes("(404)") && message.includes("machine not found");
+}
+
+function isRetryableCreateError(error: unknown): boolean {
+  const message = String(error).toLowerCase();
+  return (
+    message.includes("disappeared while waiting for 'started'") ||
+    (message.includes("machine not found") && message.includes("waiting for 'started'"))
+  );
 }
 
 function logFlyWaitEvent(params: {
@@ -713,8 +723,6 @@ export class FlyProvider extends SandboxProvider {
         opts.envVars?.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS ?? ".fly.dev",
     };
 
-    await ensureFlyAppExists({ env: this.env, appName });
-    await ensureFlyIngress({ env: this.env, appName });
     const snapshotId = opts.providerSnapshotId ?? this.defaultSnapshotId;
     if (snapshotId.includes("registry.fly.io/iterate-sandbox-image:")) {
       throw new Error(
@@ -722,53 +730,91 @@ export class FlyProvider extends SandboxProvider {
       );
     }
 
-    const createPayload = await flyApi<unknown>({
-      env: this.env,
-      method: "POST",
-      path: `/v1/apps/${encodeURIComponent(appName)}/machines`,
-      body: {
-        name: FLY_MACHINE_NAME,
-        region: jsonEnvVar.parse(RegionConfig, this.env.REGION_CONFIG).flyIoRegion,
-        skip_launch: false,
-        config: {
-          image: snapshotId,
-          env: envVars,
-          guest: {
-            cpu_kind: "shared",
-            cpus: this.env.FLY_DEFAULT_CPUS,
-            memory_mb: this.env.FLY_DEFAULT_MEMORY_MB,
-          },
-          restart: { policy: "always" },
-          services: buildServices(),
-          metadata: {
-            "com.iterate.sandbox": "true",
-            "com.iterate.machine_type": "fly",
-            "com.iterate.external_id": opts.externalId,
-          },
-          ...(hasEntrypointArguments ? { init: { exec: entrypointArguments } } : {}),
-        },
-      },
-    });
+    // Freshly-pushed Fly registry tags can occasionally produce a machine id and
+    // then vanish before the machine becomes visible. Retry once after cleanup.
+    for (let attempt = 1; attempt <= CREATE_RETRY_LIMIT; attempt += 1) {
+      await ensureFlyAppExists({ env: this.env, appName });
+      await ensureFlyIngress({ env: this.env, appName });
 
-    const machineId = resolveMachineId(createPayload);
-    logFlyWaitEvent({
-      level: "log",
-      event: "machine-created",
-      appName,
-      machineId,
-      state: "created",
-      extra: {
-        snapshotId,
-        reportedState: asString(asRecord(createPayload).state) ?? "unknown",
-      },
-    });
-    await waitForState({ env: this.env, appName, machineId, state: "started" });
+      let machineId: string | undefined;
+      try {
+        const createPayload = await flyApi<unknown>({
+          env: this.env,
+          method: "POST",
+          path: `/v1/apps/${encodeURIComponent(appName)}/machines`,
+          body: {
+            name: FLY_MACHINE_NAME,
+            region: jsonEnvVar.parse(RegionConfig, this.env.REGION_CONFIG).flyIoRegion,
+            skip_launch: false,
+            config: {
+              image: snapshotId,
+              env: envVars,
+              guest: {
+                cpu_kind: "shared",
+                cpus: this.env.FLY_DEFAULT_CPUS,
+                memory_mb: this.env.FLY_DEFAULT_MEMORY_MB,
+              },
+              restart: { policy: "always" },
+              services: buildServices(),
+              metadata: {
+                "com.iterate.sandbox": "true",
+                "com.iterate.machine_type": "fly",
+                "com.iterate.external_id": opts.externalId,
+              },
+              ...(hasEntrypointArguments ? { init: { exec: entrypointArguments } } : {}),
+            },
+          },
+        });
 
-    return new FlySandbox({
-      env: this.env,
-      appName,
-      machineId,
-    });
+        machineId = resolveMachineId(createPayload);
+        logFlyWaitEvent({
+          level: "log",
+          event: "machine-created",
+          appName,
+          machineId,
+          state: "created",
+          extra: {
+            snapshotId,
+            reportedState: asString(asRecord(createPayload).state) ?? "unknown",
+            attempt,
+          },
+        });
+        await waitForState({ env: this.env, appName, machineId, state: "started" });
+
+        return new FlySandbox({
+          env: this.env,
+          appName,
+          machineId,
+        });
+      } catch (error) {
+        if (attempt >= CREATE_RETRY_LIMIT || !isRetryableCreateError(error)) {
+          throw error;
+        }
+
+        logFlyWaitEvent({
+          level: "warn",
+          event: "create-retry",
+          appName,
+          machineId: machineId ?? "unknown",
+          state: "started",
+          extra: {
+            attempt,
+            maxAttempts: CREATE_RETRY_LIMIT,
+            backoffMs: CREATE_RETRY_BACKOFF_MS,
+            error: String(error),
+          },
+        });
+
+        await new FlySandbox({
+          env: this.env,
+          appName,
+          machineId,
+        }).delete();
+        await sleep(CREATE_RETRY_BACKOFF_MS);
+      }
+    }
+
+    throw new Error(`Fly create exhausted retries for app ${appName}`);
   }
 
   get(providerId: string): FlySandbox | null {
