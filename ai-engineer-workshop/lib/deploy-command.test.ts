@@ -24,9 +24,8 @@ describe("parseDeployCommandArgs", () => {
     });
   });
 
-  test("accepts the legacy deploy processor alias and camelCase flags", () => {
+  test("accepts camelCase flags", () => {
     const parsed = parseDeployCommandArgs([
-      "processor",
       "--file",
       "./processor.ts",
       "--streamPath",
@@ -46,6 +45,12 @@ describe("parseDeployCommandArgs", () => {
         outboundGateway: false,
       },
     });
+  });
+
+  test("rejects the removed deploy processor alias", () => {
+    expect(() => parseDeployCommandArgs(["processor", "--file", "./processor.ts"])).toThrow(
+      "Unknown deploy argument: processor",
+    );
   });
 
   test("returns help without parsing the rest of the argv", () => {

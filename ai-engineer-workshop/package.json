@@ -22,8 +22,7 @@
     "dist"
   ],
   "bin": {
-    "ai-engineer-workshop": "./dist/cli.js",
-    "workshop": "./dist/cli.js"
+    "ai-engineer-workshop": "./dist/cli.js"
   },
   "exports": {
     ".": "./sdk.ts",
@@ -58,9 +57,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm test:e2e",
     "test:e2e": "vitest run --dir examples/09-bashmode-agent --maxWorkers 1 --passWithNoTests",
-    "test:watch": "vitest --dir examples/09-bashmode-agent --maxWorkers 1 --passWithNoTests",
-    "workshop": "node --import tsx ./cli.ts",
-    "w": "pnpm workshop"
+    "test:watch": "vitest --dir examples/09-bashmode-agent --maxWorkers 1 --passWithNoTests"
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
@@ -79,7 +76,6 @@
     "openai": "^6.33.0",
     "schematch": "0.2.1",
     "tinyexec": "^1.1.1",
-    "trpc-cli": "0.14.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

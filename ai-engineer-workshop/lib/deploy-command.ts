@@ -44,7 +44,7 @@ export const DeployCommandInput = z.object({
 export type DeployCommandInput = z.infer<typeof DeployCommandInput>;
 
 export function parseDeployCommandArgs(rawArgs: string[]) {
-  const args = rawArgs[0] === "processor" ? rawArgs.slice(1) : rawArgs.slice();
+  const args = rawArgs.slice();
   const parsed: Partial<DeployCommandInput> = {};
 
   for (let index = 0; index < args.length; index++) {
@@ -106,8 +106,6 @@ export function parseDeployCommandArgs(rawArgs: string[]) {
 
 export function getDeployCommandHelp() {
   return [
-    "Usage: ai-engineer-workshop deploy [options]",
-    "",
     "Options:",
     "  --file <path>                              Path to a module that exports a processor",
     "  --stream-path <path>                       Stream path to configure, e.g. /jonas/agent",
@@ -123,7 +121,6 @@ export function getDeployCommandHelp() {
     "  -h, --help                                 Show this help",
     "",
     "Notes:",
-    "  - `deploy processor ...` is still accepted as an alias.",
     "  - If `--file` or `--stream-path` is omitted, the CLI will prompt for it.",
   ].join("\n");
 }
