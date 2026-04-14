@@ -11,9 +11,9 @@
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",
-    "@orpc/client": "1.13.13",
-    "@orpc/contract": "1.13.13",
-    "@orpc/openapi-client": "1.13.13",
+    "@orpc/client": "1.13.14",
+    "@orpc/contract": "1.13.14",
+    "@orpc/openapi-client": "1.13.14",
     "zod": "^4.1.12"
   },
   "devDependencies": {

@@ -74,16 +74,16 @@
   "pnpm": {
     "overrides": {
       "axios": "1.13.6",
-      "@orpc/client": "1.13.13",
-      "@orpc/contract": "1.13.13",
-      "@orpc/openapi": "1.13.13",
-      "@orpc/openapi-client": "1.13.13",
-      "@orpc/otel": "1.13.13",
-      "@orpc/react-query": "1.13.13",
-      "@orpc/server": "1.13.13",
-      "@orpc/shared": "1.13.13",
-      "@orpc/tanstack-query": "1.13.13",
-      "@orpc/zod": "1.13.13",
+      "@orpc/client": "1.13.14",
+      "@orpc/contract": "1.13.14",
+      "@orpc/openapi": "1.13.14",
+      "@orpc/openapi-client": "1.13.14",
+      "@orpc/otel": "1.13.14",
+      "@orpc/react-query": "1.13.14",
+      "@orpc/server": "1.13.14",
+      "@orpc/shared": "1.13.14",
+      "@orpc/tanstack-query": "1.13.14",
+      "@orpc/zod": "1.13.14",
       "srvx": "0.11.12",
       "ws": "8.19.0",
       "baseline-browser-mapping": "^2.9.14",
@@ -94,8 +94,8 @@
   },
   "dependencies": {
     "@octokit/rest": "^22.0.0",
-    "@orpc/client": "1.13.13",
-    "@orpc/server": "1.13.13",
+    "@orpc/client": "1.13.14",
+    "@orpc/server": "1.13.14",
     "zod": "^4.3.6"
   }
 }

@@ -6,16 +6,16 @@ settings:
 
 overrides:
   axios: 1.13.6
-  '@orpc/client': 1.13.13
-  '@orpc/contract': 1.13.13
-  '@orpc/openapi': 1.13.13
-  '@orpc/openapi-client': 1.13.13
-  '@orpc/otel': 1.13.13
-  '@orpc/react-query': 1.13.13
-  '@orpc/server': 1.13.13
-  '@orpc/shared': 1.13.13
-  '@orpc/tanstack-query': 1.13.13
-  '@orpc/zod': 1.13.13
+  '@orpc/client': 1.13.14
+  '@orpc/contract': 1.13.14
+  '@orpc/openapi': 1.13.14
+  '@orpc/openapi-client': 1.13.14
+  '@orpc/otel': 1.13.14
+  '@orpc/react-query': 1.13.14
+  '@orpc/server': 1.13.14
+  '@orpc/shared': 1.13.14
+  '@orpc/tanstack-query': 1.13.14
+  '@orpc/zod': 1.13.14
   srvx: 0.11.12
   ws: 8.19.0
   baseline-browser-mapping: ^2.9.14
@@ -31,11 +31,11 @@ importers:
         specifier: ^22.0.0
         version: 22.0.1
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -134,8 +134,8 @@ importers:
         specifier: ^22.0.0
         version: 22.0.1
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@slack/web-api':
         specifier: ^7.12.0
         version: 7.14.1
@@ -150,7 +150,7 @@ importers:
         version: 0.35.0
       trpc-cli:
         specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
@@ -170,17 +170,17 @@ importers:
         specifier: ^1.1.0
         version: 1.1.0
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi-client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@slack/web-api':
         specifier: ^7.15.0
         version: 7.15.0
@@ -216,7 +216,7 @@ importers:
         version: 1.1.1
       trpc-cli:
         specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -298,23 +298,23 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ui
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/openapi-client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/tanstack-query':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(@orpc/client@1.13.13(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(@orpc/client@1.13.14(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
       '@tanstack/react-devtools':
         specifier: 0.10.0
         version: 0.10.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(csstype@3.2.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)
@@ -428,8 +428,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -510,17 +510,17 @@ importers:
         specifier: ^1.38.0
         version: 1.40.0
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/react-query':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(@orpc/client@1.13.13(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)(@tanstack/react-query@5.90.21(react@19.2.4))(react@19.2.4)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(@orpc/client@1.13.14(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)(@tanstack/react-query@5.90.21(react@19.2.4))(react@19.2.4)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@radix-ui/react-avatar':
         specifier: ^1.1.11
         version: 1.1.11(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -745,7 +745,7 @@ importers:
         version: 1.3.1
       trpc-cli:
         specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
@@ -853,23 +853,23 @@ importers:
         specifier: 1.2.0-beta.3
         version: 1.2.0-beta.3
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/openapi-client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/tanstack-query':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(@orpc/client@1.13.13(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(@orpc/client@1.13.14(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
       '@scalar/api-reference-react':
         specifier: ^0.9.9
         version: 0.9.9(axios@1.13.6)(change-case@5.4.4)(react@19.2.4)(tailwindcss@4.2.1)(typescript@5.9.3)
@@ -990,14 +990,14 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi-client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -1021,23 +1021,23 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ui
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/openapi-client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/tanstack-query':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(@orpc/client@1.13.13(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(@orpc/client@1.13.14(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
       '@tanstack/ai':
         specifier: ^0.2.2
         version: 0.2.2
@@ -1160,14 +1160,14 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi-client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -1197,23 +1197,23 @@ importers:
         specifier: 1.2.0-beta.3
         version: 1.2.0-beta.3
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/openapi-client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/tanstack-query':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(@orpc/client@1.13.13(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(@orpc/client@1.13.14(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
       '@tanstack/react-devtools':
         specifier: 0.10.0
         version: 0.10.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(csstype@3.2.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)
@@ -1346,8 +1346,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -1371,20 +1371,20 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ui
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/openapi-client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/tanstack-query':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(@orpc/client@1.13.13(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(@orpc/client@1.13.14(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
       '@tanstack/react-devtools':
         specifier: 0.10.0
         version: 0.10.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(csstype@3.2.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)
@@ -1472,7 +1472,7 @@ importers:
         version: 0.27.4
       trpc-cli:
         specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       tsx:
         specifier: ^4.20.3
         version: 4.21.0
@@ -1492,8 +1492,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -1517,20 +1517,20 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ui
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/openapi-client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/tanstack-query':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(@orpc/client@1.13.13(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(@orpc/client@1.13.14(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
       '@tanstack/react-devtools':
         specifier: 0.10.0
         version: 0.10.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(csstype@3.2.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)
@@ -1620,14 +1620,14 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi-client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       zod:
         specifier: ^4.1.12
         version: 4.3.6
@@ -1838,17 +1838,17 @@ importers:
         specifier: ^1.38.0
         version: 1.40.0
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/tanstack-query':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(@orpc/client@1.13.13(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(@orpc/client@1.13.14(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
       '@radix-ui/react-accordion':
         specifier: ^1.2.12
         version: 1.2.12(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -2022,7 +2022,7 @@ importers:
         version: 1.0.2
       trpc-cli:
         specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
+        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
       ts-pattern:
         specifier: ^5.9.0
         version: 5.9.0
@@ -2182,17 +2182,17 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ui
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/openapi-client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@tanstack/react-devtools':
         specifier: 0.10.0
         version: 0.10.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(csstype@3.2.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)
@@ -2282,14 +2282,14 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi-client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       zod:
         specifier: ^4.1.12
         version: 4.3.6
@@ -2307,8 +2307,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/shared
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       yaml:
         specifier: ^2.8.2
         version: 2.8.2
@@ -2321,7 +2321,7 @@ importers:
         version: link:../packages/iterate
       trpc-cli:
         specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
@@ -2375,14 +2375,14 @@ importers:
         specifier: workspace:*
         version: link:../../apps/daemon-v2-contract
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       better-sqlite3:
         specifier: ^12.4.1
         version: 12.6.2
@@ -2415,17 +2415,17 @@ importers:
         specifier: ^1.0.0
         version: 1.1.0
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       better-auth:
         specifier: 1.4.3
         version: 1.4.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
       trpc-cli:
         specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
+        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
       zod:
         specifier: 4.1.12
         version: 4.1.12
@@ -2492,14 +2492,14 @@ importers:
   packages/pidnap:
     dependencies:
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@valibot/to-json-schema':
         specifier: ^1.5.0
         version: 1.5.0(valibot@1.2.0(typescript@5.9.3))
@@ -2517,7 +2517,7 @@ importers:
         version: 17.3.1
       trpc-cli:
         specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -2583,29 +2583,29 @@ importers:
         specifier: ^1.38.0
         version: 1.40.0
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/contract':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/openapi':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/openapi-client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/otel':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(@opentelemetry/instrumentation@0.206.0(@opentelemetry/api@1.9.0))
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(@opentelemetry/instrumentation@0.206.0(@opentelemetry/api@1.9.0))
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@orpc/shared':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/zod':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.13(@opentelemetry/api@1.9.0))(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)(zod@4.3.6)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.14(@opentelemetry/api@1.9.0))(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)(zod@4.3.6)
       '@posthog/rollup-plugin':
         specifier: ^1.2.14
         version: 1.2.15(rollup@4.59.0)
@@ -2638,7 +2638,7 @@ importers:
         version: 1.0.2
       trpc-cli:
         specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -2851,11 +2851,11 @@ importers:
         specifier: ^0.128.1
         version: 0.128.1(ws@8.20.0)
       '@orpc/client':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
-        specifier: 1.13.13
-        version: 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.20.0)
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.20.0)
       pidnap:
         specifier: workspace:*
         version: link:../packages/pidnap
@@ -2871,7 +2871,7 @@ importers:
         version: 25.3.3
       trpc-cli:
         specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.20.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@3.25.76)
+        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.20.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@3.25.76)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -6206,39 +6206,39 @@ packages:
     resolution: {integrity: sha512-cifvXDhcqMwwTlTK04GBNeIe7yyo28Mfby85QXFe1Yk8nmi36Ab/5UQwptOx84SsoGNRg+EVSjwzfSZMy6pmlw==}
     engines: {node: '>=14'}
 
-  '@orpc/client@1.13.13':
-    resolution: {integrity: sha512-jagx/Sa+9K4HEC5lBrUlMSrmR/06hvZctWh93/sKZc8GBk4zM0+71oT1kXQVw1oRYFV2XAq3xy3m6NdM6gfKYA==}
+  '@orpc/client@1.13.14':
+    resolution: {integrity: sha512-JQf3lO//UGHmmkd8+9fuWuh1gga1lhWuKnsT19cui7F6WizBy0NdFSVQerOsSy2c1kxOthlD7GnicGgSY2rhQA==}
 
-  '@orpc/contract@1.13.13':
-    resolution: {integrity: sha512-md6iyrYkePBSJNs1VnVEEnAUORMDPHIf3JGRSHxyssIcNakev/iOjP0HvpH0Sx0MlTBhihAJo6uFL8Vpth58Nw==}
+  '@orpc/contract@1.13.14':
+    resolution: {integrity: sha512-MfsjaQQDVcs4wHmdl5N/7vkwMnQ41nlojWXyRfRXNJHQczqBzM6sYaTJuUPXlw4YbIu64KHZ5nbbtwNCO5YXsg==}
 
-  '@orpc/interop@1.13.13':
-    resolution: {integrity: sha512-S8edIRA7ekD3/gHx5MrsO9CxZ0QvCaVDkVbNf42SZbLYPXuvxtdH0CYwaB1q9uQg2Jk0PBP8AquLH6WFwjMSbQ==}
+  '@orpc/interop@1.13.14':
+    resolution: {integrity: sha512-7umABTBzQMNTX8dTKrbIOu9g5XJuMeqijC6Gu6jlaVP90e8D57n7Zv6HfwSgPVq0oQXf9n/ENptzVj3TpxpXsQ==}
 
-  '@orpc/json-schema@1.13.13':
-    resolution: {integrity: sha512-48CgMrWIKG/t8l4OBlFRcYOj2ZCrIXfw1LA2Q6qRGdyBPzSLmQCMhh3Y4eoFXfz/wKvQIfyoUmBIdd91BxSyLg==}
+  '@orpc/json-schema@1.13.14':
+    resolution: {integrity: sha512-BLGewxG0dv5AhLEwTmeXDNZ0PiRxvCzxcUtbo8FExwIR6wpknfWukeoymaHn8vtyfuOO9nvPfertNuNUReiufg==}
 
-  '@orpc/openapi-client@1.13.13':
-    resolution: {integrity: sha512-k8od+bD7MqysKPPybAkxgfaNIaNseFPXtbidWkZAdCZ5w34SnDc7QPZJ0PQbyt9n9B+jOXSADNwQSTWSuGpjyA==}
+  '@orpc/openapi-client@1.13.14':
+    resolution: {integrity: sha512-mHuj/UL5qLqB1JqrRdlAoUYMidbsry8Cr9QOlOZk1mp7+OZhasFv75UNzxyjNNaSjyd3l2k4UkgpcHK4VSD7tQ==}
 
-  '@orpc/openapi@1.13.13':
-    resolution: {integrity: sha512-lm3cAR1KJ1xp5WyDKCIqvhzYlDC914oevwYPWC7GFvTU1cTEmFP4lkQRdzLfvo06BprCg+UtHjzdLUDrBOF/zQ==}
+  '@orpc/openapi@1.13.14':
+    resolution: {integrity: sha512-wwfq8CwOTxuNOfamHKTrXgUxxAhh8WSTpu2OgZhNDWxH0p6V/xLhlXl2iSjmzyO4QuBpE26fchDwaVAGic9zlQ==}
 
-  '@orpc/otel@1.13.13':
-    resolution: {integrity: sha512-einGVhnWXmiRff1EAKcBRAwJ7L302ByrrSHQ1QYURxyuTkLf6IWTGBwVVTWkDKQUFhpGm4ToMw+n71h7qAS/jQ==}
+  '@orpc/otel@1.13.14':
+    resolution: {integrity: sha512-JsDRQmu73lyj3WmY/SMMFUDmhwRWjZD5JeC5Lrx3B0RmIh07zsI6g2VDJL0p3V2zD8iw6I8QwpusuNbooinB4A==}
     peerDependencies:
       '@opentelemetry/api': '>=1.9.0'
       '@opentelemetry/instrumentation': '>=0.203.0'
 
-  '@orpc/react-query@1.13.13':
-    resolution: {integrity: sha512-/6dBJAjMVrtQ3Hw0631NavoYl+wrT/c1o67Wm3GXro2Ajlzr4gM+eKsTZ5o4a3tiOM+f2HwcIMUYsbBcMI+H9A==}
+  '@orpc/react-query@1.13.14':
+    resolution: {integrity: sha512-Pvtx6/vwk7OfwXeebhAlBDjagsdq/gsmqTVt8FQlYbBl0y5bRCZb2EEoglOKRniP28lEjyxAW5p7VhC/h9inDg==}
     peerDependencies:
-      '@orpc/client': 1.13.13
+      '@orpc/client': 1.13.14
       '@tanstack/react-query': '>=5.80.2'
       react: '>=18.3.0'
 
-  '@orpc/server@1.13.13':
-    resolution: {integrity: sha512-l3OfiaqfLiLQqamXufKiEzT8K9Zq8VHvijADV5eDJOaz6sFzK1Mg6q2D8l9wcmuyG7ga0HfMT+cf3JQsh5WDIA==}
+  '@orpc/server@1.13.14':
+    resolution: {integrity: sha512-bF+sNbSHBgs1uwzHXgTxcxWIG42ryX+w32l+FJRHrAmGma+S8PmS1X2HZ/J7XycyYVBJMUUzBr8M88pP+UcdxQ==}
     peerDependencies:
       crossws: '>=0.3.4'
       ws: 8.19.0
@@ -6248,48 +6248,48 @@ packages:
       ws:
         optional: true
 
-  '@orpc/shared@1.13.13':
-    resolution: {integrity: sha512-kNpYOBjHvmgKHla6munWOaEeA0utEfAvoiZpXjiRjjt1RxTibdwQvVHgxRIBNMXfQsb+ON3Q/wDkoaUhvvSnIw==}
+  '@orpc/shared@1.13.14':
+    resolution: {integrity: sha512-/ri8ttSX+ppoo01d3LdqQ4Xh6VZS5PYRYmHxTvO8tuyiqBJhN18d8P1VtEW4T9hetoK7JZKeU7EAeqVUnCF9WA==}
     peerDependencies:
       '@opentelemetry/api': '>=1.9.0'
     peerDependenciesMeta:
       '@opentelemetry/api':
         optional: true
 
-  '@orpc/standard-server-aws-lambda@1.13.13':
-    resolution: {integrity: sha512-e7310DnN6FSpRgR5gQpwvwg2B3uR+NoT7qlnyQWsjxQGr95L4GST3hRNSsQdQyXmFx1jvCCp0i3kAE9SJyvU6A==}
+  '@orpc/standard-server-aws-lambda@1.13.14':
+    resolution: {integrity: sha512-5P1ZzgS6zKTjjI0SaCgMlTF5PM4dbOlmP2Zm2Lh1ool/iNvjMzXSb86pbKrWOo5/V8dzn4GMyCgNso9za1nUMg==}
 
-  '@orpc/standard-server-fastify@1.13.13':
-    resolution: {integrity: sha512-G5Sq+rZDPwHvWJHsAA6bYWoJ7LcGyBby+SjjEGwz+viRdBk/inZnZafKpM+pL89aDdq6iw99Bcbug5WFPP6KdA==}
+  '@orpc/standard-server-fastify@1.13.14':
+    resolution: {integrity: sha512-DcgL5UFjHENGj1gWiQig4iObMNnnw8z7UrfTELTCejQ9NAWE8aGYdx4bZ/hk4JkieLJ+9aosGK57di6xXBtvPA==}
     peerDependencies:
       fastify: '>=5.6.1'
     peerDependenciesMeta:
       fastify:
         optional: true
 
-  '@orpc/standard-server-fetch@1.13.13':
-    resolution: {integrity: sha512-Lffy26+WtCQkwOUacsrdyeJF1GNzrhm75O3LXKVFXqmSdyVVdyI6zuqLn/YKGODU2L9IqGxZ2CwsV2tE298SSA==}
+  '@orpc/standard-server-fetch@1.13.14':
+    resolution: {integrity: sha512-k2zkCi98qd3NkvWhUX/Yece/qjB+o07g/gHC509YB5HbOGtBV/da3eseYjFyzBx5LDxMz28BOALI8/q/YDhKZw==}
 
-  '@orpc/standard-server-node@1.13.13':
-    resolution: {integrity: sha512-wI45h/bVWn7lgvqqm5aM7vj5BblmmBdFG2wbEhmpY85DslbCtMNJrIw/x+zxm1XgYAzsKLExLp6L01hzjeHmEA==}
+  '@orpc/standard-server-node@1.13.14':
+    resolution: {integrity: sha512-GKMWfMuKX+dycpEFMoFrGY+zhZMKPoR9HSM66Ebn/ixr2qCVfQaoudPa9MAgP+fv/ctZx+nkt1rR7esUFMdMAg==}
 
-  '@orpc/standard-server-peer@1.13.13':
-    resolution: {integrity: sha512-FeWAbXfnZDPYQRajM0hD6GJvHeC3DZILngAjdcLHy5zt3riu6nL2lLPSWDv5yNWWscmYU+CfKmXWd0Z01BOeWA==}
+  '@orpc/standard-server-peer@1.13.14':
+    resolution: {integrity: sha512-jinseQ8bn7XQOHjsCXhR1HiF3wAwn1xEQPpnE/av0PoOi4h0ATvhZjDLaRHvRavs8YwrIqwSuAuYT/hDxON58A==}
 
-  '@orpc/standard-server@1.13.13':
-    resolution: {integrity: sha512-9pgS8XvauuRQElkyuD8F3om+nN0KBEnTkhblDHCBzkZERjWkmfirJmshQrWHoFaDTk+nnXHIaY6d7TBTxXdPRw==}
+  '@orpc/standard-server@1.13.14':
+    resolution: {integrity: sha512-o8PaDERiwREFQpIZO0mQ1PhguchyNzrf1w7m3eK1JB4rPjHu1VJUgqCpy/sV3Id5ji4bX/gKHEC3NZjDX6mEWQ==}
 
-  '@orpc/tanstack-query@1.13.13':
-    resolution: {integrity: sha512-6+Cheaiu+RDPdszdeRKoBINrF8MQp64zSeZB+L3gqgF43zlYDhLOgELZMzYa6U3U6bLk4rmIeubpk+i1kACfRg==}
+  '@orpc/tanstack-query@1.13.14':
+    resolution: {integrity: sha512-5rq1Z1anVTVBseYeNBi5RJSgWPxpD0MqK7MYej3xnt56jjc6mFmWpUGNz9xy0BXPh3KmA/xDTNuB23kKgJ5JmQ==}
     peerDependencies:
-      '@orpc/client': 1.13.13
+      '@orpc/client': 1.13.14
       '@tanstack/query-core': '>=5.80.2'
 
-  '@orpc/zod@1.13.13':
-    resolution: {integrity: sha512-K2iWGHopi3apExqNVb6EWJJqmq7cgytY3PjJyJ/Uy98UfJJ17Kwz7rAZKffNc7E967rNk9IH8MIcUcGkT7dmzQ==}
+  '@orpc/zod@1.13.14':
+    resolution: {integrity: sha512-lpF8Nyb+WdW0PieZcJB3KvKztGveXvckOqXMyWTWvyrylV3rCPmeUneVQghjZOLqJdAevo4jqV2/BgHWSt3EEA==}
     peerDependencies:
-      '@orpc/contract': 1.13.13
-      '@orpc/server': 1.13.13
+      '@orpc/contract': 1.13.14
+      '@orpc/server': 1.13.14
       zod: '>=3.25.0'
 
   '@oslojs/asn1@1.0.0':
@@ -15742,7 +15742,7 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
-      '@orpc/server': 1.13.13
+      '@orpc/server': 1.13.14
       '@trpc/server': ^10.45.2 || ^11.0.1
       '@valibot/to-json-schema': ^1.1.0
       effect: ^3.14.2 || ^4.0.0
@@ -20933,33 +20933,33 @@ snapshots:
 
   '@opentelemetry/semantic-conventions@1.40.0': {}
 
-  '@orpc/client@1.13.13(@opentelemetry/api@1.9.0)':
+  '@orpc/client@1.13.14(@opentelemetry/api@1.9.0)':
     dependencies:
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-fetch': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-peer': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-fetch': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-peer': 1.13.14(@opentelemetry/api@1.9.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@orpc/contract@1.13.13(@opentelemetry/api@1.9.0)':
+  '@orpc/contract@1.13.14(@opentelemetry/api@1.9.0)':
     dependencies:
-      '@orpc/client': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/client': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
       '@standard-schema/spec': 1.1.0
       openapi-types: 12.1.3
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@orpc/interop@1.13.13': {}
+  '@orpc/interop@1.13.14': {}
 
-  '@orpc/json-schema@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)':
+  '@orpc/json-schema@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)':
     dependencies:
-      '@orpc/contract': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/interop': 1.13.13
-      '@orpc/openapi': 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@orpc/server': 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/contract': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/interop': 1.13.14
+      '@orpc/openapi': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
       json-schema-typed: 8.0.2
     transitivePeerDependencies:
       - '@opentelemetry/api'
@@ -20967,24 +20967,24 @@ snapshots:
       - fastify
       - ws
 
-  '@orpc/openapi-client@1.13.13(@opentelemetry/api@1.9.0)':
+  '@orpc/openapi-client@1.13.14(@opentelemetry/api@1.9.0)':
     dependencies:
-      '@orpc/client': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/contract': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/client': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/contract': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.14(@opentelemetry/api@1.9.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@orpc/openapi@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)':
+  '@orpc/openapi@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)':
     dependencies:
-      '@orpc/client': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/contract': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/interop': 1.13.13
-      '@orpc/openapi-client': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/server': 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/client': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/contract': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/interop': 1.13.14
+      '@orpc/openapi-client': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.14(@opentelemetry/api@1.9.0)
       json-schema-typed: 8.0.2
       rou3: 0.7.12
     transitivePeerDependencies:
@@ -20993,35 +20993,35 @@ snapshots:
       - fastify
       - ws
 
-  '@orpc/otel@1.13.13(@opentelemetry/api@1.9.0)(@opentelemetry/instrumentation@0.206.0(@opentelemetry/api@1.9.0))':
+  '@orpc/otel@1.13.14(@opentelemetry/api@1.9.0)(@opentelemetry/instrumentation@0.206.0(@opentelemetry/api@1.9.0))':
     dependencies:
       '@opentelemetry/api': 1.9.0
       '@opentelemetry/instrumentation': 0.206.0(@opentelemetry/api@1.9.0)
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
 
-  '@orpc/react-query@1.13.13(@opentelemetry/api@1.9.0)(@orpc/client@1.13.13(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)(@tanstack/react-query@5.90.21(react@19.2.4))(react@19.2.4)':
+  '@orpc/react-query@1.13.14(@opentelemetry/api@1.9.0)(@orpc/client@1.13.14(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)(@tanstack/react-query@5.90.21(react@19.2.4))(react@19.2.4)':
     dependencies:
-      '@orpc/client': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/tanstack-query': 1.13.13(@opentelemetry/api@1.9.0)(@orpc/client@1.13.13(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
+      '@orpc/client': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/tanstack-query': 1.13.14(@opentelemetry/api@1.9.0)(@orpc/client@1.13.14(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
       '@tanstack/react-query': 5.90.21(react@19.2.4)
       react: 19.2.4
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - '@tanstack/query-core'
 
-  '@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)':
+  '@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)':
     dependencies:
-      '@orpc/client': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/contract': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/interop': 1.13.13
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-aws-lambda': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-fastify': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-fetch': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-node': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-peer': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/client': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/contract': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/interop': 1.13.14
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-aws-lambda': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-fastify': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-fetch': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-node': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-peer': 1.13.14(@opentelemetry/api@1.9.0)
       cookie: 1.1.1
     optionalDependencies:
       crossws: 0.4.4(srvx@0.11.12)
@@ -21030,18 +21030,18 @@ snapshots:
       - '@opentelemetry/api'
       - fastify
 
-  '@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.20.0)':
+  '@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.20.0)':
     dependencies:
-      '@orpc/client': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/contract': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/interop': 1.13.13
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-aws-lambda': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-fastify': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-fetch': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-node': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-peer': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/client': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/contract': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/interop': 1.13.14
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-aws-lambda': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-fastify': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-fetch': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-node': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-peer': 1.13.14(@opentelemetry/api@1.9.0)
       cookie: 1.1.1
     optionalDependencies:
       crossws: 0.4.4(srvx@0.11.12)
@@ -21050,73 +21050,73 @@ snapshots:
       - '@opentelemetry/api'
       - fastify
 
-  '@orpc/shared@1.13.13(@opentelemetry/api@1.9.0)':
+  '@orpc/shared@1.13.14(@opentelemetry/api@1.9.0)':
     dependencies:
       radash: 12.1.1
       type-fest: 5.5.0
     optionalDependencies:
       '@opentelemetry/api': 1.9.0
 
-  '@orpc/standard-server-aws-lambda@1.13.13(@opentelemetry/api@1.9.0)':
+  '@orpc/standard-server-aws-lambda@1.13.14(@opentelemetry/api@1.9.0)':
     dependencies:
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-fetch': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-node': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-fetch': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-node': 1.13.14(@opentelemetry/api@1.9.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@orpc/standard-server-fastify@1.13.13(@opentelemetry/api@1.9.0)':
+  '@orpc/standard-server-fastify@1.13.14(@opentelemetry/api@1.9.0)':
     dependencies:
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-node': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-node': 1.13.14(@opentelemetry/api@1.9.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@orpc/standard-server-fetch@1.13.13(@opentelemetry/api@1.9.0)':
+  '@orpc/standard-server-fetch@1.13.14(@opentelemetry/api@1.9.0)':
     dependencies:
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.14(@opentelemetry/api@1.9.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@orpc/standard-server-node@1.13.13(@opentelemetry/api@1.9.0)':
+  '@orpc/standard-server-node@1.13.14(@opentelemetry/api@1.9.0)':
     dependencies:
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server-fetch': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server-fetch': 1.13.14(@opentelemetry/api@1.9.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@orpc/standard-server-peer@1.13.13(@opentelemetry/api@1.9.0)':
+  '@orpc/standard-server-peer@1.13.14(@opentelemetry/api@1.9.0)':
     dependencies:
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/standard-server': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/standard-server': 1.13.14(@opentelemetry/api@1.9.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@orpc/standard-server@1.13.13(@opentelemetry/api@1.9.0)':
+  '@orpc/standard-server@1.13.14(@opentelemetry/api@1.9.0)':
     dependencies:
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@orpc/tanstack-query@1.13.13(@opentelemetry/api@1.9.0)(@orpc/client@1.13.13(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)':
+  '@orpc/tanstack-query@1.13.14(@opentelemetry/api@1.9.0)(@orpc/client@1.13.14(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)':
     dependencies:
-      '@orpc/client': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/client': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
       '@tanstack/query-core': 5.91.0
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@orpc/zod@1.13.13(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.13(@opentelemetry/api@1.9.0))(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)(zod@4.3.6)':
+  '@orpc/zod@1.13.14(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.14(@opentelemetry/api@1.9.0))(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)(zod@4.3.6)':
     dependencies:
-      '@orpc/contract': 1.13.13(@opentelemetry/api@1.9.0)
-      '@orpc/json-schema': 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@orpc/openapi': 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@orpc/server': 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@orpc/shared': 1.13.13(@opentelemetry/api@1.9.0)
+      '@orpc/contract': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/json-schema': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@orpc/openapi': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
       escape-string-regexp: 5.0.0
       wildcard-match: 5.1.4
       zod: 4.3.6
@@ -32537,33 +32537,33 @@ snapshots:
 
   trough@2.2.0: {}
 
-  trpc-cli@0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12):
+  trpc-cli@0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12):
     dependencies:
       commander: 14.0.3
     optionalDependencies:
-      '@orpc/server': 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@trpc/server': 11.12.0(typescript@5.9.3)
       '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
       effect: 3.19.19
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.1.12
 
-  trpc-cli@0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6):
+  trpc-cli@0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6):
     dependencies:
       commander: 14.0.3
     optionalDependencies:
-      '@orpc/server': 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@trpc/server': 11.12.0(typescript@5.9.3)
       '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
       effect: 3.19.19
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.3.6
 
-  trpc-cli@0.14.0(@orpc/server@1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.20.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@3.25.76):
+  trpc-cli@0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.20.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@3.25.76):
     dependencies:
       commander: 14.0.3
     optionalDependencies:
-      '@orpc/server': 1.13.13(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.20.0)
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.20.0)
       '@trpc/server': 11.12.0(typescript@5.9.3)
       '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
       effect: 3.19.19

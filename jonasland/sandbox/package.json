@@ -16,15 +16,15 @@
   },
   "dependencies": {
     "@accelerated-software-development/caddy-api-client": "^0.4.3",
-    "@orpc/client": "1.13.13",
-    "@orpc/contract": "1.13.13",
-    "@orpc/server": "1.13.13",
+    "@iterate-com/daemon-v2-contract": "workspace:*",
+    "@orpc/client": "1.13.14",
+    "@orpc/contract": "1.13.14",
+    "@orpc/server": "1.13.14",
     "better-sqlite3": "^12.4.1",
     "drizzle-orm": "^0.45.1",
     "http-proxy": "^1.18.1",
     "pidnap": "workspace:*",
     "tsx": "^4.20.6",
-    "valibot": "^1.2.0",
-    "@iterate-com/daemon-v2-contract": "workspace:*"
+    "valibot": "^1.2.0"
   }
 }

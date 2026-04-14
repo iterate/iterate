@@ -39,9 +39,9 @@
     "docker:shell": "docker exec -it pidnap-dev bash"
   },
   "dependencies": {
-    "@orpc/client": "1.13.13",
-    "@orpc/contract": "1.13.13",
-    "@orpc/server": "1.13.13",
+    "@orpc/client": "1.13.14",
+    "@orpc/contract": "1.13.14",
+    "@orpc/server": "1.13.14",
     "@valibot/to-json-schema": "^1.5.0",
     "chokidar": "^5.0.0",
     "cli-table3": "^0.6.5",

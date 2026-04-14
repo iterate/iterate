@@ -25,8 +25,8 @@
   },
   "dependencies": {
     "@daytonaio/sdk": "^0.128.1",
-    "@orpc/client": "^1.13.4",
-    "@orpc/server": "^1.13.4",
+    "@orpc/client": "1.13.14",
+    "@orpc/server": "1.13.14",
     "pidnap": "workspace:*",
     "undici": "^7.10.0",
     "zod": "^3.25.30"
