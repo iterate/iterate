@@ -21,12 +21,16 @@ import appCss from "../styles.css?url";
 import type { RouterContext } from "../router.tsx";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
-const internalClient = orpcClient.__internal as {
-  publicConfig(input: {}): Promise<unknown>;
-};
 
 export const Route = createRootRouteWithContext<RouterContext>()({
-  loader: async () => PublicConfigSchema.parse(await internalClient.publicConfig({})),
+  loader: async () => {
+    const config = PublicConfigSchema.parse(
+      await (orpcClient.__internal as { publicConfig(input: {}): Promise<unknown> }).publicConfig(
+        {},
+      ),
+    );
+    return config;
+  },
   staleTime: Number.POSITIVE_INFINITY,
   head: () => ({
     meta: [

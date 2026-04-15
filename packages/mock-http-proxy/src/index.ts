@@ -24,7 +24,9 @@ export {
   type MockHttpServer,
   type UseMockHttpServerOptions,
 } from "./server/mock-http-server-fixture.ts";
-export { http, HttpResponse } from "msw";
+// Re-export the MSW helpers that create handlers so consumers use the same MSW
+// module instance that mock-http-proxy's native server expects at runtime.
+export { http, HttpResponse, ws } from "msw";
 export type {
   HarEntryWithExtensions,
   HarWebSocketMessage,

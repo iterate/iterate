@@ -1,12 +1,9 @@
 import type { ContractRouterClient } from "@orpc/contract";
 import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import { QueryClient } from "@tanstack/react-query";
 import { getGlobalStartContext } from "@tanstack/react-start";
 import { agentsContract } from "@iterate-com/agents-contract";
-
-const DEFAULT_API_BASE_URL = "/api";
 
 export const makeQueryClient = () =>
   new QueryClient({
@@ -27,42 +24,69 @@ export const makeQueryClient = () =>
 
 type OrpcClient = ContractRouterClient<typeof agentsContract>;
 
-type OrpcClientOptions = {
-  baseUrl?: string;
-};
-
-type BrowserOrpcState = {
-  apiUrl: string;
-  client: OrpcClient;
-  queryUtils: OrpcQueryUtils;
-};
-
 let configuredBaseUrl: string | undefined;
-let browserOrpcState: BrowserOrpcState | undefined;
+let cachedApiUrl: string | undefined;
+let cachedClient: OrpcClient | undefined;
 
-function createOrpcQueryUtils(client: OrpcClient) {
-  return createTanstackQueryUtils(client);
+/**
+ * Keep this file deliberately small. Agents only uses the browser OpenAPI client today,
+ * while SSR/root config is loaded via `createServerFn` in `routes/__root.tsx`.
+ *
+ * Docs:
+ * - https://orpc.dev/docs/adapters/tanstack-start
+ * - https://tanstack.com/start/latest/docs/framework/react/guide/server-functions
+ */
+function createOpenApiClient(baseUrl: string | undefined) {
+  return createORPCClient(
+    new OpenAPILink(agentsContract, {
+      url: resolveApiUrl(baseUrl),
+    }),
+  ) as OrpcClient;
 }
 
-type OrpcQueryUtils = ReturnType<typeof createOrpcQueryUtils>;
+export function configureOrpcClient(options: { baseUrl?: string } = {}) {
+  configuredBaseUrl = options.baseUrl;
+
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const nextApiUrl = resolveApiUrl(configuredBaseUrl);
+  if (cachedApiUrl === nextApiUrl) {
+    return cachedClient;
+  }
+
+  cachedApiUrl = nextApiUrl;
+  cachedClient = createOpenApiClient(configuredBaseUrl);
+  return cachedClient;
+}
+
+export function getOrpcClient() {
+  if (typeof window === "undefined") {
+    return createOpenApiClient(configuredBaseUrl);
+  }
+
+  cachedClient ??= createOpenApiClient(configuredBaseUrl);
+  cachedApiUrl ??= resolveApiUrl(configuredBaseUrl);
+  return cachedClient;
+}
+
+function resolveApiUrl(baseUrl: string | undefined) {
+  return new URL(normalizeApiBaseUrl(baseUrl), getCurrentUrl()).toString();
+}
 
 function getCurrentUrl() {
   if (typeof window !== "undefined") {
     return window.location.href;
   }
 
-  const requestUrl = getGlobalStartContext()?.rawRequest?.url;
-  if (requestUrl) {
-    return requestUrl;
-  }
-
-  return "http://localhost/";
+  return getGlobalStartContext()?.rawRequest?.url ?? "http://localhost/";
 }
 
 function normalizeApiBaseUrl(baseUrl: string | undefined) {
   const trimmed = baseUrl?.trim();
   if (!trimmed) {
-    return DEFAULT_API_BASE_URL;
+    return "/api";
   }
 
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
@@ -70,64 +94,4 @@ function normalizeApiBaseUrl(baseUrl: string | undefined) {
   }
 
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-}
-
-function resolveApiUrl(baseUrl: string | undefined) {
-  return new URL(normalizeApiBaseUrl(baseUrl), getCurrentUrl()).toString();
-}
-
-function makeOrpcClient(options: OrpcClientOptions = {}): OrpcClient {
-  return createORPCClient(
-    new OpenAPILink(agentsContract, {
-      url: resolveApiUrl(options.baseUrl ?? configuredBaseUrl),
-    }),
-  ) as OrpcClient;
-}
-
-function createBrowserOrpcState(options: OrpcClientOptions = {}) {
-  const client = makeOrpcClient(options);
-  const queryUtils = createOrpcQueryUtils(client);
-
-  return {
-    apiUrl: resolveApiUrl(options.baseUrl ?? configuredBaseUrl),
-    client,
-    queryUtils,
-  };
-}
-
-export function configureOrpcClient(options: OrpcClientOptions = {}) {
-  configuredBaseUrl = options.baseUrl;
-
-  if (typeof window === "undefined") {
-    return makeOrpcClient(options);
-  }
-
-  const nextApiUrl = resolveApiUrl(options.baseUrl);
-  if (browserOrpcState?.apiUrl === nextApiUrl) {
-    return browserOrpcState.client;
-  }
-
-  browserOrpcState = createBrowserOrpcState(options);
-  return browserOrpcState.client;
-}
-
-function getBrowserOrpcState() {
-  browserOrpcState ??= createBrowserOrpcState({ baseUrl: configuredBaseUrl });
-  return browserOrpcState;
-}
-
-export function getOrpcClient() {
-  if (typeof window === "undefined") {
-    return makeOrpcClient({ baseUrl: configuredBaseUrl });
-  }
-
-  return getBrowserOrpcState().client;
-}
-
-export function getOrpc() {
-  if (typeof window === "undefined") {
-    return createOrpcQueryUtils(makeOrpcClient({ baseUrl: configuredBaseUrl }));
-  }
-
-  return getBrowserOrpcState().queryUtils;
 }

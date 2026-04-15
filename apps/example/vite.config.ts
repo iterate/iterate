@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
@@ -6,8 +9,10 @@ import alchemy from "alchemy/cloudflare/tanstack-start";
 import { defineConfig } from "vite";
 
 // Bind dual-stack by default so both localhost (::1) and 127.0.0.1 work.
+const appRoot = dirname(fileURLToPath(import.meta.url));
 const host = process.env.HOST ?? "::";
 const port = process.env.PORT ? Number(process.env.PORT) : 5173;
+const hasLocalWranglerConfig = existsSync(join(appRoot, ".alchemy/local/wrangler.jsonc"));
 
 export default defineConfig({
   build: {
@@ -19,12 +24,18 @@ export default defineConfig({
   server: {
     host,
     port,
+    allowedHosts: true,
+    // TanStack Router rewrites this generated file during dev; ignoring it here
+    // avoids Vite reacting to the generator's own writes.
+    watch: {
+      ignored: ["**/routeTree.gen.ts"],
+    },
   },
   plugins: [
     devtools(), // must be first
-    // Just a thinly wrapped cloudflare plugin that picks up the
-    // .alchemy/local/wrangler.jsonc that alchemy.run.ts made
-    alchemy(),
+    // Node dev/build should still work in fresh checkouts before Alchemy has
+    // generated local Cloudflare state.
+    ...(hasLocalWranglerConfig ? [alchemy()] : []),
     tanstackStart(),
     viteReact(),
     tailwindcss(),

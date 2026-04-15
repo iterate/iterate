@@ -65,6 +65,23 @@ Roughly:
 - test-runner integration should be thin and near the top of the stack
 - Vitest-specific "current test" helpers should adapt Vitest metadata into plain inputs like `testName`, `slug`, and artifact namespace
 - lower fixtures should not depend on Vitest globals if a plain parameter will do
+- there should be a once-per-vitest-invocation provided value named `VITEST_RUN_SLUG`
+- it should be created in Vitest config and injected into tests/helpers
+- it should be slug-safe and shaped like `vitest-run-[datetime]`
+- the entire Vitest invocation should map to a single events project slug via `VITEST_RUN_SLUG`
+- each individual test should get its own unique stream path under that project slug
+- that path should mirror the repo-relative test file path and test hierarchy
+- the mirrored test hierarchy should include the full nested `describe(...)` chain
+- use the literal repo-relative file path as the source of truth for the path prefix
+- do not strip segments like `vitest`; just slugify the literal path segments
+- preferred shape:
+  - `/apps/agents/e2e/bla-test-ts/something-or-other/the-test/[datetime]-[short-hash]`
+- the trailing datetime + short hash should ensure retries, watch-mode reruns, and repeated local runs create fresh paths instead of colliding with prior state
+- all path segments should be slugified consistently
+- there is already a precedent in `packages/shared/src/jonasland/create-slug.ts`
+- for the clean shared area, we should end up with a simple slugify utility in `packages/shared/src` rather than path-specific ad hoc slug logic
+- each individual test execution should create one shared execution suffix like `[datetime]-[short-hash]`
+- that shared suffix should be reused across derived names for the same test execution, rather than each helper generating its own independent timestamp/hash
 
 ## Documentation requirement
 

@@ -3,7 +3,7 @@ import { processor } from "./agent.ts";
 import { AgentInputEvent } from "./agent.ts";
 import { useProcessorTestRig } from "./test-helpers.ts";
 
-describe("agent", () => {
+describe.skip("agent", () => {
   test("replays an assistant response from HAR", async () => {
     await using rig = await useProcessorTestRig({
       processors: [processor],

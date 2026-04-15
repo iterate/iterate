@@ -7,7 +7,10 @@ export const Route = createFileRoute("/api/$")({
       ANY: async ({ context, request }) => {
         const { matched, response } = await orpcOpenApiHandler.handle(request, {
           prefix: "/api",
-          context,
+          context: {
+            ...context,
+            rawRequest: request,
+          },
         });
 
         if (matched) return response;

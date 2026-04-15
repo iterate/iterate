@@ -17,6 +17,7 @@ export default defineConfig({
   server: {
     host,
     port: process.env.PORT ? Number(process.env.PORT) : 5173,
+    allowedHosts: true,
   },
   plugins: [devtools(), alchemy(), tanstackStart(), viteReact(), tailwindcss()],
 });

@@ -1,6 +1,10 @@
 export async function openOutboundWebSocket(callbackUrl: string) {
+  const websocketKey = createWebSocketKey();
   const response = (await fetch(getWebsocketUpgradeFetchUrl(callbackUrl).toString(), {
     headers: {
+      Connection: "Upgrade",
+      "Sec-WebSocket-Key": websocketKey,
+      "Sec-WebSocket-Version": "13",
       Upgrade: "websocket",
     },
   })) as Response & { webSocket?: WebSocket | null };
@@ -12,6 +16,12 @@ export async function openOutboundWebSocket(callbackUrl: string) {
 
   socket.accept();
   return socket;
+}
+
+function createWebSocketKey() {
+  const randomBytes = crypto.getRandomValues(new Uint8Array(16));
+  const binary = Array.from(randomBytes, (byte) => String.fromCharCode(byte)).join("");
+  return btoa(binary);
 }
 
 function getWebsocketUpgradeFetchUrl(callbackUrl: string) {

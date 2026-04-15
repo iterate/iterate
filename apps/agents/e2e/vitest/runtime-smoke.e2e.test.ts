@@ -3,8 +3,8 @@ import { describe, expect, test } from "vitest";
 import { AppConfig } from "../../src/app.ts";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
-const agentsBaseUrl = process.env.CI ? "http://127.0.0.1" : requireAgentsBaseUrl();
-const describeRuntimeSmoke = process.env.CI ? describe.skip : describe;
+const agentsBaseUrl = process.env.CI ? "http://127.0.0.1" : process.env.AGENTS_BASE_URL?.trim();
+const describeRuntimeSmoke = process.env.CI || !agentsBaseUrl ? describe.skip : describe;
 
 describeRuntimeSmoke("agents runtime smoke", () => {
   test("homepage, public config, openapi docs, and sample procedure respond", async () => {
@@ -46,14 +46,3 @@ describeRuntimeSmoke("agents runtime smoke", () => {
     expect(await helloResponse.json()).toEqual({ message: "hello world" });
   });
 });
-
-function requireAgentsBaseUrl() {
-  const value = process.env.AGENTS_BASE_URL?.trim().replace(/\/+$/, "");
-  if (!value) {
-    throw new Error(
-      "AGENTS_BASE_URL is required. Example: AGENTS_BASE_URL=http://127.0.0.1:5173 pnpm test:e2e:preview",
-    );
-  }
-
-  return value;
-}

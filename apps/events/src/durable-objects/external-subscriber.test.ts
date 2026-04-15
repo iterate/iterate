@@ -65,7 +65,7 @@ describe("externalSubscriber", () => {
     });
   });
 
-  test("afterAppend sends raw event json to websocket subscribers by default", async () => {
+  test("afterAppend sends framed event messages to websocket subscribers by default", async () => {
     const socket = new FakeWebSocket({
       url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-raw",
     });
@@ -95,7 +95,7 @@ describe("externalSubscriber", () => {
         "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-raw",
       );
       expect(socket.sentMessages).toEqual([
-        JSON.stringify(
+        createEventFrame(
           createEvent({
             streamPath: "/demo/ws-raw",
             type: "source",
@@ -110,7 +110,7 @@ describe("externalSubscriber", () => {
     }
   });
 
-  test("afterAppend canonicalizes raw event json before websocket delivery", async () => {
+  test("afterAppend canonicalizes framed websocket events and ignores websocket transforms", async () => {
     const socket = new FakeWebSocket({
       url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-canonical",
     });
@@ -137,6 +137,7 @@ describe("externalSubscriber", () => {
               type: "websocket",
               callbackUrl:
                 "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-canonical",
+              jsonataTransform: '{"kind":"transformed"}',
             },
           },
         },
@@ -146,7 +147,7 @@ describe("externalSubscriber", () => {
         "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-canonical",
       );
       expect(socket.sentMessages).toEqual([
-        JSON.stringify(
+        createEventFrame(
           createEvent({
             streamPath: "/demo/ws-canonical",
             type: "source",
@@ -219,7 +220,7 @@ describe("externalSubscriber", () => {
         ["ws://localhost:9898/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect"],
       ]);
       expect(staleSocket.sentMessages).toEqual([
-        JSON.stringify(
+        createEventFrame(
           createEvent({
             streamPath: "/demo/ws-reconnect",
             type: "source",
@@ -229,7 +230,7 @@ describe("externalSubscriber", () => {
         ),
       ]);
       expect(nextSocket.sentMessages).toEqual([
-        JSON.stringify(
+        createEventFrame(
           createEvent({
             streamPath: "/demo/ws-reconnect",
             type: "source",
@@ -386,6 +387,142 @@ describe("externalSubscriber", () => {
     }
   });
 
+  test("websocket append frames append into the same stream", async () => {
+    const socket = new FakeWebSocket({
+      url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-append",
+    });
+    openOutboundWebSocketMock.mockResolvedValueOnce(socket as unknown as WebSocket);
+    const appendSpy = vi.fn((event) =>
+      createEvent({
+        streamPath: "/demo/ws-append",
+        type: event.type,
+        payload: event.payload,
+      }),
+    );
+
+    try {
+      await externalSubscriberProcessor.afterAppend?.({
+        append: appendSpy,
+        event: createEvent({
+          streamPath: "/demo/ws-append",
+          type: "source",
+          payload: { value: 1 },
+          offset: 1,
+        }),
+        state: {
+          subscribersBySlug: {
+            "processor:ping-pong": {
+              slug: "processor:ping-pong",
+              type: "websocket",
+              callbackUrl: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-append",
+            },
+          },
+        },
+      });
+
+      await socket.dispatchMessage(
+        JSON.stringify({
+          type: "append",
+          event: {
+            type: "peer-source",
+            payload: { value: 99 },
+          },
+        }),
+      );
+
+      expect(appendSpy).toHaveBeenCalledWith({
+        type: "peer-source",
+        payload: { value: 99 },
+      });
+    } finally {
+      openOutboundWebSocketMock.mockReset();
+      resetSubscriberSocketsForStream("/demo/ws-append");
+    }
+  });
+
+  test("websocket append failures produce error frames", async () => {
+    const socket = new FakeWebSocket({
+      url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-append-error",
+    });
+    openOutboundWebSocketMock.mockResolvedValueOnce(socket as unknown as WebSocket);
+    const appendSpy = vi.fn(() => {
+      throw new Error("append broke");
+    });
+
+    try {
+      await externalSubscriberProcessor.afterAppend?.({
+        append: appendSpy,
+        event: createEvent({
+          streamPath: "/demo/ws-append-error",
+          type: "source",
+          payload: { value: 1 },
+          offset: 1,
+        }),
+        state: {
+          subscribersBySlug: {
+            "processor:ping-pong": {
+              slug: "processor:ping-pong",
+              type: "websocket",
+              callbackUrl:
+                "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-append-error",
+            },
+          },
+        },
+      });
+
+      await socket.dispatchMessage(
+        JSON.stringify({
+          type: "append",
+          event: {
+            type: "peer-source",
+            payload: { value: 99 },
+          },
+        }),
+      );
+
+      expect(socket.sentMessages.at(-1)).toEqual(createErrorFrame("append broke"));
+    } finally {
+      openOutboundWebSocketMock.mockReset();
+      resetSubscriberSocketsForStream("/demo/ws-append-error");
+    }
+  });
+
+  test("invalid websocket frames produce error frames", async () => {
+    const socket = new FakeWebSocket({
+      url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-invalid-frame",
+    });
+    openOutboundWebSocketMock.mockResolvedValueOnce(socket as unknown as WebSocket);
+
+    try {
+      await externalSubscriberProcessor.afterAppend?.({
+        append: () => createEvent(),
+        event: createEvent({
+          streamPath: "/demo/ws-invalid-frame",
+          type: "source",
+          payload: { value: 1 },
+          offset: 1,
+        }),
+        state: {
+          subscribersBySlug: {
+            "processor:ping-pong": {
+              slug: "processor:ping-pong",
+              type: "websocket",
+              callbackUrl:
+                "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-invalid-frame",
+            },
+          },
+        },
+      });
+
+      await socket.dispatchMessage(JSON.stringify({ type: "wat" }));
+
+      expect(socket.sentMessages.at(-1)).toEqual(createErrorFrame("Invalid websocket frame."));
+    } finally {
+      openOutboundWebSocketMock.mockReset();
+      resetSubscriberSocketsForStream("/demo/ws-invalid-frame");
+    }
+  });
+
   test("resetSubscriberSocketsForStream clears cached websocket connections for the stream", async () => {
     const firstSocket = new FakeWebSocket({
       url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset",
@@ -441,7 +578,7 @@ describe("externalSubscriber", () => {
       expect(openOutboundWebSocketMock).toHaveBeenCalledTimes(2);
       expect(firstSocket.readyState).toBe(3);
       expect(secondSocket.sentMessages).toEqual([
-        JSON.stringify(
+        createEventFrame(
           createEvent({
             streamPath: "/demo/ws-reset",
             type: "source",
@@ -521,7 +658,7 @@ describe("externalSubscriber", () => {
 
       expect(openOutboundWebSocketMock).toHaveBeenCalledTimes(2);
       expect(secondSocket.sentMessages).toEqual([
-        JSON.stringify(
+        createEventFrame(
           createEvent({
             streamPath: "/demo/ws-reset-pending",
             type: "source",
@@ -529,7 +666,7 @@ describe("externalSubscriber", () => {
             offset: 1,
           }),
         ),
-        JSON.stringify(
+        createEventFrame(
           createEvent({
             streamPath: "/demo/ws-reset-pending",
             type: "source",
@@ -563,10 +700,24 @@ function createEvent(overrides: Partial<Event> = {}): Event {
   };
 }
 
+function createEventFrame(event: Event) {
+  return JSON.stringify({
+    type: "event",
+    event,
+  });
+}
+
+function createErrorFrame(message: string) {
+  return JSON.stringify({
+    type: "error",
+    message,
+  });
+}
+
 class FakeWebSocket {
   sentMessages: string[] = [];
   readyState = 1;
-  readonly #listeners = new Map<string, Array<() => void>>();
+  readonly #listeners = new Map<string, Array<(event?: unknown) => void>>();
   readonly #throwOnClose: boolean;
   readonly url: string;
 
@@ -590,7 +741,15 @@ class FakeWebSocket {
     }
   }
 
-  addEventListener(type: string, listener: () => void) {
+  async dispatchMessage(data: unknown) {
+    for (const listener of this.#listeners.get("message") ?? []) {
+      listener({ data });
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  addEventListener(type: string, listener: (event?: unknown) => void) {
     this.#listeners.set(type, [...(this.#listeners.get(type) ?? []), listener]);
   }
 }

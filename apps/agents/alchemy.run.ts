@@ -1,9 +1,10 @@
 import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import alchemy, { type Scope } from "alchemy";
-import { TanStackStart } from "alchemy/cloudflare";
+import { DurableObjectNamespace, TanStackStart } from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
+import type { IterateAgent } from "./src/durable-objects/iterate-agent.ts";
 
 const APP_NAME = "agents";
 
@@ -64,11 +65,16 @@ const app = await alchemy(APP_NAME, {
 });
 
 const workerName = `${APP_NAME}-${app.stage}`;
+const iterateAgent = DurableObjectNamespace<IterateAgent>("iterate-agent", {
+  className: "IterateAgent",
+  sqlite: true,
+});
 
 export const worker = await TanStackStart(APP_NAME, {
   name: workerName,
   adopt: true,
   bindings: {
+    ITERATE_AGENT: iterateAgent,
     APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
   },
   compatibilityFlags: ["enable_request_signal"],

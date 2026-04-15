@@ -16,8 +16,8 @@
     "destroy": "doppler run --config prd -- pnpm alchemy:down",
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck",
-    "test:e2e": "node -e \"if (!process.env.AGENTS_BASE_URL) { console.error('AGENTS_BASE_URL is required for agents e2e tests'); process.exit(1); }\" && sh -c 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run --config ./e2e/vitest.config.ts \"$@\"' --",
-    "test:e2e:preview": "node -e \"if (!process.env.AGENTS_BASE_URL) { console.error('AGENTS_BASE_URL is required for agents e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts e2e/vitest/runtime-smoke.e2e.test.ts"
+    "test:e2e": "doppler run -- sh -c 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run --config ./e2e/vitest.config.ts \"$@\"' --",
+    "test:e2e:preview": "doppler run -- sh -c 'if [ -z \"$AGENTS_BASE_URL\" ]; then echo \"AGENTS_BASE_URL is required for agents e2e tests\"; exit 1; fi; vitest run --config ./e2e/vitest.config.ts e2e/vitest/runtime-smoke.e2e.test.ts'"
   },
   "iterateAppCli": {
     "remote": {
@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@iterate-com/agents-contract": "workspace:*",
+    "@iterate-com/events-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@orpc/client": "1.13.14",
@@ -41,12 +42,14 @@
     "@tanstack/react-router-devtools": "1.166.11",
     "@tanstack/react-router-ssr-query": "^1.166.2",
     "@tanstack/react-start": "1.167.5",
+    "agents": "^0.11.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tailwindcss": "^4.1.18",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.55",
     "@cloudflare/workers-types": "^4.20260317.1",
     "@iterate-com/mock-http-proxy": "workspace:*",
     "@tailwindcss/vite": "^4.1.18",

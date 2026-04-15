@@ -2,17 +2,17 @@ import { oc } from "@orpc/contract";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { z } from "zod";
 
-export const HelloInput = z.object({
+const HelloInput = z.object({
   name: z.string().trim().min(1).default("world"),
 });
 
-export const HelloResult = z.object({
+const HelloResult = z.object({
   message: z.string(),
 });
 
-export const FetchExampleInput = z.object({});
+const FetchExampleInput = z.object({});
 
-export const FetchExampleResult = z.object({
+const FetchExampleResult = z.object({
   ok: z.boolean(),
   status: z.number(),
   url: z.string().url(),

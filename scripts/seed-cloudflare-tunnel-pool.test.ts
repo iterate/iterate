@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildTunnelServiceUrl,
   buildDnsRecordBody,
   buildIngressConfig,
   countMissingResources,
+  deriveTunnelServicePort,
   pickUnusedSlug,
   selectReusableCertificatePack,
 } from "../apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts";
@@ -38,6 +40,12 @@ test("buildIngressConfig creates a single-host tunnel config with a 404 fallback
       },
     },
   );
+});
+
+test("deriveTunnelServicePort picks an unlikely high localhost port", () => {
+  assert.equal(deriveTunnelServicePort(0), 47000);
+  assert.equal(deriveTunnelServicePort(7), 47007);
+  assert.equal(buildTunnelServiceUrl(deriveTunnelServicePort(7)), "http://127.0.0.1:47007");
 });
 
 test("buildDnsRecordBody targets the tunnel hostname", () => {

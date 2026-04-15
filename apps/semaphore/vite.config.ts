@@ -18,6 +18,7 @@ export default defineConfig({
   server: {
     host,
     port,
+    allowedHosts: true,
   },
   plugins: [devtools(), alchemy(), tanstackStart(), viteReact(), tailwindcss()],
 });

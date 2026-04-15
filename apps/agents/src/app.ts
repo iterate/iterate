@@ -5,6 +5,8 @@ import packageJson from "../package.json" with { type: "json" };
 
 export const AppConfig = BaseAppConfig.extend({
   apiBaseUrl: publicValue(z.string().trim().default("")),
+  eventsBaseUrl: z.string().trim().url().default("https://events.iterate.com"),
+  eventsProjectSlug: z.string().trim().min(1).default("public"),
   posthog: z
     .object({
       apiKey: publicValue(z.string().trim().default("")),

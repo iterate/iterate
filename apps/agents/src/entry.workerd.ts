@@ -1,10 +1,12 @@
 import { env as workerEnv } from "cloudflare:workers";
+import { routeAgentRequest } from "agents";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createExternalEgressProxyFetch } from "@iterate-com/shared/apps/fetch-egress-proxy";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
 import handler from "@tanstack/react-start/server-entry";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
+import { IterateAgent } from "~/durable-objects/iterate-agent.ts";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const config = parseAppConfigFromEnv({
@@ -33,6 +35,11 @@ export default {
         executionCtx: cfCtx,
       },
       async ({ log }) => {
+        const agentResponse = await routeAgentRequest(request, env);
+        if (agentResponse) {
+          return agentResponse;
+        }
+
         const context: AppContext = {
           manifest,
           config,
@@ -46,3 +53,5 @@ export default {
     );
   },
 };
+
+export { IterateAgent };
