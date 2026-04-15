@@ -6,6 +6,7 @@ import {
   createEvents2ProjectAppFixture,
   defaultE2EProjectSlug,
   requireEventsBaseUrl,
+  supportsProjectHostRouting,
 } from "../helpers.ts";
 
 const eventsBaseUrl = requireEventsBaseUrl();
@@ -18,10 +19,11 @@ const teamApp = createEvents2ProjectAppFixture({
   projectSlug: teamProjectSlug,
 });
 const defaultProjectSlug = defaultE2EProjectSlug;
+const projectHostTest = supportsProjectHostRouting(eventsBaseUrl) ? test : test.skip;
 const testTimeoutMs = 20_000;
 
 describe("events auth-adjacent e2e", () => {
-  test(
+  projectHostTest(
     "project hosts isolate stream state and history for the same path",
     async () => {
       const path = uniqueStreamPath();
@@ -90,7 +92,7 @@ describe("events auth-adjacent e2e", () => {
     testTimeoutMs,
   );
 
-  test(
+  projectHostTest(
     "bare and scoped hosts resolve to their own root project slug",
     async () => {
       const publicRootStateResponse = await publicApp.fetch("/api/streams/__state/%2F");
