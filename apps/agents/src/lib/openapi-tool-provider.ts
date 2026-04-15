@@ -7,6 +7,7 @@ import {
 type OpenApiMethod = "get" | "post" | "put" | "patch" | "delete";
 type OpenApiRequestMethod = Uppercase<OpenApiMethod>;
 type JsonSchemaLike = Record<string, unknown>;
+type FetchLike = typeof fetch;
 
 const OPENAPI_METHODS: OpenApiMethod[] = ["get", "post", "put", "patch", "delete"];
 
@@ -55,19 +56,11 @@ interface OpenApiSpec {
   paths?: Record<string, OpenApiPathItem>;
 }
 
-export interface OpenApiProviderRequest {
-  method: OpenApiRequestMethod;
-  path: string;
-  query?: Record<string, string | number | boolean | undefined>;
-  body?: unknown;
-  contentType?: string;
-  operation: OpenApiOperation;
-}
-
 export interface CreateOpenApiToolProviderOptions {
   name: string;
   spec: string | Record<string, unknown>;
-  request: (request: OpenApiProviderRequest) => Promise<unknown>;
+  baseUrl: string;
+  fetch?: FetchLike;
 }
 
 export async function createOpenApiToolProvider(
@@ -75,6 +68,7 @@ export async function createOpenApiToolProvider(
 ): Promise<ToolProvider> {
   const rawSpec = await loadOpenApiSpec(options.spec);
   const spec = resolveRefs(rawSpec, rawSpec) as OpenApiSpec;
+  const fetchFn = options.fetch ?? globalThis.fetch;
   const tools: Record<
     string,
     { description?: string; execute: (input: unknown) => Promise<unknown> }
@@ -145,14 +139,27 @@ export async function createOpenApiToolProvider(
             }
           }
 
-          return options.request({
+          const url = new URL(resolvedPath.replace(/^\/+/, ""), options.baseUrl);
+          for (const [key, value] of Object.entries(query)) {
+            if (value != null) {
+              url.searchParams.set(key, String(value));
+            }
+          }
+
+          const response = await fetchFn(url, {
             method: method.toUpperCase() as OpenApiRequestMethod,
-            path: resolvedPath,
-            query: Object.keys(query).length > 0 ? query : undefined,
-            body,
-            contentType,
-            operation,
+            headers: contentType ? { "content-type": contentType } : undefined,
+            body: body == null ? undefined : JSON.stringify(body),
           });
+
+          if (!response.ok) {
+            throw new Error(`OpenAPI request failed: ${response.status} ${url}`);
+          }
+
+          const responseContentType = response.headers.get("content-type") ?? "";
+          return responseContentType.includes("application/json")
+            ? await response.json()
+            : await response.text();
         },
       };
 
