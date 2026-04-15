@@ -1,12 +1,12 @@
 import type { DynamicWorkerConfig } from "@iterate-com/events-contract";
 import { describe, expect, test } from "vitest";
-import { dynamicWorkerProjectSlugHeader } from "~/lib/dynamic-worker-egress.ts";
 import {
   buildDynamicWorkerLoaderCode,
   buildDynamicWorkerLoaderKey,
   resolveDynamicWorkerCompatibilityFlags,
   resolveDynamicWorkerOutboundGateway,
 } from "./dynamic-processor.ts";
+import { dynamicWorkerProjectSlugHeader } from "~/lib/dynamic-worker-egress.ts";
 
 const baseConfig: DynamicWorkerConfig = {
   compatibilityDate: "2026-02-05",
