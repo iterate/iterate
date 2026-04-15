@@ -1,0 +1,48 @@
+import { env as workerEnv } from "cloudflare:workers";
+import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { createExternalEgressProxyFetch } from "@iterate-com/shared/apps/fetch-egress-proxy";
+import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
+import handler from "@tanstack/react-start/server-entry";
+import manifest, { AppConfig } from "~/app.ts";
+import type { AppContext } from "~/context.ts";
+
+const nativeFetch = globalThis.fetch.bind(globalThis);
+const config = parseAppConfigFromEnv({
+  configSchema: AppConfig,
+  prefix: "APP_CONFIG_",
+  env: workerEnv,
+});
+
+if (config.externalEgressProxy) {
+  // `externalEgressProxy` is an app-level runtime feature flag from
+  // `BaseAppConfig`. Install the fetch override once at module scope so every
+  // subrequest made by this Worker takes the same egress path.
+  globalThis.fetch = createExternalEgressProxyFetch({
+    fetch: nativeFetch,
+    externalEgressProxy: config.externalEgressProxy,
+  });
+}
+
+export default {
+  async fetch(request: Request, env: Env, cfCtx: ExecutionContext) {
+    return withEvlog(
+      {
+        request,
+        manifest,
+        config,
+        executionCtx: cfCtx,
+      },
+      async ({ log }) => {
+        const context: AppContext = {
+          manifest,
+          config,
+          env,
+          rawRequest: request,
+          log,
+        };
+
+        return await handler.fetch(request, { context });
+      },
+    );
+  },
+};

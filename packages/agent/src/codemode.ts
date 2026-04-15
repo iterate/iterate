@@ -3,7 +3,6 @@ import {
   resolveProvider,
   type ExecuteResult,
   type Executor,
-  type ResolvedProvider,
 } from "@cloudflare/codemode";
 import { defineProcessor, PullProcessorRuntime } from "ai-engineer-workshop";
 import z from "zod";
@@ -41,38 +40,12 @@ function stringifyUnknown(value: unknown) {
   }
 }
 
-function createNamespace(provider: ResolvedProvider) {
-  return new Proxy<Record<PropertyKey, unknown>>(
-    {},
-    {
-      get: (_target, toolName) => {
-        const fn = provider.fns[String(toolName)];
-        if (!fn) {
-          throw new Error(`Tool "${provider.name}.${String(toolName)}" not found`);
-        }
-
-        if (provider.positionalArgs) {
-          return (...args: unknown[]) => fn(...args);
-        }
-
-        return (args: unknown) => fn(args);
-      },
-    },
-  );
-}
-
-class JavaScriptExecutor implements Executor {
-  async execute(
-    code: string,
-    providersOrFns: ResolvedProvider[] | Record<string, (...args: unknown[]) => Promise<unknown>>,
-  ): Promise<ExecuteResult> {
-    const providers = Array.isArray(providersOrFns)
-      ? providersOrFns
-      : [{ name: "codemode", fns: providersOrFns }];
+const executor: Executor = {
+  async execute(code, providersOrFns): Promise<ExecuteResult> {
+    const codemode = Array.isArray(providersOrFns)
+      ? providersOrFns.find((provider) => provider.name === "codemode")?.fns
+      : providersOrFns;
     const logs: string[] = [];
-    const namespaces = Object.fromEntries(
-      providers.map((provider) => [provider.name, createNamespace(provider)]),
-    );
     const sandboxConsole = {
       log: (...args: unknown[]) => logs.push(args.map(stringifyUnknown).join(" ")),
       warn: (...args: unknown[]) => logs.push(`[warn] ${args.map(stringifyUnknown).join(" ")}`),
@@ -80,12 +53,16 @@ class JavaScriptExecutor implements Executor {
     };
 
     try {
+      if (!codemode) {
+        throw new Error('Expected a "codemode" tool provider');
+      }
+
       const run = new AsyncFunction(
-        ...Object.keys(namespaces),
+        "codemode",
         "console",
         `return await (${normalizeCode(code)})();`,
       );
-      const result = await run(...Object.values(namespaces), sandboxConsole);
+      const result = await run(codemode, sandboxConsole);
       return { result, logs };
     } catch (error) {
       return {
@@ -94,12 +71,10 @@ class JavaScriptExecutor implements Executor {
         logs,
       };
     }
-  }
-}
+  },
+};
 
 export const processor = defineProcessor(() => {
-  const executor = new JavaScriptExecutor();
-
   return {
     slug: "codemode",
     afterAppend: async ({ append, event, logger }) => {
@@ -154,7 +129,7 @@ export const processor = defineProcessor(() => {
         },
       });
 
-      const result = await executor.execute(codemodeBlock.data.payload.code, [codemode]);
+      const result = await executor.execute(codemodeBlock.data.payload.code, codemode.fns);
       await append({
         event: {
           type: "codemode-result-added",

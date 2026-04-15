@@ -1,45 +1,112 @@
-// @ts-nocheck
-
 import { describe, expect, test } from "vitest";
-import { useProcessorTestHarness } from "../lib/test-helpers.ts";
-import { agentProcessor } from "./agent-processor.ts";
+import {
+  type Event,
+  Event as EventSchema,
+  StreamPath,
+  type EventInput,
+} from "../../../apps/events-contract/src/types.ts";
+import { AgentInputEvent } from "./agent.ts";
+import { processor } from "./codemode.ts";
 
-const describeAgentProcessor = process.env.OPENAI_API_KEY == null ? describe.skip : describe;
+const logger = {
+  debug: () => {},
+  error: () => {},
+  info: () => {},
+  log: () => {},
+  warn: () => {},
+};
 
-describeAgentProcessor("agent processor", () => {
-  test("answers that 50 - 8 is 42", async () => {
-    await using f = await useProcessorTestHarness({
-      processor: agentProcessor,
-      pathPrefix: "/ai-engineer-workshop/workshop2/tests/agent-processor",
+function makeEvent(input: EventInput, offset: number): Event {
+  return EventSchema.parse({
+    streamPath: StreamPath.parse("/packages/agent/tests/codemode"),
+    offset,
+    type: input.type,
+    payload: input.payload ?? {},
+    metadata: input.metadata,
+    idempotencyKey: input.idempotencyKey,
+    createdAt: new Date(offset * 1_000).toISOString(),
+  });
+}
+
+async function runProcessor(initialEvent: EventInput) {
+  const emitted: EventInput[] = [];
+  const queue = [makeEvent(initialEvent, 1)];
+  let nextOffset = 2;
+
+  while (queue.length > 0) {
+    const event = queue.shift()!;
+    await processor.afterAppend?.({
+      append: async ({ event }) => {
+        emitted.push(event);
+        const appendedEvent = makeEvent(event, nextOffset);
+        nextOffset += 1;
+        queue.push(appendedEvent);
+        return appendedEvent;
+      },
+      event,
+      logger,
+      state: undefined,
     });
+  }
 
-    await f.append({
-      type: "agent-input-added",
-      payload: { content: "What is 50 - 8? Reply with exactly 42." },
-    });
+  return emitted;
+}
 
-    const completedMessageEvent = await f.waitForEvent(
-      (event) =>
-        event.type === "openai-response-event-added" &&
-        (event.payload as { type?: string }).type === "response.output_item.done",
-      { timeout: 15_000 },
-    );
-
-    expect(completedMessageEvent).toMatchObject({
-      type: "openai-response-event-added",
-      payload: {
-        type: "response.output_item.done",
-        item: {
-          type: "message",
+describe("codemode", () => {
+  test("executes a js block with sendMessage and append", async () => {
+    const emitted = await runProcessor(
+      AgentInputEvent.parse({
+        type: "agent-input-added",
+        payload: {
           role: "assistant",
           content: [
-            {
-              type: "output_text",
-              text: expect.stringContaining("42"),
-            },
-          ],
+            "```js",
+            "async () => {",
+            '  await codemode.sendMessage({ message: "Hello!" });',
+            '  await codemode.append({ event: { type: "custom-event-added", payload: { ok: true } } });',
+            '  console.log("finished");',
+            "  return { status: 'done' };",
+            "}",
+            "```",
+          ].join("\n"),
+        },
+      }),
+    );
+
+    expect(emitted).toEqual([
+      {
+        type: "codemode-block-added",
+        payload: {
+          code: [
+            "async () => {",
+            '  await codemode.sendMessage({ message: "Hello!" });',
+            '  await codemode.append({ event: { type: "custom-event-added", payload: { ok: true } } });',
+            '  console.log("finished");',
+            "  return { status: 'done' };",
+            "}",
+          ].join("\n"),
         },
       },
-    });
-  }, 30_000);
+      {
+        type: "message-added",
+        payload: {
+          message: "Hello!",
+        },
+      },
+      {
+        type: "custom-event-added",
+        payload: {
+          ok: true,
+        },
+      },
+      {
+        type: "codemode-result-added",
+        payload: {
+          result: JSON.stringify({ status: "done" }, null, 2),
+          error: null,
+          logs: ["finished"],
+        },
+      },
+    ]);
+  });
 });

@@ -144,6 +144,8 @@ const config: KnipConfig = {
   // unrelated apps with heavyweight config loading like `apps/os`.
   ignoreWorkspaces: [
     "apps/*",
+    "!apps/agents",
+    "!apps/agents-contract",
     "!apps/example",
     "!apps/example-contract",
     "!apps/events",
@@ -167,12 +169,15 @@ const config: KnipConfig = {
     // TanStack Start resolves these router factories by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/daemon-v2/src/router.tsx": ["exports"],
+    "apps/agents/src/router.tsx": ["exports"],
     "apps/example/src/router.tsx": ["exports"],
     "apps/ingress-proxy-contract/src/client.ts": ["types"],
     "apps/semaphore-contract/src/client.ts": ["types"],
     "apps/semaphore/src/router.tsx": ["exports"],
   },
   workspaces: {
+    "apps/agents": makeCloudflareTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
+    "apps/agents-contract": makePrivateContractWorkspace(),
     "apps/example": makeDualRuntimeAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/example-contract": makePrivateContractWorkspace(),
     "apps/events": makeEventsCloudflareWorkspace("./src/lib/worker-env.d.ts"),

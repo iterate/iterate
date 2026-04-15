@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const CloudflarePreviewAppSlug = z.enum([
+  "agents",
   "codemode",
   "example",
   "events",
@@ -22,6 +23,16 @@ export type CloudflarePreviewApp = {
 };
 
 export const cloudflarePreviewApps = {
+  agents: {
+    slug: "agents",
+    displayName: "Agents",
+    appPath: "apps/agents",
+    dopplerProject: "agents",
+    paths: ["apps/agents/**", "apps/agents-contract/**"],
+    previewResourceType: "agents-preview-environment",
+    previewTestBaseUrlEnvVar: "AGENTS_BASE_URL",
+    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
+  },
   codemode: {
     slug: "codemode",
     displayName: "Codemode",

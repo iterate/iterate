@@ -24,6 +24,8 @@ packages:
   - apps/example-v2-contract
   - apps/events
   - apps/events-contract
+  - apps/agents
+  - apps/agents-contract
   - apps/codemode
   - apps/codemode-contract
   - sandbox

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@cloudflare/codemode": "^0.3.2",
+    "@iterate-com/shared": "workspace:*",
     "@orpc/server": "1.13.13",
     "@tanstack/ai": "^0.10.2",
     "@tanstack/ai-openai": "^0.7.4",
@@ -21,6 +22,7 @@
   "devDependencies": {
     "@iterate-com/mock-http-proxy": "workspace:*",
     "@types/node": "^25.6.0",
+    "alchemy": "^0.91.2",
     "msw": "^2.4.9",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
