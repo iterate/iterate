@@ -74,9 +74,9 @@ function SecretsIndexPage() {
   return (
     <section className="max-w-md space-y-6 p-4">
       <div className="space-y-1">
-        <h2 className="text-sm font-semibold">Env vars</h2>
+        <h2 className="text-sm font-semibold">Secrets</h2>
         <p className="text-sm text-muted-foreground">
-          Env vars for this project. Values are masked in the UI and stored in plaintext in D1 for
+          Secrets for this project. Values are masked in the UI and stored in plaintext in D1 for
           this demo.
         </p>
       </div>
@@ -106,7 +106,7 @@ function SecretsIndexPage() {
                     aria-invalid={isInvalid}
                     placeholder="GITHUB_ACCESS_TOKEN"
                   />
-                  <FieldDescription>Unique env var name.</FieldDescription>
+                  <FieldDescription>Unique secret name within this project.</FieldDescription>
                   {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                 </Field>
               );
@@ -164,7 +164,7 @@ function SecretsIndexPage() {
           <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
             {([canSubmit, isSubmitting]) => (
               <Button type="submit" size="sm" disabled={!canSubmit || isSubmitting}>
-                {isSubmitting ? "Adding..." : "Add env var"}
+                {isSubmitting ? "Adding..." : "Add secret"}
               </Button>
             )}
           </form.Subscribe>
@@ -199,7 +199,7 @@ function SecretsIndexPage() {
       </div>
 
       {secretsData && secretsData.secrets.length === 0 && (
-        <p className="text-sm text-muted-foreground">No env vars yet. Create one above.</p>
+        <p className="text-sm text-muted-foreground">No secrets yet. Create one above.</p>
       )}
     </section>
   );

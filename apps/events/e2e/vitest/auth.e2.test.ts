@@ -112,6 +112,58 @@ describe("events auth-adjacent e2e", () => {
     },
     testTimeoutMs,
   );
+
+  projectHostTest(
+    "project hosts isolate secrets and allow the same secret name in different projects",
+    async () => {
+      const secretName = `shared-secret-${randomUUID().slice(0, 8)}`;
+      const defaultSecret = await publicApp.client.secrets.create({
+        name: secretName,
+        value: `public-${randomUUID().slice(0, 8)}`,
+        description: "Public project secret",
+      });
+      const teamSecret = await teamApp.client.secrets.create({
+        name: secretName,
+        value: `team-${randomUUID().slice(0, 8)}`,
+        description: "Team project secret",
+      });
+
+      try {
+        const defaultSecrets = await publicApp.client.secrets.list({ limit: 100, offset: 0 });
+        const teamSecrets = await teamApp.client.secrets.list({ limit: 100, offset: 0 });
+
+        expect(defaultSecrets.secrets).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: defaultSecret.id,
+              name: secretName,
+              description: "Public project secret",
+            }),
+          ]),
+        );
+        expect(defaultSecrets.secrets).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: teamSecret.id })]),
+        );
+
+        expect(teamSecrets.secrets).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: teamSecret.id,
+              name: secretName,
+              description: "Team project secret",
+            }),
+          ]),
+        );
+        expect(teamSecrets.secrets).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: defaultSecret.id })]),
+        );
+      } finally {
+        await publicApp.client.secrets.remove({ id: defaultSecret.id });
+        await teamApp.client.secrets.remove({ id: teamSecret.id });
+      }
+    },
+    testTimeoutMs,
+  );
 });
 
 function uniqueStreamPath() {
