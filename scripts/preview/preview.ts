@@ -568,7 +568,6 @@ async function createPreviewEnvironment(
       "--",
       "env",
       `ALCHEMY_STAGE=${previewEnvironment.previewEnvironmentAlchemyStageName}`,
-      ...(params.appSlug === "events" ? [] : ["WORKER_ROUTES="]),
       "pnpm",
       "alchemy:up",
     ];
@@ -668,7 +667,6 @@ async function destroyPreviewEnvironment(
     "--",
     "env",
     `ALCHEMY_STAGE=${params.previewEnvironmentAlchemyStageName}`,
-    ...(params.dopplerProject === "events" ? [] : ["WORKER_ROUTES="]),
     "pnpm",
     "alchemy:down",
   ];
