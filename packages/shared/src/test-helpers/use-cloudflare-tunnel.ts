@@ -6,6 +6,33 @@ import { useSemaphoreLease } from "./use-semaphore-lease.ts";
 const DEFAULT_HEALTHCHECK_PATH = "/api/__internal/health";
 const DEFAULT_TUNNEL_TIMEOUT_MS = 60_000;
 
+function parseSeededServiceUrl(value: string) {
+  const url = new URL(value);
+  if (url.protocol !== "http:") {
+    throw new Error(
+      `Expected seeded tunnel service to use http:, received ${JSON.stringify(value)}`,
+    );
+  }
+  if (!url.port) {
+    throw new Error(
+      `Expected seeded tunnel service to include an explicit port: ${JSON.stringify(value)}`,
+    );
+  }
+
+  return {
+    hostname: url.hostname,
+    port: Number(url.port),
+  };
+}
+
+/**
+ * Port Semaphore encoded in the lease `service` URL. Every
+ * {@link useCloudflareTunnelLease} result also exposes this as `localPort`.
+ */
+export function getCloudflareTunnelServicePort(service: string) {
+  return parseSeededServiceUrl(service).port;
+}
+
 export interface CloudflareTunnelHandle extends AsyncDisposable {
   publicUrl: string;
 }
@@ -17,6 +44,8 @@ export interface CloudflareTunnelLeaseHandle extends AsyncDisposable {
   publicUrl: string;
   service: string;
   tunnelToken: string;
+  /** Local TCP port parsed from `service` — use for `useDevServer({ port })` so `cloudflared` matches. */
+  localPort: number;
 }
 
 export type UseCloudflareTunnelOptions =
@@ -36,7 +65,8 @@ export type UseCloudflareTunnelOptions =
 
 /**
  * Acquire a Cloudflare tunnel lease from Semaphore and expose the typed tunnel
- * data needed to later run `cloudflared tunnel run --token ...`.
+ * data needed to later run `cloudflared tunnel run --token ...`, including
+ * `localPort` parsed from the lease `service` URL for `useDevServer({ port })`.
  */
 export async function useCloudflareTunnelLease(options: {
   semaphoreApiToken?: string;
@@ -51,13 +81,16 @@ export async function useCloudflareTunnelLease(options: {
     waitMs: options.timeoutMs ?? DEFAULT_TUNNEL_TIMEOUT_MS,
   });
 
+  const service = lease.data.service;
+
   return {
     slug: lease.slug,
     leaseId: lease.leaseId,
     expiresAt: lease.expiresAt,
     publicUrl: `https://${lease.data.publicHostname}`,
-    service: lease.data.service,
+    service,
     tunnelToken: lease.data.tunnelToken,
+    localPort: getCloudflareTunnelServicePort(service),
     async [Symbol.asyncDispose]() {
       await lease[Symbol.asyncDispose]();
     },
@@ -183,29 +216,6 @@ async function stopCloudflared(child: ReturnType<typeof spawn>) {
       child.kill("SIGKILL");
     }),
   ]);
-}
-
-function parseSeededServiceUrl(value: string) {
-  const url = new URL(value);
-  if (url.protocol !== "http:") {
-    throw new Error(
-      `Expected seeded tunnel service to use http:, received ${JSON.stringify(value)}`,
-    );
-  }
-  if (!url.port) {
-    throw new Error(
-      `Expected seeded tunnel service to include an explicit port: ${JSON.stringify(value)}`,
-    );
-  }
-
-  return {
-    hostname: url.hostname,
-    port: Number(url.port),
-  };
-}
-
-export function getCloudflareTunnelServicePort(service: string) {
-  return parseSeededServiceUrl(service).port;
 }
 
 async function waitForTryCloudflareUrlFromChild(args: {

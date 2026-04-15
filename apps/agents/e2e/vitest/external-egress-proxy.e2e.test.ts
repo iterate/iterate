@@ -1,47 +1,95 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { setTimeout as delay } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { agentsContract } from "@iterate-com/agents-contract";
 import { HttpResponse, http, useMockHttpServer } from "@iterate-com/mock-http-proxy";
+import { useCloudflareTunnelLease, useDevServer } from "@iterate-com/shared/test-helpers";
 import { describe, expect, test } from "vitest";
+import { requireSemaphoreE2eEnv } from "../test-support/require-semaphore-e2e-env.ts";
+
+requireSemaphoreE2eEnv(process.env);
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
-const describeExternalEgressProxy = process.env.CI ? describe.skip : describe.sequential;
 
-describeExternalEgressProxy("agents external egress proxy", () => {
+describe.sequential("agents external egress proxy", () => {
   test("routes a sample oRPC fetch through the configured proxy", async () => {
-    const proxy = await useMockHttpServer();
+    const proxy = await useMockHttpServer({ onUnhandledRequest: "bypass" });
 
     try {
       let capturedRequestUrl: string | null = null;
 
       proxy.use(
-        http.get("https://example.com/", ({ request }) => {
+        http.get("https://example.com/*", ({ request }) => {
           capturedRequestUrl = request.url;
           return HttpResponse.text("proxied example body");
         }),
       );
 
-      await withAgentsDevServer(
-        {
+      await using tunnelLease = await useCloudflareTunnelLease({});
+      await using devServer = await useDevServer({
+        cwd: appRoot,
+        command: "pnpm",
+        args: ["dev"],
+        port: tunnelLease.localPort,
+        env: {
+          ...stripInheritedAppConfig(process.env),
           APP_CONFIG_EXTERNAL_EGRESS_PROXY: proxy.url,
         },
-        async (baseUrl) => {
-          const client = createAgentsClient(baseUrl);
-          const result = await client.fetchExample({});
-          const harEntries = proxy.getHar().log.entries;
+      });
 
-          expect(result.ok).toBe(true);
-          expect(result.status).toBe(200);
-          expect(result.body).toBe("proxied example body");
-          expect(capturedRequestUrl).toBe("https://example.com/");
-          expect(harEntries).toHaveLength(1);
-          expect(harEntries[0]?.request.url).toBe("https://example.com/");
-        },
+      const client = createAgentsClient(devServer.baseUrl);
+      const result = await client.fetchExample({});
+      const harEntries = proxy.getHar().log.entries;
+
+      expect(result.ok).toBe(true);
+      expect(result.status).toBe(200);
+      expect(result.body).toBe("proxied example body");
+      expect(capturedRequestUrl).toBe("https://example.com/");
+      expect(harEntries).toHaveLength(1);
+      expect(harEntries[0]?.request.url).toBe("https://example.com/");
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  test("IterateAgent codemode script can fetch https://example.com/ via egress proxy", async () => {
+    const proxy = await useMockHttpServer({ onUnhandledRequest: "bypass" });
+
+    try {
+      proxy.use(
+        http.get("https://example.com/*", () =>
+          HttpResponse.text("proxied example body from codemode"),
+        ),
       );
+
+      await using tunnelLease = await useCloudflareTunnelLease({});
+      await using devServer = await useDevServer({
+        cwd: appRoot,
+        command: "pnpm",
+        args: ["dev"],
+        port: tunnelLease.localPort,
+        env: {
+          ...stripInheritedAppConfig(process.env),
+          APP_CONFIG_EXTERNAL_EGRESS_PROXY: proxy.url,
+        },
+      });
+
+      const instance = `fetch-smoke-${randomBytes(4).toString("hex")}`;
+      const payload = await runIterateAgentCodemodeFetchSmoke({
+        baseUrl: devServer.baseUrl,
+        instanceName: instance,
+      });
+
+      expect(payload.error ?? "").toBe("");
+      expect(payload.result).toMatchObject({
+        status: 200,
+        body: "proxied example body from codemode",
+      });
+
+      const harEntries = proxy.getHar().log.entries;
+      expect(harEntries.some((e) => e.request.url.startsWith("https://example.com"))).toBe(true);
     } finally {
       await proxy.close();
     }
@@ -56,93 +104,83 @@ function createAgentsClient(baseUrl: string): ContractRouterClient<typeof agents
   );
 }
 
-async function withAgentsDevServer(
-  env: Record<string, string>,
-  run: (baseUrl: string) => Promise<void>,
-) {
-  const child = spawn("pnpm", ["dev"], {
-    cwd: appRoot,
-    env: {
-      ...stripInheritedAppConfig(process.env),
-      ...env,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  const output: Buffer[] = [];
-  child.stdout?.on("data", (data: Buffer) => {
-    output.push(Buffer.from(data));
-  });
-  child.stderr?.on("data", (data: Buffer) => {
-    output.push(Buffer.from(data));
-  });
-
-  try {
-    const baseUrl = await waitForReady(output);
-    await run(baseUrl);
-  } catch (error) {
-    const logs = Buffer.concat(output).toString("utf8");
-    throw new Error(`${String(error)}\n--- agents dev log ---\n${logs}`);
-  } finally {
-    await stopChild(child);
-  }
+const CODEMODE_FETCH_EXAMPLE_SCRIPT = `
+async () => {
+  const r = await fetch("https://example.com/");
+  return { status: r.status, body: await r.text() };
 }
+`.trim();
 
-async function waitForReady(output: Buffer[], timeoutMs = 45_000) {
-  const deadline = Date.now() + timeoutMs;
-  let lastError: unknown;
+type CodemodeExecutePayload = {
+  result?: { status?: number; body?: string };
+  error?: string;
+};
 
-  while (Date.now() < deadline) {
-    try {
-      const baseUrl = parseWorkersDevUrl(Buffer.concat(output).toString("utf8"));
-      if (!baseUrl) {
-        throw new Error("Waiting for agents dev server URL...");
+async function runIterateAgentCodemodeFetchSmoke(args: {
+  baseUrl: string;
+  instanceName: string;
+  timeoutMs?: number;
+}): Promise<CodemodeExecutePayload> {
+  const timeoutMs = args.timeoutMs ?? 120_000;
+  const wsUrl = new URL(args.baseUrl);
+  wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+  wsUrl.pathname = `/agents/iterate-agent/${args.instanceName}`;
+
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl.toString());
+    const deadline = setTimeout(() => {
+      try {
+        ws.close();
+      } catch {}
+      reject(new Error(`IterateAgent codemode timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    ws.addEventListener("open", () => {
+      setTimeout(() => {
+        ws.send(
+          JSON.stringify({
+            type: "event",
+            event: {
+              type: "codemode-block-added",
+              payload: { script: CODEMODE_FETCH_EXAMPLE_SCRIPT },
+            },
+          }),
+        );
+      }, 3_000);
+    });
+
+    ws.addEventListener("message", (ev) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(String(ev.data));
+      } catch {
+        return;
       }
 
-      const response = await fetch(new URL("/api/openapi.json", baseUrl), {
-        signal: AbortSignal.timeout(2_000),
-      });
-
-      if (response.ok) {
-        const openApi = (await response.json()) as { paths?: Record<string, unknown> };
-        if ((openApi.paths ?? {})["/fetch-example"]) {
-          return baseUrl;
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        "type" in parsed &&
+        (parsed as { type: string }).type === "append" &&
+        "event" in parsed
+      ) {
+        const event = (parsed as { event: { type?: string; payload?: CodemodeExecutePayload } })
+          .event;
+        if (event.type === "codemode-result-added") {
+          clearTimeout(deadline);
+          try {
+            ws.close();
+          } catch {}
+          resolve(event.payload ?? {});
         }
       }
+    });
 
-      lastError = new Error(`GET /api/openapi.json -> ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-
-    await delay(300);
-  }
-
-  throw lastError;
-}
-
-function parseWorkersDevUrl(output: string) {
-  const workersDevUrl =
-    output.match(/workersDevUrl:\s*'([^']+)'/)?.[1] ??
-    output.match(/workersDevUrl:\s*"([^"]+)"/)?.[1] ??
-    output.match(/url:\s*'([^']+)'/)?.[1] ??
-    output.match(/url:\s*"([^"]+)"/)?.[1];
-
-  return workersDevUrl?.replace(/\/+$/, "");
-}
-
-async function stopChild(child: ChildProcessWithoutNullStreams) {
-  if (child.exitCode !== null || child.killed) {
-    return;
-  }
-
-  child.kill("SIGTERM");
-  await Promise.race([
-    new Promise<void>((resolve) => child.once("exit", () => resolve())),
-    delay(3_000).then(() => {
-      child.kill("SIGKILL");
-    }),
-  ]);
+    ws.addEventListener("error", () => {
+      clearTimeout(deadline);
+      reject(new Error("WebSocket error connecting to IterateAgent"));
+    });
+  });
 }
 
 function stripInheritedAppConfig(env: NodeJS.ProcessEnv) {

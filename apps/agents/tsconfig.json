@@ -1,5 +1,5 @@
 {
-  "include": ["**/*.ts", "**/*.tsx", "alchemy.run.ts"],
+  "include": ["**/*.ts", "**/*.tsx", "**/*.d.ts", "alchemy.run.ts"],
   "exclude": ["**/*.test.ts"],
   "compilerOptions": {
     "target": "ES2024",

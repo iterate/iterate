@@ -1,3 +1,4 @@
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { env as workerEnv } from "cloudflare:workers";
 import { routeAgentRequest } from "agents";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
@@ -23,6 +24,18 @@ if (config.externalEgressProxy) {
     fetch: nativeFetch,
     externalEgressProxy: config.externalEgressProxy,
   });
+}
+
+/**
+ * Service entrypoint for {@link DynamicWorkerExecutor}'s `globalOutbound`. Nested
+ * codemode workers cannot see this Worker's `globalThis.fetch`; they need a real
+ * `Fetcher` binding. This forwards to the same `fetch` installed above (including
+ * egress proxy when configured).
+ */
+export class CodemodeOutboundFetch extends WorkerEntrypoint<Env> {
+  fetch(request: Request): Promise<Response> {
+    return globalThis.fetch(request);
+  }
 }
 
 export default {

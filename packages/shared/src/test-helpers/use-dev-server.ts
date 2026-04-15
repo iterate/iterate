@@ -22,6 +22,10 @@ export interface DevServerHandle extends AsyncDisposable {
 /**
  * Start a dev server process, wait for a health check to succeed, and stop the
  * process on dispose.
+ *
+ * For Semaphore + `cloudflared` e2e: acquire {@link useCloudflareTunnelLease} first,
+ * then pass `port: lease.localPort`
+ * so the dev server listens where the tunnel forwards (e.g. `PORT` for `pnpm dev`).
  */
 export async function useDevServer(options: UseDevServerOptions): Promise<DevServerHandle> {
   const child = spawn(options.command, options.args, {
@@ -43,11 +47,11 @@ export async function useDevServer(options: UseDevServerOptions): Promise<DevSer
     output.push(Buffer.from(data));
   });
 
-  const baseUrl = `http://${DEFAULT_PROBE_HOST}:${String(options.port)}`;
+  const expectedBaseUrl = `http://${DEFAULT_PROBE_HOST}:${String(options.port)}`;
 
   try {
-    await waitForHealth({
-      baseUrl,
+    const baseUrl = await waitForHealth({
+      baseUrl: expectedBaseUrl,
       child,
       healthcheckPath: options.healthcheckPath ?? DEFAULT_HEALTHCHECK_PATH,
       output,
@@ -64,7 +68,7 @@ export async function useDevServer(options: UseDevServerOptions): Promise<DevSer
     await stopChild(child).catch(() => {});
     const logs = Buffer.concat(output).toString("utf8");
     throw new Error(
-      `Failed to start dev server at ${baseUrl}: ${error instanceof Error ? error.message : String(error)}${
+      `Failed to start dev server at ${expectedBaseUrl}: ${error instanceof Error ? error.message : String(error)}${
         logs ? `\n--- dev server output ---\n${logs}` : ""
       }`,
     );
@@ -77,8 +81,7 @@ async function waitForHealth(args: {
   healthcheckPath: string;
   output: Buffer[];
   timeoutMs: number;
-}) {
-  const healthcheckUrl = new URL(args.healthcheckPath, args.baseUrl);
+}): Promise<string> {
   const deadline = Date.now() + args.timeoutMs;
   let lastError: string | undefined;
 
@@ -87,12 +90,14 @@ async function waitForHealth(args: {
       throw new Error(`process exited with code ${String(args.child.exitCode)}`);
     }
 
+    const healthcheckUrl = new URL(args.healthcheckPath, args.baseUrl);
+
     try {
       const response = await fetch(healthcheckUrl, {
         signal: AbortSignal.timeout(2_000),
       });
       if (response.ok) {
-        return;
+        return args.baseUrl;
       }
 
       lastError = `GET ${healthcheckUrl.toString()} -> ${String(response.status)}`;
@@ -103,7 +108,7 @@ async function waitForHealth(args: {
     await delay(300);
   }
 
-  throw new Error(lastError ?? `timed out waiting for ${healthcheckUrl.toString()}`);
+  throw new Error(lastError ?? `timed out waiting for health check`);
 }
 
 async function stopChild(child: ReturnType<typeof spawn>) {

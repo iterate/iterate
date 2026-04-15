@@ -16,7 +16,8 @@
     "destroy": "doppler run --config prd -- pnpm alchemy:down",
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck",
-    "test:e2e": "doppler run -- sh -c 'if [ \"$1\" = \"--\" ]; then shift; fi; vitest run --config ./e2e/vitest.config.ts \"$@\"' --",
+    "test:e2e": "doppler run -- pnpm exec vitest run --config ./e2e/vitest.config.ts",
+    "test:e2e:record-har": "doppler run -- env AGENTS_E2E_RECORD_HAR=1 pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent.e2e.test.ts",
     "test:e2e:preview": "doppler run -- sh -c 'if [ -z \"$AGENTS_BASE_URL\" ]; then echo \"AGENTS_BASE_URL is required for agents e2e tests\"; exit 1; fi; vitest run --config ./e2e/vitest.config.ts e2e/vitest/runtime-smoke.e2e.test.ts'"
   },
   "iterateAppCli": {
@@ -35,7 +36,6 @@
     "@orpc/openapi": "1.13.14",
     "@orpc/openapi-client": "1.13.14",
     "@orpc/server": "1.13.14",
-    "@orpc/tanstack-query": "1.13.14",
     "@tanstack/react-devtools": "0.10.0",
     "@tanstack/react-query": "^5.91.0",
     "@tanstack/react-query-devtools": "^5.91.3",

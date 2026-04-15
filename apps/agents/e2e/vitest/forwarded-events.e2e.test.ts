@@ -2,36 +2,34 @@ import { fileURLToPath } from "node:url";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
+import { eventsContract, type StreamPath } from "@iterate-com/events-contract";
 import {
-  Event,
-  type Event as EventsEvent,
-  eventsContract,
-  type StreamPath,
-} from "@iterate-com/events-contract";
-import {
-  getCloudflareTunnelServicePort,
   useCloudflareTunnel,
   useCloudflareTunnelLease,
   useDevServer,
 } from "@iterate-com/shared/test-helpers";
-import { describe, inject, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
+import { injectVitestRunSlug } from "../test-support/vitest-inject-run-slug.ts";
 import {
   createEventsStreamPath,
   createTestExecutionSuffix,
-  VITEST_RUN_SLUG_KEY,
 } from "../test-support/vitest-naming.ts";
+import {
+  eventsIterateStreamViewerUrl,
+  waitForStreamEvent,
+} from "../test-support/events-stream-helpers.ts";
+import { requireSemaphoreE2eEnv } from "../test-support/require-semaphore-e2e-env.ts";
+
+requireSemaphoreE2eEnv(process.env);
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../../../..", import.meta.url));
-const describeForwardedEvents = hasSemaphoreAccess(process.env)
-  ? describe.sequential
-  : describe.skip;
 
-describeForwardedEvents("agents forwarded events", () => {
+describe.sequential("agents forwarded events", () => {
   test("receives a real events.iterate.com webhook and appends pong to the same stream", async ({
     task,
   }) => {
-    const vitestRunSlug = inject(VITEST_RUN_SLUG_KEY);
+    const vitestRunSlug = injectVitestRunSlug();
     const executionSuffix = createTestExecutionSuffix();
     const streamPath = createEventsStreamPath({
       repoRoot,
@@ -40,14 +38,19 @@ describeForwardedEvents("agents forwarded events", () => {
       executionSuffix,
     }) as StreamPath;
     const eventsBaseUrl = resolveEventsBaseUrl();
+    const streamViewerUrl = eventsIterateStreamViewerUrl({
+      eventsOrigin: eventsBaseUrl,
+      projectSlug: vitestRunSlug,
+      streamPath,
+    });
+    console.info(`[forwarded-events e2e] Events stream (open in browser): ${streamViewerUrl}`);
     await using tunnelLease = await useCloudflareTunnelLease({});
-    const agentsLocalPort = getCloudflareTunnelServicePort(tunnelLease.service);
 
     await using devServer = await useDevServer({
       cwd: appRoot,
       command: "pnpm",
       args: ["dev"],
-      port: agentsLocalPort,
+      port: tunnelLease.localPort,
       env: {
         ...stripInheritedAppConfig(process.env),
         APP_CONFIG_EVENTS_BASE_URL: eventsBaseUrl,
@@ -87,7 +90,7 @@ describeForwardedEvents("agents forwarded events", () => {
       },
     });
 
-    const pong = await waitForEvent({
+    const pong = await waitForStreamEvent({
       client: eventsClient,
       path: streamPath,
       predicate: (event) => event.type === "pong",
@@ -121,67 +124,6 @@ function createEventsClient(options: {
   ) as ContractRouterClient<typeof eventsContract>;
 }
 
-async function waitForEvent(args: {
-  client: ContractRouterClient<typeof eventsContract>;
-  path: StreamPath;
-  predicate: (event: EventsEvent) => boolean;
-  timeoutMs?: number;
-}) {
-  const deadline = Date.now() + (args.timeoutMs ?? 30_000);
-  let lastEvents: EventsEvent[] = [];
-
-  while (Date.now() < deadline) {
-    lastEvents = await readHistory(args.client, args.path);
-    const matched = lastEvents.find(args.predicate);
-    if (matched) {
-      return matched;
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-
-  throw new Error(
-    `Timed out waiting for matching event on ${args.path}; last history types were ${lastEvents
-      .map((event) => event.type)
-      .join(", ")}`,
-  );
-}
-
-async function readHistory(
-  client: ContractRouterClient<typeof eventsContract>,
-  path: StreamPath,
-): Promise<EventsEvent[]> {
-  const stream = await client.stream({
-    path,
-    beforeOffset: "end",
-  });
-  const iterator = stream[Symbol.asyncIterator]();
-  const events: EventsEvent[] = [];
-
-  try {
-    while (true) {
-      const next = await Promise.race([
-        iterator.next().then((result) => ({ kind: "next" as const, result })),
-        new Promise<{ kind: "idle" }>((resolve) =>
-          setTimeout(() => resolve({ kind: "idle" }), 500),
-        ),
-      ]);
-
-      if (next.kind === "idle") {
-        return events;
-      }
-
-      if (next.result.done) {
-        return events;
-      }
-
-      events.push(Event.parse(next.result.value));
-    }
-  } finally {
-    await iterator.return?.();
-  }
-}
-
 function resolveEventsBaseUrl() {
   return process.env.EVENTS_BASE_URL?.trim().replace(/\/+$/, "") || "https://events.iterate.com";
 }
@@ -196,8 +138,4 @@ function stripInheritedAppConfig(env: NodeJS.ProcessEnv) {
   }
 
   return next;
-}
-
-function hasSemaphoreAccess(env: NodeJS.ProcessEnv) {
-  return Boolean(env.SEMAPHORE_API_TOKEN?.trim() && env.SEMAPHORE_BASE_URL?.trim());
 }

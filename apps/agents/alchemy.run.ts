@@ -1,6 +1,12 @@
 import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import alchemy, { type Scope } from "alchemy";
-import { DurableObjectNamespace, TanStackStart, WorkerLoader } from "alchemy/cloudflare";
+import {
+  DurableObjectNamespace,
+  Self,
+  TanStackStart,
+  Worker,
+  WorkerLoader,
+} from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
@@ -77,6 +83,9 @@ export const worker = await TanStackStart(APP_NAME, {
     ITERATE_AGENT: iterateAgent,
     LOADER: WorkerLoader(),
     APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
+    // Same pattern as `apps/events/alchemy.run.ts` + `DynamicWorkerEgressGateway`: nested
+    // codemode workers need a real `Fetcher` for `globalOutbound`, not `globalThis.fetch`.
+    CODEMODE_OUTBOUND_FETCH: Worker.experimentalEntrypoint(Self, "CodemodeOutboundFetch"),
   },
   compatibilityFlags: ["enable_request_signal"],
   wrangler: {

@@ -2,6 +2,7 @@ import type { worker } from "../../alchemy.run.ts";
 
 export type CloudflareEnv = typeof worker.Env & {
   LOADER: WorkerLoader;
+  CODEMODE_OUTBOUND_FETCH: Fetcher;
 };
 
 declare global {
