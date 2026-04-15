@@ -11,21 +11,23 @@ export class DynamicWorkerEgressGateway extends WorkerEntrypoint<Env> {
   async fetch(request: Request) {
     const headers = new Headers(request.headers);
     const target = new URL(request.url);
-    const gatewayConfig = parseDynamicWorkerEgressGatewayConfig(
-      headers.get(dynamicWorkerEgressConfigHeader),
-    );
-    const parsedProjectSlug = ProjectSlug.safeParse(headers.get(dynamicWorkerProjectSlugHeader));
+    const rawGatewayConfig = headers.get(dynamicWorkerEgressConfigHeader);
 
     headers.delete(dynamicWorkerEgressConfigHeader);
     headers.delete(dynamicWorkerProjectSlugHeader);
 
-    if (gatewayConfig == null) {
+    if (rawGatewayConfig == null) {
       return fetch(
         new Request(request, {
           headers,
         }),
       );
     }
+
+    const gatewayConfig = parseDynamicWorkerEgressGatewayConfig(rawGatewayConfig) ?? {};
+    const parsedProjectSlug = ProjectSlug.safeParse(
+      request.headers.get(dynamicWorkerProjectSlugHeader),
+    );
     if (!parsedProjectSlug.success) {
       throw new Error("DynamicWorkerEgressGateway requires a valid project slug header.");
     }

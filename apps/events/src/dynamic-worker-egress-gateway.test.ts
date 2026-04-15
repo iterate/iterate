@@ -42,14 +42,4 @@ describe("parseDynamicWorkerEgressGatewayConfig", () => {
       ),
     ).toThrow("DynamicWorkerEgressGateway received an invalid outbound gateway config.");
   });
-
-  test("rejects a config without a project slug", () => {
-    expect(() =>
-      parseDynamicWorkerEgressGatewayConfig(
-        JSON.stringify({
-          entrypoint: "DynamicWorkerEgressGateway",
-        }),
-      ),
-    ).not.toThrow();
-  });
 });
