@@ -17,25 +17,17 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { ChevronDownIcon } from "lucide-react";
 import { StreamPathLabel } from "~/components/stream-path-label.tsx";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
-import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 import type { StreamRendererMode } from "~/lib/stream-feed-types.ts";
-import { projectScopedQueryKey } from "~/lib/project-slug.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 import { getOrpc } from "~/orpc/client.ts";
-
-type BreadcrumbSearch = {
-  projectSlug?: string;
-  [key: string]: unknown;
-};
 
 const CHILD_STREAM_SEGMENT_PATTERN = /^[a-z0-9_-]+$/;
 
 export function PathBreadcrumbs() {
   const matches = useMatches();
   const { selectedStreamPath } = useStreamsChrome();
-  const projectSlug = useCurrentProjectSlug();
   const search = useSearch({ strict: false });
 
   if (matches.some((match) => match.status === "pending")) {
@@ -46,7 +38,6 @@ export function PathBreadcrumbs() {
   const parentCrumbs = crumbs.slice(0, -1);
   const currentCrumb = crumbs.at(-1);
   const streamSearch = makeStreamSearch({
-    projectSlug,
     composer:
       "composer" in search && typeof search.composer === "string"
         ? search.composer
@@ -67,7 +58,7 @@ export function PathBreadcrumbs() {
         {parentCrumbs.map((crumb) => (
           <Fragment key={crumb.key}>
             <BreadcrumbItem className="hidden md:inline-flex">
-              <BreadcrumbLink render={renderBreadcrumbLink({ crumb, projectSlug, streamSearch })}>
+              <BreadcrumbLink render={renderBreadcrumbLink({ crumb, streamSearch })}>
                 <BreadcrumbLabel crumb={crumb} />
               </BreadcrumbLink>
             </BreadcrumbItem>
@@ -105,7 +96,6 @@ function StreamChildrenBreadcrumb({
   streamSearch: ReturnType<typeof makeStreamSearch>;
 }) {
   const navigate = useNavigate();
-  const projectSlug = useCurrentProjectSlug();
   const orpc = getOrpc();
   const [open, setOpen] = useState(false);
   const [newChildSegment, setNewChildSegment] = useState("");
@@ -114,14 +104,9 @@ function StreamChildrenBreadcrumb({
     () => orpc.listChildren.queryOptions({ input: { path: parentPath } }),
     [orpc, parentPath],
   );
-  const listChildrenQueryKey = useMemo(
-    () => projectScopedQueryKey(listChildrenOptions.queryKey, projectSlug),
-    [listChildrenOptions.queryKey, projectSlug],
-  );
 
   const childrenQuery = useQuery({
     ...listChildrenOptions,
-    queryKey: listChildrenQueryKey,
     staleTime: 5_000,
   });
 
@@ -253,11 +238,9 @@ function getStreamCrumbs(path: StreamPathType) {
 
 function renderBreadcrumbLink({
   crumb,
-  projectSlug,
   streamSearch,
 }: {
   crumb: { path?: StreamPathType; to?: string };
-  projectSlug: string;
   streamSearch: ReturnType<typeof makeStreamSearch>;
 }) {
   if (crumb.path) {
@@ -270,12 +253,11 @@ function renderBreadcrumbLink({
     );
   }
 
-  return (
-    <Link
-      to={crumb.to ?? "/"}
-      search={(previous: BreadcrumbSearch) => ({ ...previous, projectSlug })}
-    />
-  );
+  if (crumb.to === "/streams/") {
+    return <Link to={crumb.to} search={streamSearch} />;
+  }
+
+  return <Link to={crumb.to ?? "/"} />;
 }
 
 function getStreamSegmentLabel(path: StreamPathType) {
@@ -284,17 +266,14 @@ function getStreamSegmentLabel(path: StreamPathType) {
 
 function makeStreamSearch({
   composer,
-  projectSlug,
   renderer,
 }: {
   composer: typeof defaultStreamViewSearch.composer;
-  projectSlug: string;
   renderer: StreamRendererMode;
 }) {
   return {
     event: defaultStreamViewSearch.event,
     composer,
-    projectSlug,
     renderer,
   };
 }

@@ -1,11 +1,7 @@
-import { ORPCError, implement } from "@orpc/server";
-import { eventsContract, ProjectSlug } from "@iterate-com/events-contract";
+import { implement } from "@orpc/server";
+import { eventsContract } from "@iterate-com/events-contract";
 import type { AppContext } from "~/context.ts";
-import {
-  defaultProjectSlug,
-  iterateProjectHeader,
-  resolveProjectSlug,
-} from "~/lib/project-slug.ts";
+import { defaultProjectSlug, resolveHostProjectSlug } from "~/lib/project-slug.ts";
 
 export const os = implement(eventsContract).$context<AppContext>();
 
@@ -13,27 +9,14 @@ export const os = implement(eventsContract).$context<AppContext>();
 // handlers can depend on validated context instead of reading Request globals:
 // https://orpc.dev/docs/middleware
 export const withProject = os.middleware(({ context, next }) => {
-  const rawProjectSlug = resolveProjectSlug({
-    url: context.rawRequest?.url,
-    headerValue: context.rawRequest?.headers.get(iterateProjectHeader) ?? defaultProjectSlug,
-  });
-  const parsedProjectSlug = ProjectSlug.safeParse(rawProjectSlug);
-
-  if (!parsedProjectSlug.success) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "X-Iterate-Project must be a non-empty string up to 255 characters.",
-      data: {
-        issues: parsedProjectSlug.error.issues.map((issue) => ({
-          path: issue.path,
-          message: issue.message,
-        })),
-      },
-    });
-  }
+  const requestUrl = context.rawRequest?.url;
+  const projectSlug =
+    (requestUrl ? resolveHostProjectSlug(new URL(requestUrl).hostname) : undefined) ??
+    defaultProjectSlug;
 
   return next({
     context: {
-      projectSlug: parsedProjectSlug.data,
+      projectSlug,
     },
   });
 });

@@ -6,7 +6,6 @@ import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { AppSidebar } from "~/components/app-sidebar.tsx";
 import { PathBreadcrumbs } from "~/components/path-breadcrumbs.tsx";
-import { validateAppSearch } from "~/lib/project-slug.ts";
 import { StreamsChromeProvider, StreamsHeaderAction } from "~/components/streams-chrome.tsx";
 
 // First-party refs:
@@ -17,7 +16,6 @@ const getSidebarDefaultOpen = createServerFn({ method: "GET" }).handler(() => ({
 }));
 
 export const Route = createFileRoute("/_app")({
-  validateSearch: validateAppSearch,
   loader: async () => ({ sidebarDefaultOpen: (await getSidebarDefaultOpen()).defaultOpen }),
   component: AppLayout,
 });

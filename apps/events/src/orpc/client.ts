@@ -5,7 +5,6 @@ import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import { getGlobalStartContext } from "@tanstack/react-start";
 import { eventsContract } from "@iterate-com/events-contract";
-import { iterateProjectHeader, resolveProjectSlug } from "~/lib/project-slug.ts";
 
 const DEFAULT_API_BASE_URL = "/api";
 
@@ -60,14 +59,6 @@ function getCurrentUrl() {
   return "http://localhost/";
 }
 
-function getCurrentHeaderValue(name: string) {
-  if (typeof window !== "undefined") {
-    return undefined;
-  }
-
-  return getGlobalStartContext()?.rawRequest?.headers.get(name) ?? undefined;
-}
-
 function normalizeApiBaseUrl(baseUrl: string | undefined) {
   const trimmed = baseUrl?.trim();
   if (!trimmed) {
@@ -85,29 +76,10 @@ function resolveApiUrl(baseUrl: string | undefined) {
   return new URL(normalizeApiBaseUrl(baseUrl), getCurrentUrl()).toString();
 }
 
-function createFetchWithProjectHeader() {
-  return (request: Request | URL | string, init?: RequestInit) => {
-    const requestInit = init as RequestInit | undefined;
-    const headers = new Headers(
-      request instanceof Request ? request.headers : requestInit?.headers,
-    );
-    headers.set(
-      iterateProjectHeader,
-      resolveProjectSlug({
-        url: getCurrentUrl(),
-        headerValue: getCurrentHeaderValue(iterateProjectHeader),
-      }),
-    );
-
-    return fetch(request, { ...requestInit, headers });
-  };
-}
-
 function makeOrpcClient(options: OrpcClientOptions = {}): OrpcClient {
   return createORPCClient(
     new OpenAPILink(eventsContract, {
       url: resolveApiUrl(options.baseUrl ?? configuredBaseUrl),
-      fetch: createFetchWithProjectHeader(),
     }),
   ) as OrpcClient;
 }
@@ -116,8 +88,6 @@ function makeOrpcClient(options: OrpcClientOptions = {}): OrpcClient {
 //   const apiUrl = new URL(resolveApiUrl(options.baseUrl ?? configuredBaseUrl));
 //   apiUrl.pathname = "/api/orpc-ws";
 //   apiUrl.protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
-//   apiUrl.searchParams.set(projectSlugSearchParam, resolveCurrentProjectSlug());
-
 //   const websocket = new WebSocket(apiUrl.toString());
 //   const client = createORPCClient(new WebSocketRPCLink({ websocket })) as OrpcClient;
 

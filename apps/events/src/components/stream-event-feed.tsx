@@ -59,7 +59,6 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import { StreamErrorAlert } from "~/components/stream-error-alert.tsx";
 import { StreamPathLabel } from "~/components/stream-path-label.tsx";
 import { StreamToolCard } from "~/components/stream-tool-card.tsx";
-import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { getEventTypePageByType } from "~/lib/event-type-pages.ts";
 import { orderEventKeysForYamlDisplay } from "~/lib/order-event-keys-for-yaml-display.ts";
 import { formatElapsedTime } from "~/lib/stream-feed-time.ts";
@@ -92,7 +91,6 @@ import type {
 type StreamLinkSearch = {
   composer?: string;
   event?: number;
-  projectSlug?: string;
   renderer?: string;
   [key: string]: unknown;
 };
@@ -286,7 +284,6 @@ function StreamFeedItemRenderer({
 }
 
 function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) {
-  const projectSlug = useCurrentProjectSlug();
   const relativePath = getRelativeStreamPath({
     basePath: item.parentPath,
     targetPath: item.createdPath,
@@ -307,7 +304,6 @@ function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) 
           search={(previous: StreamLinkSearch) => ({
             event: undefined,
             composer: previous.composer ?? defaultStreamViewSearch.composer,
-            projectSlug,
             renderer: previous.renderer ?? defaultStreamViewSearch.renderer,
           })}
           className="block min-w-0 max-w-full text-foreground hover:text-primary hover:underline"

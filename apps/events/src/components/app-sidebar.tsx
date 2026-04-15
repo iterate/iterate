@@ -1,11 +1,7 @@
-import { useEffect, useState } from "react";
-import { Link, useMatchRoute, useRouter, useSearch } from "@tanstack/react-router";
-import { ProjectSlug } from "@iterate-com/events-contract";
-import { Button } from "@iterate-com/ui/components/button";
+import { Link, useMatchRoute, useSearch } from "@tanstack/react-router";
 import {
   SidebarGroup,
   SidebarGroupContent,
-  SidebarInput,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -13,16 +9,12 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import { SidebarThemeSwitcher } from "@iterate-com/ui/components/sidebar-theme-switcher";
-import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamsSidebar } from "~/components/streams-sidebar.tsx";
-import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
-import { projectSlugSearchParam } from "~/lib/project-slug.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 
 type StreamLinkSearch = {
   composer?: string;
   event?: number;
-  projectSlug?: string;
   renderer?: string;
   [key: string]: unknown;
 };
@@ -33,7 +25,6 @@ export function AppSidebar() {
       header={<AppSidebarBrand />}
       footer={
         <>
-          <AppSidebarProjectSlugFooter />
           <SidebarSeparator />
           <SidebarThemeSwitcher />
         </>
@@ -51,7 +42,6 @@ const items = [
 ] as const;
 
 function AppSidebarBrand() {
-  const projectSlug = useCurrentProjectSlug();
   const search = useSearch({ strict: false });
   const currentRenderer =
     "renderer" in search && typeof search.renderer === "string"
@@ -72,7 +62,6 @@ function AppSidebarBrand() {
               to="/streams/"
               search={(previous: StreamLinkSearch) => ({
                 ...previous,
-                projectSlug,
                 event: defaultStreamViewSearch.event,
                 renderer: currentRenderer,
                 composer: currentComposer,
@@ -95,7 +84,6 @@ function AppSidebarBrand() {
 
 function AppSidebarNav() {
   const matchRoute = useMatchRoute();
-  const projectSlug = useCurrentProjectSlug();
   const search = useSearch({ strict: false });
   const currentRenderer =
     "renderer" in search && typeof search.renderer === "string"
@@ -119,17 +107,13 @@ function AppSidebarNav() {
                       to={item.to}
                       search={(previous: StreamLinkSearch) => ({
                         ...previous,
-                        projectSlug,
                         event: defaultStreamViewSearch.event,
                         renderer: currentRenderer,
                         composer: currentComposer,
                       })}
                     />
                   ) : (
-                    <Link
-                      to={item.to}
-                      search={(previous: StreamLinkSearch) => ({ ...previous, projectSlug })}
-                    />
+                    <Link to={item.to} />
                   )
                 }
                 isActive={Boolean(matchRoute({ to: item.to, fuzzy: true }))}
@@ -141,63 +125,5 @@ function AppSidebarNav() {
         </SidebarMenu>
       </SidebarGroupContent>
     </SidebarGroup>
-  );
-}
-
-function AppSidebarProjectSlugFooter() {
-  const router = useRouter();
-  const projectSlug = useCurrentProjectSlug();
-  const search = useSearch({ strict: false });
-  const [value, setValue] = useState(projectSlug);
-
-  useEffect(() => {
-    setValue(projectSlug);
-  }, [projectSlug]);
-
-  function submitProjectSlug() {
-    const parsed = ProjectSlug.safeParse(value.trim());
-    if (!parsed.success) {
-      toast.error("Project slug must be a non-empty string up to 255 characters.");
-      return;
-    }
-
-    const searchParams = new URLSearchParams();
-    searchParams.set(projectSlugSearchParam, parsed.data);
-    searchParams.set(
-      "renderer",
-      typeof search.renderer === "string" ? search.renderer : defaultStreamViewSearch.renderer,
-    );
-    searchParams.set(
-      "composer",
-      typeof search.composer === "string" ? search.composer : defaultStreamViewSearch.composer,
-    );
-    searchParams.delete("event");
-
-    void router.navigate({
-      href: `/streams/?${searchParams.toString()}`,
-      replace: true,
-    });
-  }
-
-  return (
-    <form
-      className="flex flex-col gap-2 p-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        submitProjectSlug();
-      }}
-    >
-      <div className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        Project slug
-      </div>
-      <SidebarInput
-        value={value}
-        onChange={(event) => setValue(event.currentTarget.value)}
-        placeholder="public"
-      />
-      <Button type="submit" size="sm" className="w-full">
-        Apply
-      </Button>
-    </form>
   );
 }

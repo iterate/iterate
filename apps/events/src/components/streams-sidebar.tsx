@@ -19,7 +19,6 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { Minus, Plus } from "lucide-react";
 import { StreamPathLabel } from "~/components/stream-path-label.tsx";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
-import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
 import {
   discoverStreamPaths,
@@ -34,7 +33,6 @@ import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 type StreamLinkSearch = {
   composer?: string;
   event?: number;
-  projectSlug?: string;
   renderer?: string;
   [key: string]: unknown;
 };
@@ -42,7 +40,6 @@ type StreamLinkSearch = {
 export function StreamsSidebar() {
   const navigate = useNavigate();
   const { selectedStreamPath } = useStreamsChrome();
-  const projectSlug = useCurrentProjectSlug();
   const search = useSearch({ strict: false });
   const [searchValue, setSearchValue] = useState("");
   const [isCreatingStream, setIsCreatingStream] = useState(false);
@@ -57,11 +54,10 @@ export function StreamsSidebar() {
       : defaultStreamViewSearch.composer;
   const { events: rootEvents, isConnecting } = useLiveStreamEvents({
     streamPath: "/",
-    projectSlug,
   });
   const streamSearch = useMemo(
-    () => makeStreamSearch({ projectSlug, renderer: currentRenderer, composer: currentComposer }),
-    [currentComposer, currentRenderer, projectSlug],
+    () => makeStreamSearch({ renderer: currentRenderer, composer: currentComposer }),
+    [currentComposer, currentRenderer],
   );
   const { root, defaultExpandedPaths } = useMemo(
     () =>
@@ -377,17 +373,14 @@ function StreamPathLink({
 
 function makeStreamSearch({
   composer,
-  projectSlug,
   renderer,
 }: {
   composer: typeof defaultStreamViewSearch.composer;
-  projectSlug: string;
   renderer: StreamRendererMode;
 }) {
   return {
     event: defaultStreamViewSearch.event,
     composer,
-    projectSlug,
     renderer,
   };
 }
