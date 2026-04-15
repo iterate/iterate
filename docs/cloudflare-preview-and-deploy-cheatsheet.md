@@ -54,8 +54,8 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
    - resource slug like `events-preview-1`
    - Doppler config like `stg_1`
    - Alchemy stage like `preview-1`
-   - public URL like `https://events-preview-1.iterate.workers.dev`
-6. It deploys the app, runs that app’s preview e2e command, and writes the result back into the PR body.
+   - public URL from that slot's deploy shape (for example `https://events-preview-1.iterate.com` for `events`, or `https://example-preview-1.iterate.workers.dev` for workers.dev-only apps)
+6. It deploys the app with the selected `stg_N` Doppler config intact, runs that app’s preview e2e command, and writes the result back into the PR body.
 7. On PR close, the same workflow runs cleanup and releases the lease.
 
 ## How production deploys work
@@ -82,6 +82,7 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
 - If the PR body state is lost, the next sync can create a fresh preview and an old preview may linger until later cleanup or slot reuse.
 - Preview jobs that mutate the PR body must stay serialized per PR.
 - Preview tests are intentionally narrower than the slowest full app e2e suites.
+- Preview deploys do not blank `WORKER_ROUTES`; route-driven previews should be configured in the app's `stg_N` Doppler configs.
 - `example` currently has no real network e2e cases; its `test:e2e` command passes with no tests.
 
 ## Prod verification commands
