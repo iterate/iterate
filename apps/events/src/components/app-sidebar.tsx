@@ -1,7 +1,11 @@
+import { useEffect, useState } from "react";
 import { Link, useMatchRoute, useSearch } from "@tanstack/react-router";
+import { ProjectSlug, type ProjectSlug as ProjectSlugValue } from "@iterate-com/events-contract";
+import { Button } from "@iterate-com/ui/components/button";
 import {
   SidebarGroup,
   SidebarGroupContent,
+  SidebarInput,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -9,7 +13,9 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import { SidebarThemeSwitcher } from "@iterate-com/ui/components/sidebar-theme-switcher";
+import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamsSidebar } from "~/components/streams-sidebar.tsx";
+import { getProjectUrl } from "~/lib/project-slug.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 
 type StreamLinkSearch = {
@@ -19,12 +25,13 @@ type StreamLinkSearch = {
   [key: string]: unknown;
 };
 
-export function AppSidebar() {
+export function AppSidebar({ projectSlug }: { projectSlug: ProjectSlugValue }) {
   return (
     <SidebarShell
       header={<AppSidebarBrand />}
       footer={
         <>
+          <AppSidebarProjectSlugFooter projectSlug={projectSlug} />
           <SidebarSeparator />
           <SidebarThemeSwitcher />
         </>
@@ -125,5 +132,54 @@ function AppSidebarNav() {
         </SidebarMenu>
       </SidebarGroupContent>
     </SidebarGroup>
+  );
+}
+
+function AppSidebarProjectSlugFooter({ projectSlug }: { projectSlug: ProjectSlugValue }) {
+  const [value, setValue] = useState(projectSlug);
+
+  useEffect(() => {
+    setValue(projectSlug);
+  }, [projectSlug]);
+
+  function submitProjectSlug() {
+    const parsed = ProjectSlug.safeParse(value.trim());
+    if (!parsed.success) {
+      toast.error("Project slug must be a non-empty string up to 255 characters.");
+      return;
+    }
+
+    const nextUrl = getProjectUrl({
+      currentUrl: window.location.href,
+      projectSlug: parsed.data,
+    });
+    if (nextUrl.host === window.location.host && parsed.data !== projectSlug) {
+      toast.error("Project switching only works on events.iterate.com hosts.");
+      return;
+    }
+
+    window.location.assign(nextUrl.toString());
+  }
+
+  return (
+    <form
+      className="flex flex-col gap-2 p-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        submitProjectSlug();
+      }}
+    >
+      <div className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Project slug
+      </div>
+      <SidebarInput
+        value={value}
+        onChange={(event) => setValue(event.currentTarget.value)}
+        placeholder="public"
+      />
+      <Button type="submit" size="sm" className="w-full">
+        Apply
+      </Button>
+    </form>
   );
 }
