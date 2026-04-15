@@ -2,6 +2,7 @@ import type { DynamicWorkerConfig } from "@iterate-com/events-contract";
 import { describe, expect, test } from "vitest";
 import {
   buildDynamicWorkerLoaderCode,
+  buildDynamicWorkerLoaderKey,
   resolveDynamicWorkerCompatibilityFlags,
   resolveDynamicWorkerOutboundGateway,
 } from "./dynamic-processor.ts";
@@ -62,6 +63,19 @@ describe("buildDynamicWorkerLoaderCode", () => {
     expect(parseRuntimeConfigModule(loaderCode.modules["runtime-config.js"])).toMatchObject({
       projectSlug: "team-a",
     });
+  });
+});
+
+describe("buildDynamicWorkerLoaderKey", () => {
+  test("includes the project slug in the worker cache key", () => {
+    expect(
+      buildDynamicWorkerLoaderKey({
+        configKey: '{"config":{},"envVarsByKey":{}}',
+        path: "/streams/demo",
+        projectSlug: "team-a",
+        slug: "worker",
+      }),
+    ).toContain("dynamic-worker:team-a:/streams/demo:worker:");
   });
 });
 

@@ -428,7 +428,12 @@ export function createDynamicWorkerManager(context: {
         const env = buildDynamicWorkerEnvBindings(envVarsByKey);
         const entrypoint = context.loader
           .get(
-            `dynamic-worker:${context.getPath()}:${slug}:${hashDynamicWorkerConfig(configKey)}`,
+            buildDynamicWorkerLoaderKey({
+              configKey,
+              path: context.getPath(),
+              projectSlug: context.getProjectSlug(),
+              slug,
+            }),
             () =>
               buildDynamicWorkerLoaderCode({
                 config,
@@ -579,6 +584,15 @@ export function buildDynamicWorkerLoaderCode(args: {
     modules,
     ...(args.globalOutbound == null ? {} : { globalOutbound: args.globalOutbound }),
   };
+}
+
+export function buildDynamicWorkerLoaderKey(args: {
+  configKey: string;
+  path: string;
+  projectSlug: string;
+  slug: string;
+}) {
+  return `dynamic-worker:${args.projectSlug}:${args.path}:${args.slug}:${hashDynamicWorkerConfig(args.configKey)}`;
 }
 
 function hashDynamicWorkerConfig(value: string) {
