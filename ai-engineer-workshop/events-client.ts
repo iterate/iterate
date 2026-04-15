@@ -4,9 +4,9 @@ import {
   createEventsClient as createBaseEventsClient,
   eventsContract,
 } from "../apps/events-contract/src/sdk.ts";
+import { ProjectSlug } from "../apps/events-contract/src/types.ts";
+import { getProjectUrl } from "../apps/events/src/lib/project-slug.ts";
 import type { EventsORPCClient } from "../apps/events-contract/src/sdk.ts";
-
-const iterateProjectHeader = "x-iterate-project";
 
 export function createWorkshopEventsClient({
   baseUrl,
@@ -17,19 +17,26 @@ export function createWorkshopEventsClient({
   closeConnection?: boolean;
   projectSlug?: string;
 }): EventsORPCClient {
-  if (projectSlug == null) {
+  if (projectSlug == null && !closeConnection) {
     return createBaseEventsClient(baseUrl);
   }
 
+  const projectBaseUrl =
+    projectSlug == null
+      ? baseUrl
+      : getProjectUrl({
+          currentUrl: baseUrl,
+          projectSlug: ProjectSlug.parse(projectSlug),
+        }).toString();
+
   return createORPCClient(
     new OpenAPILink(eventsContract, {
-      url: new URL("/api", baseUrl).toString(),
+      url: new URL("/api", projectBaseUrl).toString(),
       fetch: (request: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(request instanceof Request ? request.headers : init?.headers);
         if (closeConnection) {
           headers.set("connection", "close");
         }
-        headers.set(iterateProjectHeader, projectSlug);
         return fetch(request, { ...init, headers });
       },
     }),
