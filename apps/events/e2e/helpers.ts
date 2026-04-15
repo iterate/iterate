@@ -2,11 +2,17 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import { eventsContract, type EventInput, type StreamPath } from "@iterate-com/events-contract";
-import { iterateProjectHeader } from "../src/lib/project-slug.ts";
+import {
+  ProjectSlug,
+  eventsContract,
+  type EventInput,
+  type StreamPath,
+} from "@iterate-com/events-contract";
+import { defaultProjectSlug, getProjectUrl } from "../src/lib/project-slug.ts";
 
 export type Events2Client = ContractRouterClient<typeof eventsContract>;
-export const defaultE2EProjectSlug = "test";
+export const defaultE2EProjectSlug = defaultProjectSlug;
+export const scopedE2EProjectSlug = "test";
 
 export type Events2AppFixture = {
   baseURL: string;
@@ -30,23 +36,9 @@ export function requireEventsBaseUrl() {
 
 export function createEvents2AppFixture(args: { baseURL: string }): Events2AppFixture {
   const baseURL = args.baseURL.replace(/\/+$/, "");
-  const withProjectHeaders = (headersInit?: HeadersInit) => {
-    const headers = new Headers(headersInit);
-    if (!headers.has(iterateProjectHeader)) {
-      headers.set(iterateProjectHeader, defaultE2EProjectSlug);
-    }
-    return headers;
-  };
   const client = createORPCClient(
     new OpenAPILink(eventsContract, {
       url: new URL("/api", baseURL).toString(),
-      fetch: (request, init) => {
-        const requestInit = init as RequestInit | undefined;
-        const headers = withProjectHeaders(
-          request instanceof Request ? request.headers : requestInit?.headers,
-        );
-        return fetch(request, { ...requestInit, headers });
-      },
     }),
   ) as Events2Client;
 
@@ -61,12 +53,30 @@ export function createEvents2AppFixture(args: { baseURL: string }): Events2AppFi
         event: args.event,
       });
     },
-    fetch: (pathname, init) =>
-      fetch(new URL(pathname, baseURL), {
-        ...init,
-        headers: withProjectHeaders(init?.headers),
-      }),
+    fetch: (pathname, init) => fetch(new URL(pathname, baseURL), init),
   };
+}
+
+export function getEventsProjectBaseUrl(args: { baseURL: string; projectSlug: string }) {
+  return getProjectUrl({
+    currentUrl: args.baseURL,
+    projectSlug: ProjectSlug.parse(args.projectSlug),
+  })
+    .toString()
+    .replace(/\/+$/, "");
+}
+
+export function createEvents2ProjectAppFixture(args: { baseURL: string; projectSlug: string }) {
+  return createEvents2AppFixture({
+    baseURL: getEventsProjectBaseUrl(args),
+  });
+}
+
+export function supportsProjectHostRouting(baseURL: string) {
+  return (
+    new URL(getEventsProjectBaseUrl({ baseURL, projectSlug: scopedE2EProjectSlug })).hostname !==
+    new URL(baseURL).hostname
+  );
 }
 
 export async function collectAsyncIterableUntilIdle<T>(args: {

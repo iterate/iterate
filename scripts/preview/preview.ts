@@ -559,20 +559,21 @@ async function createPreviewEnvironment(
       updatedAt: new Date().toISOString(),
     } as const;
 
+    const deployArgs = [
+      "run",
+      "--project",
+      params.dopplerProject,
+      "--config",
+      previewEnvironment.previewEnvironmentDopplerConfigName,
+      "--",
+      "env",
+      `ALCHEMY_STAGE=${previewEnvironment.previewEnvironmentAlchemyStageName}`,
+      "pnpm",
+      "alchemy:up",
+    ];
+
     const deployResult = await runCommand({
-      args: [
-        "run",
-        "--project",
-        params.dopplerProject,
-        "--config",
-        previewEnvironment.previewEnvironmentDopplerConfigName,
-        "--",
-        "env",
-        `ALCHEMY_STAGE=${previewEnvironment.previewEnvironmentAlchemyStageName}`,
-        "WORKER_ROUTES=",
-        "pnpm",
-        "alchemy:up",
-      ],
+      args: deployArgs,
       command: "doppler",
       environment: params.commandEnvironment,
       signal: params.signal,
@@ -657,20 +658,21 @@ async function destroyPreviewEnvironment(
     workingDirectory: string;
   },
 ) {
+  const destroyArgs = [
+    "run",
+    "--project",
+    params.dopplerProject,
+    "--config",
+    params.previewEnvironmentDopplerConfigName,
+    "--",
+    "env",
+    `ALCHEMY_STAGE=${params.previewEnvironmentAlchemyStageName}`,
+    "pnpm",
+    "alchemy:down",
+  ];
+
   const destroyResult = await runCommand({
-    args: [
-      "run",
-      "--project",
-      params.dopplerProject,
-      "--config",
-      params.previewEnvironmentDopplerConfigName,
-      "--",
-      "env",
-      `ALCHEMY_STAGE=${params.previewEnvironmentAlchemyStageName}`,
-      "WORKER_ROUTES=",
-      "pnpm",
-      "alchemy:down",
-    ],
+    args: destroyArgs,
     command: "doppler",
     environment: params.commandEnvironment,
     signal: params.signal,
@@ -741,7 +743,10 @@ function derivePreviewEnvironment(input: {
     previewEnvironmentIdentifier: input.previewEnvironmentSlug,
     previewEnvironmentSlug: input.previewEnvironmentSlug,
     previewEnvironmentType: input.previewEnvironmentType,
-    publicUrl: `https://${input.previewEnvironmentSlug}.iterate.workers.dev`,
+    publicUrl:
+      input.appSlug === "events"
+        ? `https://events-preview-${slot}.iterate.com`
+        : `https://${input.previewEnvironmentSlug}.iterate.workers.dev`,
   };
 }
 

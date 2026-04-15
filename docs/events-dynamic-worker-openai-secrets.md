@@ -93,7 +93,7 @@ Use the PR preview URL:
 
 ```bash
 doppler run --project ai-engineer-workshop -- \
-  env EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+  env EVENTS_BASE_URL=https://events-preview-1.iterate.com \
       OPENAI_API_KEY="$OPENAI_API_KEY" \
   pnpm --dir apps/events test:e2e:openai-preview
 ```
@@ -250,22 +250,22 @@ and the assistant payload again contained `"42"`.
 The preview URL in PR #1254 was:
 
 ```text
-https://events-preview-1.iterate.workers.dev
+https://events-preview-1.iterate.com
 ```
 
 These preview-targeted validations passed in this branch:
 
 ```bash
 doppler run --project ai-engineer-workshop -- \
-  env EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+  env EVENTS_BASE_URL=https://events-preview-1.iterate.com \
   pnpm --dir apps/events exec tsx ./scripts/prove-dynamic-openai-loop.ts
 
 doppler run --project ai-engineer-workshop -- bash -lc '
-  export EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev
+  export EVENTS_BASE_URL=https://events-preview-1.iterate.com
   pnpm --dir apps/events test:e2e:openai-preview
 '
 
-EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+EVENTS_BASE_URL=https://events-preview-1.iterate.com \
   pnpm --dir apps/events test:e2e:preview
 ```
 
@@ -283,21 +283,21 @@ four combinations:
 Commands:
 
 ```bash
-EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+EVENTS_BASE_URL=https://events-preview-1.iterate.com \
 PROCESSOR_BASE_URL=https://ai-engineer-workshop-deployed-processor.iterate.workers.dev \
 pnpm --dir apps/events exec tsx ./scripts/prove-pushed-processor.ts
 
-EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+EVENTS_BASE_URL=https://events-preview-1.iterate.com \
 PROCESSOR_BASE_URL=https://ai-engineer-workshop-deployed-processor.iterate.workers.dev \
 SUBSCRIBER_TYPE=webhook \
 pnpm --dir apps/events exec tsx ./scripts/prove-pushed-processor.ts
 
-EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+EVENTS_BASE_URL=https://events-preview-1.iterate.com \
 PROCESSOR_BASE_URL=https://ai-engineer-workshop-deployed-processor.iterate.workers.dev \
 PROCESSOR_KIND=openai-agent \
 pnpm --dir apps/events exec tsx ./scripts/prove-pushed-processor.ts
 
-EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev \
+EVENTS_BASE_URL=https://events-preview-1.iterate.com \
 PROCESSOR_BASE_URL=https://ai-engineer-workshop-deployed-processor.iterate.workers.dev \
 PROCESSOR_KIND=openai-agent SUBSCRIBER_TYPE=webhook \
 pnpm --dir apps/events exec tsx ./scripts/prove-pushed-processor.ts
@@ -340,7 +340,7 @@ These all passed during the final hardening pass:
 - `pnpm --dir ai-engineer-workshop/examples/deployed-processor typecheck`
 - `pnpm --dir ai-engineer-workshop/examples/deployed-processor build`
 - `doppler run --project ai-engineer-workshop -- env EVENTS_BASE_URL=http://127.0.0.1:5173 pnpm --dir apps/events exec tsx ./scripts/prove-dynamic-openai-loop.ts`
-- `doppler run --project ai-engineer-workshop -- env EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev pnpm --dir apps/events exec tsx ./scripts/prove-dynamic-openai-loop.ts`
+- `doppler run --project ai-engineer-workshop -- env EVENTS_BASE_URL=https://events-preview-1.iterate.com pnpm --dir apps/events exec tsx ./scripts/prove-dynamic-openai-loop.ts`
 - local pushed-processor proof for ping/websocket
 - local pushed-processor proof for ping/webhook
 - local pushed-processor proof for OpenAI/websocket
@@ -349,8 +349,8 @@ These all passed during the final hardening pass:
 - deployed worker direct callback proof against real `events.iterate.com` for ping/websocket
 - deployed worker direct callback proof against real `events.iterate.com` for OpenAI/webhook
 - deployed worker direct callback proof against real `events.iterate.com` for OpenAI/websocket
-- `doppler run --project ai-engineer-workshop -- bash -lc 'export EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev; pnpm --dir apps/events test:e2e:openai-preview'`
-- `EVENTS_BASE_URL=https://events-preview-1.iterate.workers.dev pnpm --dir apps/events test:e2e:preview`
+- `doppler run --project ai-engineer-workshop -- bash -lc 'export EVENTS_BASE_URL=https://events-preview-1.iterate.com; pnpm --dir apps/events test:e2e:openai-preview'`
+- `EVENTS_BASE_URL=https://events-preview-1.iterate.com pnpm --dir apps/events test:e2e:preview`
 - preview -> deployed-worker pushed-processor proof for ping/websocket
 - preview -> deployed-worker pushed-processor proof for ping/webhook
 - preview -> deployed-worker pushed-processor proof for OpenAI/websocket

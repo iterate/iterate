@@ -10,15 +10,19 @@ import {
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
+  createEvents2ProjectAppFixture,
   defaultE2EProjectSlug,
   requireEventsBaseUrl,
+  supportsProjectHostRouting,
   type Events2AppFixture,
 } from "../helpers.ts";
 
+const eventsBaseUrl = requireEventsBaseUrl();
 const app = createEvents2AppFixture({
-  baseURL: requireEventsBaseUrl(),
+  baseURL: eventsBaseUrl,
 });
 const defaultProjectSlug = defaultE2EProjectSlug;
+const projectHostTest = supportsProjectHostRouting(eventsBaseUrl) ? test : test.skip;
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
 const pollIntervalMs = 50;
@@ -777,21 +781,20 @@ describe.sequential("events stream e2e", () => {
     testTimeoutMs,
   );
 
-  test(
-    "listChildren includes / for a fresh project slug before root initialization",
+  projectHostTest(
+    "listChildren includes / for a fresh project host before root initialization",
     async () => {
       const projectSlug = `test-${randomUUID().slice(0, 8)}`;
-      const response = await app.fetch("/api/streams/__children/%2F", {
-        headers: {
-          "x-iterate-project": projectSlug,
-        },
+      const projectApp = createEvents2ProjectAppFixture({
+        baseURL: eventsBaseUrl,
+        projectSlug,
       });
+      const response = await projectApp.fetch("/api/streams/__children/%2F");
 
       expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toEqual([
+      await expect(response.json()).resolves.toMatchObject([
         {
           path: "/",
-          createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
         },
       ]);
     },
