@@ -532,7 +532,7 @@ function normalizeDynamicWorkerModules(modules: Record<string, string>) {
 
 function buildDynamicWorkerRuntimeConfigModule(input: {
   outboundGateway: DynamicWorkerOutboundGateway | undefined;
-  projectSlug?: string;
+  projectSlug: string;
 }) {
   return `export default ${JSON.stringify(input)};`;
 }
@@ -570,6 +570,7 @@ export function buildDynamicWorkerLoaderCode(args: {
 }) {
   const modules = {
     ...args.config.modules,
+    [defaultDynamicWorkerMainModule]: dynamicWorkerRuntimeModule,
     [defaultDynamicWorkerRuntimeConfigModule]: buildDynamicWorkerRuntimeConfigModule({
       outboundGateway: args.config.outboundGateway,
       projectSlug: args.projectSlug,

@@ -1,5 +1,6 @@
 import type { DynamicWorkerConfig } from "@iterate-com/events-contract";
 import { describe, expect, test } from "vitest";
+import { dynamicWorkerProjectSlugHeader } from "~/lib/dynamic-worker-egress.ts";
 import {
   buildDynamicWorkerLoaderCode,
   buildDynamicWorkerLoaderKey,
@@ -63,6 +64,25 @@ describe("buildDynamicWorkerLoaderCode", () => {
     expect(parseRuntimeConfigModule(loaderCode.modules["runtime-config.js"])).toMatchObject({
       projectSlug: "team-a",
     });
+  });
+
+  test("overwrites worker.js with the latest runtime wrapper", () => {
+    const loaderCode = buildDynamicWorkerLoaderCode({
+      config: {
+        ...baseConfig,
+        modules: {
+          "worker.js": "export default { async run() {} };",
+        },
+      },
+      env: undefined,
+      globalOutbound: undefined,
+      projectSlug: "team-a",
+    });
+
+    expect(loaderCode.modules["worker.js"]).toContain(dynamicWorkerProjectSlugHeader);
+    expect(loaderCode.modules["worker.js"]).toContain(
+      'import runtimeConfig from "./runtime-config.js";',
+    );
   });
 });
 
