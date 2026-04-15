@@ -3,5 +3,6 @@ import { resolveProjectSlug } from "~/lib/project-slug.ts";
 
 export function useCurrentProjectSlug() {
   const location = useLocation();
-  return resolveProjectSlug({ url: location.href });
+  const url = new URL(location.href, window.location.origin);
+  return resolveProjectSlug({ url });
 }
