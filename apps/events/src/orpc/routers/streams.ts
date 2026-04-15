@@ -60,10 +60,16 @@ export const streamsRouter = {
   }),
 
   listChildren: os.listChildren.use(withProject).handler(async ({ input, context }) => {
-    const streamStub = getStreamStub({
-      projectSlug: context.projectSlug,
-      path: input.path,
-    });
+    const streamStub =
+      input.path === "/"
+        ? await getInitializedStreamStub({
+            projectSlug: context.projectSlug,
+            path: input.path,
+          })
+        : getStreamStub({
+            projectSlug: context.projectSlug,
+            path: input.path,
+          });
     const events = await streamStub.history();
     const discovered: Record<StreamPath, string> = {};
 
