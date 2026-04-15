@@ -30,7 +30,6 @@
     "@iterate-com/events-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "@orpc/client": "1.13.14",
     "@orpc/contract": "1.13.14",
     "@orpc/openapi": "1.13.14",

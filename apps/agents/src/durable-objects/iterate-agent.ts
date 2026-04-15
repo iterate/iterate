@@ -7,8 +7,15 @@ import { Agent, type Connection, type WSMessage } from "agents";
 import { z } from "zod";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 
-const EVENTS_BASE_URL = "https://events.iterate.com";
-const EVENTS_OPENAPI_URL = `${EVENTS_BASE_URL}/api/openapi.json`;
+const EVENTS_ORIGIN = "https://events.iterate.com";
+const EVENTS_API_BASE_URL = `${EVENTS_ORIGIN}/api`;
+const EVENTS_OPENAPI_URL = `${EVENTS_API_BASE_URL}/openapi.json`;
+const EVENTS_PROVIDER_NAME = "events";
+const EVENTS_OPERATION_ALIASES: Record<string, string> = {
+  appendStreamEvents: "append",
+  streamEvents: "stream",
+  getStreamState: "getState",
+};
 
 const AddMcpServerRequest = z.object({
   name: z.string().trim().min(1),
@@ -24,16 +31,33 @@ const CodemodeBlockAddedMessage = z.object({
   }),
 });
 
-const EventsRequestOptions = z.object({
-  method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
-  path: z.string().trim().min(1),
-  query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
-  body: z.unknown().optional(),
-  contentType: z.string().trim().min(1).optional(),
-  rawBody: z.boolean().optional(),
-});
+type OpenApiParameter = {
+  name?: string;
+  in?: string;
+  required?: boolean;
+};
 
-let eventsOpenApiSpecPromise: Promise<Record<string, unknown>> | undefined;
+type OpenApiOperation = {
+  operationId?: string;
+  parameters?: OpenApiParameter[];
+  requestBody?: unknown;
+  responses?: Record<string, { content?: Record<string, unknown> }>;
+};
+
+type OpenApiDocument = {
+  paths?: Record<string, Record<string, OpenApiOperation | undefined> | undefined>;
+};
+
+type OperationSpec = {
+  path: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  pathParamNames: string[];
+  queryParamNames: string[];
+  hasBody: boolean;
+  isStream: boolean;
+};
+
+let eventsProviderPromise: Promise<ResolvedProvider> | undefined;
 
 export class IterateAgent extends Agent<CloudflareEnv> {
   onStart() {
@@ -69,7 +93,11 @@ export class IterateAgent extends Agent<CloudflareEnv> {
       loader: this.env.LOADER,
       globalOutbound: undefined,
     });
-    const result = await executor.execute(event.data.payload.script, this.getCodemodeProviders());
+    const providers = [
+      await getEventsProvider(),
+      ...this.getMcpCodemodeProviders(new Set([EVENTS_PROVIDER_NAME])),
+    ];
+    const result = await executor.execute(event.data.payload.script, providers);
 
     connection.send(
       JSON.stringify({
@@ -117,7 +145,7 @@ export class IterateAgent extends Agent<CloudflareEnv> {
     });
   }
 
-  private getCodemodeProviders(): ResolvedProvider[] {
+  private getMcpCodemodeProviders(usedProviderNames: Set<string>): ResolvedProvider[] {
     const mcp = this.getMcpServers();
     const toolsByServerId = new Map<string, typeof mcp.tools>();
 
@@ -127,50 +155,35 @@ export class IterateAgent extends Agent<CloudflareEnv> {
       toolsByServerId.set(tool.serverId, serverTools);
     }
 
-    const usedProviderNames = new Set<string>();
-    const providers: ResolvedProvider[] = [
-      {
-        name: toUniqueIdentifier("events", usedProviderNames, "events"),
-        fns: {
-          spec: async () => await getEventsOpenApiSpec(),
-          request: async (args: unknown) => await requestEventsApi(args),
+    return Array.from(toolsByServerId.entries()).flatMap(([serverId, tools]) => {
+      const server = mcp.servers[serverId];
+      if (!server || tools.length === 0) {
+        return [];
+      }
+
+      const usedToolNames = new Set<string>();
+      const fns = Object.fromEntries(
+        tools.map((tool) => {
+          const toolName = toUniqueIdentifier(tool.name, usedToolNames);
+          return [
+            toolName,
+            async (args: unknown) =>
+              this.mcp.callTool({
+                serverId,
+                name: tool.name,
+                arguments: toToolArguments(args),
+              }),
+          ];
+        }),
+      );
+
+      return [
+        {
+          name: toUniqueIdentifier(server.name, usedProviderNames, "mcp"),
+          fns,
         },
-      },
-    ];
-
-    providers.push(
-      ...Array.from(toolsByServerId.entries()).flatMap(([serverId, tools]) => {
-        const server = mcp.servers[serverId];
-        if (!server || tools.length === 0) {
-          return [];
-        }
-
-        const usedToolNames = new Set<string>();
-        const fns = Object.fromEntries(
-          tools.map((tool) => {
-            const toolName = toUniqueIdentifier(tool.name, usedToolNames);
-            return [
-              toolName,
-              async (args: unknown) =>
-                this.mcp.callTool({
-                  serverId,
-                  name: tool.name,
-                  arguments: toToolArguments(args),
-                }),
-            ];
-          }),
-        );
-
-        return [
-          {
-            name: toUniqueIdentifier(server.name, usedProviderNames, "mcp"),
-            fns,
-          },
-        ];
-      }),
-    );
-
-    return providers;
+      ];
+    });
   }
 }
 
@@ -221,74 +234,262 @@ function escapeHtml(value: string) {
     .replaceAll("'", "&#39;");
 }
 
-async function getEventsOpenApiSpec() {
-  eventsOpenApiSpecPromise ??= fetchOpenApiSpec();
+async function getEventsProvider() {
+  eventsProviderPromise ??= buildOpenApiProvider({
+    providerName: EVENTS_PROVIDER_NAME,
+    specUrl: EVENTS_OPENAPI_URL,
+    baseUrl: EVENTS_API_BASE_URL,
+    operationAliases: EVENTS_OPERATION_ALIASES,
+  });
 
   try {
-    return await eventsOpenApiSpecPromise;
+    return await eventsProviderPromise;
   } catch (error) {
-    eventsOpenApiSpecPromise = undefined;
+    eventsProviderPromise = undefined;
     throw error;
   }
 }
 
-async function fetchOpenApiSpec() {
-  const response = await fetch(EVENTS_OPENAPI_URL);
+async function buildOpenApiProvider(options: {
+  providerName: string;
+  specUrl: string;
+  baseUrl: string;
+  operationAliases?: Record<string, string>;
+}): Promise<ResolvedProvider> {
+  const response = await fetch(options.specUrl);
   if (!response.ok) {
-    throw new Error(`Failed to fetch events OpenAPI spec: ${response.status}`);
+    throw new Error(`Failed to fetch OpenAPI spec: ${response.status}`);
   }
 
-  return (await response.json()) as Record<string, unknown>;
+  const document = (await response.json()) as OpenApiDocument;
+  const operations = collectOperations(document, options.operationAliases);
+  const fns = Object.fromEntries(
+    operations.map(([name, operation]) => [
+      name,
+      async (args: unknown) => await invokeOperation(options.baseUrl, operation, args),
+    ]),
+  );
+
+  return {
+    name: options.providerName,
+    fns,
+  };
 }
 
-async function requestEventsApi(args: unknown) {
-  const options = EventsRequestOptions.parse(args);
-  const url = new URL(options.path, EVENTS_BASE_URL);
+function collectOperations(
+  document: OpenApiDocument,
+  operationAliases?: Record<string, string>,
+): Array<[string, OperationSpec]> {
+  const operations: Array<[string, OperationSpec]> = [];
 
-  for (const [key, value] of Object.entries(options.query ?? {})) {
-    url.searchParams.set(key, String(value));
-  }
+  for (const [path, pathItem] of Object.entries(document.paths ?? {})) {
+    if (!pathItem) continue;
 
-  const headers = new Headers();
-  const init: RequestInit = {
-    method: options.method,
-    headers,
-  };
+    for (const method of ["get", "post", "put", "patch", "delete"] as const) {
+      const operation = pathItem[method];
+      if (!operation?.operationId) continue;
 
-  if (typeof options.contentType === "string") {
-    headers.set("content-type", options.contentType);
-  }
+      const functionName = sanitizeToolName(
+        operationAliases?.[operation.operationId] ?? operation.operationId,
+      );
+      const parameters = operation.parameters ?? [];
 
-  if (options.body !== undefined) {
-    if (options.rawBody) {
-      init.body =
-        typeof options.body === "string" ? options.body : JSON.stringify(options.body, null, 2);
-    } else {
-      headers.set("content-type", headers.get("content-type") ?? "application/json");
-      init.body = JSON.stringify(options.body);
+      operations.push([
+        functionName,
+        {
+          path,
+          method: method.toUpperCase() as OperationSpec["method"],
+          pathParamNames: parameters
+            .filter((parameter) => parameter.in === "path" && parameter.name)
+            .map((parameter) => parameter.name!),
+          queryParamNames: parameters
+            .filter((parameter) => parameter.in === "query" && parameter.name)
+            .map((parameter) => parameter.name!),
+          hasBody: operation.requestBody != null,
+          isStream: Boolean(operation.responses?.["200"]?.content?.["text/event-stream"]),
+        },
+      ]);
     }
   }
 
-  const response = await fetch(url, init);
-  const body = await parseResponseBody(response);
+  return operations;
+}
+
+async function invokeOperation(baseUrl: string, operation: OperationSpec, args: unknown) {
+  const input = isRecord(args) ? { ...args } : {};
+  let resolvedPath = operation.path;
+
+  for (const name of operation.pathParamNames) {
+    const value = input[name];
+    if (value == null) {
+      throw new Error(`Missing required path parameter: ${name}`);
+    }
+
+    resolvedPath = resolvedPath.replaceAll(`{${name}}`, encodeURIComponent(String(value)));
+    delete input[name];
+  }
+
+  const url = new URL(trimLeadingSlash(resolvedPath), `${trimTrailingSlash(baseUrl)}/`);
+  for (const name of operation.queryParamNames) {
+    const value = input[name];
+    if (value == null) continue;
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        url.searchParams.append(name, String(item));
+      }
+    } else {
+      url.searchParams.set(name, String(value));
+    }
+
+    delete input[name];
+  }
+
+  const headers = new Headers();
+  if (operation.hasBody) {
+    headers.set("content-type", "application/json");
+  }
+  if (operation.isStream) {
+    headers.set("accept", "text/event-stream");
+  }
+
+  const response = await fetch(url, {
+    method: operation.method,
+    headers,
+    body: operation.hasBody ? JSON.stringify(input) : undefined,
+  });
 
   if (!response.ok) {
+    const message = await readErrorResponse(response);
     throw new Error(
-      `events request failed (${response.status}): ${
-        typeof body === "string" ? body : JSON.stringify(body)
-      }`,
+      message
+        ? `${operation.method} ${url} failed with ${response.status}: ${message}`
+        : `${operation.method} ${url} failed with ${response.status}`,
     );
   }
 
-  return body;
-}
+  if (operation.isStream) {
+    return await collectSseStream(response);
+  }
 
-async function parseResponseBody(response: Response) {
+  if (response.status === 204) {
+    return null;
+  }
+
   const contentType = response.headers.get("content-type") ?? "";
-
   if (contentType.includes("application/json")) {
     return (await response.json()) as unknown;
   }
 
   return await response.text();
+}
+
+async function collectSseStream(response: Response) {
+  const values: unknown[] = [];
+  if (!response.body) {
+    return values;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+
+      const chunks = buffer.split(/\r?\n\r?\n/);
+      buffer = chunks.pop() ?? "";
+
+      for (const chunk of chunks) {
+        const parsed = parseSseChunk(chunk);
+        if (!parsed) continue;
+        if (parsed.kind === "done") return values;
+        if (parsed.kind === "error") {
+          throw new Error(
+            typeof parsed.value === "string" ? parsed.value : JSON.stringify(parsed.value),
+          );
+        }
+        values.push(parsed.value);
+      }
+
+      if (done) {
+        break;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+
+  return values;
+}
+
+function parseSseChunk(
+  chunk: string,
+): { kind: "value"; value: unknown } | { kind: "error"; value: unknown } | { kind: "done" } | null {
+  const lines = chunk.split(/\r?\n/);
+  let event = "message";
+  const dataLines: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("event:")) {
+      event = line.slice(6).trim();
+      continue;
+    }
+
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  if (dataLines.length === 0 && event === "message") {
+    return null;
+  }
+
+  const value = parseSseValue(dataLines.join("\n"));
+  if (event === "done") {
+    return { kind: "done" };
+  }
+  if (event === "error") {
+    return { kind: "error", value };
+  }
+
+  return { kind: "value", value };
+}
+
+function parseSseValue(raw: string) {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return raw;
+  }
+}
+
+async function readErrorResponse(response: Response) {
+  const contentType = response.headers.get("content-type") ?? "";
+
+  try {
+    if (contentType.includes("application/json")) {
+      return JSON.stringify(await response.json());
+    }
+
+    const text = await response.text();
+    return text.trim().length > 0 ? text.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function trimLeadingSlash(value: string) {
+  return value.replace(/^\/+/, "");
+}
+
+function trimTrailingSlash(value: string) {
+  return value.replace(/\/+$/, "");
 }
