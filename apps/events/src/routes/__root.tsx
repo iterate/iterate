@@ -18,7 +18,6 @@ import { AppProviders } from "@iterate-com/ui/apps/providers";
 import iterateLogoAsset from "@iterate-com/ui/assets/iterate-logo.svg";
 import { DefaultErrorComponent } from "@iterate-com/ui/components/route-defaults";
 import { AppConfig } from "../app.ts";
-import { defaultProjectSlug } from "../lib/project-slug.ts";
 import { defaultStreamViewSearch } from "../lib/stream-view-search.ts";
 import { configureOrpcClient } from "../orpc/client.ts";
 import appCss from "../styles.css?url";
@@ -106,7 +105,7 @@ function RootErrorComponent(props: { error: unknown; reset: () => void }) {
       secondaryAction={
         <Link
           to="/streams/"
-          search={{ ...defaultStreamViewSearch, projectSlug: defaultProjectSlug }}
+          search={defaultStreamViewSearch}
           className="text-sm text-primary hover:underline"
         >
           Go to streams
