@@ -267,6 +267,9 @@ importers:
 
   apps/agents:
     dependencies:
+      '@cloudflare/codemode':
+        specifier: ^0.3.2
+        version: 0.3.2(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.33(zod@4.3.6))(zod@4.3.6)
       '@iterate-com/agents-contract':
         specifier: workspace:*
         version: link:../agents-contract
@@ -279,6 +282,9 @@ importers:
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6)
       '@orpc/client':
         specifier: 1.13.14
         version: 1.13.14(@opentelemetry/api@1.9.0)
@@ -320,7 +326,7 @@ importers:
         version: 1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       agents:
         specifier: ^0.11.0
-        version: 0.11.0(@babel/core@7.29.0)(@babel/runtime@7.28.6)(@cloudflare/workers-types@4.20260317.1)(@tanstack/ai@0.10.2)(ai@6.0.33(zod@4.3.6))(react@19.2.4)(rolldown@1.0.0-rc.9)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(zod@4.3.6)
+        version: 0.11.0(@babel/core@7.29.0)(@babel/runtime@7.28.6)(@cloudflare/codemode@0.3.2(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(ai@6.0.33(zod@4.3.6))(zod@4.3.6))(@cloudflare/workers-types@4.20260317.1)(ai@6.0.33(zod@4.3.6))(react@19.2.4)(rolldown@1.0.0-rc.9)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(zod@4.3.6)
       react:
         specifier: ^19.2.0
         version: 19.2.4
@@ -26203,7 +26209,7 @@ snapshots:
 
   agent-base@7.1.4: {}
 
-  agents@0.11.0(@babel/core@7.29.0)(@babel/runtime@7.28.6)(@cloudflare/workers-types@4.20260317.1)(@tanstack/ai@0.10.2)(ai@6.0.33(zod@4.3.6))(react@19.2.4)(rolldown@1.0.0-rc.9)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(zod@4.3.6):
+  agents@0.11.0(@babel/core@7.29.0)(@babel/runtime@7.28.6)(@cloudflare/codemode@0.3.2(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(ai@6.0.33(zod@4.3.6))(zod@4.3.6))(@cloudflare/workers-types@4.20260317.1)(ai@6.0.33(zod@4.3.6))(react@19.2.4)(rolldown@1.0.0-rc.9)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(zod@4.3.6):
     dependencies:
       '@babel/plugin-proposal-decorators': 7.29.0(@babel/core@7.29.0)
       '@cfworker/json-schema': 4.1.1
@@ -26222,7 +26228,7 @@ snapshots:
       yargs: 18.0.0
       zod: 4.3.6
     optionalDependencies:
-      '@tanstack/ai': 0.10.2
+      '@cloudflare/codemode': 0.3.2(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.33(zod@4.3.6))(zod@4.3.6)
       vite: 8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
     transitivePeerDependencies:
       - '@babel/core'

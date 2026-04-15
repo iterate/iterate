@@ -1,9 +1,10 @@
 import { createStart } from "@tanstack/react-start";
 
 /**
- * Keep the Start config tiny. The oRPC SSR bridge lives in `src/orpc/client.ts`.
+ * Keep Start config tiny. Request context is now provided by the documented
+ * `src/server.ts` entrypoint instead of a middleware workaround.
  *
- * Middleware docs:
- * - https://tanstack.com/start/latest/docs/framework/react/guide/middleware
+ * Server entry docs:
+ * - https://tanstack.com/start/latest/docs/framework/react/guide/server-entry-point
  */
 export const startInstance = createStart(() => ({}));

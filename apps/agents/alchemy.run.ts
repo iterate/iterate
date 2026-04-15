@@ -1,6 +1,6 @@
 import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import alchemy, { type Scope } from "alchemy";
-import { DurableObjectNamespace, TanStackStart } from "alchemy/cloudflare";
+import { DurableObjectNamespace, TanStackStart, WorkerLoader } from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
@@ -75,6 +75,7 @@ export const worker = await TanStackStart(APP_NAME, {
   adopt: true,
   bindings: {
     ITERATE_AGENT: iterateAgent,
+    LOADER: WorkerLoader(),
     APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
   },
   compatibilityFlags: ["enable_request_signal"],
