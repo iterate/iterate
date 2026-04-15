@@ -741,7 +741,10 @@ function derivePreviewEnvironment(input: {
     previewEnvironmentIdentifier: input.previewEnvironmentSlug,
     previewEnvironmentSlug: input.previewEnvironmentSlug,
     previewEnvironmentType: input.previewEnvironmentType,
-    publicUrl: `https://${input.previewEnvironmentSlug}.iterate.workers.dev`,
+    publicUrl:
+      input.appSlug === "events"
+        ? `https://events-preview-${slot}.iterate.com`
+        : `https://${input.previewEnvironmentSlug}.iterate.workers.dev`,
   };
 }
 
