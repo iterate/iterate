@@ -44,6 +44,7 @@
     "@tanstack/react-router-ssr-query": "^1.166.2",
     "@tanstack/react-start": "1.167.5",
     "agents": "^0.11.0",
+    "ai": "^6.0.159",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tailwindcss": "^4.1.18",
