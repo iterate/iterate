@@ -153,11 +153,6 @@ function AppSidebarProjectSlugFooter({ projectSlug }: { projectSlug: ProjectSlug
       currentUrl: window.location.href,
       projectSlug: parsed.data,
     });
-    if (nextUrl.host === window.location.host && parsed.data !== projectSlug) {
-      toast.error("Project switching only works on events.iterate.com hosts.");
-      return;
-    }
-
     window.location.assign(nextUrl.toString());
   }
 
