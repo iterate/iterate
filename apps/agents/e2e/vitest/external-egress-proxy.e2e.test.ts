@@ -1,13 +1,11 @@
-import { spawn } from "node:child_process";
-import { setTimeout as delay } from "node:timers/promises";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createServer } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { agentsContract } from "@iterate-com/agents-contract";
-import { useMockHttpServer } from "@iterate-com/mock-http-proxy";
-import { HttpResponse, http } from "msw";
+import { HttpResponse, http, useMockHttpServer } from "@iterate-com/mock-http-proxy";
 import { describe, expect, test } from "vitest";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -27,27 +25,18 @@ describeExternalEgressProxy("agents external egress proxy", () => {
         }),
       );
 
-      const port = await getAvailablePort();
-      const baseUrl = `http://127.0.0.1:${port}`;
-
       await withAgentsDevServer(
         {
-          HOST: "127.0.0.1",
-          PORT: String(port),
           APP_CONFIG_EXTERNAL_EGRESS_PROXY: proxy.url,
         },
-        baseUrl,
-        async () => {
+        async (baseUrl) => {
           const client = createAgentsClient(baseUrl);
           const result = await client.fetchExample({});
           const harEntries = proxy.getHar().log.entries;
 
-          expect(result).toEqual({
-            ok: true,
-            status: 200,
-            url: "https://example.com/",
-            body: "proxied example body",
-          });
+          expect(result.ok).toBe(true);
+          expect(result.status).toBe(200);
+          expect(result.body).toBe("proxied example body");
           expect(capturedRequestUrl).toBe("https://example.com/");
           expect(harEntries).toHaveLength(1);
           expect(harEntries[0]?.request.url).toBe("https://example.com/");
@@ -69,8 +58,7 @@ function createAgentsClient(baseUrl: string): ContractRouterClient<typeof agents
 
 async function withAgentsDevServer(
   env: Record<string, string>,
-  baseUrl: string,
-  run: () => Promise<void>,
+  run: (baseUrl: string) => Promise<void>,
 ) {
   const child = spawn("pnpm", ["dev"], {
     cwd: appRoot,
@@ -90,8 +78,8 @@ async function withAgentsDevServer(
   });
 
   try {
-    await waitForReady(baseUrl);
-    await run();
+    const baseUrl = await waitForReady(output);
+    await run(baseUrl);
   } catch (error) {
     const logs = Buffer.concat(output).toString("utf8");
     throw new Error(`${String(error)}\n--- agents dev log ---\n${logs}`);
@@ -100,12 +88,17 @@ async function withAgentsDevServer(
   }
 }
 
-async function waitForReady(baseUrl: string, timeoutMs = 45_000) {
+async function waitForReady(output: Buffer[], timeoutMs = 45_000) {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
 
   while (Date.now() < deadline) {
     try {
+      const baseUrl = parseWorkersDevUrl(Buffer.concat(output).toString("utf8"));
+      if (!baseUrl) {
+        throw new Error("Waiting for agents dev server URL...");
+      }
+
       const response = await fetch(new URL("/api/openapi.json", baseUrl), {
         signal: AbortSignal.timeout(2_000),
       });
@@ -113,7 +106,7 @@ async function waitForReady(baseUrl: string, timeoutMs = 45_000) {
       if (response.ok) {
         const openApi = (await response.json()) as { paths?: Record<string, unknown> };
         if ((openApi.paths ?? {})["/fetch-example"]) {
-          return;
+          return baseUrl;
         }
       }
 
@@ -128,7 +121,17 @@ async function waitForReady(baseUrl: string, timeoutMs = 45_000) {
   throw lastError;
 }
 
-async function stopChild(child: ReturnType<typeof spawn>) {
+function parseWorkersDevUrl(output: string) {
+  const workersDevUrl =
+    output.match(/workersDevUrl:\s*'([^']+)'/)?.[1] ??
+    output.match(/workersDevUrl:\s*"([^"]+)"/)?.[1] ??
+    output.match(/url:\s*'([^']+)'/)?.[1] ??
+    output.match(/url:\s*"([^"]+)"/)?.[1];
+
+  return workersDevUrl?.replace(/\/+$/, "");
+}
+
+async function stopChild(child: ChildProcessWithoutNullStreams) {
   if (child.exitCode !== null || child.killed) {
     return;
   }
@@ -152,32 +155,4 @@ function stripInheritedAppConfig(env: NodeJS.ProcessEnv) {
   }
 
   return next;
-}
-
-async function getAvailablePort() {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-
-  const address = server.address();
-  if (address == null || typeof address === "string") {
-    server.close();
-    throw new Error("Failed to allocate a local port for the agents e2e test.");
-  }
-
-  const { port } = address;
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-
-      resolve();
-    });
-  });
-
-  return port;
 }

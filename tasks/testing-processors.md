@@ -102,6 +102,7 @@ For the first proof:
 - this keeps the forwarding setup generic while avoiding noisy or recursive responses
 - the response event type can just be plain `"pong"` for this teeny tiny proof
 - control events and trigger events in the test should be appended via a real oRPC client to `events.iterate.com`
+- the events base URL used by the test should come from `EVENTS_BASE_URL`, with production as a sensible default if needed
 - for the first pass, it is acceptable and even preferred to type the minimal oRPC client setup inline in a single Vitest test
 - a cleaner/minimal shared fixture or helper can be extracted after the first real test proves the shape
 - the concrete setup sequence should be:
@@ -118,6 +119,10 @@ For the first proof:
   - should accept an optional healthcheck path argument
   - should default to `GET /api/__internal/health`, which appears to be the app-style internal health convention in this repo
   - should use argv-style process spawning, not a shell command string
+  - should do the least possible thing for logs/output in v1:
+    - keep logs internal
+    - only surface recent stdout/stderr in failure messages
+    - do not build a richer logs/artifacts API yet
 - host binding needs a small amount of care:
   - `apps/agents/vite.config.ts` currently defaults `HOST` to `"::"` specifically so both `localhost`/`::1` and `127.0.0.1` work
   - so `useFreePort` can stay simple, but `useDevServer` should avoid baking in a surprising host policy without an explicit choice
@@ -186,6 +191,18 @@ So:
 - `ai-engineer-workshop/lib/deploy-processor.ts`
   - already knows how to convert a processor file into a `dynamic-worker/configured` event and append it to a stream
   - likely the most reusable way to "deploy" a processor into apps/events for tests
+
+## Existing agents e2e precedent
+
+- `apps/agents/e2e/vitest/external-egress-proxy.e2e.test.ts`
+  - already contains an inline `withAgentsDevServer(...)`
+  - uses `spawn("pnpm", ["dev"])`
+  - strips inherited `APP_CONFIG*`
+  - waits for readiness by parsing the dev URL from process output and probing the app
+  - captures stdout/stderr for failure reporting
+  - tears the child process down cleanly
+
+This is likely the closest local starting point for the new lower-level `useDevServer(...)` primitive.
 
 These are now better understood as app-specific or contract-specific higher-level helpers, not the base fixture layer.
 

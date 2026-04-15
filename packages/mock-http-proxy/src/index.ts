@@ -24,6 +24,7 @@ export {
   type MockHttpServer,
   type UseMockHttpServerOptions,
 } from "./server/mock-http-server-fixture.ts";
+export { http, HttpResponse } from "msw";
 export type {
   HarEntryWithExtensions,
   HarWebSocketMessage,
