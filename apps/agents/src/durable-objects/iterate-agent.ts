@@ -6,6 +6,7 @@ import {
   type EventInput as EventInputValue,
 } from "@iterate-com/events-contract";
 import { Agent, type Connection, type WSMessage } from "agents";
+import { z } from "zod";
 import { createMcpToolProviders } from "~/lib/mcp-tool-providers.ts";
 import { createOpenApiToolProvider } from "~/lib/openapi-tool-provider.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
@@ -20,6 +21,13 @@ const eventsProviderPromise = createOpenApiToolProvider({
   spec: "https://events.iterate.com/api/openapi.json",
   baseUrl: "https://events.iterate.com/api/",
 }).then(resolveProvider) satisfies Promise<ResolvedProvider>;
+
+const CodemodeBlockAddedEvent = z.object({
+  type: z.literal("codemode-block-added"),
+  payload: z.object({
+    script: z.string(),
+  }),
+});
 
 export class IterateAgent extends Agent<CloudflareEnv> {
   async onStart() {
@@ -36,21 +44,14 @@ export class IterateAgent extends Agent<CloudflareEnv> {
     if (typeof message !== "string") return;
 
     const parsedFrame = StreamSocketFrame.safeParse(JSON.parse(message));
-    const frame =
-      parsedFrame.success && parsedFrame.data.type === "event" ? parsedFrame.data : null;
-    const payload = frame?.event.type === "codemode-block-added" ? frame.event.payload : null;
-    const script =
-      payload &&
-      typeof payload === "object" &&
-      "script" in payload &&
-      typeof payload.script === "string"
-        ? payload.script
-        : null;
-    if (!script) return;
+    if (!parsedFrame.success || parsedFrame.data.type !== "event") return;
+
+    const parsedEvent = CodemodeBlockAddedEvent.safeParse(parsedFrame.data.event);
+    if (!parsedEvent.success) return;
 
     const executor = new DynamicWorkerExecutor({ loader: this.env.LOADER });
     const mcpProviders = await createMcpToolProviders({ mcp: this.mcp });
-    const result = await executor.execute(script, [
+    const result = await executor.execute(parsedEvent.data.payload.script, [
       {
         name: "builtin",
         fns: {
