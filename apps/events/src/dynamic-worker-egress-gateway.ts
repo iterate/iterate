@@ -1,6 +1,10 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { ProjectSlug } from "@iterate-com/events-contract";
 import { parseDynamicWorkerEgressGatewayConfig } from "~/lib/dynamic-worker-egress-config.ts";
-import { dynamicWorkerEgressConfigHeader } from "~/lib/dynamic-worker-egress.ts";
+import {
+  dynamicWorkerEgressConfigHeader,
+  dynamicWorkerProjectSlugHeader,
+} from "~/lib/dynamic-worker-egress.ts";
 import { replaceIterateSecretReferences } from "~/lib/iterate-secret-references.ts";
 
 export class DynamicWorkerEgressGateway extends WorkerEntrypoint<Env> {
@@ -10,16 +14,30 @@ export class DynamicWorkerEgressGateway extends WorkerEntrypoint<Env> {
     const gatewayConfig = parseDynamicWorkerEgressGatewayConfig(
       headers.get(dynamicWorkerEgressConfigHeader),
     );
+    const parsedProjectSlug = ProjectSlug.safeParse(headers.get(dynamicWorkerProjectSlugHeader));
 
     headers.delete(dynamicWorkerEgressConfigHeader);
+    headers.delete(dynamicWorkerProjectSlugHeader);
 
-    if ((gatewayConfig?.secretHeaderName == null) !== (gatewayConfig?.secretHeaderValue == null)) {
+    if (gatewayConfig == null) {
+      return fetch(
+        new Request(request, {
+          headers,
+        }),
+      );
+    }
+    if (!parsedProjectSlug.success) {
+      throw new Error("DynamicWorkerEgressGateway requires a valid project slug header.");
+    }
+    const projectSlug = parsedProjectSlug.data;
+
+    if ((gatewayConfig.secretHeaderName == null) !== (gatewayConfig.secretHeaderValue == null)) {
       throw new Error(
         "DynamicWorkerEgressGateway requires secretHeaderName and secretHeaderValue together.",
       );
     }
 
-    if (gatewayConfig?.secretHeaderName != null && gatewayConfig.secretHeaderValue != null) {
+    if (gatewayConfig.secretHeaderName != null && gatewayConfig.secretHeaderValue != null) {
       headers.set(gatewayConfig.secretHeaderName, gatewayConfig.secretHeaderValue);
     }
 
@@ -31,12 +49,14 @@ export class DynamicWorkerEgressGateway extends WorkerEntrypoint<Env> {
         const resolved = await replaceIterateSecretReferences({
           input: headerValue,
           loadSecret: async (secretKey) => {
-            const result = await this.env.DB.prepare("SELECT value FROM secrets WHERE name = ?")
-              .bind(secretKey)
+            const result = await this.env.DB.prepare(
+              "SELECT value FROM secrets WHERE project_slug = ? AND name = ?",
+            )
+              .bind(projectSlug, secretKey)
               .first<{ value: string }>();
 
             if (typeof result?.value !== "string") {
-              throw new Error(`Secret "${secretKey}" was not found in apps/events secrets.`);
+              throw new Error(`Secret "${secretKey}" was not found in project "${projectSlug}".`);
             }
 
             return result.value;
@@ -60,6 +80,7 @@ export class DynamicWorkerEgressGateway extends WorkerEntrypoint<Env> {
         headerNames: Array.from(headers.keys()),
         method: request.method,
         pathname: target.pathname,
+        projectSlug,
         secretKeys: Array.from(resolvedSecretKeys),
         url: target.origin,
       });
@@ -71,6 +92,7 @@ export class DynamicWorkerEgressGateway extends WorkerEntrypoint<Env> {
         headerNames: replacedHeaderNames,
         method: request.method,
         pathname: target.pathname,
+        projectSlug,
         replacementCount: replacedHeaderNames.length,
         secretKeys: Array.from(resolvedSecretKeys),
         url: target.origin,

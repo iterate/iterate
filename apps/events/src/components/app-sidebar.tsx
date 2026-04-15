@@ -44,7 +44,7 @@ export function AppSidebar({ projectSlug }: { projectSlug: ProjectSlugValue }) {
 }
 
 const items = [
-  { to: "/secrets/", label: "Env vars" },
+  { to: "/secrets/", label: "Secrets" },
   { to: "/streams/", label: "Streams" },
 ] as const;
 

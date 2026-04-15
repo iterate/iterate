@@ -45,9 +45,23 @@ describe("buildDynamicWorkerLoaderCode", () => {
       config: baseConfig,
       env: undefined,
       globalOutbound,
+      projectSlug: "public",
     });
 
     expect(loaderCode.globalOutbound).toBe(globalOutbound);
+  });
+
+  test("injects project slug into the runtime config module", () => {
+    const loaderCode = buildDynamicWorkerLoaderCode({
+      config: baseConfig,
+      env: undefined,
+      globalOutbound: undefined,
+      projectSlug: "team-a",
+    });
+
+    expect(parseRuntimeConfigModule(loaderCode.modules["runtime-config.js"])).toMatchObject({
+      projectSlug: "team-a",
+    });
   });
 });
 
@@ -76,3 +90,7 @@ describe("resolveDynamicWorkerOutboundGateway", () => {
     });
   });
 });
+
+function parseRuntimeConfigModule(moduleText: string) {
+  return JSON.parse(moduleText.replace(/^export default /, "").replace(/;$/, ""));
+}

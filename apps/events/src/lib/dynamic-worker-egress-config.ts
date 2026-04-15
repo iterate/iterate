@@ -1,17 +1,9 @@
-import {
-  DynamicWorkerOutboundGateway,
-  type DynamicWorkerOutboundGateway as DynamicWorkerOutboundGatewayType,
-} from "@iterate-com/events-contract";
+import { DynamicWorkerOutboundGateway } from "@iterate-com/events-contract";
 import { dynamicWorkerEgressConfigHeader } from "./dynamic-worker-egress.ts";
-
-type DynamicWorkerEgressGatewayProps = {
-  secretHeaderName?: string;
-  secretHeaderValue?: string;
-};
 
 export function parseDynamicWorkerEgressGatewayConfig(
   headerValue: string | null,
-): DynamicWorkerEgressGatewayProps | undefined {
+): { secretHeaderName?: string; secretHeaderValue?: string } | undefined {
   if (headerValue == null) {
     return undefined;
   }
@@ -41,11 +33,5 @@ export function parseDynamicWorkerEgressGatewayConfig(
     throw new Error("DynamicWorkerEgressGateway received an invalid outbound gateway config.");
   }
 
-  return toGatewayProps(gateway.data);
-}
-
-function toGatewayProps(
-  gateway: DynamicWorkerOutboundGatewayType,
-): DynamicWorkerEgressGatewayProps | undefined {
-  return gateway.props;
+  return gateway.data.props;
 }
