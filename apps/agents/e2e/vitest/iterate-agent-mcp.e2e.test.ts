@@ -54,10 +54,15 @@ const shouldRunMcpCodemodeTest = recordHar || harFixturePresent;
  */
 const MCP_CODEMODE_SCRIPT = `
 async () => {
-  const docSearch = await cloudflare_docs.search_cloudflare_documentation({ query: "workers" });
+  const query = "workers";
+  const docSearch = await cloudflare_docs.search_cloudflare_documentation({ query });
   const text = typeof docSearch === "string" ? docSearch : JSON.stringify(docSearch);
   return {
-    mcpSearchLength: text.length,
+    summary:
+      "MCP e2e: cloudflare_docs.search_cloudflare_documentation succeeded — snippet is real tool output (HAR replay).",
+    query,
+    mcpSearchSnippet: text.slice(0, 500),
+    mcpSearchChars: text.length,
     mcpSearchOk: text.length > 80,
   };
 }
@@ -166,14 +171,33 @@ describe.sequential("agents iterate-agent MCP codemode e2e", () => {
 
       const payload = resultEvent.payload as {
         result?: {
-          mcpSearchLength?: number;
+          summary?: string;
+          query?: string;
+          mcpSearchSnippet?: string;
+          mcpSearchChars?: number;
           mcpSearchOk?: boolean;
         };
         error?: string;
       };
       expect(payload.error ?? "").toBe("");
       expect(payload.result?.mcpSearchOk).toBe(true);
-      expect(payload.result?.mcpSearchLength).toBeGreaterThan(80);
+      expect(payload.result?.query).toBe("workers");
+      expect(payload.result?.summary ?? "").toContain("MCP e2e");
+      expect(payload.result?.mcpSearchChars).toBeGreaterThan(80);
+      expect(payload.result?.mcpSearchSnippet ?? "").toMatch(/worker|Worker|Cloudflare|cloudflare/);
+      console.info(
+        "[iterate-agent MCP e2e] codemode-result-added (excerpt):\n",
+        JSON.stringify(
+          {
+            summary: payload.result?.summary,
+            query: payload.result?.query,
+            mcpSearchChars: payload.result?.mcpSearchChars,
+            mcpSearchSnippetPreview: `${(payload.result?.mcpSearchSnippet ?? "").slice(0, 200)}…`,
+          },
+          null,
+          2,
+        ),
+      );
 
       const har = mockInternet.getHar();
       const urls = har.log.entries.map((entry) => entry.request.url);

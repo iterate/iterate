@@ -70,10 +70,16 @@ async () => {
   const streamState = await events.getStreamState({ path: "/" });
   const internalHealth = await events.__internal_health({});
   return {
+    summary:
+      "Codemode e2e: builtin.answer + Events getStreamState + __internal.health + example.com fetch — all OK.",
     answer: await builtin.answer(),
     streamStateOk: streamState != null && typeof streamState === "object",
     internalHealthOk: internalHealth != null && internalHealth.ok === true,
-    example: { status: exampleRes.status, bodyPreview: exampleBody.slice(0, 80) },
+    example: {
+      status: exampleRes.status,
+      bodyPreview: exampleBody.slice(0, 120),
+      titleLine: (exampleBody.split("\\n")[0] ?? "").slice(0, 100),
+    },
   };
 }
 `.trim();
@@ -181,19 +187,35 @@ describe.sequential("agents iterate-agent e2e", () => {
 
       const payload = resultEvent.payload as {
         result?: {
+          summary?: string;
           answer?: number;
           streamStateOk?: boolean;
           internalHealthOk?: boolean;
-          example?: { status?: number; bodyPreview?: string };
+          example?: { status?: number; bodyPreview?: string; titleLine?: string };
         };
         error?: string;
       };
       expect(payload.error ?? "").toBe("");
+      expect(payload.result?.summary ?? "").toContain("Codemode e2e");
       expect(payload.result?.answer).toBe(42);
       expect(payload.result?.streamStateOk).toBe(true);
       expect(payload.result?.internalHealthOk).toBe(true);
       expect(payload.result?.example?.status).toBe(200);
       expect(payload.result?.example?.bodyPreview?.length).toBeGreaterThan(0);
+      expect(payload.result?.example?.titleLine ?? "").toMatch(/Example Domain/);
+      console.info(
+        "[iterate-agent e2e] codemode-result-added (excerpt):\n",
+        JSON.stringify(
+          {
+            summary: payload.result?.summary,
+            answer: payload.result?.answer,
+            exampleTitlePreview: `${(payload.result?.example?.titleLine ?? "").slice(0, 100)}…`,
+            exampleBodyPreview: payload.result?.example?.bodyPreview,
+          },
+          null,
+          2,
+        ),
+      );
 
       const har = mockInternet.getHar();
       const urls = har.log.entries.map((entry) => entry.request.url);

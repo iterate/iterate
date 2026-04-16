@@ -51,20 +51,29 @@ const shouldRunMixedCodemodeTest = recordHar || harFixturePresent;
 
 const MIXED_CODEMODE_SCRIPT = `
 async () => {
+  const mcpQuery = "workers";
   const answer = await builtin.answer();
   const exampleRes = await fetch("https://example.com/");
   const exampleBody = await exampleRes.text();
   const streamState = await events.getStreamState({ path: "/" });
   const internalHealth = await events.__internal_health({});
-  const docSearch = await cloudflare_docs.search_cloudflare_documentation({ query: "workers" });
+  const docSearch = await cloudflare_docs.search_cloudflare_documentation({ query: mcpQuery });
   const docText = typeof docSearch === "string" ? docSearch : JSON.stringify(docSearch);
   return {
+    summary:
+      "Mixed e2e: builtin + Events OpenAPI + example.com egress + Cloudflare MCP search — all OK; MCP snippet below.",
     answer,
     streamStateOk: streamState != null && typeof streamState === "object",
     internalHealthOk: internalHealth != null && internalHealth.ok === true,
+    mcpQuery,
+    mcpSearchSnippet: docText.slice(0, 500),
+    mcpSearchChars: docText.length,
     mcpSearchOk: docText.length > 80,
-    mcpSearchLength: docText.length,
-    example: { status: exampleRes.status, bodyPreview: exampleBody.slice(0, 80) },
+    example: {
+      status: exampleRes.status,
+      bodyPreview: exampleBody.slice(0, 120),
+      titleLine: (exampleBody.split("\\n")[0] ?? "").slice(0, 100),
+    },
   };
 }
 `.trim();
@@ -172,23 +181,44 @@ describe.sequential("agents iterate-agent mixed codemode e2e", () => {
 
       const payload = resultEvent.payload as {
         result?: {
+          summary?: string;
           answer?: number;
           streamStateOk?: boolean;
           internalHealthOk?: boolean;
+          mcpQuery?: string;
+          mcpSearchSnippet?: string;
+          mcpSearchChars?: number;
           mcpSearchOk?: boolean;
-          mcpSearchLength?: number;
-          example?: { status?: number; bodyPreview?: string };
+          example?: { status?: number; bodyPreview?: string; titleLine?: string };
         };
         error?: string;
       };
       expect(payload.error ?? "").toBe("");
+      expect(payload.result?.summary ?? "").toContain("Mixed e2e");
       expect(payload.result?.answer).toBe(42);
       expect(payload.result?.streamStateOk).toBe(true);
       expect(payload.result?.internalHealthOk).toBe(true);
+      expect(payload.result?.mcpQuery).toBe("workers");
       expect(payload.result?.mcpSearchOk).toBe(true);
-      expect(payload.result?.mcpSearchLength).toBeGreaterThan(80);
+      expect(payload.result?.mcpSearchChars).toBeGreaterThan(80);
+      expect(payload.result?.mcpSearchSnippet ?? "").toMatch(/worker|Worker|Cloudflare|cloudflare/);
       expect(payload.result?.example?.status).toBe(200);
       expect(payload.result?.example?.bodyPreview?.length).toBeGreaterThan(0);
+      expect(payload.result?.example?.titleLine ?? "").toMatch(/Example Domain/);
+      console.info(
+        "[iterate-agent mixed e2e] codemode-result-added (excerpt):\n",
+        JSON.stringify(
+          {
+            summary: payload.result?.summary,
+            answer: payload.result?.answer,
+            mcpSearchChars: payload.result?.mcpSearchChars,
+            mcpSearchSnippetPreview: `${(payload.result?.mcpSearchSnippet ?? "").slice(0, 200)}…`,
+            exampleTitlePreview: `${(payload.result?.example?.titleLine ?? "").slice(0, 100)}…`,
+          },
+          null,
+          2,
+        ),
+      );
 
       const har = mockInternet.getHar();
       const urls = har.log.entries.map((entry) => entry.request.url);
