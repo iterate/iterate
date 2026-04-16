@@ -60,6 +60,15 @@ function parseInboundEventMessage(message: string): { event: unknown } | null {
 }
 
 export class IterateAgent extends Agent<CloudflareEnv> {
+  /**
+   * Events sets `X-Iterate-Events-External-Subscriber` on the upgrade request. Without this,
+   * Agents emit identity/state/MCP protocol JSON first; Events' outbound client only accepts
+   * stream-socket frames and treats those as invalid.
+   */
+  shouldSendProtocolMessages(_connection: Connection, ctx: { request: Request }): boolean {
+    return ctx.request.headers.get("X-Iterate-Events-External-Subscriber") !== "1";
+  }
+
   async onStart() {
     void eventsCodemodeTools.catch((error) => {
       console.error("[IterateAgent] events OpenAPI preload failed", error);
@@ -75,9 +84,10 @@ export class IterateAgent extends Agent<CloudflareEnv> {
   }
 
   async onMessage(connection: Connection, message: WSMessage) {
-    if (typeof message !== "string") return;
+    const text = websocketMessageToString(message);
+    if (text == null) return;
 
-    const inbound = parseInboundEventMessage(message);
+    const inbound = parseInboundEventMessage(text);
     if (inbound == null) return;
 
     const parsedEvent = CodemodeBlockAddedEvent.safeParse(inbound.event);
@@ -89,7 +99,10 @@ export class IterateAgent extends Agent<CloudflareEnv> {
         loader: this.env.LOADER,
         globalOutbound: this.env.CODEMODE_OUTBOUND_FETCH,
       });
-      const mcpProviders = await createMcpToolProviders({ mcp: this.mcp });
+      const mcpProviders = await createMcpToolProviders({
+        mcp: this.mcp,
+        waitForConnectionsTimeout: 60_000,
+      });
       const mcpResolved = await Promise.all(
         mcpProviders.map((provider) => resolveProvider(provider)),
       );
@@ -122,4 +135,18 @@ export class IterateAgent extends Agent<CloudflareEnv> {
       ),
     );
   }
+}
+
+function websocketMessageToString(message: WSMessage): string | null {
+  if (typeof message === "string") {
+    return message;
+  }
+  if (message instanceof ArrayBuffer) {
+    return new TextDecoder().decode(message);
+  }
+  if (ArrayBuffer.isView(message)) {
+    const view = message as ArrayBufferView;
+    return new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+  }
+  return null;
 }

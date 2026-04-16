@@ -28,14 +28,20 @@ export interface DevServerHandle extends AsyncDisposable {
  * so the dev server listens where the tunnel forwards (e.g. `PORT` for `pnpm dev`).
  */
 export async function useDevServer(options: UseDevServerOptions): Promise<DevServerHandle> {
+  const mergedEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...options.env,
+    PORT: String(options.port),
+    // Probe uses 127.0.0.1; Vite default HOST `::` can leave IPv4 unroutable on some systems.
+    HOST: options.host ?? "127.0.0.1",
+  };
+  // Vitest and many CI runners set `CI=true`. Alchemy/Vite treat CI as "non-interactive"
+  // and may exit or skip long-running dev behavior; local dev subprocesses should not inherit it.
+  delete mergedEnv.CI;
+
   const child = spawn(options.command, options.args, {
     cwd: options.cwd,
-    env: {
-      ...process.env,
-      ...options.env,
-      PORT: String(options.port),
-      ...(options.host ? { HOST: options.host } : {}),
-    },
+    env: mergedEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
   const output: Buffer[] = [];
@@ -55,7 +61,7 @@ export async function useDevServer(options: UseDevServerOptions): Promise<DevSer
       child,
       healthcheckPath: options.healthcheckPath ?? DEFAULT_HEALTHCHECK_PATH,
       output,
-      timeoutMs: options.timeoutMs ?? 45_000,
+      timeoutMs: options.timeoutMs ?? 40_000,
     });
 
     return {

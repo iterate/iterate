@@ -6,6 +6,8 @@ export async function openOutboundWebSocket(callbackUrl: string) {
       "Sec-WebSocket-Key": websocketKey,
       "Sec-WebSocket-Version": "13",
       Upgrade: "websocket",
+      // Lets agent runtimes (e.g. Cloudflare Agents) skip CF_AGENT_* protocol frames; Events only speaks stream-socket JSON.
+      "X-Iterate-Events-External-Subscriber": "1",
     },
   })) as Response & { webSocket?: WebSocket | null };
 

@@ -39,15 +39,21 @@ With `pnpm dev` running:
 
 Waits ~2.5s after connect (so events OpenAPI can preload), then sends a minimal `codemode-block-added` that uses `fetch("https://example.com/")`.
 
+### Doppler: missing env vars (including `SEMAPHORE_*`)
+
+The CLI caches decrypted secrets under `~/.doppler/fallback/`. If new secrets were added in the dashboard (e.g. inherited from `_shared`) **after** that cache was written, `doppler run` can inject an **outdated** set — `doppler secrets get` still works because it hits the API. **Fix:** scripts use `doppler run --no-cache --` so each run fetches the current secret bundle. To clear bad cache manually: remove the relevant files under `~/.doppler/fallback/` or run once with `--no-cache`.
+
 ### E2E: Semaphore tunnel + local dev server
 
-Order is fixed: **tunnel lease → local port from that lease → `pnpm dev` on that port → `cloudflared`**.
+Order is fixed: **tunnel lease → local port from that lease → Alchemy dev on that port → `cloudflared`**.
 
 1. `useCloudflareTunnelLease` — Semaphore lease; includes `localPort` from the lease `service` URL (where the tunnel will forward).
-2. `useDevServer({ port: tunnelLease.localPort, command: "pnpm", args: ["dev"], ... })` — sets `PORT` so Vite/Alchemy listens on the same port.
+2. `useDevServer({ port: tunnelLease.localPort, command: "pnpm", args: ["exec", "tsx", "./alchemy.run.ts"], ... })` — same env as `pnpm test:e2e` (already `doppler run`), so **no nested `doppler run`** (which could override `PORT`). Sets `PORT` + `HOST=127.0.0.1` and clears inherited `CI` so Alchemy/Vite stay long-running.
 3. `useCloudflareTunnel({ token, publicUrl })` — run `cloudflared` so the public URL hits that listener.
 
 See `e2e/vitest/forwarded-events.e2e.test.ts` and `iterate-agent.e2e.test.ts`.
+
+**`iterate-agent` e2e** is skipped in default `pnpm test:e2e` until you opt in with `AGENTS_E2E_ITERATE_AGENT=1` (see `pnpm test:e2e:iterate-agent`). It needs the Events worker deployed with the outbound WebSocket `X-Iterate-Events-External-Subscriber` header (`apps/events` → `outbound-websocket.ts`) so Agents does not send CF*AGENT*\* protocol JSON that Events’ client rejects.
 
 ### Inbound frames (strict vs loose)
 

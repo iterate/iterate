@@ -2,6 +2,9 @@
 # We intentionally pin projects here but not configs:
 # local dev config names vary by user (`dev_<name>`), while many scripts pass
 # `--config` explicitly. This file exists to document and set project scope.
+#
+# `doppler run` resolves `project` from the current working directory against these `path` entries
+# (see `doppler setup`). Scripts should not hard-code `--project` unless there is a special reason.
 setup:
   - project: os
     path: ./

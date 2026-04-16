@@ -49,7 +49,7 @@ describe.sequential("agents forwarded events", () => {
     await using devServer = await useDevServer({
       cwd: appRoot,
       command: "pnpm",
-      args: ["dev"],
+      args: ["exec", "tsx", "./alchemy.run.ts"],
       port: tunnelLease.localPort,
       env: {
         ...stripInheritedAppConfig(process.env),
@@ -94,12 +94,13 @@ describe.sequential("agents forwarded events", () => {
       client: eventsClient,
       path: streamPath,
       predicate: (event) => event.type === "pong",
+      timeoutMs: 45_000,
     });
 
     expect(pong.payload).toMatchObject({
       ok: true,
     });
-  }, 180_000);
+  }, 100_000);
 });
 
 function createEventsClient(options: {
