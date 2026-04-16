@@ -1,21 +1,10 @@
 /**
- * End-to-end: real Events host + Semaphore tunnel + `cloudflared` → public `wss://` to
- * `IterateAgent` → codemode runs `builtin` + events OpenAPI (including dotted operationIds →
- * `events.__internal_health`) + `fetch("https://example.com/")` (egress via mock proxy / HAR).
+ * End-to-end: codemode invokes Cloudflare Docs MCP (`search_cloudflare_documentation`) with outbound
+ * traffic mocked via committed HAR (same pattern as `iterate-agent.e2e.test.ts`).
  *
- * Requires Events worker changes that send `X-Iterate-Events-External-Subscriber` on subscriber upgrades
- * (see `apps/events` outbound WebSocket) to be **deployed** to whatever `EVENTS_BASE_URL` targets; otherwise
- * Agents protocol frames confuse Events' client and `codemode-result-added` never lands.
+ * MCP codemode namespaces use **server name** from `addMcpServer("cloudflare-docs", …)` → `cloudflare_docs`.
  *
- * Outbound HTTP (OpenAPI spec fetch, codemode `fetch`, etc.) goes through
- * `APP_CONFIG_EXTERNAL_EGRESS_PROXY` to the mock proxy; committed HAR replays it.
- *
- * Semaphore: `SEMAPHORE_API_TOKEN` + `SEMAPHORE_BASE_URL` from Doppler (see `requireSemaphoreE2eEnv`). Run `pnpm test:e2e` from `apps/agents` so `doppler.yaml` selects the `agents` project.
- *
- * After changing `CODEMODE_SCRIPT` or proxy expectations, re-record:
- *   `pnpm test:e2e:record-har`
- * MCP-only codemode + fixture: `pnpm test:e2e:record-har-mcp` (`iterate-agent-mcp.e2e.test.ts`).
- * Mixed providers in one block: `pnpm test:e2e:record-har-mixed` (`iterate-agent-mixed-codemode.e2e.test.ts`).
+ * Re-record: `pnpm test:e2e:record-har-mcp` (from `apps/agents`, with Doppler + network).
  */
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -51,34 +40,30 @@ requireSemaphoreE2eEnv(process.env);
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../../../..", import.meta.url));
 
-const harFixturePath = join(appRoot, "e2e/fixtures/iterate-agent-codemode.har");
+const harFixturePath = join(appRoot, "e2e/fixtures/iterate-agent-mcp.har");
 const recordHar = process.env.AGENTS_E2E_RECORD_HAR === "1";
 const harFixturePresent = existsSync(harFixturePath);
 
-const shouldRunIterateAgentTest = recordHar || harFixturePresent;
+const shouldRunMcpCodemodeTest = recordHar || harFixturePresent;
 
 /**
- * Codemode: `builtin` + `events` OpenAPI (`getStreamState`, `__internal.health` → `__internal_health`) + `fetch` (egress).
- * After changing this script, re-record HAR (`pnpm test:e2e:record-har`).
+ * `cloudflare_docs` = sanitized server name `cloudflare-docs` (see `createMcpToolProviders`).
+ * Tool key matches MCP `search_cloudflare_documentation` (underscores already valid).
  */
-const CODEMODE_SCRIPT = `
+const MCP_CODEMODE_SCRIPT = `
 async () => {
-  const exampleRes = await fetch("https://example.com/");
-  const exampleBody = await exampleRes.text();
-  const streamState = await events.getStreamState({ path: "/" });
-  const internalHealth = await events.__internal_health({});
+  const docSearch = await cloudflare_docs.search_cloudflare_documentation({ query: "workers" });
+  const text = typeof docSearch === "string" ? docSearch : JSON.stringify(docSearch);
   return {
-    answer: await builtin.answer(),
-    streamStateOk: streamState != null && typeof streamState === "object",
-    internalHealthOk: internalHealth != null && internalHealth.ok === true,
-    example: { status: exampleRes.status, bodyPreview: exampleBody.slice(0, 80) },
+    mcpSearchLength: text.length,
+    mcpSearchOk: text.length > 80,
   };
 }
 `.trim();
 
-describe.sequential("agents iterate-agent e2e", () => {
-  test.skipIf(!shouldRunIterateAgentTest || process.env.AGENTS_E2E_ITERATE_AGENT !== "1")(
-    "websocket subscription runs codemode with mocked egress (HAR replay)",
+describe.sequential("agents iterate-agent MCP codemode e2e", () => {
+  test.skipIf(!shouldRunMcpCodemodeTest || process.env.AGENTS_E2E_ITERATE_AGENT !== "1")(
+    "codemode calls Cloudflare Docs MCP with mocked egress (HAR replay)",
     async ({ task }) => {
       const vitestRunSlug = injectVitestRunSlug();
       const executionSuffix = createTestExecutionSuffix();
@@ -94,7 +79,7 @@ describe.sequential("agents iterate-agent e2e", () => {
         projectSlug: vitestRunSlug,
         streamPath,
       });
-      console.info(`[iterate-agent e2e] Events stream (open in browser): ${streamViewerUrl}`);
+      console.info(`[iterate-agent MCP e2e] Events stream (open in browser): ${streamViewerUrl}`);
 
       await using mockInternet = await useMockHttpServer({
         ...(recordHar
@@ -103,8 +88,6 @@ describe.sequential("agents iterate-agent e2e", () => {
               onUnhandledRequest: "bypass" as const,
             }
           : {
-              // HAR replay matches recorded POST/SSE; MCP clients also issue GETs that are not in the fixture.
-              // Bypass lets those hit the real host so `addMcpServer` can proceed; replay still applies to matching traffic.
               onUnhandledRequest: "bypass" as const,
             }),
       });
@@ -128,14 +111,14 @@ describe.sequential("agents iterate-agent e2e", () => {
           APP_CONFIG_EXTERNAL_EGRESS_PROXY: mockInternet.url,
         },
       });
-      console.info(`[iterate-agent e2e] Agents dev server: ${_devServer.baseUrl}`);
+      console.info(`[iterate-agent MCP e2e] Agents dev server: ${_devServer.baseUrl}`);
 
       await using tunnel = await useCloudflareTunnel({
         token: tunnelLease.tunnelToken,
         publicUrl: tunnelLease.publicUrl,
       });
 
-      const agentInstance = `e2e-${executionSuffix}`;
+      const agentInstance = `e2e-mcp-${executionSuffix}`;
       const callbackUrl = toWssAgentWebsocketUrl(tunnel.publicUrl, agentInstance);
 
       const eventsClient = createEventsOrpcClient({
@@ -148,7 +131,7 @@ describe.sequential("agents iterate-agent e2e", () => {
         event: {
           type: "https://events.iterate.com/events/stream/subscription/configured",
           payload: {
-            slug: `iterate-agent-ws-${executionSuffix}`,
+            slug: `iterate-agent-mcp-ws-${executionSuffix}`,
             type: "websocket",
             callbackUrl,
           },
@@ -160,7 +143,7 @@ describe.sequential("agents iterate-agent e2e", () => {
         event: {
           type: "codemode-block-added",
           payload: {
-            script: CODEMODE_SCRIPT,
+            script: MCP_CODEMODE_SCRIPT,
           },
         },
       });
@@ -169,27 +152,23 @@ describe.sequential("agents iterate-agent e2e", () => {
         client: eventsClient,
         path: streamPath,
         predicate: (event) => event.type === "codemode-result-added",
-        timeoutMs: 90_000,
+        timeoutMs: 120_000,
       });
 
       const payload = resultEvent.payload as {
         result?: {
-          answer?: number;
-          streamStateOk?: boolean;
-          internalHealthOk?: boolean;
-          example?: { status?: number; bodyPreview?: string };
+          mcpSearchLength?: number;
+          mcpSearchOk?: boolean;
         };
         error?: string;
       };
       expect(payload.error ?? "").toBe("");
-      expect(payload.result?.answer).toBe(42);
-      expect(payload.result?.streamStateOk).toBe(true);
-      expect(payload.result?.internalHealthOk).toBe(true);
-      expect(payload.result?.example?.status).toBe(200);
-      expect(payload.result?.example?.bodyPreview?.length).toBeGreaterThan(0);
+      expect(payload.result?.mcpSearchOk).toBe(true);
+      expect(payload.result?.mcpSearchLength).toBeGreaterThan(80);
 
       const har = mockInternet.getHar();
       const urls = har.log.entries.map((entry) => entry.request.url);
+      expect(urls.some((url) => url.includes("docs.mcp.cloudflare.com"))).toBe(true);
       const eventsHost = new URL(
         getProjectUrl({
           currentUrl: eventsBaseUrl,
@@ -197,9 +176,8 @@ describe.sequential("agents iterate-agent e2e", () => {
         }).toString(),
       ).hostname;
       expect(urls.some((url) => url.includes(eventsHost))).toBe(true);
-      expect(urls.some((url) => url.includes("example.com"))).toBe(true);
     },
-    120_000,
+    150_000,
   );
 });
 

@@ -3,6 +3,7 @@ import {
   type JsonSchemaToolDescriptors,
   type ToolProvider,
 } from "@cloudflare/codemode";
+import { uniqueSanitizedToolKey } from "~/lib/codemode-tool-key.ts";
 
 type OpenApiMethod = "get" | "post" | "put" | "patch" | "delete";
 type OpenApiRequestMethod = Uppercase<OpenApiMethod>;
@@ -74,13 +75,14 @@ export async function createOpenApiToolProvider(
     { description?: string; execute: (input: unknown) => Promise<unknown> }
   > = {};
   const descriptors: JsonSchemaToolDescriptors = {};
+  const usedToolKeys = new Set<string>();
 
   for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
     for (const method of OPENAPI_METHODS) {
       const operation = pathItem[method];
       if (!operation?.operationId) continue;
 
-      const toolName = operation.operationId;
+      const toolName = uniqueSanitizedToolKey(operation.operationId, usedToolKeys);
       const parameters = mergeParameters(pathItem.parameters, operation.parameters);
       const { schema: requestBodySchema, contentType } = pickRequestBody(operation);
 

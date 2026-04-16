@@ -1,12 +1,14 @@
 import {
   generateTypesFromJsonSchema,
-  sanitizeToolName,
   type JsonSchemaToolDescriptors,
   type ToolProvider,
 } from "@cloudflare/codemode";
+import { sanitizeToolName, uniqueSanitizedToolKey } from "~/lib/codemode-tool-key.ts";
 
 interface McpServerRow {
   id: string;
+  /** Stable label from `addMcpServer(name, …)`; preferred over random `id` for codemode namespaces. */
+  name?: string;
 }
 
 interface McpToolDefinition {
@@ -52,12 +54,15 @@ export async function createMcpToolProviders(
 
   await mcp.waitForConnections({ timeout: waitForConnectionsTimeout });
 
-  const serverIds = new Set(mcp.listServers().map((server) => server.id));
+  const serverRows = mcp.listServers();
+  const serverIds = new Set(serverRows.map((server) => server.id));
   const namespaceCounts = new Map<string, number>();
   const namespaces = new Map<string, string>();
 
   for (const serverId of serverIds) {
-    const baseNamespace = sanitizeToolName(serverId).toLowerCase();
+    const row = serverRows.find((s) => s.id === serverId);
+    const label = row?.name != null && String(row.name).trim() !== "" ? String(row.name) : serverId;
+    const baseNamespace = sanitizeToolName(label).toLowerCase();
     const count = (namespaceCounts.get(baseNamespace) ?? 0) + 1;
     namespaceCounts.set(baseNamespace, count);
     namespaces.set(serverId, count === 1 ? baseNamespace : `${baseNamespace}_${count}`);
@@ -71,12 +76,16 @@ export async function createMcpToolProviders(
   }
 
   return [...toolsByServer.entries()].map(([serverId, tools]) => {
-    const namespace = namespaces.get(serverId) ?? sanitizeToolName(serverId).toLowerCase();
+    const row = serverRows.find((s) => s.id === serverId);
+    const label = row?.name != null && String(row.name).trim() !== "" ? String(row.name) : serverId;
+    const namespace = namespaces.get(serverId) ?? sanitizeToolName(label).toLowerCase();
     const descriptors: JsonSchemaToolDescriptors = {};
     const providerTools: ToolProvider["tools"] = {};
+    const usedToolKeys = new Set<string>();
 
     for (const tool of tools) {
-      providerTools[tool.name] = {
+      const toolKey = uniqueSanitizedToolKey(tool.name, usedToolKeys);
+      providerTools[toolKey] = {
         description: tool.description,
         execute: async (input: unknown) => {
           const result = await mcp.callTool({
@@ -88,7 +97,7 @@ export async function createMcpToolProviders(
         },
       };
 
-      descriptors[tool.name] = {
+      descriptors[toolKey] = {
         description: tool.description,
         inputSchema: tool.inputSchema ?? { type: "object" },
         outputSchema: tool.outputSchema,

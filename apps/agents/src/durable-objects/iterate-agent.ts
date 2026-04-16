@@ -116,7 +116,7 @@ export class IterateAgent extends Agent<CloudflareEnv> {
       });
       const mcpProviders = await createMcpToolProviders({
         mcp: this.mcp,
-        waitForConnectionsTimeout: 60_000,
+        waitForConnectionsTimeout: 15_000,
       });
       const mcpResolved = await Promise.all(
         mcpProviders.map((provider) => resolveProvider(provider)),
