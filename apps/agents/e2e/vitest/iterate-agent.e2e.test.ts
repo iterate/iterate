@@ -7,8 +7,8 @@
  * (see `apps/events` outbound WebSocket) to be **deployed** to whatever `EVENTS_BASE_URL` targets; otherwise
  * Agents protocol frames confuse Events' client and `codemode-result-added` never lands.
  *
- * Outbound HTTP (OpenAPI spec fetch, codemode `fetch`, etc.) goes through
- * `APP_CONFIG_EXTERNAL_EGRESS_PROXY` to the mock proxy; committed HAR replays it.
+ * Outbound HTTP goes through `APP_CONFIG_EXTERNAL_EGRESS_PROXY`. Replay uses committed HAR +
+ * `prepareAgentsHarForReplay` (project hostname) and `onUnhandledRequest: "error"` (no silent internet).
  *
  * Semaphore: `SEMAPHORE_API_TOKEN` + `SEMAPHORE_BASE_URL` from Doppler (see `requireSemaphoreE2eEnv`). Run `pnpm test:e2e` from `apps/agents` so `doppler.yaml` selects the `agents` project.
  *
@@ -42,6 +42,8 @@ import {
   eventsIterateStreamViewerUrl,
   waitForStreamEvent,
 } from "../test-support/events-stream-helpers.ts";
+import { mcpStreamableHttpGetStubHandlers } from "../test-support/mcp-streamable-http-get-stub-handlers.ts";
+import { prepareAgentsHarForReplay } from "../test-support/prepare-agents-har-for-replay.ts";
 import { requireSemaphoreE2eEnv } from "../test-support/require-semaphore-e2e-env.ts";
 import { createEventsOrpcClient } from "../../src/lib/events-orpc-client.ts";
 import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
@@ -103,15 +105,20 @@ describe.sequential("agents iterate-agent e2e", () => {
               onUnhandledRequest: "bypass" as const,
             }
           : {
-              // HAR replay matches recorded POST/SSE; MCP clients also issue GETs that are not in the fixture.
-              // Bypass lets those hit the real host so `addMcpServer` can proceed; replay still applies to matching traffic.
-              onUnhandledRequest: "bypass" as const,
+              onUnhandledRequest: "error" as const,
             }),
       });
 
       if (!recordHar) {
-        const har = JSON.parse(await readFile(harFixturePath, "utf8")) as HarWithExtensions;
-        mockInternet.use(...fromTrafficWithWebSocket(har));
+        const eventsProjectHostname = new URL(
+          getProjectUrl({
+            currentUrl: eventsBaseUrl,
+            projectSlug: ProjectSlug.parse(vitestRunSlug),
+          }).toString(),
+        ).hostname;
+        const harRaw = JSON.parse(await readFile(harFixturePath, "utf8")) as HarWithExtensions;
+        const har = prepareAgentsHarForReplay(harRaw, eventsProjectHostname);
+        mockInternet.use(...fromTrafficWithWebSocket(har), ...mcpStreamableHttpGetStubHandlers);
       }
 
       await using tunnelLease = await useCloudflareTunnelLease({});

@@ -32,6 +32,8 @@ import {
   eventsIterateStreamViewerUrl,
   waitForStreamEvent,
 } from "../test-support/events-stream-helpers.ts";
+import { mcpStreamableHttpGetStubHandlers } from "../test-support/mcp-streamable-http-get-stub-handlers.ts";
+import { prepareAgentsHarForReplay } from "../test-support/prepare-agents-har-for-replay.ts";
 import { requireSemaphoreE2eEnv } from "../test-support/require-semaphore-e2e-env.ts";
 import { createEventsOrpcClient } from "../../src/lib/events-orpc-client.ts";
 import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
@@ -94,13 +96,20 @@ describe.sequential("agents iterate-agent mixed codemode e2e", () => {
               onUnhandledRequest: "bypass" as const,
             }
           : {
-              onUnhandledRequest: "bypass" as const,
+              onUnhandledRequest: "error" as const,
             }),
       });
 
       if (!recordHar) {
-        const har = JSON.parse(await readFile(harFixturePath, "utf8")) as HarWithExtensions;
-        mockInternet.use(...fromTrafficWithWebSocket(har));
+        const eventsProjectHostname = new URL(
+          getProjectUrl({
+            currentUrl: eventsBaseUrl,
+            projectSlug: ProjectSlug.parse(vitestRunSlug),
+          }).toString(),
+        ).hostname;
+        const harRaw = JSON.parse(await readFile(harFixturePath, "utf8")) as HarWithExtensions;
+        const har = prepareAgentsHarForReplay(harRaw, eventsProjectHostname);
+        mockInternet.use(...fromTrafficWithWebSocket(har), ...mcpStreamableHttpGetStubHandlers);
       }
 
       await using tunnelLease = await useCloudflareTunnelLease({});
