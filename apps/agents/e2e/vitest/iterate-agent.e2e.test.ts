@@ -19,10 +19,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createORPCClient } from "@orpc/client";
-import type { ContractRouterClient } from "@orpc/contract";
-import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import { eventsContract, type StreamPath } from "@iterate-com/events-contract";
+import { ProjectSlug, type StreamPath } from "@iterate-com/events-contract";
 import {
   fromTrafficWithWebSocket,
   type HarWithExtensions,
@@ -44,6 +41,8 @@ import {
   waitForStreamEvent,
 } from "../test-support/events-stream-helpers.ts";
 import { requireSemaphoreE2eEnv } from "../test-support/require-semaphore-e2e-env.ts";
+import { createEventsOrpcClient } from "../../src/lib/events-orpc-client.ts";
+import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
 
 requireSemaphoreE2eEnv(process.env);
 
@@ -137,7 +136,7 @@ describe.sequential("agents iterate-agent e2e", () => {
       const agentInstance = `e2e-${executionSuffix}`;
       const callbackUrl = toWssAgentWebsocketUrl(tunnel.publicUrl, agentInstance);
 
-      const eventsClient = createEventsClient({
+      const eventsClient = createEventsOrpcClient({
         baseUrl: eventsBaseUrl,
         projectSlug: vitestRunSlug,
       });
@@ -189,7 +188,13 @@ describe.sequential("agents iterate-agent e2e", () => {
 
       const har = mockInternet.getHar();
       const urls = har.log.entries.map((entry) => entry.request.url);
-      expect(urls.some((url) => url.includes("events.iterate.com"))).toBe(true);
+      const eventsHost = new URL(
+        getProjectUrl({
+          currentUrl: eventsBaseUrl,
+          projectSlug: ProjectSlug.parse(vitestRunSlug),
+        }).toString(),
+      ).hostname;
+      expect(urls.some((url) => url.includes(eventsHost))).toBe(true);
       expect(urls.some((url) => url.includes("docs.mcp.cloudflare.com"))).toBe(true);
       expect(urls.some((url) => url.includes("example.com"))).toBe(true);
     },
@@ -204,28 +209,6 @@ function toWssAgentWebsocketUrl(httpsBase: string, instanceName: string) {
   base.search = "";
   base.hash = "";
   return base.toString();
-}
-
-function createEventsClient(options: {
-  baseUrl: string;
-  projectSlug: string;
-}): ContractRouterClient<typeof eventsContract> {
-  return createORPCClient(
-    new OpenAPILink(eventsContract, {
-      url: new URL("/api", options.baseUrl).toString(),
-      fetch: (request, init) => {
-        const requestInit = init as RequestInit | undefined;
-        const headers = new Headers(
-          request instanceof Request ? request.headers : requestInit?.headers,
-        );
-        headers.set("x-iterate-project", options.projectSlug);
-        return fetch(request, {
-          ...requestInit,
-          headers,
-        });
-      },
-    }),
-  ) as ContractRouterClient<typeof eventsContract>;
 }
 
 function resolveEventsBaseUrl() {

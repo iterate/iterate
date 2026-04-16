@@ -1,12 +1,16 @@
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import { resolveProvider } from "@cloudflare/codemode/ai";
 import {
+  ProjectSlug,
   StreamSocketAppendFrame,
   StreamSocketFrame,
   type EventInput as EventInputValue,
 } from "@iterate-com/events-contract";
+import { parseAppConfig } from "@iterate-com/shared/apps/config";
 import { Agent, type Connection, type WSMessage } from "agents";
 import { z } from "zod";
+import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
+import { AppConfig } from "~/app.ts";
 import { createMcpToolProviders } from "~/lib/mcp-tool-providers.ts";
 import { createOpenApiToolProvider } from "~/lib/openapi-tool-provider.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
@@ -15,12 +19,6 @@ const publicMcpServers = [
   { name: "cloudflare-docs", url: "https://docs.mcp.cloudflare.com/mcp" },
   { name: "canuckduck", url: "https://mcp.canuckduck.ca/mcp" },
 ] as const;
-
-const eventsCodemodeTools = createOpenApiToolProvider({
-  name: "events",
-  spec: "https://events.iterate.com/api/openapi.json",
-  baseUrl: "https://events.iterate.com/api/",
-}).then(resolveProvider);
 
 const CodemodeBlockAddedEvent = z.object({
   type: z.literal("codemode-block-added"),
@@ -60,6 +58,8 @@ function parseInboundEventMessage(message: string): { event: unknown } | null {
 }
 
 export class IterateAgent extends Agent<CloudflareEnv> {
+  #eventsCodemodeTools: Awaited<ReturnType<typeof resolveProvider>> | null = null;
+
   /**
    * Events sets `X-Iterate-Events-External-Subscriber` on the upgrade request. Without this,
    * Agents emit identity/state/MCP protocol JSON first; Events' outbound client only accepts
@@ -70,9 +70,24 @@ export class IterateAgent extends Agent<CloudflareEnv> {
   }
 
   async onStart() {
-    void eventsCodemodeTools.catch((error) => {
+    const appConfig = parseAppConfig(AppConfig, this.env.APP_CONFIG);
+    const eventsOrigin = getProjectUrl({
+      currentUrl: appConfig.eventsBaseUrl,
+      projectSlug: ProjectSlug.parse(appConfig.eventsProjectSlug),
+    })
+      .toString()
+      .replace(/\/+$/, "");
+
+    try {
+      const eventsProvider = await createOpenApiToolProvider({
+        name: "events",
+        spec: new URL("/api/openapi.json", `${eventsOrigin}/`).toString(),
+        baseUrl: new URL("/api/", `${eventsOrigin}/`).toString(),
+      });
+      this.#eventsCodemodeTools = await resolveProvider(eventsProvider);
+    } catch (error) {
       console.error("[IterateAgent] events OpenAPI preload failed", error);
-    });
+    }
 
     const existingUrls = new Set(this.mcp.listServers().map((server) => server.server_url));
 
@@ -106,6 +121,7 @@ export class IterateAgent extends Agent<CloudflareEnv> {
       const mcpResolved = await Promise.all(
         mcpProviders.map((provider) => resolveProvider(provider)),
       );
+      const eventsTools = this.#eventsCodemodeTools;
       result = await executor.execute(parsedEvent.data.payload.script, [
         {
           name: "builtin",
@@ -113,7 +129,7 @@ export class IterateAgent extends Agent<CloudflareEnv> {
             answer: async () => 42,
           },
         },
-        await eventsCodemodeTools,
+        ...(eventsTools ? [eventsTools] : []),
         ...mcpResolved,
       ]);
     } catch (error) {

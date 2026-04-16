@@ -1,8 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { createORPCClient } from "@orpc/client";
-import type { ContractRouterClient } from "@orpc/contract";
-import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import { eventsContract, type StreamPath } from "@iterate-com/events-contract";
+import type { StreamPath } from "@iterate-com/events-contract";
 import {
   useCloudflareTunnel,
   useCloudflareTunnelLease,
@@ -19,6 +16,7 @@ import {
   waitForStreamEvent,
 } from "../test-support/events-stream-helpers.ts";
 import { requireSemaphoreE2eEnv } from "../test-support/require-semaphore-e2e-env.ts";
+import { createEventsOrpcClient } from "../../src/lib/events-orpc-client.ts";
 
 requireSemaphoreE2eEnv(process.env);
 
@@ -63,7 +61,7 @@ describe.sequential("agents forwarded events", () => {
     });
 
     const callbackUrl = new URL("/api/events-forwarded/", tunnel.publicUrl).toString();
-    const eventsClient = createEventsClient({
+    const eventsClient = createEventsOrpcClient({
       baseUrl: eventsBaseUrl,
       projectSlug: vitestRunSlug,
     });
@@ -102,28 +100,6 @@ describe.sequential("agents forwarded events", () => {
     });
   }, 100_000);
 });
-
-function createEventsClient(options: {
-  baseUrl: string;
-  projectSlug: string;
-}): ContractRouterClient<typeof eventsContract> {
-  return createORPCClient(
-    new OpenAPILink(eventsContract, {
-      url: new URL("/api", options.baseUrl).toString(),
-      fetch: (request, init) => {
-        const requestInit = init as RequestInit | undefined;
-        const headers = new Headers(
-          request instanceof Request ? request.headers : requestInit?.headers,
-        );
-        headers.set("x-iterate-project", options.projectSlug);
-        return fetch(request, {
-          ...requestInit,
-          headers,
-        });
-      },
-    }),
-  ) as ContractRouterClient<typeof eventsContract>;
-}
 
 function resolveEventsBaseUrl() {
   return process.env.EVENTS_BASE_URL?.trim().replace(/\/+$/, "") || "https://events.iterate.com";

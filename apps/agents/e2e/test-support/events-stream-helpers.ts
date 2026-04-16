@@ -1,10 +1,12 @@
 import type { ContractRouterClient } from "@orpc/contract";
 import {
   Event,
+  ProjectSlug,
   type Event as EventsEvent,
   eventsContract,
   type StreamPath,
 } from "@iterate-com/events-contract";
+import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
 
 /**
  * Finite snapshot of all events currently on the stream (same semantics as
@@ -53,14 +55,19 @@ export async function waitForStreamEvent(args: {
 }
 
 /**
- * Human-readable Events UI link (`projectSlug` selects the project in the sidebar).
+ * Human-readable Events UI link (project is the hostname subdomain on iterate.com-style hosts).
  */
 export function eventsIterateStreamViewerUrl(args: {
   eventsOrigin: string;
   projectSlug: string;
   streamPath: StreamPath;
 }): string {
-  const origin = args.eventsOrigin.replace(/\/+$/, "");
+  const projectBase = getProjectUrl({
+    currentUrl: args.eventsOrigin,
+    projectSlug: ProjectSlug.parse(args.projectSlug),
+  })
+    .toString()
+    .replace(/\/+$/, "");
   const splat =
     args.streamPath === "/"
       ? ""
@@ -70,7 +77,5 @@ export function eventsIterateStreamViewerUrl(args: {
   const pathSegments =
     splat.length === 0 ? [] : splat.split("/").map((segment) => encodeURIComponent(segment));
   const pathname = pathSegments.length === 0 ? "/streams/" : `/streams/${pathSegments.join("/")}`;
-  const url = new URL(pathname, `${origin}/`);
-  url.searchParams.set("projectSlug", args.projectSlug);
-  return url.toString();
+  return new URL(pathname, `${projectBase}/`).toString();
 }
