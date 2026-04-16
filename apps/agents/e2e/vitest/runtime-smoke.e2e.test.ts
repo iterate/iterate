@@ -3,8 +3,11 @@ import { describe, expect, test } from "vitest";
 import { AppConfig } from "../../src/app.ts";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
-const agentsBaseUrl = process.env.CI ? "http://127.0.0.1" : process.env.AGENTS_BASE_URL?.trim();
-const describeRuntimeSmoke = process.env.CI || !agentsBaseUrl ? describe.skip : describe;
+const agentsBaseUrl = process.env.AGENTS_BASE_URL?.trim();
+/** Opt-in: production/staging agents URL must respond (Cloudflare 522 if origin is down). */
+const runRuntimeSmoke =
+  process.env.AGENTS_E2E_RUNTIME_SMOKE === "1" && Boolean(agentsBaseUrl) && !process.env.CI;
+const describeRuntimeSmoke = runRuntimeSmoke ? describe : describe.skip;
 
 describeRuntimeSmoke("agents runtime smoke", () => {
   test("homepage, public config, openapi docs, and sample procedure respond", async () => {
