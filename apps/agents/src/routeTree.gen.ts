@@ -11,7 +11,6 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
-import { Route as ApiEventsForwardedRouteImport } from './routes/api.events-forwarded'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 
@@ -23,11 +22,6 @@ const IndexRoute = IndexRouteImport.update({
 const PosthogProxySplatRoute = PosthogProxySplatRouteImport.update({
   id: '/posthog-proxy/$',
   path: '/posthog-proxy/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiEventsForwardedRoute = ApiEventsForwardedRouteImport.update({
-  id: '/api/events-forwarded',
-  path: '/api/events-forwarded',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSplatRoute = ApiSplatRouteImport.update({
@@ -44,14 +38,12 @@ const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/$': typeof ApiSplatRoute
-  '/api/events-forwarded': typeof ApiEventsForwardedRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/$': typeof ApiSplatRoute
-  '/api/events-forwarded': typeof ApiEventsForwardedRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
 }
@@ -59,38 +51,20 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/$': typeof ApiSplatRoute
-  '/api/events-forwarded': typeof ApiEventsForwardedRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths:
-    | '/'
-    | '/api/$'
-    | '/api/events-forwarded'
-    | '/posthog-proxy/$'
-    | '/api/orpc/$'
+  fullPaths: '/' | '/api/$' | '/posthog-proxy/$' | '/api/orpc/$'
   fileRoutesByTo: FileRoutesByTo
-  to:
-    | '/'
-    | '/api/$'
-    | '/api/events-forwarded'
-    | '/posthog-proxy/$'
-    | '/api/orpc/$'
-  id:
-    | '__root__'
-    | '/'
-    | '/api/$'
-    | '/api/events-forwarded'
-    | '/posthog-proxy/$'
-    | '/api/orpc/$'
+  to: '/' | '/api/$' | '/posthog-proxy/$' | '/api/orpc/$'
+  id: '__root__' | '/' | '/api/$' | '/posthog-proxy/$' | '/api/orpc/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiSplatRoute: typeof ApiSplatRoute
-  ApiEventsForwardedRoute: typeof ApiEventsForwardedRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
   ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
 }
@@ -109,13 +83,6 @@ declare module '@tanstack/react-router' {
       path: '/posthog-proxy/$'
       fullPath: '/posthog-proxy/$'
       preLoaderRoute: typeof PosthogProxySplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/events-forwarded': {
-      id: '/api/events-forwarded'
-      path: '/api/events-forwarded'
-      fullPath: '/api/events-forwarded'
-      preLoaderRoute: typeof ApiEventsForwardedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/$': {
@@ -138,7 +105,6 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiSplatRoute: ApiSplatRoute,
-  ApiEventsForwardedRoute: ApiEventsForwardedRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
   ApiOrpcSplatRoute: ApiOrpcSplatRoute,
 }

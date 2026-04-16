@@ -20,7 +20,8 @@ export function createEventsOrpcClient(options: {
   return createORPCClient(
     new OpenAPILink(eventsContract, {
       url: new URL("/api", projectOrigin).toString(),
-      fetch,
+      // Bare `fetch` loses the correct `this` when OpenAPILink invokes it (Workers illegal invocation).
+      fetch: (input, init) => globalThis.fetch(input, init),
     }),
   ) as EventsOrpcClient;
 }

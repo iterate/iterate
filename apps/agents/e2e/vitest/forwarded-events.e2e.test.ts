@@ -60,7 +60,7 @@ describe.sequential("agents forwarded events", () => {
       publicUrl: tunnelLease.publicUrl,
     });
 
-    const callbackUrl = new URL("/api/events-forwarded/", tunnel.publicUrl).toString();
+    const callbackUrl = new URL("/api/events-forwarded", tunnel.publicUrl).toString();
     const eventsClient = createEventsOrpcClient({
       baseUrl: eventsBaseUrl,
       projectSlug: vitestRunSlug,
