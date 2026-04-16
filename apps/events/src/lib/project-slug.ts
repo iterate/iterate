@@ -1,47 +1,64 @@
 import { ProjectSlug, type ProjectSlug as ProjectSlugValue } from "@iterate-com/events-contract";
-import { z } from "zod";
 
-export const iterateProjectHeader = "x-iterate-project";
-export const projectSlugSearchParam = "projectSlug";
 export const defaultProjectSlug: ProjectSlugValue = "public";
+const iterateDomainLabels = ["iterate", "com"] as const;
+const eventsHostLabelPattern = /^events(?:-[a-z0-9-]+)*$/;
 
-export function normalizeProjectSlug(value: unknown): ProjectSlugValue {
-  const result = ProjectSlug.safeParse(value);
-  return result.success ? result.data : defaultProjectSlug;
-}
+function getEventsHostBase(hostname: string) {
+  const labels = hostname.split(".");
 
-export function resolveProjectSlug(args: {
-  url?: string | URL;
-  headerValue?: string | null;
-}): ProjectSlugValue {
-  const searchParamValue =
-    args.url == null ? undefined : new URL(args.url).searchParams.get(projectSlugSearchParam);
-  const parsedSearchParam = ProjectSlug.safeParse(searchParamValue);
-
-  if (parsedSearchParam.success) {
-    return parsedSearchParam.data;
+  if (
+    labels.length === 3 &&
+    labels[1] === iterateDomainLabels[0] &&
+    labels[2] === iterateDomainLabels[1] &&
+    eventsHostLabelPattern.test(labels[0])
+  ) {
+    return hostname;
   }
 
-  const parsedHeader = ProjectSlug.safeParse(args.headerValue);
-  if (parsedHeader.success) {
-    return parsedHeader.data;
+  if (
+    labels.length === 4 &&
+    labels[2] === iterateDomainLabels[0] &&
+    labels[3] === iterateDomainLabels[1] &&
+    eventsHostLabelPattern.test(labels[1])
+  ) {
+    return labels.slice(1).join(".");
   }
 
-  return defaultProjectSlug;
+  return undefined;
 }
 
-export function projectScopedQueryKey(baseKey: readonly unknown[], projectSlug: ProjectSlugValue) {
-  return [...baseKey, { projectSlug }] as const;
+export function resolveHostProjectSlug(hostname: string | null | undefined) {
+  const normalizedHostname = hostname?.trim().toLowerCase();
+  if (!normalizedHostname) {
+    return undefined;
+  }
+
+  const labels = normalizedHostname.split(".");
+  if (
+    labels.length !== 4 ||
+    labels[2] !== iterateDomainLabels[0] ||
+    labels[3] !== iterateDomainLabels[1] ||
+    !eventsHostLabelPattern.test(labels[1])
+  ) {
+    return undefined;
+  }
+
+  const maybeSlug = labels[0];
+  const parsedHostProjectSlug = ProjectSlug.safeParse(maybeSlug);
+  return parsedHostProjectSlug.success ? parsedHostProjectSlug.data : undefined;
 }
 
-const AppSearch = z.object({
-  projectSlug: z.string().optional(),
-});
+export function getProjectUrl(args: { currentUrl: string | URL; projectSlug: ProjectSlugValue }) {
+  const url = new URL(args.currentUrl);
+  const eventsHostBase = getEventsHostBase(url.hostname);
 
-export function validateAppSearch(search: unknown) {
-  const result = AppSearch.safeParse(search);
+  if (eventsHostBase) {
+    url.hostname =
+      args.projectSlug === defaultProjectSlug
+        ? eventsHostBase
+        : `${args.projectSlug}.${eventsHostBase}`;
+  }
 
-  return {
-    projectSlug: normalizeProjectSlug(result.success ? result.data.projectSlug : undefined),
-  };
+  return url;
 }

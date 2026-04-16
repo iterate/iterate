@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Event, ProjectSlug, StreamPath } from "@iterate-com/events-contract";
+import type { Event, StreamPath } from "@iterate-com/events-contract";
 import { getOrpcClient } from "~/orpc/client.ts";
 
 /** Client-side cap for live stream events; older rows are dropped to bound memory and projection work. */
@@ -7,12 +7,10 @@ const LIVE_STREAM_MAX_EVENTS = 50_000;
 
 export function useLiveStreamEvents({
   streamPath,
-  projectSlug,
   onEvent,
   maxEvents = LIVE_STREAM_MAX_EVENTS,
 }: {
   streamPath: StreamPath;
-  projectSlug: ProjectSlug;
   onEvent?: (event: Event) => void;
   maxEvents?: number;
 }) {
@@ -81,7 +79,7 @@ export function useLiveStreamEvents({
       controller.abort();
       void iterator?.return?.();
     };
-  }, [maxEvents, onEvent, projectSlug, streamPath]);
+  }, [maxEvents, onEvent, streamPath]);
 
   return {
     events,

@@ -13,7 +13,10 @@ import {
   defineBuiltinProcessor,
   type ProcessorAppendInput,
 } from "@iterate-com/events-contract/sdk";
-import { dynamicWorkerEgressConfigHeader } from "~/lib/dynamic-worker-egress.ts";
+import {
+  dynamicWorkerEgressConfigHeader,
+  dynamicWorkerProjectSlugHeader,
+} from "~/lib/dynamic-worker-egress.ts";
 
 export type DynamicWorkerAppendInput = ProcessorAppendInput;
 
@@ -127,6 +130,7 @@ function withDynamicWorkerEgressConfig(input, init) {
 
   const headers = new Headers(request.headers);
   headers.set("${dynamicWorkerEgressConfigHeader}", JSON.stringify(runtimeConfig.outboundGateway));
+  headers.set("${dynamicWorkerProjectSlugHeader}", runtimeConfig.projectSlug);
 
   return new Request(request, { headers });
 }
@@ -312,8 +316,6 @@ function normalizeDynamicWorkerConfig(input: {
       mainModule: defaultDynamicWorkerMainModule,
       modules: {
         [defaultDynamicWorkerProcessorModule]: input.script,
-        [defaultDynamicWorkerRuntimeConfigModule]:
-          buildDynamicWorkerRuntimeConfigModule(outboundGateway),
         [defaultDynamicWorkerMainModule]: dynamicWorkerRuntimeModule,
       },
       outboundGateway,
@@ -328,8 +330,6 @@ function normalizeDynamicWorkerConfig(input: {
     mainModule: defaultDynamicWorkerMainModule,
     modules: {
       ...normalizeDynamicWorkerModules(input.modules ?? {}),
-      [defaultDynamicWorkerRuntimeConfigModule]:
-        buildDynamicWorkerRuntimeConfigModule(outboundGateway),
       [defaultDynamicWorkerMainModule]: dynamicWorkerRuntimeModule,
     },
     outboundGateway,
@@ -342,6 +342,7 @@ export function createDynamicWorkerManager(context: {
   stream: (args?: { after?: StreamCursor; before?: StreamCursor }) => ReadableStream<Uint8Array>;
   createLoopbackBinding: (args: { exportName: string }) => Fetcher;
   getPath: () => StreamPath;
+  getProjectSlug: () => string;
   loader: WorkerLoader;
   waitUntil: (promise: Promise<unknown>) => void;
 }) {
@@ -427,8 +428,19 @@ export function createDynamicWorkerManager(context: {
         const env = buildDynamicWorkerEnvBindings(envVarsByKey);
         const entrypoint = context.loader
           .get(
-            `dynamic-worker:${context.getPath()}:${slug}:${hashDynamicWorkerConfig(configKey)}`,
-            () => buildDynamicWorkerLoaderCode({ config, env, globalOutbound }),
+            buildDynamicWorkerLoaderKey({
+              configKey,
+              path: context.getPath(),
+              projectSlug: context.getProjectSlug(),
+              slug,
+            }),
+            () =>
+              buildDynamicWorkerLoaderCode({
+                config,
+                env,
+                globalOutbound,
+                projectSlug: context.getProjectSlug(),
+              }),
           )
           .getEntrypoint() as unknown as {
           run(stream: RpcDynamicWorkerTarget): Promise<void>;
@@ -518,10 +530,11 @@ function normalizeDynamicWorkerModules(modules: Record<string, string>) {
   return normalized;
 }
 
-function buildDynamicWorkerRuntimeConfigModule(
-  outboundGateway: DynamicWorkerOutboundGateway | undefined,
-) {
-  return `export default ${JSON.stringify({ outboundGateway })};`;
+function buildDynamicWorkerRuntimeConfigModule(input: {
+  outboundGateway: DynamicWorkerOutboundGateway | undefined;
+  projectSlug: string;
+}) {
+  return `export default ${JSON.stringify(input)};`;
 }
 
 function buildDynamicWorkerEnvBindings(envVarsByKey: DynamicWorkerState["envVarsByKey"]) {
@@ -553,15 +566,34 @@ export function buildDynamicWorkerLoaderCode(args: {
   config: DynamicWorkerConfig;
   env: Record<string, string> | undefined;
   globalOutbound: Fetcher | undefined;
+  projectSlug: string;
 }) {
+  const modules = {
+    ...args.config.modules,
+    [defaultDynamicWorkerMainModule]: dynamicWorkerRuntimeModule,
+    [defaultDynamicWorkerRuntimeConfigModule]: buildDynamicWorkerRuntimeConfigModule({
+      outboundGateway: args.config.outboundGateway,
+      projectSlug: args.projectSlug,
+    }),
+  };
+
   return {
     compatibilityDate: args.config.compatibilityDate,
     compatibilityFlags: resolveDynamicWorkerCompatibilityFlags(args.config.compatibilityFlags),
     env: args.env,
     mainModule: args.config.mainModule,
-    modules: args.config.modules,
+    modules,
     ...(args.globalOutbound == null ? {} : { globalOutbound: args.globalOutbound }),
   };
+}
+
+export function buildDynamicWorkerLoaderKey(args: {
+  configKey: string;
+  path: string;
+  projectSlug: string;
+  slug: string;
+}) {
+  return `dynamic-worker:${args.projectSlug}:${args.path}:${args.slug}:${hashDynamicWorkerConfig(args.configKey)}`;
 }
 
 function hashDynamicWorkerConfig(value: string) {

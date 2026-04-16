@@ -4,8 +4,9 @@ import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { eventsContract, type Event } from "../../apps/events-contract/src/sdk.ts";
+import { ProjectSlug } from "../../apps/events-contract/src/types.ts";
 import { collectAsyncIterableUntilIdle } from "../../apps/events/e2e/helpers.ts";
-import { iterateProjectHeader } from "../../apps/events/src/lib/project-slug.ts";
+import { getProjectUrl } from "../../apps/events/src/lib/project-slug.ts";
 
 type EventsClient = ContractRouterClient<typeof eventsContract>;
 type SubscriberType = "webhook" | "websocket";
@@ -117,15 +118,13 @@ export async function runPushedProcessorProof(args: {
 function createEventsClient(args: { baseUrl: string; projectSlug: string }) {
   return createORPCClient(
     new OpenAPILink(eventsContract, {
-      url: new URL("/api", args.baseUrl).toString(),
-      fetch: (request, init) => {
-        const requestInit = init as RequestInit | undefined;
-        const headers = new Headers(
-          request instanceof Request ? request.headers : requestInit?.headers,
-        );
-        headers.set(iterateProjectHeader, args.projectSlug);
-        return fetch(request, { ...requestInit, headers });
-      },
+      url: new URL(
+        "/api",
+        getProjectUrl({
+          currentUrl: args.baseUrl,
+          projectSlug: ProjectSlug.parse(args.projectSlug),
+        }),
+      ).toString(),
     }),
   ) as EventsClient;
 }

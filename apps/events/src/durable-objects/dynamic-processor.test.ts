@@ -2,9 +2,11 @@ import type { DynamicWorkerConfig } from "@iterate-com/events-contract";
 import { describe, expect, test } from "vitest";
 import {
   buildDynamicWorkerLoaderCode,
+  buildDynamicWorkerLoaderKey,
   resolveDynamicWorkerCompatibilityFlags,
   resolveDynamicWorkerOutboundGateway,
 } from "./dynamic-processor.ts";
+import { dynamicWorkerProjectSlugHeader } from "~/lib/dynamic-worker-egress.ts";
 
 const baseConfig: DynamicWorkerConfig = {
   compatibilityDate: "2026-02-05",
@@ -45,9 +47,55 @@ describe("buildDynamicWorkerLoaderCode", () => {
       config: baseConfig,
       env: undefined,
       globalOutbound,
+      projectSlug: "public",
     });
 
     expect(loaderCode.globalOutbound).toBe(globalOutbound);
+  });
+
+  test("injects project slug into the runtime config module", () => {
+    const loaderCode = buildDynamicWorkerLoaderCode({
+      config: baseConfig,
+      env: undefined,
+      globalOutbound: undefined,
+      projectSlug: "team-a",
+    });
+
+    expect(parseRuntimeConfigModule(loaderCode.modules["runtime-config.js"])).toMatchObject({
+      projectSlug: "team-a",
+    });
+  });
+
+  test("overwrites worker.js with the latest runtime wrapper", () => {
+    const loaderCode = buildDynamicWorkerLoaderCode({
+      config: {
+        ...baseConfig,
+        modules: {
+          "worker.js": "export default { async run() {} };",
+        },
+      },
+      env: undefined,
+      globalOutbound: undefined,
+      projectSlug: "team-a",
+    });
+
+    expect(loaderCode.modules["worker.js"]).toContain(dynamicWorkerProjectSlugHeader);
+    expect(loaderCode.modules["worker.js"]).toContain(
+      'import runtimeConfig from "./runtime-config.js";',
+    );
+  });
+});
+
+describe("buildDynamicWorkerLoaderKey", () => {
+  test("includes the project slug in the worker cache key", () => {
+    expect(
+      buildDynamicWorkerLoaderKey({
+        configKey: '{"config":{},"envVarsByKey":{}}',
+        path: "/streams/demo",
+        projectSlug: "team-a",
+        slug: "worker",
+      }),
+    ).toContain("dynamic-worker:team-a:/streams/demo:worker:");
   });
 });
 
@@ -76,3 +124,7 @@ describe("resolveDynamicWorkerOutboundGateway", () => {
     });
   });
 });
+
+function parseRuntimeConfigModule(moduleText: string) {
+  return JSON.parse(moduleText.replace(/^export default /, "").replace(/;$/, ""));
+}

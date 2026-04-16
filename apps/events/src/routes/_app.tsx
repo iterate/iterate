@@ -1,12 +1,12 @@
 import type { CSSProperties } from "react";
 import { Outlet, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { getRequestHeader } from "@tanstack/react-start/server";
+import { getRequest, getRequestHeader } from "@tanstack/react-start/server";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { AppSidebar } from "~/components/app-sidebar.tsx";
 import { PathBreadcrumbs } from "~/components/path-breadcrumbs.tsx";
-import { validateAppSearch } from "~/lib/project-slug.ts";
+import { defaultProjectSlug, resolveHostProjectSlug } from "~/lib/project-slug.ts";
 import { StreamsChromeProvider, StreamsHeaderAction } from "~/components/streams-chrome.tsx";
 
 // First-party refs:
@@ -16,14 +16,21 @@ const getSidebarDefaultOpen = createServerFn({ method: "GET" }).handler(() => ({
   defaultOpen: !/(?:^|;\s*)sidebar_state=false(?:;|$)/.test(getRequestHeader("cookie") ?? ""),
 }));
 
+const getProjectSlug = createServerFn({ method: "GET" }).handler(() => {
+  const request = getRequest();
+  return resolveHostProjectSlug(new URL(request.url).hostname) ?? defaultProjectSlug;
+});
+
 export const Route = createFileRoute("/_app")({
-  validateSearch: validateAppSearch,
-  loader: async () => ({ sidebarDefaultOpen: (await getSidebarDefaultOpen()).defaultOpen }),
+  loader: async () => ({
+    sidebarDefaultOpen: (await getSidebarDefaultOpen()).defaultOpen,
+    projectSlug: await getProjectSlug(),
+  }),
   component: AppLayout,
 });
 
 function AppLayout() {
-  const { sidebarDefaultOpen } = Route.useLoaderData();
+  const { projectSlug, sidebarDefaultOpen } = Route.useLoaderData();
 
   return (
     <SidebarProvider
@@ -32,7 +39,7 @@ function AppLayout() {
       style={{ "--sidebar-width": "24rem" } as CSSProperties}
     >
       <StreamsChromeProvider>
-        <AppSidebar />
+        <AppSidebar projectSlug={projectSlug} />
         <SidebarInset className="min-w-0 overflow-hidden">
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
             <SidebarTrigger className="-ml-1" />

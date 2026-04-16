@@ -163,6 +163,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         return this.env.DYNAMIC_WORKER_EGRESS_GATEWAY as unknown as Fetcher;
       },
       getPath: () => this.state.path,
+      getProjectSlug: () => this.state.projectSlug,
       loader: this.env.LOADER,
       waitUntil: (promise) => this.ctx.waitUntil(promise),
     });

@@ -35,10 +35,8 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { stringify as stringifyYaml } from "yaml";
 import { StreamEventFeed } from "~/components/stream-event-feed.tsx";
-import { useCurrentProjectSlug } from "~/hooks/use-current-project-slug.ts";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
 import { eventInputTemplates, getEventInputTemplateById } from "~/lib/event-type-pages.ts";
-import { projectScopedQueryKey } from "~/lib/project-slug.ts";
 import { parseObjectFromComposerText } from "~/lib/stream-composer-input.ts";
 import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projection.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
@@ -70,7 +68,6 @@ export function StreamPage({
   const queryClient = useQueryClient();
   const { closeMetadata, metadataOpen, setHeaderControls } = useStreamsChrome();
   const orpc = getOrpc();
-  const projectSlug = useCurrentProjectSlug();
   const [selectedTemplateId, setSelectedTemplateId] = useState(DEFAULT_EVENT_TEMPLATE_ID);
   const [appendInputJson, setAppendInputJson] = useState(() =>
     createEventInputTemplate(DEFAULT_EVENT_TEMPLATE_ID, "json"),
@@ -83,38 +80,28 @@ export function StreamPage({
     () => orpc.getState.queryOptions({ input: { path: streamPath } }),
     [orpc, streamPath],
   );
-  const streamStateQueryKey = useMemo(
-    () => projectScopedQueryKey(streamStateOptions.queryKey, projectSlug),
-    [projectSlug, streamStateOptions.queryKey],
-  );
   const listChildrenOptions = useMemo(
     () => orpc.listChildren.queryOptions({ input: { path: "/" } }),
     [orpc],
   );
-  const listChildrenQueryKey = useMemo(
-    () => projectScopedQueryKey(listChildrenOptions.queryKey, projectSlug),
-    [listChildrenOptions.queryKey, projectSlug],
-  );
 
   const streamStateQuery = useQuery({
     ...streamStateOptions,
-    queryKey: streamStateQueryKey,
     staleTime: 5_000,
   });
 
   const { events, isConnecting } = useLiveStreamEvents({
     streamPath,
-    projectSlug,
     onEvent: useCallback(
       (event: Event) => {
         if (
           streamPath === "/" &&
           event.type === "https://events.iterate.com/events/stream/child-stream-created"
         ) {
-          void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
+          void queryClient.invalidateQueries({ queryKey: listChildrenOptions.queryKey });
         }
       },
-      [listChildrenQueryKey, queryClient, streamPath],
+      [listChildrenOptions.queryKey, queryClient, streamPath],
     ),
   });
   const feed = useMemo(() => projectWireToFeed(events), [events]);
@@ -146,8 +133,8 @@ export function StreamPage({
   const appendEvent = useMutation(
     orpc.append.mutationOptions({
       onSuccess: async () => {
-        void queryClient.invalidateQueries({ queryKey: listChildrenQueryKey });
-        await queryClient.invalidateQueries({ queryKey: streamStateQueryKey });
+        void queryClient.invalidateQueries({ queryKey: listChildrenOptions.queryKey });
+        await queryClient.invalidateQueries({ queryKey: streamStateOptions.queryKey });
       },
     }),
   );

@@ -30,7 +30,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
   test(
     "streams page responds",
     async () => {
-      const res = await app.fetch(`/streams?projectSlug=${defaultProjectSlug}`, {
+      const res = await app.fetch("/streams/", {
         signal: AbortSignal.timeout(8_000),
       });
 
