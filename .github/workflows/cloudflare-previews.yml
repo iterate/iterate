@@ -143,6 +143,7 @@ jobs:
             --workflow-run-url "$WORKFLOW_RUN_URL"
   e2e-agents:
     needs:
+      - scope
       - preview-agents
     if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
     name: Preview / agents e2e
@@ -292,6 +293,7 @@ jobs:
             --workflow-run-url "$WORKFLOW_RUN_URL"
   e2e-codemode:
     needs:
+      - scope
       - preview-codemode
     if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
     name: Preview / codemode e2e
@@ -441,6 +443,7 @@ jobs:
             --workflow-run-url "$WORKFLOW_RUN_URL"
   e2e-example:
     needs:
+      - scope
       - preview-example
     if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
     name: Preview / example e2e
@@ -590,6 +593,7 @@ jobs:
             --workflow-run-url "$WORKFLOW_RUN_URL"
   e2e-events:
     needs:
+      - scope
       - preview-events
     if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
     name: Preview / events e2e
@@ -739,6 +743,7 @@ jobs:
             --workflow-run-url "$WORKFLOW_RUN_URL"
   e2e-semaphore:
     needs:
+      - scope
       - preview-semaphore
     if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
     name: Preview / semaphore e2e
@@ -888,6 +893,7 @@ jobs:
             --workflow-run-url "$WORKFLOW_RUN_URL"
   e2e-ingress-proxy:
     needs:
+      - scope
       - preview-ingress-proxy
     if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
     name: Preview / ingress-proxy e2e
