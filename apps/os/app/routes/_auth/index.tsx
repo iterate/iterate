@@ -142,7 +142,7 @@ function IndexPage() {
               {pendingInvites.map((invite, index) => (
                 <div key={invite.id}>
                   {index > 0 && <ItemSeparator />}
-                  <Item variant="default">
+                  <Item data-testid="welcome-pending-invite-card" variant="default">
                     <ItemMedia variant="icon">
                       <Building2 className="h-4 w-4" />
                     </ItemMedia>

@@ -105,6 +105,7 @@ function UserSettingsPage() {
               {pendingInvites.map((invite) => (
                 <div
                   key={invite.id}
+                  data-testid="user-settings-pending-invite-card"
                   className="flex items-center justify-between gap-4 p-4 border rounded-lg bg-card"
                 >
                   <div className="flex items-center gap-3 min-w-0">
@@ -258,7 +259,10 @@ function OrgMembershipCard({ membership }: { membership: Membership }) {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-4 p-4 border rounded-lg bg-card">
+      <div
+        data-testid="user-settings-membership-card"
+        className="flex items-center justify-between gap-4 p-4 border rounded-lg bg-card"
+      >
         <div className="min-w-0">
           <div className="font-medium truncate">{membership.organization.name}</div>
           <div className="text-sm text-muted-foreground">{membership.role}</div>

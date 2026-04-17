@@ -74,13 +74,15 @@ test.describe("organization invites", () => {
     // Invitee logs in and sees the pending invite
     await login(page, inviteeEmail);
 
-    // Should be on welcome page with pending invite
-    await page.getByText("Welcome to Iterate").waitFor();
-    await page.getByText(orgName).waitFor();
-    await page.getByRole("button", { name: "Accept" }).waitFor();
+    const welcomeInviteCard = page
+      .getByTestId("welcome-pending-invite-card")
+      .filter({ hasText: orgName });
+
+    await welcomeInviteCard.waitFor();
+    await welcomeInviteCard.getByRole("button", { name: "Accept" }).waitFor();
 
     // Accept the invite
-    await page.getByRole("button", { name: "Accept" }).click();
+    await welcomeInviteCard.getByRole("button", { name: "Accept" }).click();
     await toast.success(page, `Joined ${orgName}`).waitFor();
 
     // Should now be in the org
@@ -155,13 +157,13 @@ test.describe("organization invites", () => {
     await page.goto("/user/settings");
 
     await page.getByRole("heading", { name: "Pending invites" }).waitFor();
-    await page.getByText(inviterOrgName).waitFor();
 
     // Accept the invite - find the card in the Pending invites section
-    const pendingSection = page.locator("div").filter({ hasText: "Pending invites" }).first();
-    const inviteCard = pendingSection
-      .locator("div.border.rounded-lg")
+    const inviteCard = page
+      .getByTestId("user-settings-pending-invite-card")
       .filter({ hasText: inviterOrgName });
+
+    await inviteCard.waitFor();
     await inviteCard.locator("button").first().click(); // Check icon button (accept)
     await toast.success(page, `Joined ${inviterOrgName}`).waitFor();
 
@@ -188,13 +190,18 @@ test.describe("organization invites", () => {
 
     // User accepts invite from welcome page
     await login(page, userEmail);
-    await page.getByText(orgName).first().waitFor();
-    await page.getByRole("button", { name: "Accept" }).click();
+    const welcomeInviteCard = page
+      .getByTestId("welcome-pending-invite-card")
+      .filter({ hasText: orgName });
+
+    await welcomeInviteCard.waitFor();
+    await welcomeInviteCard.getByRole("button", { name: "Accept" }).click();
     await toast.success(page, `Joined ${orgName}`).waitFor();
 
     // Now leave the org from user settings
-    const orgCard = page.locator("div.border.rounded-lg").filter({ hasText: orgName });
     await page.goto("/user/settings");
+    const orgCard = page.getByTestId("user-settings-membership-card").filter({ hasText: orgName });
+
     await orgCard.waitFor();
 
     // Click leave button on the org card (LogOut icon button)
@@ -205,6 +212,6 @@ test.describe("organization invites", () => {
     await toast.success(page, `Left ${orgName}`).waitFor();
 
     // Should be back on welcome page
-    await page.getByText("Welcome to Iterate").waitFor();
+    await page.getByLabel("Organization name").waitFor();
   });
 });
