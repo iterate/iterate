@@ -486,7 +486,9 @@ export async function seedTunnelPool(rawInput: SeedTunnelPoolInput): Promise<See
     // ingress service. We therefore seed each pooled tunnel with its own
     // unlikely high localhost port instead of assuming callers can pick an
     // arbitrary local `--url` at runtime.
-    const service = input.service ?? buildTunnelServiceUrl(deriveTunnelServicePort(index));
+    const service =
+      input.service ??
+      buildTunnelServiceUrl(deriveTunnelServicePort(existingResources.length + index));
     const existingDnsRecord = await cloudflare.findDnsRecord(zoneId, publicHostname);
 
     if (existingDnsRecord) {

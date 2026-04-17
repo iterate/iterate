@@ -48,6 +48,17 @@ test("deriveTunnelServicePort picks an unlikely high localhost port", () => {
   assert.equal(buildTunnelServiceUrl(deriveTunnelServicePort(7)), "http://127.0.0.1:47007");
 });
 
+test("expanding a tunnel pool keeps allocating fresh service ports", () => {
+  const existingCount = 20;
+  const firstNewPort = deriveTunnelServicePort(existingCount);
+  const fifthNewPort = deriveTunnelServicePort(existingCount + 4);
+
+  assert.equal(firstNewPort, 47020);
+  assert.equal(fifthNewPort, 47024);
+  assert.equal(buildTunnelServiceUrl(firstNewPort), "http://127.0.0.1:47020");
+  assert.equal(buildTunnelServiceUrl(fifthNewPort), "http://127.0.0.1:47024");
+});
+
 test("buildDnsRecordBody targets the tunnel hostname", () => {
   assert.deepEqual(
     buildDnsRecordBody({
