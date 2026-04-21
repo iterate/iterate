@@ -134,9 +134,10 @@ function Root() {
             key={name}
             to="/$artifact"
             params={{ artifact: name }}
-            className="block px-3 py-1 text-[13px] text-[#c9d1d9] no-underline hover:bg-[#161b22]"
+            className="block px-3 py-1 text-[13px] text-[#c9d1d9] no-underline hover:bg-[#161b22] truncate"
             activeProps={{
-              className: "block px-3 py-1 text-[13px] text-[#c9d1d9] no-underline bg-[#161b22]",
+              className:
+                "block px-3 py-1 text-[13px] text-[#c9d1d9] no-underline bg-[#161b22] truncate",
             }}
           >
             {name}

@@ -28,6 +28,12 @@ export function ArtifactView() {
   const [busy, setBusy] = useState("");
   const [langExt, setLangExt] = useState<import("@codemirror/state").Extension[]>([]);
 
+  const treeNodes = useMemo(() => buildTree(tree), [tree]);
+  // Auto-expand folders containing the selected file
+  const [expanded, setExpanded] = useState<Set<string>>(() => expandToFile(file));
+  useEffect(() => {
+    if (file) setExpanded((prev) => new Set([...prev, ...expandToFile(file)]));
+  }, [file]);
   const dirty = useMemo(
     () => new Set(Object.keys(working).filter((p) => working[p] !== head[p])),
     [working, head],
@@ -126,18 +132,23 @@ export function ArtifactView() {
   return (
     <>
       {/* File tree */}
-      <div className="w-[200px] border-r border-[#30363d] overflow-auto shrink-0">
+      <div className="w-[220px] border-r border-[#30363d] overflow-auto shrink-0">
         <h3 className="px-3 py-2 text-[11px] uppercase tracking-wide text-[#8b949e]">Files</h3>
-        {tree.map((p) => (
-          <div
-            key={p}
-            onClick={() => nav({ commit: selectedCommit, file: p })}
-            className={`px-3 py-1 cursor-pointer text-[13px] ${p === file ? "bg-[#161b22]" : ""} ${isHead && dirty.has(p) ? "text-orange-400" : "text-[#c9d1d9]"}`}
-          >
-            {isHead && dirty.has(p) ? "* " : ""}
-            {p}
-          </div>
-        ))}
+        <FileTree
+          nodes={treeNodes}
+          depth={0}
+          selected={file}
+          dirty={isHead ? dirty : undefined}
+          expanded={expanded}
+          onSelect={(path) => nav({ commit: selectedCommit, file: path })}
+          onToggle={(path) =>
+            setExpanded((prev) => {
+              const next = new Set(prev);
+              next.has(path) ? next.delete(path) : next.add(path);
+              return next;
+            })
+          }
+        />
       </div>
 
       {/* Editor */}
@@ -239,4 +250,104 @@ export function ArtifactView() {
       </div>
     </>
   );
+}
+
+// --- File tree ---
+
+type TreeNode = { name: string; path: string; children: TreeNode[] };
+
+function buildTree(paths: string[]) {
+  const root: TreeNode = { name: "", path: "", children: [] };
+  for (const path of paths.sort()) {
+    const parts = path.split("/");
+    let current = root;
+    for (let i = 0; i < parts.length; i++) {
+      const partial = parts.slice(0, i + 1).join("/");
+      let child = current.children.find((c) => c.path === partial);
+      if (!child) {
+        child = { name: parts[i], path: partial, children: [] };
+        current.children.push(child);
+      }
+      current = child;
+    }
+  }
+  return root.children;
+}
+
+function FileTree({
+  nodes,
+  depth,
+  selected,
+  dirty,
+  expanded,
+  onSelect,
+  onToggle,
+}: {
+  nodes: TreeNode[];
+  depth: number;
+  selected?: string;
+  dirty?: Set<string>;
+  expanded: Set<string>;
+  onSelect: (path: string) => void;
+  onToggle: (path: string) => void;
+}) {
+  return (
+    <>
+      {nodes.map((node) => {
+        const isFolder = node.children.length > 0;
+        const isOpen = expanded.has(node.path);
+        const isDirty = dirty?.has(node.path);
+        return (
+          <div key={node.path}>
+            <div
+              onClick={() => (isFolder ? onToggle(node.path) : onSelect(node.path))}
+              className={`flex items-center gap-1 py-0.5 cursor-pointer text-[13px] hover:bg-[#161b22] ${node.path === selected ? "bg-[#161b22]" : ""} ${isDirty ? "text-orange-400" : "text-[#c9d1d9]"}`}
+              style={{ paddingLeft: depth * 12 + 8 }}
+            >
+              <span className="w-3 text-[10px] text-center shrink-0 text-[#8b949e]">
+                {isFolder ? (isOpen ? "▾" : "▸") : ""}
+              </span>
+              <span className="shrink-0 text-[12px]">
+                {isFolder ? (isOpen ? "📂" : "📁") : fileIcon(node.name)}
+              </span>
+              <span className="truncate">
+                {isDirty ? "* " : ""}
+                {node.name}
+              </span>
+            </div>
+            {isFolder && isOpen && (
+              <FileTree
+                nodes={node.children}
+                depth={depth + 1}
+                selected={selected}
+                dirty={dirty}
+                expanded={expanded}
+                onSelect={onSelect}
+                onToggle={onToggle}
+              />
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function fileIcon(name: string) {
+  const ext = name.split(".").pop()?.toLowerCase();
+  if (ext === "js" || ext === "ts" || ext === "tsx" || ext === "jsx") return "📜";
+  if (ext === "json") return "📋";
+  if (ext === "html" || ext === "htm") return "🌐";
+  if (ext === "css") return "🎨";
+  if (ext === "md") return "📝";
+  return "📄";
+}
+
+/** Returns the set of parent folder paths that need to be expanded to reveal a file. */
+function expandToFile(file?: string) {
+  if (!file) return new Set<string>();
+  const parts = file.split("/");
+  const paths = new Set<string>();
+  for (let i = 1; i < parts.length; i++) paths.add(parts.slice(0, i).join("/"));
+  return paths;
 }
