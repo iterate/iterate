@@ -8,18 +8,22 @@
 - `@cloudflare/workers-types: ^4.20251128.0`
 
 Every other app (`apps/agents`, `apps/events`, `apps/codemode`, …) uses
-`catalog:cloudflare`, which tracks the latest versions (currently
-`@cloudflare/vite-plugin ^1.33.1`, `miniflare ^4.20260421.0`, `workerd
-^1.20260421.1`).
+`catalog:cloudflare`, pinned to the day‑20 release (`@cloudflare/vite-plugin
+1.33.0`, `miniflare 4.20260420.0`, `workerd 1.20260420.1`, `wrangler 4.84.0`).
+These versions are pinned exactly rather than as caret ranges because `pnpm`'s
+`minimumReleaseAge: 1440` gate was silently dropping the day‑21 packages'
+optional platform binaries from the lockfile, causing CI
+`--frozen-lockfile` installs to fall back to stale `workerd` binaries and
+fail with `Expected "2026-04-21" but got "workerd 2025-11-25"`.
 
-`wrangler` is overridden repo-wide to `^4.84.1` via `pnpm.overrides` so the
+`wrangler` is overridden repo-wide to `4.84.0` via `pnpm.overrides` so the
 older `vite-plugin@1.15.3` can still parse the modern `wrangler.jsonc`
 shape (`placement.region` without `placement.mode`).
 
 ## Why
 
 Miniflare shipped two regressions between `4.20260205.0` (good) and
-`4.20260421.0` (bad) that produce a V8 "JavaScript heap out of memory"
+`4.20260420.0`+ (bad) that produce a V8 "JavaScript heap out of memory"
 crash in the Node host process within 2–5 minutes of sustained traffic:
 
 1. `DispatchFetchDispatcher.dispatch()` sets `options.reset = true` on every
@@ -48,18 +52,18 @@ interop used by its Workers AI + codemode flows. Hence the split.
 3. `package.json` → `pnpm.overrides` no longer forces a single
    `miniflare`/`workerd` across the repo. Each app's
    `@cloudflare/vite-plugin` brings its own transitive pair:
-   - `apps/os` → `vite-plugin@1.15.3` → `miniflare@4.20251125.0` + matching
-     `workerd`
-   - `apps/agents`, others → `vite-plugin@1.33.1` → `miniflare@4.20260421.0`
-     - matching `workerd`
-4. `wrangler` stays overridden to `^4.84.1` repo-wide so both plugins agree
+   - `apps/os` → `vite-plugin@1.15.3` → `miniflare@4.20251125.0` +
+     `workerd@1.20251128.0`
+   - `apps/agents`, others → `vite-plugin@1.33.0` → `miniflare@4.20260420.0` +
+     `workerd@1.20260420.1`
+4. `wrangler` stays overridden to `4.84.0` repo-wide so both plugins agree
    on the CLI/config format.
 
 You can verify the split:
 
 ```bash
 readlink apps/os/node_modules/@cloudflare/vite-plugin        # …vite-plugin@1.15.3…
-readlink apps/agents/node_modules/@cloudflare/vite-plugin    # …vite-plugin@1.33.1…
+readlink apps/agents/node_modules/@cloudflare/vite-plugin    # …vite-plugin@1.33.0…
 ```
 
 ## When to revisit
