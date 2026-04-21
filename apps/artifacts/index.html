@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Artifacts</title>
+    <!-- Tailwind v4 from CDN — https://tailwindcss.com/docs/installation/cdn -->
+    <script src="https://cdn.tailwindcss.com?plugins="></script>
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            fontFamily: { mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"] },
+          },
+        },
+      };
+    </script>
+    <style>
+      body {
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body class="bg-[#0d1117] text-[#c9d1d9] font-mono">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
