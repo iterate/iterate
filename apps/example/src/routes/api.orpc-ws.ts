@@ -5,11 +5,14 @@ import { orpcWebSocketHandler } from "~/orpc/handler.ts";
 export const Route = createFileRoute("/api/orpc-ws")({
   server: {
     handlers: {
-      GET: ({ context }) =>
+      GET: ({ context, request }) =>
         new NitroWebSocketResponse({
           message(peer, message) {
             return orpcWebSocketHandler.message(peer, message, {
-              context,
+              context: {
+                ...context,
+                rawRequest: request,
+              },
             });
           },
           close(peer) {

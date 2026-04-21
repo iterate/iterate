@@ -1,0 +1,78 @@
+{
+  "name": "@iterate-com/agents",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "imports": {
+    "~/*": "./src/*"
+  },
+  "scripts": {
+    "alchemy:up": "tsx ./alchemy.run.ts",
+    "alchemy:down": "tsx ./alchemy.run.ts --destroy",
+    "cli": "doppler run --no-cache -- iterate-app-cli",
+    "dev": "doppler run --no-cache -- tsx ./alchemy.run.ts",
+    "build": "doppler run --no-cache -- pnpm exec vite build",
+    "deploy": "doppler run --no-cache --config prd -- pnpm alchemy:up",
+    "destroy": "doppler run --no-cache --config prd -- pnpm alchemy:down",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm typecheck && pnpm test:unit",
+    "test:unit": "pnpm exec vitest run --config ./vitest.unit.config.ts",
+    "test:e2e": "doppler run --no-cache -- sh -c 'export EVENTS_BASE_URL=\"${EVENTS_BASE_URL:-https://events-preview-1.iterate.com}\"; export AGENTS_E2E_ITERATE_AGENT=\"${AGENTS_E2E_ITERATE_AGENT:-1}\"; pnpm exec vitest run --config ./e2e/vitest.config.ts'",
+    "test:e2e:iterate-agent": "doppler run --no-cache -- env AGENTS_E2E_ITERATE_AGENT=1 pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent.e2e.test.ts",
+    "test:e2e:agent-loop": "doppler run --no-cache -- sh -c 'export EVENTS_BASE_URL=\"${EVENTS_BASE_URL:-https://events-preview-1.iterate.com}\"; export AGENTS_E2E_ITERATE_AGENT=1; pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent-agent-loop.e2e.test.ts'",
+    "test:e2e:record-har": "doppler run --no-cache -- env AGENTS_E2E_RECORD_HAR=1 AGENTS_E2E_ITERATE_AGENT=1 pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent.e2e.test.ts",
+    "test:e2e:record-har-mcp": "doppler run --no-cache -- env AGENTS_E2E_RECORD_HAR=1 AGENTS_E2E_ITERATE_AGENT=1 pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent-mcp.e2e.test.ts",
+    "test:e2e:record-har-mixed": "doppler run --no-cache -- env AGENTS_E2E_RECORD_HAR=1 AGENTS_E2E_ITERATE_AGENT=1 pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent-mixed-codemode.e2e.test.ts",
+    "test:e2e:runtime-smoke": "doppler run --no-cache -- sh -c 'if [ -z \"$AGENTS_BASE_URL\" ]; then echo \"AGENTS_BASE_URL is required\"; exit 1; fi; export AGENTS_E2E_RUNTIME_SMOKE=1; pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/runtime-smoke.e2e.test.ts'",
+    "test:e2e:preview": "doppler run --no-cache -- sh -c 'if [ -z \"$AGENTS_BASE_URL\" ]; then echo \"AGENTS_BASE_URL is required for agents e2e tests\"; exit 1; fi; vitest run --config ./e2e/vitest.config.ts e2e/vitest/runtime-smoke.e2e.test.ts'"
+  },
+  "iterateAppCli": {
+    "remote": {
+      "defaultBaseUrl": "https://agents.iterate.com"
+    }
+  },
+  "dependencies": {
+    "@cloudflare/codemode": "^0.3.2",
+    "@iterate-com/agents-contract": "workspace:*",
+    "@iterate-com/events-contract": "workspace:*",
+    "@iterate-com/shared": "workspace:*",
+    "@iterate-com/ui": "workspace:*",
+    "@orpc/client": "1.13.14",
+    "@orpc/contract": "1.13.14",
+    "@orpc/openapi": "1.13.14",
+    "@orpc/openapi-client": "1.13.14",
+    "@orpc/server": "1.13.14",
+    "@tanstack/react-devtools": "0.10.0",
+    "@tanstack/react-query": "^5.91.0",
+    "@tanstack/react-query-devtools": "^5.91.3",
+    "@tanstack/react-router": "1.168.3",
+    "@tanstack/react-router-devtools": "1.166.11",
+    "@tanstack/react-router-ssr-query": "^1.166.2",
+    "@tanstack/react-start": "1.167.5",
+    "agents": "^0.11.0",
+    "ai": "^6.0.159",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "schematch": "0.2.1",
+    "tailwindcss": "^4.1.18",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.33.0",
+    "@cloudflare/vitest-pool-workers": "^0.8.55",
+    "@cloudflare/workers-types": "^4.20260421.1",
+    "@iterate-com/mock-http-proxy": "workspace:*",
+    "@tailwindcss/vite": "^4.1.18",
+    "@tanstack/devtools-vite": "^0.6.0",
+    "@types/node": "^25.0.10",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "alchemy": "^0.92.2",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.0",
+    "vitest": "4.1.0-beta.6",
+    "wrangler": "^4.84.0"
+  }
+}

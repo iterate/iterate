@@ -18,6 +18,12 @@ export default defineConfig({
   server: {
     host,
     port,
+    allowedHosts: true,
+    // Keep Cloudflare local dev aligned with Node dev: TanStack Router rewrites
+    // this generated file during dev, so Vite should not watch it.
+    watch: {
+      ignored: ["**/routeTree.gen.ts"],
+    },
   },
   plugins: [
     devtools(), // must be first

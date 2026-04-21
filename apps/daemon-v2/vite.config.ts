@@ -21,6 +21,7 @@ export default defineConfig({
   server: {
     host,
     port,
+    allowedHosts: true,
   },
   plugins: [
     devtools(), // must be first

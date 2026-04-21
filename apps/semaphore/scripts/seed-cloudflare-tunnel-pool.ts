@@ -12,7 +12,7 @@ import { AppConfig } from "../src/app.ts";
 const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4";
 const DEFAULT_SEMAPHORE_BASE_URL = "https://semaphore.iterate.com";
 const DEFAULT_TUNNEL_COUNT = 20;
-const DEFAULT_TUNNEL_SERVICE = "http://localhost:3000";
+const DEFAULT_TUNNEL_SERVICE_PORT_BASE = 47000;
 const DEFAULT_ZONE_NAME = "iterate.com";
 const DEFAULT_BASE_DOMAIN = "tunnel.iterate.com";
 const CERTIFICATE_POLL_INTERVAL_MS = 10_000;
@@ -69,7 +69,7 @@ export type SeedTunnelPoolInput = z.infer<typeof SeedTunnelPoolInput>;
 function resolveSeedTunnelPoolInput(input: SeedTunnelPoolInput) {
   return {
     count: input.count ?? DEFAULT_TUNNEL_COUNT,
-    service: (input.service ?? DEFAULT_TUNNEL_SERVICE).trim(),
+    service: input.service?.trim(),
     type: (input.type ?? cloudflareTunnelType).trim().toLowerCase(),
     zoneName: (input.zoneName ?? DEFAULT_ZONE_NAME).trim().toLowerCase(),
     baseDomain: (input.baseDomain ?? DEFAULT_BASE_DOMAIN).trim().toLowerCase(),
@@ -105,11 +105,19 @@ class CloudflareRequestError extends Error {
   }
 }
 
-function countMissingResources(existingCount: number, desiredCount: number): number {
+export function countMissingResources(existingCount: number, desiredCount: number): number {
   return Math.max(desiredCount - existingCount, 0);
 }
 
-function buildIngressConfig(params: { publicHostname: string; service: string }) {
+export function deriveTunnelServicePort(index: number) {
+  return DEFAULT_TUNNEL_SERVICE_PORT_BASE + index;
+}
+
+export function buildTunnelServiceUrl(port: number) {
+  return `http://127.0.0.1:${String(port)}`;
+}
+
+export function buildIngressConfig(params: { publicHostname: string; service: string }) {
   return {
     config: {
       ingress: [
@@ -128,7 +136,11 @@ function buildIngressConfig(params: { publicHostname: string; service: string })
   };
 }
 
-function buildDnsRecordBody(params: { publicHostname: string; tunnelId: string; comment: string }) {
+export function buildDnsRecordBody(params: {
+  publicHostname: string;
+  tunnelId: string;
+  comment: string;
+}) {
   return {
     type: "CNAME",
     name: params.publicHostname,
@@ -139,7 +151,7 @@ function buildDnsRecordBody(params: { publicHostname: string; tunnelId: string; 
   };
 }
 
-function selectReusableCertificatePack(
+export function selectReusableCertificatePack(
   packs: CertificatePack[],
   wildcardHost: string,
 ): CertificatePack | null {
@@ -152,7 +164,7 @@ function selectReusableCertificatePack(
   );
 }
 
-function pickUnusedSlug(existingSlugs: Set<string>, makeSlug = makeFunnySlug): string {
+export function pickUnusedSlug(existingSlugs: Set<string>, makeSlug = makeFunnySlug): string {
   for (let attempt = 0; attempt < MAX_SLUG_ATTEMPTS; attempt += 1) {
     const slug = makeSlug();
     if (!existingSlugs.has(slug)) {
@@ -470,6 +482,13 @@ export async function seedTunnelPool(rawInput: SeedTunnelPoolInput): Promise<See
     const slug = pickUnusedSlug(existingSlugs);
     const publicHostname = `${slug}.${input.baseDomain}`;
     const tunnelName = `semaphore-${slug}`;
+    // Remotely-managed tunnel tokens are tied to the tunnel's configured
+    // ingress service. We therefore seed each pooled tunnel with its own
+    // unlikely high localhost port instead of assuming callers can pick an
+    // arbitrary local `--url` at runtime.
+    const service =
+      input.service ??
+      buildTunnelServiceUrl(deriveTunnelServicePort(existingResources.length + index));
     const existingDnsRecord = await cloudflare.findDnsRecord(zoneId, publicHostname);
 
     if (existingDnsRecord) {
@@ -490,7 +509,7 @@ export async function seedTunnelPool(rawInput: SeedTunnelPoolInput): Promise<See
       await cloudflare.updateTunnelConfiguration({
         tunnelId: tunnel.id,
         publicHostname,
-        service: input.service,
+        service,
       });
 
       const dnsRecord = await cloudflare.createDnsRecord({
@@ -513,7 +532,7 @@ export async function seedTunnelPool(rawInput: SeedTunnelPoolInput): Promise<See
           tunnelId: tunnel.id,
           tunnelName,
           tunnelToken,
-          service: input.service,
+          service,
           createdAt: new Date().toISOString(),
         }),
       });
