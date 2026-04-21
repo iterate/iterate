@@ -438,7 +438,7 @@ export default {
         "SELECT * FROM projects ORDER BY created_at DESC",
       ).all<ProjectRow>();
       return new Response(adminHTML(projects.results), {
-        headers: { "content-type": "text/html;charset=utf-8" },
+        headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-cache" },
       });
     }
 
@@ -482,16 +482,33 @@ export default {
         console.log(`[Worker] reply intercept: needsSend=${body.needsSend}`);
         if (body.needsSend && body.sendPayload) {
           const sp = body.sendPayload;
+          // Derive thread root before sending so we can include deep links
+          const threadId = await deriveThreadId(env.DB, sp.inReplyTo, sp.references);
+          const inboxUrl = `https://agents.${parsed.project}${PLATFORM_SUFFIX}`;
+          const streamUrl = `https://${parsed.project}.events.iterate.com/streams/agents/email/${threadId}/?renderer=raw-pretty`;
+          const replyText = [
+            sp.text,
+            "",
+            "---",
+            `Inbox: ${inboxUrl}`,
+            `Event stream: ${streamUrl}`,
+          ].join("\n");
+          const replyHtml = [
+            `<p>${sp.text}</p>`,
+            `<hr style="border:none;border-top:1px solid #ccc;margin:16px 0">`,
+            `<p style="font-size:13px;color:#888">`,
+            `<a href="${inboxUrl}">Inbox</a> · <a href="${streamUrl}">Event stream</a>`,
+            `</p>`,
+          ].join("\n");
           console.log(`[Worker] sending reply email from=${sp.from} to=${sp.to}`);
           const result = await env.EMAIL.send({
             from: sp.from,
             to: sp.to,
             subject: sp.subject,
-            text: sp.text,
+            text: replyText,
+            html: replyHtml,
           });
           console.log(`[Worker] reply email sent! messageId=${result.messageId}`);
-          // Derive thread root from the original email's message ID
-          const threadId = await deriveThreadId(env.DB, sp.inReplyTo, sp.references);
           // Store mapping: outbound message ID → thread root, so future replies resolve correctly
           const threadRootMessageId =
             sp.inReplyTo ?? sp.references?.match(/<[^>]+>/)?.[0] ?? result.messageId;
@@ -958,7 +975,9 @@ export class Project extends DurableObject<Env> {
         (await this.readFile(`apps/${app}/dist/assets/index.html`)) ??
         (await this.readFile(`apps/${app}/dist/index.html`));
       if (indexHtml) {
-        return new Response(indexHtml, { headers: { "content-type": "text/html;charset=utf-8" } });
+        return new Response(indexHtml, {
+          headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-cache" },
+        });
       }
     }
 
@@ -974,18 +993,20 @@ export class Project extends DurableObject<Env> {
     // Map URL path to public dir: /images/logo.png → apps/{app}/public/images/logo.png
     const publicPath = `${REPO_DIR}/apps/${app}/public${url.pathname}`;
     const ct = this.inferContentType(url.pathname);
+    // Public assets aren't hashed — use moderate caching (1 hour)
+    const cc = "public, max-age=3600";
 
     if (this.isTextContentType(ct)) {
       const content = await this.workspace.readFile(publicPath);
       if (content)
         return new Response(content, {
-          headers: { "content-type": ct, "cache-control": "no-cache" },
+          headers: { "content-type": ct, "cache-control": cc },
         });
     } else {
       const bytes = await this.workspace.readFileBytes(publicPath);
       if (bytes)
         return new Response(bytes, {
-          headers: { "content-type": ct, "cache-control": "no-cache" },
+          headers: { "content-type": ct, "cache-control": cc },
         });
     }
 
@@ -1176,7 +1197,7 @@ export class Project extends DurableObject<Env> {
       const files = await this.listFiles();
       const config = await this.readFile("config.json");
       return new Response(editorHTML(slug, doId, files, config), {
-        headers: { "content-type": "text/html;charset=utf-8" },
+        headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-cache" },
       });
     }
 

@@ -122,7 +122,7 @@ export function editorHTML(
   <div id="toolbar" style="display:none">
     <span>Editing:</span>
     <span class="path" id="current-path"></span>
-    <button onclick="saveFile()">Save (Ctrl+S)</button>
+    <button id="save-btn" onclick="saveFile()" style="display:none">Save (Ctrl+S)</button>
     <span class="status" id="status"></span>
   </div>
   <div id="content-area">
@@ -169,13 +169,21 @@ export function editorHTML(
 
   let currentPath = null;
   let cmView = null;
+  let savedDoc = "";
   const cmWrapper = document.getElementById('cm-wrapper');
   const toolbar = document.getElementById('toolbar');
   const empty = document.getElementById('empty');
   const status = document.getElementById('status');
   const pathEl = document.getElementById('current-path');
+  const saveBtn = document.getElementById('save-btn');
   const logPanel = document.getElementById('log-panel');
   const wsStatus = document.getElementById('ws-status');
+
+  function updateDirtyState() {
+    if (!cmView) return;
+    const isDirty = cmView.state.doc.toString() !== savedDoc;
+    saveBtn.style.display = isDirty ? '' : 'none';
+  }
 
   function getLang(path) {
     if (path.endsWith('.json') || path.endsWith('.jsonc')) return json();
@@ -223,6 +231,9 @@ export function editorHTML(
             indentWithTab,
           ]),
           saveKeymap,
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) updateDirtyState();
+          }),
           EditorView.theme({
             "&": { height: "100%", fontSize: "13px" },
             ".cm-scroller": { overflow: "auto" },
@@ -231,6 +242,8 @@ export function editorHTML(
       }),
       parent: cmWrapper,
     });
+    savedDoc = content;
+    saveBtn.style.display = 'none';
   }
 
   // ── WebSocket log connection ──
@@ -336,6 +349,8 @@ export function editorHTML(
     });
     const data = await resp.json();
     status.textContent = data.oid ? 'Saved + pushed: ' + data.oid.slice(0, 8) : 'Saved (no push)';
+    savedDoc = content;
+    saveBtn.style.display = 'none';
   };
 
   window.createFile = async function() {
