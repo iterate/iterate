@@ -1,5 +1,5 @@
 {
-  "id": "b0cbc3ae-ee6b-411e-a179-f68da106acb8",
+  "id": "29fd6e99-992d-454f-b1eb-58e5ede39bef",
   "prevId": "df4b12d1-7777-4750-8b27-b6c828c049d1",
   "version": "7",
   "dialect": "postgresql",
@@ -143,8 +143,8 @@
           "primaryKey": true,
           "notNull": true
         },
-        "organization_id": {
-          "name": "organization_id",
+        "auth_organization_id": {
+          "name": "auth_organization_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -208,6 +208,21 @@
         }
       },
       "indexes": {
+        "billing_account_auth_organization_id_index": {
+          "name": "billing_account_auth_organization_id_index",
+          "columns": [
+            {
+              "expression": "auth_organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "billing_account_stripe_customer_id_index": {
           "name": "billing_account_stripe_customer_id_index",
           "columns": [
@@ -239,28 +254,14 @@
           "with": {}
         }
       },
-      "foreignKeys": {
-        "billing_account_organization_id_organization_id_fk": {
-          "name": "billing_account_organization_id_organization_id_fk",
-          "tableFrom": "billing_account",
-          "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "billing_account_organizationId_unique": {
-          "name": "billing_account_organizationId_unique",
+        "billing_account_authOrganizationId_unique": {
+          "name": "billing_account_authOrganizationId_unique",
           "nullsNotDistinct": false,
           "columns": [
-            "organization_id"
+            "auth_organization_id"
           ]
         },
         "billing_account_stripeCustomerId_unique": {
@@ -973,178 +974,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.organization": {
-      "name": "organization",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "auth_organization_id": {
-          "name": "auth_organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "slug": {
-          "name": "slug",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "organization_authOrganizationId_unique": {
-          "name": "organization_authOrganizationId_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "auth_organization_id"
-          ]
-        },
-        "organization_slug_unique": {
-          "name": "organization_slug_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "slug"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "organization_slug_valid": {
-          "name": "organization_slug_valid",
-          "value": "\"slug\" ~ '^[a-z0-9-]+$' AND \"slug\" ~ '[a-z]' AND length(\"slug\") <= 50 AND \"slug\" NOT IN ('prj', 'org')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.organization_user_membership": {
-      "name": "organization_user_membership",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "role": {
-          "name": "role",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'member'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "organization_user_membership_user_id_organization_id_index": {
-          "name": "organization_user_membership_user_id_organization_id_index",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "organization_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "organization_user_membership_organization_id_organization_id_fk": {
-          "name": "organization_user_membership_organization_id_organization_id_fk",
-          "tableFrom": "organization_user_membership",
-          "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "organization_user_membership_user_id_user_id_fk": {
-          "name": "organization_user_membership_user_id_user_id_fk",
-          "tableFrom": "organization_user_membership",
-          "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.outbox_event": {
       "name": "outbox_event",
       "schema": "",
@@ -1269,6 +1098,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "auth_organization_id": {
+          "name": "auth_organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "auth_organization_slug": {
+          "name": "auth_organization_slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "name": {
           "name": "name",
           "type": "text",
@@ -1287,12 +1128,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
         },
         "sandbox_provider": {
           "name": "sandbox_provider",
@@ -1346,11 +1181,11 @@
         }
       },
       "indexes": {
-        "project_organization_id_name_index": {
-          "name": "project_organization_id_name_index",
+        "project_auth_organization_id_name_index": {
+          "name": "project_auth_organization_id_name_index",
           "columns": [
             {
-              "expression": "organization_id",
+              "expression": "auth_organization_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -1366,23 +1201,24 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "project_auth_organization_id_index": {
+          "name": "project_auth_organization_id_index",
+          "columns": [
+            {
+              "expression": "auth_organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
-      "foreignKeys": {
-        "project_organization_id_organization_id_fk": {
-          "name": "project_organization_id_organization_id_fk",
-          "tableFrom": "project",
-          "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "project_authProjectId_unique": {
@@ -1814,12 +1650,6 @@
           "primaryKey": true,
           "notNull": true
         },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "project_id": {
           "name": "project_id",
           "type": "text",
@@ -1890,21 +1720,6 @@
         }
       },
       "indexes": {
-        "secret_organization_id_index": {
-          "name": "secret_organization_id_index",
-          "columns": [
-            {
-              "expression": "organization_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "secret_project_id_index": {
           "name": "secret_project_id_index",
           "columns": [
@@ -1952,19 +1767,6 @@
         }
       },
       "foreignKeys": {
-        "secret_organization_id_organization_id_fk": {
-          "name": "secret_organization_id_organization_id_fk",
-          "tableFrom": "secret",
-          "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
         "secret_project_id_project_id_fk": {
           "name": "secret_project_id_project_id_fk",
           "tableFrom": "secret",
@@ -1998,7 +1800,6 @@
           "name": "secret_scope_key_idx",
           "nullsNotDistinct": true,
           "columns": [
-            "organization_id",
             "project_id",
             "user_id",
             "key"
@@ -2049,13 +1850,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "role": {
-          "name": "role",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'user'"
         },
         "banned": {
           "name": "banned",

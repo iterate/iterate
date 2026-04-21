@@ -78,7 +78,6 @@ export async function seedGlobalSecrets() {
     .delete(schema.secret)
     .where(
       and(
-        isNull(schema.secret.organizationId),
         isNull(schema.secret.projectId),
         isNull(schema.secret.userId),
         notInArray(schema.secret.key, configKeys),
@@ -107,7 +106,6 @@ export async function seedGlobalSecrets() {
       .insert(schema.secret)
       .values({
         id: typeid("sec").toString() as `sec_${string}`,
-        organizationId: null,
         projectId: null,
         userId: null,
         key: config.key,
@@ -116,12 +114,7 @@ export async function seedGlobalSecrets() {
         egressProxyRule: config.egressProxyRule,
       })
       .onConflictDoUpdate({
-        target: [
-          schema.secret.organizationId,
-          schema.secret.projectId,
-          schema.secret.userId,
-          schema.secret.key,
-        ],
+        target: [schema.secret.projectId, schema.secret.userId, schema.secret.key],
         set: {
           encryptedValue,
           description: config.description,

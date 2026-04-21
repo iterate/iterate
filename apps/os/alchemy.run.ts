@@ -20,7 +20,7 @@ import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
-import type { AuthContractClient } from "../auth-contract/src/index.ts";
+import { SERVICE_TOKEN_HEADER, type AuthContractClient } from "../auth-contract/src/index.ts";
 import {
   ensurePnpmStoreVolume as ensureIteratePnpmStoreVolume,
   getDockerEnvVars,
@@ -347,7 +347,7 @@ async function ensureLocalDevOAuthClients(params: {
       url: new URL("/api/orpc", params.authAppOrigin).toString(),
       fetch: (input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
-        headers.set("x-iterate-service-token", params.serviceAuthToken);
+        headers.set(SERVICE_TOKEN_HEADER, params.serviceAuthToken);
         return fetch(input, { ...init, headers });
       },
     }),

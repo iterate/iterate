@@ -50,8 +50,11 @@
       "default": "./src/posthog/sourcemaps-vite-plugin.ts"
     },
     "./project-ingress": "./src/project-ingress.ts",
+    "./auth-claims": "./src/auth-claims.ts",
     "./github-agent-path": "./src/github-agent-path.ts",
+    "./bearer": "./src/bearer.ts",
     "./slug": "./src/slug.ts",
+    "./default-avatar": "./src/default-avatar.ts",
     "./signup-allowlist": "./src/signup-allowlist.ts",
     "./slug-maker": "./src/slug-maker.ts",
     "./nitro-ws-response": "./src/nitro-ws-response.ts"

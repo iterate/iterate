@@ -1,8 +1,17 @@
+import { ORPCError } from "@orpc/server";
 import { os, protectedMiddleware } from "../orpc.ts";
 import { toMembershipRole, toUserRecord } from "./_shared.ts";
 
-const me = os.user.me.use(protectedMiddleware).handler(async ({ context }) => {
-  return toUserRecord(context.user);
+const me = os.user.me.handler(async ({ context }) => {
+  if (context.session) {
+    return toUserRecord(context.session.user);
+  }
+
+  if (context.projectIngressUser) {
+    return toUserRecord(context.projectIngressUser);
+  }
+
+  throw new ORPCError("UNAUTHORIZED", { message: "Not authorized" });
 });
 
 const myOrganizations = os.user.myOrganizations

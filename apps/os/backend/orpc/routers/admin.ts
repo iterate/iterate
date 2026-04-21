@@ -9,6 +9,7 @@ import { queuer } from "../../outbox/outbox-queuer.ts";
 import { outboxClient } from "../../outbox/client.ts";
 import { getEventsRelatedTo } from "../../utils/machine-metadata.ts";
 import { createAuthWorkerClient } from "../../utils/auth-worker-client.ts";
+import { listOrganizationsFromAuthWorker } from "../../auth/auth-context.ts";
 
 export const adminRouter = {
   // List all users (admin only)
@@ -36,7 +37,7 @@ export const adminRouter = {
         email: u.email,
         name: u.name,
         image: u.image,
-        role: u.role,
+        role: null,
         createdAt: u.createdAt,
       }));
     }),
@@ -55,27 +56,18 @@ export const adminRouter = {
       const limit = input?.limit ?? 50;
       const offset = input?.offset ?? 0;
 
-      const orgs = await ctx.db.query.organization.findMany({
-        limit,
-        offset,
-        orderBy: (o, { desc }) => [desc(o.createdAt)],
-        with: {
-          projects: true,
-          members: {
-            with: {
-              user: true,
-            },
-          },
-        },
+      const orgs = await listOrganizationsFromAuthWorker({
+        db: ctx.db,
+        authUserId: ctx.user.authUserId!,
       });
 
-      return orgs.map((o) => ({
+      return orgs.slice(offset, offset + limit).map((o) => ({
         id: o.id,
         name: o.name,
         slug: o.slug,
         projectCount: o.projects.length,
-        memberCount: o.members.length,
-        createdAt: o.createdAt,
+        memberCount: null,
+        createdAt: null,
       }));
     }),
 
@@ -108,7 +100,7 @@ export const adminRouter = {
     )
     .handler(async ({ context: ctx, input }) => {
       const account = await ctx.db.query.billingAccount.findFirst({
-        where: eq(billingAccount.organizationId, input.organizationId),
+        where: eq(billingAccount.authOrganizationId, input.organizationId),
       });
 
       if (!account?.stripeCustomerId) {
@@ -167,18 +159,15 @@ export const adminRouter = {
     .handler(async ({ context: ctx, input }) => {
       const project = await ctx.db.query.project.findFirst({
         where: eq(schema.project.id, input.projectId),
-        with: {
-          organization: true,
-        },
       });
 
-      if (!project?.organization) {
+      if (!project) {
         throw new Error("Project not found");
       }
 
       const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
       const members = await authClient.organization.members({
-        organizationSlug: project.organization.slug,
+        organizationSlug: project.authOrganizationSlug,
       });
       const ownerMembership = members.find((member) => member.role === "owner");
 
@@ -204,23 +193,9 @@ export const adminRouter = {
       if (input.userId === ctx.user.id && input.role !== "admin") {
         throw new Error("You cannot remove your own admin role");
       }
-
-      const targetUser = await ctx.db.query.user.findFirst({
-        where: eq(user.id, input.userId),
+      throw new ORPCError("NOT_IMPLEMENTED", {
+        message: "User role changes must be performed by the auth provider",
       });
-
-      if (!targetUser) {
-        throw new Error("User not found");
-      }
-
-      await ctx.db.update(user).set({ role: input.role }).where(eq(user.id, input.userId));
-
-      return {
-        userId: input.userId,
-        email: targetUser.email,
-        name: targetUser.name,
-        role: input.role,
-      };
     }),
 
   outbox: {

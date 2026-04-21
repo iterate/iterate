@@ -13,7 +13,7 @@ vi.mock("../db/client.ts", () => ({
 }));
 
 vi.mock("../auth/auth-context.ts", () => ({
-  requireProjectAccessBySlugFromAuthWorker: vi.fn(),
+  getProjectAccessFromAuthWorker: vi.fn(),
   requireLocalProjectAccessFromAuthWorker: vi.fn(),
 }));
 
@@ -191,14 +191,14 @@ describe("project ingress hostname resolution", () => {
 
 describe("project ingress request hostname", () => {
   it("avoids repeated DB lookups across a warm burst of authenticated ingress requests", async () => {
-    const { requireProjectAccessBySlugFromAuthWorker } = await import("../auth/auth-context.ts");
+    const { getProjectAccessFromAuthWorker } = await import("../auth/auth-context.ts");
     const { createMachineStub } = await import("@iterate-com/sandbox/providers/machine-stub");
     const { getDb } = await import("../db/client.ts");
     const { handleProjectIngressRequest } = await loadProjectIngressProxyModule();
 
     const db = createProjectIngressDb({ maxProjectQueriesBeforeFailure: 1 });
     vi.mocked(getDb).mockReturnValue(db.db as never);
-    vi.mocked(requireProjectAccessBySlugFromAuthWorker).mockResolvedValue({
+    vi.mocked(getProjectAccessFromAuthWorker).mockResolvedValue({
       project: {} as never,
       organization: {} as never,
     });
@@ -226,18 +226,18 @@ describe("project ingress request hostname", () => {
     expect(responses).toHaveLength(100);
     expect(db.getProjectQueryCount()).toBe(1);
     expect(db.getMachineQueryCount()).toBe(1);
-    expect(vi.mocked(requireProjectAccessBySlugFromAuthWorker)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(getProjectAccessFromAuthWorker)).toHaveBeenCalledTimes(1);
   });
 
   it("does not cache machine resolutions for starting machines", async () => {
-    const { requireProjectAccessBySlugFromAuthWorker } = await import("../auth/auth-context.ts");
+    const { getProjectAccessFromAuthWorker } = await import("../auth/auth-context.ts");
     const { createMachineStub } = await import("@iterate-com/sandbox/providers/machine-stub");
     const { getDb } = await import("../db/client.ts");
     const { handleProjectIngressRequest } = await loadProjectIngressProxyModule();
 
     const db = createProjectIngressDb({ machineState: "starting" });
     vi.mocked(getDb).mockReturnValue(db.db as never);
-    vi.mocked(requireProjectAccessBySlugFromAuthWorker).mockResolvedValue({
+    vi.mocked(getProjectAccessFromAuthWorker).mockResolvedValue({
       project: {} as never,
       organization: {} as never,
     });
@@ -264,7 +264,7 @@ describe("project ingress request hostname", () => {
     await handleProjectIngressRequest(requestB, env, session);
 
     expect(db.getProjectQueryCount()).toBe(2);
-    expect(vi.mocked(requireProjectAccessBySlugFromAuthWorker)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(getProjectAccessFromAuthWorker)).toHaveBeenCalledTimes(2);
   });
 
   it("prefers host header when request url host is localhost", async () => {

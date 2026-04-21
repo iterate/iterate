@@ -14,8 +14,8 @@ import type { MirroredAuthSession } from "../auth/auth-worker-session.ts";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import {
+  getProjectAccessFromAuthWorker,
   requireLocalProjectAccessFromAuthWorker,
-  requireProjectAccessBySlugFromAuthWorker,
 } from "../auth/auth-context.ts";
 import { logger } from "../tag-logger.ts";
 import { SimpleKv } from "../utils/simple-kv.ts";
@@ -224,13 +224,12 @@ const resolveMachineForIngressCache = new SimpleKv<ResolveMachineForIngressResul
 function getResolveMachineForIngressCacheKey(params: {
   target: IngressTarget;
   userId: string;
-  isSystemAdmin: boolean;
 }): string {
   const targetKey =
     params.target.kind === "project"
       ? `project:${params.target.projectSlug}:${params.target.targetPort}:${params.target.isPortExplicit}`
       : `machine:${params.target.machineId}:${params.target.targetPort}:${params.target.isPortExplicit}`;
-  return `${params.userId}:${params.isSystemAdmin}:${targetKey}`;
+  return `${params.userId}:${targetKey}`;
 }
 
 function shouldCacheResolveMachineForIngressResult(
@@ -243,13 +242,12 @@ async function resolveMachineForIngress(
   target: IngressTarget,
   authUserId: string,
   userId: string,
-  isSystemAdmin: boolean,
 ): Promise<ResolveMachineForIngressResult> {
-  const cacheKey = getResolveMachineForIngressCacheKey({ target, userId, isSystemAdmin });
+  const cacheKey = getResolveMachineForIngressCacheKey({ target, userId });
   const cached = resolveMachineForIngressCache.get(cacheKey);
   if (cached) return cached;
 
-  const result = await resolveMachineForIngressUncached(target, authUserId, isSystemAdmin);
+  const result = await resolveMachineForIngressUncached(target, authUserId);
   if (shouldCacheResolveMachineForIngressResult(result)) {
     resolveMachineForIngressCache.set(cacheKey, result, RESOLVE_MACHINE_FOR_INGRESS_CACHE_TTL_MS);
   } else {
@@ -261,7 +259,6 @@ async function resolveMachineForIngress(
 async function resolveMachineForIngressUncached(
   target: IngressTarget,
   authUserId: string,
-  isSystemAdmin: boolean,
 ): Promise<ResolveMachineForIngressResult> {
   const db = await getDb();
 
@@ -278,16 +275,14 @@ async function resolveMachineForIngressUncached(
       return { machine: null, projectFound: false };
     }
 
-    if (!isSystemAdmin) {
-      try {
-        await requireProjectAccessBySlugFromAuthWorker({
-          db,
-          authUserId,
-          projectSlug: row.slug,
-        });
-      } catch {
-        return { machine: null, projectFound: true, accessDenied: true };
-      }
+    try {
+      await getProjectAccessFromAuthWorker({
+        db,
+        authUserId,
+        projectSlug: row.slug,
+      });
+    } catch {
+      return { machine: null, projectFound: true, accessDenied: true };
     }
 
     const machine = await db.query.machine.findFirst({
@@ -310,21 +305,19 @@ async function resolveMachineForIngressUncached(
 
   const row = rows[0];
   if (!row) return { machine: null, machineExists: false };
-  if (!isSystemAdmin) {
-    try {
-      await requireProjectAccessBySlugFromAuthWorker({
-        db,
-        authUserId,
-        projectSlug: row.projectSlug,
-      });
-    } catch {
-      return {
-        machine: null,
-        accessDenied: true,
-        machineExists: true,
-        machineState: row.machine.state,
-      };
-    }
+  try {
+    await getProjectAccessFromAuthWorker({
+      db,
+      authUserId,
+      projectSlug: row.projectSlug,
+    });
+  } catch {
+    return {
+      machine: null,
+      accessDenied: true,
+      machineExists: true,
+      machineState: row.machine.state,
+    };
   }
 
   if (
@@ -581,7 +574,6 @@ export async function handleProjectIngressRequest(
     resolvedHost.target,
     session.user.authUserId!,
     session.user.id,
-    session.user.role === "admin",
   );
   if (resolvedHost.target.kind === "project" && resolvedMachine.projectFound === false) {
     return jsonError(404, "project_not_found", {
@@ -736,7 +728,6 @@ async function handleCustomDomainRequest(
       { ...target, isPortExplicit: true },
       session.user.authUserId!,
       session.user.id,
-      session.user.role === "admin",
     );
     machine = resolved.machine;
     if (resolved.accessDenied) {

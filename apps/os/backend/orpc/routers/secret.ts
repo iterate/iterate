@@ -24,7 +24,7 @@ export const secretRouter = {
       const secrets = await ctx.db.query.secret.findMany({
         where: or(
           // Global secrets (all scope fields null)
-          and(isNull(secret.organizationId), isNull(secret.projectId), isNull(secret.userId)),
+          and(isNull(secret.projectId), isNull(secret.userId)),
           // Project secrets
           eq(secret.projectId, ctx.project.id),
         ),
@@ -37,14 +37,8 @@ export const secretRouter = {
         key: s.key,
         description: s.description,
         egressProxyRule: s.egressProxyRule,
-        isGlobal: s.organizationId === null && s.projectId === null && s.userId === null,
-        scope: s.projectId
-          ? "project"
-          : s.organizationId
-            ? "organization"
-            : s.userId
-              ? "user"
-              : "global",
+        isGlobal: s.projectId === null && s.userId === null,
+        scope: s.projectId ? "project" : s.userId ? "user" : "global",
         recommendedEnvVar: secretKeyToEnvVar(s.key),
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
@@ -93,7 +87,6 @@ export const secretRouter = {
         .values({
           id: typeid("sec").toString() as `sec_${string}`,
           projectId: ctx.project.id,
-          organizationId: null,
           userId: null,
           key: input.key,
           encryptedValue,

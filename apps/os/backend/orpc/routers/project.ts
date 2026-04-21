@@ -40,6 +40,7 @@ import {
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
 import { createAuthWorkerClient } from "../../utils/auth-worker-client.ts";
+import { listProjectsForOrganizationFromAuthWorker } from "../../auth/auth-context.ts";
 
 export const projectRouter = {
   getAvailableSandboxProviders: publicProcedure.handler(({ context: ctx }) => {
@@ -97,7 +98,6 @@ export const projectRouter = {
 
       const proj = await ctx.db.query.project.findFirst({
         where: eq(project.id, conflictData.projectId),
-        with: { organization: true },
       });
 
       if (!proj) {
@@ -112,7 +112,7 @@ export const projectRouter = {
           newProject: {
             id: proj.id,
             slug: proj.slug,
-            organizationName: proj.organization.name,
+            organizationName: proj.authOrganizationSlug,
           },
         };
       }
@@ -124,33 +124,18 @@ export const projectRouter = {
         newProject: {
           id: proj.id,
           slug: proj.slug,
-          organizationName: proj.organization.name,
+          organizationName: proj.authOrganizationSlug,
         },
       };
     }),
 
   // List projects in organization
   list: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
-    const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-    const authProjects = await authClient.project.list({
+    return listProjectsForOrganizationFromAuthWorker({
+      db: ctx.db,
+      authUserId: ctx.user.authUserId!,
       organizationSlug: ctx.organization.slug,
     });
-    if (authProjects.length === 0) {
-      return [];
-    }
-
-    const projects = await ctx.db.query.project.findMany({
-      where: and(
-        eq(project.organizationId, ctx.organization.id),
-        inArray(
-          project.authProjectId,
-          authProjects.map((authProject) => authProject.id),
-        ),
-      ),
-      orderBy: (proj, { desc }) => [desc(proj.createdAt)],
-    });
-
-    return projects;
   }),
 
   // Get project by slug (project slugs are globally unique)
@@ -158,6 +143,7 @@ export const projectRouter = {
   bySlug: projectProtectedProcedure.input(ProjectInput).handler(async ({ context: ctx }) => {
     return {
       ...ctx.project,
+      organizationId: ctx.project.authOrganizationId,
       organization: ctx.organization,
     };
   }),
@@ -199,10 +185,11 @@ export const projectRouter = {
         .insert(project)
         .values({
           authProjectId: createdAuthProject.id,
+          authOrganizationId: ctx.organization.id,
+          authOrganizationSlug: ctx.organization.slug,
           name: createdAuthProject.name,
           slug: createdAuthProject.slug,
           jonasLand: input.jonasLand,
-          organizationId: ctx.organization.id,
           sandboxProvider,
         })
         .returning();
@@ -319,7 +306,7 @@ export const projectRouter = {
   delete: projectProtectedMutation.input(ProjectInput).handler(async ({ context: ctx }) => {
     // Check if this is the last project in the organization
     const projectCount = await ctx.db.query.project.findMany({
-      where: eq(project.organizationId, ctx.organization.id),
+      where: eq(project.authOrganizationId, ctx.organization.id),
     });
 
     if (projectCount.length <= 1) {
@@ -577,7 +564,6 @@ export const projectRouter = {
             .update(schema.secret)
             .set({
               encryptedValue: encryptedSecretToken,
-              organizationId: ctx.organization.id,
               metadata: secretMetadata,
               egressProxyRule: githubEgressRule,
               lastSuccessAt: new Date(),
@@ -587,7 +573,6 @@ export const projectRouter = {
           await tx.insert(schema.secret).values({
             key: "github.access_token",
             encryptedValue: encryptedSecretToken,
-            organizationId: ctx.organization.id,
             projectId: targetProjectId,
             metadata: secretMetadata,
             egressProxyRule: githubEgressRule,
@@ -846,7 +831,7 @@ export const projectRouter = {
           eq(projectConnection.provider, "slack"),
           eq(projectConnection.externalId, slackConflictData.teamId),
         ),
-        with: { project: { with: { organization: true } } },
+        with: { project: true },
       });
 
       if (!existingConnection) {
@@ -897,7 +882,6 @@ export const projectRouter = {
             .update(schema.secret)
             .set({
               encryptedValue: slackConflictData.encryptedAccessToken,
-              organizationId: ctx.organization.id,
               egressProxyRule: `$contains(url.hostname, 'slack.com')`,
               lastSuccessAt: new Date(),
             })
@@ -906,7 +890,6 @@ export const projectRouter = {
           await tx.insert(schema.secret).values({
             key: "slack.access_token",
             encryptedValue: slackConflictData.encryptedAccessToken,
-            organizationId: ctx.organization.id,
             projectId: targetProjectId,
             egressProxyRule: `$contains(url.hostname, 'slack.com')`,
             lastSuccessAt: new Date(),
@@ -944,7 +927,7 @@ export const projectRouter = {
       return {
         success: true,
         previousProjectSlug: existingConnection.project?.slug,
-        previousOrgSlug: existingConnection.project?.organization?.slug,
+        previousOrgSlug: existingConnection.project?.authOrganizationSlug,
       };
     }),
 

@@ -192,23 +192,10 @@ async function lookupSecret(
   conditions.push(
     and(
       eq(schema.secret.key, secretKey),
-      isNull(schema.secret.organizationId),
       isNull(schema.secret.projectId),
       isNull(schema.secret.userId),
     ),
   );
-
-  // Org scope (if provided)
-  if (context.organizationId) {
-    conditions.push(
-      and(
-        eq(schema.secret.key, secretKey),
-        eq(schema.secret.organizationId, context.organizationId),
-        isNull(schema.secret.projectId),
-        isNull(schema.secret.userId),
-      ),
-    );
-  }
 
   // Project scope (if provided) - only finds secrets WITHOUT userId
   // User-scoped secrets require explicit userId in the magic string
@@ -258,10 +245,10 @@ async function lookupSecret(
   }
 
   // Sort by specificity (more specific = higher priority)
-  // User > Project > Org > Global
+  // User > Project > Global
   const sorted = secrets.sort((a, b) => {
-    const scoreA = (a.userId ? 8 : 0) + (a.projectId ? 4 : 0) + (a.organizationId ? 2 : 0);
-    const scoreB = (b.userId ? 8 : 0) + (b.projectId ? 4 : 0) + (b.organizationId ? 2 : 0);
+    const scoreA = (a.userId ? 8 : 0) + (a.projectId ? 4 : 0);
+    const scoreB = (b.userId ? 8 : 0) + (b.projectId ? 4 : 0);
     return scoreB - scoreA; // Higher score first
   });
 
@@ -1006,11 +993,7 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
   const accessToken = await db.query.projectAccessToken.findFirst({
     where: eq(schema.projectAccessToken.id, tokenId),
     with: {
-      project: {
-        with: {
-          organization: true,
-        },
-      },
+      project: true,
     },
   });
 
@@ -1044,9 +1027,9 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
 
   return {
     projectId: accessToken.project.id,
-    organizationId: accessToken.project.organizationId,
+    organizationId: accessToken.project.authOrganizationId,
     projectSlug: accessToken.project.slug,
-    orgSlug: accessToken.project.organization.slug,
+    orgSlug: accessToken.project.authOrganizationSlug,
   };
 }
 

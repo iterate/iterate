@@ -1,6 +1,9 @@
 import { oc, type ContractRouterClient } from "@orpc/contract";
 import { z } from "zod";
 
+export const SERVICE_TOKEN_HEADER = "x-iterate-service-token";
+export const AS_USER_HEADER = "x-iterate-as-user";
+
 export const OrganizationRole = z.enum(["member", "admin", "owner"]);
 export type OrganizationRole = z.infer<typeof OrganizationRole>;
 
@@ -163,6 +166,15 @@ export const authContract = oc.router({
         }),
       )
       .output(OrganizationRecord),
+    delete: oc
+      .route({
+        method: "POST",
+        path: "/organization/delete",
+        summary: "Delete an organization",
+        tags: ["organization"],
+      })
+      .input(OrgInput)
+      .output(z.object({ success: z.literal(true) })),
     bySlug: oc
       .route({
         method: "GET",

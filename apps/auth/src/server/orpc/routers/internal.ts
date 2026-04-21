@@ -1,6 +1,6 @@
 import { ORPCError } from "@orpc/server";
 import { eq } from "drizzle-orm";
-import { slugify, slugifyWithSuffix } from "@iterate-com/shared/slug";
+import { resolveUniqueSlug } from "@iterate-com/shared/slug";
 import { os, protectedMiddleware, serviceMiddleware } from "../orpc.ts";
 import { auth, createProjectIngressToken as createSignedProjectIngressToken } from "../../auth.ts";
 import { schema } from "../../db/index.ts";
@@ -68,11 +68,16 @@ const createForUser = os.internal.organization.createForUser
       throw new ORPCError("NOT_FOUND", { message: "User not found" });
     }
 
-    const baseSlug = input.slug ? slugify(input.slug) : slugify(input.name);
-    const existing = await context.db.query.organization.findFirst({
-      where: eq(schema.organization.slug, baseSlug),
+    const slug = await resolveUniqueSlug({
+      name: input.name,
+      slug: input.slug,
+      isTaken: async (candidate) =>
+        Boolean(
+          await context.db.query.organization.findFirst({
+            where: eq(schema.organization.slug, candidate),
+          }),
+        ),
     });
-    const slug = existing ? slugifyWithSuffix(baseSlug) : baseSlug;
 
     const organizationId = generateId("org");
     await context.db.insert(schema.organization).values({
@@ -134,11 +139,16 @@ const createForOrganization = os.internal.project.createForOrganization
       throw new ORPCError("NOT_FOUND", { message: "Organization not found" });
     }
 
-    const baseSlug = input.slug ? slugify(input.slug) : slugify(input.name);
-    const existing = await context.db.query.project.findFirst({
-      where: eq(schema.project.slug, baseSlug),
+    const slug = await resolveUniqueSlug({
+      name: input.name,
+      slug: input.slug,
+      isTaken: async (candidate) =>
+        Boolean(
+          await context.db.query.project.findFirst({
+            where: eq(schema.project.slug, candidate),
+          }),
+        ),
     });
-    const slug = existing ? slugifyWithSuffix(baseSlug) : baseSlug;
 
     const projectId = generateId("prj");
     await context.db.insert(schema.project).values({
@@ -169,8 +179,9 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
     const existing = await context.db.query.oauthClient.findFirst({
       where: eq(schema.oauthClient.referenceId, input.referenceId),
     });
+    const shouldRotateDevClient = input.referenceId.startsWith("dev:");
 
-    if (existing?.clientSecret) {
+    if (existing?.clientSecret && !shouldRotateDevClient) {
       const existingSorted = [...(existing.redirectUris ?? [])].sort();
       const needsUpdate =
         existing.name !== input.clientName ||
@@ -195,6 +206,17 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
         clientSecret: existing.clientSecret,
         redirectURIs: redirectURIs,
       };
+    }
+
+    if (existing && shouldRotateDevClient) {
+      await context.db
+        .update(schema.oauthClient)
+        .set({
+          referenceId: null,
+          disabled: true,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.oauthClient.id, existing.id));
     }
 
     const created = await auth.api.adminCreateOAuthClient({

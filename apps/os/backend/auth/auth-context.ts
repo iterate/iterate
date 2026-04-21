@@ -1,21 +1,27 @@
 import { ORPCError } from "@orpc/server";
-import { eq } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
+import type { OrganizationRole, OrganizationSummary } from "../../../auth-contract/src/index.ts";
 import * as schema from "../db/schema.ts";
-import type {
-  OrganizationMemberRecord,
-  OrganizationRole,
-} from "../../../auth-contract/src/index.ts";
 import type { DB } from "../db/client.ts";
-import { type AuthWorkerClient, createAuthWorkerClient } from "../utils/auth-worker-client.ts";
-import { ensureLocalUserMirror } from "./auth-worker-session.ts";
+import { createAuthWorkerClient } from "../utils/auth-worker-client.ts";
 
-type LocalOrganization = typeof schema.organization.$inferSelect;
+type AuthOrganization = OrganizationSummary;
 type LocalProjectWithRelations = typeof schema.project.$inferSelect & {
-  organization: LocalOrganization | null;
   envVars: Array<typeof schema.projectEnvVar.$inferSelect>;
   accessTokens: Array<typeof schema.projectAccessToken.$inferSelect>;
   connections: Array<typeof schema.projectConnection.$inferSelect>;
 };
+
+function throwProjectAuthDriftError(params: {
+  projectSlug: string;
+  message: string;
+  details: Record<string, unknown>;
+}): never {
+  throw new ORPCError("INTERNAL_SERVER_ERROR", {
+    message: `Auth/OS project drift for ${params.projectSlug}: ${params.message}`,
+    cause: params.details,
+  });
+}
 
 function rethrowAuthWorkerError(error: unknown, fallbackMessage: string): never {
   if (error instanceof ORPCError) {
@@ -24,129 +30,37 @@ function rethrowAuthWorkerError(error: unknown, fallbackMessage: string): never 
   throw new ORPCError("INTERNAL_SERVER_ERROR", { message: fallbackMessage, cause: error });
 }
 
-export async function ensureLocalOrganizationShadow(
-  db: DB,
-  authOrganization: { id: string; name: string; slug: string },
-): Promise<LocalOrganization> {
-  const existingByAuthId = await db.query.organization.findFirst({
-    where: eq(schema.organization.authOrganizationId, authOrganization.id),
-  });
-
-  if (existingByAuthId) {
-    if (
-      existingByAuthId.name !== authOrganization.name ||
-      existingByAuthId.slug !== authOrganization.slug
-    ) {
-      const [updated] = await db
-        .update(schema.organization)
-        .set({
-          name: authOrganization.name,
-          slug: authOrganization.slug,
-        })
-        .where(eq(schema.organization.id, existingByAuthId.id))
-        .returning();
-
-      return updated ?? existingByAuthId;
-    }
-
-    return existingByAuthId;
+async function listLocalProjectsByAuthProjectIds(params: {
+  db: DB;
+  authProjectIds: string[];
+}): Promise<Array<typeof schema.project.$inferSelect>> {
+  if (params.authProjectIds.length === 0) {
+    return [];
   }
 
-  const existingBySlug = await db.query.organization.findFirst({
-    where: eq(schema.organization.slug, authOrganization.slug),
+  return params.db.query.project.findMany({
+    where: inArray(schema.project.authProjectId, params.authProjectIds),
+    orderBy: desc(schema.project.createdAt),
   });
+}
 
-  if (existingBySlug) {
-    const [updated] = await db
-      .update(schema.organization)
-      .set({
-        authOrganizationId: authOrganization.id,
-        name: authOrganization.name,
-      })
-      .where(eq(schema.organization.id, existingBySlug.id))
-      .returning();
+async function getOrganizationForProject(params: {
+  authUserId: string;
+  authOrganizationId: string;
+}): Promise<AuthOrganization> {
+  const authClient = createAuthWorkerClient({ asUser: { authUserId: params.authUserId } });
+  const organizations = await authClient.user.myOrganizations();
+  const organization = organizations.find(
+    (candidate) => candidate.id === params.authOrganizationId,
+  );
 
-    return updated ?? existingBySlug;
-  }
-
-  const [created] = await db
-    .insert(schema.organization)
-    .values({
-      authOrganizationId: authOrganization.id,
-      name: authOrganization.name,
-      slug: authOrganization.slug,
-    })
-    .returning();
-
-  if (!created) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: `Failed to create local organization shadow for ${authOrganization.slug}`,
+  if (!organization) {
+    throw new ORPCError("FORBIDDEN", {
+      message: `No organization access for ${params.authOrganizationId}`,
     });
   }
 
-  return created;
-}
-
-async function writeMembershipShadows(
-  db: DB,
-  localOrganizationId: string,
-  authMembers: OrganizationMemberRecord[],
-) {
-  const localUsers = await Promise.all(
-    authMembers.map((member) => ensureLocalUserMirror(db, member.user)),
-  );
-
-  await db
-    .delete(schema.organizationUserMembership)
-    .where(eq(schema.organizationUserMembership.organizationId, localOrganizationId));
-
-  if (localUsers.length > 0) {
-    await db.insert(schema.organizationUserMembership).values(
-      localUsers.map((localUser, index) => ({
-        organizationId: localOrganizationId,
-        userId: localUser.id,
-        role: authMembers[index].role,
-      })),
-    );
-  }
-}
-
-export async function syncOrganizationMembershipShadowsFromAuthWorker(params: {
-  db: DB;
-  authUserId: string;
-  organizationSlug: string;
-  authOrganization?: { id: string; name: string; slug: string };
-}): Promise<LocalOrganization> {
-  const authClient = createAuthWorkerClient({ asUser: { authUserId: params.authUserId } });
-  const authOrganization =
-    params.authOrganization ??
-    (await authClient.organization.bySlug({ organizationSlug: params.organizationSlug }));
-  const localOrganization = await ensureLocalOrganizationShadow(params.db, authOrganization);
-  const authMembers = await authClient.organization.members({
-    organizationSlug: authOrganization.slug,
-  });
-  await writeMembershipShadows(params.db, localOrganization.id, authMembers);
-  return localOrganization;
-}
-
-export async function syncOrganizationMembershipShadowsFromServiceAuth(params: {
-  db: DB;
-  serviceToken: string;
-  organizationSlug: string;
-  authOrganization?: { id: string; name: string; slug: string };
-}): Promise<LocalOrganization> {
-  const authClient: AuthWorkerClient = createAuthWorkerClient({
-    serviceToken: params.serviceToken,
-  });
-  const authOrganization =
-    params.authOrganization ??
-    (await authClient.organization.bySlug({ organizationSlug: params.organizationSlug }));
-  const localOrganization = await ensureLocalOrganizationShadow(params.db, authOrganization);
-  const authMembers = await authClient.internal.organization.members({
-    organizationSlug: authOrganization.slug,
-  });
-  await writeMembershipShadows(params.db, localOrganization.id, authMembers);
-  return localOrganization;
+  return organization;
 }
 
 export async function listOrganizationsFromAuthWorker(params: {
@@ -154,9 +68,7 @@ export async function listOrganizationsFromAuthWorker(params: {
   authUserId: string;
 }): Promise<
   Array<
-    (LocalOrganization & {
-      role: OrganizationRole;
-    }) & {
+    AuthOrganization & {
       projects: Array<typeof schema.project.$inferSelect>;
     }
   >
@@ -172,24 +84,23 @@ export async function listOrganizationsFromAuthWorker(params: {
 
   return Promise.all(
     organizations.map(async (organization) => {
-      const localOrganization = await ensureLocalOrganizationShadow(params.db, organization);
-      const organizationWithProjects = await params.db.query.organization.findFirst({
-        where: eq(schema.organization.id, localOrganization.id),
-        with: {
-          projects: true,
-        },
+      const authProjects = await authClient.project.list({
+        organizationSlug: organization.slug,
+      });
+      const projects = await listLocalProjectsByAuthProjectIds({
+        db: params.db,
+        authProjectIds: authProjects.map((authProject) => authProject.id),
       });
 
       return {
-        ...(organizationWithProjects ?? { ...localOrganization, projects: [] }),
-        role: organization.role,
+        ...organization,
+        projects,
       };
     }),
   );
 }
 
 export async function getOrganizationAccessFromAuthWorker(params: {
-  db: DB;
   authUserId: string;
   organizationSlug: string;
 }) {
@@ -204,13 +115,33 @@ export async function getOrganizationAccessFromAuthWorker(params: {
     rethrowAuthWorkerError(error, "Failed to load organization from auth worker");
   }
 
-  const organization = await ensureLocalOrganizationShadow(params.db, authOrganization);
-
   return {
-    organization,
+    organization: authOrganization,
     membership: { role: authOrganization.role as OrganizationRole },
     authOrganization,
   };
+}
+
+export async function listProjectsForOrganizationFromAuthWorker(params: {
+  db: DB;
+  authUserId: string;
+  organizationSlug: string;
+}): Promise<Array<typeof schema.project.$inferSelect>> {
+  const authClient = createAuthWorkerClient({ asUser: { authUserId: params.authUserId } });
+
+  let authProjects: Awaited<ReturnType<typeof authClient.project.list>>;
+  try {
+    authProjects = await authClient.project.list({
+      organizationSlug: params.organizationSlug,
+    });
+  } catch (error) {
+    rethrowAuthWorkerError(error, "Failed to load projects from auth worker");
+  }
+
+  return listLocalProjectsByAuthProjectIds({
+    db: params.db,
+    authProjectIds: authProjects.map((authProject) => authProject.id),
+  });
 }
 
 export async function getProjectAccessFromAuthWorker(params: {
@@ -219,7 +150,7 @@ export async function getProjectAccessFromAuthWorker(params: {
   projectSlug: string;
 }): Promise<{
   project: LocalProjectWithRelations;
-  organization: LocalOrganization;
+  organization: AuthOrganization;
 }> {
   const authClient = createAuthWorkerClient({ asUser: { authUserId: params.authUserId } });
 
@@ -232,10 +163,14 @@ export async function getProjectAccessFromAuthWorker(params: {
     rethrowAuthWorkerError(error, "Failed to load project from auth worker");
   }
 
-  let project = await params.db.query.project.findFirst({
+  const organization = await getOrganizationForProject({
+    authUserId: params.authUserId,
+    authOrganizationId: authProject.organizationId,
+  });
+
+  const project = await params.db.query.project.findFirst({
     where: eq(schema.project.authProjectId, authProject.id),
     with: {
-      organization: true,
       envVars: true,
       accessTokens: true,
       connections: true,
@@ -246,7 +181,6 @@ export async function getProjectAccessFromAuthWorker(params: {
     const existingBySlug = await params.db.query.project.findFirst({
       where: eq(schema.project.slug, authProject.slug),
       with: {
-        organization: true,
         envVars: true,
         accessTokens: true,
         connections: true,
@@ -254,41 +188,50 @@ export async function getProjectAccessFromAuthWorker(params: {
     });
 
     if (existingBySlug) {
-      const [updated] = await params.db
-        .update(schema.project)
-        .set({
+      throwProjectAuthDriftError({
+        projectSlug: authProject.slug,
+        message: "local project exists by slug but is not bound to the auth project id",
+        details: {
+          localProjectId: existingBySlug.id,
+          localAuthProjectId: existingBySlug.authProjectId,
           authProjectId: authProject.id,
-          name: authProject.name,
-        })
-        .where(eq(schema.project.id, existingBySlug.id))
-        .returning();
-
-      project = updated &&
-        existingBySlug.organization && {
-          ...existingBySlug,
-          ...updated,
-        };
+          localAuthOrganizationId: existingBySlug.authOrganizationId,
+          authOrganizationId: organization.id,
+        },
+      });
     }
   }
 
-  if (!project || !project.organization) {
+  if (!project) {
     throw new ORPCError("NOT_FOUND", {
       message: `Project ${authProject.slug} exists in auth but is not provisioned in os`,
     });
   }
 
+  if (
+    project.authOrganizationId !== organization.id ||
+    project.authOrganizationSlug !== organization.slug ||
+    project.name !== authProject.name
+  ) {
+    throwProjectAuthDriftError({
+      projectSlug: authProject.slug,
+      message: "local project metadata does not match auth worker state",
+      details: {
+        localProjectId: project.id,
+        localName: project.name,
+        authName: authProject.name,
+        localAuthOrganizationId: project.authOrganizationId,
+        authOrganizationId: organization.id,
+        localAuthOrganizationSlug: project.authOrganizationSlug,
+        authOrganizationSlug: organization.slug,
+      },
+    });
+  }
+
   return {
     project,
-    organization: project.organization,
+    organization,
   };
-}
-
-export async function requireProjectAccessBySlugFromAuthWorker(params: {
-  db: DB;
-  authUserId: string;
-  projectSlug: string;
-}) {
-  return getProjectAccessFromAuthWorker(params);
 }
 
 export async function requireLocalProjectAccessFromAuthWorker(params: {

@@ -20,6 +20,15 @@ export function slugifyWithSuffix(name: string): string {
   return `${slugify(name)}-${generateRandomSuffix(6)}`;
 }
 
+export async function resolveUniqueSlug(params: {
+  name: string;
+  slug?: string;
+  isTaken: (slug: string) => Promise<boolean>;
+}): Promise<string> {
+  const baseSlug = params.slug ? slugify(params.slug) : slugify(params.name);
+  return (await params.isTaken(baseSlug)) ? slugifyWithSuffix(baseSlug) : baseSlug;
+}
+
 function generateRandomSuffix(length: number): string {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
   let result = "";
