@@ -7,31 +7,30 @@
  *
  * https://tanstack.com/router/latest/docs/framework/react/guide/data-loading
  */
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import CodeMirror from "@uiw/react-codemirror";
-import { unifiedMergeView } from "@codemirror/merge";
 import { EditorView } from "@codemirror/view";
 import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import type { Extension } from "@codemirror/state";
 
-type Commit = { oid: string; message: string; author: string; timestamp: number };
-
 export const Route = createFileRoute("/$artifact")({
   validateSearch: (search: Record<string, unknown>) => ({
-    commit: (search.commit as string) || undefined,
-    file: (search.file as string) || undefined,
+    commit: (search.commit as string) ?? undefined,
+    file: (search.file as string) ?? undefined,
   }),
   loaderDeps: ({ search }) => ({ commit: search.commit }),
   loader: async ({ params, deps }) => {
-    // Fetch commits first (this deepens the shallow clone)
-    const commits: Commit[] = await fetch(`/api/log?repo=${params.artifact}`).then((r) => r.json());
-    // Then fetch tree at the selected commit (or HEAD)
+    const commitsRes = await fetch(`/api/log?repo=${params.artifact}`);
+    if (!commitsRes.ok) throw new Error(`Failed to load commits: ${commitsRes.status}`);
+    const commits = await commitsRes.json();
+
     const qs = deps.commit ? `&oid=${deps.commit}` : "";
     const treeRes = await fetch(`/api/tree?repo=${params.artifact}${qs}`);
-    const treeData = await treeRes.json();
-    const tree: string[] = treeData.paths ?? [];
+    if (!treeRes.ok) throw new Error(`Failed to load tree: ${treeRes.status}`);
+    const tree: string[] = (await treeRes.json()).paths ?? [];
+
     return { commits, tree };
   },
   pendingComponent: () => (
@@ -68,11 +67,10 @@ function ArtifactView() {
   const { artifact } = Route.useParams();
   const { commit: selectedCommit, file } = Route.useSearch();
   const navigate = useNavigate();
+  const router = useRouter();
 
   const isHead = !selectedCommit;
-  const headOid = commits[0]?.oid;
 
-  // --- Local changes (HEAD only, persisted in localStorage) ---
   const [head, setHead] = useState<Record<string, string>>({});
   const [working, setWorking] = useState<Record<string, string>>({});
   const [fileContent, setFileContent] = useState<string | undefined>();
@@ -87,27 +85,26 @@ function ArtifactView() {
   );
   const hasLocalChanges = isHead && dirty.size > 0;
 
-  // Restore localStorage working edits when artifact changes
   useEffect(() => {
     setHead({});
     setWorking(jsonParse(localStorage.getItem(`art:${artifact}:working`), {}));
     setFileContent(undefined);
   }, [artifact]);
 
-  // Persist working edits to localStorage
   useEffect(() => {
     if (isHead) localStorage.setItem(`art:${artifact}:working`, JSON.stringify(working));
   }, [artifact, working, isHead]);
 
-  // Fetch file content when file selection changes
+  // Fetch file content — AbortController prevents stale responses from racing
   useEffect(() => {
     setFileContent(undefined);
     if (!file) return;
     setFileLoading(true);
+    const controller = new AbortController();
     const url = selectedCommit
       ? `/api/blob?repo=${artifact}&path=${encodeURIComponent(file)}&oid=${selectedCommit}`
       : `/api/file?repo=${artifact}&path=${encodeURIComponent(file)}`;
-    fetch(url)
+    fetch(url, { signal: controller.signal })
       .then((r) => r.json())
       .then((d) => {
         setFileContent(d.content);
@@ -116,10 +113,14 @@ function ArtifactView() {
           setWorking((w) => ({ ...w, [file]: w[file] ?? d.content }));
         }
       })
+      .catch((e) => {
+        if (e.name !== "AbortError") throw e;
+      })
       .finally(() => setFileLoading(false));
+    return () => controller.abort();
   }, [artifact, file, selectedCommit, isHead]);
 
-  // Syntax highlighting — https://codemirror.net/docs/ref/#language-data
+  // https://codemirror.net/docs/ref/#language-data
   useEffect(() => {
     if (!file) return setLangExt([]);
     const desc = LanguageDescription.matchFilename(languages, file);
@@ -133,13 +134,13 @@ function ArtifactView() {
     return exts;
   }, [isHead, langExt]);
 
-  // The value shown in the editor
   const editorValue = isHead && file && working[file] !== undefined ? working[file] : fileContent;
 
   function nav(search: { commit?: string; file?: string }) {
     navigate({ to: "/$artifact", params: { artifact }, search });
   }
 
+  // https://tanstack.com/router/latest/docs/framework/react/guide/data-loading#using-routerinvalidate
   const handleCommit = useCallback(async () => {
     if (dirty.size === 0 || !commitMsg.trim()) return;
     setBusy("Committing...");
@@ -149,14 +150,13 @@ function ArtifactView() {
       body: JSON.stringify({ repo: artifact, message: commitMsg, files }),
       headers: { "content-type": "application/json" },
     });
-    // Clear local changes and reload
     localStorage.removeItem(`art:${artifact}:working`);
     setCommitMsg("");
+    setWorking({});
+    setHead({});
     setBusy("");
-    navigate({ to: "/$artifact", params: { artifact }, search: { file }, reloadDocument: false });
-    // Force loader re-run by invalidating
-    window.location.reload();
-  }, [artifact, dirty, working, commitMsg, file, navigate]);
+    await router.invalidate();
+  }, [artifact, dirty, working, commitMsg, router]);
 
   const handleRestore = useCallback(
     async (oid: string) => {
@@ -167,10 +167,12 @@ function ArtifactView() {
         headers: { "content-type": "application/json" },
       });
       localStorage.removeItem(`art:${artifact}:working`);
+      setWorking({});
+      setHead({});
       setBusy("");
-      window.location.reload();
+      await router.invalidate();
     },
-    [artifact],
+    [artifact, router],
   );
 
   return (
@@ -208,7 +210,6 @@ function ArtifactView() {
           minWidth: 0,
         }}
       >
-        {/* Toolbar */}
         <div
           style={{
             padding: "8px 12px",
@@ -228,14 +229,12 @@ function ArtifactView() {
           )}
           {busy && <span style={{ color: "#f0883e", marginLeft: "auto" }}>{busy}</span>}
         </div>
-
-        {/* Editor area */}
         <div style={{ flex: 1, overflow: "auto" }}>
           {fileLoading ? (
             <div style={{ padding: 40, color: "#8b949e" }}>Loading file...</div>
           ) : file && editorValue !== undefined ? (
             <CodeMirror
-              key={`${file}-${selectedCommit || "head"}`}
+              key={file}
               value={editorValue}
               height="100%"
               theme="dark"
@@ -263,7 +262,6 @@ function ArtifactView() {
       >
         <h3 style={H3}>History</h3>
 
-        {/* Commit button when there are local changes */}
         {hasLocalChanges && (
           <div style={{ padding: "8px 12px", borderBottom: "1px solid #21262d" }}>
             <input
@@ -283,7 +281,6 @@ function ArtifactView() {
           </div>
         )}
 
-        {/* Virtual "Local changes" entry */}
         {hasLocalChanges && (
           <div
             onClick={() => nav({ file })}
@@ -300,52 +297,47 @@ function ArtifactView() {
           </div>
         )}
 
-        {/* Real commits */}
-        {commits.map((c, i) => {
-          const isCurrent =
-            selectedCommit === c.oid ||
-            (isHead && !hasLocalChanges && i === 0) ||
-            (isHead && hasLocalChanges && false);
-          const isLatest = i === 0;
-          return (
-            <div
-              key={c.oid}
-              style={{
-                ...COMMIT_ITEM,
-                background:
-                  selectedCommit === c.oid || (isHead && i === 0 && !hasLocalChanges)
-                    ? "#161b22"
-                    : "transparent",
-              }}
-            >
+        {commits.map(
+          (c: { oid: string; message: string; author: string; timestamp: number }, i: number) => {
+            const isLatest = i === 0;
+            const isActive = selectedCommit === c.oid || (isHead && i === 0 && !hasLocalChanges);
+            return (
               <div
-                onClick={() => nav({ commit: isLatest ? undefined : c.oid, file })}
-                style={{ cursor: "pointer" }}
+                key={c.oid}
+                style={{ ...COMMIT_ITEM, background: isActive ? "#161b22" : "transparent" }}
               >
                 <div
-                  style={{
-                    color: "#c9d1d9",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
+                  onClick={() => nav({ commit: isLatest ? undefined : c.oid, file })}
+                  style={{ cursor: "pointer" }}
                 >
-                  {isLatest && "HEAD — "}
-                  {c.message.split("\n")[0]}
+                  <div
+                    style={{
+                      color: "#c9d1d9",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {isLatest && "HEAD — "}
+                    {c.message.split("\n")[0]}
+                  </div>
+                  <div style={{ color: "#8b949e", fontSize: 11, marginTop: 2 }}>
+                    {c.oid.slice(0, 7)} &middot; {c.author} &middot;{" "}
+                    {new Date(c.timestamp * 1000).toLocaleDateString()}
+                  </div>
                 </div>
-                <div style={{ color: "#8b949e", fontSize: 11, marginTop: 2 }}>
-                  {c.oid.slice(0, 7)} &middot; {c.author} &middot;{" "}
-                  {new Date(c.timestamp * 1000).toLocaleDateString()}
-                </div>
+                {!isLatest && selectedCommit === c.oid && (
+                  <button
+                    style={{ ...BTN_SMALL, marginTop: 4 }}
+                    onClick={() => handleRestore(c.oid)}
+                  >
+                    Restore to this commit
+                  </button>
+                )}
               </div>
-              {!isLatest && selectedCommit === c.oid && (
-                <button style={{ ...BTN_SMALL, marginTop: 4 }} onClick={() => handleRestore(c.oid)}>
-                  Restore to this commit
-                </button>
-              )}
-            </div>
-          );
-        })}
+            );
+          },
+        )}
       </div>
     </>
   );

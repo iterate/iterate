@@ -1,34 +1,5 @@
-// Minimal in-memory filesystem compatible with isomorphic-git's FS interface.
-// isomorphic-git needs: readFile, writeFile, unlink, readdir, mkdir, rmdir, stat, lstat, symlink, readlink
-
-type FsCallback<T> = (err: Error | null, result?: T) => void;
-
-interface Stat {
-  type: "file" | "dir";
-  mode: number;
-  size: number;
-  ino: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  isFile(): boolean;
-  isDirectory(): boolean;
-  isSymbolicLink(): boolean;
-}
-
-function makeStat(type: "file" | "dir", size: number): Stat {
-  const now = Date.now();
-  return {
-    type,
-    mode: type === "file" ? 0o100644 : 0o40755,
-    size,
-    ino: 0,
-    mtimeMs: now,
-    ctimeMs: now,
-    isFile: () => type === "file",
-    isDirectory: () => type === "dir",
-    isSymbolicLink: () => false,
-  };
-}
+// Minimal in-memory filesystem compatible with isomorphic-git's promises API.
+// https://isomorphic-git.org/docs/en/fs
 
 export class MemoryFS {
   private files = new Map<string, Uint8Array>();
@@ -120,7 +91,7 @@ export class MemoryFS {
       this.dirs.delete(p);
     },
 
-    stat: async (path: string): Promise<Stat> => {
+    stat: async (path: string): Promise<ReturnType<typeof makeStat>> => {
       const p = this.normalize(path);
       if (this.dirs.has(p)) return makeStat("dir", 0);
       const data = this.files.get(p);
@@ -128,7 +99,7 @@ export class MemoryFS {
       throw Object.assign(new Error(`ENOENT: ${p}`), { code: "ENOENT" });
     },
 
-    lstat: async (path: string): Promise<Stat> => {
+    lstat: async (path: string): Promise<ReturnType<typeof makeStat>> => {
       return this.promises.stat(path);
     },
 
@@ -140,8 +111,21 @@ export class MemoryFS {
       throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
     },
 
-    chmod: async (_path: string, _mode: number): Promise<void> => {
-      // noop
-    },
+    chmod: async (_path: string, _mode: number): Promise<void> => {},
+  };
+}
+
+function makeStat(type: "file" | "dir", size: number) {
+  const now = Date.now();
+  return {
+    type,
+    mode: type === "file" ? 0o100644 : 0o40755,
+    size,
+    ino: 0,
+    mtimeMs: now,
+    ctimeMs: now,
+    isFile: () => type === "file",
+    isDirectory: () => type === "dir",
+    isSymbolicLink: () => false,
   };
 }

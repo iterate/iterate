@@ -1,12 +1,21 @@
 /** Root layout — repos sidebar + global loading bar + Outlet. */
-import { createRootRoute, Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import {
+  createRootRoute,
+  Link,
+  Outlet,
+  useNavigate,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router";
 import { useState } from "react";
 
 export const Route = createRootRoute({
-  loader: () =>
-    fetch("/api/repos")
-      .then((r) => r.json())
-      .then((d) => d.repos.map((r: { name: string }) => r.name) as string[]),
+  loader: async () => {
+    const res = await fetch("/api/repos");
+    if (!res.ok) throw new Error(`Failed to load repos: ${res.status}`);
+    const data = await res.json();
+    return data.repos.map((r: { name: string }) => r.name) as string[];
+  },
   pendingComponent: () => (
     <div
       style={{
@@ -29,6 +38,7 @@ function Root() {
   const repos = Route.useLoaderData();
   const [newName, setNewName] = useState("");
   const navigate = useNavigate();
+  const router = useRouter();
   const isLoading = useRouterState({ select: (s) => s.isLoading });
 
   async function handleCreate() {
@@ -40,6 +50,7 @@ function Root() {
       headers: { "content-type": "application/json" },
     });
     setNewName("");
+    await router.invalidate();
     navigate({ to: "/$artifact", params: { artifact: name } });
   }
 
@@ -53,7 +64,6 @@ function Root() {
         color: "#c9d1d9",
       }}
     >
-      {/* Global loading bar */}
       {isLoading && (
         <div
           style={{
@@ -67,8 +77,6 @@ function Root() {
           }}
         />
       )}
-
-      {/* Repos sidebar */}
       <div
         style={{
           width: 220,
@@ -104,7 +112,6 @@ function Root() {
           </Link>
         ))}
       </div>
-
       <Outlet />
     </div>
   );
