@@ -2,12 +2,39 @@
   "name": "nested-facets-poc",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "workers_dev": true,
   "durable_objects": {
     "bindings": [{ "name": "PROJECT", "class_name": "Project" }],
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Project"] }],
   "worker_loaders": [{ "binding": "LOADER" }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nested-facets-db",
+      "database_id": "d3771c56-c0bf-4d94-89bd-3d3de0c7dc35",
+    },
+  ],
+  "artifacts": [
+    {
+      "binding": "ARTIFACTS",
+      "namespace": "default",
+    },
+  ],
+  "send_email": [{ "name": "EMAIL" }],
+  "services": [
+    {
+      "binding": "EGRESS_GATEWAY",
+      "service": "nested-facets-poc",
+      "entrypoint": "EgressGateway",
+    },
+  ],
+  "vars": {
+    "CF_ZONE_ID": "9d35b5b7f1538beb125a6bcdba870684",
+    "CF_WORKER_NAME": "nested-facets-poc",
+    "EVENTS_BASE_URL": "https://events.iterate.com",
+  },
   "observability": {
     "enabled": true,
     "logs": { "invocation_logs": true, "head_sampling_rate": 1 },
