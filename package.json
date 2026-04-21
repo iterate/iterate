@@ -89,8 +89,7 @@
       "ws": "8.19.0",
       "baseline-browser-mapping": "^2.9.14",
       "@babel/parser": "^7.28.0",
-      "workerd": "1.20260205.0",
-      "miniflare": "4.20260205.0"
+      "wrangler": "4.84.0"
     }
   },
   "dependencies": {

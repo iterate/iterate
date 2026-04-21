@@ -37,8 +37,8 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.28.0",
-    "@cloudflare/workers-types": "^4.20260317.1",
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
     "@tailwindcss/vite": "^4.2.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -46,6 +46,6 @@
     "@vitejs/plugin-react": "^6.0.1",
     "drizzle-kit": "^0.31.9",
     "vite": "^8.0.0",
-    "wrangler": "^4.74.0"
+    "wrangler": "catalog:cloudflare"
   }
 }
