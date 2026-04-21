@@ -102,6 +102,7 @@ export class EgressGateway extends WorkerEntrypoint<Env> {
       return row.value;
     };
 
+    let url = request.url;
     try {
       // Scan + replace in headers
       for (const [headerName, headerValue] of Array.from(headers.entries())) {
@@ -113,7 +114,6 @@ export class EgressGateway extends WorkerEntrypoint<Env> {
       }
 
       // Scan + replace in URL
-      let url = request.url;
       const urlResult = await replaceSecretReferences(url, loadSecret);
       if (urlResult.secretKeys.length > 0) {
         url = urlResult.output;

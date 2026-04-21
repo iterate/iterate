@@ -9,6 +9,7 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Project"] }],
   "worker_loaders": [{ "binding": "LOADER" }],
+  "ai": { "binding": "AI" },
   "d1_databases": [
     {
       "binding": "DB",
@@ -28,6 +29,16 @@
       "binding": "EGRESS_GATEWAY",
       "service": "nested-facets-poc",
       "entrypoint": "EgressGateway",
+    },
+    {
+      "binding": "AI_PROXY",
+      "service": "nested-facets-poc",
+      "entrypoint": "AiProxy",
+    },
+    {
+      "binding": "CODE_EXECUTOR",
+      "service": "nested-facets-poc",
+      "entrypoint": "CodeExecutor",
     },
   ],
   "vars": {

@@ -1,0 +1,3 @@
+{
+  "apps": ["agents", "billing", "counter", "chatbot"]
+}

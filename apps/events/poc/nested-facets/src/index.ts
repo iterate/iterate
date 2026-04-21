@@ -5,7 +5,7 @@
 //   2. <project>.iterate-dev-jonas.app    → Artifact editor (edit app source, config)
 //   3. <app>.<project-or-custom-host>     → App UI (loaded from artifact source code)
 
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { Workspace, WorkspaceFileSystem } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
 import PostalMime from "postal-mime";
@@ -42,6 +42,74 @@ interface Env {
   CF_WORKER_NAME: string;
   EVENTS_BASE_URL: string;
   EGRESS_GATEWAY: Fetcher;
+  AI: Ai;
+  AI_PROXY: Service<typeof AiProxy>;
+  CODE_EXECUTOR: Service<CodeExecutor>;
+}
+
+// ── Binding proxy ────────────────────────────────────────────────────────────
+// Returns a WorkerEntrypoint subclass that proxies all property access / method
+// calls to env[bindingName]. Expose as a self-referencing service binding, then
+// pass it into a dynamic worker's env — the dynamic worker sees the real binding.
+
+function createBindingProxy<E extends Record<string, unknown>>(bindingName: keyof E & string) {
+  return class BindingProxy extends WorkerEntrypoint<E> {
+    constructor(ctx: any, env: E) {
+      super(ctx, env);
+      return new Proxy(this, {
+        get(target, prop, receiver) {
+          if (prop in target) return Reflect.get(target, prop, receiver);
+          const binding = target.env[bindingName] as any;
+          const val = binding[prop];
+          if (typeof val === "function") return val.bind(binding);
+          return val;
+        },
+      });
+    }
+  };
+}
+
+export const AiProxy = createBindingProxy<Env>("AI");
+
+// ── CodeExecutor — runs user scripts in sandboxed dynamic workers ────────────
+// Dynamic workers can't hold LOADER directly (DurableObjectClass handles don't
+// survive RPC). This entrypoint owns the real LOADER and executes scripts on
+// behalf of dynamic workers. The script is embedded as module source code.
+
+export class CodeExecutor extends WorkerEntrypoint<Env> {
+  async execute(
+    script: string,
+    opts?: { model?: string },
+  ): Promise<{ result?: unknown; error?: string }> {
+    const model = opts?.model ?? "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+    const moduleCode = [
+      "export default {",
+      "  async fetch(req, env) {",
+      "    try {",
+      "      const userFn = " + script + ";",
+      "      const result = await userFn({",
+      "        ai: env.AI,",
+      "        model: " + JSON.stringify(model) + ",",
+      "      });",
+      "      return Response.json({ result });",
+      "    } catch (e) {",
+      "      return Response.json({ error: e.message });",
+      "    }",
+      "  }",
+      "}",
+    ].join("\n");
+
+    const worker = this.env.LOADER.get("exec-" + crypto.randomUUID().slice(0, 8), () => ({
+      compatibilityDate: "2026-04-01",
+      mainModule: "index.js",
+      modules: { "index.js": moduleCode },
+      env: { AI: (this.env as any).AI_PROXY },
+    }));
+
+    const entrypoint = worker.getEntrypoint() as any;
+    const resp = await entrypoint.fetch(new Request("http://localhost/"));
+    return resp.json() as Promise<{ result?: unknown; error?: string }>;
+  }
 }
 
 // ── Egress runtime wrapper ───────────────────────────────────────────────────
@@ -61,6 +129,87 @@ function egressRuntimeWrapper(projectSlug: string): string {
   };
 })();
 `;
+}
+
+// ── SQL Studio helpers ───────────────────────────────────────────────────────
+// Embeds LibSQL Studio as an iframe and bridges postMessage ↔ DO SQLite.
+
+function studioHTML(name: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>${name} — SQL Studio</title>
+<style>*{margin:0;padding:0}body,html{height:100%;overflow:hidden}iframe{width:100%;height:100%;border:none}</style>
+</head><body>
+<iframe id="studio" src="https://libsqlstudio.com/embed/sqlite?name=${encodeURIComponent(name)}"></iframe>
+<script>
+window.addEventListener("message", async function(e) {
+  if (e.source !== document.getElementById("studio").contentWindow) return;
+  var msg = e.data;
+  if (!msg || (msg.type !== "query" && msg.type !== "transaction")) return;
+  try {
+    var resp = await fetch("_sql", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(msg)
+    });
+    var result = await resp.json();
+    e.source.postMessage(result, "*");
+  } catch (err) {
+    e.source.postMessage({ type: msg.type, id: msg.id, error: err.message }, "*");
+  }
+});
+</script></body></html>`;
+}
+
+interface StudioQueryResult {
+  rows: Record<string, unknown>[];
+  headers: { name: string; displayName: string; originalType: null; type: number }[];
+  stat: { rowsAffected: number; rowsRead: number; rowsWritten: number; queryDurationMs: number };
+  lastInsertRowid: number;
+}
+
+function runStudioQuery(sql: SqlStorage, statement: string): StudioQueryResult {
+  const cursor = sql.exec(statement);
+  const cols = cursor.columnNames;
+  const rows = cursor.toArray();
+  const headers = cols.map((n) => ({
+    name: n,
+    displayName: n,
+    originalType: null as null,
+    type: 1,
+  }));
+  return {
+    rows,
+    headers,
+    stat: {
+      rowsAffected: cursor.rowsWritten,
+      rowsRead: cursor.rowsRead,
+      rowsWritten: cursor.rowsWritten,
+      queryDurationMs: 0,
+    },
+    lastInsertRowid: 0,
+  };
+}
+
+async function execSQL(sql: SqlStorage, req: Request): Promise<Response> {
+  const msg = (await req.json()) as {
+    type: string;
+    id: number;
+    statement?: string;
+    statements?: string[];
+  };
+  try {
+    if (msg.type === "query") {
+      const result = runStudioQuery(sql, msg.statement!);
+      return Response.json({ type: "query", id: msg.id, data: result });
+    }
+    if (msg.type === "transaction") {
+      const results = (msg.statements ?? []).map((s) => runStudioQuery(sql, s));
+      return Response.json({ type: "transaction", id: msg.id, data: results });
+    }
+    return Response.json({ error: "unknown type" }, { status: 400 });
+  } catch (err: any) {
+    return Response.json({ type: msg.type, id: msg.id, error: err.message });
+  }
 }
 
 // ── Events helpers ───────────────────────────────────────────────────────────
@@ -460,18 +609,28 @@ export default {
     const id = env.PROJECT.idFromName(parsed.project);
     const stub = env.PROJECT.get(id);
 
-    // Pass routing info + artifact credentials via headers
-    const headers = new Headers(req.headers);
-    headers.set("x-level", parsed.level);
-    headers.set("x-project-slug", parsed.project);
-    if (parsed.level === "app") headers.set("x-app", (parsed as any).app);
-    if (project.artifacts_remote) headers.set("x-artifacts-remote", project.artifacts_remote);
-    if (project.artifacts_repo) headers.set("x-artifacts-repo", project.artifacts_repo);
-    headers.set("x-config", project.config_json);
-
-    const fwdInit: RequestInit = { method: req.method, headers };
-    if (req.method !== "GET" && req.method !== "HEAD") fwdInit.body = req.body;
-    const doResp = await stub.fetch(new Request(req.url, fwdInit));
+    // For WebSocket: routing info goes in query params (overriding headers loses the
+    // internal WebSocket upgrade flag). For normal requests: use headers as before.
+    let doResp: Response;
+    if (req.headers.get("Upgrade") === "websocket") {
+      const wsUrl = new URL(req.url);
+      wsUrl.searchParams.set("_level", parsed.level);
+      wsUrl.searchParams.set("_slug", parsed.project);
+      if (parsed.level === "app") wsUrl.searchParams.set("_app", (parsed as any).app);
+      if (project.artifacts_remote) wsUrl.searchParams.set("_remote", project.artifacts_remote);
+      if (project.artifacts_repo) wsUrl.searchParams.set("_repo", project.artifacts_repo);
+      wsUrl.searchParams.set("_config", project.config_json);
+      doResp = await stub.fetch(new Request(wsUrl.toString(), req));
+    } else {
+      const headers = new Headers(req.headers);
+      headers.set("x-level", parsed.level);
+      headers.set("x-project-slug", parsed.project);
+      if (parsed.level === "app") headers.set("x-app", (parsed as any).app);
+      if (project.artifacts_remote) headers.set("x-artifacts-remote", project.artifacts_remote);
+      if (project.artifacts_repo) headers.set("x-artifacts-repo", project.artifacts_repo);
+      headers.set("x-config", project.config_json);
+      doResp = await stub.fetch(new Request(req, { headers }));
+    }
 
     // Intercept reply responses that need outbound email sending
     // (the facet can't access SEND_EMAIL, so the outer worker handles it)
@@ -658,6 +817,29 @@ export class Project extends DurableObject<Env> {
   #bundleVersion = 0;
   #buildStates: Record<string, BuildState> = {};
   #logBuffer: Array<{ ts: number; message: string }> = [];
+  #facetsTableReady = false;
+
+  ensureFacetsTable() {
+    if (this.#facetsTableReady) return;
+    this.ctx.storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS _facets (
+        name TEXT PRIMARY KEY,
+        class_name TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_fetch_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+    );
+    this.#facetsTableReady = true;
+  }
+
+  upsertFacet(name: string, className: string) {
+    this.ensureFacetsTable();
+    this.ctx.storage.sql.exec(
+      "INSERT INTO _facets (name, class_name) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET last_fetch_at = datetime('now')",
+      name,
+      className,
+    );
+  }
 
   async ensureCloned(remote: string, repoName: string): Promise<void> {
     if (this.#cloned) return;
@@ -1015,11 +1197,12 @@ export class Project extends DurableObject<Env> {
 
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
-    const level = req.headers.get("x-level") ?? "app";
-    const slug = req.headers.get("x-project-slug") ?? "unknown";
-    const app = req.headers.get("x-app");
-    const remote = req.headers.get("x-artifacts-remote");
-    const repoName = req.headers.get("x-artifacts-repo");
+    // Routing info: headers for normal requests, query params for WebSocket
+    const level = req.headers.get("x-level") ?? url.searchParams.get("_level") ?? "app";
+    const slug = req.headers.get("x-project-slug") ?? url.searchParams.get("_slug") ?? "unknown";
+    const app = req.headers.get("x-app") ?? url.searchParams.get("_app") ?? null;
+    const remote = req.headers.get("x-artifacts-remote") ?? url.searchParams.get("_remote") ?? null;
+    const repoName = req.headers.get("x-artifacts-repo") ?? url.searchParams.get("_repo") ?? null;
     const doId = this.ctx.id.toString();
 
     console.log(
@@ -1083,6 +1266,18 @@ export class Project extends DurableObject<Env> {
 
     // ── Level 2: Artifact editor ────────────────────────────────────────
     if (level === "project") {
+      // ── SQL Studio (Project DO) ──
+      if (url.pathname === "/_studio") {
+        this.ensureFacetsTable();
+        return new Response(studioHTML(`Project: ${slug}`), {
+          headers: { "content-type": "text/html;charset=utf-8" },
+        });
+      }
+      if (req.method === "POST" && url.pathname === "/_sql") {
+        this.ensureFacetsTable();
+        return execSQL(this.ctx.storage.sql, req);
+      }
+
       // GET /api/files — list files
       if (req.method === "GET" && url.pathname === "/api/files") {
         const files = await this.listFiles();
@@ -1221,7 +1416,13 @@ export class Project extends DurableObject<Env> {
       console.log(`[Project DO] app=${app} has dist (built at ${meta.builtAt})`);
 
       // Serve static assets from dist (skip for /api/* and POST — those go to the facet)
-      const isApiOrPost = url.pathname.startsWith("/api/") || req.method === "POST";
+      const isApiOrPost =
+        url.pathname.startsWith("/api/") ||
+        url.pathname.startsWith("/_studio") ||
+        url.pathname.startsWith("/_sql") ||
+        url.pathname.startsWith("/streams/") ||
+        req.method === "POST" ||
+        req.headers.get("Upgrade") === "websocket";
       if (!isApiOrPost) {
         // 1. Check dist assets (bundler output)
         if (meta.assetFiles?.length > 0) {
@@ -1261,12 +1462,14 @@ export class Project extends DurableObject<Env> {
         `[Project DO] loading built app=${app} mainModule=${mainModule} hash=${sourceHash} modules=${Object.keys(modules).join(",")}`,
       );
 
+      this.upsertFacet(app, "App");
       const facet = this.ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
         const worker = this.env.LOADER.get(`code:${app}:${sourceHash}`, async () => ({
           compatibilityDate: "2026-04-01",
           mainModule,
           modules,
           globalOutbound: this.env.EGRESS_GATEWAY,
+          env: { AI: this.env.AI_PROXY, EXEC: this.env.CODE_EXECUTOR },
         }));
         return { class: worker.getDurableObjectClass("App") };
       });
@@ -1308,6 +1511,7 @@ export class Project extends DurableObject<Env> {
       `[Project DO] loading app=${app} class=${userClassName} hash=${sourceHash} source=${appSource.length}bytes`,
     );
 
+    this.upsertFacet(app, "App");
     const facet = this.ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
       const worker = this.env.LOADER.get(`code:${app}:${sourceHash}`, async () => ({
         compatibilityDate: "2026-04-01",
