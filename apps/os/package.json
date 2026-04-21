@@ -121,8 +121,8 @@
     "zod": "4.1.12"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "catalog:cloudflare",
-    "@cloudflare/workers-types": "catalog:cloudflare",
+    "@cloudflare/vite-plugin": "1.15.3",
+    "@cloudflare/workers-types": "^4.20251128.0",
     "@effect/vitest": "^0.22.0",
     "@opencode-ai/plugin": "^1.1.36",
     "@playwright/test": "^1.57.0",
@@ -149,7 +149,7 @@
     "vite": "7.2.4",
     "vite-tsconfig-paths": "^6.0.4",
     "vitest": "4.0.15",
-    "wrangler": "catalog:cloudflare",
+    "wrangler": "^4.84.1",
     "ws": "^8.19.0"
   }
 }
