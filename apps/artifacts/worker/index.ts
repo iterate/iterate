@@ -8,7 +8,9 @@ interface Env {
       name: string,
       opts?: { description?: string },
     ): Promise<{ name: string; remote: string; token: string }>;
-    get(name: string): Promise<{
+    get(
+      name: string,
+    ): Promise<{
       createToken(scope?: "read" | "write", ttl?: number): Promise<{ plaintext: string }>;
     }>;
     list(opts?: { limit?: number; cursor?: string }): Promise<{ repos: { name: string }[] }>;
@@ -19,65 +21,6 @@ interface Env {
   ARTIFACTS_NAMESPACE: string;
 }
 
-type RepoCtx = { fs: MemoryFS; dir: string; remote: string; token: string };
-
-// Deduplicated clone cache — prevents race when parallel requests hit the same repo
-const repoCache = new Map<string, RepoCtx>();
-const cloneInFlight = new Map<string, Promise<RepoCtx>>();
-const deepened = new Set<string>();
-
-async function ensureCloned(env: Env, name: string): Promise<RepoCtx> {
-  if (repoCache.has(name)) return repoCache.get(name)!;
-  if (cloneInFlight.has(name)) return cloneInFlight.get(name)!;
-  const promise = (async () => {
-    const repo = await env.ARTIFACTS.get(name);
-    const remote = `https://${env.CF_ACCOUNT_ID}.artifacts.cloudflare.net/git/${env.ARTIFACTS_NAMESPACE}/${name}.git`;
-    const { plaintext: token } = await repo.createToken("write", 3600);
-    const tokenSecret = token.split("?")[0];
-    const fs = new MemoryFS();
-    const dir = `/${name}`;
-    await git.clone({
-      fs: fs.promises,
-      http,
-      dir,
-      url: remote,
-      onAuth: () => ({ username: "x", password: tokenSecret }),
-      singleBranch: true,
-      depth: 1,
-    });
-    const ctx: RepoCtx = { fs, dir, remote, token: tokenSecret };
-    repoCache.set(name, ctx);
-    cloneInFlight.delete(name);
-    return ctx;
-  })();
-  cloneInFlight.set(name, promise);
-  return promise;
-}
-
-/** Deepen shallow clone once per isolate to get history. */
-async function ensureDeepened(env: Env, name: string) {
-  const ctx = await ensureCloned(env, name);
-  if (!deepened.has(name)) {
-    await git.fetch({
-      fs: ctx.fs.promises,
-      http,
-      dir: ctx.dir,
-      depth: 50,
-      relative: true,
-      onAuth: () => ({ username: "x", password: ctx.token }),
-    });
-    deepened.add(name);
-  }
-  return ctx;
-}
-
-function json(data: unknown, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -85,28 +28,27 @@ export default {
     const q = (k: string) => url.searchParams.get(k);
 
     try {
-      // --- Repos CRUD ---
-      if (p === "/api/repos" && req.method === "GET") {
-        return json(await env.ARTIFACTS.list());
-      }
+      if (p === "/api/repos" && req.method === "GET")
+        return Response.json(await env.ARTIFACTS.list());
+
       if (p === "/api/repos" && req.method === "POST") {
         const { name } = (await req.json()) as { name: string };
         const result = await env.ARTIFACTS.create(name);
-        return json({ name: result.name, remote: result.remote });
+        return Response.json({ name: result.name, remote: result.remote });
       }
+
       if (p === "/api/repos" && req.method === "DELETE") {
         const { name } = (await req.json()) as { name: string };
         await env.ARTIFACTS.delete(name);
         repoCache.delete(name);
-        return json({ ok: true });
+        return Response.json({ ok: true });
       }
 
-      // --- Tree at HEAD or specific commit ---
+      // Tree at HEAD or specific commit
       if (p === "/api/tree") {
         const name = q("repo"),
           oid = q("oid") || "HEAD";
-        if (!name) return json({ error: "repo param required" }, 400);
-        // When requesting a specific commit, ensure we have history (not just depth=1)
+        if (!name) return Response.json({ error: "repo param required" }, { status: 400 });
         const { fs, dir } =
           oid !== "HEAD" ? await ensureDeepened(env, name) : await ensureCloned(env, name);
         const paths: string[] = [];
@@ -119,39 +61,33 @@ export default {
             return filepath;
           },
         });
-        return json({ paths: paths.sort() });
+        return Response.json({ paths: paths.sort() });
       }
 
-      // --- Read file at HEAD (from working tree) ---
-      if (p === "/api/file" && req.method === "GET") {
-        const name = q("repo"),
-          filepath = q("path");
-        if (!name || !filepath) return json({ error: "repo and path params required" }, 400);
-        const { fs, dir } = await ensureCloned(env, name);
-        return json({
-          content: await fs.promises.readFile(`${dir}/${filepath}`, { encoding: "utf8" }),
-        });
-      }
-
-      // --- Read file at a specific commit ---
+      // Read file — at HEAD (no oid) or a specific commit (oid param)
       if (p === "/api/blob") {
         const name = q("repo"),
           filepath = q("path"),
           oid = q("oid");
-        if (!name || !filepath || !oid)
-          return json({ error: "repo, path, and oid params required" }, 400);
+        if (!name || !filepath)
+          return Response.json({ error: "repo and path params required" }, { status: 400 });
         const { fs, dir } = await ensureCloned(env, name);
-        const { blob } = await git.readBlob({ fs: fs.promises, dir, oid, filepath });
-        return json({ content: new TextDecoder().decode(blob) });
+        if (oid) {
+          const { blob } = await git.readBlob({ fs: fs.promises, dir, oid, filepath });
+          return Response.json({ content: new TextDecoder().decode(blob) });
+        }
+        return Response.json({
+          content: await fs.promises.readFile(`${dir}/${filepath}`, { encoding: "utf8" }),
+        });
       }
 
-      // --- Git log (deepens clone lazily) ---
+      // Git log — deepens shallow clone lazily
       if (p === "/api/log") {
         const name = q("repo");
-        if (!name) return json({ error: "repo param required" }, 400);
+        if (!name) return Response.json({ error: "repo param required" }, { status: 400 });
         const { fs, dir } = await ensureDeepened(env, name);
         const commits = await git.log({ fs: fs.promises, dir, depth: 50 });
-        return json(
+        return Response.json(
           commits.map((c) => ({
             oid: c.oid,
             message: c.commit.message,
@@ -161,7 +97,7 @@ export default {
         );
       }
 
-      // --- Commit and push local changes ---
+      // Commit and push local changes
       if (p === "/api/commit" && req.method === "POST") {
         const {
           repo: name,
@@ -190,10 +126,10 @@ export default {
           remote: "origin",
           onAuth: () => ({ username: "x", password: token }),
         });
-        return json({ ok: true });
+        return Response.json({ ok: true });
       }
 
-      // --- Restore: create a new commit reusing the target commit's tree object (O(1)) ---
+      // Restore: new commit reusing target commit's tree object (O(1))
       // https://isomorphic-git.org/docs/en/commit — `tree` param reuses an existing tree OID
       if (p === "/api/restore" && req.method === "POST") {
         const { repo: name, oid } = (await req.json()) as { repo: string; oid: string };
@@ -215,14 +151,65 @@ export default {
           remote: "origin",
           onAuth: () => ({ username: "x", password: token }),
         });
-        // Sync working tree with the new HEAD
         await git.checkout({ fs: fs.promises, dir, ref: "HEAD", force: true });
-        return json({ ok: true });
+        return Response.json({ ok: true });
       }
     } catch (e: unknown) {
-      return json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
     }
 
     return env.ASSETS.fetch(req);
   },
 } satisfies ExportedHandler<Env>;
+
+// --- Git helpers (below the primary export per RULES.md) ---
+
+type RepoCtx = { fs: MemoryFS; dir: string; remote: string; token: string };
+const repoCache = new Map<string, RepoCtx>();
+const cloneInFlight = new Map<string, Promise<RepoCtx>>();
+const deepened = new Set<string>();
+
+async function ensureCloned(env: Env, name: string): Promise<RepoCtx> {
+  if (repoCache.has(name)) return repoCache.get(name)!;
+  if (cloneInFlight.has(name)) return cloneInFlight.get(name)!;
+  const promise = (async () => {
+    const repo = await env.ARTIFACTS.get(name);
+    const remote = `https://${env.CF_ACCOUNT_ID}.artifacts.cloudflare.net/git/${env.ARTIFACTS_NAMESPACE}/${name}.git`;
+    const { plaintext: token } = await repo.createToken("write", 3600);
+    const tokenSecret = token.split("?")[0];
+    const fs = new MemoryFS();
+    const dir = `/${name}`;
+    const onAuth = () => ({ username: "x", password: tokenSecret });
+    await git.clone({
+      fs: fs.promises,
+      http,
+      dir,
+      url: remote,
+      onAuth,
+      singleBranch: true,
+      depth: 1,
+    });
+    const ctx: RepoCtx = { fs, dir, remote, token: tokenSecret };
+    repoCache.set(name, ctx);
+    cloneInFlight.delete(name);
+    return ctx;
+  })();
+  cloneInFlight.set(name, promise);
+  return promise;
+}
+
+async function ensureDeepened(env: Env, name: string) {
+  const ctx = await ensureCloned(env, name);
+  if (!deepened.has(name)) {
+    await git.fetch({
+      fs: ctx.fs.promises,
+      http,
+      dir: ctx.dir,
+      depth: 50,
+      relative: true,
+      onAuth: () => ({ username: "x", password: ctx.token }),
+    });
+    deepened.add(name);
+  }
+  return ctx;
+}

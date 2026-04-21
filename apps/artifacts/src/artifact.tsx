@@ -1,71 +1,27 @@
-/**
- * Artifact view — browse any commit, edit HEAD, restore old commits.
- *
- * Hierarchy: artifact > commit > file list > file
- * - No commit param = HEAD (editable, local changes tracked)
- * - commit param = browsing old commit (read-only, restorable)
- *
- * https://tanstack.com/router/latest/docs/framework/react/guide/data-loading
- */
-import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
-import { useState, useEffect, useMemo, useCallback } from "react";
+/** Artifact view — file tree, editor with syntax highlighting, commit history, restore. */
+import {
+  useLoaderData,
+  useParams,
+  useSearch,
+  useNavigate,
+  useRouter,
+} from "@tanstack/react-router";
+import { useState, useEffect, useMemo } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView } from "@codemirror/view";
 import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import type { Extension } from "@codemirror/state";
 
-export const Route = createFileRoute("/$artifact")({
-  validateSearch: (search: Record<string, unknown>) => ({
-    commit: (search.commit as string) ?? undefined,
-    file: (search.file as string) ?? undefined,
-  }),
-  loaderDeps: ({ search }) => ({ commit: search.commit }),
-  loader: async ({ params, deps }) => {
-    const commitsRes = await fetch(`/api/log?repo=${params.artifact}`);
-    if (!commitsRes.ok) throw new Error(`Failed to load commits: ${commitsRes.status}`);
-    const commits = await commitsRes.json();
-
-    const qs = deps.commit ? `&oid=${deps.commit}` : "";
-    const treeRes = await fetch(`/api/tree?repo=${params.artifact}${qs}`);
-    if (!treeRes.ok) throw new Error(`Failed to load tree: ${treeRes.status}`);
-    const tree: string[] = (await treeRes.json()).paths ?? [];
-
-    return { commits, tree };
-  },
-  pendingComponent: () => (
-    <div
-      style={{
-        flex: 1,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color: "#8b949e",
-      }}
-    >
-      Loading repository...
-    </div>
-  ),
-  errorComponent: ({ error }) => (
-    <div
-      style={{
-        flex: 1,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color: "#f85149",
-      }}
-    >
-      Failed to load: {error.message}
-    </div>
-  ),
-  component: ArtifactView,
-});
-
-function ArtifactView() {
-  const { commits, tree } = Route.useLoaderData();
-  const { artifact } = Route.useParams();
-  const { commit: selectedCommit, file } = Route.useSearch();
+export function ArtifactView() {
+  const { commits, tree } = useLoaderData({ from: "/$artifact" }) as {
+    commits: { oid: string; message: string; author: string; timestamp: number }[];
+    tree: string[];
+  };
+  const { artifact } = useParams({ from: "/$artifact" });
+  const { commit: selectedCommit, file } = useSearch({ from: "/$artifact" }) as {
+    commit?: string;
+    file?: string;
+  };
   const navigate = useNavigate();
   const router = useRouter();
 
@@ -74,16 +30,16 @@ function ArtifactView() {
   const [head, setHead] = useState<Record<string, string>>({});
   const [working, setWorking] = useState<Record<string, string>>({});
   const [fileContent, setFileContent] = useState<string | undefined>();
-  const [fileLoading, setFileLoading] = useState(false);
   const [commitMsg, setCommitMsg] = useState("");
   const [busy, setBusy] = useState("");
-  const [langExt, setLangExt] = useState<Extension[]>([]);
+  const [langExt, setLangExt] = useState<import("@codemirror/state").Extension[]>([]);
 
   const dirty = useMemo(
     () => new Set(Object.keys(working).filter((p) => working[p] !== head[p])),
     [working, head],
   );
   const hasLocalChanges = isHead && dirty.size > 0;
+  const fileLoading = !!file && fileContent === undefined && !head[file!];
 
   useEffect(() => {
     setHead({});
@@ -99,12 +55,11 @@ function ArtifactView() {
   useEffect(() => {
     setFileContent(undefined);
     if (!file) return;
-    setFileLoading(true);
     const controller = new AbortController();
-    const url = selectedCommit
-      ? `/api/blob?repo=${artifact}&path=${encodeURIComponent(file)}&oid=${selectedCommit}`
-      : `/api/file?repo=${artifact}&path=${encodeURIComponent(file)}`;
-    fetch(url, { signal: controller.signal })
+    const qs = selectedCommit ? `&oid=${selectedCommit}` : "";
+    fetch(`/api/blob?repo=${artifact}&path=${encodeURIComponent(file)}${qs}`, {
+      signal: controller.signal,
+    })
       .then((r) => r.json())
       .then((d) => {
         setFileContent(d.content);
@@ -115,8 +70,7 @@ function ArtifactView() {
       })
       .catch((e) => {
         if (e.name !== "AbortError") throw e;
-      })
-      .finally(() => setFileLoading(false));
+      });
     return () => controller.abort();
   }, [artifact, file, selectedCommit, isHead]);
 
@@ -141,13 +95,16 @@ function ArtifactView() {
   }
 
   // https://tanstack.com/router/latest/docs/framework/react/guide/data-loading#using-routerinvalidate
-  const handleCommit = useCallback(async () => {
+  async function handleCommit() {
     if (dirty.size === 0 || !commitMsg.trim()) return;
     setBusy("Committing...");
-    const files = [...dirty].map((p) => ({ path: p, content: working[p] }));
     await fetch("/api/commit", {
       method: "POST",
-      body: JSON.stringify({ repo: artifact, message: commitMsg, files }),
+      body: JSON.stringify({
+        repo: artifact,
+        message: commitMsg,
+        files: [...dirty].map((p) => ({ path: p, content: working[p] })),
+      }),
       headers: { "content-type": "application/json" },
     });
     localStorage.removeItem(`art:${artifact}:working`);
@@ -156,24 +113,21 @@ function ArtifactView() {
     setHead({});
     setBusy("");
     await router.invalidate();
-  }, [artifact, dirty, working, commitMsg, router]);
+  }
 
-  const handleRestore = useCallback(
-    async (oid: string) => {
-      setBusy("Restoring...");
-      await fetch("/api/restore", {
-        method: "POST",
-        body: JSON.stringify({ repo: artifact, oid }),
-        headers: { "content-type": "application/json" },
-      });
-      localStorage.removeItem(`art:${artifact}:working`);
-      setWorking({});
-      setHead({});
-      setBusy("");
-      await router.invalidate();
-    },
-    [artifact, router],
-  );
+  async function handleRestore(oid: string) {
+    setBusy("Restoring...");
+    await fetch("/api/restore", {
+      method: "POST",
+      body: JSON.stringify({ repo: artifact, oid }),
+      headers: { "content-type": "application/json" },
+    });
+    localStorage.removeItem(`art:${artifact}:working`);
+    setWorking({});
+    setHead({});
+    setBusy("");
+    await router.invalidate();
+  }
 
   return (
     <>
@@ -261,18 +215,35 @@ function ArtifactView() {
         }}
       >
         <h3 style={H3}>History</h3>
-
         {hasLocalChanges && (
           <div style={{ padding: "8px 12px", borderBottom: "1px solid #21262d" }}>
             <input
-              style={{ ...INPUT, width: "100%", marginBottom: 6 }}
+              style={{
+                background: "#0d1117",
+                color: "#c9d1d9",
+                border: "1px solid #30363d",
+                borderRadius: 4,
+                padding: "4px 8px",
+                fontSize: 13,
+                width: "100%",
+                marginBottom: 6,
+              }}
               placeholder="Commit message"
               value={commitMsg}
               onChange={(e) => setCommitMsg(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleCommit()}
             />
             <button
-              style={{ ...BTN_GREEN, width: "100%" }}
+              style={{
+                background: "#238636",
+                color: "#fff",
+                border: "none",
+                borderRadius: 6,
+                padding: "6px 12px",
+                cursor: "pointer",
+                fontSize: 13,
+                width: "100%",
+              }}
               onClick={handleCommit}
               disabled={!commitMsg.trim()}
             >
@@ -280,13 +251,13 @@ function ArtifactView() {
             </button>
           </div>
         )}
-
         {hasLocalChanges && (
           <div
             onClick={() => nav({ file })}
             style={{
-              ...COMMIT_ITEM,
-              background: isHead ? "#161b22" : "transparent",
+              padding: "8px 12px",
+              borderBottom: "1px solid #21262d",
+              background: "#161b22",
               borderLeft: "3px solid #f0883e",
             }}
           >
@@ -296,48 +267,60 @@ function ArtifactView() {
             </div>
           </div>
         )}
-
-        {commits.map(
-          (c: { oid: string; message: string; author: string; timestamp: number }, i: number) => {
-            const isLatest = i === 0;
-            const isActive = selectedCommit === c.oid || (isHead && i === 0 && !hasLocalChanges);
-            return (
+        {commits.map((c, i) => {
+          const isLatest = i === 0;
+          return (
+            <div
+              key={c.oid}
+              style={{
+                padding: "8px 12px",
+                borderBottom: "1px solid #21262d",
+                background:
+                  selectedCommit === c.oid || (isHead && i === 0 && !hasLocalChanges)
+                    ? "#161b22"
+                    : "transparent",
+              }}
+            >
               <div
-                key={c.oid}
-                style={{ ...COMMIT_ITEM, background: isActive ? "#161b22" : "transparent" }}
+                onClick={() => nav({ commit: isLatest ? undefined : c.oid, file })}
+                style={{ cursor: "pointer" }}
               >
                 <div
-                  onClick={() => nav({ commit: isLatest ? undefined : c.oid, file })}
-                  style={{ cursor: "pointer" }}
+                  style={{
+                    color: "#c9d1d9",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
                 >
-                  <div
-                    style={{
-                      color: "#c9d1d9",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {isLatest && "HEAD — "}
-                    {c.message.split("\n")[0]}
-                  </div>
-                  <div style={{ color: "#8b949e", fontSize: 11, marginTop: 2 }}>
-                    {c.oid.slice(0, 7)} &middot; {c.author} &middot;{" "}
-                    {new Date(c.timestamp * 1000).toLocaleDateString()}
-                  </div>
+                  {isLatest && "HEAD — "}
+                  {c.message.split("\n")[0]}
                 </div>
-                {!isLatest && selectedCommit === c.oid && (
-                  <button
-                    style={{ ...BTN_SMALL, marginTop: 4 }}
-                    onClick={() => handleRestore(c.oid)}
-                  >
-                    Restore to this commit
-                  </button>
-                )}
+                <div style={{ color: "#8b949e", fontSize: 11, marginTop: 2 }}>
+                  {c.oid.slice(0, 7)} &middot; {c.author} &middot;{" "}
+                  {new Date(c.timestamp * 1000).toLocaleDateString()}
+                </div>
               </div>
-            );
-          },
-        )}
+              {!isLatest && selectedCommit === c.oid && (
+                <button
+                  style={{
+                    background: "transparent",
+                    color: "#58a6ff",
+                    border: "1px solid #30363d",
+                    borderRadius: 4,
+                    padding: "2px 8px",
+                    cursor: "pointer",
+                    fontSize: 12,
+                    marginTop: 4,
+                  }}
+                  onClick={() => handleRestore(c.oid)}
+                >
+                  Restore to this commit
+                </button>
+              )}
+            </div>
+          );
+        })}
       </div>
     </>
   );
@@ -358,30 +341,3 @@ const H3 = {
   letterSpacing: 1,
   color: "#8b949e",
 };
-const INPUT = {
-  background: "#0d1117",
-  color: "#c9d1d9",
-  border: "1px solid #30363d",
-  borderRadius: 4,
-  padding: "4px 8px",
-  fontSize: 13,
-};
-const BTN_SMALL = {
-  background: "transparent",
-  color: "#58a6ff",
-  border: "1px solid #30363d",
-  borderRadius: 4,
-  padding: "2px 8px",
-  cursor: "pointer",
-  fontSize: 12,
-};
-const BTN_GREEN = {
-  background: "#238636",
-  color: "#fff",
-  border: "none",
-  borderRadius: 6,
-  padding: "6px 12px",
-  cursor: "pointer",
-  fontSize: 13,
-};
-const COMMIT_ITEM = { padding: "8px 12px", borderBottom: "1px solid #21262d" };
