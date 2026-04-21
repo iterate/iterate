@@ -83,9 +83,34 @@ async function handleSqlExec(sql: any, req: Request) {
   }
 }
 
-// ── StreamProcessor — receives events from events.iterate.com via WebSocket ──
-// Processes agent-input-added (user) events by calling OpenAI and appending
-// the assistant response back via the same WebSocket connection.
+// ── StreamProcessor — agent loop with codemode tool calling ──────────────────
+// Receives events via WebSocket from events.iterate.com. On user messages:
+// 1. Calls Workers AI (Kimi K2.5) with full chat history
+// 2. Parses triple-backtick code blocks from the response
+// 3. Executes code blocks in sandboxed workers via CodeExecutor
+// 4. Feeds results back to the AI for a follow-up response
+// This creates an agentic loop: user → AI → code → result → AI → response
+
+const AGENT_MODEL = "@cf/moonshotai/kimi-k2.5";
+
+const SYSTEM_PROMPT = `You are a helpful coding assistant running inside a Cloudflare Worker.
+
+You can execute JavaScript code by wrapping it in a fenced code block with the language tag "js". The code must be an async arrow function that receives {ai, model} and returns a value:
+
+\`\`\`js
+async ({ai, model}) => {
+  // ai.run(model, {messages, max_tokens}) calls Workers AI
+  const r = await ai.run(model, {
+    messages: [{role: "user", content: "What is 2+2?"}],
+    max_tokens: 50,
+  });
+  return { answer: r.response };
+}
+\`\`\`
+
+The result of the code execution will be provided back to you. Use code blocks when the user asks you to compute something, fetch data, or do anything that benefits from actual execution rather than just reasoning.
+
+Keep non-code responses concise. When you use a code block, briefly explain what you're doing before and after.`;
 
 export class StreamProcessor extends DurableObject {
   ensureTable() {
@@ -103,79 +128,193 @@ export class StreamProcessor extends DurableObject {
     `);
   }
 
+  get sp(): string {
+    return (this.ctx.storage.kv.get("streamPath") as string) || "unknown";
+  }
+
   getHistory(): Array<{ role: string; content: string }> {
     return this.ctx.storage.sql
-      .exec(
-        "SELECT role, content FROM events WHERE type = 'agent-input-added' AND role IS NOT NULL ORDER BY id",
-      )
+      .exec("SELECT role, content FROM events WHERE role IS NOT NULL ORDER BY id")
       .toArray() as any;
   }
 
-  async runCodemode(script: string): Promise<{ result?: unknown; error?: string }> {
-    console.log("[StreamProcessor] running codemode, script length:", script.length);
+  storeEvent(
+    type: string,
+    role: string | null,
+    content: string | null,
+    payload: any,
+    offset?: number | null,
+  ) {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO events (type, role, content, payload, offset, stream_path) VALUES (?, ?, ?, ?, ?, ?)",
+      type,
+      role,
+      content,
+      JSON.stringify(payload),
+      offset ?? null,
+      this.sp,
+    );
+  }
+
+  // Parse ```js ... ``` code blocks from AI response
+  extractCodeBlocks(text: string): string[] {
+    const blocks: string[] = [];
+    const re = /```(?:js|javascript)\s*\n([\s\S]*?)```/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const code = m[1].trim();
+      if (code.length > 0) blocks.push(code);
+    }
+    return blocks;
+  }
+
+  async callAI(messages: Array<{ role: string; content: string }>): Promise<string | null> {
+    const ai = (this as any).env.AI;
+    console.log("[Agent] AI binding type:", typeof ai, "hasRun:", typeof ai?.run);
+    if (!ai || typeof ai.run !== "function") {
+      const err = "AI binding missing or no .run(): " + typeof ai;
+      this.storeEvent("agent-error", null, null, { error: err });
+      return null;
+    }
     try {
-      // EXEC is the CodeExecutor service binding — runs scripts in sandboxed workers
-      const result = await (this as any).env.EXEC.execute(script);
-      console.log("[StreamProcessor] codemode result:", JSON.stringify(result).slice(0, 200));
-
-      // Store the result
-      const sp = (this.ctx.storage.kv.get("streamPath") as string) || "unknown";
-      this.ctx.storage.sql.exec(
-        "INSERT INTO events (type, payload, stream_path) VALUES (?, ?, ?)",
-        "codemode-result-added",
-        JSON.stringify(result),
-        sp,
-      );
-
-      return result;
+      const data = await ai.run(AGENT_MODEL, { messages, max_tokens: 2048 });
+      // Workers AI: some models return { response } (Llama), others return
+      // { choices: [{message: {content}}] } (Kimi, OpenAI-compat). Handle both.
+      const text = (data as any)?.response ?? (data as any)?.choices?.[0]?.message?.content ?? null;
+      if (!text) return null;
+      return String(text);
     } catch (err: any) {
-      console.error("[StreamProcessor] codemode error:", err.message);
+      this.storeEvent("agent-error", null, null, {
+        error: err.message,
+        stack: err.stack?.split("\n").slice(0, 3),
+      });
+      return null;
+    }
+  }
+
+  async executeCode(script: string): Promise<{ result?: unknown; error?: string }> {
+    try {
+      return await (this as any).env.EXEC.execute(script);
+    } catch (err: any) {
       return { error: err.message };
     }
   }
 
-  async runAgent(): Promise<{ role: string; content: string } | null> {
+  // Agent loop that collects events (for /process endpoint)
+  async runAgentLoopCollecting(collect: (evt: any) => void): Promise<void> {
     const history = this.getHistory();
-    const messages = [
-      { role: "system", content: "You are a helpful assistant. Keep responses concise." },
-      ...history,
-    ];
+    const messages = [{ role: "system", content: SYSTEM_PROMPT }, ...history];
 
-    console.log("[StreamProcessor] calling Workers AI with", messages.length, "messages");
+    const response = await this.callAI(messages);
+    if (!response) return;
 
-    let data: any;
-    try {
-      data = await (this as any).env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
-        messages,
-        max_tokens: 1024,
+    this.storeEvent("agent-input-added", "assistant", response, {
+      role: "assistant",
+      content: response,
+    });
+    collect({ type: "agent-input-added", payload: { role: "assistant", content: response } });
+
+    const codeBlocks = this.extractCodeBlocks(response);
+    if (codeBlocks.length === 0) return;
+
+    for (const code of codeBlocks) {
+      const result = await this.executeCode(code);
+      const resultStr = JSON.stringify(result, null, 2);
+      this.storeEvent("codemode-block-added", null, code, { script: code });
+      this.storeEvent("codemode-result-added", null, resultStr, result);
+      collect({ type: "codemode-block-added", payload: { script: code } });
+      collect({ type: "codemode-result-added", payload: result });
+      this.storeEvent("agent-input-added", "user", "[Code result]:\n" + resultStr, {
+        role: "user",
+        content: "[Code result]:\n" + resultStr,
       });
-    } catch (err: any) {
-      console.error("[StreamProcessor] AI error:", err.message);
-      const streamPath = (this.ctx.storage.kv.get("streamPath") as string) || "unknown";
-      this.ctx.storage.sql.exec(
-        "INSERT INTO events (type, payload, stream_path) VALUES (?, ?, ?)",
-        "agent-error",
-        JSON.stringify({ error: err.message }),
-        streamPath,
-      );
-      return null;
     }
 
-    const assistantContent = data.response as string;
+    const followUp = await this.callAI([
+      { role: "system", content: SYSTEM_PROMPT },
+      ...this.getHistory(),
+    ]);
+    if (!followUp) return;
+    this.storeEvent("agent-input-added", "assistant", followUp, {
+      role: "assistant",
+      content: followUp,
+    });
+    collect({ type: "agent-input-added", payload: { role: "assistant", content: followUp } });
+  }
 
-    // Store assistant response
-    const streamPath = (this.ctx.storage.kv.get("streamPath") as string) || "unknown";
-    this.ctx.storage.sql.exec(
-      "INSERT INTO events (type, role, content, payload, stream_path) VALUES (?, ?, ?, ?, ?)",
-      "agent-input-added",
-      "assistant",
-      assistantContent,
-      JSON.stringify({ role: "assistant", content: assistantContent }),
-      streamPath,
+  // Full agent loop via WebSocket (deprecated — use /process instead)
+  async runAgentLoop(ws: WebSocket): Promise<void> {
+    const history = this.getHistory();
+    const messages = [{ role: "system", content: SYSTEM_PROMPT }, ...history];
+
+    console.log("[Agent] calling AI with", messages.length, "messages");
+    const response = await this.callAI(messages);
+    if (!response) return;
+
+    // Store and send the assistant response
+    this.storeEvent("agent-input-added", "assistant", response, {
+      role: "assistant",
+      content: response,
+    });
+    ws.send(
+      JSON.stringify({
+        type: "append",
+        event: { type: "agent-input-added", payload: { role: "assistant", content: response } },
+      }),
     );
 
-    console.log("[StreamProcessor] assistant response:", assistantContent.slice(0, 80));
-    return { role: "assistant", content: assistantContent };
+    // Check for code blocks
+    const codeBlocks = this.extractCodeBlocks(response);
+    if (codeBlocks.length === 0) return;
+
+    // Execute each code block
+    for (const code of codeBlocks) {
+      console.log("[Agent] executing code block:", code.slice(0, 80));
+      const result = await this.executeCode(code);
+      const resultStr = JSON.stringify(result, null, 2);
+
+      // Store the codemode events
+      this.storeEvent("codemode-block-added", null, code, { script: code });
+      this.storeEvent("codemode-result-added", null, resultStr, result);
+
+      // Append to stream
+      ws.send(
+        JSON.stringify({
+          type: "append",
+          event: { type: "codemode-block-added", payload: { script: code } },
+        }),
+      );
+      ws.send(
+        JSON.stringify({
+          type: "append",
+          event: { type: "codemode-result-added", payload: result },
+        }),
+      );
+
+      // Add result to history as a "system" message so AI sees it
+      this.storeEvent("agent-input-added", "user", "[Code execution result]:\n" + resultStr, {
+        role: "user",
+        content: "[Code execution result]:\n" + resultStr,
+      });
+    }
+
+    // Follow-up: let AI see the code results and provide a final response
+    console.log("[Agent] follow-up after code execution");
+    const followUpHistory = this.getHistory();
+    const followUpMessages = [{ role: "system", content: SYSTEM_PROMPT }, ...followUpHistory];
+    const followUp = await this.callAI(followUpMessages);
+    if (!followUp) return;
+
+    this.storeEvent("agent-input-added", "assistant", followUp, {
+      role: "assistant",
+      content: followUp,
+    });
+    ws.send(
+      JSON.stringify({
+        type: "append",
+        event: { type: "agent-input-added", payload: { role: "assistant", content: followUp } },
+      }),
+    );
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -198,7 +337,39 @@ export class StreamProcessor extends DurableObject {
       const pair = new WebSocketPair();
       this.ctx.acceptWebSocket(pair[1]);
       console.log("[StreamProcessor] WebSocket accepted for stream:", streamPath);
+      // Send a welcome message to confirm the connection works
+      pair[1].send(JSON.stringify({ type: "connected", stream: streamPath }));
       return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+
+    // POST /process — process an event, return append events
+    if (req.method === "POST" && pathname === "/process") {
+      const event = (await req.json()) as any;
+      this.storeEvent(
+        event.type || "unknown",
+        event.payload?.role || null,
+        event.payload?.content || null,
+        event.payload || {},
+        event.offset ?? null,
+      );
+
+      const appends: any[] = [];
+      const collect = (evt: any) => appends.push(evt);
+
+      if (event.type === "agent-input-added" && event.payload?.role === "user") {
+        try {
+          await this.runAgentLoopCollecting(collect);
+        } catch (loopErr: any) {
+          collect({ type: "agent-error", payload: { error: "loop:" + loopErr.message } });
+        }
+      }
+      if (event.type === "codemode-block-added" && event.payload?.script) {
+        const result = await this.executeCode(event.payload.script);
+        this.storeEvent("codemode-result-added", null, JSON.stringify(result), result);
+        collect({ type: "codemode-result-added", payload: result });
+      }
+
+      return Response.json({ ok: true, appends });
     }
 
     // POST /init — set stream path
@@ -227,46 +398,42 @@ export class StreamProcessor extends DurableObject {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+    // Diagnostic: echo back immediately to prove this method fires
+    try {
+      ws.send(JSON.stringify({ type: "echo", raw: String(message).slice(0, 200) }));
+    } catch {}
+    this.ensureTable();
     try {
       const frame = JSON.parse(message as string);
 
       // StreamSocketEventFrame from events.iterate.com: { type: "event", event: {...} }
       if (frame.type === "event" && frame.event) {
         const event = frame.event;
-        const streamPath = (this.ctx.storage.kv.get("streamPath") as string) || "unknown";
+        const streamPath = this.sp;
         console.log("[StreamProcessor] event frame:", event.type, "stream:", streamPath);
 
         // Store the event
-        this.ctx.storage.sql.exec(
-          "INSERT INTO events (type, role, content, payload, offset, stream_path) VALUES (?, ?, ?, ?, ?, ?)",
+        this.storeEvent(
           event.type || "unknown",
           event.payload?.role || null,
           event.payload?.content || null,
-          JSON.stringify(event.payload || {}),
+          event.payload || {},
           event.offset ?? null,
-          streamPath,
         );
 
-        // Process agent-input-added (user) → call Workers AI → respond
+        // Agent loop: on user message, call AI → parse code blocks → execute → follow up
         if (event.type === "agent-input-added" && event.payload?.role === "user") {
-          const result = await this.runAgent();
-          if (result) {
-            ws.send(
-              JSON.stringify({
-                type: "append",
-                event: { type: "agent-input-added", payload: result },
-              }),
-            );
-          }
+          await this.runAgentLoop(ws);
         }
 
-        // Process codemode-block-added → execute script in sandboxed worker → respond
+        // Direct codemode (manual, not from AI) → execute and respond
         if (event.type === "codemode-block-added" && event.payload?.script) {
-          const codemodeResult = await this.runCodemode(event.payload.script);
+          const result = await this.executeCode(event.payload.script);
+          this.storeEvent("codemode-result-added", null, JSON.stringify(result), result);
           ws.send(
             JSON.stringify({
               type: "append",
-              event: { type: "codemode-result-added", payload: codemodeResult },
+              event: { type: "codemode-result-added", payload: result },
             }),
           );
         }
@@ -281,7 +448,10 @@ export class StreamProcessor extends DurableObject {
 
       console.log("[StreamProcessor] unknown frame type:", frame.type);
     } catch (e: any) {
-      console.error("[StreamProcessor] ws message error:", e.message);
+      console.error("[StreamProcessor] ws message error:", e.message, e.stack);
+      try {
+        ws.send(JSON.stringify({ type: "error", message: e.message }));
+      } catch {}
     }
   }
 
@@ -353,6 +523,33 @@ export class App extends DurableObject {
       return handleSqlExec(this.ctx.storage.sql, req);
     }
 
+    // ── POST /_ws-message — WebSocket message dispatch from Project DO ──
+    if (req.method === "POST" && pathname === "/_ws-message") {
+      const body = (await req.json()) as { pathname: string; message: string };
+      // Parse the stream path from the original WebSocket URL pathname
+      // pathname is like /streams/%2Fagents%2Ftest/ws
+      const wsPathMatch = body.pathname.match(/^\/streams\/([^/]+)/);
+      if (!wsPathMatch) return Response.json({ appends: [] });
+      const wsStreamPath = decodeURIComponent(wsPathMatch[1]);
+
+      try {
+        const frame = JSON.parse(body.message);
+        if (frame.type !== "event" || !frame.event) return Response.json({ appends: [] });
+
+        const proc = this.getOrCreateStream(wsStreamPath);
+        const resp = await proc.fetch(
+          new Request("http://localhost/process", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(frame.event),
+          }),
+        );
+        return new Response(resp.body, resp);
+      } catch (e: any) {
+        return Response.json({ appends: [], error: e.message });
+      }
+    }
+
     // ── Streams routing: /streams/:encodedPath/... ──
     const streamsMatch = pathname.match(/^\/streams\/([^/]+)(\/.*)?$/);
     if (streamsMatch) {
@@ -360,9 +557,13 @@ export class App extends DurableObject {
       const subPath = streamsMatch[2] || "/";
       const proc = this.getOrCreateStream(streamPath);
 
-      // WebSocket upgrade → forward to StreamProcessor facet
+      // WebSocket upgrade — accept at App DO (nested facets can't do WebSocket)
+      // Tag with stream path so webSocketMessage can dispatch
       if (req.headers.get("Upgrade") === "websocket") {
-        return proc.fetch(req);
+        const pair = new WebSocketPair();
+        this.ctx.acceptWebSocket(pair[1], ["stream:" + streamPath]);
+        pair[1].send(JSON.stringify({ type: "connected", stream: streamPath }));
+        return new Response(null, { status: 101, webSocket: pair[0] });
       }
 
       // /_studio + /_sql
@@ -500,8 +701,40 @@ export class App extends DurableObject {
     }
   }
 
-  // WebSocket for streams is handled by StreamProcessor facets directly
-  webSocketMessage(_ws: WebSocket, _message: string | ArrayBuffer) {}
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+    // Dispatch stream WebSocket messages to the StreamProcessor via /process
+    const tags = this.ctx.getTags(ws);
+    const streamTag = tags.find((t: string) => t.startsWith("stream:"));
+    if (!streamTag) return;
+    const streamPath = streamTag.slice("stream:".length);
+
+    try {
+      const frame = JSON.parse(message as string);
+      if (frame.type !== "event" || !frame.event) return;
+
+      const proc = this.getOrCreateStream(streamPath);
+      const resp = await proc.fetch(
+        new Request("http://localhost/process", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(frame.event),
+        }),
+      );
+      const result = (await resp.json()) as any;
+
+      // Forward any append events back through the WebSocket
+      if (result.appends) {
+        for (const appendEvent of result.appends) {
+          ws.send(JSON.stringify({ type: "append", event: appendEvent }));
+        }
+      }
+    } catch (e: any) {
+      console.error("[App] ws dispatch error:", e.message);
+      try {
+        ws.send(JSON.stringify({ type: "error", message: e.message }));
+      } catch {}
+    }
+  }
   webSocketClose(ws: WebSocket) {
     ws.close();
   }
