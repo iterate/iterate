@@ -3,115 +3,98 @@
 
 export class MemoryFS {
   private files = new Map<string, Uint8Array>();
-  private dirs = new Set<string>(["/"]); // root always exists
+  private dirs = new Set<string>(["/"]);
 
-  private normalize(p: string): string {
+  private normalize(p: string) {
     if (!p.startsWith("/")) p = "/" + p;
     return p.replace(/\/+/g, "/").replace(/\/$/, "") || "/";
   }
 
-  private parentDir(p: string): string {
+  private parentDir(p: string) {
     const i = p.lastIndexOf("/");
     return i <= 0 ? "/" : p.slice(0, i);
   }
 
-  // Promisified API (what isomorphic-git actually uses)
+  private enoent(p: string): never {
+    throw Object.assign(new Error(`ENOENT: ${p}`), { code: "ENOENT" });
+  }
+
   promises = {
-    readFile: async (path: string, opts?: { encoding?: string }): Promise<Uint8Array | string> => {
+    readFile: async (path: string, opts?: { encoding?: string }) => {
       const p = this.normalize(path);
       const data = this.files.get(p);
-      if (!data) throw Object.assign(new Error(`ENOENT: ${p}`), { code: "ENOENT" });
+      if (!data) this.enoent(p);
       if (opts?.encoding === "utf8") return new TextDecoder().decode(data);
       return data;
     },
 
-    writeFile: async (
-      path: string,
-      data: Uint8Array | string,
-      opts?: { mode?: number },
-    ): Promise<void> => {
+    writeFile: async (path: string, data: Uint8Array | string) => {
       const p = this.normalize(path);
-      // auto-create parent dirs
       const parent = this.parentDir(p);
-      if (parent !== p && !this.dirs.has(parent)) {
+      if (parent !== p && !this.dirs.has(parent))
         await this.promises.mkdir(parent, { recursive: true });
-      }
-      const buf = typeof data === "string" ? new TextEncoder().encode(data) : data;
-      this.files.set(p, buf);
+      this.files.set(p, typeof data === "string" ? new TextEncoder().encode(data) : data);
     },
 
-    unlink: async (path: string): Promise<void> => {
+    unlink: async (path: string) => {
       const p = this.normalize(path);
-      if (!this.files.has(p)) throw Object.assign(new Error(`ENOENT: ${p}`), { code: "ENOENT" });
+      if (!this.files.has(p)) this.enoent(p);
       this.files.delete(p);
     },
 
-    readdir: async (path: string): Promise<string[]> => {
+    readdir: async (path: string) => {
       const p = this.normalize(path);
-      if (!this.dirs.has(p)) throw Object.assign(new Error(`ENOENT: ${p}`), { code: "ENOENT" });
+      if (!this.dirs.has(p)) this.enoent(p);
       const entries = new Set<string>();
       const prefix = p === "/" ? "/" : p + "/";
       for (const f of this.files.keys()) {
         if (f.startsWith(prefix)) {
-          const rest = f.slice(prefix.length);
-          const name = rest.split("/")[0];
+          const name = f.slice(prefix.length).split("/")[0];
           if (name) entries.add(name);
         }
       }
       for (const d of this.dirs) {
         if (d.startsWith(prefix) && d !== p) {
-          const rest = d.slice(prefix.length);
-          const name = rest.split("/")[0];
+          const name = d.slice(prefix.length).split("/")[0];
           if (name) entries.add(name);
         }
       }
       return [...entries];
     },
 
-    mkdir: async (path: string, opts?: { recursive?: boolean }): Promise<void> => {
+    mkdir: async (path: string, opts?: { recursive?: boolean }) => {
       const p = this.normalize(path);
       if (this.dirs.has(p)) return;
       if (opts?.recursive) {
-        const parts = p.split("/").filter(Boolean);
         let cur = "";
-        for (const part of parts) {
+        for (const part of p.split("/").filter(Boolean)) {
           cur += "/" + part;
           this.dirs.add(cur);
         }
       } else {
-        const parent = this.parentDir(p);
-        if (!this.dirs.has(parent))
-          throw Object.assign(new Error(`ENOENT: ${parent}`), { code: "ENOENT" });
+        if (!this.dirs.has(this.parentDir(p))) this.enoent(this.parentDir(p));
         this.dirs.add(p);
       }
     },
 
-    rmdir: async (path: string): Promise<void> => {
-      const p = this.normalize(path);
-      this.dirs.delete(p);
+    rmdir: async (path: string) => {
+      this.dirs.delete(this.normalize(path));
     },
 
-    stat: async (path: string): Promise<ReturnType<typeof makeStat>> => {
+    stat: async (path: string) => {
       const p = this.normalize(path);
       if (this.dirs.has(p)) return makeStat("dir", 0);
       const data = this.files.get(p);
       if (data) return makeStat("file", data.length);
-      throw Object.assign(new Error(`ENOENT: ${p}`), { code: "ENOENT" });
+      this.enoent(p);
     },
 
-    lstat: async (path: string): Promise<ReturnType<typeof makeStat>> => {
-      return this.promises.stat(path);
-    },
+    lstat: async (path: string) => this.promises.stat(path),
 
-    symlink: async (_target: string, _path: string): Promise<void> => {
-      // noop — isomorphic-git doesn't actually need symlinks
-    },
-
-    readlink: async (path: string): Promise<string> => {
-      throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
-    },
-
-    chmod: async (_path: string, _mode: number): Promise<void> => {},
+    // Stubs required by isomorphic-git FS interface but unused for non-symlink repos
+    symlink: async () => {},
+    readlink: async (path: string): Promise<string> => this.enoent(path),
+    chmod: async () => {},
   };
 }
 

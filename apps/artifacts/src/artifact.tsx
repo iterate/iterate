@@ -13,15 +13,9 @@ import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 
 export function ArtifactView() {
-  const { commits, tree } = useLoaderData({ from: "/$artifact" }) as {
-    commits: { oid: string; message: string; author: string; timestamp: number }[];
-    tree: string[];
-  };
+  const { commits, tree } = useLoaderData({ from: "/$artifact" });
   const { artifact } = useParams({ from: "/$artifact" });
-  const { commit: selectedCommit, file } = useSearch({ from: "/$artifact" }) as {
-    commit?: string;
-    file?: string;
-  };
+  const { commit: selectedCommit, file } = useSearch({ from: "/$artifact" });
   const navigate = useNavigate();
   const router = useRouter();
 
@@ -43,7 +37,7 @@ export function ArtifactView() {
 
   useEffect(() => {
     setHead({});
-    setWorking(jsonParse(localStorage.getItem(`art:${artifact}:working`), {}));
+    setWorking(JSON.parse(localStorage.getItem(`art:${artifact}:working`) || "{}"));
     setFileContent(undefined);
   }, [artifact]);
 
@@ -51,7 +45,7 @@ export function ArtifactView() {
     if (isHead) localStorage.setItem(`art:${artifact}:working`, JSON.stringify(working));
   }, [artifact, working, isHead]);
 
-  // Fetch file content — AbortController prevents stale responses from racing
+  // AbortController prevents stale responses from racing on quick file switches
   useEffect(() => {
     setFileContent(undefined);
     if (!file) return;
@@ -132,21 +126,13 @@ export function ArtifactView() {
   return (
     <>
       {/* File tree */}
-      <div
-        style={{ width: 200, borderRight: "1px solid #30363d", overflow: "auto", flexShrink: 0 }}
-      >
-        <h3 style={H3}>Files</h3>
+      <div className="w-[200px] border-r border-[#30363d] overflow-auto shrink-0">
+        <h3 className="px-3 py-2 text-[11px] uppercase tracking-wide text-[#8b949e]">Files</h3>
         {tree.map((p) => (
           <div
             key={p}
             onClick={() => nav({ commit: selectedCommit, file: p })}
-            style={{
-              padding: "4px 12px",
-              cursor: "pointer",
-              fontSize: 13,
-              background: p === file ? "#161b22" : "transparent",
-              color: isHead && dirty.has(p) ? "#f0883e" : "#c9d1d9",
-            }}
+            className={`px-3 py-1 cursor-pointer text-[13px] ${p === file ? "bg-[#161b22]" : ""} ${isHead && dirty.has(p) ? "text-orange-400" : "text-[#c9d1d9]"}`}
           >
             {isHead && dirty.has(p) ? "* " : ""}
             {p}
@@ -155,37 +141,19 @@ export function ArtifactView() {
       </div>
 
       {/* Editor */}
-      <div
-        style={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-          minWidth: 0,
-        }}
-      >
-        <div
-          style={{
-            padding: "8px 12px",
-            borderBottom: "1px solid #30363d",
-            display: "flex",
-            gap: 8,
-            alignItems: "center",
-            fontSize: 13,
-            flexShrink: 0,
-          }}
-        >
-          {file && <span style={{ color: "#8b949e" }}>{file}</span>}
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        <div className="px-3 py-2 border-b border-[#30363d] flex gap-2 items-center text-[13px] shrink-0">
+          {file && <span className="text-[#8b949e]">{file}</span>}
           {!isHead && (
-            <span style={{ color: "#f0883e", fontSize: 12 }}>
+            <span className="text-orange-400 text-xs">
               Viewing {selectedCommit!.slice(0, 7)} (read-only) — restore to make changes
             </span>
           )}
-          {busy && <span style={{ color: "#f0883e", marginLeft: "auto" }}>{busy}</span>}
+          {busy && <span className="text-orange-400 ml-auto">{busy}</span>}
         </div>
-        <div style={{ flex: 1, overflow: "auto" }}>
+        <div className="flex-1 overflow-auto">
           {fileLoading ? (
-            <div style={{ padding: 40, color: "#8b949e" }}>Loading file...</div>
+            <div className="p-10 text-[#8b949e]">Loading file...</div>
           ) : file && editorValue !== undefined ? (
             <CodeMirror
               key={file}
@@ -197,53 +165,25 @@ export function ArtifactView() {
               onChange={isHead ? (val) => setWorking((w) => ({ ...w, [file]: val })) : undefined}
             />
           ) : (
-            <div style={{ padding: 40, color: "#8b949e" }}>
-              {file ? "File not found" : "Select a file"}
-            </div>
+            <div className="p-10 text-[#8b949e]">{file ? "File not found" : "Select a file"}</div>
           )}
         </div>
       </div>
 
       {/* History sidebar */}
-      <div
-        style={{
-          width: 280,
-          borderLeft: "1px solid #30363d",
-          overflow: "auto",
-          fontSize: 13,
-          flexShrink: 0,
-        }}
-      >
-        <h3 style={H3}>History</h3>
+      <div className="w-[280px] border-l border-[#30363d] overflow-auto text-[13px] shrink-0">
+        <h3 className="px-3 py-2 text-[11px] uppercase tracking-wide text-[#8b949e]">History</h3>
         {hasLocalChanges && (
-          <div style={{ padding: "8px 12px", borderBottom: "1px solid #21262d" }}>
+          <div className="px-3 py-2 border-b border-[#21262d]">
             <input
-              style={{
-                background: "#0d1117",
-                color: "#c9d1d9",
-                border: "1px solid #30363d",
-                borderRadius: 4,
-                padding: "4px 8px",
-                fontSize: 13,
-                width: "100%",
-                marginBottom: 6,
-              }}
+              className="w-full bg-[#0d1117] text-[#c9d1d9] border border-[#30363d] rounded px-2 py-1 text-[13px] mb-1.5 outline-none focus:border-blue-500"
               placeholder="Commit message"
               value={commitMsg}
               onChange={(e) => setCommitMsg(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleCommit()}
             />
             <button
-              style={{
-                background: "#238636",
-                color: "#fff",
-                border: "none",
-                borderRadius: 6,
-                padding: "6px 12px",
-                cursor: "pointer",
-                fontSize: 13,
-                width: "100%",
-              }}
+              className="w-full bg-green-700 hover:bg-green-600 text-white border-none rounded-md py-1.5 px-3 cursor-pointer text-[13px] disabled:opacity-50"
               onClick={handleCommit}
               disabled={!commitMsg.trim()}
             >
@@ -254,90 +194,49 @@ export function ArtifactView() {
         {hasLocalChanges && (
           <div
             onClick={() => nav({ file })}
-            style={{
-              padding: "8px 12px",
-              borderBottom: "1px solid #21262d",
-              background: "#161b22",
-              borderLeft: "3px solid #f0883e",
-            }}
+            className="px-3 py-2 border-b border-[#21262d] bg-[#161b22] border-l-[3px] border-l-orange-400 cursor-pointer"
           >
-            <div style={{ color: "#f0883e", fontWeight: 600 }}>Local changes</div>
-            <div style={{ color: "#8b949e", fontSize: 11 }}>
+            <div className="text-orange-400 font-semibold">Local changes</div>
+            <div className="text-[#8b949e] text-[11px]">
               {dirty.size} modified file{dirty.size !== 1 ? "s" : ""}
             </div>
           </div>
         )}
-        {commits.map((c, i) => {
-          const isLatest = i === 0;
-          return (
-            <div
-              key={c.oid}
-              style={{
-                padding: "8px 12px",
-                borderBottom: "1px solid #21262d",
-                background:
-                  selectedCommit === c.oid || (isHead && i === 0 && !hasLocalChanges)
-                    ? "#161b22"
-                    : "transparent",
-              }}
-            >
+        {commits.map(
+          (c: { oid: string; message: string; author: string; timestamp: number }, i: number) => {
+            const isLatest = i === 0;
+            const isActive = selectedCommit === c.oid || (isHead && i === 0 && !hasLocalChanges);
+            return (
               <div
-                onClick={() => nav({ commit: isLatest ? undefined : c.oid, file })}
-                style={{ cursor: "pointer" }}
+                key={c.oid}
+                className={`px-3 py-2 border-b border-[#21262d] ${isActive ? "bg-[#161b22]" : ""}`}
               >
                 <div
-                  style={{
-                    color: "#c9d1d9",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
+                  onClick={() => nav({ commit: isLatest ? undefined : c.oid, file })}
+                  className="cursor-pointer"
                 >
-                  {isLatest && "HEAD — "}
-                  {c.message.split("\n")[0]}
+                  <div className="text-[#c9d1d9] truncate">
+                    {isLatest && "HEAD — "}
+                    {c.message.split("\n")[0]}
+                  </div>
+                  <div className="text-[#8b949e] text-[11px] mt-0.5">
+                    {c.oid.slice(0, 7)} &middot; {c.author} &middot;{" "}
+                    {new Date(c.timestamp * 1000).toLocaleDateString()}
+                  </div>
                 </div>
-                <div style={{ color: "#8b949e", fontSize: 11, marginTop: 2 }}>
-                  {c.oid.slice(0, 7)} &middot; {c.author} &middot;{" "}
-                  {new Date(c.timestamp * 1000).toLocaleDateString()}
-                </div>
+                {!isLatest && selectedCommit === c.oid && (
+                  <button
+                    className="mt-1 bg-transparent text-blue-400 border border-[#30363d] rounded px-2 py-0.5 cursor-pointer text-xs hover:bg-[#161b22]"
+                    onClick={() => handleRestore(c.oid)}
+                  >
+                    Restore to this commit
+                  </button>
+                )}
               </div>
-              {!isLatest && selectedCommit === c.oid && (
-                <button
-                  style={{
-                    background: "transparent",
-                    color: "#58a6ff",
-                    border: "1px solid #30363d",
-                    borderRadius: 4,
-                    padding: "2px 8px",
-                    cursor: "pointer",
-                    fontSize: 12,
-                    marginTop: 4,
-                  }}
-                  onClick={() => handleRestore(c.oid)}
-                >
-                  Restore to this commit
-                </button>
-              )}
-            </div>
-          );
-        })}
+            );
+          },
+        )}
       </div>
     </>
   );
 }
-
-function jsonParse<T>(raw: string | null, fallback: T): T {
-  try {
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-const H3 = {
-  padding: "8px 12px",
-  fontSize: 11,
-  textTransform: "uppercase" as const,
-  letterSpacing: 1,
-  color: "#8b949e",
-};

@@ -8,9 +8,7 @@ interface Env {
       name: string,
       opts?: { description?: string },
     ): Promise<{ name: string; remote: string; token: string }>;
-    get(
-      name: string,
-    ): Promise<{
+    get(name: string): Promise<{
       createToken(scope?: "read" | "write", ttl?: number): Promise<{ plaintext: string }>;
     }>;
     list(opts?: { limit?: number; cursor?: string }): Promise<{ repos: { name: string }[] }>;
@@ -162,14 +160,16 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-// --- Git helpers (below the primary export per RULES.md) ---
+// --- Git helpers ---
 
-type RepoCtx = { fs: MemoryFS; dir: string; remote: string; token: string };
-const repoCache = new Map<string, RepoCtx>();
-const cloneInFlight = new Map<string, Promise<RepoCtx>>();
+const repoCache = new Map<string, { fs: MemoryFS; dir: string; remote: string; token: string }>();
+const cloneInFlight = new Map<
+  string,
+  Promise<{ fs: MemoryFS; dir: string; remote: string; token: string }>
+>();
 const deepened = new Set<string>();
 
-async function ensureCloned(env: Env, name: string): Promise<RepoCtx> {
+async function ensureCloned(env: Env, name: string) {
   if (repoCache.has(name)) return repoCache.get(name)!;
   if (cloneInFlight.has(name)) return cloneInFlight.get(name)!;
   const promise = (async () => {

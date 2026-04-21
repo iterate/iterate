@@ -29,19 +29,7 @@ const rootRoute = createRootRoute({
     return (await res.json()).repos.map((r: { name: string }) => r.name) as string[];
   },
   pendingComponent: () => (
-    <div
-      style={{
-        display: "flex",
-        height: "100vh",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "#0d1117",
-        color: "#8b949e",
-        fontFamily: "monospace",
-      }}
-    >
-      Loading...
-    </div>
+    <div className="flex h-screen items-center justify-center text-[#8b949e]">Loading...</div>
   ),
   component: Root,
 });
@@ -50,15 +38,7 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: () => (
-    <div
-      style={{
-        flex: 1,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color: "#8b949e",
-      }}
-    >
+    <div className="flex-1 flex items-center justify-center text-[#8b949e]">
       Select a repo to get started
     </div>
   ),
@@ -83,28 +63,12 @@ export const artifactRoute = createRoute({
     return { commits, tree: ((await treeRes.json()).paths ?? []) as string[] };
   },
   pendingComponent: () => (
-    <div
-      style={{
-        flex: 1,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color: "#8b949e",
-      }}
-    >
+    <div className="flex-1 flex items-center justify-center text-[#8b949e]">
       Loading repository...
     </div>
   ),
   errorComponent: ({ error }) => (
-    <div
-      style={{
-        flex: 1,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color: "#f85149",
-      }}
-    >
+    <div className="flex-1 flex items-center justify-center text-red-400">
       Failed to load: {error.message}
     </div>
   ),
@@ -145,99 +109,37 @@ function Root() {
     navigate({ to: "/$artifact", params: { artifact: name } });
   }
 
-  const linkStyle = {
-    padding: "4px 12px",
-    cursor: "pointer",
-    fontSize: 13,
-    display: "block",
-    color: "#c9d1d9",
-    textDecoration: "none",
-  };
-
   return (
-    <div
-      style={{
-        display: "flex",
-        height: "100vh",
-        fontFamily: "monospace",
-        background: "#0d1117",
-        color: "#c9d1d9",
-      }}
-    >
-      {isLoading && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 2,
-            background: "#1f6feb",
-            zIndex: 100,
-          }}
-        />
-      )}
-      <div
-        style={{
-          width: 220,
-          borderRight: "1px solid #30363d",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "auto",
-          flexShrink: 0,
-        }}
-      >
-        <h3
-          style={{
-            padding: "8px 12px",
-            fontSize: 11,
-            textTransform: "uppercase",
-            letterSpacing: 1,
-            color: "#8b949e",
-          }}
-        >
-          Repos
-        </h3>
-        <div style={{ padding: "4px 12px", display: "flex", gap: 4 }}>
+    <div className="flex h-screen">
+      {isLoading && <div className="fixed top-0 left-0 right-0 h-0.5 bg-blue-500 z-50" />}
+      <div className="w-[220px] border-r border-[#30363d] flex flex-col overflow-auto shrink-0">
+        <h3 className="px-3 py-2 text-[11px] uppercase tracking-wide text-[#8b949e]">Repos</h3>
+        <div className="px-3 py-1 flex gap-1">
           <input
-            style={{
-              background: "#0d1117",
-              color: "#c9d1d9",
-              border: "1px solid #30363d",
-              borderRadius: 4,
-              padding: "4px 8px",
-              fontSize: 13,
-              flex: 1,
-            }}
+            className="bg-[#0d1117] text-[#c9d1d9] border border-[#30363d] rounded px-2 py-1 text-[13px] flex-1 outline-none focus:border-blue-500"
             placeholder="new repo"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleCreate()}
           />
           <button
-            style={{
-              background: "transparent",
-              color: "#58a6ff",
-              border: "1px solid #30363d",
-              borderRadius: 4,
-              padding: "2px 8px",
-              cursor: "pointer",
-              fontSize: 12,
-            }}
+            className="bg-transparent text-blue-400 border border-[#30363d] rounded px-2 py-0.5 cursor-pointer text-xs hover:bg-[#161b22]"
             onClick={handleCreate}
           >
             +
           </button>
         </div>
-        {repos.map((r) => (
+        {repos.map((name) => (
           <Link
-            key={r}
+            key={name}
             to="/$artifact"
-            params={{ artifact: r }}
-            style={linkStyle}
-            activeProps={{ style: { ...linkStyle, background: "#161b22" } }}
+            params={{ artifact: name }}
+            className="block px-3 py-1 text-[13px] text-[#c9d1d9] no-underline hover:bg-[#161b22]"
+            activeProps={{
+              className: "block px-3 py-1 text-[13px] text-[#c9d1d9] no-underline bg-[#161b22]",
+            }}
           >
-            {r}
+            {name}
           </Link>
         ))}
       </div>
