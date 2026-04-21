@@ -2,6 +2,7 @@ import alchemy, { type Scope } from "alchemy";
 import { D1Database, TanStackStart, Worker, WorkerLoader } from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { slugify } from "@iterate-com/shared/slugify";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
 
@@ -63,7 +64,7 @@ const app = await alchemy(APP_NAME, {
   stateStore,
 });
 
-const workerName = `${APP_NAME}-${app.stage}`;
+const workerName = slugify(`${APP_NAME}-${app.stage}`);
 
 const db = await D1Database("codemode-db", {
   name: `${workerName}-db`,
@@ -86,7 +87,7 @@ export const worker = await TanStackStart(APP_NAME, {
   adopt: true,
   compatibilityFlags: ["global_fetch_strictly_public"],
   bindings: {
-    APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
+    APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
     DB: db,
     LOADER: WorkerLoader(),
     OUTBOUND: outboundWorker,

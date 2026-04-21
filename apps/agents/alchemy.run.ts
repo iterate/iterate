@@ -1,6 +1,8 @@
 import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { slugify } from "@iterate-com/shared/slugify";
 import alchemy, { type Scope } from "alchemy";
 import {
+  Ai,
   DurableObjectNamespace,
   Self,
   TanStackStart,
@@ -70,7 +72,11 @@ const app = await alchemy(APP_NAME, {
   stateStore,
 });
 
-const workerName = `${APP_NAME}-${app.stage}`;
+// Cloudflare's edge-preview endpoint (used by wrangler's remote-binding proxy
+// worker for AI/etc. in local dev) silently fails with `InferenceUpstreamError`
+// when the worker name contains characters outside `[a-z0-9-]` (e.g. Doppler
+// personal configs use `dev_<username>` as the stage).
+const workerName = slugify(`${APP_NAME}-${app.stage}`);
 const iterateAgent = DurableObjectNamespace<IterateAgent>("iterate-agent", {
   className: "IterateAgent",
   sqlite: true,
@@ -82,7 +88,8 @@ export const worker = await TanStackStart(APP_NAME, {
   bindings: {
     ITERATE_AGENT: iterateAgent,
     LOADER: WorkerLoader(),
-    APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
+    AI: Ai(),
+    APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
     // Same pattern as `apps/events/alchemy.run.ts` + `DynamicWorkerEgressGateway`: nested
     // codemode workers need a real `Fetcher` for `globalOutbound`, not `globalThis.fetch`.
     CODEMODE_OUTBOUND_FETCH: Worker.experimentalEntrypoint(Self, "CodemodeOutboundFetch"),

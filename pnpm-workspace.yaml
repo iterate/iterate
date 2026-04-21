@@ -45,6 +45,8 @@ minimumReleaseAgeExclude:
   - miniflare
   - wrangler
   - "@cloudflare/unenv-preset"
+  - "@cloudflare/vite-plugin"
+  - "@cloudflare/workers-types"
   - alchemy
   - "@cloudflare/sandbox"
   - workerd

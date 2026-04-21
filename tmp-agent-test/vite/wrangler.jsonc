@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ai-poc-vite",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-04-01",
+  "ai": { "binding": "AI" },
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
+}

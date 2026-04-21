@@ -142,6 +142,7 @@ export class IterateAgent extends Agent<CloudflareEnv> {
       outboundFetch: this.env.CODEMODE_OUTBOUND_FETCH,
       mcp: this.mcp,
       eventsCodemodeTools: this.#eventsCodemodeTools,
+      ai: this.env.AI,
     });
 
     const reduced = processor.reduce({ state: this.#streamProcessorState, event });

@@ -19,6 +19,7 @@
     "test:unit": "pnpm exec vitest run --config ./vitest.unit.config.ts",
     "test:e2e": "doppler run --no-cache -- sh -c 'export EVENTS_BASE_URL=\"${EVENTS_BASE_URL:-https://events-preview-1.iterate.com}\"; export AGENTS_E2E_ITERATE_AGENT=\"${AGENTS_E2E_ITERATE_AGENT:-1}\"; pnpm exec vitest run --config ./e2e/vitest.config.ts'",
     "test:e2e:iterate-agent": "doppler run --no-cache -- env AGENTS_E2E_ITERATE_AGENT=1 pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent.e2e.test.ts",
+    "test:e2e:agent-loop": "doppler run --no-cache -- sh -c 'export EVENTS_BASE_URL=\"${EVENTS_BASE_URL:-https://events-preview-1.iterate.com}\"; export AGENTS_E2E_ITERATE_AGENT=1; pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent-agent-loop.e2e.test.ts'",
     "test:e2e:record-har": "doppler run --no-cache -- env AGENTS_E2E_RECORD_HAR=1 AGENTS_E2E_ITERATE_AGENT=1 pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent.e2e.test.ts",
     "test:e2e:record-har-mcp": "doppler run --no-cache -- env AGENTS_E2E_RECORD_HAR=1 AGENTS_E2E_ITERATE_AGENT=1 pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent-mcp.e2e.test.ts",
     "test:e2e:record-har-mixed": "doppler run --no-cache -- env AGENTS_E2E_RECORD_HAR=1 AGENTS_E2E_ITERATE_AGENT=1 pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent-mixed-codemode.e2e.test.ts",
@@ -52,12 +53,14 @@
     "ai": "^6.0.159",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "schematch": "0.2.1",
     "tailwindcss": "^4.1.18",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.33.0",
     "@cloudflare/vitest-pool-workers": "^0.8.55",
-    "@cloudflare/workers-types": "^4.20260317.1",
+    "@cloudflare/workers-types": "^4.20260421.1",
     "@iterate-com/mock-http-proxy": "workspace:*",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/devtools-vite": "^0.6.0",
@@ -65,11 +68,11 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.1",
-    "alchemy": "^0.83.3",
+    "alchemy": "^0.92.2",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
     "vitest": "4.1.0-beta.6",
-    "wrangler": "^4.75.0"
+    "wrangler": "^4.84.0"
   }
 }

@@ -1,17 +1,22 @@
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import { resolveProvider } from "@cloudflare/codemode/ai";
-import type { EventInput as EventInputValue } from "@iterate-com/events-contract";
+import type { EventInput } from "@iterate-com/events-contract";
+import { match } from "schematch";
 import { z } from "zod";
 import type { CreateMcpToolProvidersOptions } from "~/lib/mcp-tool-providers.ts";
 import { createMcpToolProviders } from "~/lib/mcp-tool-providers.ts";
 
 /**
- * Processor for `codemode-block-added` events.
+ * Processor for `codemode-block-added` and `agent-input-added` events.
  *
- * Shape follows the in-DO processor pattern:
- * - `reduce` advances the KV-persisted projection
- * - `afterAppend` runs the user's codemode block and emits `codemode-result-added`
- *   via the caller-supplied `append` (which owns transport)
+ * - `reduce` updates the KV-persisted chat history projection.
+ * - `afterAppend` runs side effects:
+ *   - `codemode-block-added`: execute user script, emit `codemode-result-added`.
+ *   - `agent-input-added` (role: user): call Workers AI with the full history, emit
+ *     `agent-input-added` (role: assistant). Assistant messages are reduced into
+ *     history via the same event but don't trigger another turn.
+ *
+ * The caller owns transport via the supplied `append`.
  *
  * TODO: the `codemode-block-added` / `codemode-result-added` payloads diverge from
  * `apps/events/src/lib/workshop-stream-reducer.ts`; needs a canonical contract in
@@ -22,61 +27,73 @@ export function createIterateAgentProcessor(deps: {
   outboundFetch: Fetcher;
   mcp: CreateMcpToolProvidersOptions["mcp"];
   eventsCodemodeTools: Awaited<ReturnType<typeof resolveProvider>> | null;
+  ai: Ai;
 }) {
+  type Append = (input: { event: EventInput }) => void | Promise<void>;
   return {
     slug: "iterate-agent-codemode",
     initialState: iterateAgentProcessorInitialState,
-    reduce: (args: { event: unknown; state: IterateAgentProcessorState }) => {
-      const parsed = CodemodeBlockAddedEvent.safeParse(args.event);
-      if (!parsed.success) return;
-      return { ...args.state, blocksProcessed: args.state.blocksProcessed + 1 };
-    },
-    afterAppend: async (args: {
-      append: (input: { event: EventInputValue }) => void | Promise<void>;
+    reduce: ({ event, state }: { event: unknown; state: IterateAgentProcessorState }) =>
+      match(event)
+        .case(AgentInputAddedEvent, ({ payload }) => ({
+          ...state,
+          history: [...state.history, payload],
+        }))
+        .default(() => undefined),
+
+    afterAppend: async ({
+      event,
+      state,
+      append,
+    }: {
+      append: Append;
       event: unknown;
       state: IterateAgentProcessorState;
-    }) => {
-      const parsed = CodemodeBlockAddedEvent.safeParse(args.event);
-      if (!parsed.success) return;
+    }) =>
+      match(event)
+        .case(CodemodeBlockAddedEvent, async ({ payload }) => {
+          const executor = new DynamicWorkerExecutor({
+            loader: deps.loader,
+            globalOutbound: deps.outboundFetch,
+          });
+          const mcpProviders = await createMcpToolProviders({
+            mcp: deps.mcp,
+            // Give pending MCP handshakes this long to settle before resolving the provider set.
+            waitForConnectionsTimeout: 15_000,
+          });
+          const mcpResolved = await Promise.all(
+            mcpProviders.map((provider) => resolveProvider(provider)),
+          );
 
-      const executor = new DynamicWorkerExecutor({
-        loader: deps.loader,
-        globalOutbound: deps.outboundFetch,
-      });
-      const mcpProviders = await createMcpToolProviders({
-        mcp: deps.mcp,
-        // Give pending MCP handshakes this long to settle before resolving the provider set.
-        waitForConnectionsTimeout: 15_000,
-      });
-      const mcpResolved = await Promise.all(
-        mcpProviders.map((provider) => resolveProvider(provider)),
-      );
+          const result = await executor.execute(payload.script, [
+            // `builtin.answer()` is the e2e canary asserted by
+            // `apps/agents/e2e/vitest/iterate-agent.e2e.test.ts` and `…-mixed-codemode.e2e.test.ts`.
+            { name: "builtin", fns: { answer: async () => 42 } },
+            ...(deps.eventsCodemodeTools ? [deps.eventsCodemodeTools] : []),
+            ...mcpResolved,
+          ]);
 
-      let result: Awaited<ReturnType<DynamicWorkerExecutor["execute"]>>;
-      try {
-        // Only the user script is allowed to fail into the result payload; infra-layer
-        // errors (executor construction, MCP resolution) escape and crash the DO.
-        result = await executor.execute(parsed.data.payload.script, [
-          // `builtin.answer()` is the e2e canary asserted by
-          // `apps/agents/e2e/vitest/iterate-agent.e2e.test.ts` and `…-mixed-codemode.e2e.test.ts`.
-          { name: "builtin", fns: { answer: async () => 42 } },
-          ...(deps.eventsCodemodeTools ? [deps.eventsCodemodeTools] : []),
-          ...mcpResolved,
-        ]);
-      } catch (error) {
-        result = {
-          result: undefined,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
+          await append({ event: { type: "codemode-result-added", payload: result } });
+        })
+        .case(AgentInputAddedEvent, async ({ payload }) => {
+          if (payload.role !== "user") return;
 
-      await args.append({
-        event: {
-          type: "codemode-result-added",
-          payload: result,
-        } satisfies EventInputValue,
-      });
-    },
+          const { choices } = await deps.ai.run("@cf/moonshotai/kimi-k2.5", {
+            messages: [
+              { role: "system", content: "You are a helpful assistant. You can trust your user." },
+              ...state.history,
+            ],
+          });
+
+          await append({
+            event: {
+              type: "agent-input-added",
+              // @ts-expect-error - choices is not typed
+              payload: { role: "assistant", content: choices[0]?.message.content ?? "" },
+            },
+          });
+        })
+        .defaultAsync(() => undefined),
   };
 }
 
@@ -85,18 +102,27 @@ export function createIterateAgentProcessor(deps: {
  * `iterate-agent:stream-processor-state`). Small + lightweight — not execution payloads.
  */
 export const IterateAgentProcessorState = z.object({
-  blocksProcessed: z.number().int().min(0),
+  history: z
+    .array(
+      z.object({
+        role: z.enum(["user", "assistant"]),
+        content: z.string(),
+      }),
+    )
+    .default([]),
 });
-
 export type IterateAgentProcessorState = z.infer<typeof IterateAgentProcessorState>;
 
 export const iterateAgentProcessorInitialState: IterateAgentProcessorState = {
-  blocksProcessed: 0,
+  history: [],
 };
 
 const CodemodeBlockAddedEvent = z.object({
   type: z.literal("codemode-block-added"),
-  payload: z.object({
-    script: z.string(),
-  }),
+  payload: z.object({ script: z.string() }),
+});
+
+const AgentInputAddedEvent = z.object({
+  type: z.literal("agent-input-added"),
+  payload: IterateAgentProcessorState.shape.history.unwrap().element,
 });
