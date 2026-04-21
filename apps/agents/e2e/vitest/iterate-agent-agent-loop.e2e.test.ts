@@ -4,7 +4,7 @@
  * `env.AI.run()` routed through the `e2e` AI Gateway → emits an
  * `agent-input-added` event with role `assistant` carrying the model's reply.
  *
- * Runs one scenario today (`kimi` → `@cf/moonshotai/kimi-k2.5`), with the
+ * Runs one scenario today (`kimi` → `@cf/moonshotai/kimi-k2.6`), with the
  * test scaffolding shaped as a `Promise.all` over `SCENARIOS` so `openai/*` and
  * `anthropic/*` rows can be added back once caching works for them (see the
  * comment above `SCENARIOS` below).
@@ -66,7 +66,7 @@ const AGENT_INPUT_CONTENT = "What is the capital of France? Answer with one word
 // `cf-aig-authorization: Bearer $CLOUDFLARE_API_TOKEN` — that path supports
 // both Unified Billing and caching for every provider. Then add
 // `openai/gpt-5.4` and `anthropic/claude-opus-4.7` back to this list.
-const SCENARIOS = [{ label: "kimi", model: "@cf/moonshotai/kimi-k2.5" }] as const;
+const SCENARIOS = [{ label: "kimi", model: "@cf/moonshotai/kimi-k2.6" }] as const;
 
 describe.sequential("agents iterate-agent agent loop e2e", () => {
   test.skipIf(process.env.AGENTS_E2E_ITERATE_AGENT !== "1")(
