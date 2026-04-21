@@ -8,6 +8,7 @@ import { waitUntil } from "../../env.ts";
 import { createPostProcedureConsumerPlugin } from "../outbox/pgmq-lib.ts";
 import { queuer } from "../outbox/outbox-queuer.ts";
 import { getDb } from "../db/client.ts";
+import { createAuthWorkerClient } from "../utils/auth-worker-client.ts";
 import {
   getOrganizationAccessFromAuthWorker,
   getProjectAccessFromAuthWorker,
@@ -41,6 +42,15 @@ const withAuth = base.middleware(async ({ context, next }) => {
 });
 export const protectedProcedure = publicProcedure.use(withAuth);
 
+async function requireCurrentAuthAdmin(context: Context) {
+  const authUser = await createAuthWorkerClient({ headers: context.rawRequest.headers }).user.me();
+  if (authUser.role !== "admin") {
+    throw new ORPCError("FORBIDDEN", {
+      message: "Admin role required",
+    });
+  }
+}
+
 /**
  * Input schemas for org/project-scoped procedures.
  * oRPC's `.input()` replaces rather than merges, so each procedure must include
@@ -65,7 +75,6 @@ export const orgProtectedProcedure = protectedProcedure.use(
     }
 
     const { organization, membership } = await getOrganizationAccessFromAuthWorker({
-      db: context.db,
       authUserId: context.user.authUserId!,
       organizationSlug: slug,
     });
@@ -80,19 +89,13 @@ export const orgProtectedProcedure = protectedProcedure.use(
 );
 
 // Organization admin procedure that requires admin or owner role
-const orgAdminProcedure = orgProtectedProcedure.use(async ({ context, next, path }) => {
-  // System admins always have access
-  if (context.user.role === "admin") {
+const orgAdminProcedure = orgProtectedProcedure.use(async ({ context, next }) => {
+  const role = context.membership?.role;
+  if (role === "owner" || role === "admin") {
     return next({ context: {} });
   }
 
-  const role = context.membership?.role;
-  if (!role || (role !== "owner" && role !== "admin")) {
-    throw new ORPCError("FORBIDDEN", {
-      message: `Access to ${path} denied: Only owners and admins can perform this action`,
-    });
-  }
-
+  await requireCurrentAuthAdmin(context);
   return next({ context: {} });
 });
 
@@ -126,7 +129,12 @@ export const projectProtectedProcedure = protectedProcedure.use(
 
 // Admin procedure - requires system admin role
 export const adminProcedure = protectedProcedure.use(async ({ context, next, path }) => {
-  if (context.user.role !== "admin") {
+  try {
+    await requireCurrentAuthAdmin(context);
+  } catch (error) {
+    if (!(error instanceof ORPCError) || error.code !== "FORBIDDEN") {
+      throw error;
+    }
     throw new ORPCError("FORBIDDEN", {
       message: `Access to ${path} denied: Admin role required`,
     });

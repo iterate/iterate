@@ -8,16 +8,21 @@ import { cors } from "hono/cors";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { onError, ORPCError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
-import { auth } from "./auth.ts";
+import { auth, getAllowedBrowserOrigins } from "./auth.ts";
 import { hono, variablesProvider, type Variables } from "./utils/hono.ts";
 import { appRouter } from "./orpc/index.ts";
 import type { CloudflareEnv } from "./env.ts";
 
 const app = hono();
+const allowedBrowserOrigins = new Set(getAllowedBrowserOrigins());
 
 app.use(
   cors({
-    origin: (origin) => origin,
+    origin: (origin) => {
+      if (!origin || !URL.canParse(origin)) return null;
+      const normalizedOrigin = new URL(origin).origin;
+      return allowedBrowserOrigins.has(normalizedOrigin) ? normalizedOrigin : null;
+    },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     maxAge: 600,

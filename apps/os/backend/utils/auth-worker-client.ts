@@ -1,7 +1,11 @@
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { env } from "../../env.ts";
-import type { AuthContractClient } from "../../../auth-contract/src/index.ts";
+import {
+  AS_USER_HEADER,
+  SERVICE_TOKEN_HEADER,
+  type AuthContractClient,
+} from "../../../auth-contract/src/index.ts";
 import { PROJECT_INGRESS_AUTH_TOKEN_COOKIE } from "../auth/constants.ts";
 
 const AUTH_WORKER_TIMEOUT_MS = 30_000;
@@ -49,10 +53,10 @@ export function createAuthWorkerClient(params: {
   const baseHeaders = buildAuthWorkerForwardHeaders(params.headers);
   const serviceToken = params.serviceToken ?? env.SERVICE_AUTH_TOKEN;
   if (serviceToken) {
-    baseHeaders.set("x-iterate-service-token", serviceToken);
+    baseHeaders.set(SERVICE_TOKEN_HEADER, serviceToken);
   }
   if (params.asUser) {
-    baseHeaders.set("x-iterate-as-user", params.asUser.authUserId);
+    baseHeaders.set(AS_USER_HEADER, params.asUser.authUserId);
   }
 
   const fetchWithTimeout: typeof globalThis.fetch = (input, init) => {
@@ -74,4 +78,11 @@ export function createAuthWorkerClient(params: {
       fetch: fetchWithTimeout,
     }),
   );
+}
+
+export function authClientFor(ctx: { user: { authUserId: string | null } }): AuthWorkerClient {
+  if (!ctx.user.authUserId) {
+    throw new Error("authClientFor called with user that has no authUserId");
+  }
+  return createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId } });
 }

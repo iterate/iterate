@@ -72,6 +72,22 @@ const update = os.organization.update
     };
   });
 
+const remove = os.organization.delete
+  .use(organizationAdminMiddleware)
+  .handler(async ({ context }) => {
+    const membershipRole = context.membership?.role;
+    const isSystemAdmin = context.user.role === "admin";
+    if (!isSystemAdmin && membershipRole !== "owner") {
+      throw new ORPCError("FORBIDDEN", { message: "Only owners can delete organizations" });
+    }
+
+    await context.db
+      .delete(schema.organization)
+      .where(eq(schema.organization.id, context.organization.id));
+
+    return { success: true as const };
+  });
+
 const members = os.organization.members
   .use(organizationScopedMiddleware)
   .handler(async ({ context }) => {
@@ -349,6 +365,7 @@ const leave = os.organization.leave
 export const organization = os.organization.router({
   create,
   update,
+  delete: remove,
   bySlug,
   members,
   updateMemberRole,

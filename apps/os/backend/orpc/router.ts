@@ -126,7 +126,7 @@ export const reportStatus = os.machines.reportStatus
     // Re-fetch with organization for invalidation
     const machineWithOrg = await db.query.machine.findFirst({
       where: eq(schema.machine.id, machine.id),
-      with: { project: { with: { organization: true } } },
+      with: { project: true },
     });
 
     if (!machineWithOrg) {

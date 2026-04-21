@@ -18,6 +18,7 @@ import {
   isProjectIngressHostname,
   parseProjectIngressHostname,
 } from "@iterate-com/shared/project-ingress";
+import { parseBearerToken } from "@iterate-com/shared/bearer";
 import type { CloudflareEnv } from "../env.ts";
 import { isNonProd } from "../env.ts";
 import { getDb } from "./db/client.ts";
@@ -210,10 +211,7 @@ app.post("/api/debug/trigger-error", (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  const authorization = c.req.header("authorization");
-  const bearerToken = authorization?.startsWith("Bearer ")
-    ? authorization.slice(7).trim()
-    : undefined;
+  const bearerToken = parseBearerToken(c.req.header("authorization"));
   const providedToken = bearerToken ?? c.req.header("x-iterate-debug-token")?.trim();
 
   if (!providedToken || providedToken !== serviceAuthToken) {
@@ -433,44 +431,53 @@ app.onError((err, c) => {
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
+function handleOrpcError(
+  kind: "app" | "daemon",
+  error: unknown,
+  request: { url: URL | string },
+): void {
+  const url = request.url.toString();
+  const maybeStatus =
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    typeof (error as { status?: unknown }).status === "number"
+      ? (error as { status: number }).status
+      : undefined;
+  const errorDetails =
+    error instanceof Error
+      ? {
+          name: error.name,
+          message: error.message,
+          stack: error.stack ?? "stack unavailable",
+        }
+      : {
+          name: "NonErrorThrowable",
+          message: String(error),
+          stack: new Error(String(error)).stack ?? "stack unavailable",
+        };
+  const message = `oRPC Error ${maybeStatus ?? "unknown"} ${url}: ${String(
+    (error as { message?: unknown })?.message ?? error,
+  )}`;
+  if (!maybeStatus || maybeStatus >= 500) {
+    if (kind === "daemon") {
+      logger.error(message, errorDetails, error);
+    } else {
+      logger.error(message, errorDetails);
+    }
+  } else {
+    if (kind === "daemon") {
+      logger.set({ status: maybeStatus, url });
+    } else {
+      logger.set({ request: { status: maybeStatus } });
+    }
+    logger.warn(message);
+  }
+}
+
 // oRPC endpoint for client-facing API (app router)
 const appOrpcHandler = new RPCHandler(appRouter, {
-  interceptors: [
-    onError((error, params) => {
-      const maybeStatus =
-        typeof error === "object" &&
-        error !== null &&
-        "status" in error &&
-        typeof (error as { status?: unknown }).status === "number"
-          ? (error as { status: number }).status
-          : undefined;
-      const errorDetails =
-        error instanceof Error
-          ? {
-              name: error.name,
-              message: error.message,
-              stack: error.stack ?? "stack unavailable",
-            }
-          : {
-              name: "NonErrorThrowable",
-              message: String(error),
-              stack: new Error(String(error)).stack ?? "stack unavailable",
-            };
-      const message = `oRPC Error ${maybeStatus ?? "unknown"} ${params.request.url}: ${String(
-        (error as { message?: unknown })?.message ?? error,
-      )}`;
-      if (!maybeStatus || maybeStatus >= 500) {
-        logger.error(message, errorDetails);
-      } else {
-        logger.set({
-          request: {
-            status: maybeStatus,
-          },
-        });
-        logger.warn(message);
-      }
-    }),
-  ],
+  interceptors: [onError((error, params) => handleOrpcError("app", error, params.request))],
 });
 
 app.all("/api/orpc/*", async (c, next) => {
@@ -504,41 +511,7 @@ app.route("", egressProxyApp);
 
 // oRPC handler for daemon→worker communication (API key auth, separate context)
 const daemonOrpcHandler = new RPCHandler(workerRouter, {
-  interceptors: [
-    onError((error, params) => {
-      const maybeStatus =
-        typeof error === "object" &&
-        error !== null &&
-        "status" in error &&
-        typeof (error as { status?: unknown }).status === "number"
-          ? (error as { status: number }).status
-          : undefined;
-      const errorDetails =
-        error instanceof Error
-          ? {
-              name: error.name,
-              message: error.message,
-              stack: error.stack ?? "stack unavailable",
-            }
-          : {
-              name: "NonErrorThrowable",
-              message: String(error),
-              stack: new Error(String(error)).stack ?? "stack unavailable",
-            };
-      const message = `oRPC Error ${maybeStatus ?? "unknown"} ${params.request.url}: ${String(
-        (error as { message?: unknown })?.message ?? error,
-      )}`;
-      if (!maybeStatus || maybeStatus >= 500) {
-        logger.error(message, errorDetails, error);
-      } else {
-        logger.set({
-          status: maybeStatus,
-          url: params.request.url,
-        });
-        logger.warn(message);
-      }
-    }),
-  ],
+  interceptors: [onError((error, params) => handleOrpcError("daemon", error, params.request))],
   plugins: [new RequestHeadersPlugin()],
 });
 app.all("/api/orpc-daemon/*", async (c) => {

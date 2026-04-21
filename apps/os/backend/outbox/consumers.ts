@@ -20,7 +20,6 @@ import {
 } from "../services/machine-readiness-probe.ts";
 import { buildMachineEnvVars, createMachineForProject } from "../services/machine-creation.ts";
 import { ensureLocalUserMirror } from "../auth/auth-worker-session.ts";
-import { syncOrganizationMembershipShadowsFromServiceAuth } from "../auth/auth-context.ts";
 import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
 import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
 import { getDefaultOrganizationNameFromEmail, parseSender } from "../email/email-routing.ts";
@@ -58,14 +57,85 @@ async function findAvailableProjectSlug(db: Awaited<ReturnType<typeof getDb>>, b
   let candidate = baseSlug;
 
   while (true) {
-    const [existingOrg, existingProject] = await Promise.all([
-      db.query.organization.findFirst({ where: eq(schema.organization.slug, candidate) }),
-      db.query.project.findFirst({ where: eq(schema.project.slug, candidate) }),
-    ]);
+    const existingProject = await db.query.project.findFirst({
+      where: eq(schema.project.slug, candidate),
+    });
 
-    if (!existingOrg && !existingProject) return candidate;
+    if (!existingProject) return candidate;
     candidate = slugifyWithSuffix(baseSlug);
   }
+}
+
+async function findResendRoutingTarget(db: Awaited<ReturnType<typeof getDb>>, senderEmail: string) {
+  const localUser = await db.query.user.findFirst({
+    where: eq(schema.user.email, senderEmail),
+  });
+  if (!localUser?.authUserId) {
+    return {
+      user: localUser ?? null,
+      project: null,
+      machine: null,
+    };
+  }
+
+  const authClient = createAuthWorkerClient({ asUser: { authUserId: localUser.authUserId } });
+  const organizations = await authClient.user.myOrganizations();
+  if (organizations.length === 0) {
+    return {
+      user: localUser,
+      project: null,
+      machine: null,
+    };
+  }
+
+  const authProjects = await Promise.all(
+    organizations.map((organization) =>
+      authClient.project.list({
+        organizationSlug: organization.slug,
+      }),
+    ),
+  );
+  const authProjectIds = [...new Set(authProjects.flat().map((project) => project.id))];
+  if (authProjectIds.length === 0) {
+    return {
+      user: localUser,
+      project: null,
+      machine: null,
+    };
+  }
+
+  const [routing] = await db
+    .select({
+      project: schema.project,
+      machine: schema.machine,
+    })
+    .from(schema.project)
+    .leftJoin(
+      schema.machine,
+      and(
+        eq(schema.machine.projectId, schema.project.id),
+        inArray(schema.machine.state, ["active", "starting"]),
+      ),
+    )
+    .where(inArray(schema.project.authProjectId, authProjectIds))
+    .orderBy(
+      sql`
+        case
+          when ${schema.machine.state} = 'active' then 0
+          when ${schema.machine.state} = 'starting' then 1
+          when ${schema.project.id} is not null then 2
+          else 3
+        end
+      `,
+      schema.project.createdAt,
+    )
+    .limit(1);
+
+  return {
+    user: localUser,
+    project: routing?.project ?? null,
+    machine: routing?.machine ?? null,
+  };
 }
 
 export const registerConsumers = () => {
@@ -115,42 +185,7 @@ export const registerConsumers = () => {
       const resendEmailId = payload.data.email_id;
       const db = await getDb();
       const senderEmail = parseSender(payload.data.from).email;
-      const [routing] = await db
-        .select({
-          user: schema.user,
-          project: schema.project,
-          machine: schema.machine,
-        })
-        .from(schema.user)
-        .leftJoin(
-          schema.organizationUserMembership,
-          eq(schema.organizationUserMembership.userId, schema.user.id),
-        )
-        .leftJoin(
-          schema.organization,
-          eq(schema.organization.id, schema.organizationUserMembership.organizationId),
-        )
-        .leftJoin(schema.project, eq(schema.project.organizationId, schema.organization.id))
-        .leftJoin(
-          schema.machine,
-          and(
-            eq(schema.machine.projectId, schema.project.id),
-            inArray(schema.machine.state, ["active", "starting"]),
-          ),
-        )
-        .where(eq(schema.user.email, senderEmail))
-        .orderBy(
-          sql`
-            case
-              when ${schema.machine.state} = 'active' then 0
-              when ${schema.machine.state} = 'starting' then 1
-              when ${schema.project.id} is not null then 2
-              else 3
-            end
-          `,
-          schema.project.createdAt,
-        )
-        .limit(1);
+      const routing = await findResendRoutingTarget(db, senderEmail);
 
       logger.set({
         emailRouting: {
@@ -164,6 +199,10 @@ export const registerConsumers = () => {
       });
 
       if (routing?.machine?.state === "active") {
+        if (!routing.user) {
+          throw new Error(`missing local user for active resend routing target ${senderEmail}`);
+        }
+
         // happy path: machine is already active
         const { createResendClient, fetchEmailContent, forwardEmailWebhookToMachine } =
           await import("../integrations/resend/resend.ts");
@@ -281,12 +320,6 @@ export const registerConsumers = () => {
         name: projectSlug,
         slug: projectSlug,
       });
-      const localOrganization = await syncOrganizationMembershipShadowsFromServiceAuth({
-        db,
-        serviceToken: env.SERVICE_AUTH_TOKEN,
-        organizationSlug: authOrganization.slug,
-        authOrganization,
-      });
       const authProject = await authClient.internal.project.createForOrganization({
         organizationSlug: authOrganization.slug,
         name: projectSlug,
@@ -296,9 +329,10 @@ export const registerConsumers = () => {
         .insert(schema.project)
         .values({
           authProjectId: authProject.id,
+          authOrganizationId: authOrganization.id,
+          authOrganizationSlug: authOrganization.slug,
           name: authProject.name,
           slug: authProject.slug,
-          organizationId: localOrganization.id,
           sandboxProvider: specMachine
             ? "spec-machine"
             : getDefaultProjectSandboxProvider(env, import.meta.env.DEV),
@@ -503,7 +537,7 @@ export const registerConsumers = () => {
 
       const machine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, machineId),
-        with: { project: { with: { organization: true } } },
+        with: { project: true },
       });
       if (!machine) throw new Error(`Machine ${machineId} not found`);
 
@@ -521,8 +555,8 @@ export const registerConsumers = () => {
         db,
         env,
         projectId: machine.projectId,
-        organizationId: machine.project.organizationId,
-        organizationSlug: machine.project.organization.slug,
+        organizationId: machine.project.authOrganizationId,
+        organizationSlug: machine.project.authOrganizationSlug,
         projectSlug: machine.project.slug,
         machineId,
         name: machine.name,

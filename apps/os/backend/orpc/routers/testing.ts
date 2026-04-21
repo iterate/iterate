@@ -2,6 +2,7 @@ import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { slugifyWithSuffix } from "@iterate-com/shared/slug";
+import { generateDefaultAvatar } from "@iterate-com/shared/default-avatar";
 import {
   publicProcedure,
   publicMutation,
@@ -9,22 +10,10 @@ import {
   projectProtectedProcedure,
   ProjectInput,
 } from "../procedures.ts";
-import { user, organization, project, projectConnection } from "../../db/schema.ts";
+import { user, project, projectConnection } from "../../db/schema.ts";
 import { getDefaultProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
 import { isNonProd } from "../../../env.ts";
 import { createAuthWorkerClient } from "../../utils/auth-worker-client.ts";
-import { ensureLocalOrganizationShadow } from "../../auth/auth-context.ts";
-
-/** Generate a DiceBear avatar URL using a hash of the email as seed */
-function generateDefaultAvatar(email: string): string {
-  const normalized = email.trim().toLowerCase();
-  let hash = 0;
-  for (let i = 0; i < normalized.length; i++) {
-    hash = (hash << 5) - hash + normalized.charCodeAt(i);
-    hash |= 0;
-  }
-  return `https://api.dicebear.com/9.x/notionists/svg?seed=${Math.abs(hash).toString(36)}`;
-}
 
 /**
  * Testing router - provides helpers for test setup
@@ -66,7 +55,6 @@ export const testingRouter = {
         .values({
           email: input.email,
           name: input.name,
-          role: input.role,
           emailVerified: true,
           image: generateDefaultAvatar(input.email),
         })
@@ -74,7 +62,6 @@ export const testingRouter = {
           target: user.email,
           set: {
             name: input.name,
-            role: input.role,
           },
         })
         .returning();
@@ -100,7 +87,6 @@ export const testingRouter = {
       const authOrganization = await authClient.organization.create({
         name: input.name,
       });
-      const newOrg = await ensureLocalOrganizationShadow(ctx.db, authOrganization);
 
       const projSlug = slugifyWithSuffix(input.projectName || "default");
       const sandboxProvider = getDefaultProjectSandboxProvider(ctx.env, import.meta.env.DEV);
@@ -113,15 +99,16 @@ export const testingRouter = {
         .insert(project)
         .values({
           authProjectId: authProject.id,
+          authOrganizationId: authOrganization.id,
+          authOrganizationSlug: authOrganization.slug,
           name: authProject.name,
           slug: authProject.slug,
-          organizationId: newOrg.id,
           sandboxProvider,
         })
         .returning();
 
       return {
-        organization: newOrg,
+        organization: authOrganization,
         project: newProject,
       };
     }),
@@ -149,10 +136,10 @@ export const testingRouter = {
 
       if (input.organizationSlug) {
         const deleted = await ctx.db
-          .delete(organization)
-          .where(eq(organization.slug, input.organizationSlug))
+          .delete(project)
+          .where(eq(project.authOrganizationSlug, input.organizationSlug))
           .returning();
-        results.push(`Deleted ${deleted.length} organizations`);
+        results.push(`Deleted ${deleted.length} projects for organization slug`);
       }
 
       return { results };

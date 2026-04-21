@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import {
   protectedProcedure,
@@ -8,9 +8,10 @@ import {
   orgAdminMutation,
   OrgInput,
 } from "../procedures.ts";
-import { organizationUserMembership, organization, UserRole } from "../../db/schema.ts";
-import { createAuthWorkerClient } from "../../utils/auth-worker-client.ts";
-import { syncOrganizationMembershipShadowsFromAuthWorker } from "../../auth/auth-context.ts";
+import * as schema from "../../db/schema.ts";
+import { UserRole } from "../../db/schema.ts";
+import { authClientFor } from "../../utils/auth-worker-client.ts";
+import { listProjectsForOrganizationFromAuthWorker } from "../../auth/auth-context.ts";
 
 export const organizationRouter = {
   create: protectedMutation
@@ -20,15 +21,8 @@ export const organizationRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
-      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-      const createdAuthOrganization = await authClient.organization.create({
+      return authClientFor(ctx).organization.create({
         name: input.name,
-      });
-      return syncOrganizationMembershipShadowsFromAuthWorker({
-        db: ctx.db,
-        authUserId: ctx.user.authUserId!,
-        organizationSlug: createdAuthOrganization.slug,
-        authOrganization: createdAuthOrganization,
       });
     }),
 
@@ -40,15 +34,15 @@ export const organizationRouter = {
   }),
 
   withProjects: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
-    const org = await ctx.db.query.organization.findFirst({
-      where: eq(organization.id, ctx.organization.id),
-      with: {
-        projects: true,
-      },
+    const projects = await listProjectsForOrganizationFromAuthWorker({
+      db: ctx.db,
+      authUserId: ctx.user.authUserId!,
+      organizationSlug: ctx.organization.slug,
     });
 
     return {
-      ...org,
+      ...ctx.organization,
+      projects,
       role: ctx.membership?.role,
     };
   }),
@@ -61,27 +55,14 @@ export const organizationRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
-      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-      const updatedAuthOrganization = await authClient.organization.update({
+      return authClientFor(ctx).organization.update({
         organizationSlug: ctx.organization.slug,
         name: input.name ?? ctx.organization.name,
       });
-
-      const [updated] = await ctx.db
-        .update(organization)
-        .set({
-          name: updatedAuthOrganization.name,
-          slug: updatedAuthOrganization.slug,
-        })
-        .where(eq(organization.id, ctx.organization.id))
-        .returning();
-
-      return updated ?? ctx.organization;
     }),
 
   members: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
-    const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-    return authClient.organization.members({
+    return authClientFor(ctx).organization.members({
       organizationSlug: ctx.organization.slug,
     });
   }),
@@ -95,8 +76,7 @@ export const organizationRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
-      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-      return authClient.organization.createInvite({
+      return authClientFor(ctx).organization.createInvite({
         organizationSlug: ctx.organization.slug,
         email: input.email,
         role: input.role,
@@ -112,8 +92,7 @@ export const organizationRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
-      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-      return authClient.organization.updateMemberRole({
+      return authClientFor(ctx).organization.updateMemberRole({
         organizationSlug: ctx.organization.slug,
         userId: input.userId,
         role: input.role,
@@ -128,8 +107,7 @@ export const organizationRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
-      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-      return authClient.organization.removeMember({
+      return authClientFor(ctx).organization.removeMember({
         organizationSlug: ctx.organization.slug,
         userId: input.userId,
       });
@@ -140,7 +118,18 @@ export const organizationRouter = {
       throw new ORPCError("FORBIDDEN", { message: "Only owners can delete organizations" });
     }
 
-    await ctx.db.delete(organization).where(eq(organization.id, ctx.organization.id));
+    await authClientFor(ctx).organization.delete({
+      organizationSlug: ctx.organization.slug,
+    });
+
+    await ctx.db.transaction(async (tx) => {
+      await tx
+        .delete(schema.billingAccount)
+        .where(eq(schema.billingAccount.authOrganizationId, ctx.organization.id));
+      await tx
+        .delete(schema.project)
+        .where(eq(schema.project.authOrganizationId, ctx.organization.id));
+    });
 
     return { success: true };
   }),
@@ -154,8 +143,7 @@ export const organizationRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
-      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-      return authClient.organization.createInvite({
+      return authClientFor(ctx).organization.createInvite({
         organizationSlug: ctx.organization.slug,
         email: input.email,
         role: input.role,
@@ -163,8 +151,7 @@ export const organizationRouter = {
     }),
 
   listInvites: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
-    const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-    return authClient.organization.listInvites({
+    return authClientFor(ctx).organization.listInvites({
       organizationSlug: ctx.organization.slug,
     });
   }),
@@ -172,56 +159,36 @@ export const organizationRouter = {
   cancelInvite: orgAdminMutation
     .input(z.object({ ...OrgInput.shape, inviteId: z.string() }))
     .handler(async ({ context: ctx, input }) => {
-      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-      return authClient.organization.cancelInvite({
+      return authClientFor(ctx).organization.cancelInvite({
         organizationSlug: ctx.organization.slug,
         inviteId: input.inviteId,
       });
     }),
 
   myPendingInvites: protectedProcedure.handler(async ({ context: ctx }) => {
-    const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-    return authClient.organization.myPendingInvites();
+    return authClientFor(ctx).organization.myPendingInvites();
   }),
 
   acceptInvite: protectedMutation
     .input(z.object({ inviteId: z.string() }))
     .handler(async ({ context: ctx, input }) => {
-      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-      const acceptedOrganization = await authClient.organization.acceptInvite({
+      return authClientFor(ctx).organization.acceptInvite({
         inviteId: input.inviteId,
-      });
-      return syncOrganizationMembershipShadowsFromAuthWorker({
-        db: ctx.db,
-        authUserId: ctx.user.authUserId!,
-        organizationSlug: acceptedOrganization.slug,
-        authOrganization: acceptedOrganization,
       });
     }),
 
   declineInvite: protectedMutation
     .input(z.object({ inviteId: z.string() }))
     .handler(async ({ context: ctx, input }) => {
-      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-      return authClient.organization.declineInvite({
+      return authClientFor(ctx).organization.declineInvite({
         inviteId: input.inviteId,
       });
     }),
 
   leave: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
-    const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
-    await authClient.organization.leave({
+    await authClientFor(ctx).organization.leave({
       organizationSlug: ctx.organization.slug,
     });
-
-    await ctx.db
-      .delete(organizationUserMembership)
-      .where(
-        and(
-          eq(organizationUserMembership.organizationId, ctx.organization.id),
-          eq(organizationUserMembership.userId, ctx.user.id),
-        ),
-      );
 
     return { success: true };
   }),

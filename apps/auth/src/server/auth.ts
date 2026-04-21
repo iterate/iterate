@@ -7,20 +7,45 @@ import { bearer, deviceAuthorization, emailOTP, jwt, oneTimeToken } from "better
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { organization } from "better-auth/plugins/organization";
 import { matchesSignupAllowlist, parseSignupAllowlist } from "@iterate-com/shared/signup-allowlist";
+import { generateDefaultAvatar } from "@iterate-com/shared/default-avatar";
+import {
+  ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM,
+  ITERATE_IS_ADMIN_CLAIM,
+  ITERATE_ROLE_CLAIM,
+} from "@iterate-com/shared/auth-claims";
 import { env } from "./env.ts";
 import { db, schema } from "./db/index.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
 
-export function generateDefaultAvatar(email: string): string {
-  const normalized = email.trim().toLowerCase();
-  let hash = 0;
-  for (let i = 0; i < normalized.length; i++) {
-    hash = (hash << 5) - hash + normalized.charCodeAt(i);
-    hash |= 0;
-  }
-  return `https://api.dicebear.com/9.x/notionists/svg?seed=${Math.abs(hash).toString(36)}`;
+export function getAllowedBrowserOrigins() {
+  return [env.VITE_AUTH_APP_ORIGIN, env.VITE_PUBLIC_URL];
+}
+
+function isAllowedBrowserOrigin(origin: string | null | undefined) {
+  if (!origin || !URL.canParse(origin)) return false;
+  return getAllowedBrowserOrigins().includes(new URL(origin).origin);
+}
+
+function buildIterateTokenClaims(user: Record<string, unknown> | null | undefined) {
+  const role = typeof user?.role === "string" ? user.role : null;
+  return {
+    [ITERATE_IS_ADMIN_CLAIM]: role === "admin",
+    [ITERATE_ROLE_CLAIM]: role,
+  };
+}
+
+async function getSessionActiveOrganizationId(jwt: Record<string, unknown> | null | undefined) {
+  const sessionId = typeof jwt?.sid === "string" ? jwt.sid : null;
+  if (!sessionId) return null;
+
+  const authSession = await db.query.session.findFirst({
+    where: (session, { eq }) => eq(session.id, sessionId),
+    columns: { activeOrganizationId: true },
+  });
+
+  return authSession?.activeOrganizationId ?? null;
 }
 
 export type ProjectIngressTokenPayload = {
@@ -46,14 +71,8 @@ export const auth = betterAuth({
   appName: "Iterate Auth",
   database: drizzleAdapter(db, { provider: "sqlite", schema }),
   baseURL: env.VITE_AUTH_APP_ORIGIN,
-  trustedOrigins: (request) => {
-    const requestOrigin = request?.headers.get("origin");
-    const origins = [env.VITE_AUTH_APP_ORIGIN];
-    if (requestOrigin && URL.canParse(requestOrigin)) {
-      origins.push(requestOrigin);
-    }
-    return origins;
-  },
+  trustedOrigins: (request) =>
+    isAllowedBrowserOrigin(request?.headers.get("origin")) ? getAllowedBrowserOrigins() : [],
   secret: env.BETTER_AUTH_SECRET,
   databaseHooks: {
     user: {
@@ -137,6 +156,21 @@ export const auth = betterAuth({
       consentPage: "/consent",
       silenceWarnings: { openidConfig: true, oauthAuthServerConfig: true },
       accessTokenExpiresIn: 5 * 60, // 5 minutes in seconds, since we are using jwt tokens
+      customIdTokenClaims: ({ user }) => buildIterateTokenClaims(user),
+      customAccessTokenClaims: ({ user }) => buildIterateTokenClaims(user),
+      customUserInfoClaims: async ({ user, jwt }) => ({
+        ...buildIterateTokenClaims(user),
+        [ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM]: await getSessionActiveOrganizationId(
+          jwt as Record<string, unknown> | null | undefined,
+        ),
+      }),
+      advertisedMetadata: {
+        claims_supported: [
+          ITERATE_IS_ADMIN_CLAIM,
+          ITERATE_ROLE_CLAIM,
+          ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM,
+        ],
+      },
     }),
   ],
   socialProviders: {

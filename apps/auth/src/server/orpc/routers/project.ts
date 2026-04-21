@@ -1,6 +1,6 @@
 import { ORPCError } from "@orpc/server";
 import { eq } from "drizzle-orm";
-import { slugify, slugifyWithSuffix } from "@iterate-com/shared/slug";
+import { resolveUniqueSlug, slugify } from "@iterate-com/shared/slug";
 import {
   organizationAdminMiddleware,
   organizationScopedMiddleware,
@@ -26,12 +26,16 @@ const bySlug = os.project.bySlug.use(projectScopedMiddleware).handler(async ({ c
 const create = os.project.create
   .use(organizationAdminMiddleware)
   .handler(async ({ context, input }) => {
-    const baseSlug = input.slug ? slugify(input.slug) : slugify(input.name);
-    const existing = await context.db.query.project.findFirst({
-      where: eq(schema.project.slug, baseSlug),
+    const slug = await resolveUniqueSlug({
+      name: input.name,
+      slug: input.slug,
+      isTaken: async (candidate) =>
+        Boolean(
+          await context.db.query.project.findFirst({
+            where: eq(schema.project.slug, candidate),
+          }),
+        ),
     });
-
-    const slug = existing ? slugifyWithSuffix(baseSlug) : baseSlug;
     const [created] = await context.db
       .insert(schema.project)
       .values({
