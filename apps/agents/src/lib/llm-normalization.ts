@@ -35,6 +35,15 @@ const AnthropicMessage = z.object({
   content: z.array(z.object({ type: z.string(), text: z.string().optional() })).min(1),
 });
 
+/**
+ * Native Workers AI chat shape returned by `@cf/*` text-generation models when
+ * the request is the non-OpenAI `{ messages }` form. `response` is the
+ * assistant string; `usage` and `tool_calls` are sibling fields we ignore here.
+ */
+const WorkersAIChatResponse = z.object({
+  response: z.string(),
+});
+
 const isAnthropicModel = (model: string) => model.startsWith("anthropic/");
 
 /**
@@ -83,5 +92,6 @@ export function normalizeLlmResponse({
         .map((b) => b.text ?? "")
         .join(""),
     )
+    .case(WorkersAIChatResponse, (r) => r.response)
     .default(match.throw);
 }
