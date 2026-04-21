@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "artifacts-jonas",
+  "account_id": "cc7f6f461fbe823c199da2b27f9e0ff3",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-04-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "routes": [{ "pattern": "artifacts.iterate-dev-jonas.com", "custom_domain": true }],
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+  },
+  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "default" }],
+  "observability": { "enabled": true },
+  "vars": {
+    "CF_ACCOUNT_ID": "cc7f6f461fbe823c199da2b27f9e0ff3",
+    "ARTIFACTS_NAMESPACE": "default",
+  },
+}

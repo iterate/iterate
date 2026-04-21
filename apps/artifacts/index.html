@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Artifacts</title>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+        background: #0d1117;
+        color: #c9d1d9;
+      }
+      /* Fix CodeMirror merge control buttons — default has no padding and text touches edges */
+      .cm-merge-revert,
+      .cm-merge-accept {
+        padding: 1px 6px;
+        margin: 0 4px;
+        border-radius: 3px;
+        font-size: 11px;
+        line-height: 1.4;
+      }
+      /* Diff colors matching GitHub dark theme */
+      .cm-deletedChunk {
+        background: rgba(248, 81, 73, 0.1);
+      }
+      .cm-changedLine {
+        background: rgba(56, 139, 253, 0.1);
+      }
+      .cm-insertedLine {
+        background: rgba(63, 185, 80, 0.1);
+      }
+      .cm-deletedText {
+        background: rgba(248, 81, 73, 0.25);
+      }
+      .cm-insertedText {
+        background: rgba(63, 185, 80, 0.25);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

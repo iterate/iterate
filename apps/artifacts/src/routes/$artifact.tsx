@@ -1,0 +1,395 @@
+/**
+ * Artifact view — browse any commit, edit HEAD, restore old commits.
+ *
+ * Hierarchy: artifact > commit > file list > file
+ * - No commit param = HEAD (editable, local changes tracked)
+ * - commit param = browsing old commit (read-only, restorable)
+ *
+ * https://tanstack.com/router/latest/docs/framework/react/guide/data-loading
+ */
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import CodeMirror from "@uiw/react-codemirror";
+import { unifiedMergeView } from "@codemirror/merge";
+import { EditorView } from "@codemirror/view";
+import { LanguageDescription } from "@codemirror/language";
+import { languages } from "@codemirror/language-data";
+import type { Extension } from "@codemirror/state";
+
+type Commit = { oid: string; message: string; author: string; timestamp: number };
+
+export const Route = createFileRoute("/$artifact")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    commit: (search.commit as string) || undefined,
+    file: (search.file as string) || undefined,
+  }),
+  loaderDeps: ({ search }) => ({ commit: search.commit }),
+  loader: async ({ params, deps }) => {
+    // Fetch commits first (this deepens the shallow clone)
+    const commits: Commit[] = await fetch(`/api/log?repo=${params.artifact}`).then((r) => r.json());
+    // Then fetch tree at the selected commit (or HEAD)
+    const qs = deps.commit ? `&oid=${deps.commit}` : "";
+    const treeRes = await fetch(`/api/tree?repo=${params.artifact}${qs}`);
+    const treeData = await treeRes.json();
+    const tree: string[] = treeData.paths ?? [];
+    return { commits, tree };
+  },
+  pendingComponent: () => (
+    <div
+      style={{
+        flex: 1,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "#8b949e",
+      }}
+    >
+      Loading repository...
+    </div>
+  ),
+  errorComponent: ({ error }) => (
+    <div
+      style={{
+        flex: 1,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "#f85149",
+      }}
+    >
+      Failed to load: {error.message}
+    </div>
+  ),
+  component: ArtifactView,
+});
+
+function ArtifactView() {
+  const { commits, tree } = Route.useLoaderData();
+  const { artifact } = Route.useParams();
+  const { commit: selectedCommit, file } = Route.useSearch();
+  const navigate = useNavigate();
+
+  const isHead = !selectedCommit;
+  const headOid = commits[0]?.oid;
+
+  // --- Local changes (HEAD only, persisted in localStorage) ---
+  const [head, setHead] = useState<Record<string, string>>({});
+  const [working, setWorking] = useState<Record<string, string>>({});
+  const [fileContent, setFileContent] = useState<string | undefined>();
+  const [fileLoading, setFileLoading] = useState(false);
+  const [commitMsg, setCommitMsg] = useState("");
+  const [busy, setBusy] = useState("");
+  const [langExt, setLangExt] = useState<Extension[]>([]);
+
+  const dirty = useMemo(
+    () => new Set(Object.keys(working).filter((p) => working[p] !== head[p])),
+    [working, head],
+  );
+  const hasLocalChanges = isHead && dirty.size > 0;
+
+  // Restore localStorage working edits when artifact changes
+  useEffect(() => {
+    setHead({});
+    setWorking(jsonParse(localStorage.getItem(`art:${artifact}:working`), {}));
+    setFileContent(undefined);
+  }, [artifact]);
+
+  // Persist working edits to localStorage
+  useEffect(() => {
+    if (isHead) localStorage.setItem(`art:${artifact}:working`, JSON.stringify(working));
+  }, [artifact, working, isHead]);
+
+  // Fetch file content when file selection changes
+  useEffect(() => {
+    setFileContent(undefined);
+    if (!file) return;
+    setFileLoading(true);
+    const url = selectedCommit
+      ? `/api/blob?repo=${artifact}&path=${encodeURIComponent(file)}&oid=${selectedCommit}`
+      : `/api/file?repo=${artifact}&path=${encodeURIComponent(file)}`;
+    fetch(url)
+      .then((r) => r.json())
+      .then((d) => {
+        setFileContent(d.content);
+        if (isHead) {
+          setHead((h) => ({ ...h, [file]: d.content }));
+          setWorking((w) => ({ ...w, [file]: w[file] ?? d.content }));
+        }
+      })
+      .finally(() => setFileLoading(false));
+  }, [artifact, file, selectedCommit, isHead]);
+
+  // Syntax highlighting — https://codemirror.net/docs/ref/#language-data
+  useEffect(() => {
+    if (!file) return setLangExt([]);
+    const desc = LanguageDescription.matchFilename(languages, file);
+    if (!desc) return setLangExt([]);
+    desc.load().then((lang) => setLangExt([lang]));
+  }, [file]);
+
+  const extensions = useMemo(() => {
+    const exts = [...langExt];
+    if (!isHead) exts.push(EditorView.editable.of(false));
+    return exts;
+  }, [isHead, langExt]);
+
+  // The value shown in the editor
+  const editorValue = isHead && file && working[file] !== undefined ? working[file] : fileContent;
+
+  function nav(search: { commit?: string; file?: string }) {
+    navigate({ to: "/$artifact", params: { artifact }, search });
+  }
+
+  const handleCommit = useCallback(async () => {
+    if (dirty.size === 0 || !commitMsg.trim()) return;
+    setBusy("Committing...");
+    const files = [...dirty].map((p) => ({ path: p, content: working[p] }));
+    await fetch("/api/commit", {
+      method: "POST",
+      body: JSON.stringify({ repo: artifact, message: commitMsg, files }),
+      headers: { "content-type": "application/json" },
+    });
+    // Clear local changes and reload
+    localStorage.removeItem(`art:${artifact}:working`);
+    setCommitMsg("");
+    setBusy("");
+    navigate({ to: "/$artifact", params: { artifact }, search: { file }, reloadDocument: false });
+    // Force loader re-run by invalidating
+    window.location.reload();
+  }, [artifact, dirty, working, commitMsg, file, navigate]);
+
+  const handleRestore = useCallback(
+    async (oid: string) => {
+      setBusy("Restoring...");
+      await fetch("/api/restore", {
+        method: "POST",
+        body: JSON.stringify({ repo: artifact, oid }),
+        headers: { "content-type": "application/json" },
+      });
+      localStorage.removeItem(`art:${artifact}:working`);
+      setBusy("");
+      window.location.reload();
+    },
+    [artifact],
+  );
+
+  return (
+    <>
+      {/* File tree */}
+      <div
+        style={{ width: 200, borderRight: "1px solid #30363d", overflow: "auto", flexShrink: 0 }}
+      >
+        <h3 style={H3}>Files</h3>
+        {tree.map((p) => (
+          <div
+            key={p}
+            onClick={() => nav({ commit: selectedCommit, file: p })}
+            style={{
+              padding: "4px 12px",
+              cursor: "pointer",
+              fontSize: 13,
+              background: p === file ? "#161b22" : "transparent",
+              color: isHead && dirty.has(p) ? "#f0883e" : "#c9d1d9",
+            }}
+          >
+            {isHead && dirty.has(p) ? "* " : ""}
+            {p}
+          </div>
+        ))}
+      </div>
+
+      {/* Editor */}
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          minWidth: 0,
+        }}
+      >
+        {/* Toolbar */}
+        <div
+          style={{
+            padding: "8px 12px",
+            borderBottom: "1px solid #30363d",
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            fontSize: 13,
+            flexShrink: 0,
+          }}
+        >
+          {file && <span style={{ color: "#8b949e" }}>{file}</span>}
+          {!isHead && (
+            <span style={{ color: "#f0883e", fontSize: 12 }}>
+              Viewing {selectedCommit!.slice(0, 7)} (read-only) — restore to make changes
+            </span>
+          )}
+          {busy && <span style={{ color: "#f0883e", marginLeft: "auto" }}>{busy}</span>}
+        </div>
+
+        {/* Editor area */}
+        <div style={{ flex: 1, overflow: "auto" }}>
+          {fileLoading ? (
+            <div style={{ padding: 40, color: "#8b949e" }}>Loading file...</div>
+          ) : file && editorValue !== undefined ? (
+            <CodeMirror
+              key={`${file}-${selectedCommit || "head"}`}
+              value={editorValue}
+              height="100%"
+              theme="dark"
+              extensions={extensions}
+              readOnly={!isHead}
+              onChange={isHead ? (val) => setWorking((w) => ({ ...w, [file]: val })) : undefined}
+            />
+          ) : (
+            <div style={{ padding: 40, color: "#8b949e" }}>
+              {file ? "File not found" : "Select a file"}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* History sidebar */}
+      <div
+        style={{
+          width: 280,
+          borderLeft: "1px solid #30363d",
+          overflow: "auto",
+          fontSize: 13,
+          flexShrink: 0,
+        }}
+      >
+        <h3 style={H3}>History</h3>
+
+        {/* Commit button when there are local changes */}
+        {hasLocalChanges && (
+          <div style={{ padding: "8px 12px", borderBottom: "1px solid #21262d" }}>
+            <input
+              style={{ ...INPUT, width: "100%", marginBottom: 6 }}
+              placeholder="Commit message"
+              value={commitMsg}
+              onChange={(e) => setCommitMsg(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleCommit()}
+            />
+            <button
+              style={{ ...BTN_GREEN, width: "100%" }}
+              onClick={handleCommit}
+              disabled={!commitMsg.trim()}
+            >
+              Commit &amp; push {dirty.size} file{dirty.size !== 1 ? "s" : ""}
+            </button>
+          </div>
+        )}
+
+        {/* Virtual "Local changes" entry */}
+        {hasLocalChanges && (
+          <div
+            onClick={() => nav({ file })}
+            style={{
+              ...COMMIT_ITEM,
+              background: isHead ? "#161b22" : "transparent",
+              borderLeft: "3px solid #f0883e",
+            }}
+          >
+            <div style={{ color: "#f0883e", fontWeight: 600 }}>Local changes</div>
+            <div style={{ color: "#8b949e", fontSize: 11 }}>
+              {dirty.size} modified file{dirty.size !== 1 ? "s" : ""}
+            </div>
+          </div>
+        )}
+
+        {/* Real commits */}
+        {commits.map((c, i) => {
+          const isCurrent =
+            selectedCommit === c.oid ||
+            (isHead && !hasLocalChanges && i === 0) ||
+            (isHead && hasLocalChanges && false);
+          const isLatest = i === 0;
+          return (
+            <div
+              key={c.oid}
+              style={{
+                ...COMMIT_ITEM,
+                background:
+                  selectedCommit === c.oid || (isHead && i === 0 && !hasLocalChanges)
+                    ? "#161b22"
+                    : "transparent",
+              }}
+            >
+              <div
+                onClick={() => nav({ commit: isLatest ? undefined : c.oid, file })}
+                style={{ cursor: "pointer" }}
+              >
+                <div
+                  style={{
+                    color: "#c9d1d9",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {isLatest && "HEAD — "}
+                  {c.message.split("\n")[0]}
+                </div>
+                <div style={{ color: "#8b949e", fontSize: 11, marginTop: 2 }}>
+                  {c.oid.slice(0, 7)} &middot; {c.author} &middot;{" "}
+                  {new Date(c.timestamp * 1000).toLocaleDateString()}
+                </div>
+              </div>
+              {!isLatest && selectedCommit === c.oid && (
+                <button style={{ ...BTN_SMALL, marginTop: 4 }} onClick={() => handleRestore(c.oid)}>
+                  Restore to this commit
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function jsonParse<T>(raw: string | null, fallback: T): T {
+  try {
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const H3 = {
+  padding: "8px 12px",
+  fontSize: 11,
+  textTransform: "uppercase" as const,
+  letterSpacing: 1,
+  color: "#8b949e",
+};
+const INPUT = {
+  background: "#0d1117",
+  color: "#c9d1d9",
+  border: "1px solid #30363d",
+  borderRadius: 4,
+  padding: "4px 8px",
+  fontSize: 13,
+};
+const BTN_SMALL = {
+  background: "transparent",
+  color: "#58a6ff",
+  border: "1px solid #30363d",
+  borderRadius: 4,
+  padding: "2px 8px",
+  cursor: "pointer",
+  fontSize: 12,
+};
+const BTN_GREEN = {
+  background: "#238636",
+  color: "#fff",
+  border: "none",
+  borderRadius: 6,
+  padding: "6px 12px",
+  cursor: "pointer",
+  fontSize: 13,
+};
+const COMMIT_ITEM = { padding: "8px 12px", borderBottom: "1px solid #21262d" };
