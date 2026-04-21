@@ -70,6 +70,7 @@ export const iterateId = <P extends string>(prefix: P) =>
 // #region ========== Better Auth Schema ==========
 export const user = pgTable("user", (t) => ({
   id: iterateId("usr"),
+  authUserId: t.text().unique(),
   name: t.text().notNull(),
   email: t.text().notNull().unique(),
   emailVerified: t.boolean().default(false).notNull(),
@@ -83,32 +84,9 @@ export const user = pgTable("user", (t) => ({
 }));
 
 export const userRelations = relations(user, ({ many }) => ({
-  session: many(session),
   account: many(account),
   organizationUserMembership: many(organizationUserMembership),
   projectConnections: many(projectConnection),
-}));
-
-export const session = pgTable("better_auth_session", (t) => ({
-  id: iterateId("ses"),
-  expiresAt: t.timestamp().notNull(),
-  token: t.text().notNull().unique(),
-  ipAddress: t.text(),
-  userAgent: t.text(),
-  userId: t
-    .text()
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
-  // https://www.better-auth.com/docs/plugins/admin#schema
-  impersonatedBy: t.text().references(() => user.id, { onDelete: "cascade" }),
-  ...withTimestamps,
-}));
-
-export const sessionRelations = relations(session, ({ one }) => ({
-  user: one(user, {
-    fields: [session.userId],
-    references: [user.id],
-  }),
 }));
 
 export const account = pgTable(
@@ -147,18 +125,6 @@ export const verification = pgTable("better_auth_verification", (t) => ({
   expiresAt: t.timestamp().notNull(),
   ...withTimestamps,
 }));
-export const deviceCode = pgTable("device_code", (t) => ({
-  id: iterateId("dvc"),
-  deviceCode: t.text().notNull(),
-  userCode: t.text().notNull(),
-  userId: t.text().references(() => user.id, { onDelete: "cascade" }),
-  expiresAt: t.timestamp().notNull(),
-  status: t.text().notNull(), // pending, approved, denied
-  lastPolledAt: t.timestamp(),
-  pollingInterval: t.integer(),
-  clientId: t.text(),
-  ...withTimestamps,
-}));
 // #endregion ========== Better Auth Schema ==========
 
 // #region ========== Organization & Project ==========
@@ -166,6 +132,7 @@ export const organization = pgTable(
   "organization",
   (t) => ({
     id: iterateId("org"),
+    authOrganizationId: t.text().unique(),
     name: t.text().notNull(),
     slug: t.text().notNull().unique(), // URL-safe slug: alphanumeric only, must contain letter
     ...withTimestamps,
@@ -176,7 +143,6 @@ export const organization = pgTable(
 export const organizationRelations = relations(organization, ({ many, one }) => ({
   projects: many(project),
   members: many(organizationUserMembership),
-  invites: many(organizationInvite),
   billingAccount: one(billingAccount),
 }));
 
@@ -216,44 +182,12 @@ export const organizationUserMembershipRelations = relations(
 );
 
 // Organization invites (pending invitations by email)
-export const organizationInvite = pgTable(
-  "organization_invite",
-  (t) => ({
-    id: iterateId("inv"),
-    organizationId: t
-      .text()
-      .notNull()
-      .references(() => organization.id, { onDelete: "cascade" }),
-    email: t.text().notNull(),
-    invitedByUserId: t
-      .text()
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
-    role: t
-      .text({ enum: [...UserRole] })
-      .notNull()
-      .default("member"),
-    ...withTimestamps,
-  }),
-  (t) => [uniqueIndex().on(t.organizationId, t.email)],
-);
-
-export const organizationInviteRelations = relations(organizationInvite, ({ one }) => ({
-  organization: one(organization, {
-    fields: [organizationInvite.organizationId],
-    references: [organization.id],
-  }),
-  invitedBy: one(user, {
-    fields: [organizationInvite.invitedByUserId],
-    references: [user.id],
-  }),
-}));
-
 // Project (renamed from instance/estate)
 export const project = pgTable(
   "project",
   (t) => ({
     id: iterateId("prj"),
+    authProjectId: t.text().unique(),
     name: t.text().notNull(),
     slug: t.text().notNull().unique(), // Globally unique URL-safe slug
     jonasLand: t.boolean().notNull().default(false),

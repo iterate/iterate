@@ -5,6 +5,13 @@ import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 
 export default defineConfig({
+  server: {
+    cors: {
+      origin: (origin, cb) => cb(null as unknown as Error, origin ?? true),
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    },
+  },
   plugins: [
     alchemy({
       viteEnvironment: { name: "ssr" },

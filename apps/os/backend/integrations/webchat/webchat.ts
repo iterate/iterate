@@ -4,6 +4,7 @@ import { z } from "zod/v4";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
+import { getProjectAccessFromAuthWorker } from "../../auth/auth-context.ts";
 import { logger } from "../../tag-logger.ts";
 import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
 
@@ -97,31 +98,22 @@ async function resolveProjectAndMachine(
     throw new Error("UNAUTHORIZED");
   }
 
-  const project = await c.var.db.query.project.findFirst({
-    where: eq(schema.project.slug, projectSlug),
-  });
+  const access = await getProjectAccessFromAuthWorker({
+    db: c.var.db,
+    authUserId: session.user.authUserId!,
+    projectSlug,
+  }).catch(() => null);
 
-  if (!project) {
-    throw new Error("PROJECT_NOT_FOUND");
-  }
-
-  const membership = await c.var.db.query.organizationUserMembership.findFirst({
-    where: and(
-      eq(schema.organizationUserMembership.organizationId, project.organizationId),
-      eq(schema.organizationUserMembership.userId, session.user.id),
-    ),
-  });
-
-  if (!membership && session.user.role !== "admin") {
+  if (!access) {
     throw new Error("FORBIDDEN");
   }
 
   const machine = await c.var.db.query.machine.findFirst({
-    where: and(eq(schema.machine.projectId, project.id), eq(schema.machine.state, "active")),
+    where: and(eq(schema.machine.projectId, access.project.id), eq(schema.machine.state, "active")),
   });
 
   return {
-    project,
+    project: access.project,
     machine: machine ?? null,
     user: session.user,
   };

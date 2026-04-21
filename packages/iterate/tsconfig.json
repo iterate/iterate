@@ -4,6 +4,9 @@
     "module": "nodenext",
     "lib": ["esnext"],
     "types": ["node"],
+    "paths": {
+      "@iterate-com/auth-contract": ["../../apps/auth-contract/src/index.ts"]
+    },
     "strict": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,

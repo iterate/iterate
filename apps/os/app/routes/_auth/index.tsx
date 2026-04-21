@@ -147,7 +147,7 @@ function IndexPage() {
                       <Building2 className="h-4 w-4" />
                     </ItemMedia>
                     <ItemContent>
-                      <ItemTitle>{invite.organization.name}</ItemTitle>
+                      <ItemTitle>{invite.organization?.name ?? "Organization invite"}</ItemTitle>
                       <ItemDescription>
                         Invited by {invite.invitedBy.name} as {invite.role}
                       </ItemDescription>

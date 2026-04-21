@@ -37,6 +37,7 @@ import { attemptSecretRefresh, type RefreshContext } from "../services/oauth-ref
 import { env, waitUntil, type CloudflareEnv } from "../../env.ts";
 import type { Variables } from "../types.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
+import { createAuthWorkerClient } from "../utils/auth-worker-client.ts";
 import { parseTokenIdFromApiKey } from "./api-key-utils.ts";
 import { checkEgressPolicy } from "./policy-check.ts";
 import type { ApprovalStatus, DecisionStatus, PolicyCheckResult } from "./types.ts";
@@ -596,7 +597,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     // Clone the request to inspect recipients without consuming the original body
     const validationError = await validateResendEmailRecipients(
       db,
-      apiKeyContext.organizationId,
+      apiKeyContext.orgSlug,
       c.req.raw.clone(),
     );
 
@@ -933,8 +934,8 @@ type ResendEmailPayload = { to?: string | string[]; cc?: string | string[] };
  * checking to/cc, we ensure at least one visible recipient is an org member.
  */
 async function validateResendEmailRecipients(
-  db: DB,
-  organizationId: string,
+  _db: DB,
+  organizationSlug: string,
   request: { json: () => Promise<unknown> },
 ): Promise<{ error: string } | null> {
   let payload: ResendEmailPayload | ResendEmailPayload[];
@@ -947,10 +948,9 @@ async function validateResendEmailRecipients(
   // Handle both single email and batch (array) payloads
   const emails = Array.isArray(payload) ? payload : [payload];
 
-  // Get org members' emails upfront (single query for all emails in batch)
-  const orgMembers = await db.query.organizationUserMembership.findMany({
-    where: eq(schema.organizationUserMembership.organizationId, organizationId),
-    with: { user: { columns: { email: true } } },
+  const authClient = createAuthWorkerClient({ serviceToken: env.SERVICE_AUTH_TOKEN });
+  const orgMembers = await authClient.internal.organization.members({
+    organizationSlug,
   });
   const orgMemberEmails = new Set(orgMembers.map((m) => m.user.email.toLowerCase()));
 

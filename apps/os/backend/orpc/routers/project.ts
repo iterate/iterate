@@ -15,7 +15,6 @@ import {
 } from "../procedures.ts";
 import { project, verification, projectConnection } from "../../db/schema.ts";
 import * as schema from "../../db/schema.ts";
-import { slugify, slugifyWithSuffix } from "../../utils/slug.ts";
 import {
   listInstallationRepositories,
   deleteGitHubInstallation,
@@ -40,6 +39,7 @@ import {
 } from "../../utils/sandbox-providers.ts";
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
+import { createAuthWorkerClient } from "../../utils/auth-worker-client.ts";
 
 export const projectRouter = {
   getAvailableSandboxProviders: publicProcedure.handler(({ context: ctx }) => {
@@ -131,8 +131,22 @@ export const projectRouter = {
 
   // List projects in organization
   list: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
+    const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
+    const authProjects = await authClient.project.list({
+      organizationSlug: ctx.organization.slug,
+    });
+    if (authProjects.length === 0) {
+      return [];
+    }
+
     const projects = await ctx.db.query.project.findMany({
-      where: eq(project.organizationId, ctx.organization.id),
+      where: and(
+        eq(project.organizationId, ctx.organization.id),
+        inArray(
+          project.authProjectId,
+          authProjects.map((authProject) => authProject.id),
+        ),
+      ),
       orderBy: (proj, { desc }) => [desc(proj.createdAt)],
     });
 
@@ -173,25 +187,20 @@ export const projectRouter = {
         });
       }
 
-      // Determine base slug: use provided slug, or org slug for first project, or slugify name
-      const orgProjects = await ctx.db.query.project.findMany({
-        where: eq(project.organizationId, ctx.organization.id),
+      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
+      const createdAuthProject = await authClient.project.create({
+        organizationSlug: ctx.organization.slug,
+        name: input.name,
+        slug: input.slug,
+        metadata: {},
       });
-      const isFirstProject = orgProjects.length === 0;
-      const baseSlug = input.slug ?? (isFirstProject ? ctx.organization.slug : slugify(input.name));
-
-      // Check global uniqueness (project slugs are now globally unique)
-      const existing = await ctx.db.query.project.findFirst({
-        where: eq(project.slug, baseSlug),
-      });
-
-      const slug = existing ? slugifyWithSuffix(baseSlug) : baseSlug;
 
       const [newProject] = await ctx.db
         .insert(project)
         .values({
-          name: input.name,
-          slug,
+          authProjectId: createdAuthProject.id,
+          name: createdAuthProject.name,
+          slug: createdAuthProject.slug,
           jonasLand: input.jonasLand,
           organizationId: ctx.organization.id,
           sandboxProvider,
@@ -226,6 +235,8 @@ export const projectRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
+      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
+
       if (input.sandboxProvider && input.sandboxProvider !== ctx.project.sandboxProvider) {
         // Validate provider is available
         const availableProviders = getAvailableProjectSandboxProviders(
@@ -273,10 +284,21 @@ export const projectRouter = {
         }
       }
 
+      const updatedAuthProject =
+        input.name === undefined
+          ? null
+          : await authClient.project.update({
+              projectSlug: ctx.project.slug,
+              name: input.name,
+            });
+
       const [updated] = await ctx.db
         .update(project)
         .set({
-          ...(input.name && { name: input.name }),
+          ...(updatedAuthProject && {
+            name: updatedAuthProject.name,
+            slug: updatedAuthProject.slug,
+          }),
           ...(input.sandboxProvider && {
             sandboxProvider: input.sandboxProvider,
           }),
@@ -305,6 +327,11 @@ export const projectRouter = {
         message: "Cannot delete the last project in an organization",
       });
     }
+
+    const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
+    await authClient.project.delete({
+      projectSlug: ctx.project.slug,
+    });
 
     await ctx.db.delete(project).where(eq(project.id, ctx.project.id));
 

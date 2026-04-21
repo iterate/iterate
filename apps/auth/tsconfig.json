@@ -4,6 +4,11 @@
     "module": "esnext",
     "lib": ["esnext", "dom", "dom.iterable"],
     "types": ["@cloudflare/workers-types", "vite/client"],
+    "paths": {
+      "@iterate-com/auth-contract": ["../auth-contract/src/index.ts"],
+      "@iterate-com/ui": ["../../packages/ui/src/index.ts"],
+      "@iterate-com/ui/*": ["../../packages/ui/src/*"]
+    },
     "moduleResolution": "bundler",
     "noEmit": true,
     "jsx": "react-jsx",

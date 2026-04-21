@@ -3,6 +3,7 @@ import { minimatch } from "minimatch";
 import { parseRouter } from "trpc-cli";
 import { contextStorage } from "hono/context-storage";
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { setCookie } from "hono/cookie";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { RPCHandler } from "@orpc/server/fetch";
@@ -20,7 +21,8 @@ import {
 import type { CloudflareEnv } from "../env.ts";
 import { isNonProd } from "../env.ts";
 import { getDb } from "./db/client.ts";
-import { getAuth } from "./auth/auth.ts";
+import { getOAuthMirroredSession, getOsIterateAuth } from "./auth/auth-worker-session.ts";
+import { PROJECT_INGRESS_AUTH_TOKEN_COOKIE } from "./auth/constants.ts";
 import { appRouter } from "./orpc/root.ts";
 import { createContext } from "./orpc/context.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
@@ -51,6 +53,7 @@ import { ProjectDurableObject } from "./durable-objects/project.ts";
 import { DeploymentDurableObject } from "./durable-objects/deployment.ts";
 import type { Variables } from "./types.ts";
 import { getOtelConfig, initializeOtel, withExtractedTraceContext } from "./utils/otel-init.ts";
+import { createAuthWorkerClient } from "./utils/auth-worker-client.ts";
 import {
   buildCanonicalProjectIngressProxyHostname,
   buildControlPlaneProjectIngressProxyLoginUrl,
@@ -237,18 +240,23 @@ app.use(
   secureHeaders(),
 );
 
+app.all("/api/iterate-auth/*", (c) => getOsIterateAuth(c.env).handler(c.req.raw));
+
 app.use("*", async (c, next) => {
   const db = await getDb();
-  const auth = getAuth(db);
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  const { session, responseHeaders } = await getOAuthMirroredSession({
+    db,
+    env: c.env,
+    headers: c.req.raw.headers,
+  });
   c.set("db", db);
-  c.set("auth", auth);
   c.set("session", session);
   const orpcCaller = createRouterClient(appRouter, {
     context: createContext(c),
   });
   c.set("orpcCaller", orpcCaller);
-  return next();
+  await next();
+  responseHeaders.forEach((value, key) => c.res.headers.append(key, value));
 });
 
 app.get("/api/testing/db-connection-probe", async (c) => {
@@ -344,9 +352,10 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
     return c.redirect(controlPlaneLoginUrl.toString(), 302);
   }
 
-  const oneTimeToken = await c.var.auth.api.generateOneTimeToken({
-    headers: c.req.raw.headers,
+  const authWorkerClient = createAuthWorkerClient({
+    asUser: { authUserId: c.var.session.user.authUserId! },
   });
+  const oneTimeToken = await authWorkerClient.internal.session.createProjectIngressToken();
   const projectIngressProxyScheme = getIngressSchemeFromPublicUrl(c.env.VITE_PUBLIC_URL);
   const exchangeUrl = new URL(
     `${projectIngressProxyScheme}://${canonicalHost}${PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH}`,
@@ -382,21 +391,29 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
     }
   }
 
-  const exchangePath = new URL(
-    "/api/auth/project-ingress-proxy/one-time-token/exchange",
-    c.req.url,
-  );
   const token = c.req.query("token");
-  if (token) exchangePath.searchParams.set("token", token);
+  if (!token) {
+    return c.json({ error: "Missing token" }, 400);
+  }
   const redirectPath = c.req.query("redirectPath");
-  if (redirectPath) exchangePath.searchParams.set("redirectPath", redirectPath);
+  const normalizedRedirectPath = normalizeProjectIngressProxyRedirectPath(redirectPath);
 
-  return c.var.auth.handler(
-    new Request(exchangePath.toString(), {
-      method: "GET",
-      headers: c.req.raw.headers,
-    }),
-  );
+  const authWorkerClient = createAuthWorkerClient({
+    serviceToken: c.env.SERVICE_AUTH_TOKEN,
+  });
+  const exchanged = await authWorkerClient.internal.session.exchangeProjectIngressToken({
+    token,
+  });
+
+  setCookie(c, PROJECT_INGRESS_AUTH_TOKEN_COOKIE, exchanged.token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    path: "/",
+    maxAge: 60 * 60,
+  });
+
+  return c.redirect(normalizedRedirectPath, 302);
 });
 
 app.onError((err, c) => {
@@ -415,8 +432,6 @@ app.onError((err, c) => {
   );
   return c.json({ error: "Internal Server Error" }, 500);
 });
-
-app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
 
 // oRPC endpoint for client-facing API (app router)
 const appOrpcHandler = new RPCHandler(appRouter, {

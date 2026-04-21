@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
+import { slugifyWithSuffix } from "@iterate-com/shared/slug";
 import {
   publicProcedure,
   publicMutation,
@@ -8,16 +9,11 @@ import {
   projectProtectedProcedure,
   ProjectInput,
 } from "../procedures.ts";
-import {
-  user,
-  organization,
-  project,
-  organizationUserMembership,
-  projectConnection,
-} from "../../db/schema.ts";
-import { slugifyWithSuffix } from "../../utils/slug.ts";
+import { user, organization, project, projectConnection } from "../../db/schema.ts";
 import { getDefaultProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
 import { isNonProd } from "../../../env.ts";
+import { createAuthWorkerClient } from "../../utils/auth-worker-client.ts";
+import { ensureLocalOrganizationShadow } from "../../auth/auth-context.ts";
 
 /** Generate a DiceBear avatar URL using a hash of the email as seed */
 function generateDefaultAvatar(email: string): string {
@@ -100,33 +96,25 @@ export const testingRouter = {
           message: "Testing endpoints are not available in production",
         });
       }
-      const orgSlug = slugifyWithSuffix(input.name);
-
-      const [newOrg] = await ctx.db
-        .insert(organization)
-        .values({
-          name: input.name,
-          slug: orgSlug,
-        })
-        .returning();
-
-      if (!newOrg) {
-        throw new Error("Failed to create organization");
-      }
-
-      await ctx.db.insert(organizationUserMembership).values({
-        organizationId: newOrg.id,
-        userId: ctx.user.id,
-        role: "owner",
+      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
+      const authOrganization = await authClient.organization.create({
+        name: input.name,
       });
+      const newOrg = await ensureLocalOrganizationShadow(ctx.db, authOrganization);
 
       const projSlug = slugifyWithSuffix(input.projectName || "default");
       const sandboxProvider = getDefaultProjectSandboxProvider(ctx.env, import.meta.env.DEV);
+      const authProject = await authClient.project.create({
+        organizationSlug: authOrganization.slug,
+        name: input.projectName || "Default Project",
+        slug: projSlug,
+      });
       const [newProject] = await ctx.db
         .insert(project)
         .values({
-          name: input.projectName || "Default Project",
-          slug: projSlug,
+          authProjectId: authProject.id,
+          name: authProject.name,
+          slug: authProject.slug,
           organizationId: newOrg.id,
           sandboxProvider,
         })
