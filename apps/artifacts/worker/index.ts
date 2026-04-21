@@ -8,9 +8,7 @@ interface Env {
       name: string,
       opts?: { description?: string },
     ): Promise<{ name: string; remote: string; token: string }>;
-    get(
-      name: string,
-    ): Promise<{
+    get(name: string): Promise<{
       createToken(scope?: "read" | "write", ttl?: number): Promise<{ plaintext: string }>;
     }>;
     list(opts?: { limit?: number; cursor?: string }): Promise<{ repos: { name: string }[] }>;
