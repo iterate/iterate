@@ -171,7 +171,7 @@ function createPreviewJobs() {
           command: "test",
           if: "needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true",
           name: `Preview / ${app.slug} e2e`,
-          needs: [`preview-${app.slug}`],
+          needs: ["scope", `preview-${app.slug}`],
           runsOnDoppler: true,
         }),
       ],

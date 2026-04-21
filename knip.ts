@@ -67,6 +67,14 @@ function makeDualRuntimeAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   };
 }
 
+function makeAgentsTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
+  const base = makeCloudflareTanStackAppWorkspace(workerEnvShim);
+  return {
+    ...base,
+    entry: [...(base.entry ?? []), "e2e/vitest.config.ts"],
+  };
+}
+
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     entry: ["alchemy.run.ts", "vite.config.ts", "scripts/router.ts", "src/entry.workerd.ts!"],
@@ -144,6 +152,8 @@ const config: KnipConfig = {
   // unrelated apps with heavyweight config loading like `apps/os`.
   ignoreWorkspaces: [
     "apps/*",
+    "!apps/agents",
+    "!apps/agents-contract",
     "!apps/example",
     "!apps/example-contract",
     "!apps/events",
@@ -167,12 +177,19 @@ const config: KnipConfig = {
     // TanStack Start resolves these router factories by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/daemon-v2/src/router.tsx": ["exports"],
+    "apps/agents/src/router.tsx": ["exports"],
     "apps/example/src/router.tsx": ["exports"],
     "apps/ingress-proxy-contract/src/client.ts": ["types"],
     "apps/semaphore-contract/src/client.ts": ["types"],
     "apps/semaphore/src/router.tsx": ["exports"],
+    "apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts": ["exports"],
+    "apps/agents/src/lib/events-orpc-client.ts": ["exports", "types"],
+    "apps/agents/src/lib/mcp-tool-providers.ts": ["types"],
+    "apps/agents/src/lib/openapi-tool-provider.ts": ["types"],
   },
   workspaces: {
+    "apps/agents": makeAgentsTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
+    "apps/agents-contract": makePrivateContractWorkspace(),
     "apps/example": makeDualRuntimeAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/example-contract": makePrivateContractWorkspace(),
     "apps/events": makeEventsCloudflareWorkspace("./src/lib/worker-env.d.ts"),

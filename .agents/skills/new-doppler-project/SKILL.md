@@ -70,7 +70,25 @@ doppler secrets set ALCHEMY_PASSWORD="$(openssl rand -hex 32)" -p <project-slug>
 
 That is all. Everything else should come from `_shared`.
 
-4. Turn Personal Configs off in the Doppler UI. This should always be off. If Doppler created `dev_personal`, that is a sign this setting needs fixing.
+4. Turn **Personal Configs** off on the **Development** (`dev`) environment. When this is on, Doppler creates a `dev_personal` branch per user; we do not use that—we use named configs (`dev_jonas`, etc.) instead. This should always be off.
+
+   **Dashboard (needs permission to manage environment settings on the project):** open the project (`doppler open -p <project-slug>` jumps to the dashboard), find the **Development** environment, open the **⋮** menu next to it → **Settings**, turn the **Personal Configs** toggle **off**, **Save**.
+
+   **API (same auth as an interactive `doppler` CLI—uses the credential already on the machine, no manual token paste):**
+
+   ```bash
+   curl -sS -X PUT \
+     "https://api.doppler.com/v3/environments/environment?project=<project-slug>&environment=dev" \
+     -H "Authorization: Bearer $(doppler configure get token --plain)" \
+     -H "Content-Type: application/json" \
+     -d '{"personal_configs":false}'
+   ```
+
+   **Verify:** `doppler configs -p <project-slug>` must not list `dev_personal`. Or `curl -sS "https://api.doppler.com/v3/environments/environment?project=<project-slug>&environment=dev" -H "Authorization: Bearer $(doppler configure get token --plain)"` and check JSON has `"personal_configs":false`.
+
+   **Workplace default (optional, reduces repeat fixes):** **Projects** → **⋮** (top right) → **Default Environments** → for the **dev** row, set **Personal Configs** to off so **new** projects are not created with this enabled. Per [Branch configs / Personal Configs](https://docs.doppler.com/docs/branch-configs).
+
+   There is no `doppler environments …` CLI subcommand for this toggle; use the dashboard or `PUT` above.
 
 5. Add the project to `doppler.yaml`:
 
@@ -111,7 +129,7 @@ doppler secrets -c dev_jonas
 - Always set a fresh high-entropy `ALCHEMY_PASSWORD` in `prd`.
 - Do not add extra app-local secrets unless the app actually needs them.
 - If staging comes back later, give `stg` its own distinct password. Do not reuse `dev` or `prd`.
-- Personal Configs should always be off.
+- Personal Configs on the `dev` environment should always be off (dashboard **Development** → **⋮** → **Settings**, or `PUT` to `/v3/environments/environment` with `{"personal_configs":false}` as in step 4).
 - Keep `doppler.yaml` in the repo's existing format.
 
 ## References

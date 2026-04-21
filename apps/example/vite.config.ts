@@ -2,7 +2,7 @@ import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
-import alchemy from "alchemy/cloudflare/tanstack-start";
+import { nitro } from "nitro/vite";
 import { defineConfig } from "vite";
 
 // Bind dual-stack by default so both localhost (::1) and 127.0.0.1 work.
@@ -19,13 +19,27 @@ export default defineConfig({
   server: {
     host,
     port,
+    allowedHosts: true,
+    // TanStack Router rewrites this generated file during dev; ignoring it here
+    // avoids Vite reacting to the generator's own writes.
+    watch: {
+      ignored: ["**/routeTree.gen.ts"],
+    },
   },
   plugins: [
     devtools(), // must be first
-    // Just a thinly wrapped cloudflare plugin that picks up the
-    // .alchemy/local/wrangler.jsonc that alchemy.run.ts made
-    alchemy(),
-    tanstackStart(),
+    // Nitro needs websocket support enabled in Node dev so routes returning
+    // NitroWebSocketResponse actually upgrade instead of hanging.
+    nitro({
+      features: {
+        websocket: true,
+      },
+    }),
+    tanstackStart({
+      server: {
+        entry: "./entry.node.ts",
+      },
+    }),
     viteReact(),
     tailwindcss(),
     // this has a bug where it doesn't work in git worktrees - will sort later

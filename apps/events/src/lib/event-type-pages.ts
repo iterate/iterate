@@ -363,7 +363,8 @@ export const streamSubscriptionConfiguredPage = {
   },
   details: [
     "The latest configured event for a slug replaces the previous subscriber config for that slug.",
-    "Both subscriber kinds can optionally use jsonataFilter and jsonataTransform against the full committed event envelope.",
+    "Both subscriber kinds can optionally use jsonataFilter against the full committed event envelope.",
+    "Only webhook subscribers apply jsonataTransform; websocket subscribers use a stable framed protocol instead of arbitrary transformed payloads.",
   ],
   templates: [
     {
@@ -540,7 +541,7 @@ export default {
   ],
 } satisfies EventTypePageDefinition;
 
-export const dynamicWorkerEnvVarSetPage = {
+const dynamicWorkerEnvVarSetPage = {
   slug: "dynamic-worker-env-var-set",
   href: "/dynamic-worker-env-var-set/",
   title: "Dynamic Worker Env Var Set",

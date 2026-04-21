@@ -1,12 +1,17 @@
 import { z } from "zod";
 import {
   type Event,
+  type EventInput,
   type ExternalSubscriber,
   type ExternalSubscriberState,
   type ExternalWebsocketSubscriber,
+  StreamSocketAppendFrame,
+  StreamSocketErrorFrame,
+  StreamSocketEventFrame,
   StreamSubscriptionConfiguredEvent,
 } from "@iterate-com/events-contract";
 import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
+import { match } from "schematch";
 import { getCompiledJsonata } from "./compiled-jsonata.ts";
 import { openOutboundWebSocket } from "./outbound-websocket.ts";
 
@@ -40,10 +45,11 @@ export const externalSubscriberProcessor = defineBuiltinProcessor<ExternalSubscr
     };
   },
 
-  async afterAppend({ event, state }) {
+  async afterAppend({ append, event, state }) {
     await Promise.all(
       Object.values(state.subscribersBySlug).map((subscriber) =>
         publishToExternalSubscriber({
+          append: (input) => Promise.resolve(append(input)),
           event,
           subscriber,
         }),
@@ -52,7 +58,11 @@ export const externalSubscriberProcessor = defineBuiltinProcessor<ExternalSubscr
   },
 }));
 
-async function publishToExternalSubscriber(args: { event: Event; subscriber: ExternalSubscriber }) {
+async function publishToExternalSubscriber(args: {
+  append: (event: EventInput) => Promise<Event>;
+  event: Event;
+  subscriber: ExternalSubscriber;
+}) {
   try {
     const shouldSend = await evaluateFilter({
       event: args.event,
@@ -62,15 +72,15 @@ async function publishToExternalSubscriber(args: { event: Event; subscriber: Ext
       return;
     }
 
-    const serializedPayload = await getOutboundPayload({
-      event: args.event,
-      subscriber: args.subscriber,
-    });
-    if (serializedPayload == null) {
-      return;
-    }
-
     if (args.subscriber.type === "webhook") {
+      const serializedPayload = await getWebhookPayload({
+        event: args.event,
+        subscriber: args.subscriber,
+      });
+      if (serializedPayload == null) {
+        return;
+      }
+
       await postWebhook({
         serializedPayload,
         subscriber: args.subscriber,
@@ -78,8 +88,12 @@ async function publishToExternalSubscriber(args: { event: Event; subscriber: Ext
       return;
     }
 
+    // Websocket subscriptions use a stable framed protocol (`{ type, event }`),
+    // so we intentionally do not apply JSONata transforms here. Arbitrary
+    // reshaping is a webhook-only feature; websocket delivery stays typed and predictable.
     await sendWebsocketMessage({
-      serializedPayload,
+      append: args.append,
+      event: args.event,
       subscriber: args.subscriber,
       streamPath: args.event.streamPath,
     });
@@ -111,7 +125,10 @@ async function evaluateFilter(args: { event: Event; subscriber: ExternalSubscrib
   return !!(await getCompiledJsonata(args.subscriber.jsonataFilter).evaluate(args.event));
 }
 
-async function getOutboundPayload(args: { event: Event; subscriber: ExternalSubscriber }) {
+async function getWebhookPayload(args: {
+  event: Event;
+  subscriber: Extract<ExternalSubscriber, { type: "webhook" }>;
+}) {
   const rawPayload =
     args.subscriber.jsonataTransform == null
       ? args.event
@@ -155,7 +172,8 @@ async function postWebhook(args: {
 }
 
 async function sendWebsocketMessage(args: {
-  serializedPayload: z.infer<typeof SerializedOutboundPayload>;
+  append: (event: EventInput) => Promise<Event>;
+  event: Event;
   subscriber: ExternalWebsocketSubscriber;
   streamPath: string;
 }) {
@@ -163,19 +181,33 @@ async function sendWebsocketMessage(args: {
 
   try {
     const socket = await getSubscriberSocket({
+      append: args.append,
       streamPath: args.streamPath,
       subscriber: args.subscriber,
     });
-    socket.send(args.serializedPayload);
+    sendSocketFrame(
+      socket,
+      StreamSocketEventFrame.parse({
+        type: "event",
+        event: args.event,
+      }),
+    );
   } catch (error) {
     resetSubscriberSocket(subscriberKey);
 
     try {
       const socket = await getSubscriberSocket({
+        append: args.append,
         streamPath: args.streamPath,
         subscriber: args.subscriber,
       });
-      socket.send(args.serializedPayload);
+      sendSocketFrame(
+        socket,
+        StreamSocketEventFrame.parse({
+          type: "event",
+          event: args.event,
+        }),
+      );
     } catch (retryError) {
       console.error("[stream-do] external websocket subscriber publish failed", {
         streamPath: args.streamPath,
@@ -189,6 +221,7 @@ async function sendWebsocketMessage(args: {
 }
 
 async function getSubscriberSocket(args: {
+  append: (event: EventInput) => Promise<Event>;
   streamPath: string;
   subscriber: ExternalWebsocketSubscriber;
 }) {
@@ -210,6 +243,7 @@ async function getSubscriberSocket(args: {
   }
 
   const connectPromise = connectSubscriberSocket({
+    append: args.append,
     streamPath: args.streamPath,
     subscriber: args.subscriber,
     subscriberKey,
@@ -239,11 +273,21 @@ async function getSubscriberSocket(args: {
 }
 
 async function connectSubscriberSocket(args: {
+  append: (event: EventInput) => Promise<Event>;
   streamPath: string;
   subscriber: ExternalWebsocketSubscriber;
   subscriberKey: string;
 }) {
   const socket = await openOutboundWebSocket(args.subscriber.callbackUrl);
+  socket.addEventListener("message", (event) => {
+    void handleSubscriberSocketMessage({
+      append: args.append,
+      event,
+      socket,
+      streamPath: args.streamPath,
+      subscriber: args.subscriber,
+    });
+  });
   socket.addEventListener("close", () => {
     const cached = connectionsBySubscriberKey.get(args.subscriberKey);
     if (cached?.socket === socket) {
@@ -257,6 +301,109 @@ async function connectSubscriberSocket(args: {
     }
   });
   return socket;
+}
+
+/**
+ * Handles inbound text from the subscriber’s websocket (the URL we opened outbound to).
+ * Contract for *our* messages: `StreamSocketAppendFrame` (append into the stream) or
+ * `StreamSocketErrorFrame` (peer-reported error). Non-text frames and invalid JSON are
+ * errors we surface back to the peer.
+ *
+ * Well-formed JSON that is neither append nor error is ignored (no reply). That includes
+ * protocol frames from runtimes that share the socket with stream traffic (e.g. Cloudflare
+ * Agents SDK `cf_agent_*` JSON). Replying with `StreamSocketErrorFrame` for those would be
+ * wrong: they are not malformed stream frames, they are simply outside this contract.
+ */
+async function handleSubscriberSocketMessage(args: {
+  append: (event: EventInput) => Promise<Event>;
+  event: unknown;
+  socket: WebSocket;
+  streamPath: string;
+  subscriber: ExternalWebsocketSubscriber;
+}) {
+  const rawData = getSocketMessageData(args.event);
+  if (typeof rawData !== "string") {
+    console.error("[stream-do] external websocket subscriber sent non-text frame", {
+      streamPath: args.streamPath,
+      subscriberSlug: args.subscriber.slug,
+      callbackUrl: args.subscriber.callbackUrl,
+    });
+    sendSocketFrame(
+      args.socket,
+      StreamSocketErrorFrame.parse({
+        type: "error",
+        message: "Expected websocket text frame.",
+      }),
+    );
+    return;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawData);
+  } catch (error) {
+    console.error("[stream-do] external websocket subscriber sent invalid JSON", {
+      streamPath: args.streamPath,
+      subscriberSlug: args.subscriber.slug,
+      callbackUrl: args.subscriber.callbackUrl,
+      error,
+    });
+    sendSocketFrame(
+      args.socket,
+      StreamSocketErrorFrame.parse({
+        type: "error",
+        message: "Invalid websocket JSON.",
+      }),
+    );
+    return;
+  }
+
+  await match(parsed)
+    .case(StreamSocketAppendFrame, async ({ event }) => {
+      try {
+        await args.append(event);
+      } catch (error) {
+        console.error("[stream-do] external websocket subscriber append failed", {
+          streamPath: args.streamPath,
+          subscriberSlug: args.subscriber.slug,
+          callbackUrl: args.subscriber.callbackUrl,
+          error,
+        });
+        sendSocketFrame(
+          args.socket,
+          StreamSocketErrorFrame.parse({
+            type: "error",
+            message: error instanceof Error ? error.message : "Failed to append websocket event.",
+          }),
+        );
+      }
+    })
+    .case(StreamSocketErrorFrame, async ({ message }) => {
+      console.error("[stream-do] external websocket subscriber reported error", {
+        streamPath: args.streamPath,
+        subscriberSlug: args.subscriber.slug,
+        callbackUrl: args.subscriber.callbackUrl,
+        message,
+      });
+    })
+    .defaultAsync(async () => {
+      // Deliberate no-op: see docstring on `handleSubscriberSocketMessage`.
+    });
+}
+
+function getSocketMessageData(event: unknown) {
+  if (typeof event === "object" && event != null && "data" in event) {
+    return (event as { data: unknown }).data;
+  }
+
+  return undefined;
+}
+
+function sendSocketFrame(
+  socket: WebSocket,
+  frame: z.infer<typeof StreamSocketEventFrame> | z.infer<typeof StreamSocketErrorFrame>,
+) {
+  socket.send(JSON.stringify(frame));
 }
 
 function resetSubscriberSocket(subscriberKey: string) {

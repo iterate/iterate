@@ -9,6 +9,7 @@ import {
 } from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { slugify } from "@iterate-com/shared/slugify";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
 import type { StreamDurableObject } from "~/entry.workerd.ts";
@@ -71,7 +72,7 @@ const app = await alchemy(APP_NAME, {
   stateStore,
 });
 
-const workerName = `${APP_NAME}-${app.stage}`;
+const workerName = slugify(`${APP_NAME}-${app.stage}`);
 
 const db = await D1Database("events-db", {
   name: `${workerName}-db`,
@@ -96,7 +97,7 @@ export const worker = await TanStackStart(APP_NAME, {
       "DynamicWorkerEgressGateway",
     ),
     LOADER: WorkerLoader(),
-    APP_CONFIG: JSON.stringify(rawAppConfig, null, 2),
+    APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
   },
   // `packages/shared/src/apps/logging/orpc-plugin.ts` inspects `request.signal`
   // so aborted client requests do not log as real handler failures. Cloudflare
