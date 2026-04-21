@@ -149,7 +149,7 @@
     "vite": "7.2.4",
     "vite-tsconfig-paths": "^6.0.4",
     "vitest": "4.0.15",
-    "wrangler": "^4.84.1",
+    "wrangler": "4.84.0",
     "ws": "^8.19.0"
   }
 }
