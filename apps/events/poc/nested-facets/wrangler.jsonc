@@ -1,0 +1,16 @@
+{
+  "name": "nested-facets-poc",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "PROJECT", "class_name": "Project" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Project"] }],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "observability": {
+    "enabled": true,
+    "logs": { "invocation_logs": true, "head_sampling_rate": 1 },
+    "traces": { "head_sampling_rate": 1 },
+  },
+}
