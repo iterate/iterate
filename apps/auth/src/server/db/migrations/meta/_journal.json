@@ -8,6 +8,13 @@
       "when": 1773809571821,
       "tag": "0000_equal_boom_boom",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1776682283853,
+      "tag": "0001_auth_cutover",
+      "breakpoints": true
     }
   ]
 }

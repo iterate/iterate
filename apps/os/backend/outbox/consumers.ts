@@ -3,6 +3,8 @@ import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { match } from "schematch";
 import { z } from "zod/v4";
 
+import { isSignupAllowed } from "@iterate-com/shared/signup-allowlist";
+import { slugifyWithSuffix } from "@iterate-com/shared/slug";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import {
@@ -17,14 +19,14 @@ import {
   pollForProbeAnswer,
 } from "../services/machine-readiness-probe.ts";
 import { buildMachineEnvVars, createMachineForProject } from "../services/machine-creation.ts";
-import { createUserFromVerifiedEmail } from "../auth/auth.ts";
+import { ensureLocalUserMirror } from "../auth/auth-worker-session.ts";
+import { syncOrganizationMembershipShadowsFromServiceAuth } from "../auth/auth-context.ts";
 import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
 import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
-import { isSignupAllowed } from "../email/signup-allowlist.ts";
 import { getDefaultOrganizationNameFromEmail, parseSender } from "../email/email-routing.ts";
 import { parseSpecMachineEmail } from "../email/spec-machine.ts";
-import { slugifyWithSuffix } from "../utils/slug.ts";
 import { getDefaultProjectSandboxProvider } from "../utils/sandbox-providers.ts";
+import { createAuthWorkerClient } from "../utils/auth-worker-client.ts";
 import { outboxClient as cc } from "./client.ts";
 
 const IterateMainPushWebhookPayload = z.object({
@@ -263,52 +265,49 @@ export const registerConsumers = () => {
       const payload = ResendWebhookReceivedEventPayload.parse(event.payload);
       const sender = parseSender(payload.data.from);
       const specMachine = parseSpecMachineEmail(sender.email);
-      const user = await createUserFromVerifiedEmail({
-        db,
-        env,
-        email: sender.email,
-        name: sender.name,
-        consideredVerifiedReason:
-          "Received email from this account, so we know they have access to it!",
-      });
-
       const projectSlug = await findAvailableProjectSlug(
         db,
         getDefaultOrganizationNameFromEmail(sender.email),
       );
-
-      const projectId = await db.transaction(async (tx) => {
-        const [organization] = await tx
-          .insert(schema.organization)
-          .values({ name: projectSlug, slug: projectSlug })
-          .returning();
-        if (!organization) {
-          throw new Error(`failed to create organization for ${sender.email}`);
-        }
-
-        await tx.insert(schema.organizationUserMembership).values({
-          organizationId: organization.id,
-          userId: user.id,
-          role: "owner",
-        });
-
-        const [project] = await tx
-          .insert(schema.project)
-          .values({
-            name: projectSlug,
-            slug: projectSlug,
-            organizationId: organization.id,
-            sandboxProvider: specMachine
-              ? "spec-machine"
-              : getDefaultProjectSandboxProvider(env, import.meta.env.DEV),
-          })
-          .returning();
-        if (!project) {
-          throw new Error(`failed to create project for ${sender.email}`);
-        }
-
-        return project.id;
+      const authClient = createAuthWorkerClient({ serviceToken: env.SERVICE_AUTH_TOKEN });
+      const authUser = await authClient.internal.user.upsertVerifiedEmail({
+        email: sender.email,
+        name: sender.name,
+        image: null,
       });
+      const user = await ensureLocalUserMirror(db, authUser);
+      const authOrganization = await authClient.internal.organization.createForUser({
+        userId: authUser.id,
+        name: projectSlug,
+        slug: projectSlug,
+      });
+      const localOrganization = await syncOrganizationMembershipShadowsFromServiceAuth({
+        db,
+        serviceToken: env.SERVICE_AUTH_TOKEN,
+        organizationSlug: authOrganization.slug,
+        authOrganization,
+      });
+      const authProject = await authClient.internal.project.createForOrganization({
+        organizationSlug: authOrganization.slug,
+        name: projectSlug,
+        slug: projectSlug,
+      });
+      const [project] = await db
+        .insert(schema.project)
+        .values({
+          authProjectId: authProject.id,
+          name: authProject.name,
+          slug: authProject.slug,
+          organizationId: localOrganization.id,
+          sandboxProvider: specMachine
+            ? "spec-machine"
+            : getDefaultProjectSandboxProvider(env, import.meta.env.DEV),
+        })
+        .returning();
+      if (!project) {
+        throw new Error(`failed to create project for ${sender.email}`);
+      }
+      const projectId = project.id;
 
       await db
         .update(schema.emailInboundDelivery)

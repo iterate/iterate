@@ -8,6 +8,8 @@
     "./client": "./src/lib/client.ts"
   },
   "scripts": {
+    "dev:local": "alchemy dev",
+    "dev": "doppler run --project auth --config dev -- alchemy dev",
     "auth:dev": "doppler run --project auth --config dev -- alchemy dev",
     "build": "vite build",
     "typecheck": "tsgo --noEmit",
@@ -18,6 +20,7 @@
     "@better-auth/drizzle-adapter": "^1.5.5",
     "@better-auth/oauth-provider": "^1.5.5",
     "@iterate-com/auth-contract": "workspace:*",
+    "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@orpc/server": "^1.13.7",
     "@orpc/tanstack-query": "^1.13.6",

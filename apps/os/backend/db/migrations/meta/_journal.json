@@ -260,6 +260,13 @@
       "when": 1774963461458,
       "tag": "0036_add_jonas_land_to_project",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1776682009770,
+      "tag": "0037_auth_cutover_squashed",
+      "breakpoints": true
     }
   ]
 }

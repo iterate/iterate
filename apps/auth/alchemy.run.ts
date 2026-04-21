@@ -30,6 +30,11 @@ const AlchemyEnv = z.object({
   // ================================
   VITE_AUTH_APP_ORIGIN: z.url(),
   BETTER_AUTH_SECRET: z.string(),
+  SERVICE_AUTH_TOKEN: z.string(),
+  RESEND_BOT_DOMAIN: z.string(),
+  RESEND_BOT_API_KEY: z.string(),
+  SIGNUP_ALLOWLIST: z.string(),
+  VITE_ENABLE_EMAIL_OTP_SIGNIN: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string(),
   GOOGLE_CLIENT_SECRET: z.string(),
 });
@@ -60,6 +65,11 @@ const worker = await TanStackStart(APP_NAME, {
     DB,
     VITE_AUTH_APP_ORIGIN: alchemy.secret(alchemyEnv.VITE_AUTH_APP_ORIGIN),
     BETTER_AUTH_SECRET: alchemy.secret(alchemyEnv.BETTER_AUTH_SECRET),
+    SERVICE_AUTH_TOKEN: alchemy.secret(alchemyEnv.SERVICE_AUTH_TOKEN),
+    RESEND_BOT_DOMAIN: alchemy.secret(alchemyEnv.RESEND_BOT_DOMAIN),
+    RESEND_BOT_API_KEY: alchemy.secret(alchemyEnv.RESEND_BOT_API_KEY),
+    SIGNUP_ALLOWLIST: alchemy.secret(alchemyEnv.SIGNUP_ALLOWLIST),
+    VITE_ENABLE_EMAIL_OTP_SIGNIN: alchemy.secret(alchemyEnv.VITE_ENABLE_EMAIL_OTP_SIGNIN ?? ""),
     GOOGLE_CLIENT_ID: alchemy.secret(alchemyEnv.GOOGLE_CLIENT_ID),
     GOOGLE_CLIENT_SECRET: alchemy.secret(alchemyEnv.GOOGLE_CLIENT_SECRET),
   },

@@ -1,8 +1,6 @@
 import "./tracked-mutations.ts";
 import { os, ORPCError } from "@orpc/server";
 import { z } from "zod/v4";
-import { and, eq } from "drizzle-orm";
-import { organizationUserMembership, organization, project as projectTable } from "../db/schema.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { logger } from "../tag-logger.ts";
 import { captureServerEvent } from "../lib/posthog.ts";
@@ -10,6 +8,10 @@ import { waitUntil } from "../../env.ts";
 import { createPostProcedureConsumerPlugin } from "../outbox/pgmq-lib.ts";
 import { queuer } from "../outbox/outbox-queuer.ts";
 import { getDb } from "../db/client.ts";
+import {
+  getOrganizationAccessFromAuthWorker,
+  getProjectAccessFromAuthWorker,
+} from "../auth/auth-context.ts";
 import { getTrackingConfig } from "./middleware/posthog.ts";
 import type { Context } from "./context.ts";
 
@@ -54,7 +56,7 @@ export const ProjectInput = z.object({ projectSlug: z.string() });
 /** Organization protected procedure that requires both authentication and organization membership.
  *  Reads `organizationSlug` from the raw input — callers MUST include it in their `.input()` schema. */
 export const orgProtectedProcedure = protectedProcedure.use(
-  async ({ context, next, path }, input: unknown) => {
+  async ({ context, next }, input: unknown) => {
     const slug = (input as Record<string, unknown>)?.organizationSlug as string | undefined;
     if (!slug) {
       throw new ORPCError("BAD_REQUEST", {
@@ -62,34 +64,16 @@ export const orgProtectedProcedure = protectedProcedure.use(
       });
     }
 
-    const org = await context.db.query.organization.findFirst({
-      where: eq(organization.slug, slug),
+    const { organization, membership } = await getOrganizationAccessFromAuthWorker({
+      db: context.db,
+      authUserId: context.user.authUserId!,
+      organizationSlug: slug,
     });
-
-    if (!org) {
-      throw new ORPCError("NOT_FOUND", {
-        message: `Organization with slug ${slug} not found`,
-      });
-    }
-
-    const membership = await context.db.query.organizationUserMembership.findFirst({
-      where: and(
-        eq(organizationUserMembership.organizationId, org.id),
-        eq(organizationUserMembership.userId, context.user.id),
-      ),
-    });
-
-    // Allow if user has membership OR is a system admin
-    if (!membership && context.user.role !== "admin") {
-      throw new ORPCError("FORBIDDEN", {
-        message: `Access to ${path} denied: User does not have access to organization`,
-      });
-    }
 
     return next({
       context: {
-        organization: org,
-        membership: membership ?? undefined,
+        organization,
+        membership,
       },
     });
   },
@@ -116,7 +100,7 @@ const orgAdminProcedure = orgProtectedProcedure.use(async ({ context, next, path
  *  Project slugs are globally unique, so only projectSlug is required.
  *  Reads `projectSlug` from the raw input — callers MUST include it in their `.input()` schema. */
 export const projectProtectedProcedure = protectedProcedure.use(
-  async ({ context, next, path }, input: unknown) => {
+  async ({ context, next }, input: unknown) => {
     const slug = (input as Record<string, unknown>)?.projectSlug as string | undefined;
     if (!slug) {
       throw new ORPCError("BAD_REQUEST", {
@@ -124,47 +108,17 @@ export const projectProtectedProcedure = protectedProcedure.use(
       });
     }
 
-    const proj = await context.db.query.project.findFirst({
-      where: eq(projectTable.slug, slug),
-      with: {
-        organization: true,
-        envVars: true,
-        accessTokens: true,
-        connections: true,
-      },
+    const { project, organization } = await getProjectAccessFromAuthWorker({
+      db: context.db,
+      authUserId: context.user.authUserId!,
+      projectSlug: slug,
     });
-
-    if (!proj) {
-      throw new ORPCError("NOT_FOUND", {
-        message: `Project with slug ${slug} not found`,
-      });
-    }
-
-    if (!proj.organization) {
-      throw new ORPCError("NOT_FOUND", {
-        message: `Project with slug ${slug} has no organization`,
-      });
-    }
-
-    // Check user has access to the project's organization
-    const membership = await context.db.query.organizationUserMembership.findFirst({
-      where: and(
-        eq(organizationUserMembership.organizationId, proj.organizationId),
-        eq(organizationUserMembership.userId, context.user.id),
-      ),
-    });
-
-    if (!membership && context.user.role !== "admin") {
-      throw new ORPCError("FORBIDDEN", {
-        message: `Access to ${path} denied: User does not have access to this project`,
-      });
-    }
 
     return next({
       context: {
-        organization: proj.organization,
-        membership: membership ?? undefined,
-        project: proj,
+        organization,
+        membership: undefined,
+        project,
       },
     });
   },

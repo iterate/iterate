@@ -4,13 +4,12 @@
  * be safely used by isolated workers like egress-proxy.
  */
 import type { RouterClient } from "@orpc/server";
-import type { Auth, AuthSession } from "./auth/auth.ts";
 import type { DB } from "./db/client.ts";
 import type { AppRouter } from "./orpc/root.ts";
+import type { MirroredAuthSession } from "./auth/auth-worker-session.ts";
 
 export type Variables = {
-  auth: Auth;
-  session: AuthSession;
+  session: MirroredAuthSession | null;
   db: DB;
   orpcCaller: RouterClient<AppRouter>;
 };
