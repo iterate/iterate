@@ -1,0 +1,8 @@
+{
+  "name": "ai-poc",
+  "main": "worker.ts",
+  "compatibility_date": "2026-04-01",
+  "ai": {
+    "binding": "AI"
+  }
+}
