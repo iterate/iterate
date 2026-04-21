@@ -27,12 +27,20 @@ ws.addEventListener("open", () => {
   console.error(`[poke] open ${wsUrl.toString()} (+${Date.now() - t0}ms)`);
   // Let OpenAPI spec preload (onStart) finish so execute() is not blocked on first line.
   setTimeout(() => {
+    // IterateAgent.onMessage validates inbound frames against
+    // StreamSocketEventFrame, which requires the full `Event` shape
+    // (`streamPath`, `offset`, `createdAt`). Anything short is silently
+    // dropped as `not-stream-socket-frame`. Fill in dev-only stubs so the
+    // frame parses and the processor actually runs.
     ws.send(
       JSON.stringify({
         type: "event",
         event: {
           type: "codemode-block-added",
           payload: { script },
+          streamPath: "/agents/poke-iterate-ws",
+          offset: Date.now(),
+          createdAt: new Date().toISOString(),
         },
       }),
     );

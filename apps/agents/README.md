@@ -55,6 +55,6 @@ See `e2e/vitest/forwarded-events.e2e.test.ts` and `iterate-agent.e2e.test.ts`.
 
 **`iterate-agent` e2e** is skipped in default `pnpm test:e2e` until you opt in with `AGENTS_E2E_ITERATE_AGENT=1` (see `pnpm test:e2e:iterate-agent`). It exercises the real Events host → outbound WebSocket → `IterateAgent` path; deploy `apps/events` so subscriber delivery matches what the test expects.
 
-### Inbound frames (strict vs loose)
+### Inbound frames
 
-Production events append full `Event` objects; `StreamSocketFrame` in the contract requires those fields. For local one-line JSON, `IterateAgent` also accepts a minimal `{ "type":"event","event":{ "type":"codemode-block-added","payload":{ "script":"..." } } }`.
+`IterateAgent.onMessage` validates inbound frames with `StreamSocketFrame` from `@iterate-com/events-contract`, which requires the full `Event` shape (`streamPath`, `offset`, `createdAt`). Frames without those fields are silently dropped (logged as `not-stream-socket-frame`) — there is no loose-parse fallback. Manual pokes (see `scripts/poke-iterate-ws.mts`) must synthesize the extra fields themselves.
