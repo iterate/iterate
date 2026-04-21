@@ -3,9 +3,8 @@
  * `IterateAgent` → codemode runs `builtin` + events OpenAPI (including dotted operationIds →
  * `events.__internal_health`) + `fetch("https://example.com/")` (egress via mock proxy / HAR).
  *
- * Requires Events worker changes that send `X-Iterate-Events-External-Subscriber` on subscriber upgrades
- * (see `apps/events` outbound WebSocket) to be **deployed** to whatever `EVENTS_BASE_URL` targets; otherwise
- * Agents protocol frames confuse Events' client and `codemode-result-added` never lands.
+ * Requires the Events worker (`apps/events`) to be **deployed** to whatever `EVENTS_BASE_URL` targets so
+ * outbound websocket subscriber delivery matches production behavior.
  *
  * Outbound HTTP goes through `APP_CONFIG_EXTERNAL_EGRESS_PROXY`. Replay uses committed HAR +
  * `prepareAgentsHarForReplay` (project hostname) and `onUnhandledRequest: "error"` (no silent internet).

@@ -1,3 +1,9 @@
+/**
+ * Opens an outbound websocket to `callbackUrl` (subscriber-configured). No custom headers:
+ * the subscriber URL is opaque, and compatibility with agent runtimes that emit their own
+ * JSON on the same connection is handled in `external-subscriber.ts` by ignoring frames that
+ * are not stream-socket append/error payloads.
+ */
 export async function openOutboundWebSocket(callbackUrl: string) {
   const websocketKey = createWebSocketKey();
   const response = (await fetch(getWebsocketUpgradeFetchUrl(callbackUrl).toString(), {
@@ -6,8 +12,6 @@ export async function openOutboundWebSocket(callbackUrl: string) {
       "Sec-WebSocket-Key": websocketKey,
       "Sec-WebSocket-Version": "13",
       Upgrade: "websocket",
-      // Lets agent runtimes (e.g. Cloudflare Agents) skip CF_AGENT_* protocol frames; Events only speaks stream-socket JSON.
-      "X-Iterate-Events-External-Subscriber": "1",
     },
   })) as Response & { webSocket?: WebSocket | null };
 

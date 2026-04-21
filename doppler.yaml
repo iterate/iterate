@@ -27,6 +27,4 @@ setup:
   - project: ai-engineer-workshop
     path: ai-engineer-workshop/
   - project: agents
-    path: packages/agent/
-  - project: agents
     path: apps/agents/

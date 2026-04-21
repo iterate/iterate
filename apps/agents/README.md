@@ -19,7 +19,7 @@ printf '%s\n' '{"type":"event","event":{"type":"codemode-block-added","payload":
 
 - **`wscat`** — interactive REPL for typing frames (no global install: `npx wscat -c "ws://127.0.0.1:5173/agents/iterate-agent/manual-test"`). After connect, paste one line of JSON and Enter.
 
-On connect, the Agents SDK sends its own protocol messages first (`cf_agent_identity`, `cf_agent_state` if any, `cf_agent_mcp_servers`, etc.) before your handler runs; that is expected.
+On connect, the Agents SDK may send its own protocol messages first (`cf_agent_identity`, `cf_agent_state` if any, `cf_agent_mcp_servers`, etc.). When Events connects outbound to this agent as a stream subscriber, it ignores those frames so they do not interfere with stream-socket traffic.
 
 **Scripting without extra CLIs:** Node 22+ exposes `globalThis.WebSocket` — use `addEventListener("open", …)` and `send()` the same JSON string as above.
 
@@ -53,7 +53,7 @@ Order is fixed: **tunnel lease → local port from that lease → Alchemy dev on
 
 See `e2e/vitest/forwarded-events.e2e.test.ts` and `iterate-agent.e2e.test.ts`.
 
-**`iterate-agent` e2e** is skipped in default `pnpm test:e2e` until you opt in with `AGENTS_E2E_ITERATE_AGENT=1` (see `pnpm test:e2e:iterate-agent`). It needs the Events worker deployed with the outbound WebSocket `X-Iterate-Events-External-Subscriber` header (`apps/events` → `outbound-websocket.ts`) so Agents does not send CF*AGENT*\* protocol JSON that Events’ client rejects.
+**`iterate-agent` e2e** is skipped in default `pnpm test:e2e` until you opt in with `AGENTS_E2E_ITERATE_AGENT=1` (see `pnpm test:e2e:iterate-agent`). It exercises the real Events host → outbound WebSocket → `IterateAgent` path; deploy `apps/events` so subscriber delivery matches what the test expects.
 
 ### Inbound frames (strict vs loose)
 

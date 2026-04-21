@@ -487,7 +487,7 @@ describe("externalSubscriber", () => {
     }
   });
 
-  test("invalid websocket frames produce error frames", async () => {
+  test("unknown websocket JSON shapes are ignored (no error frame)", async () => {
     const socket = new FakeWebSocket({
       url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-invalid-frame",
     });
@@ -514,9 +514,10 @@ describe("externalSubscriber", () => {
         },
       });
 
+      const afterOutboundEvent = [...socket.sentMessages];
       await socket.dispatchMessage(JSON.stringify({ type: "wat" }));
 
-      expect(socket.sentMessages.at(-1)).toEqual(createErrorFrame("Invalid websocket frame."));
+      expect(socket.sentMessages).toEqual(afterOutboundEvent);
     } finally {
       openOutboundWebSocketMock.mockReset();
       resetSubscriberSocketsForStream("/demo/ws-invalid-frame");

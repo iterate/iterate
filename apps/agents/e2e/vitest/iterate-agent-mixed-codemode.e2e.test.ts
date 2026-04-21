@@ -50,11 +50,14 @@ const harFixturePresent = existsSync(harFixturePath);
 const shouldRunMixedCodemodeTest = recordHar || harFixturePresent;
 
 const MIXED_CODEMODE_SCRIPT = `
-async () => {
+async ({ awaitEvent }) => {
   const mcpQuery = "workers";
   const answer = await builtin.answer();
   const exampleRes = await fetch("https://example.com/");
   const exampleBody = await exampleRes.text();
+
+  const event = awaitEvent(() => ...)
+
   const streamState = await events.getStreamState({ path: "/" });
   const internalHealth = await events.__internal_health({});
   const docSearch = await cloudflare_docs.search_cloudflare_documentation({ query: mcpQuery });

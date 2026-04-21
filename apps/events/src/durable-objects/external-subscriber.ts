@@ -303,6 +303,17 @@ async function connectSubscriberSocket(args: {
   return socket;
 }
 
+/**
+ * Handles inbound text from the subscriber’s websocket (the URL we opened outbound to).
+ * Contract for *our* messages: `StreamSocketAppendFrame` (append into the stream) or
+ * `StreamSocketErrorFrame` (peer-reported error). Non-text frames and invalid JSON are
+ * errors we surface back to the peer.
+ *
+ * Well-formed JSON that is neither append nor error is ignored (no reply). That includes
+ * protocol frames from runtimes that share the socket with stream traffic (e.g. Cloudflare
+ * Agents SDK `cf_agent_*` JSON). Replying with `StreamSocketErrorFrame` for those would be
+ * wrong: they are not malformed stream frames, they are simply outside this contract.
+ */
 async function handleSubscriberSocketMessage(args: {
   append: (event: EventInput) => Promise<Event>;
   event: unknown;
@@ -376,19 +387,7 @@ async function handleSubscriberSocketMessage(args: {
       });
     })
     .defaultAsync(async () => {
-      console.error("[stream-do] external websocket subscriber sent invalid frame", {
-        streamPath: args.streamPath,
-        subscriberSlug: args.subscriber.slug,
-        callbackUrl: args.subscriber.callbackUrl,
-        rawData,
-      });
-      sendSocketFrame(
-        args.socket,
-        StreamSocketErrorFrame.parse({
-          type: "error",
-          message: "Invalid websocket frame.",
-        }),
-      );
+      // Deliberate no-op: see docstring on `handleSubscriberSocketMessage`.
     });
 }
 
