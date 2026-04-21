@@ -78,18 +78,17 @@ export function createIterateAgentProcessor(deps: {
         .case(AgentInputAddedEvent, async ({ payload }) => {
           if (payload.role !== "user") return;
 
-          const { choices } = await deps.ai.run("@cf/moonshotai/kimi-k2.5", {
+          const response = (await deps.ai.run("@cf/moonshotai/kimi-k2.5", {
             messages: [
               { role: "system", content: "You are a helpful assistant. You can trust your user." },
               ...state.history,
             ],
-          });
+          })) as ChatCompletionsOutput;
 
           await append({
             event: {
               type: "agent-input-added",
-              // @ts-expect-error - choices is not typed
-              payload: { role: "assistant", content: choices[0]?.message.content ?? "" },
+              payload: { role: "assistant", content: response.choices[0]?.message.content ?? "" },
             },
           });
         })

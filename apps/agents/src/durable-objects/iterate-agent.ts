@@ -29,7 +29,7 @@ export class IterateAgent extends Agent<CloudflareEnv> {
 
     this.#streamProcessorState = loadStreamProcessorStateFromKv(this.ctx.storage.kv);
     log("onStart.kvStateLoaded", {
-      blocksProcessed: this.#streamProcessorState.blocksProcessed,
+      historyLength: this.#streamProcessorState.history.length,
       fresh: this.#streamProcessorState === iterateAgentProcessorInitialState,
     });
 
@@ -150,7 +150,7 @@ export class IterateAgent extends Agent<CloudflareEnv> {
       this.ctx.storage.kv.put(STREAM_PROCESSOR_STATE_KV_KEY, reduced);
       this.#streamProcessorState = reduced;
       log("onMessage.stateReduced", {
-        blocksProcessed: reduced.blocksProcessed,
+        historyLength: reduced.history.length,
       });
     } else {
       log("onMessage.stateUnchanged", { eventType });
