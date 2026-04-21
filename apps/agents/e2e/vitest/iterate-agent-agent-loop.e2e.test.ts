@@ -190,7 +190,7 @@ async function runScenario(args: {
       const payload = event.payload as { role?: string };
       return payload.role === "assistant";
     },
-    timeoutMs: 120_000,
+    timeoutMs: 10_000,
   });
   const llmMs = Date.now() - llmT0;
 
