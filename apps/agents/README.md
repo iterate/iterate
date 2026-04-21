@@ -31,14 +31,6 @@ On connect, the Agents SDK may send its own protocol messages first (`cf_agent_i
 
 Codemode runs in a nested worker; outbound HTTP uses `globalOutbound` → `CodemodeOutboundFetch` → host `fetch` (including `APP_CONFIG_EXTERNAL_EGRESS_PROXY`). Scripts use normal **`async () => { ... }`** and global **`fetch(...)`** (same as the nested worker’s outbound).
 
-### Manual probe script
-
-With `pnpm dev` running:
-
-`npx tsx scripts/poke-iterate-ws.mts http://127.0.0.1:5173`
-
-Waits ~2.5s after connect (so events OpenAPI can preload), then sends a minimal `codemode-block-added` that uses `fetch("https://example.com/")`.
-
 ### Doppler: missing env vars (including `SEMAPHORE_*`)
 
 The CLI caches decrypted secrets under `~/.doppler/fallback/`. If new secrets were added in the dashboard (e.g. inherited from `_shared`) **after** that cache was written, `doppler run` can inject an **outdated** set — `doppler secrets get` still works because it hits the API. **Fix:** scripts use `doppler run --no-cache --` so each run fetches the current secret bundle. To clear bad cache manually: remove the relevant files under `~/.doppler/fallback/` or run once with `--no-cache`.
@@ -57,4 +49,4 @@ See `e2e/vitest/forwarded-events.e2e.test.ts` and `iterate-agent.e2e.test.ts`.
 
 ### Inbound frames
 
-`IterateAgent.onMessage` validates inbound frames with `StreamSocketFrame` from `@iterate-com/events-contract`, which requires the full `Event` shape (`streamPath`, `offset`, `createdAt`). Frames without those fields are silently dropped (logged as `not-stream-socket-frame`) — there is no loose-parse fallback. Manual pokes (see `scripts/poke-iterate-ws.mts`) must synthesize the extra fields themselves.
+`IterateAgent.onMessage` validates inbound frames with `StreamSocketFrame` from `@iterate-com/events-contract`, which requires the full `Event` shape (`streamPath`, `offset`, `createdAt`). Frames without those fields are silently dropped (logged as `not-stream-socket-frame`) — there is no loose-parse fallback.
