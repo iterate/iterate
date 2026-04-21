@@ -741,18 +741,18 @@ export class Project extends DurableObject<Env> {
       await this.workspace.mkdir(REPO_DIR, { recursive: true });
       await this.git.clone({ url: baseRemote, dir: REPO_DIR, ...baseAuth });
 
-      // Re-point origin to our repo and force-push
+      // Re-point origin to our repo (plain URL, no embedded token) and force-push
       try {
         await this.git.remote({ dir: REPO_DIR, remove: "origin" });
       } catch {}
+      await this.git.remote({ dir: REPO_DIR, add: { name: "origin", url: ownRemote } });
       const ownToken = await this.#getWriteToken(repoName);
-      const ownAuth = this.#gitAuth(ownToken);
-      const authenticatedOwn = ownRemote.replace(
-        "https://",
-        `https://${ownAuth.username}:${ownAuth.password}@`,
-      );
-      await this.git.remote({ dir: REPO_DIR, add: { name: "origin", url: authenticatedOwn } });
-      await this.git.push({ dir: REPO_DIR, remote: "origin", force: true, ...ownAuth });
+      await this.git.push({
+        dir: REPO_DIR,
+        remote: "origin",
+        force: true,
+        ...this.#gitAuth(ownToken),
+      });
 
       const log = await this.git.log({ dir: REPO_DIR, depth: 1 });
       this.#cloned = true;
