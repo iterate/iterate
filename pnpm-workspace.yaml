@@ -39,15 +39,32 @@ packages:
   - repo-templates/**/*
   - .github/ts-workflows
 
+catalogs:
+  cloudflare:
+    "@cloudflare/codemode": ^0.3.4
+    "@cloudflare/unenv-preset": ^2.16.0
+    "@cloudflare/vite-plugin": ^1.33.1
+    "@cloudflare/vitest-pool-workers": ^0.14.9
+    "@cloudflare/worker-bundler": ^0.1.2
+    "@cloudflare/workers-types": ^4.20260421.1
+    miniflare: ^4.20260421.0
+    workerd: ^1.20260421.1
+    wrangler: ^4.84.1
+
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - drizzle-kit
+  - alchemy
   - miniflare
   - wrangler
-  - "@cloudflare/unenv-preset"
-  - alchemy
-  - "@cloudflare/sandbox"
   - workerd
+  - "@cloudflare/codemode"
+  - "@cloudflare/sandbox"
+  - "@cloudflare/unenv-preset"
+  - "@cloudflare/vite-plugin"
+  - "@cloudflare/vitest-pool-workers"
+  - "@cloudflare/worker-bundler"
+  - "@cloudflare/workers-types"
   - "@mmkal/jsonata"
   - "@mmkal/json-schema-to-typescript"
   - "@mariozechner/pi-ai"

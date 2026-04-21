@@ -62,9 +62,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.29.1",
-    "@cloudflare/vitest-pool-workers": "^0.14.0",
-    "@cloudflare/workers-types": "^4.20260317.1",
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
     "@iterate-com/mock-http-proxy": "workspace:*",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/devtools-vite": "^0.6.0",
@@ -80,6 +80,6 @@
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
     "vitest": "4.1.0-beta.6",
-    "wrangler": "^4.75.0"
+    "wrangler": "catalog:cloudflare"
   }
 }

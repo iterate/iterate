@@ -32,7 +32,7 @@
     }
   },
   "dependencies": {
-    "@cloudflare/codemode": "^0.3.2",
+    "@cloudflare/codemode": "catalog:cloudflare",
     "@iterate-com/agents-contract": "workspace:*",
     "@iterate-com/events-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
@@ -58,9 +58,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.33.0",
-    "@cloudflare/vitest-pool-workers": "^0.8.55",
-    "@cloudflare/workers-types": "^4.20260421.1",
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
     "@iterate-com/mock-http-proxy": "workspace:*",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/devtools-vite": "^0.6.0",
@@ -73,6 +73,6 @@
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
     "vitest": "4.1.0-beta.6",
-    "wrangler": "^4.84.0"
+    "wrangler": "catalog:cloudflare"
   }
 }
