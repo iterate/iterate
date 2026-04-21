@@ -3,6 +3,7 @@ import { resolveProvider } from "@cloudflare/codemode/ai";
 import type { EventInput } from "@iterate-com/events-contract";
 import { match } from "schematch";
 import { z } from "zod";
+import { normalizeLlmRequest, normalizeLlmResponse } from "~/lib/llm-normalization.ts";
 import type { CreateMcpToolProvidersOptions } from "~/lib/mcp-tool-providers.ts";
 import { createMcpToolProviders } from "~/lib/mcp-tool-providers.ts";
 
@@ -38,6 +39,10 @@ export function createIterateAgentProcessor(deps: {
         .case(AgentInputAddedEvent, ({ payload }) => ({
           ...state,
           history: [...state.history, payload],
+        }))
+        .case(LlmConfigUpdatedEvent, ({ payload }) => ({
+          ...state,
+          llmConfig: payload,
         }))
         .default(() => undefined),
 
@@ -78,17 +83,26 @@ export function createIterateAgentProcessor(deps: {
         .case(AgentInputAddedEvent, async ({ payload }) => {
           if (payload.role !== "user") return;
 
-          const response = (await deps.ai.run("@cf/moonshotai/kimi-k2.5", {
-            messages: [
-              { role: "system", content: "You are a helpful assistant. You can trust your user." },
-              ...state.history,
-            ],
-          })) as ChatCompletionsOutput;
+          const { model, runOpts } = state.llmConfig;
+          const body = normalizeLlmRequest({
+            model,
+            request: {
+              messages: [
+                {
+                  role: "system",
+                  content: "You are a helpful assistant. You can trust your user.",
+                },
+                ...state.history,
+              ],
+            },
+          });
+          const raw = await deps.ai.run(model as never, body as never, runOpts as never);
+          const text = normalizeLlmResponse({ model, response: raw });
 
           await append({
             event: {
               type: "agent-input-added",
-              payload: { role: "assistant", content: response.choices[0]?.message.content ?? "" },
+              payload: { role: "assistant", content: text },
             },
           });
         })
@@ -100,6 +114,11 @@ export function createIterateAgentProcessor(deps: {
  * Reduced projection persisted in the DO's synchronous KV (under key
  * `iterate-agent:stream-processor-state`). Small + lightweight — not execution payloads.
  */
+const LlmConfig = z.object({
+  model: z.string().min(1),
+  runOpts: z.record(z.string(), z.unknown()).default({}),
+});
+
 export const IterateAgentProcessorState = z.object({
   history: z
     .array(
@@ -109,11 +128,13 @@ export const IterateAgentProcessorState = z.object({
       }),
     )
     .default([]),
+  llmConfig: LlmConfig.default({ model: "@cf/moonshotai/kimi-k2.5", runOpts: {} }),
 });
 export type IterateAgentProcessorState = z.infer<typeof IterateAgentProcessorState>;
 
 export const iterateAgentProcessorInitialState: IterateAgentProcessorState = {
   history: [],
+  llmConfig: { model: "@cf/moonshotai/kimi-k2.5", runOpts: {} },
 };
 
 const CodemodeBlockAddedEvent = z.object({
@@ -124,4 +145,9 @@ const CodemodeBlockAddedEvent = z.object({
 const AgentInputAddedEvent = z.object({
   type: z.literal("agent-input-added"),
   payload: IterateAgentProcessorState.shape.history.unwrap().element,
+});
+
+const LlmConfigUpdatedEvent = z.object({
+  type: z.literal("llm-config-updated"),
+  payload: LlmConfig,
 });
