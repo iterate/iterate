@@ -76,7 +76,7 @@ const workerName = slugify(`${APP_NAME}-${app.stage}`);
 
 const db = await D1Database("events-db", {
   name: `${workerName}-db`,
-  migrationsDir: "./drizzle",
+  migrationsDir: "./migrations",
   adopt: true,
 });
 
