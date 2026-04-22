@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { Agent } from "agents";
 
 // ── SQL Studio helpers ──────────────────────────────────────────────────────
 
@@ -222,23 +223,21 @@ async function mcpCallTool(
   }
 }
 
-export class StreamProcessor extends DurableObject {
-  #mcpSessions = new Map<string, { url: string; sessionId: string | null; tools: McpTool[] }>();
-
-  async initMcp() {
-    if (this.#mcpSessions.size > 0) return;
-    const results = await Promise.allSettled(
-      MCP_SERVERS.map(async (server) => {
-        const { sessionId } = await mcpInitialize(server.url);
-        const tools = await mcpListTools(server.url, sessionId);
-        this.#mcpSessions.set(server.name, { url: server.url, sessionId, tools });
-        console.log("[MCP]", server.name, ":", tools.length, "tools");
+export class StreamProcessor extends Agent {
+  async onStart() {
+    console.log("[StreamProcessor] onStart: registering MCP servers");
+    const existing = new Set(this.mcp.listServers().map((s: any) => s.server_url || s.url));
+    const toAdd = MCP_SERVERS.filter((s) => !existing.has(s.url));
+    await Promise.allSettled(
+      toAdd.map(async (s) => {
+        try {
+          await this.addMcpServer(s.name, s.url);
+          console.log("[MCP] added:", s.name);
+        } catch (e: any) {
+          console.error("[MCP] failed:", s.name, e.message);
+        }
       }),
     );
-    results.forEach((r, i) => {
-      if (r.status === "rejected")
-        console.error("[MCP] failed:", MCP_SERVERS[i].name, (r as any).reason?.message);
-    });
   }
 
   ensureTable() {
@@ -350,22 +349,52 @@ export class StreamProcessor extends DurableObject {
       },
     ];
 
-    // MCP tool providers — each MCP server becomes a namespace with its tools
+    // MCP tool providers via Agents SDK this.mcp
     try {
-      await this.initMcp();
-      for (const [name, session] of this.#mcpSessions) {
-        if (session.tools.length === 0) continue;
+      await this.mcp.waitForConnections({ timeout: 10_000 });
+      const servers = this.mcp.listServers();
+      const tools = this.mcp.listTools();
+      const toolsByServer = new Map<string, any[]>();
+      for (const tool of tools) {
+        const list = toolsByServer.get(tool.serverId) ?? [];
+        list.push(tool);
+        toolsByServer.set(tool.serverId, list);
+      }
+      for (const [serverId, serverTools] of toolsByServer) {
+        const server = servers.find((s: any) => s.id === serverId);
+        const name = (server?.name || serverId).replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
         const fns: Record<string, (...args: any[]) => Promise<any>> = {};
-        for (const tool of session.tools) {
+        for (const tool of serverTools) {
           const toolKey = tool.name.replace(/[^a-zA-Z0-9_]/g, "_");
-          fns[toolKey] = async (input: any) =>
-            mcpCallTool(session.url, session.sessionId, tool.name, input);
+          fns[toolKey] = async (input: any) => {
+            const result = await this.mcp.callTool({
+              serverId,
+              name: tool.name,
+              arguments: input && typeof input === "object" ? input : {},
+            });
+            if ("toolResult" in result) return (result as any).toolResult;
+            if ((result as any).structuredContent != null) return (result as any).structuredContent;
+            const texts = ((result as any).content || [])
+              .filter((c: any) => c.type === "text")
+              .map((c: any) => c.text || "");
+            if (texts.length > 0) {
+              const j = texts.join("\n");
+              try {
+                return JSON.parse(j);
+              } catch {
+                return j;
+              }
+            }
+            return result;
+          };
         }
-        providers.push({ name, fns });
-        console.log("[StreamProcessor] MCP provider:", name, "tools:", Object.keys(fns).join(", "));
+        if (Object.keys(fns).length > 0) {
+          providers.push({ name, fns });
+          console.log("[StreamProcessor] MCP:", name, "tools:", Object.keys(fns));
+        }
       }
     } catch (err: any) {
-      console.error("[StreamProcessor] MCP provider setup error:", err.message);
+      console.error("[StreamProcessor] MCP setup error:", err.message);
     }
 
     return providers;
@@ -557,12 +586,13 @@ export class StreamProcessor extends DurableObject {
     // GET /api/debug-mcp — test MCP status
     if (req.method === "GET" && pathname === "/api/debug-mcp") {
       try {
-        await this.initMcp();
-        const sessions: any = {};
-        for (const [name, s] of this.#mcpSessions) {
-          sessions[name] = { tools: s.tools.map((t) => t.name), sessionId: s.sessionId };
-        }
-        return Response.json({ ok: true, sessions });
+        const servers = this.mcp.listServers();
+        const tools = this.mcp.listTools();
+        return Response.json({
+          ok: true,
+          servers: servers.length,
+          tools: tools.map((t: any) => t.serverId + ":" + t.name),
+        });
       } catch (e: any) {
         return Response.json({ ok: false, error: e.message });
       }

@@ -1324,6 +1324,8 @@ export class Project extends DurableObject<Env> {
 
           this.log(`Client entry: ${clientEntry ?? "none (server-only)"}`);
 
+          // externals: optional deps of the agents SDK that aren't needed at runtime
+          const externals = ["partyserver", "pkce-challenge", "ajv", "ajv-formats"];
           const result = clientEntry
             ? await createApp({
                 files: fs,
@@ -1331,11 +1333,13 @@ export class Project extends DurableObject<Env> {
                 server: fs.read("worker.ts") ? "worker.ts" : undefined,
                 jsx: "automatic",
                 jsxImportSource: "react",
+                externals,
               })
             : await createWorker({
                 files: fs,
                 jsx: "automatic",
                 jsxImportSource: "react",
+                externals,
               });
 
           this.log(`Bundle complete, writing dist files...`);
