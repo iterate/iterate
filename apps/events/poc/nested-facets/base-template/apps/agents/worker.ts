@@ -126,8 +126,12 @@ const MCP_SERVERS = [
 ] as const;
 
 export class StreamProcessor extends Agent {
+  #eventsCodemodeTools: any = null;
+
   async onStart() {
-    console.log("[StreamProcessor] onStart: registering MCP servers");
+    console.log("[StreamProcessor] onStart");
+
+    // Register MCP servers (same pattern as IterateAgent.onStart)
     const existingUrls = new Set(this.mcp.listServers().map((s: any) => s.server_url));
     const toAdd = MCP_SERVERS.filter((s) => !existingUrls.has(s.url));
     await Promise.allSettled(
@@ -233,8 +237,22 @@ export class StreamProcessor extends Agent {
       name: string;
       fns: Record<string, (...args: any[]) => Promise<any>>;
     }> = [
-      // Canary tool — same as apps/agents e2e test
-      { name: "builtin", fns: { answer: async () => 42 } },
+      // Canary + debug tools
+      {
+        name: "builtin",
+        fns: {
+          answer: async () => 42,
+          mcpStatus: async () => {
+            try {
+              const servers = this.mcp.listServers();
+              const tools = this.mcp.listTools();
+              return { servers: servers.length, tools: tools.length, hasMcp: typeof this.mcp };
+            } catch (e: any) {
+              return { error: e.message };
+            }
+          },
+        },
+      },
       // AI tool — lets codemode scripts call Workers AI
       {
         name: "ai",
@@ -251,9 +269,9 @@ export class StreamProcessor extends Agent {
       },
     ];
 
-    // MCP tool providers via Agent SDK this.mcp
+    // MCP tool providers — onStart registers servers, wait for handshakes to complete
     try {
-      await this.mcp.waitForConnections({ timeout: 10_000 });
+      await this.mcp.waitForConnections({ timeout: 15_000 });
       const servers = this.mcp.listServers();
       const tools = this.mcp.listTools();
       const toolsByServer = new Map<string, any[]>();
@@ -296,9 +314,22 @@ export class StreamProcessor extends Agent {
         }
       }
     } catch (err: any) {
-      console.error("[StreamProcessor] MCP setup error:", err.message);
+      // Store the MCP error so we can see it in the codemode result
+      providers.push({
+        name: "mcperr",
+        fns: {
+          getError: async () =>
+            err.message + " | " + (err.stack || "").split("\n").slice(0, 2).join(" "),
+        },
+      });
     }
 
+    console.log(
+      "[buildProviders] total:",
+      providers.length,
+      "names:",
+      providers.map((p) => p.name),
+    );
     return providers;
   }
 
@@ -430,7 +461,8 @@ export class StreamProcessor extends Agent {
     );
   }
 
-  async fetch(req: Request): Promise<Response> {
+  // Agent lifecycle: onRequest handles non-WebSocket HTTP (Agent calls onStart first)
+  async onRequest(req: Request): Promise<Response> {
     this.ensureTable();
     const pathname = getPathname(req.url);
     const streamPath = (this.ctx.storage.kv.get("streamPath") as string) || "unknown";
@@ -455,6 +487,19 @@ export class StreamProcessor extends Agent {
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
+    // GET /api/test-providers — debug: build and list providers
+    if (req.method === "GET" && pathname === "/api/test-providers") {
+      try {
+        const providers = await this.buildProviders();
+        return Response.json({
+          ok: true,
+          providers: providers.map((p) => ({ name: p.name, tools: Object.keys(p.fns) })),
+        });
+      } catch (e: any) {
+        return Response.json({ ok: false, error: e.message });
+      }
+    }
+
     // POST /process — process an event, return append events
     if (req.method === "POST" && pathname === "/process") {
       const event = (await req.json()) as any;
@@ -477,7 +522,11 @@ export class StreamProcessor extends Agent {
         }
       }
       if (event.type === "codemode-block-added" && event.payload?.script) {
+        // Debug: also return provider names
+        const providers = await this.buildProviders();
+        const providerNames = providers.map((p: any) => p.name);
         const result = await this.executeCode(event.payload.script);
+        (result as any)._providers = providerNames;
         this.storeEvent("codemode-result-added", null, JSON.stringify(result), result);
         collect({ type: "codemode-result-added", payload: result });
       }
@@ -494,7 +543,7 @@ export class StreamProcessor extends Agent {
         const log: string[] = [];
         for (const s of toAdd) {
           try {
-            await this.addMcpServer(s.name, s.url);
+            await this.mcp.connect(s.url, { name: s.name });
             log.push(`${s.name}: added`);
           } catch (e: any) {
             log.push(`${s.name}: FAILED: ${e.message}`);
@@ -645,20 +694,33 @@ export class App extends DurableObject {
     `);
   }
 
+  /**
+   * Build a Request targeting a StreamProcessor facet, injecting the
+   * `x-partykit-room` header that partyserver's `Server.fetch()` requires
+   * to set the DO name on first invocation.
+   */
+  facetRequest(facetName: string, url: string, init?: RequestInit): Request {
+    const req = new Request(url, init);
+    req.headers.set("x-partykit-room", facetName);
+    return req;
+  }
+
   getOrCreateStream(streamPath: string) {
+    const facetName = "stream:" + streamPath;
+
     this.ctx.storage.sql.exec(
       "INSERT INTO _facets (name, class_name) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET last_fetch_at = datetime('now')",
-      "stream:" + streamPath,
+      facetName,
       "StreamProcessor",
     );
 
-    const proc = this.ctx.facets.get("stream:" + streamPath, async () => {
+    const proc = this.ctx.facets.get(facetName, async () => {
       return { class: (this.ctx as any).exports.StreamProcessor };
     });
 
     proc
       .fetch(
-        new Request("http://localhost/init", {
+        this.facetRequest(facetName, "http://localhost/init", {
           method: "POST",
           body: JSON.stringify({ _setStreamPath: streamPath }),
         }),
@@ -697,7 +759,7 @@ export class App extends DurableObject {
 
         const proc = this.getOrCreateStream(wsStreamPath);
         const resp = await proc.fetch(
-          new Request("http://localhost/process", {
+          this.facetRequest("stream:" + wsStreamPath, "http://localhost/process", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(frame.event),
@@ -725,13 +787,15 @@ export class App extends DurableObject {
         return new Response(null, { status: 101, webSocket: pair[0] });
       }
 
+      const facetName = "stream:" + streamPath;
+
       // /_studio + /_sql
       if (subPath === "/_studio") {
-        return proc.fetch(new Request("http://localhost/_studio"));
+        return proc.fetch(this.facetRequest(facetName, "http://localhost/_studio"));
       }
       if (req.method === "POST" && subPath === "/_sql") {
         return proc.fetch(
-          new Request("http://localhost/_sql", {
+          this.facetRequest(facetName, "http://localhost/_sql", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: req.body,
@@ -741,9 +805,9 @@ export class App extends DurableObject {
 
       // Forward other requests
       return proc.fetch(
-        new Request("http://localhost" + subPath, {
+        this.facetRequest(facetName, "http://localhost" + subPath, {
           method: req.method,
-          headers: req.headers,
+          headers: Object.fromEntries(req.headers.entries()),
           body: req.body,
         }),
       );
@@ -841,7 +905,7 @@ export class App extends DurableObject {
     if (req.method === "GET" && streamEventsMatch) {
       const streamPath = decodeURIComponent(streamEventsMatch[1]);
       const proc = this.getOrCreateStream(streamPath);
-      return proc.fetch(new Request("http://localhost/api/events"));
+      return proc.fetch(this.facetRequest("stream:" + streamPath, "http://localhost/api/events"));
     }
 
     // For anything else, return 404 — the Project DO serves the SPA from dist assets
@@ -873,7 +937,7 @@ export class App extends DurableObject {
 
       const proc = this.getOrCreateStream(streamPath);
       const resp = await proc.fetch(
-        new Request("http://localhost/process", {
+        this.facetRequest("stream:" + streamPath, "http://localhost/process", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(frame.event),

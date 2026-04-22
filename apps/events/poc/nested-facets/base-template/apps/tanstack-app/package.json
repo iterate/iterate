@@ -1,5 +1,6 @@
 {
   "name": "tanstack-app",
+  "type": "module",
   "description": "TanStack Start app running in a Durable Object facet",
   "buildConfig": {
     "compatibilityFlags": [
@@ -8,7 +9,17 @@
     "vite": true
   },
   "dependencies": {
+    "@tanstack/react-router": "1.168.23",
+    "@tanstack/react-start": "1.167.42",
     "react": "^19",
     "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.33.1",
+    "@tanstack/router-plugin": "1.167.22",
+    "@vitejs/plugin-react": "4.7.0",
+    "typescript": "^5",
+    "vite": "6.4.2",
+    "wrangler": "^4"
   }
 }

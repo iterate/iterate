@@ -1413,22 +1413,16 @@ export class Project extends DurableObject<Env> {
         this.setBuildState(buildApp, "building");
 
         try {
-          // 1. Read source files from artifact repo
+          const sandbox = getSandbox(this.env.BUILD_SANDBOX, `vite-build-${buildApp}`);
+
+          // 1. Write all source files from artifact repo to sandbox
           const appDir = `${REPO_DIR}/apps/${buildApp}`;
           const entries = await this.workspace.glob(`${appDir}/**/*`);
           const sourceFiles = entries.filter(
             (e: any) =>
-              e.type === "file" &&
-              !e.path.includes("/dist/") &&
-              !e.path.includes("/node_modules/") &&
-              !e.path.includes("/.git/"),
+              e.type === "file" && !e.path.includes("/dist/") && !e.path.includes("/node_modules/"),
           );
-          this.log(`[Vite] Found ${sourceFiles.length} source files`);
-
-          // 2. Get or create a sandbox
-          const sandbox = getSandbox(this.env.BUILD_SANDBOX, `vite-build-${buildApp}`);
-
-          // 3. Write source files to the sandbox
+          this.log(`[Vite] Writing ${sourceFiles.length} source files to sandbox...`);
           for (const entry of sourceFiles) {
             const content = await this.workspace.readFile(entry.path);
             if (content !== null) {
@@ -1436,25 +1430,24 @@ export class Project extends DurableObject<Env> {
               await sandbox.writeFile(`/workspace/${relPath}`, content);
             }
           }
-          this.log(`[Vite] Wrote ${sourceFiles.length} files to sandbox`);
 
-          // 4. Create vite.config.ts + wrangler.jsonc for CF Workers build
+          // 2. Write vite.config.ts + wrangler.jsonc (CF Workers target)
           await sandbox.writeFile(
             "/workspace/vite.config.ts",
-            `
-import { defineConfig } from 'vite'
-import { cloudflare } from '@cloudflare/vite-plugin'
-import { tanstackStart } from '@tanstack/react-start/plugin/vite'
-import react from '@vitejs/plugin-react'
-
-export default defineConfig({
-  plugins: [
-    cloudflare({ viteEnvironment: { name: 'ssr' } }),
-    tanstackStart(),
-    react(),
-  ],
-})
-`,
+            [
+              "import { defineConfig } from 'vite'",
+              "import { cloudflare } from '@cloudflare/vite-plugin'",
+              "import { tanstackStart } from '@tanstack/react-start/plugin/vite'",
+              "import react from '@vitejs/plugin-react'",
+              "",
+              "export default defineConfig({",
+              "  plugins: [",
+              "    cloudflare({ viteEnvironment: { name: 'ssr' } }),",
+              "    tanstackStart({ customViteReactPlugin: true }),",
+              "    react(),",
+              "  ],",
+              "})",
+            ].join("\n"),
           );
           await sandbox.writeFile(
             "/workspace/wrangler.jsonc",
@@ -1466,42 +1459,75 @@ export default defineConfig({
             }),
           );
 
-          // 5. Install dependencies + build
+          // 3. Install dependencies + build
           this.log(`[Vite] Installing dependencies...`);
-          const install = await sandbox.exec("npm install --legacy-peer-deps", {
+          const install = await sandbox.exec("npm install --legacy-peer-deps 2>&1", {
             timeout: 120000,
             cwd: "/workspace",
           });
-          if (!install.success) {
-            throw new Error(`npm install failed: ${install.stderr}`);
-          }
+          if (!install.success)
+            throw new Error(
+              `npm install failed: ${install.stdout.slice(-300)} ${install.stderr.slice(-300)}`,
+            );
           this.log(`[Vite] Dependencies installed`);
 
           this.log(`[Vite] Running vite build...`);
-          const build = await sandbox.exec("npx vite build", {
-            timeout: 60000,
+          const build = await sandbox.exec("npx vite build 2>&1", {
+            timeout: 180000,
             cwd: "/workspace",
           });
           if (!build.success) {
-            throw new Error(`vite build failed: ${build.stderr}`);
+            const fullOutput = (build.stderr || "") + "\n" + (build.stdout || "");
+            throw new Error(`vite build failed: ${fullOutput.slice(-2000)}`);
           }
-          this.log(`[Vite] Build complete: ${build.stdout.slice(-200)}`);
+          this.log(`[Vite] Build done: ${build.stdout.slice(-200)}`);
 
-          // 6. Read build output from sandbox
-          const serverEntry = await sandbox.readFile("/workspace/dist/server/index.js");
-          const serverAssetList = await sandbox.exec("ls /workspace/dist/server/assets/", {
-            cwd: "/workspace",
-          });
-          const clientAssetList = await sandbox.exec("ls /workspace/dist/client/assets/", {
-            cwd: "/workspace",
-          });
+          // 4. Locate build output — CF plugin uses dist/, TanStack default uses .tanstack/start/build/
+          const locateServer = await sandbox.exec(
+            "ls /workspace/dist/server/index.js 2>/dev/null && echo 'dist' || " +
+              "(ls /workspace/.output/server/index.mjs 2>/dev/null && echo 'output') || echo 'unknown'",
+          );
+          const layout = locateServer.stdout.trim();
+          let serverDir: string, clientDir: string, serverEntryFile: string;
+          if (layout === "dist") {
+            serverDir = "/workspace/dist/server";
+            clientDir = "/workspace/dist/client";
+            serverEntryFile = "index.js";
+          } else {
+            // Fallback: find the actual locations
+            const findServer = await sandbox.exec(
+              "find /workspace -name 'index.js' -path '*/server/*' -o -name 'index.mjs' -path '*/server/*' 2>/dev/null | head -1",
+            );
+            const findClient = await sandbox.exec(
+              "find /workspace -type d -name 'assets' -path '*client*' 2>/dev/null | head -1",
+            );
+            this.log(`[Vite] Server entry: ${findServer.stdout.trim()}`);
+            this.log(`[Vite] Client dir: ${findClient.stdout.trim()}`);
+            const serverPath = findServer.stdout.trim();
+            if (!serverPath) throw new Error("Could not find server build output");
+            serverDir = serverPath.replace(/\/[^/]+$/, "");
+            clientDir =
+              findClient.stdout.trim().replace(/\/assets$/, "") || "/workspace/dist/client";
+            serverEntryFile = serverPath.split("/").pop()!;
+          }
+          this.log(
+            `[Vite] Build layout: server=${serverDir} client=${clientDir} entry=${serverEntryFile}`,
+          );
+
+          const serverEntry = await sandbox.readFile(`${serverDir}/${serverEntryFile}`);
+          const serverAssetList = await sandbox.exec(
+            `ls ${serverDir}/assets/ 2>/dev/null || echo ''`,
+          );
+          const clientAssetList = await sandbox.exec(
+            `ls ${clientDir}/assets/ 2>/dev/null || echo ''`,
+          );
 
           // Collect server modules
           const modules: Record<string, string> = {};
           modules["server-entry.js"] = serverEntry.content;
           for (const f of serverAssetList.stdout.trim().split("\n").filter(Boolean)) {
             if (f.endsWith(".js")) {
-              const file = await sandbox.readFile(`/workspace/dist/server/assets/${f}`);
+              const file = await sandbox.readFile(`${serverDir}/assets/${f}`);
               modules[`assets/${f}`] = file.content;
             }
           }
@@ -1524,7 +1550,7 @@ export class App {
           // Collect client assets
           const clientAssetFiles: string[] = [];
           for (const f of clientAssetList.stdout.trim().split("\n").filter(Boolean)) {
-            const file = await sandbox.readFile(`/workspace/dist/client/assets/${f}`);
+            const file = await sandbox.readFile(`${clientDir}/assets/${f}`);
             await this.writeFile(`apps/${buildApp}/dist/assets/${f}`, file.content);
             clientAssetFiles.push(`/${f}`);
           }
