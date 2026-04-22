@@ -4,7 +4,8 @@
 // Pair with `migrationsFromBundle` + `applyMigrations` from 'sqlfu'.
 
 const bundle = {
-  "src/db/migrations/2026-04-22T15.23.33.451Z_initial.sql": "create table secrets (\n  id text primary key not null,\n  name text not null,\n  value text not null,\n  description text,\n  created_at text not null,\n  updated_at text not null,\n  project_slug text default 'public' not null\n);\ncreate index idx_secrets_project_slug_created_at on secrets (project_slug, created_at);\ncreate unique index secrets_project_slug_name_unique on secrets (project_slug, name);\n",
+  "src/db/migrations/0000_initial.sql": "CREATE TABLE `secrets` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`name` text NOT NULL,\n\t`value` text NOT NULL,\n\t`description` text,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL\n);\n--> statement-breakpoint\nCREATE UNIQUE INDEX `secrets_name_unique` ON `secrets` (`name`);--> statement-breakpoint\nCREATE INDEX `idx_secrets_created_at` ON `secrets` (`created_at`);\n",
+  "src/db/migrations/0001_secrets_project_slug.sql": "DROP INDEX `secrets_name_unique`;--> statement-breakpoint\nDROP INDEX `idx_secrets_created_at`;--> statement-breakpoint\nALTER TABLE `secrets` ADD `project_slug` text DEFAULT 'public' NOT NULL;--> statement-breakpoint\nCREATE UNIQUE INDEX `secrets_project_slug_name_unique` ON `secrets` (`project_slug`,`name`);--> statement-breakpoint\nCREATE INDEX `idx_secrets_project_slug_created_at` ON `secrets` (`project_slug`,`created_at`);\n",
 };
 
 export default bundle;
