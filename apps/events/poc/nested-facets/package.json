@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@cloudflare/codemode": "^0.3.2",
+    "@cloudflare/sandbox": "^0.8.11",
     "@cloudflare/shell": "^0.3.3",
     "@cloudflare/worker-bundler": "^0.1.2",
     "@iterate-com/events-contract": "workspace:*",

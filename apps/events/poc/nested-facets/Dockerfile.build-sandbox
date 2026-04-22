@@ -1,0 +1,9 @@
+# Build sandbox for TanStack Start / Vite apps
+FROM cloudflare/sandbox:0.0.0-pr-605-be90395
+
+# Pre-install Vite and TanStack Start build tools globally
+RUN npm install -g vite @cloudflare/vite-plugin @tanstack/react-start @tanstack/router-plugin @vitejs/plugin-react typescript
+
+WORKDIR /workspace
+
+EXPOSE 8080

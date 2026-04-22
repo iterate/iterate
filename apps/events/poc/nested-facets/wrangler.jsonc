@@ -4,10 +4,26 @@
   "compatibility_date": "2026-04-01",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "workers_dev": true,
+  "containers": [
+    {
+      "class_name": "BuildSandbox",
+      "image": "./Dockerfile.build-sandbox",
+      "instance_type": "standard-1",
+      "max_instances": 2,
+    },
+  ],
   "durable_objects": {
-    "bindings": [{ "name": "PROJECT", "class_name": "Project" }],
+    "bindings": [
+      { "name": "PROJECT", "class_name": "Project" },
+      { "name": "BUILD_SANDBOX", "class_name": "BuildSandbox" },
+    ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Project"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Project"] },
+    { "tag": "v2", "new_sqlite_classes": ["BuildSandbox"] },
+    { "tag": "v3", "deleted_classes": ["BuildSandbox"] },
+    { "tag": "v4", "new_sqlite_classes": ["BuildSandbox"] },
+  ],
   "worker_loaders": [{ "binding": "LOADER" }],
   "ai": { "binding": "AI" },
   "d1_databases": [

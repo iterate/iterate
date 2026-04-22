@@ -4,5 +4,17 @@
     "react": "^19",
     "react-dom": "^19",
     "agents": "^0.11.0"
+  },
+  "buildConfig": {
+    "compatibilityFlags": [
+      "nodejs_compat"
+    ],
+    "localBuildOnly": true,
+    "esbuildConditions": [
+      "workerd",
+      "worker",
+      "browser"
+    ],
+    "esbuildPlatform": "node"
   }
 }

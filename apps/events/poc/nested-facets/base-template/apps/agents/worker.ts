@@ -119,115 +119,17 @@ async () => {
 
 Code blocks are auto-executed. Results are fed back to you. Use them for computation, API calls, tool use, or verification. Keep prose concise.`;
 
-// ── Minimal MCP Streamable HTTP client ───────────────────────────────────────
-// MCP servers speak JSON-RPC 2.0 over HTTP. No SDK needed.
-
+// MCP servers registered via Agent SDK's this.addMcpServer()
 const MCP_SERVERS = [
   { name: "cloudflare_docs", url: "https://docs.mcp.cloudflare.com/mcp" },
   { name: "canuckduck", url: "https://mcp.canuckduck.ca/mcp" },
 ] as const;
 
-interface McpTool {
-  name: string;
-  description?: string;
-  inputSchema?: any;
-}
-
-async function mcpInitialize(url: string): Promise<{ sessionId: string | null }> {
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-03-26",
-        capabilities: {},
-        clientInfo: { name: "nested-facets-agent", version: "0.1.0" },
-      },
-    }),
-  });
-  const sessionId = resp.headers.get("mcp-session-id");
-  // Consume response (might be SSE or JSON)
-  await resp.text();
-  return { sessionId };
-}
-
-async function mcpListTools(url: string, sessionId: string | null): Promise<McpTool[]> {
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    accept: "application/json, text/event-stream",
-  };
-  if (sessionId) headers["mcp-session-id"] = sessionId;
-  const resp = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
-  });
-  const text = await resp.text();
-  // Parse SSE or JSON response
-  const jsonMatch = text.match(/\{[\s\S]*"tools"[\s\S]*\}/);
-  if (!jsonMatch) return [];
-  try {
-    const data = JSON.parse(jsonMatch[0]);
-    return (data.result?.tools || data.tools || []) as McpTool[];
-  } catch {
-    return [];
-  }
-}
-
-async function mcpCallTool(
-  url: string,
-  sessionId: string | null,
-  name: string,
-  args: any,
-): Promise<any> {
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    accept: "application/json, text/event-stream",
-  };
-  if (sessionId) headers["mcp-session-id"] = sessionId;
-  const resp = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 3,
-      method: "tools/call",
-      params: { name, arguments: args || {} },
-    }),
-  });
-  const text = await resp.text();
-  const jsonMatch = text.match(/\{[\s\S]*"result"[\s\S]*\}/);
-  if (!jsonMatch) return text;
-  try {
-    const data = JSON.parse(jsonMatch[0]);
-    const result = data.result;
-    if (result?.content) {
-      const texts = result.content
-        .filter((c: any) => c.type === "text")
-        .map((c: any) => c.text || "");
-      if (texts.length > 0) {
-        const joined = texts.join("\n");
-        try {
-          return JSON.parse(joined);
-        } catch {
-          return joined;
-        }
-      }
-    }
-    return result;
-  } catch {
-    return text;
-  }
-}
-
 export class StreamProcessor extends Agent {
   async onStart() {
     console.log("[StreamProcessor] onStart: registering MCP servers");
-    const existing = new Set(this.mcp.listServers().map((s: any) => s.server_url || s.url));
-    const toAdd = MCP_SERVERS.filter((s) => !existing.has(s.url));
+    const existingUrls = new Set(this.mcp.listServers().map((s: any) => s.server_url));
+    const toAdd = MCP_SERVERS.filter((s) => !existingUrls.has(s.url));
     await Promise.allSettled(
       toAdd.map(async (s) => {
         try {
@@ -349,7 +251,7 @@ export class StreamProcessor extends Agent {
       },
     ];
 
-    // MCP tool providers via Agents SDK this.mcp
+    // MCP tool providers via Agent SDK this.mcp
     try {
       await this.mcp.waitForConnections({ timeout: 10_000 });
       const servers = this.mcp.listServers();
@@ -581,6 +483,37 @@ export class StreamProcessor extends Agent {
       }
 
       return Response.json({ ok: true, appends });
+    }
+
+    // POST /api/init-mcp — force MCP initialization and return result
+    if (req.method === "POST" && pathname === "/api/init-mcp") {
+      try {
+        // onStart() already registers servers, but this forces it for debugging
+        const existingUrls = new Set(this.mcp.listServers().map((s: any) => s.server_url));
+        const toAdd = MCP_SERVERS.filter((s) => !existingUrls.has(s.url));
+        const log: string[] = [];
+        for (const s of toAdd) {
+          try {
+            await this.addMcpServer(s.name, s.url);
+            log.push(`${s.name}: added`);
+          } catch (e: any) {
+            log.push(`${s.name}: FAILED: ${e.message}`);
+          }
+        }
+        await this.mcp.waitForConnections({ timeout: 15_000 });
+        return Response.json({
+          ok: true,
+          servers: this.mcp.listServers().length,
+          tools: this.mcp.listTools().map((t: any) => t.name),
+          log,
+        });
+      } catch (e: any) {
+        return Response.json({
+          ok: false,
+          error: e.message,
+          stack: e.stack?.split("\n").slice(0, 3),
+        });
+      }
     }
 
     // GET /api/debug-mcp — test MCP status

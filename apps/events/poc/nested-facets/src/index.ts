@@ -18,9 +18,13 @@ import {
   type CreateWorkerResult,
   type CreateAppResult,
 } from "@cloudflare/worker-bundler";
+import { Sandbox, getSandbox } from "@cloudflare/sandbox";
 import { adminHTML } from "./admin.ts";
 import { editorHTML } from "./editor.ts";
 export { EgressGateway } from "./egress-gateway.ts";
+
+// Export BuildSandbox for the container DO binding
+export class BuildSandbox extends Sandbox<Env> {}
 
 interface EmailService {
   send(message: {
@@ -34,6 +38,7 @@ interface EmailService {
 
 interface Env {
   PROJECT: DurableObjectNamespace<Project>;
+  BUILD_SANDBOX: DurableObjectNamespace<BuildSandbox>;
   LOADER: WorkerLoader;
   DB: D1Database;
   ARTIFACTS: any;
@@ -1306,6 +1311,29 @@ export class Project extends DurableObject<Env> {
       const buildMatch = url.pathname.match(/^\/api\/build\/([a-z0-9-]+)$/);
       if (req.method === "POST" && buildMatch) {
         const buildApp = buildMatch[1];
+
+        // Check if app requires local build (too heavy for DO-based bundler)
+        const buildPkgStr = await this.readFile(`apps/${buildApp}/package.json`);
+        const buildPkg = buildPkgStr ? JSON.parse(buildPkgStr) : {};
+        if (buildPkg.buildConfig?.localBuildOnly) {
+          const hasDist = await this.readFile(`apps/${buildApp}/dist/manifest.json`);
+          if (hasDist) {
+            return Response.json({
+              ok: true,
+              app: buildApp,
+              localBuildOnly: true,
+              message: "Using existing dist (app requires local build)",
+            });
+          }
+          return Response.json(
+            {
+              ok: false,
+              error: `App "${buildApp}" requires local build (buildConfig.localBuildOnly). Run: npx tsx scripts/build-local.ts ${buildApp}`,
+            },
+            { status: 400 },
+          );
+        }
+
         this.log(`Building ${buildApp}...`);
         this.setBuildState(buildApp, "building");
 
@@ -1324,8 +1352,12 @@ export class Project extends DurableObject<Env> {
 
           this.log(`Client entry: ${clientEntry ?? "none (server-only)"}`);
 
-          // externals: optional deps of the agents SDK that aren't needed at runtime
-          const externals = ["partyserver", "pkce-challenge", "ajv", "ajv-formats"];
+          // Read app-level build config from package.json
+          const pkgStr = fs.read("package.json");
+          const pkg = pkgStr ? JSON.parse(pkgStr) : {};
+          const buildCfg = pkg.buildConfig ?? {};
+          const externals: string[] = buildCfg.externals ?? [];
+
           const result = clientEntry
             ? await createApp({
                 files: fs,
@@ -1373,6 +1405,173 @@ export class Project extends DurableObject<Env> {
         }
       }
 
+      // POST /api/build-vite/:app — build a Vite/TanStack Start app in a Sandbox container
+      const viteBuildMatch = url.pathname.match(/^\/api\/build-vite\/([a-z0-9-]+)$/);
+      if (req.method === "POST" && viteBuildMatch) {
+        const buildApp = viteBuildMatch[1];
+        this.log(`[Vite] Building ${buildApp} in sandbox container...`);
+        this.setBuildState(buildApp, "building");
+
+        try {
+          // 1. Read source files from artifact repo
+          const appDir = `${REPO_DIR}/apps/${buildApp}`;
+          const entries = await this.workspace.glob(`${appDir}/**/*`);
+          const sourceFiles = entries.filter(
+            (e: any) =>
+              e.type === "file" &&
+              !e.path.includes("/dist/") &&
+              !e.path.includes("/node_modules/") &&
+              !e.path.includes("/.git/"),
+          );
+          this.log(`[Vite] Found ${sourceFiles.length} source files`);
+
+          // 2. Get or create a sandbox
+          const sandbox = getSandbox(this.env.BUILD_SANDBOX, `vite-build-${buildApp}`);
+
+          // 3. Write source files to the sandbox
+          for (const entry of sourceFiles) {
+            const content = await this.workspace.readFile(entry.path);
+            if (content !== null) {
+              const relPath = entry.path.replace(appDir + "/", "");
+              await sandbox.writeFile(`/workspace/${relPath}`, content);
+            }
+          }
+          this.log(`[Vite] Wrote ${sourceFiles.length} files to sandbox`);
+
+          // 4. Create vite.config.ts + wrangler.jsonc for CF Workers build
+          await sandbox.writeFile(
+            "/workspace/vite.config.ts",
+            `
+import { defineConfig } from 'vite'
+import { cloudflare } from '@cloudflare/vite-plugin'
+import { tanstackStart } from '@tanstack/react-start/plugin/vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [
+    cloudflare({ viteEnvironment: { name: 'ssr' } }),
+    tanstackStart(),
+    react(),
+  ],
+})
+`,
+          );
+          await sandbox.writeFile(
+            "/workspace/wrangler.jsonc",
+            JSON.stringify({
+              name: buildApp,
+              compatibility_date: "2026-04-01",
+              compatibility_flags: ["nodejs_compat"],
+              main: "@tanstack/react-start/server-entry",
+            }),
+          );
+
+          // 5. Install dependencies + build
+          this.log(`[Vite] Installing dependencies...`);
+          const install = await sandbox.exec("npm install --legacy-peer-deps", {
+            timeout: 120000,
+            cwd: "/workspace",
+          });
+          if (!install.success) {
+            throw new Error(`npm install failed: ${install.stderr}`);
+          }
+          this.log(`[Vite] Dependencies installed`);
+
+          this.log(`[Vite] Running vite build...`);
+          const build = await sandbox.exec("npx vite build", {
+            timeout: 60000,
+            cwd: "/workspace",
+          });
+          if (!build.success) {
+            throw new Error(`vite build failed: ${build.stderr}`);
+          }
+          this.log(`[Vite] Build complete: ${build.stdout.slice(-200)}`);
+
+          // 6. Read build output from sandbox
+          const serverEntry = await sandbox.readFile("/workspace/dist/server/index.js");
+          const serverAssetList = await sandbox.exec("ls /workspace/dist/server/assets/", {
+            cwd: "/workspace",
+          });
+          const clientAssetList = await sandbox.exec("ls /workspace/dist/client/assets/", {
+            cwd: "/workspace",
+          });
+
+          // Collect server modules
+          const modules: Record<string, string> = {};
+          modules["server-entry.js"] = serverEntry.content;
+          for (const f of serverAssetList.stdout.trim().split("\n").filter(Boolean)) {
+            if (f.endsWith(".js")) {
+              const file = await sandbox.readFile(`/workspace/dist/server/assets/${f}`);
+              modules[`assets/${f}`] = file.content;
+            }
+          }
+
+          // DO wrapper
+          modules["bundle.js"] = `
+import handler from "./server-entry.js";
+export class App {
+  constructor(state, env) { this.state = state; this.env = env; }
+  async fetch(request) {
+    try { return await handler.fetch(request); }
+    catch (err) {
+      console.error("[TanStack Facet] SSR error:", err.message, err.stack);
+      return new Response("SSR Error: " + err.message, { status: 500 });
+    }
+  }
+}
+`;
+
+          // Collect client assets
+          const clientAssetFiles: string[] = [];
+          for (const f of clientAssetList.stdout.trim().split("\n").filter(Boolean)) {
+            const file = await sandbox.readFile(`/workspace/dist/client/assets/${f}`);
+            await this.writeFile(`apps/${buildApp}/dist/assets/${f}`, file.content);
+            clientAssetFiles.push(`/${f}`);
+          }
+
+          // 7. Write server modules to dist
+          for (const [name, content] of Object.entries(modules)) {
+            await this.writeFile(`apps/${buildApp}/dist/${name}`, content);
+          }
+
+          // 8. Write manifest
+          const manifest = {
+            builtAt: new Date().toISOString(),
+            builtBy: "sandbox-vite",
+            mainModule: "bundle.js",
+            moduleFiles: Object.keys(modules),
+            assetFiles: clientAssetFiles,
+          };
+          await this.writeFile(
+            `apps/${buildApp}/dist/manifest.json`,
+            JSON.stringify(manifest, null, 2),
+          );
+
+          this.setBuildState(buildApp, "ready");
+          this.log(
+            `[Vite] Build complete: ${buildApp} (${manifest.moduleFiles.length} server modules, ${clientAssetFiles.length} client assets)`,
+          );
+
+          // Clean up sandbox
+          try {
+            await sandbox.destroy();
+          } catch {}
+
+          return Response.json({
+            ok: true,
+            app: buildApp,
+            builtBy: "sandbox-vite",
+            moduleFiles: manifest.moduleFiles,
+            assetFiles: clientAssetFiles,
+            buildOutput: build.stdout.slice(-500),
+          });
+        } catch (e: any) {
+          this.setBuildState(buildApp, "error");
+          this.log(`[Vite] Build failed: ${buildApp}: ${e.message}`);
+          return Response.json({ ok: false, error: e.message, stack: e.stack }, { status: 500 });
+        }
+      }
+
       // GET /api/build-state — get build states for all apps
       if (req.method === "GET" && url.pathname === "/api/build-state") {
         return Response.json({ states: this.#buildStates, doId });
@@ -1416,6 +1615,12 @@ export class Project extends DurableObject<Env> {
         status: 404,
       });
     }
+
+    // Read app-level build config (externals, compatibilityFlags, etc.)
+    const appPkgStr = await this.readFile(`apps/${app}/package.json`);
+    const appPkg = appPkgStr ? JSON.parse(appPkgStr) : {};
+    const appBuildConfig = appPkg.buildConfig ?? {};
+    const appCompatFlags: string[] = appBuildConfig.compatibilityFlags ?? [];
 
     // Check for built dist first
     const manifestStr = await this.readFile(`apps/${app}/dist/manifest.json`);
@@ -1474,7 +1679,7 @@ export class Project extends DurableObject<Env> {
       const facet = this.ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
         const worker = this.env.LOADER.get(`code:${app}:${sourceHash}`, async () => ({
           compatibilityDate: "2026-04-01",
-          compatibilityFlags: ["nodejs_compat"],
+          compatibilityFlags: appCompatFlags,
           mainModule,
           modules,
           globalOutbound: this.env.EGRESS_GATEWAY,
@@ -1524,7 +1729,7 @@ export class Project extends DurableObject<Env> {
     const facet = this.ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
       const worker = this.env.LOADER.get(`code:${app}:${sourceHash}`, async () => ({
         compatibilityDate: "2026-04-01",
-        compatibilityFlags: ["nodejs_compat"],
+        compatibilityFlags: appCompatFlags,
         mainModule: "index.js",
         modules: { "index.js": finalSource },
         globalOutbound: this.env.EGRESS_GATEWAY,
@@ -1578,7 +1783,7 @@ export class Project extends DurableObject<Env> {
       const facet = this.ctx.facets.get(`app:${tagApp}:${sourceHash}`, async () => {
         const worker = this.env.LOADER.get(`code:${tagApp}:${sourceHash}`, async () => ({
           compatibilityDate: "2026-04-01",
-          compatibilityFlags: ["nodejs_compat"],
+          compatibilityFlags: appCompatFlags,
           mainModule,
           modules,
           globalOutbound: this.env.EGRESS_GATEWAY,

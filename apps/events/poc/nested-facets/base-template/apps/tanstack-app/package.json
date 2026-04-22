@@ -1,0 +1,14 @@
+{
+  "name": "tanstack-app",
+  "description": "TanStack Start app running in a Durable Object facet",
+  "buildConfig": {
+    "compatibilityFlags": [
+      "nodejs_compat"
+    ],
+    "vite": true
+  },
+  "dependencies": {
+    "react": "^19",
+    "react-dom": "^19"
+  }
+}

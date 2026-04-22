@@ -60,20 +60,28 @@ async function buildApp(appName: string) {
       bundle: true,
       outfile: join(distDir, "bundle.js"),
       format: "esm",
-      platform: "neutral",
+      platform: hasPkgJson
+        ? (JSON.parse(readFileSync(join(appDir, "package.json"), "utf8")).buildConfig
+            ?.esbuildPlatform ?? "neutral")
+        : "neutral",
       target: "es2022",
       external: [
         "cloudflare:workers",
         "cloudflare:*",
         "node:*",
         "path",
-        // Agents SDK optional deps (OAuth, Party, validation — not needed for MCP core)
-        "partyserver",
-        "pkce-challenge",
-        "ajv",
-        "ajv-formats",
+        // App-declared externals from package.json buildConfig
+        ...(hasPkgJson
+          ? (JSON.parse(readFileSync(join(appDir, "package.json"), "utf8")).buildConfig
+              ?.externals ?? [])
+          : []),
       ],
-      // Polyfill node builtins for CF Workers compatibility
+      // App-declared esbuild conditions (e.g. workerd,worker,browser for tree-shaking)
+      conditions: hasPkgJson
+        ? (JSON.parse(readFileSync(join(appDir, "package.json"), "utf8")).buildConfig
+            ?.esbuildConditions ?? [])
+        : [],
+      treeShaking: true,
       define: {
         "process.env.NODE_ENV": '"production"',
       },
