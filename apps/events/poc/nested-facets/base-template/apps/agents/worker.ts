@@ -93,24 +93,28 @@ async function handleSqlExec(sql: any, req: Request) {
 
 const AGENT_MODEL = "@cf/moonshotai/kimi-k2.5";
 
-const SYSTEM_PROMPT = `You are a helpful coding assistant running inside a Cloudflare Worker.
+const SYSTEM_PROMPT = `You are a helpful coding assistant with access to tool providers.
 
-You can execute JavaScript code by wrapping it in a fenced code block with the language tag "js". The code must be an async arrow function that receives {ai, model} and returns a value:
+You can execute JavaScript by writing code in a fenced code block. The code runs in a sandboxed Cloudflare Worker with these global tools:
+
+- \`builtin.answer()\` — returns 42 (canary/test tool)
+- \`ai.run({model, messages, max_tokens, prompt})\` — calls Workers AI
+
+Example:
 
 \`\`\`js
-async ({ai, model}) => {
-  // ai.run(model, {messages, max_tokens}) calls Workers AI
-  const r = await ai.run(model, {
+async () => {
+  const result = await ai.run({
+    model: "@cf/moonshotai/kimi-k2.5",
     messages: [{role: "user", content: "What is 2+2?"}],
     max_tokens: 50,
   });
-  return { answer: r.response };
+  const answer = await builtin.answer();
+  return { aiResponse: result, builtinAnswer: answer };
 }
 \`\`\`
 
-The result of the code execution will be provided back to you. Use code blocks when the user asks you to compute something, fetch data, or do anything that benefits from actual execution rather than just reasoning.
-
-Keep non-code responses concise. When you use a code block, briefly explain what you're doing before and after.`;
+Code blocks are auto-executed. Results are fed back to you. Use them for computation, API calls, or verification. Keep prose concise.`;
 
 export class StreamProcessor extends DurableObject {
   ensureTable() {
@@ -192,9 +196,38 @@ export class StreamProcessor extends DurableObject {
     }
   }
 
-  async executeCode(script: string): Promise<{ result?: unknown; error?: string }> {
+  // Build tool providers — closures that close over this DO's bindings.
+  // When passed to CodeExecutor via RPC, these become RPC stubs.
+  // DynamicWorkerExecutor wraps them in ToolDispatchers.
+  // Sandbox calls go: Isolate 3 → ToolDispatcher (Isolate 1) → RPC stub → here (Isolate 2)
+  buildProviders(): Array<{ name: string; fns: Record<string, (...args: any[]) => Promise<any>> }> {
+    const ai = (this as any).env.AI;
+    return [
+      // Canary tool — same as apps/agents e2e test
+      { name: "builtin", fns: { answer: async () => 42 } },
+      // AI tool — lets codemode scripts call Workers AI
+      {
+        name: "ai",
+        fns: {
+          run: async (args: any) => {
+            const model = args?.model || AGENT_MODEL;
+            const messages = args?.messages || [
+              { role: "user", content: String(args?.prompt || args) },
+            ];
+            const data = await ai.run(model, { messages, max_tokens: args?.max_tokens || 1024 });
+            return (data as any)?.response ?? (data as any)?.choices?.[0]?.message?.content ?? data;
+          },
+        },
+      },
+    ];
+  }
+
+  async executeCode(
+    script: string,
+  ): Promise<{ result?: unknown; error?: string; logs?: string[] }> {
     try {
-      return await (this as any).env.EXEC.execute(script);
+      const providers = this.buildProviders();
+      return await (this as any).env.EXEC.execute(script, providers);
     } catch (err: any) {
       return { error: err.message };
     }

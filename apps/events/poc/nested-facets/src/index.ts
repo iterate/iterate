@@ -6,6 +6,7 @@
 //   3. <app>.<project-or-custom-host>     → App UI (loaded from artifact source code)
 
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+import { DynamicWorkerExecutor, type ToolDispatcher } from "@cloudflare/codemode";
 import { Workspace, WorkspaceFileSystem } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
 import PostalMime from "postal-mime";
@@ -76,39 +77,27 @@ export const AiProxy = createBindingProxy<Env>("AI");
 // survive RPC). This entrypoint owns the real LOADER and executes scripts on
 // behalf of dynamic workers. The script is embedded as module source code.
 
+// ResolvedProvider shape — the fns may be RPC stubs from the calling isolate.
+// DynamicWorkerExecutor wraps them in ToolDispatchers which JSON-serialize args,
+// so double-hop RPC (sandbox → host → caller isolate) works transparently.
+interface ResolvedProvider {
+  name: string;
+  fns: Record<string, (...args: unknown[]) => Promise<unknown>>;
+  positionalArgs?: boolean;
+}
+
 export class CodeExecutor extends WorkerEntrypoint<Env> {
   async execute(
     script: string,
-    opts?: { model?: string },
-  ): Promise<{ result?: unknown; error?: string }> {
-    const model = opts?.model ?? "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-    const moduleCode = [
-      "export default {",
-      "  async fetch(req, env) {",
-      "    try {",
-      "      const userFn = " + script + ";",
-      "      const result = await userFn({",
-      "        ai: env.AI,",
-      "        model: " + JSON.stringify(model) + ",",
-      "      });",
-      "      return Response.json({ result });",
-      "    } catch (e) {",
-      "      return Response.json({ error: e.message });",
-      "    }",
-      "  }",
-      "}",
-    ].join("\n");
-
-    const worker = this.env.LOADER.get("exec-" + crypto.randomUUID().slice(0, 8), () => ({
-      compatibilityDate: "2026-04-01",
-      mainModule: "index.js",
-      modules: { "index.js": moduleCode },
-      env: { AI: (this.env as any).AI_PROXY },
-    }));
-
-    const entrypoint = worker.getEntrypoint() as any;
-    const resp = await entrypoint.fetch(new Request("http://localhost/"));
-    return resp.json() as Promise<{ result?: unknown; error?: string }>;
+    providers: ResolvedProvider[],
+    opts?: { timeout?: number },
+  ): Promise<{ result?: unknown; error?: string; logs?: string[] }> {
+    const executor = new DynamicWorkerExecutor({
+      loader: this.env.LOADER,
+      globalOutbound: this.env.EGRESS_GATEWAY,
+      timeout: opts?.timeout ?? 30_000,
+    });
+    return executor.execute(script, providers);
   }
 }
 
