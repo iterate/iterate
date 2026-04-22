@@ -1,0 +1,35 @@
+{
+  "name": "tanstack-start-facet-poc",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:facet": "tsx scripts/build-facet.ts"
+  },
+  "dependencies": {
+    "@orpc/client": "^1.14.0",
+    "@orpc/contract": "^1.14.0",
+    "@orpc/openapi": "^1.14.0",
+    "@orpc/openapi-client": "^1.14.0",
+    "@orpc/server": "^1.14.0",
+    "@orpc/tanstack-query": "^1.14.0",
+    "@tanstack/react-query": "^5.99.2",
+    "@tanstack/react-router": "^1",
+    "@tanstack/react-start": "^1",
+    "react": "^19",
+    "react-dom": "^19",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1",
+    "@tanstack/router-plugin": "^1",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^4",
+    "tsx": "^4",
+    "typescript": "^5",
+    "vite": "^6",
+    "wrangler": "^4"
+  }
+}

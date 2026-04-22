@@ -94,30 +94,31 @@ async function handleSqlExec(sql: any, req: Request) {
 
 const AGENT_MODEL = "@cf/moonshotai/kimi-k2.5";
 
-const SYSTEM_PROMPT = `You are a helpful coding assistant with access to tool providers.
+function buildSystemPrompt(providers: Array<{ name: string; fns: Record<string, any> }>): string {
+  const toolList = providers
+    .map((p) => {
+      const tools = Object.keys(p.fns)
+        .map((t) => `${p.name}.${t}(args)`)
+        .join(", ");
+      return `- \`${p.name}\`: ${tools}`;
+    })
+    .join("\n");
 
-You can execute JavaScript by writing code in a fenced code block. The code runs in a sandboxed Cloudflare Worker with these global tool namespaces:
+  return `You are a helpful coding assistant. You can execute JavaScript by writing a fenced code block with the \`js\` tag. The code runs in a sandbox with these tool namespaces as globals:
 
-- \`builtin.answer()\` — returns 42 (canary/test tool)
-- \`ai.run({model, messages, max_tokens})\` — calls Workers AI
-- \`cloudflare_docs.*\` — search Cloudflare documentation via MCP
-- \`canuckduck.*\` — web search via Canuckduck MCP
+${toolList}
 
 Example:
-
 \`\`\`js
 async () => {
   const answer = await builtin.answer();
-  const aiResp = await ai.run({
-    model: "@cf/moonshotai/kimi-k2.5",
-    messages: [{role: "user", content: "What is 2+2?"}],
-    max_tokens: 50,
-  });
-  return { builtinAnswer: answer, aiResponse: aiResp };
+  const docs = await cloudflare_docs.search_cloudflare_documentation({ query: "Workers AI" });
+  return { answer, docs: String(docs).slice(0, 200) };
 }
 \`\`\`
 
-Code blocks are auto-executed. Results are fed back to you. Use them for computation, API calls, tool use, or verification. Keep prose concise.`;
+Code blocks are auto-executed and results are fed back to you. Use EXACT tool names shown above. Keep prose concise.`;
+}
 
 // MCP servers registered via Agent SDK's this.addMcpServer()
 const MCP_SERVERS = [

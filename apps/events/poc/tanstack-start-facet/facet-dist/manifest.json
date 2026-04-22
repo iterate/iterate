@@ -1,0 +1,30 @@
+{
+  "builtAt": "2026-04-22T15:01:40.603Z",
+  "mainModule": "bundle.js",
+  "moduleFiles": [
+    "server-entry.js",
+    "assets/__23tanstack-start-plugin-adapters-Cwee5PKy.js",
+    "assets/_tanstack-start-manifest_v-B6oU8hDT.js",
+    "assets/about-QdvM-Fg_.js",
+    "assets/counter-09m_KVMI.js",
+    "assets/counter-DjBNqCGQ.js",
+    "assets/createServerRpc--GzqEi4f.js",
+    "assets/index-196cdicC.js",
+    "assets/index-CFe-T1Ti.js",
+    "assets/router-TcaY8nNQ.js",
+    "assets/server-fns-B2pw5uuz.js",
+    "assets/server-fns-BiHhGmIf.js",
+    "assets/start-HYkvq4Ni.js",
+    "assets/things-Bq6MPbuf.js",
+    "assets/worker-entry-Bt0TXpOD.js",
+    "bundle.js"
+  ],
+  "assetFiles": [
+    "/about-CdFz6A7h.js",
+    "/counter-QpSH90mP.js",
+    "/index-CGt5-eaW.js",
+    "/index-vdVMHcFY.js",
+    "/server-fns-GJPD0IyO.js",
+    "/things-dIUMGWuJ.js"
+  ]
+}
