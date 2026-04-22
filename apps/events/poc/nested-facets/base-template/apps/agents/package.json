@@ -9,7 +9,7 @@
     "compatibilityFlags": [
       "nodejs_compat"
     ],
-    "localBuildOnly": true,
+    "sandboxBuild": true,
     "esbuildConditions": [
       "workerd",
       "worker",

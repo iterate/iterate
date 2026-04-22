@@ -1082,6 +1082,150 @@ export class Project extends DurableObject<Env> {
     await this.writeFile(`apps/${app}/dist/manifest.json`, JSON.stringify(manifest, null, 2));
   }
 
+  // Build an app in a sandbox container using esbuild (for heavy deps like agents SDK)
+  async buildInSandbox(app: string, buildConfig: Record<string, any>): Promise<Response> {
+    this.log(`[Sandbox] Building ${app}...`);
+    this.setBuildState(app, "building");
+
+    try {
+      const sandbox = getSandbox(this.env.BUILD_SANDBOX, `esbuild-${app}`);
+
+      // Write source files to sandbox
+      const appDir = `${REPO_DIR}/apps/${app}`;
+      const entries = await this.workspace.glob(`${appDir}/**/*`);
+      const sourceFiles = entries.filter(
+        (e: any) =>
+          e.type === "file" && !e.path.includes("/dist/") && !e.path.includes("/node_modules/"),
+      );
+      for (const entry of sourceFiles) {
+        const content = await this.workspace.readFile(entry.path);
+        if (content !== null) {
+          const relPath = entry.path.replace(appDir + "/", "");
+          await sandbox.writeFile(`/workspace/${relPath}`, content);
+        }
+      }
+      this.log(`[Sandbox] Wrote ${sourceFiles.length} files`);
+
+      // Install npm deps
+      const install = await sandbox.exec("npm install --legacy-peer-deps 2>&1", {
+        timeout: 120_000,
+        cwd: "/workspace",
+      });
+      if (!install.success) {
+        throw new Error(`npm install failed: ${(install.stdout + install.stderr).slice(-500)}`);
+      }
+      this.log("[Sandbox] npm install done");
+
+      // Build server (worker.ts) with esbuild
+      const conditions = (buildConfig.esbuildConditions ?? [])
+        .map((c: string) => `--conditions=${c}`)
+        .join(" ");
+      const platform = buildConfig.esbuildPlatform ?? "neutral";
+      const externals = '--external:"cloudflare:*" --external:"node:*" --external:path';
+      const esbuildCmd = [
+        "npx esbuild worker.ts",
+        "--bundle --format=esm --target=es2022",
+        `--platform=${platform}`,
+        "--tree-shaking=true",
+        externals,
+        conditions,
+        "--define:process.env.NODE_ENV='\"production\"'",
+        "--jsx=automatic --jsx-import-source=react",
+        "--outfile=dist/bundle.js",
+        "2>&1",
+      ].join(" ");
+      this.log(`[Sandbox] esbuild: ${esbuildCmd}`);
+      const build = await sandbox.exec(esbuildCmd, { timeout: 60_000, cwd: "/workspace" });
+      if (!build.success) {
+        throw new Error(`esbuild failed: ${(build.stdout + build.stderr).slice(-1000)}`);
+      }
+      this.log("[Sandbox] esbuild done");
+
+      // Build client (if client.tsx exists)
+      const hasClient = sourceFiles.some(
+        (e: any) => e.path.endsWith("/client.tsx") || e.path.endsWith("/client.ts"),
+      );
+      const assetFiles: string[] = [];
+      if (hasClient) {
+        const clientCmd = [
+          "npx esbuild client.tsx",
+          "--bundle --format=esm --target=es2022",
+          "--platform=browser --splitting",
+          "--jsx=automatic --jsx-import-source=react",
+          '--outdir=dist/assets --chunk-names="[name]-[hash]"',
+          "2>&1",
+        ].join(" ");
+        const clientBuild = await sandbox.exec(clientCmd, { timeout: 60_000, cwd: "/workspace" });
+        if (!clientBuild.success) {
+          throw new Error(
+            `client esbuild failed: ${(clientBuild.stdout + clientBuild.stderr).slice(-500)}`,
+          );
+        }
+
+        // Read client assets
+        const lsAssets = await sandbox.exec("ls dist/assets/ 2>/dev/null || echo ''", {
+          cwd: "/workspace",
+        });
+        for (const f of lsAssets.stdout.trim().split("\n").filter(Boolean)) {
+          const file = await sandbox.readFile(`/workspace/dist/assets/${f}`);
+          await this.writeFile(`apps/${app}/dist/assets/${f}`, file.content);
+          assetFiles.push(`assets/${f}`);
+        }
+
+        // Generate index.html
+        const htmlSrc = sourceFiles.find((e: any) => e.path.endsWith("/index.html"));
+        let html = htmlSrc
+          ? ((await this.workspace.readFile(htmlSrc.path)) ??
+            "<html><body><div id='root'></div></body></html>")
+          : "<html><body><div id='root'></div></body></html>";
+        html = html.replace(
+          "</body>",
+          '<script type="module" src="/assets/client.js"></script></body>',
+        );
+        await this.writeFile(`apps/${app}/dist/assets/index.html`, html);
+        assetFiles.push("assets/index.html");
+        this.log("[Sandbox] client build done");
+      }
+
+      // Read server bundle
+      const serverBundle = await sandbox.readFile("/workspace/dist/bundle.js");
+      await this.writeFile(`apps/${app}/dist/bundle.js`, serverBundle.content);
+
+      // Write manifest
+      const manifest = {
+        builtAt: new Date().toISOString(),
+        builtBy: "sandbox-esbuild",
+        mainModule: "bundle.js",
+        moduleFiles: ["bundle.js"],
+        assetFiles,
+      };
+      await this.writeFile(`apps/${app}/dist/manifest.json`, JSON.stringify(manifest, null, 2));
+
+      // Cleanup
+      try {
+        await sandbox.destroy();
+      } catch {}
+
+      this.setBuildState(app, "ready");
+      this.log(`[Sandbox] Build complete: ${app}`);
+
+      const files = await this.listFiles();
+      return Response.json({
+        ok: true,
+        app,
+        builtBy: "sandbox-esbuild",
+        moduleFiles: manifest.moduleFiles,
+        assetFiles,
+        files,
+        buildOutput: build.stdout.slice(-300),
+      });
+    } catch (e: any) {
+      this.setBuildState(app, "error");
+      this.log(`[Sandbox] Build failed: ${app}: ${e.message}`);
+      return Response.json({ ok: false, error: e.message }, { status: 500 });
+    }
+  }
+
   inferContentType(path: string): string {
     const ext = path.split(".").pop()?.toLowerCase() ?? "";
     const map: Record<string, string> = {
@@ -1312,10 +1456,14 @@ export class Project extends DurableObject<Env> {
       if (req.method === "POST" && buildMatch) {
         const buildApp = buildMatch[1];
 
-        // Check if app requires local build (too heavy for DO-based bundler)
+        // Check if app needs sandbox build (too heavy for DO-based bundler)
         const buildPkgStr = await this.readFile(`apps/${buildApp}/package.json`);
         const buildPkg = buildPkgStr ? JSON.parse(buildPkgStr) : {};
-        if (buildPkg.buildConfig?.localBuildOnly) {
+        if (buildPkg.buildConfig?.localBuildOnly || buildPkg.buildConfig?.sandboxBuild) {
+          // Redirect to sandbox build if configured, otherwise use existing dist
+          if (buildPkg.buildConfig?.sandboxBuild) {
+            return this.buildInSandbox(buildApp, buildPkg.buildConfig);
+          }
           const hasDist = await this.readFile(`apps/${buildApp}/dist/manifest.json`);
           if (hasDist) {
             return Response.json({
