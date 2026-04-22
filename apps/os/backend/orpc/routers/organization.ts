@@ -114,7 +114,7 @@ export const organizationRouter = {
     }),
 
   delete: orgAdminMutation.input(OrgInput).handler(async ({ context: ctx }) => {
-    if (ctx.membership?.role !== "owner") {
+    if (ctx.membership?.role !== "owner" && ctx.user.role !== "admin") {
       throw new ORPCError("FORBIDDEN", { message: "Only owners can delete organizations" });
     }
 

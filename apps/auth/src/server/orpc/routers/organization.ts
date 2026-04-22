@@ -49,9 +49,16 @@ const create = os.organization.create
 const bySlug = os.organization.bySlug
   .use(organizationScopedMiddleware)
   .handler(async ({ context }) => {
+    const role = context.membership?.role ?? (context.user.role === "admin" ? "admin" : undefined);
+    if (!role) {
+      throw new ORPCError("FORBIDDEN", {
+        message: "You do not have access to this organization",
+      });
+    }
+
     return {
       ...toOrganizationRecord(context.organization),
-      role: toMembershipRole(context.membership?.role ?? "owner"),
+      role: toMembershipRole(role),
     };
   });
 

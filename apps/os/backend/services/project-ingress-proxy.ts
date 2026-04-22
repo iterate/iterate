@@ -15,6 +15,7 @@ import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import {
   getProjectAccessFromAuthWorker,
+  isAuthWorkerAccessDeniedError,
   requireLocalProjectAccessFromAuthWorker,
 } from "../auth/auth-context.ts";
 import { logger } from "../tag-logger.ts";
@@ -281,7 +282,10 @@ async function resolveMachineForIngressUncached(
         authUserId,
         projectSlug: row.slug,
       });
-    } catch {
+    } catch (error) {
+      if (!isAuthWorkerAccessDeniedError(error)) {
+        throw error;
+      }
       return { machine: null, projectFound: true, accessDenied: true };
     }
 
@@ -311,7 +315,10 @@ async function resolveMachineForIngressUncached(
       authUserId,
       projectSlug: row.projectSlug,
     });
-  } catch {
+  } catch (error) {
+    if (!isAuthWorkerAccessDeniedError(error)) {
+      throw error;
+    }
     return {
       machine: null,
       accessDenied: true,
@@ -448,6 +455,14 @@ function getEffectiveTargetHost(
   return `localhost:${effectivePort}`;
 }
 
+function jsonAuthUnavailable(hostname: string, error: unknown): Response {
+  logger.error("[project-ingress] Auth worker lookup failed", error, { host: hostname });
+  return jsonError(502, "auth_unavailable", {
+    hostname,
+    authError: error instanceof Error ? error.message : String(error),
+  });
+}
+
 function buildParseDetails(params: {
   hostname: string;
   projectIngressDomain: string;
@@ -570,11 +585,16 @@ export async function handleProjectIngressRequest(
     resolvedHost,
   });
 
-  const resolvedMachine = await resolveMachineForIngress(
-    resolvedHost.target,
-    session.user.authUserId!,
-    session.user.id,
-  );
+  let resolvedMachine: ResolveMachineForIngressResult;
+  try {
+    resolvedMachine = await resolveMachineForIngress(
+      resolvedHost.target,
+      session.user.authUserId!,
+      session.user.id,
+    );
+  } catch (error) {
+    return jsonAuthUnavailable(requestHostname, error);
+  }
   if (resolvedHost.target.kind === "project" && resolvedMachine.projectFound === false) {
     return jsonError(404, "project_not_found", {
       ...parseDetails,
@@ -708,14 +728,18 @@ async function handleCustomDomainRequest(
   if (target.kind === "project") {
     // Find the active machine for this project
     const db = await getDb();
-    const hasAccess = await requireLocalProjectAccessFromAuthWorker({
-      db,
-      authUserId: session.user.authUserId!,
-      projectId: project.id,
-    }).catch(() => null);
+    try {
+      await requireLocalProjectAccessFromAuthWorker({
+        db,
+        authUserId: session.user.authUserId!,
+        projectId: project.id,
+      });
+    } catch (error) {
+      if (isAuthWorkerAccessDeniedError(error)) {
+        return jsonError(403, "forbidden", { hostname: requestHostname });
+      }
 
-    if (!hasAccess) {
-      return jsonError(403, "forbidden", { hostname: requestHostname });
+      return jsonAuthUnavailable(requestHostname, error);
     }
 
     machine =
@@ -724,11 +748,16 @@ async function handleCustomDomainRequest(
       })) ?? null;
   } else {
     // Machine target — resolve directly
-    const resolved = await resolveMachineForIngress(
-      { ...target, isPortExplicit: true },
-      session.user.authUserId!,
-      session.user.id,
-    );
+    let resolved: ResolveMachineForIngressResult;
+    try {
+      resolved = await resolveMachineForIngress(
+        { ...target, isPortExplicit: true },
+        session.user.authUserId!,
+        session.user.id,
+      );
+    } catch (error) {
+      return jsonAuthUnavailable(requestHostname, error);
+    }
     machine = resolved.machine;
     if (resolved.accessDenied) {
       return jsonError(403, "forbidden", { hostname: requestHostname });
