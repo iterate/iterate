@@ -7,7 +7,6 @@
     "module": "ESNext",
     "paths": {
       "~/*": ["./src/*"],
-      "#sql/*": ["./sql/*"],
       "@iterate-com/ui/*": ["../../packages/ui/src/*"],
       "@iterate-com/shared/posthog/vite-plugin": [
         "../../packages/shared/src/posthog/sourcemaps-vite-plugin.ts"

@@ -5,7 +5,7 @@ import {
   getSecretById,
   insertSecret,
   listSecrets,
-} from "#sql/.generated/index.ts";
+} from "~/db/queries/.generated/index.ts";
 import { os, withProject } from "~/orpc/orpc.ts";
 
 function isUniqueConstraintError(error: unknown): boolean {

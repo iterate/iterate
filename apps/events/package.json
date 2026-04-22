@@ -4,8 +4,7 @@
   "version": "0.0.1",
   "type": "module",
   "imports": {
-    "~/*": "./src/*",
-    "#sql/*": "./sql/*"
+    "~/*": "./src/*"
   },
   "scripts": {
     "alchemy:up": "tsx ./alchemy.run.ts",

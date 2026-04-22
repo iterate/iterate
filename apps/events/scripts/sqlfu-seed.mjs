@@ -3,12 +3,12 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
-// Rebuilds the local dev sqlite from migrations/. Used only for sqlfu typegen;
-// runtime code hits D1 through the sqlfu D1 adapter.
+// Rebuilds the local dev sqlite from src/db/migrations/. Used only for sqlfu
+// typegen; runtime code hits D1 through the sqlfu D1 adapter.
 
 const cwd = process.cwd();
 const dbPath = path.join(cwd, ".sqlfu/dev.sqlite");
-const migrationsDir = path.join(cwd, "migrations");
+const migrationsDir = path.join(cwd, "src/db/migrations");
 
 await fs.mkdir(path.dirname(dbPath), { recursive: true });
 await fs.rm(dbPath, { force: true });
