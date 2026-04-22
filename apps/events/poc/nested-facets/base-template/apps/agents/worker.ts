@@ -348,7 +348,9 @@ export class StreamProcessor extends Agent {
   // Agent loop that collects events (for /process endpoint)
   async runAgentLoopCollecting(collect: (evt: any) => void): Promise<void> {
     const history = this.getHistory();
-    const messages = [{ role: "system", content: SYSTEM_PROMPT }, ...history];
+    const providers = await this.buildProviders();
+    const systemPrompt = buildSystemPrompt(providers);
+    const messages = [{ role: "system", content: systemPrompt }, ...history];
 
     const response = await this.callAI(messages);
     if (!response) return;
@@ -376,7 +378,7 @@ export class StreamProcessor extends Agent {
     }
 
     const followUp = await this.callAI([
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: systemPrompt },
       ...this.getHistory(),
     ]);
     if (!followUp) return;
@@ -390,7 +392,9 @@ export class StreamProcessor extends Agent {
   // Full agent loop via WebSocket (deprecated — use /process instead)
   async runAgentLoop(ws: WebSocket): Promise<void> {
     const history = this.getHistory();
-    const messages = [{ role: "system", content: SYSTEM_PROMPT }, ...history];
+    const providers = await this.buildProviders();
+    const systemPrompt = buildSystemPrompt(providers);
+    const messages = [{ role: "system", content: systemPrompt }, ...history];
 
     console.log("[Agent] calling AI with", messages.length, "messages");
     const response = await this.callAI(messages);
@@ -446,7 +450,7 @@ export class StreamProcessor extends Agent {
     // Follow-up: let AI see the code results and provide a final response
     console.log("[Agent] follow-up after code execution");
     const followUpHistory = this.getHistory();
-    const followUpMessages = [{ role: "system", content: SYSTEM_PROMPT }, ...followUpHistory];
+    const followUpMessages = [{ role: "system", content: systemPrompt }, ...followUpHistory];
     const followUp = await this.callAI(followUpMessages);
     if (!followUp) return;
 
