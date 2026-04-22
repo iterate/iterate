@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ORPCError } from "@orpc/server";
 import {
   parseProjectIngressHostname,
   isProjectIngressHostname,
@@ -15,6 +16,9 @@ vi.mock("../db/client.ts", () => ({
 vi.mock("../auth/auth-context.ts", () => ({
   getProjectAccessFromAuthWorker: vi.fn(),
   requireLocalProjectAccessFromAuthWorker: vi.fn(),
+  isAuthWorkerAccessDeniedError: vi.fn((error: unknown) => {
+    return error instanceof ORPCError && error.code !== "INTERNAL_SERVER_ERROR";
+  }),
 }));
 
 vi.mock("../tag-logger.ts", () => ({
@@ -290,5 +294,71 @@ describe("project ingress request hostname", () => {
     });
 
     expect(getProjectIngressRequestHostname(request)).toBe("4096__mach_abc.dev.iterate.com");
+  });
+
+  it("returns 502 when auth worker lookup fails for a custom-domain project route", async () => {
+    const { requireLocalProjectAccessFromAuthWorker } = await import("../auth/auth-context.ts");
+    const { getDb } = await import("../db/client.ts");
+    const { handleProjectIngressRequest } = await loadProjectIngressProxyModule();
+
+    const db = createProjectIngressDb({});
+    vi.mocked(getDb).mockReturnValue({
+      ...db.db,
+      select: vi.fn(() => {
+        const chain = {
+          from: vi.fn(() => chain),
+          where: vi.fn(() => chain),
+          orderBy: vi.fn(() => chain),
+          limit: vi.fn(async () => [
+            {
+              id: "proj_123",
+              slug: "demo",
+              defaultPort: 3000,
+              customDomain: "example.com",
+            },
+          ]),
+        };
+
+        return chain;
+      }),
+      query: {
+        ...db.db.query,
+        project: {
+          ...db.db.query.project,
+          findFirst: vi.fn(async () => ({
+            id: "proj_123",
+            slug: "demo",
+            defaultPort: 3000,
+            customDomain: "example.com",
+          })),
+        },
+      },
+    } as never);
+    vi.mocked(requireLocalProjectAccessFromAuthWorker).mockRejectedValue(
+      new ORPCError("INTERNAL_SERVER_ERROR", { message: "auth worker timeout" }),
+    );
+
+    const request = new Request("https://example.com/", {
+      headers: { host: "example.com" },
+    });
+    const env = {
+      PROJECT_INGRESS_DOMAIN: "iterate.app",
+      VITE_PUBLIC_URL: "https://os.iterate.com",
+    } as never;
+    const session = {
+      user: { id: "usr_123", authUserId: "auth_usr_123", role: "user" },
+    } as never;
+
+    const response = await handleProjectIngressRequest(request, env, session);
+
+    expect(response).not.toBeNull();
+    if (!response) {
+      throw new Error("Expected project ingress response");
+    }
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "auth_unavailable",
+    });
   });
 });

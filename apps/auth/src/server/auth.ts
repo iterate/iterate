@@ -18,6 +18,8 @@ import { db, schema } from "./db/index.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
+const isProduction = ["prd", "production", "prod"].includes(import.meta.env?.VITE_APP_STAGE);
+const isNonProd = !isProduction;
 
 export function getAllowedBrowserOrigins() {
   return [env.VITE_AUTH_APP_ORIGIN, env.VITE_PUBLIC_URL];
@@ -120,13 +122,13 @@ export const auth = betterAuth({
             otpLength: 6,
             expiresIn: 300,
             generateOTP: ({ email }) => {
-              if (TEST_EMAIL_PATTERN.test(email)) {
+              if (isNonProd && TEST_EMAIL_PATTERN.test(email)) {
                 return TEST_OTP_CODE;
               }
               return undefined;
             },
             sendVerificationOTP: async ({ email, otp }) => {
-              if (TEST_EMAIL_PATTERN.test(email)) {
+              if (isNonProd && TEST_EMAIL_PATTERN.test(email)) {
                 return;
               }
 

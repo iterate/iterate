@@ -14,7 +14,10 @@ import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import type { CloudflareEnv } from "../../env.ts";
 import type { Variables } from "../types.ts";
 import * as schema from "../db/schema.ts";
-import { getProjectAccessFromAuthWorker } from "../auth/auth-context.ts";
+import {
+  getProjectAccessFromAuthWorker,
+  isAuthWorkerAccessDeniedError,
+} from "../auth/auth-context.ts";
 import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import { rewriteHTMLUrls } from "../utils/proxy-html-rewriter.ts";
@@ -35,11 +38,19 @@ async function resolveProxyAccess(
 ): Promise<{
   machine: typeof schema.machine.$inferSelect;
 } | null> {
-  const access = await getProjectAccessFromAuthWorker({
-    db,
-    authUserId,
-    projectSlug,
-  }).catch(() => null);
+  let access: Awaited<ReturnType<typeof getProjectAccessFromAuthWorker>> | null = null;
+  try {
+    access = await getProjectAccessFromAuthWorker({
+      db,
+      authUserId,
+      projectSlug,
+    });
+  } catch (error) {
+    if (isAuthWorkerAccessDeniedError(error)) {
+      return null;
+    }
+    throw error;
+  }
 
   if (!access || access.organization.slug !== orgSlug) {
     return null;
@@ -76,13 +87,17 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
   }
 
   // 3. Single query to resolve machine + check access
-  const access = await resolveProxyAccess(
-    db,
-    c.var.session.user.authUserId!,
-    org,
-    project,
-    machine,
-  );
+  let access: Awaited<ReturnType<typeof resolveProxyAccess>>;
+  try {
+    access = await resolveProxyAccess(db, c.var.session.user.authUserId!, org, project, machine);
+  } catch (error) {
+    logger.error("Machine proxy auth lookup failed", error, {
+      organizationSlug: org,
+      projectSlug: project,
+      machineId: machine,
+    });
+    return c.json({ error: "Auth unavailable" }, 502);
+  }
 
   if (!access) {
     return c.json({ error: "Not found or forbidden" }, 404);

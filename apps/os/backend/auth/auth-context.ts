@@ -30,6 +30,13 @@ function rethrowAuthWorkerError(error: unknown, fallbackMessage: string): never 
   throw new ORPCError("INTERNAL_SERVER_ERROR", { message: fallbackMessage, cause: error });
 }
 
+export function isAuthWorkerAccessDeniedError(error: unknown): boolean {
+  return (
+    error instanceof ORPCError &&
+    (error.code === "FORBIDDEN" || error.code === "NOT_FOUND" || error.code === "UNAUTHORIZED")
+  );
+}
+
 async function listLocalProjectsByAuthProjectIds(params: {
   db: DB;
   authProjectIds: string[];
@@ -208,28 +215,40 @@ export async function getProjectAccessFromAuthWorker(params: {
     });
   }
 
-  if (
-    project.authOrganizationId !== organization.id ||
-    project.authOrganizationSlug !== organization.slug ||
-    project.name !== authProject.name
-  ) {
+  if (project.authOrganizationId !== organization.id) {
     throwProjectAuthDriftError({
       projectSlug: authProject.slug,
-      message: "local project metadata does not match auth worker state",
+      message: "local project organization does not match auth worker state",
       details: {
         localProjectId: project.id,
-        localName: project.name,
-        authName: authProject.name,
         localAuthOrganizationId: project.authOrganizationId,
         authOrganizationId: organization.id,
-        localAuthOrganizationSlug: project.authOrganizationSlug,
-        authOrganizationSlug: organization.slug,
       },
     });
   }
 
+  let syncedProject = project;
+  if (project.authOrganizationSlug !== organization.slug || project.name !== authProject.name) {
+    const updates = {
+      authOrganizationSlug: organization.slug,
+      name: authProject.name,
+      updatedAt: new Date(),
+    };
+    const [updatedProject] = await params.db
+      .update(schema.project)
+      .set(updates)
+      .where(eq(schema.project.id, project.id))
+      .returning();
+
+    syncedProject = {
+      ...project,
+      ...updates,
+      ...updatedProject,
+    };
+  }
+
   return {
-    project,
+    project: syncedProject,
     organization,
   };
 }
