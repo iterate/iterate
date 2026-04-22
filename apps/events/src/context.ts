@@ -1,4 +1,4 @@
-import type { AsyncClient } from "sqlfu";
+import type { AsyncClient } from "sqlfu/client";
 import type { SharedRequestLogger } from "@iterate-com/shared/request-logging";
 import manifest, { type AppConfig } from "~/app.ts";
 

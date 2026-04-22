@@ -2,7 +2,7 @@ import { env as workerEnv } from "cloudflare:workers";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
 import handler from "@tanstack/react-start/server-entry";
-import { createD1Client } from "sqlfu";
+import { createD1Client } from "sqlfu/client";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import { DynamicWorkerEgressGateway } from "~/dynamic-worker-egress-gateway.ts";
