@@ -120,6 +120,74 @@ async () => {
 Code blocks are auto-executed and results are fed back to you. Use EXACT tool names shown above. Keep prose concise.`;
 }
 
+// ── Minimal OpenAPI → tool provider ──────────────────────────────────────────
+// Fetches an OpenAPI spec and creates a { name, fns } provider where each
+// operation becomes an async function that calls the API via fetch.
+
+async function createOpenApiProvider(
+  name: string,
+  specUrl: string,
+  baseUrl: string,
+): Promise<{ name: string; fns: Record<string, (...args: any[]) => Promise<any>> }> {
+  const specResp = await fetch(specUrl);
+  const spec = (await specResp.json()) as any;
+  const fns: Record<string, (...args: any[]) => Promise<any>> = {};
+
+  for (const [path, pathItem] of Object.entries(spec.paths ?? ({} as Record<string, any>))) {
+    for (const method of ["get", "post", "put", "patch", "delete"] as const) {
+      const op = (pathItem as any)?.[method];
+      if (!op?.operationId) continue;
+      const toolName = op.operationId.replace(/[^a-zA-Z0-9_]/g, "_");
+      const parameters = [...(pathItem.parameters ?? []), ...(op.parameters ?? [])];
+
+      fns[toolName] = async (input: any) => {
+        const args = { ...(input && typeof input === "object" ? input : {}) };
+        let resolvedPath = path;
+
+        // Substitute path parameters
+        for (const param of parameters) {
+          if (param.in === "path" && param.name && args[param.name] != null) {
+            resolvedPath = resolvedPath.replaceAll(
+              `{${param.name}}`,
+              encodeURIComponent(String(args[param.name])),
+            );
+            delete args[param.name];
+          }
+        }
+
+        // Build query string
+        const queryParams: string[] = [];
+        for (const param of parameters) {
+          if (param.in === "query" && param.name && args[param.name] != null) {
+            queryParams.push(`${param.name}=${encodeURIComponent(String(args[param.name]))}`);
+            delete args[param.name];
+          }
+        }
+
+        const url =
+          baseUrl.replace(/\/+$/, "") +
+          resolvedPath +
+          (queryParams.length ? "?" + queryParams.join("&") : "");
+        const init: RequestInit = { method: method.toUpperCase() };
+        if (method !== "get" && Object.keys(args).length > 0) {
+          init.headers = { "content-type": "application/json" };
+          init.body = JSON.stringify(args);
+        }
+
+        const resp = await fetch(url, init);
+        const text = await resp.text();
+        try {
+          return JSON.parse(text);
+        } catch {
+          return text;
+        }
+      };
+    }
+  }
+
+  return { name, fns };
+}
+
 // MCP servers registered via Agent SDK's this.addMcpServer()
 const MCP_SERVERS = [
   { name: "cloudflare_docs", url: "https://docs.mcp.cloudflare.com/mcp" },
@@ -127,7 +195,10 @@ const MCP_SERVERS = [
 ] as const;
 
 export class StreamProcessor extends Agent {
-  #eventsCodemodeTools: any = null;
+  #openApiProviders: Array<{
+    name: string;
+    fns: Record<string, (...args: any[]) => Promise<any>>;
+  }> = [];
 
   async onStart() {
     console.log("[StreamProcessor] onStart");
@@ -145,6 +216,19 @@ export class StreamProcessor extends Agent {
         }
       }),
     );
+
+    // Load OpenAPI tool providers (like IterateAgent loads events OpenAPI)
+    try {
+      const tanstackProvider = await createOpenApiProvider(
+        "tanstack_app",
+        "https://tanstack-app.test.iterate-dev-jonas.app/api/openapi.json",
+        "https://tanstack-app.test.iterate-dev-jonas.app/api",
+      );
+      this.#openApiProviders.push(tanstackProvider);
+      console.log("[OpenAPI] tanstack_app:", Object.keys(tanstackProvider.fns).join(", "));
+    } catch (e: any) {
+      console.error("[OpenAPI] failed:", e.message);
+    }
   }
 
   ensureTable() {
@@ -269,6 +353,22 @@ export class StreamProcessor extends Agent {
         },
       },
     ];
+
+    // OpenAPI tool providers (lazy-loaded on first buildProviders call)
+    if (this.#openApiProviders.length === 0) {
+      try {
+        const p = await createOpenApiProvider(
+          "tanstack_app",
+          "https://tanstack-app.test.iterate-dev-jonas.app/api/openapi.json",
+          "https://tanstack-app.test.iterate-dev-jonas.app/api",
+        );
+        this.#openApiProviders.push(p);
+        console.log("[OpenAPI] loaded:", p.name, Object.keys(p.fns));
+      } catch (e: any) {
+        console.error("[OpenAPI] failed:", e.message);
+      }
+    }
+    providers.push(...this.#openApiProviders);
 
     // MCP tool providers — onStart registers servers, wait for handshakes to complete
     try {
