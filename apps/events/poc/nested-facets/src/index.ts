@@ -43,6 +43,7 @@ interface Env {
   CF_WORKER_NAME: string;
   EVENTS_BASE_URL: string;
   EGRESS_GATEWAY: Fetcher;
+  WORKSPACE_R2: R2Bucket;
   AI: Ai;
   AI_PROXY: Service<typeof AiProxy>;
   CODE_EXECUTOR: Service<CodeExecutor>;
@@ -798,7 +799,11 @@ const GIT_AUTHOR = { name: "POC Editor", email: "poc@iterate.com" };
 type BuildState = "idle" | "building" | "ready" | "error";
 
 export class Project extends DurableObject<Env> {
-  workspace = new Workspace({ sql: this.ctx.storage.sql, name: () => `project-${this.ctx.id}` });
+  workspace = new Workspace({
+    sql: this.ctx.storage.sql,
+    r2: this.env.WORKSPACE_R2,
+    name: () => `project-${this.ctx.id}`,
+  });
   fs = new WorkspaceFileSystem(this.workspace);
   git = createGit(this.fs, REPO_DIR);
 

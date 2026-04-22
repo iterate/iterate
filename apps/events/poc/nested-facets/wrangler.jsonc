@@ -23,6 +23,12 @@
       "namespace": "default",
     },
   ],
+  "r2_buckets": [
+    {
+      "binding": "WORKSPACE_R2",
+      "bucket_name": "nested-facets-workspace",
+    },
+  ],
   "send_email": [{ "name": "EMAIL" }],
   "services": [
     {
