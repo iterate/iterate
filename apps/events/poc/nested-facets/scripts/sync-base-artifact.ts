@@ -30,10 +30,13 @@ async function api(method: string, apiPath: string, body?: object) {
   return resp.json() as any;
 }
 
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist"]);
+
 function copyDirSync(src: string, dest: string) {
   const entries = fs.readdirSync(src, { withFileTypes: true });
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of entries) {
+    if (SKIP_DIRS.has(entry.name)) continue;
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
@@ -80,20 +83,15 @@ async function main() {
   }
   console.log("Remote:", remote);
 
-  // 2. Clone into temp dir
+  // 2. Create fresh git repo (no history — avoids SQLITE_TOOBIG from old large blobs)
   const tmpDir = `/tmp/base-template-sync-${Date.now()}`;
   const tokenSecret = token.split("?expires=")[0];
   const authRemote = remote.replace("https://", `https://x:${tokenSecret}@`);
 
-  execSync(`git clone "${authRemote}" "${tmpDir}"`, { stdio: "pipe" });
-  console.log("Cloned to", tmpDir);
-
-  // 3. Remove everything except .git
-  const existing = fs.readdirSync(tmpDir);
-  for (const entry of existing) {
-    if (entry === ".git") continue;
-    fs.rmSync(path.join(tmpDir, entry), { recursive: true, force: true });
-  }
+  fs.mkdirSync(tmpDir, { recursive: true });
+  execSync(`git init && git checkout -b main`, { cwd: tmpDir, stdio: "pipe" });
+  execSync(`git remote add origin "${authRemote}"`, { cwd: tmpDir, stdio: "pipe" });
+  console.log("Fresh repo at", tmpDir);
 
   // 4. Copy source folder contents into the repo
   copyDirSync(resolvedSource, tmpDir);
@@ -114,7 +112,7 @@ async function main() {
   execSync(`cd "${tmpDir}" && git commit -m "Sync from ${path.basename(resolvedSource)}"`, {
     stdio: "pipe",
   });
-  execSync(`cd "${tmpDir}" && git push origin main`, { stdio: "inherit" });
+  execSync(`cd "${tmpDir}" && git push origin main --force`, { stdio: "inherit" });
 
   console.log("\nBase template synced successfully!");
 

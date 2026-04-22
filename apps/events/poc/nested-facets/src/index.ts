@@ -1465,6 +1465,7 @@ export class Project extends DurableObject<Env> {
       const facet = this.ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
         const worker = this.env.LOADER.get(`code:${app}:${sourceHash}`, async () => ({
           compatibilityDate: "2026-04-01",
+          compatibilityFlags: ["nodejs_compat"],
           mainModule,
           modules,
           globalOutbound: this.env.EGRESS_GATEWAY,
@@ -1514,6 +1515,7 @@ export class Project extends DurableObject<Env> {
     const facet = this.ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
       const worker = this.env.LOADER.get(`code:${app}:${sourceHash}`, async () => ({
         compatibilityDate: "2026-04-01",
+        compatibilityFlags: ["nodejs_compat"],
         mainModule: "index.js",
         modules: { "index.js": finalSource },
         globalOutbound: this.env.EGRESS_GATEWAY,
@@ -1567,6 +1569,7 @@ export class Project extends DurableObject<Env> {
       const facet = this.ctx.facets.get(`app:${tagApp}:${sourceHash}`, async () => {
         const worker = this.env.LOADER.get(`code:${tagApp}:${sourceHash}`, async () => ({
           compatibilityDate: "2026-04-01",
+          compatibilityFlags: ["nodejs_compat"],
           mainModule,
           modules,
           globalOutbound: this.env.EGRESS_GATEWAY,

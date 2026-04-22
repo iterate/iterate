@@ -95,28 +95,152 @@ const AGENT_MODEL = "@cf/moonshotai/kimi-k2.5";
 
 const SYSTEM_PROMPT = `You are a helpful coding assistant with access to tool providers.
 
-You can execute JavaScript by writing code in a fenced code block. The code runs in a sandboxed Cloudflare Worker with these global tools:
+You can execute JavaScript by writing code in a fenced code block. The code runs in a sandboxed Cloudflare Worker with these global tool namespaces:
 
 - \`builtin.answer()\` — returns 42 (canary/test tool)
-- \`ai.run({model, messages, max_tokens, prompt})\` — calls Workers AI
+- \`ai.run({model, messages, max_tokens})\` — calls Workers AI
+- \`cloudflare_docs.*\` — search Cloudflare documentation via MCP
+- \`canuckduck.*\` — web search via Canuckduck MCP
 
 Example:
 
 \`\`\`js
 async () => {
-  const result = await ai.run({
+  const answer = await builtin.answer();
+  const aiResp = await ai.run({
     model: "@cf/moonshotai/kimi-k2.5",
     messages: [{role: "user", content: "What is 2+2?"}],
     max_tokens: 50,
   });
-  const answer = await builtin.answer();
-  return { aiResponse: result, builtinAnswer: answer };
+  return { builtinAnswer: answer, aiResponse: aiResp };
 }
 \`\`\`
 
-Code blocks are auto-executed. Results are fed back to you. Use them for computation, API calls, or verification. Keep prose concise.`;
+Code blocks are auto-executed. Results are fed back to you. Use them for computation, API calls, tool use, or verification. Keep prose concise.`;
+
+// ── Minimal MCP Streamable HTTP client ───────────────────────────────────────
+// MCP servers speak JSON-RPC 2.0 over HTTP. No SDK needed.
+
+const MCP_SERVERS = [
+  { name: "cloudflare_docs", url: "https://docs.mcp.cloudflare.com/mcp" },
+  { name: "canuckduck", url: "https://mcp.canuckduck.ca/mcp" },
+] as const;
+
+interface McpTool {
+  name: string;
+  description?: string;
+  inputSchema?: any;
+}
+
+async function mcpInitialize(url: string): Promise<{ sessionId: string | null }> {
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-03-26",
+        capabilities: {},
+        clientInfo: { name: "nested-facets-agent", version: "0.1.0" },
+      },
+    }),
+  });
+  const sessionId = resp.headers.get("mcp-session-id");
+  // Consume response (might be SSE or JSON)
+  await resp.text();
+  return { sessionId };
+}
+
+async function mcpListTools(url: string, sessionId: string | null): Promise<McpTool[]> {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    accept: "application/json, text/event-stream",
+  };
+  if (sessionId) headers["mcp-session-id"] = sessionId;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
+  });
+  const text = await resp.text();
+  // Parse SSE or JSON response
+  const jsonMatch = text.match(/\{[\s\S]*"tools"[\s\S]*\}/);
+  if (!jsonMatch) return [];
+  try {
+    const data = JSON.parse(jsonMatch[0]);
+    return (data.result?.tools || data.tools || []) as McpTool[];
+  } catch {
+    return [];
+  }
+}
+
+async function mcpCallTool(
+  url: string,
+  sessionId: string | null,
+  name: string,
+  args: any,
+): Promise<any> {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    accept: "application/json, text/event-stream",
+  };
+  if (sessionId) headers["mcp-session-id"] = sessionId;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name, arguments: args || {} },
+    }),
+  });
+  const text = await resp.text();
+  const jsonMatch = text.match(/\{[\s\S]*"result"[\s\S]*\}/);
+  if (!jsonMatch) return text;
+  try {
+    const data = JSON.parse(jsonMatch[0]);
+    const result = data.result;
+    if (result?.content) {
+      const texts = result.content
+        .filter((c: any) => c.type === "text")
+        .map((c: any) => c.text || "");
+      if (texts.length > 0) {
+        const joined = texts.join("\n");
+        try {
+          return JSON.parse(joined);
+        } catch {
+          return joined;
+        }
+      }
+    }
+    return result;
+  } catch {
+    return text;
+  }
+}
 
 export class StreamProcessor extends DurableObject {
+  #mcpSessions = new Map<string, { url: string; sessionId: string | null; tools: McpTool[] }>();
+
+  async initMcp() {
+    if (this.#mcpSessions.size > 0) return;
+    const results = await Promise.allSettled(
+      MCP_SERVERS.map(async (server) => {
+        const { sessionId } = await mcpInitialize(server.url);
+        const tools = await mcpListTools(server.url, sessionId);
+        this.#mcpSessions.set(server.name, { url: server.url, sessionId, tools });
+        console.log("[MCP]", server.name, ":", tools.length, "tools");
+      }),
+    );
+    results.forEach((r, i) => {
+      if (r.status === "rejected")
+        console.error("[MCP] failed:", MCP_SERVERS[i].name, (r as any).reason?.message);
+    });
+  }
+
   ensureTable() {
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS events (
@@ -200,9 +324,14 @@ export class StreamProcessor extends DurableObject {
   // When passed to CodeExecutor via RPC, these become RPC stubs.
   // DynamicWorkerExecutor wraps them in ToolDispatchers.
   // Sandbox calls go: Isolate 3 → ToolDispatcher (Isolate 1) → RPC stub → here (Isolate 2)
-  buildProviders(): Array<{ name: string; fns: Record<string, (...args: any[]) => Promise<any>> }> {
+  async buildProviders(): Promise<
+    Array<{ name: string; fns: Record<string, (...args: any[]) => Promise<any>> }>
+  > {
     const ai = (this as any).env.AI;
-    return [
+    const providers: Array<{
+      name: string;
+      fns: Record<string, (...args: any[]) => Promise<any>>;
+    }> = [
       // Canary tool — same as apps/agents e2e test
       { name: "builtin", fns: { answer: async () => 42 } },
       // AI tool — lets codemode scripts call Workers AI
@@ -220,13 +349,33 @@ export class StreamProcessor extends DurableObject {
         },
       },
     ];
+
+    // MCP tool providers — each MCP server becomes a namespace with its tools
+    try {
+      await this.initMcp();
+      for (const [name, session] of this.#mcpSessions) {
+        if (session.tools.length === 0) continue;
+        const fns: Record<string, (...args: any[]) => Promise<any>> = {};
+        for (const tool of session.tools) {
+          const toolKey = tool.name.replace(/[^a-zA-Z0-9_]/g, "_");
+          fns[toolKey] = async (input: any) =>
+            mcpCallTool(session.url, session.sessionId, tool.name, input);
+        }
+        providers.push({ name, fns });
+        console.log("[StreamProcessor] MCP provider:", name, "tools:", Object.keys(fns).join(", "));
+      }
+    } catch (err: any) {
+      console.error("[StreamProcessor] MCP provider setup error:", err.message);
+    }
+
+    return providers;
   }
 
   async executeCode(
     script: string,
   ): Promise<{ result?: unknown; error?: string; logs?: string[] }> {
     try {
-      const providers = this.buildProviders();
+      const providers = await this.buildProviders();
       return await (this as any).env.EXEC.execute(script, providers);
     } catch (err: any) {
       return { error: err.message };
@@ -403,6 +552,20 @@ export class StreamProcessor extends DurableObject {
       }
 
       return Response.json({ ok: true, appends });
+    }
+
+    // GET /api/debug-mcp — test MCP status
+    if (req.method === "GET" && pathname === "/api/debug-mcp") {
+      try {
+        await this.initMcp();
+        const sessions: any = {};
+        for (const [name, s] of this.#mcpSessions) {
+          sessions[name] = { tools: s.tools.map((t) => t.name), sessionId: s.sessionId };
+        }
+        return Response.json({ ok: true, sessions });
+      } catch (e: any) {
+        return Response.json({ ok: false, error: e.message });
+      }
     }
 
     // POST /init — set stream path
