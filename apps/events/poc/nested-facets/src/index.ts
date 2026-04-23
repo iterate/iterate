@@ -23,6 +23,7 @@ import { adminHTML } from "./admin.ts";
 import { editorHTML } from "./editor.ts";
 export { EgressGateway } from "./egress-gateway.ts";
 export { AppRunner } from "./app-runner.ts";
+export { R2BucketProxy } from "./r2-proxy.ts";
 import { parseHost, PLATFORM_SUFFIX, PLATFORM_BARE } from "./host-parser.ts";
 
 // Export BuildSandbox for the container DO binding
@@ -518,6 +519,14 @@ export default {
       });
     }
 
+    // events.<project>.iterate-dev-jonas.app → proxy to <project>.events.iterate.com
+    if (parsed.level === "app" && (parsed as any).app === "events") {
+      const target = `https://${parsed.project}.events.iterate.com${url.pathname}${url.search}`;
+      const headers = new Headers(req.headers);
+      headers.set("host", `${parsed.project}.events.iterate.com`);
+      return fetch(target, { method: req.method, headers, body: req.body });
+    }
+
     // Pure proxy to Project DO — no request modification
     const id = env.PROJECT.idFromName(parsed.project);
     return env.PROJECT.get(id).fetch(req);
@@ -920,6 +929,9 @@ export class Project extends DurableObject<Env> {
   }
 
   async writeDistFiles(app: string, result: CreateWorkerResult | CreateAppResult): Promise<void> {
+    const doId = this.ctx.id.toString();
+    const r2Prefix = `${doId}/app/${app}/dist/client/`;
+
     // Clean old dist
     const distDir = `${REPO_DIR}/apps/${app}/dist`;
     try {
@@ -939,30 +951,31 @@ export class Project extends DurableObject<Env> {
     // Collect asset file keys
     const assetKeys: string[] = [];
 
-    // Write assets if present (createApp result) — supports binary via writeFileBytes
+    // Write assets if present (createApp result) — to workspace + R2
     if ("assets" in result && result.assets) {
       for (const [name, content] of Object.entries(result.assets)) {
         const fullPath = `${REPO_DIR}/apps/${app}/dist/assets${name}`;
         const dir = fullPath.split("/").slice(0, -1).join("/");
         await this.workspace.mkdir(dir, { recursive: true });
+        const cleanName = name.replace(/^\/+/, "");
         if (typeof content === "string") {
           await this.workspace.writeFile(fullPath, content);
+          await this.env.WORKSPACE_R2.put(r2Prefix + cleanName, content);
         } else {
-          // ArrayBuffer from bundler → write as binary
-          await this.workspace.writeFileBytes(fullPath, new Uint8Array(content as ArrayBuffer));
+          const bytes = new Uint8Array(content as ArrayBuffer);
+          await this.workspace.writeFileBytes(fullPath, bytes);
+          await this.env.WORKSPACE_R2.put(r2Prefix + cleanName, bytes);
         }
         assetKeys.push(name);
       }
     }
 
-    // Generate index.html if not already in assets — inject client bundle script tags
+    // Generate index.html if not already in assets
     if ("assets" in result && !assetKeys.includes("/index.html")) {
-      // Read source index.html from the app
       let html = await this.readFile(`apps/${app}/index.html`);
       if (!html) {
         html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${app}</title></head><body><div id="root"></div></body></html>`;
       }
-      // Inject client bundle script tags before </body>
       const clientScripts = assetKeys
         .filter((k) => k.endsWith(".js"))
         .map((k) => `<script type="module" src="${k}"></script>`)
@@ -973,6 +986,7 @@ export class Project extends DurableObject<Env> {
           : html + `\n${clientScripts}`;
       }
       await this.writeFile(`apps/${app}/dist/assets/index.html`, html);
+      await this.env.WORKSPACE_R2.put(r2Prefix + "index.html", html);
       assetKeys.push("/index.html");
     }
 
@@ -1128,118 +1142,6 @@ export class Project extends DurableObject<Env> {
       this.log(`[Sandbox] Build failed: ${app}: ${e.message}`);
       return Response.json({ ok: false, error: e.message }, { status: 500 });
     }
-  }
-
-  inferContentType(path: string): string {
-    const ext = path.split(".").pop()?.toLowerCase() ?? "";
-    const map: Record<string, string> = {
-      js: "application/javascript",
-      mjs: "application/javascript",
-      css: "text/css",
-      html: "text/html;charset=utf-8",
-      json: "application/json",
-      svg: "image/svg+xml",
-      png: "image/png",
-      jpg: "image/jpeg",
-      jpeg: "image/jpeg",
-      gif: "image/gif",
-      webp: "image/webp",
-      avif: "image/avif",
-      ico: "image/x-icon",
-      woff2: "font/woff2",
-      woff: "font/woff",
-      ttf: "font/ttf",
-      otf: "font/otf",
-      mp4: "video/mp4",
-      webm: "video/webm",
-      mp3: "audio/mpeg",
-      ogg: "audio/ogg",
-      wasm: "application/wasm",
-      pdf: "application/pdf",
-      txt: "text/plain",
-      xml: "application/xml",
-    };
-    return map[ext] ?? "application/octet-stream";
-  }
-
-  isTextContentType(ct: string): boolean {
-    return (
-      ct.startsWith("text/") ||
-      ct.includes("json") ||
-      ct.includes("javascript") ||
-      ct.includes("xml") ||
-      ct.includes("svg")
-    );
-  }
-
-  async serveDistAsset(app: string, meta: any, req: Request): Promise<Response | null> {
-    const url = new URL(req.url);
-    let assetPath = url.pathname === "/" ? "/index.html" : url.pathname;
-
-    // Try exact match in asset files
-    for (const af of meta.assetFiles) {
-      if (assetPath === af || assetPath === `/assets${af}` || `/assets${af}` === assetPath) {
-        const ct = this.inferContentType(af);
-        if (this.isTextContentType(ct)) {
-          const content = await this.readFile(`apps/${app}/dist/assets${af}`);
-          if (content)
-            return new Response(content, {
-              headers: { "content-type": ct, "cache-control": "no-cache" },
-            });
-        } else {
-          const bytes = await this.workspace.readFileBytes(
-            `${REPO_DIR}/apps/${app}/dist/assets${af}`,
-          );
-          if (bytes)
-            return new Response(bytes, {
-              headers: { "content-type": ct, "cache-control": "no-cache" },
-            });
-        }
-      }
-    }
-
-    // SPA fallback: serve index.html for non-API paths
-    if (!assetPath.startsWith("/api/") && !assetPath.includes(".")) {
-      const indexHtml =
-        (await this.readFile(`apps/${app}/dist/assets/index.html`)) ??
-        (await this.readFile(`apps/${app}/dist/index.html`));
-      if (indexHtml) {
-        return new Response(indexHtml, {
-          headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-cache" },
-        });
-      }
-    }
-
-    return null;
-  }
-
-  // Serve static files from apps/{app}/public/ with binary support
-  async servePublicFile(app: string, req: Request): Promise<Response | null> {
-    const url = new URL(req.url);
-    // Only serve paths that look like file requests (have an extension)
-    if (!url.pathname.includes(".") || url.pathname.startsWith("/api/")) return null;
-
-    // Map URL path to public dir: /images/logo.png → apps/{app}/public/images/logo.png
-    const publicPath = `${REPO_DIR}/apps/${app}/public${url.pathname}`;
-    const ct = this.inferContentType(url.pathname);
-    // Public assets aren't hashed — use moderate caching (1 hour)
-    const cc = "public, max-age=3600";
-
-    if (this.isTextContentType(ct)) {
-      const content = await this.workspace.readFile(publicPath);
-      if (content)
-        return new Response(content, {
-          headers: { "content-type": ct, "cache-control": cc },
-        });
-    } else {
-      const bytes = await this.workspace.readFileBytes(publicPath);
-      if (bytes)
-        return new Response(bytes, {
-          headers: { "content-type": ct, "cache-control": cc },
-        });
-    }
-
-    return null;
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -1524,10 +1426,12 @@ export class Project extends DurableObject<Env> {
             modules[`assets/${f}`] = file.content;
           }
 
+          const r2Prefix = `${this.ctx.id}/app/${buildApp}/dist/client/`;
           const clientAssetFiles: string[] = [];
           for (const f of clientAssets.stdout.trim().split("\n").filter(Boolean)) {
             const file = await sandbox.readFile(`/workspace/dist/client/assets/${f}`);
             await this.writeFile(`apps/${buildApp}/dist/assets/${f}`, file.content);
+            await this.env.WORKSPACE_R2.put(r2Prefix + f, file.content);
             clientAssetFiles.push(`/${f}`);
           }
 
@@ -1614,29 +1518,12 @@ export class Project extends DurableObject<Env> {
       const meta = JSON.parse(manifestStr);
       console.log(`[Project DO] app=${app} has dist (built at ${meta.builtAt})`);
 
-      // Serve static assets from dist (skip for /api/* and POST — those go to AppRunner)
-      const isApiOrPost =
-        url.pathname.startsWith("/api/") ||
-        url.pathname.startsWith("/_studio") ||
-        url.pathname.startsWith("/_sql") ||
-        url.pathname.startsWith("/streams/") ||
-        req.method === "POST" ||
-        req.headers.get("Upgrade") === "websocket";
-      if (!isApiOrPost) {
-        if (meta.assetFiles?.length > 0) {
-          const assetResponse = await this.serveDistAsset(app, meta, req);
-          if (assetResponse) return assetResponse;
-        }
-        const publicResponse = await this.servePublicFile(app, req);
-        if (publicResponse) return publicResponse;
-      }
-
       // WebSocket: handle directly (DO→DO WS forwarding not supported in CF)
       if (req.headers.get("Upgrade") === "websocket") {
         return this.handleAppViaFacet(app, slug, meta, req);
       }
 
-      // Non-WS: delegate to AppRunner
+      // All requests (including assets) go to AppRunner — apps serve own assets via env.ASSETS
       const runnerId = this.env.APP_RUNNER.idFromName(slug);
       const runner = this.env.APP_RUNNER.get(runnerId);
       console.log(`[Project DO] delegating to AppRunner for app=${app}`);
@@ -1708,10 +1595,12 @@ export class Project extends DurableObject<Env> {
               const file = await sandbox.readFile(`/workspace/dist/server/assets/${f}`);
               modules[`assets/${f}`] = file.content;
             }
+            const autoR2Prefix = `${this.ctx.id}/app/${app}/dist/client/`;
             const clientAssetFiles: string[] = [];
             for (const f of clientAssets.stdout.trim().split("\n").filter(Boolean)) {
               const file = await sandbox.readFile(`/workspace/dist/client/assets/${f}`);
               await this.writeFile(`apps/${app}/dist/assets/${f}`, file.content);
+              await this.env.WORKSPACE_R2.put(autoR2Prefix + f, file.content);
               clientAssetFiles.push(`/${f}`);
             }
             for (const [name, content] of Object.entries(modules)) {
@@ -1836,6 +1725,10 @@ export class Project extends DurableObject<Env> {
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
 
+    const doId = this.ctx.id.toString();
+    const assetsPrefix = `${doId}/app/${app}/dist/client/`;
+    const storagePrefix = `${doId}/app/${app}/`;
+
     console.log(`[Project DO] WS direct facet: app=${app} hash=${sourceHash}`);
     const ctx = this.ctx as any;
     const facet = ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
@@ -1845,7 +1738,12 @@ export class Project extends DurableObject<Env> {
         mainModule,
         modules,
         globalOutbound: this.env.EGRESS_GATEWAY,
-        env: { AI: this.env.AI_PROXY, EXEC: this.env.CODE_EXECUTOR },
+        env: {
+          AI: this.env.AI_PROXY,
+          EXEC: this.env.CODE_EXECUTOR,
+          ASSETS: ctx.exports.R2BucketProxy({ props: { prefix: assetsPrefix } }),
+          STORAGE: ctx.exports.R2BucketProxy({ props: { prefix: storagePrefix } }),
+        },
       }));
       return { class: (worker as any).getDurableObjectClass("App") };
     });
