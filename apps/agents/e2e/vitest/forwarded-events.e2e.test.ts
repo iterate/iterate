@@ -1,118 +1,43 @@
-import { fileURLToPath } from "node:url";
-import type { StreamPath } from "@iterate-com/events-contract";
-import {
-  useCloudflareTunnel,
-  useCloudflareTunnelLease,
-  useDevServer,
-} from "@iterate-com/shared/test-helpers";
-import { describe, expect, test } from "vitest";
-import { injectVitestRunSlug } from "../test-support/vitest-inject-run-slug.ts";
-import {
-  createEventsStreamPath,
-  createTestExecutionSuffix,
-} from "../test-support/vitest-naming.ts";
-import {
-  eventsIterateStreamViewerUrl,
-  waitForStreamEvent,
-} from "../test-support/events-stream-helpers.ts";
-import { requireSemaphoreE2eEnv } from "../test-support/require-semaphore-e2e-env.ts";
-import { createEventsOrpcClient } from "../../src/lib/events-orpc-client.ts";
+import { expect, test } from "vitest";
+import { setupE2E } from "../test-support/e2e-test.ts";
+import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
 
-requireSemaphoreE2eEnv(process.env);
+test(
+  "receives a real events.iterate.com webhook and appends pong to the same stream",
+  { tags: ["local-dev-server", "live-internet"], timeout: 100_000 },
+  async (ctx) => {
+    const e2e = await setupE2E(ctx);
+    const streamPath = e2e.createStreamPath();
 
-const appRoot = fileURLToPath(new URL("../..", import.meta.url));
-const repoRoot = fileURLToPath(new URL("../../../..", import.meta.url));
-
-describe.sequential("agents forwarded events", () => {
-  test("receives a real events.iterate.com webhook and appends pong to the same stream", async ({
-    task,
-  }) => {
-    const vitestRunSlug = injectVitestRunSlug();
-    const executionSuffix = createTestExecutionSuffix();
-    const streamPath = createEventsStreamPath({
-      repoRoot,
-      testFilePath: task.file.filepath,
-      testFullName: task.fullName,
-      executionSuffix,
-    }) as StreamPath;
-    const eventsBaseUrl = resolveEventsBaseUrl();
-    const streamViewerUrl = eventsIterateStreamViewerUrl({
-      eventsOrigin: eventsBaseUrl,
-      projectSlug: vitestRunSlug,
+    await using server = await createLocalDevServer({
+      eventsBaseUrl: e2e.eventsBaseUrl,
+      eventsProjectSlug: e2e.runSlug,
+      executionSuffix: e2e.executionSuffix,
       streamPath,
     });
-    console.info(`[forwarded-events e2e] Events stream (open in browser): ${streamViewerUrl}`);
-    await using tunnelLease = await useCloudflareTunnelLease({});
 
-    await using devServer = await useDevServer({
-      cwd: appRoot,
-      command: "pnpm",
-      args: ["exec", "tsx", "./alchemy.run.ts"],
-      port: tunnelLease.localPort,
-      env: {
-        ...stripInheritedAppConfig(process.env),
-        APP_CONFIG_EVENTS_BASE_URL: eventsBaseUrl,
-        APP_CONFIG_EVENTS_PROJECT_SLUG: vitestRunSlug,
+    const callbackUrl = new URL("/api/events-forwarded", server.publicUrl).toString();
+
+    await e2e.events.append(streamPath, {
+      type: "https://events.iterate.com/events/stream/subscription/configured",
+      payload: {
+        slug: `agents-forwarded-${e2e.executionSuffix}`,
+        type: "webhook",
+        callbackUrl,
       },
     });
-    await using tunnel = await useCloudflareTunnel({
-      token: tunnelLease.tunnelToken,
-      publicUrl: tunnelLease.publicUrl,
-    });
-
-    const callbackUrl = new URL("/api/events-forwarded", tunnel.publicUrl).toString();
-    const eventsClient = createEventsOrpcClient({
-      baseUrl: eventsBaseUrl,
-      projectSlug: vitestRunSlug,
-    });
-
-    await eventsClient.append({
-      path: streamPath,
-      event: {
-        type: "https://events.iterate.com/events/stream/subscription/configured",
-        payload: {
-          slug: `agents-forwarded-${executionSuffix}`,
-          type: "webhook",
-          callbackUrl,
-        },
-      },
-    });
-    await eventsClient.append({
-      path: streamPath,
-      event: {
-        type: "ping",
-        payload: {
-          message: `ping ${executionSuffix}`,
-          source: devServer.baseUrl,
-        },
+    await e2e.events.append(streamPath, {
+      type: "ping",
+      payload: {
+        message: `ping ${e2e.executionSuffix}`,
+        source: server.baseUrl,
       },
     });
 
-    const pong = await waitForStreamEvent({
-      client: eventsClient,
-      path: streamPath,
-      predicate: (event) => event.type === "pong",
+    const pong = await e2e.events.waitForEvent(streamPath, (event) => event.type === "pong", {
       timeoutMs: 45_000,
     });
 
-    expect(pong.payload).toMatchObject({
-      ok: true,
-    });
-  }, 100_000);
-});
-
-function resolveEventsBaseUrl() {
-  return process.env.EVENTS_BASE_URL?.trim().replace(/\/+$/, "") || "https://events.iterate.com";
-}
-
-function stripInheritedAppConfig(env: NodeJS.ProcessEnv) {
-  const next = { ...env };
-
-  for (const key of Object.keys(next)) {
-    if (key === "APP_CONFIG" || key.startsWith("APP_CONFIG_")) {
-      delete next[key];
-    }
-  }
-
-  return next;
-}
+    expect(pong.payload).toMatchObject({ ok: true });
+  },
+);

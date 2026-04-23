@@ -43,13 +43,13 @@ catalogs:
   cloudflare:
     "@cloudflare/codemode": ^0.3.4
     "@cloudflare/unenv-preset": ^2.16.0
-    "@cloudflare/vite-plugin": 1.33.0
+    "@cloudflare/vite-plugin": 1.33.1
     "@cloudflare/vitest-pool-workers": ^0.14.9
     "@cloudflare/worker-bundler": ^0.1.2
-    "@cloudflare/workers-types": ^4.20260420.0
+    "@cloudflare/workers-types": ^4.20260423.1
     miniflare: 4.20260420.0
     workerd: 1.20260420.1
-    wrangler: 4.84.0
+    wrangler: 4.84.1
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:

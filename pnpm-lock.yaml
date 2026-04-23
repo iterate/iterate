@@ -10,8 +10,8 @@ catalogs:
       specifier: ^0.3.4
       version: 0.3.4
     '@cloudflare/vite-plugin':
-      specifier: 1.33.0
-      version: 1.33.0
+      specifier: 1.33.1
+      version: 1.33.1
     '@cloudflare/vitest-pool-workers':
       specifier: ^0.14.9
       version: 0.14.9
@@ -19,8 +19,8 @@ catalogs:
       specifier: ^0.1.2
       version: 0.1.2
     '@cloudflare/workers-types':
-      specifier: ^4.20260420.0
-      version: 4.20260421.1
+      specifier: ^4.20260423.1
+      version: 4.20260423.1
 
 overrides:
   axios: 1.13.6
@@ -38,7 +38,7 @@ overrides:
   ws: 8.19.0
   baseline-browser-mapping: ^2.9.14
   '@babel/parser': ^7.28.0
-  wrangler: 4.84.0
+  wrangler: 4.84.1
 
 importers:
 
@@ -268,10 +268,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: catalog:cloudflare
-        version: 1.33.0(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260420.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 1.33.1(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
-        version: 4.20260421.1
+        version: 4.20260423.1
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -279,8 +279,8 @@ importers:
         specifier: ^8.0.0
         version: 8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
       wrangler:
-        specifier: 4.84.0
-        version: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+        specifier: 4.84.1
+        version: 4.84.1(@cloudflare/workers-types@4.20260423.1)
 
   apps/agents:
     dependencies:
@@ -337,7 +337,7 @@ importers:
         version: 1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       agents:
         specifier: ^0.11.0
-        version: 0.11.0(@babel/core@7.29.0)(@babel/runtime@7.28.6)(@cloudflare/codemode@0.3.4(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(zod@4.3.6))(@cloudflare/workers-types@4.20260421.1)(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(react@19.2.4)(rolldown@1.0.0-rc.16)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(zod@4.3.6)
+        version: 0.11.0(@babel/core@7.29.0)(@babel/runtime@7.28.6)(@cloudflare/codemode@0.3.4(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(zod@4.3.6))(@cloudflare/workers-types@4.20260423.1)(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(react@19.2.4)(rolldown@1.0.0-rc.16)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(zod@4.3.6)
       ai:
         specifier: ^6.0.159
         version: 6.0.159(zod@4.3.6)
@@ -359,13 +359,13 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: catalog:cloudflare
-        version: 1.33.0(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 1.33.1(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
-        version: 0.14.9(@cloudflare/workers-types@4.20260421.1)(@vitest/runner@4.1.0-beta.6)(@vitest/snapshot@4.1.0-beta.6)(vitest@4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))
+        version: 0.14.9(@cloudflare/workers-types@4.20260423.1)(@vitest/runner@4.1.0-beta.6)(@vitest/snapshot@4.1.0-beta.6)(vitest@4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
-        version: 4.20260421.1
+        version: 4.20260423.1
       '@iterate-com/mock-http-proxy':
         specifier: workspace:*
         version: link:../../packages/mock-http-proxy
@@ -389,7 +389,7 @@ importers:
         version: 6.0.1(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.0)(@babel/runtime@7.28.6)(rolldown@1.0.0-rc.16)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       alchemy:
         specifier: ^0.92.2
-        version: 0.92.2(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.0(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 0.92.2(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.1(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       tsx:
         specifier: ^4.20.3
         version: 4.21.0
@@ -403,8 +403,8 @@ importers:
         specifier: 4.1.0-beta.6
         version: 4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       wrangler:
-        specifier: 4.84.0
-        version: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+        specifier: 4.84.1
+        version: 4.84.1(@cloudflare/workers-types@4.20260423.1)
 
   apps/agents-contract:
     dependencies:
@@ -501,7 +501,7 @@ importers:
         version: 1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
+        version: 0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
       json5:
         specifier: ^2.2.3
         version: 2.2.3
@@ -529,10 +529,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: catalog:cloudflare
-        version: 1.33.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 1.33.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
-        version: 4.20260421.1
+        version: 4.20260423.1
       '@tailwindcss/vite':
         specifier: ^4.1.18
         version: 4.2.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
@@ -553,7 +553,7 @@ importers:
         version: 6.0.1(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.0)(@babel/runtime@7.28.6)(rolldown@1.0.0-rc.16)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       alchemy:
         specifier: ^0.83.3
-        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       drizzle-kit:
         specifier: ^0.31.1
         version: 0.31.9
@@ -576,8 +576,8 @@ importers:
         specifier: 4.0.15
         version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(@vitest/ui@4.0.15)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.32.0)(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
       wrangler:
-        specifier: 4.84.0
-        version: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+        specifier: 4.84.1
+        version: 4.84.1(@cloudflare/workers-types@4.20260423.1)
 
   apps/codemode-contract:
     dependencies:
@@ -821,7 +821,7 @@ importers:
         version: 0.31.9
       drizzle-orm:
         specifier: ^0.45.0
-        version: 0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
+        version: 0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
       embla-carousel-react:
         specifier: ^8.6.0
         version: 8.6.0(react@19.2.4)
@@ -1065,13 +1065,13 @@ importers:
         version: 0.4.4(srvx@0.11.12)
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
+        version: 0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
       lucide-react:
         specifier: ^0.545.0
         version: 0.545.0(react@19.2.4)
       nitro:
         specifier: 3.0.260311-beta
-        version: 3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+        version: 3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       react:
         specifier: ^19.2.0
         version: 19.2.4
@@ -1233,7 +1233,7 @@ importers:
         version: 0.4.4(srvx@0.11.12)
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
+        version: 0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
       jsonata:
         specifier: ^2.1.0
         version: 2.1.0
@@ -1261,13 +1261,13 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: catalog:cloudflare
-        version: 1.33.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 1.33.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
-        version: 0.14.9(@cloudflare/workers-types@4.20260421.1)(@vitest/runner@4.1.0-beta.6)(@vitest/snapshot@4.1.0-beta.6)(vitest@4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))
+        version: 0.14.9(@cloudflare/workers-types@4.20260423.1)(@vitest/runner@4.1.0-beta.6)(@vitest/snapshot@4.1.0-beta.6)(vitest@4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
-        version: 4.20260421.1
+        version: 4.20260423.1
       '@iterate-com/mock-http-proxy':
         specifier: workspace:*
         version: link:../../packages/mock-http-proxy
@@ -1291,7 +1291,7 @@ importers:
         version: 6.0.1(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.0)(@babel/runtime@7.28.6)(rolldown@1.0.0-rc.16)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       alchemy:
         specifier: ^0.83.3
-        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       drizzle-kit:
         specifier: ^0.31.1
         version: 0.31.9
@@ -1314,8 +1314,8 @@ importers:
         specifier: 4.1.0-beta.6
         version: 4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       wrangler:
-        specifier: 4.84.0
-        version: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+        specifier: 4.84.1
+        version: 4.84.1(@cloudflare/workers-types@4.20260423.1)
 
   apps/events-contract:
     dependencies:
@@ -1415,10 +1415,10 @@ importers:
         version: 0.4.4(srvx@0.11.12)
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
+        version: 0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
       nitro:
         specifier: 3.0.260311-beta
-        version: 3.0.260311-beta(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+        version: 3.0.260311-beta(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       react:
         specifier: ^19.2.0
         version: 19.2.4
@@ -1434,10 +1434,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: catalog:cloudflare
-        version: 1.33.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 1.33.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
-        version: 4.20260421.1
+        version: 4.20260423.1
       '@tailwindcss/vite':
         specifier: ^4.1.18
         version: 4.2.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
@@ -1461,7 +1461,7 @@ importers:
         version: 6.0.1(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.0)(@babel/runtime@7.28.6)(rolldown@1.0.0-rc.16)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       alchemy:
         specifier: ^0.83.3
-        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       better-sqlite3:
         specifier: ^12.6.2
         version: 12.6.2
@@ -1496,8 +1496,8 @@ importers:
         specifier: 4.0.15
         version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(@vitest/ui@4.0.15)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.32.0)(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
       wrangler:
-        specifier: 4.84.0
-        version: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+        specifier: 4.84.1
+        version: 4.84.1(@cloudflare/workers-types@4.20260423.1)
     optionalDependencies:
       '@lydell/node-pty-darwin-arm64':
         specifier: 1.2.0-beta.3
@@ -1580,13 +1580,13 @@ importers:
         version: 0.7.2
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
+        version: 0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
       lucide-react:
         specifier: ^0.545.0
         version: 0.545.0(react@19.2.4)
       nitro:
         specifier: 3.0.260311-beta
-        version: 3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+        version: 3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       react:
         specifier: ^19.2.0
         version: 19.2.4
@@ -1730,10 +1730,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: catalog:cloudflare
-        version: 1.33.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 1.33.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
-        version: 4.20260421.1
+        version: 4.20260423.1
       '@tailwindcss/vite':
         specifier: ^4.1.18
         version: 4.2.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
@@ -1754,7 +1754,7 @@ importers:
         version: 6.0.1(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.0)(@babel/runtime@7.28.6)(rolldown@1.0.0-rc.16)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       alchemy:
         specifier: ^0.83.3
-        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       esbuild:
         specifier: ^0.27.4
         version: 0.27.4
@@ -1774,8 +1774,8 @@ importers:
         specifier: 4.0.15
         version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(@vitest/ui@4.0.15)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.32.0)(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
       wrangler:
-        specifier: 4.84.0
-        version: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+        specifier: 4.84.1
+        version: 4.84.1(@cloudflare/workers-types@4.20260423.1)
 
   apps/ingress-proxy-contract:
     dependencies:
@@ -1874,24 +1874,24 @@ importers:
         specifier: ^5.0.0
         version: 5.1.0
       wrangler:
-        specifier: 4.84.0
-        version: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+        specifier: 4.84.1
+        version: 4.84.1(@cloudflare/workers-types@4.20260423.1)
       zod:
         specifier: 4.1.12
         version: 4.1.12
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: catalog:cloudflare
-        version: 1.33.0(vite@7.1.12(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 1.33.1(vite@7.1.12(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
-        version: 4.20260421.1
+        version: 4.20260423.1
       '@playwright/test':
         specifier: 1.56.1
         version: 1.56.1
       '@react-router/dev':
         specifier: 7.9.5
-        version: 7.9.5(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(react-router@7.9.5(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(terser@5.46.0)(tsx@4.21.0)(typescript@5.9.3)(vite@7.1.12(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))(yaml@2.8.3)
+        version: 7.9.5(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(react-router@7.9.5(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(terser@5.46.0)(tsx@4.21.0)(typescript@5.9.3)(vite@7.1.12(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))(yaml@2.8.3)
       '@tailwindcss/vite':
         specifier: ^4.1.16
         version: 4.2.1(vite@7.1.12(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
@@ -1963,7 +1963,7 @@ importers:
         version: 1.19.10(hono@4.12.5)
       '@hono/vite-dev-server':
         specifier: ^0.24.0
-        version: 0.24.1(hono@4.12.5)(miniflare@4.20260421.0)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 0.24.1(hono@4.12.5)(miniflare@4.20260421.0)(wrangler@4.84.1(@cloudflare/workers-types@4.20260421.1))
       '@hono/zod-validator':
         specifier: ^0.7.5
         version: 0.7.6(hono@4.12.5)(zod@4.1.12)
@@ -2065,7 +2065,7 @@ importers:
         version: 1.166.2(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
       alchemy:
         specifier: ^0.83.0
-        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.15.3(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(stripe@20.1.2(@types/node@24.11.0))(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.15.3(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260421.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(stripe@20.1.2(@types/node@24.11.0))(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260421.1))
       arctic:
         specifier: ^3.7.0
         version: 3.7.0
@@ -2101,7 +2101,7 @@ importers:
         version: 3.19.19
       evlog:
         specifier: ^1.8.0
-        version: 1.11.0(nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(react@19.2.4)
+        version: 1.11.0(nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(react@19.2.4)
       hono:
         specifier: ^4.10.7
         version: 4.12.5
@@ -2216,7 +2216,7 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: 1.15.3
-        version: 1.15.3(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 1.15.3(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260421.1))
       '@cloudflare/workers-types':
         specifier: ^4.20251128.0
         version: 4.20260421.1
@@ -2299,8 +2299,8 @@ importers:
         specifier: 4.0.15
         version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@24.11.0)(@vitest/ui@4.0.15)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.32.0)(msw@2.13.3(@types/node@24.11.0)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
       wrangler:
-        specifier: 4.84.0
-        version: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+        specifier: 4.84.1
+        version: 4.84.1(@cloudflare/workers-types@4.20260421.1)
       ws:
         specifier: 8.19.0
         version: 8.19.0
@@ -2392,10 +2392,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: catalog:cloudflare
-        version: 1.33.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 1.33.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
-        version: 4.20260421.1
+        version: 4.20260423.1
       '@tailwindcss/vite':
         specifier: ^4.1.18
         version: 4.2.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
@@ -2416,7 +2416,7 @@ importers:
         version: 6.0.1(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.0)(@babel/runtime@7.28.6)(rolldown@1.0.0-rc.16)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       alchemy:
         specifier: ^0.83.3
-        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       esbuild:
         specifier: ^0.27.4
         version: 0.27.4
@@ -2436,8 +2436,8 @@ importers:
         specifier: 4.0.15
         version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(@vitest/ui@4.0.15)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.32.0)(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
       wrangler:
-        specifier: 4.84.0
-        version: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+        specifier: 4.84.1
+        version: 4.84.1(@cloudflare/workers-types@4.20260423.1)
 
   apps/semaphore-contract:
     dependencies:
@@ -2551,7 +2551,7 @@ importers:
         version: 12.6.2
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
+        version: 0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
       http-proxy:
         specifier: ^1.18.1
         version: 1.18.1
@@ -2777,7 +2777,7 @@ importers:
         version: 1.2.15(rollup@4.59.0)
       evlog:
         specifier: ^1.8.0
-        version: 1.11.0(nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(react@19.2.4)
+        version: 1.11.0(nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(react@19.2.4)
       get-port:
         specifier: ^7.1.0
         version: 7.1.0
@@ -2786,7 +2786,7 @@ importers:
         version: 4.12.5
       nitro:
         specifier: 3.0.260311-beta
-        version: 3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
+        version: 3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
       openapi-fetch:
         specifier: ^0.14.0
         version: 0.14.1
@@ -3652,13 +3652,13 @@ packages:
     resolution: {integrity: sha512-o199VPWhPoKolIW7bfdk1Vzfpa/gE+1wA+J/B8Is8MH/pAVhNQG1rVxAXjNsOAuRMwfJxRwBKDScwVVZFuUUlw==}
     peerDependencies:
       vite: ^6.1.0 || ^7.0.0
-      wrangler: 4.84.0
+      wrangler: 4.84.1
 
-  '@cloudflare/vite-plugin@1.33.0':
-    resolution: {integrity: sha512-x7JwilJdTK5BbN/9OovJpA82xIhFaPmdo33e7Ns/mZSOrtGSLja7nUK/fz2oykq9mwqVbSlFZnLFMSTWSSYFug==}
+  '@cloudflare/vite-plugin@1.33.1':
+    resolution: {integrity: sha512-bCwbMIPXW0bjvMWNiDEPmV4/Lc5nU/x3/yIGBrgMgxHa2caMvh6QaOplI7DUcHBpzMfz/0iQ0inVmyIuQ8eG4A==}
     peerDependencies:
       vite: ^6.1.0 || ^7.0.0 || ^8.0.0
-      wrangler: 4.84.0
+      wrangler: 4.84.1
 
   '@cloudflare/vitest-pool-workers@0.14.9':
     resolution: {integrity: sha512-XLJTOd+3A3BB6vPzD7gi1LTVKFSVge9HhGWXnLouPzySphMLbg+6xXELykFxZKyqP1AEjT2tc28AkBjM9GteFQ==}
@@ -3683,12 +3683,6 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@cloudflare/workerd-darwin-64@1.20260420.1':
-    resolution: {integrity: sha512-Y6HtAY+pS5INiD9HyO1JvvujZO24mD3eqRwPZlLXBkcT+wW8bTOve/8mVKErEzEtZ5LkuT3tJqG9py8TxQEBgw==}
-    engines: {node: '>=16'}
-    cpu: [x64]
-    os: [darwin]
-
   '@cloudflare/workerd-darwin-64@1.20260421.1':
     resolution: {integrity: sha512-DLU5ZTZ1VHeZZnj0PuVJEMHKGisfLe2XShyImP5P/PPj/m/t7CLEJmPiI7FMxvT7ynArkckJl7m+Z5x7u4Kkdw==}
     engines: {node: '>=16'}
@@ -3703,12 +3697,6 @@ packages:
 
   '@cloudflare/workerd-darwin-arm64@1.20260310.1':
     resolution: {integrity: sha512-h/Vl3XrYYPI6yFDE27XO1QPq/1G1lKIM8tzZGIWYpntK3IN5XtH3Ee/sLaegpJ49aIJoqhF2mVAZ6Yw+Vk2gJw==}
-    engines: {node: '>=16'}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@cloudflare/workerd-darwin-arm64@1.20260420.1':
-    resolution: {integrity: sha512-7aiRtZTc5S4aKcL6uIx+B3tCzb/bULjQmE67/03k0HtaDNzP20GnYmYpFCqleFqsdmIb4Tx8PkKPmsXI3AJLvQ==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [darwin]
@@ -3731,12 +3719,6 @@ packages:
     cpu: [x64]
     os: [linux]
 
-  '@cloudflare/workerd-linux-64@1.20260420.1':
-    resolution: {integrity: sha512-J/DW149FPmug1wSM32zBF7My14xg+inIYwzS4bSAxyXR6tBiTxbhgFWQQz99nt08ZMstdKHRD6f6C/KQaleQcA==}
-    engines: {node: '>=16'}
-    cpu: [x64]
-    os: [linux]
-
   '@cloudflare/workerd-linux-64@1.20260421.1':
     resolution: {integrity: sha512-938QjUv0z+QqK6BAvgwX/lCIZ2b224ZXoXtGTbhyNVMhB+mt4Dj24cj9qca4ekNXjVM7uTKp1yOHZO97fVSacw==}
     engines: {node: '>=16'}
@@ -3751,12 +3733,6 @@ packages:
 
   '@cloudflare/workerd-linux-arm64@1.20260310.1':
     resolution: {integrity: sha512-sxv4CxnN4ZR0uQGTFVGa0V4KTqwdej/czpIc5tYS86G8FQQoGIBiAIs2VvU7b8EROPcandxYHDBPTb+D9HIMPw==}
-    engines: {node: '>=16'}
-    cpu: [arm64]
-    os: [linux]
-
-  '@cloudflare/workerd-linux-arm64@1.20260420.1':
-    resolution: {integrity: sha512-a5I147McRM/L4YHu9EwOsoAyIExZndPRQoLx/33dbw/yUEnO825gvn5QZkCGXBVL2JwsPAyowB0Xliqrj+71Sw==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [linux]
@@ -3779,12 +3755,6 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@cloudflare/workerd-windows-64@1.20260420.1':
-    resolution: {integrity: sha512-ZrHqlHbJNU8P24EAOBaZ6B44G9P+po2z0DBwbAr8965aWR+vohy3cfmgE9uzNPAQfKNmvq7fmc4VwsRpERkg0w==}
-    engines: {node: '>=16'}
-    cpu: [x64]
-    os: [win32]
-
   '@cloudflare/workerd-windows-64@1.20260421.1':
     resolution: {integrity: sha512-q1SFgwlNH9lFmw74vh7EJbJtduo92Nx51mNOfd3/u6pux6AldcwRviYzKEEv3FEbtv6OBB7J8D5f8vtZj7Z6Sg==}
     engines: {node: '>=16'}
@@ -3793,6 +3763,9 @@ packages:
 
   '@cloudflare/workers-types@4.20260421.1':
     resolution: {integrity: sha512-PJjuz1zwwa+/WP9dkf5ORMQWL7u2m1d8aFUhG3dx6ohweGd+zMppT1JG0zhc00LUg8gFXVaiZzZ5w/0Cp4HI+g==}
+
+  '@cloudflare/workers-types@4.20260423.1':
+    resolution: {integrity: sha512-SHIc0NeJMtn0sW043eWtMxYFbJ9VPSLkcx+FEqCk0uZLD3HrWT+5xWhm6EYiOYDg0vnrlXNHcu2ly/01zDh3bw==}
 
   '@codemirror/autocomplete@6.20.1':
     resolution: {integrity: sha512-1cvg3Vz1dSSToCNlJfRA2WSI4ht3K+WplO0UMOgmUYPivCyy2oueZY6Lx7M9wThm7SDUBViRmuT+OG/i8+ON9A==}
@@ -5061,7 +5034,7 @@ packages:
     peerDependencies:
       hono: '*'
       miniflare: '*'
-      wrangler: 4.84.0
+      wrangler: 4.84.1
     peerDependenciesMeta:
       miniflare:
         optional: true
@@ -8046,7 +8019,7 @@ packages:
       react-router: ^7.9.5
       typescript: ^5.1.0
       vite: ^5.1.0 || ^6.0.0 || ^7.0.0
-      wrangler: 4.84.0
+      wrangler: 4.84.1
     peerDependenciesMeta:
       '@react-router/serve':
         optional: true
@@ -10376,7 +10349,7 @@ packages:
       rwsdk: ^1.0.0-beta.51
       stripe: ^18.5.0
       vite: '>=6.0.0'
-      wrangler: 4.84.0
+      wrangler: 4.84.1
     peerDependenciesMeta:
       '@astrojs/cloudflare':
         optional: true
@@ -10434,7 +10407,7 @@ packages:
       rwsdk: ^1.0.0-beta.51
       stripe: ^18.5.0
       vite: '>=6.0.0'
-      wrangler: 4.84.0
+      wrangler: 4.84.1
     peerDependenciesMeta:
       '@astrojs/cloudflare':
         optional: true
@@ -14131,11 +14104,6 @@ packages:
     engines: {node: '>=18.0.0'}
     hasBin: true
 
-  miniflare@4.20260420.0:
-    resolution: {integrity: sha512-w8s3eh2W7EEsFh2uGdddZLkbTwiPI8MCSMXKtuLSA9btW8xmQsVVSkrFuLXFyTKcX0QkstS5dhcWjQPQRJ2WKg==}
-    engines: {node: '>=18.0.0'}
-    hasBin: true
-
   miniflare@4.20260421.0:
     resolution: {integrity: sha512-7ZkNQ7brgQ2hh5ha9iQCDUjxBkLvuiG2VdDns9esRL8O8lXg+MoP6E0dO1rtp+ZY2I+vV1tPWr6td5IojkewLw==}
     engines: {node: '>=18.0.0'}
@@ -17360,22 +17328,17 @@ packages:
     engines: {node: '>=16'}
     hasBin: true
 
-  workerd@1.20260420.1:
-    resolution: {integrity: sha512-1AOJgng169u4fiFrEd5WjrAGpdwd3A4ZJtP8PMvf+RF9NUKy+mdwrKdz4qPZ6Tt/Bya99vsLn6UX33fjAEVoaA==}
-    engines: {node: '>=16'}
-    hasBin: true
-
   workerd@1.20260421.1:
     resolution: {integrity: sha512-zTYD+xFR4d7TUCxsyl7FTPth9a8CDgk8pM7xUWbJxo0SGUx+2e5C7Q5LrramBZwmuAErtzXmOjlQ15PtkPAhZA==}
     engines: {node: '>=16'}
     hasBin: true
 
-  wrangler@4.84.0:
-    resolution: {integrity: sha512-lYScYXeHZ385rDzbTF7QfP4FWu2vQuD7uDQRUjDZuutyq5fZVCR6ZxLLsySbqFiFjvKsF5RoxVPeJtI78blz4w==}
+  wrangler@4.84.1:
+    resolution: {integrity: sha512-Xe1S/Bik7pNdtdJ+asHsEZC2dX9k3WxYn2BbxFtOrrLVxN/LKi750zsrjX41jSAk00M/O1l7jzyQV4sQqw8ftg==}
     engines: {node: '>=20.3.0'}
     hasBin: true
     peerDependencies:
-      '@cloudflare/workers-types': ^4.20260420.1
+      '@cloudflare/workers-types': ^4.20260421.1
     peerDependenciesMeta:
       '@cloudflare/workers-types':
         optional: true
@@ -18587,12 +18550,6 @@ snapshots:
 
   '@cloudflare/kv-asset-handler@0.4.2': {}
 
-  '@cloudflare/unenv-preset@2.16.0(unenv@2.0.0-rc.24)(workerd@1.20260420.1)':
-    dependencies:
-      unenv: 2.0.0-rc.24
-    optionalDependencies:
-      workerd: 1.20260420.1
-
   '@cloudflare/unenv-preset@2.16.0(unenv@2.0.0-rc.24)(workerd@1.20260421.1)':
     dependencies:
       unenv: 2.0.0-rc.24
@@ -18611,7 +18568,7 @@ snapshots:
     optionalDependencies:
       workerd: 1.20260421.1
 
-  '@cloudflare/vite-plugin@1.15.3(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))':
+  '@cloudflare/vite-plugin@1.15.3(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260421.1))':
     dependencies:
       '@cloudflare/unenv-preset': 2.7.11(unenv@2.0.0-rc.24)(workerd@1.20260421.1)
       '@remix-run/node-fetch-server': 0.8.1
@@ -18621,66 +18578,53 @@ snapshots:
       tinyglobby: 0.2.16
       unenv: 2.0.0-rc.24
       vite: 7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
-      wrangler: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+      wrangler: 4.84.1(@cloudflare/workers-types@4.20260421.1)
       ws: 8.19.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
       - workerd
 
-  '@cloudflare/vite-plugin@1.33.0(vite@7.1.12(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))':
+  '@cloudflare/vite-plugin@1.33.1(vite@7.1.12(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))':
     dependencies:
       '@cloudflare/unenv-preset': 2.16.0(unenv@2.0.0-rc.24)(workerd@1.20260421.1)
-      miniflare: 4.20260420.0
+      miniflare: 4.20260421.0
       unenv: 2.0.0-rc.24
       vite: 7.1.12(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
-      wrangler: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+      wrangler: 4.84.1(@cloudflare/workers-types@4.20260423.1)
       ws: 8.19.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
       - workerd
 
-  '@cloudflare/vite-plugin@1.33.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))':
+  '@cloudflare/vite-plugin@1.33.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))':
     dependencies:
       '@cloudflare/unenv-preset': 2.16.0(unenv@2.0.0-rc.24)(workerd@1.20260421.1)
-      miniflare: 4.20260420.0
+      miniflare: 4.20260421.0
       unenv: 2.0.0-rc.24
       vite: 8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
-      wrangler: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+      wrangler: 4.84.1(@cloudflare/workers-types@4.20260423.1)
       ws: 8.19.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
       - workerd
 
-  '@cloudflare/vite-plugin@1.33.0(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260420.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))':
-    dependencies:
-      '@cloudflare/unenv-preset': 2.16.0(unenv@2.0.0-rc.24)(workerd@1.20260420.1)
-      miniflare: 4.20260420.0
-      unenv: 2.0.0-rc.24
-      vite: 8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
-      wrangler: 4.84.0(@cloudflare/workers-types@4.20260421.1)
-      ws: 8.19.0
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
-      - workerd
-
-  '@cloudflare/vite-plugin@1.33.0(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))':
+  '@cloudflare/vite-plugin@1.33.1(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))':
     dependencies:
       '@cloudflare/unenv-preset': 2.16.0(unenv@2.0.0-rc.24)(workerd@1.20260421.1)
-      miniflare: 4.20260420.0
+      miniflare: 4.20260421.0
       unenv: 2.0.0-rc.24
       vite: 8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
-      wrangler: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+      wrangler: 4.84.1(@cloudflare/workers-types@4.20260423.1)
       ws: 8.19.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
       - workerd
 
-  '@cloudflare/vitest-pool-workers@0.14.9(@cloudflare/workers-types@4.20260421.1)(@vitest/runner@4.1.0-beta.6)(@vitest/snapshot@4.1.0-beta.6)(vitest@4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))':
+  '@cloudflare/vitest-pool-workers@0.14.9(@cloudflare/workers-types@4.20260423.1)(@vitest/runner@4.1.0-beta.6)(@vitest/snapshot@4.1.0-beta.6)(vitest@4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))':
     dependencies:
       '@vitest/runner': 4.1.0-beta.6
       '@vitest/snapshot': 4.1.0-beta.6
@@ -18688,14 +18632,14 @@ snapshots:
       esbuild: 0.27.3
       miniflare: 4.20260421.0
       vitest: 4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      wrangler: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+      wrangler: 4.84.1(@cloudflare/workers-types@4.20260423.1)
       zod: 3.25.76
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
       - bufferutil
       - utf-8-validate
 
-  '@cloudflare/vitest-pool-workers@0.14.9(@cloudflare/workers-types@4.20260421.1)(@vitest/runner@4.1.0-beta.6)(@vitest/snapshot@4.1.0-beta.6)(vitest@4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))':
+  '@cloudflare/vitest-pool-workers@0.14.9(@cloudflare/workers-types@4.20260423.1)(@vitest/runner@4.1.0-beta.6)(@vitest/snapshot@4.1.0-beta.6)(vitest@4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))':
     dependencies:
       '@vitest/runner': 4.1.0-beta.6
       '@vitest/snapshot': 4.1.0-beta.6
@@ -18703,7 +18647,7 @@ snapshots:
       esbuild: 0.27.3
       miniflare: 4.20260421.0
       vitest: 4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      wrangler: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+      wrangler: 4.84.1(@cloudflare/workers-types@4.20260423.1)
       zod: 3.25.76
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
@@ -18729,9 +18673,6 @@ snapshots:
   '@cloudflare/workerd-darwin-64@1.20260310.1':
     optional: true
 
-  '@cloudflare/workerd-darwin-64@1.20260420.1':
-    optional: true
-
   '@cloudflare/workerd-darwin-64@1.20260421.1':
     optional: true
 
@@ -18739,9 +18680,6 @@ snapshots:
     optional: true
 
   '@cloudflare/workerd-darwin-arm64@1.20260310.1':
-    optional: true
-
-  '@cloudflare/workerd-darwin-arm64@1.20260420.1':
     optional: true
 
   '@cloudflare/workerd-darwin-arm64@1.20260421.1':
@@ -18753,9 +18691,6 @@ snapshots:
   '@cloudflare/workerd-linux-64@1.20260310.1':
     optional: true
 
-  '@cloudflare/workerd-linux-64@1.20260420.1':
-    optional: true
-
   '@cloudflare/workerd-linux-64@1.20260421.1':
     optional: true
 
@@ -18763,9 +18698,6 @@ snapshots:
     optional: true
 
   '@cloudflare/workerd-linux-arm64@1.20260310.1':
-    optional: true
-
-  '@cloudflare/workerd-linux-arm64@1.20260420.1':
     optional: true
 
   '@cloudflare/workerd-linux-arm64@1.20260421.1':
@@ -18777,13 +18709,12 @@ snapshots:
   '@cloudflare/workerd-windows-64@1.20260310.1':
     optional: true
 
-  '@cloudflare/workerd-windows-64@1.20260420.1':
-    optional: true
-
   '@cloudflare/workerd-windows-64@1.20260421.1':
     optional: true
 
   '@cloudflare/workers-types@4.20260421.1': {}
+
+  '@cloudflare/workers-types@4.20260423.1': {}
 
   '@codemirror/autocomplete@6.20.1':
     dependencies:
@@ -19952,14 +19883,14 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@hono/vite-dev-server@0.24.1(hono@4.12.5)(miniflare@4.20260421.0)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))':
+  '@hono/vite-dev-server@0.24.1(hono@4.12.5)(miniflare@4.20260421.0)(wrangler@4.84.1(@cloudflare/workers-types@4.20260421.1))':
     dependencies:
       '@hono/node-server': 1.19.10(hono@4.12.5)
       hono: 4.12.5
       minimatch: 9.0.9
     optionalDependencies:
       miniflare: 4.20260421.0
-      wrangler: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+      wrangler: 4.84.1(@cloudflare/workers-types@4.20260421.1)
 
   '@hono/zod-validator@0.7.6(hono@4.12.5)(zod@4.1.12)':
     dependencies:
@@ -23393,7 +23324,7 @@ snapshots:
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
 
-  '@react-router/dev@7.9.5(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(react-router@7.9.5(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(terser@5.46.0)(tsx@4.21.0)(typescript@5.9.3)(vite@7.1.12(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))(yaml@2.8.3)':
+  '@react-router/dev@7.9.5(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(react-router@7.9.5(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(terser@5.46.0)(tsx@4.21.0)(typescript@5.9.3)(vite@7.1.12(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))(yaml@2.8.3)':
     dependencies:
       '@babel/core': 7.29.0
       '@babel/generator': 7.29.1
@@ -23427,7 +23358,7 @@ snapshots:
       vite-node: 3.2.4(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
     optionalDependencies:
       typescript: 5.9.3
-      wrangler: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+      wrangler: 4.84.1(@cloudflare/workers-types@4.20260423.1)
     transitivePeerDependencies:
       - '@types/node'
       - babel-plugin-macros
@@ -26512,7 +26443,7 @@ snapshots:
 
   agent-base@7.1.4: {}
 
-  agents@0.11.0(@babel/core@7.29.0)(@babel/runtime@7.28.6)(@cloudflare/codemode@0.3.4(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(zod@4.3.6))(@cloudflare/workers-types@4.20260421.1)(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(react@19.2.4)(rolldown@1.0.0-rc.16)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(zod@4.3.6):
+  agents@0.11.0(@babel/core@7.29.0)(@babel/runtime@7.28.6)(@cloudflare/codemode@0.3.4(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(zod@4.3.6))(@cloudflare/workers-types@4.20260423.1)(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(react@19.2.4)(rolldown@1.0.0-rc.16)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(zod@4.3.6):
     dependencies:
       '@babel/plugin-proposal-decorators': 7.29.0(@babel/core@7.29.0)
       '@cfworker/json-schema': 4.1.1
@@ -26524,7 +26455,7 @@ snapshots:
       json-schema-to-typescript: 15.0.4
       mimetext: 3.0.28
       nanoid: 5.1.7
-      partyserver: 0.4.1(@cloudflare/workers-types@4.20260421.1)
+      partyserver: 0.4.1(@cloudflare/workers-types@4.20260423.1)
       partysocket: 1.1.16(react@19.2.4)
       picomatch: 4.0.4
       react: 19.2.4
@@ -26588,17 +26519,17 @@ snapshots:
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
-  alchemy@0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.15.3(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(stripe@20.1.2(@types/node@24.11.0))(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1)):
+  alchemy@0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.15.3(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260421.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(stripe@20.1.2(@types/node@24.11.0))(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260421.1)):
     dependencies:
       '@aws-sdk/credential-providers': 3.1002.0
       '@cloudflare/unenv-preset': 2.7.7(unenv@2.0.0-rc.21)(workerd@1.20260421.1)
-      '@cloudflare/workers-types': 4.20260421.1
+      '@cloudflare/workers-types': 4.20260423.1
       '@iarna/toml': 2.2.5
       '@octokit/rest': 21.1.1
       '@smithy/node-config-provider': 4.3.12
       '@smithy/types': 4.13.1
       aws4fetch: 1.0.20
-      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
+      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
       env-paths: 3.0.0
       esbuild: 0.25.12
       execa: 9.6.1
@@ -26617,12 +26548,12 @@ snapshots:
       proper-lockfile: 4.1.2
       signal-exit: 4.1.0
       unenv: 2.0.0-rc.21
-      wrangler: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+      wrangler: 4.84.1(@cloudflare/workers-types@4.20260421.1)
       ws: 8.19.0
       yaml: 2.8.3
     optionalDependencies:
       '@aws-sdk/client-s3': 3.1002.0
-      '@cloudflare/vite-plugin': 1.15.3(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+      '@cloudflare/vite-plugin': 1.15.3(vite@7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260421.1))
       '@libsql/client': 0.15.15
       stripe: 20.1.2(@types/node@24.11.0)
       vite: 7.2.4(@types/node@24.11.0)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
@@ -26659,17 +26590,17 @@ snapshots:
       - utf-8-validate
       - workerd
 
-  alchemy@0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1)):
+  alchemy@0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1)):
     dependencies:
       '@aws-sdk/credential-providers': 3.1002.0
       '@cloudflare/unenv-preset': 2.7.7(unenv@2.0.0-rc.21)(workerd@1.20260421.1)
-      '@cloudflare/workers-types': 4.20260421.1
+      '@cloudflare/workers-types': 4.20260423.1
       '@iarna/toml': 2.2.5
       '@octokit/rest': 21.1.1
       '@smithy/node-config-provider': 4.3.12
       '@smithy/types': 4.13.1
       aws4fetch: 1.0.20
-      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
+      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
       env-paths: 3.0.0
       esbuild: 0.25.12
       execa: 9.6.1
@@ -26688,12 +26619,12 @@ snapshots:
       proper-lockfile: 4.1.2
       signal-exit: 4.1.0
       unenv: 2.0.0-rc.21
-      wrangler: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+      wrangler: 4.84.1(@cloudflare/workers-types@4.20260423.1)
       ws: 8.19.0
       yaml: 2.8.3
     optionalDependencies:
       '@aws-sdk/client-s3': 3.1002.0
-      '@cloudflare/vite-plugin': 1.33.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+      '@cloudflare/vite-plugin': 1.33.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       '@libsql/client': 0.15.15
       vite: 8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
     transitivePeerDependencies:
@@ -26729,17 +26660,17 @@ snapshots:
       - utf-8-validate
       - workerd
 
-  alchemy@0.92.2(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.0(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1)):
+  alchemy@0.92.2(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.1(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1)):
     dependencies:
       '@aws-sdk/credential-providers': 3.1002.0
       '@cloudflare/unenv-preset': 2.7.7(unenv@2.0.0-rc.21)(workerd@1.20260421.1)
-      '@cloudflare/workers-types': 4.20260421.1
+      '@cloudflare/workers-types': 4.20260423.1
       '@iarna/toml': 2.2.5
       '@octokit/rest': 21.1.1
       '@smithy/node-config-provider': 4.3.12
       '@smithy/types': 4.13.1
       aws4fetch: 1.0.20
-      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
+      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
       env-paths: 3.0.0
       esbuild: 0.25.12
       execa: 9.6.1
@@ -26758,12 +26689,12 @@ snapshots:
       proper-lockfile: 4.1.2
       signal-exit: 4.1.0
       unenv: 2.0.0-rc.21
-      wrangler: 4.84.0(@cloudflare/workers-types@4.20260421.1)
+      wrangler: 4.84.1(@cloudflare/workers-types@4.20260423.1)
       ws: 8.19.0
       yaml: 2.8.3
     optionalDependencies:
       '@aws-sdk/client-s3': 3.1002.0
-      '@cloudflare/vite-plugin': 1.33.0(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1))
+      '@cloudflare/vite-plugin': 1.33.1(vite@8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260421.1)(wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1))
       '@libsql/client': 0.15.15
       vite: 8.0.0(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
     transitivePeerDependencies:
@@ -27841,18 +27772,18 @@ snapshots:
 
   dayjs@1.11.19: {}
 
-  db0@0.3.4(@libsql/client@0.15.15)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)):
+  db0@0.3.4(@libsql/client@0.15.15)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)):
     optionalDependencies:
       '@libsql/client': 0.15.15
       better-sqlite3: 12.6.2
-      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
+      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
       mysql2: 3.18.2(@types/node@25.3.3)
 
-  db0@0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)):
+  db0@0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)):
     optionalDependencies:
       '@libsql/client': 0.17.0
       better-sqlite3: 12.6.2
-      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
+      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
       mysql2: 3.18.2(@types/node@25.3.3)
 
   debug@2.6.9:
@@ -28046,9 +27977,9 @@ snapshots:
       postgres: 3.4.8
       sql.js: 1.14.1
 
-  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1):
+  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1):
     optionalDependencies:
-      '@cloudflare/workers-types': 4.20260421.1
+      '@cloudflare/workers-types': 4.20260423.1
       '@libsql/client': 0.15.15
       '@neondatabase/serverless': 1.0.2
       '@opentelemetry/api': 1.9.0
@@ -28061,9 +27992,9 @@ snapshots:
       postgres: 3.4.8
       sql.js: 1.14.1
 
-  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1):
+  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1):
     optionalDependencies:
-      '@cloudflare/workers-types': 4.20260421.1
+      '@cloudflare/workers-types': 4.20260423.1
       '@libsql/client': 0.15.15
       '@neondatabase/serverless': 1.0.2
       '@opentelemetry/api': 1.9.0
@@ -28076,9 +28007,9 @@ snapshots:
       postgres: 3.4.8
       sql.js: 1.14.1
 
-  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1):
+  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1):
     optionalDependencies:
-      '@cloudflare/workers-types': 4.20260421.1
+      '@cloudflare/workers-types': 4.20260423.1
       '@libsql/client': 0.15.15
       '@neondatabase/serverless': 1.0.2
       '@opentelemetry/api': 1.9.0
@@ -28091,9 +28022,9 @@ snapshots:
       postgres: 3.4.8
       sql.js: 1.14.1
 
-  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1):
+  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@24.11.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1):
     optionalDependencies:
-      '@cloudflare/workers-types': 4.20260421.1
+      '@cloudflare/workers-types': 4.20260423.1
       '@libsql/client': 0.17.0
       '@neondatabase/serverless': 1.0.2
       '@opentelemetry/api': 1.9.0
@@ -28106,9 +28037,9 @@ snapshots:
       postgres: 3.4.8
       sql.js: 1.14.1
 
-  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1):
+  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1):
     optionalDependencies:
-      '@cloudflare/workers-types': 4.20260421.1
+      '@cloudflare/workers-types': 4.20260423.1
       '@libsql/client': 0.17.0
       '@neondatabase/serverless': 1.0.2
       '@opentelemetry/api': 1.9.0
@@ -28675,9 +28606,9 @@ snapshots:
     dependencies:
       eventsource-parser: 3.0.6
 
-  evlog@1.11.0(nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(react@19.2.4):
+  evlog@1.11.0(nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(react@19.2.4):
     optionalDependencies:
-      nitro: 3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
+      nitro: 3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
       react: 19.2.4
 
   execa@9.6.1:
@@ -30950,18 +30881,6 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  miniflare@4.20260420.0:
-    dependencies:
-      '@cspotcode/source-map-support': 0.8.1
-      sharp: 0.34.5
-      undici: 7.24.8
-      workerd: 1.20260420.1
-      ws: 8.19.0
-      youch: 4.1.0-beta.10
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
-
   miniflare@4.20260421.0:
     dependencies:
       '@cspotcode/source-map-support': 0.8.1
@@ -31373,11 +31292,11 @@ snapshots:
 
   nf3@0.3.11: {}
 
-  nitro@3.0.260311-beta(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)):
+  nitro@3.0.260311-beta(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)):
     dependencies:
       consola: 3.4.2
       crossws: 0.4.4(srvx@0.11.12)
-      db0: 0.3.4(@libsql/client@0.15.15)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3))
+      db0: 0.3.4(@libsql/client@0.15.15)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3))
       env-runner: 0.1.6(miniflare@4.20260421.0)
       h3: 2.0.1-rc.16(crossws@0.4.4(srvx@0.11.12))
       hookable: 6.1.0
@@ -31388,7 +31307,7 @@ snapshots:
       rolldown: 1.0.0-rc.9
       srvx: 0.11.12
       unenv: 2.0.0-rc.24
-      unstorage: 2.0.0-alpha.6(aws4fetch@1.0.20)(chokidar@5.0.0)(db0@0.3.4(@libsql/client@0.15.15)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)))(lru-cache@11.2.6)(ofetch@2.0.0-alpha.3)
+      unstorage: 2.0.0-alpha.6(aws4fetch@1.0.20)(chokidar@5.0.0)(db0@0.3.4(@libsql/client@0.15.15)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)))(lru-cache@11.2.6)(ofetch@2.0.0-alpha.3)
     optionalDependencies:
       dotenv: 17.3.1
       jiti: 2.6.1
@@ -31424,11 +31343,11 @@ snapshots:
       - sqlite3
       - uploadthing
 
-  nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)):
+  nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)):
     dependencies:
       consola: 3.4.2
       crossws: 0.4.4(srvx@0.11.12)
-      db0: 0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3))
+      db0: 0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3))
       env-runner: 0.1.6(miniflare@4.20260421.0)
       h3: 2.0.1-rc.16(crossws@0.4.4(srvx@0.11.12))
       hookable: 6.1.0
@@ -31439,7 +31358,7 @@ snapshots:
       rolldown: 1.0.0-rc.9
       srvx: 0.11.12
       unenv: 2.0.0-rc.24
-      unstorage: 2.0.0-alpha.6(aws4fetch@1.0.20)(chokidar@5.0.0)(db0@0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)))(lru-cache@11.2.6)(ofetch@2.0.0-alpha.3)
+      unstorage: 2.0.0-alpha.6(aws4fetch@1.0.20)(chokidar@5.0.0)(db0@0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)))(lru-cache@11.2.6)(ofetch@2.0.0-alpha.3)
     optionalDependencies:
       dotenv: 17.3.1
       jiti: 2.6.1
@@ -31475,11 +31394,11 @@ snapshots:
       - sqlite3
       - uploadthing
 
-  nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)):
+  nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260421.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)):
     dependencies:
       consola: 3.4.2
       crossws: 0.4.4(srvx@0.11.12)
-      db0: 0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3))
+      db0: 0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3))
       env-runner: 0.1.6(miniflare@4.20260421.0)
       h3: 2.0.1-rc.16(crossws@0.4.4(srvx@0.11.12))
       hookable: 6.1.0
@@ -31490,7 +31409,7 @@ snapshots:
       rolldown: 1.0.0-rc.9
       srvx: 0.11.12
       unenv: 2.0.0-rc.24
-      unstorage: 2.0.0-alpha.6(aws4fetch@1.0.20)(chokidar@5.0.0)(db0@0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)))(lru-cache@11.2.6)(ofetch@2.0.0-alpha.3)
+      unstorage: 2.0.0-alpha.6(aws4fetch@1.0.20)(chokidar@5.0.0)(db0@0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)))(lru-cache@11.2.6)(ofetch@2.0.0-alpha.3)
     optionalDependencies:
       dotenv: 17.3.1
       jiti: 2.6.1
@@ -32017,9 +31936,9 @@ snapshots:
 
   partial-json@0.1.7: {}
 
-  partyserver@0.4.1(@cloudflare/workers-types@4.20260421.1):
+  partyserver@0.4.1(@cloudflare/workers-types@4.20260423.1):
     dependencies:
-      '@cloudflare/workers-types': 4.20260421.1
+      '@cloudflare/workers-types': 4.20260423.1
       nanoid: 5.1.7
 
   partysocket@1.1.16(react@19.2.4):
@@ -34263,19 +34182,19 @@ snapshots:
       picomatch: 4.0.4
       webpack-virtual-modules: 0.6.2
 
-  unstorage@2.0.0-alpha.6(aws4fetch@1.0.20)(chokidar@5.0.0)(db0@0.3.4(@libsql/client@0.15.15)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)))(lru-cache@11.2.6)(ofetch@2.0.0-alpha.3):
+  unstorage@2.0.0-alpha.6(aws4fetch@1.0.20)(chokidar@5.0.0)(db0@0.3.4(@libsql/client@0.15.15)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)))(lru-cache@11.2.6)(ofetch@2.0.0-alpha.3):
     optionalDependencies:
       aws4fetch: 1.0.20
       chokidar: 5.0.0
-      db0: 0.3.4(@libsql/client@0.15.15)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3))
+      db0: 0.3.4(@libsql/client@0.15.15)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3))
       lru-cache: 11.2.6
       ofetch: 2.0.0-alpha.3
 
-  unstorage@2.0.0-alpha.6(aws4fetch@1.0.20)(chokidar@5.0.0)(db0@0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)))(lru-cache@11.2.6)(ofetch@2.0.0-alpha.3):
+  unstorage@2.0.0-alpha.6(aws4fetch@1.0.20)(chokidar@5.0.0)(db0@0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3)))(lru-cache@11.2.6)(ofetch@2.0.0-alpha.3):
     optionalDependencies:
       aws4fetch: 1.0.20
       chokidar: 5.0.0
-      db0: 0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260421.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3))
+      db0: 0.3.4(@libsql/client@0.17.0)(better-sqlite3@12.6.2)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260423.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3))
       lru-cache: 11.2.6
       ofetch: 2.0.0-alpha.3
 
@@ -35282,14 +35201,6 @@ snapshots:
       '@cloudflare/workerd-linux-arm64': 1.20260310.1
       '@cloudflare/workerd-windows-64': 1.20260310.1
 
-  workerd@1.20260420.1:
-    optionalDependencies:
-      '@cloudflare/workerd-darwin-64': 1.20260420.1
-      '@cloudflare/workerd-darwin-arm64': 1.20260420.1
-      '@cloudflare/workerd-linux-64': 1.20260420.1
-      '@cloudflare/workerd-linux-arm64': 1.20260420.1
-      '@cloudflare/workerd-windows-64': 1.20260420.1
-
   workerd@1.20260421.1:
     optionalDependencies:
       '@cloudflare/workerd-darwin-64': 1.20260421.1
@@ -35298,18 +35209,35 @@ snapshots:
       '@cloudflare/workerd-linux-arm64': 1.20260421.1
       '@cloudflare/workerd-windows-64': 1.20260421.1
 
-  wrangler@4.84.0(@cloudflare/workers-types@4.20260421.1):
+  wrangler@4.84.1(@cloudflare/workers-types@4.20260421.1):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.4.2
-      '@cloudflare/unenv-preset': 2.16.0(unenv@2.0.0-rc.24)(workerd@1.20260420.1)
+      '@cloudflare/unenv-preset': 2.16.0(unenv@2.0.0-rc.24)(workerd@1.20260421.1)
       blake3-wasm: 2.1.5
       esbuild: 0.27.3
-      miniflare: 4.20260420.0
+      miniflare: 4.20260421.0
       path-to-regexp: 6.3.0
       unenv: 2.0.0-rc.24
-      workerd: 1.20260420.1
+      workerd: 1.20260421.1
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260421.1
+      fsevents: 2.3.3
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
+  wrangler@4.84.1(@cloudflare/workers-types@4.20260423.1):
+    dependencies:
+      '@cloudflare/kv-asset-handler': 0.4.2
+      '@cloudflare/unenv-preset': 2.16.0(unenv@2.0.0-rc.24)(workerd@1.20260421.1)
+      blake3-wasm: 2.1.5
+      esbuild: 0.27.3
+      miniflare: 4.20260421.0
+      path-to-regexp: 6.3.0
+      unenv: 2.0.0-rc.24
+      workerd: 1.20260421.1
+    optionalDependencies:
+      '@cloudflare/workers-types': 4.20260423.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - bufferutil

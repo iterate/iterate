@@ -1,16 +1,18 @@
 import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { AppConfig } from "../../src/app.ts";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 const agentsBaseUrl = process.env.AGENTS_BASE_URL?.trim();
-/** Opt-in: production/staging agents URL must respond (Cloudflare 522 if origin is down). */
 const runRuntimeSmoke =
   process.env.AGENTS_E2E_RUNTIME_SMOKE === "1" && Boolean(agentsBaseUrl) && !process.env.CI;
-const describeRuntimeSmoke = runRuntimeSmoke ? describe : describe.skip;
 
-describeRuntimeSmoke("agents runtime smoke", () => {
-  test("homepage, public config, openapi docs, and sample procedure respond", async () => {
+const testFn = runRuntimeSmoke ? test : test.skip;
+
+testFn(
+  "homepage, public config, openapi docs, and sample procedure respond",
+  { tags: ["deployed-live-worker", "live-internet"] },
+  async () => {
     const homepage = await fetch(new URL("/", agentsBaseUrl), {
       signal: AbortSignal.timeout(8_000),
     });
@@ -22,9 +24,7 @@ describeRuntimeSmoke("agents runtime smoke", () => {
 
     const publicConfigResponse = await fetch(
       new URL("/api/__internal/public-config", agentsBaseUrl),
-      {
-        signal: AbortSignal.timeout(8_000),
-      },
+      { signal: AbortSignal.timeout(8_000) },
     );
     expect(publicConfigResponse.ok).toBe(true);
     const publicConfig = PublicConfigSchema.parse(await publicConfigResponse.json());
@@ -39,13 +39,11 @@ describeRuntimeSmoke("agents runtime smoke", () => {
 
     const helloResponse = await fetch(new URL("/api/hello", agentsBaseUrl), {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "world" }),
       signal: AbortSignal.timeout(8_000),
     });
     expect(helloResponse.ok).toBe(true);
     expect(await helloResponse.json()).toEqual({ message: "hello world" });
-  });
-});
+  },
+);

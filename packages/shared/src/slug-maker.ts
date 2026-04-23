@@ -1,5 +1,3 @@
-import { randomInt } from "node:crypto";
-
 export const FUNNY_SLUG_WORDS = [
   "amber",
   "brave",
@@ -215,8 +213,26 @@ export function makeFunnySlug(): string {
   const chosen = new Set<string>();
 
   while (chosen.size < REQUIRED_SLUG_PARTS) {
-    chosen.add(FUNNY_SLUG_WORDS[randomInt(FUNNY_SLUG_WORDS.length)]!);
+    chosen.add(FUNNY_SLUG_WORDS[randomWordIndex()]!);
   }
 
   return [...chosen].join("-");
+}
+
+/**
+ * Uniformly-sampled index into `FUNNY_SLUG_WORDS` using Web Crypto (universal
+ * across Node ≥16, Cloudflare Workers and browsers, so this module can be
+ * imported from the frontend without Node-only deps).
+ *
+ * Rejection-sampled to avoid modulo bias — the list length (200) doesn't
+ * divide 2^32 evenly.
+ */
+function randomWordIndex(): number {
+  const buffer = new Uint32Array(1);
+  const cap = Math.floor(0x1_0000_0000 / FUNNY_SLUG_WORDS.length) * FUNNY_SLUG_WORDS.length;
+  while (true) {
+    crypto.getRandomValues(buffer);
+    const value = buffer[0]!;
+    if (value < cap) return value % FUNNY_SLUG_WORDS.length;
+  }
 }

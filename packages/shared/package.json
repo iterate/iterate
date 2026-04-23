@@ -20,6 +20,7 @@
     "./apps/orpc": "./src/apps/orpc.ts",
     "./apps/middleware/require-header": "./src/apps/middleware/require-header.ts",
     "./test-helpers": "./src/test-helpers/index.ts",
+    "./test-support/vitest-e2e": "./src/test-support/vitest-e2e/index.ts",
     "./request-logging": "./src/request-logging.ts",
     "./slugify": "./src/slugify.ts",
     "./typeid": "./src/typeid.ts",

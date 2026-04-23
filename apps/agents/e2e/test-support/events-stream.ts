@@ -6,14 +6,64 @@ import {
   eventsContract,
   type StreamPath,
 } from "@iterate-com/events-contract";
+import { createEventsOrpcClient } from "../../src/lib/events-orpc-client.ts";
 import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
+
+export type EventsClient = ContractRouterClient<typeof eventsContract>;
+
+export interface EventsHelpers {
+  append(path: StreamPath, event: { type: string; payload: object }): Promise<void>;
+  waitForEvent(
+    path: StreamPath,
+    predicate: (event: EventsEvent) => boolean,
+    opts?: { timeoutMs?: number; pollMs?: number },
+  ): Promise<EventsEvent>;
+  client: EventsClient;
+  streamViewerUrl(path: StreamPath): string;
+}
+
+export function createEventsHelpers(params: {
+  baseUrl: string;
+  projectSlug: string;
+}): EventsHelpers {
+  const client = createEventsOrpcClient({
+    baseUrl: params.baseUrl,
+    projectSlug: params.projectSlug,
+  });
+
+  return {
+    async append(path, event) {
+      await client.append({ path, event });
+    },
+
+    async waitForEvent(path, predicate, opts) {
+      return await waitForStreamEvent({
+        client,
+        path,
+        predicate,
+        timeoutMs: opts?.timeoutMs,
+        pollMs: opts?.pollMs,
+      });
+    },
+
+    client,
+
+    streamViewerUrl(path) {
+      return eventsStreamViewerUrl({
+        eventsOrigin: params.baseUrl,
+        projectSlug: params.projectSlug,
+        streamPath: path,
+      });
+    },
+  };
+}
 
 /**
  * Finite snapshot of all events currently on the stream (same semantics as
  * `GET /streams/{path}?afterOffset=start&beforeOffset=end`).
  */
 async function readFiniteStreamHistory(
-  client: ContractRouterClient<typeof eventsContract>,
+  client: EventsClient,
   path: StreamPath,
 ): Promise<EventsEvent[]> {
   const stream = await client.stream({
@@ -28,8 +78,8 @@ async function readFiniteStreamHistory(
   return events;
 }
 
-export async function waitForStreamEvent(args: {
-  client: ContractRouterClient<typeof eventsContract>;
+async function waitForStreamEvent(args: {
+  client: EventsClient;
   path: StreamPath;
   predicate: (event: EventsEvent) => boolean;
   timeoutMs?: number;
@@ -54,10 +104,7 @@ export async function waitForStreamEvent(args: {
   );
 }
 
-/**
- * Human-readable Events UI link (project is the hostname subdomain on iterate.com-style hosts).
- */
-export function eventsIterateStreamViewerUrl(args: {
+function eventsStreamViewerUrl(args: {
   eventsOrigin: string;
   projectSlug: string;
   streamPath: StreamPath;

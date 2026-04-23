@@ -113,8 +113,8 @@ record/replay mode, not vitest snapshot assertions.
   await using mock = await createMockInternet({
     harPath: "./__snapshots__/codemode-builtin.har",
   });
-  // If HAR exists and AGENTS_E2E_RECORD != "1" → replay (onUnhandledRequest: "error")
-  // If HAR missing or AGENTS_E2E_RECORD == "1"  → record + normalize + write
+  // If HAR exists and E2E_RECORD_HAR != "1" → replay (onUnhandledRequest: "error")
+  // If HAR missing or E2E_RECORD_HAR == "1"  → record + normalize + write
   ```
 - **Normalization at write time**: zero timings, strip volatile headers (`cf-ray`, `date`, `age`,
   `alt-svc`, `nel`, `report-to`), sort headers alphabetically. This makes re-recorded HARs

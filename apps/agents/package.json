@@ -17,14 +17,9 @@
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck && pnpm test:unit",
     "test:unit": "pnpm exec vitest run --config ./vitest.unit.config.ts",
-    "test:e2e": "doppler run --no-cache -- sh -c 'export EVENTS_BASE_URL=\"${EVENTS_BASE_URL:-https://events.iterate.com}\"; export AGENTS_E2E_ITERATE_AGENT=\"${AGENTS_E2E_ITERATE_AGENT:-1}\"; pnpm exec vitest run --config ./e2e/vitest.config.ts'",
-    "test:e2e:iterate-agent": "doppler run --no-cache -- sh -c 'export EVENTS_BASE_URL=\"${EVENTS_BASE_URL:-https://events.iterate.com}\"; export AGENTS_E2E_ITERATE_AGENT=1; pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent.e2e.test.ts'",
-    "test:e2e:agent-loop": "doppler run --no-cache -- sh -c 'export EVENTS_BASE_URL=\"${EVENTS_BASE_URL:-https://events.iterate.com}\"; export AGENTS_E2E_ITERATE_AGENT=1; pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent-agent-loop.e2e.test.ts'",
-    "test:e2e:record-har": "doppler run --no-cache -- env AGENTS_E2E_RECORD_HAR=1 AGENTS_E2E_ITERATE_AGENT=1 pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent.e2e.test.ts",
-    "test:e2e:record-har-mcp": "doppler run --no-cache -- env AGENTS_E2E_RECORD_HAR=1 AGENTS_E2E_ITERATE_AGENT=1 pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent-mcp.e2e.test.ts",
-    "test:e2e:record-har-mixed": "doppler run --no-cache -- env AGENTS_E2E_RECORD_HAR=1 AGENTS_E2E_ITERATE_AGENT=1 pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/iterate-agent-mixed-codemode.e2e.test.ts",
-    "test:e2e:runtime-smoke": "doppler run --no-cache -- sh -c 'if [ -z \"$AGENTS_BASE_URL\" ]; then echo \"AGENTS_BASE_URL is required\"; exit 1; fi; export AGENTS_E2E_RUNTIME_SMOKE=1; pnpm exec vitest run --config ./e2e/vitest.config.ts e2e/vitest/runtime-smoke.e2e.test.ts'",
-    "test:e2e:preview": "doppler run --no-cache -- sh -c 'if [ -z \"$AGENTS_BASE_URL\" ]; then echo \"AGENTS_BASE_URL is required for agents e2e tests\"; exit 1; fi; vitest run --config ./e2e/vitest.config.ts e2e/vitest/runtime-smoke.e2e.test.ts'"
+    "test:e2e": "doppler run --no-cache -- pnpm exec vitest run --config ./e2e/vitest.config.ts",
+    "test:e2e:record": "doppler run --no-cache -- env AGENTS_E2E_RECORD_HAR=1 pnpm exec vitest run --config ./e2e/vitest.config.ts --tags-filter mocked-internet",
+    "test:e2e:runtime-smoke": "doppler run --no-cache -- sh -c 'if [ -z \"$AGENTS_BASE_URL\" ]; then echo \"AGENTS_BASE_URL is required\"; exit 1; fi; export AGENTS_E2E_RUNTIME_SMOKE=1; pnpm exec vitest run --config ./e2e/vitest.config.ts --tags-filter deployed-live-worker'"
   },
   "iterateAppCli": {
     "remote": {

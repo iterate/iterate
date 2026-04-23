@@ -9,7 +9,6 @@ import { Agent, type Connection, type WSMessage } from "agents";
 import { AppConfig } from "~/app.ts";
 import {
   createIterateAgentProcessor,
-  iterateAgentProcessorInitialState,
   IterateAgentProcessorState,
 } from "~/durable-objects/agent-processor.ts";
 import { createOpenApiToolProvider } from "~/lib/openapi-tool-provider.ts";
@@ -20,18 +19,13 @@ const STREAM_PROCESSOR_STATE_KV_KEY = "iterate-agent:stream-processor-state";
 
 export class IterateAgent extends Agent<CloudflareEnv> {
   #eventsCodemodeTools: Awaited<ReturnType<typeof resolveProvider>> | null = null;
-  #streamProcessorState: IterateAgentProcessorState = iterateAgentProcessorInitialState;
+  #processor!: ReturnType<typeof createIterateAgentProcessor>;
+  #streamProcessorState: IterateAgentProcessorState = IterateAgentProcessorState.parse({});
 
   async onStart() {
     const t0 = Date.now();
     const log = this.#log.bind(this);
     log("onStart.begin", {});
-
-    this.#streamProcessorState = loadStreamProcessorStateFromKv(this.ctx.storage.kv);
-    log("onStart.kvStateLoaded", {
-      historyLength: this.#streamProcessorState.history.length,
-      fresh: this.#streamProcessorState === iterateAgentProcessorInitialState,
-    });
 
     const appConfig = parseAppConfig(AppConfig, this.env.APP_CONFIG);
     const eventsOrigin = getProjectUrl({
@@ -56,6 +50,24 @@ export class IterateAgent extends Agent<CloudflareEnv> {
     log("onStart.eventsOpenApiPreloaded", {
       specUrl,
       ms: Date.now() - specT0,
+    });
+
+    this.#processor = createIterateAgentProcessor({
+      loader: this.env.LOADER,
+      outboundFetch: this.env.CODEMODE_OUTBOUND_FETCH,
+      mcp: this.mcp,
+      eventsCodemodeTools: this.#eventsCodemodeTools,
+      ai: this.env.AI,
+    });
+
+    const stored = this.ctx.storage.kv.get<unknown>(STREAM_PROCESSOR_STATE_KV_KEY);
+    const fresh = stored === undefined;
+    this.#streamProcessorState = fresh
+      ? (structuredClone(this.#processor.initialState) as IterateAgentProcessorState)
+      : IterateAgentProcessorState.parse(stored);
+    log("onStart.kvStateLoaded", {
+      historyLength: this.#streamProcessorState.history.length,
+      fresh,
     });
 
     const existingUrls = new Set(this.mcp.listServers().map((server) => server.server_url));
@@ -137,15 +149,7 @@ export class IterateAgent extends Agent<CloudflareEnv> {
     const eventType = (event as { type?: string }).type;
     log("onMessage.eventReceived", { eventType, len: text.length });
 
-    const processor = createIterateAgentProcessor({
-      loader: this.env.LOADER,
-      outboundFetch: this.env.CODEMODE_OUTBOUND_FETCH,
-      mcp: this.mcp,
-      eventsCodemodeTools: this.#eventsCodemodeTools,
-      ai: this.env.AI,
-    });
-
-    const reduced = processor.reduce({ state: this.#streamProcessorState, event });
+    const reduced = this.#processor.reduce({ state: this.#streamProcessorState, event });
     if (reduced !== undefined) {
       this.ctx.storage.kv.put(STREAM_PROCESSOR_STATE_KV_KEY, reduced);
       this.#streamProcessorState = reduced;
@@ -157,7 +161,7 @@ export class IterateAgent extends Agent<CloudflareEnv> {
     }
 
     const afterT0 = Date.now();
-    await processor.afterAppend({
+    await this.#processor.afterAppend({
       event,
       state: this.#streamProcessorState,
       append: (input) => {
@@ -194,15 +198,6 @@ const publicMcpServers = [
   { name: "cloudflare-docs", url: "https://docs.mcp.cloudflare.com/mcp" },
   { name: "canuckduck", url: "https://mcp.canuckduck.ca/mcp" },
 ] as const;
-
-function loadStreamProcessorStateFromKv(
-  kv: DurableObjectState["storage"]["kv"],
-): IterateAgentProcessorState {
-  const stored = kv.get<unknown>(STREAM_PROCESSOR_STATE_KV_KEY);
-  if (stored === undefined) return iterateAgentProcessorInitialState;
-  // Corrupted projection is a bug we want loud: let the parse error escape the DO.
-  return IterateAgentProcessorState.parse(stored);
-}
 
 function websocketMessageToString(message: WSMessage): string | null {
   if (typeof message === "string") return message;

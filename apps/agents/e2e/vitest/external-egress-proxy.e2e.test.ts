@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
@@ -6,15 +5,14 @@ import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { agentsContract } from "@iterate-com/agents-contract";
 import { HttpResponse, http, useMockHttpServer } from "@iterate-com/mock-http-proxy";
 import { useCloudflareTunnelLease, useDevServer } from "@iterate-com/shared/test-helpers";
-import { describe, expect, test } from "vitest";
-import { requireSemaphoreE2eEnv } from "../test-support/require-semaphore-e2e-env.ts";
-
-requireSemaphoreE2eEnv(process.env);
+import { expect, test } from "vitest";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
-describe.sequential("agents external egress proxy", () => {
-  test("routes a sample oRPC fetch through the configured proxy", async () => {
+test(
+  "routes a sample oRPC fetch through the configured proxy",
+  { tags: ["local-dev-server", "mocked-internet"] },
+  async () => {
     const proxy = await useMockHttpServer({ onUnhandledRequest: "bypass" });
 
     try {
@@ -52,51 +50,8 @@ describe.sequential("agents external egress proxy", () => {
     } finally {
       await proxy.close();
     }
-  });
-
-  // Skipped: local Miniflare + DynamicWorkerExecutor over WS did not return within 120s; first test covers proxy + oRPC.
-  test.skip("IterateAgent codemode script can fetch https://example.com/ via egress proxy", async () => {
-    const proxy = await useMockHttpServer({ onUnhandledRequest: "bypass" });
-
-    try {
-      proxy.use(
-        http.get("https://example.com/*", () =>
-          HttpResponse.text("proxied example body from codemode"),
-        ),
-      );
-
-      await using tunnelLease = await useCloudflareTunnelLease({});
-      await using devServer = await useDevServer({
-        cwd: appRoot,
-        command: "pnpm",
-        args: ["exec", "tsx", "./alchemy.run.ts"],
-        port: tunnelLease.localPort,
-        env: {
-          ...stripInheritedAppConfig(process.env),
-          APP_CONFIG_EXTERNAL_EGRESS_PROXY: proxy.url,
-        },
-      });
-
-      const instance = `fetch-smoke-${randomBytes(4).toString("hex")}`;
-      const payload = await runIterateAgentCodemodeFetchSmoke({
-        baseUrl: devServer.baseUrl,
-        instanceName: instance,
-        timeoutMs: 120_000,
-      });
-
-      expect(payload.error ?? "").toBe("");
-      expect(payload.result).toMatchObject({
-        status: 200,
-        body: "proxied example body from codemode",
-      });
-
-      const harEntries = proxy.getHar().log.entries;
-      expect(harEntries.some((e) => e.request.url.startsWith("https://example.com"))).toBe(true);
-    } finally {
-      await proxy.close();
-    }
-  }, 180_000);
-});
+  },
+);
 
 function createAgentsClient(baseUrl: string): ContractRouterClient<typeof agentsContract> {
   return createORPCClient(
@@ -106,93 +61,11 @@ function createAgentsClient(baseUrl: string): ContractRouterClient<typeof agents
   );
 }
 
-const CODEMODE_FETCH_EXAMPLE_SCRIPT = `
-async () => {
-  const r = await fetch("https://example.com/");
-  return { status: r.status, body: await r.text() };
-}
-`.trim();
-
-type CodemodeExecutePayload = {
-  result?: { status?: number; body?: string };
-  error?: string;
-};
-
-async function runIterateAgentCodemodeFetchSmoke(args: {
-  baseUrl: string;
-  instanceName: string;
-  timeoutMs?: number;
-}): Promise<CodemodeExecutePayload> {
-  const timeoutMs = args.timeoutMs ?? 90_000;
-  const wsUrl = new URL(args.baseUrl);
-  wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-  wsUrl.pathname = `/agents/iterate-agent/${args.instanceName}`;
-
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(wsUrl.toString());
-    const deadline = setTimeout(() => {
-      try {
-        ws.close();
-      } catch {}
-      reject(new Error(`IterateAgent codemode timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    ws.addEventListener("open", () => {
-      setTimeout(() => {
-        ws.send(
-          JSON.stringify({
-            type: "event",
-            event: {
-              type: "codemode-block-added",
-              payload: { script: CODEMODE_FETCH_EXAMPLE_SCRIPT },
-            },
-          }),
-        );
-      }, 3_000);
-    });
-
-    ws.addEventListener("message", (ev) => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(String(ev.data));
-      } catch {
-        return;
-      }
-
-      if (
-        typeof parsed === "object" &&
-        parsed !== null &&
-        "type" in parsed &&
-        (parsed as { type: string }).type === "append" &&
-        "event" in parsed
-      ) {
-        const event = (parsed as { event: { type?: string; payload?: CodemodeExecutePayload } })
-          .event;
-        if (event.type === "codemode-result-added") {
-          clearTimeout(deadline);
-          try {
-            ws.close();
-          } catch {}
-          resolve(event.payload ?? {});
-        }
-      }
-    });
-
-    ws.addEventListener("error", () => {
-      clearTimeout(deadline);
-      reject(new Error("WebSocket error connecting to IterateAgent"));
-    });
-  });
-}
-
-function stripInheritedAppConfig(env: NodeJS.ProcessEnv) {
-  const next = { ...env };
-
-  for (const key of Object.keys(next)) {
-    if (key === "APP_CONFIG" || key.startsWith("APP_CONFIG_")) {
-      delete next[key];
-    }
+function stripInheritedAppConfig(env: NodeJS.ProcessEnv): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key === "APP_CONFIG" || key.startsWith("APP_CONFIG_")) continue;
+    if (value != null) next[key] = value;
   }
-
   return next;
 }
