@@ -22,6 +22,8 @@ import { Sandbox, getSandbox } from "@cloudflare/sandbox";
 import { adminHTML } from "./admin.ts";
 import { editorHTML } from "./editor.ts";
 export { EgressGateway } from "./egress-gateway.ts";
+export { AppRunner } from "./app-runner.ts";
+import { parseHost, PLATFORM_SUFFIX, PLATFORM_BARE } from "./host-parser.ts";
 
 // Export BuildSandbox for the container DO binding
 export class BuildSandbox extends Sandbox<Env> {}
@@ -48,6 +50,7 @@ interface Env {
   CF_WORKER_NAME: string;
   EVENTS_BASE_URL: string;
   EGRESS_GATEWAY: Fetcher;
+  APP_RUNNER: DurableObjectNamespace;
   WORKSPACE_R2: R2Bucket;
   AI: Ai;
   AI_PROXY: Service<typeof AiProxy>;
@@ -314,39 +317,6 @@ interface ProjectRow {
   created_at: string;
 }
 
-// ── Host parsing ──────────────────────────────────────────────────────────────
-
-const PLATFORM_SUFFIX = ".iterate-dev-jonas.app";
-const PLATFORM_BARE = "iterate-dev-jonas.app";
-
-type Parsed =
-  | { level: "admin" }
-  | { level: "project"; project: string }
-  | { level: "app"; project: string; app: string };
-
-async function parseHost(host: string, db: D1Database): Promise<Parsed | null> {
-  if (host === PLATFORM_BARE || host === `www.${PLATFORM_BARE}` || host.endsWith(".workers.dev")) {
-    return { level: "admin" };
-  }
-  if (host.endsWith(PLATFORM_SUFFIX)) {
-    const prefix = host.slice(0, -PLATFORM_SUFFIX.length);
-    const dot = prefix.indexOf(".");
-    if (dot === -1) return { level: "project", project: prefix };
-    return { level: "app", app: prefix.slice(0, dot), project: prefix.slice(dot + 1) };
-  }
-  const projects = await db
-    .prepare("SELECT slug, canonical_hostname FROM projects WHERE canonical_hostname IS NOT NULL")
-    .all<ProjectRow>();
-  for (const p of projects.results) {
-    const domain = p.canonical_hostname!;
-    if (host === domain) return { level: "project", project: p.slug };
-    if (host.endsWith(`.${domain}`)) {
-      return { level: "app", app: host.slice(0, -(domain.length + 1)), project: p.slug };
-    }
-  }
-  return null;
-}
-
 // ── CF provisioning ───────────────────────────────────────────────────────────
 
 async function cfAPI(env: Env, method: string, path: string, body?: object): Promise<any> {
@@ -540,44 +510,6 @@ export default {
 
     // Level 1: Admin
     if (parsed.level === "admin") {
-      // /base and /base/* — route to a special Project DO for base-template editing
-      if (url.pathname === "/base" || url.pathname.startsWith("/base/")) {
-        // Derive base-template remote from any existing project's artifacts_remote
-        let baseRemote: string | null = null;
-        const anyProject = await env.DB.prepare(
-          "SELECT artifacts_remote, artifacts_repo FROM projects WHERE artifacts_remote IS NOT NULL LIMIT 1",
-        ).first<ProjectRow>();
-        if (anyProject?.artifacts_remote && anyProject?.artifacts_repo) {
-          baseRemote = anyProject.artifacts_remote.replace(
-            `/${anyProject.artifacts_repo}.git`,
-            "/base-template.git",
-          );
-        }
-        if (!baseRemote) {
-          return new Response("No projects exist yet — cannot derive base-template remote URL", {
-            status: 400,
-          });
-        }
-
-        const id = env.PROJECT.idFromName("__base");
-        const stub = env.PROJECT.get(id);
-
-        // Rewrite path: strip /base prefix so the DO sees / and /api/...
-        const rewrittenPath = url.pathname === "/base" ? "/" : url.pathname.slice("/base".length);
-        const rewrittenUrl = new URL(rewrittenPath + url.search, url.origin);
-
-        const headers = new Headers(req.headers);
-        headers.set("x-level", "project");
-        headers.set("x-project-slug", "__base");
-        headers.set("x-artifacts-remote", baseRemote);
-        headers.set("x-artifacts-repo", "base-template");
-        headers.set("x-config", JSON.stringify({ apps: [] }));
-
-        const fwdInit: RequestInit = { method: req.method, headers };
-        if (req.method !== "GET" && req.method !== "HEAD") fwdInit.body = req.body;
-        return stub.fetch(new Request(rewrittenUrl.toString(), fwdInit));
-      }
-
       const projects = await env.DB.prepare(
         "SELECT * FROM projects ORDER BY created_at DESC",
       ).all<ProjectRow>();
@@ -586,105 +518,9 @@ export default {
       });
     }
 
-    const project = await env.DB.prepare("SELECT * FROM projects WHERE slug = ?")
-      .bind(parsed.project)
-      .first<ProjectRow>();
-    if (!project) return new Response(`Project "${parsed.project}" not found`, { status: 404 });
-
-    // Redirect platform→custom domain if configured
-    if (project.canonical_hostname && url.hostname.endsWith(PLATFORM_SUFFIX)) {
-      const target =
-        parsed.level === "app"
-          ? `https://${(parsed as any).app}.${project.canonical_hostname}${url.pathname}${url.search}`
-          : `https://${project.canonical_hostname}${url.pathname}${url.search}`;
-      return Response.redirect(target, 302);
-    }
-
-    // Everything under a project goes through the Project DO
+    // Pure proxy to Project DO — no request modification
     const id = env.PROJECT.idFromName(parsed.project);
-    const stub = env.PROJECT.get(id);
-
-    // For WebSocket: routing info goes in query params (overriding headers loses the
-    // internal WebSocket upgrade flag). For normal requests: use headers as before.
-    let doResp: Response;
-    if (req.headers.get("Upgrade") === "websocket") {
-      const wsUrl = new URL(req.url);
-      wsUrl.searchParams.set("_level", parsed.level);
-      wsUrl.searchParams.set("_slug", parsed.project);
-      if (parsed.level === "app") wsUrl.searchParams.set("_app", (parsed as any).app);
-      if (project.artifacts_remote) wsUrl.searchParams.set("_remote", project.artifacts_remote);
-      if (project.artifacts_repo) wsUrl.searchParams.set("_repo", project.artifacts_repo);
-      wsUrl.searchParams.set("_config", project.config_json);
-      doResp = await stub.fetch(new Request(wsUrl.toString(), req));
-    } else {
-      const headers = new Headers(req.headers);
-      headers.set("x-level", parsed.level);
-      headers.set("x-project-slug", parsed.project);
-      if (parsed.level === "app") headers.set("x-app", (parsed as any).app);
-      if (project.artifacts_remote) headers.set("x-artifacts-remote", project.artifacts_remote);
-      if (project.artifacts_repo) headers.set("x-artifacts-repo", project.artifacts_repo);
-      headers.set("x-config", project.config_json);
-      doResp = await stub.fetch(new Request(req, { headers }));
-    }
-
-    // Intercept reply responses that need outbound email sending
-    // (the facet can't access SEND_EMAIL, so the outer worker handles it)
-    if (req.method === "POST" && url.pathname.match(/\/emails\/\d+\/reply$/)) {
-      try {
-        const cloned = doResp.clone();
-        const body = (await cloned.json()) as any;
-        console.log(`[Worker] reply intercept: needsSend=${body.needsSend}`);
-        if (body.needsSend && body.sendPayload) {
-          const sp = body.sendPayload;
-          // Derive thread root before sending so we can include deep links
-          const threadId = await deriveThreadId(env.DB, sp.inReplyTo, sp.references);
-          const inboxUrl = `https://agents.${parsed.project}${PLATFORM_SUFFIX}`;
-          const streamUrl = `https://${parsed.project}.events.iterate.com/streams/agents/email/${threadId}/?renderer=raw-pretty`;
-          const replyText = [
-            sp.text,
-            "",
-            "---",
-            `Inbox: ${inboxUrl}`,
-            `Event stream: ${streamUrl}`,
-          ].join("\n");
-          const replyHtml = [
-            `<p>${sp.text}</p>`,
-            `<hr style="border:none;border-top:1px solid #ccc;margin:16px 0">`,
-            `<p style="font-size:13px;color:#888">`,
-            `<a href="${inboxUrl}">Inbox</a> · <a href="${streamUrl}">Event stream</a>`,
-            `</p>`,
-          ].join("\n");
-          console.log(`[Worker] sending reply email from=${sp.from} to=${sp.to}`);
-          const result = await env.EMAIL.send({
-            from: sp.from,
-            to: sp.to,
-            subject: sp.subject,
-            text: replyText,
-            html: replyHtml,
-          });
-          console.log(`[Worker] reply email sent! messageId=${result.messageId}`);
-          // Store mapping: outbound message ID → thread root, so future replies resolve correctly
-          const threadRootMessageId =
-            sp.inReplyTo ?? sp.references?.match(/<[^>]+>/)?.[0] ?? result.messageId;
-          await storeThreadMapping(env.DB, result.messageId, threadRootMessageId, parsed.project);
-          await appendEmailEvent(env, parsed.project, threadId, "email-sent", {
-            from: sp.from,
-            to: sp.to,
-            subject: sp.subject,
-            inReplyTo: sp.inReplyTo,
-            outboundMessageId: result.messageId,
-            text: sp.text,
-          });
-          const { sendPayload: _, ...rest } = body;
-          return Response.json(rest);
-        }
-      } catch (e: any) {
-        console.error(`[Worker] email send failed: ${e.message}\n${e.stack}`);
-        // Return the original DO response on failure
-      }
-    }
-
-    return doResp;
+    return env.PROJECT.get(id).fetch(req);
   },
 };
 
@@ -738,6 +574,13 @@ async function handleAdminAPI(req: Request, url: URL, env: Env): Promise<Respons
         artifactsRemote,
       )
       .run();
+
+    // Store artifact info in the Project DO's own SQLite
+    if (artifactsRepo && artifactsRemote) {
+      const id = env.PROJECT.idFromName(slug);
+      const stub = env.PROJECT.get(id);
+      await stub.setup(slug, artifactsRemote, artifactsRepo);
+    }
 
     return Response.json(
       { ok: true, slug, config, artifactsRepo, artifactsRemote, provision },
@@ -817,6 +660,67 @@ export class Project extends DurableObject<Env> {
   #buildStates: Record<string, BuildState> = {};
   #logBuffer: Array<{ ts: number; message: string }> = [];
   #facetsTableReady = false;
+  #metaReady = false;
+
+  // ── Project metadata in SQLite ──────────────────────────────────────
+  #ensureMetaTable() {
+    if (this.#metaReady) return;
+    this.ctx.storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+    );
+    this.#metaReady = true;
+  }
+
+  #getMeta(key: string): string | null {
+    this.#ensureMetaTable();
+    const rows = this.ctx.storage.sql.exec("SELECT value FROM _meta WHERE key = ?", key).toArray();
+    return rows.length > 0 ? (rows[0].value as string) : null;
+  }
+
+  #setMeta(key: string, value: string) {
+    this.#ensureMetaTable();
+    this.ctx.storage.sql.exec(
+      "INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)",
+      key,
+      value,
+    );
+  }
+
+  // Called by admin API after project creation to store artifact info
+  async setup(slug: string, artifactsRemote: string, artifactsRepo: string) {
+    this.#setMeta("slug", slug);
+    this.#setMeta("artifacts_remote", artifactsRemote);
+    this.#setMeta("artifacts_repo", artifactsRepo);
+    console.log(`[Project DO] setup: slug=${slug} repo=${artifactsRepo}`);
+  }
+
+  get slug(): string {
+    return this.#getMeta("slug") ?? "unknown";
+  }
+  get remote(): string | null {
+    return this.#getMeta("artifacts_remote");
+  }
+  get repoName(): string | null {
+    return this.#getMeta("artifacts_repo");
+  }
+
+  // Derive level + app from hostname. Only uses the platform suffix pattern —
+  // the worker already resolved custom domains before proxying here.
+  #parseLevel(host: string): { level: "project" | "app"; app: string | null } {
+    if (host.endsWith(PLATFORM_SUFFIX)) {
+      const prefix = host.slice(0, -PLATFORM_SUFFIX.length);
+      const dot = prefix.indexOf(".");
+      if (dot !== -1) return { level: "app", app: prefix.slice(0, dot) };
+    }
+    // Custom domains: the slug portion is already handled by the worker routing.
+    // If the host has a subdomain before the project's custom domain, it's an app.
+    const canonicalHostname = this.#getMeta("canonical_hostname");
+    if (canonicalHostname && host.endsWith(`.${canonicalHostname}`)) {
+      const appName = host.slice(0, -(canonicalHostname.length + 1));
+      if (appName) return { level: "app", app: appName };
+    }
+    return { level: "project", app: null };
+  }
 
   ensureFacetsTable() {
     if (this.#facetsTableReady) return;
@@ -1340,13 +1244,16 @@ export class Project extends DurableObject<Env> {
 
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
-    // Routing info: headers for normal requests, query params for WebSocket
-    const level = req.headers.get("x-level") ?? url.searchParams.get("_level") ?? "app";
-    const slug = req.headers.get("x-project-slug") ?? url.searchParams.get("_slug") ?? "unknown";
-    const app = req.headers.get("x-app") ?? url.searchParams.get("_app") ?? null;
-    const remote = req.headers.get("x-artifacts-remote") ?? url.searchParams.get("_remote") ?? null;
-    const repoName = req.headers.get("x-artifacts-repo") ?? url.searchParams.get("_repo") ?? null;
+    const host = req.headers.get("host") ?? url.hostname;
     const doId = this.ctx.id.toString();
+
+    // Derive level/app from Host header (no D1 — uses platform suffix only)
+    const { level, app } = this.#parseLevel(host);
+
+    // Read artifact info from own SQLite (set by admin API via setup())
+    const slug = this.slug;
+    const remote = this.remote;
+    const repoName = this.repoName;
 
     console.log(
       `[Project DO] id=${doId} slug=${slug} level=${level} app=${app} path=${url.pathname}`,
@@ -1684,23 +1591,11 @@ export class Project extends DurableObject<Env> {
       });
     }
 
-    // ── WebSocket handling ──
-    // Project-level requests (no app): handled by the Project DO (log streaming, etc.)
-    // App-level requests: forwarded to the facet via facet.fetch() — the app's
-    // server entry handles the WebSocket upgrade directly (e.g. oRPC WebSocket).
-    if (req.headers.get("Upgrade") === "websocket" && !app) {
-      // Project-level WS (e.g. /api/logs) — already handled above in Level 2
-      // This shouldn't be reached, but guard anyway
-      return new Response("WebSocket not supported at this path", { status: 400 });
-    }
-    // App-level WS: fall through to Level 3 — facet.fetch() handles the upgrade
-
     // ── Level 3: App ────────────────────────────────────────────────────
     if (!app) return new Response("No app specified", { status: 400 });
 
     // Read config to check if app is enabled
-    const configStr =
-      (await this.readFile("config.json")) ?? req.headers.get("x-config") ?? '{"apps":[]}';
+    const configStr = (await this.readFile("config.json")) ?? '{"apps":[]}';
     const config = JSON.parse(configStr) as { apps: string[] };
     if (!config.apps.includes(app)) {
       return new Response(`App "${app}" not enabled. Enabled: ${config.apps.join(", ")}`, {
@@ -1713,19 +1608,13 @@ export class Project extends DurableObject<Env> {
       return this.handleRunnerUI(app, url, req, slug, remote, repoName);
     }
 
-    // Read app-level build config (externals, compatibilityFlags, etc.)
-    const appPkgStr = await this.readFile(`apps/${app}/package.json`);
-    const appPkg = appPkgStr ? JSON.parse(appPkgStr) : {};
-    const appBuildConfig = appPkg.buildConfig ?? {};
-    const appCompatFlags: string[] = appBuildConfig.compatibilityFlags ?? [];
-
-    // Check for built dist first
+    // Check for built dist
     const manifestStr = await this.readFile(`apps/${app}/dist/manifest.json`);
     if (manifestStr) {
       const meta = JSON.parse(manifestStr);
       console.log(`[Project DO] app=${app} has dist (built at ${meta.builtAt})`);
 
-      // Serve static assets from dist (skip for /api/* and POST — those go to the facet)
+      // Serve static assets from dist (skip for /api/* and POST — those go to AppRunner)
       const isApiOrPost =
         url.pathname.startsWith("/api/") ||
         url.pathname.startsWith("/_studio") ||
@@ -1734,63 +1623,33 @@ export class Project extends DurableObject<Env> {
         req.method === "POST" ||
         req.headers.get("Upgrade") === "websocket";
       if (!isApiOrPost) {
-        // 1. Check dist assets (bundler output)
         if (meta.assetFiles?.length > 0) {
           const assetResponse = await this.serveDistAsset(app, meta, req);
           if (assetResponse) return assetResponse;
         }
-        // 2. Check public/ dir (images, fonts, etc. — served with binary support)
         const publicResponse = await this.servePublicFile(app, req);
         if (publicResponse) return publicResponse;
       }
 
-      // Load server modules from dist into LOADER
-      const modules: Record<string, string> = {};
-      for (const f of meta.moduleFiles) {
-        const content = await this.readFile(`apps/${app}/dist/${f}`);
-        if (content) modules[f] = content;
+      // WebSocket: handle directly (DO→DO WS forwarding not supported in CF)
+      if (req.headers.get("Upgrade") === "websocket") {
+        return this.handleAppViaFacet(app, slug, meta, req);
       }
 
-      const mainModule = meta.mainModule;
-      if (!modules[mainModule]) {
-        return new Response(`Built app ${app} missing main module: ${mainModule}`, { status: 500 });
-      }
-
-      // Prepend fetch wrapper to inject project slug header on all outbound requests
-      const runtimePrefix = egressRuntimeWrapper(slug);
-      modules[mainModule] = runtimePrefix + modules[mainModule];
-
-      const sourceHash = Array.from(
-        new Uint8Array(
-          await crypto.subtle.digest("SHA-256", new TextEncoder().encode(modules[mainModule])),
-        ),
-      )
-        .slice(0, 4)
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
-      console.log(
-        `[Project DO] loading built app=${app} mainModule=${mainModule} hash=${sourceHash} modules=${Object.keys(modules).join(",")}`,
-      );
-
-      this.upsertFacet(app, "App");
-      const facet = this.ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
-        const worker = this.env.LOADER.get(`code:${app}:${sourceHash}`, async () => ({
-          compatibilityDate: "2026-04-01",
-          compatibilityFlags: appCompatFlags,
-          mainModule,
-          modules,
-          globalOutbound: this.env.EGRESS_GATEWAY,
-          env: { AI: this.env.AI_PROXY, EXEC: this.env.CODE_EXECUTOR },
-        }));
-        return { class: worker.getDurableObjectClass("App") };
-      });
-
-      console.log(`[Project DO] forwarding to built App facet`);
-      return facet.fetch(req);
+      // Non-WS: delegate to AppRunner
+      const runnerId = this.env.APP_RUNNER.idFromName(slug);
+      const runner = this.env.APP_RUNNER.get(runnerId);
+      console.log(`[Project DO] delegating to AppRunner for app=${app}`);
+      const appResp = await runner.fetch(req);
+      return this.#interceptEmailReply(req, url, appResp, slug);
     }
 
-    // ── Auto-build: if app has buildConfig.vite but no dist, trigger sandbox build ──
-    if (appBuildConfig.vite && !manifestStr) {
+    // ── Auto-build: if app has vite buildConfig but no dist ──
+    const appPkgStr = await this.readFile(`apps/${app}/package.json`);
+    const appPkg = appPkgStr ? JSON.parse(appPkgStr) : {};
+    const appBuildConfig = appPkg.buildConfig ?? {};
+
+    if (appBuildConfig.vite) {
       const buildState = this.getBuildState(app);
       if (buildState === "building") {
         return Response.redirect(new URL("/__runner", req.url).toString(), 302);
@@ -1886,64 +1745,111 @@ export class Project extends DurableObject<Env> {
       return Response.redirect(new URL("/__runner", req.url).toString(), 302);
     }
 
-    // Serve public files for unbundled apps too (images, etc.)
-    if (req.method === "GET" && url.pathname.includes(".") && !url.pathname.startsWith("/api/")) {
-      const publicResponse = await this.servePublicFile(app, req);
-      if (publicResponse) return publicResponse;
-    }
+    // No unbundled fallback — all apps must be built
+    return new Response(`App "${app}" is not built. Visit /__runner to trigger a build.`, {
+      status: 404,
+    });
+  }
 
-    // Fallback: read apps/{app}/index.js directly (unbundled plain JS)
-    const appSource = await this.readFile(`apps/${app}/index.js`);
-    if (!appSource) {
-      return new Response(`No source found at apps/${app}/index.js (and no dist/) in artifact`, {
-        status: 404,
+  // Intercept email reply responses — sends outbound email via env.EMAIL
+  async #interceptEmailReply(
+    req: Request,
+    url: URL,
+    resp: Response,
+    slug: string,
+  ): Promise<Response> {
+    if (!(req.method === "POST" && url.pathname.match(/\/emails\/\d+\/reply$/))) return resp;
+    try {
+      const cloned = resp.clone();
+      const body = (await cloned.json()) as any;
+      if (!body.needsSend || !body.sendPayload) return resp;
+      const sp = body.sendPayload;
+      const threadId = await deriveThreadId(this.env.DB, sp.inReplyTo, sp.references);
+      const inboxUrl = `https://agents.${slug}${PLATFORM_SUFFIX}`;
+      const streamUrl = `https://${slug}.events.iterate.com/streams/agents/email/${threadId}/?renderer=raw-pretty`;
+      const replyText = [
+        sp.text,
+        "",
+        "---",
+        `Inbox: ${inboxUrl}`,
+        `Event stream: ${streamUrl}`,
+      ].join("\n");
+      const replyHtml = [
+        `<p>${sp.text}</p>`,
+        `<hr style="border:none;border-top:1px solid #ccc;margin:16px 0">`,
+        `<p style="font-size:13px;color:#888"><a href="${inboxUrl}">Inbox</a> · <a href="${streamUrl}">Event stream</a></p>`,
+      ].join("\n");
+      console.log(`[Project DO] sending reply email from=${sp.from} to=${sp.to}`);
+      const result = await this.env.EMAIL.send({
+        from: sp.from,
+        to: sp.to,
+        subject: sp.subject,
+        text: replyText,
+        html: replyHtml,
       });
+      console.log(`[Project DO] reply email sent! messageId=${result.messageId}`);
+      const threadRootMessageId =
+        sp.inReplyTo ?? sp.references?.match(/<[^>]+>/)?.[0] ?? result.messageId;
+      await storeThreadMapping(this.env.DB, result.messageId, threadRootMessageId, slug);
+      await appendEmailEvent(this.env, slug, threadId, "email-sent", {
+        from: sp.from,
+        to: sp.to,
+        subject: sp.subject,
+        inReplyTo: sp.inReplyTo,
+        outboundMessageId: result.messageId,
+        text: sp.text,
+      });
+      const { sendPayload: _, ...rest } = body;
+      return Response.json(rest);
+    } catch (e: any) {
+      console.error(`[Project DO] email send failed: ${e.message}\n${e.stack}`);
+      return resp;
     }
+  }
 
-    const hasAppExport = /export class App\s+extends/.test(appSource);
-    const userClassName = hasAppExport
-      ? "App"
-      : ((appSource.match(/export class (\w+) extends DurableObject/) ?? [])[1] ?? "App");
-    const wrappedSource = hasAppExport
-      ? appSource
-      : appSource + `\n;export { ${userClassName} as App };`;
-    const runtimePrefix = egressRuntimeWrapper(slug);
-    const finalSource = runtimePrefix + wrappedSource;
-    const sourceHash = Array.from(
-      new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(finalSource))),
-    )
-      .slice(0, 4)
+  // Direct facet creation for WebSocket requests (DO→DO WS forwarding not supported)
+  async handleAppViaFacet(
+    app: string,
+    slug: string,
+    meta: { mainModule: string; moduleFiles: string[] },
+    req: Request,
+  ): Promise<Response> {
+    const appPkgStr = await this.readFile(`apps/${app}/package.json`);
+    const appPkg = appPkgStr ? JSON.parse(appPkgStr) : {};
+    const appCompatFlags: string[] = appPkg.buildConfig?.compatibilityFlags ?? [];
+
+    const modules: Record<string, string> = {};
+    for (const f of meta.moduleFiles) {
+      const content = await this.readFile(`apps/${app}/dist/${f}`);
+      if (content) modules[f] = content;
+    }
+    const mainModule = meta.mainModule;
+    if (!modules[mainModule]) {
+      return new Response(`App ${app} missing main module: ${mainModule}`, { status: 500 });
+    }
+    modules[mainModule] = egressRuntimeWrapper(slug) + modules[mainModule];
+
+    const hashBytes = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(modules[mainModule])),
+    );
+    const sourceHash = Array.from(hashBytes.slice(0, 4))
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
-    console.log(
-      `[Project DO] loading app=${app} class=${userClassName} hash=${sourceHash} source=${appSource.length}bytes`,
-    );
 
-    this.upsertFacet(app, "App");
-    const facet = this.ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
+    console.log(`[Project DO] WS direct facet: app=${app} hash=${sourceHash}`);
+    const ctx = this.ctx as any;
+    const facet = ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
       const worker = this.env.LOADER.get(`code:${app}:${sourceHash}`, async () => ({
         compatibilityDate: "2026-04-01",
         compatibilityFlags: appCompatFlags,
-        mainModule: "index.js",
-        modules: { "index.js": finalSource },
+        mainModule,
+        modules,
         globalOutbound: this.env.EGRESS_GATEWAY,
+        env: { AI: this.env.AI_PROXY, EXEC: this.env.CODE_EXECUTOR },
       }));
-      return { class: worker.getDurableObjectClass("App") };
+      return { class: (worker as any).getDurableObjectClass("App") };
     });
-
-    console.log(`[Project DO] forwarding to App facet`);
     return facet.fetch(req);
-  }
-
-  // webSocketMessage only fires for WebSockets accepted by THIS DO
-  // (i.e. the project-level /api/logs WebSocket). App-level WebSockets
-  // are handled directly by the facet via facet.fetch() returning a 101.
-  async webSocketMessage(_ws: WebSocket, _message: string | ArrayBuffer) {
-    // Project-level log WS has no tags — nothing to dispatch
-  }
-
-  webSocketClose(ws: WebSocket) {
-    ws.close();
   }
 
   async handleRunnerUI(

@@ -23,6 +23,7 @@
     "bindings": [
       { "name": "PROJECT", "class_name": "Project" },
       { "name": "BUILD_SANDBOX", "class_name": "BuildSandbox" },
+      { "name": "APP_RUNNER", "class_name": "AppRunner" },
     ],
   },
   "migrations": [
@@ -30,6 +31,7 @@
     { "tag": "v2", "new_sqlite_classes": ["BuildSandbox"] },
     { "tag": "v3", "deleted_classes": ["BuildSandbox"] },
     { "tag": "v4", "new_sqlite_classes": ["BuildSandbox"] },
+    { "tag": "v5", "new_sqlite_classes": ["AppRunner"] },
   ],
   "worker_loaders": [{ "binding": "LOADER" }],
   "ai": { "binding": "AI" },
