@@ -19,6 +19,48 @@ const FetchExampleResult = z.object({
   body: z.string(),
 });
 
+const SubscribeStreamInput = z.object({
+  streamPath: z
+    .string()
+    .trim()
+    .min(1)
+    .describe("Events stream path to subscribe (e.g. /my/stream)"),
+  publicBaseUrl: z
+    .string()
+    .trim()
+    .url()
+    .describe(
+      "Public origin events.iterate.com should reach this agents deployment at (e.g. your tunnel URL). Usually window.location.origin in the UI.",
+    ),
+  projectSlug: z
+    .string()
+    .trim()
+    .min(1)
+    .default("public")
+    .describe("events.iterate.com project slug"),
+  agentInstance: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("IterateAgent DO instance name (defaults to a random dev-<slug>)"),
+  subscriptionSlug: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("Subscription slug on the stream (defaults to a random dev-<slug>)"),
+});
+
+const SubscribeStreamResult = z.object({
+  streamPath: z.string(),
+  callbackUrl: z.string(),
+  streamViewerUrl: z.string(),
+  appendUrl: z.string(),
+  subscriptionSlug: z.string(),
+  agentInstance: z.string(),
+});
+
 export const agentsContract = oc.router({
   __internal: internalContract,
   hello: oc
@@ -41,4 +83,15 @@ export const agentsContract = oc.router({
     })
     .input(FetchExampleInput)
     .output(FetchExampleResult),
+  subscribeStream: oc
+    .route({
+      operationId: "subscribeStream",
+      method: "POST",
+      path: "/subscribe-stream",
+      description:
+        "Subscribe an events.iterate.com stream to this deployment's IterateAgent over WebSocket. The callback URL is derived from the request's public origin.",
+      tags: ["/sample"],
+    })
+    .input(SubscribeStreamInput)
+    .output(SubscribeStreamResult),
 });

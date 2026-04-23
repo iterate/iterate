@@ -56,7 +56,7 @@ export function createIterateAgentProcessor(deps: {
       state: IterateAgentProcessorState;
     }) =>
       match(event)
-        .case(CodemodeBlockAddedEvent, async ({ payload }) => {
+        .case(CodemodeBlockAddedEvent, async (event) => {
           const executor = new DynamicWorkerExecutor({
             loader: deps.loader,
             globalOutbound: deps.outboundFetch,
@@ -70,7 +70,7 @@ export function createIterateAgentProcessor(deps: {
             mcpProviders.map((provider) => resolveProvider(provider)),
           );
 
-          const result = await executor.execute(payload.script, [
+          const result = await executor.execute(event.payload.script, [
             // `builtin.answer()` is the e2e canary asserted by
             // `apps/agents/e2e/vitest/iterate-agent.e2e.test.ts` and `…-mixed-codemode.e2e.test.ts`.
             { name: "builtin", fns: { answer: async () => 42 } },
@@ -78,10 +78,27 @@ export function createIterateAgentProcessor(deps: {
             ...mcpResolved,
           ]);
 
-          await append({ event: { type: "codemode-result-added", payload: result } });
+          await append({
+            event: CodemodeResultAddedEvent.parse({
+              type: "codemode-result-added",
+              payload: result,
+            }),
+          });
         })
-        .case(AgentInputAddedEvent, async ({ payload }) => {
-          if (payload.role !== "user") return;
+        // Codemode results get fed back to the agent
+        .case(CodemodeResultAddedEvent, async (event) => {
+          await append({
+            event: AgentInputAddedEvent.parse({
+              type: "agent-input-added",
+              payload: {
+                role: "user",
+                content: `[Codemode result]:\n${JSON.stringify(event.payload.result, null, 2)}`,
+              },
+            }),
+          });
+        })
+        .case(AgentInputAddedEvent, async (event) => {
+          if (event.payload.role !== "user") return;
 
           const { model, runOpts } = state.llmConfig;
           const body = normalizeLlmRequest({
@@ -96,15 +113,29 @@ export function createIterateAgentProcessor(deps: {
               ],
             },
           });
-          const raw = await deps.ai.run(model as never, body as never, runOpts as never);
+          append({
+            event: LlmRequestStartedEvent.parse({
+              type: "llm-request-started",
+              payload: { model, body, runOpts },
+            }),
+          });
+          const raw = await deps.ai.run(model, body, runOpts);
           const text = normalizeLlmResponse({ model, response: raw });
 
-          await append({
-            event: {
-              type: "agent-input-added",
-              payload: { role: "assistant", content: text },
-            },
-          });
+          Promise.all([
+            append({
+              event: {
+                type: "agent-input-added",
+                payload: { role: "assistant", content: text },
+              },
+            }),
+            append({
+              event: LlmRequestCompletedEvent.parse({
+                type: "llm-request-completed",
+                payload: { startingOffset: event.offset, response: raw },
+              }),
+            }),
+          ]);
         })
         .defaultAsync(() => undefined),
   };
@@ -128,7 +159,14 @@ export const IterateAgentProcessorState = z.object({
       }),
     )
     .default([]),
-  llmConfig: LlmConfig.default({ model: "@cf/moonshotai/kimi-k2.6", runOpts: {} }),
+  llmConfig: LlmConfig.default({
+    model: "@cf/moonshotai/kimi-k2.6",
+    runOpts: {
+      gateway: {
+        id: "default",
+      },
+    },
+  }),
 });
 export type IterateAgentProcessorState = z.infer<typeof IterateAgentProcessorState>;
 
@@ -137,13 +175,35 @@ export const iterateAgentProcessorInitialState: IterateAgentProcessorState = {
   llmConfig: { model: "@cf/moonshotai/kimi-k2.6", runOpts: {} },
 };
 
+const LlmRequestStartedEvent = z.object({
+  type: z.literal("llm-request-started"),
+  payload: z.object({
+    model: z.string().describe("The model being used"),
+    body: z.record(z.string(), z.unknown()).describe("The payload of the env.AI.run call"),
+    runOpts: z.record(z.string(), z.unknown()).describe("The run options"),
+  }),
+});
+
+const LlmRequestCompletedEvent = z.object({
+  type: z.literal("llm-request-completed"),
+  payload: z.object({
+    startingOffset: z.number().describe("The offset of the event"),
+    response: z.unknown().describe("The response from the AI provider"),
+  }),
+});
+
 const CodemodeBlockAddedEvent = z.object({
   type: z.literal("codemode-block-added"),
   payload: z.object({ script: z.string() }),
 });
+const CodemodeResultAddedEvent = z.object({
+  type: z.literal("codemode-result-added"),
+  payload: z.object({ result: z.unknown() }),
+});
 
 const AgentInputAddedEvent = z.object({
   type: z.literal("agent-input-added"),
+  offset: z.number().describe("The offset of the event"),
   payload: IterateAgentProcessorState.shape.history.unwrap().element,
 });
 
