@@ -10,21 +10,21 @@ import { Miniflare } from "miniflare";
 //
 // `sqlfu generate` uses authority: 'desired_schema' (the default) and does NOT
 // call this factory — typegen reads definitions.sql directly.
+const here = import.meta.dirname;
+const wranglerPath = path.join(here, ".alchemy", "local", "wrangler.jsonc");
+const persistRoot = path.join(here, "..", "..", ".alchemy", "miniflare", "v3");
+
 async function openAlchemyLocalD1(): Promise<DisposableAsyncClient> {
-  const appRoot = path.dirname(new URL(import.meta.url).pathname);
-  const wranglerPath = path.join(appRoot, ".alchemy", "local", "wrangler.jsonc");
   if (!fs.existsSync(wranglerPath)) {
     throw new Error(
       `sqlfu.config.ts: ${wranglerPath} not found. Run \`pnpm alchemy:up\` or \`pnpm dev\` once to materialize alchemy's local wrangler config, then retry.`,
     );
   }
-  const wrangler = JSON.parse(stripJsonComments(fs.readFileSync(wranglerPath, "utf8")));
+  const wrangler = JSON.parse(fs.readFileSync(wranglerPath, "utf8"));
   const d1 = (wrangler.d1_databases ?? []).find((b: { binding: string }) => b.binding === "DB");
   if (!d1) {
     throw new Error(`sqlfu.config.ts: no d1_databases binding "DB" in ${wranglerPath}.`);
   }
-  const workspaceRoot = findWorkspaceRoot(appRoot);
-  const persistRoot = path.join(workspaceRoot, ".alchemy", "miniflare", "v3");
 
   const mf = new Miniflare({
     script: "",
@@ -41,23 +41,6 @@ async function openAlchemyLocalD1(): Promise<DisposableAsyncClient> {
       await mf.dispose();
     },
   };
-}
-
-// pnpm-workspace.yaml sits at the repo root, apps/events is two levels deep.
-// Walks up to be tolerant of being invoked from a nested cwd.
-function findWorkspaceRoot(startDir: string): string {
-  let dir = startDir;
-  while (dir !== path.dirname(dir)) {
-    if (fs.existsSync(path.join(dir, "pnpm-workspace.yaml"))) return dir;
-    dir = path.dirname(dir);
-  }
-  throw new Error(
-    `sqlfu.config.ts: could not find pnpm-workspace.yaml walking up from ${startDir}.`,
-  );
-}
-
-function stripJsonComments(source: string): string {
-  return source.replaceAll(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
 }
 
 export default defineConfig({
