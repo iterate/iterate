@@ -34,18 +34,5 @@ for (const file of files) {
   insert.run(name, checksum, new Date().toISOString());
 }
 
-// Workaround for sqlfu typegen bug: extractSchema orders by (type, name), so indices
-// come before their tables when replayed into the typegen scratch db, causing
-// "no such table". Dropping indices here is safe because typegen only needs table
-// shapes. TODO: fix upstream in sqlfu core/sqlite.ts extractSchema ordering.
-if (process.argv.includes("--for-generate")) {
-  const indexRows = db
-    .prepare(`select name from sqlite_schema where type='index' and name not like 'sqlite_%'`)
-    .all();
-  for (const row of indexRows) {
-    db.exec(`drop index if exists "${row.name}";`);
-  }
-}
-
 db.close();
 console.log("dev sqlite ready at", dbPath);
