@@ -10,9 +10,3 @@ export type SecretsRow = {
   updated_at: string;
   project_slug: string;
 };
-
-export type SqlfuMigrationsRow = {
-  name: string;
-  checksum: string;
-  applied_at: string;
-};
