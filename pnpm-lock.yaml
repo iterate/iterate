@@ -1247,8 +1247,8 @@ importers:
         specifier: 0.2.1
         version: 0.2.1
       sqlfu:
-        specifier: https://pkg.pr.new/sqlfu@47
-        version: https://pkg.pr.new/sqlfu@47(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
+        specifier: https://pkg.pr.new/sqlfu@52
+        version: https://pkg.pr.new/sqlfu@52(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
       tailwindcss:
         specifier: ^4.1.18
         version: 4.2.1
@@ -15943,12 +15943,12 @@ packages:
   sql.js@1.14.1:
     resolution: {integrity: sha512-gcj8zBWU5cFsi9WUP+4bFNXAyF1iRpA3LLyS/DP5xlrNzGmPIizUeBggKa8DbDwdqaKwUcTEnChtd2grWo/x/A==}
 
-  sqlfu@https://pkg.pr.new/sqlfu@47:
-    resolution: {tarball: https://pkg.pr.new/sqlfu@47}
+  sqlfu@https://pkg.pr.new/sqlfu@52:
+    resolution: {tarball: https://pkg.pr.new/sqlfu@52}
     version: 0.0.3-5
     hasBin: true
     peerDependencies:
-      '@sqlfu/ui': workspace:*
+      '@sqlfu/ui': 0.0.3-5
     peerDependenciesMeta:
       '@sqlfu/ui':
         optional: true
@@ -33578,7 +33578,7 @@ snapshots:
 
   sql.js@1.14.1: {}
 
-  sqlfu@https://pkg.pr.new/sqlfu@47(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
+  sqlfu@https://pkg.pr.new/sqlfu@52(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
     dependencies:
       '@clack/prompts': 1.2.0
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)

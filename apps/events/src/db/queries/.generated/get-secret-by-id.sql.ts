@@ -9,7 +9,7 @@ limit 1;
 const query = (params: getSecretById.Params) => ({
   sql,
   args: [params.id, params.projectSlug],
-  name: "get-secret-by-id",
+  name: "getSecretById",
 });
 
 export const getSecretById = Object.assign(

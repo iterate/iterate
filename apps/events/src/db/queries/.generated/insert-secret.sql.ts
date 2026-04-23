@@ -15,7 +15,7 @@ const query = (params: insertSecret.Params) => ({
     params.createdAt,
     params.updatedAt,
   ],
-  name: "insert-secret",
+  name: "insertSecret",
 });
 
 export const insertSecret = Object.assign(

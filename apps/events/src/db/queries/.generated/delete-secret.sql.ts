@@ -7,7 +7,7 @@ where id = ? and project_slug = ?;
 const query = (params: deleteSecret.Params) => ({
   sql,
   args: [params.id, params.projectSlug],
-  name: "delete-secret",
+  name: "deleteSecret",
 });
 
 export const deleteSecret = Object.assign(

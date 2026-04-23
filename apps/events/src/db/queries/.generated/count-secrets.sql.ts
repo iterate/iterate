@@ -4,7 +4,7 @@ const sql = `select count(*) as total from secrets where project_slug = ?;`;
 const query = (params: countSecrets.Params) => ({
   sql,
   args: [params.projectSlug],
-  name: "count-secrets",
+  name: "countSecrets",
 });
 
 export const countSecrets = Object.assign(

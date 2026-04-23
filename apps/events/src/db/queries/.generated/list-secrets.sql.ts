@@ -11,7 +11,7 @@ offset ?;
 const query = (params: listSecrets.Params) => ({
   sql,
   args: [params.projectSlug, params.limit, params.offset],
-  name: "list-secrets",
+  name: "listSecrets",
 });
 
 export const listSecrets = Object.assign(
