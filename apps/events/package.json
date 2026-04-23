@@ -75,6 +75,7 @@
     "@vitejs/plugin-react": "^6.0.1",
     "alchemy": "^0.83.3",
     "esbuild": "^0.27.4",
+    "miniflare": "catalog:cloudflare",
     "tinyexec": "^1.0.2",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
