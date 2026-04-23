@@ -1,25 +1,30 @@
 import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
-import { thingsContract } from "./contract";
+import type { appRouter } from "./router";
+import type { RouterClient } from "@orpc/server";
+import { appContract } from "./contract";
 
-let cachedClient: ReturnType<typeof createBrowserClient> | undefined;
+type Client = RouterClient<typeof appRouter>;
 
-function createBrowserClient() {
-  return createORPCClient(
-    new OpenAPILink(thingsContract, {
-      url: `${window.location.origin}/api`,
-    }),
-  );
+// OpenAPI client — for REST-style CRUD
+export function createOpenApiClient(): Client {
+  return createORPCClient(new OpenAPILink(appContract, { url: `${window.location.origin}/api` }));
 }
 
-export function getOrpcClient() {
+// RPC client — for streaming (SSE via RPCLink)
+export function createRpcClient(): Client {
+  return createORPCClient(new RPCLink({ url: `${window.location.origin}/api/rpc` }));
+}
+
+let cached: Client | undefined;
+export function getClient(): Client {
   if (typeof window === "undefined") {
-    // SSR — no client available, queries will run client-side only
-    return createORPCClient(new OpenAPILink(thingsContract, { url: "http://localhost/api" }));
+    return createORPCClient(new OpenAPILink(appContract, { url: "http://localhost/api" }));
   }
-  cachedClient ??= createBrowserClient();
-  return cachedClient;
+  cached ??= createOpenApiClient();
+  return cached;
 }
 
-export const orpc = createTanstackQueryUtils(getOrpcClient());
+export const orpc = createTanstackQueryUtils(getClient());

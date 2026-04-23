@@ -1,7 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "tanstack-start-facet",
-  "compatibility_date": "2026-04-01",
+  "name": "orpc-cf-demo",
+  "compatibility_date": "2026-04-23",
   "compatibility_flags": ["nodejs_compat"],
-  "main": "@tanstack/react-start/server-entry",
+  "main": "src/server.ts",
+  "observability": { "enabled": true },
 }

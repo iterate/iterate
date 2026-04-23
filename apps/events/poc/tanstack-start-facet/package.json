@@ -1,25 +1,26 @@
 {
-  "name": "tanstack-start-facet-poc",
+  "name": "orpc-cf-demo",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite dev",
     "build": "vite build",
-    "build:facet": "tsx scripts/build-facet.ts"
+    "deploy": "vite build && wrangler deploy"
   },
   "dependencies": {
-    "@orpc/client": "^1.14.0",
-    "@orpc/contract": "^1.14.0",
+    "@orpc/client": "^1",
+    "@orpc/contract": "^1",
     "@orpc/openapi": "^1.14.0",
-    "@orpc/openapi-client": "^1.14.0",
-    "@orpc/server": "^1.14.0",
-    "@orpc/tanstack-query": "^1.14.0",
-    "@tanstack/react-query": "^5.99.2",
+    "@orpc/server": "^1",
+    "@orpc/tanstack-query": "^1",
+    "@orpc/zod": "^1.14.0",
+    "@tanstack/react-query": "^5",
     "@tanstack/react-router": "^1",
     "@tanstack/react-start": "^1",
+    "crossws": "^0.4.5",
     "react": "^19",
     "react-dom": "^19",
-    "zod": "^3.25.76"
+    "zod": "^3"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1",
@@ -27,9 +28,8 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^4",
-    "tsx": "^4",
     "typescript": "^5",
-    "vite": "^6",
+    "vite": "^8",
     "wrangler": "^4"
   }
 }

@@ -6,6 +6,8 @@
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.33.1",
+    "vite": "8.0.9",
     "wrangler": "^4"
   },
   "dependencies": {

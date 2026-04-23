@@ -10,29 +10,19 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ThingsRouteImport } from './routes/things'
-import { Route as ServerFnsRouteImport } from './routes/server-fns'
-import { Route as CounterRouteImport } from './routes/counter'
-import { Route as AboutRouteImport } from './routes/about'
+import { Route as StreamRouteImport } from './routes/stream'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiSplatRouteImport } from './routes/api/$'
+import { Route as ApiRpcSplatRouteImport } from './routes/api/rpc.$'
 
 const ThingsRoute = ThingsRouteImport.update({
   id: '/things',
   path: '/things',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ServerFnsRoute = ServerFnsRouteImport.update({
-  id: '/server-fns',
-  path: '/server-fns',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CounterRoute = CounterRouteImport.update({
-  id: '/counter',
-  path: '/counter',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AboutRoute = AboutRouteImport.update({
-  id: '/about',
-  path: '/about',
+const StreamRoute = StreamRouteImport.update({
+  id: '/stream',
+  path: '/stream',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -40,43 +30,53 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiSplatRoute = ApiSplatRouteImport.update({
+  id: '/api/$',
+  path: '/api/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRpcSplatRoute = ApiRpcSplatRouteImport.update({
+  id: '/api/rpc/$',
+  path: '/api/rpc/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/about': typeof AboutRoute
-  '/counter': typeof CounterRoute
-  '/server-fns': typeof ServerFnsRoute
+  '/stream': typeof StreamRoute
   '/things': typeof ThingsRoute
+  '/api/$': typeof ApiSplatRoute
+  '/api/rpc/$': typeof ApiRpcSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/about': typeof AboutRoute
-  '/counter': typeof CounterRoute
-  '/server-fns': typeof ServerFnsRoute
+  '/stream': typeof StreamRoute
   '/things': typeof ThingsRoute
+  '/api/$': typeof ApiSplatRoute
+  '/api/rpc/$': typeof ApiRpcSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/about': typeof AboutRoute
-  '/counter': typeof CounterRoute
-  '/server-fns': typeof ServerFnsRoute
+  '/stream': typeof StreamRoute
   '/things': typeof ThingsRoute
+  '/api/$': typeof ApiSplatRoute
+  '/api/rpc/$': typeof ApiRpcSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/about' | '/counter' | '/server-fns' | '/things'
+  fullPaths: '/' | '/stream' | '/things' | '/api/$' | '/api/rpc/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/about' | '/counter' | '/server-fns' | '/things'
-  id: '__root__' | '/' | '/about' | '/counter' | '/server-fns' | '/things'
+  to: '/' | '/stream' | '/things' | '/api/$' | '/api/rpc/$'
+  id: '__root__' | '/' | '/stream' | '/things' | '/api/$' | '/api/rpc/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AboutRoute: typeof AboutRoute
-  CounterRoute: typeof CounterRoute
-  ServerFnsRoute: typeof ServerFnsRoute
+  StreamRoute: typeof StreamRoute
   ThingsRoute: typeof ThingsRoute
+  ApiSplatRoute: typeof ApiSplatRoute
+  ApiRpcSplatRoute: typeof ApiRpcSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -88,25 +88,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ThingsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/server-fns': {
-      id: '/server-fns'
-      path: '/server-fns'
-      fullPath: '/server-fns'
-      preLoaderRoute: typeof ServerFnsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/counter': {
-      id: '/counter'
-      path: '/counter'
-      fullPath: '/counter'
-      preLoaderRoute: typeof CounterRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/about': {
-      id: '/about'
-      path: '/about'
-      fullPath: '/about'
-      preLoaderRoute: typeof AboutRouteImport
+    '/stream': {
+      id: '/stream'
+      path: '/stream'
+      fullPath: '/stream'
+      preLoaderRoute: typeof StreamRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -116,15 +102,29 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/$': {
+      id: '/api/$'
+      path: '/api/$'
+      fullPath: '/api/$'
+      preLoaderRoute: typeof ApiSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/rpc/$': {
+      id: '/api/rpc/$'
+      path: '/api/rpc/$'
+      fullPath: '/api/rpc/$'
+      preLoaderRoute: typeof ApiRpcSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AboutRoute: AboutRoute,
-  CounterRoute: CounterRoute,
-  ServerFnsRoute: ServerFnsRoute,
+  StreamRoute: StreamRoute,
   ThingsRoute: ThingsRoute,
+  ApiSplatRoute: ApiSplatRoute,
+  ApiRpcSplatRoute: ApiRpcSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

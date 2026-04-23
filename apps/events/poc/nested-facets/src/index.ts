@@ -1767,15 +1767,16 @@ export class App {
       });
     }
 
-    // ── WebSocket at Project level (facets can't receive webSocketMessage) ──
-    // Accept here, tag with app + path, dispatch messages via POST to facet
-    if (req.headers.get("Upgrade") === "websocket" && app) {
-      const pair = new WebSocketPair();
-      this.ctx.acceptWebSocket(pair[1], [`ws:${app}:${slug}:${url.pathname}`]);
-      console.log(`[Project DO] accepting WebSocket for app=${app} path=${url.pathname}`);
-      pair[1].send(JSON.stringify({ type: "connected", app, path: url.pathname }));
-      return new Response(null, { status: 101, webSocket: pair[0] });
+    // ── WebSocket handling ──
+    // Project-level requests (no app): handled by the Project DO (log streaming, etc.)
+    // App-level requests: forwarded to the facet via facet.fetch() — the app's
+    // server entry handles the WebSocket upgrade directly (e.g. oRPC WebSocket).
+    if (req.headers.get("Upgrade") === "websocket" && !app) {
+      // Project-level WS (e.g. /api/logs) — already handled above in Level 2
+      // This shouldn't be reached, but guard anyway
+      return new Response("WebSocket not supported at this path", { status: 400 });
     }
+    // App-level WS: fall through to Level 3 — facet.fetch() handles the upgrade
 
     // ── Level 3: App ────────────────────────────────────────────────────
     if (!app) return new Response("No app specified", { status: 400 });
@@ -1915,79 +1916,11 @@ export class App {
     return facet.fetch(req);
   }
 
-  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-    const tags = this.ctx.getTags(ws);
-    const wsTag = tags.find((t) => t.startsWith("ws:"));
-    if (!wsTag) return; // Log WS or unknown — ignore
-
-    // Parse tag: "ws:<app>:<slug>:<pathname>"
-    const [, tagApp, tagSlug, ...pathParts] = wsTag.split(":");
-    const pathname = pathParts.join(":"); // rejoin in case pathname had colons
-    console.log(`[Project DO] WS message for app=${tagApp} path=${pathname}`);
-
-    try {
-      // Load the app and forward the message as a POST /_ws-message to the facet
-      const configStr = (await this.readFile("config.json")) ?? '{"apps":[]}';
-      const config = JSON.parse(configStr) as { apps: string[] };
-      if (!config.apps.includes(tagApp)) return;
-
-      // Reconstruct the app loading (same as Level 3 fetch)
-      const manifestStr = await this.readFile(`apps/${tagApp}/dist/manifest.json`);
-      if (!manifestStr) return;
-      const meta = JSON.parse(manifestStr);
-      const modules: Record<string, string> = {};
-      for (const f of meta.moduleFiles) {
-        const content = await this.readFile(`apps/${tagApp}/dist/${f}`);
-        if (content) modules[f] = content;
-      }
-      const mainModule = meta.mainModule;
-      if (!modules[mainModule]) return;
-
-      const runtimePrefix = egressRuntimeWrapper(tagSlug);
-      modules[mainModule] = runtimePrefix + modules[mainModule];
-      const sourceHash = Array.from(
-        new Uint8Array(
-          await crypto.subtle.digest("SHA-256", new TextEncoder().encode(modules[mainModule])),
-        ),
-      )
-        .slice(0, 4)
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
-
-      const facet = this.ctx.facets.get(`app:${tagApp}:${sourceHash}`, async () => {
-        const worker = this.env.LOADER.get(`code:${tagApp}:${sourceHash}`, async () => ({
-          compatibilityDate: "2026-04-01",
-          compatibilityFlags: appCompatFlags,
-          mainModule,
-          modules,
-          globalOutbound: this.env.EGRESS_GATEWAY,
-          env: { AI: this.env.AI_PROXY, EXEC: this.env.CODE_EXECUTOR },
-        }));
-        return { class: worker.getDurableObjectClass("App") };
-      });
-
-      // Forward message to the app facet as POST /_ws-message with pathname context
-      const resp = await facet.fetch(
-        new Request("http://localhost/_ws-message", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ pathname, message: typeof message === "string" ? message : "" }),
-        }),
-      );
-      const result = (await resp.json()) as { appends?: any[] };
-
-      // Send any append events back through the WebSocket
-      if (result.appends) {
-        for (const appendEvent of result.appends) {
-          ws.send(JSON.stringify({ type: "append", event: appendEvent }));
-        }
-      }
-    } catch (e: any) {
-      console.error(`[Project DO] WS dispatch error: ${e.message}`);
-      try {
-        ws.send(JSON.stringify({ type: "error", message: e.message }));
-      } catch {}
-    }
+  // webSocketMessage only fires for WebSockets accepted by THIS DO
+  // (i.e. the project-level /api/logs WebSocket). App-level WebSockets
+  // are handled directly by the facet via facet.fetch() returning a 101.
+  async webSocketMessage(_ws: WebSocket, _message: string | ArrayBuffer) {
+    // Project-level log WS has no tags — nothing to dispatch
   }
 
   webSocketClose(ws: WebSocket) {

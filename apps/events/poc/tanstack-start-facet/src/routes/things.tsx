@@ -1,33 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-
-interface Thing {
-  id: string;
-  name: string;
-  createdAt: string;
-}
-
-async function fetchThings(): Promise<Thing[]> {
-  const res = await fetch("/api/things");
-  if (!res.ok) throw new Error(`Failed to fetch things: ${res.status}`);
-  return res.json();
-}
-
-async function createThing(name: string): Promise<Thing> {
-  const res = await fetch("/api/things", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (!res.ok) throw new Error(`Failed to create thing: ${res.status}`);
-  return res.json();
-}
-
-async function deleteThing(id: string): Promise<void> {
-  const res = await fetch(`/api/things/${id}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`Failed to delete thing: ${res.status}`);
-}
+import { getClient, orpc } from "../orpc/client";
 
 export const Route = createFileRoute("/things")({
   component: Things,
@@ -35,29 +9,23 @@ export const Route = createFileRoute("/things")({
 
 function Things() {
   const queryClient = useQueryClient();
+  const client = getClient();
   const [newName, setNewName] = useState("");
 
-  const {
-    data: things,
-    isPending,
-    error,
-  } = useQuery({
-    queryKey: ["things"],
-    queryFn: fetchThings,
-  });
+  const { data, isPending, error } = useQuery(orpc.things.list.queryOptions());
 
   const createMutation = useMutation({
-    mutationFn: createThing,
+    mutationFn: (name: string) => client.things.create({ name }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["things"] });
+      queryClient.invalidateQueries({ queryKey: orpc.things.list.queryOptions().queryKey });
       setNewName("");
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: deleteThing,
+    mutationFn: (id: string) => client.things.remove({ id }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["things"] });
+      queryClient.invalidateQueries({ queryKey: orpc.things.list.queryOptions().queryKey });
     },
   });
 
@@ -68,15 +36,16 @@ function Things() {
     createMutation.mutate(trimmed);
   };
 
+  const things = data?.items ?? [];
+
   return (
     <main>
       <h1>Things</h1>
       <p>
-        CRUD demo backed by SQLite inside a Durable Object. Data persists across requests via the
-        DO's embedded database.
+        CRUD via <code>@orpc/openapi-client</code> → <code>OpenAPIHandler</code>. Typed end-to-end
+        from contract to UI.
       </p>
 
-      {/* Create form */}
       <form
         onSubmit={handleSubmit}
         style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem" }}
@@ -85,7 +54,7 @@ function Things() {
           type="text"
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
-          placeholder="New thing name..."
+          placeholder="New thing..."
           disabled={createMutation.isPending}
           style={{ flex: 1 }}
         />
@@ -98,49 +67,43 @@ function Things() {
         </button>
       </form>
 
-      {createMutation.error && (
-        <div className="error-box" style={{ marginBottom: "1rem" }}>
-          {createMutation.error.message}
-        </div>
+      {isPending && <p style={{ color: "#888" }}>Loading...</p>}
+      {error && <pre style={{ color: "#fca5a5", background: "#450a0a" }}>{error.message}</pre>}
+
+      {things.length === 0 && !isPending && (
+        <p style={{ color: "#555", textAlign: "center", padding: "2rem" }}>No things yet.</p>
       )}
 
-      {/* List */}
-      {isPending && <p style={{ color: "#888" }}>Loading things...</p>}
-
-      {error && <div className="error-box">{error.message}</div>}
-
-      {things && things.length === 0 && (
-        <div className="empty-state">No things yet. Create one above.</div>
-      )}
-
-      {things && things.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-          {things.map((thing) => (
-            <div key={thing.id} className="thing-item">
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontWeight: 500, color: "#e0e0e0" }}>{thing.name}</div>
-                <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.25rem" }}>
-                  {thing.id} &middot; {new Date(thing.createdAt).toLocaleString()}
-                </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        {things.map((thing) => (
+          <div
+            key={thing.id}
+            className="card"
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+          >
+            <div>
+              <div style={{ fontWeight: 500 }}>{thing.name}</div>
+              <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.2rem" }}>
+                {thing.id} · {new Date(thing.createdAt).toLocaleString()}
               </div>
-              <button
-                className="btn-danger"
-                onClick={() => deleteMutation.mutate(thing.id)}
-                disabled={deleteMutation.isPending}
-                style={{ marginLeft: "0.75rem", fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}
-              >
-                Delete
-              </button>
             </div>
-          ))}
-        </div>
-      )}
+            <button
+              className="btn-danger"
+              onClick={() => deleteMutation.mutate(thing.id)}
+              disabled={deleteMutation.isPending}
+              style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
 
-      <p style={{ marginTop: "1.5rem", fontSize: "0.85rem" }}>
-        The <code style={{ color: "#f59e0b" }}>/api/things</code> endpoints are handled by the
-        Durable Object wrapper, not TanStack server functions. The React client fetches data via{" "}
-        <code style={{ color: "#f59e0b" }}>@tanstack/react-query</code>.
-      </p>
+      {data && (
+        <p style={{ marginTop: "1rem", fontSize: "0.8rem", color: "#555" }}>
+          {data.total} total · via <code>OpenAPILink</code> → <code>GET /api/things</code>
+        </p>
+      )}
     </main>
   );
 }
