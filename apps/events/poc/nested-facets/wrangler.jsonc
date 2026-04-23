@@ -10,6 +10,13 @@
       "image": "./Dockerfile.build-sandbox",
       "instance_type": "standard-1",
       "max_instances": 2,
+      "wrangler_ssh": { "enabled": true },
+      "authorized_keys": [
+        {
+          "name": "debug",
+          "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP+VckcAWnI0ZbBLsxmKWJtv7lbDwPWcjN37dR/VYlLq sandbox-debug",
+        },
+      ],
     },
   ],
   "durable_objects": {

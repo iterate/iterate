@@ -1553,24 +1553,26 @@ export class Project extends DurableObject<Env> {
         }
       }
 
-      // POST /api/build-vite/:app — build a Vite/TanStack Start app in a Sandbox container
+      // POST /api/build-vite/:app — build a Vite app in a Sandbox container.
+      // Uses the app's own vite.config.ts/wrangler.jsonc/package.json.
+      // The server entry (index.js) exports `class App` directly — no wrapper generated.
       const viteBuildMatch = url.pathname.match(/^\/api\/build-vite\/([a-z0-9-]+)$/);
       if (req.method === "POST" && viteBuildMatch) {
         const buildApp = viteBuildMatch[1];
-        this.log(`[Vite] Building ${buildApp} in sandbox container...`);
+        this.log(`[Vite] Building ${buildApp} in sandbox...`);
         this.setBuildState(buildApp, "building");
 
         try {
           const sandbox = getSandbox(this.env.BUILD_SANDBOX, `vite-build-${buildApp}`);
-
-          // 1. Write all source files from artifact repo to sandbox
           const appDir = `${REPO_DIR}/apps/${buildApp}`;
+
+          // 1. Write source files to sandbox (app's own configs are used as-is)
           const entries = await this.workspace.glob(`${appDir}/**/*`);
           const sourceFiles = entries.filter(
             (e: any) =>
               e.type === "file" && !e.path.includes("/dist/") && !e.path.includes("/node_modules/"),
           );
-          this.log(`[Vite] Writing ${sourceFiles.length} source files to sandbox...`);
+          this.log(`[Vite] Writing ${sourceFiles.length} files...`);
           for (const entry of sourceFiles) {
             const content = await this.workspace.readFile(entry.path);
             if (content !== null) {
@@ -1579,140 +1581,57 @@ export class Project extends DurableObject<Env> {
             }
           }
 
-          // 2. Write vite.config.ts + wrangler.jsonc (CF Workers target)
-          await sandbox.writeFile(
-            "/workspace/vite.config.ts",
-            [
-              "import { defineConfig } from 'vite'",
-              "import { cloudflare } from '@cloudflare/vite-plugin'",
-              "import { tanstackStart } from '@tanstack/react-start/plugin/vite'",
-              "import react from '@vitejs/plugin-react'",
-              "",
-              "export default defineConfig({",
-              "  plugins: [",
-              "    cloudflare({ viteEnvironment: { name: 'ssr' } }),",
-              "    tanstackStart({ customViteReactPlugin: true }),",
-              "    react(),",
-              "  ],",
-              "})",
-            ].join("\n"),
-          );
-          await sandbox.writeFile(
-            "/workspace/wrangler.jsonc",
-            JSON.stringify({
-              name: buildApp,
-              compatibility_date: "2026-04-01",
-              compatibility_flags: ["nodejs_compat"],
-              main: "@tanstack/react-start/server-entry",
-            }),
-          );
-
-          // 3. Install dependencies + build
-          this.log(`[Vite] Installing dependencies...`);
+          // 2. Install + build
+          this.log(`[Vite] npm install...`);
           const install = await sandbox.exec("npm install --legacy-peer-deps 2>&1", {
             timeout: 120000,
             cwd: "/workspace",
           });
           if (!install.success)
-            throw new Error(
-              `npm install failed: ${install.stdout.slice(-300)} ${install.stderr.slice(-300)}`,
-            );
-          this.log(`[Vite] Dependencies installed`);
+            throw new Error(`npm install failed: ${install.stdout.slice(-500)}`);
 
-          this.log(`[Vite] Running vite build...`);
+          this.log(`[Vite] vite build...`);
           const build = await sandbox.exec("npx vite build 2>&1", {
             timeout: 180000,
             cwd: "/workspace",
           });
-          if (!build.success) {
-            const fullOutput = (build.stderr || "") + "\n" + (build.stdout || "");
-            throw new Error(`vite build failed: ${fullOutput.slice(-2000)}`);
-          }
-          this.log(`[Vite] Build done: ${build.stdout.slice(-200)}`);
-
-          // 4. Locate build output — CF plugin uses dist/, TanStack default uses .tanstack/start/build/
-          const locateServer = await sandbox.exec(
-            "ls /workspace/dist/server/index.js 2>/dev/null && echo 'dist' || " +
-              "(ls /workspace/.output/server/index.mjs 2>/dev/null && echo 'output') || echo 'unknown'",
-          );
-          const layout = locateServer.stdout.trim();
-          let serverDir: string, clientDir: string, serverEntryFile: string;
-          if (layout === "dist") {
-            serverDir = "/workspace/dist/server";
-            clientDir = "/workspace/dist/client";
-            serverEntryFile = "index.js";
-          } else {
-            // Fallback: find the actual locations
-            const findServer = await sandbox.exec(
-              "find /workspace -name 'index.js' -path '*/server/*' -o -name 'index.mjs' -path '*/server/*' 2>/dev/null | head -1",
+          if (!build.success)
+            throw new Error(
+              `vite build failed: ${(build.stderr + "\n" + build.stdout).slice(-2000)}`,
             );
-            const findClient = await sandbox.exec(
-              "find /workspace -type d -name 'assets' -path '*client*' 2>/dev/null | head -1",
-            );
-            this.log(`[Vite] Server entry: ${findServer.stdout.trim()}`);
-            this.log(`[Vite] Client dir: ${findClient.stdout.trim()}`);
-            const serverPath = findServer.stdout.trim();
-            if (!serverPath) throw new Error("Could not find server build output");
-            serverDir = serverPath.replace(/\/[^/]+$/, "");
-            clientDir =
-              findClient.stdout.trim().replace(/\/assets$/, "") || "/workspace/dist/client";
-            serverEntryFile = serverPath.split("/").pop()!;
-          }
-          this.log(
-            `[Vite] Build layout: server=${serverDir} client=${clientDir} entry=${serverEntryFile}`,
+          this.log(`[Vite] Build done`);
+
+          // 3. Read build output — index.js exports App directly, no wrapper needed
+          const serverEntry = await sandbox.readFile("/workspace/dist/server/index.js");
+          const serverAssets = await sandbox.exec(
+            "ls /workspace/dist/server/assets/ 2>/dev/null || echo ''",
+          );
+          const clientAssets = await sandbox.exec(
+            "ls /workspace/dist/client/assets/ 2>/dev/null || echo ''",
           );
 
-          const serverEntry = await sandbox.readFile(`${serverDir}/${serverEntryFile}`);
-          const serverAssetList = await sandbox.exec(
-            `ls ${serverDir}/assets/ 2>/dev/null || echo ''`,
-          );
-          const clientAssetList = await sandbox.exec(
-            `ls ${clientDir}/assets/ 2>/dev/null || echo ''`,
-          );
-
-          // Collect server modules
           const modules: Record<string, string> = {};
-          modules["server-entry.js"] = serverEntry.content;
-          for (const f of serverAssetList.stdout.trim().split("\n").filter(Boolean)) {
-            if (f.endsWith(".js")) {
-              const file = await sandbox.readFile(`${serverDir}/assets/${f}`);
-              modules[`assets/${f}`] = file.content;
-            }
+          modules["index.js"] = serverEntry.content;
+          for (const f of serverAssets.stdout.trim().split("\n").filter(Boolean)) {
+            const file = await sandbox.readFile(`/workspace/dist/server/assets/${f}`);
+            modules[`assets/${f}`] = file.content;
           }
 
-          // DO wrapper
-          modules["bundle.js"] = `
-import handler from "./server-entry.js";
-export class App {
-  constructor(state, env) { this.state = state; this.env = env; }
-  async fetch(request) {
-    try { return await handler.fetch(request); }
-    catch (err) {
-      console.error("[TanStack Facet] SSR error:", err.message, err.stack);
-      return new Response("SSR Error: " + err.message, { status: 500 });
-    }
-  }
-}
-`;
-
-          // Collect client assets
           const clientAssetFiles: string[] = [];
-          for (const f of clientAssetList.stdout.trim().split("\n").filter(Boolean)) {
-            const file = await sandbox.readFile(`${clientDir}/assets/${f}`);
+          for (const f of clientAssets.stdout.trim().split("\n").filter(Boolean)) {
+            const file = await sandbox.readFile(`/workspace/dist/client/assets/${f}`);
             await this.writeFile(`apps/${buildApp}/dist/assets/${f}`, file.content);
             clientAssetFiles.push(`/${f}`);
           }
 
-          // 7. Write server modules to dist
           for (const [name, content] of Object.entries(modules)) {
             await this.writeFile(`apps/${buildApp}/dist/${name}`, content);
           }
 
-          // 8. Write manifest
           const manifest = {
             builtAt: new Date().toISOString(),
             builtBy: "sandbox-vite",
-            mainModule: "bundle.js",
+            mainModule: "index.js",
             moduleFiles: Object.keys(modules),
             assetFiles: clientAssetFiles,
           };
@@ -1723,10 +1642,8 @@ export class App {
 
           this.setBuildState(buildApp, "ready");
           this.log(
-            `[Vite] Build complete: ${buildApp} (${manifest.moduleFiles.length} server modules, ${clientAssetFiles.length} client assets)`,
+            `[Vite] Done: ${manifest.moduleFiles.length} modules, ${clientAssetFiles.length} assets`,
           );
-
-          // Clean up sandbox
           try {
             await sandbox.destroy();
           } catch {}
@@ -1741,7 +1658,7 @@ export class App {
           });
         } catch (e: any) {
           this.setBuildState(buildApp, "error");
-          this.log(`[Vite] Build failed: ${buildApp}: ${e.message}`);
+          this.log(`[Vite] Failed: ${e.message}`);
           return Response.json({ ok: false, error: e.message, stack: e.stack }, { status: 500 });
         }
       }
@@ -1789,6 +1706,11 @@ export class App {
       return new Response(`App "${app}" not enabled. Enabled: ${config.apps.join(", ")}`, {
         status: 404,
       });
+    }
+
+    // ── App Runner debug UI at /__runner/* ──
+    if (url.pathname.startsWith("/__runner")) {
+      return this.handleRunnerUI(app, url, req, slug, remote, repoName);
     }
 
     // Read app-level build config (externals, compatibilityFlags, etc.)
@@ -1867,6 +1789,103 @@ export class App {
       return facet.fetch(req);
     }
 
+    // ── Auto-build: if app has buildConfig.vite but no dist, trigger sandbox build ──
+    if (appBuildConfig.vite && !manifestStr) {
+      const buildState = this.getBuildState(app);
+      if (buildState === "building") {
+        return Response.redirect(new URL("/__runner", req.url).toString(), 302);
+      }
+
+      // Trigger build in the background
+      this.log(`[AppRunner] Auto-building ${app} (has vite config but no dist)`);
+      this.setBuildState(app, "building");
+      this.ctx.waitUntil(
+        (async () => {
+          try {
+            const sandbox = getSandbox(this.env.BUILD_SANDBOX, `vite-build-${app}`);
+            const appDir = `${REPO_DIR}/apps/${app}`;
+            const entries = await this.workspace.glob(`${appDir}/**/*`);
+            const sourceFiles = entries.filter(
+              (e: any) =>
+                e.type === "file" &&
+                !e.path.includes("/dist/") &&
+                !e.path.includes("/node_modules/"),
+            );
+            this.log(`[AppRunner] Writing ${sourceFiles.length} files to sandbox...`);
+            for (const entry of sourceFiles) {
+              const content = await this.workspace.readFile(entry.path);
+              if (content !== null) {
+                const relPath = entry.path.replace(appDir + "/", "");
+                await sandbox.writeFile(`/workspace/${relPath}`, content);
+              }
+            }
+            this.log(`[AppRunner] npm install...`);
+            const install = await sandbox.exec("npm install --legacy-peer-deps 2>&1", {
+              timeout: 120000,
+              cwd: "/workspace",
+            });
+            if (!install.success)
+              throw new Error(`npm install failed: ${install.stdout.slice(-500)}`);
+            this.log(`[AppRunner] vite build...`);
+            const build = await sandbox.exec("npx vite build 2>&1", {
+              timeout: 180000,
+              cwd: "/workspace",
+            });
+            if (!build.success)
+              throw new Error(
+                `vite build failed: ${(build.stderr + "\n" + build.stdout).slice(-2000)}`,
+              );
+            this.log(`[AppRunner] Reading build output...`);
+            const serverEntry = await sandbox.readFile("/workspace/dist/server/index.js");
+            const serverAssets = await sandbox.exec(
+              "ls /workspace/dist/server/assets/ 2>/dev/null || echo ''",
+            );
+            const clientAssets = await sandbox.exec(
+              "ls /workspace/dist/client/assets/ 2>/dev/null || echo ''",
+            );
+            const modules: Record<string, string> = {};
+            modules["index.js"] = serverEntry.content;
+            for (const f of serverAssets.stdout.trim().split("\n").filter(Boolean)) {
+              const file = await sandbox.readFile(`/workspace/dist/server/assets/${f}`);
+              modules[`assets/${f}`] = file.content;
+            }
+            const clientAssetFiles: string[] = [];
+            for (const f of clientAssets.stdout.trim().split("\n").filter(Boolean)) {
+              const file = await sandbox.readFile(`/workspace/dist/client/assets/${f}`);
+              await this.writeFile(`apps/${app}/dist/assets/${f}`, file.content);
+              clientAssetFiles.push(`/${f}`);
+            }
+            for (const [name, content] of Object.entries(modules)) {
+              await this.writeFile(`apps/${app}/dist/${name}`, content);
+            }
+            const manifest = {
+              builtAt: new Date().toISOString(),
+              builtBy: "app-runner-auto",
+              mainModule: "index.js",
+              moduleFiles: Object.keys(modules),
+              assetFiles: clientAssetFiles,
+            };
+            await this.writeFile(
+              `apps/${app}/dist/manifest.json`,
+              JSON.stringify(manifest, null, 2),
+            );
+            this.setBuildState(app, "ready");
+            this.log(
+              `[AppRunner] Build complete: ${manifest.moduleFiles.length} modules, ${clientAssetFiles.length} assets`,
+            );
+            try {
+              await sandbox.destroy();
+            } catch {}
+          } catch (e: any) {
+            this.setBuildState(app, "error");
+            this.log(`[AppRunner] Build failed: ${e.message}`);
+          }
+        })(),
+      );
+
+      return Response.redirect(new URL("/__runner", req.url).toString(), 302);
+    }
+
     // Serve public files for unbundled apps too (images, etc.)
     if (req.method === "GET" && url.pathname.includes(".") && !url.pathname.startsWith("/api/")) {
       const publicResponse = await this.servePublicFile(app, req);
@@ -1925,5 +1944,73 @@ export class App {
 
   webSocketClose(ws: WebSocket) {
     ws.close();
+  }
+
+  async handleRunnerUI(
+    app: string,
+    url: URL,
+    req: Request,
+    slug: string,
+    remote: string | null,
+    repoName: string | null,
+  ): Promise<Response> {
+    const appDir = `apps/${app}`;
+    const manifest = await this.readFile(`${appDir}/dist/manifest.json`);
+    const pkg = await this.readFile(`${appDir}/package.json`);
+    const buildState = this.getBuildState(app);
+
+    // POST /__runner/rebuild — trigger a rebuild via the project-level endpoint
+    if (req.method === "POST" && url.pathname === "/__runner/rebuild") {
+      const headers = new Headers();
+      headers.set("x-level", "project");
+      headers.set("x-project-slug", slug);
+      if (remote) headers.set("x-artifacts-remote", remote);
+      if (repoName) headers.set("x-artifacts-repo", repoName);
+      const buildReq = new Request(`https://internal/api/build-vite/${app}`, {
+        method: "POST",
+        headers,
+      });
+      const resp = await this.fetch(buildReq);
+      // Redirect back to runner UI after triggering
+      return Response.redirect(new URL("/__runner", req.url).toString(), 302);
+    }
+
+    // GET /__runner/files — list source files as JSON
+    if (url.pathname === "/__runner/files") {
+      const files = await this.listFiles(appDir);
+      return Response.json({ files });
+    }
+
+    // GET /__runner — debug dashboard
+    const files = await this.listFiles(appDir);
+    const prefix = appDir + "/";
+    const stripped = files.map((f: string) => (f.startsWith(prefix) ? f.slice(prefix.length) : f));
+    const srcFiles = stripped.filter(
+      (f: string) => !f.startsWith("dist/") && !f.includes("node_modules"),
+    );
+    const distFiles = stripped.filter((f: string) => f.startsWith("dist/"));
+    const meta = manifest ? JSON.parse(manifest) : null;
+    const pkgData = pkg ? JSON.parse(pkg) : {};
+    const isBuilding = buildState === "building";
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>App Runner: ${app}</title>
+${isBuilding ? '<meta http-equiv="refresh" content="5">' : ""}
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui;background:#0a0a0a;color:#e0e0e0;padding:2rem;max-width:800px;margin:0 auto}
+h1{font-size:1.3rem;margin-bottom:1rem}h2{font-size:1rem;color:#888;margin:1.5rem 0 .5rem;border-bottom:1px solid #222;padding-bottom:.3rem}
+pre{background:#111;border:1px solid #222;border-radius:6px;padding:.75rem;font-size:.75rem;overflow:auto;max-height:300px;color:#4ade80;line-height:1.5}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.7rem;margin-left:.5rem}
+.ready{background:#052e16;color:#4ade80}.building{background:#422006;color:#fbbf24}.idle{background:#1a1a1a;color:#888}.error{background:#450a0a;color:#fca5a5}
+button{background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb;padding:.4rem 1rem;border-radius:6px;cursor:pointer;font-size:.85rem}
+button:hover{background:#1e40af}a{color:#60a5fa}</style></head><body>
+<h1>App Runner: ${app} <span class="badge ${buildState}">${buildState}</span></h1>
+<p style="color:#888;margin-bottom:1rem"><a href="/">← Back to app</a> · <a href="/__runner/files">Files API</a></p>
+${meta ? `<p style="font-size:.85rem">Built: ${meta.builtAt} · ${meta.moduleFiles?.length ?? "?"} server modules · ${meta.assetFiles?.length ?? "?"} client assets</p>` : `<p style="color:#f59e0b">No dist — app needs building</p>`}
+<form method="POST" action="/__runner/rebuild" style="margin:1rem 0"><button type="submit"${isBuilding ? " disabled" : ""}>Rebuild in Sandbox</button>${isBuilding ? ' <span style="color:#fbbf24;font-size:.85rem">Building... (auto-refreshing)</span>' : ""}</form>
+<h2>Source (${srcFiles.length} files)</h2><pre>${srcFiles.join("\n")}</pre>
+${distFiles.length ? `<h2>Dist (${distFiles.length} files)</h2><pre>${distFiles.join("\n")}</pre>` : ""}
+<h2>package.json</h2><pre>${JSON.stringify(pkgData, null, 2)}</pre>
+<h2>Build Logs</h2><pre>${this.#logBuffer.map((l) => `${new Date(l.ts).toISOString()} ${l.message}`).join("\n") || "(empty)"}</pre>
+</body></html>`;
+    return new Response(html, { headers: { "content-type": "text/html;charset=utf-8" } });
   }
 }

@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tanstack-app-standalone",
+  "compatibility_date": "2026-04-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "src/entry.standalone.ts",
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tanstack-app-db",
+      "database_id": "9efc089f-e45f-4c4d-8db8-cb33ae7128dd",
+      "migrations_dir": "drizzle",
+    },
+  ],
+}

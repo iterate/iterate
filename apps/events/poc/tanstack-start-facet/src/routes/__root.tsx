@@ -61,6 +61,7 @@ function RootDocument({ children }: { children: ReactNode }) {
           <Link to="/">Home</Link>
           <Link to="/things">Things</Link>
           <Link to="/stream">Stream</Link>
+          <Link to="/terminal">Terminal</Link>
           <a href="/api/docs" target="_blank" style={{ color: "#888" }}>
             API Docs
           </a>
