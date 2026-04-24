@@ -1,5 +1,6 @@
 {
   "name": "nested-facets-poc",
+  "account_id": "cc7f6f461fbe823c199da2b27f9e0ff3",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-01",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],

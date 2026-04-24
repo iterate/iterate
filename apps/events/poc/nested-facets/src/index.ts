@@ -563,15 +563,7 @@ async function handleAdminAPI(req: Request, url: URL, env: Env): Promise<Respons
       const id = env.PROJECT.idFromName(slug);
       const stub = env.PROJECT.get(id);
       await stub.setup(slug, artifactsRemote, artifactsRepo);
-
-      // Tell AppRunner where to clone from
-      const runnerId = env.APP_RUNNER.idFromName(slug);
-      const runner = runnerId
-        ? (env.APP_RUNNER.get(runnerId) as unknown as {
-            setup(remote: string, repoName: string): Promise<void>;
-          })
-        : null;
-      if (runner) await runner.setup(artifactsRemote, artifactsRepo);
+      // AppRunners are set up lazily on first request per app
     }
 
     return Response.json(
@@ -686,9 +678,9 @@ export class Project extends DurableObject<Env> {
     console.log(`[Project DO] setup: slug=${slug} repo=${artifactsRepo}`);
   }
 
-  #notifyAppRunner(slug: string) {
+  #notifyAppRunner(slug: string, app: string) {
     try {
-      const runnerId = this.env.APP_RUNNER.idFromName(slug);
+      const runnerId = this.env.APP_RUNNER.idFromName(`${slug}:${app}`);
       const runner = this.env.APP_RUNNER.get(runnerId) as unknown as {
         notifyBuild(): Promise<void>;
       };
@@ -1123,7 +1115,7 @@ export class Project extends DurableObject<Env> {
           this.log(`Commit/push failed: ${e.message}`);
         }
       }
-      this.#notifyAppRunner(this.slug);
+      this.#notifyAppRunner(this.slug, app);
 
       const files = await this.listFiles();
       return Response.json({
@@ -1346,7 +1338,7 @@ export class Project extends DurableObject<Env> {
           this.log(`Build complete: ${buildApp}`);
 
           // Notify AppRunner to pull latest
-          this.#notifyAppRunner(slug);
+          this.#notifyAppRunner(slug, buildApp);
 
           const files = await this.listFiles();
           return Response.json({
@@ -1464,7 +1456,7 @@ export class Project extends DurableObject<Env> {
               this.log(`Commit/push failed: ${e.message}`);
             }
           }
-          this.#notifyAppRunner(slug);
+          this.#notifyAppRunner(slug, buildApp);
 
           try {
             await sandbox.destroy();
@@ -1523,144 +1515,16 @@ export class Project extends DurableObject<Env> {
       return this.handleRunnerUI(app, url, req, slug, remote, repoName);
     }
 
-    // Check for built dist
-    const manifestStr = await this.readFile(`apps/${app}/dist/manifest.json`);
-    if (manifestStr) {
-      const meta = JSON.parse(manifestStr);
-      console.log(`[Project DO] app=${app} has dist (built at ${meta.builtAt})`);
-
-      // WebSocket: accept at Project DO level (facets can't receive webSocketMessage)
-      // Tag with app+slug+path for dispatch in webSocketMessage handler
-      if (req.headers.get("Upgrade") === "websocket") {
-        const pair = new WebSocketPair();
-        this.ctx.acceptWebSocket(pair[1], [`ws:${app}:${slug}:${url.pathname}`]);
-        console.log(`[Project DO] accepting WS for app=${app} path=${url.pathname}`);
-        pair[1].send(JSON.stringify({ type: "connected", app, path: url.pathname }));
-        return new Response(null, { status: 101, webSocket: pair[0] });
-      }
-
-      // All apps serve through Project DO facets — one workspace, one source of truth
-      console.log(`[Project DO] routing ${app} via facet`);
-      const appResp = await this.handleAppViaFacet(app, slug, meta, req);
-      return this.#interceptEmailReply(req, url, appResp, slug);
-    }
-
-    // ── Auto-build: if app has vite buildConfig but no dist ──
-    const appPkgStr = await this.readFile(`apps/${app}/package.json`);
-    const appPkg = appPkgStr ? JSON.parse(appPkgStr) : {};
-    const appBuildConfig = appPkg.buildConfig ?? {};
-
-    if (appBuildConfig.vite) {
-      const buildState = this.getBuildState(app);
-      if (buildState === "building") {
-        return Response.redirect(new URL("/__runner", req.url).toString(), 302);
-      }
-
-      // Trigger build in the background
-      this.log(`[AppRunner] Auto-building ${app} (has vite config but no dist)`);
-      this.setBuildState(app, "building");
-      this.ctx.waitUntil(
-        (async () => {
-          try {
-            const sandbox = getSandbox(this.env.BUILD_SANDBOX, `vite-build-${app}`);
-            const appDir = `${REPO_DIR}/apps/${app}`;
-            const entries = await this.workspace.glob(`${appDir}/**/*`);
-            const sourceFiles = entries.filter(
-              (e: any) =>
-                e.type === "file" &&
-                !e.path.includes("/dist/") &&
-                !e.path.includes("/node_modules/"),
-            );
-            this.log(`[AppRunner] Writing ${sourceFiles.length} files to sandbox...`);
-            for (const entry of sourceFiles) {
-              const content = await this.workspace.readFile(entry.path);
-              if (content !== null) {
-                const relPath = entry.path.replace(appDir + "/", "");
-                await sandbox.writeFile(`/workspace/${relPath}`, content);
-              }
-            }
-            this.log(`[AppRunner] npm install...`);
-            const install = await sandbox.exec("npm install --legacy-peer-deps 2>&1", {
-              timeout: 120000,
-              cwd: "/workspace",
-            });
-            if (!install.success)
-              throw new Error(`npm install failed: ${install.stdout.slice(-500)}`);
-            this.log(`[AppRunner] vite build...`);
-            const build = await sandbox.exec("npx vite build 2>&1", {
-              timeout: 180000,
-              cwd: "/workspace",
-            });
-            if (!build.success)
-              throw new Error(
-                `vite build failed: ${(build.stderr + "\n" + build.stdout).slice(-2000)}`,
-              );
-            this.log(`[AppRunner] Reading build output...`);
-            const serverEntry = await sandbox.readFile("/workspace/dist/server/index.js");
-            const serverAssets = await sandbox.exec(
-              "ls /workspace/dist/server/assets/ 2>/dev/null || echo ''",
-            );
-            const clientAssets = await sandbox.exec(
-              "ls /workspace/dist/client/assets/ 2>/dev/null || echo ''",
-            );
-            const modules: Record<string, string> = {};
-            modules["index.js"] = serverEntry.content;
-            for (const f of serverAssets.stdout.trim().split("\n").filter(Boolean)) {
-              const file = await sandbox.readFile(`/workspace/dist/server/assets/${f}`);
-              modules[`assets/${f}`] = file.content;
-            }
-            const clientAssetFiles: string[] = [];
-            for (const f of clientAssets.stdout.trim().split("\n").filter(Boolean)) {
-              const file = await sandbox.readFile(`/workspace/dist/client/assets/${f}`);
-              await this.writeFile(`apps/${app}/dist/assets/${f}`, file.content);
-              clientAssetFiles.push(`/${f}`);
-            }
-            for (const [name, content] of Object.entries(modules)) {
-              await this.writeFile(`apps/${app}/dist/${name}`, content);
-            }
-            const manifest = {
-              builtAt: new Date().toISOString(),
-              builtBy: "app-runner-auto",
-              mainModule: "index.js",
-              moduleFiles: Object.keys(modules),
-              assetFiles: clientAssetFiles,
-            };
-            await this.writeFile(
-              `apps/${app}/dist/manifest.json`,
-              JSON.stringify(manifest, null, 2),
-            );
-            this.setBuildState(app, "ready");
-            this.log(
-              `[AppRunner] Build complete: ${manifest.moduleFiles.length} modules, ${clientAssetFiles.length} assets`,
-            );
-
-            // Commit dist to artifact repo + notify AppRunner
-            if (repoName) {
-              try {
-                await this.commitAndPush(`Build ${app} (auto-vite)`, repoName);
-              } catch (e: any) {
-                this.log(`Commit/push failed: ${e.message}`);
-              }
-            }
-            this.#notifyAppRunner(slug);
-
-            try {
-              await sandbox.destroy();
-            } catch {}
-          } catch (e: any) {
-            this.setBuildState(app, "error");
-            this.log(`[AppRunner] Build failed: ${e.message}`);
-          }
-        })(),
-      );
-
-      return Response.redirect(new URL("/__runner", req.url).toString(), 302);
-    }
-
-    // No unbundled fallback — all apps must be built
-    return new Response(`App "${app}" is not built. Visit /__runner to trigger a build.`, {
-      status: 404,
-    });
+    // Delegate to AppRunner DO — it owns its own workspace + facets
+    const runnerId = this.env.APP_RUNNER.idFromName(`${slug}:${app}`);
+    const runner = this.env.APP_RUNNER.get(runnerId) as unknown as {
+      setup(remote: string, repoName: string, app: string): Promise<void>;
+      fetch(req: Request): Promise<Response>;
+    };
+    if (remote && repoName) await runner.setup(remote, repoName, app);
+    console.log(`[Project DO] → AppRunner ${slug}:${app}`);
+    const appResp = await runner.fetch(req);
+    return this.#interceptEmailReply(req, url, appResp, slug);
   }
 
   // Intercept email reply responses — sends outbound email via env.EMAIL
@@ -1717,52 +1581,6 @@ export class Project extends DurableObject<Env> {
       console.error(`[Project DO] email send failed: ${e.message}\n${e.stack}`);
       return resp;
     }
-  }
-
-  // Direct facet creation for WebSocket requests (DO→DO WS forwarding not supported)
-  async handleAppViaFacet(
-    app: string,
-    slug: string,
-    meta: { mainModule: string; moduleFiles: string[] },
-    req: Request,
-  ): Promise<Response> {
-    const appPkgStr = await this.readFile(`apps/${app}/package.json`);
-    const appPkg = appPkgStr ? JSON.parse(appPkgStr) : {};
-    const appCompatFlags: string[] = appPkg.buildConfig?.compatibilityFlags ?? [];
-
-    const modules: Record<string, string> = {};
-    for (const f of meta.moduleFiles) {
-      const content = await this.readFile(`apps/${app}/dist/${f}`);
-      if (content) modules[f] = content;
-    }
-    const mainModule = meta.mainModule;
-    if (!modules[mainModule]) {
-      return new Response(`App ${app} missing main module: ${mainModule}`, { status: 500 });
-    }
-    const hashBytes = new Uint8Array(
-      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(modules[mainModule])),
-    );
-    const sourceHash = Array.from(hashBytes.slice(0, 4))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-
-    console.log(`[Project DO] WS direct facet: app=${app} hash=${sourceHash}`);
-    const ctx = this.ctx as any;
-    const facet = ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
-      const worker = this.env.LOADER.get(`code:${app}:${sourceHash}`, async () => ({
-        compatibilityDate: "2026-04-01",
-        compatibilityFlags: appCompatFlags,
-        mainModule,
-        modules,
-        globalOutbound: this.env.EGRESS_GATEWAY,
-        env: {
-          AI: this.env.AI_PROXY,
-          EXEC: this.env.CODE_EXECUTOR,
-        },
-      }));
-      return { class: (worker as any).getDurableObjectClass("App") };
-    });
-    return facet.fetch(req);
   }
 
   async handleRunnerUI(
@@ -1831,89 +1649,6 @@ ${distFiles.length ? `<h2>Dist (${distFiles.length} files)</h2><pre>${distFiles.
 <h2>Build Logs</h2><pre>${this.#logBuffer.map((l) => `${new Date(l.ts).toISOString()} ${l.message}`).join("\n") || "(empty)"}</pre>
 </body></html>`;
     return new Response(html, { headers: { "content-type": "text/html;charset=utf-8" } });
-  }
-
-  // WebSocket messages from app facets route here (facets can't receive webSocketMessage).
-  // Re-dispatch to the app facet via POST /_ws-message.
-  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-    const tags = this.ctx.getTags(ws);
-    const wsTag = tags.find((t) => t.startsWith("ws:"));
-    if (!wsTag) return;
-
-    const [, tagApp, tagSlug, ...pathParts] = wsTag.split(":");
-    const pathname = pathParts.join(":");
-    console.log(`[Project DO] WS message for app=${tagApp} path=${pathname}`);
-
-    try {
-      const configStr = (await this.readFile("config.json")) ?? '{"apps":[]}';
-      const config = JSON.parse(configStr) as { apps: string[] };
-      if (!config.apps.includes(tagApp)) return;
-
-      const manifestStr = await this.readFile(`apps/${tagApp}/dist/manifest.json`);
-      if (!manifestStr) return;
-      const meta = JSON.parse(manifestStr);
-      const modules: Record<string, string> = {};
-      for (const f of meta.moduleFiles) {
-        const content = await this.readFile(`apps/${tagApp}/dist/${f}`);
-        if (content) modules[f] = content;
-      }
-      const mainModule = meta.mainModule;
-      if (!modules[mainModule]) return;
-
-      const appPkgStr = await this.readFile(`apps/${tagApp}/package.json`);
-      const appPkg = appPkgStr ? JSON.parse(appPkgStr) : {};
-      const appCompatFlags: string[] = appPkg.buildConfig?.compatibilityFlags ?? [];
-
-      const hashBytes = new Uint8Array(
-        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(modules[mainModule])),
-      );
-      const sourceHash = Array.from(hashBytes.slice(0, 4))
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
-
-      const ctx = this.ctx as any;
-
-      const facet = ctx.facets.get(`app:${tagApp}:${sourceHash}`, async () => {
-        const worker = this.env.LOADER.get(`code:${tagApp}:${sourceHash}`, async () => ({
-          compatibilityDate: "2026-04-01",
-          compatibilityFlags: appCompatFlags,
-          mainModule,
-          modules,
-          globalOutbound: this.env.EGRESS_GATEWAY,
-          env: {
-            AI: this.env.AI_PROXY,
-            EXEC: this.env.CODE_EXECUTOR,
-          },
-        }));
-        return { class: (worker as any).getDurableObjectClass("App") };
-      });
-
-      const resp = await facet.fetch(
-        new Request("http://localhost/_ws-message", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ pathname, message: typeof message === "string" ? message : "" }),
-        }),
-      );
-      const result = (await resp.json()) as { appends?: any[] };
-
-      if (result.appends) {
-        for (const appendEvent of result.appends) {
-          ws.send(JSON.stringify({ type: "append", event: appendEvent }));
-        }
-      }
-    } catch (e: any) {
-      console.error(`[Project DO] WS dispatch error: ${e.message}\n${e.stack}`);
-      try {
-        ws.send(
-          JSON.stringify({
-            type: "error",
-            message: e.message,
-            stack: e.stack?.split("\n").slice(0, 3),
-          }),
-        );
-      } catch {}
-    }
   }
 
   webSocketClose(ws: WebSocket) {
