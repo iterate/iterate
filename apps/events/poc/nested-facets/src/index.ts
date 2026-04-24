@@ -23,7 +23,6 @@ import { adminHTML } from "./admin.ts";
 import { editorHTML } from "./editor.ts";
 export { EgressGateway } from "./egress-gateway.ts";
 export { AppRunner } from "./app-runner.ts";
-export { R2BucketProxy } from "./r2-proxy.ts";
 import { parseHost, PLATFORM_SUFFIX, PLATFORM_BARE } from "./host-parser.ts";
 
 // Export BuildSandbox for the container DO binding
@@ -476,7 +475,8 @@ export default {
 
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
-    console.log(`[Worker] ${req.method} ${url.hostname}${url.pathname}`);
+    const isWs = req.headers.get("Upgrade") === "websocket";
+    console.log(`[Worker] ${req.method} ${url.hostname}${url.pathname} ws=${isWs}`);
 
     if (url.pathname.startsWith("/admin/api/")) return handleAdminAPI(req, url, env);
 
@@ -501,7 +501,7 @@ export default {
       return fetch(target, { method: req.method, headers, body: req.body });
     }
 
-    // Pure proxy to Project DO — no request modification
+    // Route to Project DO
     const id = env.PROJECT.idFromName(parsed.project);
     return env.PROJECT.get(id).fetch(req);
   },
@@ -563,6 +563,15 @@ async function handleAdminAPI(req: Request, url: URL, env: Env): Promise<Respons
       const id = env.PROJECT.idFromName(slug);
       const stub = env.PROJECT.get(id);
       await stub.setup(slug, artifactsRemote, artifactsRepo);
+
+      // Tell AppRunner where to clone from
+      const runnerId = env.APP_RUNNER.idFromName(slug);
+      const runner = runnerId
+        ? (env.APP_RUNNER.get(runnerId) as unknown as {
+            setup(remote: string, repoName: string): Promise<void>;
+          })
+        : null;
+      if (runner) await runner.setup(artifactsRemote, artifactsRepo);
     }
 
     return Response.json(
@@ -675,6 +684,18 @@ export class Project extends DurableObject<Env> {
     this.#setMeta("artifacts_remote", artifactsRemote);
     this.#setMeta("artifacts_repo", artifactsRepo);
     console.log(`[Project DO] setup: slug=${slug} repo=${artifactsRepo}`);
+  }
+
+  #notifyAppRunner(slug: string) {
+    try {
+      const runnerId = this.env.APP_RUNNER.idFromName(slug);
+      const runner = this.env.APP_RUNNER.get(runnerId) as unknown as {
+        notifyBuild(): Promise<void>;
+      };
+      this.ctx.waitUntil(runner.notifyBuild());
+    } catch (e: any) {
+      console.error(`[Project DO] notifyAppRunner failed: ${e.message}`);
+    }
   }
 
   get slug(): string {
@@ -903,9 +924,6 @@ export class Project extends DurableObject<Env> {
   }
 
   async writeDistFiles(app: string, result: CreateWorkerResult | CreateAppResult): Promise<void> {
-    const doId = this.ctx.id.toString();
-    const r2Prefix = `${doId}/app/${app}/dist/client/`;
-
     // Clean old dist
     const distDir = `${REPO_DIR}/apps/${app}/dist`;
     try {
@@ -925,20 +943,17 @@ export class Project extends DurableObject<Env> {
     // Collect asset file keys
     const assetKeys: string[] = [];
 
-    // Write assets if present (createApp result) — to workspace + R2
+    // Write assets if present (createApp result) — to workspace only
     if ("assets" in result && result.assets) {
       for (const [name, content] of Object.entries(result.assets)) {
         const fullPath = `${REPO_DIR}/apps/${app}/dist/assets${name}`;
         const dir = fullPath.split("/").slice(0, -1).join("/");
         await this.workspace.mkdir(dir, { recursive: true });
-        const cleanName = name.replace(/^\/+/, "");
         if (typeof content === "string") {
           await this.workspace.writeFile(fullPath, content);
-          await this.env.WORKSPACE_R2.put(r2Prefix + cleanName, content);
         } else {
           const bytes = new Uint8Array(content as ArrayBuffer);
           await this.workspace.writeFileBytes(fullPath, bytes);
-          await this.env.WORKSPACE_R2.put(r2Prefix + cleanName, bytes);
         }
         assetKeys.push(name);
       }
@@ -960,7 +975,6 @@ export class Project extends DurableObject<Env> {
           : html + `\n${clientScripts}`;
       }
       await this.writeFile(`apps/${app}/dist/assets/index.html`, html);
-      await this.env.WORKSPACE_R2.put(r2Prefix + "index.html", html);
       assetKeys.push("/index.html");
     }
 
@@ -1100,6 +1114,9 @@ export class Project extends DurableObject<Env> {
 
       this.setBuildState(app, "ready");
       this.log(`[Sandbox] Build complete: ${app}`);
+
+      // Notify AppRunner to pull latest
+      this.#notifyAppRunner(this.slug);
 
       const files = await this.listFiles();
       return Response.json({
@@ -1320,6 +1337,10 @@ export class Project extends DurableObject<Env> {
 
           this.setBuildState(buildApp, "ready");
           this.log(`Build complete: ${buildApp}`);
+
+          // Notify AppRunner to pull latest
+          this.#notifyAppRunner(slug);
+
           const files = await this.listFiles();
           return Response.json({
             ok: true,
@@ -1400,12 +1421,10 @@ export class Project extends DurableObject<Env> {
             modules[`assets/${f}`] = file.content;
           }
 
-          const r2Prefix = `${this.ctx.id}/app/${buildApp}/dist/client/`;
           const clientAssetFiles: string[] = [];
           for (const f of clientAssets.stdout.trim().split("\n").filter(Boolean)) {
             const file = await sandbox.readFile(`/workspace/dist/client/assets/${f}`);
             await this.writeFile(`apps/${buildApp}/dist/assets/${f}`, file.content);
-            await this.env.WORKSPACE_R2.put(r2Prefix + f, file.content);
             clientAssetFiles.push(`/${f}`);
           }
 
@@ -1429,6 +1448,10 @@ export class Project extends DurableObject<Env> {
           this.log(
             `[Vite] Done: ${manifest.moduleFiles.length} modules, ${clientAssetFiles.length} assets`,
           );
+
+          // Notify AppRunner to pull latest
+          this.#notifyAppRunner(slug);
+
           try {
             await sandbox.destroy();
           } catch {}
@@ -1492,12 +1515,26 @@ export class Project extends DurableObject<Env> {
       const meta = JSON.parse(manifestStr);
       console.log(`[Project DO] app=${app} has dist (built at ${meta.builtAt})`);
 
-      // WebSocket: handle directly (DO→DO WS forwarding not supported in CF)
+      // WebSocket: accept at Project DO level (facets can't receive webSocketMessage)
+      // Tag with app+slug+path for dispatch in webSocketMessage handler
       if (req.headers.get("Upgrade") === "websocket") {
-        return this.handleAppViaFacet(app, slug, meta, req);
+        const pair = new WebSocketPair();
+        this.ctx.acceptWebSocket(pair[1], [`ws:${app}:${slug}:${url.pathname}`]);
+        console.log(`[Project DO] accepting WS for app=${app} path=${url.pathname}`);
+        pair[1].send(JSON.stringify({ type: "connected", app, path: url.pathname }));
+        return new Response(null, { status: 101, webSocket: pair[0] });
       }
 
-      // All requests (including assets) go to AppRunner — apps serve own assets via env.ASSETS
+      // Apps with sandboxBuild go through Project DO facet (dist in Project workspace)
+      // Other apps delegate to AppRunner (dist in its own workspace via git clone)
+      const appPkgForRouting = await this.readFile(`apps/${app}/package.json`);
+      const routingConfig = appPkgForRouting
+        ? (JSON.parse(appPkgForRouting).buildConfig ?? {})
+        : {};
+      if (routingConfig.sandboxBuild || routingConfig.localBuildOnly) {
+        console.log(`[Project DO] routing ${app} through facet (sandboxBuild)`);
+        return this.handleAppViaFacet(app, slug, meta, req);
+      }
       const runnerId = this.env.APP_RUNNER.idFromName(slug);
       const runner = this.env.APP_RUNNER.get(runnerId);
       console.log(`[Project DO] delegating to AppRunner for app=${app}`);
@@ -1569,12 +1606,10 @@ export class Project extends DurableObject<Env> {
               const file = await sandbox.readFile(`/workspace/dist/server/assets/${f}`);
               modules[`assets/${f}`] = file.content;
             }
-            const autoR2Prefix = `${this.ctx.id}/app/${app}/dist/client/`;
             const clientAssetFiles: string[] = [];
             for (const f of clientAssets.stdout.trim().split("\n").filter(Boolean)) {
               const file = await sandbox.readFile(`/workspace/dist/client/assets/${f}`);
               await this.writeFile(`apps/${app}/dist/assets/${f}`, file.content);
-              await this.env.WORKSPACE_R2.put(autoR2Prefix + f, file.content);
               clientAssetFiles.push(`/${f}`);
             }
             for (const [name, content] of Object.entries(modules)) {
@@ -1595,6 +1630,10 @@ export class Project extends DurableObject<Env> {
             this.log(
               `[AppRunner] Build complete: ${manifest.moduleFiles.length} modules, ${clientAssetFiles.length} assets`,
             );
+
+            // Notify AppRunner to pull latest
+            this.#notifyAppRunner(slug);
+
             try {
               await sandbox.destroy();
             } catch {}
@@ -1697,10 +1736,6 @@ export class Project extends DurableObject<Env> {
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
 
-    const doId = this.ctx.id.toString();
-    const assetsPrefix = `${doId}/app/${app}/dist/client/`;
-    const storagePrefix = `${doId}/app/${app}/`;
-
     console.log(`[Project DO] WS direct facet: app=${app} hash=${sourceHash}`);
     const ctx = this.ctx as any;
     const facet = ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
@@ -1713,8 +1748,6 @@ export class Project extends DurableObject<Env> {
         env: {
           AI: this.env.AI_PROXY,
           EXEC: this.env.CODE_EXECUTOR,
-          ASSETS: ctx.exports.R2BucketProxy({ props: { prefix: assetsPrefix } }),
-          STORAGE: ctx.exports.R2BucketProxy({ props: { prefix: storagePrefix } }),
         },
       }));
       return { class: (worker as any).getDurableObjectClass("App") };
@@ -1788,5 +1821,92 @@ ${distFiles.length ? `<h2>Dist (${distFiles.length} files)</h2><pre>${distFiles.
 <h2>Build Logs</h2><pre>${this.#logBuffer.map((l) => `${new Date(l.ts).toISOString()} ${l.message}`).join("\n") || "(empty)"}</pre>
 </body></html>`;
     return new Response(html, { headers: { "content-type": "text/html;charset=utf-8" } });
+  }
+
+  // WebSocket messages from app facets route here (facets can't receive webSocketMessage).
+  // Re-dispatch to the app facet via POST /_ws-message.
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+    const tags = this.ctx.getTags(ws);
+    const wsTag = tags.find((t) => t.startsWith("ws:"));
+    if (!wsTag) return;
+
+    const [, tagApp, tagSlug, ...pathParts] = wsTag.split(":");
+    const pathname = pathParts.join(":");
+    console.log(`[Project DO] WS message for app=${tagApp} path=${pathname}`);
+
+    try {
+      const configStr = (await this.readFile("config.json")) ?? '{"apps":[]}';
+      const config = JSON.parse(configStr) as { apps: string[] };
+      if (!config.apps.includes(tagApp)) return;
+
+      const manifestStr = await this.readFile(`apps/${tagApp}/dist/manifest.json`);
+      if (!manifestStr) return;
+      const meta = JSON.parse(manifestStr);
+      const modules: Record<string, string> = {};
+      for (const f of meta.moduleFiles) {
+        const content = await this.readFile(`apps/${tagApp}/dist/${f}`);
+        if (content) modules[f] = content;
+      }
+      const mainModule = meta.mainModule;
+      if (!modules[mainModule]) return;
+
+      const appPkgStr = await this.readFile(`apps/${tagApp}/package.json`);
+      const appPkg = appPkgStr ? JSON.parse(appPkgStr) : {};
+      const appCompatFlags: string[] = appPkg.buildConfig?.compatibilityFlags ?? [];
+
+      const hashBytes = new Uint8Array(
+        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(modules[mainModule])),
+      );
+      const sourceHash = Array.from(hashBytes.slice(0, 4))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+
+      const ctx = this.ctx as any;
+
+      const facet = ctx.facets.get(`app:${tagApp}:${sourceHash}`, async () => {
+        const worker = this.env.LOADER.get(`code:${tagApp}:${sourceHash}`, async () => ({
+          compatibilityDate: "2026-04-01",
+          compatibilityFlags: appCompatFlags,
+          mainModule,
+          modules,
+          globalOutbound: this.env.EGRESS_GATEWAY,
+          env: {
+            AI: this.env.AI_PROXY,
+            EXEC: this.env.CODE_EXECUTOR,
+          },
+        }));
+        return { class: (worker as any).getDurableObjectClass("App") };
+      });
+
+      const resp = await facet.fetch(
+        new Request("http://localhost/_ws-message", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ pathname, message: typeof message === "string" ? message : "" }),
+        }),
+      );
+      const result = (await resp.json()) as { appends?: any[] };
+
+      if (result.appends) {
+        for (const appendEvent of result.appends) {
+          ws.send(JSON.stringify({ type: "append", event: appendEvent }));
+        }
+      }
+    } catch (e: any) {
+      console.error(`[Project DO] WS dispatch error: ${e.message}\n${e.stack}`);
+      try {
+        ws.send(
+          JSON.stringify({
+            type: "error",
+            message: e.message,
+            stack: e.stack?.split("\n").slice(0, 3),
+          }),
+        );
+      } catch {}
+    }
+  }
+
+  webSocketClose(ws: WebSocket) {
+    ws.close();
   }
 }

@@ -1,10 +1,12 @@
-// AppRunner — per-app runtime extracted from Project DO.
-// Reads manifest + modules from Project DO via RPC, creates dynamic worker,
-// forwards requests to the App facet.
-// All bindings (AI, EXEC, ASSETS, STORAGE, egress) provided via ctx.exports.
+// AppRunner — per-app runtime with own R2-backed Workspace.
+// Clones the artifact repo, serves assets directly, loads modules for dynamic workers.
+// No RPC to Project DO for file reads.
 
 import { DurableObject } from "cloudflare:workers";
+import { Workspace, WorkspaceFileSystem } from "@cloudflare/shell";
+import { createGit } from "@cloudflare/shell/git";
 import { PLATFORM_SUFFIX } from "./host-parser.ts";
+import { inferContentType, cacheHeaders } from "./content-types.ts";
 
 interface Env {
   PROJECT: DurableObjectNamespace;
@@ -13,12 +15,10 @@ interface Env {
   EGRESS_GATEWAY: Fetcher;
   AI_PROXY: Fetcher;
   CODE_EXECUTOR: Fetcher;
+  ARTIFACTS: any;
 }
 
-interface ProjectStub {
-  readFile(path: string): Promise<string | null>;
-  readonly slug: string;
-}
+const REPO_DIR = "/repo";
 
 function parseApp(host: string): string | null {
   if (!host.endsWith(PLATFORM_SUFFIX)) return null;
@@ -28,6 +28,122 @@ function parseApp(host: string): string | null {
 }
 
 export class AppRunner extends DurableObject<Env> {
+  workspace = new Workspace({
+    sql: this.ctx.storage.sql,
+    r2: this.env.WORKSPACE_R2,
+    name: () => `runner-${this.ctx.id}`,
+  });
+  fs = new WorkspaceFileSystem(this.workspace);
+  git = createGit(this.fs, REPO_DIR);
+
+  #metaReady = false;
+  #cloned = false;
+
+  // ── Meta table ──────────────────────────────────────────────────────
+
+  #ensureMetaTable() {
+    if (this.#metaReady) return;
+    this.ctx.storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+    );
+    this.#metaReady = true;
+  }
+
+  #getMeta(key: string): string | null {
+    this.#ensureMetaTable();
+    const rows = this.ctx.storage.sql.exec("SELECT value FROM _meta WHERE key = ?", key).toArray();
+    return rows.length > 0 ? (rows[0].value as string) : null;
+  }
+
+  #setMeta(key: string, value: string) {
+    this.#ensureMetaTable();
+    this.ctx.storage.sql.exec(
+      "INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)",
+      key,
+      value,
+    );
+  }
+
+  // ── RPC methods called by Project DO ────────────────────────────────
+
+  async setup(remote: string, repoName: string) {
+    this.#setMeta("remote", remote);
+    this.#setMeta("repo_name", repoName);
+    console.log(`[AppRunner] setup: remote=${remote} repo=${repoName}`);
+    // Trigger initial clone in background
+    this.ctx.waitUntil(this.#ensureSync());
+  }
+
+  async notifyBuild() {
+    this.#setMeta("needs_sync", "1");
+    console.log(`[AppRunner] notifyBuild: flagged for sync`);
+  }
+
+  // ── Sync logic ──────────────────────────────────────────────────────
+
+  async #ensureSync() {
+    const remote = this.#getMeta("remote");
+    const repoName = this.#getMeta("repo_name");
+    if (!remote || !repoName) return;
+
+    const hasGit = await this.workspace.exists(`${REPO_DIR}/.git/config`);
+
+    if (!hasGit) {
+      // Initial clone
+      console.log(`[AppRunner] cloning ${repoName}...`);
+      const token = await this.#getWriteToken(repoName);
+      await this.workspace.mkdir(REPO_DIR, { recursive: true });
+      await this.git.clone({
+        url: remote,
+        dir: REPO_DIR,
+        ...this.#gitAuth(token),
+      });
+      this.#cloned = true;
+      this.#setMeta("needs_sync", "0");
+      console.log(`[AppRunner] clone complete`);
+      return;
+    }
+
+    this.#cloned = true;
+
+    // Pull if flagged
+    const needsSync = this.#getMeta("needs_sync");
+    if (needsSync === "1") {
+      console.log(`[AppRunner] pulling latest...`);
+      const token = await this.#getWriteToken(repoName);
+      try {
+        await this.git.pull({
+          dir: REPO_DIR,
+          remote: "origin",
+          ref: "main",
+          author: { name: "AppRunner", email: "runner@iterate.com" },
+          ...this.#gitAuth(token),
+        });
+        console.log(`[AppRunner] pull complete`);
+      } catch (e: any) {
+        console.error(`[AppRunner] pull failed: ${e.message}`);
+      }
+      this.#setMeta("needs_sync", "0");
+    }
+  }
+
+  async #getWriteToken(repoName: string): Promise<string> {
+    const repo = await this.env.ARTIFACTS.get(repoName);
+    const tokenResult = await repo.createToken("read", 3600);
+    const token = tokenResult.plaintext ?? tokenResult.token ?? String(tokenResult);
+    return token;
+  }
+
+  #gitAuth(token: string) {
+    if (!token || typeof token !== "string") {
+      return { username: "x", password: "" };
+    }
+    const secret = token.split("?expires=")[0];
+    return { username: "x", password: secret };
+  }
+
+  // ── Request handling ────────────────────────────────────────────────
+
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const host = req.headers.get("host") ?? url.hostname;
@@ -37,31 +153,74 @@ export class AppRunner extends DurableObject<Env> {
       return new Response("AppRunner: cannot derive app from host", { status: 400 });
     }
 
-    // Get Project DO stub for file reads
+    // Ensure we have latest from artifact repo
+    await this.#ensureSync();
+
+    // Get slug from host for facet keying
     const slugFromHost = host.slice(app.length + 1, -PLATFORM_SUFFIX.length);
-    const projectId = this.env.PROJECT.idFromName(slugFromHost);
-    const project = this.env.PROJECT.get(projectId) as unknown as ProjectStub;
-    const slug = await project.slug;
-    const doId = projectId.toString();
 
     // Read app build config
-    const appPkgStr = await project.readFile(`apps/${app}/package.json`);
+    const appPkgStr = await this.workspace.readFile(`${REPO_DIR}/apps/${app}/package.json`);
     const appPkg = appPkgStr ? JSON.parse(appPkgStr) : {};
     const appBuildConfig = appPkg.buildConfig ?? {};
     const appCompatFlags: string[] = appBuildConfig.compatibilityFlags ?? [];
 
     // Read manifest
-    const manifestStr = await project.readFile(`apps/${app}/dist/manifest.json`);
+    const manifestStr = await this.workspace.readFile(`${REPO_DIR}/apps/${app}/dist/manifest.json`);
     if (!manifestStr) {
       return new Response(`App "${app}" has no dist — needs building`, { status: 404 });
     }
 
     const meta = JSON.parse(manifestStr);
 
-    // Load modules from dist via Project DO
+    // ── Asset serving ─────────────────────────────────────────────────
+    if (url.pathname.includes(".") && !url.pathname.startsWith("/api/")) {
+      const cleanPath = url.pathname.replace(/^\/+/, "");
+
+      // Try dist/client/ first (Vite builds), then dist/assets/, then dist/
+      const candidates = [
+        `${REPO_DIR}/apps/${app}/dist/client/${cleanPath}`,
+        `${REPO_DIR}/apps/${app}/dist/assets/${cleanPath}`,
+        `${REPO_DIR}/apps/${app}/dist/${cleanPath}`,
+      ];
+
+      for (const candidate of candidates) {
+        const content = await this.workspace.readFile(candidate);
+        if (content !== null) {
+          console.log(`[AppRunner] asset: ${url.pathname} from ${candidate}`);
+          return new Response(content, {
+            headers: {
+              "content-type": inferContentType(url.pathname),
+              "cache-control": cacheHeaders(url.pathname),
+            },
+          });
+        }
+      }
+    }
+
+    // ── SPA fallback ──────────────────────────────────────────────────
+    if (!url.pathname.includes(".") && !url.pathname.startsWith("/api/")) {
+      // Try multiple locations for index.html
+      const indexCandidates = [
+        `${REPO_DIR}/apps/${app}/dist/client/index.html`,
+        `${REPO_DIR}/apps/${app}/dist/assets/index.html`,
+        `${REPO_DIR}/apps/${app}/dist/index.html`,
+      ];
+
+      for (const candidate of indexCandidates) {
+        const content = await this.workspace.readFile(candidate);
+        if (content !== null) {
+          return new Response(content, {
+            headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-cache" },
+          });
+        }
+      }
+    }
+
+    // ── Dynamic worker (API routes, SSR) ──────────────────────────────
     const modules: Record<string, string> = {};
     for (const f of meta.moduleFiles) {
-      const content = await project.readFile(`apps/${app}/dist/${f}`);
+      const content = await this.workspace.readFile(`${REPO_DIR}/apps/${app}/dist/${f}`);
       if (content) modules[f] = content;
     }
 
@@ -82,12 +241,6 @@ export class AppRunner extends DurableObject<Env> {
       `[AppRunner] app=${app} mainModule=${mainModule} hash=${sourceHash} modules=${Object.keys(modules).join(",")}`,
     );
 
-    // R2 prefixes for scoped access
-    const assetsPrefix = `${doId}/app/${app}/dist/client/`;
-    const storagePrefix = `${doId}/app/${app}/`;
-
-    // Create/retrieve App facet via dynamic worker
-    // All bindings provided via ctx.exports — no self-referencing service bindings needed
     const ctx = this.ctx as any;
     const facet = ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
       const worker = this.env.LOADER.get(`code:${app}:${sourceHash}`, async () => ({
@@ -99,74 +252,10 @@ export class AppRunner extends DurableObject<Env> {
         env: {
           AI: this.env.AI_PROXY,
           EXEC: this.env.CODE_EXECUTOR,
-          ASSETS: ctx.exports.R2BucketProxy({ props: { prefix: assetsPrefix } }),
-          STORAGE: ctx.exports.R2BucketProxy({ props: { prefix: storagePrefix } }),
         },
       }));
       return { class: (worker as any).getDurableObjectClass("App") };
     });
-
-    // Serve client assets: try R2 first, fall back to workspace (for pre-baked dists)
-    if (url.pathname.includes(".") && !url.pathname.startsWith("/api/")) {
-      const cleanPath = url.pathname.replace(/^\/+/, "");
-      const ext = url.pathname.split(".").pop()?.toLowerCase() ?? "";
-      const ct =
-        {
-          js: "application/javascript",
-          css: "text/css",
-          html: "text/html;charset=utf-8",
-          json: "application/json",
-          svg: "image/svg+xml",
-          png: "image/png",
-          jpg: "image/jpeg",
-          woff2: "font/woff2",
-          woff: "font/woff",
-          ttf: "font/ttf",
-          webp: "image/webp",
-          ico: "image/x-icon",
-        }[ext] ?? "application/octet-stream";
-      const cc = /[-\.][A-Za-z0-9_-]{6,}\.\w+$/.test(url.pathname)
-        ? "public, max-age=31536000, immutable"
-        : "public, max-age=3600";
-
-      // Try R2
-      const obj = await this.env.WORKSPACE_R2.get(assetsPrefix + cleanPath);
-      if (obj) {
-        console.log(`[AppRunner] asset from R2: ${url.pathname}`);
-        return new Response(obj.body, {
-          headers: { "content-type": ct, "cache-control": cc, etag: obj.httpEtag },
-        });
-      }
-
-      // Fall back to workspace (handles pre-baked dists not yet in R2)
-      const wsContent =
-        (await project.readFile(`apps/${app}/dist/${cleanPath}`)) ??
-        (await project.readFile(`apps/${app}/dist/assets/${cleanPath}`));
-      if (wsContent) {
-        console.log(`[AppRunner] asset from workspace: ${url.pathname}`);
-        return new Response(wsContent, {
-          headers: { "content-type": ct, "cache-control": cc },
-        });
-      }
-    }
-
-    // SPA fallback: index.html from R2 or workspace
-    if (!url.pathname.includes(".") && !url.pathname.startsWith("/api/")) {
-      const indexObj = await this.env.WORKSPACE_R2.get(assetsPrefix + "index.html");
-      if (indexObj) {
-        return new Response(indexObj.body, {
-          headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-cache" },
-        });
-      }
-      const wsIndex =
-        (await project.readFile(`apps/${app}/dist/assets/index.html`)) ??
-        (await project.readFile(`apps/${app}/dist/index.html`));
-      if (wsIndex) {
-        return new Response(wsIndex, {
-          headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-cache" },
-        });
-      }
-    }
 
     console.log(`[AppRunner] forwarding to App facet`);
     return facet.fetch(req);

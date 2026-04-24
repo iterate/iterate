@@ -24,17 +24,6 @@ export class App extends DurableObject {
   }
 
   async fetch(request: Request): Promise<Response> {
-    // Serve client assets from R2 via env.ASSETS (if available)
-    const url = new URL(request.url);
-    if (
-      (this.env as any).ASSETS &&
-      url.pathname.includes(".") &&
-      !url.pathname.startsWith("/api/")
-    ) {
-      const assetResp = await (this.env as any).ASSETS.fetch(request);
-      if (assetResp.status !== 404) return assetResp;
-    }
-
     const context: AppContext = {
       db: this.db,
       pty: () => ({
