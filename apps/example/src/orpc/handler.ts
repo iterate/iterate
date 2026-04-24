@@ -12,6 +12,21 @@ import { appRouter } from "~/orpc/root.ts";
 const plugins = [new CORSPlugin({ origin: "*" }), new EvlogHandlerPlugin<AppContext>()];
 
 export const orpcOpenApiHandler = new OpenAPIHandler(appRouter, {
+  adapterInterceptors: [
+    async (options) => {
+      const result = await options.next();
+      const type = result.response?.headers.get("content-type");
+      if (!result.matched || result.response.body === null || !type?.includes("json"))
+        return result;
+      return {
+        ...result,
+        response: new Response(
+          JSON.stringify(await result.response.json(), null, 2),
+          result.response,
+        ),
+      };
+    },
+  ],
   plugins: [
     ...plugins,
     createOpenApiReferencePluginForApp(manifest, ["/debug", "/test", "/things"], {
