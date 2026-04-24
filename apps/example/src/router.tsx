@@ -10,8 +10,12 @@ export type RouterContext = {
   queryClient: QueryClient;
 };
 
-// Cast to break circular type reference between DefaultNotFoundComponent's
-// props and the router type used in the Register augmentation below.
+// Widen the component type to break a circular reference: the `declare module`
+// below resolves `ReturnType<typeof getRouter>`, which expands
+// `defaultNotFoundComponent`'s type, which references `RegisteredRouter`,
+// which reads `Register.router` — the very thing being defined.
+// Events/OS avoid this because their routeTree.gen.ts augments
+// `@tanstack/react-start` (under @ts-nocheck) instead of `@tanstack/react-router`.
 const notFoundComponent = DefaultNotFoundComponent as (
   props: NotFoundRouteProps,
 ) => React.ReactNode;
