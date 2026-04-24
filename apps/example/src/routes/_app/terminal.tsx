@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { ClientOnly, createFileRoute } from "@tanstack/react-router";
 import { Terminal } from "@iterate-com/ui/components/terminal";
 import { z } from "zod";
@@ -22,9 +22,14 @@ function TerminalPage() {
   const { command, autorun, ptyId } = search;
   const navigate = Route.useNavigate();
 
+  // Keep a ref so the callback identity stays stable (Terminal's effect
+  // depends on onParamsChange and would tear down XTerm on every change).
+  const searchRef = useRef(search);
+  searchRef.current = search;
+
   const handleParamsChange = useCallback(
     (params: { ptyId?: string; clearCommand?: boolean }) => {
-      const next = { ...search };
+      const next = { ...searchRef.current };
       if (params.ptyId) next.ptyId = params.ptyId;
       if (params.clearCommand) {
         delete next.command;
@@ -32,7 +37,7 @@ function TerminalPage() {
       }
       navigate({ search: next, replace: true });
     },
-    [navigate, search],
+    [navigate],
   );
 
   return (
