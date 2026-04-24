@@ -18,30 +18,21 @@ export const Route = createFileRoute("/_app/terminal")({
 });
 
 function TerminalPage() {
-  const { command, autorun, ptyId } = Route.useSearch();
+  const search = Route.useSearch();
+  const { command, autorun, ptyId } = search;
   const navigate = Route.useNavigate();
 
   const handleParamsChange = useCallback(
     (params: { ptyId?: string; clearCommand?: boolean }) => {
-      navigate({
-        search: (prev) => {
-          const next = { ...prev };
-
-          if (params.ptyId) {
-            next.ptyId = params.ptyId;
-          }
-
-          if (params.clearCommand) {
-            delete next.command;
-            delete next.autorun;
-          }
-
-          return next;
-        },
-        replace: true,
-      });
+      const next = { ...search };
+      if (params.ptyId) next.ptyId = params.ptyId;
+      if (params.clearCommand) {
+        delete next.command;
+        delete next.autorun;
+      }
+      navigate({ search: next, replace: true });
     },
-    [navigate],
+    [navigate, search],
   );
 
   return (
