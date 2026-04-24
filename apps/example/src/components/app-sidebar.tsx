@@ -8,6 +8,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
+import { SidebarThemeSwitcher } from "@iterate-com/ui/components/sidebar-theme-switcher";
 
 const items = [
   { to: "/debug", label: "Debug" },
@@ -18,7 +19,7 @@ const items = [
 
 export function AppSidebar() {
   return (
-    <SidebarShell header={<AppSidebarBrand />}>
+    <SidebarShell header={<AppSidebarBrand />} footer={<SidebarThemeSwitcher />}>
       <AppSidebarNav />
     </SidebarShell>
   );
