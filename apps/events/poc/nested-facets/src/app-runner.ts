@@ -106,40 +106,63 @@ export class AppRunner extends DurableObject<Env> {
       return { class: (worker as any).getDurableObjectClass("App") };
     });
 
-    // Serve client assets from R2 directly (apps don't need to implement this)
+    // Serve client assets: try R2 first, fall back to workspace (for pre-baked dists)
     if (url.pathname.includes(".") && !url.pathname.startsWith("/api/")) {
-      const assetKey = assetsPrefix + url.pathname.replace(/^\/+/, "");
-      const obj = await this.env.WORKSPACE_R2.get(assetKey);
+      const cleanPath = url.pathname.replace(/^\/+/, "");
+      const ext = url.pathname.split(".").pop()?.toLowerCase() ?? "";
+      const ct =
+        {
+          js: "application/javascript",
+          css: "text/css",
+          html: "text/html;charset=utf-8",
+          json: "application/json",
+          svg: "image/svg+xml",
+          png: "image/png",
+          jpg: "image/jpeg",
+          woff2: "font/woff2",
+          woff: "font/woff",
+          ttf: "font/ttf",
+          webp: "image/webp",
+          ico: "image/x-icon",
+        }[ext] ?? "application/octet-stream";
+      const cc = /[-\.][A-Za-z0-9_-]{6,}\.\w+$/.test(url.pathname)
+        ? "public, max-age=31536000, immutable"
+        : "public, max-age=3600";
+
+      // Try R2
+      const obj = await this.env.WORKSPACE_R2.get(assetsPrefix + cleanPath);
       if (obj) {
-        const ext = url.pathname.split(".").pop()?.toLowerCase() ?? "";
-        const ct =
-          {
-            js: "application/javascript",
-            css: "text/css",
-            html: "text/html;charset=utf-8",
-            json: "application/json",
-            svg: "image/svg+xml",
-            png: "image/png",
-            jpg: "image/jpeg",
-            woff2: "font/woff2",
-          }[ext] ?? "application/octet-stream";
-        const cc = /[-\.][A-Za-z0-9_-]{6,}\.\w+$/.test(url.pathname)
-          ? "public, max-age=31536000, immutable"
-          : "public, max-age=3600";
-        console.log(`[AppRunner] served asset from R2: ${url.pathname}`);
+        console.log(`[AppRunner] asset from R2: ${url.pathname}`);
         return new Response(obj.body, {
           headers: { "content-type": ct, "cache-control": cc, etag: obj.httpEtag },
         });
       }
+
+      // Fall back to workspace (handles pre-baked dists not yet in R2)
+      const wsContent =
+        (await project.readFile(`apps/${app}/dist/${cleanPath}`)) ??
+        (await project.readFile(`apps/${app}/dist/assets/${cleanPath}`));
+      if (wsContent) {
+        console.log(`[AppRunner] asset from workspace: ${url.pathname}`);
+        return new Response(wsContent, {
+          headers: { "content-type": ct, "cache-control": cc },
+        });
+      }
     }
 
-    // SPA fallback: serve index.html from R2 for non-file, non-API paths
+    // SPA fallback: index.html from R2 or workspace
     if (!url.pathname.includes(".") && !url.pathname.startsWith("/api/")) {
-      const indexKey = assetsPrefix + "index.html";
-      const indexObj = await this.env.WORKSPACE_R2.get(indexKey);
+      const indexObj = await this.env.WORKSPACE_R2.get(assetsPrefix + "index.html");
       if (indexObj) {
-        console.log(`[AppRunner] SPA fallback from R2: ${url.pathname} → index.html`);
         return new Response(indexObj.body, {
+          headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-cache" },
+        });
+      }
+      const wsIndex =
+        (await project.readFile(`apps/${app}/dist/assets/index.html`)) ??
+        (await project.readFile(`apps/${app}/dist/index.html`));
+      if (wsIndex) {
+        return new Response(wsIndex, {
           headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-cache" },
         });
       }
