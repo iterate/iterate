@@ -67,6 +67,8 @@ export class AppRunner extends DurableObject<Env> {
   // ── RPC methods called by Project DO ────────────────────────────────
 
   async setup(remote: string, repoName: string) {
+    const existing = this.#getMeta("remote");
+    if (existing === remote) return; // Already set up
     this.#setMeta("remote", remote);
     this.#setMeta("repo_name", repoName);
     console.log(`[AppRunner] setup: remote=${remote} repo=${repoName}`);

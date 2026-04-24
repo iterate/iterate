@@ -354,21 +354,18 @@ export class StreamProcessor extends Agent {
       },
     ];
 
-    // OpenAPI tool providers (lazy-loaded on first buildProviders call)
-    if (this.#openApiProviders.length === 0) {
-      try {
-        const p = await createOpenApiProvider(
-          "tanstack_app",
-          "https://tanstack-app.test.iterate-dev-jonas.app/api/openapi.json",
-          "https://tanstack-app.test.iterate-dev-jonas.app/api",
-        );
-        this.#openApiProviders.push(p);
-        console.log("[OpenAPI] loaded:", p.name, Object.keys(p.fns));
-      } catch (e: any) {
-        console.error("[OpenAPI] failed:", e.message);
-      }
+    // OpenAPI tool providers — loaded on every buildProviders call
+    // (facet instances don't persist state across requests)
+    try {
+      const p = await createOpenApiProvider(
+        "tanstack_app",
+        "https://tanstack-app.test.iterate-dev-jonas.app/api/openapi.json",
+        "https://tanstack-app.test.iterate-dev-jonas.app/api",
+      );
+      providers.push(p);
+    } catch (e: any) {
+      console.error("[OpenAPI] failed:", e.message);
     }
-    providers.push(...this.#openApiProviders);
 
     // MCP tool providers — onStart registers servers, wait for handshakes to complete
     try {

@@ -1115,7 +1115,14 @@ export class Project extends DurableObject<Env> {
       this.setBuildState(app, "ready");
       this.log(`[Sandbox] Build complete: ${app}`);
 
-      // Notify AppRunner to pull latest
+      // Commit dist to artifact repo + notify AppRunner
+      if (this.repoName) {
+        try {
+          await this.commitAndPush(`Build ${app} (esbuild)`, this.repoName);
+        } catch (e: any) {
+          this.log(`Commit/push failed: ${e.message}`);
+        }
+      }
       this.#notifyAppRunner(this.slug);
 
       const files = await this.listFiles();
@@ -1449,7 +1456,14 @@ export class Project extends DurableObject<Env> {
             `[Vite] Done: ${manifest.moduleFiles.length} modules, ${clientAssetFiles.length} assets`,
           );
 
-          // Notify AppRunner to pull latest
+          // Commit dist to artifact repo + notify AppRunner
+          if (repoName) {
+            try {
+              await this.commitAndPush(`Build ${buildApp} (vite)`, repoName);
+            } catch (e: any) {
+              this.log(`Commit/push failed: ${e.message}`);
+            }
+          }
           this.#notifyAppRunner(slug);
 
           try {
@@ -1525,20 +1539,9 @@ export class Project extends DurableObject<Env> {
         return new Response(null, { status: 101, webSocket: pair[0] });
       }
 
-      // Apps with sandboxBuild go through Project DO facet (dist in Project workspace)
-      // Other apps delegate to AppRunner (dist in its own workspace via git clone)
-      const appPkgForRouting = await this.readFile(`apps/${app}/package.json`);
-      const routingConfig = appPkgForRouting
-        ? (JSON.parse(appPkgForRouting).buildConfig ?? {})
-        : {};
-      if (routingConfig.sandboxBuild || routingConfig.localBuildOnly) {
-        console.log(`[Project DO] routing ${app} through facet (sandboxBuild)`);
-        return this.handleAppViaFacet(app, slug, meta, req);
-      }
-      const runnerId = this.env.APP_RUNNER.idFromName(slug);
-      const runner = this.env.APP_RUNNER.get(runnerId);
-      console.log(`[Project DO] delegating to AppRunner for app=${app}`);
-      const appResp = await runner.fetch(req);
+      // All apps serve through Project DO facets — one workspace, one source of truth
+      console.log(`[Project DO] routing ${app} via facet`);
+      const appResp = await this.handleAppViaFacet(app, slug, meta, req);
       return this.#interceptEmailReply(req, url, appResp, slug);
     }
 
@@ -1631,7 +1634,14 @@ export class Project extends DurableObject<Env> {
               `[AppRunner] Build complete: ${manifest.moduleFiles.length} modules, ${clientAssetFiles.length} assets`,
             );
 
-            // Notify AppRunner to pull latest
+            // Commit dist to artifact repo + notify AppRunner
+            if (repoName) {
+              try {
+                await this.commitAndPush(`Build ${app} (auto-vite)`, repoName);
+              } catch (e: any) {
+                this.log(`Commit/push failed: ${e.message}`);
+              }
+            }
             this.#notifyAppRunner(slug);
 
             try {
