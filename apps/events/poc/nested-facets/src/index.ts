@@ -58,29 +58,22 @@ interface Env {
   CODE_EXECUTOR: Service<CodeExecutor>;
 }
 
-// ── Binding proxy ────────────────────────────────────────────────────────────
-// Returns a WorkerEntrypoint subclass that proxies all property access / method
-// calls to env[bindingName]. Expose as a self-referencing service binding, then
-// pass it into a dynamic worker's env — the dynamic worker sees the real binding.
+// ── AiProxy — proxies AI binding to dynamic workers via ctx.exports ──────────
 
-function createBindingProxy<E extends Record<string, unknown>>(bindingName: keyof E & string) {
-  return class BindingProxy extends WorkerEntrypoint<E> {
-    constructor(ctx: any, env: E) {
-      super(ctx, env);
-      return new Proxy(this, {
-        get(target, prop, receiver) {
-          if (prop in target) return Reflect.get(target, prop, receiver);
-          const binding = target.env[bindingName] as any;
-          const val = binding[prop];
-          if (typeof val === "function") return val.bind(binding);
-          return val;
-        },
-      });
-    }
-  };
+export class AiProxy extends WorkerEntrypoint<Env> {
+  constructor(ctx: any, env: Env) {
+    super(ctx, env);
+    return new Proxy(this, {
+      get(target, prop, receiver) {
+        if (prop in target) return Reflect.get(target, prop, receiver);
+        const binding = target.env.AI as any;
+        const val = binding[prop];
+        if (typeof val === "function") return val.bind(binding);
+        return val;
+      },
+    });
+  }
 }
-
-export const AiProxy = createBindingProxy<Env>("AI");
 
 // ── CodeExecutor — runs user scripts in sandboxed dynamic workers ────────────
 // Dynamic workers can't hold LOADER directly (DurableObjectClass handles don't
@@ -109,25 +102,6 @@ export class CodeExecutor extends WorkerEntrypoint<Env> {
     });
     return executor.execute(script, providers);
   }
-}
-
-// ── Egress runtime wrapper ───────────────────────────────────────────────────
-// Prepended to dynamically loaded app modules. Wraps globalThis.fetch so every
-// outbound request includes x-iterate-project-slug, allowing the EgressGateway
-// to look up and substitute secret references.
-
-function egressRuntimeWrapper(projectSlug: string): string {
-  return `
-;(function() {
-  var _originalFetch = globalThis.fetch.bind(globalThis);
-  globalThis.fetch = function(input, init) {
-    var request = new Request(input, init);
-    var headers = new Headers(request.headers);
-    headers.set("x-iterate-project-slug", ${JSON.stringify(projectSlug)});
-    return _originalFetch(new Request(request, { headers: headers }));
-  };
-})();
-`;
 }
 
 // ── SQL Studio helpers ───────────────────────────────────────────────────────
@@ -1716,8 +1690,6 @@ export class Project extends DurableObject<Env> {
     if (!modules[mainModule]) {
       return new Response(`App ${app} missing main module: ${mainModule}`, { status: 500 });
     }
-    modules[mainModule] = egressRuntimeWrapper(slug) + modules[mainModule];
-
     const hashBytes = new Uint8Array(
       await crypto.subtle.digest("SHA-256", new TextEncoder().encode(modules[mainModule])),
     );

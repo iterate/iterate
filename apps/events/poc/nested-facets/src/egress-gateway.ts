@@ -78,7 +78,8 @@ async function replaceSecretReferences(
 export class EgressGateway extends WorkerEntrypoint<Env> {
   async fetch(request: Request): Promise<Response> {
     const headers = new Headers(request.headers);
-    const projectSlug = headers.get(PROJECT_SLUG_HEADER);
+    // Read project slug from ctx.props (set via ctx.exports) or fall back to header
+    const projectSlug = (this.ctx as any).props?.projectSlug ?? headers.get(PROJECT_SLUG_HEADER);
     headers.delete(PROJECT_SLUG_HEADER);
 
     // No project slug → pass through unchanged

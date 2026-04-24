@@ -1,7 +1,7 @@
 // AppRunner — per-app runtime extracted from Project DO.
 // Reads manifest + modules from Project DO via RPC, creates dynamic worker,
 // forwards requests to the App facet.
-// Provides env.ASSETS (R2 client assets) and env.STORAGE (R2 app storage) to apps.
+// All bindings (AI, EXEC, ASSETS, STORAGE, egress) provided via ctx.exports.
 
 import { DurableObject } from "cloudflare:workers";
 import { PLATFORM_SUFFIX } from "./host-parser.ts";
@@ -18,20 +18,6 @@ interface Env {
 interface ProjectStub {
   readFile(path: string): Promise<string | null>;
   readonly slug: string;
-}
-
-function egressRuntimeWrapper(projectSlug: string): string {
-  return `
-;(function() {
-  var _originalFetch = globalThis.fetch.bind(globalThis);
-  globalThis.fetch = function(input, init) {
-    var request = new Request(input, init);
-    var headers = new Headers(request.headers);
-    headers.set("x-iterate-project-slug", ${JSON.stringify(projectSlug)});
-    return _originalFetch(new Request(request, { headers: headers }));
-  };
-})();
-`;
 }
 
 function parseApp(host: string): string | null {
@@ -84,9 +70,6 @@ export class AppRunner extends DurableObject<Env> {
       return new Response(`App ${app} missing main module: ${mainModule}`, { status: 500 });
     }
 
-    // Prepend egress runtime wrapper
-    modules[mainModule] = egressRuntimeWrapper(slug) + modules[mainModule];
-
     // Compute source hash for cache key
     const hashBytes = new Uint8Array(
       await crypto.subtle.digest("SHA-256", new TextEncoder().encode(modules[mainModule])),
@@ -104,6 +87,7 @@ export class AppRunner extends DurableObject<Env> {
     const storagePrefix = `${doId}/app/${app}/`;
 
     // Create/retrieve App facet via dynamic worker
+    // All bindings provided via ctx.exports — no self-referencing service bindings needed
     const ctx = this.ctx as any;
     const facet = ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
       const worker = this.env.LOADER.get(`code:${app}:${sourceHash}`, async () => ({
