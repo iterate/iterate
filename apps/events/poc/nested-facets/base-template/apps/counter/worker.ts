@@ -35,7 +35,10 @@ export class App extends DurableObject {
       return Response.json({ count, doId });
     }
 
-    // For all other GET requests, return null — the asset handler in the Project DO will serve the SPA
+    // Serve client assets from R2 via env.ASSETS (if available)
+    if ((this.env as any).ASSETS) {
+      return (this.env as any).ASSETS.fetch(req);
+    }
     return new Response("Not found", { status: 404 });
   }
 

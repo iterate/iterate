@@ -1,12 +1,14 @@
 // AppRunner — per-app runtime extracted from Project DO.
 // Reads manifest + modules from Project DO via RPC, creates dynamic worker,
 // forwards requests to the App facet.
+// Provides env.ASSETS (R2 client assets) and env.STORAGE (R2 app storage) to apps.
 
 import { DurableObject } from "cloudflare:workers";
 import { PLATFORM_SUFFIX } from "./host-parser.ts";
 
 interface Env {
   PROJECT: DurableObjectNamespace;
+  WORKSPACE_R2: R2Bucket;
   LOADER: WorkerLoader;
   EGRESS_GATEWAY: Fetcher;
   AI_PROXY: Fetcher;
@@ -32,7 +34,6 @@ function egressRuntimeWrapper(projectSlug: string): string {
 `;
 }
 
-// Extract app name from host (platform suffix only — custom domains resolved by worker)
 function parseApp(host: string): string | null {
   if (!host.endsWith(PLATFORM_SUFFIX)) return null;
   const prefix = host.slice(0, -PLATFORM_SUFFIX.length);
@@ -50,14 +51,12 @@ export class AppRunner extends DurableObject<Env> {
       return new Response("AppRunner: cannot derive app from host", { status: 400 });
     }
 
-    // Get Project DO stub — the AppRunner was created with idFromName(slug),
-    // so we use the same ID to reach the Project DO
-    const projectId = this.env.PROJECT.idFromName(
-      // Derive slug from host: <app>.<slug>.iterate-dev-jonas.app
-      host.slice(app.length + 1, -PLATFORM_SUFFIX.length),
-    );
+    // Get Project DO stub for file reads
+    const slugFromHost = host.slice(app.length + 1, -PLATFORM_SUFFIX.length);
+    const projectId = this.env.PROJECT.idFromName(slugFromHost);
     const project = this.env.PROJECT.get(projectId) as unknown as ProjectStub;
     const slug = await project.slug;
+    const doId = projectId.toString();
 
     // Read app build config
     const appPkgStr = await project.readFile(`apps/${app}/package.json`);
@@ -100,6 +99,10 @@ export class AppRunner extends DurableObject<Env> {
       `[AppRunner] app=${app} mainModule=${mainModule} hash=${sourceHash} modules=${Object.keys(modules).join(",")}`,
     );
 
+    // R2 prefixes for scoped access
+    const assetsPrefix = `${doId}/app/${app}/dist/client/`;
+    const storagePrefix = `${doId}/app/${app}/`;
+
     // Create/retrieve App facet via dynamic worker
     const ctx = this.ctx as any;
     const facet = ctx.facets.get(`app:${app}:${sourceHash}`, async () => {
@@ -109,10 +112,54 @@ export class AppRunner extends DurableObject<Env> {
         mainModule,
         modules,
         globalOutbound: this.env.EGRESS_GATEWAY,
-        env: { AI: this.env.AI_PROXY, EXEC: this.env.CODE_EXECUTOR },
+        env: {
+          AI: this.env.AI_PROXY,
+          EXEC: this.env.CODE_EXECUTOR,
+          ASSETS: ctx.exports.R2BucketProxy({ props: { prefix: assetsPrefix } }),
+          STORAGE: ctx.exports.R2BucketProxy({ props: { prefix: storagePrefix } }),
+        },
       }));
       return { class: (worker as any).getDurableObjectClass("App") };
     });
+
+    // Serve client assets from R2 directly (apps don't need to implement this)
+    if (url.pathname.includes(".") && !url.pathname.startsWith("/api/")) {
+      const assetKey = assetsPrefix + url.pathname.replace(/^\/+/, "");
+      const obj = await this.env.WORKSPACE_R2.get(assetKey);
+      if (obj) {
+        const ext = url.pathname.split(".").pop()?.toLowerCase() ?? "";
+        const ct =
+          {
+            js: "application/javascript",
+            css: "text/css",
+            html: "text/html;charset=utf-8",
+            json: "application/json",
+            svg: "image/svg+xml",
+            png: "image/png",
+            jpg: "image/jpeg",
+            woff2: "font/woff2",
+          }[ext] ?? "application/octet-stream";
+        const cc = /[-\.][A-Za-z0-9_-]{6,}\.\w+$/.test(url.pathname)
+          ? "public, max-age=31536000, immutable"
+          : "public, max-age=3600";
+        console.log(`[AppRunner] served asset from R2: ${url.pathname}`);
+        return new Response(obj.body, {
+          headers: { "content-type": ct, "cache-control": cc, etag: obj.httpEtag },
+        });
+      }
+    }
+
+    // SPA fallback: serve index.html from R2 for non-file, non-API paths
+    if (!url.pathname.includes(".") && !url.pathname.startsWith("/api/")) {
+      const indexKey = assetsPrefix + "index.html";
+      const indexObj = await this.env.WORKSPACE_R2.get(indexKey);
+      if (indexObj) {
+        console.log(`[AppRunner] SPA fallback from R2: ${url.pathname} → index.html`);
+        return new Response(indexObj.body, {
+          headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-cache" },
+        });
+      }
+    }
 
     console.log(`[AppRunner] forwarding to App facet`);
     return facet.fetch(req);
