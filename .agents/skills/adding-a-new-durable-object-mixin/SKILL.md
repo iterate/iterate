@@ -26,7 +26,7 @@ The default is **do not code immediately**. First spec the API with the user. If
 - `mixins/external-listing.ts`: env lower-bound via `getDatabase(env)`, best-effort `ctx.waitUntil()` work, D1 table owned by the mixin.
 - `mixins/kv-inspector.ts`: fetch wrapper that preserves generic `Base<Env>`.
 - `mixins/outerbase.ts`: fetch wrapper around SQLite debug routes.
-- `mixins/initialize.test-d.ts`: expect-type examples that prove the type incantations still work.
+- `mixins/initialize.type.test.ts`: expect-type examples that prove the type incantations still work.
 - `test-harness/initialize-fronting-worker.ts`: shared Worker entrypoint for worker-pool unit tests and deployed E2E.
 - `README.md`: human/agent docs for composition, type shapes, runtime behavior, and test commands.
 
@@ -115,7 +115,7 @@ over:
 
 Add or update all relevant levels:
 
-- Type tests: `mixins/*.test-d.ts` using Vitest `expectTypeOf`.
+- Type tests: `mixins/*.type.test.ts` using Vitest `expectTypeOf`.
 - Unit tests: worker-pool Vitest tests using `cloudflare:test`.
 - E2E tests: fronting Worker tests when runtime behavior depends on real Worker/DO/D1 behavior.
 
