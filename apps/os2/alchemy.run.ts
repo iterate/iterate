@@ -1,10 +1,11 @@
 import alchemy, { type Scope } from "alchemy";
-import { D1Database, TanStackStart } from "alchemy/cloudflare";
+import { D1Database, DurableObjectNamespace, TanStackStart, Worker } from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { slugify } from "@iterate-com/shared/slugify";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
+import type { IterateMcpServer } from "./src/durable-objects/iterate-mcp-server.ts";
 
 const APP_NAME = "os2";
 
@@ -65,6 +66,7 @@ const app = await alchemy(APP_NAME, {
 
 const workerName = slugify(`${APP_NAME}-${app.stage}`);
 const primaryUrl = env.WORKER_ROUTES[0] ? `https://${env.WORKER_ROUTES[0]}` : undefined;
+const compatibilityFlags = ["nodejs_compat"];
 
 const db = await D1Database("os-db", {
   name: `${workerName}-db`,
@@ -72,11 +74,41 @@ const db = await D1Database("os-db", {
   adopt: true,
 });
 
+const iterateMcpServer = await Worker("iterate-mcp-server-do", {
+  name: `${workerName}-iterate-mcp-server-do`,
+  entrypoint: "./src/durable-objects/iterate-mcp-server.ts",
+  adopt: true,
+  compatibilityFlags,
+  bindings: {
+    ITERATE_MCP_SERVER: DurableObjectNamespace<IterateMcpServer>("iterate-mcp-server", {
+      className: "IterateMcpServer",
+      sqlite: true,
+    }),
+  },
+  observability: {
+    enabled: true,
+    headSamplingRate: 1,
+    logs: {
+      enabled: true,
+      headSamplingRate: 1,
+      persist: true,
+      invocationLogs: true,
+    },
+    traces: {
+      enabled: true,
+      persist: true,
+      headSamplingRate: 1,
+    },
+  },
+});
+
 export const worker = await TanStackStart(APP_NAME, {
   name: workerName,
   adopt: true,
+  compatibilityFlags,
   bindings: {
     DB: db,
+    ITERATE_MCP_SERVER: iterateMcpServer.bindings.ITERATE_MCP_SERVER,
     APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
   },
   wrangler: {
