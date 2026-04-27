@@ -24,6 +24,7 @@ export function isHtmlRendererConfiguredEvent(event: Event) {
 export async function buildCustomHtmlRendererInsertions(events: readonly Event[]) {
   const insertionsByOffset = new Map<number, StreamFeedItem[]>();
   const renderers = collectHtmlRenderers(events);
+  const matcherExpressions = new Map<string, ReturnType<typeof jsonata>>();
 
   if (renderers.size === 0) {
     return insertionsByOffset;
@@ -35,7 +36,7 @@ export async function buildCustomHtmlRendererInsertions(events: readonly Event[]
     }
 
     for (const renderer of renderers.values()) {
-      const item = await renderCustomHtmlFeedItem({ event, renderer });
+      const item = await renderCustomHtmlFeedItem({ event, renderer, matcherExpressions });
       if (item == null) {
         continue;
       }
@@ -61,7 +62,6 @@ function collectHtmlRenderers(events: readonly Event[]) {
       continue;
     }
 
-    renderers.delete(parsed.data.payload.slug);
     renderers.set(parsed.data.payload.slug, parsed.data.payload);
   }
 
@@ -71,12 +71,20 @@ function collectHtmlRenderers(events: readonly Event[]) {
 async function renderCustomHtmlFeedItem({
   event,
   renderer,
+  matcherExpressions,
 }: {
   event: Event;
   renderer: HtmlRendererDefinition;
+  matcherExpressions: Map<string, ReturnType<typeof jsonata>>;
 }): Promise<CustomHtmlRenderedEventFeedItem | CustomHtmlRenderErrorFeedItem | null> {
   try {
-    const matched = await jsonata(renderer.matcher).evaluate(event);
+    let matcherExpression = matcherExpressions.get(renderer.matcher);
+    if (matcherExpression == null) {
+      matcherExpression = jsonata(renderer.matcher);
+      matcherExpressions.set(renderer.matcher, matcherExpression);
+    }
+
+    const matched = await matcherExpression.evaluate(event);
     if (!matched) {
       return null;
     }

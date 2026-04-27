@@ -1208,18 +1208,18 @@ describe("buildCustomHtmlRendererInsertions", () => {
         offset: 2,
         type: "https://events.iterate.com/events/stream/html-renderer-configured",
         payload: {
-          slug: "summary",
-          matcher: "type = 'demo.message'",
-          template: "new {{payload.title}}",
+          slug: "detail",
+          matcher: "payload.title = 'Hello'",
+          template: "detail {{payload.body}}",
         },
       }),
       createEvent({
         offset: 3,
         type: "https://events.iterate.com/events/stream/html-renderer-configured",
         payload: {
-          slug: "detail",
-          matcher: "payload.title = 'Hello'",
-          template: "detail {{payload.body}}",
+          slug: "summary",
+          matcher: "type = 'demo.message'",
+          template: "new {{payload.title}}",
         },
       }),
       createEvent({

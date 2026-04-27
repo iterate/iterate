@@ -160,10 +160,17 @@ export function StreamEventFeed({
 
   useEffect(() => {
     if (rendererApi == null) {
+      window.__iterateEventsRendererApi = undefined;
       return;
     }
 
     window.__iterateEventsRendererApi = rendererApi;
+
+    return () => {
+      if (window.__iterateEventsRendererApi === rendererApi) {
+        window.__iterateEventsRendererApi = undefined;
+      }
+    };
   }, [rendererApi]);
 
   return (
@@ -221,7 +228,6 @@ export function StreamEventFeed({
                 rendererMode={rendererMode}
                 eventElapsedByOffset={eventElapsedByOffset}
                 onOpenEventOffsetChange={onOpenEventOffsetChange}
-                rendererApi={rendererApi}
               />
             ))}
           </ConversationContent>
@@ -243,13 +249,11 @@ function StreamFeedItemRenderer({
   rendererMode,
   eventElapsedByOffset,
   onOpenEventOffsetChange,
-  rendererApi,
 }: {
   item: StreamFeedItem;
   rendererMode: StreamRendererMode;
   eventElapsedByOffset: ReadonlyMap<number, string>;
   onOpenEventOffsetChange?: (offset?: number) => void;
-  rendererApi?: CustomHtmlRendererApi;
 }) {
   switch (item.kind) {
     case "event":
@@ -289,7 +293,7 @@ function StreamFeedItemRenderer({
     case "jsonata-transformer-configured":
       return <JsonataTransformerConfiguredCard item={item} />;
     case "custom-html-rendered-event":
-      return <CustomHtmlRenderedEventCard item={item} rendererApi={rendererApi} />;
+      return <CustomHtmlRenderedEventCard item={item} />;
     case "custom-html-render-error":
       return <CustomHtmlRenderErrorCard item={item} />;
     case "stream-lifecycle":
@@ -461,13 +465,7 @@ function JsonataTransformerConfiguredCard({
   );
 }
 
-function CustomHtmlRenderedEventCard({
-  item,
-  rendererApi,
-}: {
-  item: CustomHtmlRenderedEventFeedItem;
-  rendererApi?: CustomHtmlRendererApi;
-}) {
+function CustomHtmlRenderedEventCard({ item }: { item: CustomHtmlRenderedEventFeedItem }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -476,10 +474,6 @@ function CustomHtmlRenderedEventCard({
 
     const timeoutIds = new Set<number>();
     const runScripts = () => {
-      if (rendererApi != null) {
-        window.__iterateEventsRendererApi = rendererApi;
-      }
-
       const scripts = Array.from(container.querySelectorAll("script"));
       for (const script of scripts) {
         if (script.dataset.iterateExecuted === "true") {
@@ -514,7 +508,7 @@ function CustomHtmlRenderedEventCard({
         window.clearTimeout(timeoutId);
       }
     };
-  }, [item.html, rendererApi]);
+  }, [item.html]);
 
   return (
     <div ref={containerRef} className="contents" dangerouslySetInnerHTML={{ __html: item.html }} />
