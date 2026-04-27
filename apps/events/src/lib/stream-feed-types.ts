@@ -133,6 +133,24 @@ export interface JsonataTransformerConfiguredFeedItem {
   raw: Event;
 }
 
+export interface CustomHtmlRenderedEventFeedItem {
+  kind: "custom-html-rendered-event";
+  slug: string;
+  eventType: string;
+  html: string;
+  timestamp: number;
+  raw: Event;
+}
+
+export interface CustomHtmlRenderErrorFeedItem {
+  kind: "custom-html-render-error";
+  slug: string;
+  eventType: string;
+  message: string;
+  timestamp: number;
+  raw: Event;
+}
+
 export interface StreamLifecycleFeedItem {
   kind: "stream-lifecycle";
   label: string;
@@ -239,6 +257,8 @@ export type StreamFeedItem =
   | StreamMetadataUpdatedFeedItem
   | ExternalSubscriberConfiguredFeedItem
   | JsonataTransformerConfiguredFeedItem
+  | CustomHtmlRenderedEventFeedItem
+  | CustomHtmlRenderErrorFeedItem
   | StreamLifecycleFeedItem
   | DynamicWorkerConfiguredFeedItem
   | DynamicWorkerEnvVarSetFeedItem

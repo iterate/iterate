@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   ExternalSubscriber,
+  HtmlRendererConfiguredEventInput,
   JsonataTransformerConfiguredEventInput,
   StreamSubscriptionConfiguredEventInput,
 } from "./index.ts";
@@ -45,6 +46,34 @@ function testInvalidJsonataTransformerExpressionsFailFast() {
   assert.equal(parsed.success, false);
 }
 
+function testValidHtmlRendererConfigParses() {
+  const parsed = HtmlRendererConfiguredEventInput.parse({
+    type: "https://events.iterate.com/events/stream/html-renderer-configured",
+    payload: {
+      slug: "todo-card",
+      matcher: "type = 'todo.created'",
+      template: "<article>{{payload.title}}</article>",
+    },
+  });
+
+  assert.equal(parsed.payload.slug, "todo-card");
+}
+
+function testInvalidHtmlRendererMatcherFailsFast() {
+  const parsed = HtmlRendererConfiguredEventInput.safeParse({
+    type: "https://events.iterate.com/events/stream/html-renderer-configured",
+    payload: {
+      slug: "todo-card",
+      matcher: "type = ",
+      template: "<article>{{payload.title}}</article>",
+    },
+  });
+
+  assert.equal(parsed.success, false);
+}
+
 await testValidExternalSubscriberJsonataExpressionsParse();
 await testInvalidExternalSubscriberJsonataExpressionsFailFast();
 await testInvalidJsonataTransformerExpressionsFailFast();
+await testValidHtmlRendererConfigParses();
+await testInvalidHtmlRendererMatcherFailsFast();
