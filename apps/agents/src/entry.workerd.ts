@@ -11,6 +11,7 @@ import type { AppContext } from "~/context.ts";
 import * as schema from "~/db/schema.ts";
 import { ChildStreamAutoSubscriber } from "~/durable-objects/child-stream-auto-subscriber.ts";
 import { IterateAgent } from "~/durable-objects/iterate-agent.ts";
+import { MCPClient } from "~/durable-objects/mcp-client.ts";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const config = parseAppConfigFromEnv({
@@ -72,4 +73,4 @@ export default {
   },
 };
 
-export { ChildStreamAutoSubscriber, IterateAgent };
+export { ChildStreamAutoSubscriber, IterateAgent, MCPClient };

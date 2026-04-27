@@ -9,6 +9,7 @@ import {
   LlmRequestQueuedEventInput,
   LlmRequestScheduledEventInput,
   LlmRequestStartedEventInput,
+  ToolProviderConfigUpdatedEventInput,
 } from "./agent-processor-types.ts";
 import { createIterateAgentProcessor, type ProcessorRuntime } from "./agent-processor.ts";
 
@@ -38,8 +39,7 @@ function createProcessorForTests() {
   return createIterateAgentProcessor({
     loader: unreachable("loader"),
     outboundFetch: unreachable("outboundFetch"),
-    mcp: unreachable("mcp"),
-    eventsCodemodeTools: null,
+    env: unreachable("env"),
   });
 }
 
@@ -218,6 +218,53 @@ describe("agent-processor / reduce", () => {
       ),
     })!;
     expect(s.currentRequest).toBeNull();
+  });
+
+  test("tool-provider-config-updated upserts and null-deletes by slug", () => {
+    const processor = createProcessorForTests();
+    const exec = {
+      kind: "rpc" as const,
+      target: {
+        type: "durable-object" as const,
+        binding: { $binding: "MCP_CLIENT" },
+        address: { type: "name" as const, name: "cloudflare-docs" },
+      },
+      rpcMethod: "callTool",
+      argsMode: "object" as const,
+    };
+    const types = {
+      kind: "rpc" as const,
+      target: {
+        type: "durable-object" as const,
+        binding: { $binding: "MCP_CLIENT" },
+        address: { type: "name" as const, name: "cloudflare-docs" },
+      },
+      rpcMethod: "getTypes",
+      argsMode: "object" as const,
+    };
+    const upserted = processor.reduce({
+      state: processor.initialState,
+      event: asEvent(
+        ToolProviderConfigUpdatedEventInput.parse({
+          type: "tool-provider-config-updated",
+          payload: { slug: "mcp", executeCallable: exec, getTypesCallable: types },
+        }),
+      ),
+    });
+    expect(upserted?.toolProviders).toEqual({
+      mcp: { executeCallable: exec, getTypesCallable: types },
+    });
+
+    const deleted = processor.reduce({
+      state: upserted ?? processor.initialState,
+      event: asEvent(
+        ToolProviderConfigUpdatedEventInput.parse({
+          type: "tool-provider-config-updated",
+          payload: { slug: "mcp", executeCallable: null },
+        }),
+      ),
+    });
+    expect(deleted?.toolProviders).toEqual({});
   });
 
   test("llm-request-cancelled with a non-matching id does not clear currentRequest", () => {

@@ -98,6 +98,13 @@ const childStreamAutoSubscriber = DurableObjectNamespace("child-stream-auto-subs
   className: "ChildStreamAutoSubscriber",
   sqlite: true,
 });
+// No `<MCPClient>` type parameter — see comment on `childStreamAutoSubscriber`
+// above. The DO is imported by value in `entry.workerd.ts`, so the binding
+// type is inferred from the alchemy resource.
+const mcpClient = DurableObjectNamespace("mcp-client", {
+  className: "MCPClient",
+  sqlite: true,
+});
 
 export const worker = await TanStackStart(APP_NAME, {
   name: workerName,
@@ -106,6 +113,7 @@ export const worker = await TanStackStart(APP_NAME, {
     DB: db,
     ITERATE_AGENT: iterateAgent,
     CHILD_STREAM_AUTO_SUBSCRIBER: childStreamAutoSubscriber,
+    MCP_CLIENT: mcpClient,
     LOADER: WorkerLoader(),
     AI: Ai(),
     APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),

@@ -1,7 +1,8 @@
-import type { resolveProvider } from "@cloudflare/codemode/ai";
 import { type EventInput, type GenericEventInput } from "@iterate-com/events-contract";
 import { match } from "schematch";
 import { z } from "zod";
+import { dispatchCallable } from "~/lib/callable.ts";
+import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 import {
   AgentInputAddedEvent,
   AgentInputAddedEventInput,
@@ -24,6 +25,7 @@ import {
   LlmRequestScheduledEventInput,
   LlmRequestStartedEvent,
   SystemPromptUpdatedEvent,
+  ToolProviderConfigUpdatedEvent,
   type TriggerLlm,
 } from "./agent-processor-types.ts";
 
@@ -33,22 +35,28 @@ import {
  * exhaustive without a defensive `auto` branch.
  */
 type ConcreteTriggerLlm = Exclude<TriggerLlm, { behaviour: "auto" }>;
-import type { CreateMcpToolProvidersOptions } from "~/lib/mcp-tool-providers.ts";
 
-// `@cloudflare/codemode` and `mcp-tool-providers` transitively pull in
-// `cloudflare:workers`, which Node's ESM loader cannot resolve. The codemode
-// path is only ever exercised inside `CodemodeBlockAddedEvent` (runs in the DO
-// in production / e2e), so we lazy-load it. This keeps the trigger logic in
-// this module loadable from the node-pool unit tests in
-// `agent-processor.test.ts`.
+/**
+ * Wire shape returned by a `ToolProviderConfig.getTypesCallable`. The string
+ * is inserted verbatim into the codemode prompt as LLM-facing documentation
+ * for the namespace (declarations, examples, prose — codemode does not
+ * typecheck or parse it).
+ */
+const ProviderTypesResponse = z.object({
+  types: z.string(),
+});
+
+// `@cloudflare/codemode` transitively pulls in `cloudflare:workers`, which
+// Node's ESM loader cannot resolve. The codemode path is only ever exercised
+// inside `CodemodeBlockAddedEvent` (runs in the DO in production / e2e), so
+// we lazy-load it. This keeps the trigger logic in this module loadable from
+// the node-pool unit tests in `agent-processor.test.ts`.
 async function loadCodemodeRuntime() {
-  const [{ DynamicWorkerExecutor }, { resolveProvider }, { createMcpToolProviders }] =
-    await Promise.all([
-      import("@cloudflare/codemode"),
-      import("@cloudflare/codemode/ai"),
-      import("~/lib/mcp-tool-providers.ts"),
-    ]);
-  return { DynamicWorkerExecutor, resolveProvider, createMcpToolProviders };
+  const [{ DynamicWorkerExecutor, resolveProvider }, { dynamicTools }] = await Promise.all([
+    import("@cloudflare/codemode"),
+    import("@cloudflare/codemode/dynamic"),
+  ]);
+  return { DynamicWorkerExecutor, resolveProvider, dynamicTools };
 }
 
 // Re-export so existing consumers (e.g. iterate-agent.ts) can keep importing
@@ -395,8 +403,12 @@ async function handleUserInput(args: {
 export function createIterateAgentProcessor(deps: {
   loader: WorkerLoader;
   outboundFetch: Fetcher;
-  mcp: CreateMcpToolProvidersOptions["mcp"];
-  eventsCodemodeTools: Awaited<ReturnType<typeof resolveProvider>> | null;
+  /**
+   * Worker env, threaded through so `dispatchCallable` can resolve symbolic
+   * binding names (`{ $binding: "MCP_CLIENT" }`) against live `Fetcher`s and
+   * `DurableObjectNamespace`s when materialising tool providers.
+   */
+  env: CloudflareEnv;
 }) {
   return {
     slug: "iterate-agent",
@@ -443,6 +455,29 @@ export function createIterateAgentProcessor(deps: {
           ...state,
           pendingTriggerCount: state.pendingTriggerCount + 1,
         }))
+        .case(ToolProviderConfigUpdatedEvent, (event) => {
+          const { slug, executeCallable, getTypesCallable } = event.payload;
+          // Null `executeCallable` deletes the slug entirely. We treat this
+          // as the only deletion signal so adding `getTypesCallable` later
+          // without a fresh `executeCallable` doesn't accidentally wipe the
+          // entry.
+          if (executeCallable === null) {
+            const { [slug]: _removed, ...rest } = state.toolProviders;
+            return { ...state, toolProviders: rest };
+          }
+          return {
+            ...state,
+            toolProviders: {
+              ...state.toolProviders,
+              [slug]: {
+                executeCallable,
+                ...(getTypesCallable === undefined || getTypesCallable === null
+                  ? {}
+                  : { getTypesCallable }),
+              },
+            },
+          };
+        })
         .default(() => undefined),
 
     afterAppend: async ({
@@ -458,27 +493,54 @@ export function createIterateAgentProcessor(deps: {
     }) =>
       match(event)
         .case(CodemodeBlockAddedEvent, async (event) => {
-          const { DynamicWorkerExecutor, resolveProvider, createMcpToolProviders } =
+          const { DynamicWorkerExecutor, resolveProvider, dynamicTools } =
             await loadCodemodeRuntime();
           const executor = new DynamicWorkerExecutor({
             loader: deps.loader,
             globalOutbound: deps.outboundFetch,
           });
-          const mcpProviders = await createMcpToolProviders({
-            mcp: deps.mcp,
-            // Give pending MCP handshakes this long to settle before resolving the provider set.
-            waitForConnectionsTimeout: 15_000,
-          });
-          const mcpResolved = await Promise.all(
-            mcpProviders.map((provider) => resolveProvider(provider)),
+
+          // Materialise the serialised tool-provider stack as codemode
+          // `dynamicTools` providers: each slug becomes a runtime-resolved
+          // namespace where `slug.<anything>(args)` forwards to the
+          // configured `executeCallable`. `getTypesCallable` (when present)
+          // produces the LLM-facing prompt material — codemode inserts it
+          // verbatim, so the callable can return declarations, prose, or
+          // anything else useful to the model.
+          const dynamicResolved = await Promise.all(
+            Object.entries(state.toolProviders).map(async ([slug, config]) => {
+              const types = config.getTypesCallable
+                ? ProviderTypesResponse.parse(
+                    await dispatchCallable<unknown>({
+                      callable: config.getTypesCallable,
+                      // Pass the slug so callables that emit codemode-style
+                      // declarations (e.g. via `generateTypesFromJsonSchema`)
+                      // can pin the namespace to match the runtime one-to-one.
+                      payload: { namespace: slug },
+                      ctx: { env: deps.env as unknown as Record<string, unknown> },
+                    }),
+                  ).types
+                : undefined;
+              return resolveProvider(
+                dynamicTools({
+                  name: slug,
+                  types,
+                  callTool: (name, args) =>
+                    dispatchCallable({
+                      callable: config.executeCallable,
+                      payload: { name, args },
+                      ctx: { env: deps.env as unknown as Record<string, unknown> },
+                    }),
+                }),
+              );
+            }),
           );
 
           const result = await executor.execute(event.payload.script, [
             // `builtin.answer()` is the e2e canary asserted by
             // `apps/agents/e2e/vitest/iterate-agent.e2e.test.ts` and `…-mixed-codemode.e2e.test.ts`.
             { name: "builtin", fns: { answer: async () => 42 } },
-            ...(deps.eventsCodemodeTools ? [deps.eventsCodemodeTools] : []),
-            ...mcpResolved,
+            ...dynamicResolved,
           ]);
 
           await append({

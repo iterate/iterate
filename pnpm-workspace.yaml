@@ -41,7 +41,7 @@ packages:
 
 catalogs:
   cloudflare:
-    "@cloudflare/codemode": ^0.3.4
+    "@cloudflare/codemode": "https://pkg.pr.new/iterate/agents/@cloudflare/codemode@7c0735e"
     "@cloudflare/unenv-preset": ^2.16.0
     "@cloudflare/vite-plugin": 1.33.1
     "@cloudflare/vitest-pool-workers": ^0.14.9

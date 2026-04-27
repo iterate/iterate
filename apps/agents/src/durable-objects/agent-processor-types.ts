@@ -3,6 +3,7 @@ import {
   GenericEventInput as GenericEventInputBase,
 } from "@iterate-com/events-contract";
 import { z } from "zod";
+import { Callable } from "~/lib/callable.ts";
 
 /**
  * Zod schemas + TS types for the IterateAgent stream processor.
@@ -156,6 +157,25 @@ export const CurrentRequest = z.object({
 export type CurrentRequest = z.infer<typeof CurrentRequest>;
 
 /**
+ * Persistent description of a codemode tool provider, keyed by `slug` (the
+ * sandbox namespace, e.g. `mcp` → `await mcp.someTool(...)`).
+ *
+ * `executeCallable` is invoked at codemode-block time with `{ name, args }`
+ * to run a single tool call. `getTypesCallable` is invoked once per block to
+ * obtain `{ types, toolNames }` — the LLM-facing TypeScript declarations and
+ * the list of tool names to register on the namespace.
+ *
+ * Storing only `Callable`s here keeps state JSON-serialisable and lets
+ * presets / external systems author tool providers without ever holding live
+ * Worker bindings.
+ */
+export const ToolProviderConfig = z.object({
+  executeCallable: Callable,
+  getTypesCallable: Callable.optional(),
+});
+export type ToolProviderConfig = z.infer<typeof ToolProviderConfig>;
+
+/**
  * Reduced projection persisted in the DO's synchronous KV (under key
  * `iterate-agent:stream-processor-state`). Small + lightweight — not execution payloads.
  */
@@ -188,6 +208,12 @@ export const IterateAgentProcessorState = z.object({
    * `llm-request-started`. Reset to 0 by every started event.
    */
   pendingTriggerCount: z.number().int().nonnegative().default(0),
+  /**
+   * Codemode tool providers, keyed by sandbox-namespace `slug`. Mutated by
+   * `tool-provider-config-updated` events: a non-null `executeCallable`
+   * upserts the slug, a null `executeCallable` deletes it.
+   */
+  toolProviders: z.record(z.string(), ToolProviderConfig).default({}),
 });
 export type IterateAgentProcessorState = z.infer<typeof IterateAgentProcessorState>;
 
@@ -348,6 +374,28 @@ export const { event: LlmRequestQueuedEvent, input: LlmRequestQueuedEventInput }
  * event. Cheap; no reducer side effects (the events flow through history and
  * are then ignored). Useful from the stream viewer / e2e tests.
  */
+/**
+ * Mutate `state.toolProviders[slug]`. A non-null `executeCallable` upserts
+ * the entry; a null `executeCallable` removes the slug entirely. `slug`
+ * must be a valid JS identifier — it becomes the namespace in the sandbox.
+ *
+ * Sourced upstream from agents-app presets, never emitted by the DO itself.
+ */
+export const { event: ToolProviderConfigUpdatedEvent, input: ToolProviderConfigUpdatedEventInput } =
+  defineEventSchemas({
+    type: "tool-provider-config-updated",
+    payload: z.object({
+      slug: z
+        .string()
+        .min(1)
+        .regex(/^[a-zA-Z_$][a-zA-Z0-9_$]*$/, {
+          message: "slug must be a valid JS identifier (becomes a sandbox namespace)",
+        }),
+      executeCallable: Callable.nullable(),
+      getTypesCallable: Callable.optional().nullable(),
+    }),
+  });
+
 export const { event: DebugInfoRequestedEvent, input: DebugInfoRequestedEventInput } =
   defineEventSchemas({
     type: "debug-info-requested",
