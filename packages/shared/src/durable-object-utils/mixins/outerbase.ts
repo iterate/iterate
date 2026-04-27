@@ -1,64 +1,17 @@
 /// <reference types="@cloudflare/workers-types" />
 
-import { DurableObject } from "cloudflare:workers";
+import {
+  delegateToBaseFetch,
+  getDurableObjectState,
+  type DurableObjectClass,
+  type RuntimeDurableObjectConstructor,
+  type WithFetchMixinResult,
+} from "./fetch-mixin-utils.ts";
+
+export type WithOuterbaseResult<TBase extends DurableObjectClass> = WithFetchMixinResult<TBase>;
 
 /**
- * Cloudflare Durable Object bases are generic class values:
- *
- *   class Room extends Base<Env> {}
- *
- * Fetch-wrapper mixins stack on top of each other, so they must return that
- * same generic constructor shape. `ReqEnv` is the minimum Env required by
- * mixins applied so far. `Members` are the instance methods already added by
- * mixins applied so far.
- */
-type DurableObjectClass<ReqEnv = unknown, Members = object> = abstract new <Env extends ReqEnv>(
-  ctx: DurableObjectState,
-  env: Env,
-) => DurableObject<Env> & Members;
-
-type ReqEnvOf<C> = C extends DurableObjectClass<infer ReqEnv, infer _Members> ? ReqEnv : unknown;
-
-type MembersOf<C> = C extends DurableObjectClass<infer _ReqEnv, infer Members> ? Members : object;
-
-// Mapped types copy static properties but not construct signatures. That avoids
-// the "base constructors must all have the same return type" problem that
-// happens when an intersection contains multiple incompatible constructor
-// signatures.
-type StaticSide<T> = {
-  [K in keyof T]: T[K];
-};
-
-type RuntimeDurableObjectConstructor = abstract new (...args: any[]) => DurableObject;
-
-type DurableObjectInternals = {
-  ctx: DurableObjectState;
-};
-
-type FetchBase = {
-  fetch(request: Request): Response | Promise<Response>;
-};
-
-type OptionalFetchBase = {
-  fetch?(request: Request): Response | Promise<Response>;
-};
-
-export type WithOuterbaseResult<TBase extends DurableObjectClass> = StaticSide<TBase> &
-  // Intersect two things:
-  //
-  // 1. StaticSide<TBase>, preserving static properties from the wrapped class
-  //    without carrying forward an incompatible constructor signature.
-  // 2. a fresh generic DurableObject constructor, preserving `MixedBase<Env>`
-  //    and adding fetch() to the accumulated instance surface.
-  //
-  // Benefit:
-  //
-  //   const InspectorBase = withOuterbase(...)(DurableObject);
-  //   class Inspector extends InspectorBase<Env> {}
-  DurableObjectClass<ReqEnvOf<TBase>, MembersOf<TBase> & FetchBase>;
-
-/**
- * Debug-only SQL inspector.
+ * Debug-only SQL inspector for a Durable Object's embedded SQLite storage.
  *
  * This wraps `fetch()` and owns two routes:
  *
@@ -91,13 +44,7 @@ export function withOuterbase(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL"
           return handleOuterbaseSql(this, request);
         }
 
-        // Fetch mixins wrap the request handler in stack order. If this mixin
-        // does not own the path, delegate to the wrapped base class instead of
-        // swallowing the request.
-        const baseFetch = (Base.prototype as OptionalFetchBase).fetch;
-        if (baseFetch !== undefined) return await baseFetch.call(this, request);
-
-        return new Response("Not found", { status: 404 });
+        return await delegateToBaseFetch(Base, this, request);
       }
     }
 
@@ -114,10 +61,7 @@ async function handleOuterbaseSql(instance: object, request: Request) {
     return Response.json({ error: "Method not allowed" }, { status: 405 });
   }
 
-  // `ctx` is protected on DurableObject. The base constructor constraint proves
-  // this is a Durable Object instance; the narrow cast keeps the protected-field
-  // escape hatch local to this debug-only route handler.
-  const { ctx } = instance as unknown as DurableObjectInternals;
+  const ctx = getDurableObjectState(instance);
 
   try {
     const body = await request.json<{
