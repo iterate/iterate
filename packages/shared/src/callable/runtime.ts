@@ -35,7 +35,7 @@ export function validateCallable(options: { callable: unknown }) {
  * JSON Pointer extraction, and pass-through args are intentionally parked in
  * `tasks/` until we have real callers that need them.
  */
-export function buildCallableRequest(options: { callable: Callable; payload: unknown }) {
+export function buildCallableRequest(options: { callable: FetchCallable; payload: unknown }) {
   const callable = validateCallable({ callable: options.callable });
   if (callable.kind !== "fetch") {
     throw new CallableError("DESCRIPTOR_VALIDATION_FAILED", `Unsupported callable kind`);
@@ -130,7 +130,7 @@ export async function dispatchCallable(options: {
  * https://developers.cloudflare.com/workers/runtime-apis/request/
  */
 export async function dispatchCallableFetch(options: {
-  callable: Callable;
+  callable: FetchCallable;
   request: Request;
   ctx: CallableContext;
 }) {
@@ -146,27 +146,41 @@ export async function dispatchCallableFetch(options: {
     callable,
     incomingRequestUrl: options.request.url,
   });
-  const outboundRequest = new Request(outboundUrl, options.request);
+  const rewrittenRequest = new Request(outboundUrl, options.request);
 
   switch (callable.target.type) {
     case "http": {
       /**
-       * This is the `globalThis.fetch` fallback from the review notes. If a
+       * This is the `globalThis.fetch` fallback. If a
        * caller omits `ctx.fetcher`, public HTTP callables use the Worker/runtime
        * global fetch. That is convenient for trusted Worker-boundary code, but
        * it is ambient authority. Untrusted callables should be dispatched with
        * an explicit policy/resolver instead of relying on this default.
        */
       const fetcher = options.ctx.fetcher ?? globalThis.fetch;
-      return await fetcher(outboundRequest);
+      return await fetcher(rewrittenRequest);
     }
     case "service": {
+      /**
+       * Service bindings and Durable Object stubs use Fetch semantics, not RPC
+       * semantics, for `.fetch()`. Redirect-following on an internal binding
+       * can therefore turn a trusted binding call into public egress. Keep
+       * internal fetch targets manual by default:
+       * https://developers.cloudflare.com/workers/runtime-apis/rpc/reserved-methods/#fetch
+       */
+      const outboundRequest = new Request(rewrittenRequest, { redirect: "manual" });
       return await resolveServiceBinding({
         bindingName: callable.target.binding.$binding,
         env: options.ctx.env,
       }).fetch(outboundRequest);
     }
     case "durable-object": {
+      /**
+       * Keep redirect policy aligned with service bindings. DO `fetch()` is an
+       * HTTP-shaped invocation; if the object wants a caller to follow a
+       * redirect, the caller can inspect the 3xx response and decide.
+       */
+      const outboundRequest = new Request(rewrittenRequest, { redirect: "manual" });
       const stub = resolveDurableObjectStub({
         bindingName: callable.target.binding.$binding,
         address: callable.target.address,
@@ -193,11 +207,13 @@ export async function dispatchCallableFetch(options: {
  * https://developers.cloudflare.com/workers/runtime-apis/response/#websocket
  */
 export async function connectCallableWebSocket(options: {
-  callable: Callable;
+  callable: FetchCallable;
   ctx: CallableContext;
   url?: string;
   protocols?: string[];
   headers?: Record<string, string>;
+  binaryType?: "blob" | "arraybuffer";
+  accept?: { allowHalfOpen?: boolean };
 }) {
   const headers = new Headers(options.headers);
   headers.set("Connection", "Upgrade");
@@ -215,7 +231,11 @@ export async function connectCallableWebSocket(options: {
       headers,
     }),
     ctx: options.ctx,
-  })) as Response & { webSocket?: (WebSocket & { accept: () => void }) | null };
+  })) as Response & {
+    webSocket?:
+      | (WebSocket & { accept: (acceptOptions?: { allowHalfOpen?: boolean }) => void })
+      | null;
+  };
 
   if (response.status !== 101 || !response.webSocket) {
     throw new CallableError(
@@ -225,7 +245,8 @@ export async function connectCallableWebSocket(options: {
     );
   }
 
-  response.webSocket.accept();
+  if (options.binaryType) response.webSocket.binaryType = options.binaryType;
+  response.webSocket.accept(options.accept);
   return response.webSocket;
 }
 
@@ -250,10 +271,22 @@ function resolveBaseUrl(callable: FetchCallable) {
     case "http":
       return new URL(callable.target.url);
     case "service":
-      return new URL(callable.target.pathPrefix ?? "/", "https://service.local");
+      return buildSyntheticBaseUrl({
+        hostname: "service.local",
+        pathPrefix: callable.target.pathPrefix,
+      });
     case "durable-object":
-      return new URL(callable.target.pathPrefix ?? "/", "https://durable-object.local");
+      return buildSyntheticBaseUrl({
+        hostname: "durable-object.local",
+        pathPrefix: callable.target.pathPrefix,
+      });
   }
+}
+
+function buildSyntheticBaseUrl(options: { hostname: string; pathPrefix: string | undefined }) {
+  const url = new URL(`https://${options.hostname}`);
+  url.pathname = options.pathPrefix ?? "/";
+  return url;
 }
 
 function joinPathPrefix(prefix: string, incomingPath: string) {

@@ -15,9 +15,17 @@ const callableSchemaField = z.literal(CALLABLE_SCHEMA).optional();
  */
 const pathPrefixSchema = z
   .string()
-  .refine((value) => value.startsWith("/") && !value.includes("?") && !value.includes("#"), {
-    message: "pathPrefix must start with / and must not include query or hash",
-  });
+  .refine(
+    (value) =>
+      value.startsWith("/") &&
+      !value.startsWith("//") &&
+      !value.includes("?") &&
+      !value.includes("#"),
+    {
+      message:
+        "pathPrefix must start with one / and must not be protocol-relative or include query/hash",
+    },
+  );
 
 const httpUrlSchema = z.string().refine(
   (value) => {

@@ -65,6 +65,21 @@ describe("callable validation", () => {
     ).toThrow("Invalid callable");
   });
 
+  test("rejects protocol-relative path prefixes for synthetic binding URLs", () => {
+    expect(() =>
+      validateCallable({
+        callable: {
+          kind: "fetch",
+          target: {
+            type: "service",
+            binding: { $binding: "CALLABLE_TEST_SERVICE" },
+            pathPrefix: "//evil.example/internal",
+          },
+        },
+      }),
+    ).toThrow("Invalid callable");
+  });
+
   test("rejects dangerous RPC method names and dotted paths", () => {
     for (const rpcMethod of ["then", "__proto__", "fetch", "users.byId"]) {
       expect(() =>
@@ -352,6 +367,25 @@ describe("dispatchCallableFetch", () => {
     });
   });
 
+  test("uses manual redirects for service binding fetch dispatch", async () => {
+    const response = await dispatchCallableFetch({
+      callable: {
+        kind: "fetch",
+        pathMode: "replace",
+        target: {
+          type: "service",
+          binding: { $binding: "CALLABLE_TEST_SERVICE" },
+          pathPrefix: "/redirect",
+        },
+      },
+      request: new Request("https://router.local/orders/1"),
+      ctx: { env: testEnv },
+    });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("https://public.example.com/leak");
+  });
+
   test("dispatches to a Durable Object by name", async () => {
     const response = await dispatchCallableFetch({
       callable: {
@@ -475,9 +509,13 @@ describe("connectCallableWebSocket", () => {
       ctx: { env: testEnv },
     });
 
+    const closed = new Promise((resolve) => {
+      ws.addEventListener("close", resolve, { once: true });
+    });
     const message = await new Promise((resolve) => {
       ws.addEventListener("message", (event) => resolve(event.data), { once: true });
     });
     expect(message).toBe("connected");
+    await closed;
   });
 });

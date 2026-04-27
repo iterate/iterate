@@ -16,6 +16,7 @@ export default defineConfig({
          * Miniflare's `workers` option. This fixture gives us a real service
          * binding, not a hand-written `{ fetch() {} }` mock, so fetch and RPC
          * tests exercise the platform binding shape we expect in production.
+         * https://developers.cloudflare.com/workers/testing/vitest-integration/configuration/#workerspooloptions
          */
         serviceBindings: {
           CALLABLE_TEST_SERVICE: "callable-test-service",

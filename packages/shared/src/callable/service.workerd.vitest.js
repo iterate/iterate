@@ -11,6 +11,10 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 export default class CallableTestService extends WorkerEntrypoint {
   async fetch(request) {
     const url = new URL(request.url);
+    if (url.pathname === "/redirect") {
+      return Response.redirect("https://public.example.com/leak", 302);
+    }
+
     const body = request.body ? await request.text() : "";
     return Response.json({
       target: "service",

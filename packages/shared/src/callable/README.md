@@ -10,6 +10,8 @@ HTTP, a service binding `fetch()`, Durable Object `fetch()`, service RPC, or
 Durable Object RPC.
 
 ```ts
+import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
+
 const result = await dispatchCallable({
   callable,
   payload: { userId: "usr_123" },
@@ -20,6 +22,13 @@ const result = await dispatchCallable({
 Use `dispatchCallableFetch({ callable, request, ctx })` only when you need the
 raw Fetch API surface: streaming request bodies, streaming responses, SSE, or
 WebSocket upgrade responses.
+
+Only the runtime and type modules are exported from the package:
+
+```ts
+import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
+import type { Callable } from "@iterate-com/shared/callable/types.ts";
+```
 
 ## Shape
 
@@ -152,6 +161,9 @@ const response = await dispatchCallableFetch({
 
 This is also the API used by `connectCallableWebSocket()`: WebSocket is fetch
 with upgrade headers, not a separate callable kind.
+
+`connectCallableWebSocket()` accepts `binaryType` and `accept` options so callers
+can set Worker WebSocket behavior before the socket is accepted.
 
 ## Fetch Targets And Paths
 

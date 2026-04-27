@@ -35,6 +35,7 @@ export class CallableTestDurableObject extends DurableObject {
     server.accept();
     server.addEventListener("error", () => {});
     server.send("connected");
+    server.close(1000, "test complete");
     return new Response(null, { status: 101, webSocket: client });
   }
 }

@@ -49,7 +49,8 @@
       "import": "./src/posthog/sourcemaps-vite-plugin.ts",
       "default": "./src/posthog/sourcemaps-vite-plugin.ts"
     },
-    "./callable/*": "./src/callable/*",
+    "./callable/runtime.ts": "./src/callable/runtime.ts",
+    "./callable/types.ts": "./src/callable/types.ts",
     "./project-ingress": "./src/project-ingress.ts",
     "./github-agent-path": "./src/github-agent-path.ts",
     "./slug-maker": "./src/slug-maker.ts",
@@ -57,7 +58,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --environment node src/jonasland/ingress-url.test.ts",
+    "test": "vitest run --environment node src/jonasland/ingress-url.test.ts && pnpm test:callable",
     "test:callable": "vitest run --config src/callable/vitest.config.ts"
   },
   "dependencies": {
