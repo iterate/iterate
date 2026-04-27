@@ -1240,6 +1240,9 @@ importers:
       lucide-react:
         specifier: ^1.7.0
         version: 1.7.0(react@19.2.4)
+      mustache:
+        specifier: ^4.2.0
+        version: 4.2.0
       react:
         specifier: ^19.2.0
         version: 19.2.4
@@ -1280,6 +1283,9 @@ importers:
       '@tanstack/devtools-vite':
         specifier: ^0.6.0
         version: 0.6.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      '@types/mustache':
+        specifier: ^4.2.6
+        version: 4.2.6
       '@types/node':
         specifier: ^25.0.10
         version: 25.3.3
@@ -1359,9 +1365,6 @@ importers:
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@lydell/node-pty':
-        specifier: 1.2.0-beta.3
-        version: 1.2.0-beta.3
       '@orpc/client':
         specifier: 1.13.14
         version: 1.13.14(@opentelemetry/api@1.9.0)
@@ -1407,12 +1410,6 @@ importers:
       '@tanstack/react-start':
         specifier: 1.167.5
         version: 1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      '@xterm/addon-serialize':
-        specifier: 0.15.0-beta.103
-        version: 0.15.0-beta.103(@xterm/xterm@6.1.0-beta.103)
-      '@xterm/headless':
-        specifier: 6.1.0-beta.103
-        version: 6.1.0-beta.103
       crossws:
         specifier: ^0.4.4
         version: 0.4.4(srvx@0.11.12)
@@ -1501,10 +1498,6 @@ importers:
       wrangler:
         specifier: 4.85.0
         version: 4.85.0(@cloudflare/workers-types@4.20260426.1)
-    optionalDependencies:
-      '@lydell/node-pty-darwin-arm64':
-        specifier: 1.2.0-beta.3
-        version: 1.2.0-beta.3
 
   apps/example-contract:
     dependencies:
@@ -2104,7 +2097,7 @@ importers:
         version: 3.19.19
       evlog:
         specifier: ^1.8.0
-        version: 1.11.0(nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260426.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260424.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(ofetch@2.0.0-alpha.3)(react@19.2.4)
+        version: 1.11.0(nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260426.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260424.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(react@19.2.4)
       hono:
         specifier: ^4.10.7
         version: 4.12.5
@@ -2642,7 +2635,7 @@ importers:
         version: link:../packages/iterate
       trpc-cli:
         specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(zod@4.3.6)
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
@@ -2746,7 +2739,7 @@ importers:
         version: 1.4.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
       trpc-cli:
         specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
+        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(zod@4.1.12)
       zod:
         specifier: 4.1.12
         version: 4.1.12
@@ -2935,7 +2928,7 @@ importers:
         version: 1.2.15(rollup@4.59.0)
       evlog:
         specifier: ^1.8.0
-        version: 1.11.0(nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260426.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260424.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(ofetch@2.0.0-alpha.3)(react@19.2.4)
+        version: 1.11.0(nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260426.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260424.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(react@19.2.4)
       get-port:
         specifier: ^7.1.0
         version: 7.1.0
@@ -9909,6 +9902,9 @@ packages:
   '@types/ms@2.1.0':
     resolution: {integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==}
 
+  '@types/mustache@4.2.6':
+    resolution: {integrity: sha512-t+8/QWTAhOFlrF1IVZqKnMRJi84EgkIK5Kh0p2JV4OLywUvCwJPFxbJAl7XAow7DVIHsF+xW9f1MVzg0L6Szjw==}
+
   '@types/node@22.19.13':
     resolution: {integrity: sha512-akNQMv0wW5uyRpD2v2IEyRSZiR+BeGuoB6L310EgGObO44HSMNT8z1xzio28V8qOrgYaopIDNA18YgdXd+qTiw==}
 
@@ -14462,6 +14458,10 @@ packages:
 
   multipasta@0.2.7:
     resolution: {integrity: sha512-KPA58d68KgGil15oDqXjkUBEBYc00XvbPj5/X+dyzeo/lWm9Nc25pQRlf1D+gv4OpK7NM0J1odrbu9JNNGvynA==}
+
+  mustache@4.2.0:
+    resolution: {integrity: sha512-71ippSywq5Yb7/tVYyGbkBggbU8H3u5Rz56fH60jGFgr8uHwxs+aSKeqmluIVzM0m0kB7xQjKS6qPfd0b2ZoqQ==}
+    hasBin: true
 
   mute-stream@2.0.0:
     resolution: {integrity: sha512-WWdIxpyjEn+FhQJQQv9aQAYlHoNVdzIzUySNV1gHUPDSdZJ3yZn7pAAbQcV7B56Mvu881q9FZV+0Vx2xC44VWA==}
@@ -25727,6 +25727,11 @@ snapshots:
       typescript: 5.9.3
     optional: true
 
+  '@trpc/server@11.12.0(typescript@6.0.3)':
+    dependencies:
+      typescript: 6.0.3
+    optional: true
+
   '@tybys/wasm-util@0.10.1':
     dependencies:
       tslib: 2.8.1
@@ -25961,6 +25966,8 @@ snapshots:
 
   '@types/ms@2.1.0': {}
 
+  '@types/mustache@4.2.6': {}
+
   '@types/node@22.19.13':
     dependencies:
       undici-types: 6.21.0
@@ -26148,6 +26155,11 @@ snapshots:
   '@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3))':
     dependencies:
       valibot: 1.2.0(typescript@5.9.3)
+
+  '@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3))':
+    dependencies:
+      valibot: 1.2.0(typescript@6.0.3)
+    optional: true
 
   '@ver0/deep-equal@1.0.1': {}
 
@@ -26441,7 +26453,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
-      vitest: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(@vitest/ui@4.0.15)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.32.0)(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+      vitest: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@25.5.0)(@vitest/ui@4.0.15)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.32.0)(msw@2.13.3(@types/node@25.5.0)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
 
   '@vitest/utils@3.2.4':
     dependencies:
@@ -28867,10 +28879,9 @@ snapshots:
     dependencies:
       eventsource-parser: 3.0.6
 
-  evlog@1.11.0(nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260426.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260424.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(ofetch@2.0.0-alpha.3)(react@19.2.4):
+  evlog@1.11.0(nitro@3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260426.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260424.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(react@19.2.4):
     optionalDependencies:
       nitro: 3.0.260311-beta(@libsql/client@0.17.0)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260426.1)(@libsql/client@0.17.0)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.11)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(jiti@2.6.1)(lru-cache@11.2.6)(miniflare@4.20260424.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      ofetch: 2.0.0-alpha.3
       react: 19.2.4
 
   execa@9.6.1:
@@ -31482,6 +31493,8 @@ snapshots:
     optional: true
 
   multipasta@0.2.7: {}
+
+  mustache@4.2.0: {}
 
   mute-stream@2.0.0: {}
 
@@ -34136,6 +34149,28 @@ snapshots:
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.3.6
 
+  trpc-cli@0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(zod@4.1.12):
+    dependencies:
+      commander: 14.0.3
+    optionalDependencies:
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@trpc/server': 11.12.0(typescript@6.0.3)
+      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@6.0.3))
+      effect: 3.19.19
+      valibot: 1.2.0(typescript@6.0.3)
+      zod: 4.1.12
+
+  trpc-cli@0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@6.0.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@6.0.3)))(effect@3.19.19)(valibot@1.2.0(typescript@6.0.3))(zod@4.3.6):
+    dependencies:
+      commander: 14.0.3
+    optionalDependencies:
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@trpc/server': 11.12.0(typescript@6.0.3)
+      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@6.0.3))
+      effect: 3.19.19
+      valibot: 1.2.0(typescript@6.0.3)
+      zod: 4.3.6
+
   trpc-cli@0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.20.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@3.25.76):
     dependencies:
       commander: 14.0.3
@@ -34533,6 +34568,11 @@ snapshots:
   valibot@1.2.0(typescript@5.9.3):
     optionalDependencies:
       typescript: 5.9.3
+
+  valibot@1.2.0(typescript@6.0.3):
+    optionalDependencies:
+      typescript: 6.0.3
+    optional: true
 
   validate-npm-package-license@3.0.4:
     dependencies:

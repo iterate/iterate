@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { ThemeProvider } from "next-themes";
+import { ThemeProvider, type ThemeProviderProps } from "next-themes";
 import {
   PostHogProvider,
   setupPosthog,
@@ -20,6 +20,7 @@ export function AppProviders<TConfig>(props: {
   devtools: ReactNode;
   forcedTheme?: "light" | "dark";
   posthog?: AppProvidersPosthogOptions;
+  theme?: Pick<ThemeProviderProps, "defaultTheme" | "enableSystem" | "forcedTheme" | "storageKey">;
 }) {
   const posthogApiKey = props.posthog?.apiKey ?? getPosthogApiKeyFromConfig(props.config);
   const proxyUrl = props.posthog?.proxyUrl ?? "/posthog-proxy";
@@ -45,12 +46,12 @@ export function AppProviders<TConfig>(props: {
     <ConfigProvider value={props.config}>
       <ThemeProvider
         attribute="class"
-        defaultTheme="system"
-        enableSystem
+        defaultTheme={props.theme?.defaultTheme ?? "system"}
+        enableSystem={props.theme?.enableSystem ?? true}
         enableColorScheme
-        storageKey="theme"
+        storageKey={props.theme?.storageKey ?? "theme"}
         disableTransitionOnChange
-        forcedTheme={props.forcedTheme}
+        forcedTheme={props.forcedTheme ?? props.theme?.forcedTheme}
       >
         <PostHogProvider client={posthogClient} enabled={posthogEnabled}>
           {/* Base UI tooltips are intended to share a provider; setting delay=0
