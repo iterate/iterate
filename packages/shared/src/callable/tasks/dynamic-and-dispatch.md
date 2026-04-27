@@ -1,5 +1,5 @@
 ---
-state: planned
+state: in-progress
 priority: low
 size: large
 dependsOn: []
@@ -7,13 +7,28 @@ dependsOn: []
 
 # Dynamic Workers and dispatch namespaces
 
-Add Workers for Platforms dispatch and Dynamic Worker targets after the simple
-fetch/RPC targets are stable.
+Dynamic Worker fetch/RPC is implemented for the default entrypoint with inline
+JavaScript source. The remaining scope is dispatch namespace support and the
+larger Dynamic Worker capability surface.
 
-Planned scope:
+Implemented:
+
+- Dynamic Worker fetch
+- Dynamic Worker RPC
+- optional `cache: { mode: "get", id }` for Worker Loader `get()`
+- strict inline JS-only code shape: compatibility date, main module, modules
+- shared dispatch path after resolving the Dynamic Worker entrypoint
+
+Deferred:
 
 - dispatch namespace fetch
-- Dynamic Worker fetch
-- Dynamic Worker RPC proof of concept
-- source refs and content hashes
+- source refs / CIDs / content hashes instead of inline source
 - egress/globalOutbound policy
+- `env`, tails, typed module objects, Python modules
+- named entrypoints
+- Dynamic Worker WebSocket-specific test coverage, if we find a clean way to
+  avoid additional workerd teardown noise
+
+References:
+
+- https://developers.cloudflare.com/dynamic-workers/api-reference/

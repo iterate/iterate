@@ -10,6 +10,11 @@
       },
     ],
   },
+  "worker_loaders": [
+    {
+      "binding": "CALLABLE_TEST_LOADER",
+    },
+  ],
   "migrations": [
     {
       "tag": "v1",

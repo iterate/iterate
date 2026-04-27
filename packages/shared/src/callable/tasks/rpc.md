@@ -11,8 +11,8 @@ Implemented in the second callable slice:
 
 - service RPC
 - Durable Object RPC by stable name or id
-- serialized `rpcMethod`
-- `argsMode: "object" | "positional"`
+- serialized `call: { type: "rpc", method }`
+- `call.argsMode: "object" | "positional"`
 - runtime method-name sanitization
 - shared `dispatchCallable({ callable, payload, ctx })` for fetch and RPC
 

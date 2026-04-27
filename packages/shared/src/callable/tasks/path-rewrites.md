@@ -5,14 +5,14 @@ size: medium
 dependsOn: []
 ---
 
-# Advanced path rewrites
+# Advanced fetch path rewrites
 
-V1 only supports `pathMode: "prefix" | "replace"`. Add richer proxy behavior
-only once callers need it.
+V1 only supports `call.path.mode: "prefix" | "replace"` with an optional
+`call.path.base`. Add richer proxy behavior only once callers need it.
 
 The current public HTTP target field is just `url`. Avoid reintroducing
 `origin`, `upstream`, or `mount URL` unless a later design needs more precise
-terminology than a base URL plus path mode.
+terminology than a target URL plus fetch call path behavior.
 
 Prior art to consider:
 

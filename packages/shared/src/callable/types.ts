@@ -9,11 +9,11 @@ const callableSchemaField = z.literal(CALLABLE_SCHEMA).optional();
 
 /**
  * Service bindings and Durable Object stubs are not URL-authorized resources;
- * the binding object is the authority. `pathPrefix` names only the synthetic
- * request path visible to the callee's `fetch(request)` handler, which is why
- * non-HTTP fetch targets do not accept a public `url`.
+ * the binding object is the authority. Fetch callables may still choose a
+ * synthetic request path via `call.path.base`, but that is part of the call
+ * shape rather than part of target identity.
  */
-const pathPrefixSchema = z
+const pathBaseSchema = z
   .string()
   .refine(
     (value) =>
@@ -23,7 +23,7 @@ const pathPrefixSchema = z
       !value.includes("#"),
     {
       message:
-        "pathPrefix must start with one / and must not be protocol-relative or include query/hash",
+        "path base must start with one / and must not be protocol-relative or include query/hash",
     },
   );
 
@@ -31,18 +31,13 @@ const httpUrlSchema = z.string().refine(
   (value) => {
     try {
       const url = new URL(value);
-      return (
-        (url.protocol === "http:" || url.protocol === "https:") &&
-        url.search === "" &&
-        url.hash === ""
-      );
+      return (url.protocol === "http:" || url.protocol === "https:") && url.hash === "";
     } catch {
       return false;
     }
   },
   {
-    message:
-      "url must be an absolute http(s) URL without query or hash; query modes are future work",
+    message: "url must be an absolute http(s) URL without a hash",
   },
 );
 
@@ -70,16 +65,67 @@ const deniedRpcMethods = new Set([
 const rpcMethodSchema = z
   .string()
   .regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/, {
-    message: "rpcMethod must be a single JavaScript identifier, not a dotted path",
+    message: "RPC call method must be a single JavaScript identifier, not a dotted path",
   })
   .refine((value) => !deniedRpcMethods.has(value), {
-    message: "rpcMethod uses a reserved or dangerous method name",
+    message: "RPC call method uses a reserved or dangerous method name",
   });
 
 const durableObjectAddressSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("name"), name: z.string().min(1) }).strict(),
   z.object({ type: z.literal("id"), id: z.string().min(1) }).strict(),
 ]);
+
+const dynamicWorkerCodeSchema = z
+  .object({
+    compatibilityDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    compatibilityFlags: z.array(z.string()).optional(),
+    mainModule: z.string().min(1),
+    modules: z.record(z.string(), z.string()),
+  })
+  .strict()
+  .superRefine((code, ctx) => {
+    if (!(code.mainModule in code.modules)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Dynamic Worker mainModule must be present in modules",
+        path: ["mainModule"],
+      });
+    }
+
+    for (const moduleName of Object.keys(code.modules)) {
+      if (!moduleName.endsWith(".js")) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Dynamic Worker module names must end in .js in callable v1",
+          path: ["modules", moduleName],
+        });
+      }
+    }
+  });
+
+const dynamicWorkerCacheSchema = z
+  .object({
+    mode: z.literal("get"),
+    id: z.string().min(1),
+  })
+  .strict();
+
+/**
+ * Dynamic Worker targets intentionally keep only the loader, inline JavaScript
+ * source, and optional `get()` cache identity. Fields like `env`,
+ * `globalOutbound`, named entrypoints, tails, and typed modules are real
+ * platform features, but they expand the capability surface. V1 parks them in
+ * tasks until we add the policy layer that should govern them.
+ */
+const dynamicWorkerTargetSchema = z
+  .object({
+    type: z.literal("dynamic-worker"),
+    loader: bindingRefSchema,
+    code: dynamicWorkerCodeSchema,
+    cache: dynamicWorkerCacheSchema.optional(),
+  })
+  .strict();
 
 const fetchTargetSchema = z.discriminatedUnion("type", [
   z
@@ -92,7 +138,6 @@ const fetchTargetSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("service"),
       binding: bindingRefSchema,
-      pathPrefix: pathPrefixSchema.optional(),
     })
     .strict(),
   z
@@ -100,9 +145,9 @@ const fetchTargetSchema = z.discriminatedUnion("type", [
       type: z.literal("durable-object"),
       binding: bindingRefSchema,
       address: durableObjectAddressSchema,
-      pathPrefix: pathPrefixSchema.optional(),
     })
     .strict(),
+  dynamicWorkerTargetSchema,
 ]);
 
 const rpcTargetSchema = z.discriminatedUnion("type", [
@@ -119,14 +164,37 @@ const rpcTargetSchema = z.discriminatedUnion("type", [
       address: durableObjectAddressSchema,
     })
     .strict(),
+  dynamicWorkerTargetSchema,
 ]);
 
 const requestTemplateSchema = z
   .object({
-    method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]),
+    method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]).optional(),
     headers: z.record(z.string(), z.string()).optional(),
     query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
     body: z.object({ type: z.literal("json"), from: z.literal("payload") }).optional(),
+  })
+  .strict();
+
+const fetchCallSchema = z
+  .object({
+    type: z.literal("fetch"),
+    path: z
+      .object({
+        base: pathBaseSchema.optional(),
+        mode: pathModeSchema.optional(),
+      })
+      .strict()
+      .optional(),
+    request: requestTemplateSchema.optional(),
+  })
+  .strict();
+
+const rpcCallSchema = z
+  .object({
+    type: z.literal("rpc"),
+    method: rpcMethodSchema,
+    argsMode: z.enum(["object", "positional"]).optional(),
   })
   .strict();
 
@@ -142,30 +210,27 @@ const requestTemplateSchema = z
  * Callable. `tasks/capability-policy.md` tracks the hardened resolver/policy
  * layer.
  */
-export const CallableSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      schema: callableSchemaField,
-      kind: z.literal("fetch"),
-      target: fetchTargetSchema,
-      pathMode: pathModeSchema.optional(),
-      requestTemplate: requestTemplateSchema.optional(),
-    })
-    .strict(),
-  z
-    .object({
-      schema: callableSchemaField,
-      kind: z.literal("rpc"),
-      target: rpcTargetSchema,
-      rpcMethod: rpcMethodSchema,
-      argsMode: z.enum(["object", "positional"]).optional(),
-    })
-    .strict(),
-]);
+const fetchCallableSchema = z
+  .object({
+    schema: callableSchemaField,
+    target: fetchTargetSchema,
+    call: fetchCallSchema.optional(),
+  })
+  .strict();
+
+const rpcCallableSchema = z
+  .object({
+    schema: callableSchemaField,
+    target: rpcTargetSchema,
+    call: rpcCallSchema,
+  })
+  .strict();
+
+export const CallableSchema = z.union([fetchCallableSchema, rpcCallableSchema]);
 
 export type Callable = z.infer<typeof CallableSchema>;
-export type FetchCallable = Extract<Callable, { kind: "fetch" }>;
-export type RpcCallable = Extract<Callable, { kind: "rpc" }>;
+export type FetchCallable = z.infer<typeof fetchCallableSchema>;
+export type RpcCallable = z.infer<typeof rpcCallableSchema>;
 export type DurableObjectAddress = Extract<
   Callable["target"],
   { type: "durable-object" }

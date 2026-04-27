@@ -42,38 +42,67 @@ Add it when a persisted record needs to be self-describing. Omit it for normal
 in-repo callsites. There is no `schemaVersion` compatibility layer in this
 prototype.
 
-Fetch callable:
+The shape is `target` plus optional `call`:
+
+- `target` says where the live capability comes from.
+- `call` says what to do with that capability.
+- omitted `call` means `{ type: "fetch" }` for fetch-capable targets.
+
+The small case is intentionally tiny:
 
 ```ts
 const callable = {
-  kind: "fetch",
+  target: { type: "http", url: "https://api.example.com/tools?fixed=true" },
+};
+```
+
+That means "fetch this URL". `dispatchCallable()` will POST the JSON payload to
+that URL and preserve its query string.
+
+Service binding fetch is similarly terse:
+
+```ts
+const callable = {
   target: {
     type: "service",
     binding: { $binding: "USERS" },
-    pathPrefix: "/internal",
   },
 };
 ```
 
-RPC callable:
+Add `call` when fetch needs options:
 
 ```ts
 const callable = {
-  kind: "rpc",
+  target: {
+    type: "service",
+    binding: { $binding: "USERS" },
+  },
+  call: {
+    type: "fetch",
+    path: { base: "/internal", mode: "prefix" },
+  },
+};
+```
+
+RPC always needs an explicit call because the method is part of the invocation:
+
+```ts
+const callable = {
   target: {
     type: "durable-object",
     binding: { $binding: "USER_REGISTRY" },
     address: { type: "name", name: "global" },
   },
-  rpcMethod: "findUser",
+  call: { type: "rpc", method: "findUser" },
 };
 ```
 
-`rpcMethod` is baked into the JSON. It must be one direct JavaScript identifier,
-not a dotted path. Names such as `fetch`, `then`, `constructor`, `prototype`,
-and `__proto__` are rejected because they collide with Fetch semantics,
-Promise-like behavior, JavaScript prototype behavior, or Cloudflare RPC
-reserved names.
+RPC `call.method` is baked into the JSON. It must be one direct JavaScript
+identifier, not a dotted path. Names such as `fetch`, `then`, `constructor`,
+`prototype`, and `__proto__` are rejected because they collide with Fetch
+semantics, Promise-like behavior, JavaScript prototype behavior, or Cloudflare
+RPC reserved names.
 
 ## Dispatching Values
 
@@ -87,7 +116,6 @@ The default request template is:
 
 ```ts
 const callable = {
-  kind: "fetch",
   target: { type: "http", url: "https://api.example.com/tools" },
 };
 
@@ -109,9 +137,8 @@ argument:
 ```ts
 await dispatchCallable({
   callable: {
-    kind: "rpc",
     target: { type: "service", binding: { $binding: "TOOLS" } },
-    rpcMethod: "callTool",
+    call: { type: "rpc", method: "callTool" },
   },
   payload: { name: "createIssue", args: { title: "Bug" } },
   ctx: { env },
@@ -123,10 +150,8 @@ Use `argsMode: "positional"` when the payload is an array and should be spread:
 ```ts
 await dispatchCallable({
   callable: {
-    kind: "rpc",
     target: { type: "service", binding: { $binding: "MATH" } },
-    rpcMethod: "add",
-    argsMode: "positional",
+    call: { type: "rpc", method: "add", argsMode: "positional" },
   },
   payload: [1, 2],
   ctx: { env },
@@ -146,13 +171,12 @@ incoming request body and returns the raw `Response`.
 ```ts
 const response = await dispatchCallableFetch({
   callable: {
-    kind: "fetch",
     target: {
       type: "durable-object",
       binding: { $binding: "ROOMS" },
       address: { type: "name", name: "room-1" },
-      pathPrefix: "/events",
     },
+    call: { type: "fetch", path: { base: "/events" } },
   },
   request,
   ctx: { env },
@@ -172,35 +196,33 @@ V1 supports:
 - `http`: public HTTP via `ctx.fetcher` or `globalThis.fetch`
 - `service`: a Worker service binding with `fetch(request)`
 - `durable-object`: a Durable Object namespace, addressed by stable name or id
+- `dynamic-worker`: a Worker loaded through a Worker Loader binding
 
-Public HTTP targets use `url`:
+Public HTTP targets use `url`, and the URL may include a query string:
 
 ```ts
-{ kind: "fetch", target: { type: "http", url: "https://api.example.com/v1" } }
+{ target: { type: "http", url: "https://api.example.com/v1?fixed=true" } }
 ```
 
-Service and Durable Object targets use `pathPrefix` because the binding object
-is the authority; the URL visible to the callee's `fetch(request)` handler is
-synthetic and chosen by this runtime:
+Service and Durable Object targets do not have public URLs. The binding or DO
+stub is the authority, and the URL visible to the callee's `fetch(request)`
+handler is synthetic and chosen by this runtime:
 
 ```ts
 {
-  kind: "fetch",
   target: {
     type: "service",
-    binding: { $binding: "USERS" },
-    pathPrefix: "/internal"
+    binding: { $binding: "USERS" }
   }
 }
 ```
 
-`pathMode` lives on the fetch callable and controls what happens to the incoming
-path:
+Fetch path options live under `call.path` because they are part of building a
+`Request`, not part of target identity:
 
 ```ts
-// Default: prefix
+// Default call: omitted means { type: "fetch" }
 {
-  kind: "fetch",
   target: { type: "http", url: "https://api.example.com/v1" }
 }
 // Incoming /users?active=true
@@ -210,17 +232,102 @@ path:
 ```ts
 // Replace
 {
-  kind: "fetch",
-  pathMode: "replace",
-  target: { type: "http", url: "https://api.example.com/status" }
+  target: { type: "http", url: "https://api.example.com/status" },
+  call: { type: "fetch", path: { mode: "replace" } }
 }
 // Incoming /users?active=true
 // Outbound https://api.example.com/status?active=true
 ```
 
+```ts
+// Service binding with a synthetic path base
+{
+  target: { type: "service", binding: { $binding: "USERS" } },
+  call: { type: "fetch", path: { base: "/internal", mode: "prefix" } }
+}
+// Incoming /users?active=true
+// Callee sees https://service.local/internal/users?active=true
+```
+
+Query handling is deliberately simple in v1: there is no merge. In proxy mode,
+the incoming request query is used. In value mode, `dispatchCallable()` creates
+that incoming request; if `call.request.query` is omitted, an HTTP target's
+query is preserved, and if `call.request.query` is present, it replaces the
+target query wholesale.
+
 Advanced rewrite behavior is intentionally future work. The task notes track
 the prior art we discussed: Caddy `reverse_proxy` plus `rewrite`/`uri`, Envoy
 `prefix_rewrite`, and NGINX `proxy_pass` URI behavior.
+
+## Dynamic Worker Targets
+
+Dynamic Workers behave like binding-backed targets once resolved. The only
+Dynamic Worker-specific work is resolving the Worker Loader binding, loading the
+inline code, and taking the default entrypoint. After that, fetch and RPC use
+the same dispatch paths as service bindings and Durable Object stubs.
+
+Omitted `call` means fetch:
+
+```ts
+const callable = {
+  target: {
+    type: "dynamic-worker",
+    loader: { $binding: "LOADER" },
+    code: {
+      compatibilityDate: "2026-04-27",
+      mainModule: "worker.js",
+      modules: {
+        "worker.js": "export default { fetch() { return Response.json({ ok: true }) } }",
+      },
+    },
+  },
+};
+```
+
+RPC uses the same `call.method` and `argsMode` rules as service/DO RPC:
+
+```ts
+const callable = {
+  target: {
+    type: "dynamic-worker",
+    loader: { $binding: "LOADER" },
+    code,
+  },
+  call: { type: "rpc", method: "run" },
+};
+```
+
+By default the runtime calls `loader.load(code)`, which creates a fresh Dynamic
+Worker. Add `cache` only when the ID names this exact code version:
+
+```ts
+const callable = {
+  target: {
+    type: "dynamic-worker",
+    loader: { $binding: "LOADER" },
+    code,
+    cache: { mode: "get", id: "sha256:..." },
+  },
+};
+```
+
+Cloudflare's Worker Loader `get(id, callback)` may reuse a warm isolate for the
+same ID, but the callback must return the same code for that ID. If the code
+changes, use a new ID. Content hashes or explicit version strings are good
+cache IDs.
+
+V1 supports only inline JavaScript modules:
+
+- `code.compatibilityDate` is required.
+- `code.compatibilityFlags` is an optional string array.
+- `code.mainModule` must exist in `code.modules`.
+- every module name must end in `.js`.
+- named entrypoints, typed module objects, Python, `env`, `globalOutbound`,
+  tails, and source refs are future work.
+
+Cloudflare Dynamic Workers docs:
+
+https://developers.cloudflare.com/dynamic-workers/api-reference/
 
 ## Durable Object Addresses
 
