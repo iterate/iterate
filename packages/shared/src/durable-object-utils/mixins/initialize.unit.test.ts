@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import {
   type InspectorTestRoom,
@@ -161,6 +161,20 @@ describe("withKvInspector", () => {
 });
 
 describe("withExternalListing", () => {
+  it("returns undefined when the object has not been initialized", async () => {
+    const room = testEnv.LISTED_ROOMS.getByName("listed-uninitialized-unit");
+
+    await expect(room.getExternalListing()).resolves.toBeUndefined();
+  });
+
+  it("returns JSON null through the fronting worker when no listing exists", async () => {
+    const response = await SELF.fetch(
+      "https://example.com/listed-rooms/listed-missing-unit/listing",
+    );
+
+    await expect(response.json()).resolves.toBeNull();
+  });
+
   it("best-effort writes initialized objects into D1", async () => {
     const room = testEnv.LISTED_ROOMS.getByName("listed-unit");
 

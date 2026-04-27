@@ -153,7 +153,11 @@ export default {
       if (request.method === "GET" && action === "listing") {
         const stub = env.LISTED_ROOMS.getByName(name);
 
-        return json(await stub.getExternalListing());
+        // The external listing write is best-effort and runs through waitUntil,
+        // so callers can observe the "not listed yet" state. JSON has no
+        // representation for `undefined`, and `Response.json(undefined)` throws
+        // at runtime; use `null` as the explicit wire value for "no listing".
+        return json((await stub.getExternalListing()) ?? null);
       }
 
       return json({ error: "Not found" }, { status: 404 });

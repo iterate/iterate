@@ -75,6 +75,11 @@ export function withExternalListing<InitParams extends NamedInit, Env>(options: 
       }
 
       async getExternalListing() {
+        const initialized = tryGetInitializedParams(this);
+        if (initialized === undefined) {
+          return undefined;
+        }
+
         let row: {
           class: string;
           name: string;
@@ -93,7 +98,7 @@ export function withExternalListing<InitParams extends NamedInit, Env>(options: 
                WHERE class = ? AND name = ?
                LIMIT 1`,
             )
-            .bind(options.className, this.assertInitialized().name)
+            .bind(options.className, initialized.name)
             .first();
         } catch (error) {
           if (isMissingExternalListingTableError(error)) {

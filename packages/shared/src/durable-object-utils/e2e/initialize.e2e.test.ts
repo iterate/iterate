@@ -74,6 +74,14 @@ describe("inspector mixins fronting worker", () => {
 });
 
 describe("withExternalListing fronting worker", () => {
+  it("returns JSON null when a listed object has no external listing yet", async () => {
+    const roomName = `e2e-listed-missing-${crypto.randomUUID()}`;
+    const response = await fetch(new URL(`/listed-rooms/${roomName}/listing`, baseUrl));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toBeNull();
+  });
+
   it("creates the D1 table and mirrors initialized objects", async () => {
     const roomName = `e2e-listed-${crypto.randomUUID()}`;
 
