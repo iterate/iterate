@@ -36,7 +36,7 @@ export default defineConfig({
   ],
   test: {
     globals: true,
-    include: ["./runtime.test.ts"],
+    include: ["./*.test.ts"],
     exclude: defaultExclude,
     hookTimeout: 60_000,
     testTimeout: 45_000,

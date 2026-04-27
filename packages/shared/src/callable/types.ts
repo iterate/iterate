@@ -20,24 +20,44 @@ const pathBaseSchema = z
       value.startsWith("/") &&
       !value.startsWith("//") &&
       !value.includes("?") &&
-      !value.includes("#"),
+      !value.includes("#") &&
+      !value.includes("\\"),
     {
       message:
-        "path base must start with one / and must not be protocol-relative or include query/hash",
+        "path base must start with one / and must not be protocol-relative or include query/hash/backslash",
     },
-  );
+  )
+  .refine((value) => !hasDotPathSegment(value), {
+    message: "path base must not include dot path segments",
+  });
+
+function hasDotPathSegment(path: string) {
+  return path.split("/").some((segment) => {
+    try {
+      const decoded = decodeURIComponent(segment);
+      return decoded === "." || decoded === "..";
+    } catch {
+      return segment === "." || segment === "..";
+    }
+  });
+}
 
 const httpUrlSchema = z.string().refine(
   (value) => {
     try {
       const url = new URL(value);
-      return (url.protocol === "http:" || url.protocol === "https:") && url.hash === "";
+      return (
+        (url.protocol === "http:" || url.protocol === "https:") &&
+        url.hash === "" &&
+        url.username === "" &&
+        url.password === ""
+      );
     } catch {
       return false;
     }
   },
   {
-    message: "url must be an absolute http(s) URL without a hash",
+    message: "url must be an absolute http(s) URL without a hash or credentials",
   },
 );
 
@@ -174,7 +194,16 @@ const requestTemplateSchema = z
     query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
     body: z.object({ type: z.literal("json"), from: z.literal("payload") }).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((request, ctx) => {
+    if ((request.method === "GET" || request.method === "HEAD") && request.body != null) {
+      ctx.addIssue({
+        code: "custom",
+        message: "GET and HEAD request templates cannot include a body",
+        path: ["body"],
+      });
+    }
+  });
 
 const fetchCallSchema = z
   .object({
@@ -228,6 +257,14 @@ const rpcCallableSchema = z
 
 export const CallableSchema = z.union([fetchCallableSchema, rpcCallableSchema]);
 
+/**
+ * JSON that names a target capability and an optional call to make against it.
+ *
+ * Dispatching a Callable resolves live authority from `CallableContext`: public
+ * HTTP fetch, Worker bindings, Durable Object namespaces, and Worker Loader
+ * bindings are not stored in the descriptor itself. Treat descriptors as
+ * untrusted code until the capability-policy task is implemented.
+ */
 export type Callable = z.infer<typeof CallableSchema>;
 export type FetchCallable = z.infer<typeof fetchCallableSchema>;
 export type RpcCallable = z.infer<typeof rpcCallableSchema>;

@@ -1,7 +1,19 @@
 import { DurableObject } from "cloudflare:workers";
+import { dispatchCallable } from "./runtime.ts";
 
 export default {
-  fetch() {
+  async fetch(request: Request, env: Record<string, unknown>) {
+    const url = new URL(request.url);
+    if (url.pathname === "/dispatch") {
+      const input = (await request.json()) as { callable: unknown; payload: unknown };
+      const value = await dispatchCallable({
+        callable: input.callable,
+        payload: input.payload,
+        ctx: { env },
+      });
+      return Response.json({ value });
+    }
+
     return new Response("callable test worker");
   },
 };

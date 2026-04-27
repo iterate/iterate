@@ -55,6 +55,17 @@ const dynamicWorkerCode = {
   },
 } as const;
 
+async function dispatchThroughHostWorker(options: { callable: Callable; payload: unknown }) {
+  const response = await workerEntry.fetch(
+    new Request("https://host.local/dispatch", {
+      method: "POST",
+      body: JSON.stringify(options),
+    }),
+    testEnv,
+  );
+  return await response.json();
+}
+
 describe("callable validation", () => {
   test("accepts a JSON round-tripped fetch callable with the default schema", () => {
     const callable = {
@@ -96,6 +107,16 @@ describe("callable validation", () => {
     });
   });
 
+  test("rejects HTTP URLs with credentials", () => {
+    expect(() =>
+      validateCallable({
+        callable: {
+          target: { type: "http", url: "https://user:pass@api.example.com/v1" },
+        },
+      }),
+    ).toThrow("Invalid callable");
+  });
+
   test("rejects protocol-relative path prefixes for synthetic binding URLs", () => {
     expect(() =>
       validateCallable({
@@ -108,6 +129,19 @@ describe("callable validation", () => {
         },
       }),
     ).toThrow("Invalid callable");
+  });
+
+  test("rejects fetch path bases that URL normalization would rewrite", () => {
+    for (const base of ["/internal/../admin", "/internal/%2e%2e/admin", "/internal\\admin"]) {
+      expect(() =>
+        validateCallable({
+          callable: {
+            target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+            call: { type: "fetch", path: { base } },
+          },
+        }),
+      ).toThrow("Invalid callable");
+    }
   });
 
   test("rejects dangerous RPC method names and dotted paths", () => {
@@ -168,6 +202,25 @@ describe("callable validation", () => {
         },
       }),
     ).toThrow("Invalid callable");
+  });
+
+  test("rejects GET and HEAD request templates with JSON bodies", () => {
+    for (const method of ["GET", "HEAD"]) {
+      expect(() =>
+        validateCallable({
+          callable: {
+            target: { type: "http", url: "https://api.example.com/v1" },
+            call: {
+              type: "fetch",
+              request: {
+                method,
+                body: { type: "json", from: "payload" },
+              },
+            },
+          },
+        }),
+      ).toThrow("Invalid callable");
+    }
   });
 });
 
@@ -445,6 +498,68 @@ describe("dispatchCallable", () => {
       }),
     ).rejects.toMatchObject({
       code: "RESOLUTION_FAILED",
+    });
+  });
+});
+
+describe("host Worker dispatch combinations", () => {
+  test("routes from the host Worker to a service binding fetch target", async () => {
+    await expect(
+      dispatchThroughHostWorker({
+        callable: {
+          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          call: { type: "fetch", path: { base: "/host-service", mode: "replace" } },
+        },
+        payload: { from: "host" },
+      }),
+    ).resolves.toMatchObject({
+      value: {
+        target: "service",
+        method: "POST",
+        path: "/host-service",
+        body: '{"from":"host"}',
+      },
+    });
+  });
+
+  test("routes from the host Worker to a Durable Object RPC target", async () => {
+    await expect(
+      dispatchThroughHostWorker({
+        callable: {
+          target: {
+            type: "durable-object",
+            binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
+            address: { type: "name", name: "host-rpc-target" },
+          },
+          call: { type: "rpc", method: "echo" },
+        },
+        payload: { from: "host" },
+      }),
+    ).resolves.toEqual({
+      value: { target: "durable-object", input: { from: "host" } },
+    });
+  });
+
+  test("routes from the host Worker to a Dynamic Worker fetch target", async () => {
+    await expect(
+      dispatchThroughHostWorker({
+        callable: {
+          target: {
+            type: "dynamic-worker",
+            loader: { $binding: "CALLABLE_TEST_LOADER" },
+            code: dynamicWorkerCode,
+          },
+          call: { type: "fetch", path: { base: "/host-dynamic", mode: "replace" } },
+        },
+        payload: { from: "host" },
+      }),
+    ).resolves.toMatchObject({
+      value: {
+        target: "dynamic-worker",
+        method: "POST",
+        path: "/host-dynamic",
+        body: '{"from":"host"}',
+      },
     });
   });
 });

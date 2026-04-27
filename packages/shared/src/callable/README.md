@@ -44,8 +44,11 @@ prototype.
 
 The shape is `target` plus optional `call`:
 
-- `target` says where the live capability comes from.
-- `call` says what to do with that capability.
+- `target` identifies the capability to resolve: a public URL, Worker binding,
+  Durable Object address, or Worker Loader plus code. For HTTP targets,
+  `target.url` is also the default fetch base URL.
+- `call` describes the operation performed after resolution: fetch request
+  shaping or RPC method invocation.
 - omitted `call` means `{ type: "fetch" }` for fetch-capable targets.
 
 The small case is intentionally tiny:
@@ -255,6 +258,20 @@ that incoming request; if `call.request.query` is omitted, an HTTP target's
 query is preserved, and if `call.request.query` is present, it replaces the
 target query wholesale.
 
+```ts
+// Proxy mode drops target query params when the incoming request has no query.
+{ target: { type: "http", url: "https://api.example.com/v1?fixed=true" } }
+// Incoming /users
+// Outbound https://api.example.com/v1/users
+```
+
+```ts
+// Proxy mode uses the incoming query wholesale.
+{ target: { type: "http", url: "https://api.example.com/v1?fixed=true" } }
+// Incoming /users?active=true
+// Outbound https://api.example.com/v1/users?active=true
+```
+
 Advanced rewrite behavior is intentionally future work. The task notes track
 the prior art we discussed: Caddy `reverse_proxy` plus `rewrite`/`uri`, Envoy
 `prefix_rewrite`, and NGINX `proxy_pass` URI behavior.
@@ -311,10 +328,12 @@ const callable = {
 };
 ```
 
-Cloudflare's Worker Loader `get(id, callback)` may reuse a warm isolate for the
-same ID, but the callback must return the same code for that ID. If the code
-changes, use a new ID. Content hashes or explicit version strings are good
-cache IDs.
+`cache` is loader identity, not application state affinity. The callable
+runtime does not memoize Worker stubs; it calls `loader.get(id, ...)` for each
+dispatch. Cloudflare may reuse a warm isolate for the same ID, but the callback
+must return the same code for that ID and callers must not rely on two requests
+hitting the same isolate. If the code changes, use a new ID. Content hashes or
+explicit version strings are good cache IDs.
 
 V1 supports only inline JavaScript modules:
 
@@ -322,8 +341,15 @@ V1 supports only inline JavaScript modules:
 - `code.compatibilityFlags` is an optional string array.
 - `code.mainModule` must exist in `code.modules`.
 - every module name must end in `.js`.
-- named entrypoints, typed module objects, Python, `env`, `globalOutbound`,
-  tails, and source refs are future work.
+- named entrypoints, entrypoint props, typed module objects, Python,
+  `allowExperimental`, `env`, `globalOutbound`, tails, streaming tails, and
+  source refs are future work.
+
+Dynamic Worker targets execute the supplied module source. V1 does not set
+`WorkerCode.globalOutbound`, so dynamic code inherits the parent Worker's
+outbound network access. Do not dispatch tenant-authored, user-authored,
+LLM-authored, or otherwise untrusted Dynamic Worker callables until egress
+policy and `globalOutbound` support land.
 
 Cloudflare Dynamic Workers docs:
 
@@ -353,6 +379,10 @@ object until `tasks/capability-policy.md` is implemented.
 `ctx.fetcher` is only used for public HTTP targets. If omitted, public HTTP
 callables use `globalThis.fetch`, which grants ambient public egress to trusted
 Worker-boundary code. Untrusted descriptors need an explicit policy layer.
+
+Dynamic Worker callables are especially sensitive: the descriptor contains
+executable source code, and this prototype does not sandbox its outbound
+network access.
 
 ## Tests
 
