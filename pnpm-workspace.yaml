@@ -10,6 +10,8 @@ packages:
   - apps/daemon
   - apps/iterate-com
   - apps/os
+  - apps/os2
+  - apps/os2-contract
   - apps/semaphore
   - apps/semaphore-contract
   - apps/example
@@ -43,13 +45,13 @@ catalogs:
   cloudflare:
     "@cloudflare/codemode": ^0.3.4
     "@cloudflare/unenv-preset": ^2.16.0
-    "@cloudflare/vite-plugin": 1.33.0
+    "@cloudflare/vite-plugin": 1.33.2
     "@cloudflare/vitest-pool-workers": ^0.14.9
     "@cloudflare/worker-bundler": ^0.1.2
-    "@cloudflare/workers-types": ^4.20260420.0
-    miniflare: 4.20260420.0
-    workerd: 1.20260420.1
-    wrangler: 4.84.0
+    "@cloudflare/workers-types": ^4.20260426.1
+    miniflare: 4.20260424.0
+    workerd: 1.20260426.1
+    wrangler: 4.85.0
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
