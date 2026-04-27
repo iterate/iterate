@@ -2,12 +2,12 @@ import { eventIterator, oc } from "@orpc/contract";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { z } from "zod";
 
-const JsonObject = z.record(z.string(), z.unknown());
+const JSONObject = z.record(z.string(), z.unknown());
 
 const Project = z.object({
   id: z.string(),
   slug: z.string(),
-  metadata: JsonObject,
+  metadata: JSONObject,
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -172,7 +172,7 @@ export const osContract = oc.router({
             .trim()
             .min(1)
             .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase kebab-case"),
-          metadata: JsonObject.default({}),
+          metadata: JSONObject.default({}),
         }),
       )
       .output(Project),
