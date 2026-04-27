@@ -98,7 +98,7 @@ type StreamLinkSearch = {
   [key: string]: unknown;
 };
 
-type CustomHtmlRendererApi = {
+export type CustomHtmlRendererApi = {
   streamPath: StreamPath;
   events: readonly Event[];
   append: (event: EventInput) => Promise<Event>;

@@ -10,7 +10,10 @@ import {
   toEventFeedItem,
   toSemanticFeedItem,
 } from "~/lib/stream-feed-projection.ts";
-import { buildCustomHtmlRendererInsertions } from "~/lib/custom-html-renderers.ts";
+import {
+  buildCustomHtmlRendererInsertions,
+  buildCustomHtmlRendererProjection,
+} from "~/lib/custom-html-renderers.ts";
 import type { EventFeedItem, StreamFeedItem } from "~/lib/stream-feed-types.ts";
 
 describe("toEventFeedItem", () => {
@@ -1273,6 +1276,72 @@ describe("buildCustomHtmlRendererInsertions", () => {
         slug: "bad-card",
         eventType: "demo.message",
       }),
+    ]);
+  });
+
+  test("projects appended events incrementally until renderer config changes", async () => {
+    const firstEvents = [
+      createEvent({
+        offset: 1,
+        type: "https://events.iterate.com/events/stream/html-renderer-configured",
+        payload: {
+          slug: "demo-card",
+          matcher: "type = 'demo.message'",
+          template: "one {{payload.title}}",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "demo.message",
+        payload: { title: "First" },
+      }),
+    ];
+    const firstProjection = await buildCustomHtmlRendererProjection({ events: firstEvents });
+    const appendedProjection = await buildCustomHtmlRendererProjection({
+      events: [
+        ...firstEvents,
+        createEvent({
+          offset: 3,
+          type: "demo.message",
+          payload: { title: "Second" },
+        }),
+      ],
+      previousProjection: firstProjection,
+    });
+
+    expect(appendedProjection.insertionsByOffset.get(2)).toBe(
+      firstProjection.insertionsByOffset.get(2),
+    );
+    expect(appendedProjection.insertionsByOffset.get(3)).toEqual([
+      expect.objectContaining({ html: "one Second" }),
+    ]);
+
+    const reconfiguredProjection = await buildCustomHtmlRendererProjection({
+      events: [
+        ...firstEvents,
+        createEvent({
+          offset: 3,
+          type: "demo.message",
+          payload: { title: "Second" },
+        }),
+        createEvent({
+          offset: 4,
+          type: "https://events.iterate.com/events/stream/html-renderer-configured",
+          payload: {
+            slug: "demo-card",
+            matcher: "type = 'demo.message'",
+            template: "two {{payload.title}}",
+          },
+        }),
+      ],
+      previousProjection: appendedProjection,
+    });
+
+    expect(reconfiguredProjection.insertionsByOffset.get(2)).toEqual([
+      expect.objectContaining({ html: "two First" }),
+    ]);
+    expect(reconfiguredProjection.insertionsByOffset.get(3)).toEqual([
+      expect.objectContaining({ html: "two Second" }),
     ]);
   });
 });
