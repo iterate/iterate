@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shared-durable-object-utils-e2e",
+  "main": "../test-harness/initialize-fronting-worker.ts",
+  "compatibility_date": "2026-04-01",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ROOMS",
+        "class_name": "InitializeTestRoom",
+      },
+      {
+        "name": "INSPECTORS",
+        "class_name": "InspectorTestRoom",
+      },
+      {
+        "name": "LISTED_ROOMS",
+        "class_name": "ListedRoom",
+      },
+    ],
+  },
+  "d1_databases": [
+    {
+      "binding": "DO_LISTINGS",
+      "database_id": "durable-object-utils-listings-e2e",
+      "database_name": "durable-object-utils-listings-e2e",
+      "preview_database_id": "durable-object-utils-listings-e2e",
+    },
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["InitializeTestRoom", "InspectorTestRoom", "ListedRoom"],
+    },
+  ],
+}

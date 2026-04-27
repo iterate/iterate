@@ -125,7 +125,7 @@ function http1Request(params: {
 }): Promise<Response> {
   return new Promise<Response>((resolve, reject) => {
     const impl = params.url.protocol === "https:" ? httpsRequest : httpRequest;
-    const req = impl(params.url, { method: params.method, headers: params.headers }, (res) => {
+    const req = impl(params.url.href, { method: params.method, headers: params.headers }, (res) => {
       const status = res.statusCode ?? 500;
       const h = new Headers();
       for (const [k, v] of Object.entries(res.headers)) {
