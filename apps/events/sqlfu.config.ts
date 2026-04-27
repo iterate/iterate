@@ -45,7 +45,7 @@ async function openAlchemyLocalD1(): Promise<DisposableAsyncClient> {
 
 export default defineConfig({
   db: openAlchemyLocalD1,
-  migrations: { path: "./src/db/migrations", prefix: "four-digit" },
+  migrations: { path: "./src/db/migrations", preset: "d1" },
   definitions: "./src/db/definitions.sql",
   queries: "./src/db/queries",
 });
