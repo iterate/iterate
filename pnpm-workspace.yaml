@@ -78,6 +78,7 @@ minimumReleaseAgeExclude:
   - "@mariozechner/pi-tui"
   - pidnap
   - schematch
+  - sqlfu
   - trpc-cli
   - hono
   - "@hono/node-server"
