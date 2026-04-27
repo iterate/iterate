@@ -143,31 +143,22 @@ async function assertOrpcWebSocket(httpBaseUrl: string) {
   }
 }
 
-const COMMAND_PREFIX = "\x00[command]\x00";
-
-async function assertTerminalWebSocket(httpBaseUrl: string) {
-  const url = httpToWsUrl(httpBaseUrl, "/api/pty");
+async function assertConfettiWebSocket(httpBaseUrl: string) {
+  const url = httpToWsUrl(httpBaseUrl, "/api/confetti");
 
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(url);
     const timer = setTimeout(() => {
       ws.close();
-      reject(new Error("terminal WebSocket timeout"));
+      reject(new Error("confetti WebSocket timeout"));
     }, 5_000);
 
     ws.addEventListener("open", () => {
-      ws.send(
-        COMMAND_PREFIX +
-          JSON.stringify({
-            type: "resize",
-            cols: 80,
-            rows: 24,
-          }),
-      );
+      ws.send(JSON.stringify({ type: "burst", origin: { x: 0.5, y: 0.45 } }));
     });
     ws.addEventListener("message", (event) => {
       const text = typeof event.data === "string" ? event.data : String(event.data);
-      if (text.includes('"type":"ptyId"') || text.includes("Terminal is not available")) {
+      if (text.includes('"type":"burst"')) {
         clearTimeout(timer);
         ws.close();
         resolve();
@@ -175,17 +166,49 @@ async function assertTerminalWebSocket(httpBaseUrl: string) {
     });
     ws.addEventListener("error", () => {
       clearTimeout(timer);
-      reject(new Error("terminal WebSocket error"));
+      reject(new Error("confetti WebSocket error"));
     });
   });
 }
 
-async function assertFullStack(httpBaseUrl: string) {
+async function assertDurableObjectCounter(httpBaseUrl: string) {
+  const base = new URL("/api/durable-counter", httpBaseUrl);
+  const reset = await fetch(new URL("/api/durable-counter/reset", httpBaseUrl), {
+    method: "POST",
+    signal: AbortSignal.timeout(3_000),
+  });
+
+  expect(reset.ok).toBe(true);
+  expect(await reset.json()).toMatchObject({ count: 0 });
+
+  const increment = await fetch(new URL("/api/durable-counter/increment", httpBaseUrl), {
+    method: "POST",
+    signal: AbortSignal.timeout(3_000),
+  });
+
+  expect(increment.ok).toBe(true);
+  expect(await increment.json()).toMatchObject({ count: 1 });
+
+  const current = await fetch(base, {
+    signal: AbortSignal.timeout(3_000),
+  });
+
+  expect(current.ok).toBe(true);
+  expect(await current.json()).toMatchObject({ count: 1 });
+}
+
+async function assertFullStack(
+  httpBaseUrl: string,
+  options: { durableObjectCounter?: boolean } = {},
+) {
   await assertSsrHtml(httpBaseUrl);
   await assertTypedClientPing(httpBaseUrl);
   await assertPublicConfigOverride(httpBaseUrl);
   await assertOrpcWebSocket(httpBaseUrl);
-  await assertTerminalWebSocket(httpBaseUrl);
+  await assertConfettiWebSocket(httpBaseUrl);
+  if (options.durableObjectCounter) {
+    await assertDurableObjectCounter(httpBaseUrl);
+  }
 }
 
 async function waitForReady(httpBaseUrl: string, timeoutMs = 30_000) {
@@ -326,7 +349,9 @@ describeRuntimeSmoke("runtime smoke", () => {
 
   test.skipIf(!runFullSmoke || !hasCfWranglerLocal)("pnpm cf:dev", async () => {
     const base = `http://127.0.0.1:${CF_DEV_PORT}`;
-    await withServer("pnpm", ["run", "cf:dev"], smokeEnv, base, () => assertFullStack(base));
+    await withServer("pnpm", ["run", "cf:dev"], smokeEnv, base, () =>
+      assertFullStack(base, { durableObjectCounter: true }),
+    );
   });
 
   test.skipIf(!runFullSmoke)(
@@ -346,7 +371,7 @@ describeRuntimeSmoke("runtime smoke", () => {
         throw new Error(`Could not find deployed workers.dev URL in cf:deploy output:\n${output}`);
       }
 
-      await assertFullStack(deployUrl);
+      await assertFullStack(deployUrl, { durableObjectCounter: true });
     },
     600_000,
   );

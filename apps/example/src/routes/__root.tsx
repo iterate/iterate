@@ -66,7 +66,11 @@ function RootComponent() {
   const config = Route.useLoaderData();
 
   return (
-    <AppProviders config={config} devtools={<ExampleDevtools />}>
+    <AppProviders
+      config={config}
+      devtools={<ExampleDevtools />}
+      theme={{ defaultTheme: "light", enableSystem: false, storageKey: "example-theme" }}
+    >
       <Outlet />
     </AppProviders>
   );
