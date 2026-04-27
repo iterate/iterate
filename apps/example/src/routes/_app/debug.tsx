@@ -88,12 +88,11 @@ function DebugPage() {
         <div className="space-y-1">
           <h2 className="text-sm font-semibold">Runtime deps demo</h2>
           <p className="text-sm text-muted-foreground">
-            The terminal route uses a runtime-injected PTY dep in Node and a not-implemented
-            fallback in Cloudflare.
+            The confetti route uses the same server-side websocket handler in Node and Cloudflare.
           </p>
         </div>
-        <Button size="sm" nativeButton={false} render={<Link to="/terminal" />}>
-          Open web terminal
+        <Button size="sm" nativeButton={false} render={<Link to="/confetti" />}>
+          Open confetti
         </Button>
       </section>
 
