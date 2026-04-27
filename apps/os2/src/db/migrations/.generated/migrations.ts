@@ -5,6 +5,7 @@
 
 const bundle = {
   "src/db/migrations/0000_initial.sql": "create table projects (\n  id text primary key not null,\n  slug text not null unique,\n  metadata text not null check (json_valid(metadata)),\n  created_at text not null,\n  updated_at text not null\n);\n\ncreate index idx_projects_created_at on projects (created_at);\n",
+  "src/db/migrations/0001_drop_trigger_projects_updated_at_touch.sql": "-- dropping trigger \"projects_updated_at_touch\": table \"projects\" needs rebuild\ndrop trigger if exists projects_updated_at_touch;\n-- rebuilding table \"projects\": column \"created_at\" default changed\nalter table projects rename to __sqlfu_old_projects;\ncreate table projects (\n  id text primary key not null,\n  slug text not null unique,\n  metadata text not null check (json_valid(metadata)),\n  created_at text not null default current_timestamp,\n  updated_at text not null default current_timestamp\n);\ninsert into projects(id, slug, metadata, created_at, updated_at) select id, slug, metadata, created_at, updated_at from __sqlfu_old_projects;\ndrop table __sqlfu_old_projects;\ncreate index idx_projects_created_at on projects (created_at);\n-- recreating trigger \"projects_updated_at_touch\": table \"projects\" needs rebuild\ncreate trigger projects_updated_at_touch after update on projects when new.updated_at = old.updated_at begin\nupdate projects\nset updated_at = current_timestamp\nwhere id = new.id;\nend;\n",
 };
 
 export default bundle;

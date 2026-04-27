@@ -34,21 +34,24 @@ function toProject(row: ProjectRow) {
 export const projectsRouter = {
   projects: {
     create: os.projects.create.handler(async ({ context, input }) => {
-      const now = new Date().toISOString();
       const id = typeid({
         env: typeIdEnv(context.config.typeIdPrefix.exposeSecret()),
         prefix: "proj",
       });
 
-      await insertProject(context.db, {
+      const row = await insertProject(context.db, {
         id,
         slug: input.slug,
         metadata: JSON.stringify(input.metadata),
-        createdAt: now,
-        updatedAt: now,
       });
 
-      return { id, slug: input.slug, metadata: input.metadata, createdAt: now, updatedAt: now };
+      if (!row) {
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
+          message: `Project ${id} was not returned after insert`,
+        });
+      }
+
+      return toProject(row);
     }),
     list: os.projects.list.handler(async ({ context, input }) => {
       const [totalRow, rows] = await Promise.all([
