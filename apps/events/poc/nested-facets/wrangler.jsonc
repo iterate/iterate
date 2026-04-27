@@ -24,7 +24,8 @@
     "bindings": [
       { "name": "PROJECT", "class_name": "Project" },
       { "name": "BUILD_SANDBOX", "class_name": "BuildSandbox" },
-      { "name": "APP_RUNNER", "class_name": "AppRunner" },
+      { "name": "WORKSPACE", "class_name": "WorkspaceDO" },
+      { "name": "REPO", "class_name": "RepoDO" },
     ],
   },
   "migrations": [
@@ -33,6 +34,11 @@
     { "tag": "v3", "deleted_classes": ["BuildSandbox"] },
     { "tag": "v4", "new_sqlite_classes": ["BuildSandbox"] },
     { "tag": "v5", "new_sqlite_classes": ["AppRunner"] },
+    {
+      "tag": "v6",
+      "deleted_classes": ["AppRunner"],
+      "new_sqlite_classes": ["WorkspaceDO", "RepoDO"],
+    },
   ],
   "worker_loaders": [{ "binding": "LOADER" }],
   "ai": { "binding": "AI" },

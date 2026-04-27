@@ -1,4 +1,4 @@
-// Shared host parsing — used by worker, Project DO, and AppRunner.
+// Shared host parsing — used by worker and Project DO.
 
 export const PLATFORM_SUFFIX = ".iterate-dev-jonas.app";
 export const PLATFORM_BARE = "iterate-dev-jonas.app";

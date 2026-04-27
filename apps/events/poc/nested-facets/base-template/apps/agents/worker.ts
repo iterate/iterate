@@ -93,6 +93,11 @@ async function handleSqlExec(sql: any, req: Request) {
 // This creates an agentic loop: user → AI → code → result → AI → response
 
 const AGENT_MODEL = "@cf/moonshotai/kimi-k2.5";
+const PLATFORM_SUFFIX = ".iterate-dev-jonas.app";
+
+function appUrl(appName: string, projectSlug: string): string {
+  return `https://${appName}.${projectSlug}${PLATFORM_SUFFIX}`;
+}
 
 function buildSystemPrompt(providers: Array<{ name: string; fns: Record<string, any> }>): string {
   const toolList = providers
@@ -104,20 +109,44 @@ function buildSystemPrompt(providers: Array<{ name: string; fns: Record<string, 
     })
     .join("\n");
 
-  return `You are a helpful coding assistant. You can execute JavaScript by writing a fenced code block with the \`js\` tag. The code runs in a sandbox with these tool namespaces as globals:
+  return `You are a helpful AI agent running inside an event-driven system. Messages arrive from various sources (Slack, email, etc.) as events on your stream. You can execute JavaScript to interact with the world.
+
+Write a fenced code block with the \`js\` tag to execute code. The code runs in a sandbox with these tool namespaces as globals:
 
 ${toolList}
 
-Example:
+Example — replying to a Slack message:
 \`\`\`js
 async () => {
-  const answer = await builtin.answer();
-  const docs = await cloudflare_docs.search_cloudflare_documentation({ query: "Workers AI" });
-  return { answer, docs: String(docs).slice(0, 200) };
+  // Use channel and threadTs from the message details JSON
+  const result = await slack.replyToThread({ channel: "C...", threadTs: "1234567890.123456", text: "Hello!" });
+  return result;
 }
 \`\`\`
 
-Code blocks are auto-executed and results are fed back to you. Use EXACT tool names shown above. Keep prose concise.`;
+Example — reacting to a Slack message:
+\`\`\`js
+async () => {
+  // Use channel and messageTs from the message details JSON
+  await slack.reactToMessage({ channel: "C...", messageTs: "1234567890.123456", emoji: "eyes" });
+  return { ok: true };
+}
+\`\`\`
+
+Example — querying a database:
+\`\`\`js
+async () => {
+  const things = await tanstack_app.list();
+  return things;
+}
+\`\`\`
+
+IMPORTANT:
+- When you receive a Slack message, respond by calling slack.replyToThread() with channel and threadTs from the message details.
+- Use the EXACT channel, threadTs, and messageTs values from the message details — do not guess or transform them.
+- Call replyToThread ONCE. Do NOT call it again in follow-up code blocks — the first call is sufficient.
+- Code blocks are auto-executed and results are fed back to you.
+- Use EXACT tool names shown above. Keep prose concise.`;
 }
 
 // ── Minimal OpenAPI → tool provider ──────────────────────────────────────────
@@ -203,31 +232,40 @@ export class StreamProcessor extends Agent {
   async onStart() {
     console.log("[StreamProcessor] onStart");
 
-    // Register MCP servers (same pattern as IterateAgent.onStart)
-    const existingUrls = new Set(this.mcp.listServers().map((s: any) => s.server_url));
-    const toAdd = MCP_SERVERS.filter((s) => !existingUrls.has(s.url));
-    await Promise.allSettled(
-      toAdd.map(async (s) => {
-        try {
-          await this.addMcpServer(s.name, s.url);
-          console.log("[MCP] added:", s.name);
-        } catch (e: any) {
-          console.error("[MCP] failed:", s.name, e.message);
-        }
-      }),
-    );
-
-    // Load OpenAPI tool providers (like IterateAgent loads events OpenAPI)
     try {
-      const tanstackProvider = await createOpenApiProvider(
-        "tanstack_app",
-        "https://tanstack-app.test.iterate-dev-jonas.app/api/openapi.json",
-        "https://tanstack-app.test.iterate-dev-jonas.app/api",
+      // Register MCP servers (same pattern as IterateAgent.onStart)
+      const existingUrls = new Set(this.mcp.listServers().map((s: any) => s.server_url));
+      const toAdd = MCP_SERVERS.filter((s) => !existingUrls.has(s.url));
+      await Promise.allSettled(
+        toAdd.map(async (s) => {
+          try {
+            await this.addMcpServer(s.name, s.url);
+            console.log("[MCP] added:", s.name);
+          } catch (e: any) {
+            console.error("[MCP] failed:", s.name, e.message);
+          }
+        }),
       );
-      this.#openApiProviders.push(tanstackProvider);
-      console.log("[OpenAPI] tanstack_app:", Object.keys(tanstackProvider.fns).join(", "));
+
+      // Load OpenAPI tool providers from sibling apps
+      const slug = (this.ctx.storage.kv.get("projectSlug") as string) || "test";
+      for (const [name, appName] of [
+        ["tanstack_app", "tanstack-app"],
+        ["slack", "slack"],
+      ] as const) {
+        try {
+          const base = appUrl(appName, slug) + "/api";
+          const provider = await createOpenApiProvider(name, base + "/openapi.json", base);
+          this.#openApiProviders.push(provider);
+          console.log(`[OpenAPI] ${name}:`, Object.keys(provider.fns).join(", "));
+        } catch (e: any) {
+          console.error(`[OpenAPI] ${name} failed:`, e.message);
+        }
+      }
     } catch (e: any) {
-      console.error("[OpenAPI] failed:", e.message);
+      // In facet context, broadcastMcpServers may fail due to DO I/O isolation
+      // (WebSocket connections belong to parent DO). Safe to ignore — onRequest still works.
+      console.error("[StreamProcessor] onStart error (may be facet I/O isolation):", e.message);
     }
   }
 
@@ -354,17 +392,19 @@ export class StreamProcessor extends Agent {
       },
     ];
 
-    // OpenAPI tool providers — loaded on every buildProviders call
-    // (facet instances don't persist state across requests)
-    try {
-      const p = await createOpenApiProvider(
-        "tanstack_app",
-        "https://tanstack-app.test.iterate-dev-jonas.app/api/openapi.json",
-        "https://tanstack-app.test.iterate-dev-jonas.app/api",
-      );
-      providers.push(p);
-    } catch (e: any) {
-      console.error("[OpenAPI] failed:", e.message);
+    // OpenAPI tool providers from sibling apps
+    const slug = (this.ctx.storage.kv.get("projectSlug") as string) || "test";
+    for (const [name, appName] of [
+      ["tanstack_app", "tanstack-app"],
+      ["slack", "slack"],
+    ] as const) {
+      try {
+        const base = appUrl(appName, slug) + "/api";
+        const p = await createOpenApiProvider(name, base + "/openapi.json", base);
+        providers.push(p);
+      } catch (e: any) {
+        console.error(`[OpenAPI] ${name} failed:`, e.message);
+      }
     }
 
     // MCP tool providers — onStart registers servers, wait for handshakes to complete
@@ -473,17 +513,6 @@ export class StreamProcessor extends Agent {
         content: "[Code result]:\n" + resultStr,
       });
     }
-
-    const followUp = await this.callAI([
-      { role: "system", content: systemPrompt },
-      ...this.getHistory(),
-    ]);
-    if (!followUp) return;
-    this.storeEvent("agent-input-added", "assistant", followUp, {
-      role: "assistant",
-      content: followUp,
-    });
-    collect({ type: "agent-input-added", payload: { role: "assistant", content: followUp } });
   }
 
   // Full agent loop via WebSocket (deprecated — use /process instead)
@@ -514,16 +543,15 @@ export class StreamProcessor extends Agent {
     if (codeBlocks.length === 0) return;
 
     // Execute each code block
+    let hadSideEffect = false;
     for (const code of codeBlocks) {
       console.log("[Agent] executing code block:", code.slice(0, 80));
       const result = await this.executeCode(code);
       const resultStr = JSON.stringify(result, null, 2);
 
-      // Store the codemode events
       this.storeEvent("codemode-block-added", null, code, { script: code });
       this.storeEvent("codemode-result-added", null, resultStr, result);
 
-      // Append to stream
       ws.send(
         JSON.stringify({
           type: "append",
@@ -537,14 +565,16 @@ export class StreamProcessor extends Agent {
         }),
       );
 
-      // Add result to history as a "system" message so AI sees it
       this.storeEvent("agent-input-added", "user", "[Code execution result]:\n" + resultStr, {
         role: "user",
         content: "[Code execution result]:\n" + resultStr,
       });
+      if ((result as any)?.result?.ok === true) hadSideEffect = true;
     }
 
-    // Follow-up: let AI see the code results and provide a final response
+    // Skip follow-up if code already performed an action (prevents double-reply)
+    if (hadSideEffect) return;
+
     console.log("[Agent] follow-up after code execution");
     const followUpHistory = this.getHistory();
     const followUpMessages = [{ role: "system", content: systemPrompt }, ...followUpHistory];
@@ -605,6 +635,21 @@ export class StreamProcessor extends Agent {
     // POST /process — process an event, return append events
     if (req.method === "POST" && pathname === "/process") {
       const event = (await req.json()) as any;
+
+      // Dedup by offset — events can be delivered twice (WebSocket + _ws-message)
+      if (event.offset != null) {
+        const seen = this.ctx.storage.sql
+          .exec(
+            "SELECT id FROM events WHERE offset = ? AND stream_path = ? LIMIT 1",
+            event.offset,
+            this.sp,
+          )
+          .toArray();
+        if (seen.length > 0) {
+          return Response.json({ ok: true, appends: [], deduplicated: true });
+        }
+      }
+
       this.storeEvent(
         event.type || "unknown",
         event.payload?.role || null,
@@ -624,13 +669,16 @@ export class StreamProcessor extends Agent {
         }
       }
       if (event.type === "codemode-block-added" && event.payload?.script) {
-        // Debug: also return provider names
-        const providers = await this.buildProviders();
-        const providerNames = providers.map((p: any) => p.name);
         const result = await this.executeCode(event.payload.script);
-        (result as any)._providers = providerNames;
-        this.storeEvent("codemode-result-added", null, JSON.stringify(result), result);
+        const resultStr = JSON.stringify(result, null, 2);
+        this.storeEvent("codemode-result-added", null, resultStr, result);
         collect({ type: "codemode-result-added", payload: result });
+
+        // Store result as user message so the AI can see it
+        this.storeEvent("agent-input-added", "user", "[Code result]:\n" + resultStr, {
+          role: "user",
+          content: "[Code result]:\n" + resultStr,
+        });
       }
 
       return Response.json({ ok: true, appends });
@@ -682,12 +730,11 @@ export class StreamProcessor extends Agent {
       }
     }
 
-    // POST /init — set stream path
+    // POST /init — set stream path + project slug
     if (req.method === "POST" && pathname === "/init") {
       const body = (await req.json()) as any;
-      if (body._setStreamPath) {
-        this.ctx.storage.kv.put("streamPath", body._setStreamPath);
-      }
+      if (body._setStreamPath) this.ctx.storage.kv.put("streamPath", body._setStreamPath);
+      if (body._projectSlug) this.ctx.storage.kv.put("projectSlug", body._projectSlug);
       return Response.json({ ok: true });
     }
 
@@ -774,6 +821,27 @@ export class StreamProcessor extends Agent {
 // ── App — main DO, serves React SPA, manages subscriptions ──
 
 export class App extends DurableObject {
+  // Construct the events API base URL for this project
+  #eventsApiBase(eventsBaseUrl?: string, projectSlug?: string): string {
+    // Prefer EVENTS_API_BASE from dynamic worker env (set by Project DO)
+    const fromEnv = (this as any).env?.EVENTS_API_BASE;
+    if (fromEnv) return fromEnv + "/api";
+    // Fallback: construct from config
+    const base = (eventsBaseUrl || "https://events.iterate.com").replace(/\/+$/, "");
+    const slug = projectSlug || "";
+    return (slug ? base.replace("://", `://${slug}.`) : base) + "/api";
+  }
+
+  async #appendToStream(path: string, event: any, eventsBaseUrl?: string, projectSlug?: string) {
+    const apiBase = this.#eventsApiBase(eventsBaseUrl, projectSlug);
+    const resp = await fetch(`${apiBase}/streams/${encodeURIComponent(path)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ event }),
+    });
+    return resp;
+  }
+
   ensureTables() {
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS subscriptions (
@@ -794,6 +862,12 @@ export class App extends DurableObject {
         last_fetch_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
   }
 
   /**
@@ -805,6 +879,13 @@ export class App extends DurableObject {
     const req = new Request(url, init);
     req.headers.set("x-partykit-room", facetName);
     return req;
+  }
+
+  #getProjectSlug(): string {
+    const rows = this.ctx.storage.sql
+      .exec("SELECT value FROM config WHERE key = 'projectSlug'")
+      .toArray();
+    return rows.length ? (rows[0].value as string) : "";
   }
 
   getOrCreateStream(streamPath: string) {
@@ -824,7 +905,10 @@ export class App extends DurableObject {
       .fetch(
         this.facetRequest(facetName, "http://localhost/init", {
           method: "POST",
-          body: JSON.stringify({ _setStreamPath: streamPath }),
+          body: JSON.stringify({
+            _setStreamPath: streamPath,
+            _projectSlug: this.#getProjectSlug(),
+          }),
         }),
       )
       .catch(() => {});
@@ -859,6 +943,19 @@ export class App extends DurableObject {
         const frame = JSON.parse(body.message);
         if (frame.type !== "event" || !frame.event) return Response.json({ appends: [] });
 
+        // Monitor: auto-subscribe to child streams under /agents/
+        if (
+          (wsStreamPath === "/agents/" || wsStreamPath === "/agents") &&
+          frame.event.type === "https://events.iterate.com/events/stream/child-stream-created" &&
+          frame.event.payload?.childPath
+        ) {
+          const childPath = frame.event.payload.childPath as string;
+          console.log("[Agents] child-stream-created (via _ws-message):", childPath);
+          this.autoSubscribeChild(childPath).catch((e: any) =>
+            console.error("[Agents] autoSubscribeChild error:", e.message),
+          );
+        }
+
         const proc = this.getOrCreateStream(wsStreamPath);
         const resp = await proc.fetch(
           this.facetRequest("stream:" + wsStreamPath, "http://localhost/process", {
@@ -880,14 +977,10 @@ export class App extends DurableObject {
       const subPath = streamsMatch[2] || "/";
       const proc = this.getOrCreateStream(streamPath);
 
-      // WebSocket upgrade — accept at App DO (nested facets can't do WebSocket)
-      // Tag with stream path so webSocketMessage can dispatch
-      if (req.headers.get("Upgrade") === "websocket") {
-        const pair = new WebSocketPair();
-        this.ctx.acceptWebSocket(pair[1], ["stream:" + streamPath]);
-        pair[1].send(JSON.stringify({ type: "connected", stream: streamPath }));
-        return new Response(null, { status: 101, webSocket: pair[0] });
-      }
+      // WebSocket upgrades are handled by the Project DO (which dispatches via _ws-message).
+      // Do NOT accept WebSockets here — facets share the parent's context, so accepting
+      // here would cause BOTH the Project DO's and App's webSocketMessage to fire,
+      // resulting in duplicate event processing.
 
       const facetName = "stream:" + streamPath;
 
@@ -926,6 +1019,14 @@ export class App extends DurableObject {
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
+    // ── GET /api/install — one-time setup: subscribe to /agents/ parent stream ──
+    // The /agents/ stream receives child-stream-created events when new agent
+    // streams are created (e.g. /agents/slack/ts-123). The monitor processor
+    // auto-subscribes to each new child stream.
+    if (pathname === "/api/install") {
+      return this.handleInstall(req);
+    }
+
     // ── POST /api/subscribe — subscribe a stream to events.iterate.com ──
     if (req.method === "POST" && pathname === "/api/subscribe") {
       const body = (await req.json()) as {
@@ -942,6 +1043,9 @@ export class App extends DurableObject {
       const callbackUrl =
         "wss://" + hostHeader + "/streams/" + encodeURIComponent(streamPath) + "/ws";
 
+      // Remove stale subscription for the same stream (prevents duplicate deliveries)
+      this.ctx.storage.sql.exec("DELETE FROM subscriptions WHERE stream_path = ?", streamPath);
+
       // Store subscription
       this.ctx.storage.sql.exec(
         "INSERT INTO subscriptions (stream_path, events_base_url, events_project_slug, slug, callback_url) VALUES (?, ?, ?, ?, ?)",
@@ -955,43 +1059,23 @@ export class App extends DurableObject {
       // Create the stream processor facet
       this.getOrCreateStream(streamPath);
 
-      // Construct events project API URL
-      // "https://events.iterate.com" → "https://test.events.iterate.com/api"
-      const base = body.eventsBaseUrl.replace(/\/+$/, "");
-      const projectApiBase =
-        body.eventsProjectSlug === "public"
-          ? base + "/api"
-          : base.replace("://", "://" + body.eventsProjectSlug + ".") + "/api";
-
-      // Append subscription event to events.iterate.com
-      const appendUrl = projectApiBase + "/streams/" + encodeURIComponent(streamPath);
-      console.log("[App] subscribing:", appendUrl, "callback:", callbackUrl);
-
-      let appendResult: any = null;
       let appendError: string | null = null;
       try {
-        const appendResp = await fetch(appendUrl, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            event: {
-              type: "https://events.iterate.com/events/stream/subscription/configured",
-              payload: { slug, type: "websocket", callbackUrl },
-            },
-          }),
-        });
-        appendResult = await appendResp.json();
-        if (!appendResp.ok) {
-          appendError = `HTTP ${appendResp.status}: ${JSON.stringify(appendResult)}`;
-        }
+        await this.#appendToStream(
+          streamPath,
+          {
+            type: "https://events.iterate.com/events/stream/subscription/configured",
+            payload: { slug, type: "websocket", callbackUrl },
+          },
+          body.eventsBaseUrl,
+          body.eventsProjectSlug,
+        );
       } catch (e: any) {
         appendError = e.message;
       }
 
-      // Broadcast to UI
       this.broadcastSync();
-
-      return Response.json({ ok: !appendError, slug, callbackUrl, appendResult, appendError });
+      return Response.json({ ok: !appendError, slug, callbackUrl, error: appendError });
     }
 
     // ── GET /api/subscriptions ──
@@ -1014,6 +1098,160 @@ export class App extends DurableObject {
     return new Response("Not found", { status: 404 });
   }
 
+  // ── Install handler: subscribe to /agents/ parent stream ──────────
+  async handleInstall(req: Request): Promise<Response> {
+    this.ensureTables();
+    const hostHeader = req.headers.get("host") || "localhost";
+    const query: Record<string, string> = {};
+    const qIdx = req.url.indexOf("?");
+    if (qIdx !== -1) {
+      for (const pair of req.url.slice(qIdx + 1).split("&")) {
+        const [k, v] = pair.split("=");
+        if (k) query[decodeURIComponent(k)] = decodeURIComponent(v ?? "");
+      }
+    }
+
+    const eventsBaseUrl = query.eventsBaseUrl || "https://events.iterate.com";
+    const projectSlug = query.projectSlug || "";
+
+    if (!projectSlug) {
+      return Response.json(
+        {
+          ok: false,
+          error: "projectSlug is required",
+          usage: "GET /api/install?projectSlug=myproject&eventsBaseUrl=https://events.iterate.com",
+        },
+        { status: 400 },
+      );
+    }
+
+    // Store config for the monitor processor
+    this.ctx.storage.sql.exec(
+      "INSERT OR REPLACE INTO config (key, value) VALUES ('eventsBaseUrl', ?)",
+      eventsBaseUrl,
+    );
+    this.ctx.storage.sql.exec(
+      "INSERT OR REPLACE INTO config (key, value) VALUES ('projectSlug', ?)",
+      projectSlug,
+    );
+    this.ctx.storage.sql.exec(
+      "INSERT OR REPLACE INTO config (key, value) VALUES ('hostHeader', ?)",
+      hostHeader,
+    );
+
+    // Subscribe to /agents parent stream (only once — check config flag)
+    const streamPath = "/agents";
+    const slug = "agents-monitor";
+    const callbackUrl =
+      "wss://" + hostHeader + "/streams/" + encodeURIComponent(streamPath) + "/ws";
+    const alreadyInstalled =
+      this.ctx.storage.sql.exec("SELECT value FROM config WHERE key = 'installed'").toArray()
+        .length > 0;
+
+    this.ctx.storage.sql.exec("DELETE FROM subscriptions WHERE slug = ?", slug);
+    this.ctx.storage.sql.exec(
+      "INSERT INTO subscriptions (stream_path, events_base_url, events_project_slug, slug, callback_url) VALUES (?, ?, ?, ?, ?)",
+      streamPath,
+      eventsBaseUrl,
+      projectSlug,
+      slug,
+      callbackUrl,
+    );
+    this.getOrCreateStream(streamPath);
+
+    let result: any = null;
+    let error: string | null = null;
+
+    if (!alreadyInstalled) {
+      try {
+        await this.#appendToStream(
+          streamPath,
+          {
+            type: "https://events.iterate.com/events/stream/subscription/configured",
+            payload: { slug, type: "websocket", callbackUrl },
+          },
+          eventsBaseUrl,
+          projectSlug,
+        );
+      } catch (e: any) {
+        error = e.message;
+      }
+      this.ctx.storage.sql.exec(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('installed', '1')",
+      );
+    } else {
+      result = { skipped: true, reason: "already installed" };
+    }
+
+    this.broadcastSync();
+
+    return Response.json({
+      ok: !error,
+      message: alreadyInstalled ? "Already installed (config updated)." : "Agents app installed.",
+      subscription: { streamPath, callbackUrl, result, error },
+    });
+  }
+
+  // ── Auto-subscribe to child streams discovered by the monitor ──────
+  async autoSubscribeChild(childPath: string): Promise<void> {
+    this.ensureTables();
+
+    // Check if already subscribed
+    const existing = this.ctx.storage.sql
+      .exec("SELECT id FROM subscriptions WHERE stream_path = ? LIMIT 1", childPath)
+      .toArray();
+    if (existing.length > 0) {
+      console.log("[Agents] already subscribed to", childPath);
+      return;
+    }
+
+    // Read config
+    const configRows = this.ctx.storage.sql.exec("SELECT key, value FROM config").toArray();
+    const config: Record<string, string> = {};
+    for (const row of configRows) config[row.key as string] = row.value as string;
+
+    const eventsBaseUrl = config.eventsBaseUrl;
+    const projectSlug = config.projectSlug;
+    const hostHeader = config.hostHeader;
+
+    if (!eventsBaseUrl || !projectSlug || !hostHeader) {
+      console.error("[Agents] missing config — run /api/install first");
+      return;
+    }
+
+    const slug = "agent-child-" + childPath.replace(/\//g, "-");
+    const callbackUrl = "wss://" + hostHeader + "/streams/" + encodeURIComponent(childPath) + "/ws";
+
+    this.ctx.storage.sql.exec("DELETE FROM subscriptions WHERE slug = ?", slug);
+    this.ctx.storage.sql.exec(
+      "INSERT INTO subscriptions (stream_path, events_base_url, events_project_slug, slug, callback_url) VALUES (?, ?, ?, ?, ?)",
+      childPath,
+      eventsBaseUrl,
+      projectSlug,
+      slug,
+      callbackUrl,
+    );
+    this.getOrCreateStream(childPath);
+
+    try {
+      await this.#appendToStream(
+        childPath,
+        {
+          type: "https://events.iterate.com/events/stream/subscription/configured",
+          payload: { slug, type: "websocket", callbackUrl },
+          idempotencyKey: `sub:${slug}`,
+        },
+        eventsBaseUrl,
+        projectSlug,
+      );
+      console.log("[Agents] auto-subscribed to child:", childPath);
+    } catch (e: any) {
+      console.error("[Agents] subscribe error:", e.message);
+    }
+
+    this.broadcastSync();
+  }
+
   broadcastSync() {
     const subs = this.ctx.storage.sql
       .exec("SELECT * FROM subscriptions ORDER BY id DESC")
@@ -1026,41 +1264,7 @@ export class App extends DurableObject {
     }
   }
 
-  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-    // Dispatch stream WebSocket messages to the StreamProcessor via /process
-    const tags = this.ctx.getTags(ws);
-    const streamTag = tags.find((t: string) => t.startsWith("stream:"));
-    if (!streamTag) return;
-    const streamPath = streamTag.slice("stream:".length);
-
-    try {
-      const frame = JSON.parse(message as string);
-      if (frame.type !== "event" || !frame.event) return;
-
-      const proc = this.getOrCreateStream(streamPath);
-      const resp = await proc.fetch(
-        this.facetRequest("stream:" + streamPath, "http://localhost/process", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(frame.event),
-        }),
-      );
-      const result = (await resp.json()) as any;
-
-      // Forward any append events back through the WebSocket
-      if (result.appends) {
-        for (const appendEvent of result.appends) {
-          ws.send(JSON.stringify({ type: "append", event: appendEvent }));
-        }
-      }
-    } catch (e: any) {
-      console.error("[App] ws dispatch error:", e.message);
-      try {
-        ws.send(JSON.stringify({ type: "error", message: e.message }));
-      } catch {}
-    }
-  }
-  webSocketClose(ws: WebSocket) {
-    ws.close();
-  }
+  // No webSocketMessage handler — WebSocket events are dispatched by the Project DO
+  // via _ws-message (HTTP POST). Having both would cause duplicate processing because
+  // facets share the parent DO's WebSocket context.
 }
