@@ -77,10 +77,10 @@ test.describe("organization invites", () => {
     // Should be on welcome page with pending invite
     await page.getByText("Welcome to Iterate").waitFor();
     await page.getByText(orgName).waitFor();
-    await page.getByRole("button", { name: "Accept" }).waitFor();
+    await page.getByRole("button", { name: "Accept", exact: true }).waitFor();
 
     // Accept the invite
-    await page.getByRole("button", { name: "Accept" }).click();
+    await page.getByRole("button", { name: "Accept", exact: true }).click();
     await toast.success(page, `Joined ${orgName}`).waitFor();
 
     // Should now be in the org
@@ -186,7 +186,7 @@ test.describe("organization invites", () => {
     // User accepts invite from welcome page
     await login(page, userEmail);
     await page.getByText(orgName).first().waitFor();
-    await page.getByRole("button", { name: "Accept" }).click();
+    await page.getByRole("button", { name: "Accept", exact: true }).click();
     await toast.success(page, `Joined ${orgName}`).waitFor();
 
     await page.goto("/user/settings");
