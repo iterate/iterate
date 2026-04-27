@@ -11,6 +11,15 @@ import {
   StreamState,
 } from "@iterate-com/events-contract";
 import type { BuiltinProcessor } from "@iterate-com/events-contract/sdk";
+import { createDurableObjectClient, type SyncClient } from "sqlfu";
+import { migrate } from "./db/migrations/.generated/migrations.ts";
+import {
+  getEventByIdempotencyKey,
+  getReducedState,
+  history as selectHistory,
+  insertEvent,
+  upsertReducedState,
+} from "./db/queries/.generated/index.ts";
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
 import {
   externalSubscriberProcessor,
@@ -105,6 +114,7 @@ function getProcessorState(state: StreamState, slug: string) {
  */
 export class StreamDurableObject extends DurableObject<Env> {
   private _state: StreamState | null = null;
+  private readonly client: SyncClient;
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
   private readonly dynamicWorkerManager: ReturnType<typeof createDynamicWorkerManager>;
 
@@ -134,6 +144,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.client = createDurableObjectClient(ctx.storage);
     // Dynamic workers are intentionally not "frameworkized" as a generic
     // processor runtime. This experimental feature owns its own manager in
     // `dynamic-processor.ts`, and `stream.ts` only provides the minimal stream
@@ -169,11 +180,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
 
     void this.ctx.blockConcurrencyWhile(async () => {
-      this.ensureSchema();
+      migrate(this.client);
 
-      const persistedStateRow = this.ctx.storage.sql
-        .exec<{ json: string }>("SELECT json FROM reduced_state WHERE singleton = 1")
-        .next().value;
+      const persistedStateRow = getReducedState(this.client);
 
       if (persistedStateRow == null) {
         return;
@@ -231,8 +240,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (this._state != null) {
       return;
     }
-
-    this.ensureSchema();
 
     const processorState = Object.fromEntries(
       processors.map((p) => [p.slug, structuredClone(p.initialState)]),
@@ -299,23 +306,16 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     const nextState = this.reduce(event);
 
-    this.ctx.storage.transactionSync(() => {
-      this.ctx.storage.sql.exec(
-        `INSERT INTO events (offset, type, payload, metadata, idempotency_key, created_at)
-         VALUES (?, ?, json(?), ?, ?, ?)`,
-        event.offset,
-        event.type,
-        JSON.stringify(event.payload),
-        event.metadata === undefined ? null : JSON.stringify(event.metadata),
-        event.idempotencyKey ?? null,
-        event.createdAt,
-      );
-      this.ctx.storage.sql.exec(
-        `INSERT INTO reduced_state (singleton, json)
-         VALUES (1, json(?))
-         ON CONFLICT(singleton) DO UPDATE SET json = excluded.json`,
-        JSON.stringify(nextState),
-      );
+    this.client.transaction(() => {
+      insertEvent(this.client, {
+        offset: event.offset,
+        type: event.type,
+        payload: JSON.stringify(event.payload),
+        metadata: event.metadata === undefined ? null : JSON.stringify(event.metadata),
+        idempotencyKey: event.idempotencyKey ?? null,
+        createdAt: event.createdAt,
+      });
+      upsertReducedState(this.client, { json: JSON.stringify(nextState) });
     });
     this._state = nextState;
 
@@ -608,17 +608,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       endOffset: this.state.eventCount,
     });
 
-    return this.ctx.storage.sql
-      .exec<SqliteEventRow>(
-        `SELECT * FROM events WHERE offset > ? AND offset < ? ORDER BY offset ASC`,
-        range.afterOffset,
-        range.beforeOffset,
-      )
-      .toArray()
-      .flatMap((row) => {
-        const event = this.parseEventRow(row);
-        return event ? [event] : [];
-      });
+    return selectHistory(this.client, {
+      afterOffset: range.afterOffset,
+      beforeOffset: range.beforeOffset,
+    }).flatMap((row) => {
+      const event = this.parseEventRow(row);
+      return event ? [event] : [];
+    });
   }
 
   stream(args: { after?: StreamCursor; before?: StreamCursor } = {}): ReadableStream<Uint8Array> {
@@ -666,33 +662,8 @@ export class StreamDurableObject extends DurableObject<Env> {
   // Storage & helpers
   // ---------------------------------------------------------------------------
 
-  private ensureSchema() {
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS events (
-        offset INTEGER PRIMARY KEY,
-        type TEXT NOT NULL,
-        payload TEXT NOT NULL CHECK(json_valid(payload)),
-        metadata TEXT CHECK(metadata IS NULL OR (json_valid(metadata) AND json_type(metadata) = 'object')),
-        idempotency_key TEXT UNIQUE,
-        created_at TEXT NOT NULL
-      )
-    `);
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS reduced_state (
-        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-        json TEXT NOT NULL CHECK(json_valid(json))
-      )
-    `);
-  }
-
   private getEventByIdempotencyKey(idempotencyKey: string) {
-    const row = this.ctx.storage.sql
-      .exec<SqliteEventRow>(
-        `SELECT * FROM events WHERE idempotency_key = ? LIMIT 1`,
-        idempotencyKey,
-      )
-      .next().value;
-
+    const row = getEventByIdempotencyKey(this.client, { idempotencyKey });
     return this.parseEventRow(row);
   }
 
@@ -777,11 +748,14 @@ function getImmediateChildPath(args: {
   return firstSegment == null ? null : StreamPath.parse(`${args.parentPath}/${firstSegment}`);
 }
 
+// Shape parseEventRow accepts. The generated query Result types from
+// db/queries/.generated use `string | undefined` for nullable columns,
+// so this type is permissive enough to accept any of them.
 type SqliteEventRow = {
   offset: number;
   type: string;
   payload: string;
-  metadata: string | null;
-  idempotency_key: string | null;
+  metadata?: string | null;
+  idempotency_key?: string | null;
   created_at: string;
 };
