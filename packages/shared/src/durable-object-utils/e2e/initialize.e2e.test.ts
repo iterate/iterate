@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 const baseUrl = new URL(process.env.DURABLE_OBJECT_UTILS_E2E_BASE_URL ?? "");
 
-describe("withInitialize fronting worker", () => {
+describe("withLifecycleHooks fronting worker", () => {
   it("initializes a room and sends a message through the fronting worker", async () => {
     const roomName = `e2e-room-${crypto.randomUUID()}`;
 
@@ -49,7 +49,7 @@ describe("inspector mixins fronting worker", () => {
     });
     expect(kvSeeded.status).toBe(200);
 
-    const kvResponse = await fetch(new URL(`/inspectors/${inspectorName}/__kv/json`, baseUrl));
+    const kvResponse = await getWithRouteRetry(`/inspectors/${inspectorName}/__kv/json`);
     expect(kvResponse.status).toBe(200);
     expect(await kvResponse.json()).toEqual([
       {
@@ -76,7 +76,7 @@ describe("inspector mixins fronting worker", () => {
 describe("withExternalListing fronting worker", () => {
   it("returns JSON null when a listed object has no external listing yet", async () => {
     const roomName = `e2e-listed-missing-${crypto.randomUUID()}`;
-    const response = await fetch(new URL(`/listed-rooms/${roomName}/listing`, baseUrl));
+    const response = await getWithRouteRetry(`/listed-rooms/${roomName}/listing`);
 
     expect(response.status).toBe(200);
     expect(await response.json()).toBeNull();
@@ -102,6 +102,159 @@ describe("withExternalListing fronting worker", () => {
   });
 });
 
+describe("withMultiplexedAlarms fronting worker", () => {
+  it("persists, lists, dispatches, and deletes logical alarm rows", async () => {
+    const roomName = `e2e-alarm-${crypto.randomUUID()}`;
+
+    const initialized = await postJson(`/alarm-rooms/${roomName}/initialize`, {
+      ownerUserId: "user-alarm-e2e",
+    });
+    expect(initialized.status).toBe(200);
+
+    const scheduled = await postJson(`/alarm-rooms/${roomName}/schedule`, {
+      key: "record",
+      payload: { message: "hello from deployed e2e" },
+    });
+    expect(scheduled.status).toBe(200);
+
+    const alarms = await getWithRouteRetry(`/alarm-rooms/${roomName}/alarms`);
+    expect(alarms.status).toBe(200);
+    expect(await alarms.json()).toMatchObject([
+      {
+        key: "record",
+        method: "recordAlarmPayload",
+        payload: { message: "hello from deployed e2e" },
+      },
+    ]);
+
+    const due = await postJson(`/alarm-rooms/${roomName}/make-due`, {});
+    expect(due.status).toBe(200);
+
+    const dispatched = await postJson(`/alarm-rooms/${roomName}/run-alarm`, {});
+    expect(dispatched.status).toBe(200);
+
+    const state = await getWithRouteRetry(`/alarm-rooms/${roomName}/state`);
+    expect(state.status).toBe(200);
+    expect(await state.json()).toEqual({
+      runs: 1,
+      payload: { message: "hello from deployed e2e" },
+    });
+
+    const emptyAlarms = await getWithRouteRetry(`/alarm-rooms/${roomName}/alarms`);
+    expect(emptyAlarms.status).toBe(200);
+    expect(await emptyAlarms.json()).toEqual([]);
+  });
+
+  it("dispatches logical alarm rows through Cloudflare's natural alarm delivery", async () => {
+    const roomName = `e2e-alarm-natural-${crypto.randomUUID()}`;
+    const message = "hello from natural Cloudflare alarm delivery";
+
+    const initialized = await postJson(`/alarm-rooms/${roomName}/initialize`, {
+      ownerUserId: "user-alarm-e2e",
+    });
+    expect(initialized.status).toBe(200);
+
+    const scheduled = await postJson(`/alarm-rooms/${roomName}/schedule`, {
+      key: "natural-record",
+      runAt: Date.now() + 1_500,
+      payload: { message },
+    });
+    expect(scheduled.status).toBe(200);
+
+    await expect(waitForState(`/alarm-rooms/${roomName}/state`, { runs: 1 })).resolves.toEqual({
+      runs: 1,
+      payload: { message },
+    });
+
+    const emptyAlarms = await getWithRouteRetry(`/alarm-rooms/${roomName}/alarms`);
+    expect(emptyAlarms.status).toBe(200);
+    expect(await emptyAlarms.json()).toEqual([]);
+  });
+});
+
+describe("withScheduler fronting worker", () => {
+  it("runs a recurring schedule through the deployed worker", async () => {
+    const roomName = `e2e-schedule-${crypto.randomUUID()}`;
+
+    const initialized = await postJson(`/schedule-rooms/${roomName}/initialize`, {
+      ownerUserId: "user-scheduler-e2e",
+    });
+    expect(initialized.status).toBe(200);
+
+    const scheduled = await postJson(`/schedule-rooms/${roomName}/schedule`, {
+      key: "poll",
+      payload: { message: "hello scheduler" },
+    });
+    expect(scheduled.status).toBe(200);
+    expect(await scheduled.json()).toMatchObject({
+      key: "poll",
+      recurrence: {
+        type: "interval",
+        everyMs: 60_000,
+      },
+    });
+
+    const due = await postJson(`/schedule-rooms/${roomName}/make-due`, {
+      key: "poll",
+    });
+    expect(due.status).toBe(200);
+
+    const dispatched = await postJson(`/schedule-rooms/${roomName}/run-alarm`, {});
+    expect(dispatched.status).toBe(200);
+
+    const state = await getWithRouteRetry(`/schedule-rooms/${roomName}/state`);
+    expect(state.status).toBe(200);
+    expect(await state.json()).toEqual({
+      runs: 1,
+      failures: 0,
+      payload: { message: "hello scheduler" },
+    });
+
+    const schedules = await getWithRouteRetry(`/schedule-rooms/${roomName}/schedules`);
+    expect(schedules.status).toBe(200);
+    expect(await schedules.json()).toMatchObject([
+      {
+        key: "poll",
+        running: false,
+        recurrence: {
+          type: "interval",
+          everyMs: 60_000,
+        },
+      },
+    ]);
+  });
+
+  it("runs a delayed schedule through Cloudflare's natural alarm delivery", async () => {
+    const roomName = `e2e-schedule-natural-${crypto.randomUUID()}`;
+    const message = "hello scheduler natural alarm";
+
+    const initialized = await postJson(`/schedule-rooms/${roomName}/initialize`, {
+      ownerUserId: "user-scheduler-e2e",
+    });
+    expect(initialized.status).toBe(200);
+
+    const scheduled = await postJson(`/schedule-rooms/${roomName}/schedule`, {
+      key: "natural-delayed",
+      recurrence: {
+        type: "delayed",
+        delayMs: 1_500,
+      },
+      payload: { message },
+    });
+    expect(scheduled.status).toBe(200);
+
+    await expect(waitForState(`/schedule-rooms/${roomName}/state`, { runs: 1 })).resolves.toEqual({
+      runs: 1,
+      failures: 0,
+      payload: { message },
+    });
+
+    const schedules = await getWithRouteRetry(`/schedule-rooms/${roomName}/schedules`);
+    expect(schedules.status).toBe(200);
+    expect(await schedules.json()).toEqual([]);
+  });
+});
+
 async function postJson(path: string, body: unknown): Promise<Response> {
   return await fetchWithRouteRetry(new URL(path, baseUrl), {
     method: "POST",
@@ -109,6 +262,12 @@ async function postJson(path: string, body: unknown): Promise<Response> {
       "content-type": "application/json",
     },
     body: JSON.stringify(body),
+  });
+}
+
+async function getWithRouteRetry(path: string): Promise<Response> {
+  return await fetchWithRouteRetry(new URL(path, baseUrl), {
+    method: "GET",
   });
 }
 
@@ -133,12 +292,47 @@ async function waitForJson(path: string) {
   throw new Error(`Timed out waiting for JSON at ${path}`);
 }
 
+async function waitForState(path: string, expected: Record<string, unknown>) {
+  const deadline = Date.now() + 30_000;
+
+  while (Date.now() < deadline) {
+    const response = await fetch(new URL(path, baseUrl));
+    if (response.status !== 200) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      continue;
+    }
+
+    const payload: unknown = await response.json();
+    if (matchesExpectedState(payload, expected)) {
+      return payload;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  throw new Error(`Timed out waiting for state at ${path}`);
+}
+
+function matchesExpectedState(payload: unknown, expected: Record<string, unknown>) {
+  if (typeof payload !== "object" || payload === null) {
+    return false;
+  }
+
+  for (const [key, value] of Object.entries(expected)) {
+    if ((payload as Record<string, unknown>)[key] !== value) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 async function fetchWithRouteRetry(input: URL, init: RequestInit) {
   const deadline = Date.now() + 10_000;
 
   while (Date.now() < deadline) {
     const response = await fetch(input, init);
-    if (response.status !== 404) {
+    if (![404, 500, 503].includes(response.status)) {
       return response;
     }
 

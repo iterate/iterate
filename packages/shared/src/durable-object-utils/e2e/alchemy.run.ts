@@ -5,9 +5,11 @@ import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { z } from "zod";
 import { slugify } from "../../slugify.ts";
 import type {
+  AlarmTestRoom,
   InitializeTestRoom,
   InspectorTestRoom,
   ListedRoom,
+  SchedulerTestRoom,
 } from "../test-harness/initialize-fronting-worker.ts";
 
 const APP_NAME = "shared-durable-object-utils-e2e";
@@ -63,7 +65,17 @@ const app = await alchemy(APP_NAME, {
 const workerName = makeWorkerName(APP_NAME, app.stage);
 const rooms = DurableObjectNamespace<InitializeTestRoom>("rooms", {
   className: "InitializeTestRoom",
-  // The initialize mixin relies on SQLite-backed DO synchronous KV.
+  // The lifecycle hooks mixin relies on SQLite-backed DO synchronous KV.
+  sqlite: true,
+});
+const alarmRooms = DurableObjectNamespace<AlarmTestRoom>("alarm-rooms", {
+  className: "AlarmTestRoom",
+  // Multiplexed alarms store logical alarm rows in local DO SQLite.
+  sqlite: true,
+});
+const scheduleRooms = DurableObjectNamespace<SchedulerTestRoom>("schedule-rooms", {
+  className: "SchedulerTestRoom",
+  // Scheduler rows are local SQLite metadata projected onto multiplexed alarms.
   sqlite: true,
 });
 const inspectors = DurableObjectNamespace<InspectorTestRoom>("inspectors", {
@@ -88,6 +100,8 @@ export const worker = await Worker(APP_NAME, {
   adopt: true,
   bindings: {
     ROOMS: rooms,
+    ALARM_ROOMS: alarmRooms,
+    SCHEDULE_ROOMS: scheduleRooms,
     INSPECTORS: inspectors,
     LISTED_ROOMS: listedRooms,
     DO_LISTINGS: listings,

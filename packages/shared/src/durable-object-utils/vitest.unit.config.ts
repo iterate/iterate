@@ -27,6 +27,14 @@ writeFileSync(
             class_name: "InitializeTestRoom",
           },
           {
+            name: "ALARM_ROOMS",
+            class_name: "AlarmTestRoom",
+          },
+          {
+            name: "SCHEDULE_ROOMS",
+            class_name: "SchedulerTestRoom",
+          },
+          {
             name: "INSPECTORS",
             class_name: "InspectorTestRoom",
           },
@@ -47,7 +55,13 @@ writeFileSync(
       migrations: [
         {
           tag: "v1",
-          new_sqlite_classes: ["InitializeTestRoom", "InspectorTestRoom", "ListedRoom"],
+          new_sqlite_classes: [
+            "InitializeTestRoom",
+            "AlarmTestRoom",
+            "SchedulerTestRoom",
+            "InspectorTestRoom",
+            "ListedRoom",
+          ],
         },
       ],
     },

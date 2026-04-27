@@ -7,7 +7,7 @@ import { DurableObject } from "cloudflare:workers";
  *
  * Example:
  *
- *   Constructor<InitializeMembers<RoomInit>>
+ *   Constructor<LifecycleHooksMembers<RoomInit>>
  *
  * means "instances constructed by this class have initialize/assertInitialized".
  * Mixin result types intersect this with the wrapped base class so callers keep

@@ -12,9 +12,12 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { withExternalListing } from "../mixins/with-external-listing.ts";
-import { getInitializedDoStub, withInitialize } from "../mixins/with-initialize.ts";
+import { getOrInitializeDoStub, withLifecycleHooks } from "../mixins/with-lifecycle-hooks.ts";
 import { withKvInspector } from "../mixins/with-kv-inspector.ts";
+import { withMultiplexedAlarms } from "../mixins/with-multiplexed-alarms.ts";
 import { withOuterbase } from "../mixins/with-outerbase.ts";
+import { withScheduler } from "../mixins/with-scheduler.ts";
+import type { SchedulerRecurrence } from "../mixins/with-scheduler.ts";
 
 export type RoomInit = {
   name: string;
@@ -34,15 +37,48 @@ export type CaughtErrorResult = {
 };
 
 type Env = {
+  ALARM_ROOMS: DurableObjectNamespace<AlarmTestRoom>;
+  SCHEDULE_ROOMS: DurableObjectNamespace<SchedulerTestRoom>;
   ROOMS: DurableObjectNamespace<InitializeTestRoom>;
   INSPECTORS: DurableObjectNamespace<InspectorTestRoom>;
   LISTED_ROOMS: DurableObjectNamespace<ListedRoom>;
   DO_LISTINGS: D1Database;
 };
 
-const RoomBase = withInitialize<RoomInit>()(DurableObject);
+const RoomBase = withLifecycleHooks<RoomInit>()(DurableObject);
 
 export class InitializeTestRoom extends RoomBase<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+
+    this.registerOnFirstInitialize((params) => {
+      const runs = this.ctx.storage.kv.get<number>("test.firstInitializeHookRuns") ?? 0;
+      this.ctx.storage.kv.put("test.firstInitializeHookRuns", runs + 1);
+      this.ctx.storage.kv.put("test.firstInitializeHookOwnerUserId", params.ownerUserId);
+    });
+
+    this.registerOnStart(async (params) => {
+      const runs = this.ctx.storage.kv.get<number>("test.startHookRuns") ?? 0;
+      this.ctx.storage.kv.put("test.startHookRuns", runs + 1);
+      this.ctx.storage.kv.put("test.startHookStarted", true);
+
+      // Keep this asynchronous so tests prove initialize()/ensureStarted()
+      // wait for hook completion rather than fire-and-forget constructor work.
+      await Promise.resolve();
+
+      if (params.name.includes("hook-fails-once")) {
+        const alreadyFailed = this.ctx.storage.kv.get<boolean>("test.startHookFailedOnce") ?? false;
+
+        if (!alreadyFailed) {
+          this.ctx.storage.kv.put("test.startHookFailedOnce", true);
+          throw new Error("start hook failed once");
+        }
+      }
+
+      this.ctx.storage.kv.put("test.startHookFinished", true);
+    });
+  }
+
   sendMessage(text: string): SendMessageResult {
     const { name, ownerUserId } = this.initParams;
 
@@ -55,6 +91,44 @@ export class InitializeTestRoom extends RoomBase<Env> {
 
   getInitParams(): RoomInit {
     return this.assertInitialized();
+  }
+
+  async ensureReady(): Promise<RoomInit> {
+    return await this.ensureStarted();
+  }
+
+  getLifecycleHookState(): {
+    firstInitializeRuns: number;
+    firstInitializeOwnerUserId: string | null;
+    startRuns: number;
+    startStarted: boolean;
+    startFinished: boolean;
+    startFailedOnce: boolean;
+  } {
+    return {
+      firstInitializeRuns: this.ctx.storage.kv.get<number>("test.firstInitializeHookRuns") ?? 0,
+      firstInitializeOwnerUserId:
+        this.ctx.storage.kv.get<string>("test.firstInitializeHookOwnerUserId") ?? null,
+      startRuns: this.ctx.storage.kv.get<number>("test.startHookRuns") ?? 0,
+      startStarted: this.ctx.storage.kv.get<boolean>("test.startHookStarted") ?? false,
+      startFinished: this.ctx.storage.kv.get<boolean>("test.startHookFinished") ?? false,
+      startFailedOnce: this.ctx.storage.kv.get<boolean>("test.startHookFailedOnce") ?? false,
+    };
+  }
+
+  async initializeTwiceConcurrently(params: RoomInit): Promise<{
+    results: [RoomInit, RoomInit];
+    hookRuns: number;
+  }> {
+    const results = (await Promise.all([this.initialize(params), this.initialize(params)])) as [
+      RoomInit,
+      RoomInit,
+    ];
+
+    return {
+      results,
+      hookRuns: this.getLifecycleHookState().startRuns,
+    };
   }
 
   trySendMessage(text: string): SendMessageResult | CaughtErrorResult {
@@ -72,6 +146,14 @@ export class InitializeTestRoom extends RoomBase<Env> {
       return serializeError(error);
     }
   }
+
+  async tryEnsureReady(): Promise<RoomInit | CaughtErrorResult> {
+    try {
+      return await this.ensureReady();
+    } catch (error) {
+      return serializeError(error);
+    }
+  }
 }
 
 const ListedRoomBase = withExternalListing<RoomInit, Env>({
@@ -79,11 +161,344 @@ const ListedRoomBase = withExternalListing<RoomInit, Env>({
   getDatabase(env) {
     return env.DO_LISTINGS;
   },
-})(withInitialize<RoomInit>()(DurableObject));
+})(withLifecycleHooks<RoomInit>()(DurableObject));
 
 export class ListedRoom extends ListedRoomBase<Env> {
   getInitParams(): RoomInit {
     return this.assertInitialized();
+  }
+}
+
+const AlarmRoomBase = withMultiplexedAlarms<RoomInit>()(
+  withLifecycleHooks<RoomInit>()(DurableObject),
+);
+
+export class AlarmTestRoom extends AlarmRoomBase<Env> {
+  async scheduleRecordAlarm(input: {
+    key: string;
+    runAt: number;
+    payload?: unknown;
+  }): Promise<void | CaughtErrorResult> {
+    try {
+      await this.scheduleMultiplexedAlarm({
+        key: input.key,
+        runAt: input.runAt,
+        method: "recordAlarmPayload",
+        payload: input.payload,
+      });
+    } catch (error) {
+      return serializeError(error);
+    }
+  }
+
+  async scheduleMissingMethodAlarm(input: {
+    key: string;
+    runAt: number;
+  }): Promise<void | CaughtErrorResult> {
+    try {
+      await this.scheduleMultiplexedAlarm({
+        key: input.key,
+        runAt: input.runAt,
+        method: "missingAlarmMethod",
+      });
+    } catch (error) {
+      return serializeError(error);
+    }
+  }
+
+  async scheduleSelfReplacingAlarm(input: {
+    key: string;
+    runAt: number;
+  }): Promise<void | CaughtErrorResult> {
+    try {
+      await this.scheduleMultiplexedAlarm({
+        key: input.key,
+        runAt: input.runAt,
+        method: "replaceAlarmDuringDispatch",
+        payload: {
+          key: input.key,
+        },
+      });
+    } catch (error) {
+      return serializeError(error);
+    }
+  }
+
+  async scheduleUnserializableAlarm(): Promise<void | CaughtErrorResult> {
+    const payload: { self?: unknown } = {};
+    payload.self = payload;
+
+    try {
+      await this.scheduleMultiplexedAlarm({
+        key: "unserializable",
+        runAt: Date.now(),
+        method: "recordAlarmPayload",
+        payload,
+      });
+    } catch (error) {
+      return serializeError(error);
+    }
+  }
+
+  async cancelRecordAlarm(key: string): Promise<boolean> {
+    return await this.cancelMultiplexedAlarm(key);
+  }
+
+  async runAlarmNow(): Promise<void | CaughtErrorResult> {
+    try {
+      const alarm = this.alarm;
+
+      if (alarm === undefined) {
+        throw new Error("alarm() is not installed.");
+      }
+
+      await alarm.call(this);
+    } catch (error) {
+      return serializeError(error);
+    }
+  }
+
+  seedMissingMethodAlarmRow(key: string): void {
+    const now = Date.now();
+
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO mixin_multiplexed_alarms
+        (key, method, payload_json, run_at_ms, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      key,
+      "missingAfterDeploy",
+      "null",
+      now - 1,
+      now,
+      now,
+    );
+  }
+
+  async makeMultiplexedAlarmsDueForTest(): Promise<void> {
+    this.ctx.storage.sql.exec("UPDATE mixin_multiplexed_alarms SET run_at_ms = ?", Date.now() - 1);
+    await this.ctx.storage.deleteAlarm();
+  }
+
+  getAlarmExecutionState(): {
+    runs: number;
+    payload: unknown;
+  } {
+    return {
+      runs: this.ctx.storage.kv.get<number>("test.alarmRuns") ?? 0,
+      payload: this.ctx.storage.kv.get<unknown>("test.alarmPayload") ?? null,
+    };
+  }
+
+  async getPlatformAlarm(): Promise<number | null> {
+    return await this.ctx.storage.getAlarm();
+  }
+
+  protected recordAlarmPayload(payload: unknown): void {
+    const runs = this.ctx.storage.kv.get<number>("test.alarmRuns") ?? 0;
+
+    this.ctx.storage.kv.put("test.alarmRuns", runs + 1);
+    this.ctx.storage.kv.put("test.alarmPayload", payload);
+  }
+
+  protected async replaceAlarmDuringDispatch(payload: unknown): Promise<void> {
+    if (
+      typeof payload !== "object" ||
+      payload === null ||
+      !("key" in payload) ||
+      typeof payload.key !== "string"
+    ) {
+      throw new Error("replaceAlarmDuringDispatch payload must include key.");
+    }
+
+    await this.scheduleMultiplexedAlarm({
+      key: payload.key,
+      runAt: Date.now() + 60_000,
+      method: "recordAlarmPayload",
+      payload: { version: "replacement" },
+    });
+  }
+}
+
+const SchedulerRoomBase = withScheduler<RoomInit>()(
+  withMultiplexedAlarms<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject)),
+);
+
+export class SchedulerTestRoom extends SchedulerRoomBase<Env> {
+  async scheduleTask(input: {
+    key: string;
+    recurrence: SchedulerRecurrence;
+    payload?: unknown;
+  }): Promise<unknown> {
+    try {
+      return await this.schedule({
+        key: input.key,
+        method: "recordScheduledPayload",
+        payload: input.payload,
+        recurrence: input.recurrence,
+      });
+    } catch (error) {
+      return serializeError(error);
+    }
+  }
+
+  async scheduleFailingTask(input: {
+    key: string;
+    recurrence: SchedulerRecurrence;
+  }): Promise<unknown> {
+    try {
+      return await this.schedule({
+        key: input.key,
+        method: "failScheduledTask",
+        recurrence: input.recurrence,
+      });
+    } catch (error) {
+      return serializeError(error);
+    }
+  }
+
+  async scheduleSelfReplacingTask(input: {
+    key: string;
+    recurrence: SchedulerRecurrence;
+  }): Promise<unknown> {
+    try {
+      return await this.schedule({
+        key: input.key,
+        method: "replaceScheduleDuringRun",
+        payload: {
+          key: input.key,
+        },
+        recurrence: input.recurrence,
+      });
+    } catch (error) {
+      return serializeError(error);
+    }
+  }
+
+  async cancelTask(key: string): Promise<boolean> {
+    return await this.cancelSchedule(key);
+  }
+
+  async runAlarmNow(): Promise<void | CaughtErrorResult> {
+    try {
+      const alarm = this.alarm;
+
+      if (alarm === undefined) {
+        throw new Error("alarm() is not installed.");
+      }
+
+      await alarm.call(this);
+    } catch (error) {
+      return serializeError(error);
+    }
+  }
+
+  async makeScheduleDueForTest(key: string): Promise<void> {
+    const now = Date.now() - 1;
+    const existing = this.ctx.storage.sql
+      .exec<{ next_run_at_ms: number }>(
+        "SELECT next_run_at_ms FROM mixin_scheduler_schedules WHERE key = ? LIMIT 1",
+        key,
+      )
+      .toArray()[0];
+
+    if (existing !== undefined) {
+      await this.cancelMultiplexedAlarm(`scheduler:${key}:${existing.next_run_at_ms}`);
+    }
+
+    this.ctx.storage.sql.exec(
+      "UPDATE mixin_scheduler_schedules SET next_run_at_ms = ? WHERE key = ?",
+      now,
+      key,
+    );
+    await this.scheduleMultiplexedAlarm({
+      key: `scheduler:${key}:${now}`,
+      runAt: now,
+      method: "runScheduledTask",
+      payload: {
+        key,
+        expectedRunAtMs: now,
+      },
+    });
+    await this.ctx.storage.deleteAlarm();
+  }
+
+  async simulateRunningScheduleForTest(key: string, startedAtMs: number): Promise<void> {
+    await this.makeScheduleDueForTest(key);
+    this.ctx.storage.sql.exec(
+      `UPDATE mixin_scheduler_schedules
+       SET running = 1, execution_started_at_ms = ?
+       WHERE key = ?`,
+      startedAtMs,
+      key,
+    );
+  }
+
+  seedScheduleRowBeforeStartup(key: string): void {
+    const now = Date.now();
+
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO mixin_scheduler_schedules
+        (key, method, payload_json, recurrence_json, next_run_at_ms, running,
+         execution_started_at_ms, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
+      key,
+      "recordScheduledPayload",
+      "null",
+      JSON.stringify({
+        type: "delayed",
+        delayMs: 60_000,
+      }),
+      now + 60_000,
+      now,
+      now,
+    );
+  }
+
+  getScheduledExecutionState(): {
+    runs: number;
+    failures: number;
+    payload: unknown;
+  } {
+    return {
+      runs: this.ctx.storage.kv.get<number>("test.scheduleRuns") ?? 0,
+      failures: this.ctx.storage.kv.get<number>("test.scheduleFailures") ?? 0,
+      payload: this.ctx.storage.kv.get<unknown>("test.schedulePayload") ?? null,
+    };
+  }
+
+  protected recordScheduledPayload(payload: unknown): void {
+    const runs = this.ctx.storage.kv.get<number>("test.scheduleRuns") ?? 0;
+
+    this.ctx.storage.kv.put("test.scheduleRuns", runs + 1);
+    this.ctx.storage.kv.put("test.schedulePayload", payload);
+  }
+
+  protected failScheduledTask(): void {
+    const failures = this.ctx.storage.kv.get<number>("test.scheduleFailures") ?? 0;
+
+    this.ctx.storage.kv.put("test.scheduleFailures", failures + 1);
+    throw new Error("scheduled task failed");
+  }
+
+  protected async replaceScheduleDuringRun(payload: unknown): Promise<void> {
+    if (
+      typeof payload !== "object" ||
+      payload === null ||
+      !("key" in payload) ||
+      typeof payload.key !== "string"
+    ) {
+      throw new Error("replaceScheduleDuringRun payload must include key.");
+    }
+
+    await this.schedule({
+      key: payload.key,
+      method: "recordScheduledPayload",
+      payload: { version: "replacement" },
+      recurrence: {
+        type: "delayed",
+        delayMs: 60_000,
+      },
+    });
   }
 }
 
@@ -148,7 +563,7 @@ export default {
 
       if (request.method === "POST" && action === "initialize") {
         const body = await request.json<Partial<RoomInit>>();
-        const stub = await getInitializedDoStub({
+        const stub = await getOrInitializeDoStub({
           namespace: env.LISTED_ROOMS,
           name,
           initParams: {
@@ -168,6 +583,136 @@ export default {
       return json({ error: "Not found" }, { status: 404 });
     }
 
+    const alarmMatch = url.pathname.match(/^\/alarm-rooms\/([^/]+)\/([^/]+)$/);
+
+    if (alarmMatch !== null) {
+      const [, rawName, action] = alarmMatch;
+      const name = decodeURIComponent(rawName);
+      const stub = env.ALARM_ROOMS.getByName(name);
+
+      if (request.method === "POST" && action === "initialize") {
+        const body = await request.json<Partial<RoomInit>>();
+        const initialized = await stub.initialize({
+          name,
+          ownerUserId: requireString(body.ownerUserId, "ownerUserId"),
+        });
+
+        return json(initialized);
+      }
+
+      if (request.method === "POST" && action === "schedule") {
+        const body = await request.json<{
+          key?: string;
+          payload?: unknown;
+          runAt?: number;
+        }>();
+        const result = await stub.scheduleRecordAlarm({
+          key: requireString(body.key, "key"),
+          runAt: body.runAt ?? Date.now() + 60_000,
+          payload: body.payload,
+        });
+
+        if (isCaughtErrorResult(result)) {
+          return json(result, { status: 500 });
+        }
+
+        return json({ ok: true });
+      }
+
+      if (request.method === "POST" && action === "make-due") {
+        await stub.makeMultiplexedAlarmsDueForTest();
+
+        return json({ ok: true });
+      }
+
+      if (request.method === "POST" && action === "run-alarm") {
+        const result = await stub.runAlarmNow();
+
+        if (isCaughtErrorResult(result)) {
+          return json(result, { status: 500 });
+        }
+
+        return json({ ok: true });
+      }
+
+      if (request.method === "GET" && action === "alarms") {
+        return json(await stub.getMultiplexedAlarms());
+      }
+
+      if (request.method === "GET" && action === "state") {
+        return json(await stub.getAlarmExecutionState());
+      }
+
+      return json({ error: "Not found" }, { status: 404 });
+    }
+
+    const scheduleMatch = url.pathname.match(/^\/schedule-rooms\/([^/]+)\/([^/]+)$/);
+
+    if (scheduleMatch !== null) {
+      const [, rawName, action] = scheduleMatch;
+      const name = decodeURIComponent(rawName);
+      const stub = env.SCHEDULE_ROOMS.getByName(name);
+
+      if (request.method === "POST" && action === "initialize") {
+        const body = await request.json<Partial<RoomInit>>();
+        const initialized = await stub.initialize({
+          name,
+          ownerUserId: requireString(body.ownerUserId, "ownerUserId"),
+        });
+
+        return json(initialized);
+      }
+
+      if (request.method === "POST" && action === "schedule") {
+        const body = await request.json<{
+          key?: string;
+          payload?: unknown;
+          recurrence?: SchedulerRecurrence;
+        }>();
+        const result = await stub.scheduleTask({
+          key: requireString(body.key, "key"),
+          recurrence: body.recurrence ?? {
+            type: "interval",
+            everyMs: 60_000,
+          },
+          payload: body.payload,
+        });
+
+        if (isCaughtErrorResult(result)) {
+          return json(result, { status: 500 });
+        }
+
+        return json(result);
+      }
+
+      if (request.method === "POST" && action === "make-due") {
+        const body = await request.json<{ key?: string }>();
+        await stub.makeScheduleDueForTest(requireString(body.key, "key"));
+
+        return json({ ok: true });
+      }
+
+      if (request.method === "POST" && action === "run-alarm") {
+        const result = await stub.runAlarmNow();
+
+        if (isCaughtErrorResult(result)) {
+          return json(result, { status: 500 });
+        }
+
+        return json({ ok: true });
+      }
+
+      if (request.method === "GET" && action === "schedules") {
+        return json(await stub.getSchedules());
+      }
+
+      if (request.method === "GET" && action === "state") {
+        return json(await stub.getScheduledExecutionState());
+      }
+
+      return json({ error: "Not found" }, { status: 404 });
+    }
+
     const match = url.pathname.match(/^\/rooms\/([^/]+)\/([^/]+)$/);
 
     if (match === null) {
@@ -180,7 +725,7 @@ export default {
     try {
       if (request.method === "POST" && action === "initialize") {
         const body = await request.json<Partial<RoomInit>>();
-        const stub = await getInitializedDoStub({
+        const stub = await getOrInitializeDoStub({
           namespace: env.ROOMS,
           name,
           initParams: {
@@ -251,8 +796,6 @@ function serializeError(error: unknown): CaughtErrorResult {
   };
 }
 
-function isCaughtErrorResult(
-  value: SendMessageResult | CaughtErrorResult,
-): value is CaughtErrorResult {
-  return "kind" in value && value.kind === "error";
+function isCaughtErrorResult(value: unknown): value is CaughtErrorResult {
+  return typeof value === "object" && value !== null && "kind" in value && value.kind === "error";
 }

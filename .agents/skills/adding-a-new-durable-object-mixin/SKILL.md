@@ -22,11 +22,13 @@ The default is **do not code immediately**. First spec the API with the user. If
 
 ## Reference Implementations
 
-- `mixins/with-initialize.ts`: protected subclass surface, named initialization, static/generic preservation in the simple `TBase & Constructor<Members>` shape.
+- `mixins/with-lifecycle-hooks.ts`: protected subclass surface, named initialization, first-initialize/start hooks, static/generic preservation in the simple `TBase & Constructor<Members>` shape.
 - `mixins/with-external-listing.ts`: env lower-bound via `getDatabase(env)`, best-effort `ctx.waitUntil()` work, D1 table owned by the mixin.
+- `mixins/with-multiplexed-alarms.ts`: one owner for Cloudflare's single Durable Object alarm slot, protected scheduling methods, SQLite-backed logical alarm rows.
+- `mixins/with-scheduler.ts`: key-based scheduler layered above multiplexed alarms, tagged recurrence rows, split one-shot/recurring failure policy.
 - `mixins/with-kv-inspector.ts`: fetch wrapper that preserves generic `Base<Env>`.
 - `mixins/with-outerbase.ts`: fetch wrapper around SQLite debug routes.
-- `mixins/with-initialize.type.test.ts`: expect-type examples that prove the type incantations still work.
+- `mixins/with-lifecycle-hooks.type.test.ts`: expect-type examples that prove lifecycle, env lower-bound, and alarm protected-surface type incantations still work.
 - `test-harness/initialize-fronting-worker.ts`: shared Worker entrypoint for worker-pool unit tests and deployed E2E.
 - `README.md`: human/agent docs for composition, type shapes, runtime behavior, and test commands.
 
@@ -36,6 +38,7 @@ Before editing, write down:
 
 - What route/RPC/method/state does the mixin add?
 - Does it wrap `fetch`, override/extend an existing method, or only add new methods?
+- If it overrides `alarm`, `fetch`, or another runtime hook, does it call the inherited implementation and document what subclasses above it must do?
 - Does it require env bindings? If yes, what is the minimum env shape?
 - Does it require members from earlier mixins? If yes, what exact capability interface should the base satisfy?
 - Does it use SQLite `ctx.storage.sql` or synchronous `ctx.storage.kv`? If yes, document that it requires SQLite-backed DOs.
@@ -84,7 +87,7 @@ const Base = withExternalListing<RoomInit, NeedsListings>({
   getDatabase(env) {
     return env.DO_LISTINGS;
   },
-})(withInitialize<RoomInit>()(DurableObject));
+})(withLifecycleHooks<RoomInit>()(DurableObject));
 
 class Room extends Base<NeedsListings & { OTHER: string }> {}
 ```

@@ -1,10 +1,14 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { DurableObject } from "cloudflare:workers";
-import type { InitializeMembers, NamedInit } from "./with-initialize.ts";
+import type {
+  LifecycleHooksMembers,
+  LifecycleHooksProtected,
+  LifecycleInit,
+} from "./with-lifecycle-hooks.ts";
 import type { Constructor, DurableObjectConstructor } from "./mixin-types.ts";
 
-export type ExternalListingRecord<InitParams extends NamedInit> = {
+export type ExternalListingRecord<InitParams extends LifecycleInit> = {
   class: string;
   name: string;
   id: string;
@@ -13,7 +17,7 @@ export type ExternalListingRecord<InitParams extends NamedInit> = {
   lastStartedAt: string;
 };
 
-export type ExternalListingMembers<InitParams extends NamedInit> = {
+export type ExternalListingMembers<InitParams extends LifecycleInit> = {
   /**
    * Returns the D1 mirror row for this Durable Object, or `null` when no row is
    * available yet.
@@ -27,7 +31,7 @@ export type ExternalListingMembers<InitParams extends NamedInit> = {
 
 export type WithExternalListingResult<
   TBase extends Constructor,
-  InitParams extends NamedInit,
+  InitParams extends LifecycleInit,
   Env,
 > = TBase &
   // This non-generic constructor keeps the added method visible on subclasses.
@@ -55,43 +59,41 @@ export type WithExternalListingResult<
     ctx: DurableObjectState,
     env: FinalEnv,
   ) => DurableObject<FinalEnv> &
-    InitializeMembers<InitParams> &
+    LifecycleHooksMembers<InitParams> &
     ExternalListingMembers<InitParams>);
 
 /**
  * Best-effort D1 listing for initialized Durable Objects.
  *
- * Listing writes are scheduled after `initialize()` with `ctx.waitUntil()`:
- * initialization succeeds even if D1 is unavailable, and callers may
- * temporarily observe no listing after `initialize()` returns. This mixin is
- * for discoverability/debug indexes, not source-of-truth state.
+ * Listing writes are scheduled from the lifecycle start hook with
+ * `ctx.waitUntil()`: startup succeeds even if D1 is unavailable, and callers
+ * may temporarily observe no listing after initialization returns. This mixin
+ * is for discoverability/debug indexes, not source-of-truth state.
  *
- * The constructor intentionally does not write to D1. Our main helper,
- * `getInitializedDoStub()`, always calls `initialize()`, including for objects
- * that were already initialized, so constructor writes would duplicate the
- * common-path listing update on every wake-up.
+ * The constructor only registers the lifecycle hook. It does not write to D1
+ * directly because Durable Object construction should stay cheap and D1 is
+ * external async I/O.
  *
  * `getDatabase(env)` is the explicit D1 dependency. Its parameter type is the
  * minimum Env this mixin requires.
  */
-export function withExternalListing<InitParams extends NamedInit, Env>(options: {
+export function withExternalListing<InitParams extends LifecycleInit, Env>(options: {
   className: string;
   getDatabase(env: Env): D1Database;
 }) {
-  return function <TBase extends DurableObjectConstructor<Env, InitializeMembers<InitParams>>>(
-    Base: TBase,
-  ): WithExternalListingResult<TBase, InitParams, Env> {
+  return function <
+    TBase extends DurableObjectConstructor<
+      Env,
+      LifecycleHooksMembers<InitParams> & LifecycleHooksProtected<InitParams>
+    >,
+  >(Base: TBase): WithExternalListingResult<TBase, InitParams, Env> {
     abstract class ExternalListingMixin extends Base implements ExternalListingMembers<InitParams> {
-      async initialize(params: InitParams) {
-        const initialized = await super.initialize(params);
+      constructor(...args: any[]) {
+        super(...args);
 
-        // This runs for first initialization and for idempotent re-initializing
-        // calls. That matches the intended entry point: callers get a stub via
-        // `getInitializedDoStub()`, which always calls `initialize()` before
-        // handing the stub back.
-        this.scheduleExternalListingUpsert(initialized);
-
-        return initialized;
+        this.registerOnStart((params) => {
+          this.scheduleExternalListingUpsert(params);
+        });
       }
 
       /**
@@ -153,9 +155,10 @@ export function withExternalListing<InitParams extends NamedInit, Env>(options: 
       /**
        * Fire-and-log mirror update.
        *
-       * `ctx.waitUntil()` keeps the invocation alive for the D1 write, but the
-       * caller does not wait for it and failures must not roll back Durable
-       * Object initialization.
+       * `ctx.waitUntil()` records this as background work on the current Durable
+       * Object event, but this remains best-effort: the caller does not wait for
+       * it and failures must not roll back Durable Object initialization.
+       * https://developers.cloudflare.com/durable-objects/api/state/#waituntil
        */
       private scheduleExternalListingUpsert(params: InitParams) {
         // External listing must not make initialization fail. It is a discovery
@@ -186,7 +189,7 @@ export function withExternalListing<InitParams extends NamedInit, Env>(options: 
   };
 }
 
-async function upsertExternalListing<InitParams extends NamedInit>(params: {
+async function upsertExternalListing<InitParams extends LifecycleInit>(params: {
   db: D1Database;
   className: string;
   id: string;
@@ -196,9 +199,9 @@ async function upsertExternalListing<InitParams extends NamedInit>(params: {
 
   // Idempotent bootstrap + upsert: every write can create the mixin-owned table,
   // then insert/update the `(class, name)` row. Constructors stay cheap because
-  // this happens only after `initialize()`, inside waitUntil. `created_at`
-  // remains the first insertion time; `last_started_at` moves on each helper
-  // acquisition because `getInitializedDoStub()` always calls `initialize()`.
+  // this happens from the lifecycle start hook, inside waitUntil. `created_at`
+  // remains the first insertion time; `last_started_at` moves whenever the
+  // object starts and the hook runs.
   await params.db.batch([
     params.db.prepare(CREATE_EXTERNAL_LISTING_TABLE_SQL),
     params.db
@@ -241,8 +244,8 @@ const CREATE_EXTERNAL_LISTING_TABLE_SQL = `CREATE TABLE IF NOT EXISTS mixin_exte
       PRIMARY KEY (class, name)
     )`;
 
-function tryGetInitializedParams<InitParams extends NamedInit>(
-  instance: InitializeMembers<InitParams>,
+function tryGetInitializedParams<InitParams extends LifecycleInit>(
+  instance: LifecycleHooksMembers<InitParams>,
 ) {
   try {
     return instance.assertInitialized();
