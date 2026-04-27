@@ -382,6 +382,43 @@ export const htmlRendererConfiguredPage = {
         },
       },
     },
+    {
+      id: "html-renderer-configured:append-button",
+      label: "HTML Renderer Configured · Web Component append button",
+      event: {
+        type: HTML_RENDERER_CONFIGURED_TYPE,
+        payload: {
+          slug: "append-button",
+          matcher: "type = 'demo.click-target'",
+          template: `<iterate-append-button event-offset="{{offset}}" title="{{payload.title}}"></iterate-append-button>
+<script>
+if (!customElements.get("iterate-append-button")) {
+  customElements.define("iterate-append-button", class extends HTMLElement {
+    connectedCallback() {
+      if (this.shadowRoot) return;
+
+      const root = this.attachShadow({ mode: "open" });
+      root.innerHTML = '<style>:host{display:block;padding:12px;border:1px solid #d4d4d8;border-radius:8px;background:#fff}button{margin-top:8px;padding:6px 10px;border:1px solid #18181b;border-radius:6px;background:#18181b;color:#fff;cursor:pointer}</style><strong></strong><br><button type="button">Append clicked event</button>';
+      root.querySelector("strong").textContent = this.getAttribute("title") || "Interactive event";
+      root.querySelector("button").addEventListener("click", async () => {
+        const api = window.__iterateEventsRendererApi;
+        if (!api) return;
+
+        await api.append({
+          type: "demo.button-clicked",
+          payload: {
+            sourceOffset: Number(this.getAttribute("event-offset")),
+            clickedAt: new Date().toISOString()
+          }
+        });
+      });
+    }
+  });
+}
+</script>`,
+        },
+      },
+    },
   ],
 } satisfies EventTypePageDefinition;
 
