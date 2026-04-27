@@ -8,18 +8,17 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
-import { SidebarThemeSwitcher } from "@iterate-com/ui/components/sidebar-theme-switcher";
 
 const items = [
   { to: "/debug", label: "Debug" },
+  { to: "/confetti", label: "Confetti" },
   { to: "/log-stream", label: "Log Stream" },
   { to: "/things", label: "Things" },
-  { to: "/terminal", label: "Terminal" },
 ] as const;
 
 export function AppSidebar() {
   return (
-    <SidebarShell header={<AppSidebarBrand />} footer={<SidebarThemeSwitcher />}>
+    <SidebarShell header={<AppSidebarBrand />}>
       <AppSidebarNav />
     </SidebarShell>
   );

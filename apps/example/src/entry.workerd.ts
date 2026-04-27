@@ -31,12 +31,6 @@ export default {
           config,
           rawRequest: request,
           db,
-          pty: () => ({
-            message: (peer) => {
-              peer.send(`\r\n\r\nTerminal is not available in the Cloudflare Worker runtime.\r\n`);
-              peer.close(4000, "Terminal not implemented");
-            },
-          }),
           log,
         };
 
