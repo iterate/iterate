@@ -6,7 +6,7 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + Drizzle, dual-
 
 - **API:** oRPC over OpenAPI/HTTP at `/api`
 - **Confetti:** websocket at `/api/confetti`
-- **Durable Object:** counter demo at `/api/durable-counter`
+- **Durable Object:** counter demo at `/api/durable-counter` with WebSocket sync at `/api/durable-counter/websocket`
 - **Frontend:** TanStack Start in SPA mode + TanStack Router + TanStack Query
 - **DB:** Drizzle ORM — better-sqlite3 (Node), D1 (Workers). Shared `BaseSQLiteDatabase<"sync" | "async">` type.
 - **Observability:** Node and Workers both use the shared `withEvlog()` runtime wrapper; shared `useEvlog()` only enriches a request-scoped log

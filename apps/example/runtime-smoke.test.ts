@@ -173,6 +173,7 @@ async function assertConfettiWebSocket(httpBaseUrl: string) {
 
 async function assertDurableObjectCounter(httpBaseUrl: string) {
   const base = new URL("/api/durable-counter", httpBaseUrl);
+  const websocketUrl = httpToWsUrl(httpBaseUrl, "/api/durable-counter/websocket");
   const reset = await fetch(new URL("/api/durable-counter/reset", httpBaseUrl), {
     method: "POST",
     signal: AbortSignal.timeout(3_000),
@@ -181,6 +182,13 @@ async function assertDurableObjectCounter(httpBaseUrl: string) {
   expect(reset.ok).toBe(true);
   expect(await reset.json()).toMatchObject({ count: 0 });
 
+  const firstClient = new WebSocket(websocketUrl);
+  const secondClient = new WebSocket(websocketUrl);
+  await expectCounterStateMessage(firstClient, 0);
+  await expectCounterStateMessage(secondClient, 0);
+  const firstClientUpdate = expectCounterStateMessage(firstClient, 1);
+  const secondClientUpdate = expectCounterStateMessage(secondClient, 1);
+
   const increment = await fetch(new URL("/api/durable-counter/increment", httpBaseUrl), {
     method: "POST",
     signal: AbortSignal.timeout(3_000),
@@ -188,6 +196,10 @@ async function assertDurableObjectCounter(httpBaseUrl: string) {
 
   expect(increment.ok).toBe(true);
   expect(await increment.json()).toMatchObject({ count: 1 });
+  await firstClientUpdate;
+  await secondClientUpdate;
+  firstClient.close();
+  secondClient.close();
 
   const current = await fetch(base, {
     signal: AbortSignal.timeout(3_000),
@@ -195,6 +207,56 @@ async function assertDurableObjectCounter(httpBaseUrl: string) {
 
   expect(current.ok).toBe(true);
   expect(await current.json()).toMatchObject({ count: 1 });
+}
+
+async function expectCounterStateMessage(ws: WebSocket, count: number) {
+  await new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout>;
+    const handleMessage = (event: MessageEvent) => {
+      const text = typeof event.data === "string" ? event.data : String(event.data);
+      const parsed = parseJson(text);
+      if (isCounterStateMessage(parsed) && parsed.count === count) {
+        cleanup();
+        resolve();
+      }
+    };
+    const handleError = () => {
+      cleanup();
+      reject(new Error("counter WebSocket error"));
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.removeEventListener("message", handleMessage);
+      ws.removeEventListener("error", handleError);
+    };
+
+    timer = setTimeout(() => {
+      cleanup();
+      ws.close();
+      reject(new Error(`counter WebSocket timeout waiting for count ${String(count)}`));
+    }, 5_000);
+    ws.addEventListener("message", handleMessage);
+    ws.addEventListener("error", handleError);
+  });
+}
+
+function parseJson(text: string) {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function isCounterStateMessage(value: unknown): value is { count: number; type: "counter-state" } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    value.type === "counter-state" &&
+    "count" in value &&
+    typeof value.count === "number"
+  );
 }
 
 async function assertFullStack(

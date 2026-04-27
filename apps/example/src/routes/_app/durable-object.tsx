@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
@@ -6,6 +7,8 @@ type CounterState = {
   count: number;
   updatedAt: string | null;
 };
+
+type CounterConnectionState = "connecting" | "connected" | "disconnected";
 
 const counterQueryKey = ["durable-counter"] as const;
 
@@ -18,6 +21,7 @@ export const Route = createFileRoute("/_app/durable-object")({
 
 function DurableObjectPage() {
   const queryClient = useQueryClient();
+  const [connectionState, setConnectionState] = useState<CounterConnectionState>("connecting");
   const counter = useQuery({
     queryKey: counterQueryKey,
     queryFn: () => fetchCounter("/api/durable-counter"),
@@ -37,13 +41,35 @@ function DurableObjectPage() {
   });
   const busy = counter.isPending || increment.isPending || reset.isPending;
 
+  useEffect(() => {
+    if (!counter.isSuccess) return;
+
+    const socket = new WebSocket(createCounterWebSocketUrl());
+
+    socket.addEventListener("open", () => setConnectionState("connected"));
+    socket.addEventListener("close", () => setConnectionState("disconnected"));
+    socket.addEventListener("error", () => setConnectionState("disconnected"));
+    socket.addEventListener("message", (event) => {
+      if (typeof event.data !== "string") return;
+
+      const state = parseCounterStateMessage(event.data);
+      if (!state) return;
+
+      queryClient.setQueryData(counterQueryKey, state);
+    });
+
+    return () => {
+      socket.close();
+    };
+  }, [counter.isSuccess, queryClient]);
+
   return (
     <div className="space-y-4 p-4">
       <section className="space-y-3">
         <div className="space-y-1">
           <h2 className="text-sm font-semibold">Durable Object Counter</h2>
           <p className="text-sm text-muted-foreground">
-            A named Durable Object stores this count in Cloudflare storage.
+            A named Durable Object stores this count and broadcasts updates.
           </p>
         </div>
 
@@ -59,6 +85,7 @@ function DurableObjectPage() {
                 ? `Last updated ${new Date(counter.data.updatedAt).toLocaleString()}`
                 : "Not updated yet"}
             </p>
+            <p className="text-sm text-muted-foreground">WebSocket {connectionState}</p>
           </div>
         )}
 
@@ -80,6 +107,12 @@ function DurableObjectPage() {
   );
 }
 
+function createCounterWebSocketUrl() {
+  const url = new URL("/api/durable-counter/websocket", window.location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
 async function fetchCounter(path: string, init?: RequestInit): Promise<CounterState> {
   const response = await fetch(path, {
     ...init,
@@ -93,6 +126,16 @@ async function fetchCounter(path: string, init?: RequestInit): Promise<CounterSt
   }
 
   return parseCounterState(await response.json());
+}
+
+function parseCounterStateMessage(raw: string) {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed) || parsed.type !== "counter-state") return null;
+    return parseCounterState(parsed);
+  } catch {
+    return null;
+  }
 }
 
 function parseCounterState(value: unknown): CounterState {
