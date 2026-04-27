@@ -306,8 +306,8 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     const nextState = this.reduce(event);
 
-    this.client.transaction(() => {
-      insertEvent(this.client, {
+    this.client.transaction((tx) => {
+      insertEvent(tx, {
         offset: event.offset,
         type: event.type,
         payload: JSON.stringify(event.payload),
@@ -315,7 +315,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         idempotencyKey: event.idempotencyKey ?? null,
         createdAt: event.createdAt,
       });
-      upsertReducedState(this.client, { json: JSON.stringify(nextState) });
+      upsertReducedState(tx, { json: JSON.stringify(nextState) });
     });
     this._state = nextState;
 
