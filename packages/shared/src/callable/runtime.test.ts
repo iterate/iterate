@@ -145,7 +145,18 @@ describe("callable validation", () => {
   });
 
   test("rejects dangerous RPC method names and dotted paths", () => {
-    for (const rpcMethod of ["then", "__proto__", "fetch", "users.byId"]) {
+    for (const rpcMethod of [
+      "then",
+      "__proto__",
+      "fetch",
+      "users.byId",
+      "toString",
+      "valueOf",
+      "hasOwnProperty",
+      "apply",
+      "bind",
+      "call",
+    ]) {
       expect(() =>
         validateCallable({
           callable: {
