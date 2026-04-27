@@ -1,5 +1,13 @@
 import alchemy, { type Scope } from "alchemy";
-import { D1Database, DurableObjectNamespace, TanStackStart, Worker } from "alchemy/cloudflare";
+import {
+  D1Database,
+  DnsRecords,
+  DurableObjectNamespace,
+  TanStackStart,
+  Worker,
+  createCloudflareApi,
+  findZoneForHostname,
+} from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { slugify } from "@iterate-com/shared/slugify";
@@ -78,6 +86,9 @@ const workerRouteHosts = [
       .map((hostname) => `*.${hostname}`),
   ]),
 ];
+const projectWildcardHosts = projectHostnameBases
+  .filter((hostname) => !hostname.endsWith(".workers.dev"))
+  .map((hostname) => `*.${hostname}`);
 
 const db = await D1Database("os-db", {
   name: `${workerName}-db`,
@@ -150,6 +161,30 @@ export const worker = await TanStackStart(APP_NAME, {
     command: "pnpm exec vite dev --config vite.config.ts",
   },
 });
+
+const cloudflareApi = await createCloudflareApi({});
+if (!worker.url) {
+  throw new Error("Worker URL is required to create project wildcard DNS records.");
+}
+const workerHostname = new URL(worker.url).hostname;
+await Promise.all(
+  projectWildcardHosts.map(async (hostname) => {
+    const { zoneId } = await findZoneForHostname(cloudflareApi, hostname);
+    return DnsRecords(`project-wildcard-dns-${slugify(hostname)}`, {
+      zoneId,
+      records: [
+        {
+          type: "CNAME",
+          name: hostname,
+          content: workerHostname,
+          proxied: true,
+          ttl: 1,
+          comment: `Managed by ${APP_NAME} Alchemy for project hostname routing.`,
+        },
+      ],
+    });
+  }),
+);
 
 console.dir(
   {
