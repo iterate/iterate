@@ -195,11 +195,10 @@ export async function dispatchCallableFetch(options: {
   switch (target.type) {
     case "http": {
       /**
-       * This is the `globalThis.fetch` fallback. If a
-       * caller omits `ctx.fetcher`, public HTTP callables use the Worker/runtime
-       * global fetch. That is convenient for trusted Worker-boundary code, but
-       * it is ambient authority. Untrusted callables should be dispatched with
-       * an explicit policy/resolver instead of relying on this default.
+       * Public HTTP is the one target where dispatch needs an explicit fetch
+       * capability from the caller. Service, Durable Object, and Dynamic Worker
+       * targets resolve from bindings; public egress should not happen just
+       * because a shared helper read ambient `globalThis.fetch`.
        */
       const fetcher = target.fetcher;
       return await fetcher(rewrittenRequest);
@@ -264,7 +263,10 @@ export async function connectCallableWebSocket(options: {
     throw new CallableError(
       "TRANSPORT_FAILED",
       `WebSocket upgrade failed: ${response.status} ${response.statusText}`,
-      { retryable: true },
+      {
+        retryable: response.status >= 500,
+        details: { status: response.status, statusText: response.statusText },
+      },
     );
   }
 
@@ -382,13 +384,17 @@ function resolveFetchTarget(options: {
   switch (options.callable.target.type) {
     case "http": {
       /**
-       * This is the `globalThis.fetch` fallback. If a caller omits
-       * `ctx.fetcher`, public HTTP callables use the Worker/runtime global
-       * fetch. That is convenient for trusted Worker-boundary code, but it is
-       * ambient authority. Untrusted callables should be dispatched with an
-       * explicit policy/resolver instead of relying on this default.
+       * Public HTTP fetch is a capability too. Requiring it in the context keeps
+       * this library honest about egress: Worker entrypoints can still pass
+       * `{ fetcher: fetch }`, but helpers never silently reach for a global.
        */
-      return { type: "http", fetcher: options.ctx.fetcher ?? globalThis.fetch };
+      if (!options.ctx.fetcher) {
+        throw new CallableError(
+          "RESOLUTION_FAILED",
+          "HTTP callables require ctx.fetcher; pass fetch explicitly at the Worker boundary",
+        );
+      }
+      return { type: "http", fetcher: options.ctx.fetcher };
     }
     case "service":
       return {

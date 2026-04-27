@@ -192,7 +192,10 @@ const requestTemplateSchema = z
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]).optional(),
     headers: z.record(z.string(), z.string()).optional(),
     query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
-    body: z.object({ type: z.literal("json"), from: z.literal("payload") }).optional(),
+    body: z
+      .object({ type: z.literal("json"), from: z.literal("payload") })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((request, ctx) => {
@@ -283,10 +286,9 @@ export type CallableContext = {
   env?: Record<string, unknown>;
   /**
    * Public HTTP fetch dependency used only by fetch callables targeting
-   * `{ type: "http" }`. RPC callables ignore it. Tests should usually inject
-   * this. Production Worker boundaries can omit it and use `globalThis.fetch`,
-   * but doing so grants ambient public egress to any HTTP Callable they
-   * dispatch.
+   * `{ type: "http" }`. RPC callables ignore it. Worker-boundary code that
+   * wants runtime fetch must pass it explicitly as `{ fetcher: fetch }`; the
+   * runtime deliberately does not fall back to ambient global fetch.
    */
   fetcher?: typeof globalThis.fetch;
 };

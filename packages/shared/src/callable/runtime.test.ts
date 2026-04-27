@@ -222,6 +222,23 @@ describe("callable validation", () => {
       ).toThrow("Invalid callable");
     }
   });
+
+  test("rejects extra fields in request template bodies", () => {
+    expect(() =>
+      validateCallable({
+        callable: {
+          target: { type: "http", url: "https://api.example.com/v1" },
+          call: {
+            type: "fetch",
+            request: {
+              method: "POST",
+              body: { type: "json", from: "payload", extra: true },
+            },
+          },
+        },
+      }),
+    ).toThrow("Invalid callable");
+  });
 });
 
 describe("dispatchCallable", () => {
@@ -315,6 +332,20 @@ describe("dispatchCallable", () => {
     });
 
     expect(replaced).toEqual({ url: "https://api.example.com/tools?dryRun=true" });
+  });
+
+  test("requires an explicit fetcher for public HTTP targets", async () => {
+    await expect(
+      dispatchCallable({
+        callable: {
+          target: { type: "http", url: "https://api.example.com/tools" },
+        },
+        payload: { ignored: true },
+        ctx: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "RESOLUTION_FAILED",
+    });
   });
 
   test("includes the response body when fetch callables return non-2xx", async () => {
@@ -850,6 +881,23 @@ describe("buildCallableRequest", () => {
 });
 
 describe("connectCallableWebSocket", () => {
+  test("marks client-side upgrade failures as non-retryable and includes status details", async () => {
+    await expect(
+      connectCallableWebSocket({
+        callable: {
+          target: { type: "http", url: "https://api.example.com/socket" },
+        },
+        ctx: {
+          fetcher: async () => new Response("forbidden", { status: 403, statusText: "Forbidden" }),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "TRANSPORT_FAILED",
+      retryable: false,
+      details: { status: 403, statusText: "Forbidden" },
+    });
+  });
+
   test("connects through a Durable Object fetch target", async () => {
     const ws = await connectCallableWebSocket({
       callable: {

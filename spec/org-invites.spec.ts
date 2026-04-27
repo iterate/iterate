@@ -77,7 +77,6 @@ test.describe("organization invites", () => {
     // Should be on welcome page with pending invite
     await page.getByText("Welcome to Iterate").waitFor();
     await page.getByText(orgName).waitFor();
-    await page.getByRole("button", { name: "Accept", exact: true }).waitFor();
 
     // Accept the invite
     await page.getByRole("button", { name: "Accept", exact: true }).click();
@@ -107,7 +106,6 @@ test.describe("organization invites", () => {
     // Invitee logs in
     await login(page, inviteeEmail);
 
-    await page.getByRole("button", { name: `Decline invite to ${orgName}` }).waitFor();
     await page.getByRole("button", { name: `Decline invite to ${orgName}` }).click();
     await toast.success(page, "Invite declined").waitFor();
 
@@ -190,7 +188,6 @@ test.describe("organization invites", () => {
     await toast.success(page, `Joined ${orgName}`).waitFor();
 
     await page.goto("/user/settings");
-    await page.getByRole("button", { name: `Leave ${orgName}` }).waitFor();
     await page.getByRole("button", { name: `Leave ${orgName}` }).click();
 
     // Confirm in dialog

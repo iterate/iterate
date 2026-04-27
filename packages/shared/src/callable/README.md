@@ -196,7 +196,7 @@ can set Worker WebSocket behavior before the socket is accepted.
 
 V1 supports:
 
-- `http`: public HTTP via `ctx.fetcher` or `globalThis.fetch`
+- `http`: public HTTP via the explicit `ctx.fetcher` capability
 - `service`: a Worker service binding with `fetch(request)`
 - `durable-object`: a Durable Object namespace, addressed by stable name or id
 - `dynamic-worker`: a Worker loaded through a Worker Loader binding
@@ -376,9 +376,11 @@ V1 keeps that resolver simple on purpose so the kernel stays small. Do not pass
 tenant-authored, LLM-authored, or user-authored callables a sensitive `env`
 object until `tasks/capability-policy.md` is implemented.
 
-`ctx.fetcher` is only used for public HTTP targets. If omitted, public HTTP
-callables use `globalThis.fetch`, which grants ambient public egress to trusted
-Worker-boundary code. Untrusted descriptors need an explicit policy layer.
+`ctx.fetcher` is only used for public HTTP targets and is required for them.
+Worker-boundary code that wants normal runtime fetch should pass
+`ctx: { fetcher: fetch }` explicitly. The library does not fall back to
+`globalThis.fetch`, because public egress is a capability and should not be
+created by a shared helper reading ambient globals.
 
 Dynamic Worker callables are especially sensitive: the descriptor contains
 executable source code, and this prototype does not sandbox its outbound
